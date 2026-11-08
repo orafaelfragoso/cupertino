@@ -38,6 +38,10 @@ pub use cupertino_theme::glass::{GlassMode, GlassStyle, GLASS_BACKDROP_SCALE};
 /// Most shapes one container joins.
 pub const MAX_SHAPES: usize = 16;
 
+/// Widest blend between the shapes of a container, in points. The union bulges up to a quarter of the blend width
+/// past the shapes, so this bounds how far a container's glass reaches beyond them.
+pub const MAX_SPACING: f32 = 64.0;
+
 /// Rec. 709 luminance weights of linear light.
 const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
@@ -354,7 +358,8 @@ pub struct Container {
 }
 
 impl Container {
-    /// The container of `shapes` (at most [`MAX_SHAPES`]) joined with blend width `spacing`.
+    /// The container of `shapes` (at most [`MAX_SHAPES`]) joined with blend width `spacing` (at most [`MAX_SPACING`];
+    /// negative or not finite is 0).
     pub fn new(shapes: Vec<GlassShape>, spacing: f32, mode: GlassMode) -> Self {
         let mut shapes = shapes;
         shapes.truncate(MAX_SHAPES);
@@ -368,7 +373,11 @@ impl Container {
             .collect();
         Self {
             shapes,
-            spacing: spacing.max(0.0),
+            spacing: if spacing.is_finite() {
+                spacing.clamp(0.0, MAX_SPACING)
+            } else {
+                0.0
+            },
             mode,
             params: GlassParams::new(mode, largest),
             values,
@@ -393,10 +402,16 @@ impl Container {
         Some([b[0], b[1], b[2] - b[0], b[3] - b[1]])
     }
 
-    /// What of the backdrop the container reads: its bounds grown by the reach of its blur and refraction.
+    /// What of the backdrop the container reads: its bounds grown by the reach of its blur and refraction, and by how
+    /// far the smooth union bulges past the shapes (a quarter of the blend width).
     pub fn sample_area(&self) -> Option<[f32; 4]> {
         let [x, y, w, h] = self.bounds()?;
-        let r = self.params.reach();
+        let bulge = if self.shapes.len() > 1 {
+            self.spacing * 0.25
+        } else {
+            0.0
+        };
+        let r = self.params.reach() + bulge;
         Some([x - r, y - r, w + 2.0 * r, h + 2.0 * r])
     }
 
@@ -793,7 +808,8 @@ mod tests {
             GlassMode::default(),
         );
         assert_eq!(c.bounds(), Some([10.0, 10.0, 305.0, 100.0]));
-        let r = c.params.reach();
+        // the reach, and the bulge of the union: a quarter of the spacing
+        let r = c.params.reach() + 5.0;
         assert_eq!(
             c.sample_area(),
             Some([10.0 - r, 10.0 - r, 305.0 + 2.0 * r, 100.0 + 2.0 * r])
@@ -884,6 +900,34 @@ mod tests {
         // clear glass has no bleed and only its narrowest level shows
         let clear = Container::new(shape, 0.0, mode(GlassStyle::Clear, false));
         assert_eq!(clear.levels().map(|l| l.1), [true, false, false, false]);
+    }
+
+    #[test]
+    fn hostile_spacing_is_bounded_and_the_sampled_area_covers_the_bulge() {
+        let shapes = vec![
+            GlassShape::new([0.0, 0.0, 100.0, 40.0], 12.0),
+            GlassShape::new([104.0, 0.0, 100.0, 40.0], 12.0),
+        ];
+        let mode = GlassMode::default();
+        for bad in [f32::NAN, f32::NEG_INFINITY, -3.0] {
+            assert_eq!(Container::new(shapes.clone(), bad, mode).spacing, 0.0);
+        }
+        let huge = Container::new(shapes.clone(), 8.0e6, mode);
+        assert_eq!(huge.spacing, MAX_SPACING);
+        let r = huge.params.reach();
+        let [x, _, w, _] = huge.sample_area().unwrap();
+        assert_eq!(
+            (x, w),
+            (
+                -r - MAX_SPACING / 4.0,
+                204.0 + 2.0 * (r + MAX_SPACING / 4.0)
+            )
+        );
+        // the field never reaches past the shapes by more than the bulge the area allows for
+        let above_gap = [102.0, -MAX_SPACING / 4.0 - 0.01];
+        assert!(huge.field(above_gap).0 > 0.0);
+        let alone = Container::new(shapes[..1].to_vec(), 20.0, mode);
+        assert_eq!(alone.sample_area().unwrap()[0], -alone.params.reach());
     }
 
     /// The WCAG contrast ratio of two opaque sRGB colours.

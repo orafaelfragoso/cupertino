@@ -173,6 +173,16 @@ from the first are a wrong password. Any other failure is an error: the screen s
 modules (`PAM_TEXT_INFO`, `PAM_ERROR_MSG`: the `pam_faillock` lockout, a password about to expire) shows as the notice under the
 field until the next edit, also after a wrong password. Every prompt but the password one is refused.
 
+**Account lockout.** A failed attempt at the lock screen counts towards the account lockout like a failed login: the packaged
+`/etc/pam.d/cupertino-login` runs the distribution's shared password stack and account stack, where each distribution puts
+`pam_faillock` (Arch's `system-auth` has `preauth`, `authfail` and `authsucc` by default; on Debian and Ubuntu it is added to
+`common-auth` and `common-account`, on Fedora with `authselect enable-feature with-faillock`). The file adds no `pam_faillock`
+line of its own, which would count each failure twice where the distribution has one, and nothing in it can pass a password the
+shared stack refused (`packaging/test_release.py`, `test_the_lock_screen_counts_towards_the_account_lockout`). `pam_faillock`
+runs in this process, as the user, and records the failure in the user's own tally file (`/run/faillock/$USER` by default); the
+lockout message it prints shows as the notice. Not verified on an installed system: enter wrong passwords at the lock screen,
+then `faillock --user $USER` on another console lists them.
+
 The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Its global allocator (`cupertino_login_ipc::zeroing::ZeroOnFree`) zeroes every block it frees, so the `CString` that pam-client2 drops unzeroed once it has copied the answer into PAM's buffer is cleared too (`tests/zeroing.rs`); PAM clears its own copy. Swap can hold a password (no `mlockall`).
 
 While it is typed the password lives in the field's `SecureBuffer` (Kit's, zeroed when the field goes), which holds at most

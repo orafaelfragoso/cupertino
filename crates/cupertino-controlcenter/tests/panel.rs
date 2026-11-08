@@ -329,6 +329,16 @@ fn the_panel_under_increase_contrast_matches_its_golden() {
     check("increase-contrast", Appearance::LightHighContrast, false);
 }
 
+/// With `CUPERTINO_LOOK_DIR` set, the card in light and dark (as is and with Reduce Transparency) for review by eye;
+/// otherwise nothing is written.
+#[test]
+fn the_card_can_be_looked_at() {
+    for (reduce_transparency, name) in [(false, "controlcenter"), (true, "controlcenter-rt")] {
+        let mut run = Run::start(tokens(Appearance::Light, reduce_transparency), true);
+        run.driver.look(run.window, name).unwrap();
+    }
+}
+
 #[test]
 fn the_card_has_the_menu_material_and_a_window_for_each_battery_case() {
     let shown = view::panel::<()>(&controls(true), 0.5, |_| ());

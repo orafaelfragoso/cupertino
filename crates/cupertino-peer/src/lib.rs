@@ -17,6 +17,10 @@
 //! Flatpak instance (a Flatpak's bus connection is made by its `xdg-dbus-proxy`, another process with the same
 //! `/.flatpak-info`). An unsandboxed process could make a `/.flatpak-info` of its own in a user namespace and pass for a
 //! Flatpak instance, but it can reach every name on the bus directly already, so this gains it nothing.
+//!
+//! [`signal`] tells who sent a signal, on either bus.
+
+pub mod signal;
 
 use std::io::Read;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};

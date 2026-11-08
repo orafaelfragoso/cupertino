@@ -32,6 +32,14 @@ nothing; the caller is the process behind its connection.
 * `check_call`: the one call a method of such a service makes first. A refusal is logged once with the interface, the method
   and the process id, never the arguments, and returns a `CallerError`, whose names are `org.cupertino.Error.AnonymousCaller`,
   `FlatpakCaller`, `SnapCaller` and `UntrustedCaller`.
+* `signal::sent_by_bus(message)` and `signal::sent_by_owner(connection, message, name)`: who sent a signal, on either bus. A
+  bus daemon hands a connection every signal addressed to its unique name whatever its match rules say, and zbus compares a
+  rule's `sender` only when it is a unique name (it counts the daemon's `org.freedesktop.DBus` as one), so
+  `sender='org.freedesktop.login1'` in a rule lets the same signal through from any peer. A handler that acts on a signal
+  checks each message with one of these, also where the rule filters already:
+  `sent_by_bus` for the daemon's own signals (`NameOwnerChanged`; the daemon writes every sender, so no peer can send as it),
+  `sent_by_owner` for a service's, one `GetNameOwner` per message (a signal sent just before its sender left the name is
+  dropped with the forged ones). Users: `cupertino-login`, `cupertino-sessiond` and the server's power watchers.
 
 Users: `cupertino-server` (`org.cupertino.Session1`, the call to `org.cupertino.Login1` and the owner check of a bus name
 a Wayland client announces), `cupertino-login`
@@ -52,4 +60,5 @@ a Wayland client announces), `cupertino-login`
 (a scratch `/proc`) and Snap (the label), the relations, the parent from `status`; `same_instance` (one process, a
 process that exited, a Flatpak process that exited with its info file still matching, the same Flatpak instance through a proxy, another instance or application id, a missing or
 incomplete `.flatpak-info`, sandboxed against unsandboxed both ways, two Snap processes), credentials without a
-`ProcessFD`, the peer of a socket, and a Wayland client classified by its label and root.
+`ProcessFD`, the peer of a socket, and a Wayland client classified by its label and root; `sent_by_bus` on messages that carry the daemon's name, a unique name and
+no sender. `sent_by_owner` runs against a bus in the tests of its users.

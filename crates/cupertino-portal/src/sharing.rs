@@ -5,13 +5,18 @@
 //!
 //! The item registers with `org.kde.StatusNotifierWatcher` (the menu bar), and again whenever a watcher takes the name,
 //! so a menu bar that restarts shows it too. Without a watcher the item is still served, and the share runs on.
+//!
+//! The menu's events (Stop Sharing) are taken only from the connection that owns the watcher's name when the event
+//! arrives, the menu bar the item registered with: another application of the person could otherwise end a share it
+//! did not start. Everything else of the item and menu is open to read.
 
 use std::collections::HashMap;
 
 use futures_lite::StreamExt;
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 use zbus::fdo::DBusProxy;
-use zbus::names::WellKnownName;
+use zbus::message::Header;
+use zbus::names::{BusName, WellKnownName};
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, StructureBuilder, Value};
 use zbus::{interface, Connection};
@@ -281,6 +286,23 @@ fn icon(px: u32) -> Option<(i32, i32, Vec<u8>)> {
     Some((px as i32, px as i32, argb))
 }
 
+/// Refuses an event unless its sender owns [`WATCHER`] now: the menu bar, where the item registered.
+async fn from_watcher(connection: &Connection, header: &Header<'_>) -> zbus::fdo::Result<()> {
+    let refused =
+        || zbus::fdo::Error::AccessDenied("only the menu bar sends this menu's events".to_owned());
+    let sender = header.sender().ok_or_else(refused)?;
+    let owner = DBusProxy::new(connection)
+        .await?
+        .get_name_owner(BusName::try_from(WATCHER).map_err(zbus::Error::from)?)
+        .await
+        .map_err(|_| refused())?;
+    if owner.as_str() == sender.as_str() {
+        Ok(())
+    } else {
+        Err(refused())
+    }
+}
+
 /// `com.canonical.dbusmenu` of one share: who shares what, and Stop Sharing.
 struct Menu {
     shown: Shown,
@@ -317,6 +339,13 @@ impl Menu {
             _ => {}
         }
         properties
+    }
+
+    /// Carry out an event the menu bar sent: a click on Stop Sharing ends the share; anything else does nothing.
+    fn take(&self, id: i32, event_id: &str) {
+        if id == ITEM_STOP && event_id == "clicked" {
+            let _ = self.stop.try_send(());
+        }
     }
 
     fn node(&self, id: i32, depth: i32) -> zbus::fdo::Result<Node> {
@@ -374,19 +403,33 @@ impl Menu {
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("item {id} has no {name}")))
     }
 
-    fn event(&self, id: i32, event_id: &str, _data: Value<'_>, _timestamp: u32) {
-        if id == ITEM_STOP && event_id == "clicked" {
-            let _ = self.stop.try_send(());
-        }
+    /// An event on an item, from the menu bar only ([`from_watcher`]).
+    async fn event(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        id: i32,
+        event_id: &str,
+        _data: Value<'_>,
+        _timestamp: u32,
+    ) -> zbus::fdo::Result<()> {
+        from_watcher(connection, &header).await?;
+        self.take(id, event_id);
+        Ok(())
     }
 
-    fn event_group(&self, events: Vec<(i32, String, OwnedValue, u32)>) -> Vec<i32> {
+    /// Events on items, from the menu bar only ([`from_watcher`]).
+    async fn event_group(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        events: Vec<(i32, String, OwnedValue, u32)>,
+    ) -> zbus::fdo::Result<Vec<i32>> {
+        from_watcher(connection, &header).await?;
         for (id, event_id, _, _) in &events {
-            if *id == ITEM_STOP && event_id == "clicked" {
-                let _ = self.stop.try_send(());
-            }
+            self.take(*id, event_id);
         }
-        Vec::new()
+        Ok(Vec::new())
     }
 
     fn about_to_show(&self, _id: i32) -> bool {
@@ -465,11 +508,11 @@ mod tests {
             Some("“Meeting” is sharing “Studio Display”")
         );
         assert_eq!(label(ITEM_STOP).as_deref(), Some("Stop Sharing"));
-        menu.event(ITEM_SHARING, "clicked", Value::from(0), 0);
+        menu.take(ITEM_SHARING, "clicked");
         assert!(stopped.try_recv().is_err(), "the name is not a control");
-        menu.event(ITEM_STOP, "hovered", Value::from(0), 0);
+        menu.take(ITEM_STOP, "hovered");
         assert!(stopped.try_recv().is_err());
-        menu.event(ITEM_STOP, "clicked", Value::from(0), 0);
+        menu.take(ITEM_STOP, "clicked");
         assert!(stopped.try_recv().is_ok());
     }
 }

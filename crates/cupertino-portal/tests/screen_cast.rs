@@ -795,7 +795,7 @@ fn a_window_is_restored_only_while_the_app_runs_and_not_after_the_person_stops_i
 
     // the person stops it from the menu bar: the share ends and the app must ask again
     let item = watcher.next();
-    menu_event(&r, &item, 3, "clicked");
+    menu_event(&watcher, &item, 3, "clicked");
     let Capture::Stop { session: stopped } = r.shares.recv_timeout(WAIT).unwrap() else {
         panic!("expected the share to stop");
     };
@@ -836,7 +836,7 @@ fn stopping_a_share_leaves_a_remembered_display_to_be_forgotten_in_settings() {
 
     // the person stops the share from the menu bar: it ends, and the permission stays
     let item = watcher.next();
-    menu_event(&r, &item, 3, "clicked");
+    menu_event(&watcher, &item, 3, "clicked");
     let Capture::Stop { session: stopped } = r.shares.recv_timeout(WAIT).unwrap() else {
         panic!("expected the share to stop");
     };
@@ -857,7 +857,8 @@ fn stopping_a_share_leaves_a_remembered_display_to_be_forgotten_in_settings() {
 /// A stand-in for the menu bar's item registry, which hands on each registration.
 struct Watcher {
     registered: mpsc::Receiver<String>,
-    _connection: Connection,
+    /// Owns the watcher's name, as the menu bar does; it sends the menu's events.
+    connection: Connection,
 }
 
 struct Registry(Mutex<mpsc::Sender<String>>);
@@ -882,7 +883,7 @@ impl Watcher {
             .unwrap();
         Watcher {
             registered,
-            _connection: connection,
+            connection,
         }
     }
 
@@ -894,16 +895,24 @@ impl Watcher {
     }
 }
 
-fn menu_event(r: &Running, (name, path): &(String, String), id: i32, event: &str) {
-    r.app
-        .call_method(
-            Some(name.as_str()),
-            path.as_str(),
-            Some("com.canonical.dbusmenu"),
-            "Event",
-            &(id, event, Value::from(0i32), 0u32),
-        )
-        .unwrap();
+/// The menu bar (the owner of the watcher's name) sends `event` on menu item `id`.
+fn menu_event(watcher: &Watcher, item: &(String, String), id: i32, event: &str) {
+    send_menu_event(&watcher.connection, item, id, event).unwrap();
+}
+
+fn send_menu_event(
+    from: &Connection,
+    (name, path): &(String, String),
+    id: i32,
+    event: &str,
+) -> zbus::Result<zbus::Message> {
+    from.call_method(
+        Some(name.as_str()),
+        path.as_str(),
+        Some("com.canonical.dbusmenu"),
+        "Event",
+        &(id, event, Value::from(0i32), 0u32),
+    )
 }
 
 fn has_owner(r: &Running, name: &str) -> bool {
@@ -1001,7 +1010,32 @@ fn the_menu_bar_item_names_the_app_while_it_shares_and_stops_it() {
         ["“Meeting” is sharing “Studio Display”", "", "Stop Sharing"]
     );
 
-    menu_event(&r, &item, 3, "clicked");
+    // another application of the person cannot stop the share: only the menu bar sends the menu's events
+    for event in [
+        send_menu_event(&r.app, &item, 3, "clicked"),
+        r.app.call_method(
+            Some(item.0.as_str()),
+            item.1.as_str(),
+            Some("com.canonical.dbusmenu"),
+            "EventGroup",
+            &(vec![(3i32, "clicked", Value::from(0i32), 0u32)],),
+        ),
+    ] {
+        match event {
+            Err(zbus::Error::MethodError(name, _, _)) => {
+                assert_eq!(name.as_str(), "org.freedesktop.DBus.Error.AccessDenied")
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+    assert!(
+        r.shares
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "the share runs on"
+    );
+
+    menu_event(&watcher, &item, 3, "clicked");
     let Capture::Stop { session: stopped } = r.shares.recv_timeout(WAIT).unwrap() else {
         panic!("expected the share to stop");
     };

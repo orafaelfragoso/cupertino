@@ -18,6 +18,7 @@ app = [
     "dep:cupertino-defaults",
     "dep:cupertino-icons",
     "dep:cupertino-modifiers",
+    "dep:cupertino-peer",
     "dep:cupertino-protocol-app",
     "dep:cupertino-shell-client",
     "dep:cupertino-ui-wayland",
@@ -35,6 +36,7 @@ cupertino-defaults = { path = "../cupertino-defaults", optional = true }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
+cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-text = { path = "../cupertino-ui-text" }

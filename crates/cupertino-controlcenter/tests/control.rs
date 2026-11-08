@@ -82,3 +82,102 @@ fn toggle_opens_and_closes_the_panel_and_a_second_panel_cannot_take_the_name() {
         second.err()
     );
 }
+
+/// `Toggle` from another process of the person (a `dbus-send` this test starts, as the menu bar is to the panel: no
+/// relation) reaches the panel; from a connection the bus cannot name a process for (one over TCP, authenticated
+/// anonymously) it is refused by name and the panel does not move.
+#[test]
+fn any_unsandboxed_process_may_toggle_but_a_caller_the_bus_cannot_name_may_not() {
+    if let Err(error) = std::process::Command::new("dbus-send")
+        .arg("--version")
+        .output()
+    {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "run dbus-send: {error}"
+        );
+        cupertino_test_bus::missing_tool("dbus-send");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("bus.conf");
+    std::fs::write(
+        &config,
+        format!(
+            r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:dir={}</listen>
+  <listen>tcp:host=127.0.0.1,bind=127.0.0.1,port=0,family=ipv4</listen>
+  <auth>EXTERNAL</auth>
+  <auth>ANONYMOUS</auth>
+  <allow_anonymous/>
+  <policy context="default">
+    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+    <allow own="*"/>
+    <allow user="*"/>
+  </policy>
+</busconfig>"#,
+            dir.path().display()
+        ),
+    )
+    .unwrap();
+    let Some(bus) = PrivateBus::start_with_config(&config) else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let address = |transport: &str| {
+        bus.address
+            .split(';')
+            .find(|a| a.starts_with(transport))
+            .unwrap_or_else(|| panic!("no {transport} address in {}", bus.address))
+            .to_owned()
+    };
+    let (unix, tcp) = (address("unix:"), address("tcp:"));
+    let (toggled_tx, toggled_rx) = mpsc::channel();
+    let _panel = serve(
+        zbus::connection::Builder::address(unix.as_str()).unwrap(),
+        move || toggled_tx.send(()).unwrap(),
+    )
+    .expect("claims the name");
+
+    let sent = std::process::Command::new("dbus-send")
+        .arg(format!("--bus={unix}"))
+        .args(["--print-reply", &format!("--dest={BUS_NAME}"), OBJECT_PATH])
+        .arg("org.cupertino.ControlPanel1.Toggle")
+        .output()
+        .expect("dbus-send");
+    assert!(
+        sent.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sent.stderr)
+    );
+    toggled_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the toggle callback ran");
+
+    let anonymous: Connection = block_on(
+        zbus::connection::Builder::address(tcp.as_str())
+            .unwrap()
+            .auth_mechanism(zbus::AuthMechanism::Anonymous)
+            .build(),
+    )
+    .expect("connect over TCP");
+    let refused = block_on(anonymous.call_method(
+        Some(BUS_NAME),
+        OBJECT_PATH,
+        Some("org.cupertino.ControlPanel1"),
+        "Toggle",
+        &(),
+    ));
+    match refused {
+        Err(zbus::Error::MethodError(name, _, _)) => {
+            assert_eq!(name.as_str(), "org.cupertino.Error.AnonymousCaller")
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(toggled_rx.recv_timeout(Duration::from_millis(300)).is_err());
+}

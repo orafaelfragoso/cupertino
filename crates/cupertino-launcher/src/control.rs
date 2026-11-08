@@ -1,7 +1,11 @@
 //! `org.cupertino.Launcher1`: the control interface of the `cupertino-launcher` process. The server
-//! calls `Toggle` when the launcher shortcut or hot corner fires.
+//! calls `Toggle` when the launcher shortcut or hot corner fires. The server started this process,
+//! so `Toggle` answers only the server (this process's parent) and this process itself; any other
+//! caller is refused with an `org.cupertino.Error.*` name (`cupertino_peer::check_call`).
 
+use cupertino_peer::{check_call, CallerError, Relation};
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
+use zbus::message::Header;
 use zbus::{connection, Connection};
 
 /// Name, path and interface of the control interface (the server calls it by these strings).
@@ -14,9 +18,22 @@ struct Control {
 
 #[zbus::interface(name = "org.cupertino.Launcher1")]
 impl Control {
-    /// Show the panel, or hide it when it is shown.
-    fn toggle(&self) {
+    /// Show the panel, or hide it when it is shown. Only the server and this process may.
+    async fn toggle(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Launcher1",
+            "Toggle",
+            &[Relation::Itself, Relation::Parent],
+        )
+        .await?;
         (self.on_toggle)();
+        Ok(())
     }
 }
 

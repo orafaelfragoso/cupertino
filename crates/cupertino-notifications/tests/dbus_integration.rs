@@ -22,6 +22,11 @@ struct PrivateBus {
 }
 
 fn start_bus() -> Option<PrivateBus> {
+    start_bus_with("")
+}
+
+/// A bus that also listens with `extra` (`<listen>` and `<auth>` lines of the test's own).
+fn start_bus_with(extra: &str) -> Option<PrivateBus> {
     let dir = tempfile::tempdir().ok()?;
     let config = dir.path().join("bus.conf");
     let socket_dir = dir.path().display();
@@ -34,6 +39,7 @@ fn start_bus() -> Option<PrivateBus> {
   <type>session</type>
   <listen>unix:dir={socket_dir}</listen>
   <auth>EXTERNAL</auth>
+{extra}
   <policy context="default">
     <allow send_destination="*" eavesdrop="true"/>
     <allow eavesdrop="true"/>
@@ -601,4 +607,76 @@ fn the_lock_screen_gets_only_what_the_policy_allows_and_hears_each_change() {
             ("org.example.Chat".to_owned(), "Chat".to_owned()),
         ]
     );
+}
+
+/// A caller the bus cannot name a process for (a connection over TCP, authenticated anonymously) neither closes nor
+/// replaces another's notification: the close does nothing and the replacement is a new notification. An unsandboxed
+/// process of the person (`notify-send --replace-id` is a new one for each call) does both.
+#[test]
+fn a_caller_the_bus_cannot_name_neither_replaces_nor_closes_a_notification() {
+    let Some(bus) = start_bus_with(
+        "  <listen>tcp:host=127.0.0.1,bind=127.0.0.1,port=0,family=ipv4</listen>\n  <auth>ANONYMOUS</auth>\n  <allow_anonymous/>",
+    ) else {
+        eprintln!("dbus-daemon not available, skipping");
+        return;
+    };
+    let address = |transport: &str| {
+        bus.address
+            .split(';')
+            .find(|a| a.starts_with(transport))
+            .unwrap_or_else(|| panic!("no {transport} address in {}", bus.address))
+            .to_owned()
+    };
+    let server = Server::start(ServerOptions {
+        address: Some(address("unix:")),
+        ..Default::default()
+    })
+    .expect("server starts on the private bus");
+    let unix = || {
+        zbus::blocking::connection::Builder::address(address("unix:").as_str())
+            .unwrap()
+            .build()
+            .unwrap()
+    };
+    let app = unix();
+    let anonymous = zbus::blocking::connection::Builder::address(address("tcp:").as_str())
+        .unwrap()
+        .auth_mechanism(zbus::AuthMechanism::Anonymous)
+        .build()
+        .expect("connect over TCP");
+    let summary = |id| server.center().get(id).map(|n| n.summary.clone());
+    let live = |id| server.center().history().iter().any(|n| n.id == id);
+    let message = |replaces: u32, summary: &'static str| -> NotifyArgs<'static> {
+        (
+            "Mail",
+            replaces,
+            "",
+            summary,
+            "",
+            vec![],
+            HashMap::new(),
+            -1,
+        )
+    };
+
+    let id = notify(&proxy(&app), message(0, "From the app"));
+    proxy(&anonymous)
+        .call::<_, _, ()>("CloseNotification", &(id,))
+        .unwrap();
+    let other = notify(&proxy(&anonymous), message(id, "Not from the app"));
+    assert_ne!(
+        other, id,
+        "the refused replacement is a notification of its own"
+    );
+    assert_eq!(summary(id).as_deref(), Some("From the app"));
+    assert!(live(id), "the refused close left it");
+
+    // another unsandboxed process replaces and closes it
+    let replacer = unix();
+    assert_eq!(notify(&proxy(&replacer), message(id, "Replaced")), id);
+    assert_eq!(summary(id).as_deref(), Some("Replaced"));
+    proxy(&replacer)
+        .call::<_, _, ()>("CloseNotification", &(id,))
+        .unwrap();
+    assert!(!live(id), "closed");
 }

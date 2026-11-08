@@ -77,7 +77,7 @@ failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`). 
 
 | Method | Effect |
 |---|---|
-| `Toggle | Shows the panel or hides it. The server calls it for `Super+Space`. |
+| `Toggle | Shows the panel or hides it. The server calls it for `Super+Space`. Only the server (the process's parent) and the launcher itself may: any other caller is refused with `org.cupertino.Error.UntrustedCaller` (`AnonymousCaller`, `FlatpakCaller`, `SnapCaller`), `cupertino_peer::check_call`. |
 
 ```
 gdbus call --session --dest org.cupertino.Launcher1 --object-path /org/cupertino/Launcher1 --method org.cupertino.Launcher1.Toggle
@@ -201,7 +201,7 @@ cargo bench -p cupertino-launcher
 
 | Item | Proves or shows |
 |---|---|
-| `tests/control.rs` | The `Toggle` interface against a private `dbus-daemon`, and that a second launcher cannot take the name. |
+| `tests/control.rs` | The `Toggle` interface against a private `dbus-daemon`, that a second launcher cannot take the name, and that another process (a `dbus-send` the test starts) is refused as `UntrustedCaller`. |
 | `cupertino-server/tests/shell_processes.rs` | The real process (`--no-files`) connects to the real server, maps its hidden window at start and keeps running. |
 | `src/view/tests.rs` | The windows run headless on Kit's test driver: the search field, the results list and keyboard navigation against the Inspector goldens in `tests/goldens/` and the screen-reader readings in `tests/fixtures/screen-reader/`; launching, the clipboard, hover, click and dismissal. |
 | `cargo test` | Matching, ranking, frecency, calculator, file search, panel state, that `takes_key` agrees with `handle_key`, and the `app` process code. |

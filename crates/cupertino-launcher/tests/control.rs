@@ -40,3 +40,41 @@ fn toggle_reaches_the_launcher_and_a_second_launcher_cannot_take_the_name() {
         second.err()
     );
 }
+
+/// `Toggle` from a process of the person that is neither the server nor the launcher (a `dbus-send` this test starts:
+/// a child, not the parent) is refused by name, and the panel does not move.
+#[test]
+fn another_process_cannot_toggle_the_launcher() {
+    if let Err(error) = std::process::Command::new("dbus-send")
+        .arg("--version")
+        .output()
+    {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "run dbus-send: {error}"
+        );
+        cupertino_test_bus::missing_tool("dbus-send");
+        return;
+    }
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let (toggled_tx, toggled_rx) = mpsc::channel();
+    let _launcher =
+        serve(bus.builder(), move || toggled_tx.send(()).unwrap()).expect("claims the name");
+    let sent = std::process::Command::new("dbus-send")
+        .arg(format!("--bus={}", bus.address))
+        .args(["--print-reply", &format!("--dest={BUS_NAME}"), OBJECT_PATH])
+        .arg("org.cupertino.Launcher1.Toggle")
+        .output()
+        .expect("dbus-send");
+    assert!(!sent.status.success());
+    let error = String::from_utf8_lossy(&sent.stderr);
+    assert!(
+        error.contains("org.cupertino.Error.UntrustedCaller"),
+        "{error}"
+    );
+    assert!(toggled_rx.recv_timeout(Duration::from_millis(300)).is_err());
+}

@@ -245,6 +245,28 @@ impl Icons {
         }
     }
 
+    /// The icons loaded away from the dock's loop: as [`Icons::new`], but an asset the system's icons lack falls back to
+    /// a placeholder rather than failing, as the dock's own [`Icons`] already checked them.
+    pub fn background(assets: &Assets) -> Self {
+        Self {
+            apps: ThemeIcons::new(assets),
+            system: SystemIcons::new(assets),
+            cache: HashMap::new(),
+            system_cache: HashMap::new(),
+            windows: BTreeMap::new(),
+            trash: None,
+        }
+    }
+
+    /// The theme's icon `name` at `px`, filled to its square; `None` when the theme has none.
+    pub fn themed(&mut self, name: &str, px: u32) -> Option<&Pixmap> {
+        if self.has_themed(name, px) {
+            self.cache[&(name.to_owned(), px)].as_ref()
+        } else {
+            None
+        }
+    }
+
     /// A window set its own icon, or removed it; `apps` are its application id and the dock's key for it.
     pub fn window_icon(&mut self, apps: [String; 2], icon: DockWindowIcon) {
         let image = icon.image.as_ref().and_then(window_pixmap);

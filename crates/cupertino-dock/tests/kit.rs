@@ -96,6 +96,19 @@ struct Record {
     no_bus: bool,
     /// The icons loaded, with the side asked for, in order.
     icon_loads: Vec<(IconKey, f64)>,
+    /// The host loads icons in the background ([`Host::preload`]).
+    background: bool,
+    /// The icons asked for in the background, a list a load.
+    preloads: Vec<Vec<(IconKey, f64)>>,
+    /// The icons a background load leaves out, for the model to load itself.
+    leave_out: Vec<IconKey>,
+    /// The ends of the programs started, in order: a send makes it exit.
+    exits: Vec<async_channel::Sender<()>>,
+}
+
+thread_local! {
+    /// The next run's host loads icons in the background, leaving these out.
+    static BACKGROUND: RefCell<Option<Vec<IconKey>>> = const { RefCell::new(None) };
 }
 
 struct FakeHost(Rc<RefCell<Record>>);
@@ -148,9 +161,14 @@ impl Host for FakeHost {
         self.0.borrow_mut().keyboard.push((part, on));
     }
     fn resize_force_quit(&mut self, _: f64, _: f64) {}
-    fn spawn(&mut self, argv: Vec<String>, token: Option<String>) -> bool {
-        self.0.borrow_mut().spawned.push((argv, token));
-        true
+    fn spawn(&mut self, argv: Vec<String>, token: Option<String>) -> Option<kit::Exited> {
+        let mut record = self.0.borrow_mut();
+        record.spawned.push((argv, token));
+        let (exit, exited) = async_channel::bounded::<()>(1);
+        record.exits.push(exit);
+        Some(Box::pin(async move {
+            let _ = exited.recv().await;
+        }))
     }
     fn open(&mut self, _: &str) {}
     fn shell(&mut self, command: &str) {
@@ -180,6 +198,25 @@ impl Host for FakeHost {
             .iter()
             .map(|scale| square((side * scale).ceil().max(1.0) as u32))
             .collect()
+    }
+    fn preload(&mut self, _: &DesktopIndex, icons: Vec<(IconKey, f64)>) -> Option<kit::IconLoad> {
+        let mut record = self.0.borrow_mut();
+        if !record.background {
+            return None;
+        }
+        record.preloads.push(icons.clone());
+        let loaded: Vec<(IconKey, u32, IconSet)> = icons
+            .into_iter()
+            .filter(|(key, _)| !record.leave_out.contains(key))
+            .map(|(key, side)| {
+                let set = [1.0, 2.0]
+                    .iter()
+                    .map(|scale| square((side * scale).ceil().max(1.0) as u32))
+                    .collect();
+                (key, side.ceil() as u32, set)
+            })
+            .collect();
+        Some(Box::pin(std::future::ready(loaded)))
     }
     fn window_icon(&mut self, _: [String; 2], _: kit::WindowIcon) {}
     fn window_closed(&mut self, _: u32) {}
@@ -284,7 +321,12 @@ impl Run {
     ) -> Self {
         // window ids start again with a new runtime: none of them is configured yet
         CONFIGURED.with_borrow_mut(Vec::clear);
-        let record = Rc::new(RefCell::new(Record::default()));
+        let leave_out = BACKGROUND.take();
+        let record = Rc::new(RefCell::new(Record {
+            background: leave_out.is_some(),
+            leave_out: leave_out.unwrap_or_default(),
+            ..Record::default()
+        }));
         let mut dock = Dock::new(DockConfig::default());
         dock.set_pinned(&[EDITOR, TERMINAL]);
         let mut entries = vec![
@@ -1537,6 +1579,239 @@ fn a_launch_is_not_asked_for_twice() {
     assert!(run
         .requests()
         .contains(&(1, Request::ActivateApp(EDITOR.to_owned()))));
+}
+
+/// The model alone, the test handing it messages with no runtime around it: the commands it gives are not carried out,
+/// so an activation token it asks for never comes. With the key of the editor's tile.
+fn bare() -> (Model, Rc<RefCell<Record>>, u64) {
+    let record = Rc::new(RefCell::new(Record::default()));
+    let mut dock = Dock::new(DockConfig::default());
+    dock.set_pinned(&[EDITOR, TERMINAL]);
+    let editor = dock
+        .tiles()
+        .iter()
+        .find(|t| t.key == EDITOR)
+        .expect("the editor's tile")
+        .id
+        .0;
+    let desktop = DesktopIndex {
+        entries: vec![entry_with(EDITOR, "Editor", "")],
+    };
+    let mut model = Model::new(
+        Session::new(dock, desktop),
+        ActionMap::default(),
+        DockSettings::default(),
+        Box::new(FakeHost(Rc::clone(&record))),
+    );
+    kit::update(&mut model, Message::Outputs(OUTPUTS.to_vec()));
+    (model, record, editor)
+}
+
+/// Move the bare model's clock on by `seconds` and wake it.
+fn bare_advance(model: &mut Model, record: &Rc<RefCell<Record>>, seconds: f64) {
+    let generation = {
+        let mut record = record.borrow_mut();
+        record.now += seconds;
+        record.wake.unwrap_or(0)
+    };
+    kit::update(model, Message::Wake(generation));
+}
+
+/// The wait for an activation token is bounded: one that does not come within two seconds no longer holds the launch
+/// or the guard against a second one; the program starts without a token, and one that comes later is dropped.
+#[test]
+fn a_launch_whose_activation_token_never_comes_goes_ahead_without_one_after_2_s() {
+    let (mut model, record, editor) = bare();
+    kit::update(
+        &mut model,
+        Message::Input(cupertino_dock::view::Input::Activate(editor)),
+    );
+    assert!(record.borrow().spawned.is_empty(), "waiting for the token");
+    let wakes = record.borrow().wakes.clone();
+    assert!(
+        wakes.iter().any(|w| (w - kit::TOKEN_TIMEOUT).abs() < 1e-9),
+        "the model asks to be woken when the wait ends: {wakes:?}"
+    );
+    bare_advance(&mut model, &record, 1.0);
+    kit::update(
+        &mut model,
+        Message::Input(cupertino_dock::view::Input::Activate(editor)),
+    );
+    assert!(
+        record.borrow().spawned.is_empty(),
+        "a second ask within the wait is the same launch"
+    );
+    bare_advance(&mut model, &record, 1.0);
+    {
+        let spawned = &record.borrow().spawned;
+        assert_eq!(spawned.len(), 1, "started at the end of the wait");
+        assert_eq!(spawned[0].1, None, "without a token");
+    }
+    for launch in 0..4 {
+        kit::update(&mut model, Message::Token(launch, Some("late".to_owned())));
+    }
+    assert_eq!(
+        record.borrow().spawned.len(),
+        1,
+        "a late token starts nothing"
+    );
+}
+
+/// A program that exits before it shows a window, as one that crashes at once does, can be opened again straight away:
+/// the guard against a second launch ends with its process.
+#[test]
+fn a_program_that_exits_at_once_can_be_opened_again_straight_away() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.click(bar, editor);
+    run.advance(0.5);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        1,
+        "guarded while it starts"
+    );
+    let exit = run.record.borrow().exits[0].clone();
+    exit.send_blocking(()).unwrap();
+    run.settle();
+    run.advance(0.1);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        2,
+        "started again after it exited"
+    );
+}
+
+/// Only the process of the launch a guard is for ends it: an earlier one that exits after a later launch leaves the
+/// later guard in place.
+#[test]
+fn an_earlier_launch_exiting_leaves_a_later_launch_guarded() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.click(bar, editor);
+    run.advance(kit::OPEN_GUARD + 1.0);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        2,
+        "the guard of the first ended in time"
+    );
+    let first = run.record.borrow().exits[0].clone();
+    first.send_blocking(()).unwrap();
+    run.settle();
+    run.advance(0.1);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        2,
+        "the second launch is still guarded"
+    );
+}
+
+/// A program that showed a window is running: its exit afterwards changes nothing about how its tile opens.
+#[test]
+fn an_exit_after_a_window_showed_keeps_the_running_application_activated() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    run.click(bar, centre(run.bounds(bar, Role::Button, "Editor")));
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 8,
+            app_id: EDITOR.to_owned(),
+            title: "notes".to_owned(),
+            minimized: false,
+        }],
+    });
+    let exit = run.record.borrow().exits[0].clone();
+    exit.send_blocking(()).unwrap();
+    run.settle();
+    run.click(bar, centre(run.bounds(bar, Role::Button, "Editor")));
+    assert_eq!(run.record.borrow().spawned.len(), 1);
+    assert!(run
+        .requests()
+        .contains(&(1, Request::ActivateApp(EDITOR.to_owned()))));
+}
+
+/// With a host that loads in the background, the bar loads only its resting side on the spot: the magnified side
+/// of its icons and every icon of the grid are asked for in the background, each once, so opening the grid loads
+/// nothing on the spot. An icon the background leaves out (an application with only a window's icon) loads on the
+/// spot when the rest arrive.
+#[test]
+fn icons_load_in_the_background_so_the_first_magnification_and_grid_wait_for_none() {
+    BACKGROUND.set(Some(Vec::new()));
+    let mut run = Run::start();
+    let large = DockConfig::default().large_size;
+    let tile = DockConfig::default().tile_size;
+    let preloads = run.record.borrow().preloads.clone();
+    assert!(!preloads.is_empty(), "a background load was asked for");
+    let asked: Vec<(IconKey, f64)> = preloads.concat();
+    for app in [EDITOR, TERMINAL] {
+        assert!(
+            asked.contains(&(IconKey::App(app.to_owned()), large)),
+            "{app} magnified"
+        );
+    }
+    let grid_side = cupertino_dock::app_grid::GridLayout::ICON;
+    assert!(asked
+        .iter()
+        .any(|(k, side)| matches!(k, IconKey::Named(_)) && *side == grid_side));
+    let mut unique = asked.clone();
+    unique.dedup();
+    assert_eq!(unique.len(), asked.len(), "each icon is asked for once");
+    let loads = run.record.borrow().icon_loads.clone();
+    assert!(
+        loads.iter().all(|(_, side)| *side == tile),
+        "only the resting side on the spot: {loads:?}"
+    );
+    open_grid(&mut run);
+    let loads = run.record.borrow().icon_loads.clone();
+    assert!(
+        loads.iter().all(|(_, side)| *side != grid_side),
+        "the grid's icons were loaded already: {loads:?}"
+    );
+}
+
+#[test]
+fn an_icon_the_background_leaves_out_loads_on_the_spot() {
+    BACKGROUND.set(Some(vec![IconKey::App(EDITOR.to_owned())]));
+    let mut run = Run::start();
+    let large = DockConfig::default().large_size;
+    let loads = run.record.borrow().icon_loads.clone();
+    assert!(
+        loads.contains(&(IconKey::App(EDITOR.to_owned()), large)),
+        "{loads:?}"
+    );
+    assert!(
+        !loads.contains(&(IconKey::App(TERMINAL.to_owned()), large)),
+        "{loads:?}"
+    );
+    // a tile that comes later is asked for in the background as it comes
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 9,
+            app_id: "org.example.Viewer".to_owned(),
+            title: "picture".to_owned(),
+            minimized: false,
+        }],
+    });
+    let last = run
+        .record
+        .borrow()
+        .preloads
+        .last()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        last,
+        vec![(IconKey::App("org.example.Viewer".to_owned()), large)]
+    );
+    let loads = run.record.borrow().icon_loads.clone();
+    assert!(loads.contains(&(IconKey::App("org.example.Viewer".to_owned()), 64.0)));
 }
 
 /// A new bar role's first group lists every resident application: one the dock still holds that it does not list

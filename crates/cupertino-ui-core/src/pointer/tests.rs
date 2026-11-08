@@ -68,7 +68,9 @@ impl Fixture {
                 capture: None,
                 window_active: true,
                 now: Timestamp(0),
+                opening_press: None,
             },
+            popups: &[],
             effects: &mut effects,
         };
         self.pointer

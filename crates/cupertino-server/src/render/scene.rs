@@ -513,20 +513,15 @@ fn wallpaper_element(p: &mut SceneParams<'_>) -> Piece {
         .set
         .bar_height(p.output_id)
         .map_or(0, |h| (h * p.scale).ceil() as u32);
-    // the bar's text sits on its material, so what is under the text is the strip through the material's colour ops
+    // the bar draws nothing of its own over the wallpaper (only a solid strip under Reduce Transparency, when its text
+    // keeps the appearance's), so what is under its text is the strip as it is, with no colour operations
     let appearance = p
         .config
         .appearance
         .with_high_contrast(p.display.increase_contrast);
-    let reduce_transparency = p.display.reduce_transparency;
-    let res = &p.res;
     p.overlays
         .wallpaper
-        .set_bar_material((appearance, reduce_transparency), || {
-            res.recipe("MenuBar", appearance, reduce_transparency)
-                .and_then(|r| r.backdrop.as_ref().map(|(_, _, ops)| ops.clone()))
-                .unwrap_or_default()
-        });
+        .set_bar_material((appearance, p.display.reduce_transparency), Vec::new);
     // the image is laid in the logical space, which a quarter-turned output has on its side
     let px = p
         .output

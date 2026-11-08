@@ -46,6 +46,9 @@ struct Layout {
     /// Backdrop region: x, y, width, height, radius.
     shape: (i32, i32, i32, i32, f64),
     alpha: f64,
+    layer: zwlr_layer_shell_v1::Layer,
+    /// The surface's pixels (straight RGBA by surface-local position); none is fully transparent.
+    paint: Option<fn(i32, i32) -> [u8; 4]>,
 }
 
 /// A backdrop inside a smaller surface, with a rounded corner and half opacity.
@@ -56,6 +59,8 @@ const CARD: Layout = Layout {
     material: "Menu",
     shape: (10, 20, 300, 80, 16.0),
     alpha: 0.5,
+    layer: zwlr_layer_shell_v1::Layer::Top,
+    paint: None,
 };
 
 struct Harness {
@@ -178,7 +183,19 @@ impl ClientState {
     fn attach_and_commit(&mut self, qh: &QueueHandle<ClientState>) {
         let (w, h) = self.layout.size;
         let mut file = tempfile_like((w * h * 4) as usize);
-        file.write_all(&vec![0u8; (w * h * 4) as usize]).unwrap();
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
+        if let Some(paint) = self.layout.paint {
+            for y in 0..h {
+                for x in 0..w {
+                    let [r, g, b, a] = paint(x, y);
+                    // ARGB8888 is B, G, R, A in memory, premultiplied
+                    let pm = |c: u8| (u16::from(c) * u16::from(a) / 255) as u8;
+                    let i = ((y * w + x) * 4) as usize;
+                    pixels[i..i + 4].copy_from_slice(&[pm(b), pm(g), pm(r), a]);
+                }
+            }
+        }
+        file.write_all(&pixels).unwrap();
         let pool = self.shm.create_pool(file.as_fd(), w * h * 4, qh, ());
         let buffer = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, qh, ());
         pool.destroy();
@@ -279,7 +296,7 @@ impl TestClient {
             let layer = layer_shell.get_layer_surface(
                 &surface,
                 None,
-                zwlr_layer_shell_v1::Layer::Top,
+                layout.layer,
                 "backdrop-test".into(),
                 &qh,
                 (),
@@ -567,6 +584,8 @@ fn backdrop_material_pass_matches_the_cpu_reference() {
         material: "MenuBar",
         shape: (0, 0, OUTPUT.0, STRIP_HEIGHT, 0.0),
         alpha: 1.0,
+        layer: zwlr_layer_shell_v1::Layer::Top,
+        paint: None,
     };
     let theme = Theme::load().expect("specification files");
     for (material, dark) in [
@@ -649,6 +668,8 @@ fn glass_pass_matches_the_cpu_model() {
         material: "Glass",
         shape: (0, 0, 400, 160, 24.0),
         alpha: 1.0,
+        layer: zwlr_layer_shell_v1::Layer::Top,
+        paint: None,
     };
     let options = |rt: bool, ic: bool| DisplayOptions {
         reduce_transparency: rt,
@@ -727,6 +748,200 @@ fn glass_pass_matches_the_cpu_model() {
     }
 }
 
+/// Window-like content under the glass: dark grey with icon-sized blue squares and thin white bars, local to a
+/// 600 × 320 surface; one square straddles the glass panel's left edge.
+fn icons(x: i32, y: i32) -> [u8; 4] {
+    let square = |x0: i32, y0: i32| (x0..x0 + 52).contains(&x) && (y0..y0 + 52).contains(&y);
+    if square(76, 100) || square(210, 60) || square(330, 150) || square(470, 90) {
+        [64, 140, 230, 255]
+    } else if x % 120 == 0 || x % 120 == 1 || y == 200 {
+        [240, 240, 240, 255]
+    } else {
+        [43, 43, 43, 255]
+    }
+}
+
+/// `img` blurred with a Gaussian of standard deviation `sigma` pixels (three deviations each way, edges clamped),
+/// on the encoded values, as the glass pass blurs its capture.
+fn gaussian(img: &image::RgbaImage, sigma: f32) -> Vec<[f32; 3]> {
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    let r = (3.0 * sigma).ceil() as i32;
+    let k: Vec<f32> = (-r..=r)
+        .map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp())
+        .collect();
+    let sum: f32 = k.iter().sum();
+    let at = |x: i32, y: i32| {
+        let p = img.get_pixel(x.clamp(0, w - 1) as u32, y.clamp(0, h - 1) as u32);
+        [0, 1, 2].map(|c| p[c] as f32 / 255.0)
+    };
+    let mut tmp = vec![[0.0f32; 3]; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let mut a = [0.0; 3];
+            for (i, kv) in k.iter().enumerate() {
+                let p = at(x + i as i32 - r, y);
+                for c in 0..3 {
+                    a[c] += p[c] * kv / sum;
+                }
+            }
+            tmp[(y * w + x) as usize] = a;
+        }
+    }
+    let mut out = vec![[0.0f32; 3]; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let mut a = [0.0; 3];
+            for (i, kv) in k.iter().enumerate() {
+                let yy = (y + i as i32 - r).clamp(0, h - 1);
+                let p = tmp[(yy * w + x) as usize];
+                for c in 0..3 {
+                    a[c] += p[c] * kv / sum;
+                }
+            }
+            out[(y * w + x) as usize] = a;
+        }
+    }
+    out
+}
+
+/// The GLES glass pass over sharp content against the CPU model: icon-sized squares and thin bars of a surface below
+/// a dark glass panel, one square under its left edge, where the refraction bends what lies past the edge into the
+/// rim. Each blur level and the blur fill of the model are Gaussians of the shot without the glass. The comparison
+/// sees where the pass reads its backdrop: shifting the model's backdrop by 2 pixels breaks it.
+#[test]
+fn glass_pass_over_sharp_content_reads_the_backdrop_where_the_model_does() {
+    use cupertino_glass::glass::{Container, GlassShape};
+    use cupertino_theme::{Appearance, GlassMode};
+    use smithay::desktop::layer_map_for_output;
+    use smithay::input::pointer::CursorImageStatus;
+
+    let content = Layout {
+        size: (600, 320),
+        margin_top: 180,
+        margin_left: 200,
+        material: "Menu",
+        shape: (0, 0, 0, 0, 0.0),
+        alpha: 1.0,
+        layer: zwlr_layer_shell_v1::Layer::Bottom,
+        paint: Some(icons),
+    };
+    let panel = Layout {
+        size: (400, 160),
+        margin_top: 260,
+        margin_left: 300,
+        material: "Glass",
+        shape: (0, 0, 400, 160, 24.0),
+        alpha: 1.0,
+        layer: zwlr_layer_shell_v1::Layer::Top,
+        paint: None,
+    };
+    let shoot = |with_panel: bool| -> Option<image::RgbaImage> {
+        let mut h = Harness::with_config(|c| c.appearance = Appearance::Dark)?;
+        h.state.cursor_status = CursorImageStatus::Hidden;
+        let _content = TestClient::spawn_with(h.socket_path(), content);
+        let _panel = with_panel.then(|| TestClient::spawn_with(h.socket_path(), panel));
+        h.wait_until("the surfaces", |s| {
+            let n = layer_map_for_output(&s.outputs[0].output).layers().count();
+            n == 1 + usize::from(with_panel)
+        });
+        if with_panel {
+            h.wait_until("the glass backdrop", |s| {
+                !layer_backdrops(&s.outputs[0].output).is_empty()
+            });
+        }
+        for _ in 0..6 {
+            h.step();
+        }
+        Some(h.screenshot(if with_panel {
+            "sharp-glass"
+        } else {
+            "sharp-wall"
+        }))
+    };
+    let (Some(wall), Some(gpu)) = (shoot(false), shoot(true)) else {
+        return;
+    };
+    assert_eq!(
+        wall.get_pixel(300 + 10, 260 + 30)[2],
+        230,
+        "the content is under the panel"
+    );
+    let mode = GlassMode {
+        dark: true,
+        ..GlassMode::default()
+    };
+    let (x0, y0) = (panel.margin_left as f32, panel.margin_top as f32);
+    let container = Container::new(
+        vec![GlassShape::new([x0, y0, 400.0, 160.0], 24.0)],
+        0.0,
+        mode,
+    );
+    let p = &container.params;
+    let mut sigmas: Vec<f32> = p.level_radii().to_vec();
+    sigmas.push(p.blur.fill_radius);
+    // only what the panel reads: its bounds and the reach of the widest level and the refraction
+    let reach = p.reach().ceil() as i32;
+    let (cx, cy) = (panel.margin_left - reach, panel.margin_top - reach);
+    let (w, hgt) = (400 + 2 * reach, 160 + 2 * reach);
+    let read =
+        image::imageops::crop_imm(&wall, cx as u32, cy as u32, w as u32, hgt as u32).to_image();
+    let blurred: Vec<Vec<[f32; 3]>> = sigmas.iter().map(|s| gaussian(&read, *s)).collect();
+    let compare = |shift: f32| {
+        let sample = |level: usize, q: [f32; 2]| -> [f32; 3] {
+            // bilinear between pixel centres
+            let (fx, fy) = (q[0] - 0.5 + shift - cx as f32, q[1] - 0.5 - cy as f32);
+            let (ix, iy) = (fx.floor() as i32, fy.floor() as i32);
+            let (tx, ty) = (fx - ix as f32, fy - iy as f32);
+            let px = |x: i32, y: i32| {
+                blurred[level][(y.clamp(0, hgt - 1) * w + x.clamp(0, w - 1)) as usize]
+            };
+            let (a, b, c, d) = (
+                px(ix, iy),
+                px(ix + 1, iy),
+                px(ix, iy + 1),
+                px(ix + 1, iy + 1),
+            );
+            std::array::from_fn(|i| {
+                let top = a[i] + (b[i] - a[i]) * tx;
+                let bottom = c[i] + (d[i] - c[i]) * tx;
+                top + (bottom - top) * ty
+            })
+        };
+        let (mut sum, mut max, mut n) = (0.0f64, 0i32, 0usize);
+        // inside the panel, away from its antialiased outline
+        for y in panel.margin_top + 2..panel.margin_top + 158 {
+            for x in panel.margin_left + 2..panel.margin_left + 398 {
+                let q = [x as f32 + 0.5, y as f32 + 0.5];
+                let (c, cov) = container.shade(q, &sample);
+                if cov < 1.0 {
+                    continue;
+                }
+                let got = gpu.get_pixel(x as u32, y as u32);
+                for i in 0..3 {
+                    let d = (got[i] as i32 - (c[i] * 255.0).round() as i32).abs();
+                    sum += d as f64;
+                    max = max.max(d);
+                    n += 1;
+                }
+            }
+        }
+        (sum / n as f64, max)
+    };
+    let (mean, max) = compare(0.0);
+    let (shifted_mean, shifted_max) = compare(2.0);
+    eprintln!(
+        "glass over sharp content: mean {mean:.3} max {max}; model shifted 2 px: mean {shifted_mean:.3} max {shifted_max}"
+    );
+    assert!(
+        mean < 1.0 && max <= 12,
+        "GLES glass over sharp content vs CPU model: mean {mean:.3} max {max}"
+    );
+    assert!(
+        shifted_max > 2 * max.max(6),
+        "the comparison must see a 2 px offset: {shifted_max} vs {max}"
+    );
+}
+
 /// Reduce Transparency and Increase Contrast turn a translucent menu-bar strip into the opaque fill
 /// of the material's `-Opaque` variant (from the light and from the high-contrast catalog), and
 /// turning them off brings the wallpaper back.
@@ -746,6 +961,8 @@ fn reduce_transparency_and_increase_contrast_draw_the_material_opaque() {
         material: "MenuBar",
         shape: (0, 0, OUTPUT.0, STRIP_HEIGHT, 0.0),
         alpha: 1.0,
+        layer: zwlr_layer_shell_v1::Layer::Top,
+        paint: None,
     };
     let _client = TestClient::spawn_with(h.socket_path(), strip);
     h.wait_until("the strip backdrop", |s| {

@@ -1,23 +1,28 @@
-//! Glue between the controller and CupertinoKit: the card's and the catcher's windows get their layer surfaces from
-//! [`PanelRoles`], the bus interface's toggles and the session lock arrive as messages, and timers pace the backend
-//! writes, the refresh and the fade.
+//! Glue between the controller and CupertinoKit: the panel's and the catcher's windows get their layer surfaces from
+//! [`PanelRoles`], the bus interface's toggles, the session lock, the session's appearance and its Reduce Motion
+//! arrive as messages, and timers pace the backend writes, the refresh, the fade and the motion of a detail view.
 
 use cupertino_alsa::DEVICE_DIR;
 use cupertino_controlcenter::backend::{
-    AlsaVolume, MemoryBattery, MemoryBluetooth, MemoryBrightness, MemoryFocusMode, MemoryVolume,
-    MemoryWifi, RecordingOverlay, SessionVolume,
+    AlsaVolume, DockHiding, MemoryBluetooth, MemoryBrightness, MemoryMedia, MemorySwitch,
+    MemoryVolume, MemoryWifi, PipewireMicrophone, RecordingLauncher, RecordingLock,
+    RecordingOverlay, SessionVolume, SettingsLauncher,
 };
 use cupertino_controlcenter::control;
 use cupertino_controlcenter::controller::{Backends, Controller};
-use cupertino_controlcenter::layout::EDGE_MARGIN;
+use cupertino_controlcenter::layout::{BAR_MARGIN, EDGE_MARGIN};
 use cupertino_controlcenter::lifecycle::Phase;
-use cupertino_controlcenter::model::{Battery, VolumeState, WifiStatus};
+use cupertino_controlcenter::model::{Device, Network, Output, VolumeState, WifiStatus};
+use cupertino_controlcenter::motion::Expansion;
 use cupertino_controlcenter::system::{
-    BtdBluetooth, NetdWifi, NotificationFocusMode, PowerdBattery, PowerdBrightness, SessionOverlay,
+    BtdBluetooth, LogindLock, MprisPlayer, NetdWifi, NotificationFocusMode, PowerdBrightness,
+    SessionOverlay, UpowerKeyboard,
 };
-use cupertino_controlcenter::view::{self, Input, APP_ID, CATCHER_APP_ID};
-use cupertino_kit::core::{Application, Command, Window};
-use cupertino_kit::platform::WindowSpec;
+use cupertino_controlcenter::view::{
+    self, focus_key, Input, Opened, Presentation, Via, APP_ID, CATCHER_APP_ID, DETAIL_FOCUS,
+};
+use cupertino_kit::core::{Application, Command, Key, Window};
+use cupertino_kit::platform::{SystemAppearance, WindowSpec};
 use cupertino_modifiers::Profile;
 use cupertino_pipewire::Wpctl;
 use cupertino_protocol_app::AppEvent;
@@ -41,9 +46,11 @@ const NAMESPACE: &str = "cupertino-controlcenter";
 
 /// Readings of the in-memory backends of `--fake-backends` (arbitrary, for trying the panel).
 const FAKE_NETWORK: &str = "Home Network";
+const FAKE_OTHER_NETWORK: &str = "Guest";
+const FAKE_DEVICE: (&str, &str) = ("00:11:22:33:44:55", "Headphones");
+const FAKE_OUTPUTS: [(u32, &str); 2] = [(31, "Speakers"), (47, "Headphones")];
 const FAKE_BRIGHTNESS: f64 = 0.6;
 const FAKE_VOLUME: f64 = 0.4;
-const FAKE_BATTERY_PERCENT: u8 = 80;
 
 /// The fade's frame interval.
 const FRAME: Duration = Duration::from_micros(16_667);
@@ -81,28 +88,63 @@ impl Options {
 
 fn backends(options: &Options) -> Backends {
     if options.fake_backends {
+        let network = |ssid: &str, connected: bool, secured: bool| Network {
+            ssid: ssid.to_string(),
+            bars: Some(3),
+            secured,
+            known: connected,
+            connected,
+        };
         return Backends {
-            wifi: Box::new(MemoryWifi(WifiStatus {
-                enabled: true,
-                network: Some(FAKE_NETWORK.to_string()),
-            })),
-            bluetooth: Box::new(MemoryBluetooth(false)),
-            focus_mode: Box::new(MemoryFocusMode(false)),
+            wifi: Box::new(MemoryWifi(
+                WifiStatus {
+                    enabled: true,
+                    network: Some(FAKE_NETWORK.to_string()),
+                },
+                vec![
+                    network(FAKE_NETWORK, true, true),
+                    network(FAKE_OTHER_NETWORK, false, false),
+                ],
+            )),
+            bluetooth: Box::new(MemoryBluetooth(
+                false,
+                vec![Device {
+                    id: FAKE_DEVICE.0.to_string(),
+                    name: FAKE_DEVICE.1.to_string(),
+                    connected: false,
+                }],
+            )),
+            microphone: Box::new(MemorySwitch(true)),
+            dock_hiding: Box::new(MemorySwitch(false)),
+            keyboard: Box::new(MemorySwitch(false)),
+            focus_mode: Box::new(MemorySwitch(false)),
             brightness: Box::new(MemoryBrightness(FAKE_BRIGHTNESS)),
-            volume: Box::new(MemoryVolume(VolumeState {
-                level: FAKE_VOLUME,
-                muted: false,
-            })),
-            battery: Box::new(MemoryBattery(Some(Battery {
-                percent: FAKE_BATTERY_PERCENT,
-                charging: false,
-            }))),
+            volume: Box::new(MemoryVolume(
+                VolumeState {
+                    level: FAKE_VOLUME,
+                    muted: false,
+                },
+                FAKE_OUTPUTS
+                    .iter()
+                    .map(|&(id, name)| Output {
+                        id,
+                        name: name.to_string(),
+                        current: id == FAKE_OUTPUTS[0].0,
+                    })
+                    .collect(),
+            )),
+            media: Box::new(MemoryMedia(None)),
+            lock: Box::new(RecordingLock::default()),
+            launcher: Box::new(RecordingLauncher::default()),
             overlay: Box::new(RecordingOverlay::default()),
         };
     }
     Backends {
         wifi: Box::new(NetdWifi::new()),
         bluetooth: Box::new(BtdBluetooth::new()),
+        microphone: Box::new(PipewireMicrophone::new(Wpctl::default())),
+        dock_hiding: Box::new(DockHiding::default()),
+        keyboard: Box::new(UpowerKeyboard::new()),
         focus_mode: Box::new(NotificationFocusMode::new()),
         brightness: Box::new(PowerdBrightness::new()),
         volume: match options.alsa_card {
@@ -112,7 +154,9 @@ fn backends(options: &Options) -> Backends {
                 AlsaVolume::new(PathBuf::from(DEVICE_DIR), None),
             )),
         },
-        battery: Box::new(PowerdBattery::new()),
+        media: Box::new(MprisPlayer::new()),
+        lock: Box::new(LogindLock::new()),
+        launcher: Box::new(SettingsLauncher::default()),
         overlay: Box::new(SessionOverlay::new()),
     }
 }
@@ -126,6 +170,11 @@ pub enum Request {
     Dismiss,
     /// The output the panel's surfaces are on went away: the panel is hidden at once.
     OutputGone,
+    /// The session's appearance: whether it is dark. The panel stays dark either way and tints its glass in a light
+    /// session.
+    Appearance { dark: bool },
+    /// The session's Reduce Motion: a detail view then cross-fades in place instead of growing out of its tile.
+    ReduceMotion(bool),
 }
 
 /// Who holds the card's keyboard. The card takes the exclusive keyboard whenever the panel is shown (the catcher
@@ -200,7 +249,7 @@ impl PanelRoles {
                     spec.size.height.ceil() as u32,
                 ),
                 margin: Margin {
-                    top: self.menu_bar + EDGE_MARGIN,
+                    top: self.menu_bar + BAR_MARGIN,
                     right: EDGE_MARGIN,
                     ..Margin::default()
                 },
@@ -264,10 +313,25 @@ impl SurfaceRoles for PanelRoles {
     }
 
     fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
-        if let Some(AppEvent::SessionLock { locked: true }) = event.downcast_ref::<AppEvent>() {
-            let _ = self.requests.send_blocking(Request::Dismiss);
-            // the window system follows the lock too
-            return None;
+        match event.downcast_ref::<AppEvent>() {
+            // the window system follows the lock, the appearance and the display options too
+            Some(AppEvent::SessionLock { locked: true }) => {
+                let _ = self.requests.send_blocking(Request::Dismiss);
+                return None;
+            }
+            Some(AppEvent::Appearance { dark }) => {
+                let _ = self
+                    .requests
+                    .send_blocking(Request::Appearance { dark: *dark });
+                return None;
+            }
+            Some(AppEvent::DisplayOptions(options)) => {
+                let _ = self
+                    .requests
+                    .send_blocking(Request::ReduceMotion(options.reduce_motion));
+                return None;
+            }
+            _ => {}
         }
         match *event.downcast_ref::<ShellEvent>()? {
             ShellEvent::Configure { surface, size } => {
@@ -330,6 +394,15 @@ pub struct Panel {
     start: Instant,
     /// The timer that counts; one scheduled before it is ignored when it fires.
     timer: u64,
+    /// The session is in the light appearance.
+    light: bool,
+    reduce_motion: bool,
+    /// The detail view opening, open or closing.
+    expansion: Option<Expansion>,
+    /// The detail view is moving: its end has not been seen yet.
+    moving: bool,
+    /// The keyboard or assistive technology started the motion, so the focus follows the view when it ends.
+    follow_focus: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -346,21 +419,58 @@ impl Panel {
         self.start.elapsed().as_secs_f64()
     }
 
-    /// Carry out what the user did on the card; the card only acts while it is shown, not while it fades. A window the
-    /// server closed hides the panel at once in any phase.
-    fn input(&mut self, input: Input) {
+    /// Carry out what the user did on the panel; the panel only acts while it is shown, not while it fades. A window
+    /// the server closed hides the panel at once in any phase.
+    fn input(&mut self, input: Input) -> Vec<Command<Message>> {
         let now = self.now();
         if input == Input::Closed {
             self.controller.vanish();
-            return;
+            self.expansion = None;
+            return Vec::new();
         }
         if self.controller.phase(now) != Phase::Shown {
-            return;
+            return Vec::new();
         }
         match input {
             Input::Press(module) => {
                 self.controller.press(module);
             }
+            Input::Expand(detail, via) => {
+                self.follow_focus = via == Via::Keyboard;
+                self.controller.show_detail(Some(detail));
+                match &mut self.expansion {
+                    Some(e) if e.detail == detail => e.turn(true, now),
+                    _ => self.expansion = Some(Expansion::open(detail, now, self.reduce_motion)),
+                }
+                self.moving = true;
+            }
+            // a view already closing counts as closed: Escape or a press outside then dismisses the panel
+            Input::Collapse(_) if self.controller.detail().is_none() => {
+                self.controller.dismiss(now)
+            }
+            Input::Collapse(via) => {
+                self.follow_focus = via == Via::Keyboard;
+                self.collapse(now);
+            }
+            Input::Media(command) => {
+                self.controller.media(command);
+            }
+            Input::Join(ssid) => {
+                self.controller.join(&ssid);
+            }
+            Input::Connect(id) => {
+                self.controller.connect(&id);
+            }
+            Input::Output(id) => {
+                self.controller.select_output(id);
+            }
+            Input::Settings(detail) => {
+                self.controller.open_settings(now, detail.settings_pane());
+            }
+            Input::EditControls => {
+                self.controller.edit_controls(now);
+            }
+            Input::Focus(key) => return vec![Command::Focus(Key::from(key))],
             Input::Slide(slider, fraction) => {
                 self.controller.slide(now, slider, fraction);
             }
@@ -368,9 +478,52 @@ impl Panel {
             Input::Dismiss => self.controller.dismiss(now),
             Input::Closed => unreachable!("handled above"),
         }
+        Vec::new()
+    }
+
+    /// The open detail view closes back into its tile.
+    fn collapse(&mut self, now: f64) {
+        self.controller.show_detail(None);
+        if let Some(e) = &mut self.expansion {
+            e.turn(false, now);
+            self.moving = true;
+        }
+    }
+
+    /// Ends a detail view's motion that has settled: a closed view leaves the grid alone. Returns where the focus goes
+    /// when the keyboard or assistive technology moved the view: into the view once it is open, back to its module's
+    /// control once it has closed.
+    fn settle(&mut self, now: f64) -> Option<String> {
+        let e = self.expansion.filter(|e| self.moving && e.settled(now))?;
+        self.moving = false;
+        let key = if e.opening {
+            DETAIL_FOCUS.to_owned()
+        } else {
+            self.expansion = None;
+            focus_key(e.detail.module())
+        };
+        self.follow_focus.then_some(key)
+    }
+
+    /// Forget the detail view: the panel opened again or went.
+    fn reset(&mut self) {
+        self.expansion = None;
+        self.moving = false;
+    }
+
+    /// How the panel is shown at `now`.
+    fn presentation(&self, now: f64) -> Presentation {
+        Presentation {
+            alpha: self.controller.opacity(now),
+            light: self.light,
+            detail: self.expansion.map(|e| Opened {
+                detail: e.detail,
+                progress: e.progress(now),
+                morph: !e.reduce_motion,
+            }),
+        }
     }
 }
-
 fn listen(requests: &async_channel::Receiver<Request>) -> Command<Message> {
     let requests = requests.clone();
     Command::Perform(Box::pin(async move {
@@ -381,7 +534,8 @@ fn listen(requests: &async_channel::Receiver<Request>) -> Command<Message> {
     }))
 }
 
-/// The timer for the controller's next write or refresh, the end of the fade, or the next frame of the fade.
+/// The timer for the controller's next write or refresh, the end of the fade, or the next frame of the fade or of a
+/// detail view's motion.
 fn schedule(model: &mut Panel) -> Vec<Command<Message>> {
     model.timer += 1;
     let now = model.now();
@@ -389,9 +543,12 @@ fn schedule(model: &mut Panel) -> Vec<Command<Message>> {
         .controller
         .next_wakeup(now)
         .map(Duration::from_secs_f64);
-    let wait = match model.controller.phase(now) {
-        Phase::Hiding => Some(next.map_or(FRAME, |next| next.min(FRAME))),
-        Phase::Shown | Phase::Hidden => next,
+    let animating = model.controller.phase(now) == Phase::Hiding
+        || (model.moving && model.controller.phase(now) == Phase::Shown);
+    let wait = if animating {
+        Some(next.map_or(FRAME, |next| next.min(FRAME)))
+    } else {
+        next
     };
     let Some(wait) = wait else {
         return Vec::new();
@@ -406,6 +563,7 @@ fn schedule(model: &mut Panel) -> Vec<Command<Message>> {
 fn start(
     controller: Controller,
     requests: async_channel::Receiver<Request>,
+    appearance: SystemAppearance,
 ) -> (Panel, Vec<Command<Message>>) {
     let first = listen(&requests);
     let model = Panel {
@@ -413,12 +571,25 @@ fn start(
         requests,
         start: Instant::now(),
         timer: 0,
+        light: !appearance.dark,
+        reduce_motion: appearance.reduce_motion,
+        expansion: None,
+        moving: false,
+        follow_focus: false,
     };
     (model, vec![first])
 }
 
 fn input(input: Input) -> Message {
     Message::Input(input)
+}
+
+/// The panel keeps the dark appearance whatever the session's, and follows its display options.
+fn always_dark(session: SystemAppearance) -> SystemAppearance {
+    SystemAppearance {
+        dark: true,
+        ..session
+    }
 }
 
 impl Application for Panel {
@@ -431,6 +602,7 @@ impl Application for Panel {
         start(
             Controller::new(backends(&Options::default())),
             async_channel::unbounded().1,
+            SystemAppearance::default(),
         )
     }
 
@@ -439,21 +611,36 @@ impl Application for Panel {
             Message::Request(request) => {
                 let now = model.now();
                 match request {
-                    Request::Toggle => model.controller.toggle(now),
+                    Request::Toggle => {
+                        model.controller.toggle(now);
+                        if model.controller.phase(now) == Phase::Shown {
+                            model.reset();
+                        }
+                    }
                     Request::Dismiss => model.controller.dismiss(now),
-                    Request::OutputGone => model.controller.vanish(),
+                    Request::OutputGone => {
+                        model.controller.vanish();
+                        model.reset();
+                    }
+                    Request::Appearance { dark } => model.light = !dark,
+                    Request::ReduceMotion(on) => model.reduce_motion = on,
                 }
                 let mut commands = schedule(model);
                 commands.push(listen(&model.requests));
                 commands
             }
             Message::Input(event) => {
-                model.input(event);
-                schedule(model)
+                let mut commands = model.input(event);
+                commands.extend(schedule(model));
+                commands
             }
             Message::Timer(timer) if timer == model.timer => {
-                model.controller.tick(model.now());
-                schedule(model)
+                let now = model.now();
+                model.controller.tick(now);
+                let focus = model.settle(now);
+                let mut commands = schedule(model);
+                commands.extend(focus.map(|key| Command::Focus(Key::from(key))));
+                commands
             }
             Message::Timer(_) => Vec::new(),
             Message::Unheard => {
@@ -466,13 +653,11 @@ impl Application for Panel {
     fn view(model: &Panel) -> Vec<Window<Message>> {
         let now = model.now();
         let controls = model.controller.controls();
+        let panel = view::panel(controls, model.presentation(now), input);
         match model.controller.phase(now) {
             Phase::Hidden => Vec::new(),
-            Phase::Shown => vec![
-                view::catcher(input),
-                view::panel(controls, model.controller.opacity(now), input),
-            ],
-            Phase::Hiding => vec![view::panel(controls, model.controller.opacity(now), input)],
+            Phase::Shown => vec![view::catcher(input), panel],
+            Phase::Hiding => vec![panel],
         }
     }
 }
@@ -505,6 +690,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let menu_bar = Theme::load()?.shapes.menu_bar_height.ceil() as i32;
     let mut system = WaylandWindowSystem::connect(Profile::cupertino())
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
+    let appearance = system.appearance().unwrap_or_default();
     let conn = system.connection();
     let shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
     let (sender, requests) = async_channel::unbounded();
@@ -526,9 +712,10 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         catcher: None,
         keyboard: CardKeyboard::default(),
     });
-    cupertino_kit::app::run_on::<Panel>(
+    cupertino_kit::app::run_on_with_appearance::<Panel>(
         system,
-        start(Controller::new(backends(options)), requests),
+        start(Controller::new(backends(options)), requests, appearance),
+        always_dark,
     )?;
     Err("the control panel's window system stopped".into())
 }
@@ -536,7 +723,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cupertino_controlcenter::model::Module;
+    use cupertino_controlcenter::model::{Detail, Module};
 
     fn panel() -> Panel {
         let options = Options {
@@ -546,6 +733,7 @@ mod tests {
         start(
             Controller::new(backends(&options)),
             async_channel::unbounded().1,
+            SystemAppearance::default(),
         )
         .0
     }
@@ -603,6 +791,162 @@ mod tests {
         assert_eq!(app_ids(&model), [CATCHER_APP_ID, APP_ID]);
         // what Escape on the card sends
         Panel::update(&mut model, Message::Input(Input::Dismiss));
+        assert_eq!(model.controller.phase(model.now()), Phase::Hiding);
+    }
+
+    /// Runs the timer as if `seconds` had passed, and returns the keys the update moved the focus to.
+    fn after(model: &mut Panel, seconds: f64) -> Vec<String> {
+        model.start -= Duration::from_secs_f64(seconds);
+        let current = model.timer;
+        Panel::update(model, Message::Timer(current))
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::Focus(Key::Str(key)) => Some(key.into_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn detail(model: &Panel) -> Option<(Detail, f64, bool)> {
+        model
+            .presentation(model.now())
+            .detail
+            .map(|o| (o.detail, o.progress, o.morph))
+    }
+
+    #[test]
+    fn a_detail_view_grows_out_of_its_tile_and_takes_the_focus_once_open() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        let commands = Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::WiFi, Via::Keyboard)),
+        );
+        assert!(timer(&commands), "the motion's next frame is scheduled");
+        assert_eq!(model.controller.detail(), Some(Detail::WiFi));
+        let (_, progress, morph) = detail(&model).unwrap();
+        assert!(progress < 0.1 && morph);
+        assert!(after(&mut model, 0.1).is_empty(), "still moving");
+        assert_eq!(after(&mut model, 1.0), [DETAIL_FOCUS]);
+        assert_eq!(detail(&model), Some((Detail::WiFi, 1.0, true)));
+        assert!(after(&mut model, 1.0).is_empty(), "the focus moves once");
+    }
+
+    #[test]
+    fn collapsing_shrinks_the_view_back_and_gives_the_focus_to_its_module() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::Sound, Via::Keyboard)),
+        );
+        after(&mut model, 1.0);
+        Panel::update(&mut model, Message::Input(Input::Collapse(Via::Keyboard)));
+        assert_eq!(model.controller.detail(), None);
+        assert!(detail(&model).is_some(), "the view is still closing");
+        assert_eq!(after(&mut model, 1.0), [focus_key(Module::Sound)]);
+        assert_eq!(detail(&model), None);
+    }
+
+    #[test]
+    fn escape_while_the_view_closes_dismisses_the_panel() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::WiFi, Via::Keyboard)),
+        );
+        after(&mut model, 0.1);
+        Panel::update(&mut model, Message::Input(Input::Collapse(Via::Keyboard)));
+        assert_eq!(model.controller.phase(model.now()), Phase::Shown);
+        assert!(detail(&model).is_some(), "the view is still closing");
+        Panel::update(&mut model, Message::Input(Input::Collapse(Via::Keyboard)));
+        assert_eq!(model.controller.phase(model.now()), Phase::Hiding);
+    }
+
+    #[test]
+    fn a_click_leaves_the_focus_where_it_is() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::Display, Via::Pointer)),
+        );
+        assert!(after(&mut model, 1.0).is_empty(), "no ring after a click");
+        Panel::update(&mut model, Message::Input(Input::Collapse(Via::Keyboard)));
+        assert_eq!(after(&mut model, 1.0), [focus_key(Module::Display)]);
+    }
+
+    #[test]
+    fn a_reversal_turns_the_motion_where_it_is() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::Bluetooth, Via::Keyboard)),
+        );
+        after(&mut model, 0.08);
+        let (_, halfway, _) = detail(&model).unwrap();
+        Panel::update(&mut model, Message::Input(Input::Collapse(Via::Keyboard)));
+        let (_, turned, _) = detail(&model).unwrap();
+        assert!((turned - halfway).abs() < 0.05, "{turned} from {halfway}");
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::Bluetooth, Via::Keyboard)),
+        );
+        assert_eq!(after(&mut model, 1.0), [DETAIL_FOCUS]);
+    }
+
+    #[test]
+    fn reduce_motion_cross_fades_and_a_light_session_tints_the_glass() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::ReduceMotion(true)));
+        Panel::update(
+            &mut model,
+            Message::Request(Request::Appearance { dark: false }),
+        );
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::Display, Via::Pointer)),
+        );
+        let (_, _, morph) = detail(&model).unwrap();
+        assert!(!morph, "the view fades in place");
+        assert!(model.presentation(model.now()).light);
+        Panel::update(
+            &mut model,
+            Message::Request(Request::Appearance { dark: true }),
+        );
+        assert!(!model.presentation(model.now()).light);
+    }
+
+    #[test]
+    fn opening_the_panel_again_starts_on_the_grid() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::WiFi, Via::Pointer)),
+        );
+        Panel::update(&mut model, Message::Input(Input::Dismiss));
+        after(&mut model, 1.0);
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        assert_eq!(detail(&model), None);
+        assert_eq!(model.controller.detail(), None);
+    }
+
+    #[test]
+    fn an_arrow_key_moves_the_focus_and_the_settings_rows_dismiss() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        let commands = Panel::update(
+            &mut model,
+            Message::Input(Input::Focus("module.bluetooth".to_owned())),
+        );
+        assert!(commands
+            .iter()
+            .any(|c| matches!(c, Command::Focus(Key::Str(k)) if k == "module.bluetooth")));
+        Panel::update(&mut model, Message::Input(Input::Settings(Detail::WiFi)));
         assert_eq!(model.controller.phase(model.now()), Phase::Hiding);
     }
 

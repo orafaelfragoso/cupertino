@@ -1027,6 +1027,7 @@ dependencies = [
  "async-io",
  "cupertino-alsa",
  "cupertino-assets",
+ "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-kit",
  "cupertino-modifiers",

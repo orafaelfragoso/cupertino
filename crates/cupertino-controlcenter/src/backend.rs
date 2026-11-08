@@ -1,18 +1,21 @@
 //! What the panel reads and changes, behind traits so the controller and the tests run on in-memory stand-ins and the
 //! process can run without touching the machine (`--fake-backends`).
 //!
-//! The real implementations over the system bus are in `system` (feature `dbus`); the volume is here: the default
-//! PipeWire sink through `cupertino-pipewire`, else the kernel's sound control interface through `cupertino-alsa`.
+//! The real implementations over the system and session buses are in `system` (feature `dbus`); here are the ones
+//! that need no bus: the default PipeWire sink and source through `cupertino-pipewire` (else the kernel's sound control
+//! interface through `cupertino-alsa`), the dock's hiding switch in its settings file, and the settings application.
 
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use cupertino_alsa::{Master, OpenMode};
+use cupertino_defaults::dock::DockSettings;
 use cupertino_pipewire::{Target, VolumeWorker, Wpctl};
 
-use crate::model::{Battery, VolumeState, WifiStatus};
+use crate::model::{Device, Media, MediaCommand, Network, Output, VolumeState, WifiStatus};
 
 /// Why an effect failed; it disables the tile and goes to the log.
 pub type BackendError = Box<dyn Error + Send + Sync>;
@@ -22,6 +25,10 @@ pub trait Wifi: Send {
     fn read(&mut self) -> Result<WifiStatus, BackendError>;
     /// Switch the radio on or off. The radio may take a moment to follow.
     fn set_enabled(&mut self, enabled: bool) -> Result<(), BackendError>;
+    /// The networks of the last scan, strongest first; asks for a new scan as well.
+    fn networks(&mut self) -> Result<Vec<Network>, BackendError>;
+    /// Join a network of the last scan with the credentials the service holds.
+    fn join(&mut self, ssid: &str) -> Result<(), BackendError>;
 }
 
 /// The Bluetooth adapter.
@@ -29,10 +36,14 @@ pub trait Bluetooth: Send {
     /// Whether the adapter is powered.
     fn read(&mut self) -> Result<bool, BackendError>;
     fn set_powered(&mut self, powered: bool) -> Result<(), BackendError>;
+    /// The paired devices.
+    fn devices(&mut self) -> Result<Vec<Device>, BackendError>;
+    fn set_connected(&mut self, id: &str, connected: bool) -> Result<(), BackendError>;
 }
 
-/// Focus mode (do not disturb).
-pub trait FocusMode: Send {
+/// A setting that is on or off: focus mode (do not disturb), the microphone, the dock's hiding, the keyboard
+/// backlight.
+pub trait Switch: Send {
     fn read(&mut self) -> Result<bool, BackendError>;
     fn set(&mut self, on: bool) -> Result<(), BackendError>;
 }
@@ -50,12 +61,28 @@ pub trait Volume: Send {
     /// Set the level and the mute state together; returns the state the output takes (a background write may still
     /// be running).
     fn set(&mut self, level: f64, muted: bool) -> Result<VolumeState, BackendError>;
+    /// The outputs applications can play to.
+    fn outputs(&mut self) -> Result<Vec<Output>, BackendError>;
+    /// Play to output `id` from now on.
+    fn select_output(&mut self, id: u32) -> Result<(), BackendError>;
 }
 
-/// The battery.
-pub trait BatteryReader: Send {
-    /// `None` on a machine without a battery.
-    fn read(&mut self) -> Result<Option<Battery>, BackendError>;
+/// The media player that is playing, or was last.
+pub trait MediaPlayer: Send {
+    /// `None` when no player has anything.
+    fn read(&mut self) -> Result<Option<Media>, BackendError>;
+    fn command(&mut self, command: MediaCommand) -> Result<(), BackendError>;
+}
+
+/// Locking the session.
+pub trait SessionLock: Send {
+    fn lock(&mut self) -> Result<(), BackendError>;
+}
+
+/// Opening the settings application.
+pub trait Launcher: Send {
+    /// Open the settings application on the page with identifier `pane`.
+    fn open_settings(&mut self, pane: &str) -> Result<(), BackendError>;
 }
 
 /// The overlay the panel tells about a level it changed itself.
@@ -107,6 +134,12 @@ impl Wifi for Unavailable {
     fn set_enabled(&mut self, _: bool) -> Result<(), BackendError> {
         self.fail()
     }
+    fn networks(&mut self) -> Result<Vec<Network>, BackendError> {
+        self.fail()
+    }
+    fn join(&mut self, _: &str) -> Result<(), BackendError> {
+        self.fail()
+    }
 }
 
 impl Bluetooth for Unavailable {
@@ -116,9 +149,15 @@ impl Bluetooth for Unavailable {
     fn set_powered(&mut self, _: bool) -> Result<(), BackendError> {
         self.fail()
     }
+    fn devices(&mut self) -> Result<Vec<Device>, BackendError> {
+        self.fail()
+    }
+    fn set_connected(&mut self, _: &str, _: bool) -> Result<(), BackendError> {
+        self.fail()
+    }
 }
 
-impl FocusMode for Unavailable {
+impl Switch for Unavailable {
     fn read(&mut self) -> Result<bool, BackendError> {
         self.fail()
     }
@@ -143,10 +182,31 @@ impl Volume for Unavailable {
     fn set(&mut self, _: f64, _: bool) -> Result<VolumeState, BackendError> {
         self.fail()
     }
+    fn outputs(&mut self) -> Result<Vec<Output>, BackendError> {
+        self.fail()
+    }
+    fn select_output(&mut self, _: u32) -> Result<(), BackendError> {
+        self.fail()
+    }
 }
 
-impl BatteryReader for Unavailable {
-    fn read(&mut self) -> Result<Option<Battery>, BackendError> {
+impl MediaPlayer for Unavailable {
+    fn read(&mut self) -> Result<Option<Media>, BackendError> {
+        self.fail()
+    }
+    fn command(&mut self, _: MediaCommand) -> Result<(), BackendError> {
+        self.fail()
+    }
+}
+
+impl SessionLock for Unavailable {
+    fn lock(&mut self) -> Result<(), BackendError> {
+        self.fail()
+    }
+}
+
+impl Launcher for Unavailable {
+    fn open_settings(&mut self, _: &str) -> Result<(), BackendError> {
         self.fail()
     }
 }
@@ -157,26 +217,44 @@ impl OverlayNotifier for Unavailable {
     }
 }
 
-/// An in-memory Wi-Fi radio.
-#[derive(Debug)]
-pub struct MemoryWifi(pub WifiStatus);
+/// An in-memory Wi-Fi radio and the networks of its last scan; joining one connects it.
+#[derive(Clone, Debug)]
+pub struct MemoryWifi(pub WifiStatus, pub Vec<Network>);
 
 impl Wifi for MemoryWifi {
     fn read(&mut self) -> Result<WifiStatus, BackendError> {
         Ok(self.0.clone())
     }
     fn set_enabled(&mut self, enabled: bool) -> Result<(), BackendError> {
-        self.0 = WifiStatus {
-            enabled,
-            network: self.0.network.clone().filter(|_| enabled),
-        };
+        self.0.enabled = enabled;
+        if !enabled {
+            self.0.network = None;
+            self.1.iter_mut().for_each(|n| n.connected = false);
+        }
+        Ok(())
+    }
+    fn networks(&mut self) -> Result<Vec<Network>, BackendError> {
+        Ok(if self.0.enabled {
+            self.1.clone()
+        } else {
+            Vec::new()
+        })
+    }
+    fn join(&mut self, ssid: &str) -> Result<(), BackendError> {
+        if !self.1.iter().any(|n| n.ssid == ssid) {
+            return Err(format!("no network {ssid:?} in the last scan").into());
+        }
+        for network in &mut self.1 {
+            network.connected = network.ssid == ssid;
+        }
+        self.0.network = Some(ssid.to_owned());
         Ok(())
     }
 }
 
-/// An in-memory Bluetooth adapter.
-#[derive(Debug)]
-pub struct MemoryBluetooth(pub bool);
+/// An in-memory Bluetooth adapter and its paired devices.
+#[derive(Clone, Debug)]
+pub struct MemoryBluetooth(pub bool, pub Vec<Device>);
 
 impl Bluetooth for MemoryBluetooth {
     fn read(&mut self) -> Result<bool, BackendError> {
@@ -186,13 +264,25 @@ impl Bluetooth for MemoryBluetooth {
         self.0 = powered;
         Ok(())
     }
+    fn devices(&mut self) -> Result<Vec<Device>, BackendError> {
+        Ok(self.1.clone())
+    }
+    fn set_connected(&mut self, id: &str, connected: bool) -> Result<(), BackendError> {
+        let device = self
+            .1
+            .iter_mut()
+            .find(|d| d.id == id)
+            .ok_or_else(|| format!("no device {id}"))?;
+        device.connected = connected;
+        Ok(())
+    }
 }
 
-/// An in-memory focus mode switch.
-#[derive(Debug)]
-pub struct MemoryFocusMode(pub bool);
+/// An in-memory switch.
+#[derive(Clone, Copy, Debug)]
+pub struct MemorySwitch(pub bool);
 
-impl FocusMode for MemoryFocusMode {
+impl Switch for MemorySwitch {
     fn read(&mut self) -> Result<bool, BackendError> {
         Ok(self.0)
     }
@@ -202,8 +292,8 @@ impl FocusMode for MemoryFocusMode {
     }
 }
 
-/// An in-memory display brightness.
-#[derive(Debug)]
+/// An in-memory backlight.
+#[derive(Clone, Copy, Debug)]
 pub struct MemoryBrightness(pub f64);
 
 impl Brightness for MemoryBrightness {
@@ -211,57 +301,215 @@ impl Brightness for MemoryBrightness {
         Ok(self.0)
     }
     fn set(&mut self, level: f64) -> Result<(), BackendError> {
-        self.0 = level;
+        self.0 = level.clamp(0.0, 1.0);
         Ok(())
     }
 }
 
-/// An in-memory volume.
-#[derive(Debug)]
-pub struct MemoryVolume(pub VolumeState);
+/// An in-memory output volume and its outputs.
+#[derive(Clone, Debug)]
+pub struct MemoryVolume(pub VolumeState, pub Vec<Output>);
 
 impl Volume for MemoryVolume {
     fn read(&mut self) -> Result<VolumeState, BackendError> {
         Ok(self.0)
     }
     fn set(&mut self, level: f64, muted: bool) -> Result<VolumeState, BackendError> {
-        self.0 = VolumeState { level, muted };
+        self.0 = VolumeState {
+            level: level.clamp(0.0, 1.0),
+            muted,
+        };
         Ok(self.0)
+    }
+    fn outputs(&mut self) -> Result<Vec<Output>, BackendError> {
+        Ok(self.1.clone())
+    }
+    fn select_output(&mut self, id: u32) -> Result<(), BackendError> {
+        if !self.1.iter().any(|o| o.id == id) {
+            return Err(format!("no output {id}").into());
+        }
+        for output in &mut self.1 {
+            output.current = output.id == id;
+        }
+        Ok(())
     }
 }
 
-/// An in-memory battery.
-#[derive(Debug)]
-pub struct MemoryBattery(pub Option<Battery>);
+/// An in-memory media player: `None` plays nothing; play/pause flips what it has.
+#[derive(Clone, Debug)]
+pub struct MemoryMedia(pub Option<Media>);
 
-impl BatteryReader for MemoryBattery {
-    fn read(&mut self) -> Result<Option<Battery>, BackendError> {
-        Ok(self.0)
+impl MediaPlayer for MemoryMedia {
+    fn read(&mut self) -> Result<Option<Media>, BackendError> {
+        Ok(self.0.clone())
+    }
+    fn command(&mut self, command: MediaCommand) -> Result<(), BackendError> {
+        let media = self.0.as_mut().ok_or("nothing is playing")?;
+        if command == MediaCommand::PlayPause {
+            media.playing = !media.playing;
+        }
+        Ok(())
     }
 }
 
-/// An overlay stand-in that records what it was told; the handle keeps reading after the notifier moved into a controller.
-#[derive(Clone, Debug, Default)]
-pub struct RecordingOverlay {
-    shown: Arc<Mutex<Vec<(OverlayKind, f64)>>>,
+/// What a stand-in for the session, the settings application and the overlay was asked, shared with its clones.
+#[derive(Clone, Debug)]
+pub struct Recording<T> {
+    calls: Arc<Mutex<Vec<T>>>,
 }
+
+impl<T> Default for Recording<T> {
+    fn default() -> Self {
+        Self {
+            calls: Arc::default(),
+        }
+    }
+}
+
+impl<T: Clone> Recording<T> {
+    pub fn calls(&self) -> Vec<T> {
+        self.calls
+            .lock()
+            .expect("the lock is never poisoned")
+            .clone()
+    }
+
+    fn push(&self, call: T) {
+        self.calls
+            .lock()
+            .expect("the lock is never poisoned")
+            .push(call);
+    }
+}
+
+/// Records each lock it is asked for.
+pub type RecordingLock = Recording<()>;
+
+impl SessionLock for RecordingLock {
+    fn lock(&mut self) -> Result<(), BackendError> {
+        self.push(());
+        Ok(())
+    }
+}
+
+/// Records each settings page it is asked to open.
+pub type RecordingLauncher = Recording<String>;
+
+impl Launcher for RecordingLauncher {
+    fn open_settings(&mut self, pane: &str) -> Result<(), BackendError> {
+        self.push(pane.to_owned());
+        Ok(())
+    }
+}
+
+/// Records what the overlay was asked to show.
+pub type RecordingOverlay = Recording<(OverlayKind, f64)>;
 
 impl RecordingOverlay {
     /// Everything shown so far, oldest first.
     pub fn shown(&self) -> Vec<(OverlayKind, f64)> {
-        self.shown
-            .lock()
-            .expect("the lock is never poisoned")
-            .clone()
+        self.calls()
     }
 }
 
 impl OverlayNotifier for RecordingOverlay {
     fn show(&mut self, kind: OverlayKind, level: f64) -> Result<(), BackendError> {
-        self.shown
-            .lock()
-            .expect("the lock is never poisoned")
-            .push((kind, level));
+        self.push((kind, level));
+        Ok(())
+    }
+}
+
+/// The default PipeWire source: on while it records, off while muted. Read and written in the background, as the
+/// output volume is.
+pub struct PipewireMicrophone {
+    worker: VolumeWorker,
+    /// The level last read, written back with a change of the mute state.
+    level: f64,
+}
+
+impl PipewireMicrophone {
+    pub fn new(wpctl: Wpctl) -> Self {
+        let worker = VolumeWorker::new(wpctl, Target::DefaultSource);
+        worker.request_read(false);
+        Self { worker, level: 1.0 }
+    }
+}
+
+impl Switch for PipewireMicrophone {
+    fn read(&mut self) -> Result<bool, BackendError> {
+        self.worker.request_read(false);
+        let reading = self
+            .worker
+            .latest()
+            .ok_or("the sound server has not answered yet")?;
+        let volume = reading.volume?;
+        self.level = volume.level;
+        Ok(!volume.muted)
+    }
+
+    fn set(&mut self, on: bool) -> Result<(), BackendError> {
+        Ok(self.worker.set(cupertino_pipewire::Volume {
+            level: self.level,
+            muted: !on,
+        })?)
+    }
+}
+
+/// The dock's hiding, the `autohide` key of its settings file, which the dock follows as it changes.
+#[derive(Clone, Debug, Default)]
+pub struct DockHiding {
+    /// The file; `None` takes the dock's own (`DockSettings::path`).
+    pub path: Option<PathBuf>,
+}
+
+impl DockHiding {
+    fn path(&self) -> Result<PathBuf, BackendError> {
+        self.path
+            .clone()
+            .or_else(DockSettings::path)
+            .ok_or_else(|| "there is no settings directory".into())
+    }
+}
+
+impl Switch for DockHiding {
+    fn read(&mut self) -> Result<bool, BackendError> {
+        let (settings, _) = DockSettings::load(&self.path()?, None)?;
+        Ok(settings.autohide.unwrap_or(false))
+    }
+
+    fn set(&mut self, on: bool) -> Result<(), BackendError> {
+        let path = self.path()?;
+        let (mut settings, _) = DockSettings::load(&path, None)?;
+        settings.autohide = Some(on);
+        settings.store(&path)?;
+        Ok(())
+    }
+}
+
+/// The settings application, started as its own process (`cupertino-settings --pane <page>`).
+#[derive(Clone, Debug)]
+pub struct SettingsLauncher {
+    pub program: PathBuf,
+}
+
+impl Default for SettingsLauncher {
+    fn default() -> Self {
+        Self {
+            program: PathBuf::from("cupertino-settings"),
+        }
+    }
+}
+
+impl Launcher for SettingsLauncher {
+    fn open_settings(&mut self, pane: &str) -> Result<(), BackendError> {
+        let mut child = Command::new(&self.program)
+            .args(["--pane", pane])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("cannot start {}: {e}", self.program.display()))?;
+        // reap it when it exits, so a long-running panel leaves no zombie behind
+        std::thread::spawn(move || child.wait());
         Ok(())
     }
 }
@@ -341,6 +589,14 @@ impl Volume for AlsaVolume {
             state(master)
         })
     }
+
+    fn outputs(&mut self) -> Result<Vec<Output>, BackendError> {
+        Err("without a sound server the card's master is the only output".into())
+    }
+
+    fn select_output(&mut self, _: u32) -> Result<(), BackendError> {
+        Err("without a sound server the card's master is the only output".into())
+    }
 }
 
 /// The default PipeWire sink through `wpctl`, so the slider shows the level `wpctl get-volume` reports. A read that
@@ -401,6 +657,35 @@ impl Volume for SessionVolume {
         self.worker
             .set(cupertino_pipewire::Volume { level, muted })?;
         Ok(VolumeState { level, muted })
+    }
+
+    /// The sinks of the last reading, asking for the next one with them.
+    fn outputs(&mut self) -> Result<Vec<Output>, BackendError> {
+        if !self.pipewire {
+            return self.alsa.outputs();
+        }
+        self.worker.request_read(true);
+        let sinks = match self.worker.latest().and_then(|r| r.sinks) {
+            Some(sinks) => sinks?,
+            None => self.wpctl.sinks()?,
+        };
+        Ok(sinks
+            .into_iter()
+            .map(|sink| Output {
+                id: sink.id,
+                name: sink.name,
+                current: sink.default,
+            })
+            .collect())
+    }
+
+    fn select_output(&mut self, id: u32) -> Result<(), BackendError> {
+        if !self.pipewire {
+            return self.alsa.select_output(id);
+        }
+        self.wpctl.set_default_sink(id)?;
+        self.worker.request_read(true);
+        Ok(())
     }
 }
 
@@ -463,10 +748,13 @@ mod tests {
 
     #[test]
     fn the_memory_radio_loses_its_network_when_switched_off() {
-        let mut wifi = MemoryWifi(WifiStatus {
-            enabled: true,
-            network: Some("Home".into()),
-        });
+        let mut wifi = MemoryWifi(
+            WifiStatus {
+                enabled: true,
+                network: Some("Home".into()),
+            },
+            Vec::new(),
+        );
         wifi.set_enabled(false).unwrap();
         assert_eq!(
             wifi.read().unwrap(),
@@ -500,5 +788,136 @@ mod tests {
             overlay.shown(),
             [(OverlayKind::Volume, 0.5), (OverlayKind::Mute, 0.0)]
         );
+    }
+
+    #[test]
+    fn the_dock_hiding_switch_writes_the_dock_settings_file_and_keeps_its_other_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dock.conf");
+        std::fs::write(&path, "pin = foot\nmagnification = on\n").unwrap();
+        let mut hiding = DockHiding {
+            path: Some(path.clone()),
+        };
+        assert!(
+            !hiding.read().unwrap(),
+            "hiding is off unless the file says so"
+        );
+        hiding.set(true).unwrap();
+        assert!(hiding.read().unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("pin = foot") && text.contains("magnification = on"),
+            "{text}"
+        );
+        hiding.set(false).unwrap();
+        assert!(!hiding.read().unwrap());
+    }
+
+    #[test]
+    fn the_microphone_is_on_while_the_default_source_records() {
+        let live = cupertino_pipewire::Volume {
+            level: 0.7,
+            muted: false,
+        };
+        let fake = FakeWpctl::new(live, live);
+        let mut microphone = PipewireMicrophone::new(Wpctl::new(fake.program()));
+        microphone.worker.wait_idle();
+        assert!(microphone.read().unwrap());
+        microphone.set(false).unwrap();
+        microphone.worker.wait_idle();
+        assert_eq!(
+            fake.volume(Target::DefaultSource),
+            cupertino_pipewire::Volume {
+                level: 0.7,
+                muted: true
+            },
+            "muting keeps the level"
+        );
+        assert!(!microphone.read().unwrap());
+        assert_eq!(
+            fake.volume(Target::DefaultSink),
+            live,
+            "the output is left alone"
+        );
+    }
+
+    #[test]
+    fn the_session_volume_lists_the_sinks_and_plays_to_the_one_chosen() {
+        let half = cupertino_pipewire::Volume {
+            level: 0.5,
+            muted: false,
+        };
+        let fake = FakeWpctl::new(half, half);
+        fake.set_sinks(&[(31, "Speakers"), (47, "Headphones")], 31);
+        let alsa = tempfile::tempdir().unwrap();
+        let mut volume = SessionVolume::new(
+            Wpctl::new(fake.program()),
+            AlsaVolume::new(alsa.path().to_path_buf(), None),
+        );
+        volume.read().unwrap();
+        let names = |outputs: Vec<Output>| {
+            outputs
+                .into_iter()
+                .map(|o| (o.id, o.current))
+                .collect::<Vec<_>>()
+        };
+        volume.outputs().unwrap();
+        volume.worker.wait_idle();
+        assert_eq!(names(volume.outputs().unwrap()), [(31, true), (47, false)]);
+        volume.select_output(47).unwrap();
+        assert_eq!(fake.default_sink(), 47);
+        volume.worker.wait_idle();
+        assert_eq!(names(volume.outputs().unwrap()), [(31, false), (47, true)]);
+    }
+
+    #[test]
+    fn the_memory_stand_ins_join_a_network_connect_a_device_and_choose_an_output() {
+        let network = |ssid: &str| Network {
+            ssid: ssid.into(),
+            bars: Some(3),
+            secured: false,
+            known: false,
+            connected: false,
+        };
+        let mut wifi = MemoryWifi(
+            WifiStatus {
+                enabled: true,
+                network: None,
+            },
+            vec![network("A"), network("B")],
+        );
+        wifi.join("B").unwrap();
+        assert_eq!(wifi.read().unwrap().network.as_deref(), Some("B"));
+        assert!(wifi.join("C").is_err());
+        let mut bluetooth = MemoryBluetooth(
+            true,
+            vec![Device {
+                id: "x".into(),
+                name: "Keyboard".into(),
+                connected: false,
+            }],
+        );
+        bluetooth.set_connected("x", true).unwrap();
+        assert!(bluetooth.devices().unwrap()[0].connected);
+        let mut volume = MemoryVolume(
+            VolumeState {
+                level: 0.5,
+                muted: false,
+            },
+            vec![
+                Output {
+                    id: 1,
+                    name: "A".into(),
+                    current: true,
+                },
+                Output {
+                    id: 2,
+                    name: "B".into(),
+                    current: false,
+                },
+            ],
+        );
+        volume.select_output(2).unwrap();
+        assert!(volume.outputs().unwrap()[1].current);
     }
 }

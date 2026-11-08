@@ -1422,20 +1422,21 @@ impl Server {
     }
 }
 
-/// Toggling the card's Bluetooth switch and dragging its sound slider reach the panel's (in-memory) backends: the card
-/// draws the new state, and still does after the panel has read its backends again.
-fn interact_with_card(server: &mut Server, card: &PanelSurface) {
-    /// Centre of the Bluetooth switch and a point near the end of the sound slider's track, in card points (the
-    /// panel's layout with the battery row of `--fake-backends`).
-    const BLUETOOTH: (i32, i32) = (77, 115);
-    const SOUND_TRACK: (i32, i32) = (270, 305);
+/// Toggling the card's Bluetooth switch and pressing its sound slider at `sound_x` reach the panel's (in-memory)
+/// backends: the card draws the new state, and still does after the panel has read its backends again. The level goes
+/// where the press is, so each call presses at another point.
+fn interact_with_card(server: &mut Server, card: &PanelSurface, sound_x: i32) {
+    /// Centre of the Bluetooth switch and the line of the sound slider's track, in card points (the panel's tiles
+    /// start 8 points in from the window's corner).
+    const BLUETOOTH: (i32, i32) = (40, 116);
+    let sound_track = (sound_x, 430);
     /// Long enough for the card to draw the frames of a click.
     const SETTLE: Duration = Duration::from_millis(300);
     /// The panel reads its backends again every second while it is open.
     const REFRESH: Duration = Duration::from_millis(1500);
     let at = |(x, y): (i32, i32)| card.rect.loc + Point::from((x, y));
     let bytes = || surface_bytes(&card.surface).unwrap();
-    for (what, point) in [("switch", BLUETOOTH), ("slider", SOUND_TRACK)] {
+    for (what, point) in [("switch", BLUETOOTH), ("slider", sound_track)] {
         let before = bytes();
         server.click_at(at(point));
         server.wait_until("the card to draw the new state", |_| {
@@ -1532,7 +1533,7 @@ fn the_control_panel_goes_with_its_output_and_opens_again_on_the_remaining_or_re
         "trace: Toggle: card at {:?} on the remaining output, keyboard on the card",
         card.rect
     );
-    interact_with_card(&mut server, &card);
+    interact_with_card(&mut server, &card, 208);
     eprintln!("trace: Bluetooth switch and sound slider drew their new state through a refresh");
     const ESCAPE: u32 = 1 + 8;
     for state in [KeyState::Pressed, KeyState::Released] {
@@ -1589,7 +1590,7 @@ fn the_control_panel_goes_with_its_output_and_opens_again_on_the_remaining_or_re
         "trace: display plugged in, Toggle: card at {:?} on it, keyboard on the card",
         card.rect
     );
-    interact_with_card(&mut server, &card);
+    interact_with_card(&mut server, &card, 80);
     eprintln!("trace: Bluetooth switch and sound slider drew their new state through a refresh");
     assert_eq!(
         server.state.supervisor.pid_of(PANEL),

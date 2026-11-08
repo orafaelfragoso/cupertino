@@ -999,6 +999,28 @@ fn the_selected_file_shows_its_preview_once_the_host_reads_it() {
             "{expected:?} in {texts:?}"
         );
     }
+    // the pane takes the width the list leaves, to the panel's trailing edge, and centres the name in it
+    let bounds = |role: Role, name: &str| {
+        run.snapshot()
+            .accessibility
+            .iter()
+            .find(|(_, n)| n.role == role && n.name.as_deref() == Some(name))
+            .map(|(_, n)| n.bounds)
+            .unwrap_or_else(|| panic!("{role:?} {name:?}"))
+    };
+    let pane = bounds(Role::Group, "Preview");
+    let edge = panel_rect(panel_height(&run.model().panel)).max_x();
+    assert!((pane.max_x() - edge).abs() < 1.0, "{pane:?} ends at {edge}");
+    assert!(pane.width() > WIDTH - LIST_WIDTH - 2.0, "{pane:?}");
+    let name = bounds(Role::StaticText, "notes.txt");
+    assert!(
+        ((name.min_x() + name.max_x()) / 2.0 - (pane.min_x() + pane.max_x()) / 2.0).abs() < 1.0,
+        "{name:?} is centred in {pane:?}"
+    );
+    // a detail's label ends short of the pane's middle and its value starts past it
+    let middle = (pane.min_x() + pane.max_x()) / 2.0;
+    assert!(bounds(Role::StaticText, "Size").max_x() <= middle);
+    assert!(bounds(Role::StaticText, "23 bytes").min_x() >= middle);
     assert!(run.names(Role::Group).iter().any(|g| g == "Preview"));
     // a preview of a result no longer selected is dropped
     run.deliver(Message::Previewed(

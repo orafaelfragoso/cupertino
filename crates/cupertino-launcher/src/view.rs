@@ -22,7 +22,7 @@ use cupertino_kit::core::{
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
-    Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, SizeSpec,
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_kit::platform::{
     DecorationMode, KeyEvent, Mods, MouseButton, PointerEvent, WindowSpec,
@@ -109,8 +109,11 @@ pub const PREVIEW_TEXT_SIZE: f64 = 11.0;
 pub const PREVIEW_TEXT_LINES: usize = 9;
 pub const PREVIEW_TITLE_SIZE: f64 = 15.0;
 pub const PREVIEW_VALUE_SIZE: f64 = 28.0;
-/// The width of a detail's label, which ends at the value's start.
-pub const DETAIL_LABEL: f64 = 72.0;
+/// Between a detail's label and its value.
+pub const DETAIL_GAP: f64 = 8.0;
+/// The width of a detail's label, which ends where its value starts: the labels end just short of the pane's middle
+/// and the values start just past it.
+pub const DETAIL_LABEL: f64 = (WIDTH - LIST_WIDTH - 1.0 - 2.0 * PREVIEW_PADDING - DETAIL_GAP) / 2.0;
 pub const ACTION_HEIGHT: f64 = 26.0;
 pub const ACTION_GAP: f64 = 4.0;
 /// Action buttons shown at once.
@@ -1299,11 +1302,12 @@ impl<M: 'static> Plain<M> {
         row
     }
 
-    /// The preview pane: its children centred one above the other, inside the pane's padding.
+    /// The preview pane: the width the list leaves, its children centred one above the other inside its padding.
     fn pane(children: Vec<Element<M>>) -> Self {
         let mut pane = Self::stack(Axis::Vertical, 6.0, Align::Center, children);
         pane.layout.width = SizeSpec::Fill;
         pane.layout.height = SizeSpec::Fill;
+        pane.layout.flex = Flex::grow(1.0);
         pane.layout.insets = Insets {
             top: PREVIEW_PADDING,
             left: PREVIEW_PADDING,
@@ -1316,7 +1320,7 @@ impl<M: 'static> Plain<M> {
 
     /// A detail of the preview: its label, ending at the value's start, then its value.
     fn detail(children: Vec<Element<M>>) -> Self {
-        let mut detail = Self::stack(Axis::Horizontal, 8.0, Align::Start, children);
+        let mut detail = Self::stack(Axis::Horizontal, DETAIL_GAP, Align::Start, children);
         detail.layout.width = SizeSpec::Fill;
         detail
     }

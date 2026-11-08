@@ -37,11 +37,6 @@ pub fn is_high_contrast(env: &Environment) -> bool {
     env.theme.preferences.appearance.is_high_contrast()
 }
 
-/// Whether the session asks for opaque surfaces: Reduce Transparency or Increase Contrast.
-pub fn is_opaque(env: &Environment) -> bool {
-    env.theme.preferences.reduce_transparency || is_high_contrast(env)
-}
-
 fn shape(rect: Rect, radius: f64) -> Shape {
     if radius > 0.0 {
         Shape::RoundedRect { rect, radius }

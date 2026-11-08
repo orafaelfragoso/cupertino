@@ -240,6 +240,8 @@ enum DockEvent {
     OverviewClosed,
     HotCorner(u32),
     Gesture(u32),
+    /// `app_resident`: the application id and whether it is resident.
+    Resident(String, bool),
     Done,
 }
 
@@ -428,6 +430,7 @@ impl Dispatch<CupertinoDockV1, ()> for ClientState {
             E::Gesture {
                 kind: WEnum::Value(k),
             } => DockEvent::Gesture(k as u32),
+            E::AppResident { app_id, resident } => DockEvent::Resident(app_id, resident != 0),
             E::Done => DockEvent::Done,
             other => panic!("unexpected event {other:?}"),
         };
@@ -508,6 +511,8 @@ enum Cmd {
     GtkRequestFocus(Option<String>),
     /// An application window sets an icon of this name and one [`ICON_SIDE`] buffer of [`ICON_PIXEL`]s, and commits.
     SetIcon(&'static str),
+    /// An application destroys its toplevel and stays connected.
+    CloseWindow,
     /// The dock asks for exclusive keyboard interactivity (true) or for none, and commits.
     SetKeyboard(bool),
     /// Drop the connection: the dock process died.
@@ -671,7 +676,11 @@ impl DockClient {
                         });
                     commit_surface.commit();
                 }
-                Cmd::Activate(_) | Cmd::GtkPresent | Cmd::GtkRequestFocus(_) | Cmd::SetIcon(_) => {
+                Cmd::Activate(_)
+                | Cmd::GtkPresent
+                | Cmd::GtkRequestFocus(_)
+                | Cmd::SetIcon(_)
+                | Cmd::CloseWindow => {
                     panic!("the dock does not act as an application window")
                 }
                 Cmd::Quit => unreachable!("handled by the client loop"),
@@ -767,6 +776,11 @@ fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
                 icons.set_icon(&toplevel, Some(&icon));
                 window.commit();
                 kept.push((icon, buffer));
+            }
+            Cmd::CloseWindow => {
+                toplevel.destroy();
+                window.attach(None, 0, 0);
+                window.commit();
             }
             _ => panic!("an application window takes no dock request"),
         });
@@ -924,6 +938,141 @@ fn a_window_icon_follows_its_window_event_from_shell_version_17_only() {
         ),
         "a version 9 dock is sent no icon"
     );
+}
+
+/// From shell version 19 an application is resident while the client that showed its window stays connected, with
+/// or without windows; it stops being resident when that client disconnects. An older dock is told nothing of it.
+#[test]
+fn an_application_stays_resident_after_its_last_window_until_its_client_disconnects() {
+    let Some(mut h) = Harness::new() else { return };
+    let app = spawn_app(h.socket_path(), "org.example.notes");
+    let id = h.mapped_window(1).0 as u32;
+    let out = h.state.outputs[0].id;
+    let quit = |h: &mut Harness, dock: DockClient| {
+        h.wait_until("the dock surface to be placed", |s| {
+            s.dock_rect(out).is_some()
+        });
+        dock.send(Cmd::Quit);
+        h.wait_until("the dock to go", |s| s.dock_rect(out).is_none());
+    };
+
+    let old = DockClient::spawn_at(h.shell_stream(), true, 0, 18);
+    h.wait_for_groups(&old, 1);
+    assert!(
+        matches!(
+            &old.groups()[0][..],
+            [DockEvent::Window { .. }, DockEvent::Done]
+        ),
+        "a version 18 dock is sent no residency"
+    );
+    quit(&mut h, old);
+
+    let dock = DockClient::spawn_at(h.shell_stream(), true, 0, 19);
+    h.wait_for_groups(&dock, 1);
+    let first = &dock.groups()[0];
+    assert!(matches!(first[0], DockEvent::Window { id: w, .. } if w == id));
+    assert_eq!(
+        first[1..],
+        [
+            DockEvent::Resident("org.example.notes".into(), true),
+            DockEvent::Done
+        ]
+    );
+
+    // the last window closes; the process still runs, so the application stays resident
+    app.commands.send(Cmd::CloseWindow).unwrap();
+    h.wait_for_groups(&dock, 2);
+    assert_eq!(
+        dock.groups()[1],
+        vec![DockEvent::Closed(id), DockEvent::Done]
+    );
+    h.advance(0.5);
+    assert_eq!(dock.groups().len(), 2, "no change while it runs");
+    assert_eq!(
+        h.state.resident_apps().into_iter().collect::<Vec<_>>(),
+        ["org.example.notes"]
+    );
+
+    // the process exits: it is resident no longer
+    app.commands.send(Cmd::Quit).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while dock.groups().len() < 3 && Instant::now() < end {
+        h.advance(0.05);
+    }
+    assert_eq!(
+        dock.groups()[2],
+        vec![
+            DockEvent::Resident("org.example.notes".into(), false),
+            DockEvent::Done
+        ]
+    );
+    assert!(h.state.resident_apps().is_empty());
+
+    // a dock that binds later is told only of the running applications
+    quit(&mut h, dock);
+    let late = DockClient::spawn_at(h.shell_stream(), true, 0, 19);
+    h.wait_for_groups(&late, 1);
+    assert_eq!(late.groups()[0], vec![DockEvent::Done]);
+    assert_eq!(late.error(), None);
+}
+
+/// The X11 satellite shows every X11 application's windows on its one connection, which outlives each of them: its
+/// windows make no application resident, so an X11 application leaves the dock with its last window.
+#[test]
+fn the_x11_satellite_makes_no_application_resident() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(mut h) = Harness::new() else { return };
+    let root = tempfile::tempdir().unwrap();
+    let (tmp, runtime) = (root.path().join("tmp"), root.path().join("run"));
+    let sockets = tmp.join(".X11-unix");
+    std::fs::create_dir_all(&sockets).unwrap();
+    std::fs::create_dir(&runtime).unwrap();
+    std::fs::set_permissions(&sockets, std::fs::Permissions::from_mode(0o1777)).unwrap();
+    let program = runtime.join("satellite");
+    std::fs::write(&program, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let display = cupertino_server::xwayland::XDisplay::open(&tmp, &runtime).unwrap();
+    let x_socket = sockets.join(display.name().replace(':', "X"));
+    let x = cupertino_server::xwayland::XWayland::start(
+        display,
+        program,
+        "wayland-test".into(),
+        &h.event_loop.handle(),
+        |s: &mut Cupertino| s.xwayland.as_mut(),
+        |_| {},
+    )
+    .unwrap();
+    h.state.xwayland = Some(x);
+    // an X11 program connects, and the satellite starts
+    let _x_client = UnixStream::connect(&x_socket).unwrap();
+    h.wait_until("the satellite to start", |s| {
+        s.xwayland.as_ref().and_then(|x| x.pid()).is_some()
+    });
+    let satellite = h.state.xwayland.as_ref().and_then(|x| x.pid()).unwrap();
+    // every connection of the test is the satellite's
+    h.state.process_of = Box::new(move |_, client| {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        client.id().hash(&mut hasher);
+        Some((satellite, hasher.finish()))
+    });
+
+    let app = spawn_app(h.socket_path(), "org.example.xterm");
+    let id = h.mapped_window(1).0 as u32;
+    let dock = DockClient::spawn_at(h.shell_stream(), true, 0, 19);
+    h.wait_for_groups(&dock, 1);
+    assert!(
+        matches!(&dock.groups()[0][..], [DockEvent::Window { id: w, .. }, DockEvent::Done] if *w == id),
+        "{:?}",
+        dock.groups()
+    );
+    app.commands.send(Cmd::CloseWindow).unwrap();
+    h.wait_for_groups(&dock, 2);
+    assert_eq!(
+        dock.groups()[1],
+        vec![DockEvent::Closed(id), DockEvent::Done]
+    );
+    assert!(h.state.resident_apps().is_empty());
 }
 
 #[test]

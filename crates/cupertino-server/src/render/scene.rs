@@ -1192,7 +1192,7 @@ fn minimize_elements(
     slide: f64,
     active: bool,
 ) -> Option<Vec<Piece>> {
-    let kind = p.fx.cfg.minimize?;
+    let kind = super::motion::minimize_kind(p.fx.cfg.minimize, p.display)?;
     p.res.mesh.as_ref()?;
     let geo = entry.window.geometry();
     let ins = entry.insets();

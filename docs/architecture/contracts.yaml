@@ -497,7 +497,7 @@
   source_match: Cupertino, CupertinoAppEffectsV1
 - name: cupertino_shell_v1
   kind: wayland-global
-  version: 18
+  version: 19
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private

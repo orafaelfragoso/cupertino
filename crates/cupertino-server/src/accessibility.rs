@@ -114,6 +114,15 @@ impl Cupertino {
         self.accessibility.settings.display
     }
 
+    /// Time the window model's minimize and restore for the effect drawn: the configured one, or under Reduce Motion
+    /// its stand-in (`render::motion::minimize_kind`).
+    pub fn apply_minimize_timing(&mut self) {
+        let mut effects = self.config.effects;
+        effects.minimize =
+            crate::render::motion::minimize_kind(effects.minimize, self.display_options());
+        crate::state::set_minimize_timing(self.wm.config_mut(), effects);
+    }
+
     /// The appearance the server draws with: the session's light or dark appearance, in its
     /// high-contrast catalog while Increase Contrast is on (catalog selection).
     pub fn appearance(&self) -> Appearance {
@@ -186,6 +195,7 @@ impl Cupertino {
     /// Draw with the current settings; the observers hear of the display options only when they
     /// differ from `before`.
     fn apply_accessibility(&mut self, before: DisplayOptions) {
+        self.apply_minimize_timing();
         let appearance = self.appearance();
         self.decor.set_appearance(appearance);
         if self.display_options() != before {

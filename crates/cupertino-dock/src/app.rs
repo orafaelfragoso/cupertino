@@ -167,6 +167,22 @@ struct DockRoles {
     messages: async_channel::Sender<Message>,
 }
 
+/// The grid's margin on the dock's edge: the exclusive zone keeps it clear of a bar that reserves room, but under
+/// auto-hide the bar reserves none, so the margin leaves it uncovered and magnifying beside the open grid.
+fn grid_margin(placement: Option<Placement>) -> Margin {
+    let Some(p) = placement.filter(|p| p.exclusive_zone <= 0) else {
+        return Margin::default();
+    };
+    let depth = p.bar_depth.ceil() as i32;
+    let mut margin = Margin::default();
+    match p.orientation {
+        Orientation::Bottom => margin.bottom = depth,
+        Orientation::Left => margin.left = depth,
+        Orientation::Right => margin.right = depth,
+    }
+    margin
+}
+
 impl DockRoles {
     fn send(&self, message: Message) {
         // the receiver is gone only while the process exits
@@ -209,8 +225,8 @@ impl DockRoles {
                 -1,
                 KeyboardInteractivity::None,
             ),
-            // the server fills the output within the exclusive zones, so the dock bar stays visible; the menu bar's
-            // reservation is not a layer zone, so the grid covers the bar
+            // the server fills the output within the exclusive zones, and the margin keeps an auto-hidden bar clear
+            // (`grid_margin`), so the dock bar stays visible; the panel is centred below the menu bar's strip
             Kind::Grid => (
                 Layer::Overlay,
                 ALL_EDGES,
@@ -259,7 +275,11 @@ impl DockRoles {
             layer,
             anchor,
             size,
-            margin: Margin::default(),
+            margin: if kind == Kind::Grid {
+                grid_margin(placement)
+            } else {
+                Margin::default()
+            },
             exclusive_zone,
             keyboard,
         }
@@ -380,6 +400,7 @@ fn dock_event(change: &DockChange) -> DockEvent {
         },
         DockChange::ForceQuitDialog => DockEvent::ForceQuitDialog,
         DockChange::Engage => DockEvent::Engage,
+        DockChange::AppResident { app_id, resident } => DockEvent::Resident { app_id, resident },
     }
 }
 
@@ -624,6 +645,9 @@ impl Host for AppHost {
         for s in surfaces.all.iter_mut().filter(|s| s.kind == Kind::Edge) {
             s.layer.set_placement(anchor, size);
         }
+        if let Some(s) = surfaces.of_kind(Kind::Grid) {
+            s.layer.set_margin(grid_margin(Some(placement)));
+        }
     }
 
     fn keyboard(&mut self, part: Part, on: bool) {
@@ -705,6 +729,28 @@ impl Host for AppHost {
                 .find(|t| installed(t))
                 .map(|t| t.to_string())
         })
+    }
+
+    /// The launcher's usage store, ranked now: the dock only reads it.
+    fn recent_apps(&mut self) -> Vec<String> {
+        let Some(path) = cupertino_apps::frecency::default_path() else {
+            return Vec::new();
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64());
+        cupertino_apps::frecency::ranked_apps(&cupertino_apps::frecency::Store::read(&path), now)
+            .into_iter()
+            .map(|app| app.id)
+            .collect()
+    }
+
+    fn dbus_activate(&mut self, bus_name: &str, token: Option<String>) -> Option<kit::BusCall> {
+        Some(Box::pin(cupertino_dock::activate::activate_in_thread(
+            PROCESS,
+            bus_name.to_owned(),
+            token,
+        )))
     }
 
     fn icon(&mut self, desktop: &DesktopIndex, icon: &IconKey, side: f64) -> IconSet {

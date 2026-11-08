@@ -16,6 +16,10 @@ pub struct DesktopEntry {
     pub terminal: bool,
     pub no_display: bool,
     pub path: PathBuf,
+    /// The freedesktop `Categories`, in their order.
+    pub categories: Vec<String>,
+    /// `DBusActivatable=true`: the application takes `org.freedesktop.Application` calls on the bus name of its ID.
+    pub dbus_activatable: bool,
 }
 
 /// Parse the `[Desktop Entry]` group of a desktop file. `None` for hidden, non-application or
@@ -53,6 +57,17 @@ pub fn parse_entry(id: &str, path: &Path, text: &str) -> Option<DesktopEntry> {
         terminal: map.get("Terminal") == Some(&"true"),
         no_display: map.get("NoDisplay") == Some(&"true"),
         path: path.to_path_buf(),
+        categories: map
+            .get("Categories")
+            .map(|c| {
+                c.split(';')
+                    .map(str::trim)
+                    .filter(|c| !c.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        dbus_activatable: map.get("DBusActivatable") == Some(&"true"),
     })
 }
 
@@ -221,6 +236,18 @@ mod tests {
         )
         .is_none());
         assert!(parse_entry("x", Path::new("x"), "[Desktop Entry]\nName=X\n").is_none());
+    }
+
+    #[test]
+    fn categories_and_bus_activation_are_read() {
+        let e = entry(
+            "org.example.Maps",
+            "[Desktop Entry]\nName=Maps\nExec=maps\nCategories=GNOME;Utility; Maps;;\nDBusActivatable=true\n",
+        );
+        assert_eq!(e.categories, ["GNOME", "Utility", "Maps"]);
+        assert!(e.dbus_activatable);
+        let e = entry("foot", FOOT);
+        assert!(e.categories.is_empty() && !e.dbus_activatable);
     }
 
     #[test]

@@ -18,7 +18,7 @@
 //! the workspaces bar and sends picks and workspace edits. Hot corners and gestures the server
 //! detects go to the dock to be mapped ([`Docks::hot_corner`], [`Docks::gesture`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Seek, Write};
 use std::os::fd::AsFd;
 use std::sync::Arc;
@@ -85,6 +85,9 @@ const WINDOW_ICON_SINCE: u32 = 17;
 /// Shell version of `cupertino_dock_v1.engage`.
 const ENGAGE_SINCE: u32 = 18;
 
+/// Shell version of `cupertino_dock_v1.app_resident`.
+const APP_RESIDENT_SINCE: u32 = 19;
+
 /// Layer-shell namespace of the dock's switcher panel: a press there is the dock's, a press
 /// anywhere else cancels the switch.
 pub const SWITCHER_NAMESPACE: &str = "cupertino-dock-switcher";
@@ -105,6 +108,8 @@ struct Dock {
     wl_output: WlOutput,
     /// Windows the dock knows by id; `None` until the first group.
     sent: Option<BTreeMap<u32, WindowInfo>>,
+    /// The resident applications the dock was told of.
+    residents_sent: BTreeSet<String>,
 }
 
 impl Dock {
@@ -121,6 +126,16 @@ pub struct Docks {
     docks: Vec<Dock>,
     /// `None` while no switch is under way, also without any dock.
     switcher: Option<SwitcherState>,
+    /// The applications each connected application client has shown a window of: they stay resident while it is
+    /// connected, windows or not ([`Cupertino::resident_apps`]).
+    residents: HashMap<ClientId, BTreeSet<String>>,
+}
+
+impl Docks {
+    /// A client that showed windows disconnected: its applications are resident no longer. Whether it had any.
+    pub fn client_gone(&mut self, client: &ClientId) -> bool {
+        self.residents.remove(client).is_some()
+    }
 }
 
 impl Docks {
@@ -396,6 +411,7 @@ impl Cupertino {
             output: out,
             wl_output: output.clone(),
             sent: None,
+            residents_sent: BTreeSet::new(),
         });
         self.refresh_usable_area(out);
         self.refresh_docks();
@@ -615,13 +631,69 @@ impl Cupertino {
             .collect()
     }
 
-    /// Send every dock what changed in the window list since its last group. Call after anything
-    /// the list derives from may have changed: mapping, closing, titles, minimizing, focus.
+    /// Note the application of every mapped window of an application client as resident for that client, and have
+    /// the client's disconnection reported ([`Cupertino::forget_gone_processes`]). The server's own connections and
+    /// the shell processes are not applications, and neither is the X11 satellite: it shows the windows of every X11
+    /// application on its one connection, which outlives each of them, so an X11 application is in the dock while it
+    /// has a window.
+    fn note_residents(&mut self) {
+        let satellite = self
+            .xwayland
+            .as_ref()
+            .and_then(crate::xwayland::XWayland::pid);
+        for entry in self.windows.iter().filter(|e| e.mapped) {
+            let Some(client) = entry.surface().client() else {
+                continue;
+            };
+            let Some(data) = client.get_data::<crate::state::ClientState>() else {
+                continue;
+            };
+            if data.internal || !data.capabilities.is_empty() {
+                continue;
+            }
+            if satellite.is_some()
+                && (self.process_of)(&self.display_handle, &client).map(|(pid, _)| pid) == satellite
+            {
+                continue;
+            }
+            let Some(identity) = self
+                .wm
+                .window(entry.id)
+                .and_then(|w| self.wm.app(w.app))
+                .map(|a| a.identity.clone())
+                .filter(|i| !i.is_empty())
+            else {
+                continue;
+            };
+            data.gone.get_or_init(|| self.gone_clients.clone());
+            self.docks
+                .residents
+                .entry(client.id())
+                .or_default()
+                .insert(identity);
+        }
+    }
+
+    /// The applications a connected client has shown a window of, with or without windows now.
+    pub fn resident_apps(&self) -> BTreeSet<String> {
+        self.docks
+            .residents
+            .values()
+            .flatten()
+            .map(|a| cut_text(a).to_owned())
+            .collect()
+    }
+
+    /// Send every dock what changed in the window list and in the resident applications since its last group. Call
+    /// after anything they derive from may have changed: mapping, closing, titles, minimizing, focus, a client
+    /// disconnecting.
     pub fn refresh_docks(&mut self) {
+        self.note_residents();
         if self.docks.docks.is_empty() {
             return;
         }
         let feed = self.dock_feed();
+        let residents = self.resident_apps();
         for dock in &mut self.docks.docks {
             let mut changed = dock.sent.is_none();
             let known = dock.sent.take().unwrap_or_default();
@@ -644,6 +716,17 @@ impl Cupertino {
             for id in known.keys().filter(|id| !feed.contains_key(id)) {
                 dock.resource.window_closed(*id);
                 changed = true;
+            }
+            if dock.resource.version() >= APP_RESIDENT_SINCE {
+                for app in residents.difference(&dock.residents_sent) {
+                    dock.resource.app_resident(app.clone(), 1);
+                    changed = true;
+                }
+                for app in dock.residents_sent.difference(&residents) {
+                    dock.resource.app_resident(app.clone(), 0);
+                    changed = true;
+                }
+                dock.residents_sent = residents.clone();
             }
             if changed {
                 dock.resource.done();

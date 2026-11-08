@@ -273,3 +273,33 @@ fn a_refused_activation_makes_the_pinned_tile_of_the_entry_hop() {
         "and it plays once"
     );
 }
+
+/// A resident application the desktop shows keeps its tile and dot after its last window; a helper process (no desktop
+/// entry, or a `NoDisplay` one, like a portal's dialogs) stays connected too, but leaves with its last window.
+#[test]
+fn only_an_application_the_desktop_shows_stays_in_the_dock_without_windows() {
+    let mut s = session(
+        &[],
+        vec![
+            entry("org.example.Notes", ""),
+            entry("org.example.Helper", "NoDisplay=true\n"),
+        ],
+    );
+    for app in [
+        "org.example.Notes",
+        "org.example.Helper",
+        "org.example.Portal",
+    ] {
+        s.window(1, app, "dialog", false, 0.0);
+        s.set_resident(app, true, 0.0);
+        s.window_closed(1, 1.0);
+    }
+    assert_eq!(
+        lifecycle(&s, "org.example.Notes", 1.0),
+        TileLifecycle::Running
+    );
+    assert!(s.dock.app_tile("org.example.Helper").is_none());
+    assert!(s.dock.app_tile("org.example.Portal").is_none());
+    s.set_resident("org.example.Notes", false, 6.0);
+    assert!(s.dock.app_tile("org.example.Notes").is_none());
+}

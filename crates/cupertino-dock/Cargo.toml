@@ -22,6 +22,7 @@ app = [
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
     "dep:tiny-skia",
+    "dep:zbus",
 ]
 
 [dependencies]
@@ -41,10 +42,12 @@ cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 tiny-skia = { version = "0.12", optional = true }
+zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
 
 [dev-dependencies]
 async-channel = "2"
 cupertino-assets = { path = "../cupertino-assets" }
+cupertino-test-bus = { path = "../cupertino-test-bus" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-test = { path = "../cupertino-ui-test" }
 tempfile = "3"

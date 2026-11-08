@@ -65,6 +65,7 @@ const CAPS: &[(&str, &str, &[usize])] = &[
     ("cupertino_dock_v1", "attention", &[MAX_TEXT_BYTES]),
     ("cupertino_dock_v1", "window_icon", &[MAX_ICON_NAME]),
     ("cupertino_dock_v1", "unresponsive", &[MAX_TEXT_BYTES]),
+    ("cupertino_dock_v1", "app_resident", &[MAX_TEXT_BYTES]),
     (
         "cupertino_app_menu_v1",
         "menu_reader",

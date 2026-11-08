@@ -152,6 +152,7 @@ pub fn theme() -> ThemeTokens {
     }
     entries.push(((Link, state(Normal, false)), gray(8)));
     entries.push(((PanelTrack, state(Normal, false)), gray(9)));
+    entries.push(((QuaternaryLabel, state(Normal, false)), gray(10)));
     ThemeTokens {
         preferences: ThemePreferences {
             appearance: Appearance::Light,

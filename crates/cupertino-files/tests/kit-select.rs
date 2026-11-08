@@ -1,7 +1,7 @@
 //! Selecting by typing and with the rubber band, in the browser window on CupertinoKit run headless, through the
 //! keyboard and the pointer: a name typed in the list or the icon grid selects the item it starts and scrolls it into
-//! view; a band held at the top or the bottom edge of the icon grid scrolls the items under it, selects those it passes
-//! and stops when it is let go.
+//! view; a band held at the top or the bottom edge of the icon grid or the list scrolls the items under it, selects
+//! those it passes and stops when it is let go. In the list a band starts on a row's blank part, as under the rows.
 
 #![cfg(feature = "app")]
 
@@ -191,4 +191,123 @@ fn a_band_held_at_the_bottom_edge_scrolls_the_grid_on_selecting_the_rows_it_pass
     run.frames(400, 50);
     assert_eq!(cells(&run), held, "a release stops the scroll");
     assert_eq!(indices(&run.selected_icons()), after);
+}
+
+/// The numbers of the `item NN.txt` rows selected in the list, in order.
+fn selected_items(run: &Run) -> Vec<usize> {
+    run.selected_rows()
+        .iter()
+        .filter_map(|name| {
+            name.strip_prefix("item ")?
+                .strip_suffix(".txt")?
+                .parse()
+                .ok()
+        })
+        .collect()
+}
+
+#[test]
+fn a_band_from_a_rows_blank_part_held_at_the_bottom_edge_scrolls_the_list_on_selecting_the_rows_it_passes(
+) {
+    let mut run = window();
+    let table = run.bounds(Role::Table, "Documents");
+    // a click on a row's blank part selects the row, as a click on its name does
+    let blank = |run: &Run, name: &str| {
+        let row = run.row_bounds(name);
+        Point::new(row.max_x() - 60.0, row.center().y)
+    };
+    let at = blank(&run, "item 02.txt");
+    pointer(&mut run, PointerEvent::Motion { position: at });
+    button(&mut run, at, true);
+    button(&mut run, at, false);
+    run.frames(100, 50);
+    assert_eq!(run.selected_rows(), ["item 02.txt"]);
+
+    // a press there that moves draws a band, not a drag, and the edge scrolls the rows on under it
+    let from = blank(&run, "item 03.txt");
+    let edge = Point::new(from.x, table.max_y() - 4.0);
+    pointer(&mut run, PointerEvent::Motion { position: from });
+    button(&mut run, from, true);
+    pointer(
+        &mut run,
+        PointerEvent::Motion {
+            position: Point::new(from.x - 2.0, from.y + 20.0),
+        },
+    );
+    pointer(&mut run, PointerEvent::Motion { position: edge });
+    let before = selected_items(&run);
+    assert_eq!(before.first(), Some(&3), "{before:?}");
+    run.frames(800, 50);
+    let after = selected_items(&run);
+    assert!(after.len() > before.len(), "{before:?} then {after:?}");
+    assert!(
+        after.last() > before.last(),
+        "rows past the first view are selected: {before:?} then {after:?}"
+    );
+    // every row the band passed that is still in view, with no gap
+    let expected: Vec<usize> = (after[0]..after[0] + after.len()).collect();
+    assert_eq!(after, expected);
+    button(&mut run, edge, false);
+    let held = run.rows();
+    run.frames(400, 50);
+    assert_eq!(run.rows(), held, "a release stops the scroll");
+    assert_eq!(selected_items(&run), after);
+}
+
+/// The bounds of the name cell (the first) of the list's row that shows `name`.
+fn name_cell(run: &Run, name: &str) -> Rect {
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let nodes: HashMap<_, _> = snapshot
+        .accessibility
+        .iter()
+        .map(|(id, n)| (*id, n))
+        .collect();
+    let row = run.row_bounds(name);
+    snapshot
+        .accessibility
+        .iter()
+        .find(|(_, n)| n.role == Role::Row && n.bounds == row)
+        .and_then(|(_, n)| n.children.first())
+        .map(|cell| nodes[cell].bounds)
+        .unwrap_or_else(|| panic!("no name cell for {name:?}"))
+}
+
+#[test]
+fn in_the_name_cell_a_band_starts_past_the_name_and_a_press_on_the_name_does_not_draw_one() {
+    let mut run = window();
+    let row_height = run.row_bounds("item 04.txt").min_y() - run.row_bounds("item 03.txt").min_y();
+
+    // past the end of a short name, the name cell is the row's blank part: a move draws a band over the rows below
+    let cell = name_cell(&run, "item 03.txt");
+    let from = Point::new(cell.max_x() - 10.0, cell.center().y);
+    let to = Point::new(from.x, from.y + 2.0 * row_height);
+    pointer(&mut run, PointerEvent::Motion { position: from });
+    button(&mut run, from, true);
+    pointer(
+        &mut run,
+        PointerEvent::Motion {
+            position: Point::new(from.x, from.y + row_height),
+        },
+    );
+    pointer(&mut run, PointerEvent::Motion { position: to });
+    button(&mut run, to, false);
+    run.frames(100, 50);
+    assert_eq!(selected_items(&run), [3, 4, 5]);
+
+    // on the name's text the press grabs the row: a move draws no band
+    let cell = name_cell(&run, "item 10.txt");
+    let from = Point::new(cell.min_x() + 26.0, cell.center().y);
+    let to = Point::new(from.x, from.y + 2.0 * row_height);
+    pointer(&mut run, PointerEvent::Motion { position: from });
+    button(&mut run, from, true);
+    pointer(
+        &mut run,
+        PointerEvent::Motion {
+            position: Point::new(from.x, from.y + row_height),
+        },
+    );
+    pointer(&mut run, PointerEvent::Motion { position: to });
+    button(&mut run, to, false);
+    run.frames(100, 50);
+    assert_eq!(selected_items(&run), [10]);
 }

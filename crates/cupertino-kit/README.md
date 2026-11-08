@@ -14,7 +14,9 @@ compositor. `app::run_on` and `app::run_on_with` run on a window system a deskto
 `cupertino_icons::document::document_icon_name` maps them), then the generic document icon, then the placeholder; a
 special folder's own icon; and the alias badge of a symbolic link, drawn into the image. `discover` reads the installed
 packs and the icon theme, `without_host` a given pack alone and `builtin` the built-in assets (placeholders), for tests
-and captures. Files and the portal's file chooser draw their rows with it.
+and captures. `pack_has(name)` says whether an asset pack ships a raster or SVG file of its own for an icon name, so an
+app with its own art for a name can still let a pack's icon win. Files and the portal's file chooser draw their rows
+with it.
 
 Each example runs on Cupertino headless and on headless Mutter. One test per example and host asserts its app id,
 title and buffer size, and that it presents a frame (on Cupertino it also exits when its window closes). Its behaviour

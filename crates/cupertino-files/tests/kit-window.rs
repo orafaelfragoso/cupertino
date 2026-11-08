@@ -200,6 +200,74 @@ fn the_bars_show_the_path_and_the_item_count() {
 }
 
 #[test]
+fn a_window_keeps_its_view_and_bars_and_a_new_window_starts_with_the_last_choice() {
+    use cupertino_files::window::ViewMode;
+    use cupertino_files::window_prefs::WindowPrefs;
+    let home = tempfile::tempdir().unwrap();
+    let documents = home.path().join("Documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    std::fs::write(documents.join("a.txt"), "a").unwrap();
+    let prefs = home.path().join("config/cupertino/files/window.json");
+    let kept = WindowPrefs {
+        view: ViewMode::Icons,
+        path_bar: true,
+        status_bar: false,
+    };
+    kept.save(&prefs).unwrap();
+    let places = vec![place("Documents", &documents, PlaceKind::Documents)];
+    let file = prefs.clone();
+    let preferences = cupertino_kit::theme::ThemePreferences {
+        appearance: cupertino_kit::theme::Appearance::Light,
+        reduce_transparency: false,
+        reduce_motion: false,
+    };
+    let mut run = Run::start_configured(
+        home,
+        documents,
+        places,
+        Notices::start(None),
+        None,
+        preferences,
+        move |start| start.with_prefs_file(file),
+    );
+    // the window opens as the file says: the icon view, the path bar shown and the status bar hidden
+    assert_eq!(run.menu_label("toggle-path-bar"), "Hide Path Bar");
+    assert_eq!(run.menu_label("toggle-status-bar"), "Show Status Bar");
+    assert!(
+        run.named(Role::Table).is_empty(),
+        "the icon view has no table"
+    );
+    let first = run.window;
+
+    run.menu("toggle-status-bar");
+    run.menu("view-list");
+    let chosen = WindowPrefs {
+        view: ViewMode::List,
+        path_bar: true,
+        status_bar: true,
+    };
+    assert_eq!(WindowPrefs::load(&prefs), chosen, "the last choice is kept");
+
+    run.menu("new");
+    let second = *run.windows().last().unwrap();
+    assert_ne!(second, first);
+    run.activate(second);
+    assert_eq!(run.menu_label("toggle-status-bar"), "Hide Status Bar");
+    assert_eq!(
+        run.named(Role::Table),
+        ["Documents"],
+        "the new window lists"
+    );
+
+    // each window keeps its own: hiding the new window's path bar leaves the first one's
+    run.menu("toggle-path-bar");
+    assert_eq!(run.menu_label("toggle-path-bar"), "Show Path Bar");
+    assert!(!WindowPrefs::load(&prefs).path_bar);
+    run.activate(first);
+    assert_eq!(run.menu_label("toggle-path-bar"), "Hide Path Bar");
+}
+
+#[test]
 fn items_moved_to_the_trash_are_put_back_where_they_were() {
     let mut run = Run::with(true, Notices::start(None));
     run.wait_until(|run| run.rows().len() == 3);
@@ -446,6 +514,19 @@ fn a_folder_opens_in_a_second_window_whose_menus_act_on_it_alone() {
     run.send(WindowEvent::CloseRequested);
     assert_eq!(run.windows().len(), 2);
     assert!(!run.windows().contains(&first));
+}
+
+#[test]
+fn the_go_menu_shows_recents_and_the_home_folder_and_back_returns() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("go-recents");
+    assert_eq!(run.title(), "Recents");
+    run.menu("go-home");
+    assert_ne!(run.title(), "Recents");
+    run.wait_until(|run| run.rows().iter().any(|row| row == "Documents"));
+    run.menu("go-back");
+    assert_eq!(run.title(), "Recents");
 }
 
 #[test]
@@ -758,6 +839,11 @@ fn tab_and_shift_tab_select_the_next_and_previous_item_by_name() {
     assert_eq!(run.selected_icons(), ["b.txt"]);
 }
 
+/// A point on the text of a list row's name, near its start: past the text the name cell is the row's blank part.
+fn on_text(name: cupertino_kit::geometry::Rect) -> cupertino_kit::geometry::Point {
+    cupertino_kit::geometry::Point::new(name.min_x() + 6.0, name.center().y)
+}
+
 /// The list's row showing `name`.
 fn row_bounds(run: &Run, name: &str) -> cupertino_kit::geometry::Rect {
     run.listed()
@@ -875,7 +961,7 @@ fn in_the_list_ctrl_click_opens_the_menu_a_double_click_opens_and_a_pause_rename
     };
     run.frames(600, 100);
     let name = run.bounds(Role::StaticText, "b.txt");
-    run.press_at(name.center(), MouseButton::Left);
+    run.press_at(on_text(name), MouseButton::Left);
     assert!(!field(&run));
     run.frames(600, 100);
     assert!(
@@ -923,7 +1009,7 @@ fn in_the_list_a_key_the_triangle_or_a_held_press_keeps_a_pending_rename_from_st
     let name = run.bounds(Role::StaticText, "Notes");
 
     // a key the table takes for itself: Right opens the folder, and no rename follows
-    run.press_at(name.center(), MouseButton::Left);
+    run.press_at(on_text(name), MouseButton::Left);
     run.key(RIGHT, None);
     run.wait_until(|run| run.rows().len() == 4);
     run.frames(600, 100);
@@ -935,7 +1021,7 @@ fn in_the_list_a_key_the_triangle_or_a_held_press_keeps_a_pending_rename_from_st
     // the triangle stops its press before the row sees it
     let notes = row_bounds(&run, "Notes");
     let triangle = Point::new(notes.min_x() + 18.0, notes.center().y);
-    run.press_at(name.center(), MouseButton::Left);
+    run.press_at(on_text(name), MouseButton::Left);
     run.press_at(triangle, MouseButton::Left);
     run.wait_until(|run| run.rows().len() == 4);
     run.frames(600, 100);
@@ -945,10 +1031,10 @@ fn in_the_list_a_key_the_triangle_or_a_held_press_keeps_a_pending_rename_from_st
     run.frames(600, 100);
 
     // a press held past the interval may still be a drag: the rename waits for the release
-    press_down(&mut run, name.center());
+    press_down(&mut run, on_text(name));
     run.frames(600, 100);
     assert!(!field(&run), "no rename while the button is held");
-    run.release(name.center(), Mods::NONE);
+    run.release(on_text(name), Mods::NONE);
     run.frames(100, 50);
     assert!(field(&run), "the release starts the rename that came due");
 }

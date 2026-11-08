@@ -5,7 +5,7 @@
 
 use cupertino_menu_model::standard::{self, Features};
 use cupertino_menu_model::{ActionName, Chord, Entry, Item, Menu, MenuBar, Scope};
-use cupertino_modifiers::Modifier;
+use cupertino_modifiers::{Modifier, Mods};
 
 use crate::menu_spec::sort_choices;
 use crate::sort::SortKey;
@@ -39,6 +39,10 @@ pub enum MenuAction {
     Back,
     Forward,
     EnclosingFolder,
+    /// Show the files opened lately.
+    Recents,
+    /// Show the home folder.
+    Home,
     /// Show the progress window of the file operations.
     ShowProgress,
 }
@@ -121,6 +125,8 @@ impl MenuAction {
             Back => (Scope::Win, "go-back"),
             Forward => (Scope::Win, "go-forward"),
             EnclosingFolder => (Scope::Win, "go-enclosing-folder"),
+            Recents => (Scope::Win, "go-recents"),
+            Home => (Scope::Win, "go-home"),
             ShowProgress => (Scope::Win, "show-progress"),
         };
         ActionName::new(scope, name).expect("the menu's action names are valid")
@@ -155,6 +161,8 @@ impl MenuAction {
             Back,
             Forward,
             EnclosingFolder,
+            Recents,
+            Home,
             ShowProgress,
         ];
         fixed
@@ -168,15 +176,78 @@ fn chord(modifiers: &[Modifier], key: &str) -> Option<Chord> {
     Some(Chord::new(modifiers, key).expect("the menu's chords name keysyms"))
 }
 
-fn item(label: &str, action: MenuAction, chord: Option<Chord>) -> Entry {
-    Entry::Item(Item::new(label, action.name(), chord))
+fn item(label: &str, action: MenuAction) -> Entry {
+    Entry::Item(Item::new(label, action.name(), action.chord()))
+}
+
+impl MenuAction {
+    /// The keys that do `self` in a window, shown beside its item in every menu that offers it. Full screen's are
+    /// the standard View menu's.
+    pub fn chord(self) -> Option<Chord> {
+        use MenuAction::*;
+        use Modifier::{Alt, Ctrl, Primary, Shift};
+        match self {
+            NewWindow => chord(&[Primary], "n"),
+            NewFolder => chord(&[Shift, Primary], "n"),
+            NewFolderWithSelection => chord(&[Ctrl, Primary], "n"),
+            Open => chord(&[Primary], "o"),
+            CloseWindow => chord(&[Primary], "w"),
+            MoveToTrash => chord(&[Primary], "BackSpace"),
+            Duplicate => chord(&[Primary], "d"),
+            MakeAlias => chord(&[Ctrl, Primary], "a"),
+            ShowOriginal => chord(&[Primary], "r"),
+            Eject => chord(&[Primary], "e"),
+            Copy => chord(&[Primary], "c"),
+            Paste => chord(&[Primary], "v"),
+            MoveHere => chord(&[Alt, Primary], "v"),
+            SelectAll => chord(&[Primary], "a"),
+            View(ViewMode::Icons) => chord(&[Primary], "1"),
+            View(ViewMode::List) => chord(&[Primary], "2"),
+            TogglePathBar => chord(&[Alt, Primary], "p"),
+            ToggleStatusBar => chord(&[Primary], "slash"),
+            Back => chord(&[Primary], "bracketleft"),
+            Forward => chord(&[Primary], "bracketright"),
+            EnclosingFolder => chord(&[Primary], "Up"),
+            Home => chord(&[Shift, Primary], "h"),
+            // Shift+Primary+F is the system's full-screen shortcut, which the compositor takes before any window
+            Recents => None,
+            OpenInNewWindow | PutBack | Rename | SortBy(..) | FullScreen | ShowProgress => None,
+        }
+    }
+}
+
+/// `chord` as a menu row shows it: the modifier symbols in the order control, option, shift, command, then the key,
+/// the common named keys as symbols (Backspace as the delete-left arrow).
+pub fn glyphs(chord: &Chord) -> String {
+    let mut text: String = [
+        (Mods::CTRL, '\u{2303}'),
+        (Mods::ALT, '\u{2325}'),
+        (Mods::SHIFT, '\u{21e7}'),
+        (Mods::PRIMARY, '\u{2318}'),
+    ]
+    .into_iter()
+    .filter(|(m, _)| chord.modifiers.contains(*m))
+    .map(|(_, glyph)| glyph)
+    .collect();
+    match chord.key.name() {
+        "BackSpace" => text.push('\u{232b}'),
+        "Delete" => text.push('\u{2326}'),
+        "Return" => text.push('\u{21a9}'),
+        "Tab" => text.push('\u{21e5}'),
+        "Escape" => text.push('\u{238b}'),
+        "Up" => text.push('\u{2191}'),
+        "Down" => text.push('\u{2193}'),
+        "Left" => text.push('\u{2190}'),
+        "Right" => text.push('\u{2192}'),
+        _ => text.push_str(&chord.key.label()),
+    }
+    text
 }
 
 /// The menus for `state`. Put Back is there only in the trash, Eject only on a removable file system, and the toggles
 /// name what they will do.
 pub fn menu_bar(state: &MenuState) -> MenuBar {
     use MenuAction::*;
-    use Modifier::{Alt, Ctrl, Primary, Shift};
     let standard = standard::menu_bar(
         "Files",
         &Features {
@@ -195,30 +266,22 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
         "File",
         vec![
             vec![
-                item("New Window", NewWindow, chord(&[Primary], "n")),
-                item("New Folder", NewFolder, chord(&[Shift, Primary], "n")),
-                item(
-                    "New Folder with Selection",
-                    NewFolderWithSelection,
-                    chord(&[Ctrl, Primary], "n"),
-                ),
+                item("New Window", NewWindow),
+                item("New Folder", NewFolder),
+                item("New Folder with Selection", NewFolderWithSelection),
             ],
             vec![
-                item("Open", Open, chord(&[Primary], "o")),
-                item("Open in New Window", OpenInNewWindow, None),
-                item("Close Window", CloseWindow, chord(&[Primary], "w")),
+                item("Open", Open),
+                item("Open in New Window", OpenInNewWindow),
+                item("Close Window", CloseWindow),
             ],
             [
-                Some(item(
-                    "Move to Trash",
-                    MoveToTrash,
-                    chord(&[Primary], "BackSpace"),
-                )),
-                state.in_trash.then(|| item("Put Back", PutBack, None)),
-                Some(item("Rename", Rename, None)),
-                Some(item("Duplicate", Duplicate, chord(&[Primary], "d"))),
-                Some(item("Make Alias", MakeAlias, chord(&[Ctrl, Primary], "a"))),
-                Some(item("Show Original", ShowOriginal, chord(&[Primary], "r"))),
+                Some(item("Move to Trash", MoveToTrash)),
+                state.in_trash.then(|| item("Put Back", PutBack)),
+                Some(item("Rename", Rename)),
+                Some(item("Duplicate", Duplicate)),
+                Some(item("Make Alias", MakeAlias)),
+                Some(item("Show Original", ShowOriginal)),
             ]
             .into_iter()
             .flatten()
@@ -226,7 +289,7 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
             state
                 .eject
                 .iter()
-                .map(|name| item(&format!("Eject “{name}”"), Eject, chord(&[Primary], "e")))
+                .map(|name| item(&format!("Eject “{name}”"), Eject))
                 .collect(),
         ]
         .into_iter()
@@ -237,25 +300,25 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
         "Edit",
         vec![
             vec![
-                item("Copy", Copy, chord(&[Primary], "c")),
-                item("Paste Item", Paste, chord(&[Primary], "v")),
-                item("Move Item Here", MoveHere, chord(&[Alt, Primary], "v")),
+                item("Copy", Copy),
+                item("Paste Item", Paste),
+                item("Move Item Here", MoveHere),
             ],
-            vec![item("Select All", SelectAll, chord(&[Primary], "a"))],
+            vec![item("Select All", SelectAll)],
         ],
     );
     let sort_by = Menu::new(
         "Sort By",
         vec![sorts()
-            .map(|(title, key, ascending)| item(title, SortBy(key, ascending), None))
+            .map(|(title, key, ascending)| item(title, SortBy(key, ascending)))
             .collect()],
     );
     let view = Menu::new(
         "View",
         vec![
             vec![
-                item("as Icons", View(ViewMode::Icons), chord(&[Primary], "1")),
-                item("as List", View(ViewMode::List), chord(&[Primary], "2")),
+                item("as Icons", View(ViewMode::Icons)),
+                item("as List", View(ViewMode::List)),
             ],
             vec![Entry::Submenu(sort_by)],
             vec![
@@ -266,7 +329,6 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
                         "Show Path Bar"
                     },
                     TogglePathBar,
-                    chord(&[Alt, Primary], "p"),
                 ),
                 item(
                     if state.status_bar {
@@ -275,7 +337,6 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
                         "Show Status Bar"
                     },
                     ToggleStatusBar,
-                    chord(&[Primary], "slash"),
                 ),
             ],
             vec![full_screen],
@@ -283,16 +344,16 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
     );
     let go = Menu::new(
         "Go",
-        vec![vec![
-            item("Back", Back, chord(&[Primary], "bracketleft")),
-            item("Forward", Forward, chord(&[Primary], "bracketright")),
-            item("Enclosing Folder", EnclosingFolder, chord(&[Primary], "Up")),
-        ]],
+        vec![
+            vec![
+                item("Back", Back),
+                item("Forward", Forward),
+                item("Enclosing Folder", EnclosingFolder),
+            ],
+            vec![item("Recents", Recents), item("Home", Home)],
+        ],
     );
-    let window = Menu::new(
-        "Window",
-        vec![vec![item("Show Progress", ShowProgress, None)]],
-    );
+    let window = Menu::new("Window", vec![vec![item("Show Progress", ShowProgress)]]);
     MenuBar {
         app: Menu::new(&standard.app.title, Vec::new()),
         menus: vec![file, edit, view, go, window],
@@ -382,6 +443,41 @@ pub fn enabled(state: &MenuState) -> Vec<(MenuAction, bool)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_chord_shows_its_modifiers_in_a_fixed_order_then_its_key() {
+        let shown = |action: MenuAction| action.chord().map(|c| glyphs(&c));
+        assert_eq!(
+            shown(MenuAction::NewFolder).as_deref(),
+            Some("\u{21e7}\u{2318}N")
+        );
+        assert_eq!(
+            shown(MenuAction::NewFolderWithSelection).as_deref(),
+            Some("\u{2303}\u{2318}N")
+        );
+        assert_eq!(
+            shown(MenuAction::MoveToTrash).as_deref(),
+            Some("\u{2318}\u{232b}")
+        );
+        assert_eq!(
+            shown(MenuAction::ToggleStatusBar).as_deref(),
+            Some("\u{2318}/")
+        );
+        assert_eq!(
+            shown(MenuAction::EnclosingFolder).as_deref(),
+            Some("\u{2318}\u{2191}")
+        );
+        assert_eq!(shown(MenuAction::Rename), None);
+        assert_eq!(
+            shown(MenuAction::Home).as_deref(),
+            Some("\u{21e7}\u{2318}H")
+        );
+        assert_eq!(
+            shown(MenuAction::Recents),
+            None,
+            "the system's full-screen keys are not offered"
+        );
+    }
+
     /// Each menu as the bar reads it: titles, then `label action chord` per item, `---` between groups.
     fn outline(bar: &MenuBar) -> Vec<String> {
         let mut out = Vec::new();
@@ -449,6 +545,9 @@ mod tests {
                 "  Back win.go-back",
                 "  Forward win.go-forward",
                 "  Enclosing Folder win.go-enclosing-folder",
+                "  ---",
+                "  Recents win.go-recents",
+                "  Home win.go-home",
                 "Window:",
                 "  Show Progress win.show-progress",
             ]

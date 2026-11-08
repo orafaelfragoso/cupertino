@@ -4,7 +4,7 @@
 use crate::icon;
 use crate::look::{self, paint_focus_ring};
 use crate::scroll;
-use crate::{Handler, Scroller, Sidebar, SidebarAccessory, SidebarItem};
+use crate::{Handler, Scroller, Sidebar, SidebarAccessory, SidebarItem, SidebarLook};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Element, Environment, Event, EventCx,
@@ -25,22 +25,70 @@ const UP: Keysym = Keysym(0xff52);
 const DOWN: Keysym = Keysym(0xff54);
 const END: Keysym = Keysym(0xff57);
 
-const ROW_HEIGHT: f64 = 28.0;
-const HEADING_HEIGHT: f64 = 19.0;
+/// The geometry of a [`SidebarLook`], in points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Metrics {
+    row: f64,
+    heading: f64,
+    /// Above the first section and below the last, and between two sections.
+    top: f64,
+    section_gap: f64,
+    selection_radius: f64,
+    /// From a selection's leading edge to the icon's box, the box and the symbol drawn in it.
+    icon_x: f64,
+    icon_box: f64,
+    icon: f64,
+    /// From a selection's leading edge to the label's and to the heading's text.
+    label_x: f64,
+    heading_x: f64,
+    /// The label's weight in the selected row, `None` for the body weight.
+    selected_weight: Option<u16>,
+}
+
+/// [`SidebarLook::Accent`].
+const ACCENT: Metrics = Metrics {
+    row: 28.0,
+    heading: 19.0,
+    top: 10.0,
+    section_gap: 13.0,
+    selection_radius: 5.0,
+    icon_x: 6.0,
+    icon_box: 17.0,
+    icon: 16.0,
+    label_x: 28.0,
+    heading_x: 6.0,
+    selected_weight: None,
+};
+
+/// [`SidebarLook::Neutral`]: 32 pt rows whose 22 pt symbol box is centred 18.75 pt in from the selection's edge, the
+/// label 36.5 pt in, a 17 pt heading 7 pt in, 15 pt between sections and a 10 pt selection radius.
+const NEUTRAL: Metrics = Metrics {
+    row: 32.0,
+    heading: 17.0,
+    top: 10.0,
+    section_gap: 15.0,
+    selection_radius: 10.0,
+    icon_x: 7.75,
+    icon_box: 22.0,
+    icon: 20.0,
+    label_x: 36.5,
+    heading_x: 7.0,
+    selected_weight: Some(600),
+};
+
+impl SidebarLook {
+    fn metrics(&self) -> &'static Metrics {
+        match self {
+            SidebarLook::Accent => &ACCENT,
+            SidebarLook::Neutral { .. } => &NEUTRAL,
+        }
+    }
+}
+
 const HEADING_SIZE: f32 = 11.0;
 const HEADING_WEIGHT: u16 = 600;
-/// Above the first section and below the last.
-const TOP: f64 = 10.0;
-const SECTION_GAP: f64 = 13.0;
 /// Between the sidebar's edges and a row's selection.
 const ROW_INSET: f64 = 10.0;
-const SELECTION_RADIUS: f64 = 5.0;
-/// Between a selection's leading edge and the icon, and the heading's text.
-const INDENT: f64 = 6.0;
-const ICON_BOX: f64 = 17.0;
-const ICON: f64 = 16.0;
-/// From the icon's leading edge to the label's.
-const LABEL_X: f64 = 22.0;
 const LABEL_TRAILING: f64 = 4.0;
 /// A row's trailing button: its symbol centred in a slot that ends [`LABEL_TRAILING`] before the row's edge, and the
 /// press taken up to that edge.
@@ -59,6 +107,15 @@ type Accessory<M> = Option<Rc<Handler<Key, M>>>;
 
 impl<M: 'static> From<Sidebar<M>> for Element<M> {
     fn from(sidebar: Sidebar<M>) -> Self {
+        sidebar.with_look(SidebarLook::Accent)
+    }
+}
+
+impl<M: 'static> Sidebar<M> {
+    /// The sidebar's element, its rows drawn in `look`.
+    pub fn with_look(self, look: SidebarLook) -> Element<M> {
+        let sidebar = self;
+        let metrics = look.metrics();
         let count = sidebar.sections.iter().map(|s| s.items.len()).sum();
         let selected = sidebar.selected.filter(|&s| s < count);
         let cursor = (count > 0).then(|| selected.unwrap_or(0));
@@ -68,7 +125,18 @@ impl<M: 'static> From<Sidebar<M>> for Element<M> {
         let children = sidebar
             .sections
             .into_iter()
-            .map(|section| {
+            .enumerate()
+            .map(|(number, section)| {
+                let style = Style {
+                    metrics,
+                    neutral: matches!(look, SidebarLook::Neutral { .. }),
+                    accent: match &look {
+                        SidebarLook::Accent => true,
+                        SidebarLook::Neutral { accent } => {
+                            accent.get(number).copied().unwrap_or(false)
+                        }
+                    },
+                };
                 let rows = section
                     .items
                     .into_iter()
@@ -86,6 +154,7 @@ impl<M: 'static> From<Sidebar<M>> for Element<M> {
                                     accessory,
                                     row: key.clone(),
                                     selected,
+                                    style,
                                     on_accessory: on_accessory.clone(),
                                 })
                             })
@@ -96,6 +165,7 @@ impl<M: 'static> From<Sidebar<M>> for Element<M> {
                             item,
                             selected,
                             cursor: cursor == Some(index),
+                            style,
                             on_select: on_select.clone(),
                             children,
                         })
@@ -104,12 +174,14 @@ impl<M: 'static> From<Sidebar<M>> for Element<M> {
                     .collect();
                 Element::new(Section {
                     title: section.title,
+                    metrics,
                     rows,
                 })
             })
             .collect();
         let rows = Rows {
             label: sidebar.label,
+            metrics,
             keys,
             selected,
             on_select,
@@ -123,6 +195,15 @@ impl<M: 'static> From<Sidebar<M>> for Element<M> {
             Rc::new(sidebar.on_scroll),
         )
     }
+}
+
+/// How one section's rows are drawn: the look's metrics, whether the selection is the neutral grey, and whether the
+/// rows' symbols take the accent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Style {
+    metrics: &'static Metrics,
+    neutral: bool,
+    accent: bool,
 }
 
 fn select<M>(on_select: &Select<M>, index: usize, cx: &mut EventCx<'_, M>) {
@@ -154,6 +235,7 @@ fn column(insets: Insets, spacing: f64) -> LayoutSpec {
 /// The content of the sidebar's scroll view: the sections, and the keys that move the selection across them.
 struct Rows<M> {
     label: String,
+    metrics: &'static Metrics,
     keys: Vec<Key>,
     selected: Option<usize>,
     on_select: Select<M>,
@@ -193,12 +275,12 @@ impl<M: 'static> Widget<M> for Rows<M> {
     fn layout(&self) -> LayoutSpec {
         column(
             Insets {
-                top: TOP,
+                top: self.metrics.top,
                 left: 0.0,
-                bottom: TOP,
+                bottom: self.metrics.top,
                 right: 0.0,
             },
-            SECTION_GAP,
+            self.metrics.section_gap,
         )
     }
 
@@ -209,7 +291,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.keys.len() != old.keys.len() {
+        if self.keys.len() != old.keys.len() || self.metrics != old.metrics {
             Change::Layout
         } else {
             Change::None
@@ -240,6 +322,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
 /// A heading, when the section has one, over its rows.
 struct Section<M> {
     title: Option<String>,
+    metrics: &'static Metrics,
     rows: Vec<Element<M>>,
 }
 
@@ -263,7 +346,7 @@ impl<M: 'static> Widget<M> for Section<M> {
 
     fn layout(&self) -> LayoutSpec {
         let top = if self.title.is_some() {
-            HEADING_HEIGHT
+            self.metrics.heading
         } else {
             0.0
         };
@@ -285,7 +368,7 @@ impl<M: 'static> Widget<M> for Section<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.title.is_some() != old.title.is_some() {
+        if self.title.is_some() != old.title.is_some() || self.metrics != old.metrics {
             Change::Layout
         } else if self.title != old.title {
             Change::Paint
@@ -313,12 +396,12 @@ impl<M: 'static> Widget<M> for Section<M> {
         let width = cx.size().width;
         let text = layout.size().width;
         let x = match env.direction {
-            LayoutDirection::Ltr => ROW_INSET + INDENT,
-            LayoutDirection::Rtl => width - ROW_INSET - INDENT - text,
+            LayoutDirection::Ltr => ROW_INSET + self.metrics.heading_x,
+            LayoutDirection::Rtl => width - ROW_INSET - self.metrics.heading_x - text,
         };
         let size = f64::from(HEADING_SIZE);
         let first = layout.lines().first().map_or(0.0, |line| line.baseline);
-        let baseline = HEADING_HEIGHT / 2.0 + size * 0.36;
+        let baseline = self.metrics.heading / 2.0 + size * 0.36;
         let color = env
             .theme
             .colors
@@ -343,6 +426,7 @@ struct Row<M> {
     selected: bool,
     /// The sidebar's one Tab stop.
     cursor: bool,
+    style: Style,
     on_select: Select<M>,
     children: Vec<Element<M>>,
 }
@@ -353,7 +437,7 @@ impl<M: 'static> Widget<M> for Row<M> {
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
             width: SizeSpec::Fill,
-            height: SizeSpec::Fixed(ROW_HEIGHT),
+            height: SizeSpec::Fixed(self.style.metrics.row),
             insets: Insets {
                 top: 0.0,
                 left: ROW_INSET,
@@ -376,8 +460,15 @@ impl<M: 'static> Widget<M> for Row<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (self.index, &self.item, self.selected, self.cursor)
-            != (old.index, &old.item, old.selected, old.cursor)
+        if self.style.metrics != old.style.metrics {
+            Change::Layout
+        } else if (
+            self.index,
+            &self.item,
+            self.selected,
+            self.cursor,
+            self.style,
+        ) != (old.index, &old.item, old.selected, old.cursor, old.style)
         {
             Change::Paint
         } else {
@@ -387,7 +478,7 @@ impl<M: 'static> Widget<M> for Row<M> {
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
-            size: Size::new(0.0, ROW_HEIGHT),
+            size: Size::new(0.0, self.style.metrics.row),
             baseline: None,
         }
     }
@@ -446,12 +537,22 @@ impl<M: 'static> Widget<M> for Row<M> {
             window_active: cx.window_active(),
             ..ControlState::default()
         };
+        let m = self.style.metrics;
+        let neutral = self.style.neutral;
         if self.selected {
-            let fill = look::color(&theme, ColorRole::ControlFill, &selected);
-            look::fill(cx, chrome, SELECTION_RADIUS, fill);
+            // the neutral look's selection is a grey that reads on either appearance whether the window is active or not
+            let fill = if neutral {
+                theme
+                    .colors
+                    .get(ColorRole::QuaternaryLabel, StateVariant::NORMAL)
+            } else {
+                look::color(&theme, ColorRole::ControlFill, &selected)
+            };
+            look::fill(cx, chrome, m.selection_radius, fill);
         }
-        // a selected row's icon and label take the selected text colour; another row's icon is the accent
-        let text = if self.selected {
+        // a selected row's icon and label take the selected text colour on the accent; on the neutral grey they keep
+        // their own colours
+        let text = if self.selected && !neutral {
             look::color(&theme, ColorRole::ControlText, &selected)
         } else {
             theme.colors.get(ColorRole::Text, StateVariant::NORMAL)
@@ -472,28 +573,34 @@ impl<M: 'static> Widget<M> for Row<M> {
         };
         if let Some(name) = &self.item.icon {
             // in a window that is not active another row's icon is no longer the accent: it takes the secondary label
-            // colour, which keeps its contrast against the sidebar where the inactive accent would fade into it
-            let tint = if self.selected {
+            // colour, which keeps its contrast against the sidebar where the inactive accent would fade into it; the
+            // neutral look's selected row keeps the accent symbol, and its sections without the accent the secondary
+            let accent = look::color(&theme, ColorRole::ControlFill, &selected);
+            let secondary = theme
+                .colors
+                .get(ColorRole::SecondaryText, StateVariant::NORMAL);
+            let tint = if self.selected && !neutral {
                 text
-            } else if !cx.window_active() {
-                theme
-                    .colors
-                    .get(ColorRole::SecondaryText, StateVariant::NORMAL)
+            } else if neutral && self.selected {
+                accent
+            } else if !cx.window_active() || !self.style.accent {
+                secondary
             } else {
-                look::color(&theme, ColorRole::ControlFill, &selected)
+                accent
             };
             if let Some(tint) = tint {
                 let area = Rect::new(
-                    leading(INDENT, ICON_BOX),
-                    (size.height - ICON_BOX) / 2.0,
-                    ICON_BOX,
-                    ICON_BOX,
+                    leading(m.icon_x, m.icon_box),
+                    (size.height - m.icon_box) / 2.0,
+                    m.icon_box,
+                    m.icon_box,
                 );
-                icon::symbol(cx, name, ICON, tint, false, area);
+                icon::symbol(cx, name, m.icon, tint, false, area);
             }
         }
-        if let Some(layout) = look::label(cx.env(), &self.item.label) {
-            let start = INDENT + LABEL_X;
+        let weight = m.selected_weight.filter(|_| self.selected);
+        if let Some(layout) = row_label(cx.env(), &self.item.label, weight) {
+            let start = m.label_x;
             // a busy row's activity indicator takes the accessory's slot
             let trailing = if self.item.accessory.is_some() || self.item.busy {
                 ACCESSORY_SLOT + LABEL_TRAILING
@@ -527,7 +634,7 @@ impl<M: 'static> Widget<M> for Row<M> {
             }
         }
         if cx.is_focused() {
-            paint_focus_ring(cx, chrome, SELECTION_RADIUS);
+            paint_focus_ring(cx, chrome, m.selection_radius);
         }
     }
 
@@ -549,6 +656,29 @@ impl<M: 'static> Widget<M> for Row<M> {
             cx.focusable();
         }
     }
+}
+
+/// A row's label in the theme's body type, in `weight` when there is one.
+fn row_label(env: &Environment, text: &str, weight: Option<u16>) -> Option<ParagraphLayout> {
+    let Some(weight) = weight else {
+        return look::label(env, text);
+    };
+    if text.is_empty() {
+        return None;
+    }
+    let body = env.theme.type_scale.body;
+    let style = TextStyle {
+        weight: FontWeight(weight),
+        ..TextStyle::new(body.size)
+    };
+    let paragraph = env
+        .text
+        .paragraph(
+            &AttributedText::plain(text, style),
+            &ParagraphStyle::default(),
+        )
+        .ok()?;
+    Some(paragraph.layout(None))
 }
 
 /// The spokes of an activity indicator centred on `centre`, the brightest turning around once in
@@ -591,6 +721,7 @@ struct AccessoryButton<M> {
     accessory: SidebarAccessory,
     row: Key,
     selected: bool,
+    style: Style,
     on_accessory: Accessory<M>,
 }
 
@@ -616,7 +747,8 @@ impl<M: 'static> Widget<M> for AccessoryButton<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (&self.accessory, self.selected) != (&old.accessory, old.selected) {
+        if (&self.accessory, self.selected, self.style) != (&old.accessory, old.selected, old.style)
+        {
             Change::Paint
         } else {
             Change::None
@@ -625,7 +757,7 @@ impl<M: 'static> Widget<M> for AccessoryButton<M> {
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
-            size: Size::new(ACCESSORY_SLOT + LABEL_TRAILING, ROW_HEIGHT),
+            size: Size::new(ACCESSORY_SLOT + LABEL_TRAILING, self.style.metrics.row),
             baseline: None,
         }
     }
@@ -668,7 +800,7 @@ impl<M: 'static> Widget<M> for AccessoryButton<M> {
             window_active: cx.window_active(),
             ..ControlState::default()
         };
-        let color = if self.selected {
+        let color = if self.selected && !self.style.neutral {
             look::color(&theme, ColorRole::ControlText, &state)
         } else {
             theme

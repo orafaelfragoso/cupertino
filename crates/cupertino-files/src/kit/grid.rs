@@ -55,6 +55,8 @@ const OVERSCAN: f64 = 200.0;
 const TYPE_SELECT_NS: u64 = 1_000_000_000;
 /// Corner radius of the highlight behind a selected name (approximate).
 const NAME_RADIUS: f64 = 4.0;
+/// The body role's size at the usual text size: a name follows the role's changes from it.
+const USUAL_BODY_SIZE: f32 = 13.0;
 /// Room between a selected name and the ends of its highlight (approximate).
 const NAME_INSETS: Insets = Insets {
     top: 0.0,
@@ -981,28 +983,78 @@ struct Name {
 }
 
 impl Name {
-    /// The name in the body role's size and weight, laid out within `width`; `None` if the fonts cannot shape it.
+    /// The name in the view's text size (scaled with the body role) and the body weight, each line centred, laid out within `width`; `None` if the fonts
+    /// cannot shape it. A name that runs past `max_lines` keeps its first lines and has the rest cut in the middle to
+    /// what the last line holds, so its end (the extension) stays in view: "report with a…middle.xlsx".
     fn laid_out(&self, env: &Environment, width: f64) -> Option<ParagraphLayout> {
         let role = env.theme.type_scale.body;
         let mut content = self.text.content.clone();
         for (_, style) in &mut content.runs {
-            style.size = role.size;
+            // the view's text size, grown or shrunk as the body role is against its usual size
+            style.size *= role.size / USUAL_BODY_SIZE;
             if style.weight == FontWeight::REGULAR {
                 style.weight = FontWeight(role.weight);
             }
         }
-        let style = ParagraphStyle {
-            align: match env.direction {
-                LayoutDirection::Ltr => TextAlign::Left,
-                LayoutDirection::Rtl => TextAlign::Right,
-            },
-            wrap: Wrap::Word,
-            max_lines: self.max_lines.map(|n| n.max(1)),
-            ellipsis: self.max_lines.is_some(),
+        let wrap = |wrap| ParagraphStyle {
+            align: TextAlign::Center,
+            wrap,
             ..ParagraphStyle::default()
         };
-        let paragraph = env.text.paragraph(&content, &style).ok()?;
-        Some(paragraph.layout(width.is_finite().then_some(width as f32)))
+        let room = width.is_finite().then_some(width as f32);
+        let full = env
+            .text
+            .paragraph(&content, &wrap(Wrap::Word))
+            .ok()?
+            .layout(room);
+        let Some(max) = self.max_lines.map(|n| n.max(1) as usize) else {
+            return Some(full);
+        };
+        if full.lines().len() <= max || room.is_none() {
+            return Some(full);
+        }
+        let text = &content.text;
+        let cut = full.lines()[max - 1].range.0.start;
+        let (head, rest) = text.split_at(cut);
+        let style = content
+            .runs
+            .first()
+            .map(|(_, style)| style.clone())
+            .unwrap_or_else(|| TextStyle::new(role.size));
+        let fits = |candidate: &str| {
+            env.text
+                .paragraph(
+                    &AttributedText::plain(candidate, style.clone()),
+                    &wrap(Wrap::None),
+                )
+                .is_ok_and(|p| p.layout(None).size().width <= width)
+        };
+        let chars: Vec<char> = rest.trim_start().chars().collect();
+        let middle = |keep: usize| -> String {
+            let front = keep.div_ceil(2);
+            let back = keep - front;
+            chars[..front]
+                .iter()
+                .chain(std::iter::once(&'\u{2026}'))
+                .chain(&chars[chars.len() - back..])
+                .collect()
+        };
+        // the most characters that fit around the ellipsis on one line
+        let (mut lo, mut hi) = (0, chars.len());
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if fits(&middle(mid)) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        let shown = format!("{}\n{}", head.trim_end(), middle(lo));
+        let paragraph = env
+            .text
+            .paragraph(&AttributedText::plain(shown, style), &wrap(Wrap::Word))
+            .ok()?;
+        Some(paragraph.layout(room))
     }
 }
 
@@ -1061,13 +1113,8 @@ impl Widget<Message> for Name {
         let Some(color) = cx.env().theme.colors.get(role, variant) else {
             return;
         };
-        // against the leading edge, as a wrapping text is
-        let x = match cx.env().direction {
-            LayoutDirection::Ltr => 0.0,
-            LayoutDirection::Rtl => {
-                width - layout.lines().first().map_or(0.0, |line| line.rect.width())
-            }
-        };
+        // each line is centred in the layout's width, which is the name's
+        let x = 0.0;
         for line in layout.lines() {
             for run in &line.runs {
                 cx.push(PaintOp::Glyphs {

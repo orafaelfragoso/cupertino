@@ -142,6 +142,9 @@ pub mod icon_view {
     pub const RIGHT_LABEL_PAD: f64 = 2.0;
     /// Header of a group section: height 32 (width 100 is a value)..
     pub const GROUP_HEADER_HEIGHT: f64 = 32.0;
+    /// Space between the arranged icon view's edges and its cells: at the leading and trailing sides, and above the first
+    /// row and below the last.
+    pub const GRID_INSET: (f64, f64) = (10.0, 8.0);
     /// Margins of the free-form grid and its default cell..
     pub const FREE_GRID_MARGIN: f64 = 4.0;
     pub const FREE_GRID_DEFAULT_CELL: f64 = 32.0;

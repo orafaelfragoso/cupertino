@@ -2,7 +2,7 @@
 //! shows the folder, the folders of its path bar and the text of its status bar. The window itself is [`crate::kit`].
 
 use crate::format::available_size;
-use crate::places::{Place, PlaceKind};
+use crate::places::{recents_place, Place, PlaceKind};
 use std::path::{Path, PathBuf};
 
 /// Window chrome metrics.
@@ -40,6 +40,9 @@ pub enum ViewMode {
 /// instead.
 pub fn path_chain(dir: &Path, places: &[Place]) -> Vec<(PathBuf, String)> {
     let mut chain = Vec::new();
+    if dir == crate::recents::location() {
+        return vec![(dir.to_path_buf(), recents_place().name)];
+    }
     for folder in dir.ancestors() {
         if let Some(place) = places
             .iter()
@@ -107,12 +110,6 @@ mod tests {
             path: PathBuf::from("/home/ada/.local/share/Trash/files"),
             group: PlaceGroup::Locations,
             kind: PlaceKind::Trash,
-        });
-        ps.push(Place {
-            name: "Recents".into(),
-            path: PathBuf::from("recent:///"),
-            group: PlaceGroup::Favorites,
-            kind: PlaceKind::Recents,
         });
         let chain = |dir: &str| {
             path_chain(Path::new(dir), &ps)

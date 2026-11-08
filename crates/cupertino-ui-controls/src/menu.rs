@@ -57,6 +57,8 @@ const MARK_COLUMN: f64 = 18.0;
 /// After the label, for a submenu's chevron.
 const ARROW_COLUMN: f64 = 14.0;
 const MIN_WIDTH: f64 = 120.0;
+/// The least room between a row's label and its shortcut.
+const SHORTCUT_GAP: f64 = 24.0;
 /// Between a highlight and the panel's sides.
 const HIGHLIGHT_INSET: f64 = 5.0;
 const HIGHLIGHT_RADIUS: f64 = 4.0;
@@ -233,6 +235,11 @@ fn rows<M: Clone + 'static>(
                 enabled: true,
                 ..
             }
+            | MenuItem::Shortcut {
+                label,
+                enabled: true,
+                ..
+            }
             | MenuItem::Submenu {
                 label,
                 enabled: true,
@@ -247,6 +254,10 @@ fn rows<M: Clone + 'static>(
         .iter()
         .enumerate()
         .map(|(index, item)| {
+            let shortcut = match item {
+                MenuItem::Shortcut { shortcut, .. } => Some(shortcut.clone()),
+                _ => None,
+            };
             let (label, enabled, checked, action) = match item {
                 MenuItem::Separator => return Element::new(Separator).key(index as u64),
                 MenuItem::Item {
@@ -254,6 +265,13 @@ fn rows<M: Clone + 'static>(
                     enabled,
                     checked,
                     on_select,
+                }
+                | MenuItem::Shortcut {
+                    label,
+                    enabled,
+                    checked,
+                    on_select,
+                    ..
                 } => (
                     label,
                     *enabled,
@@ -279,6 +297,7 @@ fn rows<M: Clone + 'static>(
             };
             let row = Row {
                 label: label.clone(),
+                shortcut,
                 enabled,
                 checked,
                 action,
@@ -312,6 +331,11 @@ fn slots<M: Clone>(
         .map(|(index, item)| {
             let action = match item {
                 MenuItem::Item {
+                    enabled: true,
+                    on_select,
+                    ..
+                }
+                | MenuItem::Shortcut {
                     enabled: true,
                     on_select,
                     ..
@@ -360,7 +384,9 @@ fn enabled_position<M>(items: &[MenuItem<M>], index: usize) -> Option<usize> {
     let enabled = |item: &MenuItem<M>| {
         matches!(
             item,
-            MenuItem::Item { enabled: true, .. } | MenuItem::Submenu { enabled: true, .. }
+            MenuItem::Item { enabled: true, .. }
+                | MenuItem::Shortcut { enabled: true, .. }
+                | MenuItem::Submenu { enabled: true, .. }
         )
     };
     enabled(items.get(index)?).then(|| items[..index].iter().filter(|i| enabled(i)).count())
@@ -772,6 +798,8 @@ enum RowAction<M> {
 
 struct Row<M> {
     label: String,
+    /// The keys that choose the row, shown at its trailing edge.
+    shortcut: Option<String>,
     enabled: bool,
     checked: bool,
     action: RowAction<M>,
@@ -908,6 +936,7 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
 
     fn update(&self, old: &Self, _: &mut RowState) -> Change {
         if self.label != old.label
+            || self.shortcut != old.shortcut
             || matches!(self.action, RowAction::Open { .. })
                 != matches!(old.action, RowAction::Open { .. })
         {
@@ -925,7 +954,12 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
 
     fn measure(&self, _: &RowState, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         let label = look::label(cx.env(), &self.label).map_or(0.0, |l| l.size().width);
-        let width = PADDING_X + MARK_COLUMN + label + ARROW_COLUMN + PADDING_X;
+        let shortcut = self
+            .shortcut
+            .as_deref()
+            .and_then(|s| look::label(cx.env(), s))
+            .map_or(0.0, |l| SHORTCUT_GAP + l.size().width);
+        let width = PADDING_X + MARK_COLUMN + label + shortcut + ARROW_COLUMN + PADDING_X;
         Measured {
             size: Size::new(width.max(MIN_WIDTH), ROW_HEIGHT),
             baseline: None,
@@ -1020,6 +1054,23 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
             );
             look::glyphs(cx, &label, origin, color);
         }
+        if let Some(shortcut) = self.shortcut.as_deref().and_then(|s| look::label(&env, s)) {
+            // the keys keep to the trailing edge, in the secondary colour unless the row is highlighted or disabled
+            let keys = if !self.enabled || highlighted {
+                color
+            } else {
+                theme
+                    .colors
+                    .get(ColorRole::SecondaryText, StateVariant::NORMAL)
+            };
+            let width = shortcut.size().width;
+            let row = Rect::new(0.0, 0.0, size.width, size.height);
+            let origin = Point::new(
+                leading(size.width - PADDING_X - width, width),
+                look::top(&shortcut, row, &env),
+            );
+            look::glyphs(cx, &shortcut, origin, keys);
+        }
         if matches!(self.action, RowAction::Open { .. }) {
             let x =
                 leading(size.width - PADDING_X - ARROW_COLUMN, ARROW_COLUMN) + ARROW_COLUMN / 2.0;
@@ -1036,6 +1087,9 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
     fn semantics(&self, _: &RowState, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::MenuItem);
         cx.name(self.label.clone());
+        if let Some(shortcut) = &self.shortcut {
+            cx.description(shortcut.clone());
+        }
         cx.item_index(self.place);
         if self.checked {
             cx.value(AccessibleValue::Toggle(Checked::True));

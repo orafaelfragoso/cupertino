@@ -1,7 +1,7 @@
 //! Folders that spring open under a held drag, in the browser window on CupertinoKit run headless: a folder row, an icon,
 //! a sidebar place and a path bar folder open after the delay and not before, flashing just before; the drag goes on in
 //! the folder that opened; the drag leaving the window or being cancelled takes the window back to its folder, history,
-//! selection, view and scroll position, and a drop keeps the folder the drag opened, even when the source hears a cancel
+//! expanded folders, search, selection, view and scroll position, and a drop keeps the folder the drag opened, even when the source hears a cancel
 //! after it. With `CUPERTINO_SPRING_CAPTURES` naming a directory, a flashing folder row is written there as PNGs, light
 //! and dark at 1x and 2x, for a look at it.
 
@@ -13,7 +13,7 @@ use common::{place, Run};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::PlaceKind;
 use cupertino_files::spring::{SPRING_DELAY, SPRING_FLASH};
-use cupertino_kit::core::Role;
+use cupertino_kit::core::{AccessibleValue, Role};
 use cupertino_kit::geometry::{Point, Rect};
 use cupertino_kit::platform::{
     Capabilities, ClipboardData, DragProgress, DropAction, DropToken, Mods, PlatformEvent,
@@ -291,6 +291,68 @@ fn the_drag_leaving_the_window_takes_it_back_to_its_folder_history_selection_vie
     assert_eq!(shown(&run), "Projects");
 }
 
+/// The drag leaves the window.
+fn leave(run: &mut Run) {
+    run.driver
+        .window_system_mut()
+        .drag_leave(run.window)
+        .unwrap();
+    run.settle();
+}
+
+#[test]
+fn the_expanded_folders_come_back_with_the_selection_inside_them() {
+    const RIGHT: u32 = 0xff53;
+    let mut run = window();
+    run.click_row("Notes");
+    run.key(RIGHT, None);
+    run.wait_until(|run| run.rows().iter().any(|r| r == "Inner"));
+    run.click_row("Inner");
+    run.key(RIGHT, None);
+    run.wait_until(|run| run.rows().iter().any(|r| r == "core.txt"));
+    run.click_row("deep.txt");
+    let before = run.rows();
+
+    drag_in_row(&mut run, "Projects");
+    spring(&mut run, "Projects", "plan.txt");
+    leave(&mut run);
+    assert_eq!(shown(&run), "Documents");
+    run.wait_until(|run| run.rows() == before);
+    run.wait_until(|run| run.selected_rows() == ["deep.txt"]);
+}
+
+#[test]
+fn the_search_comes_back_with_its_text() {
+    let mut run = window();
+    run.click("search");
+    run.type_text("o");
+    run.wait_until(|run| run.rows() == ["Notes", "Projects"]);
+
+    drag_in_row(&mut run, "Projects");
+    spring(&mut run, "Projects", "plan.txt");
+    assert!(
+        run.rows().iter().any(|r| r == "plan.txt"),
+        "the folder opened whole"
+    );
+    leave(&mut run);
+    assert_eq!(shown(&run), "Documents");
+    run.wait_until(|run| run.rows() == ["Notes", "Projects"]);
+    // the field shows the text again
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let texts: Vec<String> = snapshot
+        .accessibility
+        .iter()
+        .filter_map(|(_, node)| match &node.value {
+            Some(AccessibleValue::Text {
+                value,
+                editing: Some(_),
+            }) => Some(value.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, ["o"]);
+}
+
 #[test]
 fn the_icon_view_comes_back_too() {
     let mut run = window();
@@ -365,7 +427,8 @@ fn a_drop_where_nothing_takes_it_is_a_leave() {
 /// The window's own drag of `name`'s row, held over its own window at `at` as the compositor shows it there.
 fn own_drag(run: &mut Run, name: &str) -> cupertino_ui_test::StartedDrag {
     let row = run.row_bounds(name);
-    let from = row.center();
+    // on the row's name: a press on its blank part draws a band
+    let from = Point::new(row.min_x() + 48.0, row.center().y);
     run.hold(from, Point::new(from.x + 30.0, from.y + 10.0), Mods::NONE);
     let started = run.driver.runtime().window_system().drags()[0].clone();
     let window = run.window;

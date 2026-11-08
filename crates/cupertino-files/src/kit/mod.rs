@@ -67,6 +67,7 @@ use crate::thumbnail::Thumbnailer;
 use crate::trash::Trash;
 use crate::udisks::{Media, Passphrase, Report, Volumes};
 use crate::window::ViewMode;
+use crate::window_prefs::WindowPrefs;
 use crate::SortSpec;
 
 /// Identifier of the window for the server, as the desktop entry names it.
@@ -86,7 +87,9 @@ pub struct Start {
     volumes: Option<Volumes>,
     media_woken: async_channel::Receiver<()>,
     trash: Trash,
-    view: ViewMode,
+    /// What a new window starts with, and the file that keeps it between launches.
+    prefs: WindowPrefs,
+    prefs_file: Option<PathBuf>,
     home: Option<PathBuf>,
     observer: Option<Observer>,
     /// How long a file operation runs before the progress window opens by itself.
@@ -137,7 +140,8 @@ impl Start {
             volumes,
             media_woken,
             trash: Trash::new(),
-            view: ViewMode::Icons,
+            prefs: WindowPrefs::default(),
+            prefs_file: None,
             home: None,
             observer: None,
             progress_delay: jobs::PROGRESS_WINDOW_DELAY,
@@ -166,7 +170,20 @@ impl Start {
 
     /// The windows opening in `view` in place of the icon view.
     pub fn with_view(self, view: ViewMode) -> Start {
-        Start { view, ..self }
+        Start {
+            prefs: WindowPrefs { view, ..self.prefs },
+            ..self
+        }
+    }
+
+    /// The windows opening with the view and bars kept at `file` ([`crate::window_prefs`]), and a window's change of
+    /// them kept there. Without it nothing is read or written.
+    pub fn with_prefs_file(self, file: PathBuf) -> Start {
+        Start {
+            prefs: WindowPrefs::load(&file),
+            prefs_file: Some(file),
+            ..self
+        }
     }
 
     /// The sidebar's standard places read again from `source` whenever one of `folders` changes, besides the trash's
@@ -292,8 +309,10 @@ struct Session {
     /// Where a window on a file system that goes away goes.
     home: PathBuf,
     trash: Trash,
-    /// How a new window shows its folder.
-    view: ViewMode,
+    /// How a new window shows its folder and which bars it shows: the last choice any window made.
+    prefs: std::cell::Cell<WindowPrefs>,
+    /// Where that choice is kept between launches.
+    prefs_file: Option<PathBuf>,
     /// What Copy took last, for Paste Item and Move Item Here in any window.
     pasteboard: Vec<PathBuf>,
     /// The file operations, which outlive the windows that started them, and the progress window.
@@ -311,6 +330,8 @@ struct Session {
     clock: fn() -> SystemTime,
     /// The bus name later launches hand their requests to, until Files exits.
     instance: Option<Service>,
+    /// An item a window listed carries a tag: the sidebar shows its Tags heading from then on.
+    tagged: std::cell::Cell<bool>,
 }
 
 /// One browser window.
@@ -586,7 +607,8 @@ impl Application for Files {
                     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
                 }),
                 trash: start.trash,
-                view: start.view,
+                prefs: std::cell::Cell::new(start.prefs),
+                prefs_file: start.prefs_file,
                 pasteboard: Vec::new(),
                 jobs: jobs::Jobs::new(start.progress_delay, start.observer),
                 places_watch,
@@ -596,6 +618,7 @@ impl Application for Files {
                 dragged: Vec::new(),
                 clock: start.clock,
                 instance: start.instance,
+                tagged: std::cell::Cell::new(false),
             },
         };
         let first = model.next_window;
@@ -716,11 +739,12 @@ impl Model {
         let id = self.next_window;
         self.next_window += 1;
         let wake = self::woken(&woken, Message::Window(id, Event::Woken));
+        let prefs = self.session.prefs.get();
         let mut window = BrowserWindow {
             browser,
             woken,
-            path_bar: false,
-            status_bar: false,
+            path_bar: prefs.path_bar,
+            status_bar: prefs.status_bar,
             available: None,
             mounted_read_only: false,
             search: String::new(),
@@ -739,7 +763,7 @@ impl Model {
             rename_when_listed: None,
             full_screen: false,
             unlock: None,
-            view: self.session.view,
+            view: prefs.view,
             context: None,
             pressed: None,
             sidebar_focused: false,
@@ -1013,6 +1037,11 @@ impl Model {
                 if polled.changed {
                     window.now = (window.clock)();
                     window.read_available();
+                    if !session.tagged.get()
+                        && window.browser.entries().iter().any(|e| !e.tags.is_empty())
+                    {
+                        session.tagged.set(true);
+                    }
                 }
                 window.spring_settle();
                 let mut commands = window.listed(id);
@@ -1255,6 +1284,8 @@ impl Model {
             MenuAction::Back => window.step(Step::Back, session),
             MenuAction::Forward => window.step(Step::Forward, session),
             MenuAction::EnclosingFolder => window.step(Step::Parent, session),
+            MenuAction::Recents => window.go(crate::recents::location().to_path_buf(), session),
+            MenuAction::Home => window.go(session.home.clone(), session),
             MenuAction::MoveToTrash => window.trash_selection(session),
             MenuAction::PutBack => window.put_back(session),
             MenuAction::NewFolder => match operations::new_folder(window.browser.dir()) {
@@ -1284,6 +1315,14 @@ impl Model {
             }
             MenuAction::View(_) => {}
         }
+        if matches!(
+            action,
+            MenuAction::TogglePathBar | MenuAction::ToggleStatusBar | MenuAction::View(_)
+        ) {
+            if let Some(window) = self.windows.get(&id) {
+                self.session.remember(window);
+            }
+        }
         if matches!(action, MenuAction::MoveToTrash | MenuAction::PutBack) {
             // the first item trashed makes the trash: its place comes at once
             self.session.follow_places();
@@ -1293,35 +1332,23 @@ impl Model {
 
     /// Do the row `command` of the context menu of the window `id`.
     fn menu_command(&mut self, id: u64, command: MenuCommand) -> Vec<Command<Message>> {
-        let action = match command {
-            MenuCommand::Open => MenuAction::Open,
-            MenuCommand::OpenInNewWindow => MenuAction::OpenInNewWindow,
-            MenuCommand::ShowOriginal => MenuAction::ShowOriginal,
-            MenuCommand::PutBack => MenuAction::PutBack,
-            MenuCommand::MoveToTrash => MenuAction::MoveToTrash,
-            MenuCommand::Rename => MenuAction::Rename,
-            MenuCommand::NewFolder => MenuAction::NewFolder,
-            MenuCommand::NewFolderWithSelection => MenuAction::NewFolderWithSelection,
-            MenuCommand::Duplicate => MenuAction::Duplicate,
-            MenuCommand::MakeAlias => MenuAction::MakeAlias,
-            MenuCommand::SortBy(key, ascending) => MenuAction::SortBy(key, ascending),
-            MenuCommand::SetView(view) => MenuAction::View(view),
-            MenuCommand::Copy => MenuAction::Copy,
-            MenuCommand::Paste => MenuAction::Paste,
-            MenuCommand::MoveHere => MenuAction::MoveHere,
-            MenuCommand::OpenWith(app) => {
-                let Some(window) = self.windows.get(&id) else {
-                    return Vec::new();
-                };
-                let paths = window.selected_paths();
-                return self.session.open_paths(id, paths, Some(app));
-            }
-            MenuCommand::ToggleTag(color) => {
-                if let Some(window) = self.windows.get(&id) {
-                    window.toggle_tag(color, &self.session);
+        let Some(action) = command.action() else {
+            match command {
+                MenuCommand::OpenWith(app) => {
+                    let Some(window) = self.windows.get(&id) else {
+                        return Vec::new();
+                    };
+                    let paths = window.selected_paths();
+                    return self.session.open_paths(id, paths, Some(app));
                 }
-                return Vec::new();
+                MenuCommand::ToggleTag(color) => {
+                    if let Some(window) = self.windows.get(&id) {
+                        window.toggle_tag(color, &self.session);
+                    }
+                }
+                _ => {}
             }
+            return Vec::new();
         };
         let state = match self.windows.get(&id) {
             Some(window) => window.menu_state(&self.session),
@@ -1495,6 +1522,26 @@ impl Model {
 }
 
 impl Session {
+    /// `window`'s view and bars become what a new window starts with, kept in the prefs file when there is one.
+    fn remember(&self, window: &BrowserWindow) {
+        let prefs = WindowPrefs {
+            view: window.view,
+            path_bar: window.path_bar,
+            status_bar: window.status_bar,
+        };
+        if self.prefs.replace(prefs) == prefs {
+            return;
+        }
+        if let Some(file) = &self.prefs_file {
+            if let Err(e) = prefs.save(file) {
+                eprintln!(
+                    "cupertino-files: cannot keep the window's view in {}: {e}",
+                    file.display()
+                );
+            }
+        }
+    }
+
     fn failed(&self, action: Action, items: &[&Path], error: &dyn std::fmt::Display) {
         self.notices.post(notice::failure(action, items, error));
     }
@@ -1714,10 +1761,35 @@ impl BrowserWindow {
     /// Move the selected items to the trash; the listing drops them when the watcher reports it.
     fn trash_selection(&self, session: &Session) {
         let paths = self.selected_paths();
-        session.failed_some(
-            Action::Trash,
-            paths.iter().map(|path| (path, session.trash.trash(path))),
-        );
+        let mut sizes = Vec::new();
+        let moved: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                let moved = session.trash.trash_unsized(path).map(|(item, size)| {
+                    sizes.extend(size);
+                    item
+                });
+                (path, moved)
+            })
+            .collect();
+        session.failed_some(Action::Trash, moved);
+        // each move is a rename; summing a trashed folder's files can take long, so it runs on a thread of its own
+        if !sizes.is_empty() {
+            let spawned = std::thread::Builder::new()
+                .name("trash-sizes".into())
+                .spawn(move || {
+                    for size in sizes {
+                        if let Err(e) = size.record() {
+                            eprintln!(
+                                "cupertino-files: cannot record a trashed folder's size: {e}"
+                            );
+                        }
+                    }
+                });
+            if let Err(e) = spawned {
+                eprintln!("cupertino-files: cannot sum the trashed folders' sizes: {e}");
+            }
+        }
     }
 
     /// Put the selected items of the trash back where they came from.

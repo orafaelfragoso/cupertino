@@ -232,8 +232,9 @@ pub struct IconLayout {
     pub content: Size,
 }
 
-/// Margin around the grid. for the free-form grid; reused for the flow layout (approximate).
-pub const MARGIN: f64 = m::FREE_GRID_MARGIN;
+/// Margin at the grid's leading and trailing sides, and above its first row and below its last.
+pub const MARGIN: f64 = m::GRID_INSET.0;
+pub const TOP_MARGIN: f64 = m::GRID_INSET.1;
 
 /// Flow layout of `sections` in a viewport of `width` points.
 pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) -> IconLayout {
@@ -259,7 +260,7 @@ pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) 
     };
     let mut cells = Vec::new();
     let mut headers = Vec::new();
-    let mut y = MARGIN;
+    let mut y = TOP_MARGIN;
     let mut index = 0;
     for s in sections {
         if let Some(t) = &s.title {
@@ -290,7 +291,7 @@ pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) 
         headers,
         content: Size {
             w: width,
-            h: y + MARGIN,
+            h: y + TOP_MARGIN,
         },
     }
 }

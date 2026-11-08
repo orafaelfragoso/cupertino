@@ -690,6 +690,15 @@ impl SystemIcons {
         None
     }
 
+    /// Whether an asset pack gives the raster icon `name` as a file of its own (a PNG or a full-colour SVG), rather than
+    /// through the host icon theme or not at all.
+    pub fn pack_has_raster(&self, name: &str) -> bool {
+        self.assets
+            .icon_sources(&semantic(name), 32)
+            .into_iter()
+            .any(|(_, s)| matches!(s, IconSource::Raster(_) | IconSource::Svg(_)))
+    }
+
     /// Whether a source of the packs gives the raster icon `name` (at `px` pixels): `false` means it is drawn as a placeholder.
     pub fn has_raster(&mut self, name: &str, px: u32) -> bool {
         let name = semantic(name);
@@ -924,6 +933,25 @@ mod tests {
             (0, 255),
             "a raster has no symbol: the outline placeholder"
         );
+    }
+
+    #[test]
+    fn a_pack_has_a_raster_only_for_a_file_of_its_own() {
+        let host = tempfile::tempdir().unwrap();
+        host_themes(host.path());
+        let pack = tempfile::tempdir().unwrap();
+        let assets = fixture::assets(pack.path(), &["folder"], &["symbol.house"]);
+        let icons = SystemIcons::with_host(&assets, vec![host.path().to_path_buf()]);
+        assert!(icons.pack_has_raster("folder"), "a PNG of the pack");
+        assert!(
+            !icons.pack_has_raster("symbol.house"),
+            "a template symbol is not a raster"
+        );
+        // `computer` resolves through the built-in map in the host theme, which is not the pack's own file
+        let mut themed = SystemIcons::with_host(&assets, vec![host.path().to_path_buf()]);
+        assert!(themed.has_raster("computer", 16));
+        assert!(!icons.pack_has_raster("computer"));
+        assert!(!icons.pack_has_raster("volume.internal"), "nothing at all");
     }
 
     #[test]

@@ -509,8 +509,8 @@ fn rows_of_the_list_drag_together_with_the_pressed_row_first() {
             browser.menu("view-list");
             let a = text_bounds(&browser, "a.txt");
             let b = text_bounds(&browser, "b.txt");
-            let center =
-                |r: Rect| Point::new(r.min_x() + r.width() / 2.0, r.min_y() + r.height() / 2.0);
+            // on the name's text, which the cell's text spans the start of
+            let center = |r: Rect| Point::new(r.min_x() + 6.0, r.min_y() + r.height() / 2.0);
             browser.button(center(a), true);
             browser.button(center(a), false);
             for pressed in [true, false] {

@@ -79,13 +79,18 @@ pub struct Browser {
     filter: Option<String>,
     /// The selection to give back once the listing is complete ([`Browser::return_to`]).
     reselect: Option<SelectionPaths>,
+    /// The folders to expand again as the listing reaches them ([`Browser::return_to`]), outermost first.
+    reopen: Vec<PathBuf>,
 }
 
-/// Where a window was, to go back to with [`Browser::return_to`]: its history and its selection, by path.
+/// Where a window was, to go back to with [`Browser::return_to`]: its history, its expanded folders and its
+/// selection, by path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Visit {
     history: History,
     selection: SelectionPaths,
+    /// Outermost first.
+    expanded: Vec<PathBuf>,
 }
 
 impl Visit {
@@ -192,6 +197,7 @@ impl Browser {
             types,
             filter: None,
             reselect: None,
+            reopen: Vec::new(),
         })
     }
 
@@ -432,27 +438,67 @@ impl Browser {
         self.select_when_listed = None;
         self.awaited = None;
         self.reselect = None;
+        self.reopen.clear();
         Ok(())
     }
 
     /// Where the window is, with its history and its selection, for [`Browser::return_to`].
     pub fn visit(&self) -> Visit {
+        let mut expanded: Vec<PathBuf> = self.expanded.keys().cloned().collect();
+        expanded.sort_by_key(|p| p.components().count());
         Visit {
             history: self.history.clone(),
             selection: self.selection_paths(),
+            expanded,
         }
     }
 
-    /// Go back to `visit` as it was: its folder with its history, and its selection once the listing is complete. On
-    /// an error the window stays where it is.
+    /// Go back to `visit` as it was: its folder with its history, its folders expanded again as the listing reaches
+    /// them, and its selection once they are listed. On an error the window stays where it is.
     pub fn return_to(&mut self, visit: Visit) -> io::Result<()> {
         if visit.dir() != self.dir() {
             self.show(visit.dir())?;
         }
         self.history = visit.history;
+        self.reopen = visit.expanded;
         self.reselect = Some(visit.selection);
         self.reselect_pending();
         Ok(())
+    }
+
+    /// Expand again the folders [`Browser::return_to`] waits for that the listing shows; once every folder shown has
+    /// been read, those it still does not show are gone and forgotten. `true` while any is waited for.
+    fn reopen_pending(&mut self) -> bool {
+        if self.reopen.is_empty() {
+            return false;
+        }
+        if self.filter.is_some() {
+            // a search shows no folder expanded
+            self.reopen.clear();
+            return false;
+        }
+        loop {
+            let entries = self.entries();
+            let shown = self.reopen.iter().position(|path| {
+                entries
+                    .iter()
+                    .any(|e| &e.path == path && e.kind == Kind::Directory)
+            });
+            let Some(at) = shown else { break };
+            let path = self.reopen.remove(at);
+            let index = self.entries().iter().position(|e| e.path == path);
+            if let Some(index) = index {
+                if let Err(e) = self.expand(index) {
+                    eprintln!("cupertino-files: cannot open {} again: {e}", path.display());
+                }
+            }
+        }
+        let reading =
+            self.model.is_loading() || self.expanded.values().any(DirectoryModel::is_loading);
+        if !reading {
+            self.reopen.clear();
+        }
+        !self.reopen.is_empty() || reading
     }
 
     /// Whether the folder is still being read.
@@ -461,7 +507,7 @@ impl Browser {
     }
 
     fn reselect_pending(&mut self) {
-        if self.model.is_loading() {
+        if self.model.is_loading() || self.reopen_pending() {
             return;
         }
         if let Some(kept) = self.reselect.take() {

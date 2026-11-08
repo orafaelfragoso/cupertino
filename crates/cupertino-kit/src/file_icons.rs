@@ -114,6 +114,12 @@ impl FileIcons {
         (folder, kind)
     }
 
+    /// Whether an asset pack gives the icon `name` (a name [`FileIcons::name`] returns) as a file of its own, rather than
+    /// through the host icon theme: an app that draws its own art for some kinds keeps a pack's.
+    pub fn pack_has(&self, name: &str) -> bool {
+        self.icons.pack_has(name)
+    }
+
     /// The renditions of the icon of the item at `path` of type `mime`, `points` square, at each of
     /// [`RENDITION_SCALES`]; `alias` puts the alias badge on its bottom-left corner (a symbolic link).
     pub fn images(

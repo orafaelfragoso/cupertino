@@ -26,6 +26,7 @@ pub mod group;
 pub mod history;
 #[cfg(feature = "app")]
 pub mod instance;
+pub mod item_art;
 #[cfg(feature = "app")]
 pub mod kit;
 pub mod layout;
@@ -56,6 +57,7 @@ pub mod typeselect;
 #[cfg(feature = "app")]
 pub mod udisks;
 pub mod window;
+pub mod window_prefs;
 
 pub use browser::{Activation, Browser};
 pub use entry::{Entry, Kind};

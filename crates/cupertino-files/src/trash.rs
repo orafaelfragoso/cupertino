@@ -62,6 +62,48 @@ impl From<io::Error> for TrashError {
     }
 }
 
+/// Held by every change to a `directorysizes` file in this process: a [`PendingSize`] appends on a thread of its own
+/// while [`forget`] rewrites the file, and a line appended between that read and that write would be lost or cut.
+static SIZES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn sizes_lock() -> std::sync::MutexGuard<'static, ()> {
+    SIZES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The `directorysizes` line a folder just moved to the trash still needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingSize {
+    trash_dir: PathBuf,
+    name: String,
+}
+
+impl PendingSize {
+    /// Sum the trashed folder's files and add its line. Nothing is written for a folder that has left the trash
+    /// meanwhile (put back or emptied), whose line would only be stale.
+    pub fn record(&self) -> io::Result<()> {
+        let size = dir_size(&self.trash_dir.join("files").join(&self.name));
+        let info = self
+            .trash_dir
+            .join("info")
+            .join(format!("{}.trashinfo", self.name));
+        let _held = sizes_lock();
+        let mtime = match fs::metadata(&info) {
+            Ok(meta) => meta.mtime(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.trash_dir.join("directorysizes"))?;
+        // the line in one write, so another writer appending to the file cannot split it
+        let line = format!("{} {} {}\n", size, mtime, encode_path(&self.name));
+        f.write_all(line.as_bytes())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrashedItem {
     /// Name inside `files/`.
@@ -204,8 +246,22 @@ impl Trash {
         Ok((d, Some(top)))
     }
 
-    /// Move `path` to the trash and return the record.
+    /// Move `path` to the trash and return the record, a trashed folder's `directorysizes` line written.
     pub fn trash(&self, path: &Path) -> Result<TrashedItem, TrashError> {
+        let (item, size) = self.trash_unsized(path)?;
+        if let Some(size) = size {
+            size.record()?;
+        }
+        Ok(item)
+    }
+
+    /// Move `path` to the trash as [`Trash::trash`] does, but leave a trashed folder's `directorysizes` line to the
+    /// [`PendingSize`] returned with the record, which may be written later and on another thread: summing a large
+    /// folder reads every file in it, while the move itself is one rename.
+    pub fn trash_unsized(
+        &self,
+        path: &Path,
+    ) -> Result<(TrashedItem, Option<PendingSize>), TrashError> {
         let abs = if path.is_absolute() {
             path.to_path_buf()
         } else {
@@ -268,21 +324,17 @@ impl Trash {
             let _ = fs::remove_file(&info_path);
             return Err(e.into());
         }
-        if meta.is_dir() {
-            let size = dir_size(&files.join(&name));
-            let mtime = fs::metadata(&info_path)?.mtime();
-            let mut f = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join("directorysizes"))?;
-            writeln!(f, "{} {} {}", size, mtime, encode_path(&name))?;
-        }
-        Ok(TrashedItem {
+        let size = meta.is_dir().then(|| PendingSize {
+            trash_dir: dir.clone(),
+            name: name.clone(),
+        });
+        let item = TrashedItem {
             name,
             trash_dir: dir,
             original_path: abs,
             deletion_date: date,
-        })
+        };
+        Ok((item, size))
     }
 
     /// List the items of one trash directory.
@@ -411,6 +463,7 @@ pub fn trashed_item(path: &Path) -> Option<TrashedItem> {
 pub fn forget(item: &TrashedItem) {
     let _ = fs::remove_file(item.info_path());
     let path = item.trash_dir.join("directorysizes");
+    let _held = sizes_lock();
     let Ok(s) = fs::read_to_string(&path) else {
         return;
     };
@@ -520,6 +573,79 @@ mod tests {
         assert_eq!(t.restore(&listed[0]).unwrap(), f);
         assert_eq!(fs::read(&f).unwrap(), b"hi");
         assert!(t.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_folders_size_is_written_when_asked_and_not_once_it_has_left_the_trash() {
+        let (d, t) = setup();
+        let folder = d.path().join("dir");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("f"), vec![0u8; 10]).unwrap();
+        let (item, size) = t.trash_unsized(&folder).unwrap();
+        let sizes = item.trash_dir.join("directorysizes");
+        assert!(item.file_path().is_dir(), "the folder is moved at once");
+        assert!(!sizes.exists(), "its size is not summed yet");
+        let size = size.expect("a folder has a size to write");
+        size.record().unwrap();
+        assert!(fs::read_to_string(&sizes).unwrap().starts_with("10 "));
+
+        let other = d.path().join("other");
+        fs::create_dir(&other).unwrap();
+        let (item, size) = t.trash_unsized(&other).unwrap();
+        t.restore(&item).unwrap();
+        size.unwrap().record().unwrap();
+        assert_eq!(fs::read_to_string(&sizes).unwrap().lines().count(), 1);
+
+        let file = d.path().join("file");
+        fs::write(&file, "f").unwrap();
+        assert_eq!(t.trash_unsized(&file).unwrap().1, None);
+    }
+
+    #[test]
+    fn sizes_written_on_threads_while_lines_are_forgotten_all_stay_whole() {
+        let (d, t) = setup();
+        let trash = |name: &str| {
+            let folder = d.path().join(name);
+            fs::create_dir(&folder).unwrap();
+            fs::write(folder.join("f"), vec![0u8; 7]).unwrap();
+            t.trash_unsized(&folder).unwrap()
+        };
+        let kept: Vec<_> = (0..24).map(|i| trash(&format!("kept {i}"))).collect();
+        let gone: Vec<_> = (0..24).map(|i| trash(&format!("gone {i}"))).collect();
+        for (_, size) in &gone {
+            size.as_ref().unwrap().record().unwrap();
+        }
+        let threads: Vec<_> = kept
+            .iter()
+            .map(|(_, size)| {
+                let size = size.clone().unwrap();
+                std::thread::spawn(move || size.record().unwrap())
+            })
+            .collect();
+        // each restore rewrites the file without its line while the threads append theirs
+        for (item, _) in &gone {
+            t.restore(item).unwrap();
+        }
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let sizes = fs::read_to_string(kept[0].0.trash_dir.join("directorysizes")).unwrap();
+        let mut names: Vec<&str> = sizes
+            .lines()
+            .map(|line| {
+                let fields: Vec<&str> = line.splitn(3, ' ').collect();
+                assert_eq!(fields.len(), 3, "a whole line: {line:?}");
+                assert_eq!(fields[0], "7", "{line:?}");
+                fields[2]
+            })
+            .collect();
+        names.sort_unstable();
+        let mut expected: Vec<String> = kept
+            .iter()
+            .map(|(item, _)| encode_path(&item.name))
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(names, expected);
     }
 
     #[test]

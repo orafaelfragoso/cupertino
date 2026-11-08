@@ -230,11 +230,7 @@ fn shown(session: &Session, dir: &Path) -> Option<Destination> {
     if dir == session.trash.home_trash().join("files") {
         return Some(Destination::Trash);
     }
-    let recents = session
-        .places
-        .iter()
-        .any(|p| p.kind == PlaceKind::Recents && p.path == dir);
-    (!recents).then(|| Destination::Folder(dir.to_path_buf()))
+    (dir != crate::recents::location()).then(|| Destination::Folder(dir.to_path_buf()))
 }
 
 /// The place a drag over `to` lands on, and the action it shows: none on one of this application's dragged folders,

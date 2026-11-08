@@ -698,6 +698,16 @@ pub enum MenuItem<M> {
         checked: bool,
         on_select: M,
     },
+    /// An [`MenuItem::Item`] that shows the keys that choose it from the keyboard, as "⇧⌘N", at its trailing edge in the
+    /// secondary text colour; assistive technology reads them as the item's description. The application handles the
+    /// keys itself: the menu only shows them.
+    Shortcut {
+        label: String,
+        shortcut: String,
+        enabled: bool,
+        checked: bool,
+        on_select: M,
+    },
     /// Opens a menu of `items` beside itself on a click, Return, Space, the arrow toward the trailing side or once the
     /// pointer rests on it.
     Submenu {
@@ -942,6 +952,21 @@ pub struct Sidebar<M> {
     pub on_select: Option<Handler<usize, M>>,
     /// A press on a row's accessory, with the row's key; it does not select the row.
     pub on_accessory: Option<Handler<Key, M>>,
+}
+
+/// How a [`Sidebar`] draws its rows. `Element::from` draws [`SidebarLook::Accent`]; [`Sidebar::with_look`] picks
+/// another.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SidebarLook {
+    /// The selected row is filled with the accent and its symbol and label take the selected text colour; the other
+    /// rows' symbols are the accent.
+    #[default]
+    Accent,
+    /// A file browser's list of places: taller rows with larger symbols, the selected row filled with a neutral grey
+    /// and its label in the semibold weight, its symbol in the accent. The other rows' symbols are the accent in each
+    /// section `accent` marks `true` (by the sections' order), the secondary label colour in the others and in a section
+    /// it does not reach. A section heading without rows is drawn alone.
+    Neutral { accent: Vec<bool> },
 }
 
 /// Flexible empty space in a stack.

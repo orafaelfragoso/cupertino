@@ -59,9 +59,12 @@ pub(crate) const LIGHT: Palette<Source> = Palette {
         (PageDot, Rgba([0, 0, 0, 51])),
         (GroupFill, Token("secondary-system-fill")),
         (SwitchThumbGlyph, Rgba([115, 115, 115, 255])),
-        (PanelTrack, Rgba([232, 232, 232, 255])),
+        // A panel's level slider track: a mid grey, 3:1 or more against the module behind it.
+        (PanelTrack, Rgba([118, 118, 118, 255])),
         (PanelTrackBorder, Rgba([0, 0, 0, 26])),
         (QuaternaryLabel, Token("quaternary-label")),
+        // The empty part of a slider's track: a mid grey, 3:1 or more against the window behind it.
+        (SliderTrack, Rgba([128, 128, 128, 255])),
     ],
     states: StateColors {
         emphasized_border: Rgba([0, 0, 0, 96]),
@@ -92,8 +95,8 @@ pub(crate) const DARK: Palette<Source> = Palette {
         (DefaultButtonText, WHITE),
         (DestructiveFill, Token("system-red")),
         (DestructiveText, WHITE),
-        // The empty part of a slider's track and an off switch's track: white at 20 %, so the track stands apart from
-        // the window and from a text background behind it.
+        // An off switch's track: white at 20 %, so the track stands apart from the window and from a text background
+        // behind it.
         (SwitchTrack, Rgba([255, 255, 255, 51])),
         (SwitchThumb, WHITE),
         (TextBackground, Token("text-background")),
@@ -119,9 +122,12 @@ pub(crate) const DARK: Palette<Source> = Palette {
         (PageDot, Rgba([255, 255, 255, 51])),
         (GroupFill, Token("secondary-system-fill")),
         (SwitchThumbGlyph, Rgba([115, 115, 115, 255])),
-        (PanelTrack, Rgba([35, 35, 35, 255])),
+        // A panel's level slider track: a light grey, 3:1 or more against the module behind it and from the white fill.
+        (PanelTrack, Rgba([145, 145, 145, 255])),
         (PanelTrackBorder, Rgba([0, 0, 0, 0])),
         (QuaternaryLabel, Token("quaternary-label")),
+        // The empty part of a slider's track: a mid grey, 3:1 or more against the window and the text background.
+        (SliderTrack, Rgba([128, 128, 128, 255])),
     ],
     states: StateColors {
         emphasized_border: Rgba([255, 255, 255, 96]),
@@ -225,8 +231,8 @@ mod tests {
     }
 
     #[test]
-    fn the_dark_slider_track_stands_apart_from_the_backgrounds_behind_it() {
-        /// The least contrast of the empty part of a track with the window and with a text background, in dark.
+    fn the_dark_switch_track_stands_apart_from_the_backgrounds_behind_it() {
+        /// The least contrast of an off switch's track with the window and with a text background, in dark.
         const DARK_TRACK: f32 = 1.75;
         let tokens = tokens();
         let colors = ColorTokens::cupertino(&tokens, Appearance::Dark).unwrap();

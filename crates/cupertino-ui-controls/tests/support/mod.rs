@@ -126,6 +126,10 @@ pub fn theme() -> ThemeTokens {
             for selected in [false, true] {
                 let level = base + offset + if selected { 8 } else { 0 };
                 entries.push(((role, state(interaction, selected)), gray(level)));
+                // a slider's empty track takes the switch track's greys
+                if role == SwitchTrack {
+                    entries.push(((SliderTrack, state(interaction, selected)), gray(level)));
+                }
             }
         }
     }

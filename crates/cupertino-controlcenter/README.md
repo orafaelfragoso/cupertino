@@ -138,7 +138,7 @@ failure. Properties are read from the service every time, never from a cache.
 | Lifecycle | hidden, shown, hiding, hidden; a toggle while hiding reopens; the output going hides at once |
 | Slider track | 22 pt high (minimum width 120; the panel's track is 254 pt) |
 | Slider knob travel and position | `f = clamp((x - minX - 11) / (w - 22), 0, 1); the knob's hit frame reaches 9 pt past the track on every side |
-| Slider colours | track grey 0.137 (dark) or 0.910 (light), light outline black 0.102, white fill inset 1 pt, knob about 20 pt, disabled alpha 0.30 (dark) or 0.50 |
+| Slider colours | track grey 0.569 (dark) or 0.463 (light), 3:1 or more against the module in every palette (`cupertino-ui-theme`'s `PanelTrack`), light outline black 0.102, white fill inset 1 pt, knob about 20 pt, disabled alpha 0.30 (dark) or 0.50 |
 | Volume writes | linear 0 to 1, mute below 0.001, throttle 16.7 ms with the latest value kept |
 | Fonts | titles system 12 medium |
 | Battery glyph | fill `clamp(round(19 * level), 2, 19) at (2, 2, w, 8) with radius 1.5, 4 pt to the percentage, red at level 0.1 or below |

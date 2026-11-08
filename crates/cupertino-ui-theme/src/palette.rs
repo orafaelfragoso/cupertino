@@ -88,6 +88,7 @@ impl Palette<Color> {
             ) => self.normal(DisabledControlText),
             (Disabled, SwitchTrack) if selected => s.disabled_selected_switch_track,
             (Disabled, SwitchTrack) => s.disabled_switch_track,
+            (Disabled, SliderTrack) => s.disabled_switch_track,
             (Disabled, SwitchThumb) => s.disabled_switch_thumb,
             (Hover | Pressed, ControlBorder | TextFieldBorder) => s.emphasized_border,
             (Pressed, DefaultButtonFill) => s.pressed_default_fill,

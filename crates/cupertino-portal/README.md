@@ -73,6 +73,11 @@ ext-foreign-toplevel-list-v1).
   stays unarmed): clicks, row picks and keys do nothing
   until then, and a key held since before keeps doing nothing, since Return shares only on a fresh press (its
   repeats are ignored). Share is the default button and is enabled only once armed and a row is picked; Escape cancels at once.
+- The keyboard focus starts on Cancel, and a screen reader announces Cancel first. Until the window is armed, Return,
+  Enter and Space press no button at all (not even Cancel), so a key typed for the app neither shares nor denies; Tab
+  moves the focus, but Share and the check box are no Tab stops until armed. Once armed, Return and Space press the
+  focused button: Cancel denies, Share shares; with the focus in the list Return presses Share. Escape, a click on
+  Cancel and closing the window deny, armed or not.
 - The answer to `Start` is `0` with one entry in `streams`: the node id, `source_type`, `size` (logical for a display,
   in pixels for a window) and `position` for a display. It has `persist_mode` and `restore_data` when the person
   ticked the box, else `persist_mode` 0. Cancel or closing the window is `1`; a `Close` on the request or the session
@@ -89,12 +94,15 @@ ext-foreign-toplevel-list-v1).
   frontend's app id's alone: it never restores for another id or an empty one.
 - Forgetting. Settings › Privacy › Screen Sharing lists each remembered display by app, with Forget, which reads the
   file again under its lock and takes out that one line, never writing back the list the pane read; the next request
-  shows the window again. A share running then goes on until it is stopped.
-  Stopping a share from the menu bar forgets a transient grant.
+  shows the window again. A share running then goes on until it is stopped. Forget is the only way a remembered
+  display is taken back: Stop Sharing ends the share and leaves `screen-sharing.conf` alone, so the app may share the
+  display again without asking until the person forgets it in Settings. A remembered window is not listed in Settings
+  and lasts only until the app quits; Stop Sharing drops it with the share, so the app asks again.
 - While a share runs the portal shows a status item in the menu bar (StatusNotifierItem
   `org.kde.StatusNotifierItem-<pid>-<n>` with a `com.canonical.dbusmenu` menu, registered with
   `org.kde.StatusNotifierWatcher` and again whenever a watcher appears): tooltip and first menu row "“<app>” is sharing
-  “<source>”", then Stop Sharing, which ends the share and closes the session (`Closed`). The item goes when the share
+  “<source>”", then Stop Sharing, which ends the share and closes the session (`Closed`), and keeps a remembered
+  display (see Forgetting). The item goes when the share
   ends for any reason. The server's privacy dot in the menu bar shows for any capture besides.
 - Frames are copied with an image copy session straight into the stream's memfds through a `wl_shm` pool, the cursor
   painted in when it is embedded. A frame is captured only while PipeWire has a free buffer, at most at the framerate
@@ -126,7 +134,9 @@ OpenURI needs the person to pick or confirm one. The window is the consent: noth
   icon (the session's `application.` icons, then the `hicolor` theme and the pixmaps of each data directory); an entry
   with no icon, an icon that does not resolve, or an `Icon=` with a `/` or a control character shows the applications
   symbol. `last_choice` opens selected when it is one of `choices`. Open is the default button: Return opens the
-  selected app, and Escape cancels.
+  selected app, and Escape cancels. Unlike the screen-sharing and screenshot windows it has no arming delay and opens
+  with the focus in the list, on the selected app: it hands the app nothing of the person's (no pixels, no files),
+  only which installed app opens what the app already named, so the arrows and Return work at once.
 - The answer is `0` with `choice` and an `activation_token`: the caller's own, handed on unchanged, when it sent one;
   else one the window asks the server for when the person opens the app, made for that key press or click and naming
   the chosen app, so the app may take the focus (and the Dock bounces its tile). When the server gives none the answer
@@ -149,10 +159,11 @@ captured unless the person agrees.
 
 - `Screenshot` shows a window, "Screenshot", that says "“<app>” wants to take a screenshot of your screen.", the app
   named and drawn by its desktop entry (`<app id>.desktop` in `$XDG_DATA_HOME/applications` and each `XDG_DATA_DIRS`
-  entry), else by its id; an empty id shows as "An application". Nothing is preselected, Take Screenshot has no key
-  and is enabled only 500 ms after the window's first frame is on screen, so neither a key nor a click meant for the
-  app can consent;
-  Escape cancels.
+  entry), else by its id; an empty id shows as "An application". The keyboard focus starts on Cancel, which a screen
+  reader announces first. Take Screenshot has no shortcut and is enabled (and a Tab stop) only 500 ms after the
+  window's first frame is on screen; until then Return, Enter and Space press no button, Cancel included, so neither
+  a key nor a click meant for the app can consent. Once armed, Return and Space press the focused button, so Tab to
+  Take Screenshot and Return consents. Escape, a click on Cancel and closing the window deny, armed or not.
 - `modal`, `interactive` and `permission_store_checked` are read but change nothing: the same window shows every time,
   even when the frontend checked the permission store. `AvailableTargets` is `1` (the whole screen); a `target` other
   than `1` is `InvalidArgs`.
@@ -191,9 +202,10 @@ without the display's colour profile, and the picker has no keyboard movement of
 - `bin/cupertino-portal`
 - `data/cupertino.portal` to `/usr/share/xdg-desktop-portal/portals/`
 - `data/cupertino-portals.conf` to `/usr/share/xdg-desktop-portal/`: Settings and FileChooser from this backend
-  first, then the GTK backend for what it does not serve; ScreenCast, AppChooser and Screenshot from this backend; every other interface from the
-  GTK backend
+  first, then the GTK backend for what it does not serve; ScreenCast, AppChooser and Screenshot (which carries
+  `PickColor`) from this backend only; Secret from gnome-keyring; every other interface from the GTK backend
 
-The packages ship the binary and `cupertino.portal`, with `packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf`
-in place of the one above: ScreenCast from this backend and every other interface from the GTK backend, until the
-Settings and FileChooser backends are routed here too.
+The packages ship the binary, `cupertino.portal` and the same routing file as
+`packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf`. `tests/portals_conf.rs` reads the packaged file
+and checks it against the D-Bus names of the interfaces this crate implements: each is routed here first, nothing else
+is, `cupertino.portal` lists exactly those, and the crate's copy is the same file.

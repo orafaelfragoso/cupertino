@@ -811,6 +811,49 @@ fn a_window_is_restored_only_while_the_app_runs_and_not_after_the_person_stops_i
     assert!(asked, "a stopped share is not restored");
 }
 
+#[test]
+fn stopping_a_share_leaves_a_remembered_display_to_be_forgotten_in_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = grants_file(dir.path());
+    let Some(r) = start_with(Some(file.clone()), Vec::new()) else {
+        return missing_tool("dbus-daemon");
+    };
+    let watcher = Watcher::serve(&r);
+    let session = select_as(&r, 1, APP, 2, None);
+    let ((response, results), _running) = share_as(&r, &session, APP, |event| {
+        let Event::Ask { reply, .. } = event else {
+            panic!("expected a chooser");
+        };
+        reply.send(Answer::Chosen {
+            source: display(),
+            remember: true,
+        });
+    });
+    assert_eq!((response, persist_mode(&results)), (0, 2));
+    let restore = results["restore_data"].try_clone().unwrap();
+    let kept = ScreenSharingConf::load(&file).unwrap().0.grants;
+    assert_eq!(kept.len(), 1);
+
+    // the person stops the share from the menu bar: it ends, and the permission stays
+    let item = watcher.next();
+    menu_event(&r, &item, 3, "clicked");
+    let Capture::Stop { session: stopped } = r.shares.recv_timeout(WAIT).unwrap() else {
+        panic!("expected the share to stop");
+    };
+    assert_eq!(stopped.as_str(), session);
+    assert_eq!(
+        ScreenSharingConf::load(&file).unwrap().0.grants,
+        kept,
+        "Stop Sharing does not touch screen-sharing.conf"
+    );
+    let session = select_as(&r, 2, APP, 2, Some(&restore));
+    let ((response, results), _running) = share_as(&r, &session, APP, |_| {
+        panic!("a display still remembered shows no chooser")
+    });
+    assert_eq!((response, persist_mode(&results)), (0, 2));
+    assert_eq!(results["restore_data"], restore);
+}
+
 /// A stand-in for the menu bar's item registry, which hands on each registration.
 struct Watcher {
     registered: mpsc::Receiver<String>,

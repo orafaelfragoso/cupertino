@@ -532,6 +532,10 @@ pub struct Cupertino {
     /// Shake to locate (`cursor`).
     pub cursor_shake: crate::cursor::CursorShake,
     pub drag_icon: Option<(WlSurface, Point<i32, Logical>)>,
+    /// Where the client's drag under way started (`crate::drag_return`).
+    pub client_drag: Option<crate::drag_return::DragStart>,
+    /// A client's drag that just ended without a drop, its icon not captured yet.
+    pub drag_ended: Option<crate::drag_return::DragEnd>,
     pub key_router: KeyRouter,
     /// Input-source HUD and accent popup.
     pub overlays: Overlays,
@@ -849,6 +853,8 @@ impl Cupertino {
             cursor_loader,
             cursor_shake: crate::cursor::CursorShake::default(),
             drag_icon: None,
+            client_drag: None,
+            drag_ended: None,
             key_router,
             overlays,
             caps,
@@ -1819,7 +1825,12 @@ impl Cupertino {
         let fx = self.wm.tick(now);
         self.apply_effects(fx);
         self.send_deferred_configures(now);
-        self.fx.tick(now);
+        // a drag that ended elsewhere than at a button (the session locked, the source went away)
+        self.drag_ended();
+        if self.fx.tick(now) {
+            // an effect that ended leaves the screen; its last frame may still show it
+            self.request_redraw();
+        }
         self.tick_window_managers(now);
         self.tick_menu_bars(now);
         self.tick_input_timers(now);

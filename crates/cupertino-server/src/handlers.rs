@@ -456,10 +456,19 @@ impl ClientDndGrabHandler for Cupertino {
             (0, 0).into()
         };
         self.drag_icon = icon.map(|s| (s, offset));
+        self.client_drag = self.drag_start();
     }
 
-    fn dropped(&mut self, _target: Option<WlSurface>, _validated: bool, _seat: Seat<Self>) {
-        self.drag_icon = None;
+    fn dropped(&mut self, _target: Option<WlSurface>, validated: bool, _seat: Seat<Self>) {
+        // the pointer is locked while its grab ends: the icon is captured once it is free (`Cupertino::drag_ended`)
+        let start = self.client_drag.take();
+        if let (Some((icon, offset)), false) = (self.drag_icon.take(), validated) {
+            self.drag_ended = Some(crate::drag_return::DragEnd {
+                icon,
+                offset,
+                start,
+            });
+        }
         self.request_redraw();
     }
 }

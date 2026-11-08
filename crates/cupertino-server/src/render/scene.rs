@@ -1073,6 +1073,83 @@ pub fn capture_window(
     }
 }
 
+/// Render the surface tree of `surface`, its surface's top-left corner at `origin` (global logical points), into a new
+/// texture covering `area` (global logical points), as the output of `p` draws it: the icon of a drag captured as the
+/// drag ends, before its client lets the surface go.
+pub fn capture_surface(
+    renderer: &mut GlesRenderer,
+    p: &mut SceneParams<'_>,
+    surface: &WlSurface,
+    origin: Point<f64, Logical>,
+    area: Rect,
+) -> Option<smithay::backend::renderer::gles::GlesTexture> {
+    let size_px = (
+        ((area.w * p.scale).round() as i32).max(1),
+        ((area.h * p.scale).round() as i32).max(1),
+    );
+    let saved = (p.rect, p.output_px);
+    p.rect = area;
+    p.output_px = size_px;
+    let local: Point<f64, Logical> = (origin.x - area.x, origin.y - area.y).into();
+    let loc: Point<i32, Physical> = local.to_physical(Scale::from(p.scale)).to_i32_round();
+    let mut stack = Composition::new(p.scale);
+    stack.push(
+        SceneLayer::DragIcon,
+        standalone(surface, SceneKind::DragIcon, loc, 1.0),
+    );
+    let composed = stack.finish(p);
+    p.rect = saved.0;
+    p.output_px = saved.1;
+    let mut cache = ElementCache::default();
+    let mut resources = GlesResources::new(p.res, &mut cache, composed.resources);
+    match Gles.render(
+        &composed.frame,
+        &mut resources,
+        GlesTarget::Snapshot { renderer },
+    ) {
+        Ok(GlesCompletion::Snapshot(t)) => Some(t),
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "drag icon snapshot failed");
+            None
+        }
+    }
+}
+
+/// The icon of a client's drag that ended without a drop, flying back or fading out (`crate::drag_return`).
+fn drag_return_element(p: &mut SceneParams<'_>, stack: &mut Composition) {
+    if p.res.mesh.is_none() {
+        return;
+    }
+    let Some(r) = p.fx.drag_return.as_ref() else {
+        return;
+    };
+    let (rect, alpha) = r.placement(p.now);
+    if alpha <= 0.0 {
+        return;
+    }
+    let local = Rect::new(rect.x - p.rect.x, rect.y - p.rect.y, rect.w, rect.h);
+    let lease = match p.res.snapshots.pin(r.snapshot.id()) {
+        Ok(lease) => lease,
+        Err(error) => {
+            tracing::error!(%error, "returning drag icon without its snapshot");
+            return;
+        }
+    };
+    stack.push(
+        SceneLayer::DragIcon,
+        Piece::Mesh(Box::new(MeshPiece {
+            kind: SceneKind::DragIcon,
+            index: 0,
+            snapshot: lease.id(),
+            keep: SnapshotKeep::Pinned(lease),
+            mesh: Mesh::quad(local.into_geom()),
+            opacity: alpha as f32,
+            revision: Sig::new().f(r.progress(p.now)).finish(),
+        })),
+    );
+}
+
 /// Screen edge the dock slot `target` sits at: the nearest of the bottom, left and right edges.
 fn dock_edge(target: Rect, screen: &Rect) -> DockEdge {
     let (bottom, left, right) = (
@@ -1756,6 +1833,7 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             standalone(&surface, SceneKind::DragIcon, loc, 1.0),
         );
     }
+    drag_return_element(p, stack);
     display_filter(p, stack);
     cursor(p, stack);
 }

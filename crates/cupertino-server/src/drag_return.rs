@@ -184,7 +184,8 @@ impl crate::state::Cupertino {
     }
 
     /// Escape during a client's drag: it ends with no drop, wherever it is. The target loses the drag first, so ending
-    /// the grab drops nothing, and the source hears the drag cancelled.
+    /// the grab drops nothing, and the source hears the drag cancelled; the surface under the pointer then gets the
+    /// pointer back, as after a release.
     pub(crate) fn cancel_client_drag(&mut self, time: u32) {
         if self.client_drag.is_none() {
             return;
@@ -204,6 +205,8 @@ impl crate::state::Cupertino {
         pointer.unset_grab(self, smithay::utils::SERIAL_COUNTER.next_serial(), time);
         self.client_drag = None;
         self.drag_ended();
+        // leaving the target took the pointer focus from every surface, and ending the grab only gave that back
+        self.pointer_moved_to(location, time, None);
     }
 }
 

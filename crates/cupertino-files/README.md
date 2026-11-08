@@ -43,9 +43,12 @@ process: File › New Window and Open in New Window open another beside it.
 The window is a split view: the sidebar of places, then a navigation stack whose toolbar holds back / forward, the
 folder's name (Section text, cut with an ellipsis), the View, Tags and Action pop-up buttons (`kit::toolbar`; each opens
 its menu below it: the view modes, the tags of the selection, the selection's context menu or the folder's) and the
-search field, over the folder in the icon view (`kit::grid`, laid out by `layout::icon`) or the list view (`kit::list`:
-the toolkit's outline table, Name, Date Modified, Size, Kind; a header click sorts, again reverses; a folder's
-disclosure triangle, Left and Right open and close it in place). The toolbar is the window's drag region (Kit's
+search field, over the folder in the icon view (`kit::grid`, laid out by `layout::icon`; a name wraps to the lines its cell
+holds and the last ends in an ellipsis) or the list view (`kit::list`: the toolkit's outline table, Name, Date Modified,
+Size, Kind, each cut with an ellipsis in its cell; a type the kind table does not list is described from its MIME
+subtype (`mime::kind_description`), in capitals only when it is an abbreviation of up to four letters and digits, else
+in words with the first capitalised; a header click sorts, again reverses; a folder's disclosure triangle, Left and
+Right open and close it in place). The toolbar is the window's drag region (Kit's
 `NavigationStack`, under the server's title bar): a drag where no control lies moves the window and a double click there
 zooms it, as the old window's unified bar did; back / forward, the pop-up buttons and the search field keep their
 presses, and from the keyboard the compositor's Zoom shortcut (Super+Ctrl+Z by default) and the menu bar's Window menu
@@ -181,8 +184,11 @@ settle of the test window runs the shared accessibility audit over each window o
 **Removable media** come from udisks2 on the system bus (`udisks`): after Trash, Locations lists every file system of a
 drive that udisks neither hides (`HintIgnore`) nor counts as the system's (`HintSystem`), with usage `filesystem`, and
 every locked encrypted container. A block without a drive, such as a loop device, is left out. A row is named by
-`HintName`, then `IdLabel`, then the drive's vendor and model, then "<size> Volume". It lists again whenever udisks
-reports a change or comes to the bus. Every call runs off the window's thread.
+`HintName`, then `IdLabel`, then the drive's vendor and model, then "<size> Volume". A row wears the symbol of its
+drive's medium (`places::Medium`, from udisks' `Media` and `ConnectionBus`): `symbol.memory-card` for a flash card
+(a `flash_*` medium or an SD bus), `symbol.flash-drive` for a USB stick (`thumb`, or `flash` on USB), else
+`symbol.externaldrive`; none wears the computer's. It lists again whenever udisks reports a change or comes to the
+bus. Every call runs off the window's thread.
 * **Mount:** a click on a row that is not mounted mounts it and takes the window that asked to the mount point.
   Each partition of a drive is a row of its own.
 * **Unlock:** a click on a locked container opens a sheet that asks for its passphrase in a secure field; Unlock (or
@@ -196,7 +202,8 @@ reports a change or comes to the bus. Every call runs off the window's thread.
 * **Read-only media** are described so and take nothing new: New Folder, Paste Item, Rename and the other changes are
   disabled there, and no drop lands there. A file system mounted read-only on a writable medium (the mount's
   `ST_RDONLY`) is taken the same way.
-* **Busy and failures:** while a call runs the row is busy and takes no other call. A failure is one transient
+* **Busy and failures:** while a call runs the row is busy and takes no other call; it turns an activity indicator
+  where its eject button was. A failure is one transient
   notification; when a file system is busy it names the programs that keep it open (read from `/proc`). A polkit prompt
   the person dismissed is not reported.
 * **Permission:** no call sets `auth.no_user_interaction`, so polkit may ask through the session's authentication agent,
@@ -334,5 +341,5 @@ Values live in `metrics.rs`.
 * The window does not hear the window states the compositor sets: after the compositor takes a window out of full
   screen, or refuses it, the menu still offers Exit Full Screen, and the next choice asks for the state the window is
   already in.
-* The icon view (`kit::grid`) scrolls back to the top when the view changes, so the selection can be out of sight. A name
-  wraps onto two lines and is then clipped, with no ellipsis, and each rebuild lays out every item of the folder.
+* The icon view (`kit::grid`) scrolls back to the top when the view changes, so the selection can be out of sight, and
+  each rebuild lays out every item of the folder.

@@ -132,7 +132,8 @@ failure. Properties are read from the service every time, never from a cache.
 | Connectivity block height | 134 pt (`2 * 62 + 10`) |
 | Connectivity row | 40 pt high, 7 pt between rows: `3 * 40 + 2 * 7 = 134`, so the rows sit directly on the card with no padded tile |
 | Optional first row | 28 pt; used for the battery (shown only with a battery) |
-| Module order | left: Wi-Fi, Bluetooth, file sharing (the connectivity block); right: focus mode, then stage and screen mirroring (62 x 62 each); then display, sound and now playing rows (278 x 62) |
+| Module order | left: Wi-Fi, Bluetooth, file sharing (the connectivity block); right: focus mode (the "Focus" tile), then stage and screen mirroring (62 x 62 each); then display, sound and now playing rows (278 x 62) |
+| Row tile | the focus and now playing tiles keep the 10 pt card padding on every side, so a title never runs closer than that to the trailing edge |
 | Fade-out | 0.238 s, linear alpha on the card and its backdrop |
 | Lifecycle | hidden, shown, hiding, hidden; a toggle while hiding reopens; the output going hides at once |
 | Slider track | 22 pt high (minimum width 120; the panel's track is 254 pt) |

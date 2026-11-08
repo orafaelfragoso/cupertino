@@ -19,7 +19,8 @@ both.
   4.5:1 too. The accent and red fills are darker, so white text on them reaches 4.5:1.
 - High contrast is built in and used by both: opaque, text at least 4.5:1 and borders, tracks, thumbs, separators and
   the focus ring at least 3:1 against their surface in every enabled state (tested per resolved pair). Hover and press
-  turn borders black (light) or white (dark). The dark switch thumb is dark, so it stands out on both tracks.
+  turn borders black (light) or white (dark). The dark switch thumb is dark, so it stands out on both tracks, and it
+  stands 3:1 against the control border and the panel track, so a slider's knob shows against its ring and its track.
 
 The overlay scroller thumb (`ScrollerThumb`) is translucent in Cupertino light and dark and opaque in the built-in
 palettes, at 3:1 or more against the window there. The dialog scrim (`DialogScrim`) is the one colour that is
@@ -42,7 +43,9 @@ Accepted exceptions: the Cupertino light and dark palettes keep their look below
 in places (white on the accent and red fills, secondary, placeholder and light header text, control, field and switch
 outlines, separators, the light focus ring at 2.49:1, link text on the light window background at 4.45:1). High contrast
 and neutral are the accessible palettes. Switch tracks and separators of the neutral palettes keep the Cupertino look
-below 3:1.
+below 3:1. The dark switch track, which is also the slider track, is a fifth of white so it stands apart (1.75:1 or
+more) from the window, the text background and the control background behind it, and the switch thumb stands 3:1
+against it (tested).
 
 ## Theme tokens
 

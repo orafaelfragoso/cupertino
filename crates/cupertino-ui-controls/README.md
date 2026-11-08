@@ -30,7 +30,9 @@ from the application's model and reports changes as messages.
   and a selection that does not change is not reported again. Assistive technology reads a list with a group per
   heading and a selected list item per row. A row is keyed by its item's key, so its focus and accessible object stay
   with it while rows come and go around it. A row's accessory (an eject button) offers a click only with
-  `on_accessory`; without it the accessory reads as disabled.
+  `on_accessory`; without it the accessory reads as disabled. A busy row turns an activity indicator in the accessory's
+  place, standing still under Reduce Motion. In a window that is not active the rows' icons take the secondary label
+  colour.
 - **Positions.** A menu item says its place among the menu's items and the menu says how many it holds, separators not
   counted; a tab and a page dot say their place and their tab list says its count.
 - **Outline table.** `OutlineTable` is a `TableView` whose rows form an outline, as a `TreeView`'s do: `item` gives
@@ -69,7 +71,9 @@ from the application's model and reports changes as messages.
   bar's Window menu, tile and fill with its shortcuts, and can drag the server's title bar with the pointer as always.
 - **Sliders.** `on_change` reports every value a drag passes; `on_end` reports the value once the change ends, when
   the pointer lets go or the drag is cancelled, and at once for a key or assistive technology step, so an
-  application can write a level live and commit it once.
+  application can write a level live and commit it once. With Increase Contrast the knob's ring (the control border
+  colour, 3:1 against the switch thumb's colour) is twice as wide, so the knob stands apart from a track of its own
+  lightness.
 
 ## Not yet
 

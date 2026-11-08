@@ -73,7 +73,8 @@ from the application's model and reports changes as messages.
   the pointer lets go or the drag is cancelled, and at once for a key or assistive technology step, so an
   application can write a level live and commit it once. With Increase Contrast the knob's ring (the control border
   colour, 3:1 against the switch thumb's colour) is twice as wide, so the knob stands apart from a track of its own
-  lightness.
+  lightness. The empty part of the track is `SliderTrack` (a panel level slider's is `PanelTrack`), 3:1 or more
+  against the surface under it in every palette; the filled part is the selected `ControlFill` (the accent).
 
 ## Not yet
 

@@ -62,6 +62,16 @@ impl From<io::Error> for TrashError {
     }
 }
 
+/// Held by every change to a `directorysizes` file in this process: a [`PendingSize`] appends on a thread of its own
+/// while [`forget`] rewrites the file, and a line appended between that read and that write would be lost or cut.
+static SIZES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn sizes_lock() -> std::sync::MutexGuard<'static, ()> {
+    SIZES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// The `directorysizes` line a folder just moved to the trash still needs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingSize {
@@ -78,6 +88,7 @@ impl PendingSize {
             .trash_dir
             .join("info")
             .join(format!("{}.trashinfo", self.name));
+        let _held = sizes_lock();
         let mtime = match fs::metadata(&info) {
             Ok(meta) => meta.mtime(),
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -87,7 +98,9 @@ impl PendingSize {
             .create(true)
             .append(true)
             .open(self.trash_dir.join("directorysizes"))?;
-        writeln!(f, "{} {} {}", size, mtime, encode_path(&self.name))
+        // the line in one write, so another writer appending to the file cannot split it
+        let line = format!("{} {} {}\n", size, mtime, encode_path(&self.name));
+        f.write_all(line.as_bytes())
     }
 }
 
@@ -450,6 +463,7 @@ pub fn trashed_item(path: &Path) -> Option<TrashedItem> {
 pub fn forget(item: &TrashedItem) {
     let _ = fs::remove_file(item.info_path());
     let path = item.trash_dir.join("directorysizes");
+    let _held = sizes_lock();
     let Ok(s) = fs::read_to_string(&path) else {
         return;
     };
@@ -585,6 +599,53 @@ mod tests {
         let file = d.path().join("file");
         fs::write(&file, "f").unwrap();
         assert_eq!(t.trash_unsized(&file).unwrap().1, None);
+    }
+
+    #[test]
+    fn sizes_written_on_threads_while_lines_are_forgotten_all_stay_whole() {
+        let (d, t) = setup();
+        let trash = |name: &str| {
+            let folder = d.path().join(name);
+            fs::create_dir(&folder).unwrap();
+            fs::write(folder.join("f"), vec![0u8; 7]).unwrap();
+            t.trash_unsized(&folder).unwrap()
+        };
+        let kept: Vec<_> = (0..24).map(|i| trash(&format!("kept {i}"))).collect();
+        let gone: Vec<_> = (0..24).map(|i| trash(&format!("gone {i}"))).collect();
+        for (_, size) in &gone {
+            size.as_ref().unwrap().record().unwrap();
+        }
+        let threads: Vec<_> = kept
+            .iter()
+            .map(|(_, size)| {
+                let size = size.clone().unwrap();
+                std::thread::spawn(move || size.record().unwrap())
+            })
+            .collect();
+        // each restore rewrites the file without its line while the threads append theirs
+        for (item, _) in &gone {
+            t.restore(item).unwrap();
+        }
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let sizes = fs::read_to_string(kept[0].0.trash_dir.join("directorysizes")).unwrap();
+        let mut names: Vec<&str> = sizes
+            .lines()
+            .map(|line| {
+                let fields: Vec<&str> = line.splitn(3, ' ').collect();
+                assert_eq!(fields.len(), 3, "a whole line: {line:?}");
+                assert_eq!(fields[0], "7", "{line:?}");
+                fields[2]
+            })
+            .collect();
+        names.sort_unstable();
+        let mut expected: Vec<String> = kept
+            .iter()
+            .map(|(item, _)| encode_path(&item.name))
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(names, expected);
     }
 
     #[test]

@@ -212,8 +212,8 @@ mod tests {
     #[test]
     fn titlebar_and_content() {
         assert_eq!(hit((400.0, 14.0)), Hit::Titlebar);
-        assert_eq!(hit((400.0, 27.9)), Hit::Titlebar);
-        assert_eq!(hit((400.0, 28.0)), Hit::Content);
+        assert_eq!(hit((400.0, 31.9)), Hit::Titlebar);
+        assert_eq!(hit((400.0, 32.0)), Hit::Content);
         assert_eq!(hit((400.0, 300.0)), Hit::Content);
     }
 
@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(hit((-3.0, 300.0)), Hit::Resize(ResizeEdge::Left));
         assert_eq!(hit((803.0, 300.0)), Hit::Resize(ResizeEdge::Right));
         assert_eq!(hit((400.0, -3.0)), Hit::Resize(ResizeEdge::Top));
-        assert_eq!(hit((400.0, 631.0)), Hit::Resize(ResizeEdge::Bottom));
+        assert_eq!(hit((400.0, 635.0)), Hit::Resize(ResizeEdge::Bottom));
         assert_eq!(hit((-4.0, 300.0)), Hit::Resize(ResizeEdge::Left));
         assert_eq!(hit((-4.1, 300.0)), Hit::None, "outset is 4 pt");
     }
@@ -238,15 +238,15 @@ mod tests {
     fn resize_zones_reach_inside_by_the_inset() {
         assert_eq!(hit((2.9, 300.0)), Hit::Resize(ResizeEdge::Left));
         assert_eq!(hit((3.0, 300.0)), Hit::Content, "inset is 3 pt");
-        assert_eq!(hit((400.0, 625.0)), Hit::Resize(ResizeEdge::Bottom));
+        assert_eq!(hit((400.0, 629.0)), Hit::Resize(ResizeEdge::Bottom));
     }
 
     #[test]
     fn corners_resolve_to_diagonal_resizes() {
         assert_eq!(hit((-3.0, -3.0)), Hit::Resize(ResizeEdge::TopLeft));
         assert_eq!(hit((803.0, -3.0)), Hit::Resize(ResizeEdge::TopRight));
-        assert_eq!(hit((-3.0, 631.0)), Hit::Resize(ResizeEdge::BottomLeft));
-        assert_eq!(hit((803.0, 631.0)), Hit::Resize(ResizeEdge::BottomRight));
+        assert_eq!(hit((-3.0, 635.0)), Hit::Resize(ResizeEdge::BottomLeft));
+        assert_eq!(hit((803.0, 635.0)), Hit::Resize(ResizeEdge::BottomRight));
         assert_eq!(
             hit((11.9, -3.0)),
             Hit::Resize(ResizeEdge::TopLeft),
@@ -259,16 +259,16 @@ mod tests {
         );
         assert_eq!(hit((788.0, -3.0)), Hit::Resize(ResizeEdge::TopRight));
         assert_eq!(hit((787.9, -3.0)), Hit::Resize(ResizeEdge::Top));
-        assert_eq!(hit((785.0, 630.0)), Hit::Resize(ResizeEdge::BottomRight));
+        assert_eq!(hit((785.0, 634.0)), Hit::Resize(ResizeEdge::BottomRight));
         assert_eq!(
-            hit((784.9, 630.0)),
+            hit((784.9, 634.0)),
             Hit::Resize(ResizeEdge::Bottom),
             "15 pt bottom-right corner"
         );
-        assert_eq!(hit((801.0, 613.0)), Hit::Resize(ResizeEdge::BottomRight));
-        assert_eq!(hit((801.0, 612.9)), Hit::Resize(ResizeEdge::Right));
-        assert_eq!(hit((-3.0, 616.0)), Hit::Resize(ResizeEdge::BottomLeft));
-        assert_eq!(hit((-3.0, 615.9)), Hit::Resize(ResizeEdge::Left));
+        assert_eq!(hit((801.0, 617.0)), Hit::Resize(ResizeEdge::BottomRight));
+        assert_eq!(hit((801.0, 616.9)), Hit::Resize(ResizeEdge::Right));
+        assert_eq!(hit((-3.0, 620.0)), Hit::Resize(ResizeEdge::BottomLeft));
+        assert_eq!(hit((-3.0, 619.9)), Hit::Resize(ResizeEdge::Left));
     }
 
     #[test]
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn input_region_is_the_outset_frame() {
         let (l, m) = setup();
-        assert_eq!(input_region(&l, &m), Rect::new(-4.0, -4.0, 808.0, 636.0));
+        assert_eq!(input_region(&l, &m), Rect::new(-4.0, -4.0, 808.0, 640.0));
     }
 
     #[test]

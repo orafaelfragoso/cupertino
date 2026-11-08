@@ -160,8 +160,8 @@ impl Palette {
         match (style, active) {
             (TitlebarStyle::Standard, true) => self.titlebar_active,
             (TitlebarStyle::Standard, false) => self.titlebar_inactive,
-            (TitlebarStyle::Unified, true) => self.unified_active,
-            (TitlebarStyle::Unified, false) => self.unified_inactive,
+            (_, true) => self.unified_active,
+            (_, false) => self.unified_inactive,
         }
     }
 

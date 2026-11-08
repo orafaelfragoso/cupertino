@@ -3,6 +3,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # isolated mode (-I) does not add the script's directory
@@ -17,12 +18,71 @@ def run(files: dict[str, str]) -> list[str]:
         return gate.gate(root.resolve())[1]
 
 
-class PackManifestTest(unittest.TestCase):
-    def test_a_listed_cursor_theme_name_fails_in_the_default_pack(self):
-        name = "Zorb" + "lax"  # built from parts so that this file passes the gate itself
-        problems = run({"packaging/data/manifest.json": f'{{"cursors": {{"theme": "{name}"}}}}'})
+class ListedTermTest(unittest.TestCase):
+    """The listed terms are digests; these tests list made-up terms in their place."""
+
+    def listing(self, **sets):
+        patches = [mock.patch.object(gate, name, {gate.digest(term) for term in terms}) for name, terms in sets.items()]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_a_listed_name_fails_in_its_exact_case_as_a_word_or_phrase(self):
+        self.listing(LISTED_NAMES={"Zorblax", "Quill Desk"})
+        for text in ("Zorblax", "the Zorblax theme", "Quill Desk", "zorblax_theme"):
+            problems = run({"crates/x/src/lib.rs": f"// {text}\n"})
+            expected = 0 if text.startswith("zorblax") else 1
+            self.assertEqual(len(problems), expected, (text, problems))
+            if expected:
+                self.assertIn("vendor or product name", problems[0])
+        self.assertEqual(run({"crates/x/src/lib.rs": "// Quill  Desk, Quill-Desk, Zorblaxes\n"}), [])
+
+    def test_a_listed_name_in_the_pack_manifest_fails(self):
+        self.listing(LISTED_NAMES={"Zorblax"})
+        problems = run({"packaging/data/manifest.json": '{"cursors": {"theme": "Zorblax"}}'})
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("vendor or product name", problems[0])
+
+    def test_a_listed_name_head_fails_in_any_case_and_inside_an_identifier(self):
+        self.listing(LISTED_NAME_HEADS={"pomel"})
+        for text in ("pomel_cursor", "POMEL_THEME", "Pomel", "pomel-cursors", "PomelColorEmoji", "pomelCursor", "pomel2", "com.pomel.foo"):
+            problems = run({"crates/x/src/lib.rs": f"// {text}\n"})
+            self.assertEqual(len(problems), 1, (text, problems))
+            self.assertIn("vendor or product name", problems[0])
+        self.assertEqual(run({"crates/x/src/lib.rs": "// apomel pomelo pomels\n"}), [])
+
+    def test_a_listed_word_fails_in_any_case_but_not_split_inside_an_identifier(self):
+        self.listing(LISTED_WORDS={"stayawake"})
+        for text in ("StayAwake", "stayawake", "STAYAWAKE"):
+            problems = run({"crates/x/src/lib.rs": f"//! restarted by {text}\n"})
+            self.assertEqual(len(problems), 1, (text, problems))
+            self.assertIn("provenance wording", problems[0])
+        self.assertEqual(run({"crates/x/src/lib.rs": "fn stay_awake_interval() {}\n"}), [])
+
+    def test_a_listed_word_head_fails_at_the_start_of_a_word(self):
+        self.listing(LISTED_WORD_HEADS={"unravel"})
+        lengths = mock.patch.object(gate, "LISTED_WORD_HEAD_LENGTHS", (7,))
+        lengths.start()
+        self.addCleanup(lengths.stop)
+        self.assertEqual(len(run({"crates/x/src/lib.rs": "// Unravelled from a file\n"})), 1)
+        self.assertEqual(run({"crates/x/src/lib.rs": "// an unravle\n"}), [])
+
+    def test_a_listed_phrase_fails_with_a_space_or_a_hyphen(self):
+        self.listing(LISTED_PHRASES={"sample tray"})
+        for text in ("sample tray", "Sample-Tray"):
+            problems = run({"crates/x/src/lib.rs": f"// the {text}\n"})
+            self.assertEqual(len(problems), 1, (text, problems))
+            self.assertIn("analysis wording", problems[0])
+
+    def test_a_listed_suffix_or_header_fails_as_a_file_type(self):
+        self.listing(LISTED_SUFFIXES={".qzx"}, LISTED_MAGIC={b"QZX1"})
+        self.assertEqual(run({"crates/x/data/a.qzx": "x"}), ["forbidden file type: crates/x/data/a.qzx"])
+        self.assertEqual(run({"crates/x/data/b.bin": "QZX1 rest"}), ["forbidden file type: crates/x/data/b.bin"])
+
+    def test_the_lists_hold_only_digests(self):
+        for name in ("LISTED_NAMES", "LISTED_NAME_HEADS", "LISTED_WORDS", "LISTED_WORD_HEADS", "LISTED_PHRASES", "LISTED_SUFFIXES", "LISTED_MAGIC"):
+            for entry in getattr(gate, name):
+                self.assertRegex(entry, r"^[0-9a-f]{64}$", name)
 
 
 class ForbiddenFileTest(unittest.TestCase):
@@ -33,42 +93,6 @@ class ForbiddenFileTest(unittest.TestCase):
         word = "recover" + "ed"  # built from parts so that this file passes the gate itself
         problems = run({"crates/x/src/lib.rs": f"// {word} from a binary\n"})
         self.assertEqual(len(problems), 1, problems)
-
-
-class ListedKeyTest(unittest.TestCase):
-    def test_listed_key_names_fail_in_any_case(self):
-        # built from parts so that this file passes the gate itself
-        for key in ("Stay" + "Awake", "stay" + "awake"):
-            problems = run({"crates/x/src/lib.rs": f"//! restarted by {key}\n"})
-            self.assertEqual(len(problems), 1, (key, problems))
-            self.assertIn("provenance wording", problems[0])
-
-    def test_the_words_inside_a_longer_identifier_do_not_count(self):
-        self.assertEqual(run({"crates/x/src/lib.rs": "fn stay_awake_interval() {}\nlet exit_ok = true;\n"}), [])
-
-
-class VendorIdentifierTest(unittest.TestCase):
-    name = "pom" + "el"  # built from parts so that this file passes the gate itself
-
-    def test_the_vendor_name_fails_in_any_case_and_inside_an_identifier(self):
-        cap = self.name.capitalize()
-        for text in (
-            f"{self.name}_cursor",
-            f"{self.name.upper()}_THEME",
-            cap,
-            f"{self.name}-cursors",
-            f"{cap}ColorEmoji",
-            f"{cap}Script",
-            f"{self.name}Cursor",
-            f"{self.name}2",
-            f"com.{self.name}.foo",
-        ):
-            problems = run({"crates/x/src/lib.rs": f"// {text}\n"})
-            self.assertEqual(len(problems), 1, (text, problems))
-            self.assertIn("vendor or product name", problems[0])
-
-    def test_longer_words_that_contain_it_pass(self):
-        self.assertEqual(run({"crates/x/src/lib.rs": f"// a{self.name} {self.name}o {self.name}s\n"}), [])
 
 
 class HolderTest(unittest.TestCase):

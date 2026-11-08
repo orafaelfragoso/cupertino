@@ -25,7 +25,7 @@ use cupertino_kit::platform::{
 };
 use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{AttributedText, FontWeight, TextStyle};
-use cupertino_kit::theme::{Color, ColorRole, StateVariant};
+use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant};
 
 use crate::layout::{self, detail as rows, Outline, INSET, LARGE_RADIUS, WINDOW};
 use crate::model::{Controls, Detail, MediaCommand, Module, Reading, Slider, TileState};
@@ -55,10 +55,16 @@ const CONTAINER: u32 = 1;
 const BLEND: f64 = 8.0;
 
 /// The fills a tile paints itself. `RT_*`: the opaque panel and tiles with Reduce Transparency. `LIGHT_TINT`: laid
-/// over the glass in a light session. `FALLBACK`: a tile the window cannot show glass under.
+/// over the glass in a light session, where the compositor draws light glass; half black brings it to about the
+/// darkness of the dark glass. `FALLBACK`: a tile the window cannot show glass under.
 const RT_GROUP: Color = Color::new(0.302, 0.302, 0.302, 1.0);
 const RT_TILE: Color = Color::new(0.114, 0.114, 0.114, 1.0);
-const LIGHT_TINT: Color = Color::new(0.0, 0.0, 0.0, 0.27);
+const LIGHT_TINT: Color = Color::new(0.0, 0.0, 0.0, 0.5);
+/// The tiles with Increase Contrast: opaque mid grey inside a darker rim half a point wide, so no backdrop shows through
+/// behind the white text.
+const IC_TILE: Color = Color::new(0.463, 0.463, 0.463, 1.0);
+const IC_RIM_COLOR: Color = Color::new(0.341, 0.341, 0.341, 1.0);
+const IC_RIM: f64 = 0.5;
 const FALLBACK: Color = Color::new(0.16, 0.16, 0.17, 0.92);
 /// A switch that is on: a white disc behind its symbol, drawn in the accent colour.
 const ON_FILL: Color = Color::new(1.0, 1.0, 1.0, 1.0);
@@ -127,9 +133,9 @@ pub enum Input {
     /// A module's switch or button was pressed.
     Press(Module),
     /// A module's detail view is asked for.
-    Expand(Detail),
+    Expand(Detail, Via),
     /// The open detail view is to close: Escape or a press outside it.
-    Collapse,
+    Collapse(Via),
     /// A button of the media tile.
     Media(MediaCommand),
     /// A network of the Wi-Fi view, by name.
@@ -152,6 +158,25 @@ pub enum Input {
     Dismiss,
     /// The server closed the window: its output went away.
     Closed,
+}
+
+/// How a control was taken. The focus follows a detail view in and out only when the keyboard or assistive
+/// technology opened or closed it, so a click leaves no focus ring behind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Via {
+    Pointer,
+    Keyboard,
+}
+
+impl Input {
+    /// What the input is when the keyboard or assistive technology takes the control instead of the pointer.
+    fn by_key(self) -> Input {
+        match self {
+            Input::Expand(detail, _) => Input::Expand(detail, Via::Keyboard),
+            Input::Collapse(_) => Input::Collapse(Via::Keyboard),
+            input => input,
+        }
+    }
 }
 
 /// How the panel is shown besides its readings.
@@ -275,6 +300,13 @@ fn fill(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, color: Color) {
 
 fn reduce_transparency(cx: &PaintCx<'_>) -> bool {
     cx.env().theme.preferences.reduce_transparency
+}
+
+fn increase_contrast(cx: &PaintCx<'_>) -> bool {
+    matches!(
+        cx.env().theme.preferences.appearance,
+        Appearance::LightHighContrast | Appearance::DarkHighContrast
+    )
 }
 
 fn finite_alpha(alpha: f64) -> f64 {
@@ -406,6 +438,8 @@ impl<M: 'static> Widget<M> for Place<M> {
 /// panel.
 struct Board<M> {
     alpha: f64,
+    /// Height of the tiles the opaque panel of Reduce Transparency goes around: the grid, or an open detail view.
+    height: f64,
     on_outside: M,
     children: Vec<Element<M>>,
 }
@@ -430,7 +464,7 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.alpha != old.alpha {
+        if self.alpha != old.alpha || self.height != old.height {
             Change::Paint
         } else {
             Change::None
@@ -467,7 +501,7 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
             cx.set_group(alpha as f32, Vec::new());
         }
         if reduce_transparency(cx) {
-            let group = Rect::new(0.0, 0.0, WINDOW.width, layout::GRID_HEIGHT + 2.0 * INSET);
+            let group = Rect::new(0.0, 0.0, WINDOW.width, self.height + 2.0 * INSET);
             fill(cx, group, layout::GROUP_RADIUS, RT_GROUP);
         }
     }
@@ -555,6 +589,24 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
             fill(cx, rect, radius, RT_TILE);
             return;
         }
+        if increase_contrast(cx) {
+            fill(cx, rect, radius, IC_TILE);
+            let rim = Rect::new(
+                IC_RIM / 2.0,
+                IC_RIM / 2.0,
+                size.width - IC_RIM,
+                size.height - IC_RIM,
+            );
+            cx.push(PaintOp::Stroke {
+                shape: Shape::RoundedRect {
+                    rect: rim,
+                    radius: (radius - IC_RIM / 2.0).max(0.0),
+                },
+                width: IC_RIM,
+                paint: Paint::Solid(IC_RIM_COLOR),
+            });
+            return;
+        }
         let shape = if self.capsule {
             Glass::regular().capsule()
         } else {
@@ -635,7 +687,7 @@ struct Pressable<M> {
     face: Face,
     frame: Rect,
     enabled: bool,
-    on_press: Option<M>,
+    on_press: Option<Input>,
     map: Map,
     to: fn(Input) -> M,
     children: Vec<Element<M>>,
@@ -685,7 +737,7 @@ fn nearest(map: &[(String, Rect)], own: &str, from: Rect, direction: (f64, f64))
         .map(|(_, key)| key.clone())
 }
 
-impl<M: Clone + 'static> Widget<M> for Pressable<M> {
+impl<M: 'static> Widget<M> for Pressable<M> {
     type State = Press;
 
     fn layout(&self) -> LayoutSpec {
@@ -735,9 +787,13 @@ impl<M: Clone + 'static> Widget<M> for Pressable<M> {
             return Propagation::Continue;
         }
         let enabled = self.enabled && self.on_press.is_some();
-        let activate = |cx: &mut EventCx<'_, M>| {
-            if let Some(message) = &self.on_press {
-                cx.emit(message.clone());
+        let activate = |cx: &mut EventCx<'_, M>, via: Via| {
+            if let Some(input) = self.on_press.clone() {
+                let input = match via {
+                    Via::Pointer => input,
+                    Via::Keyboard => input.by_key(),
+                };
+                cx.emit((self.to)(input));
             }
         };
         match *event {
@@ -794,7 +850,7 @@ impl<M: Clone + 'static> Widget<M> for Pressable<M> {
                 };
                 cx.request_paint();
                 if enabled && inside {
-                    activate(cx);
+                    activate(cx, Via::Pointer);
                 }
                 Propagation::Stop
             }
@@ -820,11 +876,11 @@ impl<M: Clone + 'static> Widget<M> for Pressable<M> {
                 SPACE if !key.pressed && state.key => {
                     state.key = false;
                     cx.request_paint();
-                    activate(cx);
+                    activate(cx, Via::Keyboard);
                     Propagation::Stop
                 }
                 RETURN | KP_ENTER if key.pressed && !key.repeat && enabled => {
-                    activate(cx);
+                    activate(cx, Via::Keyboard);
                     Propagation::Stop
                 }
                 LEFT | RIGHT | UP | DOWN if key.pressed && self.arrow(key.keysym, cx) => {
@@ -834,7 +890,7 @@ impl<M: Clone + 'static> Widget<M> for Pressable<M> {
             },
             Event::Action(ref request) => match request.action {
                 Action::Click | Action::Expand if enabled => {
-                    activate(cx);
+                    activate(cx, Via::Keyboard);
                     Propagation::Stop
                 }
                 Action::Focus => {
@@ -1182,7 +1238,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
             face,
             frame,
             enabled,
-            on_press: on_press.map(self.to),
+            on_press,
             map: Rc::clone(&self.map),
             to: self.to,
             children,
@@ -1289,7 +1345,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
                         size.height,
                     ),
                     true,
-                    Some(Input::Expand(detail)),
+                    Some(Input::Expand(detail, Via::Pointer)),
                     vec![Place::absolute(
                         Rect::new(0.0, 0.0, size.width - TEXT_START + 4.0, size.height),
                         vec![self.lines(
@@ -1471,7 +1527,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
                 },
                 title_frame,
                 true,
-                Some(Input::Expand(detail)),
+                Some(Input::Expand(detail, Via::Pointer)),
                 vec![Place::stack(
                     Rect::from_origin_size(Point::ZERO, title_frame.size),
                     Axis::Horizontal,
@@ -1530,9 +1586,9 @@ impl<M: Clone + 'static> Builder<'_, M> {
                     output,
                     true,
                     Some(if header {
-                        Input::Collapse
+                        Input::Collapse(Via::Pointer)
                     } else {
-                        Input::Expand(Detail::Sound)
+                        Input::Expand(Detail::Sound, Via::Pointer)
                     }),
                     vec![icon("symbol.speaker", 14.0, None)],
                 ));
@@ -1816,6 +1872,15 @@ impl<M: Clone + 'static> Builder<'_, M> {
         )
     }
 
+    /// Height of what the tiles cover: the grid, going to the open detail view's height as it opens.
+    fn height(&self) -> f64 {
+        let grid = layout::GRID_HEIGHT;
+        self.presentation.detail.map_or(grid, |o| {
+            let open = layout::detail_frame(self.row_count(o.detail)).height();
+            grid + (open - grid) * o.progress.clamp(0.0, 1.0)
+        })
+    }
+
     /// Every tile, with the detail view opening, open or closing.
     fn board(&self) -> Vec<Element<M>> {
         let opened = self.presentation.detail;
@@ -2072,10 +2137,13 @@ pub fn panel<M: Clone + 'static>(
         to,
         map: Rc::new(RefCell::new(Vec::new())),
     };
-    let escape = if presentation.detail.is_some() {
-        Input::Collapse
-    } else {
-        Input::Dismiss
+    // Escape and a press outside the open view close it; with no view open they close the panel.
+    let away = |via| {
+        if presentation.detail.is_some() {
+            Input::Collapse(via)
+        } else {
+            Input::Dismiss
+        }
     };
     Window {
         key: WindowKey(Key::from("panel")),
@@ -2094,13 +2162,14 @@ pub fn panel<M: Clone + 'static>(
                 mods: Mods::NONE,
                 keysym: ESCAPE,
             },
-            to(escape.clone()),
+            to(away(Via::Keyboard)),
         ),
         on_close: Some(to(Input::Closed)),
         background: WindowBackground::None,
         content: Element::new(Board {
             alpha: presentation.alpha,
-            on_outside: to(escape),
+            height: builder.height(),
+            on_outside: to(away(Via::Pointer)),
             children: builder.board(),
         }),
         popup: None,

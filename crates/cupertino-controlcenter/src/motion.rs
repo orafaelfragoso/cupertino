@@ -103,11 +103,16 @@ pub struct Visibility {
     pub detail_content: f64,
 }
 
-/// The tiles fade over the whole motion; the tile's content is gone by halfway and the view's comes in after it.
+/// Share of the motion over which the other tiles fade out, so they are gone before the growing tile covers them: the
+/// glass lies under all of the window's content, so a tile cannot hide the content of a tile it passes over.
+pub const OTHERS_FADE: f64 = 0.25;
+
+/// The other tiles fade over the first [`OTHERS_FADE`] of the motion; the tile's content is gone by halfway and the
+/// view's comes in after it.
 pub fn visibility(progress: f64) -> Visibility {
     let p = progress.clamp(0.0, 1.0);
     Visibility {
-        others: 1.0 - p,
+        others: (1.0 - p / OTHERS_FADE).max(0.0),
         tile_content: (1.0 - 2.0 * p).max(0.0),
         detail_content: (2.0 * p - 1.0).max(0.0),
     }
@@ -181,5 +186,11 @@ mod tests {
         assert_eq!(visibility(0.5).detail_content, 0.0);
         assert_eq!(visibility(1.0).detail_content, 1.0);
         assert_eq!(visibility(1.0).others, 0.0);
+        assert_eq!(visibility(0.125).others, 0.5);
+        assert_eq!(
+            visibility(OTHERS_FADE).others,
+            0.0,
+            "gone before the tile covers them"
+        );
     }
 }

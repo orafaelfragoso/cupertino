@@ -14,7 +14,7 @@ use cupertino_controlcenter::model::{
     Controls, Detail, Device, MediaCommand, Module, Network, Output, Reading, Slider, VolumeState,
     WifiStatus,
 };
-use cupertino_controlcenter::view::{self, Input, Opened, Presentation};
+use cupertino_controlcenter::view::{self, Input, Opened, Presentation, Via};
 use cupertino_kit::core::{
     Application, Command, Key, PlaceholderIcons, Role, RuntimeOptions, Window, WindowBackground,
 };
@@ -478,7 +478,7 @@ fn a_press_on_a_badge_switches_its_module_and_on_the_text_opens_its_view() {
         run.heard(),
         [
             Input::Press(Module::Bluetooth),
-            Input::Expand(Detail::Bluetooth)
+            Input::Expand(Detail::Bluetooth, Via::Pointer)
         ]
     );
 }
@@ -501,7 +501,7 @@ fn the_circles_the_media_buttons_and_edit_controls_act() {
             Input::Press(Module::LockScreen),
             Input::Press(Module::DockHiding),
             Input::EditControls,
-            Input::Expand(Detail::Sound),
+            Input::Expand(Detail::Sound, Via::Pointer),
         ]
     );
     // nothing plays, so the media buttons are disabled
@@ -574,7 +574,7 @@ fn escape_dismisses_the_panel_and_collapses_an_open_view() {
     assert_eq!(run.heard(), [Input::Dismiss]);
     let mut run = Run::start(tokens(Appearance::Dark, false), WIFI_OPEN);
     run.key(ESCAPE);
-    assert_eq!(run.heard(), [Input::Collapse]);
+    assert_eq!(run.heard(), [Input::Collapse(Via::Keyboard)]);
 }
 
 #[test]
@@ -592,7 +592,7 @@ fn a_press_between_the_tiles_dismisses_the_panel_and_one_on_a_tile_does_not() {
 fn a_press_outside_an_open_view_collapses_it() {
     let mut run = Run::start(tokens(Appearance::Dark, false), WIFI_OPEN);
     click(&mut run, Point::new(150.0, 420.0));
-    assert_eq!(run.heard(), [Input::Collapse]);
+    assert_eq!(run.heard(), [Input::Collapse(Via::Pointer)]);
 }
 
 #[test]
@@ -656,7 +656,7 @@ fn the_keyboard_reaches_every_tile() {
         [
             Input::Focus(view::focus_key(Module::Bluetooth)),
             Input::Focus(format!("{}.more", view::focus_key(Module::Bluetooth))),
-            Input::Expand(Detail::Bluetooth),
+            Input::Expand(Detail::Bluetooth, Via::Keyboard),
         ]
     );
     let snapshot = run.driver.runtime().snapshot(run.window).unwrap();

@@ -34,7 +34,7 @@ cupertino-controlcenter [--fake-backends] [--alsa-card N]
 
 The panel keeps the dark appearance in either session appearance: it runs through `cupertino_kit::app::run_on_with_appearance`
 with `dark` forced on, so its text is white and its symbols light. It follows the display options as they change: Increase
-Contrast takes the high-contrast catalog and the compositor's contrast recipe for the glass; Reduce Transparency makes
+Contrast takes the high-contrast catalog and makes each tile a solid grey with a darker rim; Reduce Transparency makes
 the tiles opaque on one opaque panel; Reduce Motion replaces the growth of a detail view with a cross-fade. Icons are the
 symbols of the asset directory (`symbol.*`), loaded by the kit.
 
@@ -45,8 +45,10 @@ Each tile asks the compositor for regular glass under its own outline (`PaintCx:
 ends, the media tile and an open detail view with 32 pt corners, the display and sound tiles with 24 pt corners. The tiles
 join one glass container with an 8 pt blend, less than the 12 pt between them, so tiles at rest stay apart and a growing
 detail view blends where it passes them. The glass alpha follows the fade; the content fades as one layer. In a light
-session each tile lays black at 0.27 over its glass, so the white text reads on the light glass the compositor draws there.
-With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners, 8 pt around the grid. A
+session each tile lays black at 0.5 over its glass, so the white text reads on the light glass the compositor draws there.
+With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners, 8 pt around the grid and
+around an open detail view while it is taller. With Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of
+grey 0.341, with no glass. A
 tile the window cannot show glass under fills a dark grey instead. `view::catcher` is a transparent window with no drawing
 that takes a left or right press anywhere on it. The process's `PanelRoles` gives the panel (`view::APP_ID`) an overlay
 layer surface anchored top and right, with an exclusive zone of -1 and margins that put the window 6 pt from the right edge
@@ -66,13 +68,15 @@ panel.
 
 **Detail views.** The tile grows into the view on a critically damped spring (response 0.35 s, settled by 0.6 s,
 `motion::spring`): its frame moves from its cell to the top of the grid, 292 pt wide and as high as its list (at most the
-grid's 444 pt), its corners go to 32 pt, the other tiles and Edit Controls fade out, and the tile's content gives way to
-the view's at halfway. Closing runs the same way back, from wherever the motion is. With Reduce Motion the tile fades out
+grid's 444 pt), its corners go to 32 pt, the other tiles and Edit Controls fade out over the first quarter of the motion
+(the glass lies under all of the window's content, so the growing tile cannot hide what it passes over), and the tile's
+content gives way to the view's at halfway. Closing runs the same way back, from wherever the motion is. With Reduce Motion the tile fades out
 in place and the view fades in at its place over 0.2 s. The view shows the module's switch or level, a heading, the list
 (Wi-Fi networks with a check on the connected one and a lock on secured ones; Bluetooth devices; the keyboard backlight;
 sound outputs with a check on the current one) and a row that opens the module's settings page. Escape or a press
-outside the view closes it; a second Escape dismisses the panel. The focus moves into the view once it is open and back
-to the module's control once it has closed.
+outside the view closes it; a second Escape dismisses the panel. When the keyboard or assistive technology opened the
+view, the focus moves into it once it is open; when they closed it, the focus goes back to the module's control once it has
+closed. A click leaves the focus where it was, so no focus ring appears (`view::Via`).
 
 **Keyboard and assistive technology.** Every enabled control is a Tab stop and names itself: badges and circles are
 switches with their state (Lock Screen is a button), the openers are buttons that say whether their view is open, levels
@@ -170,8 +174,9 @@ the menu bar.
 | Capsule content | 36 pt badge 14 pt in; text from 56 pt; 13 pt semibold title, 11 pt state |
 | Level | 4 pt track centred 42 pt below the tile's top; display track 36 to 254 pt, sound 33 to 213 pt; 26 pt output button centred at 265 pt |
 | Media tile | 40 pt artwork 14 pt in; buttons centred at 30, 70 and 110 pt across and 111 pt down |
-| Glass | regular, one container, 8 pt blend; light session tint black 0.27 |
+| Glass | regular, one container, 8 pt blend; light session tint black 0.5 |
 | Reduce Transparency | tiles grey 0.114, panel grey 0.302 with 40 pt corners and 8 pt padding |
+| Increase Contrast | tiles grey 0.463, 0.5 pt rim grey 0.341 |
 | Detail view | 64 pt header, 28 pt heading, 32 pt rows (at most 9), 9 pt separator, 32 pt settings row, 8 pt bottom (`layout::detail`) |
 | Detail motion | critically damped spring, response 0.35 s, settled at 0.6 s; content hands over at halfway; Reduce Motion: 0.2 s linear cross-fade (`motion`) |
 | Fade-out | 0.238 s, linear alpha on the glass and the content |
@@ -202,7 +207,7 @@ the menu bar.
 | `system` (feature `dbus`) | `NetdWifi`, `BtdBluetooth`, `NotificationFocusMode`, `PowerdBrightness`, `UpowerKeyboard`, `LogindLock`, `MprisPlayer`, `SessionOverlay` |
 | `controller` | `Controller`: lifecycle, readings, presses, the open detail view and its list, joins, connections, outputs, media commands, settings, throttled level writes, refresh timer; `Backends` |
 | `control` (feature `dbus`) | the `org.cupertino.ControlPanel1` interface (`serve`) |
-| `view` (feature `app`) | the CupertinoKit windows: `panel` (the tiles at a `Presentation`), `catcher`, `Input` (what the user did), `focus_key`, `APP_ID`, `CATCHER_APP_ID`, `TITLE` |
+| `view` (feature `app`) | the CupertinoKit windows: `panel` (the tiles at a `Presentation`), `catcher`, `Input` (what the user did), `Via`, `focus_key`, `APP_ID`, `CATCHER_APP_ID`, `TITLE` |
 
 ## Tests
 
@@ -217,7 +222,7 @@ cargo test -p cupertino-controlcenter --features app
 | Backend unit tests | The dock hiding file, the microphone and the session outputs against `cupertino-pipewire`'s fake `wpctl`, the ALSA and session volume, and the stand-ins. |
 | Controller unit tests | Switches, mute, lock, Edit Controls and settings, media commands, the detail lists, a refused join, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer, a vanish that hides at once, drops a drag and reads again on reopening. |
 | `tests/panel.rs` | The panel as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`, `light-session`, `wifi-detail`: the 1x frame and the focus and accessibility tree of every control); every tile's frame; badge, opener, circle, media, output and Edit Controls presses; a disabled module; a level drag and release; Escape and a press between the tiles dismissing, or collapsing an open view; the Wi-Fi view's list, join and settings row; Tab, Space and the arrow keys across the tiles; the catcher dismissing on a left or right press only. |
-| Process unit tests (`src/app.rs`) | The windows per phase (panel over catcher when shown, the panel alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, the detail view opening, closing and reversing with the focus moved at its ends, Reduce Motion and the light session from the session, and the panel's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a panel that acts; the opening output is the first described one and the panel hears when its output goes. |
+| Process unit tests (`src/app.rs`) | The windows per phase (panel over catcher when shown, the panel alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, the detail view opening, closing and reversing with the focus moved at its ends only after the keyboard, Reduce Motion and the light session from the session, and the panel's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a panel that acts; the opening output is the first described one and the panel hears when its output goes. |
 | `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name; another process (a `dbus-send` the test starts, as the menu bar is to the panel) may toggle, and a connection over anonymous TCP (no process the bus can name) is refused as `AnonymousCaller`. |
 
 `cupertino-server`'s `tests/shell_processes.rs` runs the process with `--fake-backends` through output removal: open on an

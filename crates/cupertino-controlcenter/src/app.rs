@@ -19,7 +19,7 @@ use cupertino_controlcenter::system::{
     SessionOverlay, UpowerKeyboard,
 };
 use cupertino_controlcenter::view::{
-    self, focus_key, Input, Opened, Presentation, APP_ID, CATCHER_APP_ID, DETAIL_FOCUS,
+    self, focus_key, Input, Opened, Presentation, Via, APP_ID, CATCHER_APP_ID, DETAIL_FOCUS,
 };
 use cupertino_kit::core::{Application, Command, Key, Window};
 use cupertino_kit::platform::{SystemAppearance, WindowSpec};
@@ -401,6 +401,8 @@ pub struct Panel {
     expansion: Option<Expansion>,
     /// The detail view is moving: its end has not been seen yet.
     moving: bool,
+    /// The keyboard or assistive technology started the motion, so the focus follows the view when it ends.
+    follow_focus: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -433,7 +435,8 @@ impl Panel {
             Input::Press(module) => {
                 self.controller.press(module);
             }
-            Input::Expand(detail) => {
+            Input::Expand(detail, via) => {
+                self.follow_focus = via == Via::Keyboard;
                 self.controller.show_detail(Some(detail));
                 match &mut self.expansion {
                     Some(e) if e.detail == detail => e.turn(true, now),
@@ -441,7 +444,10 @@ impl Panel {
                 }
                 self.moving = true;
             }
-            Input::Collapse => self.collapse(now),
+            Input::Collapse(via) => {
+                self.follow_focus = via == Via::Keyboard;
+                self.collapse(now);
+            }
             Input::Media(command) => {
                 self.controller.media(command);
             }
@@ -480,16 +486,19 @@ impl Panel {
         }
     }
 
-    /// Ends a detail view's motion that has settled: a closed view leaves the grid alone. Returns where the focus goes:
-    /// into the view once it is open, back to its module's control once it has closed.
+    /// Ends a detail view's motion that has settled: a closed view leaves the grid alone. Returns where the focus goes
+    /// when the keyboard or assistive technology moved the view: into the view once it is open, back to its module's
+    /// control once it has closed.
     fn settle(&mut self, now: f64) -> Option<String> {
         let e = self.expansion.filter(|e| self.moving && e.settled(now))?;
         self.moving = false;
-        if e.opening {
-            return Some(DETAIL_FOCUS.to_owned());
-        }
-        self.expansion = None;
-        Some(focus_key(e.detail.module()))
+        let key = if e.opening {
+            DETAIL_FOCUS.to_owned()
+        } else {
+            self.expansion = None;
+            focus_key(e.detail.module())
+        };
+        self.follow_focus.then_some(key)
     }
 
     /// Forget the detail view: the panel opened again or went.
@@ -562,6 +571,7 @@ fn start(
         reduce_motion: appearance.reduce_motion,
         expansion: None,
         moving: false,
+        follow_focus: false,
     };
     (model, vec![first])
 }
@@ -804,7 +814,10 @@ mod tests {
     fn a_detail_view_grows_out_of_its_tile_and_takes_the_focus_once_open() {
         let mut model = panel();
         Panel::update(&mut model, Message::Request(Request::Toggle));
-        let commands = Panel::update(&mut model, Message::Input(Input::Expand(Detail::WiFi)));
+        let commands = Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::WiFi, Via::Keyboard)),
+        );
         assert!(timer(&commands), "the motion's next frame is scheduled");
         assert_eq!(model.controller.detail(), Some(Detail::WiFi));
         let (_, progress, morph) = detail(&model).unwrap();
@@ -819,9 +832,12 @@ mod tests {
     fn collapsing_shrinks_the_view_back_and_gives_the_focus_to_its_module() {
         let mut model = panel();
         Panel::update(&mut model, Message::Request(Request::Toggle));
-        Panel::update(&mut model, Message::Input(Input::Expand(Detail::Sound)));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::Sound, Via::Keyboard)),
+        );
         after(&mut model, 1.0);
-        Panel::update(&mut model, Message::Input(Input::Collapse));
+        Panel::update(&mut model, Message::Input(Input::Collapse(Via::Keyboard)));
         assert_eq!(model.controller.detail(), None);
         assert!(detail(&model).is_some(), "the view is still closing");
         assert_eq!(after(&mut model, 1.0), [focus_key(Module::Sound)]);
@@ -829,16 +845,35 @@ mod tests {
     }
 
     #[test]
+    fn a_click_leaves_the_focus_where_it_is() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::Display, Via::Pointer)),
+        );
+        assert!(after(&mut model, 1.0).is_empty(), "no ring after a click");
+        Panel::update(&mut model, Message::Input(Input::Collapse(Via::Keyboard)));
+        assert_eq!(after(&mut model, 1.0), [focus_key(Module::Display)]);
+    }
+
+    #[test]
     fn a_reversal_turns_the_motion_where_it_is() {
         let mut model = panel();
         Panel::update(&mut model, Message::Request(Request::Toggle));
-        Panel::update(&mut model, Message::Input(Input::Expand(Detail::Bluetooth)));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::Bluetooth, Via::Keyboard)),
+        );
         after(&mut model, 0.08);
         let (_, halfway, _) = detail(&model).unwrap();
-        Panel::update(&mut model, Message::Input(Input::Collapse));
+        Panel::update(&mut model, Message::Input(Input::Collapse(Via::Keyboard)));
         let (_, turned, _) = detail(&model).unwrap();
         assert!((turned - halfway).abs() < 0.05, "{turned} from {halfway}");
-        Panel::update(&mut model, Message::Input(Input::Expand(Detail::Bluetooth)));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::Bluetooth, Via::Keyboard)),
+        );
         assert_eq!(after(&mut model, 1.0), [DETAIL_FOCUS]);
     }
 
@@ -851,7 +886,10 @@ mod tests {
             Message::Request(Request::Appearance { dark: false }),
         );
         Panel::update(&mut model, Message::Request(Request::Toggle));
-        Panel::update(&mut model, Message::Input(Input::Expand(Detail::Display)));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::Display, Via::Pointer)),
+        );
         let (_, _, morph) = detail(&model).unwrap();
         assert!(!morph, "the view fades in place");
         assert!(model.presentation(model.now()).light);
@@ -866,7 +904,10 @@ mod tests {
     fn opening_the_panel_again_starts_on_the_grid() {
         let mut model = panel();
         Panel::update(&mut model, Message::Request(Request::Toggle));
-        Panel::update(&mut model, Message::Input(Input::Expand(Detail::WiFi)));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::WiFi, Via::Pointer)),
+        );
         Panel::update(&mut model, Message::Input(Input::Dismiss));
         after(&mut model, 1.0);
         Panel::update(&mut model, Message::Request(Request::Toggle));

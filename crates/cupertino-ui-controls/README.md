@@ -75,7 +75,8 @@ from the application's model and reports changes as messages.
   the triangle between the last point and the submenu's near edge, without a 0.3 s rest) the rows it crosses wait. A
   press that opened the menu (a secondary press, a press on a `PopUpButton`, which opens its menu on the press) and is
   let go over an item chooses it, once, if the pointer reached an item or the press was held 0.5 s; a quicker click
-  leaves the menu open. Typed letters find a row as `cupertino-typeahead` does, per level, and Return chooses it;
+  leaves the menu open. The row a context menu opens under the pointer (one the compositor slid to fit) is not reached
+  until the pointer goes on to another. Typed letters find a row as `cupertino-typeahead` does, per level, and Return chooses it;
   Escape closes one level and the focus goes back to its row, or to where the menu opened. The panel places the
   submenu's edge where it asked the compositor to put it, beside its row on the trailing side: a submenu the compositor
   flips to the other side keeps no triangle.

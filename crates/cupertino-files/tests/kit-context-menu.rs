@@ -327,7 +327,9 @@ fn a_paste_that_runs_to_its_end_takes_its_row_away_and_selects_what_arrived() {
 
 use cupertino_kit::geometry::Rect;
 use cupertino_kit::platform::{PointerEvent, PopupEdge, WindowEvent, WindowId, WindowStates};
-use cupertino_menu_model::tracking::{SUBMENU_AIM_PAUSE, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY};
+use cupertino_menu_model::tracking::{
+    SUBMENU_AIM_PAUSE, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY, TRACKING_INTERVAL,
+};
 
 const RETURN: u32 = 0xff0d;
 const ESCAPE: u32 = 0xff1b;
@@ -709,4 +711,62 @@ fn typed_letters_find_a_row_return_chooses_it_and_escape_closes_one_level_then_t
     let after = run.driver.runtime().snapshot(main).unwrap().focus;
     assert_eq!(after, before_folder, "the focus is back where it was");
     assert!(before.is_some());
+}
+
+/// A secondary press on `a.txt` whose menu the compositor slid to fit, leaving Duplicate under the pointer, which
+/// never moves but for a twitch; the release of the press `held_ms` later.
+fn release_on_a_menu_slid_under_the_pointer(run: &mut Run, held_ms: u64) {
+    let mut ptr = Pointer::new(run);
+    let (_, a, _) = run
+        .listed()
+        .into_iter()
+        .find(|(name, _, _)| name == "a.txt")
+        .unwrap();
+    ptr.move_to(run, a.center());
+    ptr.button(run, MouseButton::Right, true);
+    let menu = level(run, 0).expect("open on the press");
+    let duplicate = row(run, 0, "Duplicate");
+    let origin = rect(run, menu).origin;
+    let under = Point::new(
+        duplicate.center().x - origin.x,
+        duplicate.center().y - origin.y,
+    );
+    let twitch = Point::new(under.x + 1.0, under.y);
+    ptr.pointer(run, ptr.main, PointerEvent::Leave);
+    ptr.pointer(run, menu, PointerEvent::Enter { position: under });
+    ptr.pointer(run, menu, PointerEvent::Motion { position: twitch });
+    ptr.wait(run, held_ms);
+    ptr.pointer(
+        run,
+        menu,
+        PointerEvent::Button {
+            position: twitch,
+            button: MouseButton::Right,
+            pressed: false,
+            serial: 1,
+            mods: Mods::NONE,
+        },
+    );
+    ptr.settle(run);
+}
+
+#[test]
+fn a_secondary_click_whose_menu_opens_with_a_row_under_the_pointer_does_not_choose_it() {
+    let mut run = run();
+    release_on_a_menu_slid_under_the_pointer(&mut run, 30);
+    assert!(
+        level(&run, 0).is_some(),
+        "a quick click leaves the menu open and chooses nothing"
+    );
+    run.frames(200, 50);
+    assert_eq!(run.rows().len(), 3, "nothing duplicated: {:?}", run.rows());
+    run.close_menu();
+    assert!(run.context_menu().is_none());
+
+    release_on_a_menu_slid_under_the_pointer(&mut run, ms(TRACKING_INTERVAL) + 10);
+    assert!(
+        level(&run, 0).is_none(),
+        "held, the release chose and closed"
+    );
+    run.wait_until(|run| run.rows().len() == 4);
 }

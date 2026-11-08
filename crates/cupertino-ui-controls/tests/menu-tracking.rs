@@ -11,7 +11,7 @@ use cupertino_ui_controls::{
     Button, ButtonRole, ButtonStyle, ContextMenu, Menu, MenuAnchor, MenuItem, PopUpButton, Stack,
 };
 use cupertino_ui_core::{Application, Command, Element, Key, NodeId, Window, WindowKey};
-use cupertino_ui_layout::{Align, Axis};
+use cupertino_ui_layout::{Align, Axis, LayoutDirection};
 use cupertino_ui_platform::{Mods, MouseButton, PointerEvent, PopupEdge, WindowId, WindowStates};
 use support::{window, Harness, RETURN};
 
@@ -473,13 +473,34 @@ fn a_quick_click_leaves_a_menu_open_and_a_held_or_dragged_press_on_a_pop_up_butt
 
 #[test]
 fn a_diagonal_into_a_submenu_keeps_it_across_the_rows_it_crosses() {
-    let mut h = Harness::<Browser>::new();
+    diagonal_into_a_submenu(LayoutDirection::Ltr);
+}
+
+#[test]
+fn in_right_to_left_a_diagonal_into_a_submenu_on_the_left_keeps_it() {
+    diagonal_into_a_submenu(LayoutDirection::Rtl);
+}
+
+fn diagonal_into_a_submenu(direction: LayoutDirection) {
+    let mut h = Harness::<Browser>::with_direction(direction);
     let mut ptr = Pointer::new(&h);
     sort_by_open(&mut h, &mut ptr);
     let menu = popup(&h, "menu").unwrap();
     let rows: Vec<(u64, Rect)> = (1..4).map(|i| (i, row_rect(&h, "menu", i))).collect();
-    let size = row_point(&h, "menu/1", 3, 0.3);
+    // a little way into the submenu from the side it opened on
+    let along = match direction {
+        LayoutDirection::Ltr => 0.3,
+        LayoutDirection::Rtl => 0.7,
+    };
+    let size = row_point(&h, "menu/1", 3, along);
     let from = ptr.at;
+    let menu_rect = rect(&h, menu);
+    let submenu_rect = rect(&h, popup(&h, "menu/1").unwrap());
+    assert_eq!(
+        submenu_rect.min_x() < menu_rect.min_x(),
+        direction == LayoutDirection::Rtl,
+        "the submenu opens on the trailing side"
+    );
     let mut crossed = Vec::new();
     for step in 1..=16 {
         let k = f64::from(step) / 16.0;
@@ -603,4 +624,67 @@ fn resting_on_a_separator_closes_the_open_submenu_as_another_row_does() {
     assert_eq!(h.model().submenus, [0], "not at once");
     ptr.wait(&mut h, 310);
     assert!(h.model().submenus.is_empty());
+}
+
+/// A secondary press on the canvas whose menu the compositor slid to fit, leaving Copy under the pointer, which never
+/// moves but for a twitch; the release of the press `held_ms` later.
+fn release_on_a_menu_slid_under_the_pointer(
+    h: &mut Harness<Browser>,
+    main: WindowId,
+    held_ms: u64,
+) {
+    h.window = main;
+    let mut ptr = Pointer::new(h);
+    let canvas = h.center("canvas");
+    ptr.move_to(h, canvas);
+    ptr.button(h, MouseButton::Right, true);
+    let menu = popup(h, "menu").expect("open on the press");
+    let copy = row_rect(h, "menu", 5);
+    let origin = rect(h, menu).origin;
+    let under = Point::new(
+        copy.min_x() + copy.width() / 2.0 - origin.x,
+        copy.min_y() + copy.height() / 2.0 - origin.y,
+    );
+    h.window = ptr.main;
+    h.pointer(PointerEvent::Leave);
+    h.window = menu;
+    h.pointer(PointerEvent::Enter { position: under });
+    h.pointer(PointerEvent::Motion {
+        position: Point::new(under.x + 1.0, under.y),
+    });
+    ptr.wait(h, held_ms);
+    h.window = menu;
+    h.pointer(PointerEvent::Button {
+        position: Point::new(under.x + 1.0, under.y),
+        button: MouseButton::Right,
+        pressed: false,
+        serial: 1,
+        mods: Mods::NONE,
+    });
+    ptr.settle(h);
+}
+
+#[test]
+fn a_context_menu_opened_with_a_row_under_the_pointer_chooses_it_only_after_the_interval() {
+    let mut h = Harness::<Browser>::new();
+    let main = h.window;
+    release_on_a_menu_slid_under_the_pointer(&mut h, main, 30);
+    assert!(
+        h.model().chosen.is_empty(),
+        "a quick click never chooses the row the menu opened under the pointer"
+    );
+    let menu = popup(&h, "menu").expect("it stays open");
+    h.window = menu;
+    h.send(cupertino_ui_platform::WindowEvent::PopupDone);
+    h.window = main;
+    Pointer::new(&h).settle(&mut h);
+    assert_eq!(h.model().menu, None);
+
+    release_on_a_menu_slid_under_the_pointer(
+        &mut h,
+        main,
+        (TRACKING_INTERVAL * 1000.0) as u64 + 10,
+    );
+    assert_eq!(h.model().chosen, ["Copy"], "held, the release chooses it");
+    assert_eq!(popup(&h, "menu"), None);
 }

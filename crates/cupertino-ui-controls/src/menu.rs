@@ -103,6 +103,8 @@ impl<M: Clone + 'static> Menu<M> {
         let mut parent = parent;
         // the menu opens with its current item over the pointer that pressed the button
         let over = matches!(anchor, MenuAnchor::Over(_));
+        // a context menu opens at the pointer, which a menu slid to fit can leave over a row
+        let at_pointer = matches!(anchor, MenuAnchor::At(_));
         let mut anchor = match anchor {
             MenuAnchor::Below(key) => PopupAnchor::Below { key, gap: GAP },
             MenuAnchor::At(point) => PopupAnchor::At(point),
@@ -155,6 +157,7 @@ impl<M: Clone + 'static> Menu<M> {
                     .map(|(index, (_, sub))| (index, height(sub))),
                 collapse: on_open(path.to_vec()),
                 start: current.filter(|_| depth == 0 && over),
+                at_pointer: depth == 0 && at_pointer,
                 typing: Rc::clone(&typing),
                 children: rows(
                     &items,
@@ -381,6 +384,8 @@ struct Panel<M> {
     collapse: M,
     /// The item over the pointer as the menu opens: a pop-up button's current option.
     start: Option<usize>,
+    /// The menu opened at the pointer: the row the pointer is first found on is the one it was on as the menu opened.
+    at_pointer: bool,
     /// What was typed to find a row, which the rows share.
     typing: Rc<RefCell<TypeAhead>>,
     children: Vec<Element<M>>,
@@ -415,6 +420,8 @@ struct PanelState {
     pointer: Option<Point>,
     /// The row, of any kind, the pointer was last found on outside the way into a submenu.
     hovered: Option<usize>,
+    /// The row, of any kind, the pointer was first found on.
+    first: Option<Option<usize>>,
     aim: SubmenuAim,
     pending: Option<(Timestamp, Pending)>,
 }
@@ -484,7 +491,9 @@ impl<M: Clone + 'static> Panel<M> {
     fn hover(&self, state: &mut PanelState, p: Point, bounds: Rect, cx: &mut EventCx<'_, M>) {
         let row = self.row_at(p, bounds);
         let position = row.and_then(|i| self.slots[i].position);
-        if position.is_some() && row != self.start {
+        let first = *state.first.get_or_insert(row);
+        let start = if self.at_pointer { first } else { self.start };
+        if position.is_some() && row != start {
             state.reached = true;
         }
         if row == state.hovered {

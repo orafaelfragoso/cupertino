@@ -101,7 +101,7 @@ composite then, per pixel:
    opposite; the key colour is the highlight matrix applied to the face, the fill colour the key plus the colour bias;
 7. outside the shape, the drop shadow and the ring shadow at their opacity.
 
-Unit tests check each stage on the model (`glass::tests`) and `tests/shaders.rs` checks that the `Glass` block has the
+Unit tests check each stage on the model (`glass::tests`), and that body text (black at 85 %) on light regular glass stays at 4.5:1 or more over the darkest backdrops at every panel size and accessibility recipe, and `tests/shaders.rs` checks that the `Glass` block has the
 same members in both shader languages and the Rust struct's size.
 
 ### GLSL ES 3.00 port

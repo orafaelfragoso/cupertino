@@ -135,3 +135,28 @@ fn a_panel_slider_track_stands_three_to_one_against_its_module() {
         assert!(fill >= TRACK, "{name}: fill on panel track {fill:.2}:1");
     }
 }
+
+/// A disabled panel track has its own colour: still apart from its module, but fainter than the enabled track.
+#[test]
+fn a_disabled_panel_track_is_fainter_than_the_enabled_one() {
+    let black = Color::from_rgba8([0, 0, 0, 255]);
+    for (name, theme) in themes() {
+        let normal = |role| theme.colors.get(role, StateVariant::NORMAL).unwrap();
+        let module = over(
+            normal(ColorRole::GroupFill),
+            over(normal(ColorRole::WindowBackground), black),
+        );
+        let disabled = StateVariant {
+            interaction: InteractionVariant::Disabled,
+            ..StateVariant::NORMAL
+        };
+        let off = theme.colors.get(ColorRole::PanelTrack, disabled).unwrap();
+        assert_ne!(off, normal(ColorRole::PanelTrack), "{name}");
+        let faint = contrast(over(off, module), module);
+        let full = contrast(over(normal(ColorRole::PanelTrack), module), module);
+        assert!(
+            faint > 1.1 && faint < full,
+            "{name}: disabled panel track {faint:.2}:1, enabled {full:.2}:1"
+        );
+    }
+}

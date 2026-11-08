@@ -863,4 +863,45 @@ mod tests {
         assert_eq!(levels.map(|l| l.1), [true, true, true, false]);
         assert_eq!(c.fill_radius(), Some(8.0));
     }
+
+    /// The WCAG contrast ratio of two opaque sRGB colours.
+    fn contrast(a: Rgb, b: Rgb) -> f32 {
+        let y = |c: Rgb| {
+            0.2126 * srgb_decode(c[0]) + 0.7152 * srgb_decode(c[1]) + 0.0722 * srgb_decode(c[2])
+        };
+        let (hi, lo) = (y(a).max(y(b)), y(a).min(y(b)));
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// A light-appearance panel of regular glass (Control Center's modules and menus) keeps body text, black at 85 %,
+    /// at 4.5:1 or more over the darkest backdrops, at every panel size and with each accessibility recipe.
+    #[test]
+    fn light_glass_keeps_body_text_readable_over_a_dark_backdrop() {
+        const BODY: f32 = 0.85;
+        for (rt, ic) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mode = GlassMode {
+                dark: false,
+                reduce_transparency: rt,
+                increase_contrast: ic,
+                ..GlassMode::default()
+            };
+            for side in [44.0, 64.0, 120.0, 320.0] {
+                let c = Container::new(
+                    vec![GlassShape::new([0.0, 0.0, 2.0 * side, side], 16.0)],
+                    0.0,
+                    mode,
+                );
+                for backdrop in [[0.0; 3], [0.1, 0.1, 0.12], [0.2, 0.05, 0.3]] {
+                    let (face, cov) = c.shade([side, side / 2.0], &|_, _| backdrop);
+                    assert_eq!(cov, 1.0);
+                    let text = face.map(|v| v * (1.0 - BODY));
+                    let ratio = contrast(text, face);
+                    assert!(
+                        ratio >= 4.5,
+                        "rt {rt} ic {ic}, {side} pt over {backdrop:?}: body text {ratio:.2}:1 on {face:?}"
+                    );
+                }
+            }
+        }
+    }
 }

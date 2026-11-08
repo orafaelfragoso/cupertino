@@ -54,6 +54,11 @@ impl Harness {
     }
 
     fn with_config(config: Config) -> Option<Harness> {
+        Self::with_scale(config, 1.0)
+    }
+
+    /// A display of `OUTPUT` points at `scale` device pixels a point.
+    fn with_scale(config: Config, scale: f64) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> =
             EventLoop::try_new().expect("creating the event loop");
         let display: Display<Cupertino> = Display::new().expect("creating the Wayland display");
@@ -66,7 +71,11 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .expect("creating the compositor");
-        match headless::init(&mut state, OUTPUT, 1.0) {
+        let pixels = (
+            (f64::from(OUTPUT.0) * scale).round() as i32,
+            (f64::from(OUTPUT.1) * scale).round() as i32,
+        );
+        match headless::init(&mut state, pixels, scale) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
                 common::egl_unavailable(format!("{e:#}"));
@@ -483,51 +492,59 @@ fn a_minimizing_window_keeps_its_material_where_it_is_otherwise_transparent() {
 
 #[test]
 fn a_square_backdrop_over_the_whole_window_follows_the_window_s_rounded_corners() {
-    let Some(mut h) = Harness::new() else { return };
-    h.state.cursor_status = CursorImageStatus::Hidden;
-    let _app = App::spawn(h.socket_path(), Some(0.0));
-    h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
-    let t = h.state.now() + 5.0;
-    common::set_time(&mut h.state, &mut h.event_loop, t);
-    h.state.tick();
-    h.step(20);
-    let id = h.state.wm.key_window().expect("a key window");
-    let frame = h.state.wm.window(id).unwrap().geometry();
-    let shot = h.screenshot();
-    let at = |x: f64, y: f64| shot.get_pixel(x as u32, y as u32).0;
-    let (left, right, bottom) = (frame.x, frame.x + frame.w - 1.0, frame.y + frame.h - 1.0);
-    let differs = |a: [u8; 4], b: [u8; 4]| {
-        a[..3]
-            .iter()
-            .zip(&b[..3])
-            .map(|(x, y)| x.abs_diff(*y))
-            .max()
-            .unwrap()
-    };
-    for (corner, beside, inside) in [
-        (
-            (left, bottom),
-            (left - 1.0, bottom + 1.0),
-            (left + 30.0, bottom - 2.0),
-        ),
-        (
-            (right, bottom),
-            (right + 1.0, bottom + 1.0),
-            (right - 30.0, bottom - 2.0),
-        ),
-    ] {
-        let (corner, beside, inside) = (
-            at(corner.0, corner.1),
-            at(beside.0, beside.1),
-            at(inside.0, inside.1),
+    for scale in [1.0, 1.5] {
+        let Some(mut h) = Harness::with_scale(Config::default(), scale) else {
+            return;
+        };
+        h.state.cursor_status = CursorImageStatus::Hidden;
+        let _app = App::spawn(h.socket_path(), Some(0.0));
+        h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
+        let t = h.state.now() + 5.0;
+        common::set_time(&mut h.state, &mut h.event_loop, t);
+        h.state.tick();
+        h.step(20);
+        let id = h.state.wm.key_window().expect("a key window");
+        let frame = h.state.wm.window(id).unwrap().geometry();
+        let shot = h.screenshot();
+        // in device pixels: the window's edges and its corner radius
+        let at = |x: f64, y: f64| shot.get_pixel(x.round() as u32, y.round() as u32).0;
+        let (left, right, bottom) = (
+            frame.x * scale,
+            (frame.x + frame.w) * scale - 1.0,
+            (frame.y + frame.h) * scale - 1.0,
         );
-        assert!(
-            differs(inside, beside) > 24,
-            "the material covers the window: {inside:?} over {beside:?}"
-        );
-        assert!(
-            differs(corner, beside) <= 12,
-            "past the rounded corner the desktop shows, as just outside the window: {corner:?} beside {beside:?}"
-        );
+        let radius = Config::default().window.corner_radius * scale;
+        let differs = |a: [u8; 4], b: [u8; 4]| {
+            a[..3]
+                .iter()
+                .zip(&b[..3])
+                .map(|(x, y)| x.abs_diff(*y))
+                .max()
+                .unwrap()
+        };
+        // (direction into the window along x, the corner's x)
+        for (inward, x) in [(1.0, left), (-1.0, right)] {
+            let beside = at(x - inward, bottom + 1.0);
+            let inside = at(x + inward * 30.0 * scale, bottom - 2.0);
+            assert!(
+                differs(inside, beside) > 24,
+                "at {scale}x the material covers the window: {inside:?} over {beside:?}"
+            );
+            // the corner pixel and one a fifth of the radius in on the diagonal lie past the rounded outline
+            for d in [0.0, (radius * 0.2).floor()] {
+                let corner = at(x + inward * d, bottom - d);
+                assert!(
+                    differs(corner, beside) <= 12,
+                    "at {scale}x past the rounded corner the desktop shows, as just outside the window: \
+                     {corner:?} {d} px in, beside {beside:?}"
+                );
+            }
+            // a radius in along the bottom edge the material is drawn again
+            let edge = at(x + inward * (radius + 2.0), bottom - 1.0);
+            assert!(
+                differs(edge, beside) > 24,
+                "at {scale}x the material reaches the bottom edge past the corner: {edge:?} over {beside:?}"
+            );
+        }
     }
 }

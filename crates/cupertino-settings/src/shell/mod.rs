@@ -49,6 +49,8 @@ const MIN_CONTENT: f64 = 320.0;
 const SEARCH_WIDTH: f64 = 112.0;
 /// The interface width factor: 1 for English (approximate).
 const WIDTH_FACTOR: f64 = 1.0;
+/// How far a pane may pass its window's height, in points, before it counts as longer than the window.
+const OVERFLOW_SLACK: f64 = 0.5;
 
 /// Window metrics (§4.1).
 pub mod metrics {
@@ -474,13 +476,20 @@ impl Shell {
             align: Align::Stretch,
             children: vec![body],
         });
+        // a pane longer than the window keeps its scroll bar shown beside it, so that it shows it goes on below
+        let scroll = self.content_scroll;
+        let scroller = if scroll.content.height > scroll.viewport.height + OVERFLOW_SLACK {
+            Scroller::Always
+        } else {
+            Scroller::Overlay
+        };
         Element::from(NavigationStack {
             content: Element::from(ScrollView {
                 content: page,
                 state: self.content_scroll,
                 horizontal: false,
                 vertical: true,
-                scroller: Scroller::Overlay,
+                scroller,
                 on_scroll: Box::new(Message::ContentScroll),
             })
             .key("content"),
@@ -1100,6 +1109,43 @@ mod tests {
             switch_state(&driver, window, "Screen reader"),
             "Switch \"Screen reader\" off focusable"
         );
+    }
+
+    #[test]
+    fn a_pane_longer_than_the_window_shows_its_scroll_bar_and_one_that_fits_does_not() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (mut driver, window) = start(dir.path(), PaneId::Accessibility);
+        let bars = |driver: &TestDriver<SettingsApp>| {
+            driver
+                .runtime()
+                .snapshot(window)
+                .unwrap()
+                .accessibility
+                .into_iter()
+                .filter(|(_, n)| n.role == Role::ScrollBar)
+                .count()
+        };
+        assert_eq!(
+            bars(&driver),
+            1,
+            "the Accessibility pane goes on below the default window"
+        );
+        let active = WindowStates {
+            activated: true,
+            ..WindowStates::default()
+        };
+        driver
+            .window_system_mut()
+            .configure(
+                window,
+                Some(Size::new(metrics::DEFAULT_WIDTH, 3000.0)),
+                active,
+            )
+            .unwrap();
+        settle(&mut driver, window);
+        settle(&mut driver, window);
+        assert_eq!(bars(&driver), 0, "in a window tall enough it fits");
     }
 
     #[test]

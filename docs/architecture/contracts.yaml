@@ -667,6 +667,18 @@
   source: crates/cupertino-settings/src/instance.rs
   source_match: "org.cupertino.Settings.About1"
   note: Show takes a caller activation token of at most 4096 bytes; any session peer may request activation and the compositor validates the token
+- name: org.freedesktop.Application
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: org.cupertino.Files
+  owner_crate: cupertino-files
+  owner_area: apps
+  scope: public
+  test_owner: crates/cupertino-files/tests/single-instance.rs
+  source: crates/cupertino-files/src/instance.rs
+  source_match: "org.freedesktop.Application"
+  note: served at /org/cupertino/Files by the one Files process of the session; Activate, Open (file and trash URIs only) and ActivateAction (show-progress, new-window) take an activation token of at most 4096 bytes in the platform data; every method refuses sandboxed, unnamed and other-user callers
 - name: org.cupertino.Bluetooth1.Agent
   kind: dbus-interface
   version: n/a

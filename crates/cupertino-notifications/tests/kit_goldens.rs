@@ -697,6 +697,10 @@ fn a_banner_of_an_application_without_previews_shows_and_says_only_notification(
         !words.contains("482913") && !words.contains("Bank"),
         "{words}"
     );
+    let banner = run.only_window();
+    run.driver
+        .look(banner, "banner-without-previews")
+        .expect("with CUPERTINO_LOOK_DIR set, the banner is written");
     run.step(Step::OpenCentre);
     let words = readable(&run);
     assert!(words.contains("Mail: Notification"), "{words}");

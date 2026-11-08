@@ -106,7 +106,10 @@ impl Jobs {
         let transfer = Transfer::start(id, work, self.observer.clone());
         let commands = vec![
             reported(&transfer),
-            after(self.delay, Message::Job(JobEvent::Due(id))),
+            Command::After {
+                delay: self.delay,
+                message: Message::Job(JobEvent::Due(id)),
+            },
         ];
         self.running.push(Job {
             transfer,
@@ -188,25 +191,6 @@ fn reported(transfer: &Transfer) -> Command<Message> {
         &transfer.woken,
         Message::Job(JobEvent::Reported(transfer.id)),
     )
-}
-
-/// `message` once `delay` has passed, from a thread that sleeps meanwhile.
-fn after(delay: Duration, message: Message) -> Command<Message> {
-    let (wake, woken) = async_channel::bounded::<()>(1);
-    let spawned = std::thread::Builder::new()
-        .name("cupertino-files delay".into())
-        .spawn(move || {
-            std::thread::sleep(delay);
-            let _ = wake.send_blocking(());
-        });
-    if let Err(e) = spawned {
-        // without the thread the message comes at once: the window opens early rather than never
-        eprintln!("cupertino-files: no thread for a delay: {e}");
-    }
-    Command::Perform(Box::pin(async move {
-        let _ = woken.recv().await;
-        message
-    }))
 }
 
 #[cfg(test)]

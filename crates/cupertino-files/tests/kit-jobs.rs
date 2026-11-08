@@ -325,22 +325,21 @@ fn the_progress_window_opens_by_itself_only_after_its_delay_and_on_request() {
     let mut run = window(Notices::start(None), |start| {
         start.with_transfer_observer(observer)
     });
-    let started = Instant::now();
     paste_into_notes(&mut run);
     waits
         .recv_timeout(Duration::from_secs(10))
         .expect("the copy started");
     run.settle();
-    if started.elapsed() < PROGRESS_WINDOW_DELAY {
-        assert!(progress(&run).is_none(), "not before the delay");
-    }
+    let delay_ms = PROGRESS_WINDOW_DELAY.as_millis() as u64;
+    run.frames(delay_ms - 20, 20);
+    assert!(progress(&run).is_none(), "not before the delay");
     // the window's own row shows the copy at once
     assert_eq!(
         run.named(Role::ProgressIndicator),
         ["Copying “big.bin” to “Notes”"]
     );
+    run.frames(20, 20);
     wait(&mut run, |run| progress(run).is_some());
-    assert!(started.elapsed() >= PROGRESS_WINDOW_DELAY);
 
     // hidden, it comes back from the menu bar and from a click on the window's row
     let shown = progress(&run).unwrap();
@@ -367,8 +366,7 @@ fn a_quick_operation_never_shows_the_progress_window() {
     run.click_row("a.txt");
     run.menu("duplicate");
     run.wait_until(|run| run.rows().contains(&"a copy.txt".to_owned()));
-    std::thread::sleep(PROGRESS_WINDOW_DELAY + Duration::from_millis(200));
-    run.settle();
+    run.frames(PROGRESS_WINDOW_DELAY.as_millis() as u64 + 200, 20);
     assert!(progress(&run).is_none());
     assert_eq!(run.windows().len(), 1);
 }

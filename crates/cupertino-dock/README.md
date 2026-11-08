@@ -85,11 +85,14 @@ with amplitudes 1/0.5/0.25, repeating every 2000 ms with lift `len + 1` pt (info
 | Gap between tiles | 4 pt (`TILE_GAP_RATIO`): tiles stand 68 pt apart; a pointer in a gap is on the nearer tile |
 | Separator | a 26 pt slot (`SEPARATOR_RATIO`), so the tiles either side stand 34 pt apart, with a 1 pt line 62 pt long in its middle |
 | Bar | 85 pt deep: 10.5 pt of padding at its ends, 10 pt between the tiles and its screen-edge side and 11 pt on the other (`BAR_PADDING_RATIO`, `BAR_EDGE_PADDING_RATIO`); corners of 28 pt (`BAR_RADIUS`); 5 pt from the screen edge (`EDGE_MARGIN`) |
-| Running indicator | a 4 pt dot 2 pt below the tile, its middle 6 pt from the bar's edge |
-| Edge and rim | a 0.5 pt dark hairline just inside the outline, and inside it a 0.5 pt light rim that is brightest along the top and the bottom and fades out down the sides; Increase Contrast doubles the hairline and draws the rim all round |
+| Running indicator | a 4 pt dot 2 pt below the tile, its middle 6 pt from the bar's edge; in the dark appearance over glass the compositor draws it (`Surface::DockIndicator`), lightening the glass behind it, and otherwise the dot paints itself |
+| Edge and rim | over glass, the glass's own rim light, along the top and the bottom and fading around the corners; where the bar is not glass (Reduce Transparency, no desktop effects), a 0.5 pt dark hairline just inside the outline and inside it a 0.5 pt light rim that is brightest along the top and the bottom and fades out down the sides; Increase Contrast doubles the hairline and draws the rim all round, over glass too |
 
-The bar's material is `view::bar::BAR_SURFACE` (the `Menu` surface today): its material, its opaque fill under Reduce
-Transparency and Increase Contrast, and nothing else of the dock, so giving the bar another material is that one line.
+The bar's material is `view::bar::BAR_SURFACE` (the `Dock` surface): glass in the bar's shape, with Reduce Transparency
+the `Dock` body in the colour of the wallpaper under it, and the window's opaque fill where the desktop shows no
+material. The stack panels take the same surface. Giving the bar another material is that one line. The application
+grid's panel lies on the `AppGrid` surface, whose recipe keeps its blur with Reduce Transparency and Increase Contrast
+and changes its colours.
 
 The bar is a Kit window (`src/view/bar.rs`) on a layer surface of the dock's display. The surface is at the bottom, left or
 right per `Orientation`, full width or height along its edge so magnification and bounces have room. It has the

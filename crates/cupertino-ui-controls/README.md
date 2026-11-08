@@ -90,7 +90,9 @@ from the application's model and reports changes as messages.
   window control buttons and a drag region of the window as a toolbar is, then an optional header slot
   (`sidebar_header`, for a search field) and the sidebar's content; beside it, past a `SplitView` divider drawn as a rim one device pixel wide on the sidebar's
   side over the content's colour (no separator line), the content
-  pane paints the window background up to the window's top edge, so the window paints none. The panel meets the
+  pane's window background reaches the window's top edge, so the window paints none; the compositor draws it
+  (`Surface::WindowBackground`) where the desktop can, so the toolbar's glass over it reads the window, and the pane
+  paints it where the desktop cannot. The panel meets the
   window's edges (`SIDEBAR_PANEL_INSET` 0); an inset panel would take the window's 16 pt corner less the inset. The
   floating toolbar controls are 36 pt tall in the middle of the 52 pt row, 8 pt from its edges and 8 pt apart:
   `ToolbarGroup` is a capsule of segments 36.5 pt wide (40 pt for a choice, whose chosen segment shows a pill 4 pt
@@ -104,10 +106,12 @@ from the application's model and reports changes as messages.
   disabled colour when disabled.
 - **Glass.** Each glass surface names a `GlassRole` (`ToolbarGroup`, `SidebarPanel`) and `GlassRole::material` says
   what draws it: the sidebar panel asks for the compositor's sidebar material under the node, with the surface's
-  opaque fill where the window cannot show it; a toolbar group lies over the window's own content, which a material
-  under the window cannot show through, so it paints a translucent body with a one-pixel rim (and a soft shade in the
-  light appearance; opaque with Reduce Transparency or Increase Contrast). Moving a role to another material is its
-  one arm in `GlassRole::material`.
+  opaque fill where the window cannot show it; a toolbar group is regular glass (`PaintCx::glass`) in one container
+  per window (`GlassRole::container`, blending only when two controls come closer than the 8 pt gap between them),
+  kept by the compositor with Reduce Transparency and Increase Contrast, over the content pane's background, which the
+  compositor draws below it; where the desktop shows no glass it paints a translucent body with a one-pixel rim (and a
+  soft shade in the light appearance). The field under a resting `ToolbarSearch` button is not drawn, so the button's
+  glass shows what lies below the field. Moving a role to another material is its one arm in `GlassRole::material`.
 - **Menus.** `Menu` levels follow the pointer as the menu bar's do (`cupertino-menu-model`'s `tracking`): the row
   under the pointer takes the focus and the highlight, a submenu opens once the pointer rests 0.2 s on its row and
   closes once it rests 0.3 s on another, and while the pointer heads from a row into its open submenu (each move inside

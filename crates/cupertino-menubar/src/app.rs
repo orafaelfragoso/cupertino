@@ -70,7 +70,28 @@ struct BarSurface {
     output: OutputId,
     layer: Option<LayerSurface>,
     menu_bar: Option<MenuBar>,
+    /// The solid strip under Reduce Transparency ([`cupertino_menubar::tone::solid_bar`]); hidden otherwise.
     backdrop: Option<Backdrop>,
+    /// The bar's size as last configured, which the backdrop covers while it shows.
+    size: Option<(u32, u32)>,
+}
+
+impl BarSurface {
+    /// Shows the backdrop over the whole bar while `display` makes the bar solid, and hides it (a shape with no area)
+    /// otherwise, so the bar draws nothing of its own over the wallpaper.
+    fn shape_backdrop(&self, display: DisplayOptions) {
+        let (Some(backdrop), Some((w, h))) = (&self.backdrop, self.size) else {
+            return;
+        };
+        let rect = if cupertino_menubar::tone::solid_bar(display) {
+            GRect::new(0.0, 0.0, f64::from(w), f64::from(h))
+        } else {
+            GRect::new(0.0, 0.0, 0.0, 0.0)
+        };
+        if let Err(e) = backdrop.set_shape(&rect, 0.0) {
+            eprintln!("{PROCESS}: cannot shape the bar's backdrop: {e}");
+        }
+    }
 }
 
 /// The shell objects of every bar, shared by the roles that make them and the model that uses them.
@@ -180,6 +201,8 @@ impl BarRoles {
             .menu_bar(conn, surface, output)
             .map_err(|_| gone())?;
         let backdrop = self.effects.backdrop(conn, surface)?;
+        // the solid strip of Reduce Transparency, the menu bar material's opaque recipe; hidden while the bar is
+        // see-through ([`BarSurface::shape_backdrop`])
         backdrop.set_material("MenuBar");
         self.send(ShellMessage::Created {
             bar,
@@ -211,25 +234,29 @@ impl SurfaceRoles for BarRoles {
 
     fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
         if let Some(change) = self.observed.apply(event) {
+            if let SessionChange::DisplayOptions(display) = change {
+                for bar in &self.surfaces.borrow().bars {
+                    bar.shape_backdrop(display);
+                }
+            }
             self.send(ShellMessage::Session(change));
             // the window system follows the appearance and the lock too
             return None;
         }
         match event.downcast_ref::<ShellEvent>()? {
             &ShellEvent::Configure { surface, size } => {
-                let surfaces = self.surfaces.borrow();
-                let bar = surfaces.of_surface(surface)?;
+                let mut surfaces = self.surfaces.borrow_mut();
+                let bar = surfaces
+                    .bars
+                    .iter_mut()
+                    .find(|s| s.layer.as_ref().is_some_and(|l| l.surface() == surface))?;
                 let layer = bar.layer.as_ref()?;
                 // a configure without a size closes the window
                 let Ok(size) = layer.configured(size) else {
                     return Some(RoleEvent::Closed(surface));
                 };
-                if let Some(backdrop) = &bar.backdrop {
-                    let rect = GRect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
-                    if let Err(e) = backdrop.set_shape(&rect, 0.0) {
-                        eprintln!("{PROCESS}: cannot shape the bar's material: {e}");
-                    }
-                }
+                bar.size = Some(size);
+                bar.shape_backdrop(self.observed.display);
                 let message = ShellMessage::Configured {
                     bar: bar.bar,
                     width: size.0,
@@ -631,6 +658,7 @@ impl App {
             layer: None,
             menu_bar: None,
             backdrop: None,
+            size: None,
         });
         self.bars.push(Bar {
             id,
@@ -744,8 +772,8 @@ impl App {
                 }
                 Vec::new()
             }
-            // the bar's and the menus' materials follow the options in the server; a solid bar keeps the appearance's
-            // text
+            // the roles show the bar's solid strip or hide it, and the menus' glass follows the options in the server;
+            // a solid bar keeps the appearance's text
             SessionChange::DisplayOptions(display) => {
                 self.display = display;
                 for bar in &mut self.bars {
@@ -1293,7 +1321,6 @@ impl Application for App {
                         shared: &app.shared,
                         font: app.font,
                         tone: bar.tone,
-                        scrim: bar.tone.scrim(bar.backdrop_lightness),
                         size: Size::new(f64::from(bar.width), app.height),
                     },
                     Message::Input,

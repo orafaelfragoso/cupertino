@@ -171,7 +171,6 @@ pub struct BarScene<'a> {
     pub shared: &'a Shared,
     pub font: BarFont,
     pub tone: BarTone,
-    pub scrim: Option<Rgba>,
     /// The bar's size: the output's width and the bar's height.
     pub size: Size,
 }
@@ -248,7 +247,6 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
             role: Role::MenuBar,
             name: BAR_TITLE.to_owned(),
             items: places,
-            scrim: scene.scrim,
             input,
             children,
         }),
@@ -429,7 +427,6 @@ fn menu<M: Clone + 'static>(
             role: Role::Menu,
             name: open.menu.label.clone(),
             items: places,
-            scrim: None,
             input,
             children,
         }),
@@ -595,7 +592,6 @@ struct Root<M> {
     name: String,
     /// How many items the bar or menu holds, which a screen reader reads with each item's place.
     items: usize,
-    scrim: Option<Rgba>,
     input: fn(Input) -> M,
     children: Vec<Element<M>>,
 }
@@ -625,11 +621,7 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.size != old.size {
             Change::Layout
-        } else if self.scrim != old.scrim
-            || self.name != old.name
-            || self.items != old.items
-            || self.origin != old.origin
-        {
+        } else if self.name != old.name || self.items != old.items || self.origin != old.origin {
             Change::Paint
         } else {
             Change::None
@@ -681,12 +673,7 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
         Propagation::Stop
     }
 
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if let Some(scrim) = self.scrim {
-            let size = cx.size();
-            fill(cx, Rect::new(0.0, 0.0, size.width, size.height), 0.0, scrim);
-        }
-    }
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(self.role);

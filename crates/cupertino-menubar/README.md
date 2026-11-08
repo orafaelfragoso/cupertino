@@ -90,11 +90,13 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
 
 ## How it works
 
-- **Surfaces.** A top-anchored layer surface per output (exclusive zone 0) with a `MenuBar` backdrop. The server reserves the
-  space and owns hiding, revealing and dimming. Each open menu level is an `xdg_popup` with a `Menu` backdrop. The server
-  draws the strip's material, so Reduce Transparency and Increase Contrast reach it there. The process keeps its palette
-  under the display options (no recorded contrast palette for the menu bar text and status items); either option makes
-  the bar solid, so its text stops following the wallpaper (*Backdrop* below).
+- **Surfaces.** A top-anchored layer surface per output (exclusive zone 0). The server reserves the space and owns hiding,
+  revealing and dimming. The bar draws nothing of its own: the wallpaper shows through it as it is, with no strip, fill or
+  blur, and only its text and symbols follow what is behind them (*Backdrop* below). Increase Contrast keeps it
+  see-through. Under Reduce Transparency it is a solid strip: the bar's `MenuBar` backdrop, which the server draws with
+  the material's opaque recipe (grey 0.1255 dark, 0.8549 light), covers the bar then and has no area otherwise
+  (`tone::solid_bar`). Each open menu level is an `xdg_popup` with a `Menu` backdrop. The process keeps its palette under
+  the display options (no recorded contrast palette for the menu bar text and status items).
 - **Menus.** The server's `cupertino_menu_bar_v1` feed names the active application and how its window exports menus:
   DBusMenu or GMenuModel. A window without menus gets the synthetic menus, whose actions go back as `window_command` /
   `move_to_workspace` / `activate_window`. From version 10 the feed also lists the application's windows and sends the
@@ -194,7 +196,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
     unaccented, so "é" cannot be typed through a dead key (a layout that has the character on a key of its own types
     it). There is no input method in the bar.
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
-  every change. The material follows it in the server. On `locked` the bars close every open menu and title focus.
+  every change. The solid strip follows it in the server. On `locked` the bars close every open menu and title focus.
 - **Backdrop.** From shell version 14 the server sends each bar the lightness of its output's wallpaper under the strip
   (`backdrop_luminance`, CIE L*/100 in thousandths), and each bar picks its own tone (`tone::BarTone`): dark text at
   550 and above, light text at 450 and below, the last tone held in between. The first value, and the first after the
@@ -202,14 +204,11 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   labels, the application name, the clock, the system mark, the control panel glyph, the extras' symbols (drawn by the
   toolkit in the text colour of the bar's tone), the dot of a status item without
   an icon and the open title's highlight. What keeps the appearance: the menus and the screen capture indicator's
-  indigo. Third-party status items keep their own icons. Before the first value, below version 14, and while Increase
-  Contrast or Reduce Transparency makes the bar solid, the whole bar keeps the appearance's palette. Over a mid-tone
-  wallpaper neither text colour reaches 4.5:1 alone (about 4.0:1 at 500, 3.4:1 at the band's edges), so the bar paints a
-  scrim over its whole strip before anything else (`BarTone::scrim`): black under light text, white under dark text, at
-  the smallest alpha that brings the text to 4.6:1 over the measured lightness (black from about 458, 0.089 at 500,
-  0.175 at 549; white up to about 536, 0.069 at 500, 0.146 at 451), and none outside that range or on the appearance's
-  palette. The server measures the lightness through the bar's material, so the scrim is worked out against what is
-  under the text. A bar redraws when its tone or its scrim changes.
+  indigo. Third-party status items keep their own icons. Before the first value, below version 14, and while Reduce
+  Transparency makes the bar solid, the whole bar keeps the appearance's palette. The server measures the wallpaper's
+  strip as it is, since nothing lies between it and the text. Outside the band the chosen text is the one that reads
+  better, at 4.5:1 or more below 400 and above 600; inside it neither colour reaches 4.5:1 (about 4.0:1 at 500), and
+  the bar paints nothing under its text to make up for it. A bar redraws when its tone changes.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and
   opens `Extras::system_menu`: About This Computer, Settings…, Recent Items, Force Quit…, then Sleep, Restart…, Shut Down…, Lock Screen, Log
   Out <name>… and, when the session agent can switch, Login Window…, with separators between the groups. Every row and
@@ -279,8 +278,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   locale data). `when-space-allows` always shows the date; the compact fallback is open. The battery and Bluetooth rows (open), the symbol choice (one `symbol.wifi` / `symbol.battery` / `symbol.bluetooth` / `symbol.moon` each, drawn in the bar's text
   colour, dimmed to 0.4 when the radio is off or has no link; no signal-strength or charge-level variants) are approximate.
   Third-party status items keep their own icons (ARGB pixmap, absolute path or `hicolor`).
-- **approximate.** Bar height (24 pt), paddings, popup metrics, the backdrop thresholds (550 and 450, split at 500 when decided afresh), what the tone covers, and the
-  scrim's target (4.6:1, against the 4.5:1 of normal text) and cap (0.25).
+- **approximate.** Bar height (24 pt), paddings, popup metrics, the backdrop thresholds (550 and 450, split at 500 when decided afresh), what the tone covers.
 
 **Text.** The controller measures with the toolkit's text system (`view::KitMeasure`), the one the windows draw with, so the slots and rows it lays out hold the text the windows draw, at every output scale.
 
@@ -301,7 +299,7 @@ cargo clippy -p cupertino-menubar --all-targets
 |---|---|
 | `tests/controller.rs` | The controller's pointer and key behaviour; among it, a press on empty bar space closes a sticky or press-drag menu, is consumed and chooses nothing on the press or the release; pointer paths for a drag onto a row, a quick click and a hold on the title, a diagonal into a submenu across other rows, a rest and a slow path that give the submenu up, and type-ahead with Return and Escape. |
 | `tests/dbus_integration.rs` | Fake DBusMenu, StatusNotifier and GMenuModel peers work against the clients and services, on a private bus from `cupertino-test-bus` (a `dbus-daemon` child that dies with its test). It skips with a message when `dbus-daemon` is not installed. |
-| `src/tone.rs` tests | The bar's text reaches 4.5:1 with its scrim at every lightness from 0 to 1000 for every tone it can hold there, and through each appearance's `MenuBar` colour ops (from `cupertino-glass`, a dev-dependency) for every wallpaper grey; no scrim outside the mid band or on the appearance's palette; the scrim values at 500 and 549. |
+| `src/tone.rs` tests | Outside the band every tone the bar can hold is the text colour that reads better, at 4.5:1 or more away from the band; the text is light over a dark blue wallpaper and dark over a pale one; only Reduce Transparency makes the bar solid and keeps the appearance's text, Increase Contrast leaves it adapting. |
 | `tests/app-menus.rs` (feature `app`) | The menus Files and Settings publish with `cupertino-ui-menus`, read by the bar's worker over a private bus, open from their title and choose an item: the application hears that item's action. It builds the menus from `cupertino_files::menu_bar` and `cupertino_settings::menu_bar` themselves, so it needs these two apps-layer crates as dev-dependencies, which are the layer graph's dev-only exceptions for this crate. |
 | `tests/bar-view.rs` (feature `app`) | The bar, the bar with the File menu open, and the open menu as CupertinoKit draws them match the goldens in `tests/goldens`: the frame at 1x (x86_64 only, within 2/255 a channel) and its focus and accessibility tree. A press on a title opens its menu as a popup of the bar, and a click on a row chooses the row's item; a screen reader does both through the titles' and rows' Click action. Every settled frame passes `cupertino-ui-test`'s accessibility audit: each menu title and row says its place and its bar or menu its count (separators and the Help search field not counted). |
 | `src/extras_bus.rs` tests | 10 000 refreshes in a burst wait as one; a queue filled with actions stays at its bound, a refresh then is not needed, the newest session agent is kept, and a task that is gone is reported. |

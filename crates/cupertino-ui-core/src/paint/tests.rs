@@ -164,7 +164,11 @@ fn an_ancestor_clip_cuts_the_hit_area_and_the_bounds() {
     );
     assert_eq!(node.clip, None, "the node clips no descendants of its own");
     assert_eq!(node.hit, Rect::new(10.0, 10.0, 50.0, 50.0));
-    assert_eq!(node.bounds, Rect::new(10.0, 10.0, 50.0, 50.0));
+    assert_eq!(
+        node.bounds,
+        Rect::new(10.0, 10.0, 50.0 + CLIP_EDGE, 50.0 + CLIP_EDGE),
+        "the bounds keep the pixels the clip's anti-aliased edge covers"
+    );
 }
 
 #[test]
@@ -225,11 +229,12 @@ fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_sub
         scroller.clip,
         Some(Shape::Rect(Rect::new(0.0, 0.0, 50.0, 50.0)))
     );
+    let cut = Rect::from_ltrb(10.0, 10.0 - CLIP_EDGE, 60.0, 60.0 + CLIP_EDGE);
     assert_eq!(
-        content.bounds, viewport,
-        "the content is cut to the viewport"
+        content.bounds, cut,
+        "the content is cut to the viewport and its anti-aliased edge"
     );
-    assert_eq!(scroller.bounds, viewport);
+    assert_eq!(scroller.bounds, cut);
 }
 
 #[test]
@@ -288,7 +293,7 @@ fn bounds_reach_past_the_layout_rect_to_what_the_node_draws_and_stop_at_its_clip
     assert_eq!(bounds(rect, ring, None), Rect::new(96.0, 96.0, 18.0, 18.0));
     assert_eq!(
         bounds(rect, ring, Some(Rect::new(98.0, 98.0, 100.0, 100.0))),
-        Rect::new(98.0, 98.0, 16.0, 16.0)
+        Rect::from_ltrb(98.0 - CLIP_EDGE, 98.0 - CLIP_EDGE, 114.0, 114.0)
     );
     assert_eq!(bounds(rect, None, None), rect);
 }
@@ -368,8 +373,8 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
     assert_eq!(node.group.as_ref().map(|g| g.opacity), Some(0.5));
     assert_eq!(node.bounds, Rect::from_ltrb(4.0, 8.0, 36.0, 40.0));
     assert_eq!(
-        painting.own[0], rect,
-        "damage still tracks what the node itself draws"
+        painting.own[0], node.bounds,
+        "its opacity and shadow reach all it and its subtree draw, so it damages its widened bounds"
     );
     assert!(
         !painting.blank[0],

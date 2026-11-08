@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 79 crates, 366 internal dependencies
+// 79 crates, 374 internal dependencies
 // per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
@@ -161,6 +161,7 @@ digraph "layers" {
   "cupertino-dock" -> "cupertino-modifiers";
   "cupertino-dock" -> "cupertino-overview";
   "cupertino-dock" -> "cupertino-shell-client";
+  "cupertino-dock" -> "cupertino-test-bus" [label="dev"];
   "cupertino-dock" -> "cupertino-theme" [label="dev"];
   "cupertino-dock" -> "cupertino-ui-test" [label="dev"];
   "cupertino-dock" -> "cupertino-ui-wayland";
@@ -264,16 +265,19 @@ digraph "layers" {
   "cupertino-menubar" -> "cupertino-test-bus" [label="dev"];
   "cupertino-menubar" -> "cupertino-theme";
   "cupertino-menubar" -> "cupertino-theme" [label="dev"];
+  "cupertino-menubar" -> "cupertino-typeahead";
   "cupertino-menubar" -> "cupertino-ui-menus" [label="dev"];
   "cupertino-menubar" -> "cupertino-ui-test" [label="dev"];
   "cupertino-menubar" -> "cupertino-ui-text";
   "cupertino-menubar" -> "cupertino-ui-wayland";
   "cupertino-menubar" -> "cupertino-wayland-client";
   "cupertino-netd" -> "cupertino-netlink";
+  "cupertino-netd" -> "cupertino-peer";
   "cupertino-netd" -> "cupertino-seat";
   "cupertino-netd" -> "cupertino-test-bus" [label="dev"];
   "cupertino-notifications" -> "cupertino-animation";
   "cupertino-notifications" -> "cupertino-assets" [label="dev"];
+  "cupertino-notifications" -> "cupertino-defaults";
   "cupertino-notifications" -> "cupertino-geometry";
   "cupertino-notifications" -> "cupertino-kit";
   "cupertino-notifications" -> "cupertino-modifiers";
@@ -301,10 +305,12 @@ digraph "layers" {
   "cupertino-osd" -> "cupertino-wayland-client";
   "cupertino-overview" -> "cupertino-animation";
   "cupertino-overview" -> "cupertino-wm";
+  "cupertino-peer" -> "cupertino-test-bus" [label="dev"];
   "cupertino-polkit-agent" -> "cupertino-assets";
   "cupertino-polkit-agent" -> "cupertino-decorations";
   "cupertino-polkit-agent" -> "cupertino-geometry";
   "cupertino-polkit-agent" -> "cupertino-icons";
+  "cupertino-polkit-agent" -> "cupertino-peer";
   "cupertino-polkit-agent" -> "cupertino-protocol-app";
   "cupertino-polkit-agent" -> "cupertino-shell-client";
   "cupertino-polkit-agent" -> "cupertino-test-bus" [label="dev"];
@@ -426,7 +432,9 @@ digraph "layers" {
   "cupertino-ui-atspi" -> "cupertino-ui-platform";
   "cupertino-ui-controls" -> "cupertino-animation";
   "cupertino-ui-controls" -> "cupertino-geometry";
+  "cupertino-ui-controls" -> "cupertino-menu-model";
   "cupertino-ui-controls" -> "cupertino-theme";
+  "cupertino-ui-controls" -> "cupertino-typeahead";
   "cupertino-ui-controls" -> "cupertino-ui-core";
   "cupertino-ui-controls" -> "cupertino-ui-layout";
   "cupertino-ui-controls" -> "cupertino-ui-platform";

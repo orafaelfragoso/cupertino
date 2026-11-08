@@ -13,6 +13,7 @@
 //! `rollover` or `pressed`; a variant the material does not draw differently names the variant it shares.
 
 use crate::appearance::Appearance;
+use crate::color::Color;
 use crate::error::{Error, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -165,33 +166,168 @@ pub fn switcher_panel(appearance: Appearance, reduce_transparency: bool) -> Reci
 /// [`app_grid_background`]).
 pub const APP_GRID_MATERIAL: &str = "AppGrid";
 
-/// The application grid's background: the desktop behind it blurred with
-/// radius 30 (the design blurs with hard edges, drawn here as σ 30), saturated by 1.8 and put
-/// through a colour matrix with R/G/B gain 0.55 and bias 0.05292. The matrix has no recipe
-/// operation; a normal fill of gray `g` at opacity `a` computes `c·(1 − a) + g·a`, so `a = 0.45`
-/// and `g = 0.05292 / 0.45` reproduce it exactly. The backdrop is captured at 1/8
-/// scale as the switcher's is (approximate; the design rasterises at display scale). The same
-/// in both appearances: the design has one filter chain.
-pub fn app_grid_background(_dark: bool) -> Recipe {
-    let gray = 0.05292 / 0.45;
+/// The application grid's background: the desktop behind it blurred with σ [`APP_GRID_SIGMA`] points, saturated by
+/// [`APP_GRID_SATURATION`], then a gain of 0.36 and a lift of 0.188 on every channel: a normal fill of gray `g` at
+/// opacity `a` computes `c·(1 − a) + g·a`, so [`APP_GRID_COVER`] and [`APP_GRID_GRAY`] give them. White behind it comes
+/// out a mid gray, black a dark one, and colours keep much of their strength through the saturation (approximate).
+/// The backdrop is captured at 1/8 scale as the switcher's is. In the light appearance the fill is the light gray
+/// [`APP_GRID_GRAY_LIGHT`] instead (and [`APP_GRID_CONTRAST_GRAY_LIGHT`], [`APP_GRID_REDUCED_GRAY_LIGHT`] for the
+/// display options), so its dark labels stay readable.
+///
+/// The display options keep the blur and change the colours rather than turning the background solid:
+/// * Reduce Transparency covers it with gray [`APP_GRID_REDUCED_GRAY`] at opacity [`APP_GRID_REDUCED_OPACITY`], a
+///   near-black that lets only faint bands of what is behind through (approximate);
+/// * Increase Contrast (a high-contrast appearance) lowers the saturation to [`APP_GRID_CONTRAST_SATURATION`] and the
+///   lift to that of gray [`APP_GRID_CONTRAST_GRAY`], so the bands stay clearly visible on a darker panel
+///   (approximate);
+/// * with both, Reduce Transparency's.
+pub fn app_grid_background(appearance: Appearance, reduce_transparency: bool) -> Recipe {
+    let backdrop = |saturation: f32| {
+        Some(Backdrop {
+            scale: 0.125,
+            sigma_pt: APP_GRID_SIGMA,
+            ops: vec![ColorOp::Saturate(saturation)],
+        })
+    };
+    let pick = |dark: f32, light: f32| if appearance.is_dark() { dark } else { light };
+    let fill = |gray: f32, opacity: f32| Fill {
+        rgba: [gray, gray, gray, opacity],
+        blend: Blend::Normal,
+        tint_layer: false,
+    };
+    if reduce_transparency {
+        return Recipe {
+            name: format!("{APP_GRID_MATERIAL}-ReduceTransparency"),
+            material: APP_GRID_MATERIAL.into(),
+            backdrop: backdrop(APP_GRID_SATURATION),
+            fills: vec![fill(
+                pick(APP_GRID_REDUCED_GRAY, APP_GRID_REDUCED_GRAY_LIGHT),
+                APP_GRID_REDUCED_OPACITY,
+            )],
+            opaque: true,
+            ..Recipe::default()
+        };
+    }
+    if appearance.is_high_contrast() {
+        return Recipe {
+            name: format!("{APP_GRID_MATERIAL}-IncreaseContrast"),
+            material: APP_GRID_MATERIAL.into(),
+            backdrop: backdrop(APP_GRID_CONTRAST_SATURATION),
+            fills: vec![fill(
+                pick(APP_GRID_CONTRAST_GRAY, APP_GRID_CONTRAST_GRAY_LIGHT),
+                APP_GRID_COVER,
+            )],
+            ..Recipe::default()
+        };
+    }
     Recipe {
         name: APP_GRID_MATERIAL.into(),
         material: APP_GRID_MATERIAL.into(),
+        backdrop: backdrop(APP_GRID_SATURATION),
+        fills: vec![fill(
+            pick(APP_GRID_GRAY, APP_GRID_GRAY_LIGHT),
+            APP_GRID_COVER,
+        )],
+        corner_radius: None,
+        ..Recipe::default()
+    }
+}
+
+/// The application grid's blur in points, so broad bands of what is behind stay apart, its saturation of the blurred
+/// desktop, and the gray and the opacity of the fill over it.
+pub const APP_GRID_SIGMA: f32 = 20.0;
+pub const APP_GRID_SATURATION: f32 = 2.8;
+pub const APP_GRID_GRAY: f32 = 0.294;
+pub const APP_GRID_COVER: f32 = 0.64;
+/// The application grid's saturation and fill gray with Increase Contrast, at opacity [`APP_GRID_COVER`].
+pub const APP_GRID_CONTRAST_SATURATION: f32 = 1.4;
+pub const APP_GRID_CONTRAST_GRAY: f32 = 0.17;
+/// The fill grays of the application grid in the light appearance: at rest, with Increase Contrast and with Reduce
+/// Transparency.
+pub const APP_GRID_GRAY_LIGHT: f32 = 0.92;
+pub const APP_GRID_CONTRAST_GRAY_LIGHT: f32 = 0.80;
+pub const APP_GRID_REDUCED_GRAY_LIGHT: f32 = 0.92;
+
+/// The near-black the application grid's background takes with Reduce Transparency, and how much of it covers the
+/// blurred desktop.
+pub const APP_GRID_REDUCED_GRAY: f32 = 0.0784;
+pub const APP_GRID_REDUCED_OPACITY: f32 = 0.98;
+
+/// Name of the Dock bar's material with Reduce Transparency, a code recipe (see [`dock_reduced`]). At other times the
+/// bar is glass.
+pub const DOCK_MATERIAL: &str = "Dock";
+
+/// The Dock bar and its stack panel with Reduce Transparency: a solid-looking body in the colour of the wallpaper under
+/// it rather than a neutral gray. The desktop is captured at 1/8 scale and blurred with σ [`DOCK_REDUCED_SIGMA`], so the
+/// body shows one broad colour with no detail, saturated by [`DOCK_REDUCED_SATURATION`], then covered by black (dark,
+/// a deep navy over a blue wallpaper) or white (light) at [`DOCK_REDUCED_COVER`] (approximate).
+pub fn dock_reduced(appearance: Appearance) -> Recipe {
+    let c = if appearance.is_dark() { 0.0 } else { 1.0 };
+    Recipe {
+        name: format!("{DOCK_MATERIAL}-ReduceTransparency"),
+        material: DOCK_MATERIAL.into(),
         backdrop: Some(Backdrop {
             scale: 0.125,
-            sigma_pt: 30.0,
-            ops: vec![ColorOp::Saturate(1.8)],
+            sigma_pt: DOCK_REDUCED_SIGMA,
+            ops: vec![ColorOp::Saturate(DOCK_REDUCED_SATURATION)],
         }),
         fills: vec![Fill {
-            rgba: [gray, gray, gray, 0.45],
+            rgba: [c, c, c, DOCK_REDUCED_COVER],
             blend: Blend::Normal,
             tint_layer: false,
         }],
-        corner_radius: None,
-        notes: vec![
-            "the gain 0.55 / bias 0.05292 colour matrix is the fill gray 0.1176 at opacity 0.45"
-                .into(),
-        ],
+        opaque: true,
+        ..Recipe::default()
+    }
+}
+
+/// Blur of the Dock's reduced-transparency body in points, its saturation and how much black or white covers it.
+pub const DOCK_REDUCED_SIGMA: f32 = 40.0;
+pub const DOCK_REDUCED_SATURATION: f32 = 3.2;
+pub const DOCK_REDUCED_COVER: f32 = 0.87;
+
+/// Name of the Dock's running indicator material, a code recipe (see [`running_indicator`]).
+pub const RUNNING_INDICATOR_MATERIAL: &str = "RunningIndicator";
+
+/// The Dock's running indicator: no backdrop of its own, the gray [`RUNNING_INDICATOR_LIFT`] added to what lies behind
+/// it (plus-lighter) in the dark appearance, so the dot is a lighter, brighter version of the glass under it; in the
+/// light appearance the same gray is taken away (plus-darker).
+pub fn running_indicator(appearance: Appearance) -> Recipe {
+    let (gray, blend) = if appearance.is_dark() {
+        (RUNNING_INDICATOR_LIFT, Blend::PlusLighter)
+    } else {
+        (1.0 - RUNNING_INDICATOR_LIFT, Blend::PlusDarker)
+    };
+    Recipe {
+        name: RUNNING_INDICATOR_MATERIAL.into(),
+        material: RUNNING_INDICATOR_MATERIAL.into(),
+        fills: vec![Fill {
+            rgba: [gray, gray, gray, 1.0],
+            blend,
+            tint_layer: false,
+        }],
+        ..Recipe::default()
+    }
+}
+
+/// How much lighter the running indicator is than what lies behind it, per channel.
+pub const RUNNING_INDICATOR_LIFT: f32 = 0.49;
+
+/// Name of the window background material, a code recipe (see [`window_background`]).
+pub const WINDOW_BACKGROUND_MATERIAL: &str = "WindowBackground";
+
+/// A window's own background drawn by the compositor: the opaque colour `color` and nothing of what lies behind, so
+/// glass over it in the same window reads the window's background rather than the desktop.
+pub fn window_background(color: Color) -> Recipe {
+    Recipe {
+        name: WINDOW_BACKGROUND_MATERIAL.into(),
+        material: WINDOW_BACKGROUND_MATERIAL.into(),
+        fills: vec![Fill {
+            rgba: [color.r, color.g, color.b, 1.0],
+            blend: Blend::Copy,
+            tint_layer: false,
+        }],
+        opaque: true,
         ..Recipe::default()
     }
 }
@@ -774,29 +910,105 @@ mod tests {
     }
 
     #[test]
-    fn the_app_grid_background_is_the_colour_matrix_as_a_fill() {
-        let recipe = app_grid_background(false);
+    fn the_app_grid_background_is_a_gain_and_a_lift_as_a_fill() {
+        let recipe = app_grid_background(Appearance::Dark, false);
         assert_eq!(
             recipe.backdrop,
             Some(Backdrop {
                 scale: 0.125,
-                sigma_pt: 30.0,
-                ops: vec![ColorOp::Saturate(1.8)]
+                sigma_pt: APP_GRID_SIGMA,
+                ops: vec![ColorOp::Saturate(APP_GRID_SATURATION)]
             })
         );
         let [r, g, b, a] = recipe.fills[0].rgba;
         assert_eq!((r, g, b), (g, g, g));
-        // a backdrop gray c comes out as c·0.55 + 0.05292 for every c
+        // a backdrop gray c comes out as c·0.36 + 0.188: white a mid gray, black a dark one
         for c in [0.0f32, 0.3, 1.0] {
             let out = c * (1.0 - a) + g * a;
-            assert!((out - (c * 0.55 + 0.05292)).abs() < 1e-6, "c = {c}: {out}");
+            assert!((out - (c * 0.36 + 0.188)).abs() < 1e-3, "c = {c}: {out}");
         }
         assert_eq!(recipe.corner_radius, None);
-        assert_eq!(
-            app_grid_background(true),
-            recipe,
-            "one filter chain for both appearances"
+        // the light appearance has the same chain with a light fill, under its dark labels
+        let light = app_grid_background(Appearance::Light, false);
+        assert_eq!(light.backdrop, recipe.backdrop);
+        assert_eq!(light.fills[0].rgba[3], a);
+        for reduce_transparency in [false, true] {
+            for appearance in [Appearance::Light, Appearance::LightHighContrast] {
+                let r = app_grid_background(appearance, reduce_transparency);
+                let fills = |c| through_fills(&r, c);
+                assert!(
+                    fills(0.0) > 0.5,
+                    "{appearance:?} {reduce_transparency}: light over black"
+                );
+            }
+        }
+    }
+
+    /// What a recipe of fills only (no colour operation besides the backdrop's saturation) makes of backdrop gray `c`.
+    fn through_fills(recipe: &Recipe, c: f32) -> f32 {
+        recipe.fills.iter().fold(c, |d, f| {
+            let (s, a) = (f.rgba[0], f.rgba[3]);
+            let b = match f.blend {
+                Blend::PlusLighter => (s + d).min(1.0),
+                Blend::PlusDarker => (s + d - 1.0).max(0.0),
+                _ => s,
+            };
+            d * (1.0 - a) + b * a
+        })
+    }
+
+    #[test]
+    fn the_app_grid_keeps_its_blur_and_changes_its_colours_with_the_display_options() {
+        let reduced = app_grid_background(Appearance::Dark, true);
+        assert!(reduced.backdrop.is_some(), "faint bands still show through");
+        let (white, black) = (through_fills(&reduced, 1.0), through_fills(&reduced, 0.0));
+        assert!(
+            white < 0.1 && black > 0.07,
+            "near black over anything: {black}..{white}"
         );
+        assert_eq!(
+            app_grid_background(Appearance::DarkHighContrast, true),
+            reduced,
+            "Reduce Transparency wins"
+        );
+        let contrast = app_grid_background(Appearance::DarkHighContrast, false);
+        let saturation = |r: &Recipe| match r.backdrop.as_ref().unwrap().ops[..] {
+            [ColorOp::Saturate(s)] => s,
+            _ => panic!("one saturation"),
+        };
+        let normal = app_grid_background(Appearance::Dark, false);
+        assert!(
+            1.0 < saturation(&contrast) && saturation(&contrast) < saturation(&normal),
+            "the bands stay, less vivid"
+        );
+        for c in [0.0f32, 0.5, 1.0] {
+            let (out, rest) = (through_fills(&contrast, c), through_fills(&normal, c));
+            assert!(out < rest, "darker than at rest: {out} {rest}");
+        }
+    }
+
+    #[test]
+    fn the_dock_with_reduce_transparency_is_the_wallpapers_colour_darkened_not_a_gray() {
+        let dark = dock_reduced(Appearance::Dark);
+        let backdrop = dark.backdrop.as_ref().unwrap();
+        assert!(backdrop.sigma_pt >= 40.0, "one broad colour, no detail");
+        assert!(matches!(backdrop.ops[..], [ColorOp::Saturate(s)] if s > 1.0));
+        assert_eq!(dark.fills[0].rgba[..3], [0.0; 3]);
+        assert!(through_fills(&dark, 1.0) < 0.2, "dark");
+        assert_eq!(dock_reduced(Appearance::Light).fills[0].rgba[..3], [1.0; 3]);
+    }
+
+    #[test]
+    fn the_running_indicator_lightens_what_is_behind_it_in_the_dark() {
+        let dark = running_indicator(Appearance::Dark);
+        assert!(dark.backdrop.is_none());
+        // a body of (46, 73, 168) comes out as (171, 198, 255): every channel lifted, the brightest clipped
+        let out = [46.0f32, 73.0, 168.0].map(|c| through_fills(&dark, c / 255.0) * 255.0);
+        for (o, want) in out.iter().zip([171.0, 198.0, 255.0]) {
+            assert!((o - want).abs() <= 1.5, "{out:?}");
+        }
+        let light = running_indicator(Appearance::Light);
+        assert!((through_fills(&light, 0.8) - (0.8 - RUNNING_INDICATOR_LIFT)).abs() < 1e-6);
     }
 
     #[test]

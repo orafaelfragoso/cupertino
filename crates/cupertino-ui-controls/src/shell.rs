@@ -15,7 +15,7 @@ use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_render::{Paint, PaintOp, Shape};
-use cupertino_ui_theme::{ColorRole, StateVariant};
+use cupertino_ui_theme::{ColorRole, StateVariant, Surface};
 
 /// The window's corner radius, which the sidebar panel's corners follow.
 pub const WINDOW_CORNER_RADIUS: f64 = 16.0;
@@ -222,7 +222,8 @@ impl<M: 'static> Widget<M> for SidebarTop {
     fn semantics(&self, _: &DragState, _: &mut SemanticsCx<'_>) {}
 }
 
-/// The content pane: the window background from the window's top edge to its bottom edge.
+/// The content pane: the window background from the window's top edge to its bottom edge, drawn by the compositor
+/// where the desktop can ([`Surface::WindowBackground`]) and painted where it cannot.
 struct ContentPane<M> {
     children: Vec<Element<M>>,
 }
@@ -253,6 +254,11 @@ impl<M: 'static> Widget<M> for ContentPane<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        // where the desktop can, the compositor draws the background, so the toolbar's glass over it reads the window
+        // and not the desktop behind it
+        if cx.material(Surface::WindowBackground, 0.0, 1.0) {
+            return;
+        }
         let state = StateVariant {
             window_active: cx.window_active(),
             ..StateVariant::NORMAL

@@ -185,9 +185,41 @@ impl AppEntry {
     }
 }
 
+/// The room the dock bar keeps outside the grid's layer, along the output's edge it sits on, in points: the panel is
+/// centred on the whole output, not on the layer, and still never reaches into this room.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Outside {
+    pub left: f64,
+    pub right: f64,
+    pub bottom: f64,
+}
+
+impl Outside {
+    /// The room of a bar `depth` points deep along `edge`.
+    pub fn dock(edge: crate::config::Orientation, depth: f64) -> Self {
+        use crate::config::Orientation;
+        let depth = depth.max(0.0);
+        match edge {
+            Orientation::Bottom => Outside {
+                bottom: depth,
+                ..Outside::default()
+            },
+            Orientation::Left => Outside {
+                left: depth,
+                ..Outside::default()
+            },
+            Orientation::Right => Outside {
+                right: depth,
+                ..Outside::default()
+            },
+        }
+    }
+}
+
 /// Geometry of the panel on a layer of `width × height` points. The panel is as large as [`GridLayout::PANEL_SIZE`]
-/// where the output allows, centred in the layer below the menu bar's strip; every part is placed from its top-left
-/// corner. The rows scroll inside [`GridLayout::content`].
+/// where the layer allows below the menu bar's strip, centred on the whole output (the layer and the dock's room
+/// outside it), moved only as far as it takes to keep its margin inside the layer; every part is placed from its
+/// top-left corner. The rows scroll inside [`GridLayout::content`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridLayout {
     pub width: f64,
@@ -271,13 +303,30 @@ impl GridLayout {
     /// "No Results": its size and weight.
     pub const NO_RESULTS_FONT_PT: f64 = 22.0;
 
+    /// The layout on a layer that is the whole output.
     pub fn new(width: f64, height: f64) -> Self {
+        Self::on_output(width, height, Outside::default())
+    }
+
+    /// The layout on a layer of `width × height` points with the dock's room `outside` it.
+    pub fn on_output(width: f64, height: f64, outside: Outside) -> Self {
         let room_w = (width - 2.0 * Self::PANEL_MARGIN).max(0.0);
         let room_h = (height - MENU_BAR_BAND - 2.0 * Self::PANEL_MARGIN).max(0.0);
         let w = Self::PANEL_SIZE.0.min(room_w).floor();
         let h = Self::PANEL_SIZE.1.min(room_h).floor();
-        let x = ((width - w) / 2.0).floor();
-        let y = (MENU_BAR_BAND + (height - MENU_BAR_BAND - h) / 2.0).floor();
+        let output_w = width + outside.left + outside.right;
+        let output_h = height + outside.bottom;
+        let x = ((output_w - w) / 2.0 - outside.left)
+            .floor()
+            .min(width - Self::PANEL_MARGIN - w)
+            .max(Self::PANEL_MARGIN.min(((width - w) / 2.0).floor()));
+        let y = ((output_h - h) / 2.0)
+            .floor()
+            .min(height - Self::PANEL_MARGIN - h)
+            .max(
+                MENU_BAR_BAND
+                    + Self::PANEL_MARGIN.min(((height - MENU_BAR_BAND - h) / 2.0).floor()),
+            );
         let panel = Rect::new(x, y, w, h);
         let inner = (w - 2.0 * Self::INSET).max(0.0);
         let columns = (w - Self::COLUMNS_LEFT - Self::COLUMNS_RIGHT).max(0.0);
@@ -607,9 +656,9 @@ impl AppGrid {
         self.reduce_motion = on;
     }
 
-    /// The layer is `width × height` points now.
-    pub fn set_size(&mut self, width: f64, height: f64) {
-        self.layout = Some(GridLayout::new(width, height));
+    /// The layer is `width × height` points now, with the dock's room `outside` it.
+    pub fn set_size(&mut self, width: f64, height: f64, outside: Outside) {
+        self.layout = Some(GridLayout::on_output(width, height, outside));
         self.scroll = self.scroll.clamp(0.0, self.max_scroll());
     }
 
@@ -1274,6 +1323,7 @@ fn camel_segments(name: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Orientation;
 
     fn app(key: &str, name: &str, categories: &[&str]) -> AppEntry {
         AppEntry {
@@ -1290,9 +1340,13 @@ mod tests {
             .collect()
     }
 
-    /// A 1440 × 900 output with a 64 pt dock bar zone below.
+    /// A 1440 × 900 output with a 70 pt dock bar zone below.
     fn sized(mut g: AppGrid) -> AppGrid {
-        g.set_size(1440.0, 900.0 - 70.0);
+        g.set_size(
+            1440.0,
+            900.0 - 70.0,
+            Outside::dock(Orientation::Bottom, 70.0),
+        );
         g
     }
 
@@ -1301,21 +1355,21 @@ mod tests {
     }
 
     #[test]
-    fn the_panel_floats_centred_below_the_menu_bar_and_shrinks_on_small_outputs() {
-        let l = GridLayout::new(1440.0, 830.0);
-        assert_eq!(l.panel, Rect::new(299.0, 139.0, 842.0, 576.0));
+    fn the_panel_floats_centred_on_the_output_clear_of_the_dock_and_shrinks_on_small_outputs() {
+        let l = GridLayout::on_output(1440.0, 830.0, Outside::dock(Orientation::Bottom, 70.0));
+        assert_eq!(l.panel, Rect::new(299.0, 162.0, 842.0, 576.0));
         assert_eq!(
-            l.panel.cy(),
-            MENU_BAR_BAND + (830.0 - MENU_BAR_BAND) / 2.0,
-            "centred between the menu bar and the dock"
+            (l.panel.cx(), l.panel.cy()),
+            (720.0, 450.0),
+            "centred on the whole output, the dock's room included"
         );
         assert!(
             l.panel.w < 1440.0 && l.panel.h < 830.0,
             "not the whole output"
         );
-        assert_eq!(l.search, Rect::new(299.0, 139.0, 842.0, 56.0));
-        assert_eq!(l.pills, Rect::new(319.0, 207.0, 802.0, 26.0));
-        assert_eq!(l.content.y, 139.0 + 104.0);
+        assert_eq!(l.search, Rect::new(299.0, 162.0, 842.0, 56.0));
+        assert_eq!(l.pills, Rect::new(319.0, 230.0, 802.0, 26.0));
+        assert_eq!(l.content.y, 162.0 + 104.0);
         assert_eq!(
             l.content.bottom(),
             l.panel.bottom(),
@@ -1333,9 +1387,9 @@ mod tests {
         );
         assert_eq!(
             l.search_separator(),
-            Rect::new(319.0, 139.0 + 56.0, 802.0, 1.0)
+            Rect::new(319.0, 162.0 + 56.0, 802.0, 1.0)
         );
-        assert_eq!(l.capsule, Rect::new(299.0 + 101.0, 139.0, 640.0, 56.0));
+        assert_eq!(l.capsule, Rect::new(299.0 + 101.0, 162.0, 640.0, 56.0));
         let small = GridLayout::new(800.0, 600.0);
         assert_eq!(
             (small.panel.w, small.panel.h),
@@ -1349,6 +1403,19 @@ mod tests {
         );
         let tiny = GridLayout::new(500.0, 400.0);
         assert_eq!(tiny.capsule.w, tiny.panel.w, "never wider than the panel");
+
+        // a deep bar on a short output: the panel moves up only as far as its margin above the layer's bottom needs
+        let short = GridLayout::on_output(1440.0, 700.0, Outside::dock(Orientation::Bottom, 200.0));
+        assert_eq!(short.panel.bottom(), 700.0 - GridLayout::PANEL_MARGIN);
+        assert!(short.panel.y >= MENU_BAR_BAND + GridLayout::PANEL_MARGIN);
+        // a bar along the left edge moves the panel left in the layer, so it is centred on the output
+        let left =
+            GridLayout::on_output(1440.0 - 80.0, 900.0, Outside::dock(Orientation::Left, 80.0));
+        assert_eq!(left.panel.cx() + 80.0, 720.0);
+        assert_eq!(left.panel.cy(), 450.0);
+        // with no room for its margins, the panel stays inside the layer
+        let narrow = GridLayout::on_output(860.0, 900.0, Outside::dock(Orientation::Right, 300.0));
+        assert_eq!(narrow.panel.x, GridLayout::PANEL_MARGIN);
     }
 
     #[test]
@@ -1437,7 +1504,7 @@ mod tests {
             &["b.desktop".into(), "gone".into(), "c".into(), "b".into()],
             0.0,
         );
-        g.set_size(1440.0, 830.0);
+        g.set_size(1440.0, 830.0, Outside::default());
         assert!(g.shows_recents());
         assert_eq!(
             names(&g),

@@ -297,8 +297,9 @@ sits inside the dock bar's exclusive zone; under auto-hide, which reserves no zo
 as the bar (`Placement::bar_depth`). The dock therefore stays visible beside the open grid and keeps magnifying under the
 pointer, and an auto-hidden bar is held out while the grid is open.
 
-**Panel.** One floating rounded panel, 842 × 576 pt with a 24 pt radius, centred in the surface below the menu bar's 24 pt
-strip and shrunk to keep 24 pt from the surface's edges on a small output. It has the `Menu` material (the launcher's), asked
+**Panel.** One floating rounded panel, 842 × 576 pt with a 24 pt radius, centred on the whole output (the surface stops at the
+dock bar, so the bar's room outside it counts too) and moved only as far as it takes to keep 24 pt inside the surface and
+below the menu bar's 24 pt strip; it shrinks to keep those margins on a small output. It has the `Menu` material (the launcher's), asked
 for by the panel's node (`PaintCx::material`), or the theme's opaque menu fill under Reduce Transparency and Increase
 Contrast. A soft shadow (offset 8, blur 24, black 0.28) is drawn outside its shape only, and a hairline in the separator
 colour outlines it. Top to bottom, with a 20 pt side inset:
@@ -378,7 +379,6 @@ is a separator (the hairline under the search row is not a node). Only the rows 
 - The pills are our own names for the freedesktop categories. Only pills that hold an application show.
 - The recents row is hidden while a query or a pill filters the list, so the results are one alphabetical list.
 - Pill widths are reckoned from the character count, not measured; the text is centred and ellipsized in them.
-- The panel is centred in the surface, which stops above the dock bar, rather than on the whole output.
 - The panel says "Applications" and the capsule "Search": our own wording for what each is.
 
 ### Overview

@@ -2443,9 +2443,14 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::Sized(Sized::Grid, w, h) => {
+            // the grid's layer leaves out the bar's room; the panel is centred on the whole output
+            let outside = model
+                .placement()
+                .map(|p| app_grid::Outside::dock(p.orientation, p.bar_depth))
+                .unwrap_or_default();
             if let Some(grid) = model.grid.as_mut() {
                 grid.sized = true;
-                grid.grid.set_size(w, h);
+                grid.grid.set_size(w, h, outside);
             }
             Vec::new()
         }

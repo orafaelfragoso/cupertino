@@ -1207,7 +1207,15 @@ fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_two_escapes_cl
     let mut run = Run::start();
     run.record.borrow_mut().recent = vec![format!("{TERMINAL}.desktop")];
     let grid = open_grid(&mut run);
-    let layout = cupertino_dock::app_grid::GridLayout::new(1280.0, 800.0);
+    // the harness gives the grid's layer 1280 × 800 points; the bar's room lies outside it, and the panel is centred
+    // on the output that makes
+    let bar = run.record.borrow().placements.last().copied().unwrap();
+    let layout = cupertino_dock::app_grid::GridLayout::on_output(
+        1280.0,
+        800.0,
+        cupertino_dock::app_grid::Outside::dock(bar.orientation, bar.bar_depth),
+    );
+    assert!((layout.panel.cy() - (800.0 + bar.bar_depth) / 2.0).abs() <= 0.5);
     let search = run.bounds(grid, Role::TextInput, "Applications");
     assert_eq!(
         search,

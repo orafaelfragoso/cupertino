@@ -516,8 +516,9 @@ pub struct Cupertino {
         smithay::reexports::wayland_server::backend::ClientId,
         crate::process::ProcessIdentity,
     >,
-    /// Clients of `mapped_clients` that disconnected, put there by their [`ClientState::gone`].
-    gone_clients: GoneClients,
+    /// Clients of `mapped_clients`, and of the docks' resident applications, that disconnected, put there by their
+    /// [`ClientState::gone`].
+    pub(crate) gone_clients: GoneClients,
     /// The process behind a client (`crate::process::peer_process`); replaced in tests, whose clients share one process.
     pub process_of: crate::process::ProcessOf,
     /// The program behind a client, when the system installed it (`crate::process::trusted_executable`); replaced in
@@ -1426,7 +1427,8 @@ impl Cupertino {
             })
     }
 
-    /// Forgets the first-window grant of processes whose last client that mapped a toplevel has disconnected.
+    /// Forgets the first-window grant of processes whose last client that mapped a toplevel has disconnected, and the
+    /// resident applications of the clients that disconnected (the docks hear of it).
     pub fn forget_gone_processes(&mut self) {
         let gone = std::mem::take(
             &mut *self
@@ -1437,12 +1439,17 @@ impl Cupertino {
         if gone.is_empty() {
             return;
         }
+        let mut residents_changed = false;
         for id in &gone {
             self.mapped_clients.remove(id);
+            residents_changed |= self.docks.client_gone(id);
         }
         let mapped = &self.mapped_clients;
         self.mapped_processes
             .retain(|p| mapped.values().any(|q| q == p));
+        if residents_changed {
+            self.refresh_docks();
+        }
     }
 
     /// The facts the focus policy needs about a window that maps (`cupertino_wm::MapFocus`): whether it is its client's

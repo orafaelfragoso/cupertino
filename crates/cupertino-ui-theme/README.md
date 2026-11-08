@@ -32,6 +32,13 @@ panel slider's fill, stands 3:1 against both tracks. A disabled `PanelTrack` has
 
 Menus and popovers (`Surface::Menu`, `Surface::Popover`) are glass (`GLASS_MATERIAL`, `CLEAR_GLASS_MATERIAL`): `ThemeTokens::surface` keeps asking for it with Reduce Transparency and in high contrast, where the compositor draws the glass recipe of those options; the other surfaces then ask for no material and paint their opaque fill.
 
+`ThemeTokens::on_glass(tone)` is the theme of what a window draws on glass whose face the compositor measured as `tone`
+(`None` until it did, and for shapes too large to follow what lies behind them): the neutral colours of `Text`,
+`ControlText` and `Header`, `SecondaryText` and `PlaceholderText` take `glass_foreground` (the foreground matrix of the
+tone, or the appearance's) at the vibrant levels of `vibrant_level` (1, 0.75, 0.7); a disabled label keeps its own
+opacity, and a selected label (drawn on its selection's fill), accents and fills keep their colours. The same holds in
+every accessibility mode.
+
 The overlay scroller thumb (`ScrollerThumb`) is translucent in Cupertino light and dark and opaque in the built-in
 palettes, at 3:1 or more against the window there. The dialog scrim (`DialogScrim`) is the one colour that is
 translucent in every palette, since it dims what it covers: 20 % black in light, 40 % in dark, 60 % in high-contrast

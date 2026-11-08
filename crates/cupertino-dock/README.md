@@ -39,7 +39,7 @@ When `CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE=id,id` is set, `capture.sh` builds a s
 | `XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID` | Set by the dock, to the xdg-activation token, in the environment of every application it launches (the command and the detached start are `cupertino_apps::launch`, shared with the menu bar). |
 
 Preference defaults: tile size 64 (52 for displays at most 800 pt tall,
-`DockConfig::for_display_height`), large size 128, magnification off, launch animation on, auto-hide off, auto-hide delay
+`DockConfig::for_display_height`), large size 88, magnification off, launch animation on, auto-hide off, auto-hide delay
 0.15 s, time modifier 1.0. Validation is `sanitize_tile_size`, `sanitize_large_size` and `DockConfig::from_preferences`.
 
 ## How it works
@@ -77,9 +77,23 @@ with amplitudes 1/0.5/0.25, repeating every 2000 ms with lift `len + 1` pt (info
 
 ### Bar and tiles
 
+**Geometry.** Everything scales with the tile size; at the default 64 pt:
+
+| Part | Size |
+|---|---|
+| Tile | 64 pt; its icon is drawn 52 pt square in the middle (`ICON_ARTWORK`), cropped to the icon's drawn shape so every icon's artwork fills that square whatever margin its file leaves (`icons::filled`: an icon with a margin is loaded again larger and cropped, so it stays sharp) |
+| Gap between tiles | 4 pt (`TILE_GAP_RATIO`): tiles stand 68 pt apart; a pointer in a gap is on the nearer tile |
+| Separator | a 26 pt slot (`SEPARATOR_RATIO`), so the tiles either side stand 34 pt apart, with a 1 pt line 62 pt long in its middle |
+| Bar | 85 pt deep: 10.5 pt of padding at its ends, 10 pt between the tiles and its screen-edge side and 11 pt on the other (`BAR_PADDING_RATIO`, `BAR_EDGE_PADDING_RATIO`); corners of 28 pt (`BAR_RADIUS`); 5 pt from the screen edge (`EDGE_MARGIN`) |
+| Running indicator | a 4 pt dot 2 pt below the tile, its middle 6 pt from the bar's edge |
+| Edge and rim | a 0.5 pt dark hairline just inside the outline, and inside it a 0.5 pt light rim that is brightest along the top and the bottom and fades out down the sides; Increase Contrast doubles the hairline and draws the rim all round |
+
+The bar's material is `view::bar::BAR_SURFACE` (the `Menu` surface today): its material, its opaque fill under Reduce
+Transparency and Increase Contrast, and nothing else of the dock, so giving the bar another material is that one line.
+
 The bar is a Kit window (`src/view/bar.rs`) on a layer surface of the dock's display. The surface is at the bottom, left or
-right per `Orientation`, full width or height along its edge so magnification and bounces have room. It has the `Menu`
-material under the bar's own rectangle only, asked for by the bar's background node (`PaintCx::material`), and takes the dock role (`get_dock`). The
+right per `Orientation`, full width or height along its edge so magnification and bounces have room. It has the
+`BAR_SURFACE` material under the bar's own rectangle only, asked for by the bar's background node (`PaintCx::material`), and takes the dock role (`get_dock`). The
 exclusive zone is the bar's thickness, or 0 with auto-hide. The input region is the bar and its tiles, or only the reveal
 strip while hidden. Each tile is a node at the rectangle `Dock::layout` gives it and draws its icon; the bar draws the
 running indicators and the separators under the tiles.

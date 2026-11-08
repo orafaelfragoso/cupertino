@@ -19,6 +19,14 @@ const GENERIC_APPLICATION_ICON: &str = "application.generic";
 const TRASH_EMPTY_ICON: &str = "trash.empty";
 const TRASH_FULL_ICON: &str = "trash.full";
 
+/// An icon whose drawn shape covers less than this share of its image is loaded again larger and cropped to the
+/// shape, so every icon's artwork fills the square it is drawn in, whatever margin its file leaves.
+const FILLED_SHARE: f64 = 0.97;
+/// The most an icon is enlarged to fill its square: a shape smaller than a quarter of its image keeps its margin.
+const MAX_FILL_SCALE: f64 = 4.0;
+/// A pixel at least this opaque is part of an icon's shape.
+const SHAPE_ALPHA: u8 = 8;
+
 /// How long the trash's state is trusted before the folder is looked at again.
 const TRASH_CHECK_EVERY: Duration = Duration::from_secs(1);
 
@@ -39,6 +47,8 @@ pub struct Icons {
     apps: ThemeIcons,
     system: SystemIcons,
     cache: HashMap<(String, u32), Option<Pixmap>>,
+    /// The system's icons by name and pixel size, filled to their squares.
+    system_cache: HashMap<(&'static str, u32), Pixmap>,
     /// Windows' own icons by window id.
     windows: BTreeMap<u32, WindowIcon>,
     trash: Option<(Instant, bool)>,
@@ -58,12 +68,14 @@ impl WindowIcon {
     /// The image at `px`: resampled once when it is larger, as it is when not.
     fn at(&mut self, px: u32) -> &Pixmap {
         let image = self.image.as_ref().expect("has an image");
-        if image.width() <= px {
-            return image;
-        }
-        self.scaled
-            .entry(px)
-            .or_insert_with(|| resampled(image, px))
+        self.scaled.entry(px).or_insert_with(|| {
+            let shape = shape_square(image).map_or_else(|| image.clone(), |s| cropped(image, s));
+            if shape.width() <= px {
+                shape
+            } else {
+                resampled(&shape, px)
+            }
+        })
     }
 }
 
@@ -84,6 +96,90 @@ fn window_pixmap(image: &WindowIconImage) -> Option<Pixmap> {
         .flat_map(|&[b, g, r, a]| [r.min(a), g.min(a), b.min(a), a])
         .collect();
     Pixmap::from_vec(rgba, tiny_skia::IntSize::from_wh(image.size, image.size)?)
+}
+
+/// The square of `image` around its drawn shape, `(x, y, side)`: the bounding box of the pixels at least
+/// [`SHAPE_ALPHA`] opaque, made square about its centre and kept inside the image. `None` when nothing is drawn.
+pub fn shape_square(image: &Pixmap) -> Option<(u32, u32, u32)> {
+    let (w, h) = (image.width(), image.height());
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+    for (i, px) in image.data().as_chunks::<4>().0.iter().enumerate() {
+        if px[3] >= SHAPE_ALPHA {
+            let (x, y) = (i as u32 % w, i as u32 / w);
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x + 1);
+            y1 = y1.max(y + 1);
+        }
+    }
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let side = (x1 - x0).max(y1 - y0).min(w).min(h);
+    let centre = |lo: u32, hi: u32, limit: u32| -> u32 {
+        let start = (lo + hi).saturating_sub(side) / 2;
+        start.min(limit - side)
+    };
+    Some((centre(x0, x1, w), centre(y0, y1, h), side))
+}
+
+/// `image` cropped to the square `(x, y, side)`.
+fn cropped(image: &Pixmap, (x, y, side): (u32, u32, u32)) -> Pixmap {
+    let mut out = Pixmap::new(side, side).expect("a non-empty side");
+    out.draw_pixmap(
+        -(x as i32),
+        -(y as i32),
+        image.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
+    out
+}
+
+/// A square image at exactly `px` a side: resampled down when larger, scaled up bilinearly when smaller.
+fn sized(image: Pixmap, px: u32) -> Pixmap {
+    let px = px.max(1);
+    if image.width() >= px {
+        return resampled(&image, px);
+    }
+    let mut out = Pixmap::new(px, px).expect("a non-empty side");
+    let fit = px as f32 / image.width() as f32;
+    out.draw_pixmap(
+        0,
+        0,
+        image.as_ref(),
+        &PixmapPaint {
+            quality: FilterQuality::Bilinear,
+            ..PixmapPaint::default()
+        },
+        Transform::from_scale(fit, fit),
+        None,
+    );
+    out
+}
+
+/// The icon `load` gives at `px` a side, its drawn shape filling the square: when the shape covers less than
+/// [`FILLED_SHARE`] of the image, the icon is loaded again as much larger as its margin and cropped to the shape, so
+/// it stays as sharp as when drawn at its own size.
+pub fn filled(px: u32, mut load: impl FnMut(u32) -> Option<Pixmap>) -> Option<Pixmap> {
+    let first = load(px)?;
+    let Some(shape) = shape_square(&first) else {
+        return Some(first);
+    };
+    let share = f64::from(shape.2) / f64::from(first.width().max(1));
+    if share >= FILLED_SHARE || share * MAX_FILL_SCALE < 1.0 {
+        return Some(first);
+    }
+    let larger = (f64::from(px) / share).ceil() as u32;
+    let image = match load(larger) {
+        Some(image) if image.width() >= larger => image,
+        _ => return Some(sized(cropped(&first, shape), px)),
+    };
+    match shape_square(&image) {
+        Some(square) => Some(sized(cropped(&image, square), px)),
+        None => Some(first),
+    }
 }
 
 /// A square pixmap at half its side, each pixel the mean of the (up to) four it covers.
@@ -143,6 +239,7 @@ impl Icons {
             apps: ThemeIcons::new(assets),
             system,
             cache: HashMap::new(),
+            system_cache: HashMap::new(),
             windows: BTreeMap::new(),
             trash: None,
         }
@@ -175,8 +272,17 @@ impl Icons {
         let apps = &mut self.apps;
         self.cache
             .entry((name.to_owned(), px))
-            .or_insert_with(|| apps.load(name, px))
+            .or_insert_with(|| filled(px, |side| apps.load(name, side)))
             .is_some()
+    }
+
+    /// The system's icon `name` at `px`, filled to its square.
+    fn system_icon(&mut self, name: &'static str, px: u32) -> &Pixmap {
+        let system = &mut self.system;
+        self.system_cache.entry((name, px)).or_insert_with(|| {
+            filled(px, |side| Some(system.raster(name, side).clone()))
+                .expect("the system always gives an icon")
+        })
     }
 
     /// The theme's icon `name`, else the asset `application.generic`.
@@ -184,7 +290,7 @@ impl Icons {
         if self.has_themed(name, px) {
             self.cache[&(name.to_owned(), px)].as_ref().expect("loaded")
         } else {
-            self.system.raster(GENERIC_APPLICATION_ICON, px)
+            self.system_icon(GENERIC_APPLICATION_ICON, px)
         }
     }
 
@@ -219,7 +325,7 @@ impl Icons {
         match self.source(desktop, app_id, px) {
             IconSource::Theme(name) => self.cache[&(name, px)].as_ref().expect("loaded"),
             IconSource::Window(id) => self.windows.get_mut(&id).expect("listed").at(px),
-            IconSource::Generic => self.system.raster(GENERIC_APPLICATION_ICON, px),
+            IconSource::Generic => self.system_icon(GENERIC_APPLICATION_ICON, px),
         }
     }
 
@@ -238,7 +344,7 @@ impl Icons {
 
     /// The trash's icon, empty or full.
     pub fn trash(&mut self, full: bool, px: u32) -> &Pixmap {
-        self.system.raster(
+        self.system_icon(
             if full {
                 TRASH_FULL_ICON
             } else {
@@ -447,5 +553,69 @@ mod tests {
         assert_eq!(blended, Vec::<u8>::new());
         assert_eq!(rgba(icon, 19, 24)[0], 0);
         assert_eq!(rgba(icon, 20, 24)[0], 255);
+    }
+
+    /// An opaque square of `side` pixels with a transparent margin of `margin` of its side all round.
+    fn margined(side: u32, margin: f64) -> Pixmap {
+        let mut p = Pixmap::new(side, side).unwrap();
+        let m = (f64::from(side) * margin).round() as u32;
+        for (i, px) in p.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let (x, y) = (i as u32 % side, i as u32 / side);
+            if (m..side - m).contains(&x) && (m..side - m).contains(&y) {
+                *px = [30, 120, 220, 255];
+            }
+        }
+        p
+    }
+
+    #[test]
+    fn an_icon_with_a_margin_is_loaded_larger_and_cropped_to_fill_its_square() {
+        let mut asked = Vec::new();
+        let icon = filled(52, |side| {
+            asked.push(side);
+            Some(margined(side, 0.125))
+        })
+        .unwrap();
+        assert_eq!(icon.width(), 52);
+        assert_eq!(asked.len(), 2, "loaded again larger: {asked:?}");
+        assert!(asked[1] >= 68, "as much larger as its margin: {asked:?}");
+        for (x, y) in [(0, 0), (51, 0), (0, 51), (51, 51), (26, 0), (0, 26)] {
+            assert_eq!(
+                rgba(&icon, x, y)[3],
+                255,
+                "({x}, {y}) is drawn: the shape fills the square"
+            );
+        }
+    }
+
+    #[test]
+    fn an_icon_that_fills_its_image_or_draws_nothing_is_loaded_once() {
+        for margin in [0.0, 0.01] {
+            let mut loads = 0;
+            let icon = filled(100, |side| {
+                loads += 1;
+                Some(margined(side, margin))
+            })
+            .unwrap();
+            assert_eq!((icon.width(), loads), (100, 1), "margin {margin}");
+        }
+        let mut loads = 0;
+        filled(64, |side| {
+            loads += 1;
+            Some(Pixmap::new(side, side).unwrap())
+        });
+        assert_eq!(loads, 1, "an empty image");
+    }
+
+    #[test]
+    fn the_shape_square_is_centred_on_a_tall_shape_and_stays_inside_the_image() {
+        let mut p = Pixmap::new(100, 100).unwrap();
+        for (i, px) in p.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let (x, y) = (i as u32 % 100, i as u32 / 100);
+            if (40..60).contains(&x) && (10..90).contains(&y) {
+                *px = [0, 0, 0, 255];
+            }
+        }
+        assert_eq!(shape_square(&p), Some((10, 10, 80)));
     }
 }

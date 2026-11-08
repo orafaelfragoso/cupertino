@@ -722,7 +722,7 @@ impl Dock {
             },
             Slot::Tile(t) => {
                 let base = match t.kind {
-                    TileKind::Separator => self.cfg.separator_extent,
+                    TileKind::Separator => self.cfg.separator_extent(),
                     _ => self.cfg.tile_size,
                 };
                 let scale = match now {
@@ -765,7 +765,7 @@ impl Dock {
 
     /// Depth of the shown bar across the dock axis: the margin, the padding and a tile at rest.
     pub fn bar_depth(&self) -> f64 {
-        self.cfg.tile_size + 2.0 * self.cfg.bar_padding + self.cfg.edge_margin
+        self.cfg.bar_thickness() + self.cfg.edge_margin
     }
 
     /// Extent across the dock axis that draws the dock at its fullest: the margin, the padding and
@@ -784,7 +784,7 @@ impl Dock {
         ]
         .into_iter()
         .fold(0.0, f64::max);
-        (self.cfg.edge_margin + self.cfg.bar_padding + size + lift).ceil()
+        (self.cfg.edge_margin + self.cfg.bar_padding() + size + lift).ceil()
     }
 
     /// The parts of `screen` that take pointer input at `now`: the bar and its tiles, or only the
@@ -880,13 +880,12 @@ impl Dock {
             }
         }
         let centre = self.axis_centre(screen);
-        let thickness = cfg.tile_size + 2.0 * cfg.bar_padding;
+        let thickness = cfg.bar_thickness();
+        let padding = cfg.bar_padding();
+        let edge = cfg.edge_padding();
         let first = frames.first().map_or(0.0, |f| f.pos);
         let last = frames.last().map_or(0.0, |f| f.pos + f.size);
-        let (a0, a1) = (
-            centre + first - cfg.bar_padding,
-            centre + last + cfg.bar_padding,
-        );
+        let (a0, a1) = (centre + first - padding, centre + last + padding);
         let slide = hide * (thickness + cfg.edge_margin);
         let bar = match cfg.orientation {
             Orientation::Bottom => Rect::new(
@@ -907,13 +906,9 @@ impl Dock {
         };
         let place = |axis: f64, size: f64, cross: f64| -> Rect {
             match cfg.orientation {
-                Orientation::Bottom => {
-                    Rect::new(axis, bar.bottom() - cfg.bar_padding - cross, size, cross)
-                }
-                Orientation::Left => Rect::new(bar.x + cfg.bar_padding, axis, cross, size),
-                Orientation::Right => {
-                    Rect::new(bar.right() - cfg.bar_padding - cross, axis, cross, size)
-                }
+                Orientation::Bottom => Rect::new(axis, bar.bottom() - edge - cross, size, cross),
+                Orientation::Left => Rect::new(bar.x + edge, axis, cross, size),
+                Orientation::Right => Rect::new(bar.right() - edge - cross, axis, cross, size),
             }
         };
         let at = now.unwrap_or(0.0);
@@ -1012,10 +1007,12 @@ impl Dock {
                 });
             }
             let (lo, hi) = self.cross_range(&layout.bar, &t.rect);
+            // a tile's slot takes half the gap on either side, so the pointer between two tiles is on one of them
+            let half_gap = self.cfg.gap() / 2.0;
             let (axis, cross, a0, a1) = if horizontal {
-                (p.x, p.y, t.rect.x, t.rect.right())
+                (p.x, p.y, t.rect.x - half_gap, t.rect.right() + half_gap)
             } else {
-                (p.y, p.x, t.rect.y, t.rect.bottom())
+                (p.y, p.x, t.rect.y - half_gap, t.rect.bottom() + half_gap)
             };
             if axis >= a0 && axis < a1 && cross >= lo && cross < hi {
                 return Some(TileHit {
@@ -1327,7 +1324,7 @@ impl Dock {
         d.inserting = near_edge && axis >= lower && axis <= upper;
 
         // the removal edge is a bar thickness beyond the bar, away from the screen edge
-        let thickness = tile + 2.0 * self.cfg.bar_padding;
+        let thickness = self.cfg.bar_thickness();
         d.zone = match self.cfg.orientation {
             Orientation::Bottom => pointer.y < rest.bar.y - thickness,
             Orientation::Left => pointer.x > rest.bar.right() + thickness,

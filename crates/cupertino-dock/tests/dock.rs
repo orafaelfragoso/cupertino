@@ -4,9 +4,17 @@ use cupertino_wm::ids::WindowId;
 
 const SCREEN: Rect = Rect::new(0.0, 0.0, 1920.0, 1080.0);
 
+/// A 48 pt dock with tiles edge to edge, 6 pt of padding, a 12 pt separator and 4 pt from the screen edge: the
+/// behaviour tests' arithmetic (the default geometry has tests of its own below).
 fn base_cfg() -> DockConfig {
     DockConfig {
         tile_size: 48.0,
+        large_size: 128.0,
+        spacing: 0.0,
+        padding_ratio: 6.0 / 48.0,
+        edge_padding_ratio: 6.0 / 48.0,
+        separator_ratio: 12.0 / 48.0,
+        edge_margin: 4.0,
         magnification: true,
         ..DockConfig::default()
     }
@@ -263,9 +271,9 @@ fn bottom_layout_is_centred_flush_and_bottom_aligned() {
     let cfg = &d.cfg;
     assert!((l.bar.cx() - 960.0).abs() < 1e-9);
     assert_eq!(l.bar.bottom(), 1080.0 - cfg.edge_margin);
-    assert_eq!(l.bar.h, cfg.tile_size + 2.0 * cfg.bar_padding);
+    assert_eq!(l.bar.h, cfg.tile_size + 2.0 * cfg.bar_padding());
     for t in &l.tiles {
-        assert_eq!(t.rect.bottom(), l.bar.bottom() - cfg.bar_padding);
+        assert_eq!(t.rect.bottom(), l.bar.bottom() - cfg.bar_padding());
         assert!(t.rect.x >= l.bar.x && t.rect.right() <= l.bar.right());
     }
     let xs: Vec<f64> = l.tiles.iter().map(|t| t.rect.x).collect();
@@ -275,7 +283,7 @@ fn bottom_layout_is_centred_flush_and_bottom_aligned() {
         .iter()
         .find(|t| t.kind == TileKind::Separator)
         .unwrap();
-    assert_eq!(sep.rect.w, cfg.separator_extent);
+    assert_eq!(sep.rect.w, cfg.separator_extent());
 }
 
 #[test]
@@ -292,13 +300,13 @@ fn left_and_right_orientation() {
             assert!(l
                 .tiles
                 .iter()
-                .all(|t| t.rect.x == l.bar.x + d.cfg.bar_padding));
+                .all(|t| t.rect.x == l.bar.x + d.cfg.bar_padding()));
         } else {
             assert_eq!(l.bar.right(), 1920.0 - d.cfg.edge_margin);
             assert!(l
                 .tiles
                 .iter()
-                .all(|t| t.rect.right() == l.bar.right() - d.cfg.bar_padding));
+                .all(|t| t.rect.right() == l.bar.right() - d.cfg.bar_padding()));
         }
         let ys: Vec<f64> = l.tiles.iter().map(|t| t.rect.y).collect();
         assert!(
@@ -1229,7 +1237,7 @@ fn verified_defaults() {
     let c = DockConfig::default();
     assert_eq!(
         (c.tile_size, c.large_size, c.magnification),
-        (64.0, 128.0, false)
+        (64.0, 88.0, false)
     );
     assert_eq!(c.autohide_delay, 0.15);
     assert_eq!(c.autohide_time_modifier, 1.0);
@@ -1241,7 +1249,7 @@ fn verified_defaults() {
     assert_eq!(sanitize_tile_size(Some(300.0), 1080.0), 64.0);
     assert_eq!(sanitize_tile_size(Some(0.0), 700.0), 52.0);
     assert_eq!(sanitize_tile_size(Some(40.2), 1080.0), 41.0);
-    assert_eq!(sanitize_large_size(Some(513.0)), 128.0);
+    assert_eq!(sanitize_large_size(Some(513.0)), 88.0);
     assert_eq!(sanitize_large_size(Some(200.5)), 201.0);
     let p = DockConfig::from_preferences(None, Some(256.0), Some(true), 900.0);
     assert_eq!(
@@ -1271,10 +1279,11 @@ fn default_dock_hovers_exactly_the_large_size_with_the_verified_fisheye() {
     let t = settle(&mut d, 0.0);
     let l = d.layout(SCREEN, t);
     let big = l.tiles.iter().find(|p| p.id == target.id).unwrap();
-    assert!((big.rect.w - 128.0).abs() < 1e-6, "{}", big.rect.w);
-    assert!((big.rect.h - 128.0).abs() < 1e-6);
+    assert!((big.rect.w - 88.0).abs() < 1e-6, "{}", big.rect.w);
+    assert!((big.rect.h - 88.0).abs() < 1e-6);
+    // the dock grows by twice the real scale: (88 − 64) / 2 / sin(π/12) on either side
     let growth = l.bar.w - rest.bar.w;
-    assert!(growth > 0.0 && growth <= 2.0 * 123.65 + 1e-6, "{growth}");
+    assert!(growth > 0.0 && growth <= 2.0 * 46.37 + 1e-6, "{growth}");
 }
 
 #[test]
@@ -1318,7 +1327,8 @@ fn next_minimized_slot_is_where_the_next_minimized_tile_lands() {
 fn the_exclusive_zone_is_the_bar_and_its_margin_and_none_while_hiding() {
     let d = Dock::new(DockConfig {
         tile_size: 48.0,
-        bar_padding: 6.0,
+        padding_ratio: 6.0 / 48.0,
+        edge_padding_ratio: 6.0 / 48.0,
         edge_margin: 4.0,
         ..DockConfig::default()
     });
@@ -1553,4 +1563,167 @@ fn the_file_manager_tile_survives_a_live_dock_conf_change() {
         .find(|p| p.kind == TileKind::App)
         .unwrap();
     assert_eq!(first.id, fm, "still the first tile of the left dock");
+}
+
+// ---- the bar's geometry at the default size ---------------------------------------------------------------------
+
+/// Seven applications, the separator, a minimized window and the trash at the default tile size.
+fn default_dock() -> Dock {
+    let mut d = Dock::new(DockConfig::default());
+    d.set_pinned(&["a", "b", "c", "d", "e", "f", "g"]);
+    d.window_minimized(WindowId(1), "a", "w", 0.0);
+    settle(&mut d, 0.0);
+    d
+}
+
+#[test]
+fn the_default_bar_is_85_pt_deep_5_pt_above_the_screen_edge_with_its_tiles_inside_it() {
+    let d = default_dock();
+    let l = d.layout(SCREEN, 100.0);
+    assert_eq!(l.bar.h, 85.0);
+    assert_eq!(l.bar.bottom(), 1080.0 - 5.0);
+    for t in l.tiles.iter().filter(|t| t.kind != TileKind::Separator) {
+        assert_eq!((t.rect.w, t.rect.h), (64.0, 64.0));
+        assert_eq!(t.rect.y - l.bar.y, 11.0, "padding above");
+        assert_eq!(
+            l.bar.bottom() - t.rect.bottom(),
+            10.0,
+            "padding below, on the screen edge's side"
+        );
+    }
+    let first = &l.tiles[0];
+    let last = l.tiles.last().unwrap();
+    assert_eq!(first.rect.x - l.bar.x, 10.5, "padding at the leading end");
+    assert_eq!(
+        l.bar.right() - last.rect.right(),
+        10.5,
+        "padding at the trailing end"
+    );
+    assert_eq!(d.exclusive_zone(), 90.0, "the bar and its margin");
+}
+
+#[test]
+fn tiles_stand_68_pt_apart_and_34_pt_across_the_separator() {
+    let d = default_dock();
+    let l = d.layout(SCREEN, 100.0);
+    let centres: Vec<(TileKind, f64)> = l.tiles.iter().map(|t| (t.kind, t.rect.cx())).collect();
+    let sep = centres
+        .iter()
+        .position(|c| c.0 == TileKind::Separator)
+        .unwrap();
+    for w in centres[..sep].windows(2) {
+        assert!((w[1].1 - w[0].1 - 68.0).abs() < 1e-9, "{w:?}");
+    }
+    let before = &l.tiles[sep - 1].rect;
+    let after = &l.tiles[sep + 1].rect;
+    assert!((after.x - before.right() - 34.0).abs() < 1e-9);
+    assert!(
+        (l.tiles[sep].rect.cx() - (before.right() + after.x) / 2.0).abs() < 1e-9,
+        "the separator's slot is in the middle of the space"
+    );
+    assert!((l.tiles[sep + 2].rect.cx() - l.tiles[sep + 1].rect.cx() - 68.0).abs() < 1e-9);
+    // 9 tiles, 10 items with their gaps, the separator's slot and the padding
+    assert!((l.bar.w - (9.0 * 64.0 + 9.0 * 4.0 + 26.0 + 21.0)).abs() < 1e-9);
+}
+
+#[test]
+fn the_metrics_scale_with_the_tile_size() {
+    let cfg = DockConfig {
+        tile_size: 32.0,
+        ..DockConfig::default()
+    };
+    assert_eq!(cfg.gap(), 2.0);
+    assert_eq!(cfg.bar_padding(), 5.25);
+    assert_eq!(cfg.edge_padding(), 5.0);
+    assert_eq!(cfg.separator_extent(), 13.0);
+    assert_eq!(cfg.bar_thickness(), 42.5);
+    assert_eq!(cfg.edge_margin, 5.0, "the gap to the screen edge stays");
+}
+
+#[test]
+fn the_pointer_in_the_gap_between_two_tiles_is_on_one_of_them() {
+    let d = default_dock();
+    let l = d.layout(SCREEN, 100.0);
+    let (a, b) = (&l.tiles[0], &l.tiles[1]);
+    for x in [a.rect.right() + 0.5, b.rect.x - 0.5] {
+        let hit = d
+            .hit_test(Point::new(x, a.rect.cy()), SCREEN, 100.0)
+            .unwrap();
+        assert!(hit.id == a.id || hit.id == b.id, "{x}");
+    }
+}
+
+// ---- magnification and the launch hop at the default size ---------------------------------------------------------
+
+/// Centres of seven tiles in a row with the pointer at `c` along the unmagnified row, fully magnified.
+fn magnified_centres(c: f64) -> Vec<f64> {
+    let cfg = DockConfig {
+        magnification: true,
+        ..DockConfig::default()
+    };
+    layout(&cfg, 7, Some(c), 1.0)
+        .iter()
+        .map(|f| f.pos + f.size / 2.0)
+        .collect()
+}
+
+#[test]
+fn the_default_magnified_size_is_88_pt_and_the_tile_under_the_pointer_takes_it() {
+    let cfg = DockConfig {
+        magnification: true,
+        ..DockConfig::default()
+    };
+    assert_eq!(cfg.large_size, 88.0);
+    let f = layout(&cfg, 7, Some(3.0 * 68.0 + 32.0), 1.0);
+    assert!((f[3].size - 88.0).abs() < 1e-9);
+}
+
+/// With the pointer on the fifth of seven tiles, a little past its middle, the distances between the tile centres
+/// grow as a local bulge: about 141 pt over the first two, then 81, 90, 91 and 86 pt, where they are 68 at rest.
+#[test]
+fn magnification_is_a_local_bulge_whose_neighbours_grow_too() {
+    let c = magnified_centres(4.0 * 68.0 + 47.0);
+    let d: Vec<f64> = c.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!((d[0] + d[1] - 141.0).abs() < 2.0, "{d:?}");
+    for (got, want) in d[2..].iter().zip([81.0, 90.0, 91.0, 86.0]) {
+        assert!((got - want).abs() < 2.0, "{d:?}");
+    }
+    // far along a long row the tiles keep their places: the bulge is local
+    let cfg = DockConfig {
+        magnification: true,
+        ..DockConfig::default()
+    };
+    let row = layout(&cfg, 20, Some(2.0 * 68.0 + 32.0), 1.0);
+    let far: Vec<f64> = row[8..].windows(2).map(|w| w[1].pos - w[0].pos).collect();
+    assert!(
+        far.iter().all(|d| (d - 68.0).abs() < 1e-9),
+        "far from the pointer they keep their places: {far:?}"
+    );
+}
+
+#[test]
+fn the_launch_hop_lifts_a_64_pt_tile_17_2_pt_at_350_ms_and_lands_at_700_ms() {
+    let mut d = Dock::new(DockConfig::default());
+    d.set_pinned(&["a"]);
+    d.app_launching("a", 0.0);
+    d.app_started("a", 0.1);
+    let lift = |d: &Dock, t: f64| {
+        d.layout(SCREEN, t)
+            .tiles
+            .iter()
+            .find(|p| p.kind == TileKind::App)
+            .unwrap()
+            .lift
+    };
+    assert!((lift(&d, 0.35) - 17.2).abs() < 1e-9);
+    // a parabola: three quarters of the height half way up and half way down
+    assert!((lift(&d, 0.175) - 0.75 * 17.2).abs() < 1e-9);
+    assert!((lift(&d, 0.525) - 0.75 * 17.2).abs() < 1e-9);
+    assert_eq!(lift(&d, 0.0), 0.0);
+    assert_eq!(lift(&d, 0.7), 0.0);
+    assert_eq!(
+        lift(&d, 0.8),
+        0.0,
+        "one hop: the window came during the first"
+    );
 }

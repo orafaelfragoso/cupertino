@@ -95,8 +95,11 @@ pub const BUTTON_GAP: f64 = 8.0;
 pub const MAX_BUTTONS: usize = 3;
 /// Diameter of a card's close button.
 pub const CLOSE_DIAMETER: f64 = 18.0;
-/// The close button's distance from the card's top and leading edges, which keeps it inside the corner's curve.
-pub const CLOSE_INSET: f64 = 4.0;
+/// How far the close button reaches past the card's top and leading edges: half its diameter, which centres it on the
+/// card's top-leading corner, clear of the icon.
+pub const CLOSE_OUTSET: f64 = CLOSE_DIAMETER / 2.0;
+// a banner's window holds the part of the close button past the card
+const _: () = assert!(CLOSE_OUTSET <= SHADOW_MARGIN);
 /// Outline of a card: 0.5 pt.
 pub const OUTLINE_WIDTH: f64 = 0.5;
 /// The centre's header panel (title and Clear), the gap under it (the one between groups) and the Clear button's inset
@@ -491,6 +494,16 @@ pub fn strip_width(layout: &StackLayout, swipe: &SwipeConfig) -> f64 {
     (layout.width + layout.right_margin + swipe.left_limit.abs() + SHADOW_MARGIN).ceil()
 }
 
+/// Where the close button of a card at `card` lies, in the frame `card` is given in: centred on its top-leading corner.
+pub fn close_rect(card: Rect) -> Rect {
+    Rect::new(
+        card.min_x() - CLOSE_OUTSET,
+        card.min_y() - CLOSE_OUTSET,
+        CLOSE_DIAMETER,
+        CLOSE_DIAMETER,
+    )
+}
+
 /// The key of a banner's window: a replaced notification keeps its window unless its height changed, as a layer
 /// surface keeps the size it was made with.
 pub fn banner_key(n: &Notification, height: f64) -> WindowKey {
@@ -535,8 +548,8 @@ pub fn windows<M: Clone + 'static>(
             let n = center.get(p.id)?.clone();
             let layout = metrics.card(&n, p.rect.width(), Fold::Banner);
             let card = Rect::new(p.rect.x(), SHADOW_MARGIN, p.rect.width(), p.rect.height());
-            // the resting card: the swipe keeps the pointer with an implicit grab, so the rest of the strip passes
-            // the pointer through to the windows under it
+            // the resting card and its close button, which reaches past its corner: the swipe keeps the pointer with an
+            // implicit grab, so the rest of the strip passes the pointer through to the windows under it
             let rest = &center.config.layout;
             let region = Rect::new(
                 width - rest.right_margin - rest.width,
@@ -545,7 +558,15 @@ pub fn windows<M: Clone + 'static>(
                 card.height(),
             );
             Some(banner_window(
-                &n, &layout, card, region, p.opacity, p.hovered, p.leaving, width, map,
+                &n,
+                &layout,
+                card,
+                vec![region, close_rect(region)],
+                p.opacity,
+                p.hovered,
+                p.leaving,
+                width,
+                map,
             ))
         })
         .collect()
@@ -685,7 +706,7 @@ fn banner_window<M: Clone + 'static>(
     n: &Notification,
     layout: &CardLayout,
     card: Rect,
-    region: Rect,
+    region: Vec<Rect>,
     opacity: f64,
     hovered: bool,
     leaving: bool,
@@ -733,7 +754,7 @@ fn banner_window<M: Clone + 'static>(
     });
     window(
         banner_key(n, layout.height),
-        spec(accessible_name(n), size, Some(vec![region])),
+        spec(accessible_name(n), size, Some(region)),
         content,
     )
 }
@@ -815,8 +836,8 @@ fn centre_window<M: Clone + 'static>(
     })
     .key("header-row");
 
-    // the list: the first card a gap below the header, each group as tall as its stack
-    let mut y = HEADER_GAP;
+    // the list: the first card a gap below the header, room for its close button, each group as tall as its stack
+    let mut y = HEADER_GAP.max(CLOSE_OUTSET);
     let mut cards = Vec::new();
     for (index, group) in groups.iter().enumerate() {
         let front = group.notifications[0];
@@ -1189,6 +1210,11 @@ impl<M: 'static> Strip<M> {
             cx.emit((self.map)(Input::Hover(over.then_some(self.id))));
         }
     }
+
+    /// Whether `position` is over the card or its close button.
+    fn over(&self, position: Point) -> bool {
+        self.card.contains(position) || close_rect(self.card).contains(position)
+    }
 }
 
 impl<M: 'static> Widget<M> for Strip<M> {
@@ -1233,7 +1259,7 @@ impl<M: 'static> Widget<M> for Strip<M> {
                     cx.emit((self.map)(Input::SwipeMove(self.id, position.x - start)));
                     return Propagation::Stop;
                 }
-                self.hover(state, self.card.contains(position), cx);
+                self.hover(state, self.over(position), cx);
                 Propagation::Continue
             }
             Event::Pointer(PointerEvent::Leave, _) if cx.node() == cx.target() => {
@@ -1267,7 +1293,7 @@ impl<M: 'static> Widget<M> for Strip<M> {
                 state.press = None;
                 cx.release_pointer();
                 cx.emit((self.map)(Input::SwipeEnd(self.id)));
-                self.hover(state, self.card.contains(position), cx);
+                self.hover(state, self.over(position), cx);
                 Propagation::Stop
             }
             Event::Cancel if state.press.is_some() => {
@@ -1648,7 +1674,8 @@ impl<M: 'static> Widget<M> for Card<M> {
             width: SizeSpec::Fixed(self.rect.width()),
             height: SizeSpec::Fixed(self.rect.height()),
             position: self.rect.origin,
-            overflow: Overflow::Clip,
+            // the close button reaches past the corner; the text is exactly as tall as the card
+            overflow: Overflow::Visible,
             ..LayoutSpec::new(ContainerKind::Absolute)
         }
     }
@@ -1837,7 +1864,7 @@ impl<M: 'static> Widget<M> for Card<M> {
     }
 }
 
-/// The round close button inside a card's top-leading corner.
+/// The round close button centred on a card's top-leading corner.
 struct CloseButton<M> {
     message: M,
 }
@@ -1854,7 +1881,7 @@ impl<M: Clone + 'static> Widget<M> for CloseButton<M> {
         LayoutSpec {
             width: SizeSpec::Fixed(CLOSE_DIAMETER),
             height: SizeSpec::Fixed(CLOSE_DIAMETER),
-            position: Point::new(CLOSE_INSET, CLOSE_INSET),
+            position: Point::new(-CLOSE_OUTSET, -CLOSE_OUTSET),
             flex: Flex::NONE,
             ..LayoutSpec::new(ContainerKind::Leaf)
         }

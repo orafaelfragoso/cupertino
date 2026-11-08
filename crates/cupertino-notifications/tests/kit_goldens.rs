@@ -499,6 +499,37 @@ fn a_new_banner_says_its_application_its_title_and_its_body_but_not_its_buttons(
 }
 
 #[test]
+fn a_banner_s_close_button_on_its_corner_stays_under_the_pointer_and_dismisses_it() {
+    let mut run = Run::new();
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.0));
+    let window = run.only_window();
+    let card = Point::new(run.model_x()[0], SHADOW_MARGIN);
+    run.pointer(
+        window,
+        PointerEvent::Enter {
+            position: Point::new(card.x + 100.0, card.y + 20.0),
+        },
+    );
+    let snapshot = run.snapshot(window);
+    let close = keyed(&snapshot, "close")
+        .expect("the pointer over the card shows its close button")
+        .rect;
+    assert_eq!(close.center(), card, "centred on the card's corner");
+    // past the card, over the button's outer half, the banner is still hovered and the button still there
+    let outer = Point::new(close.min_x() + 3.0, close.center().y);
+    assert!(outer.x < card.x);
+    run.click(window, outer);
+    assert_eq!(run.host(), [], "the button took the press, not the card");
+    run.step(Step::At(1.1));
+    assert!(
+        run.model_x()[0] > card.x,
+        "the banner slides out: {:?}",
+        run.model_x()
+    );
+}
+
+#[test]
 fn a_banner_updated_in_place_is_said_again() {
     let mut run = Run::new();
     run.notify(mail("Lunch", "Are you free at noon?"));
@@ -1174,7 +1205,12 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
         .rect;
     assert_eq!(
         (close.min_x() - card.min_x(), close.min_y() - card.min_y()),
-        (view::CLOSE_INSET, view::CLOSE_INSET)
+        (-view::CLOSE_OUTSET, -view::CLOSE_OUTSET),
+        "centred on the card's top-leading corner"
+    );
+    assert!(
+        close.min_y() >= rect(&snapshot, "list-content").min_y(),
+        "the first card leaves its close button room under the header"
     );
     run.click(window, close.center());
     assert_eq!(history(&run), vec![2]);

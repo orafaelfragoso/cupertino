@@ -118,6 +118,36 @@ class SecretServiceTest(unittest.TestCase):
                 self.assertFalse([line for line in lock if line.startswith(('session', '-session'))])
                 self.assertFalse([line for line in self.lines(fmt, 'cupertino-greeter') if 'keyring' in line])
 
+    # Where each distribution's account phase runs: Debian's pam_faillock(8) and Fedora's authselect `with-faillock` reset
+    # the count of failures there, so the lock screen's `pam_acct_mgmt` must reach it.
+    LOCK_ACCOUNT = {'arch': 'account include system-auth', 'deb': '@include common-account',
+                    'rpm': 'account include system-auth'}
+
+    def test_the_lock_screen_counts_towards_the_account_lockout(self):
+        """The lock screen authenticates through the distribution's shared password stack and account stack, the ones where
+        each distribution puts pam_faillock (preauth, authfail, authsucc or the account reset): Arch's system-auth has it
+        by default, Debian's common-auth and common-account and Fedora's system-auth when it is turned on. Nothing before
+        the shared stack decides, and nothing after it can let a password through on its own, so every failed attempt at
+        the lock screen goes through the same count as a failed login."""
+        service = (release.ROOT / 'crates/cupertino-login/src/auth.rs').read_text()
+        self.assertIn('pub const SERVICE: &str = "cupertino-login";', service)
+        self.assertIn('cupertino-login', release.PAM_SERVICES)
+        for fmt in ('arch', 'deb', 'rpm'):
+            with self.subTest(fmt):
+                lock = self.lines(fmt, 'cupertino-login')
+                auth = [line for line in lock if line.split()[0] in ('auth', '-auth') or line == self.LOCK_STACK[fmt]]
+                self.assertEqual(auth[0], self.LOCK_STACK[fmt], 'the shared stack comes first')
+                for line in auth[1:]:
+                    self.assertEqual(line.split()[1], 'optional', f'{line!r} cannot decide')
+                self.assertFalse([line for line in lock if re.search(r'pam_(permit|succeed_if|faillock)\.so', line)],
+                                 'the shared stack alone passes or counts')
+                self.assertIn(self.LOCK_ACCOUNT[fmt], lock)
+                # the lock screen runs as the user and pam_faillock records a failure only in a tally file that exists:
+                # a session that started without a password gets one from a module run as root, at no cost to its login
+                autologin = self.lines(fmt, 'cupertino-autologin')
+                self.assertEqual([line for line in autologin if line.split()[0] in ('auth', '-auth')],
+                                 ['auth required pam_permit.so', '-auth optional pam_faillock.so authsucc'])
+
     def test_every_format_installs_the_provider_its_pam_module_and_a_client(self):
         meta = tomllib.loads((release.ROOT / 'crates/cupertino-server/Cargo.toml').read_text())['package']['metadata']
         deb = [d.strip() for d in meta['deb']['recommends'].split(',')]

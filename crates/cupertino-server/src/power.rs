@@ -270,9 +270,13 @@ pub fn start_power_bus(state: &mut Cupertino) {
 
 mod bus {
     //! The watcher threads. The blocking `zbus` API is used as in `cupertino-login`: one reader thread per signal stream.
+    //! Each stream passes on a signal only from its service, the owner of the service's name (`from_owner`) or the bus daemon
+    //! ([`only_from`]), checked when the signal arrives: the bus delivers a signal addressed to this process whatever its
+    //! rules say, so another user could otherwise hold off the idle lock with a forged `BlockInhibited` or `PrepareForSleep`.
 
     use std::sync::mpsc::Receiver;
 
+    use cupertino_peer::signal::{from_owner, sent_by_bus, FromOwner};
     use smithay::reexports::calloop::channel::Sender;
     use zbus::blocking::{Connection, MessageIterator};
     use zbus::message::Type;
@@ -290,34 +294,33 @@ mod bus {
 
     pub fn start(events: Sender<BusEvent>, requests: Receiver<BusRequest>) -> zbus::Result<()> {
         let conn = Connection::system()?;
-        let changes =
-            |interface: &'static str, path: &'static str| -> zbus::Result<MessageIterator> {
-                let rule = MatchRule::builder()
-                    .msg_type(Type::Signal)
-                    .interface(PROPERTIES)?
-                    .member("PropertiesChanged")?
-                    .path(path)?
-                    .arg(0, interface)?
-                    .build();
-                MessageIterator::for_match_rule(rule, &conn, None)
-            };
-        let upower_changes = changes(UPOWER, UPOWER_PATH)?;
-        let logind_changes = changes(LOGIND_MANAGER, LOGIND_PATH)?;
+        let ignored = |_: &zbus::Message| {
+            tracing::warn!("ignored a power signal that its service did not send")
+        };
+        let changes = |name: &str, interface: &str, path: &str| {
+            let rule = MatchRule::builder()
+                .msg_type(Type::Signal)
+                .sender(name)?
+                .interface(PROPERTIES)?
+                .member("PropertiesChanged")?
+                .path(path)?
+                .arg(0, interface)?
+                .build();
+            from_owner(&conn, name, rule, ignored)
+        };
+        let upower_changes = changes(UPOWER, UPOWER, UPOWER_PATH)?;
+        let logind_changes = changes(LOGIND, LOGIND_MANAGER, LOGIND_PATH)?;
         let owner_rule = MatchRule::builder()
             .msg_type(Type::Signal)
             .sender("org.freedesktop.DBus")?
             .member("NameOwnerChanged")?
             .arg(0, UPOWER)?
             .build();
-        let owners = MessageIterator::for_match_rule(owner_rule, &conn, None)?;
-        let sleep_rule = MatchRule::builder()
-            .msg_type(Type::Signal)
-            .sender(LOGIND)?
-            .path(LOGIND_PATH)?
-            .interface(LOGIND_MANAGER)?
-            .member("PrepareForSleep")?
-            .build();
-        let sleeps = MessageIterator::for_match_rule(sleep_rule, &conn, None)?;
+        let owners = only_from(
+            MessageIterator::for_match_rule(owner_rule, &conn, None)?,
+            sent_by_bus,
+        );
+        let sleeps = sleep_signals(&conn, LOGIND)?;
 
         // the subscriptions are up: read the current values
         report_on_battery(&conn, &events);
@@ -379,17 +382,11 @@ mod bus {
         })?;
         // the delay is held before a sleep can be announced
         let mut delay = hold_sleep(&conn);
-        let c = conn.clone();
         reader(
             "system-sleep",
             sleeps,
             events.clone(),
             move |message, events| {
-                // a peer may send this connection a signal of the same name: one not from logind covers nothing
-                if !sent_by(&c, message, LOGIND) {
-                    tracing::warn!(sender = ?message.header().sender(), "PrepareForSleep ignored: it did not come from logind");
-                    return Ok(());
-                }
                 let going_to_sleep: bool = message.body().deserialize()?;
                 send(
                     events,
@@ -449,20 +446,22 @@ mod bus {
         }
     }
 
-    /// Whether `message` came from the connection that owns `name` now. The bus delivers a signal sent to this connection
-    /// whatever its match rules say, and zbus does not check a sender given by a well-known name, so a signal any peer
-    /// could send is checked here. False when the bus cannot say who owns the name.
-    pub(super) fn sent_by(conn: &Connection, message: &zbus::Message, name: &str) -> bool {
-        let header = message.header();
-        let Some(sender) = header.sender() else {
-            return false;
-        };
-        let Ok(name) = zbus::names::BusName::try_from(name) else {
-            return false;
-        };
-        zbus::blocking::fdo::DBusProxy::new(conn)
-            .and_then(|bus| bus.get_name_owner(name).map_err(zbus::Error::from))
-            .is_ok_and(|owner| owner.as_str() == sender.as_str())
+    /// logind's `PrepareForSleep`, taken only from the connection that owns `name` (logind's name outside tests): a peer
+    /// may send this connection a signal of the same name, and one not from logind covers nothing.
+    pub(super) fn sleep_signals(conn: &Connection, name: &str) -> zbus::Result<FromOwner> {
+        let rule = MatchRule::builder()
+            .msg_type(Type::Signal)
+            .sender(name)?
+            .path(LOGIND_PATH)?
+            .interface(LOGIND_MANAGER)?
+            .member("PrepareForSleep")?
+            .build();
+        from_owner(
+            conn,
+            name,
+            rule,
+            |message| tracing::warn!(sender = ?message.header().sender(), "PrepareForSleep ignored: it did not come from logind"),
+        )
     }
 
     /// `BlockInhibited` is a colon-separated list of inhibitor kinds.
@@ -505,9 +504,23 @@ mod bus {
         let _ = events.send(event);
     }
 
+    /// The messages of `messages` that `from_service` accepts; any other is logged and dropped.
+    fn only_from(
+        messages: MessageIterator,
+        from_service: impl Fn(&zbus::Message) -> bool + Send + 'static,
+    ) -> impl Iterator<Item = zbus::Result<zbus::Message>> + Send + 'static {
+        messages.filter(move |message| match message {
+            Ok(message) if !from_service(message) => {
+                tracing::warn!("ignored a power signal that its service did not send");
+                false
+            }
+            _ => true,
+        })
+    }
+
     fn reader(
         name: &str,
-        messages: MessageIterator,
+        messages: impl Iterator<Item = zbus::Result<zbus::Message>> + Send + 'static,
         events: Sender<BusEvent>,
         handle: impl Fn(&zbus::Message, &Sender<BusEvent>) -> zbus::Result<()> + Send + 'static,
     ) -> zbus::Result<()> {
@@ -544,51 +557,56 @@ mod tests {
     }
 
     #[test]
-    fn a_signal_is_taken_as_the_owner_s_only_when_the_owner_of_the_name_sent_it() {
-        use zbus::message::Type;
+    fn prepare_for_sleep_is_taken_only_from_the_owner_of_the_name() {
+        use std::time::Duration;
         const OWNER: &str = "org.example.SleepOwner";
+        const PATH: &str = "/org/freedesktop/login1";
+        const MANAGER: &str = "org.freedesktop.login1.Manager";
         let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
             return;
         };
         let owner = bus.blocking_builder().name(OWNER).unwrap().build().unwrap();
         let impostor = bus.connect();
         let watcher = bus.connect();
-        let rule = zbus::MatchRule::builder()
-            .msg_type(Type::Signal)
-            .sender(OWNER)
-            .unwrap()
-            .member("PrepareForSleep")
-            .unwrap()
-            .build();
-        let mut signals =
-            zbus::blocking::MessageIterator::for_match_rule(rule, &watcher, None).unwrap();
-        // a peer that does not own the name sends the signal straight to the watcher: the bus delivers it
-        impostor
-            .emit_signal(
-                watcher.unique_name().map(|n| n.to_owned()),
-                "/org/example",
-                "org.example.Manager",
-                "PrepareForSleep",
-                &(true,),
-            )
-            .unwrap();
+        let sleeps = super::bus::sleep_signals(&watcher, OWNER).unwrap();
+        let (heard, hearing) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for message in sleeps {
+                let going_to_sleep: bool = message.unwrap().body().deserialize().unwrap();
+                if heard.send(going_to_sleep).is_err() {
+                    return;
+                }
+            }
+        });
+        let to = watcher.unique_name().map(|n| n.to_owned());
+        // a peer that does not own the name sends the signal straight to the watcher, many times what a stream holds:
+        // the bus delivers each one, and none passes
+        for _ in 0..200 {
+            impostor
+                .emit_signal(to.clone(), PATH, MANAGER, "PrepareForSleep", &(true,))
+                .unwrap();
+        }
         owner
-            .emit_signal(
-                None::<&str>,
-                "/org/example",
-                "org.example.Manager",
-                "PrepareForSleep",
-                &(true,),
-            )
+            .emit_signal(None::<&str>, PATH, MANAGER, "PrepareForSleep", &(false,))
             .unwrap();
-        let forged = signals.next().unwrap().unwrap();
         assert_eq!(
-            forged.header().sender().map(|s| s.as_str()),
-            impostor.unique_name().map(|n| n.as_str()),
-            "the forged signal reaches the watcher"
+            hearing.recv_timeout(Duration::from_secs(10)),
+            Ok(false),
+            "only the owner's signal is heard"
         );
-        assert!(!super::bus::sent_by(&watcher, &forged, OWNER));
-        let real = signals.next().unwrap().unwrap();
-        assert!(super::bus::sent_by(&watcher, &real, OWNER));
+        // the connection still reads: a call on it is answered after the flood
+        let bus_daemon = zbus::blocking::fdo::DBusProxy::new(&watcher).unwrap();
+        assert!(bus_daemon
+            .name_has_owner(OWNER.try_into().unwrap())
+            .unwrap());
+        owner
+            .emit_signal(to, PATH, MANAGER, "PrepareForSleep", &(true,))
+            .unwrap();
+        assert_eq!(
+            hearing.recv_timeout(Duration::from_secs(10)),
+            Ok(true),
+            "the owner is heard also when it sends to the watcher alone"
+        );
+        assert!(hearing.recv_timeout(Duration::from_millis(300)).is_err());
     }
 }

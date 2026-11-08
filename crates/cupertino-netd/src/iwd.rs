@@ -4,9 +4,14 @@
 //! - `Device.Powered`, `Station.Scan`, `Station.Disconnect` and `Network.Connect` are the calls.
 //! - The passphrase of a network that has no saved profile reaches iwd through an `Agent` this
 //!   process exports and registers with `AgentManager`: iwd calls `RequestPassphrase` during
-//!   `Network.Connect`.
+//!   `Network.Connect`. The agent answers only the connection that owns iwd's name: the bus
+//!   policy lets every user reach this process, so any other caller that named the network
+//!   while a connection waits would be handed its passphrase.
 //! - `Station.State` changes become [`SupplicantEvent`]s. A watcher thread reads them, and every
 //!   `Network.Connect` runs on its own thread, because iwd answers only when the attempt ends.
+//!   A change counts only when iwd's name owner sent it: the match rule's sender keeps out
+//!   nothing addressed to this process directly, and a forged `disconnected` would drop the
+//!   lease.
 //!
 //! iwd answers every failed handshake with the same `net.connman.iwd.Failed`, so a wrong
 //! passphrase cannot be told from other failures. A failure after the agent supplied a
@@ -19,15 +24,17 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
 use cupertino_netlink::Ssid;
+use cupertino_peer::signal::{from_owner, Owner};
 use rustix::event::{eventfd, EventfdFlags};
 use rustix::io::{read, write, Errno};
 use zbus::blocking::fdo::{ObjectManagerProxy, PropertiesProxy};
-use zbus::blocking::{Connection, MessageIterator, Proxy};
+use zbus::blocking::{Connection, Proxy};
 use zbus::fdo;
-use zbus::message::Type as MessageType;
+use zbus::message::{Header, Type as MessageType};
 use zbus::names::InterfaceName;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use zbus::MatchRule;
+use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::supplicant::{
@@ -52,7 +59,8 @@ type Objects = HashMap<OwnedObjectPath, HashMap<zbus::names::OwnedInterfaceName,
 struct Pending {
     /// The iwd network the passphrase is for; any other network is refused.
     network: OwnedObjectPath,
-    passphrase: Option<String>,
+    /// Zeroed when it is dropped unused; the copy handed to iwd is the reply's.
+    passphrase: Option<Zeroizing<String>>,
     /// iwd asked and was given the passphrase.
     supplied: bool,
 }
@@ -78,6 +86,9 @@ enum AgentError {
 /// `net.connman.iwd.Agent`.
 struct Agent {
     pending: SharedPending,
+    /// iwd's connection, as the watcher follows it: asking the bus here, in the call, would stop the object server, and
+    /// with it the connection, while calls from other users filled its queue.
+    iwd: Owner,
 }
 
 #[zbus::interface(name = "net.connman.iwd.Agent")]
@@ -85,17 +96,22 @@ impl Agent {
     /// iwd stopped using the agent.
     fn release(&self) {}
 
+    /// The pending passphrase, for iwd only.
     fn request_passphrase(
         &self,
         network: ObjectPath<'_>,
+        #[zbus(header)] header: Header<'_>,
     ) -> std::result::Result<String, AgentError> {
+        if !self.iwd.is(header.sender()) {
+            return Err(AgentError::Canceled("only iwd may ask".to_owned()));
+        }
         let mut pending = lock(&self.pending);
         match pending.as_mut() {
             Some(pending) if pending.network.as_ref() == network => match pending.passphrase.take()
             {
-                Some(passphrase) => {
+                Some(mut passphrase) => {
                     pending.supplied = true;
-                    Ok(passphrase)
+                    Ok(std::mem::take(&mut *passphrase))
                 }
                 None => Err(AgentError::Canceled("there is no passphrase".to_owned())),
             },
@@ -220,15 +236,6 @@ impl IwdSupplicant {
     /// Exports the agent and starts the watcher. Does not need iwd to be running yet.
     pub fn new(connection: Connection) -> Result<Self> {
         let pending: SharedPending = Arc::new(Mutex::new(None));
-        connection
-            .object_server()
-            .at(
-                AGENT_PATH,
-                Agent {
-                    pending: pending.clone(),
-                },
-            )
-            .map_err(Error::bus("exporting the agent"))?;
         let (sender, reports) = channel();
         let waker = Arc::new(
             eventfd(0, EventfdFlags::NONBLOCK | EventfdFlags::CLOEXEC)
@@ -243,7 +250,17 @@ impl IwdSupplicant {
             sender,
             waker,
         };
-        this.watch()?;
+        let iwd = this.watch()?;
+        this.connection
+            .object_server()
+            .at(
+                AGENT_PATH,
+                Agent {
+                    pending: this.pending.clone(),
+                    iwd,
+                },
+            )
+            .map_err(Error::bus("exporting the agent"))?;
         Ok(this)
     }
 
@@ -295,8 +312,9 @@ impl IwdSupplicant {
         }
     }
 
-    /// Reads `Station.State` changes and turns them into events, on a thread of its own.
-    fn watch(&self) -> Result<()> {
+    /// Reads `Station.State` changes and turns them into events, on a thread of its own. Returns the owner of iwd's name
+    /// that the watcher follows.
+    fn watch(&self) -> Result<Owner> {
         let rule = MatchRule::builder()
             .msg_type(MessageType::Signal)
             .sender(SERVICE)
@@ -304,8 +322,11 @@ impl IwdSupplicant {
             .and_then(|rule| rule.member("PropertiesChanged"))
             .map(|rule| rule.build())
             .map_err(Error::bus("building the match rule"))?;
-        let messages = MessageIterator::for_match_rule(rule, &self.connection, None)
-            .map_err(Error::bus("subscribing to state changes"))?;
+        let messages = from_owner(&self.connection, SERVICE, rule, |_| {
+            eprintln!("cupertino-netd: ignored a state change that iwd did not send")
+        })
+        .map_err(Error::bus("subscribing to state changes"))?;
+        let iwd = messages.owner();
         let (connection, interfaces, sender, waker) = (
             self.connection.clone(),
             self.interfaces.clone(),
@@ -342,7 +363,7 @@ impl IwdSupplicant {
                 path: "iwd-watcher".into(),
                 source,
             })?;
-        Ok(())
+        Ok(iwd)
     }
 
     /// The iwd network of the device with this name, type and SSID.
@@ -521,7 +542,7 @@ impl Supplicant for IwdSupplicant {
         let network = self.network_path(&device, ssid, class)?;
         *lock(&self.pending) = Some(Pending {
             network: network.clone(),
-            passphrase: passphrase.map(str::to_owned),
+            passphrase: passphrase.map(|passphrase| Zeroizing::new(passphrase.to_owned())),
             supplied: false,
         });
         let proxy = self.proxy(network.as_str(), NETWORK)?;
@@ -616,5 +637,124 @@ impl Supplicant for IwdSupplicant {
 
     fn as_fd(&self) -> Option<BorrowedFd<'_>> {
         Some(self.waker.as_fd())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    const STATION_PATH: &str = "/net/connman/iwd/0/3";
+    const NETWORK_PATH: &str = "/net/connman/iwd/0/3/5361666548_psk";
+
+    struct FakeDevice;
+
+    #[zbus::interface(name = "net.connman.iwd.Device")]
+    impl FakeDevice {
+        #[zbus(property)]
+        fn name(&self) -> String {
+            "wlan0".to_owned()
+        }
+    }
+
+    fn iwd(bus: &cupertino_test_bus::PrivateBus) -> Connection {
+        bus.blocking_builder()
+            .name(SERVICE)
+            .unwrap()
+            .serve_at(STATION_PATH, FakeDevice)
+            .unwrap()
+            .build()
+            .unwrap()
+    }
+
+    fn request_passphrase(from: &Connection, to: &Connection) -> zbus::Result<String> {
+        let to = to.unique_name().unwrap().to_string();
+        let network = ObjectPath::try_from(NETWORK_PATH).unwrap();
+        from.call_method(
+            Some(to.as_str()),
+            AGENT_PATH,
+            Some("net.connman.iwd.Agent"),
+            "RequestPassphrase",
+            &(network,),
+        )?
+        .body()
+        .deserialize()
+    }
+
+    #[test]
+    fn only_iwd_is_handed_the_passphrase() {
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        let iwd = iwd(&bus);
+        let netd = bus.connect();
+        let supplicant = IwdSupplicant::new(netd.clone()).unwrap();
+        *lock(&supplicant.pending) = Some(Pending {
+            network: OwnedObjectPath::try_from(NETWORK_PATH).unwrap(),
+            passphrase: Some(Zeroizing::new("correct horse".to_owned())),
+            supplied: false,
+        });
+        // another user's program on the bus, while the connection waits
+        let peer = bus.connect();
+        assert!(matches!(
+            request_passphrase(&peer, &netd),
+            Err(zbus::Error::MethodError(name, _, _)) if name.as_str() == "net.connman.iwd.Agent.Error.Canceled"
+        ));
+        assert!(!lock(&supplicant.pending).as_ref().unwrap().supplied);
+        assert_eq!(request_passphrase(&iwd, &netd).unwrap(), "correct horse");
+    }
+
+    #[test]
+    fn only_iwd_says_a_station_disconnected() {
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        let iwd = iwd(&bus);
+        let netd = bus.connect();
+        let mut supplicant = IwdSupplicant::new(netd.clone()).unwrap();
+        lock(&supplicant.interfaces).insert("wlan0".to_owned(), 3);
+        let disconnected = |from: &Connection, to: Option<&str>| {
+            let changed = HashMap::from([("State", Value::from("disconnected"))]);
+            from.emit_signal(
+                to,
+                STATION_PATH,
+                "org.freedesktop.DBus.Properties",
+                "PropertiesChanged",
+                &(STATION, changed, Vec::<String>::new()),
+            )
+            .unwrap()
+        };
+        let events = |supplicant: &mut IwdSupplicant, within: Duration| {
+            let deadline = Instant::now() + within;
+            loop {
+                let events: Vec<String> = supplicant
+                    .events()
+                    .into_iter()
+                    .map(|event| format!("{event:?}"))
+                    .collect();
+                if !events.is_empty() || Instant::now() > deadline {
+                    return events;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let to = netd.unique_name().unwrap().to_string();
+        let peer = bus.connect();
+        for to in [Some(to.as_str()), None] {
+            disconnected(&peer, to);
+        }
+        assert!(
+            events(&mut supplicant, Duration::from_millis(300)).is_empty(),
+            "a forged disconnection is ignored"
+        );
+        disconnected(&iwd, None);
+        assert_eq!(
+            events(&mut supplicant, Duration::from_secs(5)),
+            [format!(
+                "{:?}",
+                Ok::<_, Error>(SupplicantEvent::Disconnected { ifindex: 3 })
+            )]
+        );
     }
 }

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use cupertino_peer::signal::{from_owner, sent_by_bus};
 use zbus::blocking::{Connection, MessageIterator};
 use zbus::message::Type;
 use zbus::zvariant::{OwnedValue, Value};
@@ -72,14 +73,17 @@ pub fn watch(
     let what = "subscribing to the power daemon's signals";
     let changes_rule = MatchRule::builder()
         .msg_type(Type::Signal)
-        .interface(PROPERTIES)
+        .sender(UPOWER)
+        .and_then(|b| b.interface(PROPERTIES))
         .and_then(|b| b.member("PropertiesChanged"))
         .and_then(|b| b.path(DISPLAY_DEVICE))
         .and_then(|b| b.arg(0, DEVICE_INTERFACE))
         .map_err(Error::bus(what))?
         .build();
-    let changes = MessageIterator::for_match_rule(changes_rule, connection, None)
-        .map_err(Error::bus(what))?;
+    let changes = from_owner(connection, UPOWER, changes_rule, |_| {
+        eprintln!("cupertino-login: a battery change not sent by the power daemon was ignored")
+    })
+    .map_err(Error::bus(what))?;
     let owner_rule = MatchRule::builder()
         .msg_type(Type::Signal)
         .sender("org.freedesktop.DBus")
@@ -108,6 +112,15 @@ pub fn watch(
         },
     )?;
     let c = connection.clone();
+    // a peer that said the daemon left would silence the warning: only the bus daemon's own change counts (zbus filters the
+    // rule's sender already; this does not rely on it)
+    let owners = owners.filter(|message| match message {
+        Ok(message) if !sent_by_bus(message) => {
+            eprintln!("cupertino-login: a NameOwnerChanged not sent by the bus was ignored");
+            false
+        }
+        _ => true,
+    });
     spawn("battery-daemon", owners, notify, move |message| {
         let (_, _, new_owner): (String, String, String) = message.body().deserialize()?;
         Ok(Some(if new_owner.is_empty() {
@@ -144,7 +157,7 @@ fn read(connection: &Connection) -> Report {
 
 fn spawn(
     name: &str,
-    messages: MessageIterator,
+    messages: impl Iterator<Item = zbus::Result<zbus::Message>> + Send + 'static,
     notify: Arc<impl Fn(Result<Report, Error>) + Send + Sync + 'static>,
     handle: impl Fn(&zbus::Message) -> zbus::Result<Option<Report>> + Send + 'static,
 ) -> Result<(), Error> {
@@ -205,4 +218,121 @@ pub fn close(session: &Connection, id: u32) -> Result<(), Error> {
         )
         .map(drop)
         .map_err(Error::bus("withdrawing the low-battery notification"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    struct Display;
+
+    #[zbus::interface(name = "org.freedesktop.UPower.Device")]
+    impl Display {
+        #[zbus(property)]
+        fn warning_level(&self) -> u32 {
+            3
+        }
+
+        #[zbus(property)]
+        fn percentage(&self) -> f64 {
+            9.0
+        }
+    }
+
+    fn described(report: Result<Report, Error>) -> String {
+        match report {
+            Ok(Report::Battery(battery)) => format!("{:?} {}", battery.level, battery.percentage),
+            Ok(Report::NoDaemon(why)) => format!("no daemon: {why}"),
+            Err(e) => format!("error: {e}"),
+        }
+    }
+
+    #[test]
+    fn only_the_bus_says_the_power_daemon_left() {
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        let daemon = bus
+            .blocking_builder()
+            .name(UPOWER)
+            .unwrap()
+            .serve_at(DISPLAY_DEVICE, Display)
+            .unwrap()
+            .build()
+            .unwrap();
+        let agent = bus.connect();
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        watch(&agent, move |report| {
+            let _ = tx.lock().unwrap().send(described(report));
+        })
+        .unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)).as_deref(),
+            Ok("Low 9")
+        );
+
+        // a change of the display device, forged by another peer and then sent by the daemon
+        let changed = |from: &Connection| {
+            let changed = HashMap::from([("Percentage", Value::from(9.0))]);
+            from.emit_signal(
+                None::<&str>,
+                DISPLAY_DEVICE,
+                PROPERTIES,
+                "PropertiesChanged",
+                &(DEVICE_INTERFACE, changed, Vec::<String>::new()),
+            )
+            .unwrap()
+        };
+        let to = agent.unique_name().unwrap().to_string();
+        let peer = bus.connect();
+        let changed_to = |to: &str| {
+            let changed = HashMap::from([("Percentage", Value::from(9.0))]);
+            peer.emit_signal(
+                Some(to),
+                DISPLAY_DEVICE,
+                PROPERTIES,
+                "PropertiesChanged",
+                &(DEVICE_INTERFACE, changed, Vec::<String>::new()),
+            )
+            .unwrap()
+        };
+        changed(&peer);
+        changed_to(&to);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "a forged change is ignored"
+        );
+        changed(&daemon);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)).as_deref(),
+            Ok("Low 9")
+        );
+
+        // another peer says the daemon left, which would silence the warning
+        let peer = bus.connect();
+        let to = agent.unique_name().unwrap().to_string();
+        let left = (UPOWER, daemon.unique_name().unwrap().to_string(), "");
+        peer.emit_signal(
+            Some(to.as_str()),
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameOwnerChanged",
+            &left,
+        )
+        .unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "a forged departure is ignored"
+        );
+        drop(daemon);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)).as_deref(),
+            Ok("no daemon: org.freedesktop.UPower left the bus")
+        );
+    }
 }

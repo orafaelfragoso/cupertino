@@ -34,12 +34,19 @@ Pure Rust over `zbus` (blocking API, no `-sys` crate); no libseat, no libsystemd
   of `session`). `open` ignores its flags, as libseat's does.
 - **Signal readers.** One thread reads the session's signals into a calloop channel, logging and skipping a signal that does
   not decode. A second watches `NameOwnerChanged` for logind's name leaving. The notifier returns `Error::SignalsEnded`
-  when the bus connection closes or logind exits or restarts.
+  when the bus connection closes or logind exits or restarts. The session's signals are bound to logind's unique name, which
+  zbus and the bus daemon both filter on. A `NameOwnerChanged` counts only when the bus daemon sent it (its sender is
+  `org.freedesktop.DBus`, which no peer can send as), checked on each message: the bus delivers a signal sent to the
+  compositor's unique name whatever its rules say, and a forged one would make the compositor give up a session that is still
+  there. zbus filters the rule's `sender='org.freedesktop.DBus'` too (it parses the daemon's name as a unique name); the check
+  does not rely on that.
 
 ## Tests
 
 `state::Machine` is driven with message sequences (VT switch away and back, forced pause, gone, release during pause, failed
 release, started inactive). Other tests check `dev_t` lookup on `/dev/null` and the bus-name watch against a private
-`dbus-daemon` (skipped when missing). Nothing talks to logind, because taking control needs a session of its own.
+`dbus-daemon` (skipped when missing): logind leaving its name is reported once, and a `NameOwnerChanged` that another
+connection sends, to the compositor or to everyone, is not; `sent_by_bus` on messages that carry the daemon's name, a peer's
+unique name and no sender. Nothing talks to logind, because taking control needs a session of its own.
 `cargo run -p cupertino-seat --example print-session` connects to the system bus, finds the session and prints it without
 calling `TakeControl`.

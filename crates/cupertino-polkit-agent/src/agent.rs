@@ -4,16 +4,22 @@
 //! `org.freedesktop.PolicyKit1`, so another program on the bus can neither raise the prompt with its own text nor
 //! cancel one. The agent never reports success: polkitd learns it from the helper, and the reply to
 //! `BeginAuthentication` only says that the agent is done.
+//!
+//! The same goes for the signals the agent acts on. The bus delivers a signal addressed to the agent whatever its match
+//! rules say, and zbus compares a rule's sender with a message only when the rule names a unique name, so each signal's
+//! sender is checked when it arrives: [`sent_by_bus`] for `NameOwnerChanged`, `cupertino_peer::signal::from_owner` for
+//! logind's.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use cupertino_peer::signal::{sent_by_bus, BUS_DAEMON};
 use zbus::fdo::DBusProxy;
-use zbus::message::Header;
+use zbus::message::{Header, Type};
 use zbus::names::BusName;
 use zbus::zvariant::{OwnedValue, Value};
-use zbus::{blocking, interface, Connection};
+use zbus::{blocking, interface, Connection, MatchRule};
 
 use crate::text::shown;
 
@@ -21,6 +27,7 @@ use crate::text::shown;
 pub const POLKIT: &str = "org.freedesktop.PolicyKit1";
 const AUTHORITY_PATH: &str = "/org/freedesktop/PolicyKit1/Authority";
 const AUTHORITY_INTERFACE: &str = "org.freedesktop.PolicyKit1.Authority";
+const BUS_DAEMON_PATH: &str = "/org/freedesktop/DBus";
 /// Where the agent's object lives.
 pub const AGENT_PATH: &str = "/org/cupertino/PolkitAgent";
 /// The most authentications that may wait at once, the one on screen included; more are refused at once, so a flood
@@ -245,7 +252,8 @@ pub fn register(
 
 /// Serves the agent on `connection` and registers it with polkitd for `session_id`, then again whenever polkitd
 /// starts anew; `events` receives what polkitd asks. Returns once the first registration is done, with the thread that
-/// follows polkitd's restarts running.
+/// follows polkitd's restarts running. Only the bus daemon's `NameOwnerChanged` counts as a restart, checked on each
+/// message ([`sent_by_bus`]).
 pub fn serve(
     connection: &blocking::Connection,
     session_id: &str,
@@ -259,8 +267,15 @@ pub fn serve(
             pending: Arc::new(AtomicUsize::new(0)),
         },
     )?;
-    let owners = blocking::fdo::DBusProxy::new(connection)?
-        .receive_name_owner_changed_with_args(&[(0, POLKIT)])?;
+    let rule = MatchRule::builder()
+        .msg_type(Type::Signal)
+        .sender(BUS_DAEMON)?
+        .path(BUS_DAEMON_PATH)?
+        .interface(BUS_DAEMON)?
+        .member("NameOwnerChanged")?
+        .arg(0, POLKIT)?
+        .build();
+    let owners = blocking::MessageIterator::for_match_rule(rule, connection, None)?;
     register(connection, session_id, locale)?;
     let (connection, session_id, locale) =
         (connection.clone(), session_id.to_owned(), locale.to_owned());
@@ -268,8 +283,18 @@ pub fn serve(
         .name("polkit-owner".to_owned())
         .spawn(move || {
             for change in owners {
-                let Ok(args) = change.args() else { continue };
-                if args.new_owner().is_some() {
+                let Ok(change) = change else { continue };
+                if !sent_by_bus(&change) {
+                    eprintln!(
+                        "cupertino-polkit-agent: ignored a NameOwnerChanged the bus did not send"
+                    );
+                    continue;
+                }
+                let Ok((_, _, new_owner)) = change.body().deserialize::<(String, String, String)>()
+                else {
+                    continue;
+                };
+                if !new_owner.is_empty() {
                     if let Err(error) = register(&connection, &session_id, &locale) {
                         eprintln!(
                             "cupertino-polkit-agent: registering again with polkitd: {error}"

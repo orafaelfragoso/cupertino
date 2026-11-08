@@ -4,6 +4,10 @@
 //! transaction runs per attempt: `pam_authenticate`, then `pam_acct_mgmt` so that an expired or locked account does not
 //! unlock the screen. The messages PAM's modules print (a lockout from `pam_faillock`, a password about to expire) reach
 //! the screen as [`Event::Notice`].
+//!
+//! The password is zeroed when the attempt is done ([`Password`]), and the one copy this module cannot clear, the `CString`
+//! that pam-client2 drops once it has copied the answer into PAM's buffer, is zeroed by the process's allocator
+//! (`cupertino_login_ipc::zeroing::ZeroOnFree`); PAM clears its own copy.
 
 use std::ffi::{CStr, CString};
 use std::sync::mpsc::{channel, Sender};
@@ -60,9 +64,19 @@ impl Authenticator {
 
 /// Answers the password prompt with the attempt's password, refuses every other prompt and passes the modules'
 /// messages on.
-struct PasswordConversation<'a> {
+pub struct PasswordConversation<'a> {
     password: Password,
     on_notice: &'a dyn Fn(String),
+}
+
+impl<'a> PasswordConversation<'a> {
+    /// The conversation of one attempt with `password`; `on_notice` gets the modules' messages.
+    pub fn new(password: Password, on_notice: &'a dyn Fn(String)) -> Self {
+        PasswordConversation {
+            password,
+            on_notice,
+        }
+    }
 }
 
 impl ConversationHandler for PasswordConversation<'_> {
@@ -90,10 +104,7 @@ fn authenticate(login: &str, password: Password, on_notice: &dyn Fn(String)) -> 
     let mut context = match Context::new(
         SERVICE,
         Some(login),
-        PasswordConversation {
-            password,
-            on_notice,
-        },
+        PasswordConversation::new(password, on_notice),
     ) {
         Ok(context) => context,
         Err(e) => return AuthOutcome::Error(format!("cannot start authentication: {e}")),

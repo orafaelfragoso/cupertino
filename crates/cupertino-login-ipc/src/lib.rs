@@ -7,6 +7,7 @@
 //! * [`frame`]: the length prefix, the size caps and the [`Decoder`] that reads a stream in exact amounts.
 //! * [`secret`]: [`Secret`], a password that is zeroed, never printed and sent as hex.
 //! * [`state`]: [`State`], the connection's state machine.
+//! * [`zeroing`]: [`ZeroOnFree`](zeroing::ZeroOnFree), the global allocator of the processes that handle passwords.
 //!
 //! Decoding errors keep only their class: serde's text embeds the offending value, which may be a password.
 
@@ -15,6 +16,7 @@ mod hex;
 pub mod message;
 pub mod secret;
 pub mod state;
+pub mod zeroing;
 
 pub use frame::{decode, encode, encode_secret, DecodeError, Decoder, FrameError, HEADER_BYTES};
 pub use message::{

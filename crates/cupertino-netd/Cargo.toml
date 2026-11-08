@@ -10,17 +10,19 @@ layer = "services"
 
 [features]
 default = ["dbus"]
-dbus = ["dep:zbus", "dep:cupertino-seat", "dep:async-channel"]
+dbus = ["dep:zbus", "dep:cupertino-seat", "dep:async-channel", "dep:cupertino-peer"]
 # the `cupertino-netd` process
 app = ["dbus"]
 
 [dependencies]
 async-channel = { version = "2", optional = true }
 cupertino-netlink = { path = "../cupertino-netlink" }
+cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-seat = { path = "../cupertino-seat", optional = true }
 rustix = { version = "1", features = ["event", "fs", "net", "rand"] }
 tempfile = "3"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
+zeroize = "1"
 
 [[bin]]
 name = "cupertino-netd"

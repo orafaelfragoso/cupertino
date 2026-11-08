@@ -366,8 +366,17 @@ impl Volumes {
             }
         };
         report();
+        // A signal only asks for a read, on a thread of its own, with at most one asked for while one runs. The streams are
+        // read at once whatever a read costs: a stream that fills stops the connection, the reply to the read included, and
+        // the bus hands this process any signal another user sends it. The devices are read from udisks itself, so such a
+        // signal costs a read at most.
+        let (again, asked) = mpsc::sync_channel::<()>(1);
+        std::thread::Builder::new()
+            .name("udisks-read".into())
+            .spawn(move || asked.into_iter().for_each(|()| report()))
+            .map_err(|e| zbus::Error::Failure(e.to_string()))?;
         for (name, messages) in [("udisks-changes", changes), ("udisks-owner", owners)] {
-            let report = report.clone();
+            let again = again.clone();
             std::thread::Builder::new()
                 .name(name.into())
                 .spawn(move || {
@@ -375,7 +384,7 @@ impl Volumes {
                         if message.is_err() {
                             break;
                         }
-                        report();
+                        let _ = again.try_send(());
                     }
                 })
                 .map_err(|e| zbus::Error::Failure(e.to_string()))?;

@@ -207,3 +207,28 @@ fn choosing_another_user_starts_over_and_a_user_polkitd_did_not_offer_is_ignored
         (ROOT, Phase::Waiting, 0)
     );
 }
+
+#[test]
+fn typing_up_to_the_limit_never_moves_the_field() {
+    let mut agent = Agent::new(ME);
+    agent.begin(request("a", &[ME]));
+    asked(&mut agent);
+    let block = |agent: &Agent| {
+        let field = &agent.prompt().unwrap().field;
+        (field.as_ptr(), field.capacity())
+    };
+    let before = block(&agent);
+    assert_eq!(before.1, MAX_ANSWER);
+    // a character of four bytes each time, past the limit
+    for _ in 0..=MAX_ANSWER / 4 {
+        agent.key(Key::Char('\u{1F512}'));
+        assert_eq!(block(&agent), before, "the text stays in its first block");
+    }
+    assert_eq!(agent.prompt().unwrap().field.len(), MAX_ANSWER);
+}
+
+#[test]
+fn an_answer_is_never_printed() {
+    let answer = Effect::Answer(Zeroizing::new(b"hunter2".to_vec()));
+    assert_eq!(format!("{answer:?}"), "Answer(<secret>)");
+}

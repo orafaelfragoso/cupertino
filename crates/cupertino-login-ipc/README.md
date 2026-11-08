@@ -18,6 +18,7 @@ only, never on D-Bus.
 | `Decoder` | reads a stream of unknown chunking in exact amounts: `wanted` bytes at most, `push(bytes) returns a frame body when one completes |
 | `encode`, `encode_secret`, `decode` | a message to a frame (length prefix, JSON) and back; `encode_secret` allocates its buffer at the full cap so it never moves |
 | `Secret` | a password: `Zeroizing<String>`, at most 512 bytes (`PAM_MAX_RESP_SIZE`), `Debug` prints `<secret>, sent as hex |
+| `zeroing::ZeroOnFree` | a global allocator that zeroes every block it frees, the allocator of the processes that hold passwords (`cupertino-sessiond`, `cupertino-login`): a copy a library drops without clearing it (pam-client2's `CString`) is cleared too; growing a block frees the old one through it |
 | `State` | the connection's state machine (`New`, `Idle`, `Authenticating`, `Starting`): `next(request)` and `after(event) |
 
 ## Rules
@@ -39,7 +40,7 @@ only, never on D-Bus.
 
 ## Tests
 
-`cargo test -p cupertino-login-ipc`: a secret round-trips, is hex on the wire, never shows in `Debug` and a malformed one is a decode
+`cargo test -p cupertino-login-ipc`: `ZeroOnFree` hands the allocator below it a zeroed block, also the one a block grew out of; a secret round-trips, is hex on the wire, never shows in `Debug` and a malformed one is a decode
 error that does not echo it; the state machine follows an attempt and refuses every pair it must; typed account names; a frame survives every chunking; a length over the cap is refused before its body is read,
 a zero length and an overrun are refused; a message over the cap is not encoded; unknown types, unknown fields and wrong field
 types are errors; a decode error names its class and never the value; the first message must be `Hello` with this version; a power request has one wire form and no other action decodes; the

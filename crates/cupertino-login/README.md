@@ -64,6 +64,16 @@ Every trigger goes through the same request, which does nothing when the session
 | display sleep | The server's idle policy calls `Lock` once the display has slept for the password delay (`power.conf`, below). |
 | idle | With `--idle-timeout` only: `ext-idle-notify-v1`, which honours idle inhibitors. |
 
+**Who may send a signal.** A bus daemon hands a process every signal addressed to its unique name whatever its match rules say,
+and zbus filters a rule's sender only when it is a unique name (or the daemon's own name), so each signal is checked when it
+arrives (`cupertino_peer::signal`). logind's `Lock` is bound to logind's unique name (the reply to the session lookup). `PrepareForSleep`,
+the session manager's `Unlock`, the server's `ApplicationQuit` (on the session bus) and the power daemon's battery changes count only from the connection that owns
+the sender's well-known name at that moment; a `NameOwnerChanged` (the manager or the power daemon coming and going) only from
+the bus daemon. Anything else is logged (`... not sent by ... was ignored`) and dropped: another user could otherwise unlock the
+screen or lock it, or a program in the session hurry the log out along (a forged `NameOwnerChanged` is also dropped by
+zbus's own filter; the check does not rely on it). The module tests send each one forged from
+another connection on a private bus, to the process and to everyone, then the genuine one.
+
 **Idle lock.** The design locks when the display sleeps (request type 5) once the password
 delay has passed. The server owns that timing, since it knows the power source and the idle inhibitors: its idle policy dims,
 sleeps the display and calls `Lock` after `require_password_after` (`cupertino-defaults` `power.conf`; default 300 s).
@@ -186,7 +196,19 @@ from the first are a wrong password. Any other failure is an error: the screen s
 modules (`PAM_TEXT_INFO`, `PAM_ERROR_MSG`: the `pam_faillock` lockout, a password about to expire) shows as the notice under the
 field until the next edit, also after a wrong password. Every prompt but the password one is refused.
 
-The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Memory the process has freed is not zeroed here, and swap can hold a password (no `mlockall`).
+**Account lockout.** A failed attempt at the lock screen counts towards the account lockout like a failed login: the packaged
+`/etc/pam.d/cupertino-login` runs the distribution's shared password stack and account stack, where each distribution puts
+`pam_faillock` (Arch's `system-auth` has `preauth`, `authfail` and `authsucc` by default; on Debian and Ubuntu it is added to
+`common-auth` and `common-account`, on Fedora with `authselect enable-feature with-faillock`). The file adds no `pam_faillock`
+line of its own, which would count each failure twice where the distribution has one, and nothing in it can pass a password the
+shared stack refused (`packaging/test_release.py`, `test_the_lock_screen_counts_towards_the_account_lockout`). `pam_faillock`
+runs in this process, as the user, and records the failure in the user's own tally file (`/run/faillock/$USER` by default); the
+directory is root's, so the file must exist already: `pam_faillock` makes it, owned by the user, when it runs as root for the
+session's login (the shared stack's `authsucc`, or the `authsucc` line of `cupertino-autologin` for a session that started
+without a password). The lockout message it prints shows as the notice. Not verified on an installed system: enter wrong passwords at the lock screen,
+then `faillock --user $USER` on another console lists them.
+
+The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Its global allocator (`cupertino_login_ipc::zeroing::ZeroOnFree`) zeroes every block it frees, so the `CString` that pam-client2 drops unzeroed once it has copied the answer into PAM's buffer is cleared too (`tests/zeroing.rs`); PAM clears its own copy. Swap can hold a password (no `mlockall`).
 
 While it is typed the password lives in the field's `SecureBuffer` (Kit's, zeroed when the field goes), which holds at most
 `MAX_PASSWORD_BYTES` (512, `PAM_MAX_RESP_SIZE`): a key past it is refused, not an edit and not announced, and text from an input

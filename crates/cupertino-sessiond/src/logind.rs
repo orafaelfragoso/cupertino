@@ -7,7 +7,7 @@ use std::fmt;
 
 use cupertino_login_ipc::PowerAction;
 use zbus::blocking::proxy::Builder;
-use zbus::blocking::{Connection, MessageIterator, Proxy};
+use zbus::blocking::{Connection, Proxy};
 use zbus::message::Type;
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
@@ -87,6 +87,16 @@ fn names_active_session(changed: &HashMap<String, OwnedValue>, invalidated: &[St
     changed.contains_key("ActiveSession") || invalidated.iter().any(|name| name == "ActiveSession")
 }
 
+/// The signals matching `rule` that logind sent; any other is logged and dropped.
+fn from_logind(
+    connection: &Connection,
+    rule: MatchRule<'_>,
+) -> zbus::Result<cupertino_peer::signal::FromOwner> {
+    cupertino_peer::signal::from_owner(connection, LOGIND, rule, |_| {
+        eprintln!("cupertino-sessiond: ignored a logind signal that logind did not send")
+    })
+}
+
 fn spawn(name: &str, run: impl FnOnce() + Send + 'static) -> zbus::Result<()> {
     std::thread::Builder::new()
         .name(name.into())
@@ -162,7 +172,10 @@ impl Logind {
     }
 
     /// Start the threads that call `notify` for every `SessionRemoved` and every change of the seat's `ActiveSession`, and
-    /// once with [`Signal::Ended`] when a stream ends.
+    /// once with [`Signal::Ended`] when a stream ends. A signal is believed only from the connection that owns logind's
+    /// name when it arrives: the rules name logind as the sender, but that keeps out nothing (the bus delivers a signal
+    /// addressed to the manager whatever its rules say), and a forged `SessionRemoved` would drop the record of a session
+    /// that is still running.
     pub fn watch(&self, notify: impl Fn(Signal) + Send + Sync + 'static) -> Result<(), Error> {
         let fail = |source: zbus::Error| Error {
             what: "subscribing to logind's signals",
@@ -184,10 +197,8 @@ impl Logind {
             .and_then(|b| b.arg(0, SEAT_INTERFACE))
             .map_err(fail)?
             .build();
-        let removed =
-            MessageIterator::for_match_rule(removed, &self.connection, None).map_err(fail)?;
-        let changed =
-            MessageIterator::for_match_rule(changed, &self.connection, None).map_err(fail)?;
+        let removed = from_logind(&self.connection, removed).map_err(fail)?;
+        let changed = from_logind(&self.connection, changed).map_err(fail)?;
         let notify = std::sync::Arc::new(notify);
         let on_removed = notify.clone();
         spawn("logind-sessions", move || {
@@ -378,5 +389,92 @@ impl Logind {
                 what: "creating a session proxy",
                 source: Box::new(source),
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use zbus::zvariant::{ObjectPath, Value};
+
+    fn session_removed(from: &Connection, to: Option<&str>, id: &str) {
+        let path = ObjectPath::try_from("/org/freedesktop/login1/session/_32").unwrap();
+        from.emit_signal(
+            to,
+            MANAGER_PATH,
+            MANAGER_INTERFACE,
+            "SessionRemoved",
+            &(id, path),
+        )
+        .expect("sent");
+    }
+
+    fn active_session_changed(from: &Connection, to: Option<&str>) {
+        let changed = HashMap::from([(
+            "ActiveSession",
+            Value::from(("c2", ObjectPath::try_from("/s").unwrap())),
+        )]);
+        from.emit_signal(
+            to,
+            "/org/freedesktop/login1/seat/seat0",
+            PROPERTIES_INTERFACE,
+            "PropertiesChanged",
+            &(SEAT_INTERFACE, changed, Vec::<String>::new()),
+        )
+        .expect("sent");
+    }
+
+    fn described(signal: Signal) -> String {
+        match signal {
+            Signal::SessionRemoved(id) => format!("removed {id}"),
+            Signal::ActiveSessionChanged => "active session changed".to_owned(),
+            Signal::Ended(why) => format!("ended: {why}"),
+        }
+    }
+
+    #[test]
+    fn only_logind_removes_a_session_or_moves_the_seat() {
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        let logind = bus.connect();
+        logind.request_name(LOGIND).expect("logind's name");
+        let manager = Logind {
+            connection: bus.connect(),
+        };
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        manager
+            .watch(move |signal| {
+                let _ = tx.lock().unwrap().send(described(signal));
+            })
+            .expect("watching");
+        let to = manager.connection.unique_name().unwrap().to_string();
+
+        // any other peer on the bus, to the manager's own name and to everyone
+        let peer = bus.connect();
+        for to in [Some(to.as_str()), None] {
+            session_removed(&peer, to, "c1");
+            active_session_changed(&peer, to);
+        }
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "forged signals are ignored"
+        );
+
+        session_removed(&logind, None, "c3");
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)).as_deref(),
+            Ok("removed c3")
+        );
+        active_session_changed(&logind, None);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)).as_deref(),
+            Ok("active session changed")
+        );
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
     }
 }

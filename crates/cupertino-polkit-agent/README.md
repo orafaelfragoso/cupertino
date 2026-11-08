@@ -22,6 +22,13 @@ The process:
   polkitd for that session, again whenever polkitd restarts;
 - answers only polkitd: a `BeginAuthentication` or `CancelAuthentication` from any other bus name is refused, and at
   most four authentications may wait at once;
+- believes a signal only from its sender: polkitd's restart only from the bus daemon's own `NameOwnerChanged`, and the
+  session's `Active` only from the connection that owns logind's name when the change arrives. The bus delivers a signal
+  addressed to the agent whatever its match rules say, so the agent reads plain match-rule streams and checks each message
+  itself rather than rely on the filtering of zbus's proxy streams; its session proxy keeps no property cache;
+- keeps no copy of what is typed: the field is allocated at its limit (512 bytes) so typing never moves it, the answer and
+  the line written to the helper are zeroed when dropped, an answer prints as `Answer(<secret>)`, and the process's global
+  allocator (`zeroing::ZeroOnFree`) zeroes every block it frees, which covers what the toolkit's keyboard handling allocates;
 - reaches the helper through polkit's socket (`/run/polkit/agent-helper.socket`) when it answers, else starts
   `polkit-agent-helper-1` from `/usr/lib/polkit-1/` or `/usr/libexec/` with an empty environment and the cookie on its
   standard input.
@@ -61,6 +68,7 @@ value is protected, so neither what is typed nor its length leaves the process; 
 | `render` | the scrim and the panel drawn with `tiny-skia` |
 | `access` | the tree assistive technology gets |
 | `users` | how the prompt names polkitd's users |
+| `zeroing` | the process's global allocator, which zeroes every block it frees |
 | `surfaces` | the layer surfaces (feature `app`) |
 
 The colours are the design tokens of the session's appearance; the scrim is `authentication-scrim`. Values marked
@@ -69,7 +77,10 @@ approximate in `panel` and `render` are Cupertino's own.
 ## Tests
 
 `cargo test -p cupertino-polkit-agent`: the model, the panel, the text and the helper's protocol as unit tests;
-`tests/agent.rs` the agent on a private bus with a fake polkitd (registration, refusals, limits); `tests/flow.rs` a whole
+`tests/agent.rs` the agent on a private bus with a fake polkitd (registration, refusals, limits, a forged restart that
+registers nothing); the `logind` unit test a forged `Active` change ignored and logind's own followed; `tests/zeroing.rs` a
+password typed, answered to the fixture helper and dropped, with a watching allocator that finds no freed block holding any
+piece of it (the field never grows, the model test `typing_up_to_the_limit_never_moves_the_field`); `tests/flow.rs` a whole
 authentication without a display: a fake polkitd asks, the model and `conversation` run the fixture helper
 (`tests/fixtures/polkit-agent-helper-1`, which accepts "right"), and the test types. It checks the reason and the
 application the prompt shows, that a valid password answers polkitd, that three wrong ones are retried and then end the

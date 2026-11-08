@@ -1,5 +1,6 @@
 #%PAM-1.0
 auth required pam_permit.so
+-auth optional pam_faillock.so authsucc
 account include system-auth
 session include system-auth
 session include postlogin

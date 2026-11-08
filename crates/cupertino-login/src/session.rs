@@ -1,7 +1,9 @@
 //! The server's `org.cupertino.Session1` on the session bus, which quits the applications before a log out: the calls
-//! and the `ApplicationQuit` signal that [`crate::logout`] times.
+//! and the `ApplicationQuit` signal that [`crate::logout`] times. An `ApplicationQuit` counts only from the server, the
+//! owner of the name when it arrives: another program could otherwise hurry the log out along.
 
-use zbus::blocking::{Connection, MessageIterator};
+use cupertino_peer::signal::from_owner;
+use zbus::blocking::Connection;
 use zbus::message::Type;
 use zbus::MatchRule;
 
@@ -45,11 +47,14 @@ pub fn watch_quit(
 ) -> zbus::Result<()> {
     let rule = MatchRule::builder()
         .msg_type(Type::Signal)
+        .sender(BUS_NAME)?
         .interface(INTERFACE)?
         .member("ApplicationQuit")?
         .path(OBJECT_PATH)?
         .build();
-    let messages = MessageIterator::for_match_rule(rule, session, None)?;
+    let messages = from_owner(session, BUS_NAME, rule, |_| {
+        eprintln!("cupertino-login: an ApplicationQuit not sent by the server was ignored")
+    })?;
     std::thread::Builder::new()
         .name("session-quit".into())
         .spawn(move || {
@@ -65,4 +70,45 @@ pub fn watch_quit(
         })
         .map(drop)
         .map_err(|e| zbus::Error::Failure(format!("starting the ApplicationQuit reader: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn only_the_server_says_an_application_quit() {
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        let server = bus.connect();
+        server.request_name(BUS_NAME).unwrap();
+        let agent = bus.connect();
+        let (tx, rx) = mpsc::channel();
+        watch_quit(&agent, move |quit| {
+            let _ = tx.send(quit.map_err(|e| e.to_string()));
+        })
+        .unwrap();
+        let to = agent.unique_name().unwrap().to_string();
+        let quit = |from: &Connection, to: Option<&str>, app: &str| {
+            from.emit_signal(to, OBJECT_PATH, INTERFACE, "ApplicationQuit", &app)
+                .unwrap()
+        };
+        let peer = bus.connect();
+        for to in [Some(to.as_str()), None] {
+            quit(&peer, to, "org.example.Forged");
+        }
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "a forged quit is ignored"
+        );
+        quit(&server, None, "org.example.Editor");
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(Ok("org.example.Editor".to_owned()))
+        );
+    }
 }

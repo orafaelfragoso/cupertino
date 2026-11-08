@@ -4,6 +4,7 @@
 
 use std::fmt;
 
+use cupertino_peer::signal::{from_owner, sent_by_bus};
 use zbus::blocking::{Connection, MessageIterator};
 use zbus::message::Type;
 use zbus::MatchRule;
@@ -153,7 +154,9 @@ impl LoginManager {
 
     /// Call `notify` on a reader thread for every `Unlock` the manager sends this process, and once with the error when the
     /// stream breaks or ends (no signal arrives after that). Only the owner of the manager's bus name is accepted as the
-    /// sender, and only root may own it; an `Unlock` from any other peer is ignored ([`sent_by_manager`]).
+    /// sender, and only root may own it. A match rule cannot hold a well-known name as its sender: the bus delivers a signal
+    /// sent to this process by its unique name whatever the rule says, so an `Unlock` from any other peer arrives too and is
+    /// ignored here.
     pub fn watch_unlock(
         &self,
         notify: impl Fn(Result<(), Error>) + Send + 'static,
@@ -171,18 +174,16 @@ impl LoginManager {
             .and_then(|b| b.member("Unlock"))
             .map_err(fail)?
             .build();
-        let signals =
-            MessageIterator::for_match_rule(rule, &self.connection, None).map_err(fail)?;
-        let connection = self.connection.clone();
+        let signals = from_owner(&self.connection, BUS_NAME, rule, |_| {
+            eprintln!("cupertino-login: an Unlock not sent by the session manager was ignored")
+        })
+        .map_err(fail)?;
         std::thread::Builder::new()
             .name("login-unlock".into())
             .spawn(move || {
                 for message in signals {
                     match message {
-                        Ok(message) if sent_by_manager(&connection, &message) => notify(Ok(())),
-                        Ok(_) => eprintln!(
-                            "cupertino-login: an Unlock not sent by the session manager was ignored"
-                        ),
+                        Ok(_) => notify(Ok(())),
                         Err(source) => {
                             return notify(Err(Error {
                                 what: "reading the session manager's Unlock",
@@ -205,6 +206,7 @@ impl LoginManager {
 
     /// Call `notify` on a reader thread every time the manager's bus name gets an owner (the manager started or restarted; its
     /// table of agents is gone, so the session announces itself again), and once with the error when the stream breaks or ends.
+    /// Only the bus daemon's own `NameOwnerChanged` counts.
     pub fn watch_owner(
         &self,
         notify: impl Fn(Result<(), Error>) + Send + 'static,
@@ -229,6 +231,12 @@ impl LoginManager {
             .name("login-manager-owner".into())
             .spawn(move || {
                 for message in signals {
+                    if message.as_ref().is_ok_and(|m| !sent_by_bus(m)) {
+                        eprintln!(
+                            "cupertino-login: a NameOwnerChanged not sent by the bus was ignored"
+                        );
+                        continue;
+                    }
                     match message.and_then(|m| m.body().deserialize::<(String, String, String)>()) {
                         Ok((_, _, new_owner)) if !new_owner.is_empty() => notify(Ok(())),
                         Ok(_) => {}
@@ -268,27 +276,6 @@ impl LoginManager {
                 source: Box::new(source),
             })
     }
-}
-
-/// Whether `message` comes from the connection that owns the manager's name now. A match rule cannot hold a well-known
-/// name as its sender: the bus delivers a signal sent to this process by its unique name whatever the rule says, so any
-/// peer on the bus could send one that matches everything else.
-fn sent_by_manager(connection: &Connection, message: &zbus::Message) -> bool {
-    let header = message.header();
-    let Some(sender) = header.sender() else {
-        return false;
-    };
-    connection
-        .call_method(
-            Some("org.freedesktop.DBus"),
-            "/org/freedesktop/DBus",
-            Some("org.freedesktop.DBus"),
-            "GetNameOwner",
-            &(BUS_NAME,),
-        )
-        .ok()
-        .and_then(|reply| reply.body().deserialize::<String>().ok())
-        .is_some_and(|owner| owner == sender.as_str())
 }
 
 #[cfg(test)]
@@ -376,5 +363,43 @@ mod tests {
         unlock(&successor);
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
         assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+    }
+
+    #[test]
+    fn only_the_bus_says_the_manager_restarted() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        let agent = LoginManager {
+            connection: bus.connect(),
+        };
+        let (tx, rx) = mpsc::channel();
+        agent
+            .watch_owner(move |signal| {
+                let _ = tx.send(signal.is_ok());
+            })
+            .expect("watching");
+        let to = agent.connection.unique_name().unwrap().to_string();
+        // another peer says the manager came up, to the agent directly
+        let peer = bus.connect();
+        let started = (BUS_NAME, "", peer.unique_name().unwrap().to_string());
+        peer.emit_signal(
+            Some(to.as_str()),
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameOwnerChanged",
+            &started,
+        )
+        .expect("sent");
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "a forged start is ignored"
+        );
+        let manager = bus.connect();
+        manager.request_name(BUS_NAME).expect("the manager's name");
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
     }
 }

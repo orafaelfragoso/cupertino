@@ -374,7 +374,7 @@ X11 programs run through [`xwayland-satellite`](https://github.com/Supreeeme/xwa
 |---|---|
 | Reduce Transparency | materials take their `-Opaque` variants (`RenderResources::recipe`, cached per appearance and option) |
 | Increase Contrast | the high-contrast catalogs (`Cupertino::appearance`), so materials are opaque too; decorations take the high-contrast palette and the contrast half of the shadow table |
-| Reduce Motion | `render::motion`: the workspace switch cross-fades in place instead of sliding; full screen draws the new frame at once (no frame zoom, the workspace cross-fade carries the change); a closing sheet disappears at once |
+| Reduce Motion | `render::motion`: the workspace switch cross-fades in place instead of sliding; full screen draws the new frame at once (no frame zoom, the workspace cross-fade carries the change); a closing sheet disappears at once; the warp and funnel minimize effects become the scale effect, with its timing |
 | Colour filter, invert, display contrast | a `Full` material element over the whole output in `SceneLayer::DisplayFilter` (below the pointer): backdrop at scale 1 without blur, then the colour chain of `cupertino_glass::display_filter` |
 | Differentiate without colour | broadcast only |
 

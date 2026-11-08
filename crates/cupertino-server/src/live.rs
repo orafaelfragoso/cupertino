@@ -238,7 +238,7 @@ impl Cupertino {
         if changed!(minimize_effect, closing_animation) {
             self.config.effects = target.effects;
             self.fx.cfg = target.effects;
-            crate::state::set_minimize_timing(self.wm.config_mut(), target.effects);
+            self.apply_minimize_timing();
         }
         if changed!(hot_corner_size, hot_corner_dwell) {
             self.config.hot_corners = target.hot_corners.clone();

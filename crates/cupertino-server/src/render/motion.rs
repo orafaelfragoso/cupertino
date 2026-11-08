@@ -2,7 +2,7 @@
 //! reference has no global rule; each animation owner decides. Replacements here:
 
 use cupertino_defaults::accessibility::DisplayOptions;
-use cupertino_effects::{TransformKind, WindowKind};
+use cupertino_effects::{MinimizeKind, TransformKind, WindowKind};
 use cupertino_wm::LifecycleState;
 
 /// How the windows of an output follow its workspace position during a switch.
@@ -53,9 +53,39 @@ pub fn close_transform(
     normal
 }
 
+/// The minimize effect drawn for the configured `effect`: under Reduce Motion the scale, the shortest and the one that
+/// moves least, stands in for the warp and the funnel. No effect stays none.
+pub fn minimize_kind(
+    effect: Option<MinimizeKind>,
+    options: DisplayOptions,
+) -> Option<MinimizeKind> {
+    effect.map(|kind| {
+        if options.reduce_motion {
+            MinimizeKind::Scale
+        } else {
+            kind
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reduce_motion_minimizes_with_the_scale() {
+        for kind in MinimizeKind::ALL {
+            assert_eq!(
+                minimize_kind(Some(kind), DisplayOptions::default()),
+                Some(kind)
+            );
+            assert_eq!(
+                minimize_kind(Some(kind), reduced()),
+                Some(MinimizeKind::Scale)
+            );
+        }
+        assert_eq!(minimize_kind(None, reduced()), None);
+    }
 
     fn reduced() -> DisplayOptions {
         DisplayOptions {

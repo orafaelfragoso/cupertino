@@ -23,6 +23,7 @@ use cupertino_kit::platform::{MouseButton, PointerEvent};
 use super::{window_key, Event as WindowEvent, Message};
 use crate::context_menu::{Command as MenuCommand, ViewSegment};
 use crate::context_menu::{ItemKind, MenuItem, TAG_ROW_ORDER, VIEW_ROW_ORDER};
+use crate::menu_bar::{self, MenuAction};
 
 /// An open context menu of a window.
 #[derive(Clone, Debug, PartialEq)]
@@ -68,13 +69,28 @@ fn view_label(segment: ViewSegment) -> &'static str {
 
 /// `items` as Kit's rows of the window `id`'s menu.
 pub(super) fn kit_items(id: u64, items: &[MenuItem]) -> Vec<KitItem<Message>> {
-    let command =
-        move |label: &str, enabled: bool, checked: bool, command: MenuCommand| KitItem::Item {
-            label: label.into(),
-            enabled,
-            checked,
-            on_select: Message::Window(id, WindowEvent::MenuCommand(command)),
-        };
+    let command = move |label: &str, enabled: bool, checked: bool, command: MenuCommand| {
+        let shortcut = command
+            .action()
+            .and_then(MenuAction::chord)
+            .map(|chord| menu_bar::glyphs(&chord));
+        let on_select = Message::Window(id, WindowEvent::MenuCommand(command));
+        match shortcut {
+            Some(shortcut) => KitItem::Shortcut {
+                label: label.into(),
+                shortcut,
+                enabled,
+                checked,
+                on_select,
+            },
+            None => KitItem::Item {
+                label: label.into(),
+                enabled,
+                checked,
+                on_select,
+            },
+        }
+    };
     let mut out = Vec::new();
     for item in items {
         match &item.kind {
@@ -228,6 +244,19 @@ mod tests {
                         if *checked { " ✓" } else { "" }
                     )
                 }
+                KitItem::Shortcut {
+                    label,
+                    shortcut,
+                    enabled,
+                    checked,
+                    ..
+                } => {
+                    format!(
+                        "{label}{}{} [{shortcut}]",
+                        if *enabled { "" } else { " (off)" },
+                        if *checked { " ✓" } else { "" }
+                    )
+                }
                 KitItem::Submenu { label, enabled, .. } => {
                     format!("{label} ›{}", if *enabled { "" } else { " (off)" })
                 }
@@ -246,13 +275,16 @@ mod tests {
             pasteboard: 0,
         });
         let rows = labels(&kit_items(0, &menu));
-        assert!(rows.contains(&"New Folder".to_owned()), "{rows:?}");
+        assert!(
+            rows.contains(&"New Folder [\u{21e7}\u{2318}N]".to_owned()),
+            "{rows:?}"
+        );
         let views: Vec<&String> = rows.iter().filter(|r| r.starts_with("as ")).collect();
         assert_eq!(
             views,
             [
-                "as Icons",
-                "as List ✓",
+                "as Icons [\u{2318}1]",
+                "as List ✓ [\u{2318}2]",
                 "as Columns (off)",
                 "as Gallery (off)"
             ]
@@ -286,5 +318,27 @@ mod tests {
         assert!(tags.contains(&"Red".to_owned()), "{tags:?}");
         // nothing opens with no application: the submenu is off
         assert!(labels(&menu).contains(&"Open With › (off)".to_owned()));
+    }
+
+    #[test]
+    fn rows_the_window_has_keys_for_show_them_and_the_others_do_not() {
+        let subject = Subject {
+            count: 1,
+            name: "a.txt".into(),
+            all_folders: false,
+            single_link: false,
+            in_trash: false,
+            tags_on: Vec::new(),
+        };
+        let rows = labels(&kit_items(3, &item_menu(&subject, &[])));
+        for row in [
+            "Open [\u{2318}O]",
+            "Move to Trash [\u{2318}\u{232b}]",
+            "Duplicate [\u{2318}D]",
+            "Make Alias [\u{2303}\u{2318}A]",
+            "Rename",
+        ] {
+            assert!(rows.contains(&row.to_owned()), "{row}: {rows:?}");
+        }
     }
 }

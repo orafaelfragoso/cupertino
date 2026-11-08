@@ -4,6 +4,7 @@
 //! * A row can carry alternates: rows that take the place of the row while the modifiers they name are held.
 //! * Two rows stand for a set of choices: the tag row of seven colours and the row of the four view modes.
 
+use crate::menu_bar::MenuAction;
 use crate::sort::SortKey;
 use crate::tags::TagColor;
 use crate::window::ViewMode;
@@ -69,6 +70,31 @@ pub enum Command {
     /// Add the tag of this colour to the selection, or remove it when every item has it.
     ToggleTag(TagColor),
     SetView(ViewMode),
+}
+
+impl Command {
+    /// The menu bar's action that does the same, whose rules decide whether the row can act and whose keys the row
+    /// shows; `None` for the rows only the context menu has.
+    pub fn action(&self) -> Option<MenuAction> {
+        Some(match self {
+            Command::Open => MenuAction::Open,
+            Command::OpenInNewWindow => MenuAction::OpenInNewWindow,
+            Command::ShowOriginal => MenuAction::ShowOriginal,
+            Command::PutBack => MenuAction::PutBack,
+            Command::MoveToTrash => MenuAction::MoveToTrash,
+            Command::Rename => MenuAction::Rename,
+            Command::NewFolder => MenuAction::NewFolder,
+            Command::NewFolderWithSelection => MenuAction::NewFolderWithSelection,
+            Command::Duplicate => MenuAction::Duplicate,
+            Command::MakeAlias => MenuAction::MakeAlias,
+            Command::SortBy(key, ascending) => MenuAction::SortBy(*key, *ascending),
+            Command::SetView(view) => MenuAction::View(*view),
+            Command::Copy => MenuAction::Copy,
+            Command::Paste => MenuAction::Paste,
+            Command::MoveHere => MenuAction::MoveHere,
+            Command::OpenWith(_) | Command::ToggleTag(_) => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

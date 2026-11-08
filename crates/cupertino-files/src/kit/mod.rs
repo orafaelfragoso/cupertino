@@ -1330,35 +1330,23 @@ impl Model {
 
     /// Do the row `command` of the context menu of the window `id`.
     fn menu_command(&mut self, id: u64, command: MenuCommand) -> Vec<Command<Message>> {
-        let action = match command {
-            MenuCommand::Open => MenuAction::Open,
-            MenuCommand::OpenInNewWindow => MenuAction::OpenInNewWindow,
-            MenuCommand::ShowOriginal => MenuAction::ShowOriginal,
-            MenuCommand::PutBack => MenuAction::PutBack,
-            MenuCommand::MoveToTrash => MenuAction::MoveToTrash,
-            MenuCommand::Rename => MenuAction::Rename,
-            MenuCommand::NewFolder => MenuAction::NewFolder,
-            MenuCommand::NewFolderWithSelection => MenuAction::NewFolderWithSelection,
-            MenuCommand::Duplicate => MenuAction::Duplicate,
-            MenuCommand::MakeAlias => MenuAction::MakeAlias,
-            MenuCommand::SortBy(key, ascending) => MenuAction::SortBy(key, ascending),
-            MenuCommand::SetView(view) => MenuAction::View(view),
-            MenuCommand::Copy => MenuAction::Copy,
-            MenuCommand::Paste => MenuAction::Paste,
-            MenuCommand::MoveHere => MenuAction::MoveHere,
-            MenuCommand::OpenWith(app) => {
-                let Some(window) = self.windows.get(&id) else {
-                    return Vec::new();
-                };
-                let paths = window.selected_paths();
-                return self.session.open_paths(id, paths, Some(app));
-            }
-            MenuCommand::ToggleTag(color) => {
-                if let Some(window) = self.windows.get(&id) {
-                    window.toggle_tag(color, &self.session);
+        let Some(action) = command.action() else {
+            match command {
+                MenuCommand::OpenWith(app) => {
+                    let Some(window) = self.windows.get(&id) else {
+                        return Vec::new();
+                    };
+                    let paths = window.selected_paths();
+                    return self.session.open_paths(id, paths, Some(app));
                 }
-                return Vec::new();
+                MenuCommand::ToggleTag(color) => {
+                    if let Some(window) = self.windows.get(&id) {
+                        window.toggle_tag(color, &self.session);
+                    }
+                }
+                _ => {}
             }
+            return Vec::new();
         };
         let state = match self.windows.get(&id) {
             Some(window) => window.menu_state(&self.session),

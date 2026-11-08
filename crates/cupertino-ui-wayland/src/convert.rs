@@ -202,9 +202,25 @@ pub(crate) fn role_configure(n: u32, size: (u32, u32)) -> platform::Configure {
     }
 }
 
+/// The window style the desktop's effects give a window of `mode`, if it is not the default titled one.
+pub(crate) fn window_style(
+    mode: platform::DecorationMode,
+) -> Option<cupertino_protocol_app::WindowStyle> {
+    use cupertino_protocol_app::WindowStyle;
+    match mode {
+        platform::DecorationMode::Unified => Some(WindowStyle::Unified),
+        platform::DecorationMode::UnifiedCompact => Some(WindowStyle::UnifiedCompact),
+        platform::DecorationMode::Sidebar => Some(WindowStyle::Sidebar),
+        _ => None,
+    }
+}
+
 pub(crate) fn decorations(mode: platform::DecorationMode) -> wl::Decorations {
     match mode {
-        platform::DecorationMode::Preferred => wl::Decorations::Server,
+        platform::DecorationMode::Preferred
+        | platform::DecorationMode::Unified
+        | platform::DecorationMode::UnifiedCompact
+        | platform::DecorationMode::Sidebar => wl::Decorations::Server,
         platform::DecorationMode::Client | platform::DecorationMode::None => {
             wl::Decorations::Client
         }

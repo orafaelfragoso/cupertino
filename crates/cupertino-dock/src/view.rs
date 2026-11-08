@@ -10,8 +10,10 @@ pub mod drag;
 pub mod edge;
 pub mod force_quit;
 pub mod grid;
+pub mod label;
 pub mod menu;
 pub(crate) mod paint;
+pub mod stack;
 
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{Key, WindowKey};
@@ -101,6 +103,18 @@ pub enum Input {
     Frame,
     /// The compositor closed a window the model still shows: its output went away.
     Closed(WindowKey),
+    /// The pointer on the open folder stack.
+    Stack(Pointer),
+    /// A key on the open folder stack that none of its parts took.
+    StackKey(KeyEvent),
+    /// Assistive technology's click on the stack's entry at this index.
+    StackEntry(usize),
+    /// The stack's button that opens its folder.
+    StackOpenFolder,
+    /// The stack closed: Escape, or a press outside it.
+    StackClosed,
+    /// The compositor took the hovered tile's label down; the next pointer motion shows it again.
+    LabelGone,
 }
 
 /// The window-manager surfaces of an output.

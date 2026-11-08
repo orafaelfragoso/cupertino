@@ -62,6 +62,22 @@ pub use cupertino_defaults::dock::{
 /// Auto-hide speed per unit of the time modifier, in milliseconds.
 pub const AUTOHIDE_SPEED_MS: f64 = 60.0;
 
+/// Gap between neighbouring tiles, as a fraction of the tile size: 4 pt between 64 pt tiles.
+pub const TILE_GAP_RATIO: f64 = 4.0 / 64.0;
+/// Padding between the bar's edge and its tiles, as a fraction of the tile size: 10.5 pt around 64 pt tiles, an
+/// 85 pt deep bar.
+pub const BAR_PADDING_RATIO: f64 = 10.5 / 64.0;
+/// Extent of a separator's slot along the bar, as a fraction of the tile size: 26 pt at 64, so with the gaps either
+/// side the tiles around it stand 34 pt apart.
+pub const SEPARATOR_RATIO: f64 = 26.0 / 64.0;
+/// Padding between the tiles and the bar's edge on the screen-edge side, as a fraction of the tile size: 10 pt at
+/// 64, so the tiles sit half a point nearer the screen edge than the middle of the bar (11 pt on the other side).
+pub const BAR_EDGE_PADDING_RATIO: f64 = 10.0 / 64.0;
+/// Gap between the bar and the screen edge, in points.
+pub const EDGE_MARGIN: f64 = 5.0;
+/// How many recent applications the bar's recents section holds at most.
+pub const RECENTS_MAX: usize = 3;
+
 #[derive(Clone, Debug)]
 pub struct DockConfig {
     /// default 64 (52 on displays at most 800 pt tall, see [`DockConfig::for_display_height`]).
@@ -71,7 +87,7 @@ pub struct DockConfig {
     /// default off.
     pub magnification: bool,
     pub orientation: Orientation,
-    /// spacing between tiles as a fraction of the tile size (approximate)
+    /// Gap between neighbouring tiles as a fraction of the tile size (4 pt at 64).
     pub spacing: f64,
     /// Half-width of the magnification bump in unmagnified tile units: the fisheye size is
     /// `fish_span · tile_size` (3.0).
@@ -80,13 +96,20 @@ pub struct DockConfig {
     pub fish_speed: f64,
     /// constant 270.0, unit milliseconds
     pub move_speed_ms: f64,
-    /// Extent of a separator along the dock axis, in points. approximate.
-    pub separator_extent: f64,
-    /// Padding between the bar edge and the tiles. approximate.
-    pub bar_padding: f64,
-    /// Gap between the bar and the screen edge. approximate.
+    /// Extent of a separator's slot along the dock axis as a fraction of the tile size (26 pt at 64): with the gaps
+    /// on both sides the tiles either side of it stand 34 pt apart, the line in the middle.
+    pub separator_ratio: f64,
+    /// Padding between the bar's edge and the tiles as a fraction of the tile size (10.5 pt at 64, so the bar is
+    /// 85 pt deep).
+    pub padding_ratio: f64,
+    /// Padding between the tiles and the bar's edge on the screen-edge side as a fraction of the tile size (10 pt at
+    /// 64); the rest of the bar's depth is on the other side.
+    pub edge_padding_ratio: f64,
+    /// Gap between the bar and the screen edge, in points.
     pub edge_margin: f64,
+    /// Show the recent applications' section, between the applications and the windows and the trash.
     pub show_recents: bool,
+    /// How many recent applications that section holds at most ([`RECENTS_MAX`]).
     pub recents_max: usize,
     /// Draw a running indicator under running apps (setting existence, default unknown).
     pub show_running_indicators: bool,
@@ -127,15 +150,16 @@ impl Default for DockConfig {
             large_size: DEFAULT_LARGE_SIZE,
             magnification: false,
             orientation: Orientation::Bottom,
-            spacing: 0.0,
+            spacing: TILE_GAP_RATIO,
             fish_span: 3.0,
             fish_speed: 42.0,
             move_speed_ms: 270.0,
-            separator_extent: 12.0,
-            bar_padding: 6.0,
-            edge_margin: 4.0,
+            separator_ratio: SEPARATOR_RATIO,
+            padding_ratio: BAR_PADDING_RATIO,
+            edge_padding_ratio: BAR_EDGE_PADDING_RATIO,
+            edge_margin: EDGE_MARGIN,
             show_recents: true,
-            recents_max: 5,
+            recents_max: RECENTS_MAX,
             show_running_indicators: true,
             minimize_to_app: false,
             minimize_effect: MinimizeEffect::WarpMinimize,
@@ -176,6 +200,32 @@ impl DockConfig {
             magnification: magnification.unwrap_or(false),
             ..Self::default()
         }
+    }
+
+    /// Gap between neighbouring tiles in points.
+    pub fn gap(&self) -> f64 {
+        self.tile_size * self.spacing
+    }
+
+    /// Padding between the bar's edge and its tiles in points.
+    pub fn bar_padding(&self) -> f64 {
+        self.tile_size * self.padding_ratio
+    }
+
+    /// Extent of a separator's slot along the bar in points.
+    pub fn separator_extent(&self) -> f64 {
+        self.tile_size * self.separator_ratio
+    }
+
+    /// Padding between the tiles and the bar's edge on the screen-edge side, in points: the rest of the bar's depth
+    /// is on the other side.
+    pub fn edge_padding(&self) -> f64 {
+        self.tile_size * self.edge_padding_ratio
+    }
+
+    /// Depth of the bar across its edge: a tile and the padding either side.
+    pub fn bar_thickness(&self) -> f64 {
+        self.tile_size + 2.0 * self.bar_padding()
     }
 
     /// Auto-hide speed in milliseconds: `time_modifier · 60`.

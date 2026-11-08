@@ -262,9 +262,19 @@ pub fn layout(cfg: &DockConfig, n: usize, cursor: Option<f64>, fish: f64) -> Vec
 mod tests {
     use super::*;
 
+    /// The default configuration without gaps between tiles: the profile's arithmetic on its own.
+    fn zero_gap() -> DockConfig {
+        DockConfig {
+            spacing: 0.0,
+            ..DockConfig::default()
+        }
+    }
+
     fn cfg() -> DockConfig {
         DockConfig {
             tile_size: 48.0,
+            large_size: 128.0,
+            spacing: 0.0,
             magnification: true,
             ..DockConfig::default()
         }
@@ -272,6 +282,8 @@ mod tests {
 
     fn cfg64() -> DockConfig {
         DockConfig {
+            large_size: 128.0,
+            spacing: 0.0,
             magnification: true,
             ..DockConfig::default()
         }
@@ -474,7 +486,7 @@ mod tests {
                 tile_size: tile,
                 large_size: large,
                 magnification: true,
-                ..DockConfig::default()
+                ..zero_gap()
             };
             for n in [1usize, 5, 11] {
                 for k in 0..n {

@@ -31,6 +31,7 @@ pub mod menu;
 pub mod overview_kit;
 pub mod overview_ui;
 pub mod session;
+pub mod stack;
 pub mod switcher;
 pub mod switcher_kit;
 pub mod tile_drag;

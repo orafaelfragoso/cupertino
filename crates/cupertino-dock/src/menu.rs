@@ -4,8 +4,8 @@
 //! The item lists follow the design tables with these
 //! deviations, all approximate: the "Options" submenu is flattened into the top level (no
 //! submenus here), "Open at Login" is absent (there is no login-items store), "Show Recents",
-//! "Dock Settings" and "Minimize Using" are absent (no recents source, no settings application;
-//! the minimize effect is the server's setting), and the Option-key alternates (Hide Others, Force
+//! "Dock Settings" and "Minimize Using" are absent (the recents are `dock.conf`'s `recents`, there
+//! is no settings application to open, and the minimize effect is the server's setting), and the Option-key alternates (Hide Others, Force
 //! Quit) are not offered. The metrics and colours are the menu bar's (approximate).
 
 use std::path::{Path, PathBuf};
@@ -133,6 +133,10 @@ pub fn tile_menu(f: &TileFacts<'_>) -> Vec<MenuItem> {
     match f.kind {
         TileKind::Separator | TileKind::MinimizedWindow => Vec::new(),
         TileKind::Trash => vec![MenuItem::item("Open", MenuCommand::OpenTrash)],
+        TileKind::Folder => vec![MenuItem::item(
+            &format!("Open \u{201c}{}\u{201d}", crate::stack::folder_name(f.key)),
+            MenuCommand::ShowInFileManager(PathBuf::from(f.key)),
+        )],
         // the file manager's menus have an empty Options submenu and no Quit:
         // running, Show All Windows and Hide; not running, Open. Its Relaunch is not offered
         // (approximate: the dock has no relaunch path)

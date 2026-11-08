@@ -17,8 +17,8 @@ use cupertino_dock::config::Orientation;
 use cupertino_dock::desktop::DesktopIndex;
 use cupertino_dock::icons::Icons;
 use cupertino_dock::kit::{
-    self, AppAction, DockEvent, Host, IconKey, Message, Model, OutputInfo, Part, Placement,
-    Request, Sized, WindowIcon,
+    self, AppAction, DockEvent, Exited, Host, IconKey, IconLoad, Message, Model, OutputInfo, Part,
+    Placement, Request, Sized, WindowIcon,
 };
 use cupertino_dock::overview_ui::{Mode, Workspace};
 use cupertino_dock::session::Session;
@@ -47,7 +47,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -564,6 +564,11 @@ struct AppHost {
     surfaces: Rc<RefCell<Surfaces>>,
     start: Instant,
     icons: Icons,
+    /// The icons loaded in the background ([`Host::preload`]), on a thread of their own; made on the first load.
+    preloader: Arc<Mutex<Option<Icons>>>,
+    assets: Assets,
+    /// The file types, for a stack's icons; loaded by the first listing, on its thread.
+    mime: Arc<std::sync::OnceLock<cupertino_apps::MimeDatabase>>,
     /// Where the pins are stored (`None` when neither `XDG_CONFIG_HOME` nor `HOME` is set).
     pins_path: Option<PathBuf>,
     conf_path: Option<PathBuf>,
@@ -680,15 +685,13 @@ impl Host for AppHost {
         }
     }
 
-    fn spawn(&mut self, argv: Vec<String>, token: Option<String>) -> bool {
-        let Some(spec) = CommandSpec::from_argv(argv) else {
-            return false;
-        };
+    fn spawn(&mut self, argv: Vec<String>, token: Option<String>) -> Option<Exited> {
+        let spec = CommandSpec::from_argv(argv)?;
         let spec = match token {
             Some(token) => spec.with_activation_token(&token),
             None => spec,
         };
-        spawn(PROCESS, spec.to_command())
+        spawn_watched(spec.to_command())
     }
 
     fn open(&mut self, target: &str) {
@@ -768,6 +771,92 @@ impl Host for AppHost {
             .collect()
     }
 
+    /// The user's downloads folder (`XDG_DOWNLOAD_DIR` of `user-dirs.dirs`, else `~/Downloads`), when it exists.
+    fn folders(&mut self) -> Vec<(String, String)> {
+        let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) else {
+            return Vec::new();
+        };
+        let home = PathBuf::from(home);
+        let config = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|c| !c.is_empty())
+            .map_or_else(|| home.join(".config"), PathBuf::from);
+        let user_dirs = std::fs::read_to_string(config.join("user-dirs.dirs")).ok();
+        let downloads = cupertino_dock::stack::downloads_dir(user_dirs.as_deref(), &home);
+        if !downloads.is_dir() {
+            return Vec::new();
+        }
+        vec![(
+            downloads.to_string_lossy().into_owned(),
+            cupertino_dock::stack::DOWNLOADS_ICON.to_owned(),
+        )]
+    }
+
+    /// Listed on a thread of its own when the stack opens ([`cupertino_dock::stack::list_folder`]).
+    fn folder_entries(&mut self, folder: &str) -> kit::FolderListing {
+        let (sender, receiver) = async_channel::bounded(1);
+        let folder = PathBuf::from(folder);
+        let mime = Arc::clone(&self.mime);
+        std::thread::spawn(move || {
+            let mime = mime.get_or_init(|| {
+                let dirs = cupertino_apps::XdgDirs::from_env()
+                    .map(|d| d.all_data_dirs())
+                    .unwrap_or_default();
+                cupertino_apps::MimeDatabase::load(&dirs).unwrap_or_default()
+            });
+            let entries = cupertino_dock::stack::list_folder(&folder, |path, is_dir| {
+                let ty = mime.file_type(path, is_dir);
+                cupertino_icons::document::document_icon_name(mime, ty).to_owned()
+            });
+            let _ = sender.send_blocking(entries);
+        });
+        Box::pin(async move { receiver.recv().await.unwrap_or_default() })
+    }
+
+    /// An application's icon loads from the theme name of its entry; one without, or whose name the theme lacks, is
+    /// left out, for the model to load on the spot (its window's own icon lives here, on the model's thread).
+    fn preload(&mut self, desktop: &DesktopIndex, icons: Vec<(IconKey, f64)>) -> Option<IconLoad> {
+        let jobs: Vec<(IconKey, f64, Preload)> = icons
+            .into_iter()
+            .filter_map(|(key, side)| {
+                let job = match &key {
+                    IconKey::App(app) => Preload::Themed(desktop.entry_icon(app)?.to_owned()),
+                    IconKey::Named(name) => Preload::Named(name.clone()),
+                    IconKey::Trash(full) => Preload::Trash(*full),
+                };
+                Some((key, side, job))
+            })
+            .collect();
+        let (sender, receiver) = async_channel::bounded(1);
+        let preloader = Arc::clone(&self.preloader);
+        let assets = self.assets.clone();
+        std::thread::spawn(move || {
+            let mut slot = preloader.lock().unwrap_or_else(|e| e.into_inner());
+            let icons = slot.get_or_insert_with(|| Icons::background(&assets));
+            let loaded: Vec<(IconKey, u32, IconSet)> = jobs
+                .into_iter()
+                .filter_map(|(key, side, job)| {
+                    let set = kit::ICON_SCALES
+                        .iter()
+                        .map(|scale| {
+                            let px = (side * scale).ceil().max(1.0) as u32;
+                            let pixmap = match &job {
+                                Preload::Themed(name) => icons.themed(name, px)?,
+                                Preload::Named(name) => icons.named(name, px),
+                                Preload::Trash(full) => icons.trash(*full, px),
+                            };
+                            Some(image(pixmap))
+                        })
+                        .collect::<Option<IconSet>>()?;
+                    Some((key, side.ceil().max(1.0) as u32, set))
+                })
+                .collect();
+            let _ = sender.send_blocking(loaded);
+        });
+        Some(Box::pin(async move {
+            receiver.recv().await.unwrap_or_default()
+        }))
+    }
+
     fn window_icon(&mut self, apps: [String; 2], icon: WindowIcon) {
         self.icons.window_icon(
             apps,
@@ -788,6 +877,48 @@ impl Host for AppHost {
     fn trash_full(&mut self) -> bool {
         self.icons.trash_full()
     }
+}
+
+/// An icon loaded in the background ([`Host::preload`]).
+enum Preload {
+    /// The theme's icon of this name, or none.
+    Themed(String),
+    /// The theme's icon of this name, else the generic application icon.
+    Named(String),
+    /// The trash, full or empty.
+    Trash(bool),
+}
+
+/// Run `command` detached from the dock's loop, as [`spawn`] does: what ends when the process exits, in whether it
+/// failed, its exit reaped on a thread; `None` when it did not start. An unsuccessful exit is reported on standard
+/// error. An exit that cannot be read counts as no failure.
+fn spawn_watched(mut command: Process) -> Option<Exited> {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("{PROCESS}: cannot run {program}: {e}");
+            return None;
+        }
+    };
+    let (sender, receiver) = async_channel::bounded::<bool>(1);
+    std::thread::spawn(move || {
+        let failed = match child.wait() {
+            Ok(status) if !status.success() => {
+                eprintln!("{PROCESS}: {program} exited with {status}");
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                eprintln!("{PROCESS}: {program}: {e}");
+                false
+            }
+        };
+        let _ = sender.send_blocking(failed);
+    });
+    Some(Box::pin(
+        async move { receiver.recv().await.unwrap_or(false) },
+    ))
 }
 
 /// The model and the channel the session's messages arrive on.
@@ -930,6 +1061,9 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         surfaces,
         start: Instant::now(),
         icons: Icons::new(&assets),
+        preloader: Arc::default(),
+        assets: assets.clone(),
+        mime: Arc::default(),
         pins_path,
         conf_path,
         terminal: options.terminal.clone(),

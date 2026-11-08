@@ -34,6 +34,8 @@ pub enum Activation {
     Reopen { key: String, app_id: String },
     /// Open the trash.
     OpenTrash,
+    /// Open, or close, the stack of the folder tile with this id.
+    ToggleStack(TileId),
 }
 
 /// The command that starts an application.
@@ -44,6 +46,9 @@ pub struct Launch {
     pub terminal: bool,
 }
 
+/// How many of the applications that quit the session remembers.
+const QUIT_KEPT: usize = 16;
+
 /// The dock model together with the windows it reflects.
 pub struct Session {
     pub dock: Dock,
@@ -53,6 +58,9 @@ pub struct Session {
     /// The application ids the server reported resident: a process of the application that showed a window is
     /// still connected, with or without windows now.
     resident: BTreeSet<String>,
+    /// The tile keys of the applications that quit, the most recent first, each once: the recents section's first
+    /// source ([`Session::recently_quit`]).
+    quit: Vec<String>,
     /// The server's first list of windows was taken in: an application that appears after that
     /// has just started, one in the list was running before the dock was.
     live: bool,
@@ -65,6 +73,7 @@ impl Session {
             desktop,
             windows: BTreeMap::new(),
             resident: BTreeSet::new(),
+            quit: Vec::new(),
             live: false,
         }
     }
@@ -149,7 +158,7 @@ impl Session {
         if !self.windows.values().any(|w| w.key == window.key)
             && self.resident_app_id(&window.key).is_none()
         {
-            self.dock.app_quit(&window.key, now);
+            self.app_quit(&window.key, now);
         }
     }
 
@@ -172,7 +181,7 @@ impl Session {
             && !self.windows.values().any(|w| w.key == key)
             && self.resident_app_id(&key).is_none()
         {
-            self.dock.app_quit(&key, now);
+            self.app_quit(&key, now);
         }
     }
 
@@ -183,6 +192,36 @@ impl Session {
         for app_id in gone {
             self.set_resident(&app_id, false, now);
         }
+    }
+
+    /// The application of tile `key` quit: its tile loses the running state, and it heads the applications that quit.
+    fn app_quit(&mut self, key: &str, now: f64) {
+        self.dock.app_quit(key, now);
+        self.quit.retain(|k| k != key);
+        self.quit.insert(0, key.to_owned());
+        self.quit.truncate(QUIT_KEPT);
+    }
+
+    /// The tile keys of the applications that quit since the dock started, the most recent first.
+    pub fn recently_quit(&self) -> &[String] {
+        &self.quit
+    }
+
+    /// The recent applications the bar shows, the most recent first: those that quit since the dock started, then
+    /// `history` (desktop file IDs, the most recent first), each as its desktop file ID. An application without an
+    /// entry the desktop shows, and one with a tile among the applications (pinned or running), is left out.
+    pub fn recent_apps(&self, history: &[String]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for key in self.quit.iter().chain(history) {
+            let Some(entry) = self.desktop.find(key).filter(|e| !e.no_display) else {
+                continue;
+            };
+            if out.contains(&entry.id) || self.dock.app_tile(&self.key_of(&entry.id)).is_some() {
+                continue;
+            }
+            out.push(entry.id.clone());
+        }
+        out
     }
 
     /// The application id of a resident application whose tile key is `key`.
@@ -243,6 +282,7 @@ impl Session {
             }),
             TileKind::App | TileKind::Recent => Some(self.opening(&tile.key)),
             TileKind::Trash => Some(Activation::OpenTrash),
+            TileKind::Folder => Some(Activation::ToggleStack(id)),
             TileKind::Separator => None,
         }
     }

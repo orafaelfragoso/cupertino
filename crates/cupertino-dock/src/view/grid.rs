@@ -110,12 +110,7 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
             scale: visual.scale,
         };
         let s = zoom.scale;
-        let collapsed = grid.is_collapsed();
-        let radius = if collapsed {
-            panel.h / 2.0
-        } else {
-            GridLayout::PANEL_RADIUS
-        };
+        let radius = GridLayout::PANEL_RADIUS;
         children.push(
             Element::new(PanelNode {
                 rect: zoom.rect(&panel),
@@ -125,11 +120,10 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
             .key("panel"),
         );
         // the keys are on the focused pill, on the selected application, else on the search field
-        let search_focus = collapsed
-            || match grid.zone() {
-                Zone::Pills => grid.pill_focus().is_none(),
-                Zone::Grid => grid.selected().is_none(),
-            };
+        let search_focus = match grid.zone() {
+            Zone::Pills => grid.pill_focus().is_none(),
+            Zone::Grid => grid.selected().is_none(),
+        };
         if let Some(search) = grid.search_rect() {
             children.push(
                 Element::new(SearchNode {
@@ -154,7 +148,7 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
                 .key(Key::from(format!("pill-{}", pill.name()))),
             );
         }
-        if !collapsed {
+        {
             let content = zoom.rect(&layout.content);
             let mut rows: Vec<Element<M>> = Vec::new();
             let mut recents: Vec<Element<M>> = Vec::new();

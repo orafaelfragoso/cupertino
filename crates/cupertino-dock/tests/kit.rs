@@ -96,6 +96,29 @@ struct Record {
     no_bus: bool,
     /// The icons loaded, with the side asked for, in order.
     icon_loads: Vec<(IconKey, f64)>,
+    /// The host loads icons in the background ([`Host::preload`]).
+    background: bool,
+    /// The icons asked for in the background, a list a load.
+    preloads: Vec<Vec<(IconKey, f64)>>,
+    /// The icons a background load leaves out, for the model to load itself.
+    leave_out: Vec<IconKey>,
+    /// The ends of the programs started, in order: a send makes it exit, failed or not.
+    exits: Vec<async_channel::Sender<bool>>,
+    /// The folders shown as stacks, with their icons, and the entries every folder lists.
+    folders: Vec<(String, String)>,
+    folder_entries: Vec<cupertino_dock::stack::StackEntry>,
+    /// Listings wait for a send here before they end, as a slow folder does; otherwise they end at once.
+    hold_listings: bool,
+    listings: Vec<async_channel::Sender<()>>,
+    /// What was opened with the session's opener, in order.
+    opened: Vec<String>,
+}
+
+thread_local! {
+    /// The next run's host loads icons in the background, leaving these out.
+    static BACKGROUND: RefCell<Option<Vec<IconKey>>> = const { RefCell::new(None) };
+    /// The next run's host shows these folders as stacks.
+    static FOLDERS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
 }
 
 struct FakeHost(Rc<RefCell<Record>>);
@@ -148,11 +171,34 @@ impl Host for FakeHost {
         self.0.borrow_mut().keyboard.push((part, on));
     }
     fn resize_force_quit(&mut self, _: f64, _: f64) {}
-    fn spawn(&mut self, argv: Vec<String>, token: Option<String>) -> bool {
-        self.0.borrow_mut().spawned.push((argv, token));
-        true
+    fn spawn(&mut self, argv: Vec<String>, token: Option<String>) -> Option<kit::Exited> {
+        let mut record = self.0.borrow_mut();
+        record.spawned.push((argv, token));
+        let (exit, exited) = async_channel::bounded::<bool>(1);
+        record.exits.push(exit);
+        Some(Box::pin(
+            async move { exited.recv().await.unwrap_or(false) },
+        ))
     }
-    fn open(&mut self, _: &str) {}
+    fn open(&mut self, target: &str) {
+        self.0.borrow_mut().opened.push(target.to_owned());
+    }
+    fn folders(&mut self) -> Vec<(String, String)> {
+        self.0.borrow().folders.clone()
+    }
+    fn folder_entries(&mut self, _: &str) -> kit::FolderListing {
+        let mut record = self.0.borrow_mut();
+        let entries = record.folder_entries.clone();
+        if !record.hold_listings {
+            return Box::pin(std::future::ready(entries));
+        }
+        let (done, listed) = async_channel::bounded::<()>(1);
+        record.listings.push(done);
+        Box::pin(async move {
+            let _ = listed.recv().await;
+            entries
+        })
+    }
     fn shell(&mut self, command: &str) {
         self.0.borrow_mut().shell.push(command.to_owned());
     }
@@ -180,6 +226,25 @@ impl Host for FakeHost {
             .iter()
             .map(|scale| square((side * scale).ceil().max(1.0) as u32))
             .collect()
+    }
+    fn preload(&mut self, _: &DesktopIndex, icons: Vec<(IconKey, f64)>) -> Option<kit::IconLoad> {
+        let mut record = self.0.borrow_mut();
+        if !record.background {
+            return None;
+        }
+        record.preloads.push(icons.clone());
+        let loaded: Vec<(IconKey, u32, IconSet)> = icons
+            .into_iter()
+            .filter(|(key, _)| !record.leave_out.contains(key))
+            .map(|(key, side)| {
+                let set = [1.0, 2.0]
+                    .iter()
+                    .map(|scale| square((side * scale).ceil().max(1.0) as u32))
+                    .collect();
+                (key, side.ceil() as u32, set)
+            })
+            .collect();
+        Some(Box::pin(std::future::ready(loaded)))
     }
     fn window_icon(&mut self, _: [String; 2], _: kit::WindowIcon) {}
     fn window_closed(&mut self, _: u32) {}
@@ -284,7 +349,13 @@ impl Run {
     ) -> Self {
         // window ids start again with a new runtime: none of them is configured yet
         CONFIGURED.with_borrow_mut(Vec::clear);
-        let record = Rc::new(RefCell::new(Record::default()));
+        let leave_out = BACKGROUND.take();
+        let record = Rc::new(RefCell::new(Record {
+            background: leave_out.is_some(),
+            leave_out: leave_out.unwrap_or_default(),
+            folders: FOLDERS.take(),
+            ..Record::default()
+        }));
         let mut dock = Dock::new(DockConfig::default());
         dock.set_pinned(&[EDITOR, TERMINAL]);
         let mut entries = vec![
@@ -755,8 +826,7 @@ fn the_focus_dock_shortcut_is_dropped_while_the_grid_or_the_dialog_has_the_keybo
         events: vec![DockEvent::Engage],
     });
     run.send_to(grid, WindowEvent::Focus(true));
-    // the first Escape collapses the grid to its search field, the second dismisses it
-    run.key(grid, ESCAPE);
+    // with nothing typed, one Escape dismisses the grid
     run.key(grid, ESCAPE);
     run.advance(1.0);
     assert!(run.window(&format!("{GRID_APP_ID}@1")).is_none());
@@ -1129,9 +1199,9 @@ fn named(run: &Run, window: WindowId, role: Role) -> Vec<String> {
 
 /// The grid is a panel inside the output, not the whole of it: its search field on top, the pills of the categories
 /// its applications are in, the recently used applications in a row of their own above a separator, then every
-/// application by name. The first Escape leaves the search field alone, the second dismisses the grid.
+/// application by name. One Escape dismisses the grid.
 #[test]
-fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_escape_collapses_it_first() {
+fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_one_escape_closes_it() {
     let mut run = Run::start();
     run.record.borrow_mut().recent = vec![format!("{TERMINAL}.desktop")];
     let grid = open_grid(&mut run);
@@ -1188,19 +1258,6 @@ fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_escape_collaps
     assert_eq!(in_recents, ["Terminal"]);
     assert_eq!(run.focused(grid).as_deref(), Some("Applications"));
 
-    run.key(grid, ESCAPE);
-    assert!(
-        run.window(&format!("{GRID_APP_ID}@1")).is_some(),
-        "the first Escape keeps the grid open"
-    );
-    assert!(named(&run, grid, Role::CheckBox).is_empty());
-    assert!(named(&run, grid, Role::Button).is_empty());
-    let collapsed = run.bounds(grid, Role::TextInput, "Applications");
-    assert_eq!(
-        collapsed,
-        kit_rect(layout.collapsed),
-        "only the search field is left"
-    );
     assert_eq!(
         run.record.borrow().keyboard.last().copied(),
         Some((Part::Grid, true))
@@ -1214,19 +1271,32 @@ fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_escape_collaps
     );
 }
 
-/// Typing searches at once, from the collapsed field too, which opens again on the results; an application that runs
-/// is brought forward rather than started again.
+/// Typing searches at once; with a query typed, the first Escape clears it and leaves the grid open on every
+/// application, and the next closes it. An application that runs is brought forward rather than started again.
 #[test]
 fn typing_searches_at_once_and_an_application_that_runs_comes_forward() {
     let mut run = Run::start();
     let grid = open_grid(&mut run);
-    run.key(grid, ESCAPE);
     run.type_text(grid, "term");
     assert_eq!(named(&run, grid, Role::Button), ["Terminal"]);
+    run.key(grid, ESCAPE);
     assert!(
-        !named(&run, grid, Role::CheckBox).is_empty(),
-        "the panel opened again"
+        run.window(&format!("{GRID_APP_ID}@1")).is_some(),
+        "the first Escape clears the query"
     );
+    let mut every = named(&run, grid, Role::Button);
+    every.sort();
+    every.dedup();
+    assert_eq!(every, ["Editor", "Terminal"], "every application again");
+    assert!(!named(&run, grid, Role::CheckBox).is_empty());
+    run.key(grid, ESCAPE);
+    run.advance(1.0);
+    assert!(
+        run.window(&format!("{GRID_APP_ID}@1")).is_none(),
+        "the next closes"
+    );
+    let grid = open_grid(&mut run);
+    run.type_text(grid, "term");
     run.key(grid, RETURN);
     assert!(
         run.requests()
@@ -1537,6 +1607,590 @@ fn a_launch_is_not_asked_for_twice() {
     assert!(run
         .requests()
         .contains(&(1, Request::ActivateApp(EDITOR.to_owned()))));
+}
+
+/// The model alone, the test handing it messages with no runtime around it: the commands it gives are not carried out,
+/// so an activation token it asks for never comes. With the key of the editor's tile.
+fn bare() -> (Model, Rc<RefCell<Record>>, u64) {
+    let record = Rc::new(RefCell::new(Record::default()));
+    let mut dock = Dock::new(DockConfig::default());
+    dock.set_pinned(&[EDITOR, TERMINAL]);
+    let editor = dock
+        .tiles()
+        .iter()
+        .find(|t| t.key == EDITOR)
+        .expect("the editor's tile")
+        .id
+        .0;
+    let desktop = DesktopIndex {
+        entries: vec![entry_with(EDITOR, "Editor", "")],
+    };
+    let mut model = Model::new(
+        Session::new(dock, desktop),
+        ActionMap::default(),
+        DockSettings::default(),
+        Box::new(FakeHost(Rc::clone(&record))),
+    );
+    kit::update(&mut model, Message::Outputs(OUTPUTS.to_vec()));
+    (model, record, editor)
+}
+
+/// Move the bare model's clock on by `seconds` and wake it.
+fn bare_advance(model: &mut Model, record: &Rc<RefCell<Record>>, seconds: f64) {
+    let generation = {
+        let mut record = record.borrow_mut();
+        record.now += seconds;
+        record.wake.unwrap_or(0)
+    };
+    kit::update(model, Message::Wake(generation));
+}
+
+/// The wait for an activation token is bounded: one that does not come within two seconds no longer holds the launch
+/// or the guard against a second one; the program starts without a token, and one that comes later is dropped.
+#[test]
+fn a_launch_whose_activation_token_never_comes_goes_ahead_without_one_after_2_s() {
+    let (mut model, record, editor) = bare();
+    kit::update(
+        &mut model,
+        Message::Input(cupertino_dock::view::Input::Activate(editor)),
+    );
+    assert!(record.borrow().spawned.is_empty(), "waiting for the token");
+    let wakes = record.borrow().wakes.clone();
+    assert!(
+        wakes.iter().any(|w| (w - kit::TOKEN_TIMEOUT).abs() < 1e-9),
+        "the model asks to be woken when the wait ends: {wakes:?}"
+    );
+    bare_advance(&mut model, &record, 1.0);
+    kit::update(
+        &mut model,
+        Message::Input(cupertino_dock::view::Input::Activate(editor)),
+    );
+    assert!(
+        record.borrow().spawned.is_empty(),
+        "a second ask within the wait is the same launch"
+    );
+    bare_advance(&mut model, &record, 1.0);
+    {
+        let spawned = &record.borrow().spawned;
+        assert_eq!(spawned.len(), 1, "started at the end of the wait");
+        assert_eq!(spawned[0].1, None, "without a token");
+    }
+    for launch in 0..4 {
+        kit::update(&mut model, Message::Token(launch, Some("late".to_owned())));
+    }
+    assert_eq!(
+        record.borrow().spawned.len(),
+        1,
+        "a late token starts nothing"
+    );
+}
+
+/// A program that fails before it shows a window, as one that crashes at once does, can be opened again straight away:
+/// the guard against a second launch ends with its process.
+#[test]
+fn a_program_that_exits_at_once_can_be_opened_again_straight_away() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.click(bar, editor);
+    run.advance(0.5);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        1,
+        "guarded while it starts"
+    );
+    let exit = run.record.borrow().exits[0].clone();
+    exit.send_blocking(true).unwrap();
+    run.settle();
+    run.advance(0.1);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        2,
+        "started again after it exited"
+    );
+}
+
+/// A launcher that exits successfully before the window comes (one that starts the application in the background, or
+/// hands the open to an instance already running) leaves the guard in place: a second click opens nothing more.
+#[test]
+fn a_launcher_that_exits_successfully_before_the_window_leaves_the_guard() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.click(bar, editor);
+    run.advance(0.5);
+    let exit = run.record.borrow().exits[0].clone();
+    exit.send_blocking(false).unwrap();
+    run.settle();
+    run.advance(0.1);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        1,
+        "still guarded: its window is on the way"
+    );
+    run.advance(kit::OPEN_GUARD);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        2,
+        "the guard ends in its own time"
+    );
+}
+
+/// Only the process of the launch a guard is for ends it: an earlier one that exits after a later launch leaves the
+/// later guard in place.
+#[test]
+fn an_earlier_launch_exiting_leaves_a_later_launch_guarded() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.click(bar, editor);
+    run.advance(kit::OPEN_GUARD + 1.0);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        2,
+        "the guard of the first ended in time"
+    );
+    let first = run.record.borrow().exits[0].clone();
+    first.send_blocking(true).unwrap();
+    run.settle();
+    run.advance(0.1);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        2,
+        "the second launch is still guarded"
+    );
+}
+
+/// A program that showed a window is running: its exit afterwards changes nothing about how its tile opens.
+#[test]
+fn an_exit_after_a_window_showed_keeps_the_running_application_activated() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    run.click(bar, centre(run.bounds(bar, Role::Button, "Editor")));
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 8,
+            app_id: EDITOR.to_owned(),
+            title: "notes".to_owned(),
+            minimized: false,
+        }],
+    });
+    let exit = run.record.borrow().exits[0].clone();
+    exit.send_blocking(true).unwrap();
+    run.settle();
+    run.click(bar, centre(run.bounds(bar, Role::Button, "Editor")));
+    assert_eq!(run.record.borrow().spawned.len(), 1);
+    assert!(run
+        .requests()
+        .contains(&(1, Request::ActivateApp(EDITOR.to_owned()))));
+}
+
+/// With a host that loads in the background, the bar loads only its resting side on the spot: the magnified side
+/// of its icons and every icon of the grid are asked for in the background, each once, so opening the grid loads
+/// nothing on the spot. An icon the background leaves out (an application with only a window's icon) loads on the
+/// spot when the rest arrive.
+#[test]
+fn icons_load_in_the_background_so_the_first_magnification_and_grid_wait_for_none() {
+    BACKGROUND.set(Some(Vec::new()));
+    let mut run = Run::start();
+    let large = DockConfig::default().large_size;
+    let tile = DockConfig::default().tile_size;
+    let preloads = run.record.borrow().preloads.clone();
+    assert!(!preloads.is_empty(), "a background load was asked for");
+    let asked: Vec<(IconKey, f64)> = preloads.concat();
+    for app in [EDITOR, TERMINAL] {
+        assert!(
+            asked.contains(&(IconKey::App(app.to_owned()), large)),
+            "{app} magnified"
+        );
+    }
+    let grid_side = cupertino_dock::app_grid::GridLayout::ICON;
+    assert!(asked
+        .iter()
+        .any(|(k, side)| matches!(k, IconKey::Named(_)) && *side == grid_side));
+    let mut unique = asked.clone();
+    unique.dedup();
+    assert_eq!(unique.len(), asked.len(), "each icon is asked for once");
+    let loads = run.record.borrow().icon_loads.clone();
+    assert!(
+        loads.iter().all(|(_, side)| *side == tile),
+        "only the resting side on the spot: {loads:?}"
+    );
+    open_grid(&mut run);
+    let loads = run.record.borrow().icon_loads.clone();
+    assert!(
+        loads.iter().all(|(_, side)| *side != grid_side),
+        "the grid's icons were loaded already: {loads:?}"
+    );
+}
+
+#[test]
+fn an_icon_the_background_leaves_out_loads_on_the_spot() {
+    BACKGROUND.set(Some(vec![IconKey::App(EDITOR.to_owned())]));
+    let mut run = Run::start();
+    let large = DockConfig::default().large_size;
+    let loads = run.record.borrow().icon_loads.clone();
+    assert!(
+        loads.contains(&(IconKey::App(EDITOR.to_owned()), large)),
+        "{loads:?}"
+    );
+    assert!(
+        !loads.contains(&(IconKey::App(TERMINAL.to_owned()), large)),
+        "{loads:?}"
+    );
+    // a tile that comes later is asked for in the background as it comes
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 9,
+            app_id: "org.example.Viewer".to_owned(),
+            title: "picture".to_owned(),
+            minimized: false,
+        }],
+    });
+    let last = run
+        .record
+        .borrow()
+        .preloads
+        .last()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        last,
+        vec![(IconKey::App("org.example.Viewer".to_owned()), large)]
+    );
+    let loads = run.record.borrow().icon_loads.clone();
+    assert!(loads.contains(&(IconKey::App("org.example.Viewer".to_owned()), 64.0)));
+}
+
+const VIEWER: &str = "org.example.Viewer";
+
+/// The tiles of the bar by name, the separators as "|", in order.
+fn bar_row(run: &mut Run) -> Vec<String> {
+    let bar = run.bar();
+    let mut nodes: Vec<(Role, String, String, Rect)> = run
+        .nodes(bar)
+        .into_iter()
+        .filter(|n| matches!(n.0, Role::Button | Role::Separator))
+        .collect();
+    nodes.sort_by(|a, b| a.3.x().total_cmp(&b.3.x()));
+    nodes
+        .into_iter()
+        .map(|n| {
+            if n.0 == Role::Separator {
+                "|".to_owned()
+            } else {
+                n.1
+            }
+        })
+        .collect()
+}
+
+fn viewer_run() -> Run {
+    Run::on_desktop(
+        tokens(false),
+        ActionMap::default(),
+        true,
+        vec![
+            entry_with(VIEWER, "Viewer", ""),
+            entry_with("org.example.Mail", "Mail", ""),
+            entry_with("org.example.Music", "Music", ""),
+            entry_with("org.example.Maps", "Maps", ""),
+        ],
+    )
+}
+
+/// An application that quits, not pinned, comes into the recents: their own section after the applications, between
+/// two separators, before the trash. Opening it from there starts it; while it runs it is among the applications.
+#[test]
+fn an_application_that_quits_comes_into_the_recents_between_two_separators() {
+    let mut run = viewer_run();
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 9,
+            app_id: VIEWER.to_owned(),
+            title: "picture".to_owned(),
+            minimized: false,
+        }],
+    });
+    run.advance(1.0);
+    let row = bar_row(&mut run);
+    assert_eq!(&row[..3], ["Editor", "Terminal", "Viewer"], "{row:?}");
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::WindowClosed(9)],
+    });
+    run.advance(1.0);
+    let row = bar_row(&mut run);
+    let trash = row.last().cloned().unwrap();
+    assert_eq!(
+        row,
+        ["Editor", "Terminal", "|", "Viewer", "|", trash.as_str()]
+    );
+    let bar = run.bar();
+    run.click(bar, centre(run.bounds(bar, Role::Button, "Viewer")));
+    let spawned = run.record.borrow().spawned.clone();
+    assert_eq!(spawned.len(), 1);
+    assert_eq!(spawned[0].0[0], "viewer");
+}
+
+/// With the launcher's history, the recents are the applications that quit, then the history's, the most recent first:
+/// none pinned or running, none twice, at most three.
+#[test]
+fn the_recents_are_those_that_quit_then_the_launchers_history_at_most_three() {
+    let mut run = viewer_run();
+    run.record.borrow_mut().recent = vec![
+        format!("{EDITOR}.desktop"),
+        "org.example.Maps.desktop".to_owned(),
+        "org.example.Music.desktop".to_owned(),
+        "org.example.Mail.desktop".to_owned(),
+        "org.example.Gone.desktop".to_owned(),
+    ];
+    for (id, closed) in [(9, false), (9, true)] {
+        let events = if closed {
+            vec![DockEvent::WindowClosed(id)]
+        } else {
+            vec![DockEvent::Window {
+                id,
+                app_id: "org.example.Music".to_owned(),
+                title: "song".to_owned(),
+                minimized: false,
+            }]
+        };
+        run.message(Message::Dock { output: 1, events });
+        run.advance(1.0);
+    }
+    let row = bar_row(&mut run);
+    assert_eq!(
+        &row[..7],
+        ["Editor", "Terminal", "|", "Music", "Maps", "Mail", "|"],
+        "{row:?}"
+    );
+}
+
+/// With the recents off (`recents = off`), the bar has no recents section.
+#[test]
+fn without_recents_the_bar_has_one_separator() {
+    let mut run = viewer_run();
+    run.record.borrow_mut().conf = Some(DockSettings {
+        recents: Some(false),
+        ..DockSettings::default()
+    });
+    run.message(Message::ConfChanged);
+    for events in [
+        vec![DockEvent::Window {
+            id: 9,
+            app_id: VIEWER.to_owned(),
+            title: "picture".to_owned(),
+            minimized: false,
+        }],
+        vec![DockEvent::WindowClosed(9)],
+    ] {
+        run.message(Message::Dock { output: 1, events });
+        run.advance(1.0);
+    }
+    let row = bar_row(&mut run);
+    assert_eq!(row.len(), 4, "{row:?}");
+    assert_eq!(&row[..3], ["Editor", "Terminal", "|"]);
+}
+
+const DOWNLOADS: &str = "/fixture/Downloads";
+
+/// A run whose host shows the downloads folder as a stack of `count` files.
+fn stack_run(count: usize) -> Run {
+    FOLDERS.set(vec![(DOWNLOADS.to_owned(), "folder-download".to_owned())]);
+    let run = Run::start();
+    run.record.borrow_mut().folder_entries = (0..count)
+        .map(|i| cupertino_dock::stack::StackEntry {
+            name: format!("file-{i}.txt"),
+            path: format!("{DOWNLOADS}/file-{i}.txt").into(),
+            icon: "text-x-generic".to_owned(),
+        })
+        .collect();
+    run
+}
+
+/// The stack's popup window, while it is open.
+fn stack_window(run: &Run) -> Option<WindowId> {
+    run.driver
+        .runtime()
+        .windows()
+        .into_iter()
+        .map(|(_, id)| id)
+        .find(|&id| {
+            run.driver.runtime().snapshot(id).is_some_and(|s| {
+                s.accessibility
+                    .iter()
+                    .any(|(_, n)| n.role == Role::Dialog && n.name.as_deref() == Some("Downloads"))
+            })
+        })
+}
+
+/// The downloads folder is a tile after the applications, before the trash; a click opens its stack, a grabbing
+/// popup over it with the folder's name, its newest files as buttons and a button that opens the folder. A click on
+/// a file opens it and closes the stack; a second click on the tile closes it too.
+#[test]
+fn the_downloads_folder_is_a_tile_before_the_trash_whose_click_opens_its_stack() {
+    let mut run = stack_run(7);
+    let row = bar_row(&mut run);
+    assert_eq!(
+        &row[..4],
+        ["Editor", "Terminal", "|", "Downloads"],
+        "{row:?}"
+    );
+    assert_eq!(row.len(), 5, "then the trash: {row:?}");
+    assert!(stack_window(&run).is_none());
+    let bar = run.bar();
+    let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
+    run.click(bar, tile);
+    run.advance(0.5);
+    let stack = stack_window(&run).expect("the stack opened");
+    let buttons = named(&run, stack, Role::Button);
+    assert_eq!(buttons.len(), 8, "{buttons:?}");
+    assert_eq!(buttons[0], "file-0.txt");
+    assert!(buttons.contains(&"Open in Files".to_owned()));
+    let layout = cupertino_dock::stack::StackLayout::new(7);
+    let bounds = run.bounds(stack, Role::Button, "Open in Files");
+    assert_eq!(
+        bounds,
+        kit_rect(layout.button),
+        "the button where the layout puts it"
+    );
+    run.click(stack, centre(run.bounds(stack, Role::Button, "file-2.txt")));
+    assert_eq!(
+        run.record.borrow().opened,
+        [format!("{DOWNLOADS}/file-2.txt")]
+    );
+    run.settle();
+    assert!(
+        stack_window(&run).is_none(),
+        "opening a file closes the stack"
+    );
+
+    run.click(bar, tile);
+    run.advance(0.5);
+    assert!(stack_window(&run).is_some());
+    run.click(bar, tile);
+    run.settle();
+    assert!(stack_window(&run).is_none(), "a second click closes it");
+}
+
+/// Escape closes the stack; its button opens the folder in the file manager (here the session's opener, as no file
+/// manager is installed) and closes it.
+#[test]
+fn escape_closes_the_stack_and_its_button_opens_the_folder() {
+    let mut run = stack_run(0);
+    let bar = run.bar();
+    let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
+    run.click(bar, tile);
+    run.advance(0.5);
+    let stack = stack_window(&run).expect("the stack opened");
+    let texts = named(&run, stack, Role::StaticText);
+    assert!(texts.contains(&"No Items".to_owned()), "{texts:?}");
+    run.send_to(stack, WindowEvent::Focus(true));
+    run.key(stack, ESCAPE);
+    run.settle();
+    assert!(stack_window(&run).is_none());
+    run.click(bar, tile);
+    run.advance(0.5);
+    let stack = stack_window(&run).expect("the stack opened again");
+    run.click(
+        stack,
+        centre(run.bounds(stack, Role::Button, "Open in Files")),
+    );
+    run.settle();
+    assert_eq!(run.record.borrow().opened, [DOWNLOADS.to_owned()]);
+    assert!(stack_window(&run).is_none());
+}
+
+/// The folder is listed away from the dock: the stack shows only once its listing ends, a click on the tile while it
+/// is listed closes it for good (the listing that ends later opens nothing).
+#[test]
+fn a_stack_shows_once_its_folder_is_listed_and_a_listing_for_a_closed_stack_opens_nothing() {
+    let mut run = stack_run(3);
+    run.record.borrow_mut().hold_listings = true;
+    let bar = run.bar();
+    let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
+    run.click(bar, tile);
+    run.advance(0.5);
+    assert!(stack_window(&run).is_none(), "still being listed");
+    assert_eq!(run.record.borrow().listings.len(), 1);
+    let first = run.record.borrow().listings[0].clone();
+    first.send_blocking(()).unwrap();
+    run.settle();
+    run.advance(0.5);
+    let stack = stack_window(&run).expect("shown once listed");
+    assert_eq!(
+        named(&run, stack, Role::Button).len(),
+        4,
+        "three files and the button"
+    );
+
+    run.click(bar, tile);
+    run.settle();
+    assert!(stack_window(&run).is_none());
+    run.click(bar, tile);
+    run.click(bar, tile);
+    run.settle();
+    let listings = run.record.borrow().listings.clone();
+    assert_eq!(listings.len(), 2, "a listing for the second open");
+    listings[1].send_blocking(()).unwrap();
+    run.settle();
+    run.advance(0.5);
+    assert!(
+        stack_window(&run).is_none(),
+        "closed while it was listed, it stays closed"
+    );
+}
+
+/// The label popup, while it shows: its window and the name it says.
+fn label(run: &Run) -> Option<(WindowId, String)> {
+    run.driver
+        .runtime()
+        .windows()
+        .into_iter()
+        .map(|(_, id)| id)
+        .find_map(|id| {
+            let snapshot = run.driver.runtime().snapshot(id)?;
+            snapshot
+                .accessibility
+                .iter()
+                .find(|(_, n)| n.role == Role::Tooltip)
+                .map(|(_, n)| (id, n.name.clone().unwrap_or_default()))
+        })
+}
+
+/// The tile under the pointer shows its name over it at once, and the name follows the pointer from tile to tile; it
+/// goes when the pointer leaves the bar and while the tile's menu is open. A separator has none.
+#[test]
+fn the_tile_under_the_pointer_shows_its_name_over_it_at_once() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    assert!(label(&run).is_none());
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.pointer(bar, PointerEvent::Enter { position: editor });
+    run.settle();
+    assert_eq!(label(&run).map(|l| l.1).as_deref(), Some("Editor"));
+    let terminal = centre(run.bounds(bar, Role::Button, "Terminal"));
+    run.pointer(bar, PointerEvent::Motion { position: terminal });
+    run.settle();
+    assert_eq!(label(&run).map(|l| l.1).as_deref(), Some("Terminal"));
+    run.button(bar, terminal, MouseButton::Right, true);
+    run.button(bar, terminal, MouseButton::Right, false);
+    run.settle();
+    assert!(label(&run).is_none(), "not with the menu open");
+    run.message(Message::Input(cupertino_dock::view::Input::MenuClosed));
+    run.pointer(bar, PointerEvent::Leave);
+    run.advance(1.0);
+    assert!(label(&run).is_none(), "gone with the pointer");
 }
 
 /// A new bar role's first group lists every resident application: one the dock still holds that it does not list
@@ -2340,10 +2994,11 @@ fn look_captures() {
         run.driver
             .look_into(&dir, grid, "dock-grid", scale, &looks)
             .unwrap();
-        run.key(grid, ESCAPE);
+        run.type_text(grid, "term");
         run.driver
-            .look_into(&dir, grid, "dock-grid-collapsed", scale, &looks)
+            .look_into(&dir, grid, "dock-grid-search", scale, &looks)
             .unwrap();
+        run.key(grid, ESCAPE);
         run.key(grid, ESCAPE);
         run.advance(1.0);
     }

@@ -35,6 +35,7 @@ use crate::menu::{self, MenuCommand, MenuItem, TileFacts};
 use crate::overview_kit::{OverviewInput, OverviewRequest, OverviewSurface};
 use crate::overview_ui::{Mode, WindowEntry, Workspace};
 use crate::session::{Activation, Session};
+use crate::stack::{self, StackEntry, StackHit, StackLayout};
 use crate::switcher_kit::{SwitcherEntry, SwitcherInput, SwitcherRequest, SwitcherSurface};
 use crate::tile_drag::{Poof, TilePress};
 use crate::tiles::{TileId, TileKind, TileLifecycle};
@@ -57,6 +58,10 @@ pub const ICON_SCALES: [f64; 3] = [1.0, 2.0, 3.0];
 /// How long after asking an application to open (a launch, or a new window of its resident process) a second ask is
 /// dropped while no window of it has appeared, in seconds: a double click opens it once.
 pub const OPEN_GUARD: f64 = 5.0;
+
+/// How long a launch waits for its activation token, in seconds: past it the program starts without one, as when the
+/// compositor offers none, and a token that comes later is dropped.
+pub const TOKEN_TIMEOUT: f64 = 2.0;
 
 /// How much a bouncing tile dims at the top of a hop under Reduce Motion, where it stays in place.
 pub const REDUCED_BOUNCE_DIM: f64 = 0.5;
@@ -203,6 +208,18 @@ pub enum AppAction {
 /// An `org.freedesktop.Application.Activate` call under way ([`Host::dbus_activate`]): whether it succeeded.
 pub type BusCall = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
 
+/// A program the dock started ([`Host::spawn`]): ends when its process exits, in whether it failed (an unsuccessful
+/// exit status or a signal).
+pub type Exited = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
+
+/// Icons loading away from the model ([`Host::preload`]): ends in each one's key, side in whole points and renditions.
+pub type IconLoad =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Vec<(IconKey, u32, IconSet)>> + Send>>;
+
+/// A folder being listed away from the model ([`Host::folder_entries`]): ends in the entries its stack shows.
+pub type FolderListing =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Vec<StackEntry>> + Send>>;
+
 /// Where the bar's layer surface is: its output, its edge, its depth and the area it keeps windows out of.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
@@ -259,8 +276,8 @@ pub trait Host {
     fn keyboard(&mut self, part: Part, on: bool);
     /// The Force Quit dialog is now this large.
     fn resize_force_quit(&mut self, width: f64, height: f64);
-    /// Start `argv` with the activation token; whether it started.
-    fn spawn(&mut self, argv: Vec<String>, token: Option<String>) -> bool;
+    /// Start `argv` with the activation token: when it started, what ends as its process exits.
+    fn spawn(&mut self, argv: Vec<String>, token: Option<String>) -> Option<Exited>;
     /// Open `target` with the session's default handler.
     fn open(&mut self, target: &str);
     /// Run `command` through the shell.
@@ -272,6 +289,17 @@ pub trait Host {
     fn read_conf(&mut self, last_good: &DockSettings) -> Option<DockSettings>;
     /// The terminal emulator that runs entries with `Terminal=true`, if one is installed.
     fn terminal(&mut self) -> Option<String>;
+    /// The folders the bar shows as stacks, with the theme names of their icons, in order (the user's downloads
+    /// folder); none by default.
+    fn folders(&mut self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+    /// List `folder` away from the model: what ends in the entries its stack shows, the newest first, at most
+    /// [`stack::MAX_ENTRIES`] ([`stack::newest_first`]). A large or slow folder holds up nothing else.
+    fn folder_entries(&mut self, folder: &str) -> FolderListing {
+        let _ = folder;
+        Box::pin(std::future::ready(Vec::new()))
+    }
     /// The desktop file IDs of the recently used applications, the most recent first: the grid's first row.
     fn recent_apps(&mut self) -> Vec<String> {
         Vec::new()
@@ -285,6 +313,13 @@ pub trait Host {
     }
     /// The renditions of `icon` at `side` points for each of [`ICON_SCALES`].
     fn icon(&mut self, desktop: &DesktopIndex, icon: &IconKey, side: f64) -> IconSet;
+    /// Load `icons`, each at its side in points, away from the model, as [`Host::icon`] would: what ends in those it
+    /// could load from an icon theme or the assets (an application's own window image stays for [`Host::icon`]), or
+    /// `None` when the host loads only on the spot.
+    fn preload(&mut self, desktop: &DesktopIndex, icons: Vec<(IconKey, f64)>) -> Option<IconLoad> {
+        let _ = (desktop, icons);
+        None
+    }
     /// A window set its own icon, or removed it; `apps` are its application id and the dock's key for it.
     fn window_icon(&mut self, apps: [String; 2], icon: WindowIcon);
     fn window_closed(&mut self, id: u32);
@@ -313,6 +348,24 @@ pub enum Message {
     KeyboardLeft(u32),
     /// The activation token of the launch waiting as `launch` arrived (`None` when there is none).
     Token(u64, Option<String>),
+    /// The program started for tile `key` at `asked` (when the open was asked for) exited; `failed` is whether it
+    /// failed.
+    Exited {
+        key: String,
+        asked: f64,
+        failed: bool,
+    },
+    /// The folder of the stack waiting for listing `listing` was listed.
+    FolderListed {
+        listing: u64,
+        entries: Vec<StackEntry>,
+    },
+    /// Icons loaded in the background ([`Host::preload`]): those asked for, by key and side in whole points, and
+    /// those loaded.
+    IconsLoaded {
+        asked: Vec<(IconKey, u32)>,
+        loaded: Vec<(IconKey, u32, IconSet)>,
+    },
     /// The bus call that asked the resident application of tile `key` for a window ended; `ok` is whether it
     /// succeeded.
     BusActivated {
@@ -362,6 +415,22 @@ struct Pending {
     /// Key of the tile of the application.
     key: String,
     opening: Opening,
+    /// When the token was asked for: past [`TOKEN_TIMEOUT`] the launch goes ahead without it.
+    asked: f64,
+}
+
+/// A folder's stack open over its tile.
+struct OpenStack {
+    tile: TileId,
+    folder: String,
+    name: String,
+    /// The listing it waits for ([`Host::folder_entries`]), by number: a listing for a stack closed meanwhile is
+    /// dropped.
+    listing: u64,
+    /// Its entries, once listed; it shows from then.
+    entries: Option<Vec<StackEntry>>,
+    /// When it showed: it comes in over [`stack::ENTRY_S`] from then.
+    opened: f64,
 }
 
 /// An open context menu.
@@ -422,6 +491,10 @@ pub struct Model {
     press: Option<TilePress>,
     poof: Option<Poof>,
     menu: Option<OpenMenu>,
+    stack: Option<OpenStack>,
+    /// The folders the host shows as stacks were asked for, and their icons' theme names by path.
+    folders_asked: bool,
+    folder_icons: HashMap<String, String>,
     /// The bar has the keyboard.
     pub engaged: bool,
     /// Focus Dock came: the first tile takes the focus.
@@ -440,12 +513,23 @@ pub struct Model {
     wm: BTreeMap<u32, WmSurfaces>,
     pending: HashMap<u64, Pending>,
     next_launch: u64,
+    /// The number the next folder listing goes by.
+    next_listing: u64,
     /// The applications asked to open and when, by tile key, until a window of theirs appears ([`OPEN_GUARD`]).
     opening: HashMap<String, f64>,
     /// The edge strip the pointer is on, and since when.
     edge: Option<(u32, f64)>,
     /// The icons loaded, by key and side in whole points.
     icons: HashMap<IconKey, BTreeMap<u32, IconSet>>,
+    /// Whether the host loads icons in the background ([`Host::preload`]); `None` until it was first asked.
+    background_icons: Option<bool>,
+    /// The icons asked for in the background and not arrived yet, by key and side in whole points.
+    requested: HashSet<(IconKey, u32)>,
+    /// The grid's icons were asked for in the background.
+    grid_preloaded: bool,
+    /// What the bar's recents were last worked out from: the application tiles and the applications that quit. The
+    /// launcher's history is read again when it changes.
+    recents_basis: Option<Vec<String>>,
     /// The name of the desktop entry of each application key looked up so far (`None` without one): the entries do
     /// not change while the process runs.
     names: HashMap<String, Option<String>>,
@@ -488,6 +572,9 @@ impl Model {
             press: None,
             poof: None,
             menu: None,
+            stack: None,
+            folders_asked: false,
+            folder_icons: HashMap::new(),
             engaged: false,
             focus_first: false,
             menu_takes_keyboard: false,
@@ -499,9 +586,14 @@ impl Model {
             wm: BTreeMap::new(),
             pending: HashMap::new(),
             next_launch: 0,
+            next_listing: 0,
             opening: HashMap::new(),
             edge: None,
             icons: HashMap::new(),
+            background_icons: None,
+            requested: HashSet::new(),
+            grid_preloaded: false,
+            recents_basis: None,
             names: HashMap::new(),
             trash_checked: None,
             trash_full: false,
@@ -820,8 +912,119 @@ impl Model {
             Some(Activation::Launch(key)) => self.begin_launch(key),
             Some(Activation::Reopen { key, .. }) => self.reopen(key),
             Some(Activation::OpenTrash) => self.open_in_file_manager(TRASH_URI),
+            Some(Activation::ToggleStack(id)) => self.toggle_stack(id),
             None => Vec::new(),
         }
+    }
+
+    /// Open the stack of folder tile `id` over it, or close it when it is the one open (or still being listed).
+    /// Opening it closes a menu; it shows once its folder is listed ([`Model::folder_listed`]).
+    fn toggle_stack(&mut self, id: TileId) -> Vec<Command<Message>> {
+        if self.stack.take().is_some_and(|s| s.tile == id) {
+            return Vec::new();
+        }
+        let Some(tile) = self.session.dock.tile(id) else {
+            return Vec::new();
+        };
+        let folder = tile.key.clone();
+        self.menu = None;
+        self.press = None;
+        let listing = self.next_listing;
+        self.next_listing += 1;
+        let listed = self.host.folder_entries(&folder);
+        self.stack = Some(OpenStack {
+            tile: id,
+            name: stack::folder_name(&folder),
+            folder,
+            listing,
+            entries: None,
+            opened: self.now(),
+        });
+        vec![Command::Perform(Box::pin(async move {
+            Message::FolderListed {
+                listing,
+                entries: listed.await,
+            }
+        }))]
+    }
+
+    /// The folder of the stack waiting for `listing` was listed: the stack shows, coming in from now. A listing for a
+    /// stack that closed, or was opened again, meanwhile is dropped.
+    fn folder_listed(&mut self, listing: u64, mut entries: Vec<StackEntry>) {
+        let now = self.now();
+        let Some(open) = self
+            .stack
+            .as_mut()
+            .filter(|s| s.listing == listing && s.entries.is_none())
+        else {
+            return;
+        };
+        entries.truncate(stack::MAX_ENTRIES);
+        open.entries = Some(entries);
+        open.opened = now;
+    }
+
+    /// The tile whose name shows over it, and the name: the tile under the pointer, while no menu, stack, press or drag
+    /// is on the bar. A separator has none.
+    fn label(&self, layout: &crate::dock::DockLayout) -> Option<(TileId, String)> {
+        if self.menu.is_some()
+            || self.stack.is_some()
+            || self.press.is_some()
+            || layout.dragging.is_some()
+            || self.locked
+        {
+            return None;
+        }
+        let id = self.session.dock.hovered()?;
+        let tile = layout.tiles.iter().find(|t| t.id == id)?;
+        if tile.kind == TileKind::Separator {
+            return None;
+        }
+        let name = self.tile_name(id);
+        (!name.is_empty()).then_some((id, name))
+    }
+
+    /// A click on the open stack, on its release: an entry opens and the stack closes; the button opens the folder.
+    fn stack_pointer(&mut self, pointer: Pointer) -> Vec<Command<Message>> {
+        let Pointer::Release(p) = pointer else {
+            return Vec::new();
+        };
+        let Some(entries) = self.stack.as_ref().and_then(|s| s.entries.as_ref()) else {
+            return Vec::new();
+        };
+        match StackLayout::new(entries.len()).hit(Point::new(p.x, p.y), entries.len()) {
+            Some(StackHit::Entry(i)) => self.open_stack_entry(i),
+            Some(StackHit::OpenFolder) => self.open_stack_folder(),
+            None => Vec::new(),
+        }
+    }
+
+    fn open_stack_entry(&mut self, index: usize) -> Vec<Command<Message>> {
+        let Some(open) = self.stack.take() else {
+            return Vec::new();
+        };
+        if let Some(entry) = open.entries.as_ref().and_then(|e| e.get(index)) {
+            self.host.open(&entry.path.to_string_lossy());
+        }
+        Vec::new()
+    }
+
+    fn open_stack_folder(&mut self) -> Vec<Command<Message>> {
+        match self.stack.take() {
+            Some(open) => self.open_in_file_manager(&open.folder),
+            None => Vec::new(),
+        }
+    }
+
+    /// The folders the host shows as stacks, asked for once.
+    fn ask_folders(&mut self) {
+        if std::mem::replace(&mut self.folders_asked, true) {
+            return;
+        }
+        let folders = self.host.folders();
+        let paths: Vec<&str> = folders.iter().map(|(p, _)| p.as_str()).collect();
+        self.session.dock.set_folders(&paths);
+        self.folder_icons = folders.into_iter().collect();
     }
 
     /// Open the application of tile `key` as a click on its tile does, also when it has no tile: raise its windows,
@@ -834,7 +1037,9 @@ impl Model {
             }
             Activation::Reopen { key, .. } => self.reopen(key),
             Activation::Launch(key) => self.begin_launch(key),
-            Activation::RestoreWindow(_) | Activation::OpenTrash => Vec::new(),
+            Activation::RestoreWindow(_) | Activation::OpenTrash | Activation::ToggleStack(_) => {
+                Vec::new()
+            }
         }
     }
 
@@ -842,7 +1047,9 @@ impl Model {
     /// would open it twice.
     fn opening_now(&self, key: &str) -> bool {
         let now = self.now();
-        self.pending.values().any(|p| p.key == key)
+        self.pending
+            .values()
+            .any(|p| p.key == key && now - p.asked < TOKEN_TIMEOUT)
             || self
                 .opening
                 .get(key)
@@ -913,7 +1120,15 @@ impl Model {
     fn ask_token(&mut self, key: String, opening: Opening) -> Vec<Command<Message>> {
         let launch = self.next_launch;
         self.next_launch += 1;
-        self.pending.insert(launch, Pending { key, opening });
+        let asked = self.now();
+        self.pending.insert(
+            launch,
+            Pending {
+                key,
+                opening,
+                asked,
+            },
+        );
         let window = self
             .bar_key()
             .unwrap_or_else(|| view::bar_key(0, self.bar_generation));
@@ -927,21 +1142,31 @@ impl Model {
     /// Start the program that waited for `token` and bounce its tile, or ask the application for a window; an
     /// application that cannot be asked is started again with the token.
     fn complete(&mut self, launch: u64, token: Option<String>) -> Vec<Command<Message>> {
-        let Some(Pending { key, opening }) = self.pending.remove(&launch) else {
+        let Some(Pending { key, opening, .. }) = self.pending.remove(&launch) else {
             return Vec::new();
         };
         match opening {
-            Opening::Spawn { argv, bounce } => {
-                if self.host.spawn(argv, token) {
+            Opening::Spawn { argv, bounce } => match self.host.spawn(argv, token) {
+                Some(exited) => {
                     if bounce {
                         let now = self.now();
                         self.session.dock.app_launching(&key, now);
                     }
-                } else {
-                    self.opening.remove(&key);
+                    // the guard against a second launch ends with a process that fails: a program that crashes at once
+                    // can be opened again straight away
+                    let Some(&asked) = self.opening.get(&key) else {
+                        return Vec::new();
+                    };
+                    vec![Command::Perform(Box::pin(async move {
+                        let failed = exited.await;
+                        Message::Exited { key, asked, failed }
+                    }))]
                 }
-                Vec::new()
-            }
+                None => {
+                    self.opening.remove(&key);
+                    Vec::new()
+                }
+            },
             Opening::Activate(name) => match self.host.dbus_activate(&name, token) {
                 Some(call) => vec![Command::Perform(Box::pin(async move {
                     Message::BusActivated {
@@ -954,6 +1179,32 @@ impl Model {
                     self.start(key, false)
                 }
             },
+        }
+    }
+
+    /// Launches whose activation token did not come within [`TOKEN_TIMEOUT`] go ahead without one.
+    fn expire_tokens(&mut self, now: f64) -> Vec<Command<Message>> {
+        let mut late: Vec<u64> = self
+            .pending
+            .iter()
+            .filter(|(_, p)| now - p.asked >= TOKEN_TIMEOUT)
+            .map(|(launch, _)| *launch)
+            .collect();
+        late.sort_unstable();
+        late.into_iter()
+            .flat_map(|launch| self.complete(launch, None))
+            .collect()
+    }
+
+    /// The program started for tile `key` when it was asked to open at `asked` exited: with no window of it shown,
+    /// the guard against a second launch goes, so asking again starts it again. A later ask has a guard of its own.
+    ///
+    /// Only a failed process ends it: a launcher that hands the application on and exits successfully (a wrapper that
+    /// starts it in the background, or one that passes the open to an instance already running) is followed by a
+    /// window that has not come yet, and a second ask meanwhile would open the application twice.
+    fn exited(&mut self, key: &str, asked: f64, failed: bool) {
+        if failed && self.opening.get(key) == Some(&asked) && !self.session.has_windows(key) {
+            self.opening.remove(key);
         }
     }
 
@@ -972,6 +1223,7 @@ impl Model {
     /// The menu of the tile or the separator.
     fn open_menu(&mut self, id: TileId) {
         self.menu = None;
+        self.stack = None;
         self.press = None;
         let Some(tile) = self.session.dock.tile(id) else {
             return;
@@ -1595,6 +1847,7 @@ impl Model {
         }
         if before.recents != after.recents {
             cfg.show_recents = target.show_recents;
+            self.recents_basis = None;
         }
         if before.autohide != after.autohide && cfg.autohide != target.autohide {
             self.session.dock.toggle_autohide(now);
@@ -1633,10 +1886,89 @@ impl Model {
             .collect()
     }
 
-    /// The sides the tiles are drawn at: resting and fully magnified.
-    fn tile_sides(&self) -> Vec<f64> {
+    /// The sides the tiles are drawn at: resting, and fully magnified. While the magnified side loads in the background
+    /// ([`Model::preload`]), a magnified tile draws the resting side's largest rendition.
+    fn drawn_sides(&self) -> Vec<f64> {
         let cfg = &self.session.dock.cfg;
         vec![cfg.tile_size, cfg.large_size.max(cfg.tile_size)]
+    }
+
+    /// The sides loaded on the spot, before the bar shows: the resting one, and the magnified one too when the host
+    /// loads nothing in the background.
+    fn tile_sides(&self) -> Vec<f64> {
+        if self.background_icons == Some(true) {
+            vec![self.session.dock.cfg.tile_size]
+        } else {
+            self.drawn_sides()
+        }
+    }
+
+    /// Ask the host to load in the background what is drawn later: the bar's icons at their magnified side, as tiles
+    /// come, and, once, every icon of the grid, so neither the first magnification nor the grid's first show waits
+    /// for them. Each icon at each side is asked for once.
+    fn preload(&mut self) -> Vec<Command<Message>> {
+        if self.background_icons == Some(false) {
+            return Vec::new();
+        }
+        let cfg = &self.session.dock.cfg;
+        let large = cfg.large_size.max(cfg.tile_size);
+        let mut wanted: Vec<(IconKey, f64)> = self
+            .session
+            .dock
+            .tiles()
+            .iter()
+            .filter(|t| t.kind != TileKind::Separator)
+            .filter_map(|t| self.tile_icon(t.id))
+            .map(|key| (key, large))
+            .collect();
+        if !std::mem::replace(&mut self.grid_preloaded, true) {
+            let desktop = self.session.desktop();
+            wanted.extend(
+                AppGrid::from_desktop(desktop, &[], 0.0)
+                    .items()
+                    .map(|app| (IconKey::Named(app.icon.clone()), GridLayout::ICON)),
+            );
+        }
+        let px = |side: f64| side.ceil().max(1.0) as u32;
+        wanted.retain(|(key, side)| {
+            !self
+                .icons
+                .get(key)
+                .is_some_and(|k| k.contains_key(&px(*side)))
+                && self.requested.insert((key.clone(), px(*side)))
+        });
+        if wanted.is_empty() {
+            return Vec::new();
+        }
+        let asked: Vec<(IconKey, u32)> = wanted.iter().map(|(k, s)| (k.clone(), px(*s))).collect();
+        match self.host.preload(self.session.desktop(), wanted) {
+            Some(load) => {
+                self.background_icons = Some(true);
+                vec![Command::Perform(Box::pin(async move {
+                    Message::IconsLoaded {
+                        asked,
+                        loaded: load.await,
+                    }
+                }))]
+            }
+            None => {
+                self.background_icons = Some(false);
+                self.requested.clear();
+                Vec::new()
+            }
+        }
+    }
+
+    /// Icons loaded in the background arrived; those the host left to the spot (an application whose only icon is
+    /// its window's) load now.
+    fn icons_loaded(&mut self, asked: Vec<(IconKey, u32)>, loaded: Vec<(IconKey, u32, IconSet)>) {
+        for (key, px, set) in loaded {
+            self.icons.entry(key).or_default().entry(px).or_insert(set);
+        }
+        for (key, px) in asked {
+            self.requested.remove(&(key.clone(), px));
+            self.icon_set(&key, &[f64::from(px)]);
+        }
     }
 
     /// The icon key of the tile with `id`.
@@ -1644,6 +1976,12 @@ impl Model {
         let tile = self.session.dock.tile(id)?;
         Some(match tile.kind {
             TileKind::Trash => IconKey::Trash(self.trash_full),
+            TileKind::Folder => IconKey::Named(
+                self.folder_icons
+                    .get(&tile.key)
+                    .cloned()
+                    .unwrap_or_else(|| stack::FOLDER_ICON.to_owned()),
+            ),
             _ => IconKey::App(tile.key.clone()),
         })
     }
@@ -1730,6 +2068,15 @@ impl Model {
         for (app, side) in switched {
             self.icon_set(&IconKey::App(app), &[side]);
         }
+        if let Some(entries) = self.stack.as_ref().and_then(|s| s.entries.as_ref()) {
+            let keys: Vec<IconKey> = entries
+                .iter()
+                .map(|e| IconKey::Named(e.icon.clone()))
+                .collect();
+            for key in keys {
+                self.icon_set(&key, &[StackLayout::ICON]);
+            }
+        }
         self.prefill_grid();
     }
 
@@ -1783,7 +2130,7 @@ impl Model {
             self.engaged = false;
         }
         // an auto-hidden bar shows while it has the keyboard, and beside the open grid
-        self.session.dock.keep_shown = self.engaged || grid_open;
+        self.session.dock.keep_shown = self.engaged || grid_open || self.stack.is_some();
         if let Some(screen) = self.screen() {
             self.session.dock.pointer_moved(self.pointer, screen, now);
         }
@@ -1827,7 +2174,18 @@ impl Model {
                 self.relocate(output);
             }
         }
+        let mut commands = self.expire_tokens(now);
+        self.ask_folders();
+        if self
+            .stack
+            .as_ref()
+            .is_some_and(|s| self.session.dock.tile(s.tile).is_none())
+        {
+            self.stack = None;
+        }
+        self.refresh_recents(now);
         self.tell_host();
+        commands.extend(self.preload());
         self.prefill();
         // the grid's entry starts on the pass its surface was sized, with its first icons; the rest fill in over the
         // frames of the entry
@@ -1835,9 +2193,36 @@ impl Model {
             grid.entered = true;
             grid.grid.restart_entry(self.host.now());
         }
-        let mut commands = self.focus_commands();
+        commands.extend(self.focus_commands());
         commands.extend(self.schedule(now));
         commands
+    }
+
+    /// The bar's recents section: the applications that quit since the dock started, then the launcher's history, each
+    /// without a tile among the applications, at most [`crate::config::DockConfig::recents_max`]. Worked out again, the
+    /// history read again, only when an application gets or loses its tile or one quits.
+    fn refresh_recents(&mut self, now: f64) {
+        if !self.session.dock.cfg.show_recents {
+            return;
+        }
+        let mut basis: Vec<String> = self
+            .session
+            .dock
+            .tiles()
+            .iter()
+            .filter(|t| t.kind == TileKind::App && !t.is_leaving())
+            .map(|t| t.key.clone())
+            .collect();
+        basis.push(String::new());
+        basis.extend(self.session.recently_quit().iter().cloned());
+        if self.recents_basis.as_ref() == Some(&basis) {
+            return;
+        }
+        self.recents_basis = Some(basis);
+        let history = self.host.recent_apps();
+        let recents = self.session.recent_apps(&history);
+        let keys: Vec<&str> = recents.iter().map(String::as_str).collect();
+        self.session.dock.set_recents(&keys, now);
     }
 
     /// Tell the host what it has to know: where the bar is, the minimize target, who has the keyboard and the dialog's
@@ -1923,7 +2308,17 @@ impl Model {
             .filter(|(o, _)| Some(*o) != self.output)
             .map(|(_, since)| (since + EDGE_DWELL - now).max(0.0));
         let moving = self.animating(now).then_some(FRAME_FALLBACK);
-        let due = panel.chain(hold).chain(edge).chain(moving).reduce(f64::min);
+        let token = self
+            .pending
+            .values()
+            .map(|p| (p.asked + TOKEN_TIMEOUT - now).max(0.0))
+            .reduce(f64::min);
+        let due = panel
+            .chain(hold)
+            .chain(edge)
+            .chain(moving)
+            .chain(token)
+            .reduce(f64::min);
         let Some(due) = due else {
             return Vec::new();
         };
@@ -1963,11 +2358,9 @@ impl Model {
         };
         match tile.kind {
             TileKind::Trash => TRASH_NAME.to_owned(),
+            TileKind::Folder => stack::folder_name(&tile.key),
             TileKind::Separator => String::new(),
             TileKind::MinimizedWindow if !tile.title.is_empty() => tile.title.clone(),
-            TileKind::Recent => std::path::Path::new(&tile.key)
-                .file_name()
-                .map_or_else(|| tile.key.clone(), |n| n.to_string_lossy().into_owned()),
             _ => match self.entry_name(&tile.key) {
                 Some(name) => name.to_owned(),
                 None if tile.title.is_empty() => tile.key.clone(),
@@ -2029,6 +2422,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
                 model.force_quit = None;
                 model.grid = None;
                 model.menu = None;
+                model.stack = None;
                 model.press = None;
                 model.engaged = false;
                 model.edge = None;
@@ -2064,6 +2458,18 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::Token(launch, token) => model.complete(launch, token),
+        Message::Exited { key, asked, failed } => {
+            model.exited(&key, asked, failed);
+            Vec::new()
+        }
+        Message::FolderListed { listing, entries } => {
+            model.folder_listed(listing, entries);
+            Vec::new()
+        }
+        Message::IconsLoaded { asked, loaded } => {
+            model.icons_loaded(asked, loaded);
+            Vec::new()
+        }
         Message::BusActivated { key, ok } => model.bus_activated(key, ok),
         Message::Wake(generation) => {
             if generation == model.wake_generation {
@@ -2114,6 +2520,20 @@ fn input_message(model: &mut Model, input: Input) -> Vec<Command<Message>> {
             model.menu = None;
             Vec::new()
         }
+        Input::Stack(pointer) => model.stack_pointer(pointer),
+        Input::StackKey(key) => {
+            if key.pressed && key.keysym == ESCAPE {
+                model.stack = None;
+            }
+            Vec::new()
+        }
+        Input::StackEntry(i) => model.open_stack_entry(i),
+        Input::StackOpenFolder => model.open_stack_folder(),
+        Input::StackClosed => {
+            model.stack = None;
+            Vec::new()
+        }
+        Input::LabelGone => Vec::new(),
         Input::Grid(pointer) => model.grid_pointer(pointer),
         Input::GridKey(key) => model.grid_key(key),
         Input::GridLeft => {
@@ -2251,7 +2671,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         }
     }
     let set = |key: IconKey, sides: &[f64]| model.icon(&key, sides);
-    let sides = model.tile_sides();
+    let sides = model.drawn_sides();
     if let (Some(output), Some(screen), Some(key)) = (model.output, model.screen(), model.bar_key())
     {
         let layout = model.session.dock.layout(screen, now);
@@ -2302,6 +2722,39 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             },
             message,
         ));
+        if let Some(name) = model.label(&layout) {
+            windows.push(view::label::window(
+                key.clone(),
+                name.0 .0,
+                &name.1,
+                orientation,
+                message,
+            ));
+        }
+        if let Some((open, entries)) = model
+            .stack
+            .as_ref()
+            .and_then(|s| Some((s, s.entries.as_ref()?)))
+        {
+            if layout.tiles.iter().any(|t| t.id == open.tile) {
+                let lookup = |name: &str| -> IconSet {
+                    model.icon(&IconKey::Named(name.to_owned()), &[StackLayout::ICON])
+                };
+                windows.push(view::stack::window(
+                    view::stack::StackView {
+                        parent: key.clone(),
+                        tile: open.tile.0,
+                        orientation,
+                        name: &open.name,
+                        entries,
+                        icons: &lookup,
+                        since: now - open.opened,
+                        reduce_motion: model.reduce_motion,
+                    },
+                    message,
+                ));
+            }
+        }
         if let Some(menu) = &model.menu {
             if let Some(anchor) = layout.tiles.iter().find(|t| t.id == menu.tile) {
                 windows.extend(view::menu::windows(

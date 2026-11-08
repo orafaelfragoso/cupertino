@@ -13,7 +13,7 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, LayoutSpec, Measured};
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
-use cupertino_kit::render::{Paint, PaintOp, Shape};
+use cupertino_kit::render::{GradientStop, Paint, PaintOp, Shape};
 use cupertino_kit::theme::Surface;
 
 use super::paint::{self, Root};
@@ -21,19 +21,43 @@ use super::{IconSet, Input, BAR_APP_ID, BAR_TITLE};
 use crate::config::Orientation;
 use crate::tiles::TileKind;
 
+/// The surface the bar's material is: the one place to change to give the bar another material.
+pub const BAR_SURFACE: Surface = Surface::Menu;
+
 /// Diameter of the running indicator in points.
 pub const INDICATOR: f64 = 4.0;
-/// Corner radius of the bar as a fraction of the tile size.
-pub const BAR_RADIUS: f64 = 0.3;
+/// Gap between the bottom of a resting tile and the top of its running indicator, in points.
+pub const INDICATOR_GAP: f64 = 2.0;
+/// Corner radius of the bar as a fraction of the tile size (28 pt at 64).
+pub const BAR_RADIUS: f64 = 28.0 / 64.0;
+/// Side of an icon's artwork as a fraction of its tile: a 64 pt tile shows a 52 pt icon, centred.
+pub const ICON_ARTWORK: f64 = 52.0 / 64.0;
+/// Length of a separator's line as a fraction of the tile size (62 pt at 64), and its width in points.
+pub const SEPARATOR_LENGTH: f64 = 62.0 / 64.0;
+pub const SEPARATOR_WIDTH: f64 = 1.0;
 /// Corner radius of the focus ring as a fraction of the tile size.
 const FOCUS_RADIUS: f64 = 0.22;
 
 /// Running indicator: light and dark, and the alpha it keeps with Increase Contrast.
-const INDICATOR_LIGHT: paint::Rgba = [0.1, 0.1, 0.12, 0.8];
-const INDICATOR_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.85];
+pub(crate) const INDICATOR_LIGHT: paint::Rgba = [0.0, 0.0, 0.0, 0.5];
+pub(crate) const INDICATOR_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.6];
 /// Separator line: light and dark; with Increase Contrast it is drawn at twice the alpha.
 const SEPARATOR_LIGHT: paint::Rgba = [0.0, 0.0, 0.0, 0.2];
 const SEPARATOR_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.25];
+
+/// The bar's fine edge: a hairline just inside its outline, darker than what is around it, light and dark, and its
+/// width in points (one device pixel at 2x); Increase Contrast doubles it.
+const EDGE_LIGHT: paint::Rgba = [0.0, 0.0, 0.0, 0.25];
+const EDGE_DARK: paint::Rgba = [0.0, 0.0, 0.0, 0.6];
+const EDGE_WIDTH: f64 = 0.5;
+/// The rim inside the edge: a light line along the bar's top and bottom that fades out down its sides, at this
+/// alpha at the top and the bottom (light, dark), and gone over the middle of the sides
+/// ([`RIM_FADE`] of the bar's depth from either end).
+const RIM_TOP: [f32; 2] = [0.5, 0.45];
+const RIM_BOTTOM: [f32; 2] = [0.6, 0.5];
+const RIM_FADE: f32 = 0.3;
+/// With Increase Contrast the rim shows at this alpha all the way round.
+const RIM_CONTRAST: f32 = 0.6;
 
 const LEFT: Keysym = Keysym(0xff51);
 const UP: Keysym = Keysym(0xff52);
@@ -96,7 +120,7 @@ pub fn tile_key(id: u64) -> Key {
 /// The bar's window.
 pub fn window<M: Clone + 'static>(view: BarView, input: fn(Input) -> M) -> Window<M> {
     let orientation = view.orientation;
-    let radius = view.tile_size * BAR_RADIUS;
+    let radius = (view.tile_size * BAR_RADIUS).min(view.bar.height().min(view.bar.width()) / 2.0);
     let mut children = Vec::with_capacity(2 * view.tiles.len() + 1);
     if view.bar.width() > 0.0 && view.bar.height() > 0.0 {
         children.push(
@@ -206,25 +230,99 @@ impl<M: Clone + 'static> Widget<M> for BarMaterial {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if cx.material(Surface::Menu, self.radius, 1.0) {
-            return;
-        }
-        let Some(fill) = cx.env().theme.surface(Surface::Menu).fill else {
-            return;
-        };
         let size = cx.size();
-        cx.push(PaintOp::Fill {
-            shape: Shape::RoundedRect {
-                rect: Rect::new(0.0, 0.0, size.width, size.height),
-                radius: self.radius,
-            },
-            paint: Paint::Solid(fill),
-        });
+        let all = Rect::new(0.0, 0.0, size.width, size.height);
+        if !cx.material(BAR_SURFACE, self.radius, 1.0) {
+            if let Some(fill) = cx.env().theme.surface(BAR_SURFACE).fill {
+                cx.push(PaintOp::Fill {
+                    shape: Shape::RoundedRect {
+                        rect: all,
+                        radius: self.radius,
+                    },
+                    paint: Paint::Solid(fill),
+                });
+            }
+        }
+        paint_edge(cx, all, self.radius);
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.hidden();
     }
+}
+
+/// The bar's fine edge and rim over its material or fill, in the bar's rectangle `all`.
+pub(crate) fn paint_edge(cx: &mut PaintCx<'_>, all: Rect, radius: f64) {
+    let env = cx.env().clone();
+    let (dark, contrast) = (paint::is_dark(&env), paint::is_high_contrast(&env));
+    let edge = if dark { EDGE_DARK } else { EDGE_LIGHT };
+    let width = if contrast {
+        2.0 * EDGE_WIDTH
+    } else {
+        EDGE_WIDTH
+    };
+    let inset = |r: Rect, d: f64| {
+        Rect::new(
+            r.x() + d,
+            r.y() + d,
+            r.width() - 2.0 * d,
+            r.height() - 2.0 * d,
+        )
+    };
+    cx.push(PaintOp::Stroke {
+        shape: Shape::RoundedRect {
+            rect: inset(all, width / 2.0),
+            radius: (radius - width / 2.0).max(0.0),
+        },
+        width,
+        paint: Paint::Solid(paint::color(edge)),
+    });
+    let rim = |alpha: f32| paint::color([1.0, 1.0, 1.0, alpha]);
+    let mode = usize::from(dark);
+    let stops = if contrast {
+        vec![
+            GradientStop {
+                offset: 0.0,
+                color: rim(RIM_CONTRAST),
+            },
+            GradientStop {
+                offset: 1.0,
+                color: rim(RIM_CONTRAST),
+            },
+        ]
+    } else {
+        vec![
+            GradientStop {
+                offset: 0.0,
+                color: rim(RIM_TOP[mode]),
+            },
+            GradientStop {
+                offset: RIM_FADE,
+                color: rim(0.0),
+            },
+            GradientStop {
+                offset: 1.0 - RIM_FADE,
+                color: rim(0.0),
+            },
+            GradientStop {
+                offset: 1.0,
+                color: rim(RIM_BOTTOM[mode]),
+            },
+        ]
+    };
+    let w = EDGE_WIDTH;
+    cx.push(PaintOp::Stroke {
+        shape: Shape::RoundedRect {
+            rect: inset(all, width + w / 2.0),
+            radius: (radius - width - w / 2.0).max(0.0),
+        },
+        width: w,
+        paint: Paint::Linear {
+            start: Point::new(0.0, all.y()),
+            end: Point::new(0.0, all.y() + all.height()),
+            stops,
+        },
+    });
 }
 
 /// What the bar draws under a tile.
@@ -307,7 +405,7 @@ impl<M: Clone + 'static> Widget<M> for MarkNode {
                 } else {
                     c
                 });
-                paint::fill(cx, all, 0.5, c);
+                paint::fill(cx, all, SEPARATOR_WIDTH / 2.0, c);
             }
         }
     }
@@ -320,18 +418,20 @@ impl<M: Clone + 'static> Widget<M> for MarkNode {
 /// The separator's line across the middle of the slot `r`.
 fn separator_rect(r: Rect, orientation: Orientation) -> Rect {
     if orientation.is_horizontal() {
+        let length = r.height() * SEPARATOR_LENGTH;
         Rect::new(
-            r.x() + r.width() / 2.0 - 0.5,
-            r.y() + r.height() * 0.15,
-            1.0,
-            r.height() * 0.7,
+            r.x() + (r.width() - SEPARATOR_WIDTH) / 2.0,
+            r.y() + (r.height() - length) / 2.0,
+            SEPARATOR_WIDTH,
+            length,
         )
     } else {
+        let length = r.width() * SEPARATOR_LENGTH;
         Rect::new(
-            r.x() + r.width() * 0.15,
-            r.y() + r.height() / 2.0 - 0.5,
-            r.width() * 0.7,
-            1.0,
+            r.x() + (r.width() - length) / 2.0,
+            r.y() + (r.height() - SEPARATOR_WIDTH) / 2.0,
+            length,
+            SEPARATOR_WIDTH,
         )
     }
 }
@@ -342,23 +442,34 @@ pub fn indicator_rect(r: Rect, orientation: Orientation) -> Rect {
     match orientation {
         Orientation::Bottom => Rect::new(
             cx - INDICATOR / 2.0,
-            r.y() + r.height() + 1.0,
+            r.y() + r.height() + INDICATOR_GAP,
             INDICATOR,
             INDICATOR,
         ),
         Orientation::Left => Rect::new(
-            r.x() - 1.0 - INDICATOR,
+            r.x() - INDICATOR_GAP - INDICATOR,
             cy - INDICATOR / 2.0,
             INDICATOR,
             INDICATOR,
         ),
         Orientation::Right => Rect::new(
-            r.x() + r.width() + 1.0,
+            r.x() + r.width() + INDICATOR_GAP,
             cy - INDICATOR / 2.0,
             INDICATOR,
             INDICATOR,
         ),
     }
+}
+
+/// Where a tile at `r` draws its icon: the artwork square, [`ICON_ARTWORK`] of the tile, centred in it.
+pub fn artwork_rect(r: Rect) -> Rect {
+    let side = r.width().min(r.height()) * ICON_ARTWORK;
+    Rect::new(
+        r.x() + (r.width() - side) / 2.0,
+        r.y() + (r.height() - side) / 2.0,
+        side,
+        side,
+    )
 }
 
 struct TileNode<M> {
@@ -446,10 +557,11 @@ impl<M: Clone + 'static> Widget<M> for TileNode<M> {
         if self.tile.opacity < 1.0 {
             cx.set_group(self.tile.opacity.clamp(0.0, 1.0) as f32, Vec::new());
         }
-        paint::image(cx, &self.tile.icon, bounds);
+        let artwork = artwork_rect(bounds);
+        paint::image(cx, &self.tile.icon, artwork);
         // the ring goes with the keyboard: a bar that gave it back keeps its focused tile but shows no ring
         if cx.focus_visible() && cx.window_active() {
-            paint::focus_ring(cx, bounds, self.tile_size * FOCUS_RADIUS);
+            paint::focus_ring(cx, artwork, self.tile_size * ICON_ARTWORK * FOCUS_RADIUS);
         }
     }
 

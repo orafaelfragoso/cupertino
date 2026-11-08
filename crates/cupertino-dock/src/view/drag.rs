@@ -8,7 +8,7 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::platform::{DecorationMode, WindowSpec};
 
-use super::bar::{indicator_rect, INDICATOR};
+use super::bar::{artwork_rect, indicator_rect, INDICATOR, INDICATOR_DARK, INDICATOR_LIGHT};
 use super::paint::{self, Root};
 use super::{IconSet, Input, DRAG_APP_ID};
 use crate::config::Orientation;
@@ -27,9 +27,6 @@ const PILL_DARK: paint::Rgba = [0.16, 0.16, 0.18, 0.88];
 /// The label's colour, light and dark.
 const LABEL_LIGHT: paint::Rgba = [0.0, 0.0, 0.0, 0.85];
 const LABEL_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.9];
-/// Running indicator colours, as the bar draws them.
-const INDICATOR_LIGHT: paint::Rgba = [0.1, 0.1, 0.12, 0.8];
-const INDICATOR_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.85];
 
 /// Number of puffs in the removal effect, the share of the tile size they spread to, and their radius at the start
 /// and at the end, as shares of the tile size.
@@ -137,7 +134,7 @@ fn paint_held(cx: &mut PaintCx<'_>, held: &Held, orientation: Orientation) {
     let dark = paint::is_dark(&env);
     let r = held.rect;
     if held.opacity > 0.0 {
-        draw_faded(cx, &held.icon, r, held.opacity);
+        draw_faded(cx, &held.icon, artwork_rect(r), held.opacity);
     }
     if held.indicator > 0.0 {
         let c = if dark {

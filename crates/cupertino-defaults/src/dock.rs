@@ -46,7 +46,7 @@ pub fn sanitize_tile_size(value: Option<f64>, display_height: f64) -> f64 {
     }
 }
 
-/// Large size preference validation: valid when `0 < v < 513`, rounded up; otherwise 128.
+/// Large size preference validation: valid when `0 < v < 513`, rounded up; otherwise [`DEFAULT_LARGE_SIZE`].
 pub fn sanitize_large_size(value: Option<f64>) -> f64 {
     match value {
         Some(v) if v > 0.0 && v < 513.0 => v.ceil(),

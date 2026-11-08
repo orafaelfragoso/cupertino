@@ -827,7 +827,8 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
         .size
         .h;
 
-    // the settings application writes atomically; the zone is the tile plus the padding and margin
+    // the settings application writes atomically; the zone is the bar (the tile and a padding that scales with it) and
+    // its margin: 85 + 5 pt at 64 pt tiles, 47.8 + 5 pt (53 whole) at 36
     cupertino_defaults::atomic::write_atomic(&conf, b"tile_size = 36\nmagnification = on\n")
         .unwrap();
     server.wait_until("the dock zone to shrink with the tile size", move |s| {
@@ -835,7 +836,7 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
     });
     assert_eq!(
         before - zone(&server.state),
-        28.0,
+        37.0,
         "64 pt tiles became 36 pt tiles"
     );
     server.wait_until("the dock surface to be resized", |s| {

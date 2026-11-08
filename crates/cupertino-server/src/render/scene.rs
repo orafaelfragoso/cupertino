@@ -1233,8 +1233,13 @@ fn minimize_elements(
         snapshot: owner.id(),
         keep: SnapshotKeep::Owned(owner),
         mesh: local_mesh,
-        opacity: pres.opacity as f32,
-        revision: Sig::new().f(pres.minimize_progress).u(kind as u64).finish(),
+        opacity: (pres.opacity * super::motion::minimize_opacity(pres.minimize_progress, p.display))
+            as f32,
+        revision: Sig::new()
+            .f(pres.minimize_progress)
+            .u(kind as u64)
+            .u(u64::from(p.display.reduce_motion))
+            .finish(),
     }))])
 }
 

@@ -41,7 +41,7 @@ use cupertino_kit::controls::{
 use cupertino_kit::core::{
     AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event, EventCx, Glass,
     Key, Live, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget, Window,
-    WindowBackground, WindowKey,
+    WindowBackground, WindowKey, MAX_MATERIALS,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
@@ -936,7 +936,7 @@ fn centre_window<M: Clone + 'static>(
     // the list: the first card a gap below the header, room for its close button, each group as tall as its stack, or
     // as its cards one below the other while it is expanded
     let mut y = HEADER_GAP.max(CLOSE_OUTSET);
-    let mut cards = Vec::new();
+    let mut cards: Vec<Piece<M>> = Vec::new();
     let mut index = 0usize;
     for (number, group) in groups.iter().enumerate() {
         let shown: Vec<Notification> = group
@@ -998,7 +998,7 @@ fn centre_window<M: Clone + 'static>(
                     collapsed.width(),
                     collapsed.height(),
                 );
-                cards.push(Element::new(Card {
+                cards.push(Piece::Sheet(Card {
                     brightness: behind.brightness,
                     container,
                     cover: Some(cover),
@@ -1032,7 +1032,7 @@ fn centre_window<M: Clone + 'static>(
                     map,
                 );
             }
-            cards.push(Element::new(front_card).key(card_key(front.id)));
+            cards.push(Piece::Card(front_card));
             index += 1;
             y += stack.height(front_layout.height, count);
             continue;
@@ -1068,7 +1068,7 @@ fn centre_window<M: Clone + 'static>(
             .key("clear-group"),
         );
         let header_rect = Rect::new(x, y, layout.width, GROUP_HEADER);
-        cards.push(
+        cards.push(Piece::Other(
             Element::new(Fade {
                 rect: header_rect,
                 opacity: expansion,
@@ -1087,7 +1087,7 @@ fn centre_window<M: Clone + 'static>(
                 })],
             })
             .key(format!("group-{}", group.key)),
-        );
+        ));
         let lerp = |a: f64, b: f64| a + (b - a) * expansion;
         let mut top = y + GROUP_HEADER;
         let mut placed = Vec::new();
@@ -1130,13 +1130,22 @@ fn centre_window<M: Clone + 'static>(
                     Vec::new()
                 };
             }
-            cards.push(Element::new(element).key(card_key(n.id)));
+            cards.push(Piece::Card(element));
         }
         index += count;
         let expanded = top - CARD_GAP - y + stack.bottom_padding;
         y += lerp(stack.height(front_layout.height, count), expanded);
     }
     let content_height = y.ceil();
+    // what of the list is in view, with a card's height to spare for a scroll the state has not caught up with; all
+    // of it before the list was first laid out
+    let scroll = ui.scroll;
+    let in_view = move |rect: Rect| {
+        scroll.viewport.height <= 0.0
+            || (rect.max_y() > scroll.offset.y - MIN_CARD_HEIGHT
+                && rect.min_y() < scroll.offset.y + scroll.viewport.height + MIN_CARD_HEIGHT)
+    };
+    let cards = glass_within_budget(cards, in_view);
     let list = Element::from(ScrollView {
         content: Element::new(Layer {
             size: Size::new(width, content_height),
@@ -1936,6 +1945,61 @@ impl<M> Card<M> {
     fn pressed(&self) -> Input {
         self.press.clone().unwrap_or(Input::Activate(self.id))
     }
+}
+
+/// A piece of the centre's list before its glass is counted.
+enum Piece<M> {
+    /// A notification's card, keyed by its id.
+    Card(Card<M>),
+    /// A sheet peeking under a collapsed group's front card.
+    Sheet(Card<M>),
+    Other(Element<M>),
+}
+
+/// The list's pieces with their glass kept within what one window shows ([`MAX_MATERIALS`]), counting what is in view
+/// (`in_view` of a piece's rect): every card keeps its glass, and the sheets of collapsed groups keep theirs a whole group
+/// at a time down the list while there is room. The sheets past it are drawn as opaque sheets, so no card further down
+/// loses its glass to a sheet above it and no group mixes glass and opaque sheets.
+fn glass_within_budget<M: 'static>(
+    pieces: Vec<Piece<M>>,
+    in_view: impl Fn(Rect) -> bool,
+) -> Vec<Element<M>> {
+    let cards = pieces
+        .iter()
+        .filter(|p| matches!(p, Piece::Card(c) if c.material && in_view(c.rect)))
+        .count();
+    // the sheets in view of each group, by container, which numbers the groups down the list
+    let mut sheets = BTreeMap::<u32, usize>::new();
+    for piece in &pieces {
+        if let Piece::Sheet(sheet) = piece {
+            if sheet.material && in_view(sheet.rect) {
+                *sheets.entry(sheet.container).or_default() += 1;
+            }
+        }
+    }
+    let mut room = MAX_MATERIALS.saturating_sub(cards);
+    let mut glass = BTreeSet::new();
+    for (container, count) in sheets {
+        if count > room {
+            break;
+        }
+        room -= count;
+        glass.insert(container);
+    }
+    pieces
+        .into_iter()
+        .map(|piece| match piece {
+            Piece::Card(card) => {
+                let key = card_key(card.id);
+                Element::new(card).key(key)
+            }
+            Piece::Sheet(sheet) => Element::new(Card {
+                material: sheet.material && glass.contains(&sheet.container),
+                ..sheet
+            }),
+            Piece::Other(element) => element,
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -1471,3 +1471,51 @@ fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_
         "the card's shape is filled once, as the clipped source of its shadow outside the glass"
     );
 }
+
+#[test]
+fn past_the_glass_one_window_shows_the_lower_groups_sheets_go_opaque_and_every_card_keeps_its_glass(
+) {
+    let mut run = Run::with(Setup {
+        effects: true,
+        ..Setup::default()
+    });
+    // fourteen collapsed groups of three: a card and two sheets each, more glass than one window shows
+    let apps: Vec<String> = (0..14).map(|n| format!("App {n}")).collect();
+    let mut t = 0.0;
+    for app in &apps {
+        for n in 0..3 {
+            t += 0.01;
+            run.step(Step::At(t));
+            run.notify(NotifyInput::new(app, &format!("Summary {n}"), "Body"));
+        }
+    }
+    run.step(Step::At(t + 1.0));
+    run.step(Step::OpenCentre);
+    let window = run.only_window();
+    let snapshot = run.snapshot(window);
+    let regions = run.materials(window).last().cloned().unwrap();
+    assert!(
+        regions.len() <= cupertino_kit::core::MAX_MATERIALS,
+        "{} glass regions",
+        regions.len()
+    );
+    let model = run.driver.runtime().model();
+    let fronts: Vec<u32> = model
+        .center
+        .borrow()
+        .groups()
+        .iter()
+        .map(|g| g.notifications[0].id)
+        .collect();
+    assert_eq!(fronts.len(), 14);
+    for id in fronts {
+        let card = rect(&snapshot, &format!("card-{id}"));
+        assert!(
+            regions.iter().any(|r| r.rect == card),
+            "card {id} at {card:?} keeps its glass: {regions:?}"
+        );
+    }
+    // the sheets of the groups at the top keep theirs, a whole group at a time
+    let sheets = regions.len() - 14;
+    assert!(sheets > 0 && sheets % 2 == 0, "{sheets} sheets of glass");
+}

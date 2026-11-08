@@ -295,10 +295,13 @@ pub struct DrawParams<'a> {
     pub output_px: (i32, i32),
     /// Pixel scale of the output (points to pixels).
     pub scale: f32,
-    /// Region rectangle in output pixels.
+    /// The rectangle of the region's rounded mask in output pixels: the region's own, or the outline of the window it
+    /// is cut to ([`MaterialMask`]).
     pub rect: Rectangle<i32, Physical>,
-    /// Corner extent (px), superellipse exponent.
+    /// Corner extent (px), superellipse exponent of the mask.
     pub corner: (f32, f32),
+    /// Where the region draws, in output pixels: the region's own rectangle, which the mask may reach past.
+    pub area: Rectangle<i32, Physical>,
     pub opacity: f32,
     pub tint: [f32; 3],
     /// Rectangles (absolute output pixels) to draw.
@@ -743,9 +746,12 @@ impl MaterialGl {
         gl.ActiveTexture(ffi::TEXTURE0);
         gl.BindTexture(ffi::TEXTURE_2D, backdrop_tex);
         gl.Uniform1i(progs.material_loc.backdrop, 0);
+        // a pixel more for the mask's antialiased edge, where the mask is the region's own; a region cut to a window
+        // ends at its own rectangle
+        let grow = i32::from(p.area == p.rect);
         let bounds = Rectangle::new(
-            (p.rect.loc.x - 1, p.rect.loc.y - 1).into(),
-            (p.rect.size.w + 2, p.rect.size.h + 2).into(),
+            (p.area.loc.x - grow, p.area.loc.y - grow).into(),
+            (p.area.size.w + 2 * grow, p.area.size.h + 2 * grow).into(),
         );
         for d in p.damage {
             let Some(q) = d.intersection(bounds) else {
@@ -786,6 +792,15 @@ impl MaterialGl {
     }
 }
 
+/// The outline a material region is cut to besides its own rectangle: the rounded outline of the window whose backdrop
+/// it is, so a backdrop that reaches the window's corners follows them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MaterialMask {
+    pub rect: Rectangle<f64, Logical>,
+    pub radius_pt: f64,
+    pub continuous: bool,
+}
+
 /// Material region element. Draw order matters: everything below it in the element list is part
 /// of its backdrop. Its id/commit are assigned by [`MaterialElement::finalize`] once the elements
 /// below it are known: the commit advances whenever they changed, so the damage tracker repaints
@@ -805,6 +820,7 @@ pub struct MaterialElement {
     tint: [f32; 3],
     output_px: (i32, i32),
     scale: f64,
+    mask: Option<MaterialMask>,
 }
 
 impl std::fmt::Debug for MaterialElement {
@@ -847,9 +863,17 @@ impl MaterialElement {
             tint,
             output_px,
             scale,
+            mask: None,
         };
         e.finalize(0, cache);
         e
+    }
+
+    /// The region cut to `mask` as well as to its own rectangle.
+    pub fn masked(mut self, mask: MaterialMask, cache: &mut ElementCache) -> Self {
+        self.mask = Some(mask);
+        self.finalize(self.generation, cache);
+        self
     }
 
     pub fn area(&self) -> Rectangle<f64, Logical> {
@@ -868,14 +892,20 @@ impl MaterialElement {
     /// commit counter from the cache.
     pub fn finalize(&mut self, generation: u64, cache: &mut ElementCache) {
         self.generation = generation;
-        let sig = Sig::new()
+        let mut sig = Sig::new()
             .rect(self.area)
             .f(self.radius_pt)
             .f(self.opacity as f64)
             .u(self.recipe.key)
             .u(generation)
-            .u(self.continuous as u64)
-            .finish();
+            .u(self.continuous as u64);
+        if let Some(mask) = self.mask {
+            sig = sig
+                .rect(mask.rect)
+                .f(mask.radius_pt)
+                .u(mask.continuous as u64);
+        }
+        let sig = sig.finish();
         let (id, commit) = cache.slot(self.key, sig);
         self.id = id;
         self.commit = commit;
@@ -921,16 +951,29 @@ impl RenderElement<GlesRenderer> for MaterialElement {
             return Ok(());
         }
         let projection = *frame.projection();
-        let (extent, exponent) = {
-            let style = if self.continuous {
+        let corner = |radius_pt: f64, continuous: bool| {
+            let style = if continuous {
                 CornerStyle::continuous()
             } else {
                 CornerStyle::Circular
             };
             (
-                (self.radius_pt * style.expansion() * self.scale) as f32,
+                (radius_pt * style.expansion() * self.scale) as f32,
                 style.exponent() as f32,
             )
+        };
+        let (rect, corner) = match self.mask {
+            // the mask where the region's own rectangle is drawn, `dst`
+            Some(mask) => {
+                let scale = Scale::from(self.scale);
+                let own = to_physical_rect(self.area, scale);
+                let outline = to_physical_rect(mask.rect, scale);
+                (
+                    Rectangle::new(outline.loc + (dst.loc - own.loc), outline.size),
+                    corner(mask.radius_pt, mask.continuous),
+                )
+            }
+            None => (dst, corner(self.radius_pt, self.continuous)),
         };
         let abs: Vec<Rectangle<i32, Physical>> = damage
             .iter()
@@ -943,8 +986,9 @@ impl RenderElement<GlesRenderer> for MaterialElement {
             generation: self.generation,
             output_px: self.output_px,
             scale: self.scale as f32,
-            rect: dst,
-            corner: (extent, exponent),
+            rect,
+            corner,
+            area: dst,
             opacity: self.opacity,
             tint: self.tint,
             damage: &abs,

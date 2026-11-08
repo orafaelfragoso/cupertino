@@ -25,10 +25,12 @@ const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const PASS_SHADER: &str = include_str!("shaders/passes.wgsl");
 const MATERIAL_SHADER: &str = include_str!("shaders/material.wgsl");
 const VIBRANT_SHADER: &str = include_str!("shaders/vibrant.wgsl");
+const GLASS_SHADER: &str = include_str!("shaders/glass.wgsl");
 
 pub const PASSES_WGSL: &str = PASS_SHADER;
 pub const MATERIAL_WGSL: &str = MATERIAL_SHADER;
 pub const VIBRANT_WGSL: &str = VIBRANT_SHADER;
+pub const GLASS_WGSL: &str = GLASS_SHADER;
 
 /// One material to draw: a rectangle in target pixels (y down) plus its recipe.
 #[derive(Clone, Copy, Debug)]

@@ -14,6 +14,7 @@ use cupertino_protocols::server::app_effects::cupertino_app_effects_v1::{
 use cupertino_protocols::server::app_effects::cupertino_backdrop_v1::{
     self, CupertinoBackdropV1, Error,
 };
+use cupertino_theme::GlassStyle;
 use smithay::desktop::{layer_map_for_output, LayerMap, LayerSurface};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::backend::{ClientId, GlobalId};
@@ -59,11 +60,37 @@ struct Shape {
     radius: f64,
 }
 
+/// Material names that draw glass rather than a recipe of the design tokens: each backdrop is a glass shape of its
+/// own, like `set_glass` with container 0.
+pub const GLASS_MATERIALS: [(&str, GlassStyle); 2] = [
+    ("Glass", GlassStyle::Regular),
+    ("ClearGlass", GlassStyle::Clear),
+];
+
+/// The glass style a material name stands for.
+pub fn glass_material(name: &str) -> Option<GlassStyle> {
+    GLASS_MATERIALS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, style)| *style)
+}
+
+/// How a backdrop draws as glass (`set_glass`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassSpec {
+    pub style: GlassStyle,
+    /// Backdrops of a surface with the same nonzero container join into one shape; 0 keeps the backdrop alone.
+    pub container: u32,
+    /// How far the outlines of a container blend into each other, in logical points; 0 joins them with a hard edge.
+    pub spacing: f64,
+}
+
 #[derive(Clone, Debug)]
 struct BackdropEntry {
     serial: u64,
-    /// `None` until `set_material`: the backdrop draws nothing.
+    /// `None` until `set_material`: the backdrop draws nothing unless it is glass.
     material: Option<String>,
+    glass: Option<GlassSpec>,
     shape: Shape,
     alpha: f64,
 }
@@ -93,9 +120,11 @@ pub struct BackdropArea {
     pub area: Rectangle<f64, Logical>,
     pub radius: f64,
     pub alpha: f64,
+    /// Drawn as glass: by `set_glass`, or by a glass material name ([`GLASS_MATERIALS`]).
+    pub glass: Option<GlassSpec>,
 }
 
-/// Committed, visible backdrops of `surface` (set material, non-empty shape) in creation order,
+/// Committed, visible backdrops of `surface` (set material or glass, non-empty shape) in creation order,
 /// placed relative to `origin`, the logical position of the surface's local origin.
 pub fn surface_backdrops(surface: &WlSurface, origin: Point<f64, Logical>) -> Vec<BackdropArea> {
     with_states(surface, |states| {
@@ -106,11 +135,26 @@ pub fn surface_backdrops(surface: &WlSurface, origin: Point<f64, Logical>) -> Ve
             .entries
             .iter()
             .filter_map(|e| {
-                let material = e.material.clone()?;
+                let glass = e.glass.or_else(|| {
+                    e.material
+                        .as_deref()
+                        .and_then(glass_material)
+                        .map(|style| GlassSpec {
+                            style,
+                            container: 0,
+                            spacing: 0.0,
+                        })
+                });
+                let material = match (&e.material, glass) {
+                    (Some(m), _) => m.clone(),
+                    (None, Some(_)) => String::new(),
+                    (None, None) => return None,
+                };
                 let s = e.shape;
                 (s.width > 0 && s.height > 0).then(|| BackdropArea {
                     key: e.serial,
                     material,
+                    glass,
                     area: Rectangle::new(
                         origin + Point::from((f64::from(s.x), f64::from(s.y))),
                         (f64::from(s.width), f64::from(s.height)).into(),
@@ -257,6 +301,7 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                         .push(BackdropEntry {
                             serial,
                             material: None,
+                            glass: None,
                             shape: Shape::default(),
                             alpha: 1.0,
                         });
@@ -483,10 +528,11 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                     state.appearance(),
                     state.display_options().reduce_transparency,
                 );
-                if !state
-                    .render
-                    .as_ref()
-                    .is_some_and(|r| r.recipe(&name, appearance, reduce_transparency).is_some())
+                if glass_material(&name).is_none()
+                    && !state
+                        .render
+                        .as_ref()
+                        .is_some_and(|r| r.recipe(&name, appearance, reduce_transparency).is_some())
                 {
                     resource.post_error(
                         Error::UnknownMaterial,
@@ -494,7 +540,11 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                     );
                     return;
                 }
-                data.edit(|e| e.material = Some(name));
+                // the last of set_material and set_glass wins
+                data.edit(|e| {
+                    e.material = Some(name);
+                    e.glass = None;
+                });
             }
             cupertino_backdrop_v1::Request::SetShape {
                 x,
@@ -529,6 +579,35 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                     return;
                 }
                 data.edit(|e| e.alpha = alpha);
+            }
+            cupertino_backdrop_v1::Request::SetGlass {
+                style,
+                container,
+                spacing,
+            } => {
+                let style = match style {
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::Regular) => {
+                        Some(GlassStyle::Regular)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::Clear) => {
+                        Some(GlassStyle::Clear)
+                    }
+                    _ => None,
+                };
+                let (Some(style), true) = (style, spacing >= 0.0 && spacing.is_finite()) else {
+                    resource.post_error(
+                        Error::InvalidGlass,
+                        format!("unknown glass style or negative spacing {spacing}"),
+                    );
+                    return;
+                };
+                data.edit(|e| {
+                    e.glass = Some(GlassSpec {
+                        style,
+                        container,
+                        spacing,
+                    })
+                });
             }
             // `Destroy` is handled in `destroyed`
             _ => {}

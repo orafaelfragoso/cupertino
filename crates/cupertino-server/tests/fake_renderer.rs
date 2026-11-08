@@ -105,6 +105,14 @@ impl Renderer for Fake {
                     )?;
                     seen.recipes += 1;
                 }
+                Source::Glass(pass) => {
+                    slot_of(
+                        pass.glass.0.slot,
+                        pass.glass.0.generation,
+                        resources.glass.len(),
+                        "glass",
+                    )?;
+                }
                 Source::TexturedMesh { snapshot, .. } => {
                     slot_of(
                         snapshot.0.slot,

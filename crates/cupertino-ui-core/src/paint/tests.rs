@@ -605,7 +605,12 @@ fn a_node_s_material_is_cut_to_what_shows_and_capped_per_window_and_a_refused_on
     assert_eq!(
         shown.materials[0],
         MaterialRegion {
-            material: "Menu".into(),
+            material: cupertino_ui_theme::GLASS_MATERIAL.into(),
+            glass: Some(cupertino_ui_platform::GlassRegion {
+                style: cupertino_ui_platform::GlassStyle::Regular,
+                container: 0,
+                spacing: 0.0,
+            }),
             rect: Rect::new(10.0, 0.0, 80.0, 5.0),
             radius: 6.0,
             alpha: 0.5,
@@ -636,5 +641,137 @@ fn a_node_that_draws_tells_the_damage_and_a_group_draws_even_with_no_operation()
         f.painting(rect, None, false).blank,
         [false],
         "a swatch fills"
+    );
+}
+
+#[test]
+fn the_theme_and_the_platform_name_glass_alike() {
+    use cupertino_ui_platform::GlassStyle;
+    assert_eq!(
+        GlassStyle::Regular.material(),
+        cupertino_ui_theme::GLASS_MATERIAL
+    );
+    assert_eq!(
+        GlassStyle::Clear.material(),
+        cupertino_ui_theme::CLEAR_GLASS_MATERIAL
+    );
+    assert_eq!(
+        GlassStyle::of_material(cupertino_ui_theme::GLASS_MATERIAL),
+        Some(GlassStyle::Regular)
+    );
+    assert_eq!(GlassStyle::of_material("Menu"), None);
+}
+
+/// A capsule of glass in container 2, blending over 8 points.
+struct GlassButton;
+
+impl Widget<M> for GlassButton {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        cx.glass(
+            crate::Glass::clear()
+                .capsule()
+                .container(2, 8.0)
+                .alpha(f64::NAN),
+        );
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+#[test]
+fn glass_nodes_join_their_container_with_round_ends() {
+    use cupertino_ui_platform::{GlassRegion, GlassStyle};
+    let mut tree = Tree::<M>::new(4);
+    let children = (0..2).map(|_| Element::new(GlassButton)).collect();
+    let root = tree
+        .reconcile(None, Element::new(crate::test_support::group(children)))
+        .unwrap();
+    let ids = tree.get(root).unwrap().children.clone();
+    let window = Rect::new(0.0, 0.0, 300.0, 100.0);
+    let mut geometry = Geometry::from([(
+        root,
+        Placement {
+            rect: window,
+            target: window,
+            clip: None,
+            own_clip: Some(window),
+        },
+    )]);
+    for (i, id) in ids.iter().enumerate() {
+        let rect = Rect::new(10.0 + i as f64 * 110.0, 20.0, 100.0, 36.0);
+        geometry.insert(
+            *id,
+            Placement {
+                rect,
+                target: rect,
+                clip: None,
+                own_clip: None,
+            },
+        );
+    }
+    let env = env();
+    let mut painter = Painter::default();
+    let painting = painter.paint(
+        &tree,
+        root,
+        &geometry,
+        &PaintInput {
+            env: &env,
+            focus: None,
+            focus_visible: false,
+            window_active: true,
+            background: WindowBackground::None,
+            backdrop: false,
+            materials: true,
+            now: Timestamp(0),
+        },
+    );
+    let glass = GlassRegion {
+        style: GlassStyle::Clear,
+        container: 2,
+        spacing: 8.0,
+    };
+    assert_eq!(
+        painting.materials,
+        vec![
+            MaterialRegion {
+                material: "ClearGlass".into(),
+                rect: Rect::new(10.0, 20.0, 100.0, 36.0),
+                radius: 18.0,
+                alpha: 1.0,
+                glass: Some(glass),
+            },
+            MaterialRegion {
+                material: "ClearGlass".into(),
+                rect: Rect::new(120.0, 20.0, 100.0, 36.0),
+                radius: 18.0,
+                alpha: 1.0,
+                glass: Some(glass),
+            },
+        ],
+        "both capsules, in the same container, opaque for an alpha that is not finite"
     );
 }

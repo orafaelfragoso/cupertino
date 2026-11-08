@@ -9,6 +9,7 @@ and typography.
 |---|---|
 | `tokens.json` | `DesignTokens`: named colours per `Appearance` (sRGB `f32` + alpha) and the system font sizes, metrics and tracking table |
 | `materials.json` | `MaterialLibrary`/`Recipe`: backdrop filter chain + fill layers per window state and interaction, opaque variants, high-contrast catalogs |
+| `glass` (code) | `GlassParams::new(GlassMode, short_side)`: the glass recipe of an appearance, style (`GlassStyle::{Regular, Clear}`), Reduce Transparency, Increase Contrast and Reduce Motion, for a shape whose shorter side is `short_side` points; `foreground_matrix(dark)`, `adapts_foreground(side)`, `apply_matrix` for content on glass |
 | `animations.json` | `AnimationPresets`: springs, timing functions, momentum, rubber band and dock timings as `cupertino-animation` types; `Easing` (bézier timing functions plus the cosine ease, which is not a bézier) via `AnimationPresets::easing(name)`; the dock auto-hide curve is `Easing::CosineEase` with the 0.15 s delay / 0.24 s duration; an unknown curve name is an error, not a silent fallback |
 
 
@@ -52,6 +53,21 @@ flag and its Increase Contrast option.
     Contrast wins when both are on (approximate).
   - `AppGrid`, the app grid's background: blur 30, saturate 1.8, and the gain 0.55 / bias 0.05292 colour matrix
     as a fill of gray 0.1176 at opacity 0.45.
+- **Glass** (`glass.rs`, code). `GlassParams` holds every value of the glass background pass in stage order: the
+  blur (`GlassBlur`: four levels of radius `radius·2^i`, widest first, each narrower one laid over at its opacity, and
+  a blur fill that darkens, lightens or covers), the face colour (`GlassFace`: saturation, white gain and per-channel
+  limit on linear light, a luminance cap, a black lift and a fill), the refraction (`GlassRefraction`: offset and band
+  along the edge), the bleed of the widest level (`GlassBleed`), the key and fill rim lights (`GlassHighlight`) and the
+  drop and ring shadows (`GlassShadow`, at opacity 0 at rest). Some values follow the shape's size: for regular glass
+  the refraction offset (−min(s/2, 60)) and band (min(s/4, 20)), the bleed band (0.35·min(s, 140)), the opacity of the
+  two narrowest levels (0.4 + clamp(s − 64, 0, 76)/240) and, in the dark appearance, the luminance cap (0.6 at 60 pt
+  down to 0.35 at 120 pt); for clear glass the offset (−min(0.65·s, 60)), band (min(0.36·s, 20)), blur radius
+  (5 to 10 between 48 and 120 pt) and shadows. Each accessibility option selects its own recipe rather than turning
+  the glass off: Reduce Transparency removes the bending at the edge, widens the blur (40.6 pt, 200 for clear glass)
+  and lays a dense fill over it; Increase Contrast keeps the optics with firmer colours; both together use the
+  reduced-transparency optics with the increased-contrast colours; Reduce Motion drops the refraction band and widens the
+  narrowest blur. `GLASS_BACKDROP_SCALE` (0.5) is the scale the backdrop is read at. Content on glass is coloured by a
+  4×5 matrix per appearance; `adapts_foreground` tells which controls (shorter side under 64 pt) take it.
 - **Display filter steps.** `ColorOp::{LinearMatrix, Invert, Contrast}` feed `cupertino-glass::display_filter`. No catalog
   recipe uses them.
 

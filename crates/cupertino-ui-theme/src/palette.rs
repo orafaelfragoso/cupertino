@@ -17,6 +17,8 @@ pub(crate) struct StateColors<C> {
     pub disabled_switch_track: C,
     pub disabled_selected_switch_track: C,
     pub disabled_switch_thumb: C,
+    /// A panel's level slider track that takes no input: the enabled track, faded towards the module behind it.
+    pub disabled_panel_track: C,
 }
 
 /// One appearance's colours, `normal` in [`ColorRole::ALL`] order.
@@ -47,6 +49,7 @@ impl<C: Copy> Palette<C> {
                 disabled_switch_track: f(s.disabled_switch_track)?,
                 disabled_selected_switch_track: f(s.disabled_selected_switch_track)?,
                 disabled_switch_thumb: f(s.disabled_switch_thumb)?,
+                disabled_panel_track: f(s.disabled_panel_track)?,
             },
         })
     }
@@ -90,6 +93,7 @@ impl Palette<Color> {
             (Disabled, SwitchTrack) => s.disabled_switch_track,
             (Disabled, SliderTrack) => s.disabled_switch_track,
             (Disabled, SwitchThumb) => s.disabled_switch_thumb,
+            (Disabled, PanelTrack) => s.disabled_panel_track,
             (Hover | Pressed, ControlBorder | TextFieldBorder) => s.emphasized_border,
             (Pressed, DefaultButtonFill) => s.pressed_default_fill,
             (Pressed, DestructiveFill) => s.pressed_destructive_fill,

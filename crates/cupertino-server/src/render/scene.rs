@@ -32,6 +32,7 @@ use super::compose::{
 };
 use super::gles::{Gles, GlesCompletion, GlesResources, GlesTarget};
 use super::lower::id_hash;
+use super::material::glass::{area_generation, Below, GlassContainer};
 use super::material::{GpuRecipe, MaterialStage, SharedMaterial};
 use super::mesh::{MeshGl, SharedMesh};
 use super::motion::{cross_fade_opacity, skips_frame_animation, WorkspaceTransition};
@@ -46,6 +47,7 @@ use crate::fx::{Effects, IntoGeom};
 use crate::shell::Shell;
 use crate::state::{Shrink, WindowEntry};
 use crate::window_manager::Look;
+use cupertino_glass::glass::{Container, GlassShape};
 use cupertino_render_api::Renderer;
 
 /// Material over a window while a sheet hangs from it (material 30).
@@ -1094,9 +1096,15 @@ pub fn capture_window(
     let pieces = window_elements(p, entry, &plan, active, shadow, deco)
         .into_iter()
         .map(|piece| match piece {
-            Piece::Material(m) => fallback_fill(p, m.kind, m.index, m.rect, m.radius, m.opacity),
-            piece => piece,
-        });
+            Piece::Material(m) => vec![fallback_fill(
+                p, m.kind, m.index, m.rect, m.radius, m.opacity,
+            )],
+            Piece::Glass(g) => glass_fallback(p, g.kind, g.index, &g.glass.container, g.opacity),
+            piece => vec![piece],
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flatten();
     let mut stack = Composition::new(p.scale);
     stack.extend(SceneLayer::Windows, pieces);
     let composed = stack.finish(p);
@@ -1389,27 +1397,33 @@ fn popup_backdrop_elements(
     let mut out: Vec<Piece> = Vec::new();
     let params = p.decor.popup_shadow_params();
     let rim = p.decor.rim_color(p.scale);
+    let mut glass = GlassGroups::default();
     for b in backdrops.iter().rev() {
         let alpha = b.alpha as f32 * opacity;
-        out.push(rrect_item(
-            SceneKind::PopupRim,
-            b.key,
-            b.area,
-            b.radius,
-            true,
-            [0.0; 4],
-            Some((1.0 / p.scale, rim)),
-            alpha,
-        ));
-        out.extend(material_layer(
-            p,
-            SceneKind::Backdrop,
-            b.key,
-            &b.material,
-            b.area,
-            b.radius,
-            alpha,
-        ));
+        if b.glass.is_some() {
+            // glass lights its own rim
+            glass.add(b, out.len());
+        } else {
+            out.push(rrect_item(
+                SceneKind::PopupRim,
+                b.key,
+                b.area,
+                b.radius,
+                true,
+                [0.0; 4],
+                Some((1.0 / p.scale, rim)),
+                alpha,
+            ));
+            out.extend(material_layer(
+                p,
+                SceneKind::Backdrop,
+                b.key,
+                &b.material,
+                b.area,
+                b.radius,
+                alpha,
+            ));
+        }
         let visual = cupertino_wm::Rect::new(
             p.rect.x + b.area.loc.x,
             p.rect.y + b.area.loc.y,
@@ -1436,7 +1450,7 @@ fn popup_backdrop_elements(
             f64::from(alpha),
         ));
     }
-    out
+    glass.finish(p, out, opacity)
 }
 
 /// Material pieces of committed backdrops, to go directly below the owning surface's pieces
@@ -1447,7 +1461,12 @@ fn backdrop_elements(
     opacity: f32,
 ) -> Vec<Piece> {
     let mut out = Vec::new();
+    let mut glass = GlassGroups::default();
     for b in backdrops.iter().rev() {
+        if b.glass.is_some() {
+            glass.add(b, out.len());
+            continue;
+        }
         out.extend(material_layer(
             p,
             SceneKind::Backdrop,
@@ -1458,7 +1477,128 @@ fn backdrop_elements(
             b.alpha as f32 * opacity,
         ));
     }
-    out
+    glass.finish(p, out, opacity)
+}
+
+/// Glass backdrops of one surface joined per container while its backdrops are laid out front to back: a container
+/// is drawn where its frontmost backdrop is.
+#[derive(Default)]
+struct GlassGroups<'a> {
+    /// The position in the pieces, the container and the backdrops of each group.
+    groups: Vec<(usize, Option<u32>, Vec<&'a BackdropArea>)>,
+}
+
+impl<'a> GlassGroups<'a> {
+    /// Add glass backdrop `b`; a new container keeps the place of the next piece of the list, `at`.
+    fn add(&mut self, b: &'a BackdropArea, at: usize) {
+        let Some(spec) = b.glass else {
+            return;
+        };
+        let container = (spec.container != 0).then_some(spec.container);
+        if let Some(group) = container.and_then(|c| {
+            self.groups
+                .iter_mut()
+                .find(|(_, other, _)| *other == Some(c))
+        }) {
+            group.2.push(b);
+            return;
+        }
+        self.groups.push((at, container, vec![b]));
+    }
+
+    /// `out` with each container's piece at its place.
+    fn finish(self, p: &SceneParams<'_>, out: Vec<Piece>, opacity: f32) -> Vec<Piece> {
+        self.place(out, |members| glass_pieces(p, members, opacity))
+    }
+
+    /// `out` with the pieces `make` gives each container (its backdrops front to back) at the container's place.
+    fn place(
+        self,
+        out: Vec<Piece>,
+        mut make: impl FnMut(&[&BackdropArea]) -> Vec<Piece>,
+    ) -> Vec<Piece> {
+        if self.groups.is_empty() {
+            return out;
+        }
+        let mut at = self.groups.into_iter().peekable();
+        let mut all = Vec::with_capacity(out.len() + 1);
+        for (i, piece) in out.into_iter().enumerate() {
+            while let Some((_, _, members)) = at.next_if(|g| g.0 == i) {
+                all.extend(make(&members));
+            }
+            all.push(piece);
+        }
+        for (_, _, members) in at {
+            all.extend(make(&members));
+        }
+        all
+    }
+}
+
+/// The glass piece of the container of `members` (glass backdrops of one surface, front to back), or translucent fills
+/// standing in for it while the material pass is unavailable.
+fn glass_pieces(p: &SceneParams<'_>, members: &[&BackdropArea], opacity: f32) -> Vec<Piece> {
+    let Some(spec) = members.first().and_then(|b| b.glass) else {
+        return Vec::new();
+    };
+    let mode = crate::accessibility::glass_mode(p.config.is_dark(), spec.style, p.display);
+    // the shapes back to front, as the surface created them
+    let shapes = members
+        .iter()
+        .rev()
+        .map(|b| {
+            GlassShape::new(
+                [
+                    b.area.loc.x as f32,
+                    b.area.loc.y as f32,
+                    b.area.size.w as f32,
+                    b.area.size.h as f32,
+                ],
+                b.radius as f32,
+            )
+        })
+        .collect();
+    let container = Container::new(shapes, spec.spacing as f32, mode);
+    let alpha = members.iter().map(|b| b.alpha).fold(0.0, f64::max) as f32 * opacity;
+    let index = members[0].key;
+    let ready = p
+        .res
+        .material
+        .as_ref()
+        .is_some_and(|m| m.borrow().is_ready());
+    if !ready {
+        return glass_fallback(p, SceneKind::Backdrop, index, &container, alpha);
+    }
+    vec![Piece::Glass(Box::new(super::compose::Glass {
+        glass: Rc::new(GlassContainer::new(container)),
+        kind: SceneKind::Backdrop,
+        index,
+        opacity: alpha,
+    }))]
+}
+
+/// Translucent fills standing in for a glass container, one per shape.
+fn glass_fallback(
+    p: &SceneParams<'_>,
+    kind: SceneKind,
+    index: u64,
+    container: &Container,
+    alpha: f32,
+) -> Vec<Piece> {
+    container
+        .shapes
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(i, s)| {
+            let rect = smithay::utils::Rectangle::<f64, Logical>::new(
+                (f64::from(s.rect[0]), f64::from(s.rect[1])).into(),
+                (f64::from(s.rect[2]), f64::from(s.rect[3])).into(),
+            );
+            let index = index.wrapping_add((i as u64) << 48);
+            fallback_fill(p, kind, index, rect, f64::from(s.fitted_radius()), alpha)
+        })
+        .collect()
 }
 
 /// Backdrops of a menu bar, to go directly below the bar's pieces. A bar reserves its strip,
@@ -1477,9 +1617,14 @@ fn bar_backdrop_elements(
         (0.0, 0.0).into(),
         (p.rect.w, p.rect.h).into(),
     );
+    let mut glass = GlassGroups::default();
     for b in backdrops.iter().rev() {
         let alpha = b.alpha as f32 * opacity;
         let owner = b.key;
+        if b.glass.is_some() {
+            glass.add(b, out.len());
+            continue;
+        }
         let composite = material_piece(
             p,
             SceneKind::Backdrop,
@@ -1514,7 +1659,7 @@ fn bar_backdrop_elements(
         ));
         out.push(composite);
     }
-    out
+    glass.finish(p, out, opacity)
 }
 
 /// Material pass (or the translucent fallback fill without one) behind `area`, drawn at `alpha`.
@@ -1936,13 +2081,21 @@ fn display_filter(p: &mut SceneParams<'_>, stack: &mut Composition) {
 }
 
 /// Assign each material element the signature of everything below it (bottom to top). A
-/// composite takes the signature of its capture element, which sits lower in the scene.
+/// composite takes the signature of its capture element, which sits lower in the scene. A glass element takes the
+/// signature of the elements below it that overlap the area it samples ([`area_generation`]).
 pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: &mut ElementCache) {
     let scale = Scale::from(scale);
     let mut running = Sig::new();
     let mut acc: u64 = 0;
     let mut captured: Vec<(u64, u64)> = Vec::new();
+    // the elements so far, bottom to top
+    let mut below: Vec<Below> = Vec::new();
     for e in elements.iter_mut().rev() {
+        if let CupertinoElement::Glass(g) = e {
+            // glass reads only the area it samples: what changes elsewhere leaves its blurred levels alone
+            let generation = area_generation(g.geometry(scale), below.iter().copied());
+            g.finalize(generation, cache);
+        }
         if let CupertinoElement::Material(m) = e {
             let generation = match m.stage() {
                 MaterialStage::Full => acc,
@@ -1975,6 +2128,12 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
             .u(g.size.h as u64);
         h = h.u(id_hash(e.id()));
         acc = h.finish();
+        below.push(Below {
+            id: id_hash(e.id()),
+            commit: c,
+            alpha: e.alpha(),
+            geometry: g,
+        });
         let _ = &mut running;
     }
 }
@@ -2296,6 +2455,112 @@ mod tests {
             CupertinoElement::Material(m) => m.generation(),
             _ => unreachable!("the scene holds only material elements"),
         }
+    }
+
+    #[test]
+    fn glass_backdrops_of_a_surface_join_per_container_where_the_frontmost_is() {
+        use crate::app_effects_v1::GlassSpec;
+        use cupertino_theme::GlassStyle;
+        let area = |key: u64, container: Option<u32>| BackdropArea {
+            key,
+            material: String::new(),
+            area: smithay::utils::Rectangle::new((0.0, 0.0).into(), (10.0, 10.0).into()),
+            radius: 0.0,
+            alpha: 1.0,
+            glass: container.map(|container| GlassSpec {
+                style: GlassStyle::Regular,
+                container,
+                spacing: 4.0,
+            }),
+        };
+        // front to back: glass in container 1, a material, glass on its own, glass in container 1 again
+        let backdrops = [
+            area(1, Some(1)),
+            area(2, None),
+            area(3, Some(0)),
+            area(4, Some(1)),
+        ];
+        let mut out = Vec::new();
+        let mut groups = GlassGroups::default();
+        for b in &backdrops {
+            if b.glass.is_some() {
+                groups.add(b, out.len());
+            } else {
+                out.push(marker(SceneKind::Backdrop));
+            }
+        }
+        let mut made = Vec::new();
+        let pieces = groups.place(out, |members| {
+            made.push(members.iter().map(|b| b.key).collect::<Vec<_>>());
+            vec![marker(SceneKind::BackdropCapture)]
+        });
+        assert_eq!(made, vec![vec![1, 4], vec![3]], "one piece per container");
+        let kinds: Vec<SceneKind> = pieces
+            .iter()
+            .map(|p| match p {
+                Piece::Item(i) => i.id.kind,
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SceneKind::BackdropCapture,
+                SceneKind::Backdrop,
+                SceneKind::BackdropCapture
+            ],
+            "container 1 in front of the material, where its frontmost backdrop is; the lone glass behind it"
+        );
+    }
+
+    #[test]
+    fn glass_reblurs_only_when_what_lies_below_its_sampled_area_changes() {
+        use crate::render::GlassElement;
+        use cupertino_theme::GlassMode;
+        let mut cache = ElementCache::default();
+        let container = Rc::new(GlassContainer::new(Container::new(
+            vec![GlassShape::new([400.0, 300.0, 200.0, 60.0], 16.0)],
+            0.0,
+            GlassMode::default(),
+        )));
+        let sampled = container.sample_area().unwrap();
+        // front to back: the glass, then a material standing in for a window
+        let mut scene = |window: Rect| {
+            let glass = GlassElement::new(
+                ElementKey::new("backdrop", 1),
+                &mut cache,
+                sampled,
+                container.clone(),
+                MaterialGl::detached(),
+                1.0,
+                1.0,
+            );
+            let mut els = vec![
+                CupertinoElement::Glass(glass),
+                material(
+                    &mut cache,
+                    ElementKey::new("window", 0),
+                    MaterialStage::Full,
+                    window,
+                ),
+            ];
+            finalize_materials(&mut els, 1.0, &mut cache);
+            match &els[0] {
+                CupertinoElement::Glass(g) => g.generation(),
+                _ => unreachable!(),
+            }
+        };
+        let far = scene(Rect::new(0.0, 700.0, 100.0, 50.0));
+        assert_eq!(
+            far,
+            scene(Rect::new(10.0, 700.0, 100.0, 50.0)),
+            "a window moving far from the glass keeps its blurred levels"
+        );
+        assert_ne!(
+            far,
+            scene(Rect::new(450.0, 320.0, 100.0, 50.0)),
+            "a window moving under the glass makes them again"
+        );
     }
 
     #[test]

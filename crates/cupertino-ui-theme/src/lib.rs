@@ -291,20 +291,27 @@ pub struct ThemeTokens {
     pub motion: Motion,
 }
 
+/// The material name of regular glass: the compositor draws glass rather than a recipe of the design tokens.
+pub const GLASS_MATERIAL: &str = "Glass";
+/// The material name of clear glass.
+pub const CLEAR_GLASS_MATERIAL: &str = "ClearGlass";
+
 impl ThemeTokens {
-    /// The look of `surface`. With reduced transparency or in high contrast it asks for no material and is opaque.
+    /// The look of `surface`. Menus and popovers are glass, which keeps its shape with reduced transparency and in
+    /// high contrast (the compositor draws the glass recipe of those options); the other surfaces then ask for no
+    /// material and are opaque.
     pub fn surface(&self, surface: Surface) -> SurfaceLook {
         let opaque =
             self.preferences.reduce_transparency || self.preferences.appearance.is_high_contrast();
-        let material = match surface {
-            Surface::Sidebar => "Sidebar",
-            Surface::Menu | Surface::Popover => "Menu",
-            Surface::Hud => "LoginWindowControl",
-            Surface::AppGrid => "AppGrid",
-            Surface::Switcher => "Switcher",
+        let (material, glass) = match surface {
+            Surface::Sidebar => ("Sidebar", false),
+            Surface::Menu | Surface::Popover => (GLASS_MATERIAL, true),
+            Surface::Hud => ("LoginWindowControl", false),
+            Surface::AppGrid => ("AppGrid", false),
+            Surface::Switcher => ("Switcher", false),
         };
         SurfaceLook {
-            material: (!opaque).then_some(material),
+            material: (glass || !opaque).then_some(material),
             fill: self
                 .colors
                 .get(ColorRole::WindowBackground, StateVariant::NORMAL),

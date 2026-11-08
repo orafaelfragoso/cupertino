@@ -17,9 +17,9 @@ use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken,
     ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
-    DropAnswer, DropEvent, DropToken, KeyEvent, Keysym, MaterialRegion, MenuDescription,
-    PlatformError, PlatformEvent, PopupSpec, PresentOutcome, SystemAppearance, Timestamp,
-    WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, KeyEvent, Keysym, MaterialRegion,
+    MenuDescription, PlatformError, PlatformEvent, PopupSpec, PresentOutcome, SystemAppearance,
+    Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -137,6 +137,35 @@ struct ShownBackdrop {
 struct ShownMaterial {
     material: Material,
     region: MaterialRegion,
+}
+
+/// Gives `backdrop` its look: glass for `glass`, or for a glass material name of the theme, on its own; otherwise the
+/// material `name`.
+fn set_look(
+    backdrop: &Material,
+    name: &str,
+    glass: Option<GlassRegion>,
+) -> Result<(), cupertino_protocol_app::Error> {
+    let glass = glass.or_else(|| {
+        GlassStyle::of_material(name).map(|style| GlassRegion {
+            style,
+            container: 0,
+            spacing: 0.0,
+        })
+    });
+    match glass {
+        Some(g) => {
+            let style = match g.style {
+                GlassStyle::Regular => cupertino_protocol_app::GlassStyle::Regular,
+                GlassStyle::Clear => cupertino_protocol_app::GlassStyle::Clear,
+            };
+            backdrop.set_glass(style, g.container, g.spacing)
+        }
+        None => {
+            backdrop.set_material(name);
+            Ok(())
+        }
+    }
 }
 
 /// Sets the flag [`WindowSystem::dispatch`] reports as [`PlatformEvent::Wake`] and wakes the connection's wait.
@@ -530,7 +559,7 @@ impl WaylandWindowSystem {
                 let wire = effects
                     .backdrop(&self.conn, surface)
                     .map_err(|e| PlatformError::Protocol(e.to_string()))?;
-                wire.set_material(&material);
+                set_look(&wire, &material, None).map_err(protocol)?;
                 wire.set_alpha(alpha).map_err(protocol)?;
                 Some(ShownBackdrop {
                     material: wire,
@@ -569,8 +598,9 @@ impl WaylandWindowSystem {
         let result = (|| {
             for (i, region) in regions.into_iter().enumerate() {
                 if let Some(old) = shown.get_mut(i) {
-                    if old.region.material != region.material {
-                        old.material.set_material(&region.material);
+                    if old.region.material != region.material || old.region.glass != region.glass {
+                        set_look(&old.material, &region.material, region.glass)
+                            .map_err(protocol)?;
                     }
                     if old.region.alpha != region.alpha {
                         old.material.set_alpha(region.alpha).map_err(protocol)?;
@@ -587,7 +617,7 @@ impl WaylandWindowSystem {
                 let material = effects
                     .backdrop(&self.conn, surface)
                     .map_err(|e| PlatformError::Protocol(e.to_string()))?;
-                material.set_material(&region.material);
+                set_look(&material, &region.material, region.glass).map_err(protocol)?;
                 material.set_alpha(region.alpha).map_err(protocol)?;
                 material
                     .set_shape(&region.rect, region.radius)

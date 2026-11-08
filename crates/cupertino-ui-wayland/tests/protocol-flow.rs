@@ -1729,6 +1729,7 @@ mod window_system {
                     rect: Rect::new(0.0, i as f64, 10.0, 10.0),
                     radius: 4.0,
                     alpha: 1.0,
+                    glass: None,
                 })
                 .collect::<Vec<_>>()
         };

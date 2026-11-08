@@ -46,6 +46,11 @@ fn wgsl_shaders_validate() {
         cupertino_glass::renderer::VIBRANT_WGSL,
         &["vs_vibrant", "fs_vibrant"],
     );
+    validate_wgsl(
+        "glass.wgsl",
+        cupertino_glass::renderer::GLASS_WGSL,
+        &["vs_glass", "fs_glass"],
+    );
 }
 
 fn to_naga_dialect(src: &str, fragment: bool) -> String {
@@ -74,6 +79,18 @@ fn to_naga_dialect(src: &str, fragment: bool) -> String {
             samplers.push(name.to_string());
             l = format!("layout(set = 0, binding = {next_binding}) uniform texture2D {name}_tex;\nlayout(set = 0, binding = {}) uniform sampler {name}_smp;", next_binding + 1);
             next_binding += 2;
+        } else if let Some(rest) = t
+            .strip_prefix("uniform ")
+            .filter(|r| !r.starts_with("sampler2D") && r.ends_with(";"))
+        {
+            // a plain uniform: Vulkan GLSL only takes them in blocks
+            let name = rest
+                .trim_end_matches(";")
+                .split_whitespace()
+                .last()
+                .unwrap_or("u");
+            l = format!("layout(std140, set = 0, binding = {next_binding}) uniform {name}_block {{ {rest} }};");
+            next_binding += 1;
         } else if t.starts_with("in ") && fragment {
             l = format!("layout(location = {next_in}) {t}");
             next_in += 1;
@@ -218,4 +235,48 @@ fn gles_and_wgsl_agree_on_uniform_layout() {
         assert_eq!(wb.len(), names.len());
         assert_eq!(gb.len(), names.len());
     }
+}
+
+/// Members of a uniform block in order, each with its number of vec4 slots.
+fn block_members(src: &str, open: &str, wgsl: bool) -> Vec<(String, usize)> {
+    let start = src.find(open).unwrap_or_else(|| panic!("no block {open}"));
+    let body = &src[start + open.len()..];
+    let body = &body[..body.find('}').unwrap()];
+    body.lines()
+        .map(|l| l.split("//").next().unwrap().trim())
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            let count = |s: &str| {
+                s.split(['[', ','])
+                    .nth(1)
+                    .and_then(|n| n.trim_matches(|c: char| !c.is_ascii_digit()).parse().ok())
+                    .unwrap_or(1)
+            };
+            if wgsl {
+                let (name, ty) = l.trim_end_matches(',').split_once(':').unwrap();
+                let n = if ty.contains("array") { count(ty) } else { 1 };
+                (name.trim().to_string(), n)
+            } else {
+                let decl = l.trim_end_matches(';').trim_start_matches("vec4 ");
+                let name = decl.split('[').next().unwrap().trim().to_string();
+                (name, if decl.contains('[') { count(decl) } else { 1 })
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn glass_block_matches_the_rust_uniform_in_both_languages() {
+    let w = block_members(
+        cupertino_glass::renderer::GLASS_WGSL,
+        "struct Glass {",
+        true,
+    );
+    let g = block_members(cupertino_glass::gles::GLASS_FRAG, "uniform Glass {", false);
+    assert_eq!(w, g);
+    let slots: usize = w.iter().map(|(_, n)| n).sum();
+    assert_eq!(
+        slots * 16,
+        std::mem::size_of::<cupertino_glass::glass::GlassUniform>()
+    );
 }

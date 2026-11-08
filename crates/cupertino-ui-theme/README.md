@@ -28,7 +28,9 @@ or more against the surface they sit on in every palette, light and dark, as is,
 Reduce Transparency, in every enabled state: `SliderTrack` against the window and a text background (a mid grey, 128,
 in light and dark; 118 and 150 in high contrast), `PanelTrack` against a module, the group fill over the window
 background (118 in light, 145 in dark; 110 and 165 in high contrast). The thumb colour, which is a slider's knob and a
-panel slider's fill, stands 3:1 against both tracks. `tests/slider-track.rs` checks the resolved colours.
+panel slider's fill, stands 3:1 against both tracks. A disabled `PanelTrack` has its own colour, the enabled track faded towards the module (185 in light, 95 in dark; 160 and 110 in high contrast): still apart from the module, fainter than the enabled track. `tests/slider-track.rs` checks the resolved colours.
+
+Menus and popovers (`Surface::Menu`, `Surface::Popover`) are glass (`GLASS_MATERIAL`, `CLEAR_GLASS_MATERIAL`): `ThemeTokens::surface` keeps asking for it with Reduce Transparency and in high contrast, where the compositor draws the glass recipe of those options; the other surfaces then ask for no material and paint their opaque fill.
 
 The overlay scroller thumb (`ScrollerThumb`) is translucent in Cupertino light and dark and opaque in the built-in
 palettes, at 3:1 or more against the window there. The dialog scrim (`DialogScrim`) is the one colour that is

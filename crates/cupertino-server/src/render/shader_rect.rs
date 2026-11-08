@@ -80,6 +80,25 @@ impl ElementCache {
         (s.id.clone(), s.commit)
     }
 
+    /// Id and commit for `key` as they are, without comparing a signature; `sig` is stored only for a new key.
+    pub fn peek(&mut self, key: ElementKey, sig: u64) -> (Id, CommitCounter) {
+        let s = self.slots.entry(key).or_insert_with(|| Slot {
+            id: Id::new(),
+            commit: CommitCounter::default(),
+            sig,
+            used: true,
+        });
+        s.used = true;
+        (s.id.clone(), s.commit)
+    }
+
+    /// Advance the commit of `key` though its signature is unchanged; its new commit, if it is known.
+    pub fn advance(&mut self, key: ElementKey) -> Option<CommitCounter> {
+        let s = self.slots.get_mut(&key)?;
+        s.commit.increment();
+        Some(s.commit)
+    }
+
     /// Forget every key that was not requested since the previous call.
     pub fn end_frame(&mut self) {
         self.slots

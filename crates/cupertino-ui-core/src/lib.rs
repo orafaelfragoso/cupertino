@@ -30,7 +30,8 @@ pub use accessibility::{
 };
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
-pub use cx::{EventCx, FocusTarget, MeasureCx, PaintCx, SemanticsCx};
+pub use cupertino_ui_platform::GlassStyle;
+pub use cx::{EventCx, FocusTarget, Glass, GlassCorners, MeasureCx, PaintCx, SemanticsCx};
 pub use drop_target::{
     DropHandler, DropOver, DropPlace, DropTarget, Dropped, HoverHandler, PlaceHandler,
 };

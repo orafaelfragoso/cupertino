@@ -76,6 +76,7 @@ pub(crate) const LIGHT: Palette<Source> = Palette {
         disabled_switch_track: Rgba([220, 220, 220, 255]),
         disabled_selected_switch_track: Rgba([166, 198, 232, 255]),
         disabled_switch_thumb: Rgba([248, 248, 248, 255]),
+        disabled_panel_track: Rgba([185, 185, 185, 255]),
     },
 };
 
@@ -139,6 +140,7 @@ pub(crate) const DARK: Palette<Source> = Palette {
         disabled_switch_track: Rgba([70, 70, 70, 255]),
         disabled_selected_switch_track: Rgba([54, 82, 112, 255]),
         disabled_switch_thumb: Rgba([180, 180, 180, 255]),
+        disabled_panel_track: Rgba([95, 95, 95, 255]),
     },
 };
 

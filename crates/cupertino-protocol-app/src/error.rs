@@ -8,6 +8,8 @@ pub enum Error {
     InvalidShape,
     /// A backdrop alpha outside 0 to 1.
     InvalidAlpha,
+    /// A glass spacing that is negative or not finite.
+    InvalidGlass,
 }
 
 impl fmt::Display for Error {
@@ -18,6 +20,7 @@ impl fmt::Display for Error {
                 "backdrop shape has a negative extent or radius, or is not finite"
             ),
             Self::InvalidAlpha => write!(f, "backdrop alpha is outside 0 to 1"),
+            Self::InvalidGlass => write!(f, "glass spacing is negative or not finite"),
         }
     }
 }

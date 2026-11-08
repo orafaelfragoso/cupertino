@@ -66,6 +66,7 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         disabled_switch_track: gray(220),
         disabled_selected_switch_track: [166, 198, 232, 255],
         disabled_switch_thumb: gray(248),
+        disabled_panel_track: gray(185),
     },
 };
 
@@ -124,6 +125,7 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         disabled_switch_track: gray(70),
         disabled_selected_switch_track: [54, 82, 112, 255],
         disabled_switch_thumb: gray(180),
+        disabled_panel_track: gray(95),
     },
 };
 
@@ -182,6 +184,7 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
         disabled_switch_track: gray(200),
         disabled_selected_switch_track: [150, 170, 215, 255],
         disabled_switch_thumb: gray(248),
+        disabled_panel_track: gray(160),
     },
 };
 
@@ -239,6 +242,7 @@ pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
         disabled_switch_track: gray(90),
         disabled_selected_switch_track: [54, 82, 112, 255],
         disabled_switch_thumb: gray(170),
+        disabled_panel_track: gray(110),
     },
 };
 

@@ -8,6 +8,8 @@
 //! * [`cpu`]: CPU reference implementation of the same pipeline for validation.
 //! * [`blur`], [`ops`]: blur plan and the flat GPU encoding of recipes.
 //! * [`display_filter`]: colour filters, invert and contrast of the whole display as a colour chain.
+//! * [`glass`]: the glass model (stages of the background pass, foreground matrix) and its uniform block; the WGSL
+//!   and GLSL ES shaders follow it.
 //! * [`gpu`]: headless helpers (adapter, upload/read-back, procedural wallpaper, PSNR).
 //!
 //! Recipes come from `cupertino-theme` (decoded layer archives). The GLSL ES 3.00 port of every
@@ -16,6 +18,7 @@
 pub mod blur;
 pub mod cpu;
 pub mod display_filter;
+pub mod glass;
 pub mod gpu;
 pub mod ops;
 pub mod renderer;
@@ -35,9 +38,11 @@ pub mod gles {
     pub const MATERIAL_FRAG: &str = include_str!("../shaders/gles/material.frag");
     pub const VIBRANT_VERT: &str = include_str!("../shaders/gles/vibrant.vert");
     pub const VIBRANT_FRAG: &str = include_str!("../shaders/gles/vibrant.frag");
+    pub const GLASS_VERT: &str = include_str!("../shaders/gles/glass.vert");
+    pub const GLASS_FRAG: &str = include_str!("../shaders/gles/glass.frag");
 
     /// `(file name, is fragment stage, source)` for every shader.
-    pub const ALL: [(&str, bool, &str); 9] = [
+    pub const ALL: [(&str, bool, &str); 11] = [
         ("fullscreen.vert", false, FULLSCREEN_VERT),
         ("downsample.frag", true, DOWNSAMPLE_FRAG),
         ("blur.frag", true, BLUR_FRAG),
@@ -47,5 +52,7 @@ pub mod gles {
         ("material.frag", true, MATERIAL_FRAG),
         ("vibrant.vert", false, VIBRANT_VERT),
         ("vibrant.frag", true, VIBRANT_FRAG),
+        ("glass.vert", false, GLASS_VERT),
+        ("glass.frag", true, GLASS_FRAG),
     ];
 }

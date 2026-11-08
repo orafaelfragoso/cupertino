@@ -16,8 +16,8 @@
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
       event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
-      event of cupertino_appearance_v1, version 6 the unified_compact and sidebar title bar styles;
-      the other interfaces of the protocol are unchanged in each.
+      event of cupertino_appearance_v1, version 6 the unified_compact and sidebar title bar styles and
+      set_glass of cupertino_backdrop_v1; the other interfaces of the protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -134,7 +134,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_backdrop_v1" version="2">
+  <interface name="cupertino_backdrop_v1" version="6">
     <description summary="a material region below a surface">
       All state is double-buffered: it applies on the next wl_surface.commit of the surface the
       backdrop was created for, together with that commit's buffer, so the backdrop and the content
@@ -145,6 +145,12 @@
       <entry name="unknown_material" value="0" summary="the material name is not a recipe of the server's design tokens"/>
       <entry name="invalid_shape" value="1" summary="negative width or height, or a negative corner radius"/>
       <entry name="invalid_alpha" value="2" summary="alpha outside 0 to 1"/>
+      <entry name="invalid_glass" value="3" summary="unknown glass style or a negative spacing" since="6"/>
+    </enum>
+
+    <enum name="glass_style" since="6">
+      <entry name="regular" value="0" summary="the frosted glass of bars, menus, panels and controls"/>
+      <entry name="clear" value="1" summary="the clearer glass of controls over rich content, such as media"/>
     </enum>
 
     <request name="destroy" type="destructor">
@@ -178,6 +184,23 @@
         Opacity from 0 to 1 applied to the composited backdrop, for fades. The initial value is 1.
       </description>
       <arg name="alpha" type="fixed"/>
+    </request>
+
+    <request name="set_glass" since="6">
+      <description summary="draw the backdrop as glass">
+        Draw the backdrop as glass of the given style instead of a material recipe; set_material is
+        then not needed and its name is not used. The server blurs and colours what lies behind
+        the shape, bends it along the edge and lights the rim, following the appearance and the
+        display options; the recipe depends on the shape's size.
+        Glass backdrops of the same surface with the same nonzero container join into one shape:
+        their outlines blend into each other over spacing logical points, and 0 joins them with a
+        hard edge; the server blends over at most 64 points. Container 0 keeps the backdrop on its
+        own. The last of set_glass and set_material decides how the backdrop draws. Posts
+        invalid_glass for an unknown style or a negative spacing.
+      </description>
+      <arg name="style" type="uint" enum="glass_style"/>
+      <arg name="container" type="uint"/>
+      <arg name="spacing" type="fixed"/>
     </request>
   </interface>
 

@@ -18,6 +18,7 @@ use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
 
 use super::clip::{ClipElement, ClipShape};
 use super::compose::{logical_rect, FrameResources};
+use super::material::glass::GlassElement;
 use super::material::{MaterialElement, MaterialMask, SharedMaterial};
 use super::mesh::{MeshElement, SharedMesh};
 use super::programs::{corner_uniforms, u4, Programs};
@@ -48,6 +49,7 @@ pub fn lower(
         surfaces,
         images,
         recipes,
+        glass,
         mut snapshots,
         ..
     } = resources;
@@ -151,6 +153,32 @@ pub fn lower(
                             "material recipe unknown or material pass unavailable"
                         );
                         tracing::error!(recipe = ?pass.recipe, "scene material unavailable, item skipped");
+                    }
+                }
+            }
+            Source::Glass(pass) => {
+                let container = glass
+                    .get(pass.glass.0.slot as usize)
+                    .filter(|_| pass.glass.0.generation == frame.id.0);
+                match (container, ctx.material.clone()) {
+                    (Some(container), Some(shared)) => elements.push(
+                        GlassElement::new(
+                            key,
+                            ctx.cache,
+                            logical_rect(pass.rect),
+                            container.clone(),
+                            shared,
+                            item.opacity as f32,
+                            ctx.scale,
+                        )
+                        .into(),
+                    ),
+                    _ => {
+                        debug_assert!(
+                            false,
+                            "glass container unknown or material pass unavailable"
+                        );
+                        tracing::error!(glass = ?pass.glass, "scene glass unavailable, item skipped");
                     }
                 }
             }

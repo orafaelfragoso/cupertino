@@ -975,11 +975,11 @@ fn the_window_feed_comes_from_the_bars_role_and_a_trigger_from_any() {
     );
 }
 
-/// The bar's node asks for the menu material under the bar's own rectangle, not under the whole window (which is
-/// deeper and as wide as the output); under Reduce Transparency it asks for none and paints the opaque fill.
+/// The bar's node asks for glass under the bar's own rectangle, not under the whole window (which is deeper and as
+/// wide as the output); under Reduce Transparency it keeps the glass, which the compositor draws with its recipe.
 #[test]
-fn with_reduce_transparency_the_bar_asks_for_no_material() {
-    for (reduce, material) in [(false, true), (true, false)] {
+fn with_reduce_transparency_the_bar_keeps_its_glass() {
+    for (reduce, material) in [(false, true), (true, true)] {
         let mut run = Run::with(tokens(reduce), ActionMap::default());
         let bar = run.bar();
         let width = run.driver.window_system_mut().spec(bar).unwrap().size.width;
@@ -1005,7 +1005,7 @@ fn with_reduce_transparency_the_bar_asks_for_no_material() {
         );
         if material {
             assert_eq!(regions.len(), 1, "{regions:?}");
-            assert_eq!(regions[0].material, "Menu");
+            assert_eq!(regions[0].material, "Glass");
             assert!(
                 regions[0].rect.width() < width,
                 "the material lies under the bar's rectangle only: {regions:?}"

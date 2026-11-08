@@ -15,7 +15,7 @@ use cupertino_app_protocols::server::scroll::cupertino_pointer_scroll_v1::Cupert
 use cupertino_app_protocols::server::scroll::cupertino_scroll_v1::{self, CupertinoScrollV1};
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_geometry::Rect;
-use cupertino_protocol_app::{AppEffects, AppEvent, ScrollCounts, WindowControls};
+use cupertino_protocol_app::{AppEffects, AppEvent, GlassStyle, ScrollCounts, WindowControls};
 use cupertino_wayland_client::{
     BufferFormat, Connection, Decorations, Error, Event, PointerEvent, SurfaceId, Toplevel,
     ToplevelConfig, WindowConfigure,
@@ -61,6 +61,8 @@ struct BackdropState {
     material: String,
     shape: [f64; 5],
     alpha: f64,
+    /// Style, container and spacing of `set_glass`.
+    glass: Option<(u32, u32, f64)>,
 }
 
 enum Control {
@@ -488,6 +490,11 @@ impl Dispatch<CupertinoBackdropV1, Arc<Mutex<BackdropState>>> for Mock {
                 ]
             }
             cupertino_backdrop_v1::Request::SetAlpha { alpha } => b.alpha = alpha,
+            cupertino_backdrop_v1::Request::SetGlass {
+                style,
+                container,
+                spacing,
+            } => b.glass = Some((u32::from(style), container, spacing)),
             _ => {}
         }
     }
@@ -761,10 +768,48 @@ fn a_backdrop_arrives_with_the_next_commit_of_its_surface() {
             backdrops: vec![BackdropState {
                 material: "Menu".to_string(),
                 shape: [4.0, 6.0, 40.0, 20.0, 12.0],
-                alpha: 0.5
+                alpha: 0.5,
+                glass: None,
             }],
         }
     );
+}
+
+#[test]
+fn glass_backdrops_name_their_container_and_fall_back_to_a_material_on_an_older_server() {
+    for (version, expect) in [
+        (6, (String::new(), Some((1, 3, 8.0)))),
+        (5, ("Menu".to_string(), None)),
+    ] {
+        let (mut conn, _control, committed, _seen) = connect_at(version);
+        let effects = AppEffects::bind(&mut conn).unwrap();
+        let window = window(&mut conn);
+        let mut stash = Stash::new();
+        configured(&mut conn, &mut stash, window);
+        let backdrop = effects.backdrop(&conn, window.surface()).unwrap();
+        backdrop.set_glass(GlassStyle::Clear, 3, 8.0).unwrap();
+        assert!(matches!(
+            backdrop.set_glass(GlassStyle::Regular, 3, -1.0),
+            Err(cupertino_protocol_app::Error::InvalidGlass)
+        ));
+        backdrop
+            .set_shape(&Rect::new(4.0, 6.0, 40.0, 20.0), 10.0)
+            .unwrap();
+        present(&mut conn, &mut stash, window.surface(), (920, 436));
+        assert_eq!(
+            committed.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Committed {
+                buffer_size: (1840, 872),
+                backdrops: vec![BackdropState {
+                    material: expect.0,
+                    shape: [4.0, 6.0, 40.0, 20.0, 10.0],
+                    alpha: 0.0,
+                    glass: expect.1,
+                }],
+            },
+            "server version {version}"
+        );
+    }
 }
 
 #[test]

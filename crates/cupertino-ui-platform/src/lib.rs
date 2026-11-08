@@ -183,12 +183,51 @@ pub struct Backdrop {
 
 /// A material of the theme data (`materials.json`) the compositor draws under one part of a window: `rect` in the
 /// window's coordinates with its corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque).
+/// With `glass`, the compositor draws glass there instead, and `material` names what a compositor without glass draws.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MaterialRegion {
     pub material: String,
     pub rect: Rect,
     pub radius: f64,
     pub alpha: f64,
+    pub glass: Option<GlassRegion>,
+}
+
+/// The look of a glass region.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GlassStyle {
+    /// The frosted glass of bars, menus, panels and controls.
+    #[default]
+    Regular,
+    /// The clearer glass of controls over rich content, such as media.
+    Clear,
+}
+
+impl GlassStyle {
+    /// The material name that stands for this glass on its own, as the theme names it (`Glass`, `ClearGlass`).
+    pub fn material(self) -> &'static str {
+        match self {
+            Self::Regular => "Glass",
+            Self::Clear => "ClearGlass",
+        }
+    }
+
+    /// The glass a material name stands for.
+    pub fn of_material(name: &str) -> Option<Self> {
+        [Self::Regular, Self::Clear]
+            .into_iter()
+            .find(|s| s.material() == name)
+    }
+}
+
+/// How a [`MaterialRegion`] draws as glass: regions of a window with the same nonzero `container` join into one shape
+/// whose outlines blend into each other over `spacing` points (0 joins them with a hard edge); container 0 keeps the
+/// region on its own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassRegion {
+    pub style: GlassStyle,
+    pub container: u32,
+    pub spacing: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

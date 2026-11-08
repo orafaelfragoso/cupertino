@@ -7,7 +7,7 @@ use crate::widget::Change;
 use crate::{Environment, Key, NodeId, Phase, WindowKey};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_layout::LayoutDirection;
-use cupertino_ui_platform::{CursorShape, Timestamp};
+use cupertino_ui_platform::{CursorShape, GlassRegion, GlassStyle, Timestamp};
 use cupertino_ui_render::{
     Effect, Group, ImageResource, PaintOp, ResourceId, ResourceRef, Sampling,
 };
@@ -402,13 +402,136 @@ impl PaintCx<'_> {
             } else {
                 0.0
             },
+            capsule: false,
             alpha: if alpha.is_finite() {
                 alpha.clamp(0.0, 1.0)
             } else {
                 1.0
             },
+            // a glass surface is glass on its own
+            glass: glass_style(name).map(|style| GlassRegion {
+                style,
+                container: 0,
+                spacing: 0.0,
+            }),
         });
         self.material.is_some()
+    }
+
+    /// Makes this node glass: the compositor draws `glass` under its whole size, cut by the clips around it. Nodes of
+    /// one window in the same container join into one shape ([`Glass::container`]). A group's opacity does not reach
+    /// it, so a node that fades passes its opacity in [`Glass::alpha`]. Returns whether the window shows the glass: it
+    /// does not without the desktop's effects or past [`MAX_MATERIALS`](crate::MAX_MATERIALS) in one window, and the
+    /// node then paints a fill itself. Reduce Transparency and Increase Contrast keep the glass, with the compositor's
+    /// recipes for them. The glass lies under everything the window paints.
+    pub fn glass(&mut self, glass: Glass) -> bool {
+        *self.asked_material = true;
+        let finite = |v: f64, otherwise: f64| if v.is_finite() { v } else { otherwise };
+        let (name, style) = (glass.style.material(), glass.style);
+        *self.material = self.materials.then(|| NodeMaterial {
+            name,
+            radius: match glass.corners {
+                GlassCorners::Radius(r) => finite(r, 0.0).max(0.0),
+                GlassCorners::Capsule => 0.0,
+            },
+            capsule: glass.corners == GlassCorners::Capsule,
+            alpha: finite(glass.alpha, 1.0).clamp(0.0, 1.0),
+            glass: Some(GlassRegion {
+                style,
+                container: glass.container,
+                spacing: finite(glass.spacing, 0.0).max(0.0),
+            }),
+        });
+        self.material.is_some()
+    }
+}
+
+/// The glass style a material name of the theme stands for.
+pub(crate) fn glass_style(material: &str) -> Option<GlassStyle> {
+    GlassStyle::of_material(material)
+}
+
+/// The corners of a glass node.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GlassCorners {
+    /// Corners of this radius in points.
+    Radius(f64),
+    /// Round ends: the radius is half the node's shorter side, whatever its size.
+    Capsule,
+}
+
+/// What [`PaintCx::glass`] puts under a node: the style, the corners, the container it joins and its opacity.
+///
+/// ```
+/// use cupertino_ui_core::{Glass, GlassCorners, GlassStyle};
+///
+/// // two capsule buttons of a toolbar that merge where they are less than 8 points apart
+/// let button = Glass::regular().capsule().container(1, 8.0);
+/// assert_eq!(button.corners, GlassCorners::Capsule);
+/// // a clear panel on its own, fading in
+/// let panel = Glass::clear().radius(16.0).alpha(0.5);
+/// assert_eq!((panel.style, panel.container), (GlassStyle::Clear, 0));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Glass {
+    pub style: GlassStyle,
+    pub corners: GlassCorners,
+    /// Nodes of a window with the same nonzero container join into one shape; 0 keeps the node on its own.
+    pub container: u32,
+    /// How far the outlines of a container blend into each other, in points; 0 joins them with a hard edge.
+    pub spacing: f64,
+    /// From 0 (hidden) to 1.
+    pub alpha: f64,
+}
+
+impl Glass {
+    /// Regular glass with square corners, on its own, opaque.
+    pub fn regular() -> Self {
+        Self {
+            style: GlassStyle::Regular,
+            corners: GlassCorners::Radius(0.0),
+            container: 0,
+            spacing: 0.0,
+            alpha: 1.0,
+        }
+    }
+
+    /// Clear glass with square corners, on its own, opaque.
+    pub fn clear() -> Self {
+        Self {
+            style: GlassStyle::Clear,
+            ..Self::regular()
+        }
+    }
+
+    /// Corners of `radius` points.
+    pub fn radius(self, radius: f64) -> Self {
+        Self {
+            corners: GlassCorners::Radius(radius),
+            ..self
+        }
+    }
+
+    /// Round ends.
+    pub fn capsule(self) -> Self {
+        Self {
+            corners: GlassCorners::Capsule,
+            ..self
+        }
+    }
+
+    /// Join container `id` (nonzero), blending into its other shapes over `spacing` points.
+    pub fn container(self, id: u32, spacing: f64) -> Self {
+        Self {
+            container: id,
+            spacing,
+            ..self
+        }
+    }
+
+    /// Draw at `alpha`, from 0 (hidden) to 1.
+    pub fn alpha(self, alpha: f64) -> Self {
+        Self { alpha, ..self }
     }
 }
 

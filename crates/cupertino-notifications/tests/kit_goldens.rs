@@ -1329,10 +1329,15 @@ fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_
     assert_eq!(
         shown,
         vec![MaterialRegion {
-            material: "Menu".into(),
+            material: "Glass".into(),
             rect: card,
             radius: view::CORNER_RADIUS,
             alpha: 1.0,
+            glass: Some(cupertino_kit::platform::GlassRegion {
+                style: cupertino_kit::platform::GlassStyle::Regular,
+                container: 0,
+                spacing: 0.0,
+            }),
         }],
         "the popover's material under the banner's card and nowhere else in its strip"
     );
@@ -1363,9 +1368,10 @@ fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_
     run.notify(mail("Lunch", "Are you free at noon?"));
     run.step(Step::At(1.0));
     let window = run.only_window();
+    let shown = run.materials(window).last().cloned().unwrap_or_default();
     assert!(
-        run.materials(window).iter().all(Vec::is_empty),
-        "Reduce Transparency shows no material"
+        shown.len() == 1 && shown[0].glass.is_some(),
+        "Reduce Transparency keeps the card's glass, drawn with the compositor's recipe for it: {shown:?}"
     );
     let fills = run
         .snapshot(window)
@@ -1377,5 +1383,8 @@ fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_
             matches!(op, cupertino_kit::render::PaintOp::Fill { shape: cupertino_kit::render::Shape::RoundedRect { rect, .. }, .. } if rect.size == card.size)
         })
         .count();
-    assert_eq!(fills, 1, "the card paints its opaque fill");
+    assert_eq!(
+        fills, 1,
+        "the card's shape is filled once, as the clipped source of its shadow outside the glass"
+    );
 }

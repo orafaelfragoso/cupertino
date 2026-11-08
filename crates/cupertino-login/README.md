@@ -67,7 +67,7 @@ Every trigger goes through the same request, which does nothing when the session
 **Who may send a signal.** A bus daemon hands a process every signal addressed to its unique name whatever its match rules say,
 and zbus filters a rule's sender only when it is a unique name (or the daemon's own name), so each signal is checked when it
 arrives (`cupertino_peer::signal`). logind's `Lock` is bound to logind's unique name (the reply to the session lookup). `PrepareForSleep`,
-the session manager's `Unlock`, the server's `ApplicationQuit` (on the session bus) count only from the connection that owns
+the session manager's `Unlock`, the server's `ApplicationQuit` (on the session bus) and the power daemon's battery changes count only from the connection that owns
 the sender's well-known name at that moment; a `NameOwnerChanged` (the manager or the power daemon coming and going) only from
 the bus daemon. Anything else is logged (`... not sent by ... was ignored`) and dropped: another user could otherwise unlock the
 screen or lock it, or a program in the session hurry the log out along (a forged `NameOwnerChanged` is also dropped by

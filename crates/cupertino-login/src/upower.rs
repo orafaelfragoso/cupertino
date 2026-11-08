@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use cupertino_peer::signal::sent_by_bus;
+use cupertino_peer::signal::{sent_by_bus, sent_by_owner};
 use zbus::blocking::{Connection, MessageIterator};
 use zbus::message::Type;
 use zbus::zvariant::{OwnedValue, Value};
@@ -73,7 +73,8 @@ pub fn watch(
     let what = "subscribing to the power daemon's signals";
     let changes_rule = MatchRule::builder()
         .msg_type(Type::Signal)
-        .interface(PROPERTIES)
+        .sender(UPOWER)
+        .and_then(|b| b.interface(PROPERTIES))
         .and_then(|b| b.member("PropertiesChanged"))
         .and_then(|b| b.path(DISPLAY_DEVICE))
         .and_then(|b| b.arg(0, DEVICE_INTERFACE))
@@ -93,6 +94,14 @@ pub fn watch(
     let notify = Arc::new(notify);
     notify(Ok(read(connection)));
 
+    let c = connection.clone();
+    let changes = changes.filter(move |message| match message {
+        Ok(message) if !sent_by_owner(&c, message, UPOWER) => {
+            eprintln!("cupertino-login: a battery change not sent by the power daemon was ignored");
+            false
+        }
+        _ => true,
+    });
     let c = connection.clone();
     spawn(
         "battery-changes",
@@ -266,6 +275,44 @@ mod tests {
             let _ = tx.lock().unwrap().send(described(report));
         })
         .unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)).as_deref(),
+            Ok("Low 9")
+        );
+
+        // a change of the display device, forged by another peer and then sent by the daemon
+        let changed = |from: &Connection| {
+            let changed = HashMap::from([("Percentage", Value::from(9.0))]);
+            from.emit_signal(
+                None::<&str>,
+                DISPLAY_DEVICE,
+                PROPERTIES,
+                "PropertiesChanged",
+                &(DEVICE_INTERFACE, changed, Vec::<String>::new()),
+            )
+            .unwrap()
+        };
+        let to = agent.unique_name().unwrap().to_string();
+        let peer = bus.connect();
+        let changed_to = |to: &str| {
+            let changed = HashMap::from([("Percentage", Value::from(9.0))]);
+            peer.emit_signal(
+                Some(to),
+                DISPLAY_DEVICE,
+                PROPERTIES,
+                "PropertiesChanged",
+                &(DEVICE_INTERFACE, changed, Vec::<String>::new()),
+            )
+            .unwrap()
+        };
+        changed(&peer);
+        changed_to(&to);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "a forged change is ignored"
+        );
+        changed(&daemon);
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(5)).as_deref(),
             Ok("Low 9")

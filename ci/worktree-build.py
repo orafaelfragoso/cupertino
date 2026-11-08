@@ -19,6 +19,7 @@ import platform
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -39,6 +40,8 @@ SLOTS_VARIABLE = "CUPERTINO_BUILD_SLOTS"
 MAX_SLOTS = 16
 # How often a waiter checks the queue and the slots again, in seconds.
 POLL = 0.2
+# A waiter's place in the queue: its arrival time in nanoseconds, its process and what it waits for.
+TICKET = re.compile(r"[0-9]{20}-[0-9]+-(whole|shared)")
 # Parallelism caps given to a shared operation's child: they change how fast it runs, never what it produces.
 JOB_VARIABLES = ("CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS", "RUST_TEST_THREADS")
 UNFINGERPRINTED = frozenset({"CARGO_TARGET_DIR", "CUPERTINO_BUILD_LOCK_FD", SLOTS_VARIABLE, *JOB_VARIABLES})
@@ -86,7 +89,9 @@ def slot_path(directory: Path, slot: int) -> Path:
 def ticket(directory: Path, whole: bool) -> Iterator[Path]:
     """Hold a place in the per-user queue: a file named by arrival time, locked while its owner waits."""
     queue = directory / "queue"
-    queue.mkdir(parents=True, exist_ok=True)
+    queue.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if queue.is_symlink():
+        raise ValueError(f"{queue}: refusing a symlinked queue directory")
     name = f"{time.time_ns():020d}-{os.getpid()}-{'whole' if whole else 'shared'}"
     # Lock before the name appears, so a peer never mistakes a new ticket for one left by a killed waiter.
     staging = queue / f".{name}"
@@ -104,19 +109,23 @@ def ticket(directory: Path, whole: bool) -> Iterator[Path]:
 def ahead(own: Path) -> tuple[int, bool]:
     """Count the live waiters that arrived before `own`, and whether one wants every slot.
 
-    Tickets of waiters that were killed are removed on the way.
+    Tickets of waiters that were killed are removed on the way. Anything else in the queue, such as a link, a pipe
+    or a directory, is neither opened through nor waited for.
     """
     count, whole = 0, False
     for entry in sorted(own.parent.iterdir()):
-        if entry.name.startswith("."):
+        if TICKET.fullmatch(entry.name) is None:
             continue
         if entry.name >= own.name:
             break
         try:
-            descriptor = os.open(entry, os.O_RDONLY | os.O_CLOEXEC)
-        except FileNotFoundError:
+            descriptor = os.open(entry, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError:
+            # gone, or a link
             continue
         try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                continue
             fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError:
             count += 1

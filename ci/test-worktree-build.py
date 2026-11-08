@@ -370,6 +370,68 @@ class WorktreeBuildTest(unittest.TestCase):
         self.granted(second)
         self.release(second)
 
+    def test_a_shared_waiter_leaves_a_free_slot_to_each_live_waiter_ahead(self):
+        # A waiter ahead that has not polled yet: its ticket is live, so the next arrival must not take its slot.
+        with BUILD.ticket(self.root / "locks", False):
+            holder = self.worker(2)
+            self.granted(holder)
+            behind = self.worker(2)
+            self.waits(behind)
+            self.release(holder)
+            # Both slots free: one stays for the waiter ahead.
+            self.assertIn("build slot 1 of 2", self.granted(behind))
+        self.release(behind)
+
+    def test_a_shared_waiter_never_passes_a_waiting_exclusive_operation(self):
+        with BUILD.ticket(self.root / "locks", True):
+            behind = self.worker(2)
+            self.waits(behind)
+        self.granted(behind)
+        self.release(behind)
+
+    def test_an_exclusive_operation_waits_for_every_earlier_arrival(self):
+        with BUILD.ticket(self.root / "locks", False):
+            whole = self.worker(2, "whole")
+            self.waits(whole)
+        self.assertIn("every build slot", self.granted(whole))
+        self.release(whole)
+
+    def test_a_ticket_left_by_a_killed_waiter_is_removed_and_not_waited_for(self):
+        queue = self.root / "locks" / "queue"
+        queue.mkdir(parents=True)
+        (queue / f"{1:020d}-1-whole").write_text("")
+        worker = self.worker(2)
+        self.granted(worker)
+        self.assertFalse((queue / f"{1:020d}-1-whole").exists())
+        self.release(worker)
+
+    def test_queue_entries_that_are_not_tickets_neither_block_nor_count(self):
+        holder = self.worker(2)
+        self.granted(holder)
+        queue = self.root / "locks" / "queue"
+        # Ticket-like names that sort first: a link to the held slot lock, a pipe, a directory, and a stray file.
+        (queue / f"{1:020d}-1-whole").symlink_to(self.root / "locks" / "heavy.lock")
+        os.mkfifo(queue / f"{2:020d}-1-shared")
+        (queue / f"{3:020d}-1-shared").mkdir()
+        (queue / "0-stray").write_text("")
+        self.assertIn("build slot 1 of 2", self.granted(self.worker(2)))
+        self.assertTrue((self.root / "locks" / "heavy.lock").exists())
+        self.release(holder)
+
+    def test_exclusive_operations_queued_together_run_one_after_the_other(self):
+        shared = self.worker(2)
+        self.granted(shared)
+        first, second = self.worker(2, "whole"), None
+        self.waits(first)
+        second = self.worker(2, "whole")
+        self.waits(second)
+        self.release(shared)
+        self.assertIn("every build slot", self.granted(first))
+        self.assertEqual(select.select([second.stdout], [], [], 4 * BUILD.POLL)[0], [])
+        self.release(first)
+        self.assertIn("every build slot", self.granted(second))
+        self.release(second)
+
     def test_operations_touching_seeds_or_packages_take_every_slot(self):
         expected = {("run", "--profile", "dev", "--", "cargo", "build"): False,
                     ("prepare", "--profile", "dev"): False,

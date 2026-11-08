@@ -306,7 +306,7 @@ impl<M: 'static> Widget<M> for Slider<M> {
         let radius = track_height / 2.0;
         let track_role = match self.style {
             SliderStyle::PanelLevel(_) => ColorRole::PanelTrack,
-            _ => ColorRole::SwitchTrack,
+            _ => ColorRole::SliderTrack,
         };
         look::fill(
             cx,

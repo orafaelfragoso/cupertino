@@ -22,6 +22,14 @@ both.
   turn borders black (light) or white (dark). The dark switch thumb is dark, so it stands out on both tracks, and it
   stands 3:1 against the control border and the panel track, so a slider's knob shows against its ring and its track.
 
+Slider tracks. The empty part of a slider's track has a role of its own (`SliderTrack`), so it is not the switch
+track; its disabled colour is the disabled switch track's. It and a panel's level slider track (`PanelTrack`) stand 3:1
+or more against the surface they sit on in every palette, light and dark, as is, with Increase Contrast and with
+Reduce Transparency, in every enabled state: `SliderTrack` against the window and a text background (a mid grey, 128,
+in light and dark; 118 and 150 in high contrast), `PanelTrack` against a module, the group fill over the window
+background (118 in light, 145 in dark; 110 and 165 in high contrast). The thumb colour, which is a slider's knob and a
+panel slider's fill, stands 3:1 against both tracks. `tests/slider-track.rs` checks the resolved colours.
+
 The overlay scroller thumb (`ScrollerThumb`) is translucent in Cupertino light and dark and opaque in the built-in
 palettes, at 3:1 or more against the window there. The dialog scrim (`DialogScrim`) is the one colour that is
 translucent in every palette, since it dims what it covers: 20 % black in light, 40 % in dark, 60 % in high-contrast
@@ -43,9 +51,9 @@ Accepted exceptions: the Cupertino light and dark palettes keep their look below
 in places (white on the accent and red fills, secondary, placeholder and light header text, control, field and switch
 outlines, separators, the light focus ring at 2.49:1, link text on the light window background at 4.45:1). High contrast
 and neutral are the accessible palettes. Switch tracks and separators of the neutral palettes keep the Cupertino look
-below 3:1. The dark switch track, which is also the slider track, is a fifth of white so it stands apart (1.75:1 or
-more) from the window, the text background and the control background behind it, and the switch thumb stands 3:1
-against it (tested).
+below 3:1. The dark switch track is a fifth of white so it stands apart (1.75:1 or more) from the window, the text
+background and the control background behind it, and the switch thumb stands 3:1 against it (tested). Slider tracks
+are no exception (above).
 
 ## Theme tokens
 

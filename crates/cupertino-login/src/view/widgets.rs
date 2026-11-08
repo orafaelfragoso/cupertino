@@ -13,7 +13,8 @@ use cupertino_kit::layout::{
 use cupertino_kit::platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_kit::render::{FillRule, GradientStop, Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::text::{
-    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, Wrap,
+    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, TextSystem,
+    Wrap,
 };
 use cupertino_kit::theme::{Color, ColorRole, StateVariant};
 
@@ -1133,4 +1134,174 @@ fn power_glyph(cx: &mut PaintCx<'_>, center: Point) {
         width: POWER_STROKE,
         paint: Paint::Solid(WHITE),
     });
+}
+
+/// A card's fill: white at this alpha over the treated wallpaper (approximate), and the alpha of its secondary text.
+const NOTICE_FILL_ALPHA: f32 = 0.18;
+const NOTICE_SECONDARY_ALPHA: f32 = 0.75;
+
+/// A notification on the lock screen, in the column of cards: its application, its title and its body, left-aligned,
+/// each cut with an ellipsis where it does not fit. It is as tall as its text, and the gap below it is its own. It is
+/// one node for assistive technology, named by `speech` and said politely as it arrives; it takes no input, so the
+/// password field keeps the focus.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NoticeCard {
+    pub app: String,
+    pub title: String,
+    pub body: String,
+    pub speech: String,
+    pub ascent: f64,
+    pub descent: f64,
+}
+
+/// A line of a card's text: its size, weight and how many lines it may take.
+struct Line {
+    size: f64,
+    weight: FontWeight,
+    lines: u32,
+}
+
+impl NoticeCard {
+    fn laid_out(&self, text: &TextSystem, words: &str, line: &Line) -> Option<ParagraphLayout> {
+        use crate::lock_notices::{CARD_PADDING, CARD_WIDTH};
+        let content = AttributedText::plain(
+            words.to_owned(),
+            TextStyle {
+                weight: line.weight,
+                ..TextStyle::new(line.size as f32)
+            },
+        );
+        let style = ParagraphStyle {
+            align: TextAlign::Start,
+            wrap: if line.lines > 1 {
+                Wrap::Word
+            } else {
+                Wrap::None
+            },
+            max_lines: Some(line.lines),
+            ellipsis: true,
+            ..ParagraphStyle::default()
+        };
+        let paragraph = text.paragraph(&content, &style).ok()?;
+        Some(paragraph.layout(Some((CARD_WIDTH - 2.0 * CARD_PADDING) as f32)))
+    }
+
+    const BODY: Line = Line {
+        size: crate::lock_notices::BODY_SIZE,
+        weight: FontWeight::REGULAR,
+        lines: crate::lock_notices::BODY_LINES,
+    };
+
+    /// How many lines the body takes: none without one.
+    fn body_lines(&self, text: &TextSystem) -> u32 {
+        if self.body.trim().is_empty() {
+            return 0;
+        }
+        self.laid_out(text, &self.body, &Self::BODY)
+            .map_or(Self::BODY.lines, |l| l.lines().len() as u32)
+            .clamp(1, Self::BODY.lines)
+    }
+
+    /// Paint `words` with its first line's top at `top`; returns the top of what follows.
+    fn paint_text(
+        &self,
+        cx: &mut PaintCx<'_>,
+        words: &str,
+        line: &Line,
+        top: f64,
+        color: Color,
+    ) -> f64 {
+        use crate::lock_notices::CARD_PADDING;
+        let Some(layout) = self.laid_out(&cx.env().text, words, line) else {
+            return top;
+        };
+        let first = layout.lines().first().map_or(0.0, |l| l.baseline);
+        let origin = Point::new(CARD_PADDING, top + self.ascent * line.size - first);
+        let shown = layout.lines().len().min(line.lines as usize).max(1);
+        for l in layout.lines().iter().take(shown) {
+            for run in &l.runs {
+                cx.push(PaintOp::Glyphs {
+                    origin: origin + run.origin,
+                    run: run.run.clone(),
+                    color,
+                });
+            }
+        }
+        top + shown as f64 * (self.ascent + self.descent) * line.size
+    }
+}
+
+impl<M: 'static> Widget<M> for NoticeCard {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(crate::lock_notices::CARD_WIDTH),
+            height: SizeSpec::Fit,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self != old {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        use crate::lock_notices::{card_height, CARD_GAP, CARD_WIDTH};
+        let lines = self.body_lines(&cx.env().text);
+        Measured {
+            size: Size::new(
+                CARD_WIDTH,
+                card_height(lines, self.ascent, self.descent) + CARD_GAP,
+            ),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        use crate::lock_notices::{
+            APP_SIZE, CARD_GAP, CARD_PADDING, CARD_RADIUS, LINE_GAP, TITLE_SIZE,
+        };
+        let size = cx.size();
+        fill(
+            cx,
+            Shape::RoundedRect {
+                rect: Rect::new(0.0, 0.0, size.width, (size.height - CARD_GAP).max(0.0)),
+                radius: CARD_RADIUS,
+            },
+            Color::new(1.0, 1.0, 1.0, NOTICE_FILL_ALPHA),
+        );
+        let secondary = Color::new(1.0, 1.0, 1.0, NOTICE_SECONDARY_ALPHA);
+        let app = Line {
+            size: APP_SIZE,
+            weight: FontWeight::REGULAR,
+            lines: 1,
+        };
+        let title = Line {
+            size: TITLE_SIZE,
+            weight: FontWeight::SEMIBOLD,
+            lines: 1,
+        };
+        let top = self.paint_text(cx, &self.app, &app, CARD_PADDING, secondary);
+        let top = self.paint_text(cx, &self.title, &title, top + LINE_GAP, WHITE);
+        if !self.body.trim().is_empty() {
+            self.paint_text(cx, &self.body, &Self::BODY, top + LINE_GAP, secondary);
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::StaticText);
+        cx.name(self.speech.clone());
+        cx.live(Live::Polite);
+    }
 }

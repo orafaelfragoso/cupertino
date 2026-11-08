@@ -6,6 +6,8 @@
 //! * [`autostart`]: the XDG autostart entries (login items) the session agent starts once per session.
 //! * [`hint`]: when failed attempts bring up the password help.
 //! * [`layout`]: where the clock, avatar, name and password field sit, in points.
+//! * [`lock_notices`]: the notifications the lock screen shows, as the notification daemon lists them, and their cards'
+//!   frames; with feature `dbus`, reading and following the list.
 //! * [`picker`]: the greeter's user tiles, grid, selection and the name typed for "Other…".
 //! * [`power`]: the greeter's power menu.
 //! * [`power_button`]: what a press, a release and a hold of the power button do.
@@ -37,6 +39,7 @@ pub mod control;
 pub mod hint;
 pub mod interrupt;
 pub mod layout;
+pub mod lock_notices;
 #[cfg(feature = "dbus")]
 pub mod login_manager;
 #[cfg(feature = "dbus")]

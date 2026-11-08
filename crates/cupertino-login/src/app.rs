@@ -21,6 +21,7 @@ use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
 use cupertino_login::control::{self, Request};
 use cupertino_login::hint::FailedAttempts;
 use cupertino_login::interrupt::Choice;
+use cupertino_login::lock_notices::{self, Notice};
 use cupertino_login::login_manager::{LoginManager, Power};
 use cupertino_login::logind::{Inhibitor, Logind, Signal};
 use cupertino_login::logout::{self, LogOut};
@@ -77,6 +78,8 @@ pub enum Bus {
     Battery(std::result::Result<upower::Report, String>),
     /// The server's `ApplicationQuit`: the last window of the application being quit went away.
     ApplicationQuit(String),
+    /// What the notification daemon lets the lock screen show now ([`lock_notices`]).
+    LockNotices(Vec<Notice>),
 }
 
 #[derive(Clone, Debug)]
@@ -174,6 +177,8 @@ pub struct SessionApp {
     low_battery: LowBattery,
     /// The session bus, for the notifications and the server's `org.cupertino.Session1`.
     session_bus: zbus::blocking::Connection,
+    /// The notifications the lock screen shows, as the daemon last listed them; shown only while locked.
+    lock_notices: Vec<Notice>,
 }
 
 /// Why [`run`] returned without a failure.
@@ -313,6 +318,11 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             Err(e) => Bus::Failed(format!("reading ApplicationQuit: {e}")),
         })
     })?;
+    let notices = send(&bus);
+    // the lock screen works without the notifications: a watch that cannot start is reported, not fatal
+    if let Err(e) = lock_notices::watch(&session_bus, move |list| notices(Bus::LockNotices(list))) {
+        eprintln!("cupertino-login: the lock screen shows no notifications: {e}");
+    }
     drop(bus);
     let login_items = start_login_items(&logind);
     let restore_path = restore::state_path_from_env();
@@ -389,6 +399,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             retries_until_hint,
             low_battery: LowBattery::new(),
             session_bus,
+            lock_notices: Vec::new(),
         };
         let commands = vec![
             listen(&app.bus, Message::Bus, Message::Unheard("the bus threads")),
@@ -645,6 +656,7 @@ impl Application for SessionApp {
                         shake: screen.shake(now),
                         hidden: screen.hidden(),
                         power: None,
+                        notices: &app.lock_notices,
                     },
                     LOCKED_TITLE,
                     Message::Input,
@@ -749,6 +761,14 @@ impl SessionApp {
             Bus::Auth(event) => self.handle_auth(now, event)?,
             Bus::Failed(reason) => return Err(reason.into()),
             Bus::Battery(report) => self.battery(report),
+            // a list that comes while the session is not locked is a late one: it never shows
+            Bus::LockNotices(list) => {
+                self.lock_notices = if self.lock.is_some() {
+                    list
+                } else {
+                    Vec::new()
+                }
+            }
             Bus::ApplicationQuit(app) => {
                 if let Some(quitting) = &mut self.quitting {
                     eprintln!("cupertino-login: application quit: {app}");
@@ -966,6 +986,8 @@ impl SessionApp {
     /// roles then unlock.
     fn unlock(&mut self) -> Result<()> {
         let lock = self.lock.take().expect("only a locked session unlocks");
+        // nothing of this lock's list stays for the next one
+        self.lock_notices.clear();
         if lock.answer != Some(true) {
             return Err("the session unlocked before the server confirmed the lock".into());
         }

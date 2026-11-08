@@ -64,6 +64,16 @@ Every trigger goes through the same request, which does nothing when the session
 | display sleep | The server's idle policy calls `Lock` once the display has slept for the password delay (`power.conf`, below). |
 | idle | With `--idle-timeout` only: `ext-idle-notify-v1`, which honours idle inhibitors. |
 
+**Who may send a signal.** A bus daemon hands a process every signal addressed to its unique name whatever its match rules say,
+and zbus filters a rule's sender only when it is a unique name (or the daemon's own name), so each signal is checked when it
+arrives (`cupertino_peer::signal`). logind's `Lock` is bound to logind's unique name (the reply to the session lookup). `PrepareForSleep`,
+the session manager's `Unlock`, the server's `ApplicationQuit` (on the session bus) count only from the connection that owns
+the sender's well-known name at that moment; a `NameOwnerChanged` (the manager or the power daemon coming and going) only from
+the bus daemon. Anything else is logged (`... not sent by ... was ignored`) and dropped: another user could otherwise unlock the
+screen or lock it, or a program in the session hurry the log out along (a forged `NameOwnerChanged` is also dropped by
+zbus's own filter; the check does not rely on it). The module tests send each one forged from
+another connection on a private bus, to the process and to everyone, then the genuine one.
+
 **Idle lock.** The design locks when the display sleeps (request type 5) once the password
 delay has passed. The server owns that timing, since it knows the power source and the idle inhibitors: its idle policy dims,
 sleeps the display and calls `Lock` after `require_password_after` (`cupertino-defaults` `power.conf`; default 300 s).

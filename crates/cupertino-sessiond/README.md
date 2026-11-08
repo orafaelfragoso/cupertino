@@ -170,7 +170,7 @@ other methods':
 - A person who deletes their own `accessibility.conf` while signed in keeps their settings until their next login: the
   compositor reads whether they have one at start.
 
-**Signal `Unlock()`**, sent by the manager to one agent only: the unique name that called `SessionReady` for the session (a `dbus-daemon` delivers a message with a destination to that destination alone). The agent subscribes with the manager's name as the sender, and only root may own that name, so no other process can send it. A session without a registered agent is only activated (`session N has no agent to unlock it`).
+**Signal `Unlock()`**, sent by the manager to one agent only: the unique name that called `SessionReady` for the session (a `dbus-daemon` delivers a message with a destination to that destination alone). The agent checks each `Unlock` against the current owner of the manager's name, and only root may own that name, so no other process can send it (the subscription's `sender` alone keeps out nothing addressed to the agent's unique name). A session without a registered agent is only activated (`session N has no agent to unlock it`).
 
 The methods run on the connection's thread and wait at most 10 s for the main loop's answer (the loop never blocks longer than a
 logind call). The main loop is fed by a channel and an eventfd, the way logind's signals are.

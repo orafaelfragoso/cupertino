@@ -5,8 +5,11 @@
 //! answers say which of them the menu may offer ([`Logind::can`]).
 //!
 //! The signals arrive on reader threads (the blocking `zbus` API has no pollable descriptor) and reach the caller through
-//! the callback of [`Logind::listen`].
+//! the callback of [`Logind::listen`]. Each comes from logind only: the session's signals are bound to logind's unique name,
+//! and `PrepareForSleep` is checked against the owner of logind's name when it arrives, since a rule naming the well-known
+//! name keeps out nothing that is sent to this process directly.
 
+use cupertino_peer::signal::sent_by_owner;
 use std::fmt;
 use std::sync::Arc;
 use zbus::blocking::{Connection, MessageIterator};
@@ -268,15 +271,23 @@ impl Logind {
             .and_then(|b| b.member("PrepareForSleep"))
             .map_err(Error::bus(what))?
             .build();
+        let connection = self.connection.clone();
         let sleep_signals = MessageIterator::for_match_rule(sleep_rule, &self.connection, None)
-            .map_err(Error::bus(what))?;
+            .map_err(Error::bus(what))?
+            .filter(move |message| match message {
+                Ok(message) if !sent_by_owner(&connection, message, LOGIND) => {
+                    eprintln!("cupertino-login: a PrepareForSleep not sent by logind was ignored");
+                    false
+                }
+                _ => true,
+            });
         spawn(session_signals, Arc::clone(&notify), decode_lock)?;
         spawn(sleep_signals, notify, decode_sleep)
     }
 }
 
 fn spawn(
-    signals: MessageIterator,
+    signals: impl Iterator<Item = zbus::Result<Message>> + Send + 'static,
     notify: Arc<impl Fn(Result<Signal, Error>) + Send + Sync + 'static>,
     decode: fn(&Message) -> Result<Option<Signal>, zbus::Error>,
 ) -> Result<(), Error> {
@@ -371,5 +382,85 @@ mod tests {
             &by_id,
             &io(std::io::ErrorKind::ConnectionRefused)
         ));
+    }
+
+    struct FakeManager(String);
+
+    #[zbus::interface(name = "org.freedesktop.login1.Manager")]
+    impl FakeManager {
+        fn get_session(&self, _id: String) -> zbus::zvariant::OwnedObjectPath {
+            self.0.as_str().try_into().unwrap()
+        }
+    }
+
+    #[test]
+    fn only_logind_locks_the_session_or_puts_it_to_sleep() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        let path = "/org/freedesktop/login1/session/c2";
+        let logind = bus
+            .blocking_builder()
+            .name(LOGIND)
+            .unwrap()
+            .serve_at(MANAGER_PATH, FakeManager(path.to_owned()))
+            .unwrap()
+            .build()
+            .unwrap();
+        let connection = bus.connect();
+        let session =
+            cupertino_seat::locate(&connection, &SessionLookup::ById("c2".into())).unwrap();
+        let screen = Logind {
+            connection,
+            session,
+            session_id: "c2".into(),
+        };
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        screen
+            .listen(move |signal| {
+                let _ = tx.lock().unwrap().send(signal.map_err(|e| e.to_string()));
+            })
+            .unwrap();
+        let to = screen.connection.unique_name().unwrap().to_string();
+        let lock = |from: &Connection, to: Option<&str>| {
+            from.emit_signal(to, path, SESSION_INTERFACE, "Lock", &())
+                .unwrap()
+        };
+        let sleep = |from: &Connection, to: Option<&str>| {
+            from.emit_signal(
+                to,
+                MANAGER_PATH,
+                MANAGER_INTERFACE,
+                "PrepareForSleep",
+                &true,
+            )
+            .unwrap()
+        };
+
+        // another peer, to the lock screen directly and to everyone
+        let peer = bus.connect();
+        for to in [Some(to.as_str()), None] {
+            lock(&peer, to);
+            sleep(&peer, to);
+        }
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "forged signals are ignored"
+        );
+
+        lock(&logind, None);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(Ok(Signal::Lock))
+        );
+        sleep(&logind, None);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(Ok(Signal::PrepareForSleep))
+        );
     }
 }

@@ -133,6 +133,38 @@ fn the_caret_blinks_inside_the_search_field_and_repaints_nothing_else() {
     );
 }
 
+/// How long the caret shows, then hides, while it blinks: the theme's phase.
+const CARET_PHASE_MS: u64 = 500;
+
+/// How long after focus the caret stops blinking and stays on.
+const BLINK_LIMIT_MS: u64 = 10_000;
+
+#[test]
+fn an_idle_window_commits_no_frame_and_a_blinking_caret_one_per_edge() {
+    let mut run = start(40, 1.0);
+    // the scroller's fade and anything else that moves comes to rest
+    run.frames(3000, 16);
+    let before = presented(&run);
+    run.frames(5000, 16);
+    assert_eq!(presented(&run), before, "an idle window commits nothing");
+    run.click("search");
+    run.frames(1000, 16);
+    let before = presented(&run);
+    let span = 3000;
+    run.frames(span, 16);
+    let edges = span / CARET_PHASE_MS;
+    let committed = (presented(&run) - before) as u64;
+    assert!(
+        (edges - 1..=edges + 1).contains(&committed),
+        "{committed} frames for {edges} edges of the caret"
+    );
+    // past the blink's limit the caret stays on, and nothing is committed
+    run.frames(BLINK_LIMIT_MS, 16);
+    let before = presented(&run);
+    run.frames(5000, 16);
+    assert_eq!(presented(&run), before, "a steady caret commits nothing");
+}
+
 #[test]
 fn the_search_field_s_animation_repaints_only_the_toolbar() {
     let mut run = start(10, 1.0);
@@ -245,9 +277,10 @@ fn a_window_kept_from_damage_alone_is_the_window_drawn_whole() {
 }
 
 /// How far apart a pixel drawn again inside a damaged rectangle may be from the same pixel of a whole frame: the CPU
-/// renderer blends an anti-aliased edge near a rectangle's border a few levels differently. A pixel left stale (a caret,
-/// a selection, text that went) is much further.
-const EDGE: u8 = 16;
+/// renderer samples a curved or fractional anti-aliased edge cut by a damaged rectangle's border on a slightly different
+/// sub-pixel grid, which moves its coverage a few levels (six at most here, at 1.5x). A pixel left stale (a caret, a
+/// selection, text that went) is much further.
+const EDGE: u8 = 8;
 
 /// The last frame, which was not drawn whole, has the pixels of the window drawn whole, as a configure draws it.
 #[track_caller]

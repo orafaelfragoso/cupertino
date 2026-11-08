@@ -265,6 +265,19 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         };
         let before = drop.over.take();
         self.hover(before.as_ref(), None);
+        self.left(i);
+    }
+
+    /// Tells the targets of window `i` that ask for it that the drag over the window left it, or ended without a drop.
+    fn left(&mut self, i: usize) {
+        let Some(root) = self.windows[i].root else {
+            return;
+        };
+        for node in self.tree.preorder(root) {
+            if let Some(message) = frame(&self.tree, node).and_then(|f| f.on_leave.clone()) {
+                self.messages.push_back(message);
+            }
+        }
     }
 
     /// The drag over window `i` dropped: read the data for the target it was over, or refuse it.
@@ -274,6 +287,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         };
         let Some(over) = drop.over.take() else {
             self.system.finish_drop(drop.token, None);
+            self.left(i);
             return;
         };
         self.hover(Some(&over), None);
@@ -283,6 +297,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         });
         let Some(action) = action else {
             self.system.finish_drop(drop.token, None);
+            self.left(i);
             return;
         };
         match self.system.read_drop(drop.token, &over.mime) {
@@ -300,7 +315,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     },
                 );
             }
-            Err(_) => self.system.finish_drop(drop.token, None),
+            Err(_) => {
+                self.system.finish_drop(drop.token, None);
+                self.left(i);
+            }
         }
     }
 
@@ -325,7 +343,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }));
                 self.finishing.push((landed.token, Some(landed.action)));
             }
-            _ => self.system.finish_drop(landed.token, None),
+            _ => {
+                self.system.finish_drop(landed.token, None);
+                // refused after all: the drag ended over the window without a drop a target took
+                if let Some(i) = self.windows.iter().position(|w| w.key == landed.window) {
+                    self.left(i);
+                }
+            }
         }
         true
     }

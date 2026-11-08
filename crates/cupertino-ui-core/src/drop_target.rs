@@ -46,6 +46,10 @@ pub struct DropTarget<M> {
     pub place: PlaceHandler,
     pub on_hover: Option<HoverHandler<M>>,
     pub on_drop: DropHandler<M>,
+    /// Sent when a drag that was over the target's window leaves the window, or ends there without being dropped on a
+    /// target (released where nothing takes it, refused, its data failed or cancelled); not after a drop a target took.
+    /// Over any part of the window, not only over this target.
+    pub on_leave: Option<M>,
 }
 
 /// A drag over a [`DropTarget`], as its [`DropTarget::place`] sees it.
@@ -98,6 +102,7 @@ impl<M: 'static> From<DropTarget<M>> for Element<M> {
             place,
             on_hover,
             on_drop,
+            on_leave,
         } = target;
         // the target takes its content's place in its parent; the content fills it
         let own = content.layout();
@@ -119,6 +124,7 @@ impl<M: 'static> From<DropTarget<M>> for Element<M> {
             place,
             on_hover,
             on_drop,
+            on_leave,
             children: vec![content, Element::new(Highlight)],
         })
     }
@@ -132,6 +138,7 @@ pub(crate) struct DropFrame<M> {
     pub(crate) place: PlaceHandler,
     pub(crate) on_hover: Option<HoverHandler<M>>,
     pub(crate) on_drop: DropHandler<M>,
+    pub(crate) on_leave: Option<M>,
     children: Vec<Element<M>>,
 }
 

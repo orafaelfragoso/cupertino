@@ -14,16 +14,18 @@ use std::time::{Duration, Instant};
 use cupertino_server::backend::headless;
 use cupertino_server::cli::start_shell_supervision;
 use cupertino_server::config::{Config, ShellProcess};
+use cupertino_server::drag_return::{Back, DRAG_FADE_DURATION, DRAG_RETURN_DURATION};
 use cupertino_server::events::BTN_LEFT;
 use cupertino_server::Cupertino;
-use smithay::backend::input::ButtonState;
+use smithay::backend::input::{ButtonState, KeyState};
 use smithay::backend::renderer::element::Element;
+use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::{Display, Resource};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer,
-    wl_data_source, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+    wl_data_source, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{event_created_child, Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
@@ -42,6 +44,16 @@ const FILE_SOURCE_SIZE: (i32, i32) = (120, 640);
 /// The drag icon's size and the point of it under the pointer, in points: a size no other element of the scene has.
 const ICON_SIZE: (i32, i32) = (37, 23);
 const ICON_HOTSPOT: (i32, i32) = (9, 5);
+/// The keycode of Escape (evdev 1, plus the 8 of the X keycodes).
+const ESCAPE: u32 = 1 + 8;
+/// The most pixels the returning icon of a drag is drawn wider and taller than it is, and from before its origin.
+const NEAR: i32 = 3;
+
+/// Whether `drawn`, an origin of the returning icon, is where an icon at `at` is drawn from.
+fn drawn_at(drawn: (i32, i32), at: (f64, f64)) -> bool {
+    let before = |d: i32, a: f64| (0..=NEAR).contains(&(a.round() as i32 - d));
+    before(drawn.0, at.0) && before(drawn.1, at.1)
+}
 
 struct Harness {
     state: Cupertino,
@@ -151,6 +163,48 @@ impl Harness {
             .map(|g| (g.loc.x, g.loc.y, g.size.w, g.size.h))
             .collect()
     }
+
+    /// [`Harness::drawn_of_size`] at scale 1 for the returning icon of a drag, which lies on fractional points and is
+    /// drawn with a margin of up to [`NEAR`] pixels: its origin is up to that much before the icon's.
+    fn drawn_near_size(&mut self, size: (i32, i32)) -> Vec<(i32, i32, i32, i32)> {
+        let mut backend = self.state.backend.take().unwrap();
+        let elements = self.state.build_output_elements(backend.renderer(), 0);
+        self.state.backend = Some(backend);
+        elements
+            .iter()
+            .map(|e| e.geometry(smithay::utils::Scale::from(1.0)))
+            .filter(|g| (0..=NEAR).contains(&(g.size.w - size.0)))
+            .filter(|g| (0..=NEAR).contains(&(g.size.h - size.1)))
+            .map(|g| (g.loc.x, g.loc.y, g.size.w, g.size.h))
+            .collect()
+    }
+
+    /// Press Escape and let it go.
+    fn escape(&mut self) {
+        for state in [KeyState::Pressed, KeyState::Released] {
+            self.state
+                .keyboard_event_now(Keycode::new(ESCAPE), state, 0);
+            self.run_for(Duration::from_millis(20));
+        }
+    }
+
+    /// Stops the compositor's clock where it is, so an animation moves only as [`Harness::advance`] moves it, however
+    /// long the test waits for its clients.
+    fn freeze(&mut self) {
+        self.state.fixed_time = Some(self.state.now());
+    }
+
+    /// Moves the stopped clock on by `seconds`, and lets the compositor see it.
+    fn advance(&mut self, seconds: f64) {
+        let now = self.state.fixed_time.expect("the clock is stopped");
+        self.state.fixed_time = Some(now + seconds);
+        self.run_for(Duration::from_millis(20));
+    }
+
+    /// Where the icon of a drag that ended without a drop goes, while it shows.
+    fn icon_going(&self) -> Option<Back> {
+        self.state.fx.drag_return.as_ref().map(|r| r.back)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -177,6 +231,10 @@ struct Log {
     pointer: Vec<String>,
     /// The protocol id of the icon surface the client gave `start_drag`.
     icon: Option<u32>,
+    /// What the data device was told of drags over the client's window: enter, leave and drop, in order.
+    device: Vec<String>,
+    /// The keys the client was sent, as `key CODE pressed` or `key CODE released` (evdev codes).
+    keys: Vec<String>,
 }
 
 struct ClientState {
@@ -193,6 +251,8 @@ struct ClientState {
     /// What a source sends.
     payload: Vec<u8>,
     log: Arc<Mutex<Log>>,
+    /// The window's roles, destroyed with its surface when the test closes the window.
+    window: Option<(xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel)>,
 }
 
 type OfferTypes = Mutex<Vec<String>>;
@@ -411,6 +471,15 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for ClientState {
         conn: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        let entry = match &event {
+            wl_data_device::Event::Enter { .. } => Some("enter"),
+            wl_data_device::Event::Leave => Some("leave"),
+            wl_data_device::Event::Drop => Some("drop"),
+            _ => None,
+        };
+        if let Some(entry) = entry {
+            state.log.lock().unwrap().device.push(entry.into());
+        }
         if state.role != Role::Target {
             return;
         }
@@ -451,9 +520,40 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for ClientState {
     ]);
 }
 
-/// A toplevel of `size` with a pointer and a data device; serves its connection until dropped.
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_keyboard::Event::Key {
+            key,
+            state: WEnum::Value(pressed),
+            ..
+        } = event
+        {
+            let pressed = match pressed {
+                wl_keyboard::KeyState::Pressed => "pressed",
+                _ => "released",
+            };
+            state
+                .log
+                .lock()
+                .unwrap()
+                .keys
+                .push(format!("key {key} {pressed}"));
+        }
+    }
+}
+
+/// A toplevel of `size` with a pointer, a keyboard and a data device; serves its connection until dropped.
 struct TestClient {
     stop: Arc<AtomicBool>,
+    /// Set to close the window: the client destroys its toplevel and its surface, and keeps its drag going.
+    close: Arc<AtomicBool>,
     log: Arc<Mutex<Log>>,
 }
 
@@ -465,8 +565,9 @@ impl TestClient {
     /// A client whose drag sends `payload`.
     fn sending(socket: PathBuf, role: Role, size: (i32, i32), payload: Vec<u8>) -> TestClient {
         let stop = Arc::new(AtomicBool::new(false));
+        let close = Arc::new(AtomicBool::new(false));
         let log: Arc<Mutex<Log>> = Arc::default();
-        let (stop2, log2) = (stop.clone(), log.clone());
+        let (stop2, close2, log2) = (stop.clone(), close.clone(), log.clone());
         std::thread::spawn(move || {
             let conn = Connection::from_socket(
                 UnixStream::connect(&socket).expect("connecting to the compositor"),
@@ -481,6 +582,7 @@ impl TestClient {
             let manager: wl_data_device_manager::WlDataDeviceManager =
                 globals.bind(&qh, 3..=3, ()).unwrap();
             let _pointer = seat.get_pointer(&qh, ());
+            let _keyboard = seat.get_keyboard(&qh, ());
             let device = manager.get_data_device(&seat, &qh, ());
             let surface = compositor.create_surface(&qh, ());
             let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
@@ -505,15 +607,28 @@ impl TestClient {
                 dragging: false,
                 payload,
                 log: log2,
+                window: Some((xdg, toplevel)),
             };
             while !stop2.load(Ordering::SeqCst) {
+                if close2.load(Ordering::SeqCst) {
+                    if let Some((xdg, toplevel)) = client.window.take() {
+                        toplevel.destroy();
+                        xdg.destroy();
+                        client.surface.destroy();
+                    }
+                }
                 if queue.roundtrip(&mut client).is_err() {
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
-        TestClient { stop, log }
+        TestClient { stop, close, log }
+    }
+
+    /// Close the client's window, keeping the connection and any drag it started.
+    fn close_window(&self) {
+        self.close.store(true, Ordering::SeqCst);
     }
 
     fn log(&self) -> std::sync::MutexGuard<'_, Log> {
@@ -529,12 +644,21 @@ impl Drop for TestClient {
 
 /// A drag of text from the source's window held over the target's window, which chose to copy it.
 fn drag_held_over_the_target(h: &mut Harness) -> (TestClient, TestClient) {
+    let (source, target, _) = drag_as_held_over_the_target(h, Role::Source);
+    (source, target)
+}
+
+/// [`drag_held_over_the_target`] by a source of `role`, with the point the drag started at.
+fn drag_as_held_over_the_target(
+    h: &mut Harness,
+    role: Role,
+) -> (TestClient, TestClient, (f64, f64)) {
     // the wide source and the tall target cross, so each has an end the other cannot cover, whichever is on top
     let target = TestClient::spawn(h.socket_path(), Role::Target, TARGET_SIZE);
     h.wait_until("the target window", |s| {
         s.windows.iter().filter(|w| w.mapped).count() == 1
     });
-    let source = TestClient::spawn(h.socket_path(), Role::Source, SOURCE_SIZE);
+    let source = TestClient::spawn(h.socket_path(), role, SOURCE_SIZE);
     h.wait_until("the source window", |s| {
         s.windows.iter().filter(|w| w.mapped).count() == 2
     });
@@ -568,7 +692,7 @@ fn drag_held_over_the_target(h: &mut Harness) -> (TestClient, TestClient) {
             .iter()
             .any(|e| e == "action DndAction(Copy)")
     });
-    (source, target)
+    (source, target, start)
 }
 
 /// A press in one client's window starts a drag of text; moving onto another client's window and releasing there
@@ -654,9 +778,11 @@ fn a_drag_icon_is_the_clients_surface_drawn_with_the_pointer_at_its_hotspot() {
 }
 
 /// A drop released where nothing accepts it (the source's own window, which takes no drops) is refused: the source
-/// hears the cancel, the icon is no longer drawn, the window gets the pointer back and the next press reaches it.
+/// hears the cancel, and the icon, no longer the client's surface, flies from where it was let go back to where the
+/// drag started and is gone once [`DRAG_RETURN_DURATION`] has passed; the window gets the pointer back and the next
+/// press reaches it.
 #[test]
-fn a_refused_drop_takes_the_icon_away_and_gives_the_pointer_back() {
+fn a_refused_drop_flies_the_icon_back_and_gives_the_pointer_back() {
     let Some(mut h) = Harness::new() else { return };
     let source = TestClient::spawn(h.socket_path(), Role::IconSource(1), SOURCE_SIZE);
     h.wait_until("the source window", |s| {
@@ -674,12 +800,40 @@ fn a_refused_drop_takes_the_icon_away_and_gives_the_pointer_back() {
     });
     assert_eq!(h.drawn_of_size(ICON_SIZE, 1.0).len(), 1);
 
+    h.freeze();
     h.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
     h.wait_until("the cancel", |_| {
         source.log().source.last().map(String::as_str) == Some("cancelled")
     });
-    assert!(h.state.drag_icon.is_none());
-    assert!(h.drawn_of_size(ICON_SIZE, 1.0).is_empty());
+    assert!(
+        h.state.drag_icon.is_none(),
+        "no longer the client's surface"
+    );
+    let (hx, hy) = (f64::from(ICON_HOTSPOT.0), f64::from(ICON_HOTSPOT.1));
+    assert_eq!(h.icon_going(), Some(Back::To(start.0 - hx, start.1 - hy)));
+    let first = h.drawn_near_size(ICON_SIZE);
+    assert_eq!(first.len(), 1, "the icon still shows: {first:?}");
+    assert!(
+        drawn_at(
+            (first[0].0, first[0].1),
+            (start.0 + 60.0 - hx, start.1 - hy)
+        ),
+        "where it was let go: {first:?}"
+    );
+    h.advance(DRAG_RETURN_DURATION / 4.0);
+    let half = h.drawn_near_size(ICON_SIZE);
+    assert_eq!(half.len(), 1, "the icon still shows: {half:?}");
+    assert!(
+        half[0].0 < first[0].0 && half[0].0 >= (start.0 - hx).round() as i32 - NEAR,
+        "on its way back: {half:?} after {first:?}"
+    );
+    assert!(
+        (0..=NEAR).contains(&((start.1 - hy).round() as i32 - half[0].1)),
+        "level: {half:?}"
+    );
+    h.advance(DRAG_RETURN_DURATION);
+    assert!(h.drawn_near_size(ICON_SIZE).is_empty(), "back and gone");
+    assert_eq!(h.icon_going(), None);
     h.move_to((start.0 + 70.0, start.1));
     h.wait_until("the pointer back on the source", |_| {
         source.log().pointer.last().map(String::as_str) == Some("enter")
@@ -696,6 +850,117 @@ fn a_refused_drop_takes_the_icon_away_and_gives_the_pointer_back() {
         h.state.drag_icon.is_none(),
         "a press after a drag starts none"
     );
+}
+
+/// Escape while a drag is held over a target that chose to take it: the drag ends without a drop. The source hears
+/// it cancelled, the target is left and never dropped on, the key reaches no client, and the icon flies back to where
+/// the drag started. The window under the pointer gets the pointer back at once, and the release that follows drops
+/// nothing.
+#[test]
+fn escape_cancels_a_drag_held_over_a_target_and_flies_the_icon_back() {
+    let Some(mut h) = Harness::new() else { return };
+    let (source, target, start) = drag_as_held_over_the_target(&mut h, Role::IconSource(1));
+    assert!(h.state.drag_icon.is_some());
+    assert_eq!(
+        target.log().device.last().map(String::as_str),
+        Some("enter")
+    );
+    h.freeze();
+    h.escape();
+    h.wait_until("the cancel", |_| {
+        source.log().source.last().map(String::as_str) == Some("cancelled")
+    });
+    h.wait_until("the target left", |_| {
+        target.log().device.last().map(String::as_str) == Some("leave")
+    });
+    let (hx, hy) = (f64::from(ICON_HOTSPOT.0), f64::from(ICON_HOTSPOT.1));
+    assert_eq!(h.icon_going(), Some(Back::To(start.0 - hx, start.1 - hy)));
+    assert_eq!(
+        h.drawn_near_size(ICON_SIZE).len(),
+        1,
+        "the icon still shows"
+    );
+    h.wait_until("the pointer back on the target", |_| {
+        target.log().pointer.last().map(String::as_str) == Some("enter")
+    });
+    h.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    h.advance(DRAG_RETURN_DURATION);
+    assert!(h.drawn_near_size(ICON_SIZE).is_empty(), "back and gone");
+    assert_eq!(h.icon_going(), None);
+    assert_eq!(target.log().dropped, None, "the target got no drop");
+    assert!(
+        !target.log().device.iter().any(|e| e == "drop"),
+        "{:?}",
+        target.log().device
+    );
+    assert!(
+        !source.log().source.iter().any(|e| e == "drop performed"),
+        "{:?}",
+        source.log().source
+    );
+    assert!(h.state.drag_icon.is_none());
+    let escape = format!("key {}", ESCAPE - 8);
+    for client in [&source, &target] {
+        let keys = client.log().keys.clone();
+        assert!(!keys.iter().any(|k| k.starts_with(&escape)), "{keys:?}");
+    }
+    // with no drag, Escape is the focused client's again: the source's, where the drag was pressed
+    h.escape();
+    h.wait_until("Escape to reach the source", |_| {
+        source
+            .log()
+            .keys
+            .ends_with(&[format!("{escape} pressed"), format!("{escape} released")])
+    });
+}
+
+/// The window a drag started in closes while the drag is held, and the drag is released where nothing takes it: the
+/// icon has nowhere to fly back to, so it fades out where it was let go, and is gone once [`DRAG_FADE_DURATION`] has
+/// passed.
+#[test]
+fn a_refused_drop_whose_window_closed_fades_the_icon_where_it_was_let_go() {
+    let Some(mut h) = Harness::new() else { return };
+    let source = TestClient::spawn(h.socket_path(), Role::IconSource(1), SOURCE_SIZE);
+    h.wait_until("the source window", |s| {
+        s.windows.iter().filter(|w| w.mapped).count() == 1
+    });
+    h.run_for(Duration::from_millis(100));
+    let (sx, sy, _, sh) = h.frames()[0];
+    let start = (sx + 40.0, sy + sh / 2.0);
+    h.move_to(start);
+    h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
+    h.wait_until("the drag icon", |s| s.drag_icon.is_some());
+    // below the window, where nothing is
+    let end = (start.0 + 60.0, sy + sh + 80.0);
+    h.move_to(end);
+    source.close_window();
+    h.wait_until("the window to close", |s| {
+        s.windows.iter().all(|w| !w.mapped)
+    });
+    h.freeze();
+    h.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    h.wait_until("the cancel", |_| {
+        source.log().source.last().map(String::as_str) == Some("cancelled")
+    });
+    assert_eq!(h.icon_going(), Some(Back::Fade));
+    let (hx, hy) = (f64::from(ICON_HOTSPOT.0), f64::from(ICON_HOTSPOT.1));
+    let at = (end.0 - hx, end.1 - hy);
+    let first = h.drawn_near_size(ICON_SIZE);
+    assert_eq!(first.len(), 1, "the icon still shows: {first:?}");
+    assert!(
+        drawn_at((first[0].0, first[0].1), at),
+        "where it was let go: {first:?}, {at:?}"
+    );
+    h.advance(DRAG_FADE_DURATION / 2.0);
+    let half = h.drawn_near_size(ICON_SIZE);
+    assert_eq!(half.len(), 1, "still fading: {half:?}");
+    assert_eq!(half[0], first[0], "it does not move");
+    let now = h.state.now();
+    let alpha = h.state.fx.drag_return.as_ref().unwrap().placement(now).1;
+    assert!((alpha - 0.5).abs() < 1e-6, "half faded: {alpha}");
+    h.advance(DRAG_FADE_DURATION / 2.0);
+    assert!(h.drawn_near_size(ICON_SIZE).is_empty(), "faded out");
+    assert_eq!(h.icon_going(), None);
 }
 
 /// A scratch directory removed on drop.

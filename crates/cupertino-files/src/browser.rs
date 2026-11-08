@@ -77,6 +77,22 @@ pub struct Browser {
     types: Option<Arc<MimeDatabase>>,
     /// The toolbar search, lower-cased: only the folder's items whose names contain it are shown, flat.
     filter: Option<String>,
+    /// The selection to give back once the listing is complete ([`Browser::return_to`]).
+    reselect: Option<SelectionPaths>,
+}
+
+/// Where a window was, to go back to with [`Browser::return_to`]: its history and its selection, by path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Visit {
+    history: History,
+    selection: SelectionPaths,
+}
+
+impl Visit {
+    /// The folder shown.
+    pub fn dir(&self) -> &Path {
+        self.history.current()
+    }
 }
 
 /// Lay out `entries` at `level` with the items of the expanded folders under them, noting the expanded
@@ -175,6 +191,7 @@ impl Browser {
             recents_file,
             types,
             filter: None,
+            reselect: None,
         })
     }
 
@@ -414,7 +431,42 @@ impl Browser {
         self.type_select.clear();
         self.select_when_listed = None;
         self.awaited = None;
+        self.reselect = None;
         Ok(())
+    }
+
+    /// Where the window is, with its history and its selection, for [`Browser::return_to`].
+    pub fn visit(&self) -> Visit {
+        Visit {
+            history: self.history.clone(),
+            selection: self.selection_paths(),
+        }
+    }
+
+    /// Go back to `visit` as it was: its folder with its history, and its selection once the listing is complete. On
+    /// an error the window stays where it is.
+    pub fn return_to(&mut self, visit: Visit) -> io::Result<()> {
+        if visit.dir() != self.dir() {
+            self.show(visit.dir())?;
+        }
+        self.history = visit.history;
+        self.reselect = Some(visit.selection);
+        self.reselect_pending();
+        Ok(())
+    }
+
+    /// Whether the folder is still being read.
+    pub fn is_loading(&self) -> bool {
+        self.model.is_loading()
+    }
+
+    fn reselect_pending(&mut self) {
+        if self.model.is_loading() {
+            return;
+        }
+        if let Some(kept) = self.reselect.take() {
+            self.restore_selection(kept);
+        }
     }
 
     /// Show the folder `to`. On an error (no such folder, no permission) the window stays where it is.
@@ -524,6 +576,7 @@ impl Browser {
         }
         self.select_pending();
         self.select_awaited();
+        self.reselect_pending();
         polled
     }
 

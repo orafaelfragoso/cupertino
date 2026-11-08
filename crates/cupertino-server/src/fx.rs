@@ -75,6 +75,8 @@ impl Default for EffectsConfig {
 pub struct Effects {
     pub cfg: EffectsConfig,
     pub closing: Vec<ClosingWindow>,
+    /// The icon of a client's drag that ended without a drop, on its way back (`crate::drag_return`).
+    pub drag_return: Option<crate::drag_return::DragReturn>,
     snapshots: std::collections::HashMap<WindowId, Snapshot>,
     pub desktop: ShowDesktop,
     show_desktop: ProgressAnimator,
@@ -86,6 +88,7 @@ impl Effects {
         Self {
             cfg,
             closing: Vec::new(),
+            drag_return: None,
             snapshots: Default::default(),
             show_desktop: desktop.animator(0.0),
             desktop,
@@ -171,6 +174,7 @@ impl Effects {
     pub fn drop_snapshots(&mut self) {
         self.snapshots.clear();
         self.closing.clear();
+        self.drag_return = None;
     }
 
     pub fn has_ghost(&self, id: WindowId) -> bool {
@@ -206,11 +210,14 @@ impl Effects {
     pub fn tick(&mut self, now: f64) -> bool {
         let before = self.closing.len();
         self.closing.retain(|c| !c.is_done(now));
-        before != self.closing.len()
+        let returned = self.drag_return.take_if(|r| r.is_done(now)).is_some();
+        before != self.closing.len() || returned
     }
 
     pub fn wants_tick(&self, now: f64) -> bool {
-        self.show_desktop.is_animating(now) || self.closing.iter().any(|c| !c.is_done(now))
+        self.show_desktop.is_animating(now)
+            || self.closing.iter().any(|c| !c.is_done(now))
+            || self.drag_return.as_ref().is_some_and(|r| !r.is_done(now))
     }
 }
 

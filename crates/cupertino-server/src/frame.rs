@@ -354,6 +354,27 @@ impl Cupertino {
         captured
     }
 
+    /// Capture the surface tree of `surface`, its surface's top-left corner at `origin`, over `area` (global logical
+    /// points) at the scale of the output under the pointer: the icon of a drag that ended without a drop.
+    pub fn capture_surface_snapshot(
+        &mut self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+        origin: Point<f64, Logical>,
+        area: cupertino_wm::Rect,
+    ) -> Option<crate::render::snapshots::SnapshotOwner> {
+        let idx = self.pointer_output_idx()?;
+        let mut backend = self.backend.take()?;
+        let captured = self
+            .with_scene(backend.renderer(), idx, |renderer, mut p| {
+                let texture =
+                    crate::render::scene::capture_surface(renderer, &mut p, surface, origin, area)?;
+                Some(p.res.snapshots.insert(texture))
+            })
+            .flatten();
+        self.backend = Some(backend);
+        captured
+    }
+
     /// Remember the current look of a window (throttled) so that it can fade out after its surface
     /// is gone.
     pub fn refresh_snapshot(&mut self, id: cupertino_wm::WindowId) {

@@ -5,7 +5,9 @@
 //! devices; Option copies, the primary modifier moves. For a drag from this application the device is known while the
 //! drag moves; for one from another application the files are known only at the drop, so the drag shows a move and
 //! the drop copies what lies on another device. A folder is not dropped on itself, and a drag of this application's
-//! items over the folder holding them all lands nowhere. Folders do not spring open under a drag.
+//! items over the folder holding them all lands nowhere. A folder of the path bar takes drops as the folder it names.
+//! The targets tell the window which folder the drag is over, so a folder held under it springs open ([`super::spring`]),
+//! and the folder area's target tells it when the drag leaves.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -67,7 +69,9 @@ pub(super) fn folder(
     );
     let places = Rc::clone(&folders);
     let target = Rc::clone(&folders);
+    let hovered = Rc::clone(&folders);
     let row_places = Rc::clone(&rows);
+    let row_hovers = Rc::clone(&rows);
     let into = here.clone();
     let read_only = read_only(session);
     Element::from(DropTarget {
@@ -90,7 +94,15 @@ pub(super) fn folder(
                 None => offer(over, None, here.as_ref()?, &dragged, &*read_only),
             }
         }),
-        on_hover: None,
+        // the folder under the drag, which springs open when it is held there
+        on_hover: Some(Box::new(move |place| {
+            let folder = place
+                .and_then(|place| place.key)
+                .and_then(|key| item_under(std::slice::from_ref(&key), &row_hovers))
+                .and_then(|(_, i)| hovered.get(usize::try_from(i).ok()?)?.clone());
+            Message::Window(id, Event::SpringOver(folder))
+        })),
+        on_leave: Some(Message::Window(id, Event::DragLeft)),
         on_drop: Box::new(move |dropped| {
             let item = dropped
                 .place
@@ -106,6 +118,8 @@ pub(super) fn folder(
             dropped_on(id, to, dropped)
         }),
     })
+    // a folder the drag opened lays out a new target, which the drag resting there is asked of anew
+    .key(format!("drops/{}", win.springing.opened()))
 }
 
 /// The item under a drag among `keys`, with the key that names it: a list row by its key in `rows`, else a grid cell
@@ -135,6 +149,7 @@ pub(super) fn sidebar(session: &Session, id: u64, content: Element<Message>) -> 
         .collect();
     let dragged: Rc<[PathBuf]> = session.dragged.clone().into();
     let target = Rc::clone(&places);
+    let hovered = Rc::clone(&places);
     let read_only = read_only(session);
     Element::from(DropTarget {
         content,
@@ -147,7 +162,15 @@ pub(super) fn sidebar(session: &Session, id: u64, content: Element<Message>) -> 
                 .find_map(|key| places.iter().find(|(place, _)| place == key))?;
             offer(over, Some(key.clone()), to, &dragged, &*read_only)
         }),
-        on_hover: None,
+        on_hover: Some(Box::new(move |place| {
+            let folder = place.and_then(|place| {
+                let key = place.key?;
+                let (_, to) = hovered.iter().find(|(k, _)| *k == key)?;
+                Some(to.folder()?.to_path_buf())
+            });
+            Message::Window(id, Event::SpringOver(folder))
+        })),
+        on_leave: None,
         on_drop: Box::new(move |dropped| {
             let to = dropped.place.as_ref().and_then(|key| {
                 let (_, to) = target.iter().find(|(place, _)| place == key)?;
@@ -156,6 +179,50 @@ pub(super) fn sidebar(session: &Session, id: u64, content: Element<Message>) -> 
             dropped_on(id, to, dropped)
         }),
     })
+}
+
+/// The path bar `content` of window `id`, whose folders, `chain` from the top down and each keyed by its place in it,
+/// take drops as the folder area does when it shows them: the trash's own folder trashes, Recents takes nothing.
+pub(super) fn path_bar(
+    session: &Session,
+    id: u64,
+    chain: &[PathBuf],
+    content: Element<Message>,
+) -> Element<Message> {
+    let folders: Rc<[Option<Destination>]> = chain.iter().map(|dir| shown(session, dir)).collect();
+    let dragged: Rc<[PathBuf]> = session.dragged.clone().into();
+    let target = Rc::clone(&folders);
+    let hovered = Rc::clone(&folders);
+    let read_only = read_only(session);
+    Element::from(DropTarget {
+        content,
+        mimes: vec![URI_LIST.into()],
+        actions: [Offered::Copy, Offered::Move].into(),
+        place: Box::new(move |over| {
+            let (key, to) = over
+                .keys
+                .iter()
+                .find_map(|key| Some((key.clone(), segment(&folders, key)?)))?;
+            offer(over, Some(key), &to, &dragged, &*read_only)
+        }),
+        on_hover: Some(Box::new(move |place| {
+            let folder = place
+                .and_then(|place| place.key)
+                .and_then(|key| segment(&hovered, &key)?.folder().map(Path::to_path_buf));
+            Message::Window(id, Event::SpringOver(folder))
+        })),
+        on_leave: None,
+        on_drop: Box::new(move |dropped| {
+            let to = dropped.place.as_ref().and_then(|key| segment(&target, key));
+            dropped_on(id, to, dropped)
+        }),
+    })
+}
+
+/// Where the path bar's folder keyed `key` takes drops.
+fn segment(folders: &[Option<Destination>], key: &Key) -> Option<Destination> {
+    let Key::Int(i) = key else { return None };
+    folders.get(usize::try_from(*i).ok()?)?.clone()
 }
 
 /// Where a drop on the folder shown at `dir` goes: the trash's own folder trashes, Recents takes nothing.

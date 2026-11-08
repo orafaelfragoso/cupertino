@@ -57,6 +57,8 @@ enum KeyRoute {
     Accent { repeats: bool },
     /// A compositor shortcut or a swallowed release.
     Plan(ActionPlan),
+    /// Escape during a client's drag and drop: the drag ends without a drop.
+    CancelDrag,
 }
 
 /// How a device's motion is accelerated.
@@ -501,6 +503,11 @@ impl Cupertino {
     ) -> KeyRoute {
         let sym = key.sym;
         let modifier_key = crate::overlays::is_modifier_sym(sym);
+        // 0. Escape ends a client's drag; the client never sees the key
+        if pressed && !repeat && sym == keysyms::KEY_Escape && self.client_drag.is_some() {
+            self.key_router.swallow(sym);
+            return KeyRoute::CancelDrag;
+        }
         // 1. the input-source HUD takes Escape, Return and the arrows
         if pressed
             && !modifier_key
@@ -577,6 +584,10 @@ impl Cupertino {
                 matches!(key.sym, keysyms::KEY_Up | keysyms::KEY_Down)
             }
             KeyRoute::Accent { repeats } => repeats,
+            KeyRoute::CancelDrag => {
+                self.cancel_client_drag(time);
+                false
+            }
             KeyRoute::Plan(plan) => {
                 let repeats = plan.repeats();
                 self.execute_plan(plan);
@@ -952,6 +963,8 @@ impl Cupertino {
     /// release with the client that got the press.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
         self.as_input(|s| s.handle_pointer_button(button, state, time));
+        // a release that ended a drag without a drop sends its icon back
+        self.drag_ended();
     }
 
     fn handle_pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {

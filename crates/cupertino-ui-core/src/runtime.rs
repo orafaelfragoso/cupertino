@@ -230,6 +230,10 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     finishing: Vec<(DropToken, Option<DropAction>)>,
     /// The messages to send once a window has presented its first frame ([`Command::OnPresented`]).
     on_presented: Vec<(WindowKey, A::Message)>,
+    /// The messages of [`Command::After`], by when they are due and then in the order they were asked for.
+    timers: BTreeMap<(Timestamp, u64), A::Message>,
+    /// The order of the next [`Command::After`].
+    next_timer: u64,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -264,6 +268,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             landed: HashMap::new(),
             finishing: Vec::new(),
             on_presented: Vec::new(),
+            timers: BTreeMap::new(),
+            next_timer: 0,
         };
         for command in commands {
             runtime.command(command);
@@ -362,11 +368,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     fn next_wake(&self) -> Option<Timestamp> {
+        let timer = self.timers.keys().next().map(|&(at, _)| at);
         self.windows
             .iter()
             .flat_map(|w| w.wakes.values())
-            .min()
             .copied()
+            .chain(timer)
+            .min()
     }
 
     fn ready(&self) -> bool {
@@ -476,6 +484,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 } else {
                     self.on_presented.push((window, message));
                 }
+            }
+            Command::After { delay, message } => {
+                let nanos = u64::try_from(delay.as_nanos()).unwrap_or(u64::MAX);
+                let at = Timestamp(self.options.clock.now().0.saturating_add(nanos));
+                self.timers.insert((at, self.next_timer), message);
+                self.next_timer += 1;
             }
             Command::Exit => self.exit = true,
         }
@@ -1092,6 +1106,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     /// Wakes every node whose time has come, before this turn's input.
     fn wake_due(&mut self) {
         let now = self.options.clock.now();
+        while let Some(entry) = self.timers.first_entry() {
+            if entry.key().0 > now {
+                break;
+            }
+            self.messages.push_back(entry.remove());
+        }
         for i in 0..self.windows.len() {
             let w = &mut self.windows[i];
             let due: Vec<NodeId> = w

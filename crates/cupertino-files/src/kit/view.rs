@@ -1,6 +1,7 @@
 //! What a browser window shows for its [`BrowserWindow`].
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use cupertino_menu_model::{ActionName, MenuBar};
@@ -193,9 +194,16 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         })
         .filter(|s: &SidebarSection| !s.items.is_empty())
         .collect();
+    // a place about to spring open under a drag flashes as the selected one
+    let flashing = win.springing.flashing().map(PathBuf::as_path);
     let selected = shown
         .iter()
-        .position(|&i| session.places[i].folder() == Some(dir));
+        .position(|&i| flashing.is_some() && session.places[i].folder() == flashing)
+        .or_else(|| {
+            shown
+                .iter()
+                .position(|&i| session.places[i].folder() == Some(dir))
+        });
     let sidebar = Element::from(Sidebar {
         label: "Sidebar".into(),
         sections,
@@ -482,7 +490,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let item_icons = Rc::clone(&session.icons);
     let paths = Rc::clone(&entries);
     let items = tree_items(browser.outline());
-    let selected = selection(browser.selection());
+    let selected = shown_selection(win);
     let cell_selection = selected.clone();
     let presses = Rc::clone(&win.list_presses);
     let cell_presses = Rc::clone(&win.list_presses);
@@ -727,7 +735,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         params,
         items,
         scroll: win.scroll,
-        selection: selection(browser.selection()),
+        selection: shown_selection(win),
         band: win.band,
         name: Box::new(
             move |index, selected| match rename.as_ref().filter(|r| r.0 == index) {
@@ -784,6 +792,8 @@ pub(super) fn popup_key(popup: Popup) -> Key {
 fn path_bar(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let chain = path_chain(win.browser.dir(), &session.places);
     let last = chain.len().saturating_sub(1);
+    let folders: Vec<PathBuf> = chain.iter().map(|(path, _)| path.clone()).collect();
+    let flashing = win.springing.flashing();
     let children = chain
         .into_iter()
         .enumerate()
@@ -794,7 +804,8 @@ fn path_bar(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message>
                 name,
                 symbol: symbol.into(),
                 accent: place.is_some_and(|p| p.kind == PlaceKind::Recents),
-                current: i == last,
+                // a folder about to spring open under a drag flashes as the folder shown is drawn
+                current: i == last || flashing == Some(&path),
                 on_press: Message::Window(id, Event::PathSegment(path)),
             })
             .key(Key::Int(i as u64));
@@ -810,10 +821,10 @@ fn path_bar(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message>
             std::iter::once(segment).chain(separator)
         })
         .collect();
-    Element::new(PathBar {
+    let bar = Element::new(PathBar {
         children: vec![bar(children)],
-    })
-    .key("path-bar")
+    });
+    drops::path_bar(session, id, &folders, bar).key("path-bar")
 }
 
 /// A running paste or move: what it does, how far it came and its Stop button.
@@ -907,6 +918,28 @@ fn cell_text(e: &Entry, id: ColumnId, now: std::time::SystemTime) -> String {
         ColumnId::Size => human_size(e.size),
         ColumnId::Kind => mime::kind_description(&mime::entry_mime(e)),
         _ => String::new(),
+    }
+}
+
+/// The selection the views show: the browser's, with the folder about to spring open under a drag flashing as selected.
+fn shown_selection(win: &BrowserWindow) -> Selection {
+    let selected = win.browser.selection();
+    let flashing = win
+        .springing
+        .flashing()
+        .and_then(|path| win.browser.entries().iter().position(|e| &e.path == path))
+        .filter(|&i| !selected.contains(i));
+    match flashing {
+        Some(index) => {
+            let mut flashed = selected.clone();
+            flashed.restore(
+                selected.indices().chain([index]).collect::<Vec<_>>(),
+                selected.anchor(),
+                selected.focus(),
+            );
+            selection(&flashed)
+        }
+        None => selection(selected),
     }
 }
 

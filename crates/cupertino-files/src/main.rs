@@ -1,15 +1,15 @@
 //! The `cupertino-files` process: browser windows on CupertinoKit, the first on a folder (the home folder when none is
 //! given). New windows open in the same process; it exits once the last window is closed and no file operation runs.
-//! See the README.
+//! One process serves the session: a launch while Files runs hands its folder (or its wish for a window) to it over the
+//! session bus and exits. See the README.
 
-use std::ffi::OsString;
 use std::io;
-use std::os::unix::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use cupertino_apps::{Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
+use cupertino_files::instance::{self, Launch, LaunchError, Request, Service, Target};
 use cupertino_files::kit::{self, Start};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::{session_places, SessionPlaces};
@@ -17,44 +17,19 @@ use cupertino_files::recents;
 use cupertino_files::thumbnail::Thumbnailer;
 use cupertino_files::trash::Trash;
 use cupertino_kit::file_icons::FileIcons;
-use percent_encoding::percent_decode_str;
 
 const USAGE: &str =
     "usage: cupertino-files [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]";
 
 /// What the command line asks for.
 struct Options {
-    folder: PathBuf,
+    /// The folder named, made absolute; `None` for the home folder (or the running Files' window).
+    target: Option<Target>,
     /// The argv prefix that runs applications with `Terminal=true` (`PROGRAM -e`), as the launcher's.
     terminal: Option<Vec<String>>,
 }
 
-/// The folder an argument names: a path, a local `file://` URI (the desktop entry's `%U`) or the trash
-/// (`trash:///`, the scheme the session's file manager handles), whose folder is `<home_trash>/files`.
-fn folder_of(arg: &str, home_trash: &Path) -> Result<PathBuf, String> {
-    if let Some(rest) = arg.strip_prefix("trash:") {
-        return match rest.trim_start_matches('/') {
-            "" => Ok(home_trash.join("files")),
-            _ => Err(format!(
-                "{arg}: only the trash itself (trash:///) can be opened"
-            )),
-        };
-    }
-    if let Some(rest) = arg.strip_prefix("file://") {
-        let path = rest.strip_prefix("localhost").unwrap_or(rest);
-        // the query and fragment are not part of the path (RFC 8089, RFC 3986 §3)
-        let path = path.split(['?', '#']).next().unwrap_or(path);
-        if !path.starts_with('/') {
-            return Err(format!("{arg}: not a local file URI"));
-        }
-        let bytes: Vec<u8> = percent_decode_str(path).collect();
-        return Ok(PathBuf::from(OsString::from_vec(bytes)));
-    }
-    Ok(PathBuf::from(arg))
-}
-
-/// `[--terminal PROGRAM] [FOLDER]`; the folder defaults to `$HOME`. Opening the trash creates it when
-/// nothing was trashed yet (the freedesktop Trash specification lets the implementation create it).
+/// `[--terminal PROGRAM] [FOLDER]`.
 fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut folder = None;
     let mut terminal = None;
@@ -71,25 +46,14 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
             _ => folder = Some(arg),
         }
     }
-    let trash = Trash::new();
-    let folder = folder
-        .map(|arg| folder_of(&arg, trash.home_trash()))
+    let target = folder
+        .map(|arg| {
+            Target::of_argument(&arg)?
+                .absolute()
+                .map_err(|e| format!("{arg}: {e}"))
+        })
         .transpose()?;
-    if folder.as_ref() == Some(&trash.home_trash().join("files")) {
-        for sub in ["files", "info"] {
-            let dir = trash.home_trash().join(sub);
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-        }
-    }
-    let folder = match folder {
-        Some(folder) => folder,
-        None => PathBuf::from(
-            std::env::var_os("HOME").ok_or("HOME is not set; name the folder to open")?,
-        ),
-    };
-    let folder = std::path::absolute(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
-    Ok(Options { folder, terminal })
+    Ok(Options { target, terminal })
 }
 
 fn main() -> ExitCode {
@@ -100,7 +64,33 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let start = match start(options) {
+    // before any thread starts, so no program Files starts inherits the launch's spent token
+    let token = instance::take_activation_token();
+    let request = match &options.target {
+        Some(target) => Request::Open(vec![target.clone()]),
+        None => Request::Activate,
+    };
+    let service = match instance::serve_or_forward(
+        zbus::connection::Builder::session,
+        &request,
+        token.as_deref(),
+        instance::FORWARD_TIMEOUT,
+    ) {
+        Ok(Launch::Serve(service)) => Some(service),
+        Ok(Launch::Forwarded) => return ExitCode::SUCCESS,
+        Err(LaunchError::NoBus(e)) => {
+            eprintln!(
+                "cupertino-files: a later launch cannot reach this one: cannot claim {}: {e}",
+                instance::BUS_NAME
+            );
+            None
+        }
+        Err(e @ LaunchError::Refused(_)) => {
+            eprintln!("cupertino-files: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let start = match start(options, service, token) {
         Ok(start) => start,
         Err(e) => {
             eprintln!("cupertino-files: {e}");
@@ -123,10 +113,16 @@ fn other(e: impl std::fmt::Display) -> io::Error {
 /// The first window of the session: its folder listed, the session's places and file types, the Recents of the data
 /// folder, notices on the session bus, removable media on the system bus, the icons of the asset packs and the icon
 /// theme, and pictures' thumbnails in the session's thumbnail cache.
-fn start(options: Options) -> io::Result<Start> {
+fn start(options: Options, service: Option<Service>, token: Option<String>) -> io::Result<Start> {
     let dirs = XdgDirs::from_env().map_err(other)?;
-    let home =
-        PathBuf::from(std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME is not set"))?);
+    let home = PathBuf::from(
+        std::env::var_os("HOME")
+            .ok_or_else(|| io::Error::other("HOME is not set; name the folder to open"))?,
+    );
+    let folder = match &options.target {
+        Some(target) => target.folder(&Trash::new())?,
+        None => home.clone(),
+    };
     let SessionPlaces {
         places,
         folder_icons,
@@ -147,7 +143,7 @@ fn start(options: Options) -> io::Result<Start> {
         .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
         .ok();
     Start::open(
-        options.folder.clone(),
+        folder.clone(),
         places,
         Some(types),
         dirs.data_home.join(recents::XBEL_NAME),
@@ -161,13 +157,10 @@ fn start(options: Options) -> io::Result<Start> {
             .with_file_icons(icons)
             .with_thumbnails(Thumbnailer::from_env(kit::APP_ID))
             .with_places_source(source, watched)
+            .with_instance(service)
+            .with_activation_token(token)
     })
-    .map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!("cannot open {}: {e}", options.folder.display()),
-        )
-    })
+    .map_err(|e| io::Error::new(e.kind(), format!("cannot open {}: {e}", folder.display())))
 }
 
 /// The default-application resolver of the session's directories and desktops, read again at each open.
@@ -175,47 +168,4 @@ fn applications() -> io::Result<MimeApps> {
     let dirs = XdgDirs::from_env().map_err(other)?;
     let db = MimeDatabase::load(&dirs.all_data_dirs()).map_err(other)?;
     MimeApps::load(&dirs, db, &Locale::from_env(), &Visibility::from_env()).map_err(other)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::folder_of;
-    use std::path::{Path, PathBuf};
-
-    #[test]
-    fn arguments_name_a_path_a_file_uri_or_the_trash() {
-        let trash = Path::new("/home/u/.local/share/Trash");
-        assert_eq!(
-            folder_of("trash:///", trash),
-            Ok(PathBuf::from("/home/u/.local/share/Trash/files"))
-        );
-        assert_eq!(
-            folder_of("trash:", trash),
-            Ok(PathBuf::from("/home/u/.local/share/Trash/files"))
-        );
-        assert!(
-            folder_of("trash:///old/report.txt", trash).is_err(),
-            "only the trash folder itself"
-        );
-        assert_eq!(
-            folder_of("file:///home/u/My%20Files", trash),
-            Ok(PathBuf::from("/home/u/My Files"))
-        );
-        assert_eq!(
-            folder_of("file://localhost/tmp", trash),
-            Ok(PathBuf::from("/tmp"))
-        );
-        assert_eq!(
-            folder_of("file:///tmp/a%3Fb?x=1#top", trash),
-            Ok(PathBuf::from("/tmp/a?b"))
-        );
-        assert!(
-            folder_of("file://server/share", trash).is_err(),
-            "a remote host"
-        );
-        assert_eq!(
-            folder_of("Documents", trash),
-            Ok(PathBuf::from("Documents"))
-        );
-    }
 }

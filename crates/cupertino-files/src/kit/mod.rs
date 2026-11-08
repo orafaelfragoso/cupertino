@@ -14,6 +14,7 @@ mod jobs;
 mod list;
 mod places;
 mod progress;
+mod remote;
 mod search;
 mod sidebar;
 mod spring;
@@ -51,6 +52,7 @@ use zbus::zvariant::OwnedObjectPath;
 
 use crate::browser::{Activation, Browser};
 use crate::context_menu::{common_apps, AppChoice, Command as MenuCommand};
+use crate::instance::Service;
 use crate::menu_bar::{self, MenuAction, MenuState};
 use crate::menu_spec::{self, Background, Subject};
 use crate::name_edit::NameEdit;
@@ -96,6 +98,10 @@ pub struct Start {
     thumbnails: Option<Thumbnailer>,
     /// What the list words its dates relative to.
     clock: fn() -> SystemTime,
+    /// The session bus name the process serves, which later launches hand their requests to.
+    instance: Option<Service>,
+    /// The activation token the process was started with, which raises the first window.
+    activation: Option<String>,
 }
 
 impl Start {
@@ -140,6 +146,8 @@ impl Start {
             file_icons: None,
             thumbnails: None,
             clock: SystemTime::now,
+            instance: None,
+            activation: None,
         })
     }
 
@@ -207,6 +215,20 @@ impl Start {
     /// The list wording its dates ("Today at 09:41") relative to the time `clock` gives, in place of the system's.
     pub fn with_clock(self, clock: fn() -> SystemTime) -> Start {
         Start { clock, ..self }
+    }
+
+    /// The calls of later launches and of the desktop, taken from `instance` ([`crate::instance`]). Files gives its
+    /// name up as it exits.
+    pub fn with_instance(self, instance: Option<Service>) -> Start {
+        Start { instance, ..self }
+    }
+
+    /// The first window raised with `token`, the activation token Files was started with, once it is shown.
+    pub fn with_activation_token(self, token: Option<String>) -> Start {
+        Start {
+            activation: token,
+            ..self
+        }
     }
 }
 
@@ -287,6 +309,8 @@ struct Session {
     dragged: Vec<PathBuf>,
     /// What the list words its dates relative to.
     clock: fn() -> SystemTime,
+    /// The bus name later launches hand their requests to, until Files exits.
+    instance: Option<Service>,
 }
 
 /// One browser window.
@@ -372,6 +396,10 @@ pub enum Message {
     Window(u64, Event),
     /// A file operation, or the progress window.
     Job(JobEvent),
+    /// Calls of later launches or of the desktop are waiting ([`crate::instance`]).
+    Remote,
+    /// The window with this key is shown: raise it, with the activation token of the launch that asked for it.
+    Raise(WindowKey, Option<String>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -567,12 +595,20 @@ impl Application for Files {
                 thumbnails_woken,
                 dragged: Vec::new(),
                 clock: start.clock,
+                instance: start.instance,
             },
         };
+        let first = model.next_window;
         let mut commands = vec![
             model.add_window(start.browser, start.woken),
             woken(&model.session.places_watch.woken, Message::Places),
         ];
+        if let Some(token) = start.activation {
+            commands.push(remote::raise(window_key(first), Some(token)));
+        }
+        if let Some(instance) = &model.session.instance {
+            commands.push(woken(instance.woken(), Message::Remote));
+        }
         if model.session.volumes.is_some() {
             commands.push(woken(&model.session.media_woken, Message::Media));
         }
@@ -610,6 +646,10 @@ impl Model {
     fn handle(&mut self, message: Message) -> Vec<Command<Message>> {
         match message {
             Message::Job(event) => self.job_event(event),
+            Message::Remote => self.remote_calls(),
+            Message::Raise(key, token) => {
+                vec![Command::Window(key, WindowRequest::Activate(token))]
+            }
             Message::Media => self.follow_media(),
             Message::Places => {
                 self.session.follow_places();
@@ -640,6 +680,8 @@ impl Model {
             return None;
         }
         self.exiting = true;
+        // first, so a launch racing the exit is refused at once and starts a Files of its own
+        self.session.instance = None;
         self.session.notices.flush(EXIT_NOTICES);
         Some(Command::Exit)
     }
@@ -716,19 +758,29 @@ impl Model {
 
     /// Open a window on each of `folders`.
     fn open_windows(&mut self, folders: Vec<PathBuf>) -> Vec<Command<Message>> {
-        let mut commands = Vec::new();
-        for folder in folders {
-            let session = &self.session;
-            match open_browser(
-                folder.clone(),
-                session.types.clone(),
-                session.recents.clone(),
-            ) {
-                Ok((browser, woken)) => commands.push(self.add_window(browser, woken)),
-                Err(e) => session.failed(Action::Open, &[&folder], &e),
+        folders
+            .into_iter()
+            .filter_map(|folder| self.open_window(folder).map(|(_, wake)| wake))
+            .collect()
+    }
+
+    /// Open a window on `folder`: its id and what wakes it, or `None` (and a notice) when the folder cannot be read.
+    fn open_window(&mut self, folder: PathBuf) -> Option<(u64, Command<Message>)> {
+        let session = &self.session;
+        match open_browser(
+            folder.clone(),
+            session.types.clone(),
+            session.recents.clone(),
+        ) {
+            Ok((browser, woken)) => {
+                let id = self.next_window;
+                Some((id, self.add_window(browser, woken)))
+            }
+            Err(e) => {
+                session.failed(Action::Open, &[&folder], &e);
+                None
             }
         }
-        commands
     }
 
     /// Drag `grab`'s items out of window `id`, remembering them until the drag ends so the windows know their own items.

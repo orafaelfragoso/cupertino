@@ -379,18 +379,29 @@ mod bus {
         })?;
         // the delay is held before a sleep can be announced
         let mut delay = hold_sleep(&conn);
-        reader("system-sleep", sleeps, events.clone(), |message, events| {
-            let going_to_sleep: bool = message.body().deserialize()?;
-            send(
-                events,
-                if going_to_sleep {
-                    BusEvent::Sleeping
-                } else {
-                    BusEvent::Resumed
-                },
-            );
-            Ok(())
-        })?;
+        let c = conn.clone();
+        reader(
+            "system-sleep",
+            sleeps,
+            events.clone(),
+            move |message, events| {
+                // a peer may send this connection a signal of the same name: one not from logind covers nothing
+                if !sent_by(&c, message, LOGIND) {
+                    tracing::warn!(sender = ?message.header().sender(), "PrepareForSleep ignored: it did not come from logind");
+                    return Ok(());
+                }
+                let going_to_sleep: bool = message.body().deserialize()?;
+                send(
+                    events,
+                    if going_to_sleep {
+                        BusEvent::Sleeping
+                    } else {
+                        BusEvent::Resumed
+                    },
+                );
+                Ok(())
+            },
+        )?;
         std::thread::Builder::new()
             .name("power-requests".into())
             .spawn(move || {
@@ -436,6 +447,22 @@ mod bus {
                 None
             }
         }
+    }
+
+    /// Whether `message` came from the connection that owns `name` now. The bus delivers a signal sent to this connection
+    /// whatever its match rules say, and zbus does not check a sender given by a well-known name, so a signal any peer
+    /// could send is checked here. False when the bus cannot say who owns the name.
+    pub(super) fn sent_by(conn: &Connection, message: &zbus::Message, name: &str) -> bool {
+        let header = message.header();
+        let Some(sender) = header.sender() else {
+            return false;
+        };
+        let Ok(name) = zbus::names::BusName::try_from(name) else {
+            return false;
+        };
+        zbus::blocking::fdo::DBusProxy::new(conn)
+            .and_then(|bus| bus.get_name_owner(name).map_err(zbus::Error::from))
+            .is_ok_and(|owner| owner.as_str() == sender.as_str())
     }
 
     /// `BlockInhibited` is a colon-separated list of inhibitor kinds.
@@ -514,5 +541,54 @@ mod tests {
             "handle-idle is not idle"
         );
         assert!(!super::bus::names_idle(""));
+    }
+
+    #[test]
+    fn a_signal_is_taken_as_the_owner_s_only_when_the_owner_of_the_name_sent_it() {
+        use zbus::message::Type;
+        const OWNER: &str = "org.example.SleepOwner";
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        let owner = bus.blocking_builder().name(OWNER).unwrap().build().unwrap();
+        let impostor = bus.connect();
+        let watcher = bus.connect();
+        let rule = zbus::MatchRule::builder()
+            .msg_type(Type::Signal)
+            .sender(OWNER)
+            .unwrap()
+            .member("PrepareForSleep")
+            .unwrap()
+            .build();
+        let mut signals =
+            zbus::blocking::MessageIterator::for_match_rule(rule, &watcher, None).unwrap();
+        // a peer that does not own the name sends the signal straight to the watcher: the bus delivers it
+        impostor
+            .emit_signal(
+                watcher.unique_name().map(|n| n.to_owned()),
+                "/org/example",
+                "org.example.Manager",
+                "PrepareForSleep",
+                &(true,),
+            )
+            .unwrap();
+        owner
+            .emit_signal(
+                None::<&str>,
+                "/org/example",
+                "org.example.Manager",
+                "PrepareForSleep",
+                &(true,),
+            )
+            .unwrap();
+        let forged = signals.next().unwrap().unwrap();
+        assert_eq!(
+            forged.header().sender().map(|s| s.as_str()),
+            impostor.unique_name().map(|n| n.as_str()),
+            "the forged signal reaches the watcher"
+        );
+        assert!(!super::bus::sent_by(&watcher, &forged, OWNER));
+        let real = signals.next().unwrap().unwrap();
+        assert!(super::bus::sent_by(&watcher, &real, OWNER));
     }
 }

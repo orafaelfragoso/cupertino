@@ -347,3 +347,315 @@ fn an_application_stays_told_locked_when_the_lock_client_crashes() {
     h.wait_until("a new client to take the lock", |_| successor.locked());
     assert_eq!(observer.lock_events(), ["session_lock 0", "session_lock 1"]);
 }
+
+impl Harness {
+    /// Step the server for `time` of wall time.
+    fn run_for(&mut self, time: Duration) {
+        let end = Instant::now() + time;
+        while Instant::now() < end {
+            headless::step(
+                &mut self.state,
+                &mut self.event_loop,
+                Duration::from_millis(5),
+            )
+            .unwrap();
+        }
+    }
+
+    /// Press `keys` in order on the keyboard device and release them in reverse.
+    fn chord(&mut self, keys: &[u32]) {
+        use smithay::backend::input::KeyState;
+        use smithay::input::keyboard::Keycode;
+        for (state, keys) in [
+            (KeyState::Pressed, keys.to_vec()),
+            (KeyState::Released, keys.iter().rev().copied().collect()),
+        ] {
+            for key in keys {
+                self.state.key_from_device(Keycode::new(key + 8), state, 0);
+                self.run_for(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+/// The window ids of the mapped toplevels, in the order they were made.
+fn window_ids(h: &Harness) -> Vec<cupertino_wm::WindowId> {
+    h.state
+        .windows
+        .iter()
+        .filter(|e| e.mapped)
+        .map(|e| e.id)
+        .collect()
+}
+
+#[test]
+fn every_toplevel_is_deactivated_while_locked_and_the_active_one_is_active_again_after_the_unlock()
+{
+    let Some(mut h) = Harness::new() else { return };
+    let (first, _) = mapped_toplevel(&mut h);
+    let second = Client::toplevel(h.socket_path());
+    h.wait_until("the second toplevel to be mapped", |s| {
+        s.windows.iter().filter(|e| e.mapped).count() == 2
+    });
+    let ids = window_ids(&h);
+    // the first window is the active one when the lock begins
+    h.state
+        .command(cupertino_wm::Command::FocusWindow { window: ids[0] });
+    h.wait_until("the first toplevel to be active", |s| {
+        s.wm.key_window() == Some(ids[0])
+            && first.activations().last() == Some(&true)
+            && second.activations().last() == Some(&false)
+    });
+
+    let locker = Client::locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked", |_| locker.locked());
+    h.wait_until("every toplevel to be deactivated", |_| {
+        first.activations().last() == Some(&false) && second.activations().last() == Some(&false)
+    });
+    // a window that opens behind the lock is never activated, whatever focus it takes in the model
+    let third = Client::toplevel(h.socket_path());
+    h.wait_until("a toplevel to be mapped behind the lock", |s| {
+        s.windows.iter().filter(|e| e.mapped).count() == 3
+    });
+    h.run_for(Duration::from_millis(100));
+    assert!(
+        !third.activations().contains(&true),
+        "a window was activated behind the lock: {:?}",
+        third.activations()
+    );
+    assert!(!first.activations().last().unwrap() && !second.activations().last().unwrap());
+
+    locker.unlock();
+    h.wait_until("the session to be unlocked", |s| {
+        !s.session_lock.is_active()
+    });
+    h.wait_until("the first toplevel to be active again", |_| {
+        first.activations().last() == Some(&true)
+    });
+    assert_eq!(h.state.wm.key_window(), Some(ids[0]));
+    h.run_for(Duration::from_millis(50));
+    assert_eq!(second.activations().last(), Some(&false));
+    assert!(!third.activations().contains(&true));
+}
+
+/// A screen reader that only runs: its process stands for the session's reader.
+fn fake_reader(dir: &std::path::Path) -> PathBuf {
+    let script = dir.join("fake-reader");
+    std::fs::write(&script, "#!/bin/sh\nexec /usr/bin/sleep 300\n").unwrap();
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    script
+}
+
+#[test]
+fn at_the_lock_screen_super_alt_s_turns_the_reader_on_and_off_and_no_other_shortcut_acts() {
+    const KEY_SUPER: u32 = 125;
+    const KEY_LEFTALT: u32 = 56;
+    const KEY_LEFTCTRL: u32 = 29;
+    const KEY_LEFTSHIFT: u32 = 42;
+    const KEY_S: u32 = 31;
+    const KEY_TAB: u32 = 15;
+    const KEY_SPACE: u32 = 57;
+    const KEY_F: u32 = 33;
+    const KEY_M: u32 = 50;
+    const KEY_H: u32 = 35;
+    const KEY_Q: u32 = 16;
+    const KEY_W: u32 = 17;
+    const KEY_UP: u32 = 103;
+    const KEY_F3: u32 = 61;
+    const KEY_4: u32 = 5;
+    let Some(mut h) = Harness::new() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    h.state.session_reader.program = Some(fake_reader(dir.path()));
+    h.state
+        .use_accessibility_store(dir.path().join("accessibility.conf"))
+        .unwrap();
+    let (_toplevel, _) = mapped_toplevel(&mut h);
+    let window = h.state.wm.key_window().unwrap();
+    let locker = Client::locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked", |_| locker.locked());
+    h.wait_until("the lock surface to take the keyboard", |s| {
+        s.seat
+            .get_keyboard()
+            .unwrap()
+            .current_focus()
+            .is_some_and(|f| s.is_lock_surface(&f))
+    });
+
+    h.chord(&[KEY_SUPER, KEY_LEFTALT, KEY_S]);
+    let pid = h
+        .state
+        .session_reader
+        .pid()
+        .expect("Super+Alt+S starts the reader at the lock screen");
+    assert!(h.state.accessibility.settings.screen_reader);
+
+    // the desktop's and the applications' shortcuts: each key goes to the lock screen, none acts
+    let shortcuts: [&[u32]; 10] = [
+        &[KEY_SUPER, KEY_TAB],
+        &[KEY_SUPER, KEY_SPACE],
+        &[KEY_SUPER, KEY_LEFTCTRL, KEY_F],
+        &[KEY_SUPER, KEY_LEFTCTRL, KEY_UP],
+        &[KEY_SUPER, KEY_M],
+        &[KEY_SUPER, KEY_H],
+        &[KEY_SUPER, KEY_Q],
+        &[KEY_SUPER, KEY_W],
+        &[KEY_F3],
+        &[KEY_SUPER, KEY_LEFTSHIFT, KEY_4],
+    ];
+    for chord in shortcuts {
+        h.chord(chord);
+    }
+    h.run_for(Duration::from_millis(100));
+    let pressed: Vec<u32> = locker
+        .keys()
+        .into_iter()
+        .filter(|(_, down)| *down)
+        .map(|(key, _)| key)
+        .collect();
+    for chord in shortcuts {
+        let key = *chord.last().unwrap();
+        assert!(
+            pressed.contains(&key),
+            "{chord:?} did not reach the lock screen: {pressed:?}"
+        );
+    }
+    assert!(
+        !pressed.contains(&KEY_S),
+        "the screen reader's chord reached the lock screen"
+    );
+    let w = h.state.wm.window(window).unwrap();
+    assert_eq!(w.state(), cupertino_wm::LifecycleState::Normal);
+    assert!(!h.state.wm.app(w.app).unwrap().hidden);
+    assert!(!h.state.shell.overview_open());
+    assert!(h.state.session_lock.is_active());
+
+    h.chord(&[KEY_SUPER, KEY_LEFTALT, KEY_S]);
+    assert_eq!(
+        h.state.session_reader.pid(),
+        None,
+        "Super+Alt+S stops the reader at the lock screen"
+    );
+    assert!(!h.state.accessibility.settings.screen_reader);
+    let _ = pid;
+}
+
+/// Give the session a lock screen: a login process with the session lock role (never started here; the tests' lock
+/// clients stand for it).
+fn with_lock_screen(h: &mut Harness) {
+    h.state
+        .config
+        .shell_processes
+        .push(cupertino_server::config::ShellProcess {
+            name: "login".into(),
+            command: vec!["/usr/bin/false".into()],
+            roles: vec![cupertino_server::authorization::ShellRole::SessionLock],
+        });
+}
+
+#[test]
+fn without_a_lock_screen_a_sleep_leaves_the_session_as_it_is() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_toplevel, _) = mapped_toplevel(&mut h);
+    // a nested run, or the login screen: nothing would ever take a covered session over
+    h.state.system_going_to_sleep();
+    assert!(
+        !h.state.session_lock.holds_sleep(),
+        "the sleep goes on at once"
+    );
+    assert!(!h.state.session_lock.is_active());
+    assert_eq!(h.center_pixel("awake")[..3], [0, 0, 255][..]);
+    with_lock_screen(&mut h);
+    h.state.login_screen = true;
+    h.state.system_going_to_sleep();
+    assert!(!h.state.session_lock.holds_sleep());
+    assert!(!h.state.session_lock.is_active());
+}
+
+#[test]
+fn a_session_the_system_sleeps_on_before_it_is_locked_is_covered_until_a_lock_client_takes_it_over()
+{
+    let Some(mut h) = Harness::new() else { return };
+    with_lock_screen(&mut h);
+    let (toplevel, center) = mapped_toplevel(&mut h);
+    assert_eq!(h.center_pixel("awake")[..3], [0, 0, 255][..]);
+
+    // the lock client hung or crashed before it asked for the lock
+    h.state.system_going_to_sleep();
+    assert!(h.state.session_lock.is_active());
+    assert!(
+        h.state.session_lock.holds_sleep(),
+        "the sleep waits for the cover"
+    );
+    h.wait_until("every output to show the cover", |s| {
+        !s.session_lock.holds_sleep()
+    });
+    assert!(h.state.sleep_covered());
+    assert_eq!(
+        h.center_pixel("covered")[..3],
+        [0, 0, 0][..],
+        "the session is covered"
+    );
+    assert!(
+        h.keyboard_focus().is_none(),
+        "no keyboard focus under the cover"
+    );
+    assert!(
+        h.surface_under(center).is_none(),
+        "the pointer reaches nothing under the cover"
+    );
+    h.wait_until("the toplevel to be deactivated", |_| {
+        toplevel.activations().last() == Some(&false)
+    });
+
+    // the next lock client (a login process that came back, or one that was slow) takes the covered session over
+    let locker = Client::locker(common::session_agent(&h.state));
+    h.wait_until("a lock client to take the lock", |_| locker.locked());
+    assert_eq!(h.center_pixel("locked")[..3], [0, 255, 0][..]);
+    locker.unlock();
+    h.wait_until("the session to be unlocked", |s| {
+        !s.session_lock.is_active()
+    });
+    assert_eq!(h.center_pixel("unlocked")[..3], [0, 0, 255][..]);
+    h.wait_until("the toplevel to be active again", |_| {
+        toplevel.activations().last() == Some(&true)
+    });
+}
+
+#[test]
+fn a_lock_client_that_hangs_before_presenting_and_then_dies_leaves_a_sleeping_session_covered() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_toplevel, center) = mapped_toplevel(&mut h);
+    // the model clock stands still: the lock stays pending however long the client takes
+    h.state.fixed_time = Some(h.state.now());
+
+    // without a sleep, a lock client that goes before it confirms leaves the session as it was
+    let first = Client::hung_locker(common::session_agent(&h.state));
+    h.wait_until("the lock to be pending", |s| s.session_lock.is_active());
+    first.kill();
+    h.wait_until("the session to come back", |s| !s.session_lock.is_active());
+
+    let hung = Client::hung_locker(common::session_agent(&h.state));
+    h.wait_until("the lock to be pending", |s| s.session_lock.is_active());
+    h.state.system_going_to_sleep();
+    h.wait_until("every output to show the cover", |s| {
+        !s.session_lock.holds_sleep()
+    });
+    assert!(!hung.locked(), "the lock is still pending");
+    assert_eq!(h.center_pixel("pending")[..3], [0, 0, 0][..]);
+
+    hung.kill();
+    h.run_for(Duration::from_millis(300));
+    assert!(
+        h.state.session_lock.is_active(),
+        "the session opened when the lock client died after the system slept"
+    );
+    assert_eq!(
+        h.center_pixel("orphaned")[..3],
+        [0, 0, 0][..],
+        "the session shows after the wake"
+    );
+    assert!(h.surface_under(center).is_none());
+
+    let successor = Client::locker(common::session_agent(&h.state));
+    h.wait_until("a new lock client to take the lock", |_| successor.locked());
+}

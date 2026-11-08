@@ -48,6 +48,15 @@ impl Backend {
         }
     }
 
+    /// Whether no frame reaches the screens now: on DRM the session is paused or the display sleeps (every CRTC off).
+    pub fn shows_nothing(&self) -> bool {
+        match self {
+            #[cfg(feature = "udev")]
+            Backend::Udev(u) => u.shows_nothing(),
+            _ => false,
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             #[cfg(feature = "winit")]
@@ -57,6 +66,11 @@ impl Backend {
             Backend::Udev(_) => "udev",
         }
     }
+}
+
+/// Whether no frame of `state` reaches the screens now ([`Backend::shows_nothing`]).
+pub fn shows_nothing(state: &Cupertino) -> bool {
+    state.backend.as_ref().is_some_and(Backend::shows_nothing)
 }
 
 /// A GLES renderer on `context` without GL fences.

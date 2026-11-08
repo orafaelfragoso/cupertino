@@ -1915,7 +1915,7 @@ impl Cupertino {
                     size,
                     states,
                 } => {
-                    let activated = self.wm.key_window() == Some(window);
+                    let activated = self.activated_window() == Some(window);
                     let now = self.now();
                     let (pos, animating) = self
                         .wm
@@ -2031,9 +2031,17 @@ impl Cupertino {
         }
     }
 
-    /// Make every toplevel's `activated` state match the model's key window.
+    /// The toplevel whose `activated` state is on: the model's key window, and none while the session is locked or about to
+    /// be, so no application behaves as the one in front behind the lock screen.
+    pub fn activated_window(&self) -> Option<WindowId> {
+        self.wm
+            .key_window()
+            .filter(|_| !self.session_lock.is_active())
+    }
+
+    /// Make every toplevel's `activated` state match [`Self::activated_window`].
     pub fn refresh_activation(&mut self) {
-        let key = self.wm.key_window();
+        let key = self.activated_window();
         for e in &self.windows {
             e.set_activated(Some(e.id) == key);
         }

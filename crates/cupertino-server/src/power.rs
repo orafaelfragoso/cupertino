@@ -7,6 +7,10 @@
 //! a system sleep (`PrepareForSleep(false)`, which counts as input). Without a system bus or a power daemon the mains
 //! timers apply, and the server says so once.
 //!
+//! The server holds a logind `sleep` delay inhibitor of its own. At `PrepareForSleep(true)` it covers the session
+//! (`session_lock.rs`, [`Cupertino::system_going_to_sleep`]) and releases the inhibitor once every output shows a covered
+//! frame, so what the screens show when the system wakes is never the session; it takes a new one after the wake.
+//!
 //! What a sleeping display looks like depends on the backend: on DRM every CRTC is switched off (`DrmCompositor::clear`,
 //! the DPMS-off path) and nothing is rendered until input; the other backends draw an opaque black overlay and keep
 //! taking input. The dim is a black overlay whose alpha shows the dim factor (`display_power::overlay_alpha`).
@@ -72,6 +76,8 @@ pub enum BusEvent {
     NoPowerSource(String),
     /// logind's `BlockInhibited` names `idle` (or no longer does).
     IdleBlocked(bool),
+    /// The system is about to sleep (`PrepareForSleep(true)`).
+    Sleeping,
     /// The system woke from sleep.
     Resumed,
     /// The watcher stopped; the facts it reported stay as they were.
@@ -82,6 +88,10 @@ pub enum BusEvent {
 #[derive(Debug)]
 enum BusRequest {
     Suspend,
+    /// Take the sleep delay inhibitor (after a wake); the watcher takes one as it starts.
+    HoldSleep,
+    /// Let the sleep go on: drop the delay inhibitor.
+    ReleaseSleep,
 }
 
 impl Cupertino {
@@ -196,14 +206,34 @@ impl Cupertino {
                 tracing::info!(blocked, "logind idle inhibitor");
                 self.power.idle_blocked = blocked;
             }
+            BusEvent::Sleeping => {
+                tracing::info!("the system is about to sleep");
+                self.system_going_to_sleep();
+            }
             BusEvent::Resumed => {
                 tracing::info!("the system woke from sleep");
+                self.power_request(BusRequest::HoldSleep);
                 // a display plugged or swapped while the system slept sends no uevent when the kernel did not see it
                 #[cfg(feature = "udev")]
                 crate::backend::udev::scan_connectors(self);
                 self.input_activity();
             }
             BusEvent::Stopped(reason) => tracing::warn!(reason, "the system bus watcher stopped"),
+        }
+    }
+}
+
+impl Cupertino {
+    /// Let a system sleep the server held back go on (the session is covered, `session_lock.rs`).
+    pub(crate) fn release_sleep(&mut self) {
+        self.power_request(BusRequest::ReleaseSleep);
+    }
+
+    fn power_request(&mut self, request: BusRequest) {
+        if let Some(bus) = &self.power.bus {
+            if bus.send(request).is_err() {
+                tracing::warn!("the system bus watcher has stopped");
+            }
         }
     }
 }
@@ -347,11 +377,18 @@ mod bus {
             }
             Ok(())
         })?;
+        // the delay is held before a sleep can be announced
+        let mut delay = hold_sleep(&conn);
         reader("system-sleep", sleeps, events.clone(), |message, events| {
             let going_to_sleep: bool = message.body().deserialize()?;
-            if !going_to_sleep {
-                send(events, BusEvent::Resumed);
-            }
+            send(
+                events,
+                if going_to_sleep {
+                    BusEvent::Sleeping
+                } else {
+                    BusEvent::Resumed
+                },
+            );
             Ok(())
         })?;
         std::thread::Builder::new()
@@ -364,11 +401,41 @@ mod bus {
                                 tracing::warn!(error = %e, "logind refused to put the system to sleep");
                             }
                         }
+                        BusRequest::HoldSleep => {
+                            if delay.is_none() {
+                                delay = hold_sleep(&conn);
+                            }
+                        }
+                        BusRequest::ReleaseSleep => drop(delay.take()),
                     }
                 }
             })
             .map_err(|e| zbus::Error::Failure(format!("starting the power request thread: {e}")))?;
         Ok(())
+    }
+
+    /// A logind `sleep` delay inhibitor: the system sleeps once it is dropped (or logind's delay limit passed). `None`
+    /// when logind refuses; the session is then covered as the system sleeps, without waiting for the frame.
+    fn hold_sleep(conn: &Connection) -> Option<zbus::zvariant::OwnedFd> {
+        let reply = conn.call_method(
+            Some(LOGIND),
+            LOGIND_PATH,
+            Some(LOGIND_MANAGER),
+            "Inhibit",
+            &(
+                "sleep",
+                "cupertino",
+                "Cover the screen before the system sleeps",
+                "delay",
+            ),
+        );
+        match reply.and_then(|r| r.body().deserialize::<zbus::zvariant::OwnedFd>()) {
+            Ok(fd) => Some(fd),
+            Err(e) => {
+                tracing::warn!(error = %e, "logind gave no sleep delay: the screen may still show the session as the system sleeps");
+                None
+            }
+        }
     }
 
     /// `BlockInhibited` is a colon-separated list of inhibitor kinds.

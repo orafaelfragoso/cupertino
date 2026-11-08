@@ -134,6 +134,10 @@ impl Cupertino {
 
     /// A key from an input device: whether it is Super+Alt+S (or the release of its key), which the compositor takes. At
     /// the login screen a press asks the worker to toggle the reader; in a person's session it toggles the session's.
+    ///
+    /// The chord acts while the session is locked as well, on purpose: it is an accessibility shortcut a person may need
+    /// before they can unlock, and it starts or stops the reader only. Every other global shortcut is off while the
+    /// session is locked (`KeyRouter::key`).
     pub fn screen_reader_key(&mut self, code: u32, sym: u32, mods: &Mods, pressed: bool) -> bool {
         let Some(reader) = self.screen_reader.as_mut() else {
             return self.session_reader_key(code, sym, mods, pressed);

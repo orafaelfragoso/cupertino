@@ -107,6 +107,21 @@ pub fn failure(action: Action, items: &[&Path], error: &dyn Display) -> Notice {
     }
 }
 
+/// The notice that a file operation ended, as `summary` ("Copied 3 items to “Documents”"), with the reason of its
+/// first failure, if any, as its body.
+pub fn finished(summary: &str, reason: Option<&str>) -> Notice {
+    Notice {
+        summary: shown(summary),
+        body: escape(&shown(reason.unwrap_or_default())),
+        icon: "",
+    }
+}
+
+/// `error` as a person reads it in a window: a sentence without the system's error number, shown as text.
+pub fn explained(error: &dyn Display) -> String {
+    shown(&reason(error))
+}
+
 /// The notice for `folder`, a folder of the window's history such as "the previous folder", failing to open.
 pub fn unopened(folder: &str, error: &dyn Display) -> Notice {
     Notice {
@@ -169,10 +184,17 @@ fn sentence(text: &str) -> String {
     out
 }
 
+/// What the notices' thread is asked.
+enum Post {
+    Notice(Notice),
+    /// Answer once every notice before this one was posted.
+    Flush(mpsc::SyncSender<()>),
+}
+
 /// The notices of one process, posted in order on a thread of their own.
 #[derive(Clone)]
 pub struct Notices {
-    sender: Option<Sender<Notice>>,
+    sender: Option<Sender<Post>>,
 }
 
 impl Notices {
@@ -181,13 +203,20 @@ impl Notices {
         let Some(session) = session else {
             return Notices { sender: None };
         };
-        let (sender, notices) = mpsc::channel::<Notice>();
+        let (sender, posts) = mpsc::channel::<Post>();
         let spawned = std::thread::Builder::new()
             .name("notices".into())
             .spawn(move || {
-                for notice in notices {
-                    if let Err(e) = notify(&session, &notice) {
-                        log(&notice, &e);
+                for post in posts {
+                    match post {
+                        Post::Notice(notice) => {
+                            if let Err(e) = notify(&session, &notice) {
+                                log(&notice, &e);
+                            }
+                        }
+                        Post::Flush(done) => {
+                            let _ = done.send(());
+                        }
                     }
                 }
             });
@@ -205,11 +234,24 @@ impl Notices {
     pub fn post(&self, notice: Notice) {
         match &self.sender {
             Some(sender) => {
-                if let Err(mpsc::SendError(notice)) = sender.send(notice) {
+                if let Err(mpsc::SendError(Post::Notice(notice))) =
+                    sender.send(Post::Notice(notice))
+                {
                     log(&notice, &"the notice thread ended");
                 }
             }
             None => log(&notice, &"no session bus"),
+        }
+    }
+
+    /// Wait up to `timeout` until every notice posted so far has been sent: the process is about to exit.
+    pub fn flush(&self, timeout: std::time::Duration) {
+        let Some(sender) = &self.sender else {
+            return;
+        };
+        let (done, sent) = mpsc::sync_channel(1);
+        if sender.send(Post::Flush(done)).is_ok() {
+            let _ = sent.recv_timeout(timeout);
         }
     }
 }

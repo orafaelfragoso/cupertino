@@ -65,15 +65,21 @@ pub fn new_folder(dir: &Path) -> io::Result<PathBuf> {
 
 /// Copy each of `paths` next to itself, with the first free `name copy` name (the design's Duplicate).
 pub fn duplicate(paths: &[PathBuf]) -> Vec<io::Result<PathBuf>> {
-    paths
+    duplicate_with(paths, &Cancel::default(), &mut |_| {})
+}
+
+/// [`duplicate`] that reports its [`Progress`] over all of `paths` to `progress` and stops at `cancel`, as
+/// [`transfer`] does.
+pub fn duplicate_with(
+    paths: &[PathBuf],
+    cancel: &Cancel,
+    progress: &mut dyn FnMut(&Progress),
+) -> Vec<io::Result<PathBuf>> {
+    let items: Vec<(&Path, Option<&Path>)> = paths
         .iter()
-        .map(|path| {
-            let parent = path
-                .parent()
-                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-            drop_into(std::slice::from_ref(path), parent, DropAction::Copy).remove(0)
-        })
-        .collect()
+        .map(|path| (path.as_path(), path.parent()))
+        .collect();
+    transfer_each(&items, DropAction::Copy, cancel, progress)
 }
 
 /// Make a symbolic link to `path` named `name alias` (then `name alias 2` …) in its folder and return it. The link
@@ -179,6 +185,11 @@ impl std::error::Error for Stopped {}
 
 fn cancelled() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, Stopped)
+}
+
+/// The error of an item a stopped transfer did not reach, which [`is_cancelled`] tells.
+pub fn stopped() -> io::Error {
+    cancelled()
 }
 
 /// Whether `error` is a transfer's stop rather than a failure: it is not reported.
@@ -437,14 +448,27 @@ pub fn transfer(
     cancel: &Cancel,
     progress: &mut dyn FnMut(&Progress),
 ) -> Vec<io::Result<PathBuf>> {
-    let weights: Vec<u64> = sources.iter().map(|s| weight(s, cancel)).collect();
+    let items: Vec<(&Path, Option<&Path>)> =
+        sources.iter().map(|s| (s.as_path(), Some(dest))).collect();
+    transfer_each(&items, action, cancel, progress)
+}
+
+/// Move or copy each item into its folder (`None`: an item with no folder, which fails), as [`transfer`] does, with
+/// one [`Progress`] over them all.
+fn transfer_each(
+    items: &[(&Path, Option<&Path>)],
+    action: DropAction,
+    cancel: &Cancel,
+    progress: &mut dyn FnMut(&Progress),
+) -> Vec<io::Result<PathBuf>> {
+    let weights: Vec<u64> = items.iter().map(|(s, _)| weight(s, cancel)).collect();
     let mut done = Progress {
         total_bytes: weights.iter().sum(),
-        total_items: sources.len(),
+        total_items: items.len(),
         ..Progress::default()
     };
-    let mut results = Vec::with_capacity(sources.len());
-    for (source, weight) in sources.iter().zip(weights) {
+    let mut results = Vec::with_capacity(items.len());
+    for (&(source, dest), weight) in items.iter().zip(weights) {
         if cancel.is_cancelled() {
             results.push(Err(cancelled()));
             continue;
@@ -462,7 +486,10 @@ pub fn transfer(
                 cancel,
                 advance: &mut advance,
             };
-            drop_one(source, dest, action, &mut copying)
+            match dest {
+                Some(dest) => drop_one(source, dest, action, &mut copying),
+                None => Err(io::Error::from(io::ErrorKind::InvalidInput)),
+            }
         };
         done.bytes = before + weight;
         done.items += 1;

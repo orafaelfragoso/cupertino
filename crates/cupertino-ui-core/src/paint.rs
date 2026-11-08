@@ -247,9 +247,10 @@ impl Painter {
                     WindowBackground::None => false,
                 })
             .then_some(input.background);
-            // Focus, the window's active state and its background change how a node paints, though nothing in the
-            // node changed.
-            let source = node.paint_revision << 3
+            // Focus, the window's active state, its background and whether the window system shows that background
+            // change how a node paints, though nothing in the node changed.
+            let source = node.paint_revision << 4
+                | u64::from(input.backdrop) << 3
                 | u64::from(input.window_active) << 2
                 | u64::from(focused) << 1
                 | u64::from(focused && input.focus_visible);
@@ -329,6 +330,7 @@ impl Painter {
                         focused,
                         focus_visible: focused && input.focus_visible,
                         window_active: input.window_active,
+                        backdrop: input.backdrop,
                         now: input.now,
                         ops: &mut ops,
                         group: &mut group,

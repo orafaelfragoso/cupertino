@@ -88,7 +88,10 @@ fn the_packaged_conf_falls_back_for_the_rest() {
             [cupertino(), "gtk"]
         );
     }
-    assert_eq!(keys["org.freedesktop.impl.portal.Secret"], ["gnome-keyring"]);
+    assert_eq!(
+        keys["org.freedesktop.impl.portal.Secret"],
+        ["gnome-keyring"]
+    );
     // no interface is sent here that this backend does not serve
     let served = served();
     for (key, backends) in &keys {

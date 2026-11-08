@@ -40,9 +40,9 @@ const SEPARATOR_INSET: f64 = 10.0;
 /// A row's least height, and with an icon tile.
 pub const FORM_ROW_HEIGHT: f64 = 36.5;
 pub const FORM_TILE_ROW_HEIGHT: f64 = 48.0;
-/// A row's padding: above and below its content (a switch's row is then the least height), at its edges, and at the
-/// leading edge before a tile.
-const ROW_PADDING_Y: f64 = 7.0;
+/// A row's padding: above and below its content (a control padded out to the least pointer target, as a pop-up
+/// button is, still leaves the row at the least height), at its edges, and at the leading edge before a tile.
+const ROW_PADDING_Y: f64 = 6.0;
 const ROW_PADDING: f64 = 10.0;
 const TILE_ROW_LEADING: f64 = 12.0;
 /// The tile of a row, and the space between it and the content.

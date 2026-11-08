@@ -5,8 +5,8 @@ mod support;
 
 use cupertino_geometry::{Insets, Point, Size};
 use cupertino_ui_controls::{
-    FormGroup, FormHeader, FormRow, IconTile, NavigationRow, SearchField, Stack, Text, TextChange,
-    TextField, TextRole, TileColor, TileSidebar, TileSidebarItem, FORM_ROW_HEIGHT,
+    FormGroup, FormHeader, FormRow, IconTile, NavigationRow, PopUpButton, SearchField, Stack, Text,
+    TextChange, TextField, TextRole, TileColor, TileSidebar, TileSidebarItem, Toggle, FORM_ROW_HEIGHT,
     FORM_TILE_ROW_HEIGHT, TILE_SIDEBAR_ROW_HEIGHT,
 };
 use cupertino_ui_core::{
@@ -159,6 +159,28 @@ impl Application for Settings {
                             content: label("Tiled"),
                         })
                         .key("tiled"),
+                        Element::from(FormRow {
+                            tile: None,
+                            content: Element::new(Toggle {
+                                label: "Switch".into(),
+                                on: true,
+                                enabled: false,
+                                on_toggle: None,
+                            }),
+                        })
+                        .key("switch"),
+                        Element::from(FormRow {
+                            tile: None,
+                            content: Element::new(PopUpButton {
+                                label: "Pop-up".into(),
+                                options: vec!["When Unlocked".into()],
+                                selected: 0,
+                                open: false,
+                                enabled: false,
+                                on_open: None,
+                            }),
+                        })
+                        .key("popup"),
                         Element::new(NavigationRow {
                             label: "About".into(),
                             tile: Some(tile(24.0)),
@@ -308,14 +330,17 @@ fn the_search_field_edits_and_reads_as_a_text_field_at_a_search_fields_height() 
 }
 
 #[test]
-fn form_rows_are_at_least_a_rows_height_and_taller_with_a_tile() {
+fn form_rows_are_a_rows_height_with_any_regular_control_and_taller_with_a_tile() {
     let h = harness();
-    assert!(h.rect("plain").height() >= FORM_ROW_HEIGHT);
-    assert!(h.rect("tiled").height() >= FORM_TILE_ROW_HEIGHT);
+    assert_eq!(h.rect("plain").height(), FORM_ROW_HEIGHT);
+    assert_eq!(h.rect("tiled").height(), FORM_TILE_ROW_HEIGHT);
     assert_eq!(h.rect("open").height(), FORM_TILE_ROW_HEIGHT);
     assert_eq!(h.rect("closed").height(), FORM_ROW_HEIGHT);
+    // a switch, and a pop-up button padded out to the least pointer target, keep their row at the least height
+    assert_eq!(h.rect("switch").height(), FORM_ROW_HEIGHT);
+    assert_eq!(h.rect("popup").height(), FORM_ROW_HEIGHT);
     let page = h.rect("header");
-    for key in ["plain", "tiled", "open", "closed"] {
+    for key in ["plain", "tiled", "switch", "popup", "open", "closed"] {
         let r = h.rect(key);
         assert_eq!(
             (r.min_x(), r.width()),

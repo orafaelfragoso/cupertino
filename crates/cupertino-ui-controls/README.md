@@ -132,6 +132,14 @@ from the application's model and reports changes as messages.
   lightness. The empty part of the track is `SliderTrack` (a panel level slider's is `PanelTrack`), 3:1 or more
   against the surface under it in every palette; the filled part is the selected `ControlFill` (the accent).
 
+- **File preview.** `FilePreview` draws a file without opening it (`PreviewContent`): a picture whole and as large as
+  fits, the start of a text file in a fixed-pitch face (`text_family`, the theme's face without one) on the text
+  background, scrolled by the application's `ScrollState`, or the file's icon. `PreviewStyle::Pane` is the column a
+  file browser puts after its lists: the content in a 200 pt box, then the name, the summary (kind and size) and the
+  labelled details, clipped above an optional footer pinned to the bottom edge behind a hairline. `PreviewStyle::Window`
+  fills a preview window with the content alone, a file shown by its icon keeping its name, summary and details beside
+  it. It reads as a group named "Preview of <name>"; a picture reads by the file's name and text by its text.
+
 ## Not yet
 
 Text shaping and glyph rasterization are not in `cupertino-ui-text` yet, so `Text`, `Icon`, the label of a button

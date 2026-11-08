@@ -1498,6 +1498,7 @@ dependencies = [
  "cupertino-decorations",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-peer",
  "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-test-bus",

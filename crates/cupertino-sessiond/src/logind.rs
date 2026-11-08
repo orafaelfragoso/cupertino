@@ -7,7 +7,7 @@ use std::fmt;
 
 use cupertino_login_ipc::PowerAction;
 use zbus::blocking::proxy::Builder;
-use zbus::blocking::{Connection, MessageIterator, Proxy};
+use zbus::blocking::{Connection, Proxy};
 use zbus::message::Type;
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
@@ -87,15 +87,14 @@ fn names_active_session(changed: &HashMap<String, OwnedValue>, invalidated: &[St
     changed.contains_key("ActiveSession") || invalidated.iter().any(|name| name == "ActiveSession")
 }
 
-/// Whether a signal read from a stream comes from logind; a read error is passed on, to end the stream.
-fn from_logind(connection: &Connection, message: &zbus::Result<zbus::Message>) -> bool {
-    match message {
-        Ok(message) if !cupertino_peer::signal::sent_by_owner(connection, message, LOGIND) => {
-            eprintln!("cupertino-sessiond: ignored a logind signal that logind did not send");
-            false
-        }
-        _ => true,
-    }
+/// The signals matching `rule` that logind sent; any other is logged and dropped.
+fn from_logind(
+    connection: &Connection,
+    rule: MatchRule<'_>,
+) -> zbus::Result<cupertino_peer::signal::FromOwner> {
+    cupertino_peer::signal::from_owner(connection, LOGIND, rule, |_| {
+        eprintln!("cupertino-sessiond: ignored a logind signal that logind did not send")
+    })
 }
 
 fn spawn(name: &str, run: impl FnOnce() + Send + 'static) -> zbus::Result<()> {
@@ -198,16 +197,10 @@ impl Logind {
             .and_then(|b| b.arg(0, SEAT_INTERFACE))
             .map_err(fail)?
             .build();
-        let removed =
-            MessageIterator::for_match_rule(removed, &self.connection, None).map_err(fail)?;
-        let changed =
-            MessageIterator::for_match_rule(changed, &self.connection, None).map_err(fail)?;
+        let removed = from_logind(&self.connection, removed).map_err(fail)?;
+        let changed = from_logind(&self.connection, changed).map_err(fail)?;
         let notify = std::sync::Arc::new(notify);
         let on_removed = notify.clone();
-        let connection = self.connection.clone();
-        let removed = removed.filter(move |message| from_logind(&connection, message));
-        let connection = self.connection.clone();
-        let changed = changed.filter(move |message| from_logind(&connection, message));
         spawn("logind-sessions", move || {
             for message in removed {
                 match message.and_then(|m| m.body().deserialize::<(String, OwnedObjectPath)>()) {

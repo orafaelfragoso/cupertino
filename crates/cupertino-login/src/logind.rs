@@ -9,10 +9,10 @@
 //! and `PrepareForSleep` is checked against the owner of logind's name when it arrives, since a rule naming the well-known
 //! name keeps out nothing that is sent to this process directly.
 
-use cupertino_peer::signal::sent_by_owner;
+use cupertino_peer::signal::from_owner;
 use std::fmt;
 use std::sync::Arc;
-use zbus::blocking::{Connection, MessageIterator};
+use zbus::blocking::Connection;
 use zbus::message::Type;
 use zbus::zvariant::OwnedFd;
 use zbus::{MatchRule, Message};
@@ -271,16 +271,10 @@ impl Logind {
             .and_then(|b| b.member("PrepareForSleep"))
             .map_err(Error::bus(what))?
             .build();
-        let connection = self.connection.clone();
-        let sleep_signals = MessageIterator::for_match_rule(sleep_rule, &self.connection, None)
-            .map_err(Error::bus(what))?
-            .filter(move |message| match message {
-                Ok(message) if !sent_by_owner(&connection, message, LOGIND) => {
-                    eprintln!("cupertino-login: a PrepareForSleep not sent by logind was ignored");
-                    false
-                }
-                _ => true,
-            });
+        let sleep_signals = from_owner(&self.connection, LOGIND, sleep_rule, |_| {
+            eprintln!("cupertino-login: a PrepareForSleep not sent by logind was ignored")
+        })
+        .map_err(Error::bus(what))?;
         spawn(session_signals, Arc::clone(&notify), decode_lock)?;
         spawn(sleep_signals, notify, decode_sleep)
     }

@@ -1,14 +1,14 @@
 //! The logind session the agent registers for, and whether it is the active one.
 //!
 //! `Active` is read from logind and followed through `PropertiesChanged` signals that only the connection owning
-//! logind's name may send, checked on each message ([`sent_by_owner`]): a forged `Active` would dismiss the prompt, or show
+//! logind's name may send ([`from_owner`]): a forged `Active` would dismiss the prompt, or show
 //! it while the session is in the background. The proxy keeps no cache: `Active` is read from logind when asked.
 
 use std::collections::HashMap;
 
-use cupertino_polkit_agent::agent::sent_by_owner;
+use cupertino_peer::signal::from_owner;
 use zbus::blocking::proxy::Builder;
-use zbus::blocking::{Connection, MessageIterator, Proxy};
+use zbus::blocking::{Connection, Proxy};
 use zbus::message::Type;
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
@@ -78,19 +78,15 @@ impl Session {
             .member("PropertiesChanged")?
             .arg(0, SESSION)?
             .build();
-        let changes = MessageIterator::for_match_rule(rule, &connection, None)?;
+        let changes = from_owner(&connection, LOGIND, rule, |_| {
+            eprintln!("cupertino-polkit-agent: ignored a session change that logind did not send")
+        })?;
         std::thread::Builder::new()
             .name("logind-active".to_owned())
             .spawn(move || {
                 for change in changes {
                     let change = match change {
-                        Ok(change) if sent_by_owner(&connection, &change, LOGIND) => change,
-                        Ok(_) => {
-                            eprintln!(
-                                "cupertino-polkit-agent: ignored a session change that logind did not send"
-                            );
-                            continue;
-                        }
+                        Ok(change) => change,
                         Err(error) => {
                             return changed(Err(format!("reading the session's Active: {error}")))
                         }

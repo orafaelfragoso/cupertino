@@ -24,6 +24,7 @@ cupertino-assets = { path = "../cupertino-assets" }
 cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-icons = { path = "../cupertino-icons" }
+cupertino-peer = { path = "../cupertino-peer" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-theme = { path = "../cupertino-theme" }

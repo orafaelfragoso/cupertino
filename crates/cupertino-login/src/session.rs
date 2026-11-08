@@ -2,8 +2,8 @@
 //! and the `ApplicationQuit` signal that [`crate::logout`] times. An `ApplicationQuit` counts only from the server, the
 //! owner of the name when it arrives: another program could otherwise hurry the log out along.
 
-use cupertino_peer::signal::sent_by_owner;
-use zbus::blocking::{Connection, MessageIterator};
+use cupertino_peer::signal::from_owner;
+use zbus::blocking::Connection;
 use zbus::message::Type;
 use zbus::MatchRule;
 
@@ -52,21 +52,13 @@ pub fn watch_quit(
         .member("ApplicationQuit")?
         .path(OBJECT_PATH)?
         .build();
-    let messages = MessageIterator::for_match_rule(rule, session, None)?;
-    let connection = session.clone();
+    let messages = from_owner(session, BUS_NAME, rule, |_| {
+        eprintln!("cupertino-login: an ApplicationQuit not sent by the server was ignored")
+    })?;
     std::thread::Builder::new()
         .name("session-quit".into())
         .spawn(move || {
             for message in messages {
-                if message
-                    .as_ref()
-                    .is_ok_and(|m| !sent_by_owner(&connection, m, BUS_NAME))
-                {
-                    eprintln!(
-                        "cupertino-login: an ApplicationQuit not sent by the server was ignored"
-                    );
-                    continue;
-                }
                 match message.and_then(|m| m.body().deserialize::<String>()) {
                     Ok(app) => notify(Ok(app)),
                     Err(e) => return notify(Err(e)),

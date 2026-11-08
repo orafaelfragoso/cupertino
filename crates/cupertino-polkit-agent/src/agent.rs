@@ -7,17 +7,19 @@
 //!
 //! The same goes for the signals the agent acts on. The bus delivers a signal addressed to the agent whatever its match
 //! rules say, and zbus compares a rule's sender with a message only when the rule names a unique name, so each signal's
-//! sender is checked when it arrives: [`sent_by_bus`] for `NameOwnerChanged`, [`sent_by_owner`] for logind's.
+//! sender is checked when it arrives: [`sent_by_bus`] for `NameOwnerChanged`, `cupertino_peer::signal::from_owner` for
+//! logind's.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use cupertino_peer::signal::{sent_by_bus, BUS_DAEMON};
 use zbus::fdo::DBusProxy;
 use zbus::message::{Header, Type};
 use zbus::names::BusName;
 use zbus::zvariant::{OwnedValue, Value};
-use zbus::{blocking, interface, Connection, MatchRule, Message};
+use zbus::{blocking, interface, Connection, MatchRule};
 
 use crate::text::shown;
 
@@ -25,8 +27,6 @@ use crate::text::shown;
 pub const POLKIT: &str = "org.freedesktop.PolicyKit1";
 const AUTHORITY_PATH: &str = "/org/freedesktop/PolicyKit1/Authority";
 const AUTHORITY_INTERFACE: &str = "org.freedesktop.PolicyKit1.Authority";
-/// The bus daemon's name, which it writes as the sender of its own signals; no peer can send under it.
-const BUS_DAEMON: &str = "org.freedesktop.DBus";
 const BUS_DAEMON_PATH: &str = "/org/freedesktop/DBus";
 /// Where the agent's object lives.
 pub const AGENT_PATH: &str = "/org/cupertino/PolkitAgent";
@@ -144,34 +144,6 @@ impl Drop for Pending {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
     }
-}
-
-/// Whether the bus daemon itself sent `message`, as it does every genuine `NameOwnerChanged`.
-pub fn sent_by_bus(message: &Message) -> bool {
-    message
-        .header()
-        .sender()
-        .is_some_and(|sender| sender.as_str() == BUS_DAEMON)
-}
-
-/// Whether `message` comes from the connection that owns `name` when it is read (`GetNameOwner`). False when nobody owns
-/// the name or the bus does not answer.
-pub fn sent_by_owner(connection: &blocking::Connection, message: &Message, name: &str) -> bool {
-    let header = message.header();
-    let Some(sender) = header.sender() else {
-        return false;
-    };
-    connection
-        .call_method(
-            Some(BUS_DAEMON),
-            BUS_DAEMON_PATH,
-            Some(BUS_DAEMON),
-            "GetNameOwner",
-            &(name,),
-        )
-        .ok()
-        .and_then(|reply| reply.body().deserialize::<String>().ok())
-        .is_some_and(|owner| owner == sender.as_str())
 }
 
 /// Refuses a call that does not come from the current owner of polkitd's name.
@@ -333,24 +305,4 @@ pub fn serve(
         })
         .map_err(|error| zbus::Error::Failure(error.to_string()))?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_a_message_with_the_daemons_name_comes_from_the_bus() {
-        let change = |sender: Option<&str>| {
-            let mut builder =
-                Message::signal(BUS_DAEMON_PATH, BUS_DAEMON, "NameOwnerChanged").unwrap();
-            if let Some(sender) = sender {
-                builder = builder.sender(sender).unwrap();
-            }
-            builder.build(&(POLKIT, "", ":1.7")).unwrap()
-        };
-        assert!(sent_by_bus(&change(Some(BUS_DAEMON))));
-        assert!(!sent_by_bus(&change(Some(":1.7"))));
-        assert!(!sent_by_bus(&change(None)));
-    }
 }

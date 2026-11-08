@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use cupertino_peer::signal::{sent_by_bus, sent_by_owner};
+use cupertino_peer::signal::{from_owner, sent_by_bus};
 use zbus::blocking::{Connection, MessageIterator};
 use zbus::message::Type;
 use zbus::zvariant::{OwnedValue, Value};
@@ -80,8 +80,10 @@ pub fn watch(
         .and_then(|b| b.arg(0, DEVICE_INTERFACE))
         .map_err(Error::bus(what))?
         .build();
-    let changes = MessageIterator::for_match_rule(changes_rule, connection, None)
-        .map_err(Error::bus(what))?;
+    let changes = from_owner(connection, UPOWER, changes_rule, |_| {
+        eprintln!("cupertino-login: a battery change not sent by the power daemon was ignored")
+    })
+    .map_err(Error::bus(what))?;
     let owner_rule = MatchRule::builder()
         .msg_type(Type::Signal)
         .sender("org.freedesktop.DBus")
@@ -94,14 +96,6 @@ pub fn watch(
     let notify = Arc::new(notify);
     notify(Ok(read(connection)));
 
-    let c = connection.clone();
-    let changes = changes.filter(move |message| match message {
-        Ok(message) if !sent_by_owner(&c, message, UPOWER) => {
-            eprintln!("cupertino-login: a battery change not sent by the power daemon was ignored");
-            false
-        }
-        _ => true,
-    });
     let c = connection.clone();
     spawn(
         "battery-changes",

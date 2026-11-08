@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use cupertino_peer::signal::{sent_by_bus, sent_by_owner};
+use cupertino_peer::signal::{from_owner, sent_by_bus};
 use zbus::blocking::{Connection, MessageIterator};
 use zbus::message::Type;
 use zbus::MatchRule;
@@ -174,20 +174,16 @@ impl LoginManager {
             .and_then(|b| b.member("Unlock"))
             .map_err(fail)?
             .build();
-        let signals =
-            MessageIterator::for_match_rule(rule, &self.connection, None).map_err(fail)?;
-        let connection = self.connection.clone();
+        let signals = from_owner(&self.connection, BUS_NAME, rule, |_| {
+            eprintln!("cupertino-login: an Unlock not sent by the session manager was ignored")
+        })
+        .map_err(fail)?;
         std::thread::Builder::new()
             .name("login-unlock".into())
             .spawn(move || {
                 for message in signals {
                     match message {
-                        Ok(message) if sent_by_owner(&connection, &message, BUS_NAME) => {
-                            notify(Ok(()))
-                        }
-                        Ok(_) => eprintln!(
-                            "cupertino-login: an Unlock not sent by the session manager was ignored"
-                        ),
+                        Ok(_) => notify(Ok(())),
                         Err(source) => {
                             return notify(Err(Error {
                                 what: "reading the session manager's Unlock",

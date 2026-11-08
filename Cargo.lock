@@ -1113,6 +1113,7 @@ dependencies = [
  "cupertino-modifiers",
  "cupertino-overview",
  "cupertino-shell-client",
+ "cupertino-test-bus",
  "cupertino-theme",
  "cupertino-ui-test",
  "cupertino-ui-wayland",
@@ -1120,6 +1121,7 @@ dependencies = [
  "cupertino-wm",
  "tempfile",
  "tiny-skia",
+ "zbus",
 ]
 
 [[package]]

@@ -5,12 +5,15 @@
 //! actions ([`actions`]), the press and removal effect around a tile drag ([`tile_drag`]), the settings file ([`conf`]) and desktop entries ([`desktop`]). Pure logic
 //! (no compositor dependency). The dock as a CupertinoKit application is [`kit`] with its windows ([`view`],
 //! [`switcher_kit`], [`overview_kit`]). The feature `app` adds the `cupertino-dock` process: those windows on layer
-//! surfaces and popups as a client of the server, with the icons it loads ([`icons`]).
+//! surfaces and popups as a client of the server, with the icons it loads ([`icons`]) and the D-Bus activation that
+//! asks a resident application for a window ([`activate`]).
 //!
 //! The tile
 //! layout, margins, section order and drag behaviour are approximate or unknown and configurable.
 
 pub mod actions;
+#[cfg(feature = "app")]
+pub mod activate;
 pub mod app_grid;
 pub mod autohide;
 pub mod bounce;

@@ -153,7 +153,7 @@ impl LoginManager {
 
     /// Call `notify` on a reader thread for every `Unlock` the manager sends this process, and once with the error when the
     /// stream breaks or ends (no signal arrives after that). Only the owner of the manager's bus name is accepted as the
-    /// sender, and only root may own it.
+    /// sender, and only root may own it; an `Unlock` from any other peer is ignored ([`sent_by_manager`]).
     pub fn watch_unlock(
         &self,
         notify: impl Fn(Result<(), Error>) + Send + 'static,
@@ -173,12 +173,16 @@ impl LoginManager {
             .build();
         let signals =
             MessageIterator::for_match_rule(rule, &self.connection, None).map_err(fail)?;
+        let connection = self.connection.clone();
         std::thread::Builder::new()
             .name("login-unlock".into())
             .spawn(move || {
                 for message in signals {
                     match message {
-                        Ok(_) => notify(Ok(())),
+                        Ok(message) if sent_by_manager(&connection, &message) => notify(Ok(())),
+                        Ok(_) => eprintln!(
+                            "cupertino-login: an Unlock not sent by the session manager was ignored"
+                        ),
                         Err(source) => {
                             return notify(Err(Error {
                                 what: "reading the session manager's Unlock",
@@ -266,6 +270,27 @@ impl LoginManager {
     }
 }
 
+/// Whether `message` comes from the connection that owns the manager's name now. A match rule cannot hold a well-known
+/// name as its sender: the bus delivers a signal sent to this process by its unique name whatever the rule says, so any
+/// peer on the bus could send one that matches everything else.
+fn sent_by_manager(connection: &Connection, message: &zbus::Message) -> bool {
+    let header = message.header();
+    let Some(sender) = header.sender() else {
+        return false;
+    };
+    connection
+        .call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "GetNameOwner",
+            &(BUS_NAME,),
+        )
+        .ok()
+        .and_then(|reply| reply.body().deserialize::<String>().ok())
+        .is_some_and(|owner| owner == sender.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +328,53 @@ mod tests {
             source: Box::new(zbus::Error::Failure("broken".into())),
         };
         assert!(!fault.manager_absent() && fault.refusal().is_none());
+    }
+
+    #[test]
+    fn an_unlock_sent_by_any_peer_but_the_manager_is_ignored() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        let manager = bus.connect();
+        manager.request_name(BUS_NAME).expect("the manager's name");
+        let agent = LoginManager {
+            connection: bus.connect(),
+        };
+        let (tx, rx) = mpsc::channel();
+        agent
+            .watch_unlock(move |signal| {
+                let _ = tx.send(signal.is_ok());
+            })
+            .expect("watching");
+        let to = agent
+            .connection
+            .unique_name()
+            .expect("a unique name")
+            .to_string();
+        let unlock = |from: &Connection| {
+            from.emit_signal(Some(to.as_str()), OBJECT_PATH, BUS_NAME, "Unlock", &())
+                .expect("sent")
+        };
+        // another peer sends the manager's signal to the lock screen by its unique name, as sessiond does
+        let peer = bus.connect();
+        for _ in 0..3 {
+            unlock(&peer);
+        }
+        // the manager's own arrive, each answered once; the peer's, sent first, would have come before them
+        for _ in 0..2 {
+            unlock(&manager);
+            assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
+        }
+        // a manager that left its name is no longer believed; the one that owns it after is
+        manager.release_name(BUS_NAME).expect("released");
+        unlock(&manager);
+        unlock(&peer);
+        let successor = bus.connect();
+        successor.request_name(BUS_NAME).expect("the name again");
+        unlock(&successor);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
     }
 }

@@ -336,9 +336,38 @@ fn copy_tree(
 /// Remove what a failed copy made at `path`, without following links.
 fn remove_made(path: &Path) -> io::Result<()> {
     if fs::symlink_metadata(path)?.is_dir() {
+        make_removable(path);
         fs::remove_dir_all(path)
     } else {
         fs::remove_file(path)
+    }
+}
+
+/// Give the owner write and search permission on every folder of a tree a failed copy made: a finished folder took its
+/// source's mode, and the items of a read-only folder cannot be removed. Each folder is opened without following links
+/// and changed through its descriptor; one that cannot be opened is left as it is.
+fn make_removable(dir: &Path) {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let Ok(folder) = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(dir)
+    else {
+        return;
+    };
+    if let Ok(meta) = folder.metadata() {
+        let mode = meta.permissions().mode();
+        if mode & 0o700 != 0o700 {
+            let _ = folder.set_permissions(fs::Permissions::from_mode(mode | 0o700));
+        }
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            make_removable(&entry.path());
+        }
     }
 }
 
@@ -638,6 +667,81 @@ mod tests {
         assert_eq!(
             fs::read_to_string(src.join("tree/inner/b.txt")).unwrap(),
             "b"
+        );
+    }
+
+    #[test]
+    fn a_failed_copy_removes_the_read_only_folders_it_finished() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let dest = d.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        // finished read-only folders beside an item a copy does not take: the pipe is made before them in one tree and
+        // after them in the other, so in a listing in the order items were made, or the reverse, one copy fails after
+        // a read-only folder took its mode
+        let mut folders = Vec::new();
+        let mut trees = Vec::new();
+        for (tree, pipe_first) in [("first", true), ("last", false)] {
+            let tree = d.path().join(tree);
+            fs::create_dir(&tree).unwrap();
+            let pipe = || {
+                let fifo =
+                    std::ffi::CString::new(tree.join("pipe").as_os_str().as_bytes()).unwrap();
+                // SAFETY: the path is NUL-terminated and outlives the call
+                assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+            };
+            if pipe_first {
+                pipe();
+            }
+            for i in 0..4 {
+                let folder = tree.join(format!("ro{i}"));
+                fs::create_dir(&folder).unwrap();
+                fs::write(folder.join("f.txt"), "f").unwrap();
+                fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
+                folders.push(folder);
+            }
+            if !pipe_first {
+                pipe();
+            }
+            trees.push(tree);
+        }
+
+        let placed = drop_into(&trees, &dest, DropAction::Copy);
+        for folder in &folders {
+            fs::set_permissions(folder, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(placed.iter().all(Result::is_err), "{placed:?}");
+        assert_eq!(
+            fs::read_dir(&dest).unwrap().count(),
+            0,
+            "no partial copy is left"
+        );
+    }
+
+    #[test]
+    fn what_a_copy_made_is_removed_through_read_only_and_unsearchable_folders_without_following_links(
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let outside = d.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("kept.txt"), "kept").unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o555)).unwrap();
+        let made = d.path().join("made");
+        fs::create_dir_all(made.join("a/b")).unwrap();
+        fs::write(made.join("a/b/f.txt"), "f").unwrap();
+        std::os::unix::fs::symlink(&outside, made.join("a/link")).unwrap();
+        fs::set_permissions(made.join("a/b"), fs::Permissions::from_mode(0o500)).unwrap();
+        fs::set_permissions(made.join("a"), fs::Permissions::from_mode(0o555)).unwrap();
+
+        remove_made(&made).unwrap();
+        assert!(!made.exists());
+        let mode = fs::metadata(&outside).unwrap().permissions().mode() & 0o777;
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(mode, 0o555, "a linked folder keeps its mode");
+        assert_eq!(
+            fs::read_to_string(outside.join("kept.txt")).unwrap(),
+            "kept"
         );
     }
 

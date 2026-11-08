@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search, 6 drag, 9 drop and 8 file operation tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search, 6 drag, 9 drop and 9 file operation tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
@@ -151,7 +151,13 @@ known only at the drop, so with nothing held the drag shows a move and the drop 
 drop stays open while the operation runs (`Command::HoldDrop`), so the source hears it is finished only after the files
 are in place, and with what was done: a move only when every
 item left its place, a copy when every item was copied, and otherwise nothing (an item that failed, or one dropped on
-the folder already holding it), so a source never removes items Files did not take. A list is taken whole or not at
+the folder already holding it), so a source never removes items Files did not take. Holding the offer open is what the
+drag-and-drop protocol asks of a target whose work ends later: the source has seen the drop performed and may free its
+data (a move's originals, or the temporary files of an archive) only once it hears the drop finished, and the
+compositor sets no time limit. Two things end a held drop early, as a cancel the source hears at once, while the
+operation goes on: closing the window it was dropped on (its offer goes with its surface), and more than eight drops
+held at once (the oldest is let go). A cancel makes a source keep its originals; a source that then frees temporary
+files can make that copy fail, and the failure is listed. A list is taken whole or not at
 all: one with a URI of another scheme or host, a relative path, a `.` or `..` step or a NUL is refused. A drag of the window's own items has nowhere to go
 on one of the dragged folders or in the folder holding them all. Folders do not spring open under a drag.
 

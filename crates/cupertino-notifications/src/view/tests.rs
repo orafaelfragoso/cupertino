@@ -195,7 +195,10 @@ fn a_long_application_name_and_summary_are_drawn_and_named_within_their_caps() {
     assert_eq!(summary.chars().count(), MAX_SUMMARY_CHARS);
     assert!(app.ends_with(ELLIPSIS) && summary.ends_with(ELLIPSIS));
     let speech = banner_speech(&n, &card);
-    assert!(speech.starts_with(app), "the speech names the capped application");
+    assert!(
+        speech.starts_with(app),
+        "the speech names the capped application"
+    );
 }
 
 #[test]

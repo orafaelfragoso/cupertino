@@ -348,7 +348,11 @@ mod tests {
         }
         let short = NotifyInput::new("Mail", "Lunch", "At noon?").capped();
         assert_eq!(
-            (short.app_name.as_str(), short.summary.as_str(), short.body.as_str()),
+            (
+                short.app_name.as_str(),
+                short.summary.as_str(),
+                short.body.as_str()
+            ),
             ("Mail", "Lunch", "At noon?")
         );
     }

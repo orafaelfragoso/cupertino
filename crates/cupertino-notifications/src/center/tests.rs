@@ -52,21 +52,12 @@ fn ids_are_unique_and_replacement_keeps_the_id() {
 #[test]
 fn timeouts_follow_urgency_and_client_request() {
     let p = TimeoutPolicy::default();
-    assert_eq!(
-        p.duration(Urgency::Normal, Expire::Default),
-        Some(5.0)
-    );
+    assert_eq!(p.duration(Urgency::Normal, Expire::Default), Some(5.0));
     assert_eq!(p.duration(Urgency::Low, Expire::Default), Some(5.0));
     assert_eq!(p.duration(Urgency::Critical, Expire::Default), None);
     assert_eq!(p.duration(Urgency::Normal, Expire::Never), None);
-    assert_eq!(
-        p.duration(Urgency::Normal, Expire::Millis(1500)),
-        Some(1.5)
-    );
-    assert_eq!(
-        p.duration(Urgency::Critical, Expire::Millis(1500)),
-        None
-    );
+    assert_eq!(p.duration(Urgency::Normal, Expire::Millis(1500)), Some(1.5));
+    assert_eq!(p.duration(Urgency::Critical, Expire::Millis(1500)), None);
     assert_eq!(
         p.duration(Urgency::Normal, Expire::Millis(10_000_000)),
         Some(60.0)
@@ -720,7 +711,11 @@ fn unlocking_resumes_the_rest_of_the_lifetime_quietly_and_empties_the_lock_list(
     c.set_screen_locked(false, 50.0);
     assert!(c.lock_screen().is_empty());
     assert!(c.is_quiet(id), "back on screen, said already");
-    assert_eq!(c.visible_ids(), vec![id], "nothing that arrived while locked shows");
+    assert_eq!(
+        c.visible_ids(),
+        vec![id],
+        "nothing that arrived while locked shows"
+    );
     // 3 s of its 5 s were left
     assert_eq!(c.next_wakeup(50.3), Some(Wakeup::At(53.0)));
     c.tick(53.0);
@@ -786,7 +781,10 @@ fn an_application_kept_off_the_lock_screen_is_not_listed_and_others_are() {
     );
     c.set_policy(policy);
     assert_eq!(
-        c.lock_screen().iter().map(|i| i.app.as_str()).collect::<Vec<_>>(),
+        c.lock_screen()
+            .iter()
+            .map(|i| i.app.as_str())
+            .collect::<Vec<_>>(),
         ["Mail"]
     );
 }
@@ -827,7 +825,11 @@ fn each_preview_setting_decides_what_the_lock_list_and_the_unlocked_cards_show()
         } else {
             assert_eq!(shown.summary, REDACTED_TITLE);
             assert!(shown.body.is_empty() && shown.spans.is_empty());
-            assert_eq!(shown.button_actions().count(), 0, "a label may hold content");
+            assert_eq!(
+                shown.button_actions().count(),
+                0,
+                "a label may hold content"
+            );
         }
     }
 }

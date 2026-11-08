@@ -2,6 +2,8 @@
 //! `cupertino_notifications::view` get their layer surfaces from [`NotificationRoles`], the bus wakes the
 //! application's loop through a channel, and timers pace the banners' lifetimes and animations.
 
+use cupertino_defaults::notifications::NotificationSettings;
+use cupertino_defaults::watch::ConfigWatcher;
 use cupertino_kit::core::{Application, Command, Key, RuntimeOptions, Window};
 use cupertino_kit::platform::WindowSpec;
 use cupertino_modifiers::Profile;
@@ -87,6 +89,8 @@ pub enum Note {
     Lock(bool),
     /// The session's reduce-motion option.
     ReduceMotion(bool),
+    /// `notifications.conf` changed.
+    Policy,
 }
 
 /// Gives the windows of the process their layer surfaces on the overlay layer, at the right edge of the output the
@@ -208,6 +212,8 @@ pub struct Notifications {
     timer: u64,
     /// Measures the cards with the windows' text system; set once the runtime has its options.
     metrics: Option<CardMetrics>,
+    /// Follows `notifications.conf`; `None` when it cannot, and the file then applies at the next start.
+    _policy_watch: Option<ConfigWatcher>,
 }
 
 #[derive(Clone, Debug)]
@@ -334,6 +340,52 @@ impl Notifications {
     }
 }
 
+/// `notifications.conf` as it is now: its lines that are not understood are reported, and keep the value of `last`.
+/// A file that cannot be read keeps `last` (the defaults at start).
+fn load_policy(last: Option<&NotificationSettings>) -> NotificationSettings {
+    let kept = || last.cloned().unwrap_or_default();
+    let Some(path) = NotificationSettings::path() else {
+        return kept();
+    };
+    match NotificationSettings::load(&path, last) {
+        Ok((settings, problems)) => {
+            for p in problems {
+                eprintln!(
+                    "cupertino-notifications: {} line {}: {}",
+                    path.display(),
+                    p.line,
+                    p.message
+                );
+            }
+            settings
+        }
+        Err(e) => {
+            eprintln!(
+                "cupertino-notifications: cannot read {}: {e}",
+                path.display()
+            );
+            kept()
+        }
+    }
+}
+
+/// Watch `notifications.conf`; each change is a [`Note::Policy`].
+fn watch_policy(notes: async_channel::Sender<Note>) -> Option<ConfigWatcher> {
+    let path = NotificationSettings::path()?;
+    match ConfigWatcher::new(vec![path.clone()], move |_| {
+        let _ = notes.try_send(Note::Policy);
+    }) {
+        Ok(watch) => Some(watch),
+        Err(e) => {
+            eprintln!(
+                "cupertino-notifications: cannot watch {}: {e}; changes apply at the next start",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
 fn start(options: &Options) -> Result<(Notifications, Vec<Command<Message>>)> {
     let mut config = CenterConfig::from_theme(&Theme::load()?);
     // the toolkit's first frame has the session's options; the roles report changes
@@ -349,6 +401,8 @@ fn start(options: &Options) -> Result<(Notifications, Vec<Command<Message>>)> {
         ..ServerOptions::default()
     })
     .map_err(start_error)?;
+    server.center().set_policy(load_policy(None));
+    let policy_watch = watch_policy(sender.clone());
     let toggle = sender.clone();
     server.serve_centre_control(move || {
         let _ = toggle.try_send(Note::Toggle);
@@ -362,6 +416,7 @@ fn start(options: &Options) -> Result<(Notifications, Vec<Command<Message>>)> {
             sender,
             timer: 0,
             metrics: None,
+            _policy_watch: policy_watch,
         },
         vec![first],
     ))
@@ -405,6 +460,11 @@ impl Application for Notifications {
                     }
                     Note::ReduceMotion(on) => {
                         model.server.center().config.motion.reduce_motion = on
+                    }
+                    Note::Policy => {
+                        let last = model.server.center().policy().clone();
+                        let policy = load_policy(Some(&last));
+                        model.server.center().set_policy(policy);
                     }
                 }
                 vec![listen(&model.notes)]

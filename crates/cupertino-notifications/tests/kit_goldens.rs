@@ -102,10 +102,9 @@ impl Application for Scripted {
                     }
                     Step::At(t) => model.now = t,
                     Step::OpenCentre => model.ui.centre_open = true,
-                    Step::Lock(locked) => model
-                        .center
-                        .get_mut()
-                        .set_screen_locked(locked, model.now),
+                    Step::Lock(locked) => {
+                        model.center.get_mut().set_screen_locked(locked, model.now)
+                    }
                 }
                 model.center.get_mut().tick(model.now);
                 vec![next(&model.steps)]
@@ -618,9 +617,16 @@ fn a_banner_is_neither_said_nor_readable_while_the_screen_is_locked() {
     // at the unlock the banner that was on screen comes back; what arrived while locked is in the centre
     run.step(Step::Lock(false));
     run.step(Step::At(1.6));
-    assert_eq!(run.windows().len(), 1, "only the banner from before the lock");
+    assert_eq!(
+        run.windows().len(),
+        1,
+        "only the banner from before the lock"
+    );
     assert!(readable(&run).contains("Lunch"));
-    assert!(!readable(&run).contains("482913"), "the new one went to the centre");
+    assert!(
+        !readable(&run).contains("482913"),
+        "the new one went to the centre"
+    );
     assert_eq!(
         run.heard(),
         [],
@@ -687,11 +693,17 @@ fn a_banner_of_an_application_without_previews_shows_and_says_only_notification(
         [(Live::Polite, "Mail: Notification".to_owned())]
     );
     let words = readable(&run);
-    assert!(!words.contains("482913") && !words.contains("Bank"), "{words}");
+    assert!(
+        !words.contains("482913") && !words.contains("Bank"),
+        "{words}"
+    );
     run.step(Step::OpenCentre);
     let words = readable(&run);
     assert!(words.contains("Mail: Notification"), "{words}");
-    assert!(!words.contains("482913") && !words.contains("Bank"), "{words}");
+    assert!(
+        !words.contains("482913") && !words.contains("Bank"),
+        "{words}"
+    );
 }
 
 #[test]

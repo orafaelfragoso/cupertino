@@ -15,7 +15,7 @@ use cupertino_ui_layout::{
     SizeSpec,
 };
 use cupertino_ui_platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent};
-use cupertino_ui_render::{PaintOp, Shape};
+use cupertino_ui_render::{FillRule, Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle};
 use cupertino_ui_theme::{ColorRole, StateVariant};
 use std::rc::Rc;
@@ -46,6 +46,13 @@ const LABEL_TRAILING: f64 = 4.0;
 /// press taken up to that edge.
 const ACCESSORY_SLOT: f64 = 24.0;
 const ACCESSORY_SYMBOL: f64 = 14.0;
+/// A busy row's activity indicator in the accessory slot: its spokes, their length and width from a circle of
+/// [`ACCESSORY_SYMBOL`] across, the opacity of the faintest spoke, and one turn of the brightest spoke.
+const ACTIVITY_SPOKES: usize = 8;
+const ACTIVITY_SPOKE_LENGTH: f64 = 3.5;
+const ACTIVITY_SPOKE_WIDTH: f64 = 1.5;
+const ACTIVITY_FAINTEST: f32 = 0.25;
+const ACTIVITY_TURN_NS: u64 = 800_000_000;
 
 type Select<M> = Option<Rc<Handler<usize, M>>>;
 type Accessory<M> = Option<Rc<Handler<Key, M>>>;
@@ -415,6 +422,10 @@ impl<M: 'static> Widget<M> for Row<M> {
                 cx.request_paint();
                 Propagation::Continue
             }
+            Event::AnimationFrame(_) if self.item.busy => {
+                cx.request_paint();
+                Propagation::Continue
+            }
             _ => Propagation::Continue,
         }
     }
@@ -483,7 +494,8 @@ impl<M: 'static> Widget<M> for Row<M> {
         }
         if let Some(layout) = look::label(cx.env(), &self.item.label) {
             let start = INDENT + LABEL_X;
-            let trailing = if self.item.accessory.is_some() && !self.item.busy {
+            // a busy row's activity indicator takes the accessory's slot
+            let trailing = if self.item.accessory.is_some() || self.item.busy {
                 ACCESSORY_SLOT + LABEL_TRAILING
             } else {
                 LABEL_TRAILING
@@ -499,6 +511,20 @@ impl<M: 'static> Widget<M> for Row<M> {
             cx.push(PaintOp::PushClip(Shape::Rect(clip)));
             look::glyphs(cx, &layout, origin, label_color);
             cx.push(PaintOp::PopClip);
+        }
+        if self.item.busy {
+            let slot = Rect::new(
+                leading(
+                    chrome.width() - LABEL_TRAILING - ACCESSORY_SLOT,
+                    ACCESSORY_SLOT,
+                ),
+                0.0,
+                ACCESSORY_SLOT,
+                size.height,
+            );
+            if let Some(color) = label_color {
+                paint_activity(cx, slot.center(), color);
+            }
         }
         if cx.is_focused() {
             paint_focus_ring(cx, chrome, SELECTION_RADIUS);
@@ -522,6 +548,40 @@ impl<M: 'static> Widget<M> for Row<M> {
         if self.cursor {
             cx.focusable();
         }
+    }
+}
+
+/// The spokes of an activity indicator centred on `centre`, the brightest turning around once in
+/// [`ACTIVITY_TURN_NS`] and the others fading behind it; still when motion is reduced.
+fn paint_activity(cx: &mut PaintCx<'_>, centre: Point, color: cupertino_ui_theme::Color) {
+    let lead = if cx.env().theme.motion.reduce {
+        0
+    } else {
+        cx.request_animation_frame();
+        let phase = (cx.now().0 % ACTIVITY_TURN_NS) as f64 / ACTIVITY_TURN_NS as f64;
+        (phase * ACTIVITY_SPOKES as f64) as usize % ACTIVITY_SPOKES
+    };
+    let outer = ACCESSORY_SYMBOL / 2.0;
+    let inner = outer - ACTIVITY_SPOKE_LENGTH;
+    for spoke in 0..ACTIVITY_SPOKES {
+        let angle = std::f64::consts::TAU * spoke as f64 / ACTIVITY_SPOKES as f64;
+        let (sin, cos) = angle.sin_cos();
+        let behind = (lead + ACTIVITY_SPOKES - spoke) % ACTIVITY_SPOKES;
+        let fade = 1.0 - (1.0 - ACTIVITY_FAINTEST) * behind as f32 / (ACTIVITY_SPOKES - 1) as f32;
+        cx.push(PaintOp::Stroke {
+            shape: Shape::Path {
+                verbs: vec![
+                    PathVerb::MoveTo(Point::new(centre.x + inner * sin, centre.y - inner * cos)),
+                    PathVerb::LineTo(Point::new(centre.x + outer * sin, centre.y - outer * cos)),
+                ],
+                fill_rule: FillRule::NonZero,
+            },
+            width: ACTIVITY_SPOKE_WIDTH,
+            paint: Paint::Solid(cupertino_ui_theme::Color {
+                a: color.a * fade,
+                ..color
+            }),
+        });
     }
 }
 

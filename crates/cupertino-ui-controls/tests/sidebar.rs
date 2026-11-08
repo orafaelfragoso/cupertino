@@ -301,7 +301,8 @@ enum Device {
     Eject(Key),
 }
 
-/// Three devices: Backup is mounted and can be ejected, Card is mid-eject, and Stick is not mounted.
+/// Three devices: Backup is mounted and can be ejected, Card is mid-eject, and Stick is not mounted. Card's activity
+/// indicator turns without end, so the harnesses show one more frame per settle.
 struct Devices;
 
 impl Application for Devices {
@@ -372,7 +373,7 @@ fn device_rect(h: &Harness<Devices>, name: &str) -> Rect {
 
 #[test]
 fn a_press_at_the_trailing_edge_ejects_without_selecting_and_a_press_on_the_name_selects() {
-    let mut h = Harness::<Devices>::new();
+    let mut h = Harness::<Devices>::animated();
     let r = device_rect(&h, "Backup");
     let y = r.min_y() + r.height() / 2.0;
     h.click(Point::new(r.max_x() - 11.0, y));
@@ -391,7 +392,7 @@ fn a_press_at_the_trailing_edge_ejects_without_selecting_and_a_press_on_the_name
 
 #[test]
 fn a_busy_row_has_no_eject_button_and_says_it_is_busy() {
-    let mut h = Harness::<Devices>::new();
+    let mut h = Harness::<Devices>::animated();
     let r = device_rect(&h, "Card");
     h.click(Point::new(r.max_x() - 11.0, r.min_y() + r.height() / 2.0));
     assert_eq!(h.model().1, [Device::Select(1)]);
@@ -401,7 +402,7 @@ fn a_busy_row_has_no_eject_button_and_says_it_is_busy() {
 
 #[test]
 fn assistive_technology_reads_the_description_and_clicks_the_eject_button() {
-    let mut h = Harness::<Devices>::assistive();
+    let mut h = Harness::<Devices>::assistive_animated();
     let backup = named(&h, "Backup").unwrap();
     assert_eq!(backup.description.as_deref(), Some("Removable"));
     let eject = named(&h, "Eject Backup").unwrap();
@@ -474,4 +475,56 @@ fn an_inactive_windows_row_icons_take_the_secondary_label_colour() {
         asked.iter().all(|(_, c)| *c == secondary),
         "every row's icon in the secondary label colour: {asked:?}"
     );
+}
+
+#[test]
+fn a_busy_row_turns_an_activity_indicator_where_its_eject_button_was() {
+    let mut h = Harness::<Devices>::animated();
+    let spokes = |h: &Harness<Devices>, name: &str| -> Vec<Rect> {
+        let id = PaintNodeId::from(row(h, name));
+        h.snapshot()
+            .display_list
+            .nodes
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap()
+            .ops
+            .into_iter()
+            .filter_map(|op| match op {
+                PaintOp::Stroke {
+                    shape: Shape::Path { verbs, .. },
+                    ..
+                } => {
+                    let points: Vec<Point> = verbs
+                        .iter()
+                        .filter_map(|v| match v {
+                            cupertino_ui_render::PathVerb::MoveTo(p)
+                            | cupertino_ui_render::PathVerb::LineTo(p) => Some(*p),
+                            _ => None,
+                        })
+                        .collect();
+                    let (a, b) = (points[0], points[1]);
+                    Some(Rect::new(
+                        a.x.min(b.x),
+                        a.y.min(b.y),
+                        (a.x - b.x).abs(),
+                        (a.y - b.y).abs(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(spokes(&h, "Backup").is_empty(), "a row at rest shows none");
+    let card = spokes(&h, "Card");
+    assert_eq!(card.len(), 8);
+    let row_width = device_rect(&h, "Card").width();
+    // every spoke lies in the trailing slot the eject button takes on a row at rest
+    for spoke in &card {
+        assert!(
+            spoke.min_x() >= row_width - 10.0 - 4.0 - 24.0
+                && spoke.max_x() <= row_width - 10.0 - 4.0,
+            "{spoke:?} in the slot of a {row_width} pt row"
+        );
+    }
 }

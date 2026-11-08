@@ -1,8 +1,28 @@
 //! Typed wrapper of `cupertino_backdrop_v1`: a material the server draws below a surface.
 
 use crate::Error;
-use cupertino_app_protocols::client::app_effects::cupertino_backdrop_v1::CupertinoBackdropV1;
+use cupertino_app_protocols::client::app_effects::cupertino_backdrop_v1::{
+    CupertinoBackdropV1, GlassStyle as WireStyle,
+};
 use cupertino_geometry::Rect;
+use wayland_client::Proxy;
+
+/// The look of a glass backdrop ([`Backdrop::set_glass`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GlassStyle {
+    /// The frosted glass of bars, menus, panels and controls.
+    #[default]
+    Regular,
+    /// The clearer glass of controls over rich content, such as media.
+    Clear,
+}
+
+impl GlassStyle {
+    /// The material a server without glass draws instead.
+    pub fn fallback_material(self) -> &'static str {
+        "Menu"
+    }
+}
 
 /// A server-rendered material region below the content of a surface. Every setter takes
 /// effect with the next commit of the surface.
@@ -58,6 +78,26 @@ impl Backdrop {
     pub fn set_shape(&self, rect: &Rect, radius: f64) -> Result<(), Error> {
         let s = Shape::new(rect, radius)?;
         self.proxy.set_shape(s.x, s.y, s.width, s.height, s.radius);
+        Ok(())
+    }
+
+    /// Draw the backdrop as glass of `style` instead of a material recipe. Backdrops of one surface with the same
+    /// nonzero `container` join into one shape whose outlines blend over `spacing` points (0 joins them with a hard
+    /// edge); container 0 keeps the backdrop on its own. A server before version 6 draws the backdrop with the
+    /// material of [`GlassStyle::fallback_material`] instead.
+    pub fn set_glass(&self, style: GlassStyle, container: u32, spacing: f64) -> Result<(), Error> {
+        if !(spacing.is_finite() && spacing >= 0.0) {
+            return Err(Error::InvalidGlass);
+        }
+        if self.proxy.version() < 6 {
+            self.set_material(style.fallback_material());
+            return Ok(());
+        }
+        let style = match style {
+            GlassStyle::Regular => WireStyle::Regular,
+            GlassStyle::Clear => WireStyle::Clear,
+        };
+        self.proxy.set_glass(style, container, spacing);
         Ok(())
     }
 

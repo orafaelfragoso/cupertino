@@ -14,7 +14,7 @@ mod effects;
 mod error;
 mod scroll;
 
-pub use backdrop::Backdrop;
+pub use backdrop::{Backdrop, GlassStyle};
 pub use effects::{
     report_appearance, report_display_options, AppEffects, AppEvent, AppMenu, Appearance,
     MenuAddress, WindowControls,

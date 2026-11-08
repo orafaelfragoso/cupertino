@@ -380,3 +380,32 @@ fn with_no_control_and_content_past_its_bound_the_scroll_view_takes_the_keyboard
     assert!(scroll_view_is_a_stop(&h));
     assert_eq!(focused_role(&h), Some(Role::ScrollView));
 }
+
+#[test]
+fn without_the_glass_it_is_the_opaque_fill_in_a_16_point_corner_with_its_own_edge() {
+    let mut h = harness(false);
+    h.click(h.center("Open"));
+    enter(&mut h);
+    let ops: Vec<PaintOp> = h
+        .snapshot()
+        .display_list
+        .nodes
+        .into_iter()
+        .flat_map(|n| n.ops)
+        .collect();
+    assert!(
+        ops.iter().any(|op| matches!(
+            op,
+            PaintOp::Fill { shape: Shape::RoundedRect { radius, .. }, .. } if *radius == 16.0
+        )),
+        "the fill: {ops:?}"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(
+            op,
+            PaintOp::Stroke { shape: Shape::RoundedRect { radius, .. }, width, .. }
+                if *radius == 15.5 && *width == 1.0
+        )),
+        "the edge: {ops:?}"
+    );
+}

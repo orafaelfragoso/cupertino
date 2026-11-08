@@ -125,6 +125,13 @@ from the application's model and reports changes as messages.
   `MenuItem::Shortcut` is an item that shows the keys that choose it ("⇧⌘N") at its trailing edge in the secondary
   label colour (the row's colour when it is highlighted or disabled), which assistive technology reads as its
   description; the application binds the keys itself.
+  A row is 24 pt tall and a separator 11 pt. Labels start 15 pt in, or 31 pt when any row of the menu is checked
+  (the check mark is centred 17 pt in); the keys and a submenu's chevron end 20 pt from the trailing edge. A
+  separator runs from the label column to 15 pt short of the trailing edge, translucent over the glass and the
+  theme's separator colour over the opaque fill and with Increase Contrast. Over the glass the compositor draws the
+  panel's edge; over the opaque fill the panel strokes its own.
+- **Popovers.** A popover is glass with a 16 pt corner, like a menu: the compositor draws its body and edge, and
+  over the opaque fill (no material) it strokes its own edge.
 - **Sliders.** `on_change` reports every value a drag passes; `on_end` reports the value once the change ends, when
   the pointer lets go or the drag is cancelled, and at once for a key or assistive technology step, so an
   application can write a level live and commit it once. With Increase Contrast the knob's ring (the control border

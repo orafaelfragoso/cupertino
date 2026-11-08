@@ -8,13 +8,15 @@ use cupertino_ui_core::{
 };
 use cupertino_ui_layout::{Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured};
 use cupertino_ui_platform::{DecorationMode, Keysym, WindowSpec};
-use cupertino_ui_theme::{ColorRole, StateVariant};
+use cupertino_ui_theme::{ColorRole, StateVariant, Surface};
 use std::rc::Rc;
 
 const ESCAPE: Keysym = Keysym(0xff1b);
-const RADIUS: f64 = 8.0;
+/// The panel's corner radius.
+const RADIUS: f64 = 16.0;
 const PADDING: f64 = 12.0;
 const GAP: f64 = 8.0;
+/// The panel's own edge, drawn only over the opaque fill a window without the compositor's glass paints.
 const EDGE: f64 = 1.0;
 /// The widest the panel grows; the height bound is not in the spec, so it stays well under a laptop screen.
 const MAX: Size = Size {
@@ -39,7 +41,12 @@ impl<M: Clone + 'static> Popover<M> {
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,
-            background: WindowBackground::None,
+            // glass, whose edge the compositor draws; without it the window paints the opaque fill
+            background: WindowBackground::Surface {
+                surface: Surface::Popover,
+                radius: RADIUS,
+                alpha: 1.0,
+            },
             content: Element::new(Panel {
                 label: self.label,
                 on_close: self.on_close.clone(),
@@ -115,15 +122,15 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         }
     }
 
+    /// Over the opaque fill a window without the compositor's glass paints, the panel draws its own edge.
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if cx.window_backdrop() {
+            return;
+        }
         let size = cx.size();
         let theme = &cx.env().theme;
-        let fill = theme
-            .colors
-            .get(ColorRole::WindowBackground, StateVariant::NORMAL);
         let edge = theme.colors.get(ColorRole::Separator, StateVariant::NORMAL);
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
-        look::fill(cx, rect, RADIUS, fill);
         look::stroke(
             cx,
             rect.inset(Insets::uniform(EDGE / 2.0)),

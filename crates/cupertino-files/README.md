@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 11 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 9 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 18 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 11 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 10 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 18 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)

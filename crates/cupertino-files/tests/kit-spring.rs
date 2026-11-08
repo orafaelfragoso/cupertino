@@ -1,8 +1,9 @@
 //! Folders that spring open under a held drag, in the browser window on CupertinoKit run headless: a folder row, an icon,
 //! a sidebar place and a path bar folder open after the delay and not before, flashing just before; the drag goes on in
 //! the folder that opened; the drag leaving the window or being cancelled takes the window back to its folder, history,
-//! selection, view and scroll position, and a drop keeps the folder the drag opened. With `CUPERTINO_SPRING_CAPTURES`
-//! naming a directory, a flashing folder row is written there as PNGs, light and dark at 1x and 2x, for a look at it.
+//! selection, view and scroll position, and a drop keeps the folder the drag opened, even when the source hears a cancel
+//! after it. With `CUPERTINO_SPRING_CAPTURES` naming a directory, a flashing folder row is written there as PNGs, light
+//! and dark at 1x and 2x, for a look at it.
 
 #![cfg(feature = "app")]
 
@@ -402,6 +403,36 @@ fn a_cancelled_drag_of_the_windows_own_items_takes_it_back() {
     run.settle();
     hold(&mut run, DELAY_MS * 2);
     assert_eq!(shown(&run), "Documents");
+}
+
+/// The window's own items dropped in a folder the drag opened: the drop keeps that folder, also when the source hears
+/// the drag cancelled after the drop, as it does when a drop held open while it is worked on is let go early.
+#[test]
+fn a_cancel_after_a_drop_keeps_the_folder_the_drag_opened() {
+    let mut run = window();
+    let started = own_drag(&mut run, "w03.txt");
+    drag_to_row(&mut run, "Projects");
+    spring(&mut run, "Projects", "plan.txt");
+    // on the folder shown, under its rows
+    let table = run.bounds(Role::Table, "Projects");
+    drag_to(&mut run, Point::new(table.center().x, table.max_y() - 20.0));
+    let window = run.window;
+    assert!(run.driver.window_system_mut().drag_drop(window).unwrap());
+    // the source hears the drop was made, then, once Files has it, that the drag was cancelled
+    for progress in [DragProgress::Dropped, DragProgress::Cancelled] {
+        run.driver
+            .window_system_mut()
+            .enqueue(PlatformEvent::Drag {
+                token: started.token,
+                progress,
+            })
+            .unwrap();
+        run.settle();
+    }
+    let moved = run.home().join("Documents/Projects/w03.txt");
+    run.wait_until(|_| moved.exists());
+    hold(&mut run, DELAY_MS * 2);
+    assert_eq!(shown(&run), "Projects");
 }
 
 #[test]

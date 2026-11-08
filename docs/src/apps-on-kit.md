@@ -43,39 +43,50 @@ maximum, the frames over 8 ms and the share of the window each frame repainted. 
 time depends on the machine; the crates' READMEs say how to run them. Tests that do run pin what each interaction
 repaints instead (`crates/cupertino-files/tests/kit-damage.rs`, the damage tests of the Settings report's module).
 
-Measured on 2026-11-07 on an AMD Ryzen 7 5800X (8 cores, 16 threads) in the release profile, one test thread, Files
-with a folder of 1500 files (p99 at scales 2 / 1.5 / 1, in ms):
+Measured on 2026-11-08 on an AMD Ryzen 7 5800X (8 cores, 16 threads) in the release profile, one test thread, with
+other builds running on the machine, Files with a folder of 1500 files (p99 at scales 2 / 1.5 / 1, in ms):
 
 | Interaction | p99 | Frames over 8 ms |
 |---|---|---|
-| Files: arrow-key selection among the rows in view | 6.2 / 6.5 / 7.3 | none |
-| Files: hover over the rows | 4.1 / 4.9 / 6.0 | none |
-| Files: the caret's blink in the search field | 3.7 / 4.2 / 5.3 | none |
-| Files: the search field opening | 5.4 / 6.7 / 8.8 | all 13 at scale 1 |
-| Files: the search field closing | 7.5 / 8.5 / 9.8 | 1 of 14 at scale 1.5, 13 of 14 at scale 1 |
-| Files: typing a new name | 5.7 / 6.4 / 8.6 | 6 of 12 at scale 1 |
-| Files: typing a search | 66.0 / 70.1 / 76.2 | 1 of 11: the key whose results fill the listing |
-| Files: opening the folder of 1500 files | 57.1 / 58.9 / 61.0 | both frames |
-| Files: wheel scrolling the listing | 61.5 / 66.5 / 70.5 | all |
-| Files: an arrow key past the last row in view (scrolls a row) | 64.4 / 68.2 / 71.4 | all |
-| Settings: switching panes | 39.4 / 29.1 / 20.3 | all |
+| Files: arrow-key selection among the rows in view | 5.6 / 6.2 / 8.0 | 1 of 30 at scale 1 |
+| Files: hover over the rows | 3.2 / 4.2 / 6.3 | none |
+| Files: the caret's blink in the search field | 3.6 / 4.4 / 7.6 | none |
+| Files: the search field opening | 10.1 / 12.2 / 11.7 | 12 of 13 at scale 2, all 13 at 1.5 and 1 |
+| Files: the search field closing | 8.9 / 9.1 / 11.5 | 8, 6 and 13 of 14 |
+| Files: typing a new name | 4.8 / 6.1 / 8.6 | 10 of 12 at scale 1 |
+| Files: typing a search | 28.9 / 31.9 / 38.5 | 1, 2 and 6 of 11 |
+| Files: opening the folder of 1500 files | 21.1 / 19.1 / 24.8 | both frames |
+| Files: wheel scrolling the listing | 27.3 / 29.2 / 38.1 | all |
+| Files: an arrow key past the last row in view (scrolls a row) | 32.0 / 30.8 / 38.3 | all |
+| Settings: switching panes | 11.9 / 6.9 / 5.0 | 3 of 8 at scale 2 |
 | Settings: toggling a switch, dragging a slider, the caret | under 1 | none |
-| Settings: scrolling a pane (at its default size) | 1.4 / 0.9 / 0.5 | none |
-| Settings: typing a search (the page lists the results and the sidebar keeps the panes found) | 60.6 / 46.1 / 30.5 | 2 of 8 |
+| Settings: scrolling a pane (at its default size) | 0.4 / 0.4 / 0.3 | none |
+| Settings: typing a search (the page lists the results and the sidebar keeps the panes found) | 16.0 / 12.7 / 7.7 | 1 of 8 at scales 2 and 1.5 |
 
-Before this work every frame of Files but the caret's and a hover's repainted 85–95 % of the window and took
-57–96 ms, and switching Settings panes repainted 96–98 % in 16–21 ms. Now a node that draws nothing (a stack, a
-scroll view's content, the listing's gesture layer) damages nothing, a node that draws damages its box, and a change
-that moves nothing keeps the layout. A scroll, a folder opened and the search results still repaint everything the
-listing shows, at about 9 ns a pixel: up to 7.6 million pixels a frame at scale 1. Meeting 8 ms there needs the
-renderer to move the pixels it has, or the GPU composition planned for Phase 6.
+Before the first damage work every frame of Files but the caret's and a hover's repainted 85–95 % of the window and
+took 57–96 ms. Now a node that draws nothing (a stack, a scroll view's content, the listing's gesture layer) damages
+nothing, a node that draws damages its box, and a change that moves nothing keeps the layout. A scroll, a folder
+opened and the search results still repaint everything the listing shows; meeting 8 ms there needs the renderer to
+move the pixels it has, or the GPU composition planned for Phase 6.
 
-The Settings rows were measured again on 2026-11-08, on the same machine, after its pages became grouped forms on
-their own background; before that, switching panes took 10.1 / 7.2 / 4.9 ms and typing a search 15.0 / 11.4 / 7.2 ms
-at p99. Switching panes repaints about the same share of the window (28 % at scale 2, 23 % before), but each damaged
-pixel now costs about 10.5 ns instead of 2.8, as the CPU renderer blends every layer it is given pixel by pixel. The
-page's own background, drawn over the window's, accounts for about a third of that; the groups' fills and the rest of
-the page add the remainder. Typing a search also repaints the sidebar, whose rows it filters.
+When the Settings pages became grouped forms on their own background, switching panes went from 10.2 / 7.1 / 4.9 ms
+to 39.4 / 29.1 / 20.3 ms and typing a search from 15.7 / 11.9 / 7.7 to 60.6 / 46.1 / 30.5 ms: the CPU renderer
+blended every layer pixel by pixel, the page's background over the window's, the groups' fills over the page's, at
+about 10.5 ns a damaged pixel. The renderer now takes a shorter way for solid fills, with the same pixels to the
+byte (`crates/cupertino-ui-render/README.md`):
+
+- The pixels a solid rectangle or rounded rectangle covers fully are written as rows, copied when the colour is
+  opaque; only its anti-aliased rim goes through an image of its own.
+- A one-colour write waits until something else paints there, so a group's fill over the page's background over the
+  window's becomes a single write.
+- Nodes under an opaque fill that covers a whole damaged rectangle are not painted, and the rectangle is not cleared.
+
+A damaged pixel of Settings now costs about 2.4 ns instead of 13.5 to 14, and a pixel the Files listing scrolls
+about 4 instead of 7.8. With
+these paths turned off, the same build on the same machine took 51.0 / 37.4 / 25.5 ms to switch panes, 75.1 / 55.5 /
+37.3 ms to type a search, 54.9 / 57.3 / 62.2 ms to scroll the Files listing and 5.9 / 6.5 / 7.4 ms for an arrow key
+among the rows in view. Opening and closing the Files search field takes as long either way; it is slower than on
+2026-11-07 for reasons outside the renderer.
 
 ## What this means for you
 

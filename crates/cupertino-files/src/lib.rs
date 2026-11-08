@@ -44,6 +44,7 @@ pub mod search_field;
 pub mod selection;
 pub mod settings;
 pub mod sort;
+pub mod spring;
 pub mod tags;
 pub use cupertino_thumbnails as thumbnail;
 pub mod thumbnail_service;

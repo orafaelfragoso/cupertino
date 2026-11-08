@@ -14,6 +14,7 @@ mod list;
 mod places;
 mod search;
 mod sidebar;
+mod spring;
 mod toolbar;
 mod transfer;
 mod view;
@@ -325,6 +326,8 @@ struct BrowserWindow {
     items_focused: bool,
     /// An item just renamed, whose row or icon takes the keyboard once the view shows it.
     focus_when_listed: Option<PathBuf>,
+    /// Folders a held drag opens ([`spring`]).
+    springing: spring::Springing,
 }
 
 /// The sheet that asks for a locked container's passphrase.
@@ -453,6 +456,12 @@ pub enum Event {
     Popup(Popup),
     /// A folder of the path bar was clicked: go to it.
     PathSegment(PathBuf),
+    /// A drag of files is over this folder of the list, the grid, the sidebar or the path bar, or over none of them.
+    SpringOver(Option<PathBuf>),
+    /// The timer of a drag's dwell over a folder is due: the dwell's generation and what the timer does.
+    SpringDue(u64, crate::spring::Step),
+    /// A drag that was over the window left it, or ended there without a drop.
+    DragLeft,
 }
 
 /// The toolbar's pop-up buttons.
@@ -659,6 +668,7 @@ impl Model {
             announcement: announce::Announcement::default(),
             items_focused: false,
             focus_when_listed: None,
+            springing: spring::Springing::default(),
         };
         window.entered();
         self.windows.insert(id, window);
@@ -783,6 +793,12 @@ impl Model {
                 if matches!(progress, DragProgress::Finished | DragProgress::Cancelled) {
                     self.session.dragged.clear();
                 }
+                // a cancelled drag takes the window it came from back to where it was
+                if progress == DragProgress::Cancelled {
+                    if let Some(window) = self.windows.get_mut(&id) {
+                        window.spring_back(&self.session);
+                    }
+                }
                 return Vec::new();
             }
             Event::Dropped {
@@ -792,6 +808,9 @@ impl Model {
                 action,
                 mods,
             } => {
+                if let Some(window) = self.windows.get_mut(&id) {
+                    window.spring_kept();
+                }
                 let done = to.and_then(|to| self.drop_items(id, &to, &paths, action, mods));
                 return vec![Command::FinishDrop(token, done)];
             }
@@ -812,6 +831,7 @@ impl Model {
                     window.now = (window.clock)();
                     window.read_available();
                 }
+                window.spring_settle();
                 let mut commands = window.listed(id);
                 commands.push(woken(&window.woken, Message::Window(id, Event::Woken)));
                 return commands;
@@ -843,6 +863,11 @@ impl Model {
                 }
             }
             Event::UnlockCancelled => window.unlock = None,
+            Event::SpringOver(folder) => return window.spring_over(id, folder),
+            Event::SpringDue(generation, step) => {
+                return window.spring_due(id, generation, step, session)
+            }
+            Event::DragLeft => window.spring_back(session),
             Event::Navigate(Navigation::Back) => window.step(Step::Back, session),
             Event::Navigate(Navigation::Forward) => window.step(Step::Forward, session),
             Event::Select(selection) => window.select(&selection, session),

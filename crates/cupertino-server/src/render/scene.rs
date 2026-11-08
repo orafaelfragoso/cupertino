@@ -480,9 +480,47 @@ pub(crate) fn rrect_item(
             style: corner_style(continuous),
             fill,
             border,
+            border_sides: 0.0,
         }),
         f64::from(alpha),
     ))
+}
+
+/// The outline of an edge ([`cupertino_decorations::Edge`]) just outside `rect`, whose corners are rounded by
+/// `radius`: a ring of whole device pixels whose inner side is the shape's outline, at `alpha`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn outline_item(
+    kind: SceneKind,
+    index: u64,
+    rect: smithay::utils::Rectangle<f64, Logical>,
+    radius: f64,
+    continuous: bool,
+    edge: &cupertino_decorations::Edge,
+    scale: f64,
+    alpha: f32,
+) -> Option<Piece> {
+    let (px, color) = edge.outline.device(scale);
+    if color[3] <= 0.0 || alpha <= 0.0 || rect.size.w <= 0.0 || rect.size.h <= 0.0 {
+        return None;
+    }
+    let w = f64::from(px) / scale;
+    let ring = smithay::utils::Rectangle::new(
+        (rect.loc.x - w, rect.loc.y - w).into(),
+        (rect.size.w + 2.0 * w, rect.size.h + 2.0 * w).into(),
+    );
+    Some(Piece::item(item(
+        kind,
+        index,
+        Source::RoundedRect(RoundedRect {
+            rect: output_rect(ring),
+            radius: radius + w,
+            style: corner_style(continuous),
+            fill: [0.0; 4],
+            border: Some((w, color)),
+            border_sides: edge.falloff.power(),
+        }),
+        f64::from(alpha),
+    )))
 }
 
 /// A surface tree drawn at `origin` as it is, without a window's rescale or mask.
@@ -801,6 +839,18 @@ fn window_elements(
     }
     out.extend(backdrops);
     if shadow && styled {
+        // the fine outline just outside the frame, over the shadow, fading with it (none on a full-screen window)
+        let edge = p.decor.edge(active);
+        out.extend(outline_item(
+            SceneKind::Outline,
+            entry.id.0,
+            visual_local,
+            radius,
+            style.continuous_corners,
+            &edge,
+            p.scale,
+            alpha * plan.shadow as f32,
+        ));
         out.extend(shadow_piece(p, entry.id, plan, active, plan.opacity));
     }
     out
@@ -1386,9 +1436,9 @@ fn layer_elements(p: &mut SceneParams<'_>, layer: Layer, captures: &mut Vec<Piec
 }
 
 /// Elements of popups that carry a material, to go directly below the popup's surface (front to back:
-/// rim, material, shadow). The rim is the window rim of 1 device pixel, the shadow
-/// the panel row of the table (it is cut out under the popup, so the material stays
-/// translucent). `backdrops` are in output-local logical coordinates.
+/// material or glass, outline, shadow). The outline is the menu edge (`Decor::menu_edge`) just outside the shape, the
+/// shadow the panel row of the table (it is cut out under the popup, so the material stays translucent). `backdrops`
+/// are in output-local logical coordinates.
 fn popup_backdrop_elements(
     p: &mut SceneParams<'_>,
     backdrops: &[BackdropArea],
@@ -1396,24 +1446,14 @@ fn popup_backdrop_elements(
 ) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();
     let params = p.decor.popup_shadow_params();
-    let rim = p.decor.rim_color(p.scale);
+    let edge = p.decor.menu_edge();
     let mut glass = GlassGroups::default();
     for b in backdrops.iter().rev() {
         let alpha = b.alpha as f32 * opacity;
         if b.glass.is_some() {
-            // glass lights its own rim
+            // glass lights its own rim inside the shape
             glass.add(b, out.len());
         } else {
-            out.push(rrect_item(
-                SceneKind::PopupRim,
-                b.key,
-                b.area,
-                b.radius,
-                true,
-                [0.0; 4],
-                Some((1.0 / p.scale, rim)),
-                alpha,
-            ));
             out.extend(material_layer(
                 p,
                 SceneKind::Backdrop,
@@ -1424,6 +1464,16 @@ fn popup_backdrop_elements(
                 alpha,
             ));
         }
+        out.extend(outline_item(
+            SceneKind::PopupRim,
+            b.key,
+            b.area,
+            b.radius,
+            true,
+            &edge,
+            p.scale,
+            alpha,
+        ));
         let visual = cupertino_wm::Rect::new(
             p.rect.x + b.area.loc.x,
             p.rect.y + b.area.loc.y,

@@ -164,6 +164,8 @@ fn a_capture_of_a_locked_output_holds_only_the_lock_surface_and_black() {
 struct Framed {
     clip: cupertino_scene::Clip,
     shadow: bool,
+    /// The fine outline just outside the frame.
+    outline: bool,
     titlebar: bool,
     rim: bool,
 }
@@ -191,6 +193,7 @@ fn framed(d: &mut Desktop) -> Framed {
             .map(|(_, clip)| *clip)
             .expect("the window's content"),
         shadow: has(SceneKind::Shadow),
+        outline: has(SceneKind::Outline),
         titlebar: has(SceneKind::TitleBar),
         rim: has(SceneKind::Rim),
     }
@@ -287,12 +290,12 @@ fn a_zoomed_or_filled_window_keeps_its_rounded_corners_and_shadow_and_a_full_scr
             if state == "full screen" {
                 assert!(!rounded(&frame.clip), "{mode:?} {state}: {frame:?}");
                 assert!(
-                    !(frame.shadow || frame.titlebar || frame.rim),
+                    !(frame.shadow || frame.outline || frame.titlebar || frame.rim),
                     "{mode:?} {state}: {frame:?}"
                 );
             } else {
                 assert!(rounded(&frame.clip), "{mode:?} {state}: {frame:?}");
-                assert!(frame.shadow, "{mode:?} {state}: {frame:?}");
+                assert!(frame.shadow && frame.outline, "{mode:?} {state}: {frame:?}");
                 assert_eq!(
                     (frame.titlebar, frame.rim),
                     (decorated, decorated),
@@ -311,7 +314,7 @@ fn a_window_whose_client_draws_its_own_decorations_keeps_its_own_shape_in_every_
     for (state, frame) in frames_by_state(&mut d, id) {
         assert!(!rounded(&frame.clip), "{state}: {frame:?}");
         assert!(
-            !(frame.shadow || frame.titlebar || frame.rim),
+            !(frame.shadow || frame.outline || frame.titlebar || frame.rim),
             "{state}: {frame:?}"
         );
     }

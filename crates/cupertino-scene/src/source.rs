@@ -94,6 +94,9 @@ pub struct RoundedRect {
     pub fill: [f32; 4],
     /// Width in logical points and straight RGBA colour.
     pub border: Option<(f64, [f32; 4])>,
+    /// Power the border's strength follows the horizontal part of the edge's outward normal by: full along the sides,
+    /// nothing at the top and bottom. 0 draws it the same all around.
+    pub border_sides: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

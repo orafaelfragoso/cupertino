@@ -38,14 +38,21 @@ surface, ends the process with a failure status so the server restarts it.
   bottom that takes the keyboard: the header stays at the top and the cards scroll below it in a Kit `ScrollView`, which ends
   `BOTTOM_MARGIN` (16 pt) above the screen's bottom edge. A replaced notification gets a new banner window (its height may
   change).
-- **Display options.** Reduce Motion sets `Motion::reduce_motion` (banners fade in place); unfolding a body and scrolling have
-  no animation of their own beyond the scroll view's. Kit follows the appearance, Reduce Transparency and Increase Contrast
-  itself: under either, or without the compositor's effects, the theme's popover surface has no material and every card paints
-  its opaque fill.
+- **Display options.** Reduce Motion sets `Motion::reduce_motion`: banners fade in place and a group expands and collapses at
+  once; unfolding a body and scrolling have no animation of their own beyond the scroll view's. Kit follows the appearance,
+  Reduce Transparency and Increase Contrast itself: under either the cards keep their glass, drawn with the compositor's recipe
+  for it; without the compositor's effects every card paints the popover surface's opaque fill.
 - **Input.** Hover pauses the timeout. A click runs the default action, a button its action, a link `xdg-open`. The close button
   dismisses, and a drag to the right swipes the banner away. Every action first fetches an `xdg_activation_v1` token, which goes
   out as `ActivationToken` before `ActionInvoked`. While the list is open the surface takes the keyboard and Escape, or a press
-  outside the header, the cards and the Clear menu, closes it. The list scrolls with the wheel (40 pt a notch), the touchpad
+  outside the header, the cards and the Clear menu, closes it. In the list the pointer over a card, or the keyboard on it,
+  reveals its close button and its action buttons (the card grows to show them); a banner shows its buttons always and its
+  close button while hovered. A click (or Return, Space or assistive technology's click) on a collapsed group of more than
+  one notification expands it: a header row with the application, Show Less and a clear button for the group, then each
+  card on its own, 6 pt apart; the cards move out of the stack with a spring of 0.35 s perceptual duration and no bounce,
+  their text fading in as they arrive, and Show Less moves them back. The header's clear button is a circle with a cross
+  that grows into "Clear All" under the pointer or the keyboard; it clears the list, or opens the Clear menu when there are
+  two scopes. The list scrolls with the wheel (40 pt a notch), the touchpad
   (by its distance, offsets kept on whole points) and the keyboard (Up, Down, Page Up, Page Down, Home, End); Tab moves
   between the cards and their buttons and the list follows the focus. On a focused card Return, keypad Enter and Space run its
   default action and Delete or Backspace clears it; the focus then goes to the card in its place (its group's next one, else the next group's, else the one before).
@@ -95,22 +102,26 @@ surface, ends the process with a failure status so the server restarts it.
   unlock (see Session); an application whose previews are Never is said as its application and "Notification". The centre
   is a group named "Notification Centre" holding a list of its cards (list items with their position); its cards are
   not live. Each is named "app: summary" with its whole body as description, read as a reader moves to it, and a
-  group's front card says how many more it holds. The first card takes the focus when the list opens. Every card, close button and action button takes assistive technology's click, and the disclosure button reports
+  group's front card says how many more it holds and that it is collapsed (expanded state false). The first card takes the
+  focus when the list opens, and keeps it while its group expands. Every card, close button and action button takes assistive technology's click, and the disclosure button reports
   whether the body is unfolded.
 - **Banners.** One on screen, one waiting. A banner arriving while one is shown takes the waiting slot; a banner already waiting goes straight to the centre. Critical urgency and `expire_timeout = 0` are alerts without a timer; a waiting banner
   stays behind them. A client `expire_timeout` is honoured, capped at 60 s. A rightward release dismisses at speed
   `max(dx/100, 8) / 15`; a leftward one springs back.
 - **Do not disturb.** Banners are suppressed and notifications kept in the centre. Critical urgency bypasses it
   (`critical_bypasses_dnd`), and `Until(t) ends by itself.
-- **Drawing.** Kit controls on a card the `view` module paints: the compositor's material of the theme's popover surface under
-  the card (`PaintCx::material`, cut to the part the list shows), a 0.5 pt separator outline, 16 pt corners and a drop shadow
-  around it, faded as one layer with its content. Where the material is refused (reduced transparency, increased contrast, no
-  compositor effects, more materials than the window may show) the card paints the surface's opaque fill instead. The cards
-  behind a group's front card and the Clear menu are always opaque, as a material would show through to the card in front. A
-  32 pt icon (the `app_icon` symbol, else `bell`), the summary semibold in up to `SUMMARY_LINES` (2) lines, the body in up to
-  `BODY_LINES` (4) lines with bold, italic and link markup (`RichText`, links are `xdg-open`ed), up to 3 action buttons
-  (pills, sharing the row when their labels do not fit) and an 18 pt close button centred on the top-leading corner,
-  clear of the icon (a banner's while hovered, always on a centre card). Text wraps at word boundaries and keeps the body's
+- **Drawing.** Kit controls on a card the `view` module paints: regular glass under the card (`PaintCx::glass`, cut to the
+  part the list shows), a 0.5 pt separator outline, 18 pt corners and a drop shadow drawn only outside it, faded as one
+  layer with its content. A collapsed group's front card and the sheets peeking below it join one glass container with a
+  hard edge, so they read as one shape; each sheet's shadow, darkening and outline stay off the front card. Where the glass
+  is refused (no compositor effects, more glass nodes than the window may show) a card paints the popover surface's opaque
+  fill instead. The Clear menu is always opaque, as glass would show through to the cards under it. The header has no
+  panel: the title, bold 19 pt, sits over the cards' leading edge, the clear button at their trailing edge. A card holds a
+  32 pt icon (the `app_icon` symbol, else `bell`) 13 pt from its leading edge and 14 pt before the text, its age at the top
+  right ("now", "5m ago", "2h ago", "3d ago", 11 pt secondary), the summary semibold in up to `SUMMARY_LINES` (2) lines
+  short of the age, the body in the label colour in up to `BODY_LINES` (4) lines with bold, italic and link markup
+  (`RichText`, links are `xdg-open`ed), up to 3 action buttons (pills, sharing the row when their labels do not fit) and an
+  18 pt close button centred on the top-leading corner, clear of the icon. A card is at least 58 pt tall. Text wraps at word boundaries and keeps the body's
   line breaks; text past the limit ends in an ellipsis and links past the cut are dropped. A centre card whose body is
   cut has a disclosure button beside its summary that unfolds the body to `UNFOLDED_BODY_LINES` (20); banners stay folded
   (the centre holds the whole message). Card heights come from `view::CardMetrics`, which measures the text with the
@@ -215,13 +226,20 @@ The model's calls, for a host of its own (all take `now`):
 | shadow opacity 0.20 / 0.25, radius 4, no offset; vibrant rim; 1 pt white inner rim | |
 | alerts skip the timer (critical urgency → alert mapping is ours) | |
 | top inset (menu bar + 16 pt), right margin 16 pt (Dock at the bottom) | |
-| centre header: a panel of the cards' material, corner radius and rim, 6 pt above the first card; title "Notification Centre" bold 22 at the card padding (12 pt) from its left edge, Clear menu button 6 pt inside its right edge, top and bottom; the open list replaces the banners on screen | |
+| centre header: a 44 pt row without a panel, 5 pt above the first card; title "Notification Centre" bold 19 pt 3 pt in from the cards' leading edge; an 18 pt clear button at their trailing edge, growing into "Clear All"; the open list replaces the banners on screen | |
+| card: 18 pt corners, regular glass, icon 13 pt from the leading edge and 14 pt before the text, 16 pt trailing, 12 pt top and bottom, at least 58 pt tall; age 11 pt at the top right in 56 pt of room | |
+| expanded group: a 30 pt header row (application 15 pt semibold, Show Less, clear), cards 6 pt apart; a spring of perceptual duration 0.35 s, no bounce | |
 | Clear menu scopes: "Banners Only" (keeps pinned; offered only with both pinned and other notifications in the list) and "All Notifications" (always); panel metrics item 22, edge padding 5, minimum width 150, radius 6, row highlight radius 4 | |
 | corner radius 14 pt, platter material `Medium`, all other banner metrics | |
 | Focus rows: "For 1 hour" (3600 s), "Until this evening" from 04:00 to 17:59 else "Until tomorrow morning"; both end today 07:00 before 04:00, today 19:00 before 18:00, else tomorrow 07:00; durations clamped to 86400 s; row ids `one-hour`, `evening`, `morning` | |
 | the location and calendar-event rows are not offered (no place or calendar source in the session) | |
 
 ## Open issues
+
+- The centre holds notifications only: no widgets, as the session has no data source for them.
+- A centre card's close and action buttons are in the accessibility tree while it is revealed (pointer or keyboard on it); a
+  reader that browses without moving the focus reaches its default action and clearing through the card itself (click,
+  Delete).
 
 - A card scrolled partly under the header is cut by the list's edge, but its material keeps rounded corners there: the
   compositor's backdrop shapes are rounded rectangles of one radius.
@@ -238,5 +256,5 @@ cargo test -p cupertino-notifications
 |---|---|
 | `tests/dbus_integration.rs` | The server against a real client on a private `dbus-daemon`. Skipped when `dbus-daemon` is not installed. `Notify` caps the application name, summary and body; the lock screen gets only what the policy allows (redacted, full with Always, nothing for an application kept off it, empty unlocked), `LockScreenChanged` at each change, and `Applications`; a caller over anonymous TCP (no process the bus can name) neither closes nor replaces another's notification, while another unsandboxed process does both. The unit tests of `dbus.rs` cover the rest of `may_change`: a sandboxed caller changes only what its own instance sent. |
 | `src/center/tests.rs` | The model: arrival, transient and Do Not Disturb while locked; a replacement while locked stays in the centre or updates the frozen banner; locking freezes the banner on screen and sends the waiting one to the centre; the unlock resumes it quietly for at least the minimum time, while an update is heard; a per-application override; each preview policy on the lock screen and the banners; the list bounded and capped; `applications`. |
-| `tests/kit_goldens.rs` | The Kit windows on the headless window system against the Inspector dumps in `tests/goldens/`: a banner sliding in and at rest, a critical one taking over, with the screen-reader announcements (`banner`); the centre with a stacked group (`centre-stacked`); a swipe dragged 60 pt and mid-dismissal (`swipe-dismiss`). `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. Geometry and interaction: a long banner body wraps inside its card and stops at its line limit; the centre scrolls with the wheel, the touchpad and the keyboard and a click hits the card shown there; a banner's close button stays under the pointer past the card's edge and dismisses it; the disclosure button unfolds and folds a body; the keyboard activates and clears cards, the focus following to the card in a cleared one's place, the close button clears one and Escape closes an empty centre; each card's material region is its card and Reduce Transparency paints fills. Screen reader, through `cupertino-ui-test`'s stand-in reader, which announces as the AT-SPI bridge does (a live node's name, as it appears or is renamed): a new banner says its application, title and body and not its buttons; a banner updated in place is said again; nothing is said or readable while locked and nothing is said again at the unlock, while the next update of the banner back on screen is; an application without previews shows and says only its name and "Notification" (with `CUPERTINO_LOOK_DIR` set, capture `banner-without-previews`); banners arriving together are each said as they show; announcing never takes the focus; a reader's click on an action button invokes it; the centre's cards carry their whole body as description. |
-| `src/view/tests.rs` | `CardMetrics` against the built-in font: heights follow the text, wrapping, line limits and ellipsis, kept line breaks, the body byte bound, links cut at the ellipsis, buttons sharing a row, the close button on the corner clear of the icon and in the banner's input region, a banner's speech (order, spacing, the cut body), the caps drawn with an ellipsis, no window while locked, and the `apply` of scroll, unfold, clear and close. |
+| `tests/kit_goldens.rs` | The Kit windows on the headless window system against the Inspector dumps in `tests/goldens/`: a banner sliding in and at rest, a critical one taking over, with the screen-reader announcements (`banner`); the centre with a stacked group (`centre-stacked`) and with a group expanded (`centre-expanded`: a click expands it, its cards move out of the stack, Show Less collapses it); a swipe dragged 60 pt and mid-dismissal (`swipe-dismiss`). `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. Geometry and interaction: a long banner body wraps inside its card and stops at its line limit; the centre scrolls with the wheel, the touchpad and the keyboard and a click hits the card shown there; a banner's close button stays under the pointer past the card's edge and dismisses it; the disclosure button unfolds and folds a body; the keyboard activates and clears cards, the focus following to the card in a cleared one's place, the close button clears one and Escape closes an empty centre; each card's material region is its card and Reduce Transparency paints fills. Screen reader, through `cupertino-ui-test`'s stand-in reader, which announces as the AT-SPI bridge does (a live node's name, as it appears or is renamed): a new banner says its application, title and body and not its buttons; a banner updated in place is said again; nothing is said or readable while locked and nothing is said again at the unlock, while the next update of the banner back on screen is; an application without previews shows and says only its name and "Notification" (with `CUPERTINO_LOOK_DIR` set, capture `banner-without-previews`); banners arriving together are each said as they show; announcing never takes the focus; a reader's click on an action button invokes it; the centre's cards carry their whole body as description. |
+| `src/view/tests.rs` | `CardMetrics` against the built-in font: heights follow the text, wrapping, line limits and ellipsis, kept line breaks, the body byte bound, links cut at the ellipsis, buttons sharing a row, the close button on the corner clear of the icon and in the banner's input region, a banner's speech (order, spacing, the cut body), the caps drawn with an ellipsis, no window while locked, the `apply` of scroll, unfold, clear and close, the age words, a centre card's buttons only while revealed, and a group's expansion spring, instant under Reduce Motion, and clearing a whole group. |

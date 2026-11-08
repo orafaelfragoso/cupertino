@@ -259,6 +259,12 @@ impl Notifications {
             c.tick(now);
             c.next_wakeup(now)
         };
+        // a group of the centre expanding or collapsing needs every frame
+        let wakeup = if self.ui.centre_open && self.ui.is_animating(now) {
+            Some(Wakeup::Frame)
+        } else {
+            wakeup
+        };
         if let Err(e) = self.server.flush_events() {
             eprintln!("cupertino-notifications: cannot send the signals: {e}");
         }

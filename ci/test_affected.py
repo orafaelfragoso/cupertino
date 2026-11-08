@@ -83,21 +83,24 @@ class AffectedTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cargo = root / "cargo"
+            # Every descriptor in the list, as the wrapper passes a worktree lock and one or more slots.
             cargo.write_text('#!' + sys.executable + '\nimport os, sys\n'
-                             + 'os.write(int(os.environ["CUPERTINO_BUILD_LOCK_FD"]), (sys.argv[1] + "\\n").encode())\n')
+                             + 'for d in os.environ["CUPERTINO_BUILD_LOCK_FD"].split(","):\n'
+                             + '    os.write(int(d), (sys.argv[1] + "\\n").encode())\n')
             cargo.chmod(0o700)
             script = Path(__file__).resolve().with_name("affected.py")
-            with (root / "lease").open("w+b") as lease:
-                descriptor = lease.fileno()
+            with (root / "lease").open("w+b") as lease, (root / "slot").open("w+b") as slot:
+                descriptors = (lease.fileno(), slot.fileno())
                 env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", CUPERTINO_CI_PACKAGES='["core"]',
-                           CUPERTINO_BUILD_LOCK_FD=str(descriptor))
+                           CUPERTINO_BUILD_LOCK_FD=",".join(map(str, descriptors)))
                 for check in ("clippy", "tests", "doctests"):
                     with self.subTest(check=check):
                         result = subprocess.run([sys.executable, str(script), "run", check], env=env,
-                                                pass_fds=(descriptor,), capture_output=True, text=True)
+                                                pass_fds=descriptors, capture_output=True, text=True)
                         self.assertEqual(result.returncode, 0, result.stderr)
-                lease.seek(0)
-                self.assertEqual(lease.read(), b"clippy\nnextest\ntest\n")
+                for stream in (lease, slot):
+                    stream.seek(0)
+                    self.assertEqual(stream.read(), b"clippy\nnextest\ntest\n")
 
     def test_fixture_and_test_commands_use_the_same_expanded_package_union(self) -> None:
         packages = self.packages + [

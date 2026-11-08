@@ -105,21 +105,19 @@ composite then, per pixel:
 Unit tests check each stage on the model (`glass::tests`), and that body text (black at 85 %) on light regular glass stays at 4.5:1 or more over the darkest backdrops at every panel size and accessibility recipe, and `tests/shaders.rs` checks that the `Glass` block has the
 same members in both shader languages and the Rust struct's size.
 
-**Foreground: not applied yet.** `cupertino-theme` holds the foreground matrices (`foreground_matrix`, lifting the
-face under a glyph to white on dark glass and dropping it to black on light glass) and `adapts_foreground` (shapes
-whose shorter side is under 64 points choose the matrix from what is behind them, larger bars and panels keep their
-appearance's), and `glass::foreground` is their CPU model, but nothing draws with them: toolkit text on glass keeps
-the theme's label colours. The toolkit draws its text in the client, which never sees the backdrop, so applying them
-needs:
+**Foreground.** `cupertino-theme` holds the foreground matrices (`foreground_matrix`, lifting the face under a glyph to
+white on dark glass and dropping it to black on light glass) and `adapts_foreground` (shapes whose shorter side is under
+64 points choose the matrix from what is behind them, larger bars and panels keep their appearance's); `glass::foreground`
+is their CPU model. The toolkit draws its text in the client, which never sees the backdrop, so the server tells it:
 
-1. the server measuring, after it blurs a container, the mean colour of the widest level under each glass backdrop
-   (a few texels read back without stalling, through a pixel buffer a frame later) and sending it with a new
-   `cupertino_backdrop_v1` event when its luminance crosses a threshold with some hysteresis, so that video under a
-   control does not make the text flicker;
-2. `PaintCx::glass` returning that colour to the node, and the toolkit's environment giving the node's descendants a
-   foreground of `glass::foreground(face_color(measured), foreground_matrix(…), 1)`: the appearance's matrix for
-   larger shapes, and for small ones the matrix of the side the measured face falls on;
-3. a golden per appearance of a small glass control over a light and a dark backdrop.
+1. after it blurs a container whose union of shapes adapts, the server reads the widest blur level back into a grid of
+   at most 32 × 32 texels through a pixel buffer, without stalling (the fence is polled after later frames), takes the
+   mean under each shape, runs it through `face_color` and sends the `tone` event of `cupertino_backdrop_v1` (version 7)
+   when the face's luminance crosses `FACE_TONE_THRESHOLD` by more than `FACE_TONE_HYSTERESIS`. Nothing is read or sent
+   while the backdrop does not change; a shape that stops adapting is told `appearance` once;
+2. the toolkit gives a glass node and everything drawn on it (its subtree, and later nodes inside its shape) the theme
+   of text on glass (`ThemeTokens::on_glass`): neutral labels take `foreground_rgb` of the tone at the vibrant levels
+   (`VIBRANT_PRIMARY`, `VIBRANT_SECONDARY`, `VIBRANT_PLACEHOLDER`); accents, fills and selected labels keep theirs.
 
 The alternative, drawing glass text in the compositor as the menu bar's vibrant text is (`draw_vibrant`), needs the
 glyphs on a surface of their own and is not planned.

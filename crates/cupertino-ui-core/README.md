@@ -79,6 +79,13 @@ all on one thread.
   container are drawn as one shape: their outlines blend into each other over the container's spacing, so two buttons
   close together merge. It is granted under the same limits as `material` and travels in the same
   `WindowRequest::Materials` list (`MaterialRegion::glass`).
+- **Text on glass.** What a glass node paints after asking, its subtree and, for a node with no material above it,
+  any later node of the window that its glass holds whole (a panel's content drawn beside the node of its glass) take
+  the theme of text on glass (`ThemeTokens::on_glass`) through `PaintCx::env`; so does a window whose own material is
+  glass and shown. A small shape follows the tone the compositor measured under it (`WindowEvent::GlassTone`, kept by
+  region in the painter and reset when the material list changes); without one, and on a compositor before version 7
+  of the effects, labels take the appearance's matrix. A node over a material other than glass keeps the window's
+  colours. A tone that changes repaints only the nodes on that glass.
 
   ```rust
   use cupertino_ui_core::{Glass, PaintCx};

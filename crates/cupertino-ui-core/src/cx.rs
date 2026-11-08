@@ -296,7 +296,12 @@ impl<M> EventCx<'_, M> {
 pub struct PaintCx<'a> {
     pub(crate) node: NodeId,
     pub(crate) size: Size,
+    /// What the node paints with: on glass, the theme of text on glass ([`PaintCx::glass`]).
     pub(crate) env: &'a Environment,
+    /// The window's environment, for what the node paints over a material that is not glass.
+    pub(crate) plain_env: &'a Environment,
+    /// The environment of text on the glass the node would show, for what it paints once it asked for it.
+    pub(crate) glass_env: &'a Environment,
     pub(crate) focused: bool,
     pub(crate) focus_visible: bool,
     pub(crate) window_active: bool,
@@ -424,7 +429,18 @@ impl PaintCx<'_> {
                 spacing: 0.0,
             }),
         });
+        self.take_foreground();
         self.material.is_some()
+    }
+
+    /// What the node paints after it asked for a material lies on it: text and symbols on glass take the colours of
+    /// the glass's face, and over any other material the window's.
+    fn take_foreground(&mut self) {
+        match self.material {
+            Some(NodeMaterial { glass: Some(_), .. }) => self.env = self.glass_env,
+            Some(_) => self.env = self.plain_env,
+            None => {}
+        }
     }
 
     /// Makes this node glass: the compositor draws `glass` under its whole size, cut by the clips around it. Nodes of
@@ -433,6 +449,11 @@ impl PaintCx<'_> {
     /// does not without the desktop's effects or past [`MAX_MATERIALS`](crate::MAX_MATERIALS) in one window, and the
     /// node then paints a fill itself. Reduce Transparency and Increase Contrast keep the glass, with the compositor's
     /// recipes for them. The glass lies under everything the window paints.
+    ///
+    /// What the node paints after it asked, and its whole subtree, lies on the glass: [`PaintCx::env`] then has the
+    /// theme of text on glass ([`ThemeTokens::on_glass`](cupertino_ui_theme::ThemeTokens::on_glass)), whose labels take
+    /// the colour of the glass's face, light or dark on a small shape as the compositor measured it. A node reads its
+    /// colours after this call. [`PaintCx::material`] with a glass surface does the same.
     pub fn glass(&mut self, glass: Glass) -> bool {
         *self.asked_material = true;
         let finite = |v: f64, otherwise: f64| if v.is_finite() { v } else { otherwise };
@@ -451,6 +472,7 @@ impl PaintCx<'_> {
                 spacing: finite(glass.spacing, 0.0).max(0.0),
             }),
         });
+        self.take_foreground();
         self.material.is_some()
     }
 }

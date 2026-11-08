@@ -587,12 +587,102 @@ pub fn adapts_foreground(short_side: f32) -> bool {
     short_side < SMALL_CONTROL_SIDE
 }
 
+/// What a small glass shape's face looks like, which picks its foreground ([`FaceTone::matrix`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FaceTone {
+    /// A dark face: light text and symbols.
+    Dark,
+    /// A light face: dark text and symbols.
+    Light,
+}
+
+impl FaceTone {
+    /// The foreground matrix of a face of this tone: the dark appearance's over a dark face, the light one's over a
+    /// light face.
+    pub fn matrix(self) -> ColorMatrix {
+        foreground_matrix(self == FaceTone::Dark)
+    }
+}
+
+/// The relative luminance of a face where white and black text read equally well (both about 4.6:1): above it a small
+/// shape's face counts as light.
+pub const FACE_TONE_THRESHOLD: f32 = 0.179;
+/// How far past [`FACE_TONE_THRESHOLD`] the luminance must go before the tone changes, so that a backdrop moving about
+/// the threshold (video under a control) does not make the text flicker.
+pub const FACE_TONE_HYSTERESIS: f32 = 0.03;
+
+/// The tone of a face of relative luminance `luminance`, which had tone `previous` (`None` when it was not measured
+/// yet). The tone changes only once the luminance is [`FACE_TONE_HYSTERESIS`] past the threshold on the other side.
+pub fn face_tone(luminance: f32, previous: Option<FaceTone>) -> FaceTone {
+    let light_from = match previous {
+        None => FACE_TONE_THRESHOLD,
+        Some(FaceTone::Dark) => FACE_TONE_THRESHOLD + FACE_TONE_HYSTERESIS,
+        Some(FaceTone::Light) => FACE_TONE_THRESHOLD - FACE_TONE_HYSTERESIS,
+    };
+    if luminance > light_from {
+        FaceTone::Light
+    } else {
+        FaceTone::Dark
+    }
+}
+
+/// The foreground matrix of text and symbols on a glass shape of `dark` appearance whose face was measured as `tone`:
+/// the appearance's matrix until it was measured, or when the shape does not adapt ([`adapts_foreground`]).
+pub fn foreground_matrix_for(dark: bool, tone: Option<FaceTone>) -> ColorMatrix {
+    tone.map_or_else(|| foreground_matrix(dark), FaceTone::matrix)
+}
+
+/// The relative luminance of an encoded sRGB colour, each channel from 0 to 1.
+pub fn relative_luminance(rgb: [f32; 3]) -> f32 {
+    let lin = |v: f32| {
+        let v = v.clamp(0.0, 1.0);
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2])
+}
+
+/// The contrast ratio of two encoded sRGB colours, from 1 to 21.
+pub fn contrast_ratio(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let (la, lb) = (relative_luminance(a), relative_luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
 /// `m · [rgb, a]`, unclamped.
 pub fn apply_matrix(m: &ColorMatrix, c: [f32; 4]) -> [f32; 4] {
     std::array::from_fn(|r| {
         let row = &m[r * 5..r * 5 + 5];
         row[0] * c[0] + row[1] * c[1] + row[2] * c[2] + row[3] * c[3] + row[4]
     })
+}
+
+/// How strongly a primary label (text, a control's text, a header) is drawn on glass: the face behind it is busier
+/// than a window's background, so labels on glass are drawn more opaque than on a plain window.
+pub const VIBRANT_PRIMARY: f32 = 1.0;
+/// How strongly a secondary label is drawn on glass.
+pub const VIBRANT_SECONDARY: f32 = 0.75;
+/// How strongly a text field's placeholder is drawn on glass.
+pub const VIBRANT_PLACEHOLDER: f32 = 0.7;
+
+/// The face the foreground matrix is applied to when the window does not know the face: a mid grey. Both matrices
+/// carry any face but the darkest to white or to black, so the exact face hardly matters.
+const NOMINAL_FACE: f32 = 0.5;
+
+/// The colour of text and symbols on glass of the `dark` appearance whose face was measured as `tone`
+/// ([`foreground_matrix_for`]), as an encoded sRGB colour the window draws at a label's opacity.
+pub fn foreground_rgb(dark: bool, tone: Option<FaceTone>) -> [f32; 3] {
+    let out = apply_matrix(
+        &foreground_matrix_for(dark, tone),
+        [NOMINAL_FACE, NOMINAL_FACE, NOMINAL_FACE, 1.0],
+    );
+    [
+        out[0].clamp(0.0, 1.0),
+        out[1].clamp(0.0, 1.0),
+        out[2].clamp(0.0, 1.0),
+    ]
 }
 
 #[cfg(test)]
@@ -847,6 +937,91 @@ mod tests {
         let on_light = apply_matrix(&foreground_matrix(false), grey);
         assert!(close(on_light[0], -0.7));
         assert!(adapts_foreground(40.0) && !adapts_foreground(64.0));
+    }
+
+    #[test]
+    fn the_threshold_is_where_white_and_black_text_read_alike() {
+        let grey = |l: f32| {
+            // the encoded grey of relative luminance l
+            let e = if l <= 0.0031308 {
+                l * 12.92
+            } else {
+                1.055 * l.powf(1.0 / 2.4) - 0.055
+            };
+            [e; 3]
+        };
+        let face = grey(FACE_TONE_THRESHOLD);
+        let (white, black) = (
+            contrast_ratio([1.0; 3], face),
+            contrast_ratio([0.0; 3], face),
+        );
+        assert!(
+            (white - black).abs() < 0.05 && white > 4.5,
+            "{white} {black}"
+        );
+        // the side each tone picks reads better than the other one over the faces it is picked for
+        for l in [0.02, 0.1, 0.25, 0.6, 0.95] {
+            let rgb = |m: ColorMatrix| {
+                let o = apply_matrix(&m, [grey(l)[0], grey(l)[1], grey(l)[2], 1.0]);
+                [o[0], o[1], o[2]].map(|v| v.clamp(0.0, 1.0))
+            };
+            let picked = face_tone(l, None);
+            let other = match picked {
+                FaceTone::Dark => FaceTone::Light,
+                FaceTone::Light => FaceTone::Dark,
+            };
+            assert!(
+                contrast_ratio(rgb(picked.matrix()), grey(l))
+                    >= contrast_ratio(rgb(other.matrix()), grey(l)),
+                "{l}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_tone_changes_only_past_the_hysteresis() {
+        let t = FACE_TONE_THRESHOLD;
+        let h = FACE_TONE_HYSTERESIS;
+        assert_eq!(face_tone(t - 0.01, None), FaceTone::Dark);
+        assert_eq!(face_tone(t + 0.01, None), FaceTone::Light);
+        // a dark face that brightens a little past the threshold stays dark, and only flips past the band
+        assert_eq!(face_tone(t + h * 0.5, Some(FaceTone::Dark)), FaceTone::Dark);
+        assert_eq!(
+            face_tone(t + h * 1.5, Some(FaceTone::Dark)),
+            FaceTone::Light
+        );
+        assert_eq!(
+            face_tone(t - h * 0.5, Some(FaceTone::Light)),
+            FaceTone::Light
+        );
+        assert_eq!(
+            face_tone(t - h * 1.5, Some(FaceTone::Light)),
+            FaceTone::Dark
+        );
+        // a luminance wobbling inside the band never changes the tone, from either side
+        for start in [FaceTone::Dark, FaceTone::Light] {
+            let mut tone = start;
+            for i in 0..100 {
+                let wobble = (i as f32 * 0.7).sin() * h * 0.9;
+                tone = face_tone(t + wobble, Some(tone));
+                assert_eq!(tone, start);
+            }
+        }
+    }
+
+    #[test]
+    fn unmeasured_and_large_shapes_keep_the_appearances_matrix() {
+        assert_eq!(foreground_matrix_for(true, None), foreground_matrix(true));
+        assert_eq!(foreground_matrix_for(false, None), foreground_matrix(false));
+        // a small dark shape over a light face takes the light appearance's matrix, and the other way round
+        assert_eq!(
+            foreground_matrix_for(true, Some(FaceTone::Light)),
+            foreground_matrix(false)
+        );
+        assert_eq!(
+            foreground_matrix_for(false, Some(FaceTone::Dark)),
+            foreground_matrix(true)
+        );
     }
 
     #[test]

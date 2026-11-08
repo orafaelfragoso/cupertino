@@ -5,6 +5,8 @@
 //! ([`AppEffects::appearance`]), creates server-rendered [`Backdrop`]s, sets the title bar style of an
 //! application window, announces where a window's menus are on the session bus ([`AppEffects::menu`]), for the
 //! desktop's menu bar, and disables a window's minimize and zoom controls ([`AppEffects::set_disabled_controls`]).
+//! A glass backdrop tells the tone of the face behind it ([`AppEvent::BackdropTone`], version 7), which picks the
+//! colour of the text and symbols over a small shape.
 //! [`ScrollCounts`] (`cupertino_scroll_v1`) reports how many scroll steps each pointer frame carries. What the objects
 //! receive arrives as an [`AppEvent`] inside the transport's `Event::Extension`, in order with the transport's own
 //! events.
@@ -14,7 +16,7 @@ mod effects;
 mod error;
 mod scroll;
 
-pub use backdrop::{Backdrop, GlassStyle};
+pub use backdrop::{Backdrop, BackdropId, BackdropTone, GlassStyle};
 pub use effects::{
     report_appearance, report_display_options, AppEffects, AppEvent, AppMenu, Appearance,
     MenuAddress, WindowControls, WindowStyle,

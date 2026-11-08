@@ -230,6 +230,19 @@ pub struct GlassRegion {
     pub spacing: f64,
 }
 
+/// What the text and symbols over a glass region are drawn with: the compositor measures the face of a small glass
+/// shape and tells whether it is dark or light ([`WindowEvent::GlassTone`]); larger ones keep the appearance's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GlassTone {
+    /// The appearance's: nothing was measured, or the shape is too large to follow what lies behind it.
+    #[default]
+    Appearance,
+    /// A dark face: light text and symbols.
+    Dark,
+    /// A light face: dark text and symbols.
+    Light,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CursorShape {
     #[default]
@@ -529,6 +542,13 @@ pub enum WindowEvent {
     MenuActivated(ActionName),
     /// A drag from any application over the window. Needs [`Capabilities::drag_and_drop`].
     Drop(DropEvent),
+    /// The face of a glass region changed tone: `region` is the index of a [`MaterialRegion`] of the last
+    /// [`WindowRequest::Materials`], or `None` for the window's own [`Backdrop`]. A window system that measures nothing
+    /// never sends it, and every region keeps [`GlassTone::Appearance`].
+    GlassTone {
+        region: Option<usize>,
+        tone: GlassTone,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

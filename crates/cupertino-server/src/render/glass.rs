@@ -19,9 +19,11 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use cupertino_glass::blur::plan_blur;
-use cupertino_glass::glass::{Container, GlassUniform};
+use cupertino_glass::glass::{face_color, Container, GlassUniform};
 use cupertino_glass::ops::PassParams;
-use cupertino_theme::glass::{BLUR_LEVELS, GLASS_BACKDROP_SCALE};
+use cupertino_theme::glass::{
+    relative_luminance, GlassMode, GlassParams, BLUR_LEVELS, GLASS_BACKDROP_SCALE,
+};
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{ffi, GlesError, GlesFrame, GlesRenderer};
 use smithay::backend::renderer::utils::{CommitCounter, OpaqueRegions};
@@ -55,7 +57,32 @@ pub struct GlassContainer {
     pub container: Container,
     /// Identity of everything that changes how it looks besides the backdrop.
     pub key: u64,
+    /// The small shapes whose face the pass measures when it makes the container's blurred backdrop, for the tone of
+    /// their text ([`ToneProbe`]).
+    pub probes: Vec<ToneProbe>,
 }
+
+/// A glass shape whose text follows what lies behind it: the backdrop it was made for and its rectangle in
+/// output-local points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToneProbe {
+    /// The serial of the client's backdrop.
+    pub serial: u64,
+    pub rect: [f32; 4],
+}
+
+/// The face luminance measured under one backdrop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToneReading {
+    pub serial: u64,
+    pub luminance: f32,
+}
+
+/// The side, in texels, of the grid the widest blur level is read back at: it is blurred over tens of points, so a
+/// coarse grid holds all it says.
+const TONE_GRID: i32 = 32;
+/// Readbacks waiting for the GPU at once; past it the oldest is given up.
+const MAX_TONE_READS: usize = 8;
 
 impl GlassContainer {
     pub fn new(container: Container) -> Self {
@@ -74,7 +101,22 @@ impl GlassContainer {
         Self {
             key: h.finish(),
             container,
+            probes: Vec::new(),
         }
+    }
+
+    /// The container measuring the faces of `probes`. They are part of its identity, so a new backdrop over an
+    /// unchanged shape is measured too.
+    pub fn with_probes(mut self, probes: Vec<ToneProbe>) -> Self {
+        if !probes.is_empty() {
+            let mut sig = Sig::new().u(self.key);
+            for p in &probes {
+                sig = sig.u(p.serial);
+            }
+            self.key = sig.finish();
+        }
+        self.probes = probes;
+        self
     }
 
     /// Identity of the textures the container needs: its look, the backdrop signature and the scale.
@@ -190,6 +232,88 @@ pub(super) struct GlassGl {
     quad: GLint,
     ubo: GLuint,
     cache: GlassCache<CachedGlass>,
+    /// Readbacks of faces under small shapes, oldest first, until the GPU finished them.
+    reads: Vec<ToneRead>,
+    /// Faces measured since the server last took them ([`MaterialGl::take_tones`]).
+    readings: Vec<ToneReading>,
+    /// Glass backdrops that were drawn too large to follow what lies behind them since the server last took them.
+    unadapted: Vec<u64>,
+}
+
+/// One readback of the widest blur level of a container, at most [`TONE_GRID`] texels on a side, into a pixel buffer
+/// the GPU fills while the frame goes on.
+struct ToneRead {
+    pbo: GLuint,
+    fence: ffi::types::GLsync,
+    grid: (i32, i32),
+    mode: GlassMode,
+    /// Each probe's backdrop, its rectangle in texture coordinates of the grid (u0, v0, u1, v1) and its short side.
+    probes: Vec<(u64, [f32; 4], f32)>,
+}
+
+/// The mean of the texels of an RGBA8 `grid` (`w` × `h`, rows from the bottom) whose centres lie in `uv` (u0, v0, u1,
+/// v1 in texture coordinates), or of the texel nearest its centre when none does; encoded colours from 0 to 1.
+pub fn grid_mean(grid: &[u8], (w, h): (i32, i32), uv: [f32; 4]) -> [f32; 3] {
+    let (w, h) = (w.max(1) as usize, h.max(1) as usize);
+    let mut sum = [0.0f32; 3];
+    let mut n = 0usize;
+    for y in 0..h {
+        let v = (y as f32 + 0.5) / h as f32;
+        if v < uv[1] || v > uv[3] {
+            continue;
+        }
+        for x in 0..w {
+            let u = (x as f32 + 0.5) / w as f32;
+            if u < uv[0] || u > uv[2] {
+                continue;
+            }
+            let i = (y * w + x) * 4;
+            for (c, s) in sum.iter_mut().enumerate() {
+                *s += f32::from(grid.get(i + c).copied().unwrap_or(0));
+            }
+            n += 1;
+        }
+    }
+    if n == 0 {
+        let x = ((uv[0] + uv[2]) * 0.5 * w as f32).clamp(0.0, w as f32 - 1.0) as usize;
+        let y = ((uv[1] + uv[3]) * 0.5 * h as f32).clamp(0.0, h as f32 - 1.0) as usize;
+        let i = (y * w + x) * 4;
+        return std::array::from_fn(|c| f32::from(grid.get(i + c).copied().unwrap_or(0)) / 255.0);
+    }
+    sum.map(|v| v / (n as f32 * 255.0))
+}
+
+/// The relative luminance of the face glass of `mode` puts over the blurred backdrop `backdrop` (encoded) on a shape
+/// whose short side is `short_side` points.
+pub fn face_luminance(backdrop: [f32; 3], mode: GlassMode, short_side: f32) -> f32 {
+    let params = GlassParams::new(mode, short_side);
+    let face = face_color(backdrop, &params, params.face.max_luma);
+    relative_luminance(face)
+}
+
+/// Where `rect` (output-local points at `scale` pixels per point) lies in the texture coordinates `uv` maps output
+/// pixels to (from [`capture_uv`]), as (u0, v0, u1, v1) clamped to the texture.
+pub fn probe_uv(rect: [f32; 4], scale: f32, uv: &[[f32; 3]; 2]) -> [f32; 4] {
+    let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+    for (x, y) in [
+        (rect[0], rect[1]),
+        (rect[0] + rect[2], rect[1]),
+        (rect[0], rect[1] + rect[3]),
+        (rect[0] + rect[2], rect[1] + rect[3]),
+    ] {
+        let (x, y) = (x * scale, y * scale);
+        for i in 0..2 {
+            let t = uv[i][0] * x + uv[i][1] * y + uv[i][2];
+            lo[i] = lo[i].min(t);
+            hi[i] = hi[i].max(t);
+        }
+    }
+    [
+        lo[0].clamp(0.0, 1.0),
+        lo[1].clamp(0.0, 1.0),
+        hi[0].clamp(0.0, 1.0),
+        hi[1].clamp(0.0, 1.0),
+    ]
 }
 
 /// The blurred backdrop of one container: its textures and which of them each level and the blur fill reads.
@@ -379,8 +503,51 @@ impl GlassGl {
             proj: uniform_loc(gl, program, "u_proj"),
             quad: uniform_loc(gl, program, "u_quad"),
             ubo,
-            cache: GlassCache::default(),
+            ..Self::default()
         })
+    }
+
+    /// Poll the readbacks in flight: those the GPU finished give their faces. Whether some are still in flight.
+    unsafe fn poll_reads(&mut self, gl: &ffi::Gles2) -> bool {
+        let mut i = 0;
+        while i < self.reads.len() {
+            let r = &self.reads[i];
+            match gl.ClientWaitSync(r.fence, 0, 0) {
+                ffi::ALREADY_SIGNALED | ffi::CONDITION_SATISFIED => {}
+                ffi::TIMEOUT_EXPIRED => {
+                    i += 1;
+                    continue;
+                }
+                _ => {
+                    let r = self.reads.remove(i);
+                    Self::delete_read(gl, r);
+                    continue;
+                }
+            }
+            let r = self.reads.remove(i);
+            let len = (r.grid.0 * r.grid.1 * 4) as usize;
+            gl.BindBuffer(ffi::PIXEL_PACK_BUFFER, r.pbo);
+            let ptr = gl.MapBufferRange(ffi::PIXEL_PACK_BUFFER, 0, len as isize, ffi::MAP_READ_BIT);
+            if !ptr.is_null() {
+                let grid = std::slice::from_raw_parts(ptr as *const u8, len).to_vec();
+                gl.UnmapBuffer(ffi::PIXEL_PACK_BUFFER);
+                for (serial, uv, short_side) in &r.probes {
+                    let backdrop = grid_mean(&grid, r.grid, *uv);
+                    self.readings.push(ToneReading {
+                        serial: *serial,
+                        luminance: face_luminance(backdrop, r.mode, *short_side),
+                    });
+                }
+            }
+            gl.BindBuffer(ffi::PIXEL_PACK_BUFFER, 0);
+            Self::delete_read(gl, r);
+        }
+        !self.reads.is_empty()
+    }
+
+    unsafe fn delete_read(gl: &ffi::Gles2, r: ToneRead) {
+        gl.DeleteSync(r.fence);
+        gl.DeleteBuffers(1, &r.pbo);
     }
 
     pub(super) fn targets(&mut self) -> Vec<Target> {
@@ -392,6 +559,9 @@ impl GlassGl {
     }
 
     pub(super) unsafe fn destroy(&mut self, gl: &ffi::Gles2) {
+        for r in std::mem::take(&mut self.reads) {
+            Self::delete_read(gl, r);
+        }
         if self.program != 0 {
             gl.DeleteProgram(self.program);
             gl.DeleteBuffers(1, &self.ubo);
@@ -590,6 +760,9 @@ impl MaterialGl {
                     saved.restore(gl);
                     return Err("glass backdrop processing failed (framebuffer incomplete?)".into());
                 };
+                if !p.glass.probes.is_empty() {
+                    self.read_tones(gl, p, &targets, &slots, viewport, fb);
+                }
                 let textures = slots.map(|s| targets[s].tex);
                 let dropped =
                     self.glass
@@ -656,6 +829,118 @@ impl MaterialGl {
         }
         saved.restore(gl);
         Ok(())
+    }
+
+    /// Start reading back the widest blur level `glass` uses at a coarse grid, for the faces of its probes; the
+    /// pixels arrive in a pixel buffer without stalling the frame ([`MaterialGl::poll_tones`]).
+    unsafe fn read_tones(
+        &mut self,
+        gl: &ffi::Gles2,
+        p: &GlassDraw<'_>,
+        targets: &[Target],
+        slots: &[usize; BLUR_LEVELS + 1],
+        viewport: [i32; 4],
+        fb: [i32; 4],
+    ) {
+        let Some(widest) = p
+            .glass
+            .container
+            .levels()
+            .iter()
+            .rposition(|(_, used)| *used)
+        else {
+            return;
+        };
+        let level = &targets[slots[widest]];
+        let grid = (
+            level.size.0.clamp(1, TONE_GRID),
+            level.size.1.clamp(1, TONE_GRID),
+        );
+        let Some(small) = self.alloc_target(gl, grid, false) else {
+            return;
+        };
+        gl.Disable(ffi::SCISSOR_TEST);
+        gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, level.fbo);
+        gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, small.fbo);
+        gl.BlitFramebuffer(
+            0,
+            0,
+            level.size.0,
+            level.size.1,
+            0,
+            0,
+            grid.0,
+            grid.1,
+            ffi::COLOR_BUFFER_BIT,
+            ffi::LINEAR,
+        );
+        let mut pbo = 0;
+        gl.GenBuffers(1, &mut pbo);
+        gl.BindBuffer(ffi::PIXEL_PACK_BUFFER, pbo);
+        gl.BufferData(
+            ffi::PIXEL_PACK_BUFFER,
+            (grid.0 * grid.1 * 4) as isize,
+            std::ptr::null(),
+            ffi::STREAM_READ,
+        );
+        gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, small.fbo);
+        gl.ReadPixels(
+            0,
+            0,
+            grid.0,
+            grid.1,
+            ffi::RGBA,
+            ffi::UNSIGNED_BYTE,
+            std::ptr::null_mut(),
+        );
+        gl.BindBuffer(ffi::PIXEL_PACK_BUFFER, 0);
+        let fence = gl.FenceSync(ffi::SYNC_GPU_COMMANDS_COMPLETE, 0);
+        // the copy into the buffer was queued; the small target can go
+        self.destroy_target(gl, small);
+        let uv = capture_uv(&p.projection, viewport, fb);
+        let probes = p
+            .glass
+            .probes
+            .iter()
+            .map(|probe| {
+                let side = probe.rect[2].min(probe.rect[3]);
+                (probe.serial, probe_uv(probe.rect, p.scale, &uv), side)
+            })
+            .collect();
+        if self.glass.reads.len() >= MAX_TONE_READS {
+            let old = self.glass.reads.remove(0);
+            GlassGl::delete_read(gl, old);
+        }
+        self.glass.reads.push(ToneRead {
+            pbo,
+            fence,
+            grid,
+            mode: p.glass.container.mode,
+            probes,
+        });
+    }
+
+    /// The faces measured since the last call, and whether readbacks are still in flight, after polling them. Call with
+    /// the renderer's context current.
+    ///
+    /// # Safety
+    /// Must be called with the renderer's context current.
+    pub unsafe fn poll_tones(&mut self, gl: &ffi::Gles2) -> (Vec<ToneReading>, bool) {
+        let pending = self.glass.poll_reads(gl);
+        (std::mem::take(&mut self.glass.readings), pending)
+    }
+
+    /// Note glass backdrops drawn too large to follow what lies behind them, while a frame is built.
+    pub fn note_unadapted(&mut self, serials: impl IntoIterator<Item = u64>) {
+        self.glass.unadapted.extend(serials);
+    }
+
+    /// The glass backdrops noted too large since the last call.
+    pub fn take_unadapted(&mut self) -> Vec<u64> {
+        let mut all = std::mem::take(&mut self.glass.unadapted);
+        all.sort_unstable();
+        all.dedup();
+        all
     }
 
     /// While a frame is built: whether the textures of glass `owner` for `state` are whole, keeping them through the
@@ -1089,5 +1374,73 @@ mod tests {
                 }
             )
         );
+    }
+
+    #[test]
+    fn a_probe_reads_the_texels_under_its_shape_in_the_capture() {
+        // an output 200 × 100 pixels, rows from the bottom, captured at framebuffer rect (20, 10, 40, 30)
+        let proj = projection(200.0, 100.0);
+        let uv = capture_uv(&proj, [0, 0, 200, 100], [20, 10, 40, 30]);
+        // a shape of 10 × 10 points at scale 1 in the capture's left half
+        let r = probe_uv([20.0, 10.0, 20.0, 30.0], 1.0, &uv);
+        assert!(r[0].abs() < 1e-5 && (r[2] - 0.5).abs() < 1e-5, "{r:?}");
+        // a grid 4 × 2 whose left half is black and right half white
+        let mut grid = vec![0u8; 4 * 2 * 4];
+        for y in 0..2 {
+            for x in 2..4 {
+                grid[(y * 4 + x) * 4..(y * 4 + x) * 4 + 3].copy_from_slice(&[255; 3]);
+            }
+        }
+        assert_eq!(grid_mean(&grid, (4, 2), r), [0.0; 3]);
+        assert_eq!(grid_mean(&grid, (4, 2), [0.5, 0.0, 1.0, 1.0]), [1.0; 3]);
+        assert_eq!(grid_mean(&grid, (4, 2), [0.0, 0.0, 1.0, 1.0]), [0.5; 3]);
+        // a shape smaller than a texel takes the texel under its centre
+        assert_eq!(grid_mean(&grid, (4, 2), [0.8, 0.4, 0.81, 0.41]), [1.0; 3]);
+    }
+
+    #[test]
+    fn dark_glass_over_white_has_a_light_face_and_over_black_a_dark_one() {
+        use cupertino_theme::glass::{face_tone, FaceTone, GlassStyle};
+        let mode = |dark| GlassMode {
+            dark,
+            style: GlassStyle::Regular,
+            ..GlassMode::default()
+        };
+        let dark = mode(true);
+        assert_eq!(
+            face_tone(face_luminance([1.0; 3], dark, 28.0), None),
+            FaceTone::Light
+        );
+        assert_eq!(
+            face_tone(face_luminance([0.0; 3], dark, 28.0), None),
+            FaceTone::Dark
+        );
+        // the milky face of light glass stays light over black too, though darker than over white
+        let light = mode(false);
+        let (white, black) = (
+            face_luminance([1.0; 3], light, 28.0),
+            face_luminance([0.0; 3], light, 28.0),
+        );
+        assert!(black < white);
+        assert_eq!(face_tone(black, None), FaceTone::Light);
+    }
+
+    #[test]
+    fn small_backdrops_are_probed_and_the_probes_are_part_of_the_identity() {
+        let shape = |w| GlassShape::new([0.0, 0.0, w, 30.0], 15.0);
+        let container =
+            GlassContainer::new(Container::new(vec![shape(40.0)], 0.0, GlassMode::default()));
+        let probe = |serial| ToneProbe {
+            serial,
+            rect: [0.0, 0.0, 40.0, 30.0],
+        };
+        let a = container.clone().with_probes(vec![probe(1)]);
+        let b = container.clone().with_probes(vec![probe(2)]);
+        assert_ne!(a.key, container.key);
+        assert_ne!(
+            a.key, b.key,
+            "a new backdrop over the same shape is measured too"
+        );
+        assert_eq!(container.clone().with_probes(Vec::new()).key, container.key);
     }
 }

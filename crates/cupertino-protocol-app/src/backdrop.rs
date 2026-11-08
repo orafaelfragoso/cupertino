@@ -1,11 +1,40 @@
 //! Typed wrapper of `cupertino_backdrop_v1`: a material the server draws below a surface.
 
-use crate::Error;
+use crate::{AppEvent, Error};
 use cupertino_app_protocols::client::app_effects::cupertino_backdrop_v1::{
-    CupertinoBackdropV1, GlassStyle as WireStyle,
+    self, CupertinoBackdropV1, GlassStyle as WireStyle, Tone,
 };
 use cupertino_geometry::Rect;
-use wayland_client::Proxy;
+use cupertino_wayland_client::State;
+use std::sync::atomic::{AtomicU64, Ordering};
+use wayland_client::{Connection as WlConnection, Dispatch, Proxy, QueueHandle};
+
+/// Names a [`Backdrop`] of this process in [`AppEvent::BackdropTone`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BackdropId(pub u64);
+
+static NEXT_BACKDROP: AtomicU64 = AtomicU64::new(1);
+
+/// User data of a backdrop: the id its events name.
+pub(crate) struct BackdropData(BackdropId);
+
+impl BackdropData {
+    pub(crate) fn new() -> Self {
+        Self(BackdropId(NEXT_BACKDROP.fetch_add(1, Ordering::Relaxed)))
+    }
+}
+
+/// What the text and symbols over a glass backdrop are drawn with ([`AppEvent::BackdropTone`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum BackdropTone {
+    /// The appearance's: nothing was measured, or the shape is too large to follow what lies behind it.
+    #[default]
+    Appearance,
+    /// The face behind the backdrop is dark: light text and symbols.
+    Dark,
+    /// The face behind the backdrop is light: dark text and symbols.
+    Light,
+}
 
 /// The look of a glass backdrop ([`Backdrop::set_glass`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -68,6 +97,19 @@ impl Backdrop {
         Self { proxy }
     }
 
+    /// The id [`AppEvent::BackdropTone`] names this backdrop with.
+    pub fn id(&self) -> BackdropId {
+        self.proxy
+            .data::<BackdropData>()
+            .map_or(BackdropId(0), |d| d.0)
+    }
+
+    /// Whether the server tells the tone of the backdrop's face ([`AppEvent::BackdropTone`], version 7). A server
+    /// before it sends none, and the client keeps the appearance's colours.
+    pub fn tells_tone(&self) -> bool {
+        self.proxy.version() >= TONE_VERSION
+    }
+
     /// Name of a material recipe of the design tokens, for example `"Menu"`.
     pub fn set_material(&self, name: &str) {
         self.proxy.set_material(name.to_string());
@@ -108,6 +150,37 @@ impl Backdrop {
         }
         self.proxy.set_alpha(alpha);
         Ok(())
+    }
+}
+
+/// The version of `cupertino_backdrop_v1` that has the `tone` event.
+const TONE_VERSION: u32 = 7;
+
+impl Dispatch<CupertinoBackdropV1, BackdropData> for State {
+    fn event(
+        state: &mut State,
+        _: &CupertinoBackdropV1,
+        event: cupertino_backdrop_v1::Event,
+        data: &BackdropData,
+        _: &WlConnection,
+        _: &QueueHandle<State>,
+    ) {
+        if let cupertino_backdrop_v1::Event::Tone { tone } = event {
+            let tone = match tone.into_result() {
+                Ok(Tone::Appearance) => BackdropTone::Appearance,
+                Ok(Tone::Dark) => BackdropTone::Dark,
+                Ok(Tone::Light) => BackdropTone::Light,
+                _ => {
+                    return state.fail(cupertino_wayland_client::Error::Protocol(
+                        "unknown backdrop tone",
+                    ))
+                }
+            };
+            state.emit(AppEvent::BackdropTone {
+                backdrop: data.0,
+                tone,
+            });
+        }
     }
 }
 

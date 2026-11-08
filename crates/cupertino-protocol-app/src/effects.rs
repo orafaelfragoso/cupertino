@@ -1,7 +1,8 @@
 //! `cupertino_app_effects_v1`: the appearance observer, backdrops, the title bar style, the menu announcement and the
 //! disabled window controls.
 
-use crate::{Backdrop, Quiet};
+use crate::backdrop::BackdropData;
+use crate::{Backdrop, BackdropId, BackdropTone, Quiet};
 use cupertino_app_protocols::client::app_effects::cupertino_app_effects_v1::{
     CupertinoAppEffectsV1, TitlebarStyle, WindowControl,
 };
@@ -11,7 +12,6 @@ use cupertino_app_protocols::client::app_effects::cupertino_app_menu_v1::{
 use cupertino_app_protocols::client::app_effects::cupertino_appearance_v1::{
     self, CupertinoAppearanceV1, DisplayOption,
 };
-use cupertino_app_protocols::client::app_effects::cupertino_backdrop_v1::CupertinoBackdropV1;
 use cupertino_app_protocols::client::scroll::cupertino_scroll_v1::CupertinoScrollV1;
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_wayland_client::{Connection, Error, State, SurfaceId};
@@ -33,11 +33,7 @@ macro_rules! quiet {
     )*};
 }
 
-quiet!(
-    CupertinoAppEffectsV1,
-    CupertinoBackdropV1,
-    CupertinoScrollV1
-);
+quiet!(CupertinoAppEffectsV1, CupertinoScrollV1);
 
 /// What an object of the public protocols received, in the order it arrived.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,6 +57,13 @@ pub enum AppEvent {
         surface: SurfaceId,
         bus_name: Option<String>,
     },
+    /// The text and symbols over a glass backdrop take `tone`: the face behind a small shape turned dark or light, or
+    /// the shape grew too large to follow it. From version 7; before it, and before the first measurement, the tone is
+    /// [`BackdropTone::Appearance`].
+    BackdropTone {
+        backdrop: BackdropId,
+        tone: BackdropTone,
+    },
 }
 
 /// The app effects global (`cupertino_app_effects_v1`).
@@ -69,7 +72,7 @@ pub struct AppEffects(CupertinoAppEffectsV1);
 impl AppEffects {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<AppEffects> {
-        conn.bind_extension(1..=6, Quiet).map(AppEffects)
+        conn.bind_extension(1..=7, Quiet).map(AppEffects)
     }
 
     /// Observe the session's appearance and display options: [`AppEvent::Appearance`] and
@@ -85,7 +88,7 @@ impl AppEffects {
         Ok(Backdrop::new(self.0.get_backdrop(
             &wl,
             &conn.queue_handle(),
-            Quiet,
+            BackdropData::new(),
         )))
     }
 

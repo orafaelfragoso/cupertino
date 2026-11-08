@@ -454,6 +454,7 @@ impl Cupertino {
             return;
         }
         self.process_captures(renderer, idx);
+        self.send_backdrop_tones(renderer);
         if self.screenshot_requests.is_empty() {
             return;
         }
@@ -472,6 +473,25 @@ impl Cupertino {
                 }
             }
             Err(e) => tracing::error!(error = %e, "screenshot render failed"),
+        }
+    }
+
+    /// Take the faces the glass pass measured under small backdrops and send the tones that changed. A readback still
+    /// in flight asks for another frame, which picks it up.
+    fn send_backdrop_tones(&mut self, renderer: &mut GlesRenderer) {
+        let Some(material) = self.render.as_ref().and_then(|r| r.material.clone()) else {
+            return;
+        };
+        let polled = renderer.with_context(|gl| unsafe { material.borrow_mut().poll_tones(gl) });
+        let Ok((readings, pending)) = polled else {
+            return;
+        };
+        let unadapted = material.borrow_mut().take_unadapted();
+        if !readings.is_empty() || !unadapted.is_empty() {
+            self.backdrop_tones.apply(&readings, &unadapted);
+        }
+        if pending {
+            self.request_redraw();
         }
     }
 

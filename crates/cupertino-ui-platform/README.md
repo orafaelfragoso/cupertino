@@ -7,6 +7,10 @@ input method, activation tokens, drags), its events and `Capabilities`. MPL-2.0.
 A popup asks for a place beside an anchor (`PopupSpec`); where the compositor put it, after flipping or sliding it to
 fit, arrives as `WindowEvent::PopupPlaced(rect)`, in its parent's coordinates, before each configure that places it.
 
+The compositor may tell whether the face of a glass material is dark or light: `WindowEvent::GlassTone { region, tone }`
+names the region by its index in the last `WindowRequest::Materials` list, or the window's own backdrop with `None`,
+and `GlassTone::{Appearance, Dark, Light}` picks the colour of the text over it. A system that cannot tell sends none.
+
 `WindowSpec::decorations` chooses the window's style: `Preferred` (titled: the compositor's title bar over the
 content), `Client`, `None`, and the styles whose content fills the window and draws the row the compositor's window
 control buttons lie in (`DecorationMode::content_fills_window`): `Unified` (the 52 pt toolbar row), `UnifiedCompact`

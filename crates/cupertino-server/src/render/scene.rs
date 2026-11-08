@@ -13,6 +13,7 @@ use cupertino_scene::{
     BorderFalloff, Clip, ImageRole, OutputPoint, Placement, RoundedRect, SceneItem, SceneKind,
     Shadow, Source, SurfaceRole,
 };
+use cupertino_theme::glass::adapts_foreground;
 use cupertino_theme::{Appearance, MaterialOptions, Theme};
 use cupertino_wm::{OutputId, Presentation, Rect, WindowId, Wm};
 use smithay::backend::renderer::element::Element;
@@ -32,7 +33,7 @@ use super::compose::{
 };
 use super::gles::{Gles, GlesCompletion, GlesResources, GlesTarget};
 use super::lower::id_hash;
-use super::material::glass::{area_generation, Below, GlassContainer};
+use super::material::glass::{area_generation, Below, GlassContainer, ToneProbe};
 use super::material::{GpuRecipe, MaterialStage, SharedMaterial};
 use super::mesh::{MeshGl, SharedMesh};
 use super::motion::{cross_fade_opacity, skips_frame_animation, WorkspaceTransition};
@@ -1519,6 +1520,7 @@ fn popup_backdrop_elements(
     backdrops: &[BackdropArea],
     opacity: f32,
 ) -> Vec<Piece> {
+    note_not_glass(p, backdrops);
     let mut out: Vec<Piece> = Vec::new();
     let params = p.decor.popup_shadow_params();
     let edge = p.decor.menu_edge();
@@ -1595,6 +1597,7 @@ fn backdrop_elements(
     backdrops: &[BackdropArea],
     opacity: f32,
 ) -> Vec<Piece> {
+    note_not_glass(p, backdrops);
     let mut out = Vec::new();
     let mut glass = GlassGroups::default();
     for b in backdrops.iter().rev() {
@@ -1613,6 +1616,18 @@ fn backdrop_elements(
         ));
     }
     glass.finish(p, out, opacity)
+}
+
+/// Note the backdrops drawn as a material other than glass: one whose face was measured while it was glass goes back
+/// to the appearance's tone ([`crate::app_effects_v1::BackdropTones`]).
+fn note_not_glass(p: &SceneParams<'_>, backdrops: &[BackdropArea]) {
+    if let Some(m) = &p.res.material {
+        let plain = backdrops
+            .iter()
+            .filter(|b| b.glass.is_none())
+            .map(|b| b.key);
+        m.borrow_mut().note_unadapted(plain);
+    }
 }
 
 /// Glass backdrops of one surface joined per container while its backdrops are laid out front to back: a container
@@ -1718,12 +1733,42 @@ fn glass_pieces(
     if !ready {
         return glass_fallback(p, SceneKind::Backdrop, index, &container, alpha);
     }
+    let probes = tone_probes(members);
+    if probes.is_empty() {
+        if let Some(m) = &p.res.material {
+            m.borrow_mut().note_unadapted(members.iter().map(|b| b.key));
+        }
+    }
     vec![Piece::Glass(Box::new(super::compose::Glass {
-        glass: Rc::new(GlassContainer::new(container)),
+        glass: Rc::new(GlassContainer::new(container).with_probes(probes)),
         kind: SceneKind::Backdrop,
         index,
         opacity: alpha,
     }))]
+}
+
+/// The glass backdrops of a container (`members`) whose text follows what lies behind them: every one when the
+/// container's bounds are small enough ([`adapts_foreground`]), none otherwise, so the shapes of a larger panel keep
+/// the appearance together.
+fn tone_probes(members: &[&BackdropArea]) -> Vec<ToneProbe> {
+    let Some(bounds) = members.iter().map(|b| b.area).reduce(|a, b| a.merge(b)) else {
+        return Vec::new();
+    };
+    if !adapts_foreground(bounds.size.w.min(bounds.size.h) as f32) {
+        return Vec::new();
+    }
+    members
+        .iter()
+        .map(|b| ToneProbe {
+            serial: b.key,
+            rect: [
+                b.area.loc.x as f32,
+                b.area.loc.y as f32,
+                b.area.size.w as f32,
+                b.area.size.h as f32,
+            ],
+        })
+        .collect()
 }
 
 /// Translucent fills standing in for a glass container, one per shape.
@@ -1761,6 +1806,7 @@ fn bar_backdrop_elements(
     opacity: f32,
     captures: &mut Vec<Piece>,
 ) -> Vec<Piece> {
+    note_not_glass(p, backdrops);
     let mut out = Vec::new();
     let output = smithay::utils::Rectangle::<f64, Logical>::new(
         (0.0, 0.0).into(),

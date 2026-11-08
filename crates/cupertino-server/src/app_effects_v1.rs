@@ -4,6 +4,7 @@
 //! Backdrops and disabled controls live in the surface's cached state, so they apply atomically with the surface's
 //! `wl_surface.commit`; the scene reads the committed (`current`) side.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -12,8 +13,9 @@ use cupertino_protocols::server::app_effects::cupertino_app_effects_v1::{
     self, CupertinoAppEffectsV1, Error as EffectsError, WindowControl,
 };
 use cupertino_protocols::server::app_effects::cupertino_backdrop_v1::{
-    self, CupertinoBackdropV1, Error,
+    self, CupertinoBackdropV1, Error, Tone,
 };
+use cupertino_theme::glass::{face_tone, FaceTone};
 use cupertino_theme::GlassStyle;
 use smithay::desktop::{layer_map_for_output, LayerMap, LayerSurface};
 use smithay::output::Output;
@@ -26,6 +28,7 @@ use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor::{with_states, Cacheable};
 
 use crate::menu_bar::AppMenuData;
+use crate::render::material::glass::ToneReading;
 use crate::state::{ClientState, Cupertino};
 
 /// Registers the `cupertino_app_effects_v1` global.
@@ -36,7 +39,7 @@ pub struct AppEffectsV1Global {
 impl AppEffectsV1Global {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(6, ()),
+            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(7, ()),
         }
     }
 }
@@ -46,6 +49,112 @@ impl AppEffectsV1Global {
 const MAX_BACKDROPS_PER_SURFACE: usize = 64;
 /// Most backdrops one client may hold, over all its surfaces.
 const MAX_BACKDROPS_PER_CLIENT: usize = 128;
+
+/// The version of `cupertino_backdrop_v1` that has the `tone` event.
+const TONE_VERSION: u32 = 7;
+
+/// The tone a backdrop's text is drawn with, as the wire carries it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WireTone {
+    /// The appearance's: nothing measured, or the shape is too large to follow what lies behind it.
+    Appearance,
+    Measured(FaceTone),
+}
+
+/// The tone of each glass backdrop, as the server last sent it: a face measured past the threshold, with its margin,
+/// changes it, and only a change is sent.
+#[derive(Default)]
+pub struct BackdropTones {
+    tracked: HashMap<u64, Tracked>,
+}
+
+struct Tracked {
+    resource: CupertinoBackdropV1,
+    sent: WireTone,
+}
+
+impl BackdropTones {
+    fn register(&mut self, serial: u64, resource: CupertinoBackdropV1) {
+        if resource.version() >= TONE_VERSION {
+            self.tracked.insert(
+                serial,
+                Tracked {
+                    resource,
+                    sent: WireTone::Appearance,
+                },
+            );
+        }
+    }
+
+    fn forget(&mut self, serial: u64) {
+        self.tracked.remove(&serial);
+    }
+
+    /// Take the faces measured under small backdrops (`readings`, oldest first) and the backdrops drawn too large to
+    /// follow what lies behind them or as a material other than glass (`unadapted`), and send each backdrop whose tone
+    /// changed its new tone. Only the backdrops named are looked at, so a frame that measured nothing costs a lookup
+    /// per backdrop drawn.
+    pub fn apply(&mut self, readings: &[ToneReading], unadapted: &[u64]) {
+        let mut named: Vec<u64> = readings
+            .iter()
+            .map(|r| r.serial)
+            .chain(unadapted.iter().copied())
+            .collect();
+        named.sort_unstable();
+        named.dedup();
+        let sent = named
+            .into_iter()
+            .filter_map(|s| self.tracked.get(&s).map(|t| (s, t.sent)));
+        for (serial, tone) in next_tones(sent, readings, unadapted) {
+            let Some(t) = self.tracked.get_mut(&serial) else {
+                continue;
+            };
+            t.sent = tone;
+            if t.resource.is_alive() {
+                t.resource.tone(match tone {
+                    WireTone::Appearance => Tone::Appearance,
+                    WireTone::Measured(FaceTone::Dark) => Tone::Dark,
+                    WireTone::Measured(FaceTone::Light) => Tone::Light,
+                });
+            }
+        }
+    }
+
+    /// The tone last sent for backdrop `serial`, for tests.
+    pub fn sent(&self, serial: u64) -> Option<WireTone> {
+        self.tracked.get(&serial).map(|t| t.sent)
+    }
+}
+
+/// The tones that change, given the tone each backdrop was last sent (`sent`), the faces measured since (oldest
+/// first) and the backdrops drawn too large, or not as glass, since: a measured face moves the tone through
+/// [`face_tone`], with its margin; a backdrop drawn too large or not as glass goes back to the appearance. A
+/// backdrop not in `sent` is ignored.
+pub fn next_tones(
+    sent: impl IntoIterator<Item = (u64, WireTone)>,
+    readings: &[ToneReading],
+    unadapted: &[u64],
+) -> Vec<(u64, WireTone)> {
+    let mut changed = Vec::new();
+    for (serial, before) in sent {
+        let mut tone = before;
+        for r in readings.iter().filter(|r| r.serial == serial) {
+            let previous = match tone {
+                WireTone::Appearance => None,
+                WireTone::Measured(t) => Some(t),
+            };
+            tone = WireTone::Measured(face_tone(r.luminance, previous));
+        }
+        if unadapted.contains(&serial) {
+            tone = WireTone::Appearance;
+        }
+        if tone != before {
+            changed.push((serial, tone));
+        }
+    }
+    changed.sort_by_key(|(serial, _)| *serial);
+    changed
+}
 
 /// Source of backdrop serials: identity of a backdrop and its creation order across surfaces.
 static NEXT_SERIAL: AtomicU64 = AtomicU64::new(0);
@@ -306,7 +415,7 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                             alpha: 1.0,
                         });
                 });
-                init.init(
+                let resource = init.init(
                     id,
                     BackdropData {
                         surface: Some(surface),
@@ -314,6 +423,7 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                         held: Some(held),
                     },
                 );
+                state.backdrop_tones.register(serial, resource);
             }
             cupertino_app_effects_v1::Request::SetTitlebarStyle { surface, style } => {
                 if owned_by(&surface, client) {
@@ -615,7 +725,8 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
     }
 
     /// The backdrop leaves its surface's pending state, so it disappears with the next commit.
-    fn destroyed(_: &mut Self, _: ClientId, _: &CupertinoBackdropV1, data: &BackdropData) {
+    fn destroyed(state: &mut Self, _: ClientId, _: &CupertinoBackdropV1, data: &BackdropData) {
+        state.backdrop_tones.forget(data.serial);
         if let Some(held) = &data.held {
             held.fetch_sub(1, Ordering::SeqCst);
         }
@@ -629,5 +740,60 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                     .retain(|e| e.serial != data.serial)
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cupertino_theme::glass::{FACE_TONE_HYSTERESIS, FACE_TONE_THRESHOLD};
+
+    fn read(serial: u64, luminance: f32) -> ToneReading {
+        ToneReading { serial, luminance }
+    }
+
+    #[test]
+    fn a_tone_is_sent_once_when_the_face_crosses_the_threshold_and_not_while_it_wobbles() {
+        let (t, h) = (FACE_TONE_THRESHOLD, FACE_TONE_HYSTERESIS);
+        let dark = WireTone::Measured(FaceTone::Dark);
+        let light = WireTone::Measured(FaceTone::Light);
+        // the first measurement of a backdrop sends its tone
+        assert_eq!(
+            next_tones([(1, WireTone::Appearance)], &[read(1, 0.05)], &[]),
+            vec![(1, dark)]
+        );
+        // the same tone again sends nothing: a face that changes without crossing costs no event
+        assert!(next_tones([(1, dark)], &[read(1, 0.02), read(1, 0.1)], &[]).is_empty());
+        // a face moving about the threshold, inside the margin, sends nothing either
+        let wobble: Vec<ToneReading> = (0..50)
+            .map(|i| read(1, t + (i as f32 * 0.9).sin() * h * 0.9))
+            .collect();
+        assert!(next_tones([(1, dark)], &wobble, &[]).is_empty());
+        assert!(next_tones([(1, light)], &wobble, &[]).is_empty());
+        // past the margin it flips, and the last of several readings decides
+        assert_eq!(
+            next_tones([(1, dark)], &[read(1, t + 2.0 * h)], &[]),
+            vec![(1, light)]
+        );
+        assert_eq!(
+            next_tones([(1, dark)], &[read(1, 0.9), read(1, 0.01)], &[]),
+            Vec::new()
+        );
+        // only the backdrop measured changes, and one the server does not track is ignored
+        assert_eq!(
+            next_tones([(1, dark), (2, dark)], &[read(2, 0.9), read(9, 0.9)], &[]),
+            vec![(2, light)]
+        );
+    }
+
+    #[test]
+    fn a_backdrop_drawn_too_large_goes_back_to_the_appearance_once() {
+        let light = WireTone::Measured(FaceTone::Light);
+        assert_eq!(
+            next_tones([(4, light)], &[], &[4]),
+            vec![(4, WireTone::Appearance)]
+        );
+        // one that never had a tone sends nothing
+        assert!(next_tones([(4, WireTone::Appearance)], &[], &[4]).is_empty());
     }
 }

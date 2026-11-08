@@ -553,13 +553,14 @@ fn a_pop_up_button_opens_its_options_over_itself_with_the_chosen_one_checked_on_
     let id = popup(&h, "sizes").expect("open");
     let placed = h.rt.window_system().placement(id).unwrap().unwrap().clone();
     assert_eq!(placed.anchor_rect, button);
-    // the button's label is 10 pt in, a row's 10 + 18; the chosen first row's middle is 5 + 11 down
+    // the button's label is 10 pt in, a row's 31 in a menu with check marks; the chosen first row's middle is 5 + 12
+    // down
     assert_eq!(
         (placed.anchor, placed.gravity, placed.offset),
         (
             PopupEdge::Left,
             PopupEdge::BottomRight,
-            Point::new(-18.0, -16.0)
+            Point::new(-21.0, -17.0)
         )
     );
     assert!(!placed.constraint.flip, "it slides to fit and never flips");
@@ -599,7 +600,7 @@ fn a_pop_up_button_opens_its_options_over_itself_with_the_chosen_one_checked_on_
     let placed = h.rt.window_system().placement(id).unwrap().unwrap();
     assert_eq!(
         placed.offset,
-        Point::new(-18.0, -60.0),
+        Point::new(-21.0, -65.0),
         "Large, the third row, is over the button"
     );
     enter(&mut h, "sizes");
@@ -622,7 +623,80 @@ fn in_right_to_left_a_pop_up_buttons_menu_lines_up_with_its_right_edge() {
         (
             PopupEdge::Right,
             PopupEdge::BottomLeft,
-            Point::new(18.0, -16.0)
+            Point::new(21.0, -17.0)
         )
     );
+}
+
+fn ops(h: &Harness<Editor>, id: NodeId) -> Vec<PaintOp> {
+    let id = PaintNodeId::from(id);
+    h.snapshot()
+        .display_list
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id)
+        .map(|n| n.ops)
+        .unwrap_or_default()
+}
+
+fn label_x(h: &Harness<Editor>, index: u64) -> f64 {
+    let ops = ops(h, row(h, index));
+    ops.iter()
+        .find_map(|op| match op {
+            PaintOp::Glyphs { origin, .. } => Some(origin.x),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("row {index} has a label: {ops:?}"))
+}
+
+#[test]
+fn rows_are_24_points_tall_with_labels_15_in_and_separators_from_the_labels_to_15_short_of_the_edge(
+) {
+    let mut h = Harness::<Editor>::assistive();
+    context(&mut h);
+    for index in [0, 1, 2, 4] {
+        assert_eq!(row_rect(&h, index).height(), 24.0, "row {index}");
+    }
+    for index in [0, 1, 4] {
+        assert!((label_x(&h, index) - 15.0).abs() < 0.5, "row {index}");
+    }
+    let separator = row_rect(&h, 3);
+    assert_eq!(separator.height(), 11.0);
+    let line = ops(&h, row(&h, 3))
+        .into_iter()
+        .find_map(|op| match op {
+            PaintOp::Fill {
+                shape: cupertino_ui_render::Shape::Rect(r),
+                ..
+            } => Some(r),
+            _ => None,
+        })
+        .expect("the line");
+    assert_eq!(line.x(), 15.0);
+    assert_eq!(line.x() + line.width(), separator.width() - 15.0);
+    assert_eq!(line.height(), 1.0);
+}
+
+#[test]
+fn in_a_menu_with_check_marks_the_labels_move_over_to_make_room_for_them() {
+    let mut h = Harness::<Editor>::assistive();
+    h.tap(TAB);
+    h.tap(SPACE);
+    enter(&mut h, "sizes");
+    for index in 0..SIZES.len() as u64 {
+        assert!((label_x(&h, index) - 31.0).abs() < 0.5, "row {index}");
+    }
+}
+
+#[test]
+fn without_the_glass_a_menu_strokes_its_own_edge() {
+    let mut h = Harness::<Editor>::assistive();
+    context(&mut h);
+    let edged = h
+        .snapshot()
+        .display_list
+        .nodes
+        .into_iter()
+        .any(|n| n.ops.iter().any(|op| matches!(op, PaintOp::Stroke { .. })));
+    assert!(edged, "over the opaque fill the panel draws its edge");
 }

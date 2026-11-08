@@ -15,8 +15,9 @@ premultiplied RGBA buffers that a compositor uploads as textures.
 | `glyph` | Glyph rasterisation: exact-area coverage of the flattened outline; the dilation (stem darkening) of drawn text, d = min((0.0058 + 0.01 Yq) s, 0.3) on both axes from the fill colour's quantised linear luminance Yq and the device pixel size s, applied by edge translation with the +d upward shift; the glyph origin quantisation by size |
 | `field` | The inside of a single-line text field for the apps: `caret_offsets` measures the x of each caret position in one shaping pass (`TextRenderer::offsets`), `draw_field` draws the selection band (the `selected-text-background` token), the text, the composition underline and the caret (1 pt), clipped to the field and scrolled; the band and caret reach 2 pt above and below the text size |
 | `text` | `swash` shaping and title rendering: `TextRenderer::new(&assets, FontRole::Ui)` reads the fonts of the asset packs, then the built-in font (`cupertino-assets`; no host fonts), and takes the packs' family for the role, else the first usable family. The `ui` font is one variable font, so shaping and rasterisation both get the variation coordinates of the request: CSS weight mapped through the font's named instances (each at its `wght` coordinate on a standard axis, else by its style name, Thin 100 … Black 900, case-insensitive; static faces by their weight class) and, after `set_scale`, `opsz` = point size clamped to the axis (17..96); truncation with an ellipsis; tracking table of `cupertino-theme` as letter spacing |
+| `edge` | `edge(kind, dark, active, increased_contrast, contrast_rim)` → `Edge`: a black outline half a point wide just outside a window or a menu (window 0.93 dark, 0.22 light, an inactive window 0.62 of that; menu 0.65 dark, 0.15 light), a menu's only along its sides (`OutlineFalloff::Sides`, `|n.x|²` of the outward normal); a window's white inner rim at half the shadow table's inner-rim density, as wide as its inner-rim scale (1 pt dark, ½ pt light), and a menu's white inner rim half a point wide, 0.22 dark and 0.5 light along the top and bottom and 0.45 of that along the sides (`OutlineFalloff::Ends`, `0.45 + 0.55 |n.y|`); with Increase Contrast the outline is the `window-rim` token a point wide all around and a menu has no inner rim. `Hairline::device(scale)` gives whole device pixels at the strength their coverage leaves |
 | `shadow` | `ShadowParams::lookup` over the verified 32-row table, `radius_px = ceil(σ·2.8)`, margins, `ShadowGpuParams` (device pixels, flat array), `ShadowRasterizer` (cached nine-slice source, equals the direct render within 1/255), knock-out under the window |
-| `render` | `Decorations`: `layout`, `hit_test`, `render_titlebar`, `render_rim`, `shape`, `shadow_params`, `title_placement` |
+| `render` | `Decorations`: `layout`, `hit_test`, `render_titlebar`, `render_rim` (the inner rim), `edge` and `menu_edge`, `shape`, `shadow_params`, `title_placement` |
 | `preview` | composed window (shadow + content stand-in + titlebar + rim) |
 
 ## Usage
@@ -41,7 +42,9 @@ let shadow = ShadowRasterizer::new().render(&params, frame, 12.0, dec.config.cor
 ## How it works
 
 Coordinates are frame-local logical points (y down, titlebar at the top). `scale` is device pixels per point and may be
-fractional: buffers are `round(size · scale)`, and the rim is always one device pixel. The window shape (all four corners
+fractional: buffers are `round(size · scale)`, and the edge's lines are whole device pixels, at least one, at the strength
+their coverage leaves (half a point at 1× is one pixel at half strength). The compositor draws the outline outside the
+window; `render_rim` draws the inner rim inside it. The window shape (all four corners
 rounded) is `Decorations::shape`, and the compositor must clip the client content to it.
 
 ### Window styles
@@ -54,7 +57,7 @@ rounded) is `Decorations::shape`, and the compositor must clip the client conten
 | `Sidebar` (full-height sidebar) | the 52 pt top of the client's sidebar | (26, 26), then every 23 pt | the buttons only |
 
 The buttons are 14 pt across; each centre lies half the row's height from the top and leading edges. Every style has a
-16 pt window corner and the same rim and shadow. In the three client-drawn styles the content fills the frame, the
+16 pt window corner and the same edge and shadow. In the three client-drawn styles the content fills the frame, the
 client draws the row and moves the window from it, and `hit_test` gives `Hit::Button` over the buttons alone.
 
 ### Samples
@@ -94,7 +97,8 @@ cargo bench -p cupertino-decorations
 ```
 
 Tests cover layout, hit tests, button
-colours and glyphs per state, rim, titlebar fills, shadow fall-off and peak density (0.40 light, 0.70 dark), nine-slice
+colours and glyphs per state, the edge (outline strength by appearance, activity and Increase Contrast, the side
+fall-off of a menu's outline, the inner rim and its device pixels), titlebar fills, shadow fall-off and peak density (0.40 light, 0.70 dark), nine-slice
 equals direct render at 1× and 2×, GPU parameters, and title centring, truncation, tracking, the weight scale, ink growth with weight and the optical size. The bench prints, on the
 development host, titlebar rasterisation (≈0.3 ms), nine-slice shadow expansion (≈2 ms at 1×, ≈11 ms at 2× for a 1600×900
 window) and the direct render (≈31 ms).

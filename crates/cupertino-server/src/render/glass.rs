@@ -62,6 +62,10 @@ impl GlassContainer {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         container.mode.hash(&mut h);
         container.spacing.to_bits().hash(&mut h);
+        // a popup's glass lays its own face fill over the recipe of the mode
+        for v in container.params.face.fill {
+            v.to_bits().hash(&mut h);
+        }
         for s in &container.shapes {
             for v in s.rect.iter().chain([&s.radius]) {
                 v.to_bits().hash(&mut h);

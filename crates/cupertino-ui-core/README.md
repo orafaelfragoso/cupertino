@@ -64,6 +64,8 @@ all on one thread.
   or when the request fails, core paints the surface's opaque fill in the window's rounded shape. A theme change
   (Reduce Transparency, high contrast) takes the material away or asks for it again. Its `alpha` fades the material
   or the fill, so a window can fade its background with its content; a change of alpha alone keeps the material.
+  `PaintCx::window_backdrop` says whether the window system shows the material and draws its edge: without it a
+  panel draws its own edge over the opaque fill.
   A node can also ask for its surface's material under itself while painting (`PaintCx::material(surface, radius,
   alpha)`): core cuts it to the part of the node that shows (a scroll view's clip, say) and sends the window's list
   as `WindowRequest::Materials` when it changes. It is granted, and the call returns `true`, only with `app_effects`,

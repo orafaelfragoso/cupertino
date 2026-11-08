@@ -94,6 +94,20 @@ pub struct RoundedRect {
     pub fill: [f32; 4],
     /// Width in logical points and straight RGBA colour.
     pub border: Option<(f64, [f32; 4])>,
+    /// How the border's strength follows the direction of the edge; the default is the same all around.
+    pub border_falloff: BorderFalloff,
+}
+
+/// How the strength of a rounded rectangle's border follows the direction of its edge. With `n` the unit outward
+/// normal, the border is drawn at `floor + (1 − floor) · |n.x|^sides · |n.y|^ends`, where a power of 0 leaves its
+/// factor out: `sides` keeps the border along the left and right edges and fades it towards the top and bottom,
+/// `ends` the other way round. All zero (the default) draws it the same all around.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BorderFalloff {
+    pub sides: f32,
+    pub ends: f32,
+    /// The share of the border left where the powers give nothing.
+    pub floor: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

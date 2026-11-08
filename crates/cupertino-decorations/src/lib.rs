@@ -10,6 +10,7 @@
 //! * [`text`]: title text with the fonts of the asset directory and the tracking table of the theme.
 //! * [`field`]: the inside of a single-line text field (selection band, text, composition underline, caret), clipped
 //!   and scrolled, for the apps' fields.
+//! * [`edge`]: the edge of a window or a menu: a fine dark outline outside the shape and a faint light rim inside.
 //! * [`shadow`]: window shadow parameters from the verified table (all 32 rows live in
 //!   `cupertino_theme::window_shadow`), GPU parameters and a nine-slice cached CPU rasteriser.
 //! * [`render`]: [`Decorations`], the façade that lays out, hit-tests and rasterises the titlebar
@@ -19,11 +20,12 @@
 //!
 //! window corner radii 12 pt / 10 pt, the shadow table and the
 //! `ceil(σ·2.8) radius rule, button diameter 12 pt in a 16 pt art box,
-//! rim colour tokens and the one-pixel rim. Titlebar
+//! the outline and inner rim of the edge. Titlebar
 //! heights, button spacing, resize zones, glyph proportions and the button colours are
 //! approximate and configurable.
 
 pub mod buttons;
+pub mod edge;
 pub mod field;
 pub use cupertino_glyph as glyph;
 pub mod hit;
@@ -37,6 +39,7 @@ pub mod shape;
 pub mod text;
 
 pub use buttons::{ButtonState, ButtonVisual};
+pub use edge::{Edge, EdgeKind, Hairline, OutlineFalloff};
 pub use hit::{resize_hit, Hit, ResizeEdge};
 pub use layout::{ButtonLayout, FrameLayout};
 pub use metrics::{

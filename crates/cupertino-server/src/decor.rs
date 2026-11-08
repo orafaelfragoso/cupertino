@@ -10,8 +10,8 @@ use std::hash::{Hash, Hasher};
 
 use cupertino_assets::{AssetError, Assets};
 use cupertino_decorations::{
-    ButtonKind, DecorationConfig, DecorationState, Decorations, DoubleClickAction, Hit, ResizeEdge,
-    ShadowParams, TitlebarStyle,
+    ButtonKind, DecorationConfig, DecorationState, Decorations, DoubleClickAction, Edge, Hit,
+    ResizeEdge, ShadowParams, TitlebarStyle,
 };
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::{Appearance, Theme};
@@ -308,9 +308,15 @@ impl Decor {
         )
     }
 
-    /// Colour of the 1 device pixel rim around a window or popup at a backing scale.
-    pub fn rim_color(&self, scale: f64) -> [f32; 4] {
-        self.deco.config.palette.rim(scale)
+    /// The edge of a window, active or not: the outline the compositor draws just outside its frame (the inner
+    /// rim is in the rim buffer of [`Decor::buffers`]).
+    pub fn edge(&self, active: bool) -> Edge {
+        self.deco.edge(active)
+    }
+
+    /// The edge of a popup with a material (a menu, a popover): an outline along its sides.
+    pub fn menu_edge(&self) -> Edge {
+        self.deco.menu_edge()
     }
 
     pub fn double_click_action(&self, hit: Hit) -> DoubleClickAction {

@@ -10,8 +10,8 @@ use cupertino_decorations::TitlebarStyle;
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_effects::{DockEdge, Mesh, MinimizeEffect, Vertex, WorkspaceSlide};
 use cupertino_scene::{
-    Clip, ImageRole, OutputPoint, Placement, RoundedRect, SceneItem, SceneKind, Shadow, Source,
-    SurfaceRole,
+    BorderFalloff, Clip, ImageRole, OutputPoint, Placement, RoundedRect, SceneItem, SceneKind,
+    Shadow, Source, SurfaceRole,
 };
 use cupertino_theme::{Appearance, MaterialOptions, Theme};
 use cupertino_wm::{OutputId, Presentation, Rect, WindowId, Wm};
@@ -480,9 +480,109 @@ pub(crate) fn rrect_item(
             style: corner_style(continuous),
             fill,
             border,
+            border_falloff: BorderFalloff::default(),
         }),
         f64::from(alpha),
     ))
+}
+
+/// The outline of an edge ([`cupertino_decorations::Edge`]) just outside `rect`, whose corners are rounded by
+/// `radius`: a ring of whole device pixels whose inner side is the shape's outline, at `alpha`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn outline_item(
+    kind: SceneKind,
+    index: u64,
+    rect: smithay::utils::Rectangle<f64, Logical>,
+    radius: f64,
+    continuous: bool,
+    edge: &cupertino_decorations::Edge,
+    scale: f64,
+    alpha: f32,
+) -> Option<Piece> {
+    let line = EdgeLine {
+        line: edge.outline,
+        falloff: edge.falloff,
+        outside: true,
+    };
+    edge_line_item(kind, index, rect, radius, continuous, line, scale, alpha)
+}
+
+/// The inner rim of an edge just inside `rect`, whose corners are rounded by `radius`: a ring of whole device pixels
+/// whose outer side is the shape's outline, at `alpha`. `None` for an edge without one.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn inner_rim_item(
+    kind: SceneKind,
+    index: u64,
+    rect: smithay::utils::Rectangle<f64, Logical>,
+    radius: f64,
+    continuous: bool,
+    edge: &cupertino_decorations::Edge,
+    scale: f64,
+    alpha: f32,
+) -> Option<Piece> {
+    let line = EdgeLine {
+        line: edge.inner?,
+        falloff: edge.inner_falloff,
+        outside: false,
+    };
+    edge_line_item(kind, index, rect, radius, continuous, line, scale, alpha)
+}
+
+/// One line of an edge and the side of the shape's outline it lies on.
+struct EdgeLine {
+    line: cupertino_decorations::Hairline,
+    falloff: cupertino_decorations::OutlineFalloff,
+    /// Just outside the outline, else just inside it.
+    outside: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn edge_line_item(
+    kind: SceneKind,
+    index: u64,
+    rect: smithay::utils::Rectangle<f64, Logical>,
+    radius: f64,
+    continuous: bool,
+    line: EdgeLine,
+    scale: f64,
+    alpha: f32,
+) -> Option<Piece> {
+    let (px, color) = line.line.device(scale);
+    if color[3] <= 0.0 || alpha <= 0.0 || rect.size.w <= 0.0 || rect.size.h <= 0.0 {
+        return None;
+    }
+    let w = f64::from(px) / scale;
+    // the shader draws a border inside its rectangle: outside the shape, grow the rectangle by the line's width
+    let grow = if line.outside { w } else { 0.0 };
+    let ring = smithay::utils::Rectangle::new(
+        (rect.loc.x - grow, rect.loc.y - grow).into(),
+        (rect.size.w + 2.0 * grow, rect.size.h + 2.0 * grow).into(),
+    );
+    let (sides, ends, floor) = line.falloff.shader();
+    Some(Piece::item(item(
+        kind,
+        index,
+        Source::RoundedRect(RoundedRect {
+            rect: output_rect(ring),
+            radius: radius + grow,
+            style: corner_style(continuous),
+            fill: [0.0; 4],
+            border: Some((w, color)),
+            border_falloff: BorderFalloff { sides, ends, floor },
+        }),
+        f64::from(alpha),
+    )))
+}
+
+/// The straight sRGB colour laid over the face of a menu's or popover's glass in the dark appearance, at its alpha: it
+/// flattens what shows through towards a dark grey, so the panel reads dense over any backdrop.
+const POPUP_GLASS_FACE_DARK: [f32; 4] = [0.235, 0.235, 0.235, 0.49];
+
+/// The face fill of a popup's glass in `mode`, if it takes one: the plain dark recipe. Reduce Transparency and Increase
+/// Contrast have dense faces of their own, and light glass is dense enough.
+fn popup_glass_face(mode: &cupertino_theme::GlassMode) -> Option<[f32; 4]> {
+    (mode.dark && !mode.reduce_transparency && !mode.increase_contrast)
+        .then_some(POPUP_GLASS_FACE_DARK)
 }
 
 /// A surface tree drawn at `origin` as it is, without a window's rescale or mask.
@@ -801,6 +901,31 @@ fn window_elements(
     }
     out.extend(backdrops);
     if shadow && styled {
+        // the fine outline just outside the frame, over the shadow, fading with it (none on a full-screen window);
+        // around the device pixels the content and its mask cover, so it meets them at every scale and position
+        let edge = p.decor.edge(active);
+        let frame = smithay::utils::Rectangle::<f64, Logical>::new(
+            (
+                f64::from(v_phys.loc.x) / p.scale,
+                f64::from(v_phys.loc.y) / p.scale,
+            )
+                .into(),
+            (
+                f64::from(v_phys.size.w) / p.scale,
+                f64::from(v_phys.size.h) / p.scale,
+            )
+                .into(),
+        );
+        out.extend(outline_item(
+            SceneKind::Outline,
+            entry.id.0,
+            frame,
+            radius,
+            style.continuous_corners,
+            &edge,
+            p.scale,
+            alpha * plan.shadow as f32,
+        ));
         out.extend(shadow_piece(p, entry.id, plan, active, plan.opacity));
     }
     out
@@ -1386,9 +1511,9 @@ fn layer_elements(p: &mut SceneParams<'_>, layer: Layer, captures: &mut Vec<Piec
 }
 
 /// Elements of popups that carry a material, to go directly below the popup's surface (front to back:
-/// rim, material, shadow). The rim is the window rim of 1 device pixel, the shadow
-/// the panel row of the table (it is cut out under the popup, so the material stays
-/// translucent). `backdrops` are in output-local logical coordinates.
+/// material or glass, outline, shadow). The outline is the menu edge (`Decor::menu_edge`) just outside the shape, the
+/// shadow the panel row of the table (it is cut out under the popup, so the material stays translucent). `backdrops`
+/// are in output-local logical coordinates.
 fn popup_backdrop_elements(
     p: &mut SceneParams<'_>,
     backdrops: &[BackdropArea],
@@ -1396,24 +1521,24 @@ fn popup_backdrop_elements(
 ) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();
     let params = p.decor.popup_shadow_params();
-    let rim = p.decor.rim_color(p.scale);
+    let edge = p.decor.menu_edge();
     let mut glass = GlassGroups::default();
     for b in backdrops.iter().rev() {
         let alpha = b.alpha as f32 * opacity;
         if b.glass.is_some() {
-            // glass lights its own rim
-            glass.add(b, out.len());
-        } else {
-            out.push(rrect_item(
+            // the light rim inside the glass, in front of it
+            out.extend(inner_rim_item(
                 SceneKind::PopupRim,
                 b.key,
                 b.area,
                 b.radius,
                 true,
-                [0.0; 4],
-                Some((1.0 / p.scale, rim)),
+                &edge,
+                p.scale,
                 alpha,
             ));
+            glass.add(b, out.len());
+        } else {
             out.extend(material_layer(
                 p,
                 SceneKind::Backdrop,
@@ -1424,6 +1549,16 @@ fn popup_backdrop_elements(
                 alpha,
             ));
         }
+        out.extend(outline_item(
+            SceneKind::PopupOutline,
+            b.key,
+            b.area,
+            b.radius,
+            true,
+            &edge,
+            p.scale,
+            alpha,
+        ));
         let visual = cupertino_wm::Rect::new(
             p.rect.x + b.area.loc.x,
             p.rect.y + b.area.loc.y,
@@ -1450,7 +1585,7 @@ fn popup_backdrop_elements(
             f64::from(alpha),
         ));
     }
-    glass.finish(p, out, opacity)
+    glass.finish_popup(p, out, opacity)
 }
 
 /// Material pieces of committed backdrops, to go directly below the owning surface's pieces
@@ -1508,7 +1643,13 @@ impl<'a> GlassGroups<'a> {
 
     /// `out` with each container's piece at its place.
     fn finish(self, p: &SceneParams<'_>, out: Vec<Piece>, opacity: f32) -> Vec<Piece> {
-        self.place(out, |members| glass_pieces(p, members, opacity))
+        self.place(out, |members| glass_pieces(p, members, opacity, false))
+    }
+
+    /// `out` with each container's piece at its place, for the glass of a popup (a menu, a popover): it takes the
+    /// popup face ([`popup_glass_face`]).
+    fn finish_popup(self, p: &SceneParams<'_>, out: Vec<Piece>, opacity: f32) -> Vec<Piece> {
+        self.place(out, |members| glass_pieces(p, members, opacity, true))
     }
 
     /// `out` with the pieces `make` gives each container (its backdrops front to back) at the container's place.
@@ -1536,8 +1677,13 @@ impl<'a> GlassGroups<'a> {
 }
 
 /// The glass piece of the container of `members` (glass backdrops of one surface, front to back), or translucent fills
-/// standing in for it while the material pass is unavailable.
-fn glass_pieces(p: &SceneParams<'_>, members: &[&BackdropArea], opacity: f32) -> Vec<Piece> {
+/// standing in for it while the material pass is unavailable. A `popup`'s glass takes the popup face.
+fn glass_pieces(
+    p: &SceneParams<'_>,
+    members: &[&BackdropArea],
+    opacity: f32,
+    popup: bool,
+) -> Vec<Piece> {
     let Some(spec) = members.first().and_then(|b| b.glass) else {
         return Vec::new();
     };
@@ -1558,7 +1704,10 @@ fn glass_pieces(p: &SceneParams<'_>, members: &[&BackdropArea], opacity: f32) ->
             )
         })
         .collect();
-    let container = Container::new(shapes, spec.spacing as f32, mode);
+    let mut container = Container::new(shapes, spec.spacing as f32, mode);
+    if let Some(face) = popup.then(|| popup_glass_face(&mode)).flatten() {
+        container.params.face.fill = face;
+    }
     let alpha = members.iter().map(|b| b.alpha).fold(0.0, f64::max) as f32 * opacity;
     let index = members[0].key;
     let ready = p

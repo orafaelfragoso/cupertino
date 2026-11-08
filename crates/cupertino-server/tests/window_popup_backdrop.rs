@@ -530,8 +530,9 @@ fn a_square_backdrop_over_the_whole_window_follows_the_window_s_rounded_corners(
                 differs(inside, beside) > 24,
                 "at {scale}x the material covers the window: {inside:?} over {beside:?}"
             );
-            // the corner pixel and one a fifth of the radius in on the diagonal lie past the rounded outline
-            for d in [0.0, (radius * 0.2).floor()] {
+            // the corner pixel and one a tenth of the radius in on the diagonal lie past the rounded shape and the fine
+            // outline just outside it
+            for d in [0.0, (radius * 0.1).floor()] {
                 let corner = at(x + inward * d, bottom - d);
                 assert!(
                     differs(corner, beside) <= 12,

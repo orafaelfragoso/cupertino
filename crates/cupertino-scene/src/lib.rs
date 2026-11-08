@@ -10,9 +10,9 @@ pub use coordinates::{
 };
 pub use layers::{LayerStack, SceneLayer};
 pub use source::{
-    AlphaMode, Clip, GlassId, GlassPass, ImageId, ImageMapping, ImageRole, MaterialPass,
-    MaterialStage, Placement, RecipeId, ResourceKey, RoundedRect, Shadow, SnapshotId, Source,
-    SurfaceId, SurfaceRole,
+    AlphaMode, BorderFalloff, Clip, GlassId, GlassPass, ImageId, ImageMapping, ImageRole,
+    MaterialPass, MaterialStage, Placement, RecipeId, ResourceKey, RoundedRect, Shadow, SnapshotId,
+    Source, SurfaceId, SurfaceRole,
 };
 
 use std::time::Duration;
@@ -35,6 +35,7 @@ pub enum SceneKind {
     SnapPreview,
     Shadow,
     PopupRim,
+    PopupOutline,
     PopupShadow,
     WindowContent,
     PopupContent,
@@ -44,6 +45,7 @@ pub enum SceneKind {
     CursorContent,
     TitleBar,
     Rim,
+    Outline,
     CursorImage,
     InputHud,
     ShortcutNotice,
@@ -75,6 +77,7 @@ impl SceneKind {
             Self::SnapPreview => "snap-preview",
             Self::Shadow => "shadow",
             Self::PopupRim => "popup-rim",
+            Self::PopupOutline => "popup-outline",
             Self::PopupShadow => "popup-shadow",
             Self::WindowContent => "window-content",
             Self::PopupContent => "popup-content",
@@ -84,6 +87,7 @@ impl SceneKind {
             Self::CursorContent => "cursor-content",
             Self::TitleBar => "title-bar",
             Self::Rim => "rim",
+            Self::Outline => "outline",
             Self::CursorImage => "cursor-image",
             Self::InputHud => "input-hud",
             Self::ShortcutNotice => "shortcut-notice",

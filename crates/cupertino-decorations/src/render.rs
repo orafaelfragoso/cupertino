@@ -2,6 +2,7 @@
 //! titlebar and rim into premultiplied RGBA buffers.
 
 use crate::buttons::{draw_button, ButtonState};
+use crate::edge::{edge, Edge, EdgeKind};
 use crate::hit::{double_click, hit_test, in_button_group, input_region, Hit};
 use crate::layout::{title_slot, FrameLayout};
 use crate::metrics::{
@@ -394,10 +395,39 @@ impl Decorations {
         pm
     }
 
-    /// Stroke the one-pixel rim just inside the outline of a frame of `size` logical points.
+    /// The edge of the window, active or not: the outline the compositor draws just outside the frame and the inner
+    /// rim [`Decorations::render_rim`] draws just inside it.
+    pub fn edge(&self, active: bool) -> Edge {
+        self.edge_of(EdgeKind::Window, active)
+    }
+
+    /// The edge of a menu or popover in this appearance: an outline along its sides and a light rim inside, brightest
+    /// at the top and bottom.
+    pub fn menu_edge(&self) -> Edge {
+        self.edge_of(EdgeKind::Menu, true)
+    }
+
+    fn edge_of(&self, kind: EdgeKind, active: bool) -> Edge {
+        let cfg = &self.config;
+        edge(
+            kind,
+            cfg.appearance.is_dark(),
+            active,
+            cfg.increased_contrast,
+            // the high-contrast rim colour is the same at every scale
+            cfg.palette.rim(1.0),
+        )
+    }
+
+    /// Stroke the inner rim of the edge ([`Decorations::edge`]) just inside the outline of a frame of `size` logical
+    /// points: whole device pixels, at least one.
     fn stroke_rim(&self, pm: &mut Pixmap, size: Size, scale: f64) {
         let cfg = &self.config;
-        let width = cfg.metrics.rim_width_px;
+        let Some(inner) = self.edge(true).inner else {
+            return;
+        };
+        let (px, color) = inner.device(scale);
+        let width = f64::from(px);
         let half = width / 2.0 / scale;
         let rect = Rect::new(
             half,
@@ -412,18 +442,12 @@ impl Decorations {
                 line_cap: LineCap::Butt,
                 ..Stroke::default()
             };
-            pm.stroke_path(
-                &path,
-                &paint(cfg.palette.rim(scale)),
-                &stroke,
-                Transform::identity(),
-                None,
-            );
+            pm.stroke_path(&path, &paint(color), &stroke, Transform::identity(), None);
         }
     }
 
-    /// One-pixel rim around the whole frame (premultiplied RGBA, transparent inside). Meant to be
-    /// drawn over the client content.
+    /// The inner rim of the edge around the whole frame (premultiplied RGBA, transparent inside), whole device pixels
+    /// wide. Meant to be drawn over the client content; the outline outside the frame is the compositor's.
     pub fn render_rim(&self, frame_size: Size, scale: f64) -> Pixmap {
         let (w, h) = (
             (frame_size.width * scale).round().max(1.0) as u32,
@@ -543,7 +567,7 @@ mod tests {
         assert_eq!(rgba(&pm, 0, 0)[3], 0, "outside the rounded corner");
         assert_eq!(rgba(&pm, 399, 0)[3], 0);
         assert_eq!(rgba(&pm, 200, 0)[3], 255, "rim over fill is opaque");
-        let rim = d.config.palette.rim(1.0);
+        let (_, rim) = d.edge(true).inner.unwrap().device(1.0);
         let fill = d.config.palette.titlebar_active;
         let top = rgba(&pm, 200, 0);
         let expect: Vec<f32> = (0..3)
@@ -562,19 +586,53 @@ mod tests {
     }
 
     #[test]
-    fn rim_is_a_hairline_ring() {
+    fn rim_is_a_faint_white_ring_inside_the_frame() {
         let d = decorations(TitlebarStyle::Standard, Appearance::Dark);
         let ring = d.render_rim(Size::new(300.0, 200.0), 1.0);
         assert_eq!((ring.width(), ring.height()), (300, 200));
         assert_eq!(rgba(&ring, 150, 100)[3], 0);
-        assert!(rgba(&ring, 150, 0)[3] > 60 && rgba(&ring, 150, 1)[3] == 0);
-        assert!(rgba(&ring, 0, 100)[3] > 60 && rgba(&ring, 299, 100)[3] > 60);
-        assert!(rgba(&ring, 150, 199)[3] > 60);
+        // white at a tenth, premultiplied
+        let edge = rgba(&ring, 150, 0);
+        assert!((edge[3] as i32 - 26).abs() <= 1, "{edge:?}");
+        assert_eq!(edge[0], edge[3], "white");
+        assert_eq!(rgba(&ring, 150, 1)[3], 0);
+        for (x, y) in [(0, 100), (299, 100), (150, 199)] {
+            assert!((rgba(&ring, x, y)[3] as i32 - 26).abs() <= 1);
+        }
         let ring2 = d.render_rim(Size::new(300.0, 200.0), 2.0);
         assert!(
-            rgba(&ring2, 300, 0)[3] > 60 && rgba(&ring2, 300, 1)[3] == 0,
-            "still one device pixel at 2x"
+            rgba(&ring2, 300, 1)[3] > 20 && rgba(&ring2, 300, 2)[3] == 0,
+            "a point wide in the dark appearance: two device pixels at 2x"
         );
+        let light = decorations(TitlebarStyle::Standard, Appearance::Light);
+        let ring2 = light.render_rim(Size::new(300.0, 200.0), 2.0);
+        let edge = rgba(&ring2, 300, 0);
+        assert!((edge[3] as i32 - 13).abs() <= 1, "{edge:?}");
+        assert_eq!(
+            rgba(&ring2, 300, 1)[3],
+            0,
+            "half a point in the light appearance: one device pixel at 2x"
+        );
+    }
+
+    #[test]
+    fn the_edge_follows_the_appearance_and_increase_contrast() {
+        let dark = decorations(TitlebarStyle::Sidebar, Appearance::Dark);
+        assert_eq!(
+            dark.edge(true).outline.color[3],
+            crate::edge::WINDOW_OUTLINE_DARK
+        );
+        assert_eq!(
+            dark.menu_edge().outline.color[3],
+            crate::edge::MENU_OUTLINE_DARK
+        );
+        let mut cfg =
+            DecorationConfig::builtin(Appearance::DarkHighContrast, TitlebarStyle::Standard);
+        cfg.increased_contrast = true;
+        let contrast = decorations_with(cfg);
+        let e = contrast.edge(false);
+        assert_eq!(e.outline.color, contrast.config.palette.rim(1.0));
+        assert_eq!(e.outline.width_pt, 1.0);
     }
 
     #[test]

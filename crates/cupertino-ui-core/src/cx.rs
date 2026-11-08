@@ -300,6 +300,8 @@ pub struct PaintCx<'a> {
     pub(crate) focused: bool,
     pub(crate) focus_visible: bool,
     pub(crate) window_active: bool,
+    /// The window system shows the material of the window's [`WindowBackground::Surface`](crate::WindowBackground).
+    pub(crate) backdrop: bool,
     pub(crate) now: Timestamp,
     pub(crate) ops: &'a mut Vec<PaintOp>,
     pub(crate) group: &'a mut Option<Group>,
@@ -338,6 +340,13 @@ impl PaintCx<'_> {
 
     pub fn window_active(&self) -> bool {
         self.window_active
+    }
+
+    /// Whether the window system shows the material of the window's
+    /// [`WindowBackground::Surface`](crate::WindowBackground) and draws its edge. Without it the window paints the
+    /// surface's opaque fill instead, and a panel draws its own edge over it.
+    pub fn window_backdrop(&self) -> bool {
+        self.backdrop
     }
 
     pub fn now(&self) -> Timestamp {

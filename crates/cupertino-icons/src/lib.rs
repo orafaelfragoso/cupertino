@@ -936,6 +936,25 @@ mod tests {
     }
 
     #[test]
+    fn a_pack_has_a_raster_only_for_a_file_of_its_own() {
+        let host = tempfile::tempdir().unwrap();
+        host_themes(host.path());
+        let pack = tempfile::tempdir().unwrap();
+        let assets = fixture::assets(pack.path(), &["folder"], &["symbol.house"]);
+        let icons = SystemIcons::with_host(&assets, vec![host.path().to_path_buf()]);
+        assert!(icons.pack_has_raster("folder"), "a PNG of the pack");
+        assert!(
+            !icons.pack_has_raster("symbol.house"),
+            "a template symbol is not a raster"
+        );
+        // `computer` resolves through the built-in map in the host theme, which is not the pack's own file
+        let mut themed = SystemIcons::with_host(&assets, vec![host.path().to_path_buf()]);
+        assert!(themed.has_raster("computer", 16));
+        assert!(!icons.pack_has_raster("computer"));
+        assert!(!icons.pack_has_raster("volume.internal"), "nothing at all");
+    }
+
+    #[test]
     fn the_system_mark_is_drawn_at_the_requested_size_in_the_given_colour() {
         for px in [16, 32] {
             let mark = system_mark(px, [0.0, 0.0, 1.0, 1.0]);

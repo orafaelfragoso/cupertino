@@ -1668,6 +1668,22 @@ pub fn notification_apps(settings: &Settings, live: &Live) -> Vec<(String, Strin
     apps
 }
 
+/// Whether the pop-up menu `open` still belongs to the row it opened on once the applications of
+/// [`notification_apps`] went from `before` to `after`. An application's rows are addressed by its place in that list,
+/// so a menu open on one closes when the list changes under it, and a choice never lands on another application.
+pub fn menu_survives(
+    open: ControlId,
+    before: &[(String, String)],
+    after: &[(String, String)],
+) -> bool {
+    match open {
+        ControlId::NotificationAppLockScreen(_) | ControlId::NotificationAppPreviews(_) => {
+            before == after
+        }
+        _ => true,
+    }
+}
+
 /// The lock screen's settings for every application, then each listed application's own choices, where Default
 /// follows the former (`notifications.conf`; the pane's layout is Original).
 fn notifications_sections(settings: &Settings, live: &Live) -> Vec<Section> {
@@ -3982,6 +3998,38 @@ mod tests {
         let sections = sections(PaneId::Wallpaper, &unset(), LIGHT, &live);
         assert!(matches!(sections[1].rows[0].control, Control::Tiles { .. }));
         assert!(matches!(sections[2].rows[0].control, Control::Tiles { .. }));
+    }
+
+    #[test]
+    fn an_app_menu_closes_when_the_list_of_apps_changes_under_it() {
+        let s = unset();
+        let mail = Live {
+            notifying_apps: vec![("org.example.Mail".into(), "Mail".into())],
+            ..Live::default()
+        };
+        let both = Live {
+            notifying_apps: vec![
+                ("org.example.Mail".into(), "Mail".into()),
+                ("org.example.Bank".into(), "Bank".into()),
+            ],
+            ..Live::default()
+        };
+        let (before, after) = (notification_apps(&s, &mail), notification_apps(&s, &both));
+        // Bank sorts before Mail: the menu opened on Mail's row 0 would now set Bank's
+        assert_eq!(before[0].1, "Mail");
+        assert_eq!(after[0].1, "Bank");
+        for open in [
+            ControlId::NotificationAppPreviews(0),
+            ControlId::NotificationAppLockScreen(0),
+        ] {
+            assert!(!menu_survives(open, &before, &after));
+            assert!(menu_survives(open, &after, &after));
+        }
+        assert!(menu_survives(
+            ControlId::NotificationsPreviews,
+            &before,
+            &after
+        ));
     }
 
     #[test]

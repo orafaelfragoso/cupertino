@@ -135,14 +135,11 @@ pub fn lower(
                                 radius,
                                 style,
                                 ..
-                            } => element.masked(
-                                MaterialMask {
-                                    rect: logical_rect(rect),
-                                    radius_pt: radius,
-                                    continuous: !style.is_circular(),
-                                },
-                                ctx.cache,
-                            ),
+                            } => element.masked(MaterialMask {
+                                rect: logical_rect(rect),
+                                radius_pt: radius,
+                                continuous: !style.is_circular(),
+                            }),
                             _ => element,
                         };
                         elements.push(element.into());

@@ -69,6 +69,16 @@ from the application's model and reports changes as messages.
   Touch, right and middle presses start nothing, and a fullscreen window neither moves nor zooms. The region has no
   role and no Tab stop: keyboard users zoom with the compositor's Zoom shortcut (Super+Ctrl+Z by default) or the menu
   bar's Window menu, tile and fill with its shortcuts, and can drag the server's title bar with the pointer as always.
+- **Menus.** `Menu` levels follow the pointer as the menu bar's do (`cupertino-menu-model`'s `tracking`): the row
+  under the pointer takes the focus and the highlight, a submenu opens once the pointer rests 0.2 s on its row and
+  closes once it rests 0.3 s on another, and while the pointer heads from a row into its open submenu (each move inside
+  the triangle between the last point and the submenu's near edge, without a 0.3 s rest) the rows it crosses wait. A
+  press that opened the menu (a secondary press, a press on a `PopUpButton`, which opens its menu on the press) and is
+  let go over an item chooses it, once, if the pointer reached an item or the press was held 0.5 s; a quicker click
+  leaves the menu open. Typed letters find a row as `cupertino-typeahead` does, per level, and Return chooses it;
+  Escape closes one level and the focus goes back to its row, or to where the menu opened. The panel places the
+  submenu's edge where it asked the compositor to put it, beside its row on the trailing side: a submenu the compositor
+  flips to the other side keeps no triangle.
 - **Sliders.** `on_change` reports every value a drag passes; `on_end` reports the value once the change ends, when
   the pointer lets go or the drag is cancelled, and at once for a key or assistive technology step, so an
   application can write a level live and commit it once. With Increase Contrast the knob's ring (the control border

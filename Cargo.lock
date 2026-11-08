@@ -1850,7 +1850,9 @@ version = "0.1.0"
 dependencies = [
  "cupertino-animation",
  "cupertino-geometry",
+ "cupertino-menu-model",
  "cupertino-theme",
+ "cupertino-typeahead",
  "cupertino-ui-core",
  "cupertino-ui-layout",
  "cupertino-ui-platform",

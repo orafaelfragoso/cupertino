@@ -1,12 +1,22 @@
 //! Menus in popup windows, the regions that open a context menu, and pop-up buttons. A menu's enabled items are one
 //! roving group: the arrows and typed characters move the focus between them, and the focused item is drawn
 //! highlighted. Each open submenu is a popup of the menu before it, beside its item.
+//!
+//! Each level's panel follows the pointer as every menu does ([`cupertino_menu_model::tracking`]): the pointer
+//! highlights the row under it, a submenu opens after the pointer rests on its row and closes after it rests on
+//! another, and while the pointer heads from a row into its open submenu the rows it crosses wait. A press that opened
+//! the menu (a secondary press, a press on a pop-up button) and is let go on a row chooses it once the pointer reached
+//! a row or the press was held; a quick click leaves the menu open.
 
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::{ContextMenu, Handler, Menu, MenuAnchor, MenuItem, PopUpButton};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_menu_model::tracking::{
+    Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY,
+};
 use cupertino_theme::metrics::Control;
+use cupertino_typeahead::TypeAhead;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, CommandRegistry, ControlState,
     Element, Event, EventCx, FocusTarget, Key, MeasureCx, PaintCx, Phase, Popup, PopupAnchor,
@@ -15,9 +25,12 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
 };
-use cupertino_ui_platform::{DecorationMode, Keysym, Mods, MouseButton, PointerEvent, WindowSpec};
+use cupertino_ui_platform::{
+    DecorationMode, Keysym, Mods, MouseButton, PointerEvent, Timestamp, WindowSpec,
+};
 use cupertino_ui_render::{Paint, PaintOp, Sampling, Shape};
 use cupertino_ui_theme::{Color, ColorRole, StateVariant, Surface};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 const LEFT: Keysym = Keysym(0xff51);
@@ -88,6 +101,8 @@ impl<M: Clone + 'static> Menu<M> {
             on_close,
         } = self;
         let mut parent = parent;
+        // the menu opens with its current item over the pointer that pressed the button
+        let over = matches!(anchor, MenuAnchor::Over(_));
         let mut anchor = match anchor {
             MenuAnchor::Below(key) => PopupAnchor::Below { key, gap: GAP },
             MenuAnchor::At(point) => PopupAnchor::At(point),
@@ -122,6 +137,7 @@ impl<M: Clone + 'static> Menu<M> {
                 _ => None,
             };
             let back = (depth > 0).then(|| on_open(open[..depth - 1].to_vec()));
+            let typing = Rc::new(RefCell::new(TypeAhead::default()));
             let panel = Panel {
                 label: label.clone(),
                 rows: items
@@ -133,6 +149,13 @@ impl<M: Clone + 'static> Menu<M> {
                     .and_then(|i| enabled_position(&items, i)),
                 escape: back.clone().unwrap_or_else(|| on_close.clone()),
                 back,
+                slots: slots(&items, path, &on_open, &on_close),
+                open: next
+                    .zip(submenu.as_ref())
+                    .map(|(index, (_, sub))| (index, height(sub))),
+                collapse: on_open(path.to_vec()),
+                start: current.filter(|_| depth == 0 && over),
+                typing: Rc::clone(&typing),
                 children: rows(
                     &items,
                     path,
@@ -140,6 +163,7 @@ impl<M: Clone + 'static> Menu<M> {
                     next.filter(|_| submenu.is_some()),
                     &on_open,
                     &on_close,
+                    &typing,
                 ),
             };
             let key = level_key(&key, depth);
@@ -195,6 +219,7 @@ fn rows<M: Clone + 'static>(
     open: Option<usize>,
     on_open: &Handler<Vec<usize>, M>,
     on_close: &M,
+    typing: &Rc<RefCell<TypeAhead>>,
 ) -> Vec<Element<M>> {
     let labels: Rc<[String]> = items
         .iter()
@@ -254,6 +279,7 @@ fn rows<M: Clone + 'static>(
                 checked,
                 action,
                 labels: Rc::clone(&labels),
+                typing: Rc::clone(typing),
                 position,
                 place,
                 current: current == Some(index),
@@ -265,6 +291,64 @@ fn rows<M: Clone + 'static>(
             Element::new(row).key(index as u64)
         })
         .collect()
+}
+
+/// What the panel of the menu at `path` needs to follow the pointer over `items`: each row's height, its place among
+/// the enabled rows and what choosing it does.
+fn slots<M: Clone>(
+    items: &[MenuItem<M>],
+    path: &[usize],
+    on_open: &Handler<Vec<usize>, M>,
+    on_close: &M,
+) -> Vec<Slot<M>> {
+    let mut position = 0;
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let action = match item {
+                MenuItem::Item {
+                    enabled: true,
+                    on_select,
+                    ..
+                } => Some(RowAction::Select {
+                    on_select: on_select.clone(),
+                    on_close: on_close.clone(),
+                }),
+                MenuItem::Submenu { enabled: true, .. } => {
+                    let mut opened = path.to_vec();
+                    opened.push(index);
+                    Some(RowAction::Open {
+                        on_open: on_open(opened),
+                        open: false,
+                    })
+                }
+                _ => None,
+            };
+            let place = action.is_some().then(|| {
+                position += 1;
+                position - 1
+            });
+            Slot {
+                height: row_height(item),
+                position: place,
+                action,
+            }
+        })
+        .collect()
+}
+
+fn row_height<M>(item: &MenuItem<M>) -> f64 {
+    match item {
+        MenuItem::Separator => SEPARATOR_HEIGHT,
+        _ => ROW_HEIGHT,
+    }
+}
+
+/// The height of the panel of `items`.
+fn height<M>(items: &[MenuItem<M>]) -> f64 {
+    let rows: f64 = items.iter().map(row_height).sum();
+    (2.0 * PADDING_Y + rows).min(MAX.height)
 }
 
 /// The place of item `index` among the enabled items, if it is one.
@@ -289,12 +373,226 @@ struct Panel<M> {
     escape: M,
     /// Sent on the arrow toward the leading side in a submenu.
     back: Option<M>,
+    /// The rows in order, separators included.
+    slots: Vec<Slot<M>>,
+    /// The item whose submenu is open, and the submenu's height.
+    open: Option<(usize, f64)>,
+    /// Closes the submenus of this menu.
+    collapse: M,
+    /// The item over the pointer as the menu opens: a pop-up button's current option.
+    start: Option<usize>,
+    /// What was typed to find a row, which the rows share.
+    typing: Rc<RefCell<TypeAhead>>,
     children: Vec<Element<M>>,
 }
 
+/// A row of a panel as the pointer sees it.
+struct Slot<M> {
+    height: f64,
+    /// Its place among the enabled rows, if it is one.
+    position: Option<usize>,
+    /// What choosing it does, if it is enabled.
+    action: Option<RowAction<M>>,
+}
+
+/// A submenu opening or closing once the pointer rests long enough.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pending {
+    Open(usize),
+    Collapse,
+}
+
+#[derive(Default)]
+struct PanelState {
+    /// The focus came in.
+    entered: bool,
+    /// When the panel first heard of anything: about when the press that opened it went down.
+    opened: Option<Timestamp>,
+    /// A press that went down on this panel.
+    press: Option<Tracking>,
+    /// The pointer came onto a row that can be chosen, other than the one it was on as the menu opened.
+    reached: bool,
+    pointer: Option<Point>,
+    /// The row the pointer last chose to highlight.
+    hovered: Option<usize>,
+    aim: SubmenuAim,
+    pending: Option<(Timestamp, Pending)>,
+}
+
+fn seconds(t: Timestamp) -> f64 {
+    t.0 as f64 / 1e9
+}
+
+fn timestamp(seconds: f64) -> Timestamp {
+    Timestamp((seconds * 1e9).ceil().max(0.0) as u64)
+}
+
+fn after(t: Timestamp, seconds: f64) -> Timestamp {
+    Timestamp(t.0 + (seconds * 1e9).round() as u64)
+}
+
+impl<M: Clone + 'static> Panel<M> {
+    /// The row under `p`, in window coordinates, with the panel at `bounds`.
+    fn row_at(&self, p: Point, bounds: Rect) -> Option<usize> {
+        if !bounds.contains(p) {
+            return None;
+        }
+        let mut y = bounds.min_y() + PADDING_Y;
+        for (index, slot) in self.slots.iter().enumerate() {
+            if p.y >= y && p.y < y + slot.height {
+                return Some(index);
+            }
+            y += slot.height;
+        }
+        None
+    }
+
+    /// The near edge of the open submenu, beside its row on the trailing side.
+    fn submenu_edge(&self, bounds: Rect, direction: LayoutDirection) -> Option<Edge> {
+        let (index, height) = self.open?;
+        let above: f64 = self.slots[..index.min(self.slots.len())]
+            .iter()
+            .map(|s| s.height)
+            .sum();
+        let top = bounds.min_y() + above;
+        let x = match direction {
+            LayoutDirection::Ltr => bounds.max_x() - SUBMENU_OVERLAP,
+            LayoutDirection::Rtl => bounds.min_x() + SUBMENU_OVERLAP,
+        };
+        Some(Edge {
+            x,
+            top,
+            bottom: top + height,
+        })
+    }
+
+    /// The pointer is at `p`: unless it heads into the open submenu, the row under it takes the highlight.
+    fn pointed(&self, state: &mut PanelState, p: Point, cx: &mut EventCx<'_, M>) {
+        let Some(bounds) = cx.bounds() else {
+            return;
+        };
+        state.pointer = Some(p);
+        let edge = self.submenu_edge(bounds, cx.env().direction);
+        if !state.aim.moved((p.x, p.y), seconds(cx.now()), edge) {
+            self.hover(state, p, bounds, cx);
+        }
+        self.schedule(state, cx);
+    }
+
+    /// The row under `p` takes the highlight, and its submenu opens, or the open one closes, once the pointer rests.
+    fn hover(&self, state: &mut PanelState, p: Point, bounds: Rect, cx: &mut EventCx<'_, M>) {
+        let row = self
+            .row_at(p, bounds)
+            .filter(|&i| self.slots[i].position.is_some());
+        if row.is_some() && row != self.start {
+            state.reached = true;
+        }
+        if row == state.hovered {
+            return;
+        }
+        state.hovered = row;
+        let Some(index) = row else {
+            // off the rows a closing submenu still closes, an opening one does not open
+            state.pending = state.pending.filter(|(_, p)| *p == Pending::Collapse);
+            return;
+        };
+        if let Some(position) = self.slots[index].position {
+            cx.focus_item(FocusTarget::Index(position));
+        }
+        let now = cx.now();
+        let open = self.open.map(|(i, _)| i);
+        state.pending = match &self.slots[index].action {
+            Some(RowAction::Open { .. }) if open == Some(index) => None,
+            Some(RowAction::Open { .. }) => {
+                Some((after(now, SUBMENU_OPEN_DELAY), Pending::Open(index)))
+            }
+            _ if open.is_some() => Some((after(now, SUBMENU_CLOSE_DELAY), Pending::Collapse)),
+            _ => None,
+        };
+    }
+
+    /// Wakes the panel for the earliest of its pending submenu and the end of the pointer's way into one.
+    fn schedule(&self, state: &PanelState, cx: &mut EventCx<'_, M>) {
+        let aim = state.aim.deadline().map(timestamp);
+        let pending = state.pending.map(|(at, _)| at);
+        if let Some(at) = aim.into_iter().chain(pending).min() {
+            cx.wake_at(at);
+        }
+    }
+
+    fn woke(&self, state: &mut PanelState, now: Timestamp, cx: &mut EventCx<'_, M>) {
+        if state.aim.expired(seconds(now) + 1e-9) {
+            if let (Some(p), Some(bounds)) = (state.pointer, cx.bounds()) {
+                self.hover(state, p, bounds, cx);
+            }
+        }
+        if let Some((_, pending)) = state.pending.filter(|(at, _)| *at <= now) {
+            state.pending = None;
+            match pending {
+                Pending::Collapse => cx.emit(self.collapse.clone()),
+                Pending::Open(index) => {
+                    if let Some(RowAction::Open { on_open, .. }) = &self.slots[index].action {
+                        cx.emit(on_open.clone());
+                    }
+                }
+            }
+        }
+        self.schedule(state, cx);
+    }
+
+    /// A button went down or up at `p` over this panel.
+    fn button(&self, state: &mut PanelState, p: Point, pressed: bool, cx: &mut EventCx<'_, M>) {
+        let now = cx.now();
+        let row = cx.bounds().and_then(|bounds| self.row_at(p, bounds));
+        let action = row.and_then(|i| self.slots[i].action.as_ref());
+        if pressed {
+            state.press = Some(Tracking::in_menu(seconds(now)));
+            if let Some(bounds) = cx.bounds() {
+                self.hover(state, p, bounds, cx);
+            }
+            state.pending = None;
+            if let Some(RowAction::Open { on_open, .. }) = action {
+                if self.open.map(|(i, _)| i) != row {
+                    cx.emit(on_open.clone());
+                }
+            }
+            return;
+        }
+        // a release without a press here ends the press that opened the menu
+        let tracking = state.press.take().unwrap_or_else(|| {
+            let mut tracking = Tracking::from_title(seconds(state.opened.unwrap_or(now)));
+            if state.reached {
+                tracking.reach();
+            }
+            tracking
+        });
+        // let go on a panel, a release never closes the menu without choosing
+        let under = match action {
+            Some(RowAction::Select { .. }) => Under::Item,
+            _ => Under::Menu,
+        };
+        match (tracking.release(seconds(now), under), action) {
+            (
+                Release::Choose,
+                Some(RowAction::Select {
+                    on_select,
+                    on_close,
+                }),
+            ) => {
+                cx.emit(on_select.clone());
+                cx.emit(on_close.clone());
+            }
+            (_, Some(RowAction::Open { on_open, .. })) if self.open.map(|(i, _)| i) != row => {
+                state.pending = None;
+                cx.emit(on_open.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
 impl<M: Clone + 'static> Widget<M> for Panel<M> {
-    /// Whether the focus came in yet.
-    type State = bool;
+    type State = PanelState;
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
@@ -312,11 +610,15 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         std::mem::take(&mut self.children)
     }
 
-    fn state(&self) -> bool {
-        false
+    fn state(&self) -> PanelState {
+        PanelState::default()
     }
 
-    fn update(&self, old: &Self, _: &mut bool) -> Change {
+    fn update(&self, old: &Self, _: &mut PanelState) -> Change {
+        if !Rc::ptr_eq(&self.typing, &old.typing) {
+            let typed = old.typing.borrow().clone();
+            *self.typing.borrow_mut() = typed;
+        }
         if self.label != old.label {
             Change::Paint
         } else {
@@ -324,16 +626,53 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         }
     }
 
-    fn measure(&self, _: &bool, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &PanelState, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
             size: Size::ZERO,
             baseline: None,
         }
     }
 
-    fn event(&self, entered: &mut bool, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+    fn event(&self, state: &mut PanelState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        state.opened.get_or_insert(cx.now());
+        // the panel follows the pointer over all its rows: as they hear it, or over its own padding
+        let mine = cx.phase() == Phase::Capture || cx.node() == cx.target();
+        match *event {
+            Event::Pointer(PointerEvent::Enter { position }, _) if cx.node() == cx.target() => {
+                self.pointed(state, position, cx);
+                return Propagation::Continue;
+            }
+            Event::Pointer(PointerEvent::Motion { position }, _) if mine => {
+                self.pointed(state, position, cx);
+                return Propagation::Continue;
+            }
+            Event::Pointer(PointerEvent::Leave, _) if cx.node() == cx.target() => {
+                state.pointer = None;
+                state.hovered = None;
+                state.pending = None;
+                state.aim.reset();
+                return Propagation::Continue;
+            }
+            Event::Pointer(
+                PointerEvent::Button {
+                    position,
+                    button: MouseButton::Left | MouseButton::Right,
+                    pressed,
+                    ..
+                },
+                _,
+            ) if mine => {
+                self.button(state, position, pressed, cx);
+                return Propagation::Stop;
+            }
+            Event::Wake(now) if cx.node() == cx.target() => {
+                self.woke(state, now, cx);
+                return Propagation::Stop;
+            }
+            _ => {}
+        }
         if let Event::FocusWithin { gained: true, .. } = event {
-            if !std::mem::replace(entered, true) {
+            if !std::mem::replace(&mut state.entered, true) {
                 if let Some(index) = self.current {
                     cx.focus_item(FocusTarget::Index(index));
                 }
@@ -365,7 +704,7 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
     }
 
     /// The window paints the material or the opaque fill under it; the panel adds its edge.
-    fn paint(&self, _: &bool, cx: &mut PaintCx<'_>) {
+    fn paint(&self, _: &PanelState, cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let theme = &cx.env().theme;
         let edge = theme.colors.get(ColorRole::Separator, StateVariant::NORMAL);
@@ -379,7 +718,7 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         );
     }
 
-    fn semantics(&self, _: &bool, cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &PanelState, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Menu);
         cx.name(self.label.clone());
         cx.item_count(self.rows);
@@ -401,6 +740,8 @@ struct Row<M> {
     action: RowAction<M>,
     /// The labels of the menu's enabled rows, in order, for typing to move.
     labels: Rc<[String]>,
+    /// What was typed so far, shared by the menu's rows.
+    typing: Rc<RefCell<TypeAhead>>,
     /// This row's place among them, if enabled.
     position: usize,
     /// This row's place among all the menu's rows, separators not counted, which a screen reader reads out.
@@ -442,14 +783,18 @@ impl<M: Clone + 'static> Row<M> {
         }
     }
 
-    /// The next enabled row after this one whose label starts with `c`, wrapping around; from this one when it is
-    /// not `selected`.
-    fn typed(&self, c: char, selected: bool) -> Option<usize> {
-        let typed: String = c.to_lowercase().collect();
+    /// The enabled row that what was typed, with `c` typed at `now`, finds: one character the next row it starts
+    /// after this one (from this one when it is not `selected`), more characters the first row from this one that
+    /// they start, wrapping around.
+    fn typed(&self, c: char, selected: bool, now: f64) -> Option<usize> {
         let count = self.labels.len();
-        (usize::from(selected)..count + usize::from(selected))
-            .map(|k| (self.position + k) % count)
-            .find(|&i| self.labels[i].to_lowercase().starts_with(&typed))
+        let titles: Vec<Option<&str>> = self.labels.iter().map(|l| Some(l.as_str())).collect();
+        let from = if selected {
+            self.position
+        } else {
+            (self.position + count - 1) % count
+        };
+        self.typing.borrow_mut().find(c, now, from, &titles)
     }
 
     fn key(
@@ -479,7 +824,7 @@ impl<M: Clone + 'static> Row<M> {
                     && !key.mods.contains(Mods::ALT)
                     && !key.mods.contains(Mods::PRIMARY);
                 match key.text.filter(|c| plain && !c.is_control() && *c != ' ') {
-                    Some(c) => match self.typed(c, selected) {
+                    Some(c) => match self.typed(c, selected, seconds(cx.now())) {
                         Some(index) => FocusTarget::Index(index),
                         None => return true,
                     },
@@ -552,11 +897,11 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
 
     fn event(&self, state: &mut RowState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match event {
+            // the panel moves the focus to the row the pointer is on
             Event::Pointer(PointerEvent::Enter { .. }, _)
                 if self.enabled && cx.node() == cx.target() =>
             {
                 state.pointed = true;
-                cx.request_focus();
                 cx.request_paint();
             }
             Event::Pointer(PointerEvent::Leave, _) if cx.node() == cx.target() => {
@@ -899,6 +1244,22 @@ impl<M: Clone + 'static> Widget<M> for PopUpButton<M> {
                 && cx.node() == cx.target()
             {
                 cx.emit(on_open.clone());
+                return Propagation::Stop;
+            }
+        }
+        // the menu opens on the press, so the pointer can drag to an option and let go there
+        if let Event::Pointer(
+            PointerEvent::Button {
+                button: MouseButton::Left,
+                pressed: true,
+                ..
+            },
+            _,
+        ) = event
+        {
+            if cx.phase() != Phase::Capture {
+                cx.emit(on_open.clone());
+                cx.request_paint();
                 return Propagation::Stop;
             }
         }

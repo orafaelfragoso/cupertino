@@ -298,6 +298,8 @@ fn arrows_home_end_and_typed_characters_move_between_the_enabled_items() {
     assert!(on_row(&h, 1), "the next item starting with it");
     h.type_text("p");
     assert!(on_row(&h, 1), "a disabled item is not typed to");
+    // after a pause, a new search
+    h.clock().advance_by(1_100_000_000);
     h.type_text("s");
     assert!(on_row(&h, 4));
 }

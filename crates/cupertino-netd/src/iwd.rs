@@ -24,15 +24,17 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
 use cupertino_netlink::Ssid;
+use cupertino_peer::signal::{from_owner, Owner};
 use rustix::event::{eventfd, EventfdFlags};
 use rustix::io::{read, write, Errno};
 use zbus::blocking::fdo::{ObjectManagerProxy, PropertiesProxy};
-use zbus::blocking::{Connection, MessageIterator, Proxy};
+use zbus::blocking::{Connection, Proxy};
 use zbus::fdo;
 use zbus::message::{Header, Type as MessageType};
 use zbus::names::InterfaceName;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use zbus::MatchRule;
+use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::supplicant::{
@@ -57,7 +59,8 @@ type Objects = HashMap<OwnedObjectPath, HashMap<zbus::names::OwnedInterfaceName,
 struct Pending {
     /// The iwd network the passphrase is for; any other network is refused.
     network: OwnedObjectPath,
-    passphrase: Option<String>,
+    /// Zeroed when it is dropped unused; the copy handed to iwd is the reply's.
+    passphrase: Option<Zeroizing<String>>,
     /// iwd asked and was given the passphrase.
     supplied: bool,
 }
@@ -80,47 +83,12 @@ enum AgentError {
     Canceled(String),
 }
 
-/// Whether `sender` owns iwd's name now. False when nobody does or the bus does not answer.
-async fn is_iwd(
-    sender: Option<&zbus::names::UniqueName<'_>>,
-    connection: &zbus::Connection,
-) -> bool {
-    let Some(sender) = sender else {
-        return false;
-    };
-    let Ok(dbus) = fdo::DBusProxy::new(connection).await else {
-        return false;
-    };
-    let Ok(name) = zbus::names::BusName::try_from(SERVICE) else {
-        return false;
-    };
-    dbus.get_name_owner(name)
-        .await
-        .is_ok_and(|owner| owner.as_str() == sender.as_str())
-}
-
-/// Whether the signal `message` comes from the connection that owns iwd's name now.
-fn sent_by_iwd(connection: &Connection, message: &zbus::Message) -> bool {
-    let header = message.header();
-    let Some(sender) = header.sender() else {
-        return false;
-    };
-    connection
-        .call_method(
-            Some("org.freedesktop.DBus"),
-            "/org/freedesktop/DBus",
-            Some("org.freedesktop.DBus"),
-            "GetNameOwner",
-            &(SERVICE,),
-        )
-        .ok()
-        .and_then(|reply| reply.body().deserialize::<String>().ok())
-        .is_some_and(|owner| owner == sender.as_str())
-}
-
 /// `net.connman.iwd.Agent`.
 struct Agent {
     pending: SharedPending,
+    /// iwd's connection, as the watcher follows it: asking the bus here, in the call, would stop the object server, and
+    /// with it the connection, while calls from other users filled its queue.
+    iwd: Owner,
 }
 
 #[zbus::interface(name = "net.connman.iwd.Agent")]
@@ -129,22 +97,21 @@ impl Agent {
     fn release(&self) {}
 
     /// The pending passphrase, for iwd only.
-    async fn request_passphrase(
+    fn request_passphrase(
         &self,
         network: ObjectPath<'_>,
         #[zbus(header)] header: Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
     ) -> std::result::Result<String, AgentError> {
-        if !is_iwd(header.sender(), connection).await {
+        if !self.iwd.is(header.sender()) {
             return Err(AgentError::Canceled("only iwd may ask".to_owned()));
         }
         let mut pending = lock(&self.pending);
         match pending.as_mut() {
             Some(pending) if pending.network.as_ref() == network => match pending.passphrase.take()
             {
-                Some(passphrase) => {
+                Some(mut passphrase) => {
                     pending.supplied = true;
-                    Ok(passphrase)
+                    Ok(std::mem::take(&mut *passphrase))
                 }
                 None => Err(AgentError::Canceled("there is no passphrase".to_owned())),
             },
@@ -269,15 +236,6 @@ impl IwdSupplicant {
     /// Exports the agent and starts the watcher. Does not need iwd to be running yet.
     pub fn new(connection: Connection) -> Result<Self> {
         let pending: SharedPending = Arc::new(Mutex::new(None));
-        connection
-            .object_server()
-            .at(
-                AGENT_PATH,
-                Agent {
-                    pending: pending.clone(),
-                },
-            )
-            .map_err(Error::bus("exporting the agent"))?;
         let (sender, reports) = channel();
         let waker = Arc::new(
             eventfd(0, EventfdFlags::NONBLOCK | EventfdFlags::CLOEXEC)
@@ -292,7 +250,17 @@ impl IwdSupplicant {
             sender,
             waker,
         };
-        this.watch()?;
+        let iwd = this.watch()?;
+        this.connection
+            .object_server()
+            .at(
+                AGENT_PATH,
+                Agent {
+                    pending: this.pending.clone(),
+                    iwd,
+                },
+            )
+            .map_err(Error::bus("exporting the agent"))?;
         Ok(this)
     }
 
@@ -344,8 +312,9 @@ impl IwdSupplicant {
         }
     }
 
-    /// Reads `Station.State` changes and turns them into events, on a thread of its own.
-    fn watch(&self) -> Result<()> {
+    /// Reads `Station.State` changes and turns them into events, on a thread of its own. Returns the owner of iwd's name
+    /// that the watcher follows.
+    fn watch(&self) -> Result<Owner> {
         let rule = MatchRule::builder()
             .msg_type(MessageType::Signal)
             .sender(SERVICE)
@@ -353,8 +322,11 @@ impl IwdSupplicant {
             .and_then(|rule| rule.member("PropertiesChanged"))
             .map(|rule| rule.build())
             .map_err(Error::bus("building the match rule"))?;
-        let messages = MessageIterator::for_match_rule(rule, &self.connection, None)
-            .map_err(Error::bus("subscribing to state changes"))?;
+        let messages = from_owner(&self.connection, SERVICE, rule, |_| {
+            eprintln!("cupertino-netd: ignored a state change that iwd did not send")
+        })
+        .map_err(Error::bus("subscribing to state changes"))?;
+        let iwd = messages.owner();
         let (connection, interfaces, sender, waker) = (
             self.connection.clone(),
             self.interfaces.clone(),
@@ -367,13 +339,6 @@ impl IwdSupplicant {
                 // station path to interface index: the paths do not change while iwd runs
                 let mut known: HashMap<String, u32> = HashMap::new();
                 for message in messages {
-                    if message
-                        .as_ref()
-                        .is_ok_and(|message| !sent_by_iwd(&connection, message))
-                    {
-                        eprintln!("cupertino-netd: ignored a state change that iwd did not send");
-                        continue;
-                    }
                     let report = message
                         .map_err(Error::bus("reading a state change"))
                         .and_then(|message| {
@@ -398,7 +363,7 @@ impl IwdSupplicant {
                 path: "iwd-watcher".into(),
                 source,
             })?;
-        Ok(())
+        Ok(iwd)
     }
 
     /// The iwd network of the device with this name, type and SSID.
@@ -577,7 +542,7 @@ impl Supplicant for IwdSupplicant {
         let network = self.network_path(&device, ssid, class)?;
         *lock(&self.pending) = Some(Pending {
             network: network.clone(),
-            passphrase: passphrase.map(str::to_owned),
+            passphrase: passphrase.map(|passphrase| Zeroizing::new(passphrase.to_owned())),
             supplied: false,
         });
         let proxy = self.proxy(network.as_str(), NETWORK)?;
@@ -727,7 +692,7 @@ mod tests {
         let supplicant = IwdSupplicant::new(netd.clone()).unwrap();
         *lock(&supplicant.pending) = Some(Pending {
             network: OwnedObjectPath::try_from(NETWORK_PATH).unwrap(),
-            passphrase: Some("correct horse".to_owned()),
+            passphrase: Some(Zeroizing::new("correct horse".to_owned())),
             supplied: false,
         });
         // another user's program on the bus, while the connection waits

@@ -1397,11 +1397,13 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "cupertino-netlink",
+ "cupertino-peer",
  "cupertino-seat",
  "cupertino-test-bus",
  "rustix 1.1.6",
  "tempfile",
  "zbus",
+ "zeroize",
 ]
 
 [[package]]

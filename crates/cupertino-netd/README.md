@@ -72,10 +72,11 @@ cargo run -p cupertino-netd --features app -- [--session-bus [--no-auth]] [--res
 - **Connecting.** `Connect` returns when the attempt has begun. The device goes `configuring`, then `connected` once iwd
   has associated and DHCP has answered. `ConnectionFailed` and the device's `failure` report a failed attempt. A
   passphrase is needed only for a network iwd has no profile for. It goes to iwd once, through the agent this process
-  registers, for that network only, and is not kept. The agent answers `RequestPassphrase` only to the connection that owns
-  `net.connman.iwd` when the call arrives: the bus policy lets every user reach this process, so any other caller that named
+  registers, for that network only, and is not kept (the pending copy is zeroed when it is dropped). The agent answers `RequestPassphrase` only to the connection that owns
+  `net.connman.iwd` when the call arrives, as the state watcher follows it (`cupertino_peer::signal::from_owner`; the call asks
+  the bus nothing, so a flood of calls from other users cannot stop the agent): the bus policy lets every user reach this process, so any other caller that named
   the network while the connection waits would be handed the passphrase. iwd's `Station.State` changes count only from that
-  owner too, checked on receipt, so another user cannot drop the lease with a forged `disconnected` (`iwd` tests
+  owner too, so another user cannot drop the lease with a forged `disconnected` (`iwd` tests
   `only_iwd_is_handed_the_passphrase`, `only_iwd_says_a_station_disconnected`). WEP and 802.1X networks without a profile are refused. iwd answers every
   failed handshake with the same error, so a failure after a supplied passphrase is `wrong-passphrase` (approximate).
 - **DHCP.** Timers follow RFC 2131: retransmission at 4, 8, 16, 32 and 64 s, T1 at half and T2 at 0.875 of the lease

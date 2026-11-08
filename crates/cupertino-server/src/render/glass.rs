@@ -55,6 +55,9 @@ pub struct GlassContainer {
     pub container: Container,
     /// Identity of everything that changes how it looks besides the backdrop.
     pub key: u64,
+    /// For the glass of a window, the part of the window it reads (output-local points): what lies outside it is read
+    /// as the nearest pixel inside, so the glass shows the window and not what is around it.
+    pub within: Option<Rectangle<f64, Logical>>,
 }
 
 impl GlassContainer {
@@ -70,7 +73,21 @@ impl GlassContainer {
         Self {
             key: h.finish(),
             container,
+            within: None,
         }
+    }
+
+    /// The container reading only `within` (output-local points) of what lies below it.
+    pub fn within(mut self, within: Rectangle<f64, Logical>) -> Self {
+        self.key = Sig::new()
+            .u(self.key)
+            .f(within.loc.x)
+            .f(within.loc.y)
+            .f(within.size.w)
+            .f(within.size.h)
+            .finish();
+        self.within = Some(within);
+        self
     }
 
     /// Identity of the textures the container needs: its look, the backdrop signature and the scale.
@@ -158,6 +175,41 @@ pub fn framebuffer_rect(
     let x1 = ((hi[0] - SNAP).ceil() as i32).min(viewport[0] + viewport[2]);
     let y1 = ((hi[1] - SNAP).ceil() as i32).min(viewport[1] + viewport[3]);
     (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
+}
+
+/// The blits (source in framebuffer pixels, destination in capture texels, each `[x0, y0, x1, y1]`) that fill the part
+/// of a capture of framebuffer rectangle `fb` at `size` texels lying outside framebuffer rectangle `within` with the
+/// nearest pixels inside it: a row or column of its edge stretched over each side, a corner pixel over each corner.
+/// None when `within` covers the capture, or misses it.
+pub fn edge_blits(fb: [i32; 4], size: (i32, i32), within: [i32; 4]) -> Vec<([i32; 4], [i32; 4])> {
+    let (x0, y0) = (within[0].max(fb[0]), within[1].max(fb[1]));
+    let (x1, y1) = (
+        (within[0] + within[2]).min(fb[0] + fb[2]),
+        (within[1] + within[3]).min(fb[1] + fb[3]),
+    );
+    if x1 <= x0 || y1 <= y0 {
+        return Vec::new();
+    }
+    // a framebuffer position as a capture texel, rounded to the nearest edge
+    let tx = |x: i32| ((x - fb[0]) as f32 * size.0 as f32 / fb[2] as f32).round() as i32;
+    let ty = |y: i32| ((y - fb[1]) as f32 * size.1 as f32 / fb[3] as f32).round() as i32;
+    let (cx0, cy0, cx1, cy1) = (tx(x0), ty(y0), tx(x1), ty(y1));
+    let (w, h) = size;
+    let mut out = Vec::new();
+    let mut add = |src: [i32; 4], dst: [i32; 4]| {
+        if dst[2] > dst[0] && dst[3] > dst[1] {
+            out.push((src, dst));
+        }
+    };
+    add([x0, y0, x0 + 1, y1], [0, cy0, cx0, cy1]);
+    add([x1 - 1, y0, x1, y1], [cx1, cy0, w, cy1]);
+    add([x0, y0, x1, y0 + 1], [cx0, 0, cx1, cy0]);
+    add([x0, y1 - 1, x1, y1], [cx0, cy1, cx1, h]);
+    add([x0, y0, x0 + 1, y0 + 1], [0, 0, cx0, cy0]);
+    add([x1 - 1, y0, x1, y0 + 1], [cx1, 0, w, cy0]);
+    add([x0, y1 - 1, x0 + 1, y1], [0, cy1, cx0, h]);
+    add([x1 - 1, y1 - 1, x1, y1], [cx1, cy1, w, h]);
+    out
 }
 
 /// The affine map from output pixels to the texture coordinates of a capture of framebuffer rectangle `fb`.
@@ -466,12 +518,13 @@ impl MaterialGl {
     }
 
     /// Capture framebuffer rectangle `fb` of `src_fbo` at half scale and blur it into the levels and the blur fill
-    /// `glass` reads.
+    /// `glass` reads. With `within`, a framebuffer rectangle, the capture outside it repeats its edge pixels.
     unsafe fn process_glass(
         &mut self,
         gl: &ffi::Gles2,
         src_fbo: GLuint,
         fb: [i32; 4],
+        within: Option<[i32; 4]>,
         glass: &Container,
         scale: f32,
     ) -> Option<(Vec<Target>, [usize; BLUR_LEVELS + 1])> {
@@ -497,6 +550,23 @@ impl MaterialGl {
             ffi::LINEAR,
         );
         self.stats.passes += 1;
+        if let Some(within) = within {
+            for (src, dst) in edge_blits(fb, size, within) {
+                gl.BlitFramebuffer(
+                    src[0],
+                    src[1],
+                    src[2],
+                    src[3],
+                    dst[0],
+                    dst[1],
+                    dst[2],
+                    dst[3],
+                    ffi::COLOR_BUFFER_BIT,
+                    ffi::NEAREST,
+                );
+                self.stats.passes += 1;
+            }
+        }
         // texels of the capture per point
         let px_per_pt = scale * size.0 as f32 / fb[2] as f32;
         let src = (capture.tex, capture.size);
@@ -576,10 +646,15 @@ impl MaterialGl {
             }
             None => {
                 self.stats.backdrop_misses += 1;
+                let within = p.glass.within.and_then(|w| {
+                    let w = to_physical_rect(w, Scale::from(f64::from(p.scale)));
+                    framebuffer_rect(&p.projection, viewport, w)
+                });
                 let Some((targets, slots)) = self.process_glass(
                     gl,
                     saved.draw_fbo as GLuint,
                     fb,
+                    within,
                     &p.glass.container,
                     p.scale,
                 ) else {
@@ -861,6 +936,41 @@ mod tests {
         assert_eq!(
             framebuffer_rect(&proj, viewport, rect(300, 0, 10, 10)),
             None
+        );
+    }
+
+    /// Outside the window a capture repeats the window's edge: each side and corner is filled from the nearest row,
+    /// column or pixel inside, and nothing is filled where the window covers the capture.
+    #[test]
+    fn a_capture_outside_its_window_repeats_the_window_edge() {
+        // a 100 x 50 capture at half scale of a 200 x 100 rectangle, the window covering its upper-left part
+        let (fb, size) = ([10, 20, 200, 100], (100, 50));
+        let blits = edge_blits(fb, size, [0, 40, 150, 200]);
+        let area = |r: [i32; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+        // what lies inside, in texels: x from 0 to 70, y from 10 to 50
+        let inside = 70 * 40;
+        assert_eq!(
+            blits.iter().map(|(_, d)| area(*d)).sum::<i32>(),
+            100 * 50 - inside,
+            "the blits fill exactly what lies outside: {blits:?}"
+        );
+        for (src, _) in &blits {
+            assert!(
+                src[0] >= 10 && src[2] <= 160 && src[1] >= 40 && src[3] <= 120,
+                "{src:?}"
+            );
+            assert!(
+                src[2] - src[0] == 1 || src[3] - src[1] == 1,
+                "a row, a column or a pixel: {src:?}"
+            );
+        }
+        assert!(
+            edge_blits(fb, size, [0, 0, 400, 400]).is_empty(),
+            "the window covers it"
+        );
+        assert!(
+            edge_blits(fb, size, [300, 0, 10, 10]).is_empty(),
+            "the window misses it"
         );
     }
 

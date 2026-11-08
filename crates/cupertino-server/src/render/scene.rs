@@ -485,6 +485,22 @@ fn push_session_overlays(
     }
 }
 
+/// How far inside a rounded corner of radius 1 its rectangle is clear of the curve along the diagonal, a little more
+/// than 1 − 1/√2 so a continuous corner, which reaches further in, clears too.
+const CORNER_CLEARANCE: f64 = 0.33;
+
+/// `r` with each side moved `by` towards its centre, never below an empty rectangle.
+fn inset_rect(
+    r: smithay::utils::Rectangle<f64, Logical>,
+    by: f64,
+) -> smithay::utils::Rectangle<f64, Logical> {
+    let (w, h) = (
+        (r.size.w - 2.0 * by).max(0.0),
+        (r.size.h - 2.0 * by).max(0.0),
+    );
+    smithay::utils::Rectangle::new((r.loc.x + by, r.loc.y + by).into(), (w, h).into())
+}
+
 fn local(r: Rect, origin: &Rect) -> smithay::utils::Rectangle<f64, Logical> {
     smithay::utils::Rectangle::new((r.x - origin.x, r.y - origin.y).into(), (r.w, r.h).into())
 }
@@ -820,6 +836,14 @@ fn window_elements(
         WindowState::Inactive
     };
     let mut backdrops = backdrop_elements(p, &backdrops, alpha, state);
+    // glass in a window reads the window: inside its corners, where nothing of what is around it shows
+    let corner = if styled { radius } else { 0.0 };
+    let within = inset_rect(visual_local, corner * CORNER_CLEARANCE + 1.0);
+    for piece in &mut backdrops {
+        if let Piece::Glass(g) = piece {
+            g.glass = Rc::new((*g.glass).clone().within(within));
+        }
+    }
     if matches!(clip, Clip::Rounded { .. }) {
         for piece in &mut backdrops {
             if let Piece::Material(m) = piece {

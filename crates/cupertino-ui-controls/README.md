@@ -81,8 +81,9 @@ from the application's model and reports changes as messages.
   first control of the body takes the focus, else the least destructive button (Cancel, then the default, then
   another). A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
   shadow, a dark hairline outside its edge and, in the dark appearance, a faint light rim inside it; the title, the
-  message, the body and a trailing row of buttons, 20 pt in. A `DialogKind::Alert` is 260 pt wide on the painted
-  glass (`GlassRole::Alert`) with a 26 pt radius and the hairline: the application's icon (`Icons::application`, 64 pt)
+  message, the body and a trailing row of buttons, 20 pt in. A `DialogKind::Alert` is 260 pt wide, a nearly opaque
+  grey (97 %, opaque under Reduce Transparency and Increase Contrast) with a light rim, a 26 pt radius and the
+  hairline: the application's icon (`Icons::application`, 64 pt)
   22 pt in from the top and the leading side, the title in bold body text below it, the message 10 pt under that, then
   28 pt capsule buttons 16 pt from the sides and the bottom. Two buttons whose labels fit half the row (reckoned from
   the character count) go side by side at equal widths in their given order; otherwise they are stacked full width,

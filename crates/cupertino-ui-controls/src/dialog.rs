@@ -1,10 +1,10 @@
 //! A window's modal dialogs: the content behind, the scrim that dims it, and the panel hanging under the toolbar
-//! row. A dialog is a sheet, a solid panel with its controls; an alert is a narrow glass panel with the application's
-//! icon, its title and message and a column of capsule buttons. Both show at once: the window draws no motion for
-//! them, which a dialog shown as a window of its own gets from the compositor.
+//! row. A dialog is a sheet, a solid panel with its controls; an alert is a narrow, nearly opaque panel with the
+//! application's icon, its title and message and a column of capsule buttons. Both show at once: the window draws no
+//! motion for them, which a dialog shown as a window of its own gets from the compositor.
 
 use crate::button::{SheetButton, CAPSULE_INSET};
-use crate::glass::{paint_glass, GlassRole};
+use crate::glass::nested_radius;
 use crate::look;
 use crate::{
     Button, ButtonRole, ButtonStyle, Dialog, DialogAction, DialogKind, Modal, Stack, Text, TextRole,
@@ -44,6 +44,14 @@ const OUTLINE_LIGHT: f32 = 0.12;
 const SHADOW_OFFSET: f64 = 8.0;
 const SHADOW_BLUR: f64 = 24.0;
 const SHADOW_ALPHA: f32 = 0.3;
+/// The alert's body: a grey at an opacity that keeps the content behind from showing through its text, in the dark
+/// and the light appearance (opaque under Reduce Transparency and Increase Contrast), and its rim one device pixel wide
+/// just inside the edge: a share of white in the dark appearance, of black in the light one.
+const ALERT_BODY_DARK: f32 = 0.2;
+const ALERT_BODY_LIGHT: f32 = 0.96;
+const ALERT_BODY_ALPHA: f32 = 0.97;
+const ALERT_RIM_DARK: f32 = 0.12;
+const ALERT_RIM_LIGHT: f32 = 0.06;
 /// How far below the window's top a dialog hangs: under the toolbar row.
 const HANG: f64 = 52.0;
 /// The alert: its width, corner radius and padding; the icon and the text sit further in than the buttons.
@@ -707,8 +715,8 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
         Propagation::Stop
     }
 
-    /// A sheet is solid with a shadow, an alert glass; both have a dark hairline just outside their edge, and a
-    /// sheet in the dark appearance a light rim just inside it.
+    /// A sheet is solid with a shadow and, in the dark appearance, a light rim just inside its edge; an alert is a
+    /// nearly opaque grey with a rim; both have a dark hairline just outside their edge.
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
@@ -747,7 +755,27 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
                 RADIUS
             }
             DialogKind::Alert => {
-                paint_glass(cx, GlassRole::Alert, rect, ALERT_RADIUS);
+                let opaque = theme.preferences.reduce_transparency
+                    || theme.preferences.appearance.is_high_contrast();
+                let (grey, rim) = if dark {
+                    (ALERT_BODY_DARK, Color::new(1.0, 1.0, 1.0, ALERT_RIM_DARK))
+                } else {
+                    (ALERT_BODY_LIGHT, Color::new(0.0, 0.0, 0.0, ALERT_RIM_LIGHT))
+                };
+                let alpha = if opaque { 1.0 } else { ALERT_BODY_ALPHA };
+                look::fill(
+                    cx,
+                    rect,
+                    ALERT_RADIUS,
+                    Some(Color::new(grey, grey, grey, alpha)),
+                );
+                look::stroke(
+                    cx,
+                    rect.inset(Insets::uniform(px / 2.0)),
+                    nested_radius(ALERT_RADIUS, px / 2.0),
+                    px,
+                    Some(rim),
+                );
                 ALERT_RADIUS
             }
         };

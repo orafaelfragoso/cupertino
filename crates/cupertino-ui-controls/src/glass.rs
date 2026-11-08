@@ -18,8 +18,6 @@ pub enum GlassRole {
     ToolbarGroup,
     /// The sidebar panel of a full-height-sidebar window, from its top edge to its bottom edge.
     SidebarPanel,
-    /// An alert's body, over the window's dimmed content.
-    Alert,
 }
 
 /// What draws a [`GlassRole`].
@@ -34,10 +32,10 @@ pub enum GlassMaterial {
 impl GlassRole {
     /// What draws each role. A floating toolbar group lies over the window's own content, which a material under the
     /// window cannot show through, so it is painted; the sidebar panel lies at the window's edge over what is behind
-    /// the window, which the compositor's sidebar material shows. An alert lies over the window's content too.
+    /// the window, which the compositor's sidebar material shows.
     pub const fn material(self) -> GlassMaterial {
         match self {
-            GlassRole::ToolbarGroup | GlassRole::Alert => GlassMaterial::Painted,
+            GlassRole::ToolbarGroup => GlassMaterial::Painted,
             GlassRole::SidebarPanel => GlassMaterial::Compositor(Surface::Sidebar),
         }
     }
@@ -146,7 +144,6 @@ mod tests {
     #[test]
     fn each_role_has_its_material() {
         assert_eq!(GlassRole::ToolbarGroup.material(), GlassMaterial::Painted);
-        assert_eq!(GlassRole::Alert.material(), GlassMaterial::Painted);
         assert_eq!(
             GlassRole::SidebarPanel.material(),
             GlassMaterial::Compositor(Surface::Sidebar)

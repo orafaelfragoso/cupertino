@@ -90,19 +90,39 @@ draw it, one draw per container over its sampled area (the shapes grown by the r
 composite then, per pixel:
 
 1. evaluates the field: the smooth union of the shapes' rounded-rectangle distances, polynomial blend of width
-   `spacing` (0 is a hard union), with each shape's size-dependent values mixed by the same weights;
+   `spacing` (0 is a hard union, at most `MAX_SPACING`, 64 points), with each shape's size-dependent values mixed by
+   the same weights; the union bulges up to a quarter of the spacing past the shapes, which the sampled area includes;
 2. refraction: inside the band along the edge, the sample point moves along the outward normal by the offset times
    (1 − t)², t the depth into the band;
 3. blur levels and blur fill: the levels laid over each other widest first, then the fill darkens, lightens or covers;
 4. face colour on linear light: saturation, white gain, per-channel limit, luminance cap, then encoded black lift and fill;
-5. bleed: the widest level, saturated and mapped between black and white, lightens (dark) or darkens (light) the face
-   in the bleed band;
+5. bleed: the widest level (made whenever a shape bleeds, even with no weight in the blend), saturated and mapped
+   between black and white, lightens (dark) or darkens (light) the face in the bleed band;
 6. key and fill rim lights: a Gaussian band about the edge, lit by a cosine lobe around the light angle and its
    opposite; the key colour is the highlight matrix applied to the face, the fill colour the key plus the colour bias;
 7. outside the shape, the drop shadow and the ring shadow at their opacity.
 
 Unit tests check each stage on the model (`glass::tests`), and that body text (black at 85 %) on light regular glass stays at 4.5:1 or more over the darkest backdrops at every panel size and accessibility recipe, and `tests/shaders.rs` checks that the `Glass` block has the
 same members in both shader languages and the Rust struct's size.
+
+**Foreground: not applied yet.** `cupertino-theme` holds the foreground matrices (`foreground_matrix`, lifting the
+face under a glyph to white on dark glass and dropping it to black on light glass) and `adapts_foreground` (shapes
+whose shorter side is under 64 points choose the matrix from what is behind them, larger bars and panels keep their
+appearance's), and `glass::foreground` is their CPU model, but nothing draws with them: toolkit text on glass keeps
+the theme's label colours. The toolkit draws its text in the client, which never sees the backdrop, so applying them
+needs:
+
+1. the server measuring, after it blurs a container, the mean colour of the widest level under each glass backdrop
+   (a few texels read back without stalling, through a pixel buffer a frame later) and sending it with a new
+   `cupertino_backdrop_v1` event when its luminance crosses a threshold with some hysteresis, so that video under a
+   control does not make the text flicker;
+2. `PaintCx::glass` returning that colour to the node, and the toolkit's environment giving the node's descendants a
+   foreground of `glass::foreground(face_color(measured), foreground_matrix(…), 1)`: the appearance's matrix for
+   larger shapes, and for small ones the matrix of the side the measured face falls on;
+3. a golden per appearance of a small glass control over a light and a dark backdrop.
+
+The alternative, drawing glass text in the compositor as the menu bar's vibrant text is (`draw_vibrant`), needs the
+glyphs on a surface of their own and is not planned.
 
 ### GLSL ES 3.00 port
 

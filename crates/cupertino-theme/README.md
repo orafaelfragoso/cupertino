@@ -63,11 +63,11 @@ flag and its Increase Contrast option.
   two narrowest levels (0.4 + clamp(s − 64, 0, 76)/240) and, in the dark appearance, the luminance cap (0.6 at 60 pt
   down to 0.35 at 120 pt); for clear glass the offset (−min(0.65·s, 60)), band (min(0.36·s, 20)), blur radius
   (5 to 10 between 48 and 120 pt) and shadows. Each accessibility option selects its own recipe rather than turning
-  the glass off: Reduce Transparency removes the bending and rim light, widens the blur (40.6 pt, 200 for clear glass)
+  the glass off: Reduce Transparency removes the bending at the edge, widens the blur (40.6 pt, 200 for clear glass)
   and lays a dense fill over it; Increase Contrast keeps the optics with firmer colours; both together use the
-  reduced-transparency optics with the increased-contrast colours; Reduce Motion drops the rim light and widens the
+  reduced-transparency optics with the increased-contrast colours; Reduce Motion drops the refraction band and widens the
   narrowest blur. `GLASS_BACKDROP_SCALE` (0.5) is the scale the backdrop is read at. Content on glass is coloured by a
-  4×5 matrix per appearance; `adapts_foreground` tells which controls (at most 64 pt on their longer side) take it.
+  4×5 matrix per appearance; `adapts_foreground` tells which controls (shorter side under 64 pt) take it.
 - **Display filter steps.** `ColorOp::{LinearMatrix, Invert, Contrast}` feed `cupertino-glass::display_filter`. No catalog
   recipe uses them.
 

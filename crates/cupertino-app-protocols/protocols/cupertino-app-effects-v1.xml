@@ -188,8 +188,9 @@
         display options; the recipe depends on the shape's size.
         Glass backdrops of the same surface with the same nonzero container join into one shape:
         their outlines blend into each other over spacing logical points, and 0 joins them with a
-        hard edge. Container 0 keeps the backdrop on its own. Posts invalid_glass for an unknown
-        style or a negative spacing.
+        hard edge; the server blends over at most 64 points. Container 0 keeps the backdrop on its
+        own. The last of set_glass and set_material decides how the backdrop draws. Posts
+        invalid_glass for an unknown style or a negative spacing.
       </description>
       <arg name="style" type="uint" enum="glass_style"/>
       <arg name="container" type="uint"/>

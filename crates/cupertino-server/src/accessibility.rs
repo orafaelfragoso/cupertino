@@ -3,13 +3,13 @@
 //! and sends the four display options to the shell processes on the session object.
 //!
 //! * Reduce Transparency: materials use their opaque variants (`RenderResources::recipe`); glass keeps its shape and
-//!   takes its reduced-transparency recipe ([`glass_mode`]): no bending or rim light, a much wider blur and a dense
+//!   takes its reduced-transparency recipe ([`glass_mode`]): no bending at the edge, a much wider blur and a dense
 //!   fill, so what lies behind shows only as soft colour.
 //! * Increase Contrast: the high-contrast catalogs ([`Cupertino::appearance`]), so materials are
 //!   opaque too, and the decorations take the high-contrast palette and the contrast half of the
 //!   shadow table (`decor.rs`). Glass takes its increased-contrast colours (a denser fill and a firmer edge); with
 //!   both options on, the reduced-transparency optics with the increased-contrast colours.
-//! * Reduce Motion: the replacements of `render::motion`; glass flattens its rim light and widens its narrowest blur.
+//! * Reduce Motion: the replacements of `render::motion`; glass stops bending at the edge and widens its narrowest blur.
 //! * Invert, display contrast and the colour filter: a material pass over the whole output, below
 //!   the pointer ([`Accessibility::display_filter`], `cupertino_glass::display_filter`).
 //!

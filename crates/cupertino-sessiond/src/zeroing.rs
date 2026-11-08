@@ -1,35 +1,13 @@
-//! An allocator that zeroes every block it frees, so no copy of a password outlives the memory that held it: the PAM
-//! answer is copied several times on its way (the frame, the `CString` handed to PAM), and the libraries that make the
-//! copies do not clear them.
+//! The manager's and the worker's global allocator, [`ZeroOnFree`]: every block they free is zeroed first, so no copy of a
+//! password outlives the memory that held it. The PAM answer is copied several times on its way (the frame, the `CString`
+//! handed to PAM), and the libraries that make the copies do not clear them.
 
-use std::alloc::{GlobalAlloc, Layout};
-
-use zeroize::Zeroize;
-
-/// `A`, with every freed block zeroed first.
-pub struct ZeroOnFree<A>(pub A);
-
-// Safety: every call is forwarded to `A` with the same arguments; the zeroing writes only inside the block `dealloc`
-// is about to give back.
-unsafe impl<A: GlobalAlloc> GlobalAlloc for ZeroOnFree<A> {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        self.0.alloc(layout)
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        self.0.alloc_zeroed(layout)
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        std::slice::from_raw_parts_mut(ptr, layout.size()).zeroize();
-        self.0.dealloc(ptr, layout);
-    }
-}
+pub use cupertino_login_ipc::zeroing::ZeroOnFree;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::alloc::System;
+    use std::alloc::{GlobalAlloc, Layout, System};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Only this module's test writes this text.

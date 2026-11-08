@@ -1,7 +1,7 @@
 mod support;
 
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_ui_controls::{Sidebar, SidebarAccessory, SidebarItem, SidebarSection};
+use cupertino_ui_controls::{Sidebar, SidebarAccessory, SidebarItem, SidebarLook, SidebarSection};
 use cupertino_ui_core::{
     AccessibilityNode, Action, Application, Command, Element, Key, NodeId, Role, Window,
 };
@@ -563,4 +563,131 @@ fn with_motion_reduced_a_busy_row_s_indicator_stands_still_and_asks_for_no_frame
     );
     h.settle();
     assert_eq!(strokes(&h), still, "and it does not turn");
+}
+
+/// [`Places`] in the neutral look, Computer selected and only the Favourites marked for the accent.
+struct Neutral;
+
+impl Application for Neutral {
+    type Model = Model;
+    type Message = Message;
+
+    fn init() -> (Model, Vec<Command<Message>>) {
+        let (mut model, commands) = Places::init();
+        model.selected = Some(4);
+        (model, commands)
+    }
+
+    fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
+        Places::update(model, message)
+    }
+
+    fn view(model: &Model) -> Vec<Window<Message>> {
+        let section = |title: Option<&str>, names: &[&str]| SidebarSection {
+            title: title.map(Into::into),
+            items: names
+                .iter()
+                .map(|name| SidebarItem {
+                    icon: Some(format!("symbol.{name}")),
+                    ..item(name)
+                })
+                .collect(),
+        };
+        window(
+            Sidebar {
+                label: "Places".into(),
+                sections: vec![
+                    section(None, &PLACES[..1]),
+                    section(Some("Favourites"), &PLACES[1..4]),
+                    section(Some("Locations"), &PLACES[4..]),
+                ],
+                selected: model.selected,
+                scroll: model.scroll,
+                on_scroll: Box::new(Message::Scroll),
+                on_select: Some(Box::new(Message::Select)),
+                on_accessory: None,
+            }
+            .with_look(SidebarLook::Neutral {
+                accent: vec![false, true],
+            }),
+        )
+    }
+}
+
+#[test]
+fn the_neutral_look_fills_the_selected_row_grey_and_tints_symbols_by_section() {
+    let tints = std::sync::Arc::new(Tints::default());
+    let mut h =
+        Harness::<Neutral>::with_icons(cupertino_ui_layout::LayoutDirection::Ltr, tints.clone());
+    // tall enough for every row
+    h.rt.window_system_mut()
+        .configure(
+            h.window,
+            Some(Size::new(200.0, 300.0)),
+            cupertino_ui_platform::WindowStates {
+                activated: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    h.settle();
+    let snapshot = h.snapshot();
+    let rect = |name: &str| {
+        let id = row(&h, name);
+        snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect
+    };
+    assert_eq!(
+        rect("Desktop").height(),
+        32.0,
+        "taller rows than the accent look's"
+    );
+    assert_eq!(rect("Documents").min_y() - rect("Desktop").min_y(), 32.0);
+
+    let id = PaintNodeId::from(row(&h, "Computer"));
+    let ops = snapshot
+        .display_list
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id)
+        .unwrap()
+        .ops;
+    let grey = support::theme()
+        .colors
+        .get(
+            ColorRole::QuaternaryLabel,
+            cupertino_ui_theme::StateVariant::NORMAL,
+        )
+        .unwrap();
+    assert_eq!(
+        ops.first(),
+        Some(&PaintOp::Fill {
+            shape: Shape::RoundedRect {
+                rect: Rect::new(10.0, 0.0, 180.0, 32.0),
+                radius: 10.0,
+            },
+            paint: Paint::Solid(grey),
+        }),
+        "the selection is the neutral grey, not the accent"
+    );
+
+    let accent = color(ColorRole::ControlFill, InteractionVariant::Normal, true);
+    let secondary = support::theme()
+        .colors
+        .get(
+            ColorRole::SecondaryText,
+            cupertino_ui_theme::StateVariant::NORMAL,
+        )
+        .unwrap();
+    let asked: HashMap<String, _> = tints.asked.lock().unwrap().iter().cloned().collect();
+    let tint = |name: &str| asked.get(&format!("symbol.{name}")).copied();
+    // the first section is not marked, the second is, and the third is past the marks
+    assert_eq!(tint("Recents"), Some(secondary));
+    assert_eq!(tint("Desktop"), Some(accent));
+    assert_eq!(tint("Downloads"), Some(accent));
+    assert_eq!(tint("Network"), Some(secondary));
+    assert_eq!(
+        tint("Computer"),
+        Some(accent),
+        "the selected row's symbol is the accent"
+    );
 }

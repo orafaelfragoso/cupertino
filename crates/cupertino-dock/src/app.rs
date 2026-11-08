@@ -568,8 +568,8 @@ struct AppHost {
     /// The icons loaded in the background ([`Host::preload`]), on a thread of their own; made on the first load.
     preloader: Arc<Mutex<Option<Icons>>>,
     assets: Assets,
-    /// The file types, for a stack's icons; loaded when a stack first opens.
-    mime: Option<cupertino_apps::MimeDatabase>,
+    /// The file types, for a stack's icons; loaded by the first listing, on its thread.
+    mime: Arc<std::sync::OnceLock<cupertino_apps::MimeDatabase>>,
     /// Where the pins are stored (`None` when neither `XDG_CONFIG_HOME` nor `HOME` is set).
     pins_path: Option<PathBuf>,
     conf_path: Option<PathBuf>,
@@ -792,34 +792,25 @@ impl Host for AppHost {
         )]
     }
 
-    /// Read when the stack opens: the folder's entries with their last change, each with the icon of its kind.
-    fn folder_entries(&mut self, folder: &str) -> Vec<StackEntry> {
-        let Ok(dir) = std::fs::read_dir(folder) else {
-            return Vec::new();
-        };
-        let mime = self.mime.get_or_insert_with(|| {
-            let dirs = cupertino_apps::XdgDirs::from_env()
-                .map(|d| d.all_data_dirs())
-                .unwrap_or_default();
-            cupertino_apps::MimeDatabase::load(&dirs).unwrap_or_default()
+    /// Listed on a thread of its own when the stack opens ([`cupertino_dock::stack::list_folder`]).
+    fn folder_entries(&mut self, folder: &str) -> kit::FolderListing {
+        let (sender, receiver) = async_channel::bounded(1);
+        let folder = PathBuf::from(folder);
+        let mime = Arc::clone(&self.mime);
+        std::thread::spawn(move || {
+            let mime = mime.get_or_init(|| {
+                let dirs = cupertino_apps::XdgDirs::from_env()
+                    .map(|d| d.all_data_dirs())
+                    .unwrap_or_default();
+                cupertino_apps::MimeDatabase::load(&dirs).unwrap_or_default()
+            });
+            let entries = cupertino_dock::stack::list_folder(&folder, |path, is_dir| {
+                let ty = mime.file_type(path, is_dir);
+                cupertino_icons::document::document_icon_name(mime, ty).to_owned()
+            });
+            let _ = sender.send_blocking(entries);
         });
-        let items = dir
-            .flatten()
-            .filter_map(|e| {
-                let path = e.path();
-                let meta = std::fs::metadata(&path).ok()?;
-                let changed = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                let ty = mime.file_type(&path, meta.is_dir());
-                let icon = cupertino_icons::document::document_icon_name(mime, ty).to_owned();
-                let entry = StackEntry {
-                    name: e.file_name().to_string_lossy().into_owned(),
-                    path,
-                    icon,
-                };
-                Some((entry, changed))
-            })
-            .collect();
-        cupertino_dock::stack::newest_first(items)
+        Box::pin(async move { receiver.recv().await.unwrap_or_default() })
     }
 
     /// An application's icon loads from the theme name of its entry; one without, or whose name the theme lacks, is
@@ -1068,7 +1059,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         icons: Icons::new(&assets),
         preloader: Arc::default(),
         assets: assets.clone(),
-        mime: None,
+        mime: Arc::default(),
         pins_path,
         conf_path,
         terminal: options.terminal.clone(),

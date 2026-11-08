@@ -107,6 +107,9 @@ struct Record {
     /// The folders shown as stacks, with their icons, and the entries every folder lists.
     folders: Vec<(String, String)>,
     folder_entries: Vec<cupertino_dock::stack::StackEntry>,
+    /// Listings wait for a send here before they end, as a slow folder does; otherwise they end at once.
+    hold_listings: bool,
+    listings: Vec<async_channel::Sender<()>>,
     /// What was opened with the session's opener, in order.
     opened: Vec<String>,
 }
@@ -183,8 +186,18 @@ impl Host for FakeHost {
     fn folders(&mut self) -> Vec<(String, String)> {
         self.0.borrow().folders.clone()
     }
-    fn folder_entries(&mut self, _: &str) -> Vec<cupertino_dock::stack::StackEntry> {
-        self.0.borrow().folder_entries.clone()
+    fn folder_entries(&mut self, _: &str) -> kit::FolderListing {
+        let mut record = self.0.borrow_mut();
+        let entries = record.folder_entries.clone();
+        if !record.hold_listings {
+            return Box::pin(std::future::ready(entries));
+        }
+        let (done, listed) = async_channel::bounded::<()>(1);
+        record.listings.push(done);
+        Box::pin(async move {
+            let _ = listed.recv().await;
+            entries
+        })
     }
     fn shell(&mut self, command: &str) {
         self.0.borrow_mut().shell.push(command.to_owned());
@@ -2068,6 +2081,46 @@ fn escape_closes_the_stack_and_its_button_opens_the_folder() {
     run.settle();
     assert_eq!(run.record.borrow().opened, [DOWNLOADS.to_owned()]);
     assert!(stack_window(&run).is_none());
+}
+
+/// The folder is listed away from the dock: the stack shows only once its listing ends, a click on the tile while it
+/// is listed closes it for good (the listing that ends later opens nothing).
+#[test]
+fn a_stack_shows_once_its_folder_is_listed_and_a_listing_for_a_closed_stack_opens_nothing() {
+    let mut run = stack_run(3);
+    run.record.borrow_mut().hold_listings = true;
+    let bar = run.bar();
+    let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
+    run.click(bar, tile);
+    run.advance(0.5);
+    assert!(stack_window(&run).is_none(), "still being listed");
+    assert_eq!(run.record.borrow().listings.len(), 1);
+    let first = run.record.borrow().listings[0].clone();
+    first.send_blocking(()).unwrap();
+    run.settle();
+    run.advance(0.5);
+    let stack = stack_window(&run).expect("shown once listed");
+    assert_eq!(
+        named(&run, stack, Role::Button).len(),
+        4,
+        "three files and the button"
+    );
+
+    run.click(bar, tile);
+    run.settle();
+    assert!(stack_window(&run).is_none());
+    run.click(bar, tile);
+    run.click(bar, tile);
+    run.settle();
+    let listings = run.record.borrow().listings.clone();
+    assert_eq!(listings.len(), 2, "a listing for the second open");
+    listings[1].send_blocking(()).unwrap();
+    run.settle();
+    run.advance(0.5);
+    assert!(
+        stack_window(&run).is_none(),
+        "closed while it was listed, it stays closed"
+    );
 }
 
 /// The label popup, while it shows: its window and the name it says.

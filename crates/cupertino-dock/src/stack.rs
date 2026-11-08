@@ -171,6 +171,42 @@ pub fn newest_first(mut items: Vec<(StackEntry, std::time::SystemTime)>) -> Vec<
     items.into_iter().map(|(e, _)| e).collect()
 }
 
+/// The entries of `folder` a stack shows ([`newest_first`]), each with the icon `icon_of` names for its path and
+/// whether it is a folder. A hidden file and a name that is not UTF-8 (the session's opener takes the path as text) are
+/// left out before anything is read of them; a link shows what it points at, and one that points nowhere is left out.
+/// Only the entries shown have their icon looked up. It reads the whole folder: run it away from the model's thread.
+pub fn list_folder(folder: &Path, icon_of: impl Fn(&Path, bool) -> String) -> Vec<StackEntry> {
+    let Ok(dir) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    let items = dir
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            if name.starts_with('.') {
+                return None;
+            }
+            let path = e.path();
+            let changed = std::fs::metadata(&path)
+                .ok()?
+                .modified()
+                .unwrap_or(std::time::UNIX_EPOCH);
+            let entry = StackEntry {
+                name,
+                path,
+                icon: String::new(),
+            };
+            Some((entry, changed))
+        })
+        .collect();
+    let mut entries = newest_first(items);
+    for entry in &mut entries {
+        let is_dir = std::fs::metadata(&entry.path).is_ok_and(|m| m.is_dir());
+        entry.icon = icon_of(&entry.path, is_dir);
+    }
+    entries
+}
+
 /// The user's downloads folder: `XDG_DOWNLOAD_DIR` of a `user-dirs.dirs` file (`user_dirs`, its text), `$HOME`
 /// expanded, else `Downloads` in `home`.
 pub fn downloads_dir(user_dirs: Option<&str>, home: &Path) -> PathBuf {
@@ -286,6 +322,79 @@ mod tests {
         let kept = newest_first(items);
         assert_eq!(kept.len(), MAX_ENTRIES);
         assert_eq!(kept[0].name, "f19");
+    }
+
+    /// A real folder: hidden files, a link that points nowhere and a name that is not UTF-8 are left out, a link to a
+    /// folder shows as a folder, a file that cannot be read still shows, the newest first, and only those shown have
+    /// their icon looked up.
+    #[test]
+    fn a_folder_lists_its_shown_files_newest_first_and_looks_up_only_their_icons() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let at = |name: &str, secs: u64| {
+            let path = root.join(name);
+            std::fs::write(&path, b"x").unwrap();
+            let file = std::fs::File::options().write(true).open(&path).unwrap();
+            file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+                .unwrap();
+        };
+        at("old.txt", 1_000);
+        at("new.txt", 3_000);
+        at(".hidden", 9_000);
+        at("locked.txt", 2_000);
+        std::fs::set_permissions(root.join("locked.txt"), std::fs::Permissions::from_mode(0))
+            .unwrap();
+        std::fs::create_dir(root.join("inner")).unwrap();
+        let inner = std::fs::File::open(root.join("inner")).unwrap();
+        inner
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(500))
+            .unwrap();
+        symlink(root.join("inner"), root.join("to-inner")).unwrap();
+        symlink(root.join("gone"), root.join("dangling")).unwrap();
+        std::fs::write(root.join(std::ffi::OsStr::from_bytes(b"bad-\xff")), b"x").unwrap();
+
+        let looked_up = std::cell::RefCell::new(Vec::new());
+        let entries = list_folder(root, |path, is_dir| {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            looked_up.borrow_mut().push(name);
+            if is_dir { "folder" } else { "text" }.to_owned()
+        });
+        let shown: Vec<(&str, &str)> = entries
+            .iter()
+            .map(|e| (e.name.as_str(), e.icon.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("new.txt", "text"),
+                ("locked.txt", "text"),
+                ("old.txt", "text"),
+                ("inner", "folder"),
+                ("to-inner", "folder"),
+            ]
+        );
+        assert_eq!(entries[0].path, root.join("new.txt"));
+        assert_eq!(looked_up.borrow().len(), 5, "only the shown");
+        std::fs::set_permissions(
+            root.join("locked.txt"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+
+        let many = tempfile::tempdir().unwrap();
+        for i in 0..40 {
+            std::fs::write(many.path().join(format!("f{i:02}")), b"x").unwrap();
+        }
+        let looked_up = std::cell::Cell::new(0);
+        let entries = list_folder(many.path(), |_, _| {
+            looked_up.set(looked_up.get() + 1);
+            String::new()
+        });
+        assert_eq!(entries.len(), MAX_ENTRIES);
+        assert_eq!(looked_up.get(), MAX_ENTRIES, "the rest are not looked up");
+        assert!(list_folder(&root.join("missing"), |_, _| String::new()).is_empty());
     }
 
     #[test]

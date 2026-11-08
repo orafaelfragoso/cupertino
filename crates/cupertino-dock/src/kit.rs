@@ -215,6 +215,10 @@ pub type Exited = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>
 pub type IconLoad =
     std::pin::Pin<Box<dyn std::future::Future<Output = Vec<(IconKey, u32, IconSet)>> + Send>>;
 
+/// A folder being listed away from the model ([`Host::folder_entries`]): ends in the entries its stack shows.
+pub type FolderListing =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Vec<StackEntry>> + Send>>;
+
 /// Where the bar's layer surface is: its output, its edge, its depth and the area it keeps windows out of.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
@@ -289,11 +293,11 @@ pub trait Host {
     fn folders(&mut self) -> Vec<(String, String)> {
         Vec::new()
     }
-    /// The entries of `folder` its stack shows: the newest first, at most [`stack::MAX_ENTRIES`]
-    /// ([`stack::newest_first`]).
-    fn folder_entries(&mut self, folder: &str) -> Vec<StackEntry> {
+    /// List `folder` away from the model: what ends in the entries its stack shows, the newest first, at most
+    /// [`stack::MAX_ENTRIES`] ([`stack::newest_first`]). A large or slow folder holds up nothing else.
+    fn folder_entries(&mut self, folder: &str) -> FolderListing {
         let _ = folder;
-        Vec::new()
+        Box::pin(std::future::ready(Vec::new()))
     }
     /// The desktop file IDs of the recently used applications, the most recent first: the grid's first row.
     fn recent_apps(&mut self) -> Vec<String> {
@@ -347,6 +351,11 @@ pub enum Message {
     Exited {
         key: String,
         asked: f64,
+    },
+    /// The folder of the stack waiting for listing `listing` was listed.
+    FolderListed {
+        listing: u64,
+        entries: Vec<StackEntry>,
     },
     /// Icons loaded in the background ([`Host::preload`]): those asked for, by key and side in whole points, and
     /// those loaded.
@@ -412,8 +421,12 @@ struct OpenStack {
     tile: TileId,
     folder: String,
     name: String,
-    entries: Vec<StackEntry>,
-    /// When it opened: it comes in over [`stack::ENTRY_S`] from then.
+    /// The listing it waits for ([`Host::folder_entries`]), by number: a listing for a stack closed meanwhile is
+    /// dropped.
+    listing: u64,
+    /// Its entries, once listed; it shows from then.
+    entries: Option<Vec<StackEntry>>,
+    /// When it showed: it comes in over [`stack::ENTRY_S`] from then.
     opened: f64,
 }
 
@@ -497,6 +510,8 @@ pub struct Model {
     wm: BTreeMap<u32, WmSurfaces>,
     pending: HashMap<u64, Pending>,
     next_launch: u64,
+    /// The number the next folder listing goes by.
+    next_listing: u64,
     /// The applications asked to open and when, by tile key, until a window of theirs appears ([`OPEN_GUARD`]).
     opening: HashMap<String, f64>,
     /// The edge strip the pointer is on, and since when.
@@ -568,6 +583,7 @@ impl Model {
             wm: BTreeMap::new(),
             pending: HashMap::new(),
             next_launch: 0,
+            next_listing: 0,
             opening: HashMap::new(),
             edge: None,
             icons: HashMap::new(),
@@ -893,34 +909,56 @@ impl Model {
             Some(Activation::Launch(key)) => self.begin_launch(key),
             Some(Activation::Reopen { key, .. }) => self.reopen(key),
             Some(Activation::OpenTrash) => self.open_in_file_manager(TRASH_URI),
-            Some(Activation::ToggleStack(id)) => {
-                self.toggle_stack(id);
-                Vec::new()
-            }
+            Some(Activation::ToggleStack(id)) => self.toggle_stack(id),
             None => Vec::new(),
         }
     }
 
-    /// Open the stack of folder tile `id` over it, or close it when it is the one open. Opening it closes a menu.
-    fn toggle_stack(&mut self, id: TileId) {
+    /// Open the stack of folder tile `id` over it, or close it when it is the one open (or still being listed).
+    /// Opening it closes a menu; it shows once its folder is listed ([`Model::folder_listed`]).
+    fn toggle_stack(&mut self, id: TileId) -> Vec<Command<Message>> {
         if self.stack.take().is_some_and(|s| s.tile == id) {
-            return;
+            return Vec::new();
         }
         let Some(tile) = self.session.dock.tile(id) else {
-            return;
+            return Vec::new();
         };
         let folder = tile.key.clone();
         self.menu = None;
         self.press = None;
-        let mut entries = self.host.folder_entries(&folder);
-        entries.truncate(stack::MAX_ENTRIES);
+        let listing = self.next_listing;
+        self.next_listing += 1;
+        let listed = self.host.folder_entries(&folder);
         self.stack = Some(OpenStack {
             tile: id,
             name: stack::folder_name(&folder),
             folder,
-            entries,
+            listing,
+            entries: None,
             opened: self.now(),
         });
+        vec![Command::Perform(Box::pin(async move {
+            Message::FolderListed {
+                listing,
+                entries: listed.await,
+            }
+        }))]
+    }
+
+    /// The folder of the stack waiting for `listing` was listed: the stack shows, coming in from now. A listing for a
+    /// stack that closed, or was opened again, meanwhile is dropped.
+    fn folder_listed(&mut self, listing: u64, mut entries: Vec<StackEntry>) {
+        let now = self.now();
+        let Some(open) = self
+            .stack
+            .as_mut()
+            .filter(|s| s.listing == listing && s.entries.is_none())
+        else {
+            return;
+        };
+        entries.truncate(stack::MAX_ENTRIES);
+        open.entries = Some(entries);
+        open.opened = now;
     }
 
     /// The tile whose name shows over it, and the name: the tile under the pointer, while no menu, stack, press or drag
@@ -948,10 +986,10 @@ impl Model {
         let Pointer::Release(p) = pointer else {
             return Vec::new();
         };
-        let Some(open) = &self.stack else {
+        let Some(entries) = self.stack.as_ref().and_then(|s| s.entries.as_ref()) else {
             return Vec::new();
         };
-        match StackLayout::new(open.entries.len()).hit(Point::new(p.x, p.y), open.entries.len()) {
+        match StackLayout::new(entries.len()).hit(Point::new(p.x, p.y), entries.len()) {
             Some(StackHit::Entry(i)) => self.open_stack_entry(i),
             Some(StackHit::OpenFolder) => self.open_stack_folder(),
             None => Vec::new(),
@@ -962,7 +1000,7 @@ impl Model {
         let Some(open) = self.stack.take() else {
             return Vec::new();
         };
-        if let Some(entry) = open.entries.get(index) {
+        if let Some(entry) = open.entries.as_ref().and_then(|e| e.get(index)) {
             self.host.open(&entry.path.to_string_lossy());
         }
         Vec::new()
@@ -2023,9 +2061,8 @@ impl Model {
         for (app, side) in switched {
             self.icon_set(&IconKey::App(app), &[side]);
         }
-        if let Some(open) = &self.stack {
-            let keys: Vec<IconKey> = open
-                .entries
+        if let Some(entries) = self.stack.as_ref().and_then(|s| s.entries.as_ref()) {
+            let keys: Vec<IconKey> = entries
                 .iter()
                 .map(|e| IconKey::Named(e.icon.clone()))
                 .collect();
@@ -2418,6 +2455,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             model.exited(&key, asked);
             Vec::new()
         }
+        Message::FolderListed { listing, entries } => {
+            model.folder_listed(listing, entries);
+            Vec::new()
+        }
         Message::IconsLoaded { asked, loaded } => {
             model.icons_loaded(asked, loaded);
             Vec::new()
@@ -2683,7 +2724,11 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 message,
             ));
         }
-        if let Some(open) = &model.stack {
+        if let Some((open, entries)) = model
+            .stack
+            .as_ref()
+            .and_then(|s| Some((s, s.entries.as_ref()?)))
+        {
             if layout.tiles.iter().any(|t| t.id == open.tile) {
                 let lookup = |name: &str| -> IconSet {
                     model.icon(&IconKey::Named(name.to_owned()), &[StackLayout::ICON])
@@ -2694,7 +2739,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                         tile: open.tile.0,
                         orientation,
                         name: &open.name,
-                        entries: &open.entries,
+                        entries,
                         icons: &lookup,
                         since: now - open.opened,
                         reduce_motion: model.reduce_motion,

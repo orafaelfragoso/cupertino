@@ -155,10 +155,16 @@ mod tests {
         assert_eq!(u.frame, Rect::new(0.0, 0.0, 800.0, 600.0));
         for style in [TitlebarStyle::UnifiedCompact, TitlebarStyle::Sidebar] {
             let l = layout(style);
-            assert_eq!(l.content, u.content, "{style:?}: the content fills the frame");
+            assert_eq!(
+                l.content, u.content,
+                "{style:?}: the content fills the frame"
+            );
             assert_eq!(l.frame, u.frame, "{style:?}");
         }
-        assert_eq!(layout(TitlebarStyle::UnifiedCompact).titlebar.height(), 38.0);
+        assert_eq!(
+            layout(TitlebarStyle::UnifiedCompact).titlebar.height(),
+            38.0
+        );
         assert_eq!(layout(TitlebarStyle::Sidebar).titlebar.height(), 52.0);
     }
 

@@ -247,6 +247,25 @@ fn the_sidebar_moves_its_selection_across_groups_and_reports_each_change_once() 
 }
 
 #[test]
+fn a_press_on_the_selected_row_reports_it_once_more_and_keys_that_stay_on_it_report_nothing() {
+    let mut h = harness();
+    h.click(h.center("Displays"));
+    assert_eq!(h.model().reported, [2], "one press, one report");
+    h.click(h.center("Displays"));
+    assert_eq!(h.model().reported, [2, 2], "the selected row again, once");
+    h.ask(&Key::from("Displays"), Action::Click);
+    assert_eq!(h.model().reported, [2, 2, 2]);
+    assert_eq!(focused(&h), Some(2), "the press keeps the focus on the row");
+    h.tap(END);
+    h.tap(END);
+    assert_eq!(
+        h.model().reported,
+        [2, 2, 2, 4],
+        "a key that leaves the selection where it is reports nothing"
+    );
+}
+
+#[test]
 fn the_sidebar_reads_as_a_list_of_its_rows_with_the_selected_one() {
     let mut h = harness();
     h.click(h.center("Displays"));

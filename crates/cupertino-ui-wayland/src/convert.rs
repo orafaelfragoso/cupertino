@@ -1,6 +1,6 @@
 //! Between the window-system interface (`cupertino-ui-platform`, `cupertino-ui-text`) and the transport's types.
 
-use cupertino_geometry::{Point, Size};
+use cupertino_geometry::{Point, Rect, Size};
 use cupertino_modifiers::{Profile, RawMods};
 use cupertino_ui_platform as platform;
 use cupertino_ui_text as text;
@@ -167,6 +167,16 @@ pub(crate) fn configure(c: &wl::WindowConfigure) -> platform::Configure {
             minimize: caps.minimize,
         },
     }
+}
+
+/// Where the compositor placed a popup, in its parent's coordinates.
+pub(crate) fn popup_placement(c: &wl::PopupConfigure) -> Rect {
+    Rect::new(
+        f64::from(c.x),
+        f64::from(c.y),
+        f64::from(c.width),
+        f64::from(c.height),
+    )
 }
 
 pub(crate) fn popup_configure(c: &wl::PopupConfigure) -> platform::Configure {
@@ -472,6 +482,20 @@ mod tests {
         assert_eq!(c.size, Some(Size::new(640.0, 480.0)));
         assert!(c.server_decorations && c.states.activated && c.states.tiled.left);
         assert!(c.wm_capabilities.minimize && c.wm_capabilities.window_menu);
+    }
+
+    #[test]
+    fn a_popup_configure_tells_where_the_compositor_placed_the_popup_in_its_parent() {
+        let c = wl::PopupConfigure {
+            serial: 3,
+            x: -180,
+            y: 26,
+            width: 160,
+            height: 120,
+        };
+        // flipped to the left of the parent, past its edge
+        assert_eq!(popup_placement(&c), Rect::new(-180.0, 26.0, 160.0, 120.0));
+        assert_eq!(popup_configure(&c).size, Some(Size::new(160.0, 120.0)));
     }
 
     #[test]

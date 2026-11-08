@@ -684,6 +684,10 @@ impl WaylandWindowSystem {
                 };
                 self.windows[i].size = (configure.width, configure.height);
                 due = self.resume(i);
+                out.push(PlatformEvent::Window {
+                    window: self.windows[i].id,
+                    event: WindowEvent::PopupPlaced(convert::popup_placement(&configure)),
+                });
                 (
                     i,
                     WindowEvent::Configure(convert::popup_configure(&configure)),

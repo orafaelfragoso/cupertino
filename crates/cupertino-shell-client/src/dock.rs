@@ -100,6 +100,9 @@ pub enum DockChange {
     ForceQuitDialog,
     /// The Focus Dock shortcut was pressed: the dock takes the keyboard on its first tile; from shell version 18.
     Engage,
+    /// A process of the application that showed a window is still connected (`true`), with or without windows, or no
+    /// longer is (`false`): it exited. The first group lists every resident application; from shell version 19.
+    AppResident { app_id: String, resident: bool },
     /// The switch ended: `committed` when the selected application was activated, else cancelled.
     SwitcherClosed { committed: bool },
     /// The overview opened on the dock's output, or its windows or workspaces changed while open:
@@ -362,6 +365,10 @@ impl GroupBuilder {
             }),
             Event::ForceQuitDialog => self.changes.push(DockChange::ForceQuitDialog),
             Event::Engage => self.changes.push(DockChange::Engage),
+            Event::AppResident { app_id, resident } => self.changes.push(DockChange::AppResident {
+                app_id,
+                resident: resident != 0,
+            }),
             Event::SwitcherClosed { committed } => self.changes.push(DockChange::SwitcherClosed {
                 committed: committed != 0,
             }),
@@ -525,6 +532,13 @@ mod tests {
         );
         push(&mut group, Event::ForceQuitDialog);
         push(&mut group, Event::Engage);
+        push(
+            &mut group,
+            Event::AppResident {
+                app_id: "org.example.f".into(),
+                resident: 0,
+            },
+        );
         assert_eq!(
             push(&mut group, Event::Done),
             Some(vec![
@@ -546,6 +560,10 @@ mod tests {
                 },
                 DockChange::ForceQuitDialog,
                 DockChange::Engage,
+                DockChange::AppResident {
+                    app_id: "org.example.f".into(),
+                    resident: false
+                },
             ])
         );
     }

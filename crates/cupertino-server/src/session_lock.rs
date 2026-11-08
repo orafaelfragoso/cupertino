@@ -12,8 +12,10 @@
 //! When the system is about to sleep ([`Cupertino::system_going_to_sleep`]) the session must not show when it wakes,
 //! whatever the lock client did. In a session with a lock screen (a shell process with the session lock role, not the
 //! login screen), a session that is not locked yet (the lock client hung or crashed before it asked) becomes `Orphaned`
-//! at once: black on every output, locked for the session's observers, taken over by the next lock client. A pending lock stays in force should its client go before it confirms. The compositor holds the sleep back
-//! (a logind delay inhibitor, `power.rs`) until every output shows such a covered frame.
+//! at once: black on every output, locked for the session's observers, taken over by the next lock client; the lock
+//! screen is asked to lock, as `lock_session` asks it. A pending lock stays in force should its client go before it
+//! confirms. The compositor holds the sleep back (a logind delay inhibitor, `power.rs`) until every output shows such a
+//! covered frame.
 
 use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::delegate_session_lock;
@@ -253,6 +255,8 @@ impl Cupertino {
                 );
                 self.session_lock.state = LockState::Orphaned;
                 self.seal_session(false);
+                // a lock screen that lives but did not hear of the sleep is asked to take the covered session over
+                self.lock_session();
             }
             // should the lock client go before it confirms, the session stays locked rather than open
             LockState::Pending { takeover, .. } => *takeover = true,

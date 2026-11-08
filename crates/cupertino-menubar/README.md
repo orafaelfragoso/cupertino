@@ -9,7 +9,7 @@ computes, and feeds the crate pointer, key and timer events with absolute timest
 | Module | Contents |
 |---|---|
 | `layout` | `BarContent` → `BarLayout`: bold app-name menu, menus, status items nearest the control panel first, control panel slot, clock. Items that do not fit are reported hidden. `layout_popup` lays out rows, separators, check / radio column, icon column, shortcut text (the Mac modifier glyphs while Super is the command key, the PC key names such as `Alt+` and `F4`, `Ctrl+Super+` and `Z` while Ctrl is: `MenuMetrics::shortcut_style`, set from the server's primary modifier), submenu arrows, flipping, clipping and scrolling. `TextMeasure` abstracts text measurement; `MonoMeasure` is a deterministic stand-in. |
-| `controller` | `MenuController`: press-drag-release, click-sticky menus, hover switching between open menus, focus-bar shortcut, arrow / Home / End / Enter / Esc keys, type-ahead, submenus with open / close delays and a safe triangle, disabled / checked / separator / shortcut items, `AboutToShow` and `Activate` effects. |
+| `controller` | `MenuController`: press-drag-release, click-sticky menus, hover switching between open menus, focus-bar shortcut, arrow / Home / End / Enter / Esc keys, type-ahead, submenus with open / close delays and a safe triangle, disabled / checked / separator / shortcut items, `AboutToShow` and `Activate` effects. Releasing a press, the delays and the way into a submenu are `cupertino-menu-model`'s `tracking`, which Kit's menus share: a press on a title dragged onto a row chooses it on release; released on the title within 0.5 s, or without reaching a row, the menu stays open; dragged onto a row and back to the title after that, it closes. The way into a submenu holds while each move stays in the triangle and the pointer does not rest 0.3 s (`tick` then gives the row under it the highlight). Type-ahead is `cupertino-typeahead` (a one-second pause restarts it, and it restarts in another menu level). |
 | `clock` | The clock text (`clock_text`: weekday, day and short month, 12 / 24-hour time, seconds, day period, flashing separators) and its ticks (`next_tick`, `tick_interval`) from `ClockSettings`, which `cupertino_defaults::menubar` reads from and writes to `menubar.conf` (the `clock.* keys, bad lines reported with their numbers). |
 | `extras` | The bar's own status items (Wi-Fi, battery, Bluetooth, Focus): which show, their icons, menus (`ExtraMenu`) and row actions (`ExtraAction`), from an `Extras` snapshot of the services; the system menu (`system_menu`, rows at fixed ids `SystemRow`) and its Recent Items submenu (`recent_items`). |
 | `recent` | What Recent Items lists (`RecentItems`): `RecentSources::read` takes the launcher's applications in its order (`cupertino_apps::frecency`, ids without an installed visible desktop entry skipped) and the documents of `recently-used.xbel` newest first (`cupertino_apps::recent`, missing files skipped), at most 10 of each, leaving out what was used at or before the last Clear Menu (`RecentSources::clear`, the bar's own `$XDG_DATA_HOME/cupertino/menubar-recent-items-cleared`). It never writes the launcher's or the applications' files. |
@@ -103,7 +103,8 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   Edit items send `edit` before their menu closes, and the server types the chord into the key window once the keyboard
   is back there; below version 11 they stay disabled. The `engage` event focuses the bar's first
   title; from version 12 `engage_help` opens the Help menu with its search field focused (see *Help search*). Arrows,
-  Return and Escape navigate. Type-ahead needs a keymap and is not available.
+  Return and Escape navigate, and letters typed without Ctrl, Alt or the primary modifier select the first row they
+  start (type-ahead; in the Help menu they go to its search field).
 - **Alt variants.** While Alt is held, the open menus show the alternate of each of the bar's items that has one in its
   place: in the Window menu Minimize becomes Minimize All (`minimize_all`, enabled even when the active window cannot
   minimize), Zoom becomes Zoom All (`zoom_all`, enabled even when the active window cannot zoom), Close Window becomes Close All (`quit_app`, every window of the application)
@@ -275,8 +276,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   locale data). `when-space-allows` always shows the date; the compact fallback is open. The battery and Bluetooth rows (open), the symbol choice (one `symbol.wifi` / `symbol.battery` / `symbol.bluetooth` / `symbol.moon` each, drawn in the bar's text
   colour, dimmed to 0.4 when the radio is off or has no link; no signal-strength or charge-level variants) are approximate.
   Third-party status items keep their own icons (ARGB pixmap, absolute path or `hicolor`).
-- **approximate.** Bar height (24 pt), paddings, popup metrics, submenu open / close delays, the safe triangle, the
-  type-ahead timeout, the backdrop thresholds (550 and 450, split at 500 when decided afresh), what the tone covers, and the
+- **approximate.** Bar height (24 pt), paddings, popup metrics, the backdrop thresholds (550 and 450, split at 500 when decided afresh), what the tone covers, and the
   scrim's target (4.6:1, against the 4.5:1 of normal text) and cap (0.25).
 
 **Text.** The controller measures with the toolkit's text system (`view::KitMeasure`), the one the windows draw with, so the slots and rows it lays out hold the text the windows draw, at every output scale.
@@ -296,7 +296,7 @@ cargo clippy -p cupertino-menubar --all-targets
 
 | Test | Proves |
 |---|---|
-| `tests/controller.rs` | The controller's pointer and key behaviour; among it, a press on empty bar space closes a sticky or press-drag menu, is consumed and chooses nothing on the press or the release. |
+| `tests/controller.rs` | The controller's pointer and key behaviour; among it, a press on empty bar space closes a sticky or press-drag menu, is consumed and chooses nothing on the press or the release; pointer paths for a drag onto a row, a quick click and a hold on the title, a diagonal into a submenu across other rows, a rest and a slow path that give the submenu up, and type-ahead with Return and Escape. |
 | `tests/dbus_integration.rs` | Fake DBusMenu, StatusNotifier and GMenuModel peers work against the clients and services, on a private bus from `cupertino-test-bus` (a `dbus-daemon` child that dies with its test). It skips with a message when `dbus-daemon` is not installed. |
 | `src/tone.rs` tests | The bar's text reaches 4.5:1 with its scrim at every lightness from 0 to 1000 for every tone it can hold there, and through each appearance's `MenuBar` colour ops (from `cupertino-glass`, a dev-dependency) for every wallpaper grey; no scrim outside the mid band or on the appearance's palette; the scrim values at 500 and 549. |
 | `tests/app-menus.rs` (feature `app`) | The menus Files and Settings publish with `cupertino-ui-menus`, read by the bar's worker over a private bus, open from their title and choose an item: the application hears that item's action. It builds the menus from `cupertino_files::menu_bar` and `cupertino_settings::menu_bar` themselves, so it needs these two apps-layer crates as dev-dependencies, which are the layer graph's dev-only exceptions for this crate. |

@@ -1374,6 +1374,7 @@ dependencies = [
  "cupertino-shell-client",
  "cupertino-test-bus",
  "cupertino-theme",
+ "cupertino-typeahead",
  "cupertino-ui-menus",
  "cupertino-ui-test",
  "cupertino-ui-text",

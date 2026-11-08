@@ -8,8 +8,8 @@
 //! the interaction model (press-drag-release selects in one gesture, a click opens
 //! a sticky menu, hovering across titles switches menus while one is open, arrows navigate,
 //! type-ahead selects, Esc closes, a shortcut focuses the bar) is as designed behaviour of the
-//! design. The timings and the safe-triangle rule are
-//! approximate; see [`ControllerConfig`].
+//! design. Releasing a press, the timings and the safe triangle are the ones every menu shares
+//! ([`cupertino_menu_model::tracking`]); see [`ControllerConfig`].
 
 use crate::fallback::{self, HELP_MENU};
 use crate::geom::{Point, Rect};
@@ -19,6 +19,10 @@ use crate::layout::{
     SlotKey, TextMeasure,
 };
 use crate::search::{self, Match};
+use cupertino_menu_model::tracking::{
+    Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY,
+};
+use cupertino_typeahead::TypeAhead;
 use cupertino_ui_text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
 use std::time::Instant;
 
@@ -75,16 +79,14 @@ pub struct Outcome {
 
 #[derive(Clone, Debug)]
 pub struct ControllerConfig {
-    /// Hover time on a submenu row before its popup opens. approximate.
+    /// Hover time on a submenu row before its popup opens.
     pub submenu_open_delay: f64,
-    /// Time before the popup of a submenu closes after the pointer moved to another row outside the
-    /// safe triangle. approximate.
+    /// Time before the popup of a submenu closes after the pointer moved to another row while not heading into it.
     pub submenu_close_delay: f64,
-    /// Keep a submenu open while the pointer travels towards it inside a triangle. approximate.
+    /// Keep a submenu open while the pointer heads into it ([`SubmenuAim`]).
     pub safe_triangle: bool,
-    /// Seconds after which the type-ahead buffer restarts. approximate.
-    pub type_ahead_timeout: f64,
-    /// Releasing the button over the open title after a press leaves the menu open (click-sticky).
+    /// Releasing the button over the open title after a quick click, or without the pointer having reached a row,
+    /// leaves the menu open (click-sticky); a drag that reached a row and came back to the title closes it.
     pub release_on_title_keeps_open: bool,
     /// A click outside the menus closes them and is also delivered to the client below.
     pub click_outside_passthrough: bool,
@@ -95,10 +97,9 @@ pub struct ControllerConfig {
 impl Default for ControllerConfig {
     fn default() -> Self {
         Self {
-            submenu_open_delay: 0.2,
-            submenu_close_delay: 0.3,
+            submenu_open_delay: SUBMENU_OPEN_DELAY,
+            submenu_close_delay: SUBMENU_CLOSE_DELAY,
             safe_triangle: true,
-            type_ahead_timeout: 1.0,
             release_on_title_keeps_open: true,
             click_outside_passthrough: false,
             hover_switch: true,
@@ -168,8 +169,13 @@ pub struct MenuController {
     pressed_button: Option<SlotKey>,
     hit_slot: Option<SlotKey>,
     last_pointer: Option<Point>,
-    type_ahead: String,
-    type_ahead_at: f64,
+    typing: TypeAhead,
+    /// The menu the typed text searches; another menu starts a new search.
+    typed_in: Option<ItemId>,
+    /// The press held since it opened a menu or pressed in one.
+    tracking: Option<Tracking>,
+    /// Whether the pointer heads from a row into the submenu it opened.
+    aim: SubmenuAim,
     pending: Option<Pending>,
     keyboard_origin: bool,
     /// The Help menu's search field and what its text finds.
@@ -204,8 +210,10 @@ impl MenuController {
             pressed_button: None,
             hit_slot: None,
             last_pointer: None,
-            type_ahead: String::new(),
-            type_ahead_at: 0.0,
+            typing: TypeAhead::default(),
+            typed_in: None,
+            tracking: None,
+            aim: SubmenuAim::default(),
             pending: None,
             keyboard_origin: false,
             search: TextBuffer::new(),
@@ -255,7 +263,10 @@ impl MenuController {
 
     /// Time of the next pending timer, if any.
     pub fn next_deadline(&self) -> Option<f64> {
-        self.pending.map(|p| p.due)
+        match (self.pending.map(|p| p.due), self.aim.deadline()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     // ---- content -------------------------------------------------------------------------
@@ -490,6 +501,7 @@ impl MenuController {
         self.open_slot = Some(key.clone());
         self.title_focus = None;
         self.pending = None;
+        self.aim.reset();
         out.effects.push(Effect::Opened { slot: key });
         out.effects.push(Effect::Redraw);
     }
@@ -499,6 +511,8 @@ impl MenuController {
         self.levels.clear();
         self.open_slot = None;
         self.pending = None;
+        self.tracking = None;
+        self.aim.reset();
         self.title_focus = None;
         self.mode = Mode::Idle;
         self.keyboard_origin = false;
@@ -563,29 +577,26 @@ impl MenuController {
 
     // ---- pointer -------------------------------------------------------------------------
 
-    fn in_safe_triangle(&self, level: usize, from: Point, to: Point) -> bool {
+    /// The near edge of the submenu open from the menu at `level`, where the pointer comes into it.
+    fn submenu_edge(&self, level: usize) -> Option<Edge> {
         if !self.cfg.safe_triangle || level + 1 >= self.levels.len() {
-            return false;
+            return None;
         }
-        let parent = &self.levels[level].layout;
         let child = &self.levels[level + 1].layout;
-        if !parent.rect.contains(from) {
-            return false;
-        }
-        let edge_x = if child.placed_left {
+        let x = if child.placed_left {
             child.rect.right()
         } else {
             child.rect.x
         };
-        let (a, b) = (
-            Point::new(edge_x, child.rect.y),
-            Point::new(edge_x, child.rect.bottom()),
-        );
-        point_in_triangle(to, from, a, b)
+        Some(Edge {
+            x,
+            top: child.rect.y,
+            bottom: child.rect.bottom(),
+        })
     }
 
     pub fn pointer_move(&mut self, pos: Point, now: f64) -> Outcome {
-        let prev = self.last_pointer.replace(pos);
+        self.last_pointer = Some(pos);
         let mut out = Outcome::default();
         if !self.is_open() {
             return out;
@@ -594,13 +605,18 @@ impl MenuController {
         if self.mode == Mode::Keyboard {
             self.mode = Mode::Sticky;
         }
-        match self.hit(pos) {
-            Hit::Popup { level, row } => self.hover_row(level, row, prev, pos, now, &mut out),
-            Hit::PopupPadding { level } => {
-                if !prev.is_some_and(|p| self.in_safe_triangle(level, p, pos)) {
-                    self.select(level, None, &mut out);
-                }
-            }
+        let hit = self.hit(pos);
+        // the menu under the pointer, or off the menus the parent of the deepest, whose submenu it may head into
+        let aimed = match hit {
+            Hit::Popup { level, .. } | Hit::PopupPadding { level } => Some(level),
+            Hit::Bar | Hit::Outside => self.levels.len().checked_sub(2),
+            Hit::Slot => None,
+        };
+        let edge = aimed.and_then(|level| self.submenu_edge(level));
+        let heading = self.aim.moved((pos.x, pos.y), now, edge);
+        match hit {
+            Hit::Popup { level, row } if !heading => self.hover_row(level, row, now, &mut out),
+            Hit::PopupPadding { level } if !heading => self.select(level, None, &mut out),
             Hit::Slot => {
                 let key = self.hit_slot.clone().expect("slot hit");
                 if self.cfg.hover_switch
@@ -610,34 +626,33 @@ impl MenuController {
                     self.open_title(key, &mut out);
                 }
             }
-            Hit::Bar | Hit::Outside => {
+            Hit::Bar | Hit::Outside if !heading && self.pending.is_none() => {
                 let deepest = self.levels.len() - 1;
-                let keeps_child = self.pending.is_some();
-                if !keeps_child
-                    && !prev
-                        .is_some_and(|p| deepest > 0 && self.in_safe_triangle(deepest - 1, p, pos))
-                {
-                    self.select(deepest, None, &mut out);
-                }
+                self.select(deepest, None, &mut out);
             }
+            _ => {}
         }
         out
     }
 
-    fn hover_row(
-        &mut self,
-        level: usize,
-        row: usize,
-        prev: Option<Point>,
-        pos: Point,
-        now: f64,
-        out: &mut Outcome,
-    ) {
-        if prev.is_some_and(|p| self.in_safe_triangle(level, p, pos)) {
+    /// The pointer stopped heading into a submenu: the row under it takes over.
+    fn pointer_rested(&mut self, now: f64, out: &mut Outcome) {
+        let Some(pos) = self.last_pointer else {
             return;
+        };
+        match self.hit(pos) {
+            Hit::Popup { level, row } => self.hover_row(level, row, now, out),
+            Hit::PopupPadding { level } => self.select(level, None, out),
+            _ => {}
         }
+    }
+
+    fn hover_row(&mut self, level: usize, row: usize, now: f64, out: &mut Outcome) {
         let item = self.levels[level].layout.rows[row].item.clone();
         let target = item.is_selectable().then_some(row);
+        if let Some(tracking) = self.tracking.as_mut().filter(|_| target.is_some()) {
+            tracking.reach();
+        }
         let changed = self.levels[level].selected != target;
         if changed {
             self.select(level, target, out);
@@ -663,7 +678,7 @@ impl MenuController {
         }
     }
 
-    pub fn pointer_press(&mut self, pos: Point, _now: f64) -> Outcome {
+    pub fn pointer_press(&mut self, pos: Point, now: f64) -> Outcome {
         self.last_pointer = Some(pos);
         let mut out = Outcome::default();
         let hit = self.hit(pos);
@@ -674,6 +689,7 @@ impl MenuController {
                     out.consumed = true;
                     if self.slot_has_menu(&key) {
                         self.open_title(key, &mut out);
+                        self.tracking = Some(Tracking::from_title(now));
                         self.mode = Mode::Tracking;
                         self.keyboard_origin = false;
                     } else {
@@ -697,6 +713,7 @@ impl MenuController {
                     self.close_all(&mut out);
                 } else if self.slot_has_menu(&key) {
                     self.open_title(key, &mut out);
+                    self.tracking = Some(Tracking::from_title(now));
                     self.mode = Mode::Tracking;
                 } else {
                     self.close_all(&mut out);
@@ -704,6 +721,7 @@ impl MenuController {
             }
             Hit::Popup { level, row } => {
                 let selectable = self.levels[level].layout.rows[row].item.is_selectable();
+                self.tracking = Some(Tracking::in_menu(now));
                 self.levels.truncate(level + 1);
                 self.select(level, selectable.then_some(row), &mut out);
                 self.mode = Mode::Tracking;
@@ -711,7 +729,10 @@ impl MenuController {
                     self.open_submenu(level, false, &mut out);
                 }
             }
-            Hit::PopupPadding { .. } => self.mode = Mode::Tracking,
+            Hit::PopupPadding { .. } => {
+                self.tracking = Some(Tracking::in_menu(now));
+                self.mode = Mode::Tracking;
+            }
             Hit::Bar | Hit::Outside => {
                 self.close_all(&mut out);
                 out.consumed = !self.cfg.click_outside_passthrough;
@@ -720,7 +741,9 @@ impl MenuController {
         out
     }
 
-    pub fn pointer_release(&mut self, pos: Point, _now: f64) -> Outcome {
+    /// A press opened a menu from its title or pressed in an open one: what its release does is
+    /// [`Tracking::release`]. A drag onto a row chooses it, a quick click on the title leaves the menu open.
+    pub fn pointer_release(&mut self, pos: Point, now: f64) -> Outcome {
         self.last_pointer = Some(pos);
         let mut out = Outcome::default();
         let hit = self.hit(pos);
@@ -735,30 +758,43 @@ impl MenuController {
             return out;
         }
         out.consumed = true;
-        match hit {
+        let tracking = self.tracking.take().unwrap_or(Tracking::in_menu(now));
+        let (under, item) = match hit {
             Hit::Popup { level, row } => {
-                let item = self.levels[level].layout.rows[row].item.clone();
+                let item = &self.levels[level].layout.rows[row].item;
                 if item.is_selectable() && !item.has_submenu {
-                    out.effects.extend(self.activation(item.id));
-                    self.close_all(&mut out);
+                    (Under::Item, Some(item.id))
                 } else {
-                    self.mode = Mode::Sticky;
+                    (Under::Menu, None)
                 }
             }
-            Hit::Slot
-                if self.cfg.release_on_title_keeps_open && self.hit_slot == self.open_slot =>
-            {
-                self.mode = Mode::Sticky
+            Hit::PopupPadding { .. } => (Under::Menu, None),
+            Hit::Slot if self.hit_slot == self.open_slot => (Under::Title, None),
+            _ => (Under::Outside, None),
+        };
+        let release = match tracking.release(now, under) {
+            Release::Stay if under == Under::Title && !self.cfg.release_on_title_keeps_open => {
+                Release::Close
             }
-            Hit::PopupPadding { .. } => self.mode = Mode::Sticky,
-            _ => self.close_all(&mut out),
+            release => release,
+        };
+        match (release, item) {
+            (Release::Choose, Some(item)) => {
+                out.effects.extend(self.activation(item));
+                self.close_all(&mut out);
+            }
+            (Release::Close, _) => self.close_all(&mut out),
+            _ => self.mode = Mode::Sticky,
         }
         out
     }
 
-    /// Advance timers (submenu open / close).
+    /// Advance timers (submenu open / close, the end of the way into a submenu).
     pub fn tick(&mut self, now: f64) -> Outcome {
         let mut out = Outcome::default();
+        if self.aim.expired(now) {
+            self.pointer_rested(now, &mut out);
+        }
         if let Some(p) = self.pending {
             if now >= p.due {
                 self.pending = None;
@@ -1021,37 +1057,23 @@ impl MenuController {
         if c.is_control() {
             return;
         }
-        if now - self.type_ahead_at > self.cfg.type_ahead_timeout {
-            self.type_ahead.clear();
-        }
-        self.type_ahead_at = now;
-        self.type_ahead.extend(c.to_lowercase());
-        let buf: Vec<char> = self.type_ahead.chars().collect();
-        let repeated = buf.len() > 1 && buf.iter().all(|x| *x == buf[0]);
-        let (prefix, advance) = if repeated {
-            (buf[0].to_string(), true)
-        } else {
-            (self.type_ahead.clone(), buf.len() == 1)
-        };
-        let rows = &self.levels[level].layout.rows;
-        let n = rows.len();
-        if n == 0 {
+        let Some(last) = self.levels[level].layout.rows.len().checked_sub(1) else {
             return;
-        }
-        let cur = self.levels[level].selected;
-        let start = match (cur, advance) {
-            (Some(i), true) => i + 1,
-            (Some(i), false) => i,
-            (None, _) => 0,
         };
-        for k in 0..n {
-            let i = (start + k) % n;
-            let r = &rows[i];
-            if r.item.is_selectable() && r.item.label.to_lowercase().starts_with(&prefix) {
-                self.select(level, Some(i), out);
-                self.ensure_visible(level);
-                return;
-            }
+        let menu = self.levels[level].menu.id;
+        if self.typed_in.replace(menu) != Some(menu) {
+            self.typing = TypeAhead::default();
+        }
+        let rows = &self.levels[level].layout.rows;
+        let titles: Vec<Option<&str>> = rows
+            .iter()
+            .map(|r| r.item.is_selectable().then_some(r.item.label.as_str()))
+            .collect();
+        // with nothing selected the search starts at the first row
+        let from = self.levels[level].selected.unwrap_or(last);
+        if let Some(i) = self.typing.find(c, now, from, &titles) {
+            self.select(level, Some(i), out);
+            self.ensure_visible(level);
         }
     }
 
@@ -1196,16 +1218,12 @@ impl MenuController {
     }
 }
 
-fn cross(o: Point, a: Point, b: Point) -> f64 {
-    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
-}
-
 /// Whether `p` lies inside (or on the edge of) the triangle `(t0, t1, t2)`.
 pub fn point_in_triangle(p: Point, t0: Point, t1: Point, t2: Point) -> bool {
-    let d1 = cross(p, t0, t1);
-    let d2 = cross(p, t1, t2);
-    let d3 = cross(p, t2, t0);
-    let neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
-    let pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
-    !(neg && pos)
+    cupertino_menu_model::tracking::point_in_triangle(
+        (p.x, p.y),
+        (t0.x, t0.y),
+        (t1.x, t1.y),
+        (t2.x, t2.y),
+    )
 }

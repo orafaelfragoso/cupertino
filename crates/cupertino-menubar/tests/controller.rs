@@ -1233,3 +1233,265 @@ fn the_system_menu_closes_when_its_content_goes_and_other_menus_stay() {
         "nothing left to close"
     );
 }
+
+// ---- tracking shared with every menu -----------------------------------------------------------
+
+fn activations(o: &cupertino_menubar::controller::Outcome) -> usize {
+    o.effects
+        .iter()
+        .filter(|e| matches!(e, Effect::Activate { .. }))
+        .count()
+}
+
+/// The pointer's way from `from` to `to` in `steps` moves `dt` seconds apart from `t`, with the timers run between moves
+/// as the bar runs them; the time of the last move.
+fn path(c: &mut MenuController, from: Point, to: Point, steps: u32, t: f64, dt: f64) -> f64 {
+    let mut now = t;
+    for step in 1..=steps {
+        let k = f64::from(step) / f64::from(steps);
+        now = t + dt * f64::from(step);
+        while let Some(due) = c.next_deadline().filter(|due| *due <= now) {
+            c.tick(due);
+        }
+        c.pointer_move(
+            Point::new(from.x + (to.x - from.x) * k, from.y + (to.y - from.y) * k),
+            now,
+        );
+    }
+    now
+}
+
+#[test]
+fn a_press_dragged_onto_a_row_chooses_it_once_on_release_and_closes_the_menu() {
+    let mut c = controller();
+    let title = slot_center(&c, &edit());
+    c.pointer_press(title, 0.0);
+    let copy = row_center(&c, 0, 24);
+    let now = path(&mut c, title, copy, 8, 0.0, 0.016);
+    assert_eq!(selected_id(&c, 0), Some(24));
+    let o = c.pointer_release(copy, now + 0.016);
+    assert_eq!(activations(&o), 1);
+    assert!(has(
+        &o,
+        &Effect::Activate {
+            slot: edit(),
+            item: ItemId(24)
+        }
+    ));
+    assert!(!c.is_open() && has(&o, &Effect::Closed));
+    let o = c.pointer_release(copy, now + 0.05);
+    assert_eq!(activations(&o), 0, "a second release chooses nothing");
+}
+
+#[test]
+fn a_quick_click_or_a_hold_without_reaching_a_row_leaves_the_menu_open_and_a_drag_back_to_the_title_closes_it(
+) {
+    let tracking_interval = cupertino_menu_model::tracking::TRACKING_INTERVAL;
+    let mut c = controller();
+    let title = slot_center(&c, &file());
+    c.pointer_press(title, 0.0);
+    let o = c.pointer_release(title, tracking_interval - 0.1);
+    assert_eq!((activations(&o), c.mode()), (0, Mode::Sticky));
+    c.close();
+
+    c.pointer_press(title, 10.0);
+    let o = c.pointer_release(title, 10.0 + 2.0 * tracking_interval);
+    assert_eq!(
+        (c.is_open(), c.mode(), activations(&o)),
+        (true, Mode::Sticky, 0),
+        "held without reaching a row"
+    );
+    c.close();
+
+    c.pointer_press(title, 20.0);
+    let row = row_center(&c, 0, 10);
+    let now = path(&mut c, title, row, 6, 20.0, 0.1);
+    path(&mut c, row, title, 3, now, 0.05);
+    let o = c.pointer_release(title, now + 0.2);
+    assert!(
+        !c.is_open() && activations(&o) == 0,
+        "dragged onto a row and back"
+    );
+}
+
+/// A Sort menu whose first row opens a tall submenu and whose third opens another: the way from the first into its
+/// submenu crosses the rows below it.
+fn nested() -> MenuController {
+    let mut content = content();
+    content.menus.push(MenuItem::submenu(
+        4,
+        "Sort",
+        vec![
+            MenuItem::submenu(
+                40,
+                "By Name",
+                vec![
+                    MenuItem::new(41, "Ascending"),
+                    MenuItem::new(42, "Descending"),
+                    MenuItem::new(43, "Natural"),
+                    MenuItem::new(44, "Kind"),
+                    MenuItem::new(45, "Size"),
+                ],
+            ),
+            MenuItem::new(46, "Refresh"),
+            MenuItem::submenu(
+                47,
+                "Group",
+                vec![MenuItem::new(48, "None"), MenuItem::new(49, "Kind")],
+            ),
+            MenuItem::new(50, "Reload"),
+        ],
+    ));
+    let mut c = MenuController::new(OUT, Box::new(MonoMeasure::default()));
+    c.set_content(content);
+    c
+}
+
+fn sort() -> SlotKey {
+    SlotKey::Menu(ItemId(4))
+}
+
+/// Opens Sort with a click and By Name's submenu by resting on its row; the time then.
+fn by_name_open(c: &mut MenuController) -> f64 {
+    let title = slot_center(c, &sort());
+    c.pointer_press(title, 0.0);
+    c.pointer_release(title, 0.1);
+    let row = row_center(c, 0, 40);
+    let now = path(c, title, row, 4, 0.1, 0.05);
+    c.tick(now + c.cfg.submenu_open_delay);
+    assert_eq!(c.levels()[1].menu.id, ItemId(40));
+    now + c.cfg.submenu_open_delay
+}
+
+/// The middle of the submenu's row `id`, on the side of it away from the parent.
+fn far_in_submenu(c: &MenuController, id: i32) -> Point {
+    let p = row_center(c, 1, id);
+    let child = c.levels()[1].layout.rect;
+    Point::new(child.x + child.w * 0.25, p.y)
+}
+
+#[test]
+fn a_diagonal_into_the_submenu_keeps_it_across_the_rows_it_crosses() {
+    let mut c = nested();
+    let now = by_name_open(&mut c);
+    let from = row_center(&c, 0, 40);
+    let to = far_in_submenu(&c, 45);
+    let parent = c.levels()[0].layout.rect;
+    let child = c.levels()[1].layout.rect;
+    let crossed = |p: Point| parent.contains(p) && !child.contains(p);
+    let mut t = now;
+    let mut over = Vec::new();
+    for step in 1..=16 {
+        let k = f64::from(step) / 16.0;
+        let p = Point::new(from.x + (to.x - from.x) * k, from.y + (to.y - from.y) * k);
+        t += 0.016;
+        c.tick(t);
+        c.pointer_move(p, t);
+        if crossed(p) {
+            if let Some(row) = c.levels()[0].layout.row_at(p) {
+                over.push(c.levels()[0].layout.rows[row].item.id.0);
+            }
+            assert_eq!(
+                selected_id(&c, 0),
+                Some(40),
+                "the highlight stays on By Name"
+            );
+            assert_eq!(c.levels()[1].menu.id, ItemId(40), "and its submenu open");
+        }
+    }
+    assert!(
+        over.contains(&46) && over.contains(&47),
+        "the way crosses Refresh and Group: {over:?}"
+    );
+    assert_eq!(selected_id(&c, 1), Some(45), "Size, in the submenu");
+    c.tick(t + 2.0);
+    assert_eq!(c.levels()[1].menu.id, ItemId(40), "and it stays");
+}
+
+#[test]
+fn resting_on_the_way_or_a_slow_path_gives_the_submenu_up_to_the_row_under_the_pointer() {
+    // a rest on Group, halfway along the diagonal
+    let mut c = nested();
+    let now = by_name_open(&mut c);
+    let from = row_center(&c, 0, 40);
+    let group = row_center(&c, 0, 47);
+    let rest = Point::new(from.x + (group.x - from.x) * 0.2 + 30.0, group.y);
+    let t = path(&mut c, from, rest, 4, now, 0.016);
+    assert_eq!(selected_id(&c, 0), Some(40), "still heading");
+    let rested = t + cupertino_menu_model::tracking::SUBMENU_AIM_PAUSE;
+    assert_eq!(c.next_deadline(), Some(rested));
+    c.tick(rested);
+    assert_eq!(selected_id(&c, 0), Some(47), "Group takes over");
+    c.tick(rested + c.cfg.submenu_open_delay);
+    assert_eq!(
+        c.levels()[1].menu.id,
+        ItemId(47),
+        "and its submenu replaces By Name's"
+    );
+
+    // the same way, slowly: every move comes after the pause
+    let mut c = nested();
+    let now = by_name_open(&mut c);
+    let to = far_in_submenu(&c, 45);
+    let mut t = now;
+    let mut switched = false;
+    for step in 1..=16 {
+        let k = f64::from(step) / 16.0;
+        let p = Point::new(from.x + (to.x - from.x) * k, from.y + (to.y - from.y) * k);
+        t += 0.4;
+        while let Some(due) = c.next_deadline().filter(|due| *due <= t) {
+            c.tick(due);
+        }
+        c.pointer_move(p, t);
+        if c.levels().len() > 1 && c.levels()[1].menu.id == ItemId(47) {
+            switched = true;
+            break;
+        }
+    }
+    assert!(switched, "the slow way opened Group's submenu on the way");
+}
+
+#[test]
+fn typed_letters_select_the_first_match_return_chooses_it_and_escape_closes_one_level_back_to_the_title(
+) {
+    let mut c = nested();
+    c.focus_bar();
+    for _ in 0..8 {
+        if c.highlighted_slot() == Some(&sort()) {
+            break;
+        }
+        c.key(Key::Right, 0.0);
+    }
+    assert_eq!(c.highlighted_slot(), Some(&sort()));
+    c.key(Key::Down, 0.1);
+    c.key(Key::Char('r'), 0.2);
+    c.key(Key::Char('e'), 0.3);
+    c.key(Key::Char('l'), 0.4);
+    assert_eq!(selected_id(&c, 0), Some(50), "Reload, not Refresh");
+    c.key(Key::Char('g'), 2.0);
+    assert_eq!(selected_id(&c, 0), Some(47), "a new search after a pause");
+    c.key(Key::Right, 2.1);
+    assert_eq!(c.levels().len(), 2);
+    c.key(Key::Char('k'), 2.2);
+    assert_eq!(selected_id(&c, 1), Some(49));
+    c.key(Key::Escape, 2.3);
+    assert_eq!(c.levels().len(), 1, "Escape closes the submenu");
+    assert_eq!(selected_id(&c, 0), Some(47), "back on its row");
+    c.key(Key::Escape, 2.4);
+    assert_eq!(
+        (c.is_open(), c.mode(), c.highlighted_slot()),
+        (false, Mode::TitleFocus, Some(&sort())),
+        "then the menu, back to its title"
+    );
+    c.key(Key::Down, 3.0);
+    c.key(Key::Char('r'), 3.5);
+    let o = c.key(Key::Enter, 3.6);
+    assert_eq!(activations(&o), 1);
+    assert!(has(
+        &o,
+        &Effect::Activate {
+            slot: sort(),
+            item: ItemId(46)
+        }
+    ));
+}

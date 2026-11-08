@@ -553,6 +553,8 @@ pub enum Event {
     FocusRow(usize),
     /// The list shows the row with this key: give it the keyboard.
     FocusKey(Key),
+    /// The column view shows the row with this key: give it the keyboard, its ring showing only if it showed.
+    FollowKey(Key),
     /// A toolbar button's menu: open it below the button.
     Popup(Popup),
     /// A folder of the path bar was clicked: go to it.
@@ -1270,6 +1272,7 @@ impl Model {
                 }))];
             }
             Event::FocusKey(key) => return vec![Command::Focus(key)],
+            Event::FollowKey(key) => return vec![Command::MoveFocus(key)],
             Event::Popup(popup) => window.open_popup(popup, session),
             Event::PathSegment(path) => {
                 if path != window.browser.dir() {
@@ -1303,7 +1306,7 @@ impl Model {
                     .and_then(|i| window.browser.entries().get(i))
                     .map(|e| e.path.clone())
                 {
-                    return window.focus_item(id, &path);
+                    return window.follow_item(id, &path);
                 }
             }
             Event::ColumnStep(by) => {
@@ -1313,7 +1316,7 @@ impl Model {
                 if let Some(path) = window.columns.step(&mut window.browser, by) {
                     window.entered();
                     window.columns.sync(&window.browser, &mut window.scroll);
-                    return window.focus_item(id, &path);
+                    return window.follow_item(id, &path);
                 }
             }
             Event::ColumnResize { index, width, all } => {
@@ -2521,6 +2524,18 @@ impl BrowserWindow {
         };
         vec![Command::Perform(Box::pin(async move {
             Message::Window(id, Event::FocusKey(key))
+        }))]
+    }
+
+    /// Give the keyboard to the row of the item at `path` of window `id` in the column view once it shows it, its ring
+    /// showing only if it showed: a click in another column moves the keyboard there without a ring.
+    fn follow_item(&self, id: u64, path: &Path) -> Vec<Command<Message>> {
+        if !self.browser.entries().iter().any(|e| e.path == path) {
+            return Vec::new();
+        }
+        let key = view::row_key(id, path);
+        vec![Command::Perform(Box::pin(async move {
+            Message::Window(id, Event::FollowKey(key))
         }))]
     }
 

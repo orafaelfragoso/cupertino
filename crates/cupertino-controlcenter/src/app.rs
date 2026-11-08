@@ -444,6 +444,10 @@ impl Panel {
                 }
                 self.moving = true;
             }
+            // a view already closing counts as closed: Escape or a press outside then dismisses the panel
+            Input::Collapse(_) if self.controller.detail().is_none() => {
+                self.controller.dismiss(now)
+            }
             Input::Collapse(via) => {
                 self.follow_focus = via == Via::Keyboard;
                 self.collapse(now);
@@ -842,6 +846,22 @@ mod tests {
         assert!(detail(&model).is_some(), "the view is still closing");
         assert_eq!(after(&mut model, 1.0), [focus_key(Module::Sound)]);
         assert_eq!(detail(&model), None);
+    }
+
+    #[test]
+    fn escape_while_the_view_closes_dismisses_the_panel() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(
+            &mut model,
+            Message::Input(Input::Expand(Detail::WiFi, Via::Keyboard)),
+        );
+        after(&mut model, 0.1);
+        Panel::update(&mut model, Message::Input(Input::Collapse(Via::Keyboard)));
+        assert_eq!(model.controller.phase(model.now()), Phase::Shown);
+        assert!(detail(&model).is_some(), "the view is still closing");
+        Panel::update(&mut model, Message::Input(Input::Collapse(Via::Keyboard)));
+        assert_eq!(model.controller.phase(model.now()), Phase::Hiding);
     }
 
     #[test]

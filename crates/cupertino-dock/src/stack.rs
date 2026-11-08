@@ -12,7 +12,8 @@ pub struct StackEntry {
     /// The file's name, as the stack labels it.
     pub name: String,
     pub path: PathBuf,
-    /// Theme name of its icon (its type's generic icon, or a folder's).
+    /// Name of its icon: the icon of its kind (`document.pdf`, `document.image`, …, `folder`), as the asset packs
+    /// name them.
     pub icon: String,
 }
 
@@ -32,9 +33,9 @@ pub const EMPTY: &str = "No Items";
 pub const ENTRY_S: f64 = 0.25;
 pub const ENTRY_SCALE: f64 = 0.9;
 
-/// The theme icon of the user's downloads folder, the stack the bar shows by default.
-pub const DOWNLOADS_ICON: &str = "folder-download";
-/// The theme icon of a folder inside a stack.
+/// The icon of the user's downloads folder, the stack the bar shows by default.
+pub const DOWNLOADS_ICON: &str = "folder.downloads";
+/// The icon of a folder of no special kind.
 pub const FOLDER_ICON: &str = "folder";
 
 /// Where the parts of a stack go in its window, in points.

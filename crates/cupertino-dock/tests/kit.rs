@@ -2070,6 +2070,48 @@ fn escape_closes_the_stack_and_its_button_opens_the_folder() {
     assert!(stack_window(&run).is_none());
 }
 
+/// The label popup, while it shows: its window and the name it says.
+fn label(run: &Run) -> Option<(WindowId, String)> {
+    run.driver
+        .runtime()
+        .windows()
+        .into_iter()
+        .map(|(_, id)| id)
+        .find_map(|id| {
+            let snapshot = run.driver.runtime().snapshot(id)?;
+            snapshot
+                .accessibility
+                .iter()
+                .find(|(_, n)| n.role == Role::Tooltip)
+                .map(|(_, n)| (id, n.name.clone().unwrap_or_default()))
+        })
+}
+
+/// The tile under the pointer shows its name over it at once, and the name follows the pointer from tile to tile; it
+/// goes when the pointer leaves the bar and while the tile's menu is open. A separator has none.
+#[test]
+fn the_tile_under_the_pointer_shows_its_name_over_it_at_once() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    assert!(label(&run).is_none());
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.pointer(bar, PointerEvent::Enter { position: editor });
+    run.settle();
+    assert_eq!(label(&run).map(|l| l.1).as_deref(), Some("Editor"));
+    let terminal = centre(run.bounds(bar, Role::Button, "Terminal"));
+    run.pointer(bar, PointerEvent::Motion { position: terminal });
+    run.settle();
+    assert_eq!(label(&run).map(|l| l.1).as_deref(), Some("Terminal"));
+    run.button(bar, terminal, MouseButton::Right, true);
+    run.button(bar, terminal, MouseButton::Right, false);
+    run.settle();
+    assert!(label(&run).is_none(), "not with the menu open");
+    run.message(Message::Input(cupertino_dock::view::Input::MenuClosed));
+    run.pointer(bar, PointerEvent::Leave);
+    run.advance(1.0);
+    assert!(label(&run).is_none(), "gone with the pointer");
+}
+
 /// A new bar role's first group lists every resident application: one the dock still holds that it does not list
 /// exited meanwhile, and loses its dot.
 #[test]

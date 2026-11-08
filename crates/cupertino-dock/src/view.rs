@@ -10,6 +10,7 @@ pub mod drag;
 pub mod edge;
 pub mod force_quit;
 pub mod grid;
+pub mod label;
 pub mod menu;
 pub(crate) mod paint;
 pub mod stack;
@@ -112,6 +113,8 @@ pub enum Input {
     StackOpenFolder,
     /// The stack closed: Escape, or a press outside it.
     StackClosed,
+    /// The compositor took the hovered tile's label down; the next pointer motion shows it again.
+    LabelGone,
 }
 
 /// The window-manager surfaces of an output.

@@ -923,6 +923,26 @@ impl Model {
         });
     }
 
+    /// The tile whose name shows over it, and the name: the tile under the pointer, while no menu, stack, press or drag
+    /// is on the bar. A separator has none.
+    fn label(&self, layout: &crate::dock::DockLayout) -> Option<(TileId, String)> {
+        if self.menu.is_some()
+            || self.stack.is_some()
+            || self.press.is_some()
+            || layout.dragging.is_some()
+            || self.locked
+        {
+            return None;
+        }
+        let id = self.session.dock.hovered()?;
+        let tile = layout.tiles.iter().find(|t| t.id == id)?;
+        if tile.kind == TileKind::Separator {
+            return None;
+        }
+        let name = self.tile_name(id);
+        (!name.is_empty()).then_some((id, name))
+    }
+
     /// A click on the open stack, on its release: an entry opens and the stack closes; the button opens the folder.
     fn stack_pointer(&mut self, pointer: Pointer) -> Vec<Command<Message>> {
         let Pointer::Release(p) = pointer else {
@@ -2465,6 +2485,7 @@ fn input_message(model: &mut Model, input: Input) -> Vec<Command<Message>> {
             model.stack = None;
             Vec::new()
         }
+        Input::LabelGone => Vec::new(),
         Input::Grid(pointer) => model.grid_pointer(pointer),
         Input::GridKey(key) => model.grid_key(key),
         Input::GridLeft => {
@@ -2653,6 +2674,15 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             },
             message,
         ));
+        if let Some(name) = model.label(&layout) {
+            windows.push(view::label::window(
+                key.clone(),
+                name.0 .0,
+                &name.1,
+                orientation,
+                message,
+            ));
+        }
         if let Some(open) = &model.stack {
             if layout.tiles.iter().any(|t| t.id == open.tile) {
                 let lookup = |name: &str| -> IconSet {

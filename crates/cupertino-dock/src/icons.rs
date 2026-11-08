@@ -16,6 +16,27 @@ use crate::desktop::DesktopIndex;
 
 /// Semantic names of the generic application icon and of the trash's two states.
 const GENERIC_APPLICATION_ICON: &str = "application.generic";
+/// The asset packs' icons a named icon may be, when the theme has none of the name: the special folders' and the kinds
+/// of documents' (what a folder's stack shows).
+const PACKED_NAMES: [&str; 17] = [
+    "folder",
+    "folder.home",
+    "folder.desktop",
+    "folder.documents",
+    "folder.downloads",
+    "folder.music",
+    "folder.pictures",
+    "folder.movies",
+    "document.pdf",
+    "document.image",
+    "document.audio",
+    "document.video",
+    "document.archive",
+    "document.text",
+    "document.executable",
+    "document.generic",
+    "folder.applications",
+];
 const TRASH_EMPTY_ICON: &str = "trash.empty";
 const TRASH_FULL_ICON: &str = "trash.full";
 
@@ -307,13 +328,18 @@ impl Icons {
         })
     }
 
-    /// The theme's icon `name`, else the asset `application.generic`.
+    /// The theme's icon `name`, else the asset packs' icon of that name (a folder's or a kind of document's,
+    /// `folder.downloads` or `document.pdf`), else the asset `application.generic`.
     pub fn named(&mut self, name: &str, px: u32) -> &Pixmap {
         if self.has_themed(name, px) {
-            self.cache[&(name.to_owned(), px)].as_ref().expect("loaded")
-        } else {
-            self.system_icon(GENERIC_APPLICATION_ICON, px)
+            return self.cache[&(name.to_owned(), px)].as_ref().expect("loaded");
         }
+        if let Some(packed) = PACKED_NAMES.iter().find(|n| **n == name) {
+            if self.system.has_raster(packed, px) {
+                return self.system_icon(packed, px);
+            }
+        }
+        self.system_icon(GENERIC_APPLICATION_ICON, px)
     }
 
     fn source(&mut self, desktop: &DesktopIndex, app_id: &str, px: u32) -> IconSource {

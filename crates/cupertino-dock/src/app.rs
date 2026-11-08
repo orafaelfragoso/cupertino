@@ -792,7 +792,7 @@ impl Host for AppHost {
         )]
     }
 
-    /// Read when the stack opens: the folder's entries with their last change, each with its type's generic icon.
+    /// Read when the stack opens: the folder's entries with their last change, each with the icon of its kind.
     fn folder_entries(&mut self, folder: &str) -> Vec<StackEntry> {
         let Ok(dir) = std::fs::read_dir(folder) else {
             return Vec::new();
@@ -809,11 +809,8 @@ impl Host for AppHost {
                 let path = e.path();
                 let meta = std::fs::metadata(&path).ok()?;
                 let changed = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                let icon = if meta.is_dir() {
-                    cupertino_dock::stack::FOLDER_ICON.to_owned()
-                } else {
-                    mime.generic_icon_name(mime.file_type(&path, false))
-                };
+                let ty = mime.file_type(&path, meta.is_dir());
+                let icon = cupertino_icons::document::document_icon_name(mime, ty).to_owned();
                 let entry = StackEntry {
                     name: e.file_name().to_string_lossy().into_owned(),
                     path,

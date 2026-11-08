@@ -210,7 +210,10 @@ impl NotificationSettings {
             Setting::Lock(on) => self.show_on_lock_screen = on,
             Setting::Previews(p) => self.show_previews = p,
             Setting::AppLock(id, on) => {
-                self.apps.entry(id.to_owned()).or_default().show_on_lock_screen = Some(on)
+                self.apps
+                    .entry(id.to_owned())
+                    .or_default()
+                    .show_on_lock_screen = Some(on)
             }
             Setting::AppPreviews(id, p) => {
                 self.apps.entry(id.to_owned()).or_default().show_previews = Some(p)
@@ -224,7 +227,10 @@ impl NotificationSettings {
             Slot::Previews => self.show_previews = good.show_previews,
             Slot::AppLock(id) => {
                 let kept = good.apps.get(id).and_then(|a| a.show_on_lock_screen);
-                self.apps.entry(id.to_owned()).or_default().show_on_lock_screen = kept;
+                self.apps
+                    .entry(id.to_owned())
+                    .or_default()
+                    .show_on_lock_screen = kept;
             }
             Slot::AppPreviews(id) => {
                 let kept = good.apps.get(id).and_then(|a| a.show_previews);
@@ -383,7 +389,11 @@ mod tests {
         assert_eq!(s.show_previews, Previews::Always);
         assert!(!s.policy("mail").show_on_lock_screen);
         let (fresh, _) = NotificationSettings::parse(text, None);
-        assert_eq!(fresh, NotificationSettings::UNSET, "no last good value: unset");
+        assert_eq!(
+            fresh,
+            NotificationSettings::UNSET,
+            "no last good value: unset"
+        );
     }
 
     #[test]
@@ -422,6 +432,9 @@ mod tests {
             "# lock screen\nshow_previews = when-unlocked # quiet\n\
              app.org.example.Chat.show_on_lock_screen = off\n"
         );
-        assert_eq!(NotificationSettings::load(&path, None).unwrap(), (s, vec![]));
+        assert_eq!(
+            NotificationSettings::load(&path, None).unwrap(),
+            (s, vec![])
+        );
     }
 }

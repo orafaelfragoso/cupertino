@@ -1688,6 +1688,11 @@ mod tests {
     /// Renders the same frames with and without the fast paths and compares every byte; returns the fast renderer's
     /// counters summed over the frames.
     fn compare(seed: u64, scale: f64) -> (u64, u32) {
+        compare_list(seed, scale, scene(seed))
+    }
+
+    /// [`compare`] on the frames of `list`.
+    fn compare_list(seed: u64, scale: f64, mut list: DisplayList) -> (u64, u32) {
         let none = resources();
         let config = CpuConfig {
             max_pixels: 1 << 22,
@@ -1702,7 +1707,6 @@ mod tests {
             (SCENE.0 * scale).ceil() as u32,
             (SCENE.1 * scale).ceil() as u32,
         );
-        let mut list = scene(seed);
         let (mut spans, mut hidden) = (0, 0);
         for frame in 0..8 {
             let damage = if frame == 0 {
@@ -1768,6 +1772,263 @@ mod tests {
         }
         assert!(spans > 1000, "the span path ran {spans} times");
         assert!(hidden > 20, "nodes hidden {hidden} times");
+    }
+
+    /// [`scene`] made harder for the fast paths: nodes scaled, flipped or turned, fills that are all but opaque,
+    /// layers inside a node's operations, groups with effects, and more opaque pages, one of them rounded and one
+    /// under a group.
+    fn harsh(seed: u64) -> DisplayList {
+        let mut list = scene(seed);
+        let mut draw = Draw(seed ^ 0x0bad_5eed);
+        let (w, h) = SCENE;
+        let near = [0.996, 0.998, 0.999, 0.9999, 254.4 / 255.0, 254.6 / 255.0];
+        let mut shadowed = false;
+        for node in &mut list.nodes[1..] {
+            let [_, _, _, _, e, f] = node.transform.0;
+            node.transform = match draw.pick(8) {
+                0 => {
+                    let s = [0.5, 0.75, 1.3, 2.0];
+                    Transform([
+                        s[draw.pick(4) as usize],
+                        0.0,
+                        0.0,
+                        s[draw.pick(4) as usize],
+                        e,
+                        f,
+                    ])
+                }
+                1 => Transform([0.96, 0.28, -0.28, 0.96, e, f]),
+                2 => Transform([-1.0, 0.0, 0.0, 1.0, e + w / 2.0, f]),
+                _ => node.transform,
+            };
+            for op in &mut node.ops {
+                if let PaintOp::Fill {
+                    paint: Paint::Solid(c),
+                    ..
+                } = op
+                {
+                    if draw.pick(3) == 0 {
+                        c.a = near[draw.pick(near.len() as u32) as usize];
+                    }
+                }
+            }
+            match draw.pick(12) {
+                0 => {
+                    let at = draw.pick(node.ops.len() as u32 + 1) as usize;
+                    let rect = draw.rect(w / 2.0, h / 2.0, 2);
+                    let layer = [
+                        PaintOp::PushLayer {
+                            opacity: 0.6,
+                            effects: Vec::new(),
+                        },
+                        PaintOp::Fill {
+                            shape: Shape::Rect(rect),
+                            paint: Paint::Solid(draw.color()),
+                        },
+                        PaintOp::PopLayer,
+                    ];
+                    node.ops.splice(at..at, layer);
+                }
+                // a shadow is slow to paint unoptimized: one group in a scene has one
+                1 if node.group.is_none() && !shadowed => {
+                    shadowed = true;
+                    node.group = Some(Group {
+                        opacity: [1.0, 0.8][draw.pick(2) as usize],
+                        effects: vec![crate::Effect::DropShadow {
+                            offset: cupertino_geometry::Point::new(1.0, 2.0),
+                            blur: 3.0,
+                            color: Color::new(0.0, 0.0, 0.0, 0.4),
+                        }],
+                    });
+                }
+                _ => {}
+            }
+        }
+        // more opaque pages: a rounded one, and one inside a group
+        let parents: Vec<u64> = list.nodes.iter().map(|n| n.id.0).collect();
+        for id in 100..104 {
+            let parent = parents[draw.pick(parents.len() as u32) as usize];
+            let g = [0, 2, 4][draw.pick(3) as usize];
+            let rect = Rect::new(
+                draw.value(-5.0, 20.0, g),
+                draw.value(-5.0, 20.0, g),
+                draw.value(30.0, w, g),
+                draw.value(30.0, h, g),
+            );
+            let shape = if id == 100 {
+                Shape::RoundedRect { rect, radius: 7.0 }
+            } else {
+                Shape::Rect(rect)
+            };
+            let mut ops = vec![PaintOp::Fill {
+                shape,
+                paint: Paint::Solid(Color::new(0.3, 0.6, 0.1, 1.0)),
+            }];
+            if id == 102 {
+                // an opaque detail in a corner, and over the page a fill that is all but opaque: the page hides
+                // nothing
+                ops.insert(
+                    0,
+                    PaintOp::Fill {
+                        shape: Shape::Rect(Rect::new(rect.min_x(), rect.min_y(), 2.0, 2.0)),
+                        paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, 1.0)),
+                    },
+                );
+                ops[1] = PaintOp::Fill {
+                    shape: Shape::Rect(rect),
+                    paint: Paint::Solid(Color::new(0.3, 0.6, 0.1, 254.4 / 255.0)),
+                };
+            }
+            let mut page = plain(id, Some(parent), (0.0, 0.0), ops);
+            if id == 101 {
+                page.group = Some(Group {
+                    opacity: 0.9,
+                    effects: Vec::new(),
+                });
+            }
+            // a page is the last child of its parent so that the list stays a preorder walk
+            let at = list
+                .nodes
+                .iter()
+                .rposition(|n| {
+                    let mut up = Some(n.id);
+                    while let Some(p) = up {
+                        if p.0 == parent {
+                            return true;
+                        }
+                        up = list.nodes.iter().find(|m| m.id == p).and_then(|m| m.parent);
+                    }
+                    false
+                })
+                .unwrap();
+            list.nodes.insert(at + 1, page);
+        }
+        // last, over everything: a pane that clips, painted through a gradient so that its pixels are written before
+        // its children's rows, and translucent panels stacked on it, some of two fills, at any offset
+        let g = [0, 2, 4][draw.pick(3) as usize];
+        let mut stack = plain(
+            200,
+            None,
+            (draw.value(-4.0, 8.0, g), draw.value(-4.0, 8.0, g)),
+            vec![PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, w * 0.8, h * 0.8)),
+                paint: Paint::Linear {
+                    start: cupertino_geometry::Point::new(0.0, 0.0),
+                    end: cupertino_geometry::Point::new(w, h),
+                    stops: vec![
+                        GradientStop {
+                            offset: 0.0,
+                            color: Color::new(0.1, 0.5, 0.9, 0.7),
+                        },
+                        GradientStop {
+                            offset: 1.0,
+                            color: Color::new(0.9, 0.4, 0.1, 1.0),
+                        },
+                    ],
+                },
+            }],
+        );
+        stack.clip = Some(Shape::Rect(Rect::new(
+            draw.value(0.0, 6.0, g),
+            draw.value(0.0, 6.0, g),
+            w * 0.75,
+            h * 0.75,
+        )));
+        list.nodes.push(stack);
+        for id in 201..201 + 2 + draw.pick(4) as u64 {
+            let ops = (0..1 + draw.pick(2))
+                .map(|_| {
+                    let rect = Rect::new(
+                        draw.value(0.0, w / 3.0, g),
+                        draw.value(0.0, h / 3.0, g),
+                        draw.value(w / 4.0, w / 1.5, g),
+                        draw.value(h / 4.0, h / 1.5, g),
+                    );
+                    let c = |draw: &mut Draw| draw.value(0.0, 1.0, 0) as f32;
+                    let color = Color::new(
+                        c(&mut draw),
+                        c(&mut draw),
+                        c(&mut draw),
+                        [0.05, 0.3, 0.6, 0.97][draw.pick(4) as usize],
+                    );
+                    PaintOp::Fill {
+                        shape: if draw.pick(2) == 0 {
+                            Shape::Rect(rect)
+                        } else {
+                            Shape::RoundedRect {
+                                rect,
+                                radius: draw.value(0.0, 8.0, g),
+                            }
+                        },
+                        paint: Paint::Solid(color),
+                    }
+                })
+                .collect();
+            // a control's label, picture or ring on its own fill
+            let mut ops: Vec<PaintOp> = ops;
+            let PaintOp::Fill {
+                shape: Shape::Rect(inside) | Shape::RoundedRect { rect: inside, .. },
+                ..
+            } = ops[0].clone()
+            else {
+                unreachable!()
+            };
+            let spot = cupertino_geometry::Point::new(
+                inside.min_x() + inside.width() * draw.value(0.2, 0.6, 0),
+                inside.min_y() + inside.height() * draw.value(0.4, 0.8, 0),
+            );
+            match draw.pick(4) {
+                0 => ops.push(PaintOp::Glyphs {
+                    origin: spot,
+                    run: GlyphRun {
+                        font: FontId(1),
+                        size: draw.value(6.0, 13.0, 2) as f32,
+                        glyphs: (0..1 + draw.pick(4))
+                            .map(|i| PositionedGlyph {
+                                id: GlyphId(draw.pick(8)),
+                                x: i as f32 * 4.5,
+                                y: 0.0,
+                                cluster: 0,
+                            })
+                            .collect(),
+                    },
+                    color: draw.color(),
+                }),
+                1 => ops.push(PaintOp::Image {
+                    image: ResourceRef {
+                        id: PICTURE,
+                        revision: 1,
+                    },
+                    src: Rect::new(0.0, 0.0, 8.0, 8.0),
+                    dst: Rect::new(spot.x, spot.y - 6.0, 6.0, 6.0),
+                    sampling: crate::Sampling::Linear,
+                }),
+                2 => ops.push(PaintOp::Stroke {
+                    shape: Shape::Rect(Rect::new(spot.x - 4.0, spot.y - 4.0, 8.0, 5.0)),
+                    width: draw.value(1.0, 4.0, 2),
+                    paint: Paint::Solid(draw.color()),
+                }),
+                _ => {}
+            }
+            let at = (draw.value(-2.0, 4.0, g), draw.value(-2.0, 4.0, g));
+            list.nodes.push(plain(id, Some(200), at, ops));
+        }
+        list
+    }
+
+    #[test]
+    fn the_fast_paths_paint_the_same_bytes_on_turned_and_scaled_nodes_layers_and_near_opaque_fills()
+    {
+        let (mut spans, mut hidden) = (0, 0);
+        for seed in 0..16 {
+            for scale in [1.0, 1.25, 1.75, 2.0] {
+                let (s, h) = compare_list(seed, scale, harsh(seed));
+                spans += s;
+                hidden += h;
+            }
+        }
+        assert!(spans > 300, "the span path ran {spans} times");
+        assert!(hidden > 10, "nodes hidden {hidden} times");
     }
 
     /// A window background, a pane that clips, an opaque page over it and a translucent rounded group on the page, all

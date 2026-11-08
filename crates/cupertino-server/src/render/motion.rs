@@ -68,6 +68,17 @@ pub fn minimize_kind(
     })
 }
 
+/// The opacity a minimizing or restoring window is drawn at, at `progress` (0 the window, 1 the dock slot): under
+/// Reduce Motion the plain scale that stands in for the bend also fades, out towards the slot and back in on the way
+/// out of it; otherwise the window stays opaque.
+pub fn minimize_opacity(progress: f64, options: DisplayOptions) -> f64 {
+    if options.reduce_motion {
+        1.0 - progress.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,6 +96,64 @@ mod tests {
             );
         }
         assert_eq!(minimize_kind(None, reduced()), None);
+    }
+
+    #[test]
+    fn under_reduce_motion_the_scale_fades_as_it_goes_and_comes_back() {
+        for progress in [0.0, 0.3, 1.0] {
+            assert_eq!(minimize_opacity(progress, DisplayOptions::default()), 1.0);
+        }
+        assert_eq!(
+            minimize_opacity(0.0, reduced()),
+            1.0,
+            "the window at its place"
+        );
+        assert!((minimize_opacity(0.25, reduced()) - 0.75).abs() < 1e-12);
+        assert_eq!(minimize_opacity(1.0, reduced()), 0.0, "gone at the slot");
+        assert_eq!(minimize_opacity(1.5, reduced()), 0.0);
+    }
+
+    /// The window model's progress is linear over the drawn effect's duration, the same both ways: the bend takes
+    /// half a second to the slot and half a second back out of it; the scale that stands in for it under Reduce
+    /// Motion takes a fifth.
+    #[test]
+    fn the_minimize_timing_is_the_drawn_effects_duration_both_ways() {
+        use cupertino_animation::{CubicBezier, Curve};
+        // the duration of a linear timed curve; `None` for any other
+        let linear = |c: Curve| match c {
+            Curve::Timed { duration, bezier } if bezier == CubicBezier::LINEAR => Some(duration),
+            _ => None,
+        };
+        let timing = |effect: Option<MinimizeKind>, options: DisplayOptions| {
+            let mut cfg = cupertino_wm::WmConfig::default();
+            let effects = crate::fx::EffectsConfig {
+                minimize: minimize_kind(effect, options),
+                ..crate::fx::EffectsConfig::default()
+            };
+            crate::state::set_minimize_timing(&mut cfg, effects);
+            (
+                linear(cfg.animation.minimizing),
+                linear(cfg.animation.restoring),
+            )
+        };
+        assert_eq!(
+            timing(Some(MinimizeKind::Warp), DisplayOptions::default()),
+            (Some(0.5), Some(0.5))
+        );
+        assert_eq!(
+            timing(Some(MinimizeKind::Warp), reduced()),
+            (Some(0.2), Some(0.2))
+        );
+        assert_eq!(
+            timing(Some(MinimizeKind::Funnel), DisplayOptions::default()),
+            (Some(0.4), Some(0.4))
+        );
+        let defaults = cupertino_wm::WmConfig::default().animation;
+        assert_eq!(
+            timing(None, reduced()),
+            (linear(defaults.minimizing), linear(defaults.restoring)),
+            "no effect keeps the model's own curves"
+        );
     }
 
     fn reduced() -> DisplayOptions {

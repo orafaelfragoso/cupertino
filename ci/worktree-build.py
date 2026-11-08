@@ -2,7 +2,7 @@
 """Keep Cargo targets private to a worktree and bound how many expensive local builds run at once.
 
 Run from the worktree root. All cooperating worktrees share per-user build slots: `run`, a plain
-`prepare` and `cleanup --target` take one of N slots (--slots or CUPERTINO_BUILD_SLOTS, default 3)
+`prepare` and `cleanup --target` take one of N slots (--slots or CUPERTINO_BUILD_SLOTS, default 2)
 and give their child about 1/N of the processors; seed and package operations take every slot.
 The child inherits its slot locks, so killing this wrapper does not release a running build.
 Seeds are explicitly promoted snapshots, never arbitrary target directories.
@@ -32,7 +32,7 @@ SEED_LIMIT = 1
 SEED_AGE = 7 * 24 * 60 * 60
 MARKER = ".cupertino-build.json"
 # How many shared operations run at once unless --slots or the variable below says otherwise.
-DEFAULT_SLOTS = 3
+DEFAULT_SLOTS = 2
 SLOTS_VARIABLE = "CUPERTINO_BUILD_SLOTS"
 # An exclusive operation takes every slot up to this bound, whatever N each caller chose.
 MAX_SLOTS = 16

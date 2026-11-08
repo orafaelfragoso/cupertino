@@ -364,10 +364,10 @@ class WorktreeBuildTest(unittest.TestCase):
                     patch.object(BUILD, "promote"), patch.object(BUILD, "cleanup"), patch.object(BUILD, "write_marker"), \
                     patch.dict(os.environ, {}, clear=True), patch.object(sys, "argv", [str(SCRIPT), *arguments]):
                 BUILD.main()
-                self.assertEqual(seen, [(self.root / ".cache" / "cupertino-build", 3, whole)])
+                self.assertEqual(seen, [(self.root / ".cache" / "cupertino-build", 2, whole)])
 
     def test_slot_count_comes_from_the_flag_then_the_environment(self):
-        self.assertEqual(BUILD.slot_count(None), 3)
+        self.assertEqual(BUILD.slot_count(None), 2)
         self.assertEqual(BUILD.slot_count("5"), 5)
         for invalid in ("0", "17", "-1", "two"):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "build slots"):
@@ -378,7 +378,7 @@ class WorktreeBuildTest(unittest.TestCase):
         def fingerprint(root, profile, environ):
             identities.append(dict(environ))
             return "host"
-        for flags, environment, jobs in (([], {}, "5"), (["--slots", "4"], {}, "4"), ([], {"CUPERTINO_BUILD_SLOTS": "2"}, "8"),
+        for flags, environment, jobs in (([], {}, "8"), (["--slots", "4"], {}, "4"), ([], {"CUPERTINO_BUILD_SLOTS": "3"}, "5"),
                                          (["--slots", "1"], {"CUPERTINO_BUILD_SLOTS": "2"}, "16")):
             command = [str(SCRIPT), "run", "--profile", "dev", *flags, "--", "cargo", "build"]
             with self.subTest(flags=flags, environment=environment), \

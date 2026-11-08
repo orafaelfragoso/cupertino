@@ -409,7 +409,7 @@ Shortcuts are the `cupertino-input` `ShortcutMap` (defaults approximate, `Super`
 | `keybindings` | object | `{} | chord to action name, for example `{"Super+t": "spawn-terminal"} |
 | `appearance` | `"light"` / `"dark" | `light` | appearance (`--appearance` beats it) |
 | `terminals` | string array | `["xdg-terminal-exec", "$TERMINAL", "foot", "alacritty", "kitty", "wezterm", "xterm"]` | candidates for `Super+Return`, first existing wins; `$NAME` is the program the environment variable `NAME` names (skipped when unset) |
-| `corner_radius` | number (pt) | `12` | window corner radius |
+| `corner_radius` | number (pt) | `16` | window corner radius |
 | `decorations` | bool | `true` | server-side decorations |
 | `menu_bar_height` | number (pt) | `cupertino-theme` menu bar height | height reserved in the usable area |
 | `show_menu_bar` | bool | `true` | reserve the menu bar's height (`--no-menu-bar` sets it to false) |

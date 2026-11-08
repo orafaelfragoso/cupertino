@@ -302,8 +302,8 @@ impl Insets {
     }
 }
 
-/// Window corner style. radius for regular windows: 12 pt; the continuous-corner expansion comes from `cupertino-geometry`
-/// (approximate).
+/// Window corner style. radius for regular windows: 16 pt, the decorations' window corner in every window style; the
+/// continuous-corner expansion comes from `cupertino-geometry` (approximate).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WindowStyle {
     pub corner_radius: f64,
@@ -322,7 +322,7 @@ pub struct WindowStyle {
 impl Default for WindowStyle {
     fn default() -> Self {
         Self {
-            corner_radius: 12.0,
+            corner_radius: cupertino_decorations::WINDOW_CORNER_RADIUS,
             continuous_corners: true,
             shadow: ShadowStyle::default(),
             style_client_decorated: true,
@@ -977,8 +977,8 @@ mod tests {
     }
 
     #[test]
-    fn corner_radius_is_twelve() {
-        assert_eq!(WindowStyle::default().corner_radius, 12.0);
+    fn corner_radius_is_sixteen() {
+        assert_eq!(WindowStyle::default().corner_radius, 16.0);
     }
 
     #[test]

@@ -1604,7 +1604,7 @@ impl Cupertino {
                 && !entry.fullscreen
                 && self.config.window.decorations
                 && plan.exact
-                && (ins.top > 0.0 || style == cupertino_decorations::TitlebarStyle::Unified);
+                && (ins.top > 0.0 || style.client_drawn());
             let decoration_hit = |resize: bool| {
                 let content = (f64::from(geo.size.w), f64::from(geo.size.h));
                 let local = (pos.x - plan.visual.x, pos.y - plan.visual.y);
@@ -1615,7 +1615,7 @@ impl Cupertino {
                 )
             };
             // the window control buttons of a unified bar lie over the client's surface and take the pointer first
-            if decorated && style == cupertino_decorations::TitlebarStyle::Unified {
+            if decorated && style.client_drawn() {
                 let (hit, content, local) = decoration_hit(false);
                 if matches!(hit, cupertino_decorations::Hit::Button(_)) {
                     return Some(WindowTarget::Decoration {

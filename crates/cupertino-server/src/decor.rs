@@ -69,8 +69,9 @@ pub struct DecorInput<'a> {
 pub struct Decor {
     /// Standard title bars; its text renderer draws the titles.
     deco: Decorations,
-    /// Unified bars (the buttons only): a second instance because its config carries the style.
-    unified: Decorations,
+    /// The styles whose row the client draws (the buttons only): unified, compact unified and sidebar, in the order of
+    /// [`TitlebarStyle::ALL`]; an instance each, because the config carries the style.
+    styled: Vec<Decorations>,
     cache: HashMap<WindowId, WindowBuffers>,
     /// Window whose button group is hovered.
     pub hover_group: Option<WindowId>,
@@ -179,7 +180,11 @@ impl Decor {
     pub fn new(appearance: Appearance, assets: &Assets) -> Result<Self, AssetError> {
         Ok(Self {
             deco: Decorations::new(config_for(appearance, TitlebarStyle::Standard), assets)?,
-            unified: Decorations::new(config_for(appearance, TitlebarStyle::Unified), assets)?,
+            styled: TitlebarStyle::ALL
+                .into_iter()
+                .filter(|style| style.client_drawn())
+                .map(|style| Decorations::new(config_for(appearance, style), assets))
+                .collect::<Result<_, _>>()?,
             cache: HashMap::new(),
             hover_group: None,
             pressed: None,
@@ -193,8 +198,10 @@ impl Decor {
         if self.deco.config.appearance != appearance {
             self.deco
                 .set_config(config_for(appearance, TitlebarStyle::Standard));
-            self.unified
-                .set_config(config_for(appearance, TitlebarStyle::Unified));
+            for deco in &mut self.styled {
+                let style = deco.config.style;
+                deco.set_config(config_for(appearance, style));
+            }
             self.cache.clear();
         }
     }
@@ -207,7 +214,14 @@ impl Decor {
     pub fn for_style(&self, style: TitlebarStyle) -> &Decorations {
         match style {
             TitlebarStyle::Standard => &self.deco,
-            TitlebarStyle::Unified => &self.unified,
+            other => &self.styled[other.index() - 1],
+        }
+    }
+
+    fn for_style_mut(&mut self, style: TitlebarStyle) -> &mut Decorations {
+        match style {
+            TitlebarStyle::Standard => &mut self.deco,
+            other => &mut self.styled[other.index() - 1],
         }
     }
 
@@ -336,7 +350,13 @@ impl Decor {
             &state.title,
         );
         let rim_key = hash_of(
-            &[fw.to_bits(), fh.to_bits(), scale.to_bits(), appearance],
+            &[
+                fw.to_bits(),
+                fh.to_bits(),
+                scale.to_bits(),
+                appearance,
+                input.style as u64,
+            ],
             "",
         );
         let entry = self.cache.entry(input.id).or_default();
@@ -356,8 +376,7 @@ impl Decor {
                 TitlebarStyle::Standard if input.flush => {
                     self.deco.render_flush_titlebar(fw, scale, &state)
                 }
-                TitlebarStyle::Standard => self.deco.render_titlebar(fw, scale, &state),
-                TitlebarStyle::Unified => self.unified.render_titlebar(fw, scale, &state),
+                style => self.for_style_mut(style).render_titlebar(fw, scale, &state),
             };
             let size = (pm.width() as i32, pm.height() as i32);
             let buf = MemoryRenderBuffer::from_slice(
@@ -376,7 +395,7 @@ impl Decor {
         }
         if render_rim {
             self.renders += 1;
-            let pm = self.deco.render_rim(Size::new(fw, fh), scale);
+            let pm = self.for_style(input.style).render_rim(Size::new(fw, fh), scale);
             let size = (pm.width() as i32, pm.height() as i32);
             let buf = MemoryRenderBuffer::from_slice(
                 pm.data(),
@@ -548,14 +567,54 @@ mod tests {
     #[test]
     fn insets_follow_the_titlebar_height() {
         let d = decor(Appearance::Light);
-        assert_eq!(d.insets(TitlebarStyle::Standard).top, 28.0);
-        assert_eq!(d.insets(TitlebarStyle::Standard).vertical(), 28.0);
+        assert_eq!(d.insets(TitlebarStyle::Standard).top, 32.0);
+        assert_eq!(d.insets(TitlebarStyle::Standard).vertical(), 32.0);
         assert_eq!(d.insets(TitlebarStyle::Standard).horizontal(), 0.0);
-        assert_eq!(
-            d.insets(TitlebarStyle::Unified).vertical(),
-            0.0,
-            "a unified bar lies over the surface"
-        );
+        for style in [
+            TitlebarStyle::Unified,
+            TitlebarStyle::UnifiedCompact,
+            TitlebarStyle::Sidebar,
+        ] {
+            assert_eq!(
+                d.insets(style).vertical(),
+                0.0,
+                "{style:?}: the row lies over the surface"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sidebar_window_buffers_its_buttons_at_the_top_of_the_sidebar_and_hits_only_them() {
+        let mut d = decor(Appearance::Dark);
+        for (style, row) in [
+            (TitlebarStyle::Sidebar, 52),
+            (TitlebarStyle::UnifiedCompact, 38),
+        ] {
+            let input = DecorInput {
+                style,
+                ..input(1, 400.0)
+            };
+            assert_eq!(d.buffers(&input).titlebar_px, (400, row), "{style:?}");
+            let content = (400.0, 300.0);
+            let zoom = d
+                .for_style(style)
+                .layout(Size::new(content.0, content.1))
+                .button(ButtonKind::Zoom)
+                .center;
+            assert_eq!(
+                (zoom.x, zoom.y),
+                (f64::from(row) / 2.0 + 46.0, f64::from(row) / 2.0)
+            );
+            assert_eq!(
+                d.hit_test(style, content, (zoom.x, zoom.y), true),
+                Hit::Button(ButtonKind::Zoom)
+            );
+            assert_eq!(
+                d.hit_test(style, content, (200.0, 10.0), true),
+                Hit::Content,
+                "{style:?}: the client moves the window"
+            );
+        }
     }
 
     #[test]
@@ -599,7 +658,7 @@ mod tests {
         let mut inactive = input(1, 400.0);
         inactive.active = false;
         let c = d.buffers(&inactive);
-        assert_eq!(c.titlebar_px, (400, 28));
+        assert_eq!(c.titlebar_px, (400, 32));
         d.end_frame();
         assert_eq!(d.cached_windows(), 1);
         d.end_frame();

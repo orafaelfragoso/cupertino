@@ -1163,6 +1163,7 @@ pub fn input_hud(p: &mut SceneParams<'_>) -> Vec<Piece> {
         shadow: 1.0,
         exact: true,
         corner: None,
+        corner_cap: None,
     };
     els.extend(shadow_item(
         p,
@@ -1334,6 +1335,7 @@ pub fn accent_popup(p: &mut SceneParams<'_>) -> Vec<Piece> {
         shadow: 1.0,
         exact: true,
         corner: None,
+        corner_cap: None,
     };
     els.extend(shadow_item(
         p,

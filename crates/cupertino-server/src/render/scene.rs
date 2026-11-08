@@ -65,6 +65,30 @@ pub struct WindowPlan {
     /// Visual corner radius of a stage placement, in points, or 0 for a full-screen window
     /// ([`cupertino_wm::FrameShape::Square`]); `None` scales the window style's radius with the content.
     pub corner: Option<f64>,
+    /// The most the corner radius may be, in points, whatever `corner` says: while a window fills its output or leaves
+    /// it, the room between its frame and the output's edges ([`fullscreen_corner_cap`]), so the corners round off as
+    /// the frame meets the edges instead of squaring at the start of the transition. `None` is no limit.
+    pub corner_cap: Option<f64>,
+}
+
+/// The corner limit of a frame `frame` filling or leaving `output`: the largest gap between one of the frame's edges
+/// and the output's edge beside it. It is zero once the frame covers the output and grows as the frame moves away.
+pub fn fullscreen_corner_cap(frame: Rect, output: Rect) -> f64 {
+    [
+        (frame.x - output.x).abs(),
+        (frame.y - output.y).abs(),
+        (frame.right() - output.right()).abs(),
+        (frame.bottom() - output.bottom()).abs(),
+    ]
+    .into_iter()
+    .fold(0.0, f64::max)
+}
+
+impl WindowPlan {
+    /// The radius `radius` within [`WindowPlan::corner_cap`].
+    pub fn capped(&self, radius: f64) -> f64 {
+        self.corner_cap.map_or(radius, |cap| radius.min(cap.max(0.0)))
+    }
 }
 
 /// How a window is drawn at `now`: at rest the client's committed size wins (no stretch); while
@@ -90,6 +114,7 @@ pub fn plan_window(
             shadow: pres.shadow.clamp(0.0, 1.0),
             exact: false,
             corner: None,
+            corner_cap: None,
         };
     }
     if unscaled && !animating {
@@ -106,6 +131,7 @@ pub fn plan_window(
             shadow: pres.shadow.clamp(0.0, 1.0),
             exact: true,
             corner: None,
+            corner_cap: None,
         };
     }
     let target = pres.minimize_target.translate(offset.0, offset.1);
@@ -120,6 +146,7 @@ pub fn plan_window(
         shadow: pres.shadow.clamp(0.0, 1.0),
         exact: false,
         corner: None,
+        corner_cap: None,
     }
 }
 
@@ -187,6 +214,7 @@ pub fn placed_plan(
         shadow,
         exact: false,
         corner: Some(corner),
+        corner_cap: None,
     }
 }
 
@@ -213,9 +241,19 @@ pub fn plan_for(
     }
     let animating = w.lifecycle.is_animating(now) || entry.shrink != Shrink::None;
     let mut plan = plan_window(&pres, entry.committed_size(), animating, (slide, 0.0));
-    // a full-screen window meets the edges of its output: no corner mask (its shadow is faded out by the model)
-    if w.lifecycle.toplevel_states().frame_shape() == cupertino_wm::FrameShape::Square {
-        plan.corner = Some(0.0);
+    // a full-screen window meets the edges of its output: no corner mask (its shadow is faded out by the model); while
+    // it fills the output or leaves it, its corners follow the room left between its frame and the output's edges
+    match w.state() {
+        cupertino_wm::LifecycleState::EnterFullScreen
+        | cupertino_wm::LifecycleState::ExitFullScreen => {
+            if let Some(out) = wm.output(w.output) {
+                plan.corner_cap = Some(fullscreen_corner_cap(plan.visual, out.rect));
+            }
+        }
+        _ if w.lifecycle.toplevel_states().frame_shape() == cupertino_wm::FrameShape::Square => {
+            plan.corner = Some(0.0);
+        }
+        _ => {}
     }
     let desk = fx.show_desktop_progress(now);
     if desk > 0.0 && !w.sticky {
@@ -576,9 +614,10 @@ fn shadow_piece(
     alpha: f64,
 ) -> Option<Piece> {
     let params = p.decor.shadow_params(active);
-    let radius = plan
-        .corner
-        .map_or(p.config.window.corner_radius, |r| r / shadow_scale(plan));
+    let radius = plan.capped(
+        plan.corner
+            .map_or(p.config.window.corner_radius, |r| r / shadow_scale(plan)),
+    );
     shadow_item(p, SceneKind::Shadow, id.0, &params, plan, radius, alpha)
 }
 
@@ -705,9 +744,10 @@ fn window_elements(
 
     out.extend(decorations);
     let styled = entry.styled(style.style_client_decorated);
-    let radius = plan
-        .corner
-        .unwrap_or(style.corner_radius * plan.scale_x.min(plan.scale_y));
+    let radius = plan.capped(
+        plan.corner
+            .unwrap_or(style.corner_radius * plan.scale_x.min(plan.scale_y)),
+    );
     let clip = if styled && radius > 0.0 {
         Clip::Rounded {
             rect: output_rect(visual_local),
@@ -856,7 +896,7 @@ fn builtin_decorations(
     let loc = v_phys.loc.to_f64();
     let clip = plan.corner.map_or(Clip::None, |radius| Clip::Rounded {
         rect: output_rect(local(plan.visual, &p.rect)),
-        radius,
+        radius: plan.capped(radius),
         style: corner_style(p.config.window.continuous_corners),
         exact: plan.exact,
     });
@@ -1045,6 +1085,7 @@ pub fn capture_window(
         shadow: 1.0,
         exact: true,
         corner: None,
+        corner_cap: None,
     };
     let deco = window_decorations(p, entry, &plan, active);
     // a material samples what lies below it and keeps the target's alpha, so on the clear snapshot it would
@@ -1377,6 +1418,7 @@ fn popup_backdrop_elements(
             shadow: 1.0,
             exact: true,
             corner: None,
+            corner_cap: None,
         };
         out.extend(shadow_item(
             p,
@@ -1695,6 +1737,7 @@ fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
             shadow: 1.0,
             exact: false,
             corner: None,
+            corner_cap: None,
         };
         let active = key == Some(*id);
         let deco = window_decorations(p, entry, &plan, active);
@@ -2356,5 +2399,54 @@ mod tests {
         let a = Sig::new().u(1).u(2).finish();
         let b = Sig::new().u(2).u(1).finish();
         assert_ne!(a, b);
+    }
+}
+
+#[cfg(test)]
+mod fullscreen_corner_tests {
+    use super::*;
+
+    fn plan(cap: Option<f64>) -> WindowPlan {
+        WindowPlan {
+            visual: Rect::new(0.0, 0.0, 100.0, 100.0),
+            scale_x: 1.0,
+            scale_y: 1.0,
+            opacity: 1.0,
+            shadow: 1.0,
+            exact: false,
+            corner: None,
+            corner_cap: cap,
+        }
+    }
+
+    #[test]
+    fn the_corners_round_off_as_the_frame_meets_the_output_edges() {
+        let output = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        // far from the edges the window keeps its radius
+        let far = fullscreen_corner_cap(Rect::new(200.0, 100.0, 800.0, 500.0), output);
+        assert!(far > 16.0);
+        assert_eq!(plan(Some(far)).capped(16.0), 16.0);
+        // close to every edge the radius is the room left, and nothing once the frame covers the output
+        let near = fullscreen_corner_cap(Rect::new(4.0, 3.0, 1272.0, 794.0), output);
+        assert_eq!(near, 4.0);
+        assert_eq!(plan(Some(near)).capped(16.0), 4.0);
+        assert_eq!(fullscreen_corner_cap(output, output), 0.0);
+        assert_eq!(plan(Some(0.0)).capped(16.0), 0.0);
+        // the radius shrinks steadily as the frame grows towards the output
+        let mut last = f64::INFINITY;
+        for i in 0..=20 {
+            let t = f64::from(i) / 20.0;
+            let f = Rect::new(
+                200.0 * (1.0 - t),
+                100.0 * (1.0 - t),
+                800.0 + 480.0 * t,
+                500.0 + 300.0 * t,
+            );
+            let r = plan(Some(fullscreen_corner_cap(f, output))).capped(16.0);
+            assert!(r <= last, "{r} after {last} at {t}");
+            last = r;
+        }
+        assert_eq!(last, 0.0);
+        assert_eq!(plan(None).capped(16.0), 16.0, "no transition, no limit");
     }
 }

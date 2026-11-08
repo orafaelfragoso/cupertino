@@ -17,7 +17,7 @@ mod scroll;
 pub use backdrop::Backdrop;
 pub use effects::{
     report_appearance, report_display_options, AppEffects, AppEvent, AppMenu, Appearance,
-    MenuAddress, WindowControls,
+    MenuAddress, WindowControls, WindowStyle,
 };
 pub use error::Error;
 pub use scroll::{PointerScroll, ScrollCounts};

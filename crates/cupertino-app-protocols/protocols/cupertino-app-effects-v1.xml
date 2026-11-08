@@ -12,11 +12,12 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="5">
+  <interface name="cupertino_app_effects_v1" version="6">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
       event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
-      event of cupertino_appearance_v1; the other interfaces of the protocol are unchanged in each.
+      event of cupertino_appearance_v1, version 6 the unified_compact and sidebar title bar styles;
+      the other interfaces of the protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -33,6 +34,8 @@
       </description>
       <entry name="standard" value="0" summary="a title bar above the surface, drawn by the server with the window's title"/>
       <entry name="unified" value="1" summary="the surface fills the whole window and the title bar lies over its top; the server draws only the window control buttons"/>
+      <entry name="unified_compact" value="2" summary="unified, with the shorter compact toolbar row" since="6"/>
+      <entry name="sidebar" value="3" summary="the surface fills the whole window and its sidebar runs from the top edge to the bottom edge; the server draws only the window control buttons, in the top of the sidebar" since="6"/>
     </enum>
 
     <enum name="window_control" bitfield="true" since="4">
@@ -68,11 +71,14 @@
     <request name="set_titlebar_style">
       <description summary="choose the title bar style of an application window">
         Chooses how the server decorates the xdg toplevel of the surface. The default is standard.
-        With the unified style the surface starts at the top edge of the window: the client draws
+        With the unified styles the surface starts at the top edge of the window: the client draws
         its toolbar, the fill behind it and the window's title in the top strip, and keeps the area
         of the window control buttons at the strip's leading edge free of controls, because the
-        buttons take the pointer there. The server does not move the window from the strip: the
-        client does, with xdg_toplevel.move, and a double click may call xdg_toplevel.set_maximized.
+        buttons take the pointer there. With the sidebar style the surface starts at the top edge
+        too, and the buttons lie at the top of the client's sidebar, which keeps that area free in
+        the same way; its toolbar lies beside the sidebar. The server does not move the window from
+        the strip or the top of the sidebar: the client does, with xdg_toplevel.move, and a double
+        click may call xdg_toplevel.set_maximized.
         Resize zones and the window shape are the server's in both styles.
         Posts invalid_surface when the surface belongs to another client, and window when it is
         not an xdg toplevel or has committed a buffer.

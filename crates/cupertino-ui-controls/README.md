@@ -48,7 +48,8 @@ from the application's model and reports changes as messages.
 - **Tiled sidebar.** `TileSidebar` lists a settings window's pages: rows of `TILE_SIDEBAR_ROW_HEIGHT`, a tile before
   each label, in groups set apart by space, under an optional header (a `SearchField`) that does not scroll. The
   selected row fills with the selected control colour, its label bold. Keys, Tab stop, reporting and assistive
-  technology behave as `Sidebar`'s.
+  technology behave as `Sidebar`'s, except that a press or click on the selected row reports it again, so that a
+  window showing a page below that row's page can go back to it.
 - **Positions.** A menu item says its place among the menu's items and the menu says how many it holds, separators not
   counted; a tab and a page dot say their place and their tab list says its count.
 - **Outline table.** `OutlineTable` is a `TableView` whose rows form an outline, as a `TreeView`'s do: `item` gives

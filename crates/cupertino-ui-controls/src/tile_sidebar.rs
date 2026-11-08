@@ -294,7 +294,8 @@ impl<M: 'static> Widget<M> for TileRow<M> {
         }
     }
 
-    /// A press focuses the row without showing the ring and selects it.
+    /// A press focuses the row without showing the ring and selects it. A press on the row already selected selects it
+    /// again, so that a window showing a page below that row's page can go back to it.
     fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match event {
             Event::Pointer(
@@ -306,17 +307,13 @@ impl<M: 'static> Widget<M> for TileRow<M> {
                 _,
             ) if cx.phase() != Phase::Capture => {
                 cx.request_focus();
-                if !self.selected {
-                    select(&self.on_select, self.index, cx);
-                }
+                select(&self.on_select, self.index, cx);
                 Propagation::Stop
             }
             Event::Action(request)
                 if cx.node() == cx.target() && request.action == Action::Click =>
             {
-                if !self.selected {
-                    select(&self.on_select, self.index, cx);
-                }
+                select(&self.on_select, self.index, cx);
                 Propagation::Stop
             }
             Event::Focus { .. } if cx.node() == cx.target() => {

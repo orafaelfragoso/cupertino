@@ -1329,10 +1329,15 @@ fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_
     assert_eq!(
         shown,
         vec![MaterialRegion {
-            material: "Menu".into(),
+            material: "Glass".into(),
             rect: card,
             radius: view::CORNER_RADIUS,
             alpha: 1.0,
+            glass: Some(cupertino_kit::platform::GlassRegion {
+                style: cupertino_kit::platform::GlassStyle::Regular,
+                container: 0,
+                spacing: 0.0,
+            }),
         }],
         "the popover's material under the banner's card and nowhere else in its strip"
     );

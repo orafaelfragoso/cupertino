@@ -48,9 +48,11 @@ pub const BODY_SIZE: f64 = 13.0;
 pub const BODY_LINES: u32 = 2;
 pub const LINE_GAP: f64 = 2.0;
 
-/// `text` with at most `max` characters, a longer one cut and ending in an ellipsis; control characters become
+/// `text` with at most `max` characters, a longer one cut between user-perceived characters (grapheme clusters, so a
+/// letter keeps its marks and an emoji sequence stays whole) and ending in an ellipsis; control characters become
 /// spaces.
 pub fn cap(text: &str, max: usize) -> String {
+    use unicode_segmentation::UnicodeSegmentation;
     let clean: String = text
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -58,8 +60,17 @@ pub fn cap(text: &str, max: usize) -> String {
     if clean.chars().count() <= max {
         return clean;
     }
-    let mut out: String = clean.chars().take(max.saturating_sub(1)).collect();
-    out.truncate(out.trim_end().len());
+    let room = max.saturating_sub(1);
+    let (mut end, mut used) = (0, 0);
+    for (at, cluster) in clean.grapheme_indices(true) {
+        let chars = cluster.chars().count();
+        if used + chars > room {
+            break;
+        }
+        used += chars;
+        end = at + cluster.len();
+    }
+    let mut out = clean[..end].trim_end().to_owned();
     out.push(ELLIPSIS);
     out
 }
@@ -246,6 +257,13 @@ mod tests {
             assert!(!n.body.contains('\n'), "no control characters");
         }
         assert_eq!(cap("Mail", MAX_APP_CHARS), "Mail");
+        // a cut never splits a letter from its mark or an emoji sequence
+        assert_eq!(cap("ae\u{301}e\u{301}", 3), "a\u{2026}");
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        assert_eq!(
+            cap(&format!("{family}{family}"), 8),
+            format!("{family}\u{2026}")
+        );
     }
 
     #[test]

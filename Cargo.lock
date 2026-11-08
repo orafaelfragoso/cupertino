@@ -1332,6 +1332,7 @@ dependencies = [
  "pam-client2",
  "tempfile",
  "tiny-skia",
+ "unicode-segmentation",
  "zbus",
  "zeroize",
 ]

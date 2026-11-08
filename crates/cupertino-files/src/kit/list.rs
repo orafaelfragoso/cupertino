@@ -1,5 +1,6 @@
-//! What the list view does beyond the toolkit's outline table: a press on empty space under the rows draws a rubber
-//! band ([`super::band`]), a double click opens a row, a press on the name of the only selected row renames it after
+//! What the list view does beyond the toolkit's outline table: a press on empty space under the rows, or on a row's
+//! blank part (any cell but its name) that then moves, draws a rubber band ([`super::band`]), which scrolls the rows at
+//! the view's top and bottom edges; a double click opens a row, a press on the name of the only selected row renames it after
 //! the double-click interval ([`super::clicks`]), a press with Ctrl held opens the context menu, a press that moves
 //! drags the selected rows out of the window, and Tab and Shift+Tab on a row select the next and the previous item by
 //! name ([`tab`]); past the last (or before the first) they move the keyboard on to the next control, so the list never
@@ -51,11 +52,24 @@ struct RowPress {
     cell: Size,
 }
 
+/// A press on a row's blank part, which becomes a band once it moves.
+#[derive(Clone)]
+struct BlankPress {
+    /// In window coordinates.
+    at: Point,
+    mods: Mods,
+    /// The selection the press found, which a band with Shift or Primary toggles against.
+    selection: Selection,
+    /// The press moved far enough: the frame starts the band at the next move it sees.
+    moved: bool,
+}
+
 /// The state of the list's presses, shared by its cells and its frame.
 #[derive(Default)]
 pub(super) struct Presses {
     clicks: Clicks,
     press: Option<RowPress>,
+    blank: Option<BlankPress>,
     band: Option<Band>,
 }
 
@@ -131,6 +145,18 @@ impl RowCell {
             return Propagation::Stop;
         }
         presses.clicks.arm(cx);
+        if !self.name {
+            // the row's blank part: the table selects the row, and a move draws a band from here
+            presses.press = None;
+            presses.blank = Some(BlankPress {
+                at: position,
+                mods,
+                selection: self.selection.clone(),
+                moved: false,
+            });
+            cx.capture_pointer();
+            return Propagation::Continue;
+        }
         let keep = plain && self.selection.contains(index) && self.selection.len() > 1;
         let next = if keep {
             self.selection.clone()
@@ -160,6 +186,16 @@ impl RowCell {
 
     fn moved(&self, position: Point, cx: &mut EventCx<'_, Message>) -> Propagation {
         let mut presses = self.presses.borrow_mut();
+        if let Some(blank) = presses.blank.as_mut().filter(|b| !b.moved) {
+            if (position.x - blank.at.x).hypot(position.y - blank.at.y) < drag::START_DISTANCE {
+                return Propagation::Stop;
+            }
+            // the frame around the table takes the pointer and draws the band
+            blank.moved = true;
+            presses.clicks.cancel();
+            cx.release_pointer();
+            return Propagation::Continue;
+        }
         let Some(press) = presses.press.as_ref().filter(|p| p.index == self.index) else {
             return Propagation::Continue;
         };
@@ -254,6 +290,12 @@ impl Widget<Message> for RowCell {
                 _,
             ) => {
                 let mut presses = self.presses.borrow_mut();
+                if presses.blank.as_ref().is_some_and(|b| !b.moved) {
+                    presses.blank = None;
+                    cx.release_pointer();
+                    presses.clicks.arm(cx);
+                    return Propagation::Stop;
+                }
                 if presses
                     .press
                     .as_ref()
@@ -276,6 +318,7 @@ impl Widget<Message> for RowCell {
             Event::Cancel => {
                 let mut presses = self.presses.borrow_mut();
                 presses.press = None;
+                presses.blank = None;
                 presses.clicks.cancel();
                 Propagation::Continue
             }
@@ -484,6 +527,17 @@ impl Widget<Message> for Gestures {
             Event::Pointer(PointerEvent::Motion { position }, _) => {
                 let band = {
                     let mut presses = self.presses.borrow_mut();
+                    if presses.band.is_none() {
+                        // a press on a row's blank part that moved: the band starts where it was
+                        let blank = presses.blank.take_if(|b| b.moved);
+                        let origin = self.content_origin(cx);
+                        if let (Some(blank), Some(origin)) = (blank, origin) {
+                            let start = Point::new(blank.at.x - origin.x, blank.at.y - origin.y);
+                            presses.band =
+                                Some(Band::start(start, position, blank.mods, &blank.selection));
+                            cx.capture_pointer();
+                        }
+                    }
                     let Some(band) = presses.band.as_mut() else {
                         return Propagation::Continue;
                     };
@@ -526,6 +580,7 @@ impl Widget<Message> for Gestures {
             Event::Cancel => {
                 let mut presses = self.presses.borrow_mut();
                 presses.clicks.cancel();
+                presses.blank = None;
                 if presses.band.take().is_some() {
                     self.emit(WindowEvent::Band(None), cx);
                 }

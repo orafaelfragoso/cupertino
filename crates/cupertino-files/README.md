@@ -104,7 +104,8 @@ Reduce Transparency (`kit::sidebar`).
 
 **Pointer and keyboard in the views.** A press on empty space and a drag draw a rubber band (`kit::band`): the items it
 touches replace the selection, or toggle against it with Shift or Primary held at the press; near the top or bottom
-edge the view scrolls under the band. A click on the name of the only selected item edits the name after the
+edge the view scrolls under the band. In the list a press on a row's blank part (any cell but its name) selects the
+row as a click, and draws a band once it moves; a press on the name drags the row. A click on the name of the only selected item edits the name after the
 double-click interval, unless a second click (which opens), a scroll or a key comes first (`kit::clicks`). Ctrl with a
 press opens the context menu; Tab and Shift+Tab on an item select the next and previous item by name (with nothing
 selected, from the first or last by name, or the one after it when the keyboard is already on it), and past the last or
@@ -451,10 +452,8 @@ locked -- env CUPERTINO_REPAINT_DIR=DIR BINARY --ignored --nocapture --exact rep
   knows the window, not the item, so after the item is removed (or scrolled away by something other than a spring-loaded
   folder, which the window returns from) the image still lands where the item was. It fades in place only when the
   window is gone or hidden.
-* The list's rubber band starts only on the empty space under the rows, which a list taller than its view does not
-  show, so its edge scroll comes into play only when the rows grow while the band is held and the pointer then moves at
-  the edge: in practice the list's band does not scroll. A band starting on the blank part of a row would fix it; the
-  icon grid's band scrolls at both edges (`tests/kit-select.rs`).
+* In the list, the space after a short name in its own cell is part of the name: a press there drags the row rather
+  than drawing a band (the band starts from the other cells and under the rows).
 * Thumbnails are made for PNG, JPEG and WebP pictures only (what `cupertino-thumbnails` decodes): no external
   thumbnailers, so videos, PDFs and other documents show their type's icon. Thumbnails are decoded for a 2× display;
   a 1× display draws them shrunk. The sidebar keeps the design's template symbols, as the places are not files.

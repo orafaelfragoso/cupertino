@@ -365,7 +365,8 @@ fn a_drop_where_nothing_takes_it_is_a_leave() {
 /// The window's own drag of `name`'s row, held over its own window at `at` as the compositor shows it there.
 fn own_drag(run: &mut Run, name: &str) -> cupertino_ui_test::StartedDrag {
     let row = run.row_bounds(name);
-    let from = row.center();
+    // on the row's name: a press on its blank part draws a band
+    let from = Point::new(row.min_x() + 48.0, row.center().y);
     run.hold(from, Point::new(from.x + 30.0, from.y + 10.0), Mods::NONE);
     let started = run.driver.runtime().window_system().drags()[0].clone();
     let window = run.window;

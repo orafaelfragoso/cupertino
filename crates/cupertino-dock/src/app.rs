@@ -22,7 +22,6 @@ use cupertino_dock::kit::{
 };
 use cupertino_dock::overview_ui::{Mode, Workspace};
 use cupertino_dock::session::Session;
-use cupertino_dock::stack::StackEntry;
 use cupertino_dock::view::{
     edge, IconSet, BAR_APP_ID, DRAG_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, GRID_APP_ID,
     OVERVIEW_APP_ID, SWITCHER_APP_ID,

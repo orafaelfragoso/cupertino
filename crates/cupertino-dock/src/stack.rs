@@ -344,8 +344,11 @@ mod tests {
         at("new.txt", 3_000);
         at(".hidden", 9_000);
         at("locked.txt", 2_000);
-        std::fs::set_permissions(root.join("locked.txt"), std::fs::Permissions::from_mode(0))
-            .unwrap();
+        std::fs::set_permissions(
+            root.join("locked.txt"),
+            std::fs::Permissions::from_mode(0o000),
+        )
+        .unwrap();
         std::fs::create_dir(root.join("inner")).unwrap();
         let inner = std::fs::File::open(root.join("inner")).unwrap();
         inner

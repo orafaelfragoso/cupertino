@@ -15,10 +15,13 @@ use cupertino_kit::controls::{
     CheckBox, Image, ImageFit, ImageSource, ListView, SegmentedControl, Selection, SplitLayout,
     SplitView, TextRole,
 };
-use cupertino_kit::core::{next_resource_id, Checked, CommandRegistry, Key, Shortcut};
+use cupertino_kit::core::{
+    next_resource_id, Change, Checked, CommandRegistry, Event as CoreEvent, EventCx, Key,
+    MeasureCx, PaintCx, Phase, Propagation, SemanticsCx, Shortcut, Widget,
+};
 use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::geometry::{Insets, Point, Size};
-use cupertino_kit::layout::ScrollState;
+use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, ScrollState};
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods};
 use cupertino_kit::prelude::*;
 use cupertino_kit::render::{ImageResource, PixelFormat};
@@ -53,6 +56,8 @@ const CONSENT_SIZE: Size = Size::new(420.0, 180.0);
 const APP_ICON: f64 = 32.0;
 const RETURN: Keysym = Keysym(0xff0d);
 const ESCAPE: Keysym = Keysym(0xff1b);
+const KP_ENTER: Keysym = Keysym(0xff8d);
+const SPACE: Keysym = Keysym(0x20);
 /// Characters of a file name or URI the app chooser's prompt shows before it ends it with an ellipsis.
 const TARGET_CHARS: usize = 80;
 
@@ -865,6 +870,80 @@ fn button(label: String, role: ButtonRole, enabled: bool, on_press: Message) -> 
     })
 }
 
+/// The Cancel button of a consent window: the window's keyboard focus starts on it, so the answer a stray key reaches
+/// is the one that denies. Until the window is `armed` the keys that press a button (Return, Enter and Space) are taken
+/// before they reach it, so a key typed for the app does nothing at all; Tab and Escape still work, and a click on
+/// Cancel denies at once.
+fn deny_button(id: u64, armed: bool) -> Element<Message> {
+    Element::new(Deny {
+        armed,
+        children: vec![button(
+            "Cancel".to_owned(),
+            ButtonRole::Normal,
+            true,
+            Message::Cancel(id),
+        )
+        .key("cancel")],
+    })
+}
+
+/// Holds a consent window's Cancel button; see [`deny_button`].
+struct Deny {
+    armed: bool,
+    children: Vec<Element<Message>>,
+}
+
+/// The keys that press a focused button.
+fn presses(keysym: Keysym) -> bool {
+    matches!(keysym, RETURN | KP_ENTER | SPACE)
+}
+
+impl Widget<Message> for Deny {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<Message>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.armed == old.armed {
+            Change::None
+        } else {
+            Change::Paint
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), event: &CoreEvent, cx: &mut EventCx<'_, Message>) -> Propagation {
+        match event {
+            CoreEvent::Key(key, _)
+                if !self.armed && cx.phase() == Phase::Capture && presses(key.keysym) =>
+            {
+                Propagation::Stop
+            }
+            _ => Propagation::Continue,
+        }
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.initial_focus();
+    }
+}
+
 /// A choice among several, in the bottom bar.
 fn pick(
     label: String,
@@ -1332,13 +1411,7 @@ fn picker_window(p: &Picker, app_icons: &AppIcons) -> Window<Message> {
     let bar = bar_row(
         remember.into_iter().collect(),
         vec![
-            button(
-                "Cancel".to_owned(),
-                ButtonRole::Normal,
-                true,
-                Message::Cancel(id),
-            )
-            .key("cancel"),
+            deny_button(id, p.armed),
             button(
                 "Share".to_owned(),
                 ButtonRole::Default,
@@ -1360,8 +1433,9 @@ fn picker_window(p: &Picker, app_icons: &AppIcons) -> Window<Message> {
             foreign_parent: crate::wayland_parent(&p.ask.parent_window).map(str::to_owned),
             input_region: None,
         },
-        // Return is the default button once a row is picked and the window is armed, and Escape cancels, wherever the
-        // focus is; only a fresh press of Return shares, never a key held since before
+        // Return presses the focused button, Cancel when the window opens; with the focus in the list it is the default
+        // button once a row is picked and the window is armed. Only a fresh press of Return shares, never a key held
+        // since before. Escape cancels wherever the focus is
         shortcuts: CommandRegistry::new()
             .with_fresh(
                 Shortcut {
@@ -1561,13 +1635,7 @@ fn consent_window(c: &Consent, app_icons: &AppIcons) -> Window<Message> {
     let bar = bar_row(
         Vec::new(),
         vec![
-            button(
-                "Cancel".to_owned(),
-                ButtonRole::Normal,
-                true,
-                Message::Cancel(id),
-            )
-            .key("cancel"),
+            deny_button(id, c.armed),
             button(
                 "Take Screenshot".to_owned(),
                 ButtonRole::Normal,
@@ -1589,7 +1657,8 @@ fn consent_window(c: &Consent, app_icons: &AppIcons) -> Window<Message> {
             foreign_parent: crate::wayland_parent(&c.ask.parent_window).map(str::to_owned),
             input_region: None,
         },
-        // Escape cancels wherever the focus is; Return has no shortcut, so a key meant for the app never consents
+        // Escape cancels wherever the focus is; Return has no shortcut and presses only the focused button, which is
+        // Cancel when the window opens, so a key meant for the app never consents
         shortcuts: CommandRegistry::new().with(
             Shortcut {
                 mods: Mods::NONE,
@@ -1621,6 +1690,7 @@ fn consent_window(c: &Consent, app_icons: &AppIcons) -> Window<Message> {
 
 #[cfg(test)]
 mod tests {
+    mod consent;
     mod semantics;
 
     use std::num::NonZeroU32;
@@ -2221,12 +2291,6 @@ mod tests {
             "a click before the window is armed takes nothing"
         );
         armed(&mut driver, window);
-        type_key(&mut driver, window, RETURN, None);
-        type_key(&mut driver, window, Keysym(' ' as u32), Some(' '));
-        assert!(
-            answer.try_recv().is_err(),
-            "nothing is preselected, so no key consents"
-        );
         click(&mut driver, window, "take");
         assert_eq!(answer.try_recv().unwrap(), screenshot::Answer::Granted);
         assert!(driver.runtime().windows().is_empty());

@@ -44,6 +44,21 @@ fn lines(lines: &[&str]) -> Vec<String> {
     lines.iter().map(|l| (*l).to_owned()).collect()
 }
 
+/// The node assistive technology is told holds the focus is the Cancel button, so a screen reader announces it first.
+fn announces_cancel(driver: &TestDriver<Dialogs>, window: WindowId) {
+    let runtime = driver.runtime();
+    let snapshot = runtime.snapshot(window).unwrap();
+    let cancel = runtime.find(window, &Key::from("cancel"));
+    assert!(cancel.is_some());
+    assert_eq!(snapshot.accessibility_focus, cancel);
+    let name = snapshot
+        .accessibility
+        .iter()
+        .find(|(id, _)| Some(*id) == cancel)
+        .and_then(|(_, node)| node.name.clone());
+    assert_eq!(name.as_deref(), Some("Cancel"));
+}
+
 fn reads(driver: &TestDriver<Dialogs>, window: WindowId, expected: &[&str]) {
     assert_eq!(outline(driver, window), lines(expected));
     assert_eq!(gaps(driver, window), Vec::<String>::new());
@@ -176,23 +191,22 @@ fn the_screen_cast_chooser_reads_its_sources_and_enables_share_on_a_pick() {
         reply: screen_cast::Reply(sender),
     });
     let (mut driver, window) = start();
+    let opened = [
+        "Window",
+        "  StaticText \"“Meeting” wants to share your screen. Choose a display or a window.\"",
+        "  ScrollView",
+        "    List \"Displays and Windows\" 2 items",
+        "      ListItem focusable",
+        "        StaticText \"Studio Display\"",
+        "      ListItem",
+        "        StaticText \"Notes (org.example.Notes)\"",
+        "  Button \"Cancel\" focusable focused",
+        "  Button \"Share\" disabled",
+    ];
+    reads(&driver, window, &opened);
+    announces_cancel(&driver, window);
     armed(&mut driver, window);
-    reads(
-        &driver,
-        window,
-        &[
-            "Window",
-            "  StaticText \"“Meeting” wants to share your screen. Choose a display or a window.\"",
-            "  ScrollView",
-            "    List \"Displays and Windows\" 2 items",
-            "      ListItem focusable",
-            "        StaticText \"Studio Display\"",
-            "      ListItem",
-            "        StaticText \"Notes (org.example.Notes)\"",
-            "  Button \"Cancel\" focusable",
-            "  Button \"Share\" disabled",
-        ],
-    );
+    reads(&driver, window, &opened);
     click_at(&mut driver, window, Key::Int(1));
     reads(
         &driver,
@@ -260,8 +274,8 @@ fn the_app_chooser_reads_its_prompt_and_apps_with_the_last_choice_selected_and_f
 }
 
 #[test]
-fn the_screenshot_consent_reads_its_prompt_and_two_buttons_with_neither_focused_and_take_armed_late(
-) {
+fn the_screenshot_consent_reads_its_prompt_and_two_buttons_with_cancel_focused_and_take_armed_late()
+{
     let _turn = INBOX.lock().unwrap_or_else(|e| e.into_inner());
     let (sender, answer) = async_channel::bounded(1);
     inbox().push(screenshot::Event::Ask {
@@ -281,10 +295,11 @@ fn the_screenshot_consent_reads_its_prompt_and_two_buttons_with_neither_focused_
         &[
             "Window",
             "  StaticText \"“Drawing” wants to take a screenshot of your screen.\"",
-            "  Button \"Cancel\" focusable",
+            "  Button \"Cancel\" focusable focused",
             "  Button \"Take Screenshot\" disabled",
         ],
     );
+    announces_cancel(&driver, window);
     armed(&mut driver, window);
     reads(
         &driver,
@@ -292,7 +307,7 @@ fn the_screenshot_consent_reads_its_prompt_and_two_buttons_with_neither_focused_
         &[
             "Window",
             "  StaticText \"“Drawing” wants to take a screenshot of your screen.\"",
-            "  Button \"Cancel\" focusable",
+            "  Button \"Cancel\" focusable focused",
             "  Button \"Take Screenshot\" focusable",
         ],
     );

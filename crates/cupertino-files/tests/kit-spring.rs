@@ -314,13 +314,16 @@ fn the_icon_view_comes_back_too() {
     run.wait_until(|run| run.icons().iter().any(|(name, _)| name == "Notes"));
 }
 
+/// After springing through two folders, a drop lands in the deeper one and the window stays there.
 #[test]
 fn a_drop_keeps_the_folder_the_drag_opened() {
     let mut run = window();
     let token = drag_in_row(&mut run, "Notes");
-    spring(&mut run, "Notes", "deep.txt");
+    spring(&mut run, "Notes", "Inner");
+    drag_to_row(&mut run, "Inner");
+    spring(&mut run, "Inner", "core.txt");
     // on the folder shown, under its rows
-    let table = run.bounds(Role::Table, "Notes");
+    let table = run.bounds(Role::Table, "Inner");
     drag_to(&mut run, Point::new(table.center().x, table.max_y() - 20.0));
     let window = run.window;
     assert!(run.driver.window_system_mut().drag_drop(window).unwrap());
@@ -331,11 +334,14 @@ fn a_drop_keeps_the_folder_the_drag_opened() {
         Some(Some(DropAction::Move)),
         "dropped in the folder that opened"
     );
-    assert!(run.home().join("Documents/Notes/x.txt").exists());
+    assert!(run.home().join("Documents/Notes/Inner/x.txt").exists());
     // the source's leave after the drop changes nothing
     run.driver.window_system_mut().drag_leave(window).unwrap();
     run.settle();
     hold(&mut run, DELAY_MS * 2);
+    assert_eq!(shown(&run), "Inner");
+    // the history keeps the folders the drag went through
+    run.menu("go-back");
     assert_eq!(shown(&run), "Notes");
 }
 

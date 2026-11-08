@@ -371,6 +371,23 @@ impl Capture {
             }
             settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
         }
+        // the start of a text file previewed is read on a thread of its own: wait until the preview shows it
+        let previewed = selected
+            .and_then(|path| path.rsplit('/').next())
+            .filter(|name| sample_text(name, 1).is_some());
+        if let Some(name) = previewed {
+            let end = Instant::now() + LISTING;
+            let group = format!("Preview of {name}");
+            while any_named(&driver, |n| n == group)
+                && !any_named(&driver, |n| n.starts_with(SAMPLE_LINES[0]))
+            {
+                if Instant::now() > end {
+                    return Err(format!("{name}: its text never showed"));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+                settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
+            }
+        }
         let shown = driver.runtime().windows();
         let window = match shown.last() {
             Some(&(_, newest)) if newest != window => {
@@ -535,6 +552,19 @@ fn text_center(driver: &TestDriver<Files>, window: WindowId, name: &str) -> Opti
         .filter(|(_, n)| n.role == Role::StaticText && n.name.as_deref() == Some(name))
         .map(|(_, n)| n.bounds.center())
         .max_by(|a, b| a.x.total_cmp(&b.x))
+}
+
+/// Whether a node of any window of the application has a name that `name` accepts.
+fn any_named(driver: &TestDriver<Files>, name: impl Fn(&str) -> bool) -> bool {
+    let runtime = driver.runtime();
+    runtime.windows().into_iter().any(|(_, window)| {
+        runtime.snapshot(window).is_some_and(|snapshot| {
+            snapshot
+                .accessibility
+                .iter()
+                .any(|(_, n)| n.name.as_deref().is_some_and(&name))
+        })
+    })
 }
 
 /// A click at `at`.

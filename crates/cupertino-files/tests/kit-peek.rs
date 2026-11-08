@@ -82,6 +82,12 @@ fn space_opens_the_preview_of_the_selected_text_file_and_space_closes_it() {
     run.key(SPACE, Some(' '));
     assert!(preview(&run).is_some(), "Space opened the preview");
     shown(&mut run);
+    // the text is read away from the window's thread, and shows once read
+    run.wait_until(|run| {
+        preview_texts(run)
+            .iter()
+            .any(|t| t.starts_with("alpha line"))
+    });
     let texts = preview_texts(&run);
     assert!(texts.iter().any(|t| t == "a.txt"), "{texts:?}");
     assert!(

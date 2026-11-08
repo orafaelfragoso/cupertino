@@ -124,7 +124,8 @@ group named "Preview of <name>".
 **Preview window** (`preview`, `kit::peek`). Space on the items, or File › Quick Preview (Primary+Y), opens the
 selection in a floating window of its own: a toolbar with a close and a full screen button, the item's name and, with
 several items, "n of N", then an "Open with <application>" button (the default application, else "Open"); under it a
-picture shows whole, the start of a text file (at most 64 KiB, cut at a character) in the pack's fixed-pitch face, and
+picture shows whole, the start of a text file (at most 64 KiB, cut at a character, read on a thread of its own and
+dropped when the item shown has changed since; a pipe or a device is never opened) in the pack's fixed-pitch face, and
 anything else its large icon with kind, size and dates. With several items selected the arrows go from one to the
 next; with one, they move the window's selection and the window follows. Space or Escape closes it. It grows from its
 centre as it fades in, over a time that grows with its size (at most 0.35 s), and shrinks back as it closes; with

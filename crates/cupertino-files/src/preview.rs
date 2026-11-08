@@ -8,6 +8,7 @@
 //! preview never draws a binary file as text.
 
 use std::io::{self, Read};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -73,9 +74,17 @@ pub struct TextPreview {
     pub truncated: bool,
 }
 
-/// Read the start of the text file at `path` ([`TextPreview`]); `Ok(None)` when it is not text.
+/// Read the start of the text file at `path` ([`TextPreview`]); `Ok(None)` when it is not text, or not a plain file:
+/// a pipe or a device, even one put in the file's place since it was listed, is never opened to wait on it or read.
 pub fn read_text(path: &Path) -> io::Result<Option<TextPreview>> {
-    let file = std::fs::File::open(path)?;
+    if !std::fs::metadata(path)?.is_file() {
+        return Ok(None);
+    }
+    // a pipe swapped in after the check opens without waiting for a writer, and is refused below
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
     if !file.metadata()?.is_file() {
         return Ok(None);
     }
@@ -323,6 +332,24 @@ mod tests {
         let read = read_text(&file).unwrap().unwrap();
         assert_eq!((read.text.len() as u64, read.truncated), (TEXT_LIMIT, true));
         assert_eq!(read_text(dir.path()).unwrap(), None, "a folder is not text");
+    }
+
+    #[test]
+    fn a_pipe_named_as_text_is_refused_without_waiting_for_a_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("notes.txt");
+        let name = std::ffi::CString::new(pipe.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert_eq!(
+            kind(&Entry::from_path(pipe.clone()).unwrap()),
+            PreviewKind::Text
+        );
+        // with no writer, an open that waited would never return
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(read_text(&pipe).map_err(|e| e.kind())));
+        let read = rx.recv_timeout(std::time::Duration::from_secs(10));
+        assert_eq!(read, Ok(Ok(None)));
     }
 
     #[test]

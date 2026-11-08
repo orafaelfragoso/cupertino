@@ -1126,6 +1126,7 @@ impl Model {
                     eprintln!("cupertino-files: {error}");
                 }
                 let columns = window.columns.poll();
+                window.texts.poll();
                 // the tabs not shown follow their folders too
                 for tab in window.parked.values_mut() {
                     let polled = tab.browser.poll();
@@ -1949,7 +1950,7 @@ impl BrowserWindow {
         }
         let (previewed, _) = self.previewed();
         let previewed: Vec<crate::Entry> = previewed.cloned().collect();
-        self.texts.follow(&previewed);
+        self.texts.follow(&previewed, &self.wake);
     }
 
     /// The items previewed: the preview column's file and the preview window's item, and the side of their pictures

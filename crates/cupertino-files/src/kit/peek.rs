@@ -12,8 +12,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::time::SystemTime;
 
+use cupertino_apps::MimeApps;
 use cupertino_kit::controls::{FilePreview, PreviewStyle, Text, TextRole, WindowDragArea};
 use cupertino_kit::core::{
     Action, Change, CommandRegistry, Element, Event, EventCx, Key, MeasureCx, PaintCx, Phase,
@@ -32,7 +35,7 @@ use cupertino_kit::theme::{ColorRole, StateVariant, Surface};
 
 use super::columns::preview_content;
 use super::toolbar::focus_ring;
-use super::{BrowserWindow, Event as WindowEvent, Message, Session, NO_SCROLL};
+use super::{BrowserWindow, Event as WindowEvent, Message, Session, Wake, NO_SCROLL};
 use crate::preview::{self as file_preview, Browse, Motion, MotionFrame, PreviewKind};
 use crate::Entry;
 
@@ -61,10 +64,27 @@ const RIGHT: Keysym = Keysym(0xff53);
 const DOWN: Keysym = Keysym(0xff54);
 const RETURN: Keysym = Keysym(0xff0d);
 
-/// The start of the text files a window previews, by path, with the time each was changed when it was read.
-#[derive(Default)]
+/// The start of the text files a window previews, by path, with the time each was changed when it was read. A file is
+/// read on a thread of its own, which wakes the window when it is done; a result for a file no longer previewed, or
+/// changed since, is dropped.
 pub(super) struct Texts {
     read: HashMap<PathBuf, (Option<SystemTime>, Option<String>)>,
+    /// The files being read, with the time each was changed when its read started.
+    reading: HashMap<PathBuf, Option<SystemTime>>,
+    done: (Sender<TextRead>, Receiver<TextRead>),
+}
+
+/// A file read: its path, the time it was changed when the read started, and its text (`None` when it is not text).
+type TextRead = (PathBuf, Option<SystemTime>, Option<String>);
+
+impl Default for Texts {
+    fn default() -> Self {
+        Texts {
+            read: HashMap::new(),
+            reading: HashMap::new(),
+            done: mpsc::channel(),
+        }
+    }
 }
 
 impl Texts {
@@ -73,35 +93,60 @@ impl Texts {
         self.read.get(path).and_then(|(_, text)| text.clone())
     }
 
-    /// Keep the texts of `entries` (the text files previewed now), reading those not read yet or changed since, and
-    /// forget the others.
-    pub fn follow<'a>(&mut self, entries: impl IntoIterator<Item = &'a Entry>) {
+    /// Keep the texts of `entries` (the text files previewed now), reading those not read yet or changed since, away
+    /// from the window's thread, and forget the others; `wake` is called as each read ends.
+    pub fn follow<'a>(&mut self, entries: impl IntoIterator<Item = &'a Entry>, wake: &Wake) {
         let wanted: Vec<&Entry> = entries
             .into_iter()
             .filter(|e| file_preview::kind(e) == PreviewKind::Text)
             .collect();
         self.read
             .retain(|path, _| wanted.iter().any(|e| &e.path == path));
+        self.reading
+            .retain(|path, _| wanted.iter().any(|e| &e.path == path));
         for entry in wanted {
             let fresh = self
                 .read
                 .get(&entry.path)
                 .is_some_and(|(modified, _)| *modified == entry.modified);
-            if fresh {
+            if fresh || self.reading.get(&entry.path) == Some(&entry.modified) {
                 continue;
             }
-            let text = match file_preview::read_text(&entry.path) {
-                Ok(text) => text.map(|t| t.text),
-                Err(e) => {
-                    eprintln!(
-                        "cupertino-files: cannot read {} to preview it: {e}",
-                        entry.path.display()
-                    );
-                    None
+            self.reading.insert(entry.path.clone(), entry.modified);
+            let (path, modified) = (entry.path.clone(), entry.modified);
+            let (done, wake) = (self.done.0.clone(), Arc::clone(wake));
+            std::thread::spawn(move || {
+                let text = match file_preview::read_text(&path) {
+                    Ok(text) => text.map(|t| t.text),
+                    Err(e) => {
+                        eprintln!(
+                            "cupertino-files: cannot read {} to preview it: {e}",
+                            path.display()
+                        );
+                        None
+                    }
+                };
+                // the window may be gone, and nobody is left to tell
+                if done.send((path, modified, text)).is_ok() {
+                    wake();
                 }
-            };
-            self.read.insert(entry.path.clone(), (entry.modified, text));
+            });
         }
+    }
+
+    /// Take in the reads that ended: whether a text previewed now arrived.
+    pub fn poll(&mut self) -> bool {
+        let mut arrived = false;
+        while let Ok((path, modified, text)) = self.done.1.try_recv() {
+            // a read for a file no longer previewed, or since changed again, is stale
+            if self.reading.get(&path) != Some(&modified) {
+                continue;
+            }
+            self.reading.remove(&path);
+            self.read.insert(path, (modified, text));
+            arrived = true;
+        }
+        arrived
     }
 }
 
@@ -120,6 +165,8 @@ pub(super) struct Peek {
     pub full_screen: bool,
     /// The name of the application that opens the item shown, with the item it was read for.
     app: Option<(PathBuf, Option<String>)>,
+    /// The session's associations, read once while the window is open: stepping through items reads none again.
+    apps: Option<Option<MimeApps>>,
 }
 
 /// What the preview window asks of its browser window.
@@ -154,6 +201,7 @@ impl Peek {
             scroll: NO_SCROLL,
             full_screen: false,
             app: None,
+            apps: None,
         }
     }
 
@@ -213,8 +261,11 @@ impl Peek {
         if self.app.as_ref().is_some_and(|(p, _)| p == path) {
             return;
         }
-        let name = (session.applications)().ok().and_then(|apps| {
-            crate::open::open_with(&apps, path, path.is_dir())
+        let apps = self
+            .apps
+            .get_or_insert_with(|| (session.applications)().ok());
+        let name = apps.as_ref().and_then(|apps| {
+            crate::open::open_with(apps, path, path.is_dir())
                 .into_iter()
                 .find(|item| item.is_default)
                 .map(|item| item.entry.name.clone())

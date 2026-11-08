@@ -143,12 +143,8 @@ fn a_row_of_another_column_shows_its_folder_and_typing_selects_in_the_column_sho
         .named(Role::Group)
         .iter()
         .any(|g| g == "Preview of a.txt"));
-    // the preview reads the text file's start and names its kind
-    assert!(
-        texts(&run).iter().any(|t| t.starts_with("alpha")),
-        "{:?}",
-        texts(&run)
-    );
+    // the preview reads the text file's start, away from the window's thread
+    run.wait_until(|run| texts(run).iter().any(|t| t.starts_with("alpha")));
 }
 
 #[test]

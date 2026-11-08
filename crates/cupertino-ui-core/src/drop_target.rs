@@ -47,8 +47,8 @@ pub struct DropTarget<M> {
     pub on_hover: Option<HoverHandler<M>>,
     pub on_drop: DropHandler<M>,
     /// Sent when a drag that was over the target's window leaves the window, or ends there without being dropped on a
-    /// target (released where nothing takes it, refused or cancelled); not after a drop a target took. Over any part
-    /// of the window, not only over this target.
+    /// target (released where nothing takes it, refused, its data failed or cancelled); not after a drop a target took.
+    /// Over any part of the window, not only over this target.
     pub on_leave: Option<M>,
 }
 

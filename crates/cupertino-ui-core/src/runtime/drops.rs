@@ -315,7 +315,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     },
                 );
             }
-            Err(_) => self.system.finish_drop(drop.token, None),
+            Err(_) => {
+                self.system.finish_drop(drop.token, None);
+                self.left(i);
+            }
         }
     }
 
@@ -340,7 +343,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }));
                 self.finishing.push((landed.token, Some(landed.action)));
             }
-            _ => self.system.finish_drop(landed.token, None),
+            _ => {
+                self.system.finish_drop(landed.token, None);
+                // refused after all: the drag ended over the window without a drop a target took
+                if let Some(i) = self.windows.iter().position(|w| w.key == landed.window) {
+                    self.left(i);
+                }
+            }
         }
         true
     }

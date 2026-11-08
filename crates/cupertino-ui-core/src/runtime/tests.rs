@@ -2772,6 +2772,13 @@ fn a_drop_where_nothing_takes_it_or_whose_data_fails_is_refused() {
         [(DropToken(7), None), (DropToken(7), None)]
     );
     assert!(!rt.model().heard.iter().any(|m| m.starts_with("drop")));
+    let heard = &rt.model().heard;
+    assert_eq!(heard.last().unwrap(), "left", "the data failed: {heard:?}");
+    assert_eq!(
+        heard.iter().filter(|m| *m == "left").count(),
+        2,
+        "{heard:?}"
+    );
 }
 
 /// The targets that ask for it hear once that a drag left the window, wherever it was over, and nothing of a drop a

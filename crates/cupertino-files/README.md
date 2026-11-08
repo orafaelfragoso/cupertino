@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 11 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 10 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 18 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 15 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 10 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 18 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
@@ -113,6 +113,11 @@ rows are `menu_spec`'s, walked in order (`kit::context`): rows without a backend
 Tags submenu of the seven colours (checked where every selected item has the tag), the view row is "as Icons", "as
 List" and the two views that are not built, disabled. Toolkit menus cannot swap rows while a modifier is held, so an
 alternate that does something (Open in New Window, Move Item Here) is a row of its own after the row it belongs to.
+The menus track the pointer and keys as every menu does (`cupertino-ui-controls`, `cupertino-menu-model`'s
+`tracking`): the secondary press that opens the menu, dragged onto a row, chooses it on release, and a quick click
+leaves the menu open; a submenu opens after a rest on its row and stays open while the pointer heads into it (Sort By
+from the folder menu, Tags from the item menu), until the pointer rests or crawls; typed letters find a row, Return
+chooses it and Escape closes one level, then the menu, with the focus back where it was.
 
 **Copy and paste.** Besides dropping (below), moving or copying into a folder goes through the application's own
 pasteboard, the keyboard's and assistive technology's way in: Copy (the item menu, Edit › Copy, Primary+C) keeps the selection's paths; Paste Item

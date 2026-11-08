@@ -17,8 +17,8 @@ use std::path::PathBuf;
 /// The control panel, which Settings… of the system menu starts.
 const SETTINGS_PROGRAM: &str = "cupertino-settings";
 
-/// The menu key for an evdev key code; `None` for keys menus ignore. Letters (type-ahead) need
-/// a keymap, which the process does not have.
+/// The menu key for an evdev key code; `None` for keys menus ignore. Letters come through
+/// [`typed_key`].
 pub fn menu_key(code: u32) -> Option<Key> {
     Some(match code {
         key::UP => Key::Up,
@@ -32,6 +32,13 @@ pub fn menu_key(code: u32) -> Option<Key> {
         key::END => Key::End,
         _ => return None,
     })
+}
+
+/// The character a key typed, as a menu key for type-ahead: printable, and typed without a command modifier
+/// (`command`: Ctrl, Alt or the primary modifier held).
+pub fn typed_key(text: Option<char>, command: bool) -> Option<Key> {
+    text.filter(|c| !command && !c.is_control() && !c.is_whitespace())
+        .map(Key::Char)
 }
 
 /// What the process does for a controller effect.
@@ -273,6 +280,16 @@ fn fallback_action(item: ItemId, feed: &BarFeed) -> Option<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn printable_characters_typed_without_a_command_modifier_are_type_ahead() {
+        assert_eq!(typed_key(Some('r'), false), Some(Key::Char('r')));
+        assert_eq!(typed_key(Some('É'), false), Some(Key::Char('É')));
+        assert_eq!(typed_key(Some('r'), true), None, "a shortcut");
+        assert_eq!(typed_key(Some('\r'), false), None);
+        assert_eq!(typed_key(Some(' '), false), None, "Space chooses");
+        assert_eq!(typed_key(None, false), None);
+    }
     use crate::controller::MenuController;
     use crate::dbus::sni::{ItemStatus, StatusItem};
     use crate::desktop::AppName;

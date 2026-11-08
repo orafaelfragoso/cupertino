@@ -298,6 +298,8 @@ fn arrows_home_end_and_typed_characters_move_between_the_enabled_items() {
     assert!(on_row(&h, 1), "the next item starting with it");
     h.type_text("p");
     assert!(on_row(&h, 1), "a disabled item is not typed to");
+    // after a pause, a new search
+    h.clock().advance_by(1_100_000_000);
     h.type_text("s");
     assert!(on_row(&h, 4));
 }
@@ -526,7 +528,20 @@ fn a_pop_up_button_opens_its_options_over_itself_with_the_chosen_one_checked_on_
     assert_eq!(size.states.expanded, Some(false));
     h.tap(DOWN);
     assert_eq!(h.model().menu, Some(Open::Sizes), "Down opens it too");
-    h.send(WindowEvent::PopupDone);
+    let dismiss = |h: &mut Harness<Editor>| {
+        h.window = popup(h, "sizes").expect("open");
+        h.send(WindowEvent::PopupDone);
+        h.window = main;
+        assert_eq!(h.model().menu, None);
+    };
+    dismiss(&mut h);
+    h.ask(&Key::from("size"), Action::Click);
+    assert_eq!(
+        (h.model().menu.clone(), h.model().size),
+        (Some(Open::Sizes), 2),
+        "and assistive technology, choosing nothing"
+    );
+    dismiss(&mut h);
     h.click(h.center("size"));
     assert_eq!(h.model().menu, Some(Open::Sizes), "and a click");
     let id = popup(&h, "sizes").expect("open");

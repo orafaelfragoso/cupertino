@@ -698,7 +698,8 @@ pub enum MenuItem<M> {
         checked: bool,
         on_select: M,
     },
-    /// Opens a menu of `items` beside itself on a click, Return, Space or the arrow toward the trailing side.
+    /// Opens a menu of `items` beside itself on a click, Return, Space, the arrow toward the trailing side or once the
+    /// pointer rests on it.
     Submenu {
         label: String,
         enabled: bool,
@@ -721,7 +722,8 @@ pub enum MenuAnchor {
 /// A menu in a popup window that takes the keyboard while open. Up, Down, Home and End move between the enabled items,
 /// a typed character moves to the next item it starts, and Escape or the arrow toward the leading side closes a
 /// submenu. Escape in the menu itself, a chosen item and a press outside send `on_close`. Declare [`Menu::windows`]
-/// with the other windows while it is open.
+/// with the other windows while it is open. The pointer tracks it as it does every menu: a press that opened it and is
+/// dragged onto an item chooses the item on release, and the way from a row into its submenu keeps the submenu open.
 pub struct Menu<M> {
     /// The window the anchor is in.
     pub parent: WindowKey,
@@ -746,7 +748,7 @@ pub struct ContextMenu<M> {
     pub on_open: Option<Handler<Point, M>>,
 }
 
-/// A button that shows the chosen option and opens a menu of the options over itself on a click, Space, Return, Up
+/// A button that shows the chosen option and opens a menu of the options over itself on a press, Space, Return, Up
 /// or Down. Give its element a key and declare [`PopUpButton::menu`] while `open`.
 pub struct PopUpButton<M> {
     /// The button's accessible name; its value is the chosen option.

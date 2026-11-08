@@ -844,7 +844,10 @@ impl App {
                     return commands;
                 }
                 let input = key_input(&key, self.keymap.profile());
-                let code = menu_key(key.code);
+                let command = key.mods.contains(Mods::CTRL)
+                    || key.mods.contains(Mods::ALT)
+                    || key.mods.contains(Mods::PRIMARY);
+                let code = menu_key(key.code).or_else(|| routing::typed_key(key.text, command));
                 let controller = &mut self.bars[i].controller;
                 let outcome =
                     match controller.search_key(code, &mut self.keymap, input, Instant::now()) {

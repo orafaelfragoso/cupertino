@@ -1,4 +1,4 @@
-//! Glass: the reference model of the background pass and of the foreground colour matrix, and the uniform block the
+//! Glass: the CPU model of the background pass and of the foreground colour matrix, and the uniform block the
 //! shaders read (`shaders/glass.wgsl`, `shaders/gles/glass.frag`).
 //!
 //! A glass *container* holds up to [`MAX_SHAPES`] shapes (rounded rectangles or capsules). Its backdrop is captured
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn a_union_without_spacing_is_hard_and_spacing_bridges_the_gap() {
-        // two 150 × 100 shapes 5 apart, as the reference container: a point in the gap
+        // two 150 × 100 shapes 5 apart, as in a container of two buttons: a point in the gap
         let a = GlassShape::new([0.0, 0.0, 150.0, 100.0], 18.0);
         let b = GlassShape::new([155.0, 0.0, 150.0, 100.0], 18.0);
         let gap = [152.5, 50.0];

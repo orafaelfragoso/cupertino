@@ -2,7 +2,7 @@
 //! shadows) and the foreground colour matrix, for a [`GlassMode`] (appearance, style and accessibility options) and the
 //! size of the shape it covers.
 //!
-//! A recipe is plain data. `cupertino-glass` turns it into GPU uniforms and holds the reference model of each stage;
+//! A recipe is plain data. `cupertino-glass` turns it into GPU uniforms and holds the CPU model of each stage;
 //! the README of that crate describes what every value does.
 //!
 //! * [`GlassStyle::Regular`] is the legibility style for controls, bars and panels; [`GlassStyle::Clear`] lets more of
@@ -612,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn dark_regular_reference_shape() {
+    fn dark_regular_wide_shape() {
         // 150 × 100 point shape: short side 100
         let p = GlassParams::new(mode(true, GlassStyle::Regular), 100.0);
         assert_eq!(p.blur.radius, 5.0);

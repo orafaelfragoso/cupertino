@@ -330,10 +330,22 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         true
     }
 
-    /// The application says what it did with the drop `token` it was handed this turn; a drop already finished is gone.
+    /// The application says what it did with the drop `token` it was handed this turn, or with one it held since; a
+    /// drop already finished is gone.
     pub(super) fn drop_done(&mut self, token: DropToken, action: Option<DropAction>) {
         if let Some(finishing) = self.finishing.iter_mut().find(|(t, _)| *t == token) {
             finishing.1 = action;
+        } else if let Some(at) = self.held.iter().position(|t| *t == token) {
+            self.held.remove(at);
+            self.system.finish_drop(token, action);
+        }
+    }
+
+    /// The application keeps the drop `token` it was handed this turn open until it finishes it.
+    pub(super) fn hold_drop(&mut self, token: DropToken) {
+        if let Some(at) = self.finishing.iter().position(|(t, _)| *t == token) {
+            self.finishing.remove(at);
+            self.held.push(token);
         }
     }
 

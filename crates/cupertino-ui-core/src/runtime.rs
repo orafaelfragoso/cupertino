@@ -228,6 +228,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     /// Drops handed to their targets, finished once the turn has handled what they became: with the action agreed, or
     /// what the application said it did.
     finishing: Vec<(DropToken, Option<DropAction>)>,
+    /// Drops the application keeps open until it finishes them ([`Command::HoldDrop`]).
+    held: Vec<DropToken>,
     /// The messages to send once a window has presented its first frame ([`Command::OnPresented`]).
     on_presented: Vec<(WindowKey, A::Message)>,
 }
@@ -263,6 +265,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             drags: HashMap::new(),
             landed: HashMap::new(),
             finishing: Vec::new(),
+            held: Vec::new(),
             on_presented: Vec::new(),
         };
         for command in commands {
@@ -470,6 +473,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             },
             Command::StartDrag(drag) => self.start_drag(drag),
             Command::FinishDrop(token, action) => self.drop_done(token, action),
+            Command::HoldDrop(token) => self.hold_drop(token),
             Command::OnPresented { window, message } => {
                 if self.windows.iter().any(|w| w.key == window && w.presented) {
                     self.messages.push_back(message);

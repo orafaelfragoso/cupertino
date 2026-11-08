@@ -2447,6 +2447,11 @@ impl Application for Shelf {
                 commands.push(Command::FinishDrop(DropToken(7), Some(DropAction::Copy)));
             } else if message.ends_with(": kept") {
                 commands.push(Command::FinishDrop(DropToken(7), None));
+            } else if message.ends_with(": held") {
+                commands.push(Command::HoldDrop(DropToken(7)));
+            } else if message.ends_with(": release") {
+                // the held drop ends in a later turn, with what was done with it
+                commands.push(Command::FinishDrop(DropToken(7), Some(DropAction::Copy)));
             }
         }
         model.heard.push(message);
@@ -2686,6 +2691,69 @@ fn a_drop_finishes_with_what_the_update_says_it_did_rather_than_the_action_agree
         );
     }
     assert_eq!(rt.window_system().drops_finished.len(), 2);
+}
+
+#[test]
+fn a_held_drop_finishes_only_when_a_later_update_says_what_was_done() {
+    let (mut rt, window) = shelf();
+    let both = [DropAction::Copy, DropAction::Move];
+    rt.window_system_mut().drop_data = Some(ClipboardData {
+        mime: URI_LIST.into(),
+        bytes: b"held".to_vec(),
+    });
+    enter(&mut rt, window, Point::new(4.0, 6.0), &both);
+    drag(&mut rt, window, DropEvent::Drop);
+    assert!(rt.model().heard.last().unwrap().ends_with(": held"));
+    assert!(
+        rt.window_system().drops_finished.is_empty(),
+        "the source waits"
+    );
+
+    // another drop, whose update ends the held one
+    rt.window_system_mut().drop_data = Some(ClipboardData {
+        mime: URI_LIST.into(),
+        bytes: b"release".to_vec(),
+    });
+    drag(
+        &mut rt,
+        window,
+        DropEvent::Enter {
+            token: DropToken(8),
+            position: Point::new(25.0, 50.0),
+            mimes: vec![URI_LIST.into()],
+            actions: both.into_iter().collect(),
+            mods: Mods::NONE,
+        },
+    );
+    drag(&mut rt, window, DropEvent::Drop);
+    assert_eq!(
+        rt.window_system().drops_finished,
+        [
+            (DropToken(7), Some(DropAction::Copy)),
+            (DropToken(8), Some(DropAction::Copy))
+        ]
+    );
+    // a held drop finishes once
+    rt.window_system_mut().drop_data = Some(ClipboardData {
+        mime: URI_LIST.into(),
+        bytes: b"release".to_vec(),
+    });
+    drag(
+        &mut rt,
+        window,
+        DropEvent::Enter {
+            token: DropToken(9),
+            position: Point::new(25.0, 50.0),
+            mimes: vec![URI_LIST.into()],
+            actions: both.into_iter().collect(),
+            mods: Mods::NONE,
+        },
+    );
+    drag(&mut rt, window, DropEvent::Drop);
+    assert_eq!(
+        rt.window_system().drops_finished[2..],
+        [(DropToken(9), Some(DropAction::Copy))]
+    );
 }
 
 #[test]

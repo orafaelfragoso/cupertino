@@ -3,6 +3,7 @@
 
 use crate::markup::{self, Span};
 use std::borrow::Cow;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Longest application name kept, in characters; a longer one is cut and ends in an ellipsis.
 pub const MAX_APP_NAME_CHARS: usize = 64;
@@ -13,21 +14,53 @@ pub const MAX_SUMMARY_CHARS: usize = 256;
 pub const MAX_BODY_CHARS: usize = 8192;
 /// What ends a text that was cut.
 pub const ELLIPSIS: char = '\u{2026}';
+/// Longest `desktop-entry` hint kept, in bytes (a file name's bound); a longer one is dropped.
+pub const MAX_DESKTOP_ENTRY_BYTES: usize = 255;
 
-/// `text` with at most `max` characters: a longer one keeps its first `max - 1` and ends in [`ELLIPSIS`].
+/// `text` with at most `max` characters: a longer one keeps the whole user-perceived characters (grapheme clusters)
+/// that fit in its first `max - 1` and ends in [`ELLIPSIS`], so a cut never splits a letter from its marks, an emoji
+/// sequence or a flag.
 pub fn cap(text: &str, max: usize) -> Cow<'_, str> {
-    match text.char_indices().nth(max) {
-        None => Cow::Borrowed(text),
-        Some(_) => {
-            let keep = max.saturating_sub(1);
-            let end = text.char_indices().nth(keep).map_or(text.len(), |(i, _)| i);
-            let mut out = text[..end].trim_end().to_owned();
-            if max > 0 {
-                out.push(ELLIPSIS);
-            }
-            Cow::Owned(out)
-        }
+    if text.char_indices().nth(max).is_none() {
+        return Cow::Borrowed(text);
     }
+    let room = max.saturating_sub(1);
+    let (mut end, mut used) = (0, 0);
+    for (at, cluster) in text.grapheme_indices(true) {
+        let chars = cluster.chars().count();
+        if used + chars > room {
+            break;
+        }
+        used += chars;
+        end = at + cluster.len();
+    }
+    let mut out = text[..end].trim_end().to_owned();
+    if max > 0 {
+        out.push(ELLIPSIS);
+    }
+    Cow::Owned(out)
+}
+
+/// The longest entity the body markup decodes, from `&` to `;` (`markup::decode_entities`).
+const MAX_ENTITY_BYTES: usize = 10;
+
+/// [`cap`] of a body in markup: a cut that falls inside a tag or an entity drops what is left of it, so the parser
+/// never shows half a tag or entity as text.
+pub fn cap_markup(text: &str, max: usize) -> Cow<'_, str> {
+    let Cow::Owned(cut) = cap(text, max) else {
+        return Cow::Borrowed(text);
+    };
+    let kept = cut.strip_suffix(ELLIPSIS).unwrap_or(&cut);
+    let open_tag = kept.rfind('<').filter(|&i| !kept[i..].contains('>'));
+    let open_entity = kept
+        .rfind('&')
+        .filter(|&i| !kept[i..].contains(';') && kept.len() - i <= MAX_ENTITY_BYTES);
+    let Some(end) = open_tag.into_iter().chain(open_entity).min() else {
+        return Cow::Owned(cut);
+    };
+    let mut out = kept[..end].trim_end().to_owned();
+    out.push(ELLIPSIS);
+    Cow::Owned(out)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -177,11 +210,22 @@ impl NotifyInput {
         for (text, max) in [
             (&mut self.app_name, MAX_APP_NAME_CHARS),
             (&mut self.summary, MAX_SUMMARY_CHARS),
-            (&mut self.body, MAX_BODY_CHARS),
         ] {
             if let Cow::Owned(cut) = cap(text, max) {
                 *text = cut;
             }
+        }
+        if let Cow::Owned(cut) = cap_markup(&self.body, MAX_BODY_CHARS) {
+            self.body = cut;
+        }
+        // no desktop entry id is longer than a file name; a longer hint names none, and the name stands in
+        if self
+            .hints
+            .desktop_entry
+            .as_ref()
+            .is_some_and(|d| d.len() > MAX_DESKTOP_ENTRY_BYTES)
+        {
+            self.hints.desktop_entry = None;
         }
         self
     }
@@ -354,6 +398,66 @@ mod tests {
                 short.body.as_str()
             ),
             ("Mail", "Lunch", "At noon?")
+        );
+    }
+
+    #[test]
+    fn a_cut_keeps_whole_clusters_and_right_to_left_text_in_its_order() {
+        // a letter and its combining mark stay together: "e\u{301}" is two characters
+        assert_eq!(cap("ae\u{301}e\u{301}", 3), "a\u{2026}");
+        assert_eq!(cap("ae\u{301}e\u{301}", 4), "ae\u{301}\u{2026}");
+        // a family emoji (five characters joined) and a flag (two) are kept whole or dropped whole
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        assert_eq!(
+            cap(&format!("{family}{family}"), 8),
+            format!("{family}\u{2026}")
+        );
+        assert_eq!(cap(&format!("{family}{family}"), 5), "\u{2026}");
+        let flags = "\u{1F1EB}\u{1F1F7}\u{1F1E9}\u{1F1EA}";
+        assert_eq!(cap(flags, 3), "\u{1F1EB}\u{1F1F7}\u{2026}");
+        assert_eq!(cap(flags, 2), "\u{2026}");
+        // right-to-left text keeps its first characters in reading (logical) order
+        assert_eq!(cap("שלום עולם", 5), "שלום\u{2026}");
+        for text in ["ae\u{301}e\u{301}", "שלום עולם", family] {
+            for max in 0..12 {
+                assert!(
+                    cap(text, max).chars().count() <= max.max(1),
+                    "{text:?} {max}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_body_cut_inside_a_tag_or_an_entity_drops_the_rest_of_it() {
+        let cut = |body: &str, max| cap_markup(body, max).into_owned();
+        assert_eq!(cut("Hi <b>there</b>", 6), "Hi\u{2026}");
+        assert_eq!(cut("Hi <a href=\"https://x\">x</a>", 12), "Hi\u{2026}");
+        assert_eq!(cut("Tom &amp; Jerry", 8), "Tom\u{2026}");
+        assert_eq!(cut("<b>bold text</b> more", 9), "<b>bold\u{2026}");
+        assert_eq!(cut("a < b and more", 6), "a\u{2026}");
+        assert_eq!(cut("short", 9), "short");
+        // what the parser makes of a cut body: no part of a tag or entity is text
+        for max in 1..40 {
+            let body =
+                "<b>Ada</b> &quot;hi&quot; <a href=\"https://example.org\">a link</a> &#x263A; end";
+            let text: String = markup::parse(&cap_markup(body, max))
+                .into_iter()
+                .map(|s| s.text)
+                .collect();
+            assert!(!text.contains(['<', '>', '&']), "{max}: {text:?}");
+        }
+    }
+
+    #[test]
+    fn an_overlong_desktop_entry_names_no_application() {
+        let mut inp = NotifyInput::new("Mail", "Hi", "");
+        inp.hints.desktop_entry = Some("a".repeat(MAX_DESKTOP_ENTRY_BYTES + 1));
+        assert_eq!(inp.clone().capped().hints.desktop_entry, None);
+        inp.hints.desktop_entry = Some("org.example.Mail".into());
+        assert_eq!(
+            inp.capped().hints.desktop_entry.as_deref(),
+            Some("org.example.Mail")
         );
     }
 

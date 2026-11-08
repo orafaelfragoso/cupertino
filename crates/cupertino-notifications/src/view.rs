@@ -1036,7 +1036,8 @@ fn body_text(n: &Notification) -> Option<BodyText> {
     for span in &n.spans {
         let mut piece = span.text.replace("\r\n", "\n").replace('\r', "\n");
         let room = MAX_BODY_BYTES.saturating_sub(text.len());
-        if piece.len() > room {
+        let cut = piece.len() > room;
+        if cut {
             let mut end = room.saturating_sub(ELLIPSIS.len_utf8());
             while !piece.is_char_boundary(end) {
                 end -= 1;
@@ -1047,6 +1048,10 @@ fn body_text(n: &Notification) -> Option<BodyText> {
             }
         }
         if piece.is_empty() {
+            // nothing of the body follows a cut
+            if cut {
+                break;
+            }
             continue;
         }
         let start = text.len();
@@ -1061,6 +1066,9 @@ fn body_text(n: &Notification) -> Option<BodyText> {
         runs.push((TextRange(start..text.len()), style));
         if let Some(href) = &span.link {
             links.push((start..text.len(), href.clone()));
+        }
+        if cut {
+            break;
         }
     }
     (!text.trim().is_empty()).then_some(BodyText {

@@ -38,6 +38,7 @@ cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 libc = { version = "0.2", optional = true }
+unicode-segmentation = "1.13"
 zbus = { version = "5", optional = true }
 
 [dev-dependencies]

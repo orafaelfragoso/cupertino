@@ -176,6 +176,16 @@ fn a_huge_body_is_bounded_before_it_is_laid_out() {
     let bounded = body_text(&n).unwrap().content.text;
     assert!(bounded.len() <= MAX_BODY_BYTES && bounded.len() > MAX_BODY_BYTES - 2);
     assert!(bounded.ends_with(ELLIPSIS));
+    // a cut that falls short of the bound on a character boundary is still the body's end: no later run follows it
+    let styled = format!("{}<b>a</b>", "é".repeat(MAX_BODY_BYTES));
+    let n = notification("Title", &styled);
+    let bounded = body_text(&n).unwrap().content.text;
+    assert!(
+        bounded.ends_with(ELLIPSIS),
+        "{:?}",
+        &bounded[bounded.len() - 8..]
+    );
+    assert!(!bounded.contains('a'));
 }
 
 #[test]

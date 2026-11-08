@@ -1435,6 +1435,7 @@ dependencies = [
  "futures-lite",
  "libc",
  "tempfile",
+ "unicode-segmentation",
  "zbus",
 ]
 

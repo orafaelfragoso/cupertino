@@ -1,5 +1,6 @@
 //! The floating toolbar controls: glass capsules of buttons ([`ToolbarGroup`]), a menu button with a chevron
-//! ([`ToolbarMenuButton`]), a circular button ([`ToolbarButton`]) and the large title ([`ToolbarTitle`]).
+//! ([`ToolbarMenuButton`]), a circular button ([`ToolbarButton`]), a search field that rests as a circular button
+//! ([`ToolbarSearch`]) and the large title ([`ToolbarTitle`]).
 //!
 //! Every control is 36 pt tall and lies in the middle of the 52 pt toolbar row. A group's segments are 36.5 pt wide, a
 //! choice's 40 pt, and the chosen segment shows a pill 4 pt inside it whose corner radius is the group's less that
@@ -12,8 +13,8 @@ use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
-    AccessibleStates, Action, Change, ControlState, Element, Event, EventCx, MeasureCx, PaintCx,
-    Phase, Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Element, Event,
+    EventCx, Key, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
@@ -65,6 +66,8 @@ const MENU_CHEVRON_STROKE: f64 = 1.5;
 const MENU_CHEVRON_GAP: f64 = 6.0;
 const MENU_MARGIN: f64 = 8.0;
 /// The "more" glyph: three dots this wide, this far apart.
+/// The resting search field's symbol.
+const SEARCH_SYMBOL: &str = "symbol.magnifyingglass";
 const DOT: f64 = 3.25;
 const DOT_PITCH: f64 = 6.25;
 
@@ -84,7 +87,7 @@ pub enum ToolbarGlyph {
 /// One button of a [`ToolbarGroup`].
 pub struct ToolbarItem<M> {
     /// The node's key, which a menu anchored below the button names.
-    pub key: Option<String>,
+    pub key: Option<Key>,
     pub glyph: ToolbarGlyph,
     /// What assistive technology calls it.
     pub label: String,
@@ -108,7 +111,7 @@ pub struct ToolbarGroup<M> {
 
 /// A floating glass capsule that opens a menu: a symbol and a chevron. Build its element with `Element::from`.
 pub struct ToolbarMenuButton<M> {
-    pub key: Option<String>,
+    pub key: Option<Key>,
     pub symbol: String,
     pub label: String,
     /// Sent on the press; `None` disables it.
@@ -119,11 +122,21 @@ pub struct ToolbarMenuButton<M> {
 
 /// A floating circular glass button, as the search button. Build its element with `Element::from`.
 pub struct ToolbarButton<M> {
-    pub key: Option<String>,
+    pub key: Option<Key>,
     pub glyph: ToolbarGlyph,
     pub label: String,
     /// Sent when it is pressed; `None` disables it.
     pub on_press: Option<M>,
+}
+
+/// A search field that rests as a circular glass button with a magnifying glass: while `collapsed` the button covers
+/// the field, which still takes the presses, so a click on it gives the field the keyboard. The application opens it
+/// (clears `collapsed`) while the field has the keyboard or holds text, and gives it its width: [`TOOLBAR_CONTROL`]
+/// at rest. Build its element with `Element::from`.
+pub struct ToolbarSearch<M> {
+    /// The field: a [`crate::TextField`].
+    pub field: Element<M>,
+    pub collapsed: bool,
 }
 
 /// The large bold title after the back and forward buttons. It takes the room the controls leave, its text ending in
@@ -140,7 +153,7 @@ fn no_measure() -> Measured {
     }
 }
 
-fn keyed<M: 'static>(element: Element<M>, key: Option<String>) -> Element<M> {
+fn keyed<M: 'static>(element: Element<M>, key: Option<Key>) -> Element<M> {
     match key {
         Some(key) => element.key(key),
         None => element,
@@ -231,6 +244,131 @@ impl<M: Clone + 'static> From<ToolbarButton<M>> for Element<M> {
             enabled: Vec::new(),
             children: vec![keyed(segment, key)],
         })
+    }
+}
+
+impl<M: 'static> From<ToolbarSearch<M>> for Element<M> {
+    fn from(search: ToolbarSearch<M>) -> Self {
+        Element::new(SearchHolder {
+            children: vec![
+                search.field,
+                Element::new(SearchCover {
+                    collapsed: search.collapsed,
+                }),
+            ],
+        })
+    }
+}
+
+/// The field and the button over it, as tall as a toolbar control.
+struct SearchHolder<M> {
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for SearchHolder<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fixed(TOOLBAR_CONTROL),
+            flex: Flex::grow(1.0),
+            ..LayoutSpec::new(ContainerKind::Overlay)
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), constraints: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(constraints.width.ideal(), TOOLBAR_CONTROL),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The resting search button: glass and a magnifying glass over the field, which the pointer passes through.
+struct SearchCover {
+    collapsed: bool,
+}
+
+impl<M: 'static> Widget<M> for SearchCover {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.collapsed != old.collapsed {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if !self.collapsed {
+            return;
+        }
+        let size = cx.size();
+        let rect = Rect::new(0.0, 0.0, size.width, size.height);
+        let radius = size.height.min(size.width) / 2.0;
+        // the field under the button must not show through its glass: the window's background hides it first
+        let state = cupertino_ui_theme::StateVariant {
+            window_active: cx.window_active(),
+            ..cupertino_ui_theme::StateVariant::NORMAL
+        };
+        let background = cx
+            .env()
+            .theme
+            .colors
+            .get(ColorRole::WindowBackground, state);
+        look::fill(cx, rect, radius, background);
+        paint_glass(cx, GlassRole::ToolbarGroup, rect, radius);
+        let state = ControlState {
+            enabled: true,
+            window_active: cx.window_active(),
+            ..ControlState::default()
+        };
+        let color = glyph_color(&cx.env().theme.clone(), &state);
+        symbol(cx, SEARCH_SYMBOL, TOOLBAR_SYMBOL, color, false, rect);
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
     }
 }
 
@@ -338,7 +476,10 @@ impl<M: 'static> Widget<M> for Capsule<M> {
         let px = 1.0 / cx.env().scale.max(1.0);
         let color = theme
             .colors
-            .get(ColorRole::Separator, cupertino_ui_theme::StateVariant::NORMAL)
+            .get(
+                ColorRole::Separator,
+                cupertino_ui_theme::StateVariant::NORMAL,
+            )
             .map(|c| divider_color(&theme, c));
         for x in self.divider_positions() {
             let x = mirror(x, 0.0);
@@ -557,7 +698,10 @@ impl<M: Clone + 'static> Widget<M> for Segment<M> {
                 shape: Shape::Path {
                     verbs: vec![
                         PathVerb::MoveTo(Point::new(x, y)),
-                        PathVerb::LineTo(Point::new(x + MENU_CHEVRON.width / 2.0, y + MENU_CHEVRON.height)),
+                        PathVerb::LineTo(Point::new(
+                            x + MENU_CHEVRON.width / 2.0,
+                            y + MENU_CHEVRON.height,
+                        )),
                         PathVerb::LineTo(Point::new(x + MENU_CHEVRON.width, y)),
                     ],
                     fill_rule: Default::default(),
@@ -577,6 +721,13 @@ impl<M: Clone + 'static> Widget<M> for Segment<M> {
             (None, None) => Role::Button,
         });
         cx.name(self.label.clone());
+        if let (None, Some(chosen)) = (self.menu, self.chosen) {
+            cx.value(AccessibleValue::Toggle(if chosen {
+                Checked::True
+            } else {
+                Checked::False
+            }));
+        }
         cx.states(AccessibleStates {
             disabled: !enabled,
             selected: self.chosen == Some(true),
@@ -603,9 +754,15 @@ fn chevron(area: Rect, right: bool) -> Shape {
     };
     Shape::Path {
         verbs: vec![
-            PathVerb::MoveTo(Point::new(centre.x - reach, centre.y - CHEVRON.height / 2.0)),
+            PathVerb::MoveTo(Point::new(
+                centre.x - reach,
+                centre.y - CHEVRON.height / 2.0,
+            )),
             PathVerb::LineTo(Point::new(centre.x + reach, centre.y)),
-            PathVerb::LineTo(Point::new(centre.x - reach, centre.y + CHEVRON.height / 2.0)),
+            PathVerb::LineTo(Point::new(
+                centre.x - reach,
+                centre.y + CHEVRON.height / 2.0,
+            )),
         ],
         fill_rule: Default::default(),
     }
@@ -655,8 +812,14 @@ impl ToolbarTitle {
     }
 }
 
+/// The width the title's text takes at most, from its last measure, for what assistive technology shows of it.
+#[derive(Default)]
+pub struct TitleState {
+    text_width: std::cell::Cell<f64>,
+}
+
 impl<M: 'static> Widget<M> for ToolbarTitle {
-    type State = ();
+    type State = TitleState;
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
@@ -667,25 +830,31 @@ impl<M: 'static> Widget<M> for ToolbarTitle {
         }
     }
 
-    fn state(&self) {}
+    fn state(&self) -> TitleState {
+        TitleState::default()
+    }
 
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
+    fn update(&self, old: &Self, _: &mut TitleState) -> Change {
         if self.text != old.text {
-            Change::Paint
+            Change::Layout
         } else {
             Change::None
         }
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, state: &TitleState, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        let width = self
+            .laid_out(cx.env(), f64::INFINITY)
+            .map_or(0.0, |layout| layout.size().width);
+        state.text_width.set(width);
         no_measure()
     }
 
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+    fn event(&self, _: &mut TitleState, _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
         Propagation::Continue
     }
 
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+    fn paint(&self, _: &TitleState, cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let inset = TOOLBAR_TITLE_GAP - TOOLBAR_GAP;
         let width = (size.width - inset).max(0.0);
@@ -709,8 +878,20 @@ impl<M: 'static> Widget<M> for ToolbarTitle {
         look::glyphs(cx, &layout, Point::new(x, y), Some(color));
     }
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, state: &TitleState, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::StaticText);
         cx.name(self.text.clone());
+        // the text, not the room after it, which is the toolbar's empty space
+        let size = cx.size();
+        let inset = TOOLBAR_TITLE_GAP - TOOLBAR_GAP;
+        let width = state.text_width.get().min((size.width - inset).max(0.0));
+        if width > 0.0 {
+            let x = if cx.direction() == LayoutDirection::Rtl {
+                size.width - inset - width
+            } else {
+                inset
+            };
+            cx.bounds(Rect::new(x, 0.0, width, size.height));
+        }
     }
 }

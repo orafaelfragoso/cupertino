@@ -166,7 +166,11 @@ impl<M: 'static> Widget<M> for PanelBody<M> {
         let size = cx.size();
         let radius = nested_radius(WINDOW_CORNER_RADIUS, SIDEBAR_PANEL_INSET);
         // a panel that meets the window's edges takes the window's corners, which the compositor cuts
-        let radius = if SIDEBAR_PANEL_INSET > 0.0 { radius } else { 0.0 };
+        let radius = if SIDEBAR_PANEL_INSET > 0.0 {
+            radius
+        } else {
+            0.0
+        };
         paint_glass(
             cx,
             GlassRole::SidebarPanel,

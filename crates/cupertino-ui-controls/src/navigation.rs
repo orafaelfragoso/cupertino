@@ -13,7 +13,6 @@ use cupertino_ui_platform::{Keysym, Mods};
 const BRACKET_LEFT: Keysym = Keysym(0x5b);
 const BRACKET_RIGHT: Keysym = Keysym(0x5d);
 
-
 fn no_measure() -> Measured {
     Measured {
         size: Size::ZERO,

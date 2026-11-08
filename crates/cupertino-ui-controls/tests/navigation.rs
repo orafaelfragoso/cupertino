@@ -91,8 +91,8 @@ fn a_toolbar_of_back_and_forward_buttons_disabled_at_the_ends_of_the_history() {
     assert_eq!(toolbar.children.len(), 2);
     assert!(!button(&h, "Back").states.disabled);
     let back = button(&h, "Back").bounds;
-    assert_eq!((back.width(), back.height()), (26.5, 28.0));
-    h.click(Point::new(back.min_x() + 13.0, back.min_y() + 14.0));
+    assert_eq!((back.width(), back.height()), (36.5, 36.0));
+    h.click(Point::new(back.min_x() + 18.0, back.min_y() + 18.0));
     assert_eq!(*h.model(), 0);
     assert!(button(&h, "Back").states.disabled);
     assert!(!button(&h, "Back").states.focusable);

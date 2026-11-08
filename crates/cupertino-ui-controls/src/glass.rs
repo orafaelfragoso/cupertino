@@ -85,7 +85,8 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
 fn paint_body(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
     let theme = &cx.env().theme;
     let dark = theme.preferences.appearance.is_dark();
-    let opaque = theme.preferences.reduce_transparency || theme.preferences.appearance.is_high_contrast();
+    let opaque =
+        theme.preferences.reduce_transparency || theme.preferences.appearance.is_high_contrast();
     let scale = cx.env().scale.max(1.0);
     let shape = Shape::RoundedRect { rect, radius };
     if !dark {

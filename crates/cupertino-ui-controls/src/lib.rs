@@ -43,20 +43,20 @@ mod window_group;
 pub use editor::EditorState;
 pub use field::{FieldState, SecureState};
 pub use glass::{nested_radius, paint_glass, GlassMaterial, GlassRole};
-pub use shell::{SidebarWindow, SIDEBAR_PANEL_INSET, SIDEBAR_TOP, WINDOW_CORNER_RADIUS};
-pub use toolbar::{
-    ToolbarButton, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarTitle,
-    TOOLBAR_CHOICE_INSET, TOOLBAR_CHOICE_SEGMENT, TOOLBAR_CONTROL, TOOLBAR_DIVIDER, TOOLBAR_EDGE,
-    TOOLBAR_GAP, TOOLBAR_MENU_BUTTON, TOOLBAR_ROW, TOOLBAR_SEGMENT, TOOLBAR_SYMBOL,
-    TOOLBAR_TITLE_GAP, TOOLBAR_TITLE_SIZE, TOOLBAR_TITLE_WEIGHT,
-};
 pub use list::ListState;
 pub use press::Press;
 pub use scroll::{BarState, ViewportState};
+pub use shell::{SidebarWindow, SIDEBAR_PANEL_INSET, SIDEBAR_TOP, WINDOW_CORNER_RADIUS};
 pub use slider::SliderState;
 pub use split::DividerState;
 pub use stepper::StepperState;
 pub use text_box::TextBoxState;
+pub use toolbar::{
+    ToolbarButton, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarSearch,
+    ToolbarTitle, TOOLBAR_CHOICE_INSET, TOOLBAR_CHOICE_SEGMENT, TOOLBAR_CONTROL, TOOLBAR_DIVIDER,
+    TOOLBAR_EDGE, TOOLBAR_GAP, TOOLBAR_MENU_BUTTON, TOOLBAR_ROW, TOOLBAR_SEGMENT, TOOLBAR_SYMBOL,
+    TOOLBAR_TITLE_GAP, TOOLBAR_TITLE_SIZE, TOOLBAR_TITLE_WEIGHT,
+};
 pub use tooltip::{TooltipChange, TooltipState};
 
 pub use cupertino_ui_core::SortOrder;

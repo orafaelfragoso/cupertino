@@ -13,6 +13,7 @@ use cupertino_server::backend::headless;
 use cupertino_server::cli::start_shell_supervision;
 use cupertino_server::config::{Config, ShellProcess};
 use cupertino_server::Cupertino;
+use cupertino_test_bus::PrivateBus;
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::input::keyboard::Keycode;
@@ -133,11 +134,14 @@ fn files_binary() -> PathBuf {
 }
 
 /// The file manager with `home` as its home folder and its configuration, data and system data directories inside it,
-/// so that its sidebar does not depend on the host: `data_dirs` stands for `$XDG_DATA_DIRS`.
-fn files_process(home: &Path, data_dirs: &Path) -> ShellProcess {
+/// so that its sidebar does not depend on the host: `data_dirs` stands for `$XDG_DATA_DIRS`. Its session bus is the
+/// test's own `bus`: Files serves one process per session bus name, and another test's Files on a shared bus would
+/// take its launch.
+fn files_process(home: &Path, data_dirs: &Path, bus: &PrivateBus) -> ShellProcess {
     let env = |name: &str, value: &Path| format!("{name}={}", value.display());
     let command = vec![
         "env".into(),
+        format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
         env("HOME", home),
         env("XDG_CONFIG_HOME", &home.join(".config")),
         env("XDG_DATA_HOME", &home.join(".local/share")),
@@ -225,7 +229,10 @@ fn the_file_manager_window_maps_lists_refreshes_navigates_and_closes() {
     // default Favorites that exist here,: no Desktop folder, Documents not assigned in user-dirs.dirs)
     let data_dirs = scratch.0.join("share");
     std::fs::create_dir_all(data_dirs.join("applications")).unwrap();
-    let Some(mut server) = Server::start(vec![files_process(&home, &data_dirs)]) else {
+    let Some(bus) = PrivateBus::start() else {
+        return;
+    };
+    let Some(mut server) = Server::start(vec![files_process(&home, &data_dirs, &bus)]) else {
         return;
     };
 

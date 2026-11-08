@@ -17,6 +17,7 @@ use cupertino_server::config::{Config, ShellProcess};
 use cupertino_server::drag_return::{Back, DRAG_FADE_DURATION, DRAG_RETURN_DURATION};
 use cupertino_server::events::BTN_LEFT;
 use cupertino_server::Cupertino;
+use cupertino_test_bus::PrivateBus;
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::backend::renderer::element::Element;
 use smithay::input::keyboard::Keycode;
@@ -974,14 +975,20 @@ impl Drop for Scratch {
 
 /// The file manager, built before the test runner starts, with `home` as its home folder and its configuration and
 /// data directories inside it, so that its sidebar does not depend on the host: `data_dirs` stands for
-/// `$XDG_DATA_DIRS`.
-fn files_process(home: &std::path::Path, data_dirs: &std::path::Path) -> ShellProcess {
+/// `$XDG_DATA_DIRS`. Its session bus is the test's own `bus`: Files serves one process per session bus name, and
+/// another test's Files on a shared bus would take its launch.
+fn files_process(
+    home: &std::path::Path,
+    data_dirs: &std::path::Path,
+    bus: &PrivateBus,
+) -> ShellProcess {
     let env = |name: &str, value: &std::path::Path| format!("{name}={}", value.display());
     let binary = common::fixtures::artifact("cupertino-files", "bin", "cupertino-files");
     ShellProcess {
         name: "cupertino-files".into(),
         command: vec![
             "env".into(),
+            format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
             env("HOME", home),
             env("XDG_CONFIG_HOME", &home.join(".config")),
             env("XDG_DATA_HOME", &home.join(".local/share")),
@@ -1008,7 +1015,10 @@ fn a_file_dragged_from_another_client_into_the_file_manager_moves_into_its_folde
     }
     let dragged = outside.join("dropped.txt");
     std::fs::write(&dragged, b"dropped").unwrap();
-    let Some(mut h) = Harness::running(1.0, vec![files_process(&home, &data_dirs)]) else {
+    let Some(bus) = PrivateBus::start() else {
+        return;
+    };
+    let Some(mut h) = Harness::running(1.0, vec![files_process(&home, &data_dirs, &bus)]) else {
         return;
     };
     h.wait_until("the file manager's window", |s| {

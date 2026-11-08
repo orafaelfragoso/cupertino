@@ -24,13 +24,15 @@ pub(crate) struct PackIcons {
     application: Application,
 }
 
-/// The pieces [`PackIcons::application`] works from.
+/// The pieces [`PackIcons::application`] works from. Nothing is read until an alert first asks for the icon.
 struct Application {
     /// The desktop entry id: the running program's file name.
     entry: Option<String>,
     dirs: Vec<PathBuf>,
     icon: OnceLock<Option<String>>,
-    themes: Option<Mutex<ThemeIcons>>,
+    /// The packs the host's themes are searched with, the first time an icon is not in the packs.
+    assets: Assets,
+    themes: OnceLock<Mutex<ThemeIcons>>,
     drawn: Mutex<HashMap<u32, Option<IconImage>>>,
 }
 
@@ -48,7 +50,8 @@ impl PackIcons {
                 entry,
                 dirs: cupertino_apps::entry::xdg_application_dirs(),
                 icon: OnceLock::new(),
-                themes: Some(Mutex::new(ThemeIcons::new(assets))),
+                assets: assets.clone(),
+                themes: OnceLock::new(),
                 drawn: Mutex::new(HashMap::new()),
             },
         )
@@ -96,8 +99,11 @@ impl PackIcons {
                 return Some(image_of(p.width(), p.height(), p.data()));
             }
         }
-        if let (Some(name), Some(themes)) = (icon, &self.application.themes) {
-            let found = themes
+        if let Some(name) = icon {
+            let app = &self.application;
+            let found = app
+                .themes
+                .get_or_init(|| Mutex::new(ThemeIcons::new(&app.assets)))
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .load(name, px);
@@ -203,20 +209,32 @@ mod tests {
     /// Icons of the built-in packs for an application whose desktop entry id is `entry`, looked up under `dirs`.
     fn with_entry(entry: Option<&str>, dirs: Vec<PathBuf>) -> PackIcons {
         let assets = Assets::builtin();
+        let themes = OnceLock::new();
+        let _ = themes.set(Mutex::new(ThemeIcons::with_roots(
+            &assets,
+            Vec::new(),
+            Vec::new(),
+        )));
         PackIcons::of(
             SystemIcons::without_host(&assets),
             Application {
                 entry: entry.map(str::to_owned),
                 dirs,
                 icon: OnceLock::new(),
-                themes: Some(Mutex::new(ThemeIcons::with_roots(
-                    &assets,
-                    Vec::new(),
-                    Vec::new(),
-                ))),
+                assets: assets.clone(),
+                themes,
                 drawn: Mutex::new(HashMap::new()),
             },
         )
+    }
+
+    /// Starting an application reads no icon theme and no desktop entry: only an alert's first icon does.
+    #[test]
+    fn the_application_icon_is_looked_up_only_when_first_asked_for() {
+        let icons = PackIcons::new(&Assets::builtin());
+        icons.symbol("symbol.house", 16, BLACK, false);
+        assert!(icons.application.themes.get().is_none());
+        assert!(icons.application.icon.get().is_none());
     }
 
     #[test]

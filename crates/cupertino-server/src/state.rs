@@ -1388,6 +1388,9 @@ impl Cupertino {
         );
         params.parent = parent;
         params.modal = self.windows[idx].modal;
+        if self.windows[idx].server_side {
+            params.sheet_top = self.decor.sheet_top(self.windows[idx].titlebar);
+        }
         // the model turns a modal child into a sheet and places dialogs
         params.kind = cupertino_wm::window_kind(params.modal, false);
         params.output = Some(output);

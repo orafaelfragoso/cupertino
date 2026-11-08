@@ -77,6 +77,9 @@ pub struct MapParams {
     pub kind: WindowKind,
     /// The controls its application disabled before the first commit.
     pub disabled: DisabledControls,
+    /// How far below the top of this window's frame its sheets hang: the bottom of the row its title or toolbar is in.
+    /// `None` is a title bar of [`crate::SnapConfig::titlebar_height`].
+    pub sheet_top: Option<f64>,
 }
 
 impl MapParams {
@@ -94,6 +97,7 @@ impl MapParams {
             activation: Activation::Always,
             kind: WindowKind::Plain,
             disabled: DisabledControls::default(),
+            sheet_top: None,
         }
     }
 }

@@ -95,6 +95,8 @@ pub struct Window {
     pub level: WindowLevel,
     pub lifecycle: Lifecycle,
     pub disabled: DisabledControls,
+    /// How far below the top of the frame the window's sheets hang ([`crate::MapParams::sheet_top`]).
+    pub sheet_top: Option<f64>,
 }
 
 impl Window {

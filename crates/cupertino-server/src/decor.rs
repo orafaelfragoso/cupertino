@@ -218,6 +218,14 @@ impl Decor {
         }
     }
 
+    /// How far below the top of the frame of a window of `style` its sheets hang, when not under a title bar: a
+    /// window whose client draws its toolbar row has them hang below that row.
+    pub fn sheet_top(&self, style: TitlebarStyle) -> Option<f64> {
+        style
+            .client_drawn()
+            .then(|| self.for_style(style).config.metrics.titlebar_height(style))
+    }
+
     fn for_style_mut(&mut self, style: TitlebarStyle) -> &mut Decorations {
         match style {
             TitlebarStyle::Standard => &mut self.deco,
@@ -583,6 +591,19 @@ mod tests {
                 "{style:?}: the row lies over the surface"
             );
         }
+    }
+
+    #[test]
+    fn sheets_hang_below_the_row_the_client_draws() {
+        let d = decor(Appearance::Dark);
+        assert_eq!(
+            d.sheet_top(TitlebarStyle::Standard),
+            None,
+            "under the title bar"
+        );
+        assert_eq!(d.sheet_top(TitlebarStyle::Unified), Some(52.0));
+        assert_eq!(d.sheet_top(TitlebarStyle::UnifiedCompact), Some(38.0));
+        assert_eq!(d.sheet_top(TitlebarStyle::Sidebar), Some(52.0));
     }
 
     #[test]

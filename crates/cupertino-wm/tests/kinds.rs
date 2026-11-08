@@ -58,6 +58,31 @@ fn a_modal_child_becomes_a_sheet_that_slides_down_from_the_title_bar() {
 }
 
 #[test]
+fn a_sheet_hangs_below_the_toolbar_row_its_parent_names() {
+    let mut h = H::new();
+    let mut p = MapParams::new(WindowId(7), "a", Rect::new(200.0, 100.0, 600.0, 400.0));
+    p.sheet_top = Some(52.0);
+    h.cmd(Command::Map(p));
+    let parent = WindowId(7);
+    h.settle();
+    let sheet = map_with(
+        &mut h,
+        50,
+        "a",
+        (300.0, 200.0),
+        Some(parent),
+        window_kind(true, false),
+        true,
+    );
+    assert_eq!(kind(&h, sheet), WindowKind::Sheet);
+    assert_eq!(
+        h.wm.window(sheet).unwrap().geometry(),
+        Rect::new(350.0, 152.0, 300.0, 200.0),
+        "below the parent's 52 pt row, not a 32 pt title bar"
+    );
+}
+
+#[test]
 fn without_sheets_a_modal_child_keeps_the_app_modal_transforms_and_centres_on_its_parent() {
     let mut cfg = WmConfig::default();
     cfg.focus.place_modal_children_as_sheets = false;

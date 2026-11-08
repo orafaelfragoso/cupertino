@@ -174,12 +174,18 @@ fn the_search_field_s_animation_repaints_only_the_toolbar() {
     run.frames(1000, 16);
     let damage = damage_since(&run, before);
     assert!(presented(&run) > before + 1, "the field animated open");
+    // the soft shade under the toolbar's glass in the light appearance reaches a few points past the row
+    const SHADE: f64 = 6.0;
     assert!(
         damage
             .iter()
-            .all(|r| f64::from(r.y + r.height) <= listing.min_y().ceil()),
+            .all(|r| f64::from(r.y + r.height) <= (listing.min_y() + SHADE).ceil()),
         "above the listing: {damage:?} reaches below {}",
         listing.min_y()
+    );
+    assert!(
+        damage.iter().all(|r| f64::from(r.y) < listing.min_y()),
+        "nothing of the listing itself: {damage:?}"
     );
 }
 

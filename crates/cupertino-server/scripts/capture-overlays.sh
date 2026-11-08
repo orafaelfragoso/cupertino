@@ -41,16 +41,12 @@ dbus-daemon --session --nofork --print-address=3 3>"$SCRATCH/bus.addr" >/dev/nul
 sleep 0.5
 export DBUS_SESSION_BUS_ADDRESS=$(cat "$SCRATCH/bus.addr")
 
-echo "launcher-open.png (through the bus with gdbus)"
-# the panel comes from the launcher process, started and supervised by the server
+echo "launcher-open.png (the shortcut, through the bus)"
+# the panel comes from the launcher process, started and supervised by the server; the launcher answers only the
+# server, so the shortcut opens it rather than a call from this script
 printf '{"shell": [%s, {"name": "launcher", "command": ["%s", "--no-files"]}]}' "$DOCK_ENTRY" "$LAUNCHER_BIN" > "$SCRATCH/launcher.json"
-CUPERTINO_SERVER_CONFIG="$SCRATCH/launcher.json" "$BIN" "${COMMON[@]}" --dbus --type 3.4:te \
-    --screenshot "$OUT/launcher-open.png" --screenshot-after 4.5 --exit-after-screenshot >/dev/null 2>&1 &
-COMP=$!
-sleep 2.5
-gdbus call --session --dest org.cupertino.Launcher1 --object-path /org/cupertino/Launcher1 \
-    --method org.cupertino.Launcher1.Toggle >/dev/null
-wait $COMP
+CUPERTINO_SERVER_CONFIG="$SCRATCH/launcher.json" "$BIN" "${COMMON[@]}" --dbus --key 2.5:Super+space --type 3.4:te \
+    --screenshot "$OUT/launcher-open.png" --screenshot-after 4.5 --exit-after-screenshot >/dev/null 2>&1
 
 echo "input-switcher.png"
 CUPERTINO_SERVER_CONFIG="$SCRATCH/dock.json" CUPERTINO_NO_DBUS=1 "$BIN" "${COMMON[@]}" --hold-modifiers --key 1:Ctrl+space --key 1.4:Ctrl+space \

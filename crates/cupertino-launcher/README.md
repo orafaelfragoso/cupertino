@@ -79,9 +79,8 @@ failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`). 
 |---|---|
 | `Toggle | Shows the panel or hides it. The server calls it for `Super+Space`. Only the server (the process's parent) and the launcher itself may: any other caller is refused with `org.cupertino.Error.UntrustedCaller` (`AnonymousCaller`, `FlatpakCaller`, `SnapCaller`), `cupertino_peer::check_call`. |
 
-```
-gdbus call --session --dest org.cupertino.Launcher1 --object-path /org/cupertino/Launcher1 --method org.cupertino.Launcher1.Toggle
-```
+A call from a shell (`gdbus call ... --method org.cupertino.Launcher1.Toggle`) is refused for that reason; press
+`Super+Space`, or pass `--key 2:Super+space` to a scripted server (`cupertino-server/scripts/capture-overlays.sh`).
 
 ## Icons
 

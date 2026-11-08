@@ -1,10 +1,9 @@
-//! The standard places of the sidebar: Recents, Applications, Desktop, Documents and Downloads under
-//! "Favorites", the design's default Favorites in its order without its nearby-sharing item,
-//! which has no counterpart here; the computer (the file system root, under the machine's name)
-//! and the trash under "Locations" (approximate, a screenshot). The home folder and the
-//! other user directories are not in the sidebar but keep their folder icons ([`SessionPlaces`]).
+//! The standard places of the sidebar: the home folder (under its own name), Applications, Desktop, Documents and
+//! Downloads under "Favorites", the design's default Favorites in its order without its nearby-sharing item, which has
+//! no counterpart here; the computer (the file system root, under the machine's name) and the trash under "Locations".
+//! The other user directories are not in the sidebar but keep their folder icons ([`SessionPlaces`]). Recents, the
+//! virtual folder of [`crate::recents`], is not a row: the Go menu reaches it ([`recents_place`]).
 //!
-//! * Recents is the virtual folder of [`crate::recents`].
 //! * Applications is the first `applications` folder of `$XDG_DATA_DIRS` (XDG Base
 //!   Directory and Desktop Entry standards: where the system's desktop entries are installed),
 //!   a real folder rather than a merged virtual one (approximate: the design lists application
@@ -157,6 +156,9 @@ impl Place {
 
 /// What a window showing `dir` is titled: the place's name for the trash and Recents, else the folder's name.
 pub fn window_title(dir: &Path, places: &[Place]) -> String {
+    if dir == crate::recents::location() {
+        return recents_place().name;
+    }
     if let Some(place) = places
         .iter()
         .find(|p| matches!(p.kind, PlaceKind::Trash | PlaceKind::Recents) && p.path == dir)
@@ -286,6 +288,16 @@ fn user_folders(
     out
 }
 
+/// The Recents folder as a place: what the Go menu opens and what a window showing it is titled.
+pub fn recents_place() -> Place {
+    Place {
+        name: "Recents".into(),
+        path: crate::recents::location().to_path_buf(),
+        group: PlaceGroup::Favorites,
+        kind: PlaceKind::Recents,
+    }
+}
+
 /// The user directories the default Favorites list.
 const FAVORITE_USER_DIRS: [PlaceKind; 3] = [
     PlaceKind::Desktop,
@@ -294,9 +306,9 @@ const FAVORITE_USER_DIRS: [PlaceKind; 3] = [
 ];
 
 /// The places of a session with this `home`, user directory assignments, home trash folder
-/// (`<trash>/files`), applications folder and computer name. A user directory that is disabled or does
-/// not exist is left out, and so is the trash before anything was ever trashed, and Applications when
-/// the system has no such folder.
+/// (`<trash>/files`), applications folder and computer name: the home folder first, under its folder's name (the
+/// user's), as the head of the Favorites. A user directory that is disabled or does not exist is left out, and so is
+/// the trash before anything was ever trashed, and Applications when the system has no such folder.
 pub fn standard_places(
     home: &Path,
     user_dirs: &[(String, PathBuf)],
@@ -305,10 +317,13 @@ pub fn standard_places(
     computer: &str,
 ) -> Vec<Place> {
     let mut places = vec![Place {
-        name: "Recents".into(),
-        path: crate::recents::location().to_path_buf(),
+        name: home.file_name().map_or_else(
+            || home.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        ),
+        path: home.to_path_buf(),
         group: PlaceGroup::Favorites,
-        kind: PlaceKind::Recents,
+        kind: PlaceKind::Home,
     }];
     if let Some(path) = applications {
         places.push(Place {
@@ -461,21 +476,26 @@ mod tests {
         let places = standard_places(home.path(), &user_dirs, &trash, None, "ada's laptop");
         let rows: Vec<(&str, PlaceGroup)> =
             places.iter().map(|p| (p.name.as_str(), p.group)).collect();
+        let name = home.path().file_name().unwrap().to_str().unwrap();
         assert_eq!(
             rows,
             [
-                ("Recents", PlaceGroup::Favorites),
+                (name, PlaceGroup::Favorites),
                 ("Desktop", PlaceGroup::Favorites),
                 ("Downloads", PlaceGroup::Favorites),
                 ("ada's laptop", PlaceGroup::Locations)
             ]
         );
-        assert_eq!(places[0].path, PathBuf::from("recent:///"));
+        assert_eq!(
+            places[0].path,
+            home.path(),
+            "the home folder heads the Favorites"
+        );
         assert_eq!(places[2].path, home.path().join("Eingang"));
         assert_eq!(
             places.iter().map(|p| p.kind.symbol()).collect::<Vec<_>>(),
             [
-                "symbol.recents",
+                "symbol.house",
                 "symbol.desktop",
                 "symbol.download",
                 "symbol.computer"
@@ -525,6 +545,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let trash = home.path().join(".local/share/Trash/files");
         let mut places = standard_places(home.path(), &[], &trash, None, "box");
+        let name = home.path().file_name().unwrap().to_str().unwrap();
         let standard = places.len();
         places.push(Place::removable("Card", None, false, Medium::Card));
         assert_eq!(follow_trash(&mut places, standard, &trash), standard);
@@ -534,7 +555,7 @@ mod tests {
         assert_eq!(with_trash, standard + 1);
         assert_eq!(
             places.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
-            ["Recents", "box", "Trash", "Card"]
+            [name, "box", "Trash", "Card"]
         );
         assert_eq!(places[2].path, trash);
         assert_eq!(follow_trash(&mut places, with_trash, &trash), with_trash);
@@ -543,7 +564,7 @@ mod tests {
         assert_eq!(follow_trash(&mut places, with_trash, &trash), standard);
         assert_eq!(
             places.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
-            ["Recents", "box", "Card"]
+            [name, "box", "Card"]
         );
     }
 

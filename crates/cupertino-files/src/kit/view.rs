@@ -10,8 +10,8 @@ use cupertino_kit::controls::{
     Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton, DialogKind, Icon,
     IconDirection, Image, ImageFit, ImageSource, MenuAnchor, Modal, NavigationStack, OutlineTable,
     Progress, ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
-    SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
-    TreeItem,
+    SidebarLook, SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField,
+    TextRole, TreeItem,
 };
 use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground};
 use cupertino_kit::geometry::{Insets, Size};
@@ -54,6 +54,8 @@ const ROW_HEIGHT: f64 = ROW_ICON + list_view::ROW_PADDING;
 const SHOWN_MARGIN: f64 = 200.0;
 /// The symbol of a folder of the path bar that is not a place of the sidebar.
 const FOLDER_SYMBOL: &str = "symbol.folder";
+/// The heading of the sidebar's tags.
+const TAGS_TITLE: &str = "Tags";
 /// The key of the field that edits an item's name in its row of window `id`; one per window, as focus goes to the
 /// first window holding the key.
 pub(super) fn name_field_key(id: u64) -> Key {
@@ -182,7 +184,7 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
             (0..session.places.len()).filter(move |&i| session.places[i].group == group)
         })
         .collect();
-    let sections = groups
+    let mut sections: Vec<SidebarSection> = groups
         .into_iter()
         .map(|group| SidebarSection {
             title: Some(group.title().into()),
@@ -195,6 +197,18 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         })
         .filter(|s: &SidebarSection| !s.items.is_empty())
         .collect();
+    // the Favorites' symbols are the accent, the Locations' the secondary label colour
+    let accent = sections
+        .iter()
+        .map(|s| s.title.as_deref() == Some(PlaceGroup::Favorites.title()))
+        .collect();
+    // the Tags heading, once an item listed carries a tag; it lists no rows, as a tag is not a place to go yet
+    if session.tagged.get() {
+        sections.push(SidebarSection {
+            title: Some(TAGS_TITLE.into()),
+            items: Vec::new(),
+        });
+    }
     // a place about to spring open under a drag flashes as the selected one
     let flashing = win.springing.flashing().map(PathBuf::as_path);
     let selected = shown
@@ -205,7 +219,7 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 .iter()
                 .position(|&i| session.places[i].folder() == Some(dir))
         });
-    let sidebar = Element::from(Sidebar {
+    let sidebar = Sidebar {
         label: "Sidebar".into(),
         sections,
         selected,
@@ -213,7 +227,8 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         on_scroll: send(id, Event::SidebarScroll),
         on_select: Some(send(id, move |row| Event::Place(shown[row]))),
         on_accessory: Some(send(id, Event::Accessory)),
-    })
+    }
+    .with_look(SidebarLook::Neutral { accent })
     .key("places");
     drops::sidebar(session, id, sidebar)
 }
@@ -800,12 +815,17 @@ fn path_bar(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message>
         .into_iter()
         .enumerate()
         .flat_map(|(i, (path, name))| {
+            let recents = path == crate::recents::location();
             let place = session.places.iter().find(|p| p.path == path);
-            let symbol = place.map_or(FOLDER_SYMBOL, |p| p.kind.symbol());
+            let symbol = match place {
+                _ if recents => PlaceKind::Recents.symbol(),
+                Some(p) => p.kind.symbol(),
+                None => FOLDER_SYMBOL,
+            };
             let segment = Element::new(PathSegment {
                 name,
                 symbol: symbol.into(),
-                accent: place.is_some_and(|p| p.kind == PlaceKind::Recents),
+                accent: recents,
                 // a folder about to spring open under a drag flashes as the folder shown is drawn
                 current: i == last || flashing == Some(&path),
                 on_press: Message::Window(id, Event::PathSegment(path)),

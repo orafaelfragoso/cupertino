@@ -311,6 +311,8 @@ struct Session {
     clock: fn() -> SystemTime,
     /// The bus name later launches hand their requests to, until Files exits.
     instance: Option<Service>,
+    /// An item a window listed carries a tag: the sidebar shows its Tags heading from then on.
+    tagged: std::cell::Cell<bool>,
 }
 
 /// One browser window.
@@ -596,6 +598,7 @@ impl Application for Files {
                 dragged: Vec::new(),
                 clock: start.clock,
                 instance: start.instance,
+                tagged: std::cell::Cell::new(false),
             },
         };
         let first = model.next_window;
@@ -1013,6 +1016,11 @@ impl Model {
                 if polled.changed {
                     window.now = (window.clock)();
                     window.read_available();
+                    if !session.tagged.get()
+                        && window.browser.entries().iter().any(|e| !e.tags.is_empty())
+                    {
+                        session.tagged.set(true);
+                    }
                 }
                 window.spring_settle();
                 let mut commands = window.listed(id);

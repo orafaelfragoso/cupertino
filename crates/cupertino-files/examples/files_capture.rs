@@ -168,13 +168,13 @@ impl Capture {
             .iter()
             .map(|(key, name)| (key.to_string(), home.join(name)))
             .collect();
-        let places = standard_places(
-            &home,
-            &user_dirs,
-            &root.path().join("no-trash/files"),
-            None,
-            "cupertino",
-        );
+        // an applications folder and a trash that holds something, so the sidebar lists both
+        let applications = root.path().join("share/applications");
+        let trash = root.path().join("Trash/files");
+        for dir in [&applications, &trash] {
+            std::fs::create_dir_all(dir).map_err(io)?;
+        }
+        let places = standard_places(&home, &user_dirs, &trash, Some(&applications), "cupertino");
         Ok(Capture { home, places, root })
     }
 
@@ -212,7 +212,7 @@ impl Capture {
             None,
         )
         .map_err(|e| format!("listing {}: {e}", self.home.display()))?
-        .with_trash(Trash::with_home(self.root.path().join("no-trash")))
+        .with_trash(Trash::with_home(self.root.path().join("Trash")))
         .with_home(self.home.clone())
         .with_view(view)
         .with_file_icons(icons)

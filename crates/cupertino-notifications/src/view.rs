@@ -56,7 +56,9 @@ use cupertino_theme::metrics::{alignment_height, Control};
 use crate::center::{
     BannerMeasure, ClearScope, NotificationCenter, StackLayout, SwipeConfig, SwipeOutcome,
 };
-use crate::notification::{Notification, Urgency};
+use crate::notification::{
+    cap, Notification, Urgency, ELLIPSIS, MAX_APP_NAME_CHARS, MAX_SUMMARY_CHARS,
+};
 use crate::stack::GroupStack;
 
 /// The `app_id` of every window of the process.
@@ -117,8 +119,6 @@ const SHADOW_BLUR: f64 = 8.0;
 const SHADOW_ALPHA: f32 = 0.2;
 /// How far beyond a card its shadow can reach: the area the shadow is drawn in.
 const SHADOW_REACH: f64 = 4.0 * SHADOW_BLUR;
-/// What ends a line of text that is cut.
-const ELLIPSIS: char = '\u{2026}';
 
 const RETURN: Keysym = Keysym(0xff0d);
 const KEYPAD_ENTER: Keysym = Keysym(0xff8d);
@@ -407,7 +407,7 @@ impl CardMetrics {
             column
         };
         let summary = self.fit(
-            &plain(&n.summary, FontWeight::SEMIBOLD),
+            &plain(&cap(&n.summary, MAX_SUMMARY_CHARS), FontWeight::SEMIBOLD),
             role,
             SUMMARY_LINES,
             summary_width,
@@ -672,7 +672,11 @@ fn window<M: Clone + 'static>(key: WindowKey, spec: WindowSpec, content: Element
 
 /// What assistive technology calls a card.
 pub fn accessible_name(n: &Notification) -> String {
-    match (n.app_name.trim(), n.summary.trim()) {
+    let (app, summary) = (
+        cap(&n.app_name, MAX_APP_NAME_CHARS),
+        cap(&n.summary, MAX_SUMMARY_CHARS),
+    );
+    match (app.trim(), summary.trim()) {
         ("", summary) => summary.to_owned(),
         (app, "") => app.to_owned(),
         (app, summary) => format!("{app}: {summary}"),
@@ -684,7 +688,10 @@ pub fn accessible_name(n: &Notification) -> String {
 /// Lunch, Are you free at noon?"). Its buttons are its children, with names of their own.
 pub fn banner_speech(n: &Notification, layout: &CardLayout) -> String {
     let flat = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let head = match (flat(&n.app_name), flat(&layout.summary.text)) {
+    let head = match (
+        flat(&cap(&n.app_name, MAX_APP_NAME_CHARS)),
+        flat(&layout.summary.text),
+    ) {
         (app, summary) if app.is_empty() => summary,
         (app, summary) if summary.is_empty() => app,
         (app, summary) => format!("{app}: {summary}"),
@@ -1016,7 +1023,7 @@ fn plain(text: &str, weight: FontWeight) -> AttributedText {
 }
 
 /// The body with its markup as text runs, its line breaks kept, and its links; `None` when it is empty. At most
-/// [`MAX_BODY_BYTES`] of it.
+/// [`MAX_BODY_BYTES`] of it, a longer one cut and ending in an ellipsis.
 fn body_text(n: &Notification) -> Option<BodyText> {
     let mut text = String::new();
     let mut runs = Vec::new();
@@ -1025,11 +1032,14 @@ fn body_text(n: &Notification) -> Option<BodyText> {
         let mut piece = span.text.replace("\r\n", "\n").replace('\r', "\n");
         let room = MAX_BODY_BYTES.saturating_sub(text.len());
         if piece.len() > room {
-            let mut end = room;
+            let mut end = room.saturating_sub(ELLIPSIS.len_utf8());
             while !piece.is_char_boundary(end) {
                 end -= 1;
             }
             piece.truncate(end);
+            if !piece.is_empty() {
+                piece.push(ELLIPSIS);
+            }
         }
         if piece.is_empty() {
             continue;

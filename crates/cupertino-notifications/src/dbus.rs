@@ -206,7 +206,8 @@ impl Interface {
             actions,
             expire: Expire::from_dbus(expire_timeout),
             hints: parse_hints(&hints),
-        };
+        }
+        .capped();
         let now = (self.0.clock)();
         let (id, events) = {
             let mut c = self.0.lock();

@@ -168,11 +168,34 @@ fn the_summary_wraps_to_two_lines() {
 fn a_huge_body_is_bounded_before_it_is_laid_out() {
     let body = "x".repeat(MAX_BODY_BYTES * 20) + "é";
     let n = notification("Title", &body);
-    assert_eq!(body_text(&n).unwrap().content.text.len(), MAX_BODY_BYTES);
+    let bounded = body_text(&n).unwrap().content.text;
+    assert_eq!(bounded.len(), MAX_BODY_BYTES);
+    assert!(bounded.ends_with(ELLIPSIS), "a cut body says so");
     let multibyte = "é".repeat(MAX_BODY_BYTES);
     let n = notification("Title", &multibyte);
     let bounded = body_text(&n).unwrap().content.text;
     assert!(bounded.len() <= MAX_BODY_BYTES && bounded.len() > MAX_BODY_BYTES - 2);
+    assert!(bounded.ends_with(ELLIPSIS));
+}
+
+#[test]
+fn a_long_application_name_and_summary_are_drawn_and_named_within_their_caps() {
+    use crate::notification::{MAX_APP_NAME_CHARS, MAX_SUMMARY_CHARS};
+    let m = metrics();
+    // a notification the host built itself, past the bus server's caps
+    let mut n = notification("", "");
+    n.app_name = "a".repeat(MAX_APP_NAME_CHARS * 4);
+    n.summary = "s".repeat(MAX_SUMMARY_CHARS * 4);
+    let card = m.card(&n, WIDTH, Fold::Banner);
+    assert!(card.summary.text.chars().count() <= MAX_SUMMARY_CHARS);
+    assert!(card.summary.text.ends_with(ELLIPSIS));
+    let name = accessible_name(&n);
+    let (app, summary) = name.split_once(": ").unwrap();
+    assert_eq!(app.chars().count(), MAX_APP_NAME_CHARS);
+    assert_eq!(summary.chars().count(), MAX_SUMMARY_CHARS);
+    assert!(app.ends_with(ELLIPSIS) && summary.ends_with(ELLIPSIS));
+    let speech = banner_speech(&n, &card);
+    assert!(speech.starts_with(app), "the speech names the capped application");
 }
 
 #[test]

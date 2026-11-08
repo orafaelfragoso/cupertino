@@ -52,12 +52,13 @@ fn neutral(c: Color) -> bool {
 
 impl ThemeTokens {
     /// The theme of what a window draws on glass whose face was measured as `tone`: the neutral label colours of text
-    /// and symbols take [`glass_foreground`] at their [`vibrant_level`] (a disabled label keeps its own opacity); every
-    /// other colour is unchanged.
+    /// and symbols take [`glass_foreground`] at their [`vibrant_level`] (a disabled label keeps its own opacity); a
+    /// selected label, drawn on the fill of its selection, and every other colour are unchanged.
     pub fn on_glass(&self, tone: Option<FaceTone>) -> ThemeTokens {
         let fg = glass_foreground(self.preferences.appearance.is_dark(), tone);
         let colors = self.colors.map(|role, state, c| {
-            let Some(level) = vibrant_level(role).filter(|_| neutral(c)) else {
+            // a selected label is drawn on its selection's fill, not on the glass
+            let Some(level) = vibrant_level(role).filter(|_| neutral(c) && !state.selected) else {
                 return c;
             };
             let a = if state.interaction == InteractionVariant::Disabled {
@@ -139,6 +140,19 @@ mod tests {
         assert_eq!(
             after.a, before.a,
             "a disabled label stays as dim as the theme has it"
+        );
+        // the symbol on an accent-filled switch is the selected control text; it stays as the theme has it
+        let selected = StateVariant {
+            selected: true,
+            ..StateVariant::NORMAL
+        };
+        let light = theme(Appearance::Light);
+        assert_eq!(
+            light
+                .on_glass(None)
+                .colors
+                .get(ColorRole::ControlText, selected),
+            light.colors.get(ColorRole::ControlText, selected)
         );
     }
 }

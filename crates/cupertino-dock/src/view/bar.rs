@@ -1,6 +1,7 @@
 //! The bar: one window as wide (or tall) as its edge of the output, deep enough for the magnified tiles and the
-//! bounces. A node at the bar's own rectangle asks for the menu material under it ([`PaintCx::material`]), or paints
-//! the menu's opaque fill where the session shows none; each tile is a node at the rectangle the model laid it out at,
+//! bounces. A node at the bar's own rectangle asks for the Dock's material under it ([`PaintCx::material`]: glass,
+//! and with Reduce Transparency a body in the wallpaper's colour), or paints the window's opaque fill where the session
+//! shows none; each tile is a node at the rectangle the model laid it out at,
 //! drawing its icon, and each running indicator and separator is a node of its own under the tiles, so a change
 //! repaints only the nodes it moved. The tiles are one roving group: the arrows move the keyboard focus along the bar,
 //! Return or Space activates, the Menu key or Shift+F10 opens the tile's menu, Escape gives the keyboard back.
@@ -21,8 +22,10 @@ use super::{IconSet, Input, BAR_APP_ID, BAR_TITLE};
 use crate::config::Orientation;
 use crate::tiles::TileKind;
 
-/// The surface the bar's material is: the one place to change to give the bar another material.
-pub const BAR_SURFACE: Surface = Surface::Menu;
+/// The surface the bar's material is: the one place to change to give the bar another material. The Dock's surface is
+/// glass with the bar's shape, and with Reduce Transparency a dark (or pale) body in the colour of the wallpaper under
+/// it.
+pub const BAR_SURFACE: Surface = Surface::Dock;
 
 /// Diameter of the running indicator in points.
 pub const INDICATOR: f64 = 4.0;
@@ -386,6 +389,10 @@ impl<M: Clone + 'static> Widget<M> for MarkNode {
         let all = Rect::new(0.0, 0.0, size.width, size.height);
         match self.0 {
             Mark::Indicator(_) => {
+                // in the dark the dot lightens the glass behind it, which only the compositor can read
+                if !contrast && cx.material(Surface::DockIndicator, INDICATOR / 2.0, 1.0) {
+                    return;
+                }
                 let c = if dark {
                     INDICATOR_DARK
                 } else {

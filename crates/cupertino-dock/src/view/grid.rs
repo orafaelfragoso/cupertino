@@ -1,8 +1,9 @@
-//! The application grid: one window over the output with the keyboard, drawing a floating panel on the menu material
-//! with a soft shadow. The search, the pills, the rows, the selection, the scroll and the motion are the model's
-//! ([`AppGrid`]); the parts are where [`GridLayout`] puts them, scaled about the panel's centre by the entry's and the
-//! exit's zoom, and the whole content fades with them. The rows scroll inside a clip; only the rows shown are nodes.
-//! Every application shown is a button for assistive technology, which can click it; every pill is a check box.
+//! The application grid: one window over the output with the keyboard, drawing a floating panel on the application
+//! grid's material with a soft shadow. The search, the pills, the rows, the selection, the scroll and the motion are
+//! the model's ([`AppGrid`]); the parts are where [`GridLayout`] puts them, scaled about the panel's centre by the
+//! entry's and the exit's zoom, and the whole content fades with them. The rows scroll inside a clip; only the rows
+//! shown are nodes. Every application shown is a button for assistive technology, which can click it; every pill is a
+//! check box.
 
 use cupertino_kit::core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, CommandRegistry, Element, Event,
@@ -270,8 +271,8 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
     }
 }
 
-/// The panel: its shadow, the menu material under it (or the menu's opaque fill where the session shows none) and a
-/// fine outline.
+/// The panel: its shadow, the application grid's material under it (or the window background's opaque fill where the
+/// session shows none) and a fine outline.
 struct PanelNode {
     rect: Rect,
     radius: f64,
@@ -318,7 +319,7 @@ impl<M: Clone + 'static> Widget<M> for PanelNode {
         let radius = self.radius.min(size.height / 2.0);
         let theme = cx.env().theme.clone();
         let fill = theme
-            .surface(Surface::Menu)
+            .surface(Surface::AppGrid)
             .fill
             .unwrap_or(Color::new(0.5, 0.5, 0.5, 1.0));
         let shape = Shape::RoundedRect { rect, radius };
@@ -327,7 +328,7 @@ impl<M: Clone + 'static> Widget<M> for PanelNode {
             blur: SHADOW_BLUR,
             color: Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA),
         };
-        if cx.material(Surface::Menu, radius, self.alpha) {
+        if cx.material(Surface::AppGrid, radius, self.alpha) {
             // the compositor draws the material under the panel: the shadow is drawn only outside it, from an opaque
             // copy of its shape the clip hides
             let mut ring = rounded_path(rect.outset(SHADOW_REACH), 0.0);

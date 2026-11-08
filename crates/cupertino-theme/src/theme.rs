@@ -3,8 +3,9 @@ use crate::appearance::Appearance;
 use crate::error::Result;
 use crate::metrics::{ShapeTokens, WindowShadowPreset};
 use crate::recipe::{
-    app_grid_background, switcher_panel, MaterialLibrary, MaterialOptions, Recipe,
-    APP_GRID_MATERIAL, SWITCHER_MATERIAL,
+    app_grid_background, dock_reduced, running_indicator, switcher_panel, window_background,
+    MaterialLibrary, MaterialOptions, Recipe, APP_GRID_MATERIAL, DOCK_MATERIAL,
+    RUNNING_INDICATOR_MATERIAL, SWITCHER_MATERIAL, WINDOW_BACKGROUND_MATERIAL,
 };
 use crate::tokens::DesignTokens;
 use std::path::{Path, PathBuf};
@@ -46,6 +47,9 @@ pub struct Theme {
     pub window_shadow: WindowShadowPreset,
 }
 
+/// The colour token of a window's background, which the window background material draws.
+const WINDOW_BACKGROUND_TOKEN: &str = "window-background";
+
 impl Theme {
     /// Load from [`spec_dir`].
     pub fn load() -> Result<Self> {
@@ -84,7 +88,18 @@ impl Theme {
             return Ok(switcher_panel(appearance, opts.reduce_transparency));
         }
         if material == APP_GRID_MATERIAL {
-            return Ok(app_grid_background(appearance.is_dark()));
+            return Ok(app_grid_background(appearance, opts.reduce_transparency));
+        }
+        if material == DOCK_MATERIAL {
+            return Ok(dock_reduced(appearance));
+        }
+        if material == RUNNING_INDICATOR_MATERIAL {
+            return Ok(running_indicator(appearance));
+        }
+        if material == WINDOW_BACKGROUND_MATERIAL {
+            if let Some(color) = self.tokens.color(appearance, WINDOW_BACKGROUND_TOKEN) {
+                return Ok(window_background(color));
+            }
         }
         self.materials.recipe(appearance, material, opts)
     }
@@ -132,6 +147,38 @@ mod tests {
             spec_dir_from(Some("/opt/theme".into())),
             PathBuf::from("/opt/theme")
         );
+    }
+
+    /// The window background material is the window's own background colour, opaque, in every appearance, with or
+    /// without Reduce Transparency, and reads nothing behind the window.
+    #[test]
+    fn the_window_background_material_is_the_window_background_colour() {
+        use crate::recipe::{Blend, MaterialOptions, WINDOW_BACKGROUND_MATERIAL};
+        let theme = Theme::load().unwrap();
+        for appearance in [
+            Appearance::Light,
+            Appearance::Dark,
+            Appearance::Light.with_high_contrast(true),
+            Appearance::Dark.with_high_contrast(true),
+        ] {
+            let color = theme
+                .tokens
+                .color(appearance, WINDOW_BACKGROUND_TOKEN)
+                .unwrap();
+            for reduce_transparency in [false, true] {
+                let opts = MaterialOptions {
+                    reduce_transparency,
+                    ..MaterialOptions::default()
+                };
+                let recipe = theme
+                    .recipe(appearance, WINDOW_BACKGROUND_MATERIAL, &opts)
+                    .unwrap();
+                assert!(recipe.backdrop.is_none() && recipe.opaque, "{appearance:?}");
+                assert_eq!(recipe.fills.len(), 1);
+                assert_eq!(recipe.fills[0].blend, Blend::Copy);
+                assert_eq!(recipe.fills[0].rgba, [color.r, color.g, color.b, 1.0]);
+            }
+        }
     }
 
     #[test]

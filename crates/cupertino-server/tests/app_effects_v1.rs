@@ -745,6 +745,26 @@ fn glass_pass_matches_the_cpu_model() {
             "glass dark={dark} {display:?}: GLES vs CPU mean {mean:.3} max {max}"
         );
         assert!(changed > 400 * 160 / 2, "the glass pass ran");
+        // the rim light lies along the light's axis: the top and the bottom edge lit, the sides not (measured on dark
+        // glass at rest, where the light shows most)
+        if !dark || display.reduce_transparency || display.increase_contrast {
+            continue;
+        }
+        let (cx, cy) = (x0 as u32 + 200, y0 as u32 + 80);
+        let lum = |x: u32, y: u32| {
+            let p = gpu.get_pixel(x, y);
+            p[0] as i32 + p[1] as i32 + p[2] as i32
+        };
+        let (top, bottom) = (y0 as u32, y0 as u32 + 159);
+        let top_lift = lum(cx, top) - lum(cx, top + 3);
+        let bottom_lift = lum(cx, bottom) - lum(cx, bottom - 3);
+        let side_lift = lum(x0 as u32, cy) - lum(x0 as u32 + 3, cy);
+        assert!(top_lift > 12, "the top rim is lit: {top_lift}");
+        assert!(
+            bottom_lift > top_lift / 2,
+            "the bottom rim is lit too: {bottom_lift} of {top_lift}"
+        );
+        assert!(side_lift < top_lift / 3, "the sides are not: {side_lift}");
     }
 }
 

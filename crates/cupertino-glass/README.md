@@ -98,8 +98,10 @@ composite then, per pixel:
 4. face colour on linear light: saturation, white gain, per-channel limit, luminance cap, then encoded black lift and fill;
 5. bleed: the widest level (made whenever a shape bleeds, even with no weight in the blend), saturated and mapped
    between black and white, lightens (dark) or darkens (light) the face in the bleed band;
-6. key and fill rim lights: a Gaussian band about the edge, lit by a cosine lobe around the light angle and its
-   opposite; the key colour is the highlight matrix applied to the face, the fill colour the key plus the colour bias;
+6. key and fill rim lights: a Gaussian band about the edge where light is added along the axis of the light angle,
+   the highlight matrix applied to the face; a raised-cosine lobe around each end of the axis falls to nothing three
+   quarters of the spread away, so the top and the bottom edge are lit and the sides are not, and the fill end gets
+   the light scaled by one plus the colour bias;
 7. outside the shape, the drop shadow and the ring shadow at their opacity.
 
 Unit tests check each stage on the model (`glass::tests`), and that body text (black at 85 %) on light regular glass stays at 4.5:1 or more over the darkest backdrops at every panel size and accessibility recipe, and `tests/shaders.rs` checks that the `Glass` block has the

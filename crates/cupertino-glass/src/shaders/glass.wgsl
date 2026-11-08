@@ -137,11 +137,15 @@ fn angle_between(a: f32, b: f32) -> f32 {
   return min(d, t - d);
 }
 
+// a raised cosine of the angle from the light, nothing past LOBE_REACH of the spread
+const LOBE_REACH: f32 = 0.75;
+
 fn lobe(normal_angle: f32, light: f32) -> f32 {
-  if (G.highlight.z <= 0.0) { return 0.0; }
-  let x = angle_between(normal_angle, light) / G.highlight.z * PI;
-  if (x >= 0.5 * PI) { return 0.0; }
-  return pow(max(cos(x), 0.0), max(G.highlight2.z, 0.001));
+  let reach = G.highlight.z * LOBE_REACH;
+  if (reach <= 0.0) { return 0.0; }
+  let a = angle_between(normal_angle, light);
+  if (a >= reach) { return 0.0; }
+  return pow(0.5 + 0.5 * cos(a / reach * PI), max(G.highlight2.z, 0.001));
 }
 
 fn key_color(c: vec3<f32>) -> vec3<f32> {
@@ -191,15 +195,13 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
     let b = select(max(c, tone), min(c, tone), G.bleed.w > 0.5);
     c = mix(c, b, w);
   }
-  // stage 5: key and fill rim lights
+  // stage 5: key and fill rim lights, added along the light's axis
   if (G.highlight.x > 0.0 && G.highlight.w > 0.0 && gl > 1e-6) {
     let x = (d - G.highlight2.x) / G.highlight.w;
     let band = exp(-x * x);
     let na = atan2(-n.y, n.x);
-    let key = key_color(c);
-    let fill = clamp(key + vec3<f32>(G.highlight2.y), vec3<f32>(0.0), vec3<f32>(1.0));
-    c = mix(c, key, G.highlight.x * band * lobe(na, G.highlight.y));
-    c = mix(c, fill, G.highlight.x * band * lobe(na, G.highlight.y + PI));
+    let ends = lobe(na, G.highlight.y) + lobe(na, G.highlight.y + PI) * max(1.0 + G.highlight2.y, 0.0);
+    c = min(c + key_color(c) * (G.highlight.x * band * ends), vec3<f32>(1.0));
   }
   let cov = clamp(0.5 - d / G.info.z, 0.0, 1.0) * G.info.w;
   return vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), cov);

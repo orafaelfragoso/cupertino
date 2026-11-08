@@ -381,27 +381,17 @@ fn a_quarter_turned_output_draws_the_image_upright() {
 
 #[test]
 fn the_procedural_wallpaper_is_measured_by_its_average_colour_once_per_change() {
-    use cupertino_glass::{cpu::apply_color_ops, ops::color_ops};
     use cupertino_server::render::scene::wallpaper_tint;
     use cupertino_server::render::wallpaper::colour_lightness;
-    // the average colour as the menu bar's material shows it
-    let under_bar = |appearance: Appearance| {
-        let recipe = cupertino_theme::Theme::load()
-            .unwrap()
-            .recipe(appearance, "MenuBar", &Default::default())
-            .unwrap();
-        let ops = color_ops(&recipe.backdrop.unwrap().ops);
-        colour_lightness(apply_color_ops(
-            wallpaper_tint(appearance == Appearance::Dark),
-            &ops,
-        ))
-    };
+    // the average colour as it is: the bar draws nothing between the wallpaper and its text
+    let under_bar =
+        |appearance: Appearance| colour_lightness(wallpaper_tint(appearance == Appearance::Dark));
     let Some(mut h) = Harness::new(|_, _| {}) else {
         return;
     };
     let out = h.state.outputs[0].id;
     let light = under_bar(Appearance::Light);
-    assert_ne!(light, colour_lightness(wallpaper_tint(false)));
+    assert_ne!(light, under_bar(Appearance::Dark));
     h.wait_until("the measure", |s| s.backdrop_lightness(out) == Some(light));
     // told once: no output is marked for frames again by it
     for _ in 0..20 {

@@ -245,7 +245,7 @@ fn the_resting_search_is_a_round_button_whose_press_reaches_the_field() {
         "the field under the button takes the keyboard"
     );
     assert_eq!(h.accessible("field").role, Role::TextInput);
-    // the round button's glass, and over the resting field a second, its background under it
+    // the round button's glass, and over the resting field a second
     let round = |h: &Harness<Browser>| {
         h.snapshot()
             .display_list
@@ -258,7 +258,7 @@ fn the_resting_search_is_a_round_button_whose_press_reaches_the_field() {
             })
             .count()
     };
-    // in the light appearance each glass has a shade under its body: two fills for the round search button, three
-    // for the resting field's (its background, the shade, the body)
-    assert_eq!(round(&h), 5);
+    // in the light appearance each glass has a shade under its body: two fills for each; the field under the resting
+    // button is unseen, so nothing needs to hide it
+    assert_eq!(round(&h), 4);
 }

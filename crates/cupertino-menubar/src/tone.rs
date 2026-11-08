@@ -1,5 +1,5 @@
-//! The colours of the bar and its menus: the palette of each appearance, and the tone and scrim the bar's text takes
-//! over the wallpaper under it. Colours not given by the material recipes are approximate.
+//! The colours of the bar and its menus: the palette of each appearance, the tone the bar's text takes over the
+//! wallpaper under it, and when the bar is solid. Colours not given by the material recipes are approximate.
 
 use cupertino_defaults::accessibility::DisplayOptions;
 
@@ -55,17 +55,18 @@ pub const LIGHT_TEXT_UNTIL: u16 = 450;
 /// Where a tone chosen afresh splits the band between [`LIGHT_TEXT_UNTIL`] and [`DARK_TEXT_FROM`]. approximate.
 const FRESH_SPLIT: u16 = 500;
 
-/// Contrast the bar's text is brought to over a mid-tone wallpaper by the scrim under it (WCAG 4.5:1 for normal text,
-/// with a margin for 8-bit rounding and the strip mean). approximate.
-const SCRIM_CONTRAST: f64 = 4.6;
-/// The strongest scrim; the band's edges need at most 0.175. approximate.
-const SCRIM_MAX_ALPHA: f64 = 0.25;
+/// Whether the bar draws a solid strip of its own (the menu bar material's opaque recipe) under its text. Otherwise
+/// it draws nothing at all: the wallpaper shows through it as it is, and only its text and symbols follow what is
+/// behind them. It is solid with Reduce Transparency only; Increase Contrast keeps it see-through.
+pub fn solid_bar(display: DisplayOptions) -> bool {
+    display.reduce_transparency
+}
 
 /// The text of a bar's strip: the appearance's, or dark or light for the wallpaper under the bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BarTone {
     /// The palette of the appearance: before the server sent the wallpaper's lightness (always below shell version
-    /// 14), and while Increase Contrast or Reduce Transparency makes the bar solid.
+    /// 14), and while Reduce Transparency makes the bar solid ([`solid_bar`]).
     #[default]
     Appearance,
     DarkText,
@@ -79,7 +80,7 @@ impl BarTone {
         let Some(lightness) = lightness else {
             return BarTone::Appearance;
         };
-        if display.increase_contrast || display.reduce_transparency {
+        if solid_bar(display) {
             return BarTone::Appearance;
         }
         let dark_from = match self {
@@ -119,70 +120,6 @@ impl BarTone {
     pub fn light_text(self, appearance: MenuPalette) -> bool {
         self.palette(appearance).text == MenuPalette::new(true).text
     }
-
-    /// The fill under the bar's text over a wallpaper of `lightness`: black under light text and white under dark
-    /// text, at the smallest alpha that brings the text to [`SCRIM_CONTRAST`]; none where the text reaches it alone,
-    /// and none for the appearance's tone (unmeasured, or a solid bar).
-    pub fn scrim(self, lightness: Option<u16>) -> Option<Rgba> {
-        let (text, scrim) = match self {
-            BarTone::Appearance => return None,
-            BarTone::DarkText => (MenuPalette::new(false).text, 1.0),
-            BarTone::LightText => (MenuPalette::new(true).text, 0.0),
-        };
-        let strip = srgb_grey(lightness?);
-        let contrast = |alpha: f64| {
-            let backdrop = alpha * scrim + (1.0 - alpha) * strip;
-            text_contrast(text, [backdrop; 3])
-        };
-        if contrast(0.0) >= SCRIM_CONTRAST {
-            return None;
-        }
-        let (mut low, mut high) = (0.0, SCRIM_MAX_ALPHA);
-        for _ in 0..20 {
-            let mid = (low + high) / 2.0;
-            if contrast(mid) >= SCRIM_CONTRAST {
-                high = mid;
-            } else {
-                low = mid;
-            }
-        }
-        let c = scrim as f32;
-        Some([c, c, c, high as f32])
-    }
-}
-
-/// The sRGB grey of `lightness` (CIE L*/100 in thousandths).
-fn srgb_grey(lightness: u16) -> f64 {
-    let l = f64::from(lightness.min(1000)) / 10.0;
-    let y = if l > 8.0 {
-        ((l + 16.0) / 116.0).powi(3)
-    } else {
-        l / 903.3
-    };
-    if y <= 0.003_130_8 {
-        12.92 * y
-    } else {
-        1.055 * y.powf(1.0 / 2.4) - 0.055
-    }
-}
-
-/// The WCAG contrast of `text` drawn source-over in sRGB on the opaque `backdrop`.
-fn text_contrast(text: Rgba, backdrop: [f64; 3]) -> f64 {
-    let a = f64::from(text[3]);
-    let over = [0, 1, 2].map(|i| a * f64::from(text[i]) + (1.0 - a) * backdrop[i]);
-    let (t, b) = (relative_luminance(over), relative_luminance(backdrop));
-    (t.max(b) + 0.05) / (t.min(b) + 0.05)
-}
-
-fn relative_luminance(rgb: [f64; 3]) -> f64 {
-    let [r, g, b] = rgb.map(|c| {
-        if c <= 0.040_45 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    });
-    0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
 #[cfg(test)]
@@ -253,24 +190,42 @@ mod tests {
             BarTone::DarkText.next(None, TRANSLUCENT),
             BarTone::Appearance
         );
-        for display in [
-            DisplayOptions {
-                increase_contrast: true,
-                ..TRANSLUCENT
-            },
-            DisplayOptions {
-                reduce_transparency: true,
-                ..TRANSLUCENT
-            },
-        ] {
-            assert_eq!(BarTone::fresh(Some(900), display), BarTone::Appearance);
-            assert_eq!(
-                BarTone::LightText.next(Some(100), display),
-                BarTone::Appearance
-            );
-        }
+        let solid = DisplayOptions {
+            reduce_transparency: true,
+            ..TRANSLUCENT
+        };
+        assert_eq!(BarTone::fresh(Some(900), solid), BarTone::Appearance);
+        assert_eq!(
+            BarTone::LightText.next(Some(100), solid),
+            BarTone::Appearance
+        );
         let light = MenuPalette::new(false);
         assert_eq!(BarTone::Appearance.palette(light), light);
+    }
+
+    #[test]
+    fn only_reduce_transparency_makes_the_bar_solid() {
+        let contrast = DisplayOptions {
+            increase_contrast: true,
+            ..TRANSLUCENT
+        };
+        let reduced = DisplayOptions {
+            reduce_transparency: true,
+            ..TRANSLUCENT
+        };
+        assert!(!solid_bar(TRANSLUCENT));
+        assert!(
+            !solid_bar(contrast),
+            "Increase Contrast keeps it see-through"
+        );
+        assert!(solid_bar(reduced));
+        assert!(solid_bar(DisplayOptions {
+            increase_contrast: true,
+            ..reduced
+        }));
+        // over a see-through bar the text still follows the wallpaper
+        assert_eq!(BarTone::fresh(Some(120), contrast), BarTone::LightText);
+        assert_eq!(BarTone::fresh(Some(900), contrast), BarTone::DarkText);
     }
 
     #[test]
@@ -325,16 +280,9 @@ mod tests {
         }
     }
 
-    /// The text of `tone` over its scrim over a strip of `strip` (sRGB).
-    fn contrast_over(tone: BarTone, lightness: u16, strip: [f64; 3]) -> f64 {
-        let text = tone.palette(MenuPalette::new(false)).text;
-        let backdrop = match tone.scrim(Some(lightness)) {
-            Some(s) => {
-                strip.map(|c| f64::from(s[3]) * f64::from(s[0]) + (1.0 - f64::from(s[3])) * c)
-            }
-            None => strip,
-        };
-        wcag(text, backdrop)
+    /// The text of `tone` straight over a strip of `strip` (sRGB): the bar draws nothing under it.
+    fn contrast_over(tone: BarTone, strip: [f64; 3]) -> f64 {
+        wcag(tone.palette(MenuPalette::new(false)).text, strip)
     }
 
     /// Every tone a bar can hold at `lightness`: fresh, and kept from either text.
@@ -346,61 +294,33 @@ mod tests {
     }
 
     #[test]
-    fn the_text_reaches_4_5_to_1_over_every_lightness_with_its_scrim() {
-        for lightness in 0..=1000 {
+    fn outside_the_band_the_text_is_the_one_that_reads_better_and_clears_4_5_to_1_away_from_it() {
+        for lightness in (0..=LIGHT_TEXT_UNTIL).chain(DARK_TEXT_FROM..=1000) {
+            let strip = [grey(lightness); 3];
+            let (light, dark) = (
+                contrast_over(BarTone::LightText, strip),
+                contrast_over(BarTone::DarkText, strip),
+            );
             for tone in reachable(lightness) {
-                let c = contrast_over(tone, lightness, [grey(lightness); 3]);
-                assert!(c >= 4.5, "{tone:?} at {lightness}: {c:.3}");
+                let c = contrast_over(tone, strip);
+                assert_eq!(c, light.max(dark), "{tone:?} at {lightness}");
+                if !(400..=600).contains(&lightness) {
+                    assert!(c >= 4.5, "{tone:?} at {lightness}: {c:.3}");
+                }
             }
         }
     }
 
     #[test]
-    fn there_is_no_scrim_where_the_text_reads_alone_or_on_the_appearance() {
-        assert_eq!(BarTone::LightText.scrim(Some(300)), None);
-        assert_eq!(BarTone::LightText.scrim(Some(450)), None);
-        assert_eq!(BarTone::DarkText.scrim(Some(560)), None);
-        assert_eq!(BarTone::DarkText.scrim(Some(900)), None);
-        assert_eq!(BarTone::Appearance.scrim(Some(500)), None);
-        assert_eq!(BarTone::LightText.scrim(None), None);
-    }
-
-    #[test]
-    fn a_mid_grey_takes_a_light_scrim_under_dark_text_and_a_dark_one_under_light_text() {
-        let light = BarTone::LightText.scrim(Some(500)).unwrap();
-        assert_eq!(light[..3], [0.0; 3]);
-        assert!((light[3] - 0.089).abs() <= 0.005, "{light:?}");
-        let dark = BarTone::DarkText.scrim(Some(500)).unwrap();
-        assert_eq!(dark[..3], [1.0; 3]);
-        assert!((dark[3] - 0.069).abs() <= 0.005, "{dark:?}");
-        let edge = BarTone::LightText.scrim(Some(549)).unwrap();
-        assert!((edge[3] - 0.175).abs() <= 0.005, "{edge:?}");
-    }
-
-    /// From wallpaper grey to text: the strip through each appearance's MenuBar colour ops, the lightness the server
-    /// measures of it, the tone and scrim the bar takes, and the text over scrim over that strip.
-    #[test]
-    fn through_the_bar_material_the_text_reaches_4_5_to_1_in_both_appearances() {
-        use cupertino_theme::{Appearance, MaterialOptions, Theme};
-        let theme = Theme::load().unwrap();
-        for appearance in [Appearance::Light, Appearance::Dark] {
-            let recipe = theme
-                .recipe(appearance, "MenuBar", &MaterialOptions::default())
-                .unwrap();
-            let ops = cupertino_glass::ops::color_ops(&recipe.backdrop.unwrap().ops);
-            for g in 0..=255u8 {
-                let c = f32::from(g) / 255.0;
-                let strip = cupertino_glass::cpu::apply_color_ops([c; 3], &ops)
-                    .map(|v| f64::from(v.clamp(0.0, 1.0)));
-                let lightness = cie_lightness(strip);
-                for tone in reachable(lightness) {
-                    let contrast = contrast_over(tone, lightness, strip);
-                    assert!(
-                        contrast >= 4.5,
-                        "{appearance:?} grey {g}: {tone:?} at {lightness}: {contrast:.3}"
-                    );
-                }
-            }
+    fn the_text_is_white_over_a_dark_blue_wallpaper_and_dark_over_a_pale_one() {
+        let navy = cie_lightness([14.0 / 255.0, 8.0 / 255.0, 134.0 / 255.0]);
+        let pale = cie_lightness([0.9, 0.9, 0.92]);
+        for dark in [false, true] {
+            let appearance = MenuPalette::new(dark);
+            let over_navy = BarTone::fresh(Some(navy), TRANSLUCENT).palette(appearance);
+            let over_pale = BarTone::fresh(Some(pale), TRANSLUCENT).palette(appearance);
+            assert_eq!(over_navy.text, MenuPalette::new(true).text, "{navy}");
+            assert_eq!(over_pale.text, MenuPalette::new(false).text, "{pale}");
         }
     }
 

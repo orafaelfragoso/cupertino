@@ -337,6 +337,54 @@ mod tests {
         for appearance in Appearance::ALL {
             assert_eq!(look(appearance, true, Surface::Menu).fill.unwrap().a, 1.0);
         }
+        // the grid keeps its material, whose recipe follows the options
+        for (appearance, reduced) in [
+            (Appearance::Dark, false),
+            (Appearance::Dark, true),
+            (Appearance::DarkHighContrast, false),
+        ] {
+            assert_eq!(
+                look(appearance, reduced, Surface::AppGrid).material,
+                Some("AppGrid")
+            );
+        }
+        // the Dock is glass, and its own body with Reduce Transparency
+        assert_eq!(
+            look(Appearance::Dark, false, Surface::Dock).material,
+            Some(crate::GLASS_MATERIAL)
+        );
+        assert_eq!(
+            look(Appearance::DarkHighContrast, false, Surface::Dock).material,
+            Some(crate::GLASS_MATERIAL)
+        );
+        assert_eq!(
+            look(Appearance::Light, true, Surface::Dock).material,
+            Some("Dock")
+        );
+        // the running indicator lightens the glass in the dark appearance only
+        assert_eq!(
+            look(Appearance::Dark, false, Surface::DockIndicator).material,
+            Some("RunningIndicator")
+        );
+        assert_eq!(
+            look(Appearance::Dark, true, Surface::DockIndicator).material,
+            Some("RunningIndicator")
+        );
+        for appearance in [Appearance::Light, Appearance::DarkHighContrast] {
+            assert_eq!(
+                look(appearance, false, Surface::DockIndicator).material,
+                None
+            );
+        }
+        // a window's background is opaque, so it is the compositor's whatever the options
+        for appearance in Appearance::ALL {
+            for reduced in [false, true] {
+                assert_eq!(
+                    look(appearance, reduced, Surface::WindowBackground).material,
+                    Some("WindowBackground")
+                );
+            }
+        }
     }
 
     #[test]

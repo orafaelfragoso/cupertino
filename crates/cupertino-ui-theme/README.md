@@ -30,7 +30,7 @@ in light and dark; 118 and 150 in high contrast), `PanelTrack` against a module,
 background (118 in light, 145 in dark; 110 and 165 in high contrast). The thumb colour, which is a slider's knob and a
 panel slider's fill, stands 3:1 against both tracks. A disabled `PanelTrack` has its own colour, the enabled track faded towards the module (185 in light, 95 in dark; 160 and 110 in high contrast): still apart from the module, fainter than the enabled track. `tests/slider-track.rs` checks the resolved colours.
 
-Menus and popovers (`Surface::Menu`, `Surface::Popover`) are glass (`GLASS_MATERIAL`, `CLEAR_GLASS_MATERIAL`): `ThemeTokens::surface` keeps asking for it with Reduce Transparency and in high contrast, where the compositor draws the glass recipe of those options; the other surfaces then ask for no material and paint their opaque fill.
+Menus, popovers and the Dock (`Surface::Menu`, `Surface::Popover`, `Surface::Dock`) are glass (`GLASS_MATERIAL`, `CLEAR_GLASS_MATERIAL`): `ThemeTokens::surface` keeps asking for it with Reduce Transparency and in high contrast, where the compositor draws the glass recipe of those options; the Dock asks for its own `Dock` body with Reduce Transparency. The application grid (`Surface::AppGrid`) keeps its `AppGrid` material too, whose recipe has variants of its own for those options, and a window's background drawn by the compositor (`Surface::WindowBackground`, `WindowBackground`) is opaque, so it is kept as well. The Dock's running dot (`Surface::DockIndicator`) asks for `RunningIndicator`, which lightens what lies behind it, in the dark appearance only (not in high contrast); elsewhere it asks for nothing and the dot paints itself. The other surfaces ask for no material with Reduce Transparency or in high contrast and paint their opaque fill.
 
 `ThemeTokens::on_glass(tone)` is the theme of what a window draws on glass whose face the compositor measured as `tone`
 (`None` until it did, and for shapes too large to follow what lies behind them): the neutral colours of `Text`,
@@ -49,10 +49,11 @@ Links (`Link`) take the theme's link token in light and dark and reach 4.5:1 aga
 the built-in palettes. A page indicator dot for a page not shown (`PageDot`) is text at 20 % in light and dark and an
 opaque grey at 3:1 or more in the built-in palettes; the shown page's dot is `Text`.
 
-`ThemeTokens::surface` gives a sidebar, menu or popover the material to ask the compositor for (`Sidebar`, or `Menu`
-for menus and popovers, `LoginWindowControl` for a heads-up display, `AppGrid` for the full-screen application grid and
-`Switcher` for the application switcher's panel) and the opaque window background to paint where there is none. With
-reduced transparency or in high contrast it asks for no material.
+`ThemeTokens::surface` gives each surface the material to ask the compositor for (`Sidebar`, `Glass` for menus,
+popovers and the Dock, `LoginWindowControl` for a heads-up display, `AppGrid` for the application grid's panel,
+`Switcher` for the application switcher's panel, `RunningIndicator` for the Dock's running dot and `WindowBackground`
+for a window's background) and the opaque window background to paint where there is none. With reduced transparency or
+in high contrast it asks for no material, except for the surfaces above that keep theirs.
 
 Approximate: every state colour, the disabled fills and borders, the opaque thumb, the dark white role text and the
 dark tooltip in the Cupertino light and dark palettes; all neutral and high-contrast values.

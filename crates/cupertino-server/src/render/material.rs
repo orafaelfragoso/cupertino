@@ -874,14 +874,15 @@ impl MaterialElement {
             scale,
             mask: None,
         };
-        e.finalize(0, cache);
+        // the id until `finalize`, which sets the commit once a frame: asking with a provisional signature would
+        // advance it on every frame, and the damage tracker would repaint the whole region each time
+        (e.id, e.commit) = cache.peek(key, e.sig(0));
         e
     }
 
-    /// The region cut to `mask` as well as to its own rectangle.
-    pub fn masked(mut self, mask: MaterialMask, cache: &mut ElementCache) -> Self {
+    /// The region cut to `mask` as well as to its own rectangle; the mask counts from the next [`Self::finalize`].
+    pub fn masked(mut self, mask: MaterialMask) -> Self {
         self.mask = Some(mask);
-        self.finalize(self.generation, cache);
         self
     }
 
@@ -901,6 +902,13 @@ impl MaterialElement {
     /// commit counter from the cache.
     pub fn finalize(&mut self, generation: u64, cache: &mut ElementCache) {
         self.generation = generation;
+        let (id, commit) = cache.slot(self.key, self.sig(generation));
+        self.id = id;
+        self.commit = commit;
+    }
+
+    /// Everything that changes how the region looks: its shape, opacity, recipe and the backdrop generation.
+    fn sig(&self, generation: u64) -> u64 {
         let mut sig = Sig::new()
             .rect(self.area)
             .f(self.radius_pt)
@@ -914,10 +922,7 @@ impl MaterialElement {
                 .f(mask.radius_pt)
                 .u(mask.continuous as u64);
         }
-        let sig = sig.finish();
-        let (id, commit) = cache.slot(self.key, sig);
-        self.id = id;
-        self.commit = commit;
+        sig.finish()
     }
 }
 
@@ -1029,6 +1034,131 @@ mod tests {
             .unwrap()
             .recipe(a, m, &MaterialOptions::default())
             .unwrap()
+    }
+
+    /// A material element under `frames` builds of the same scene, `masked` or not: its commit after each.
+    fn commits(cache: &mut ElementCache, frames: usize, masked: bool) -> Vec<CommitCounter> {
+        let recipe = Rc::new(GpuRecipe::new(&recipe(Appearance::Dark, "Sidebar")));
+        let area = Rectangle::<f64, Logical>::new((40.0, 30.0).into(), (200.0, 300.0).into());
+        (0..frames)
+            .map(|_| {
+                let e = MaterialElement::new(
+                    ElementKey::new("backdrop", 1),
+                    MaterialStage::Full,
+                    cache,
+                    area,
+                    recipe.clone(),
+                    MaterialGl::detached(),
+                    0.0,
+                    true,
+                    1.0,
+                    [0.0; 3],
+                    (1280, 800),
+                    1.0,
+                );
+                let mut e = if masked {
+                    e.masked(MaterialMask {
+                        rect: area,
+                        radius_pt: 16.0,
+                        continuous: true,
+                    })
+                } else {
+                    e
+                };
+                e.finalize(42, cache);
+                cache.end_frame();
+                e.current_commit()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_unchanged_material_element_keeps_its_commit_so_the_region_is_not_repainted() {
+        for masked in [false, true] {
+            let mut cache = ElementCache::default();
+            let c = commits(&mut cache, 3, masked);
+            assert_eq!(c[1], c[0], "masked {masked}");
+            assert_eq!(c[2], c[0], "masked {masked}");
+        }
+    }
+
+    #[test]
+    fn a_material_element_repaints_when_what_lies_below_it_changed() {
+        let mut cache = ElementCache::default();
+        let before = commits(&mut cache, 1, false)[0];
+        let recipe = Rc::new(GpuRecipe::new(&recipe(Appearance::Dark, "Sidebar")));
+        let area = Rectangle::<f64, Logical>::new((40.0, 30.0).into(), (200.0, 300.0).into());
+        let mut e = MaterialElement::new(
+            ElementKey::new("backdrop", 1),
+            MaterialStage::Full,
+            &mut cache,
+            area,
+            recipe,
+            MaterialGl::detached(),
+            0.0,
+            true,
+            1.0,
+            [0.0; 3],
+            (1280, 800),
+            1.0,
+        );
+        e.finalize(43, &mut cache);
+        assert_ne!(e.current_commit(), before);
+    }
+
+    /// The source of a shader of `cupertino-glass`'s GLSL ES port, which the server's shaders copy.
+    fn glass_shader(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../cupertino-glass/shaders/gles")
+            .join(name);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    /// The text of `source` from the line holding `start` through the first line after it holding `end`.
+    fn span<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        let from = source.find(start).unwrap_or_else(|| panic!("no {start:?}"));
+        let to = source[from..]
+            .find(end)
+            .unwrap_or_else(|| panic!("no {end:?} after {start:?}"))
+            + from
+            + end.len();
+        &source[from..to]
+    }
+
+    #[test]
+    fn the_shaders_shared_with_the_glass_crate_stay_its_copies() {
+        // drawn by the server exactly as the glass crate draws them
+        for (name, server) in [
+            ("fullscreen.vert", FULLSCREEN_VERT),
+            ("downsample.frag", DOWNSAMPLE_FRAG),
+            ("blur.frag", BLUR_FRAG),
+            ("color.frag", COLOR_FRAG),
+            ("glass.vert", super::glass::GLASS_VERT),
+            ("glass.frag", super::glass::GLASS_FRAG),
+        ] {
+            assert!(
+                server == glass_shader(name),
+                "shaders/{name} is no longer a copy of cupertino-glass/shaders/gles/{name}"
+            );
+        }
+        // the material region is placed and sampled through the compositor's frame projection, but its uniform block,
+        // mask, blend modes and fill layers are the glass crate's
+        let (vert, frag) = (glass_shader("material.vert"), glass_shader("material.frag"));
+        let block = |s: &str| span(s, "layout(std140) uniform Region", "} R;").to_owned();
+        assert_eq!(block(MATERIAL_VERT), block(&vert), "material.vert block");
+        assert_eq!(block(MATERIAL_FRAG), block(&frag), "material.frag block");
+        for (start, end) in [
+            ("float region_sdf(", "\n}\n"),
+            ("float soft_light(", "\n}\n"),
+            ("vec3 blend(", "\n}\n"),
+            ("int n = int(R.info.x);", "frag_color = "),
+        ] {
+            assert_eq!(
+                span(MATERIAL_FRAG, start, end),
+                span(&frag, start, end),
+                "material.frag: {start}"
+            );
+        }
     }
 
     #[test]

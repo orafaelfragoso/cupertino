@@ -29,8 +29,8 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent,
-    WindowId, WindowRequest, WindowStates,
+    Capabilities, KeyEvent, Keysym, MaterialRegion, Mods, MouseButton, PointerEvent, Timestamp,
+    WindowEvent, WindowId, WindowRequest, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer, ImageResource, PixelFormat};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
@@ -977,10 +977,11 @@ fn the_window_feed_comes_from_the_bars_role_and_a_trigger_from_any() {
 }
 
 /// The bar's node asks for glass under the bar's own rectangle, not under the whole window (which is deeper and as
-/// wide as the output); under Reduce Transparency it keeps the glass, which the compositor draws with its recipe.
+/// wide as the output); under Reduce Transparency it asks for the Dock's own material instead, a body in the
+/// wallpaper's colour.
 #[test]
-fn with_reduce_transparency_the_bar_keeps_its_glass() {
-    for (reduce, material) in [(false, true), (true, true)] {
+fn with_reduce_transparency_the_bar_has_its_own_body() {
+    for (reduce, material, glass) in [(false, "Glass", true), (true, "Dock", false)] {
         let mut run = Run::with(tokens(reduce), ActionMap::default());
         let bar = run.bar();
         let width = run.driver.window_system_mut().spec(bar).unwrap().size.width;
@@ -991,28 +992,68 @@ fn with_reduce_transparency_the_bar_keeps_its_glass() {
                 .any(|r| matches!(r, WindowRequest::Backdrop(Some(_)))),
             "no material under the whole window"
         );
-        let regions = requests
-            .iter()
-            .rev()
-            .find_map(|r| match r {
-                WindowRequest::Materials(m) => Some(m.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
+        let regions = last_materials(requests);
+        // in the light appearance the running dot paints itself
+        assert_eq!(regions.len(), 1, "{regions:?}");
         assert_eq!(
-            !regions.is_empty(),
-            material,
+            regions[0].material, material,
             "reduce transparency {reduce}"
         );
-        if material {
-            assert_eq!(regions.len(), 1, "{regions:?}");
-            assert_eq!(regions[0].material, "Glass");
-            assert!(
-                regions[0].rect.width() < width,
-                "the material lies under the bar's rectangle only: {regions:?}"
-            );
-        }
+        assert_eq!(
+            regions[0].glass.is_some(),
+            glass,
+            "reduce transparency {reduce}"
+        );
+        assert!(
+            regions[0].rect.width() < width,
+            "the material lies under the bar's rectangle only: {regions:?}"
+        );
     }
+}
+
+/// In the dark appearance a running dot asks for the material that lightens what lies behind it, in front of the
+/// bar's, with and without Reduce Transparency.
+#[test]
+fn in_the_dark_the_running_dot_lightens_the_bar_behind_it() {
+    for reduce in [false, true] {
+        let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
+        let preferences = ThemePreferences {
+            appearance: Appearance::Dark,
+            reduce_transparency: reduce,
+            reduce_motion: false,
+        };
+        let tokens = ThemeTokens::cupertino(&Theme::from_dir(data).unwrap(), preferences).unwrap();
+        let mut run = Run::with(tokens, ActionMap::default());
+        let bar = run.bar();
+        let requests = run.driver.window_system_mut().requests(bar).unwrap();
+        let regions = last_materials(requests);
+        let marks = indicators(&run, bar);
+        assert_eq!(marks.len(), 1, "only the terminal runs");
+        assert_eq!(regions.len(), 2, "{regions:?}");
+        assert_eq!(
+            regions[1].material, "RunningIndicator",
+            "reduce transparency {reduce}"
+        );
+        assert!(regions[1].glass.is_none());
+        let dot = regions[1].rect;
+        assert!(
+            regions[0].rect.contains(dot.center()),
+            "the dot lies on the bar: {regions:?}"
+        );
+        assert!(dot.width() <= marks[0].width() + 1e-9 && dot.height() <= marks[0].height() + 1e-9);
+    }
+}
+
+/// The materials of the last request that set them.
+fn last_materials(requests: &[WindowRequest]) -> Vec<MaterialRegion> {
+    requests
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            WindowRequest::Materials(m) => Some(m.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 #[test]

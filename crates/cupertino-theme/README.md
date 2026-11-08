@@ -47,12 +47,23 @@ flag and its Increase Contrast option.
 - **Reduce Transparency.** `reduce_transparency` selects the `-Opaque` variant (mapping). The high-contrast
   appearances only ship opaque variants and fall back to the normal-contrast catalog for materials they do not define.
 - **Hidden state layer.** A few selection materials draw nothing in one state: an empty recipe with a note.
-- **Code recipes.** Two sit beside the catalog, and `Theme::recipe` answers them by name:
+- **Code recipes.** Five sit beside the catalog, and `Theme::recipe` answers them by name:
   - `Switcher`, the app switcher's panel. Under Reduce Transparency it is the solid gray 0.8548 (light) /
     0.1255 (dark), under Increase Contrast 0.7843 / 0.05882, opaque with no backdrop. Increase
     Contrast wins when both are on (approximate).
-  - `AppGrid`, the app grid's background: blur 30, saturate 1.8, and the gain 0.55 / bias 0.05292 colour matrix
-    as a fill of gray 0.1176 at opacity 0.45.
+  - `AppGrid`, the app grid's background (`app_grid_background`): the desktop at 1/8 scale blurred with σ 20 pt and
+    saturated by 2.8, then a fill of gray 0.294 at opacity 0.64 (a gain of 0.36 and a lift of 0.188; gray 0.92 in the
+    light appearance). The display options keep the blur and change the colours: Reduce Transparency covers it with
+    gray 0.0784 (light 0.92) at 0.98, opaque, so only faint bands show; Increase Contrast lowers the saturation to 1.4
+    and the fill to gray 0.17 (light 0.80); with both, Reduce Transparency's (approximate).
+  - `Dock`, the Dock bar and its stack panel with Reduce Transparency (`dock_reduced`; otherwise they are glass): the
+    desktop at 1/8 scale blurred with σ 40 pt and saturated by 3.2, covered by black (dark) or white (light) at 0.87,
+    so the body is one deep colour of the wallpaper rather than a gray (approximate).
+  - `RunningIndicator`, the Dock's running dot (`running_indicator`): no backdrop, gray 0.49 added to what lies behind
+    it (plus-lighter) in the dark appearance, taken away (plus-darker) in the light one.
+  - `WindowBackground`, a window's own background drawn by the compositor (`window_background`): the theme's
+    `window-background` colour, copied opaque, so glass over it in the same window reads the window and not the
+    desktop.
 - **Glass** (`glass.rs`, code). `GlassParams` holds every value of the glass background pass in stage order: the
   blur (`GlassBlur`: four levels of radius `radius·2^i`, widest first, each narrower one laid over at its opacity, and
   a blur fill that darkens, lightens or covers), the face colour (`GlassFace`: saturation, white gain and per-channel

@@ -129,7 +129,6 @@ impl Application for Bar {
                 shared: &model.shared,
                 font: model.font,
                 tone: BarTone::Appearance,
-                scrim: None,
                 size: Size::new(bar.w, bar.h),
             },
             |input| input,

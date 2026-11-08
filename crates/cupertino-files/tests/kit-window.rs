@@ -1227,10 +1227,28 @@ fn the_sidebar_shows_the_sidebar_material_where_the_window_can_and_its_fill_wher
         sidebar.rect.width() >= 200.0,
         "under the whole sidebar: {sidebar:?}"
     );
+    let reduced = materials(true);
     assert!(
-        materials(true).is_empty(),
-        "with Reduce Transparency the sidebar paints its opaque fill"
+        !reduced
+            .iter()
+            .any(|r| r.material.to_lowercase().contains("sidebar")),
+        "with Reduce Transparency the sidebar paints its opaque fill: {reduced:?}"
     );
+    // the content pane's background is the compositor's either way, under the toolbar's glass
+    for regions in [&regions, &reduced] {
+        let background = regions
+            .iter()
+            .position(|r| r.material == "WindowBackground")
+            .unwrap_or_else(|| panic!("the window background: {regions:?}"));
+        let glass = regions
+            .iter()
+            .position(|r| r.glass.is_some())
+            .unwrap_or_else(|| panic!("the toolbar's glass: {regions:?}"));
+        assert!(
+            background < glass,
+            "the glass lies over the background: {regions:?}"
+        );
+    }
 }
 
 /// A point in the toolbar row that none of its items covers, scanning from the row's trailing end.

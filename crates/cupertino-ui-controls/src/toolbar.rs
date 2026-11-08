@@ -251,7 +251,10 @@ impl<M: 'static> From<ToolbarSearch<M>> for Element<M> {
     fn from(search: ToolbarSearch<M>) -> Self {
         Element::new(SearchHolder {
             children: vec![
-                search.field,
+                Element::new(SearchField {
+                    collapsed: search.collapsed,
+                    children: vec![search.field],
+                }),
                 Element::new(SearchCover {
                     collapsed: search.collapsed,
                 }),
@@ -303,6 +306,58 @@ impl<M: 'static> Widget<M> for SearchHolder<M> {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
+/// The field under the search button: unseen while the button covers it, so the button's glass shows what lies below
+/// the field and not the field; it still takes the presses.
+struct SearchField<M> {
+    collapsed: bool,
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for SearchField<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Overlay)
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.collapsed != old.collapsed {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), constraints: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(constraints.width.ideal(), TOOLBAR_CONTROL),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if self.collapsed {
+            cx.set_group(0.0, Vec::new());
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
 /// The resting search button: glass and a magnifying glass over the field, which the pointer passes through.
 struct SearchCover {
     collapsed: bool,
@@ -344,17 +399,7 @@ impl<M: 'static> Widget<M> for SearchCover {
         let size = cx.size();
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
         let radius = size.height.min(size.width) / 2.0;
-        // the field under the button must not show through its glass: the window's background hides it first
-        let state = cupertino_ui_theme::StateVariant {
-            window_active: cx.window_active(),
-            ..cupertino_ui_theme::StateVariant::NORMAL
-        };
-        let background = cx
-            .env()
-            .theme
-            .colors
-            .get(ColorRole::WindowBackground, state);
-        look::fill(cx, rect, radius, background);
+        // the field under the button is unseen meanwhile ([`SearchField`])
         paint_glass(cx, GlassRole::ToolbarGroup, rect, radius);
         let state = ControlState {
             enabled: true,

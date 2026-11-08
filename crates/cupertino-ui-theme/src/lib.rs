@@ -282,10 +282,18 @@ pub enum Surface {
     Popover,
     /// A heads-up display over everything, such as the volume and brightness overlay.
     Hud,
-    /// The full-screen application grid over the desktop.
+    /// The application grid's panel over the desktop.
     AppGrid,
     /// The application switcher's panel.
     Switcher,
+    /// The Dock's bar and its stack panels: glass, and with Reduce Transparency a body in the wallpaper's colour.
+    Dock,
+    /// A running indicator under a Dock tile in the dark appearance, which lightens what lies behind it; elsewhere it
+    /// asks for no material and the dot paints itself.
+    DockIndicator,
+    /// A window's own background drawn by the compositor, so glass over it in the window reads the window rather than
+    /// the desktop; opaque, so kept with reduced transparency and in high contrast.
+    WindowBackground,
 }
 
 /// How a surface paints: the compositor material to ask for, if any, and the opaque fill to paint where there is none.
@@ -314,21 +322,33 @@ pub const GLASS_MATERIAL: &str = "Glass";
 pub const CLEAR_GLASS_MATERIAL: &str = "ClearGlass";
 
 impl ThemeTokens {
-    /// The look of `surface`. Menus and popovers are glass, which keeps its shape with reduced transparency and in
-    /// high contrast (the compositor draws the glass recipe of those options); the other surfaces then ask for no
-    /// material and are opaque.
+    /// The look of `surface`. Menus, popovers and the Dock are glass, which keeps its shape with reduced transparency
+    /// and in high contrast (the compositor draws the glass recipe of those options, and the Dock its own body with
+    /// Reduce Transparency); the application grid keeps its material too, whose recipe has variants of its own for
+    /// those options. The other surfaces then ask for no material and are opaque.
     pub fn surface(&self, surface: Surface) -> SurfaceLook {
-        let opaque =
-            self.preferences.reduce_transparency || self.preferences.appearance.is_high_contrast();
-        let (material, glass) = match surface {
+        let prefs = &self.preferences;
+        let opaque = prefs.reduce_transparency || prefs.appearance.is_high_contrast();
+        let (material, kept) = match surface {
             Surface::Sidebar => ("Sidebar", false),
             Surface::Menu | Surface::Popover => (GLASS_MATERIAL, true),
             Surface::Hud => ("LoginWindowControl", false),
-            Surface::AppGrid => ("AppGrid", false),
+            Surface::AppGrid => ("AppGrid", true),
             Surface::Switcher => ("Switcher", false),
+            Surface::Dock if prefs.reduce_transparency => ("Dock", true),
+            Surface::Dock => (GLASS_MATERIAL, true),
+            Surface::DockIndicator => (
+                "RunningIndicator",
+                prefs.appearance.is_dark() && !prefs.appearance.is_high_contrast(),
+            ),
+            Surface::WindowBackground => ("WindowBackground", true),
+        };
+        let material = match surface {
+            Surface::DockIndicator => kept.then_some(material),
+            _ => (kept || !opaque).then_some(material),
         };
         SurfaceLook {
-            material: (glass || !opaque).then_some(material),
+            material,
             fill: self
                 .colors
                 .get(ColorRole::WindowBackground, StateVariant::NORMAL),

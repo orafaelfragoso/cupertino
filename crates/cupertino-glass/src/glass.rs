@@ -577,7 +577,8 @@ impl GlassUniform {
 }
 
 impl Container {
-    /// Blur radius in points of each level of the backdrop, and whether any shape uses it.
+    /// Blur radius in points of each level of the backdrop, and whether any shape uses it: through the levels' blend,
+    /// or the widest level through the bleed.
     pub fn levels(&self) -> [(f32, bool); BLUR_LEVELS] {
         let radii = self.params.level_radii();
         let mut used = [false; BLUR_LEVELS];
@@ -588,6 +589,7 @@ impl Container {
             for (u, w) in used.iter_mut().zip(p.level_weights()) {
                 *u |= w > cupertino_theme::glass::LEVEL_WEIGHT_EPSILON;
             }
+            used[BLUR_LEVELS - 1] |= v.bleed_amount > 0.0 && v.bleed_height > 0.0;
         }
         std::array::from_fn(|i| (radii[i], used[i]))
     }
@@ -860,8 +862,28 @@ mod tests {
         assert_eq!(u.shape_a[0][2], 20.0);
         assert_eq!(u.highlight_matrix[0][3], 0.1471);
         let levels = c.levels();
-        assert_eq!(levels.map(|l| l.1), [true, true, true, false]);
+        // level 3 has no weight in the blend, but the bleed reads it
+        assert_eq!(levels.map(|l| l.1), [true, true, true, true]);
         assert_eq!(c.fill_radius(), Some(8.0));
+    }
+
+    #[test]
+    fn the_widest_level_is_made_only_when_the_blend_or_the_bleed_reads_it() {
+        let shape = vec![GlassShape::new([0.0, 0.0, 150.0, 100.0], 18.0)];
+        let mode = |style, reduce_transparency| GlassMode {
+            dark: true,
+            style,
+            reduce_transparency,
+            ..GlassMode::default()
+        };
+        // regular glass bleeds the widest level into its edge though its weight in the blend is 0
+        let regular = Container::new(shape.clone(), 0.0, mode(GlassStyle::Regular, false));
+        assert_eq!(regular.params.level_weights()[3], 0.0);
+        assert!(regular.values[0].bleed_amount > 0.0);
+        assert!(regular.levels()[3].1, "the bleed reads level 3");
+        // clear glass has no bleed and only its narrowest level shows
+        let clear = Container::new(shape, 0.0, mode(GlassStyle::Clear, false));
+        assert_eq!(clear.levels().map(|l| l.1), [true, false, false, false]);
     }
 
     /// The WCAG contrast ratio of two opaque sRGB colours.

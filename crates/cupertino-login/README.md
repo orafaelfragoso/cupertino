@@ -160,7 +160,11 @@ menu), the power item is a button that opens a Kit menu, and the panels are moda
 While the session is locked the lock screen shows the notifications the notification daemon (`cupertino-notifications`)
 lists for it: the daemon's `org.cupertino.NotificationCenter1.LockScreenNotifications` on the session bus, read again at
 each `LockScreenChanged` signal (which carries nothing) and whenever the daemon's bus name changes owner
-(`lock_notices::watch`, on reader threads; no daemon is an empty list). The daemon decides what may show (Settings >
+(`lock_notices::watch`, on reader threads; no daemon is an empty list). The name alone is not trusted, as any process
+of the user can own it while the daemon is not running: `lock_notices::fetch` asks the bus for the name's owner and its
+credentials, and asks that connection only when it is an unsandboxed process running `cupertino-notifications` from the
+lock screen's own directory; any other owner is not asked and the list is empty, so no other program can put words on
+the lock screen. The daemon decides what may show (Settings >
 Notifications): only arrivals since the lock, only from applications allowed on the lock screen, and without previews
 the title is "Notification" and the body empty, so the rest of a notification never reaches this process, its windows
 or what assistive technology reads. The process keeps at most `MAX_NOTICES` (20) and cuts each text again to its cap

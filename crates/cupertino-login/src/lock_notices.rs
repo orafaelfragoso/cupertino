@@ -8,6 +8,12 @@
 //! the list changed with the signal `LockScreenChanged`, which carries nothing; [`watch`] then asks for the list
 //! again, and again when the daemon's bus name changes owner. Each text is cut again here to its cap, whatever the
 //! daemon sent.
+//!
+//! Any process of the user could own the daemon's bus name while the daemon is not running, so the name alone is not
+//! trusted: [`fetch`] asks the bus for the name's owner, reads the owner's process from the credentials the bus gives
+//! and asks that very connection only when the process is unsandboxed and runs `cupertino-notifications` from this
+//! program's own directory ([`daemon_program`]). Any other owner gets no question and the list is empty, so no other
+//! program can put words on the lock screen.
 
 use cupertino_geometry::Rect;
 
@@ -137,24 +143,76 @@ pub fn more_text(n: usize) -> String {
     }
 }
 
+/// The program the daemon runs as `/proc` names it: `cupertino-notifications` in the directory of `own`, this program's
+/// path. A program replaced on disk while it runs is named with " (deleted)" after its path; that mark is not part of
+/// the directory or the name compared.
+pub fn daemon_program(own: &std::path::Path) -> std::path::PathBuf {
+    own.with_file_name("cupertino-notifications")
+}
+
+/// `exe` as `/proc/<pid>/exe` names it, without the mark of a program replaced on disk since it started.
+pub fn live_path(exe: &std::path::Path) -> std::path::PathBuf {
+    let text = exe.as_os_str().to_string_lossy();
+    match text.strip_suffix(" (deleted)") {
+        Some(path) => std::path::PathBuf::from(path),
+        None => exe.to_path_buf(),
+    }
+}
+
 #[cfg(feature = "dbus")]
-pub use bus::{fetch, watch};
+pub use bus::{fetch, fetch_served_by, watch};
 
 #[cfg(feature = "dbus")]
 mod bus {
-    use super::{from_rows, Notice};
+    use super::{daemon_program, from_rows, live_path, Notice};
+    use cupertino_peer::Caller;
+    use std::path::Path;
+    use zbus::blocking::fdo::DBusProxy;
     use zbus::blocking::{Connection, MessageIterator};
     use zbus::message::Type;
+    use zbus::names::BusName;
     use zbus::MatchRule;
 
     const BUS_NAME: &str = "org.cupertino.NotificationCenter1";
     const OBJECT_PATH: &str = "/org/cupertino/NotificationCenter1";
     const INTERFACE: &str = "org.cupertino.NotificationCenter1";
 
-    /// The list the daemon gives the lock screen now. No daemon on the bus is an empty list.
+    /// The list the daemon gives the lock screen now, asked only of the real daemon ([`fetch_served_by`] with
+    /// [`daemon_program`] of this program). No daemon on the bus is an empty list.
     pub fn fetch(session: &Connection) -> zbus::Result<Vec<Notice>> {
+        let own = std::env::current_exe()
+            .map_err(|e| zbus::Error::Failure(format!("this program's path: {e}")))?;
+        fetch_served_by(session, &daemon_program(&live_path(&own)))
+    }
+
+    /// The list, asked of the owner of the daemon's name only when it is an unsandboxed process running `program`;
+    /// any other owner is an error and is not asked. No owner is an empty list.
+    pub fn fetch_served_by(session: &Connection, program: &Path) -> zbus::Result<Vec<Notice>> {
+        let dbus = DBusProxy::new(session)?;
+        let name = BusName::try_from(BUS_NAME)?;
+        let owner = match dbus.get_name_owner(name) {
+            Ok(owner) => owner,
+            Err(zbus::fdo::Error::NameHasNoOwner(_)) => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        let credentials =
+            dbus.get_connection_credentials(BusName::from(owner.clone().into_inner()))?;
+        let runs_program = match Caller::from_credentials(&credentials, Path::new("/proc")) {
+            Caller::Process(process) => {
+                process.sandbox.is_none()
+                    && process.exe.as_deref().map(live_path).as_deref() == Some(program)
+            }
+            Caller::Anonymous | Caller::Unclassified(_) => false,
+        };
+        if !runs_program {
+            return Err(zbus::Error::Failure(format!(
+                "{BUS_NAME} is owned by a process that is not {}",
+                program.display()
+            )));
+        }
+        // the owner's own connection, so a new owner of the name cannot answer in its place
         let reply = session.call_method(
-            Some(BUS_NAME),
+            Some(owner.as_str()),
             OBJECT_PATH,
             Some(INTERFACE),
             "LockScreenNotifications",
@@ -180,6 +238,7 @@ mod bus {
     ) -> zbus::Result<()> {
         let changed = MatchRule::builder()
             .msg_type(Type::Signal)
+            .sender(BUS_NAME)?
             .interface(INTERFACE)?
             .member("LockScreenChanged")?
             .path(OBJECT_PATH)?
@@ -263,6 +322,76 @@ mod tests {
         assert_eq!(
             cap(&format!("{family}{family}"), 8),
             format!("{family}\u{2026}")
+        );
+    }
+
+    #[test]
+    fn the_daemon_is_the_program_beside_this_one_also_once_replaced_on_disk() {
+        use std::path::Path;
+        assert_eq!(
+            daemon_program(Path::new("/usr/bin/cupertino-login")),
+            Path::new("/usr/bin/cupertino-notifications")
+        );
+        assert_eq!(
+            live_path(Path::new("/usr/bin/cupertino-notifications (deleted)")),
+            Path::new("/usr/bin/cupertino-notifications")
+        );
+        assert_eq!(
+            live_path(Path::new("/usr/bin/cupertino-notifications")),
+            Path::new("/usr/bin/cupertino-notifications")
+        );
+    }
+
+    #[cfg(feature = "dbus")]
+    struct Daemon;
+
+    #[cfg(feature = "dbus")]
+    #[zbus::interface(name = "org.cupertino.NotificationCenter1")]
+    impl Daemon {
+        fn lock_screen_notifications(&self) -> Vec<(u32, String, String, String)> {
+            vec![row(
+                7,
+                "Bank",
+                "Enter your password",
+                "to keep your account",
+            )]
+        }
+    }
+
+    #[cfg(feature = "dbus")]
+    #[test]
+    fn only_the_daemon_program_is_asked_for_the_list() {
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            eprintln!("skipped: dbus-daemon is not available");
+            return;
+        };
+        let client = bus.connect();
+        assert_eq!(
+            fetch_served_by(&client, std::path::Path::new("/nowhere")).unwrap(),
+            Vec::new(),
+            "no owner: an empty list"
+        );
+        // this test owns the name: it runs the test program, not the daemon
+        let _owner = zbus::blocking::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .serve_at("/org/cupertino/NotificationCenter1", Daemon)
+            .unwrap()
+            .name("org.cupertino.NotificationCenter1")
+            .unwrap()
+            .build()
+            .unwrap();
+        let own = live_path(&std::env::current_exe().unwrap());
+        let refused = fetch_served_by(&client, &daemon_program(&own));
+        assert!(
+            refused.is_err(),
+            "another program owning the name is not asked: {refused:?}"
+        );
+        assert!(fetch(&client).is_err(), "nor by the lock screen's fetch");
+        let listed = fetch_served_by(&client, &own).unwrap();
+        assert_eq!(
+            listed.iter().map(|n| n.id).collect::<Vec<_>>(),
+            [7],
+            "the program expected is asked"
         );
     }
 

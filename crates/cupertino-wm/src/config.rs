@@ -240,7 +240,7 @@ impl Default for SnapConfig {
             workspace_edge_switch: true,
             workspace_edge_dwell: 0.75,
             keep_titlebar_visible: true,
-            titlebar_height: 28.0,
+            titlebar_height: 32.0,
             preview_frame_curve: spring_curve(springs.frame),
             preview_opacity_curve: Curve::Spring(SpringParams::from_ratio(
                 PREVIEW_FADE_RESPONSE,

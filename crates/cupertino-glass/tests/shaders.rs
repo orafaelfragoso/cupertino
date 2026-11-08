@@ -247,7 +247,7 @@ fn block_members(src: &str, open: &str, wgsl: bool) -> Vec<(String, usize)> {
         .filter(|l| !l.is_empty())
         .map(|l| {
             let count = |s: &str| {
-                s.split(|c| c == '[' || c == ',')
+                s.split(['[', ','])
                     .nth(1)
                     .and_then(|n| n.trim_matches(|c: char| !c.is_ascii_digit()).parse().ok())
                     .unwrap_or(1)

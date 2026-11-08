@@ -1355,7 +1355,7 @@ fn popup_backdrop_elements(
         let alpha = b.alpha as f32 * opacity;
         if b.glass.is_some() {
             // glass lights its own rim
-            glass.add(b, &mut out);
+            glass.add(b, out.len());
         } else {
             out.push(rrect_item(
                 SceneKind::PopupRim,
@@ -1416,7 +1416,7 @@ fn backdrop_elements(
     let mut glass = GlassGroups::default();
     for b in backdrops.iter().rev() {
         if b.glass.is_some() {
-            glass.add(b, &mut out);
+            glass.add(b, out.len());
             continue;
         }
         out.extend(material_layer(
@@ -1441,8 +1441,8 @@ struct GlassGroups<'a> {
 }
 
 impl<'a> GlassGroups<'a> {
-    /// Add glass backdrop `b`; a new container keeps its place in `out`.
-    fn add(&mut self, b: &'a BackdropArea, out: &mut Vec<Piece>) {
+    /// Add glass backdrop `b`; a new container keeps the place of the next piece of the list, `at`.
+    fn add(&mut self, b: &'a BackdropArea, at: usize) {
         let Some(spec) = b.glass else {
             return;
         };
@@ -1455,7 +1455,7 @@ impl<'a> GlassGroups<'a> {
             group.2.push(b);
             return;
         }
-        self.groups.push((out.len(), container, vec![b]));
+        self.groups.push((at, container, vec![b]));
     }
 
     /// `out` with each container's piece at its place.
@@ -1574,7 +1574,7 @@ fn bar_backdrop_elements(
         let alpha = b.alpha as f32 * opacity;
         let owner = b.key;
         if b.glass.is_some() {
-            glass.add(b, &mut out);
+            glass.add(b, out.len());
             continue;
         }
         let composite = material_piece(
@@ -2430,7 +2430,7 @@ mod tests {
         let mut groups = GlassGroups::default();
         for b in &backdrops {
             if b.glass.is_some() {
-                groups.add(b, &mut out);
+                groups.add(b, out.len());
             } else {
                 out.push(marker(SceneKind::Backdrop));
             }

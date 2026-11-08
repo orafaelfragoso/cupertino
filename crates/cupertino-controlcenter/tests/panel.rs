@@ -22,11 +22,12 @@ use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
     Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent,
-    WindowId, WindowStates,
+    WindowId, WindowRequest, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
+use cupertino_theme::glass::adapts_foreground;
 use cupertino_theme::Theme;
 use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
 use tiny_skia::Pixmap;
@@ -425,6 +426,69 @@ fn a_light_session_darkens_the_glass_by_about_a_quarter() {
         0,
         "the dark session draws the glass alone"
     );
+}
+
+/// The compositor measures the face of a glass container whose bounds are small and tells the window to draw its
+/// text light or dark to match; a larger container keeps the appearance's text. The panel's labels are white over its
+/// own tint in a light session, which the compositor does not see, so every tile joins one container that is never
+/// small: at rest, in a light session, while a view opens or cross-fades, and with it open.
+#[test]
+fn the_tiles_are_one_glass_too_large_for_their_text_to_follow_the_backdrop() {
+    let opening = |progress, morph| Presentation {
+        detail: Some(Opened {
+            detail: Detail::WiFi,
+            progress,
+            morph,
+        }),
+        ..Presentation::SHOWN
+    };
+    let scenes = [
+        Presentation::SHOWN,
+        Presentation {
+            light: true,
+            ..Presentation::SHOWN
+        },
+        Presentation {
+            alpha: 0.5,
+            ..Presentation::SHOWN
+        },
+        opening(0.0, true),
+        opening(0.3, true),
+        opening(0.7, true),
+        opening(0.5, false),
+        WIFI_OPEN,
+    ];
+    for presentation in scenes {
+        let mut run = Run::start(tokens(Appearance::Dark, false), presentation);
+        let requests = run.driver.window_system_mut().requests(run.window).unwrap();
+        let regions = requests
+            .iter()
+            .rev()
+            .find_map(|r| match r {
+                WindowRequest::Materials(regions) => Some(regions.clone()),
+                _ => None,
+            })
+            .expect("the panel asks for glass");
+        assert!(!regions.is_empty(), "{presentation:?}: no glass");
+        let containers: Vec<u32> = regions
+            .iter()
+            .map(|r| r.glass.expect("every tile is glass").container)
+            .collect();
+        assert!(
+            containers.iter().all(|c| *c != 0 && *c == containers[0]),
+            "{presentation:?}: the tiles join one container: {containers:?}"
+        );
+        let bounds = regions
+            .iter()
+            .map(|r| r.rect)
+            .reduce(|a, b| a.union(&b))
+            .unwrap();
+        let short = bounds.width().min(bounds.height());
+        assert!(
+            !adapts_foreground(short as f32),
+            "{presentation:?}: the container's short side, {short} pt, lets its text follow the backdrop"
+        );
+    }
 }
 
 #[test]

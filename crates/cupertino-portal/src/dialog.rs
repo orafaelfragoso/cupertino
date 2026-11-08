@@ -1760,6 +1760,13 @@ mod tests {
 
     /// The dialogs on a test window system that has configured no window yet.
     fn driver() -> TestDriver<Dialogs> {
+        driver_with(None)
+    }
+
+    /// [`driver`], publishing to `accessibility` (a stand-in screen reader) when there is one.
+    fn driver_with(
+        accessibility: Option<Box<dyn cupertino_kit::core::AccessibilityAdapter>>,
+    ) -> TestDriver<Dialogs> {
         let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
         let preferences = ThemePreferences {
             appearance: Appearance::Light,
@@ -1788,7 +1795,7 @@ mod tests {
                     GlyphRaster::new(Arc::clone(&glyphs)),
                 ))
             }),
-            accessibility: None,
+            accessibility,
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };

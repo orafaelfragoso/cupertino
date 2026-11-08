@@ -263,3 +263,62 @@ fn escape_and_closing_deny_a_consent_window_armed_or_not() {
         assert!(driver.runtime().windows().is_empty());
     }
 }
+
+/// Asks the node `key` of `window` for a click, as a screen reader's DoAction does.
+fn ask_click(
+    driver: &mut TestDriver<Dialogs>,
+    reader: &cupertino_ui_test::AssistiveTechnology,
+    window: WindowId,
+    key: Key,
+) {
+    let target = driver.runtime().find(window, &key).unwrap();
+    driver.ask(reader, target, cupertino_kit::core::Action::Click, None);
+    settle(driver, window);
+}
+
+#[test]
+fn assistive_technology_cannot_consent_before_a_consent_window_is_armed() {
+    let _turn = INBOX.lock().unwrap_or_else(|e| e.into_inner());
+    let reader = cupertino_ui_test::AssistiveTechnology::new();
+    let mut driver = driver_with(Some(reader.adapter()));
+
+    let answer = screenshot_ask(70);
+    let window = show(&mut driver);
+    ask_click(&mut driver, &reader, window, Key::from("take"));
+    assert!(
+        answer.try_recv().is_err(),
+        "a click asked for on Take Screenshot before the window is armed takes nothing"
+    );
+    armed(&mut driver, window);
+    ask_click(&mut driver, &reader, window, Key::from("take"));
+    assert_eq!(
+        answer.try_recv().unwrap(),
+        screenshot::Answer::Granted,
+        "once armed, the reader's click takes the screenshot"
+    );
+
+    let answer = share_ask(71);
+    let window = show(&mut driver);
+    for key in [Key::Int(0), Key::from("remember"), Key::from("share")] {
+        ask_click(&mut driver, &reader, window, key);
+    }
+    assert!(
+        answer.try_recv().is_err(),
+        "clicks asked for on a row, the check box and Share before the window is armed pick and share nothing"
+    );
+    armed(&mut driver, window);
+    ask_click(&mut driver, &reader, window, Key::from("share"));
+    assert!(
+        answer.try_recv().is_err(),
+        "no row was picked before arming, so Share has nothing to share"
+    );
+    press(&mut driver, window, ESCAPE);
+    assert_eq!(answer.try_recv().unwrap(), screen_cast::Answer::Cancelled);
+
+    // denying needs no arming: the reader's click on Cancel answers at once
+    let answer = screenshot_ask(72);
+    let window = show(&mut driver);
+    ask_click(&mut driver, &reader, window, Key::from("cancel"));
+    assert_eq!(answer.try_recv().unwrap(), screenshot::Answer::Cancelled);
+    assert!(driver.runtime().windows().is_empty());
+}

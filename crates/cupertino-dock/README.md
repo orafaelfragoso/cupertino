@@ -170,8 +170,8 @@ running dot follows it:
 - Opening it (a click on its tile, its menu's Open, the grid) asks that process for a new window. When the desktop entry
   says `DBusActivatable=true`, the dock calls `org.freedesktop.Application.Activate` on the bus name of the desktop file ID
   (`src/activate.rs`, on a thread of its own). The activation token goes in the platform data as `activation-token` and
-  `desktop-startup-id`. Otherwise, or when the call fails, the dock starts the entry again with an activation token, and a
-  running instance opens a window. Neither bounces the tile: the application is already running.
+  `desktop-startup-id`. Otherwise, or when the call fails or is not answered within 3 s (`ACTIVATE_TIMEOUT`), the dock
+  starts the entry again with an activation token, and a running instance opens a window. Neither bounces the tile: the application is already running.
 - The dot goes when the server reports the application no longer resident (its process exited or crashed) and it has no
   window left.
 - No duplicate launches. A second ask for the same tile within 5 s (`OPEN_GUARD`) is dropped while no window has come,

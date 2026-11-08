@@ -3,11 +3,25 @@
 //! the platform data so the window it opens may take the focus.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use zbus::zvariant::{ObjectPath, Value};
 
 /// The interface a D-Bus activatable application implements.
 pub const INTERFACE: &str = "org.freedesktop.Application";
+
+/// How long an application has to answer `Activate`: one that has not answered by then counts as failed, so the dock
+/// starts its entry again instead of waiting on it.
+pub const ACTIVATE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// `builder` with its method calls bounded by `timeout` ([`ACTIVATE_TIMEOUT`] for the dock's own connection): a hung
+/// application fails the call instead of holding it open.
+pub fn bounded(
+    builder: zbus::connection::Builder<'_>,
+    timeout: Duration,
+) -> zbus::connection::Builder<'_> {
+    builder.method_timeout(timeout)
+}
 
 /// The object path of the application with desktop file ID `id` (without `.desktop`): a slash, then the ID with its
 /// dots as slashes and its dashes as underscores.
@@ -40,8 +54,9 @@ pub async fn activate(conn: &zbus::Connection, id: &str, token: Option<&str>) ->
     .map(|_| ())
 }
 
-/// [`activate`] on the session bus, on a thread of its own so the dock's loop does not wait for the application: the
-/// future ends in whether the call succeeded. A failure is reported on standard error, prefixed with `process`.
+/// [`activate`] on the session bus, on a thread of its own so the dock's loop does not wait for the application, and
+/// bounded by [`ACTIVATE_TIMEOUT`]: the future ends in whether the call succeeded. A failure is reported on standard
+/// error, prefixed with `process`.
 pub fn activate_in_thread(
     process: &'static str,
     id: String,
@@ -52,7 +67,9 @@ pub fn activate_in_thread(
         .name("dbus-activate".into())
         .spawn(move || {
             let outcome = async_io::block_on(async {
-                let conn = zbus::Connection::session().await?;
+                let conn = bounded(zbus::connection::Builder::session()?, ACTIVATE_TIMEOUT)
+                    .build()
+                    .await?;
                 activate(&conn, &id, token.as_deref()).await
             });
             if let Err(e) = &outcome {

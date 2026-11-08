@@ -1,12 +1,14 @@
 //! Asking a resident application for a window over D-Bus, against a fake `org.freedesktop.Application` on a private
 //! session bus: the call reaches the object path of the desktop file ID with the activation token in its platform
-//! data, and a name nobody owns fails.
+//! data, a name nobody owns fails, and an application that does not answer fails once the call's time is up.
 #![cfg(feature = "app")]
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use cupertino_dock::activate::{activate, object_path};
+use std::time::{Duration, Instant};
+
+use cupertino_dock::activate::{activate, bounded, object_path};
 use cupertino_test_bus::PrivateBus;
 use zbus::zvariant::OwnedValue;
 
@@ -77,6 +79,46 @@ fn activate_reaches_the_application_with_the_token_and_fails_for_a_name_nobody_o
                 .await
                 .is_err(),
             "nobody owns the name"
+        );
+    });
+}
+
+const HUNG: &str = "org.example.Hung";
+
+/// An application that takes `Activate` calls and never answers them.
+struct HungApplication;
+
+#[zbus::interface(name = "org.freedesktop.Application")]
+impl HungApplication {
+    async fn activate(&self, _platform_data: HashMap<String, OwnedValue>) {
+        std::future::pending::<()>().await;
+    }
+}
+
+#[test]
+fn an_application_that_does_not_answer_fails_the_call_when_its_time_is_up() {
+    let Some(bus) = PrivateBus::start() else {
+        return;
+    };
+    async_io::block_on(async {
+        let _application = bus
+            .builder()
+            .name(HUNG)
+            .unwrap()
+            .serve_at(object_path(HUNG), HungApplication)
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let timeout = Duration::from_millis(300);
+        let dock = bounded(bus.builder(), timeout).build().await.unwrap();
+        let asked = Instant::now();
+        let outcome = activate(&dock, HUNG, Some("token-3")).await;
+        assert!(outcome.is_err(), "{outcome:?}");
+        let waited = asked.elapsed();
+        assert!(
+            waited >= timeout && waited < Duration::from_secs(10),
+            "{waited:?}"
         );
     });
 }

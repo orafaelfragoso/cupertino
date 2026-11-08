@@ -3,16 +3,19 @@
 #![cfg(feature = "dbus")]
 
 use cupertino_controlcenter::backend::{
-    MemoryBluetooth, MemoryBrightness, MemoryMedia, MemorySwitch, MemoryVolume, MemoryWifi,
-    RecordingLauncher, RecordingLock, RecordingOverlay,
+    MediaPlayer, MemoryBluetooth, MemoryBrightness, MemoryMedia, MemorySwitch, MemoryVolume,
+    MemoryWifi, RecordingLauncher, RecordingLock, RecordingOverlay,
 };
 use cupertino_controlcenter::control::{serve, BUS_NAME, OBJECT_PATH};
+use cupertino_controlcenter::system::{MprisPlayer, PLAYER_TIMEOUT};
 use cupertino_controlcenter::{
     Backends, Controller, Module, Phase, TileState, VolumeState, WifiStatus,
 };
 use cupertino_test_bus::PrivateBus;
+use std::collections::HashMap;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use zbus::zvariant::{OwnedValue, Value};
 use zbus::{block_on, Connection};
 
 fn fake_backends() -> Backends {
@@ -191,4 +194,76 @@ fn any_unsandboxed_process_may_toggle_but_a_caller_the_bus_cannot_name_may_not()
         other => panic!("expected a refusal, got {other:?}"),
     }
     assert!(toggled_rx.recv_timeout(Duration::from_millis(300)).is_err());
+}
+
+/// A media player that never answers a read of its track.
+struct HungPlayer;
+
+#[zbus::interface(name = "org.mpris.MediaPlayer2.Player")]
+impl HungPlayer {
+    #[zbus(property)]
+    async fn metadata(&self) -> HashMap<String, OwnedValue> {
+        std::future::pending().await
+    }
+}
+
+/// A media player playing a song.
+struct SongPlayer;
+
+#[zbus::interface(name = "org.mpris.MediaPlayer2.Player")]
+impl SongPlayer {
+    #[zbus(property)]
+    fn metadata(&self) -> HashMap<String, OwnedValue> {
+        let title = OwnedValue::try_from(Value::from("Song")).unwrap();
+        HashMap::from([("xesam:title".to_owned(), title)])
+    }
+
+    #[zbus(property)]
+    fn playback_status(&self) -> String {
+        "Playing".to_owned()
+    }
+}
+
+#[test]
+fn a_media_player_that_hangs_is_passed_over_and_the_panel_reads_on() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    // the hung player sorts first, so the reading meets it before the one that plays
+    let _hung = block_on(
+        bus.builder()
+            .name("org.mpris.MediaPlayer2.a_hung")
+            .unwrap()
+            .serve_at("/org/mpris/MediaPlayer2", HungPlayer)
+            .unwrap()
+            .build(),
+    )
+    .expect("the hung player claims its name");
+    let _song = block_on(
+        bus.builder()
+            .name("org.mpris.MediaPlayer2.b_song")
+            .unwrap()
+            .serve_at("/org/mpris/MediaPlayer2", SongPlayer)
+            .unwrap()
+            .build(),
+    )
+    .expect("the playing player claims its name");
+    let address = bus.address.clone();
+    let (read_tx, read_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let media = MprisPlayer::at(&address).read();
+        let _ = read_tx.send((media.map_err(|e| e.to_string()), started.elapsed()));
+    });
+    let (media, took) = read_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("a hung player does not hold the reading");
+    let media = media.expect("the reading").expect("a player plays");
+    assert_eq!(media.title, "Song");
+    assert!(media.playing);
+    assert!(
+        took < PLAYER_TIMEOUT * 5,
+        "one wait for the hung player, not more: {took:?}"
+    );
 }

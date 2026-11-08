@@ -6,9 +6,10 @@
 //! Properties are read from the service every time, never from a cache.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use zbus::blocking::proxy::Builder;
-use zbus::blocking::{Connection, Proxy};
+use zbus::blocking::{connection, Connection, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
@@ -45,9 +46,17 @@ const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
 /// same floor as the overlay's key presses; the design maps 0.0 to the panel's device minimum).
 const DISPLAY_FLOOR: u32 = 1;
 
+/// How long a media player has to answer one call. The players are other applications and are read on the panel's
+/// own thread, so one that hangs costs a reading this long instead of holding the panel.
+pub const PLAYER_TIMEOUT: Duration = Duration::from_millis(200);
+
 /// One bus connection, made when first needed.
 struct Bus {
     session: bool,
+    /// The bus's address; `None` takes the system or session bus of the environment.
+    address: Option<String>,
+    /// How long a method call may wait for its answer; `None` waits as long as it takes.
+    timeout: Option<Duration>,
     connection: Option<Connection>,
 }
 
@@ -55,6 +64,8 @@ impl Bus {
     fn system() -> Self {
         Self {
             session: false,
+            address: None,
+            timeout: None,
             connection: None,
         }
     }
@@ -62,8 +73,21 @@ impl Bus {
     fn session() -> Self {
         Self {
             session: true,
-            connection: None,
+            ..Self::system()
         }
+    }
+
+    fn connect(&self) -> zbus::Result<Connection> {
+        let builder = match (&self.address, self.session) {
+            (Some(address), _) => connection::Builder::address(address.as_str())?,
+            (None, true) => connection::Builder::session()?,
+            (None, false) => connection::Builder::system()?,
+        };
+        match self.timeout {
+            Some(timeout) => builder.method_timeout(timeout),
+            None => builder,
+        }
+        .build()
     }
 
     fn proxy(
@@ -83,11 +107,7 @@ impl Bus {
         interface: &'static str,
     ) -> zbus::Result<Proxy<'static>> {
         if self.connection.is_none() {
-            self.connection = Some(if self.session {
-                Connection::session()?
-            } else {
-                Connection::system()?
-            });
+            self.connection = Some(self.connect()?);
         }
         let connection = self.connection.as_ref().expect("connected above");
         Builder::new(connection)
@@ -488,10 +508,26 @@ pub struct MprisPlayer {
 }
 
 impl MprisPlayer {
-    /// A media backend; nothing is contacted until the first use.
+    /// A media backend on the session bus; nothing is contacted until the first use.
     pub fn new() -> Self {
+        Self::on(Bus::session())
+    }
+
+    /// A media backend on the bus at `address`.
+    pub fn at(address: &str) -> Self {
+        Self::on(Bus {
+            address: Some(address.to_owned()),
+            ..Bus::session()
+        })
+    }
+
+    /// Every call bounded by [`PLAYER_TIMEOUT`].
+    fn on(bus: Bus) -> Self {
         Self {
-            bus: Bus::session(),
+            bus: Bus {
+                timeout: Some(PLAYER_TIMEOUT),
+                ..bus
+            },
             player: None,
         }
     }

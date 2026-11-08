@@ -1459,20 +1459,20 @@ fn popup_backdrop_elements(
     let mut glass = GlassGroups::default();
     for b in backdrops.iter().rev() {
         let alpha = b.alpha as f32 * opacity;
+        // the popup's rim, in front of its glass or material, which light no rim of their own
+        out.push(rrect_item(
+            SceneKind::PopupRim,
+            b.key,
+            b.area,
+            b.radius,
+            true,
+            [0.0; 4],
+            Some((1.0 / p.scale, rim)),
+            alpha,
+        ));
         if b.glass.is_some() {
-            // glass lights its own rim
             glass.add(b, out.len());
         } else {
-            out.push(rrect_item(
-                SceneKind::PopupRim,
-                b.key,
-                b.area,
-                b.radius,
-                true,
-                [0.0; 4],
-                Some((1.0 / p.scale, rim)),
-                alpha,
-            ));
             out.extend(material_layer(
                 p,
                 SceneKind::Backdrop,
@@ -1509,7 +1509,7 @@ fn popup_backdrop_elements(
             f64::from(alpha),
         ));
     }
-    glass.finish(p, out, opacity)
+    glass.finish_popup(p, out, opacity)
 }
 
 /// Material pieces of committed backdrops, to go directly below the owning surface's pieces
@@ -1569,7 +1569,12 @@ impl<'a> GlassGroups<'a> {
 
     /// `out` with each container's piece at its place.
     fn finish(self, p: &SceneParams<'_>, out: Vec<Piece>, opacity: f32) -> Vec<Piece> {
-        self.place(out, |members| glass_pieces(p, members, opacity))
+        self.place(out, |members| glass_pieces(p, members, opacity, false))
+    }
+
+    /// [`Self::finish`] for the glass of a popup, whose rim is drawn apart ([`popup_backdrop_elements`]).
+    fn finish_popup(self, p: &SceneParams<'_>, out: Vec<Piece>, opacity: f32) -> Vec<Piece> {
+        self.place(out, |members| glass_pieces(p, members, opacity, true))
     }
 
     /// `out` with the pieces `make` gives each container (its backdrops front to back) at the container's place.
@@ -1598,7 +1603,12 @@ impl<'a> GlassGroups<'a> {
 
 /// The glass piece of the container of `members` (glass backdrops of one surface, front to back), or translucent fills
 /// standing in for it while the material pass is unavailable.
-fn glass_pieces(p: &SceneParams<'_>, members: &[&BackdropArea], opacity: f32) -> Vec<Piece> {
+fn glass_pieces(
+    p: &SceneParams<'_>,
+    members: &[&BackdropArea],
+    opacity: f32,
+    popup: bool,
+) -> Vec<Piece> {
     let Some(spec) = members.first().and_then(|b| b.glass) else {
         return Vec::new();
     };
@@ -1619,7 +1629,11 @@ fn glass_pieces(p: &SceneParams<'_>, members: &[&BackdropArea], opacity: f32) ->
             )
         })
         .collect();
-    let container = Container::new(shapes, spec.spacing as f32, mode);
+    let mut container = Container::new(shapes, spec.spacing as f32, mode);
+    if popup {
+        // a popup's rim is drawn apart, lit all around: the glass's own would light its top and bottom twice
+        container.params.highlight.amount = 0.0;
+    }
     let alpha = members.iter().map(|b| b.alpha).fold(0.0, f64::max) as f32 * opacity;
     let index = members[0].key;
     let ready = p

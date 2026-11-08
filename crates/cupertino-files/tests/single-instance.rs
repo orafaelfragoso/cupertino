@@ -616,6 +616,49 @@ fn a_launch_racing_the_exit_starts_a_new_files_instead_of_handing_over() {
     );
 }
 
+/// The D-Bus error name a call failed with.
+fn error_name(e: &zbus::Error) -> String {
+    match e {
+        zbus::Error::MethodError(name, _, _) => name.to_string(),
+        zbus::Error::FDO(e) => zbus::DBusError::name(&**e).to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+#[test]
+fn calls_past_the_ones_waiting_are_refused_at_once() {
+    let Some(bus) = bus() else { return };
+    // the most calls that wait for the window's thread
+    const WAITING: usize = 16;
+    const CALLERS: usize = WAITING + 8;
+    let service = Service::serve(bus.builder()).unwrap();
+    let (results, answered) = mpsc::channel();
+    for _ in 0..CALLERS {
+        let activate = call(&bus, "Activate", (HashMap::<String, OwnedValue>::new(),));
+        let results = results.clone();
+        std::thread::spawn(move || {
+            let _ = results.send(activate());
+        });
+    }
+    // the window's thread takes nothing yet: the calls past the waiting ones are answered while those still wait
+    for _ in WAITING..CALLERS {
+        let refused = answered
+            .recv_timeout(Duration::from_secs(20))
+            .expect("a call past the waiting ones is answered");
+        let e = refused.expect_err("only the waiting calls are taken");
+        assert_eq!(error_name(&e), "org.freedesktop.DBus.Error.LimitsExceeded");
+    }
+    let calls = service.take();
+    assert_eq!(calls.len(), WAITING);
+    calls.into_iter().for_each(instance::Call::done);
+    for _ in 0..WAITING {
+        answered
+            .recv_timeout(Duration::from_secs(20))
+            .expect("a taken call is answered")
+            .expect("and succeeds");
+    }
+}
+
 #[test]
 fn the_first_window_is_raised_with_the_token_files_was_started_with() {
     let Some(bus) = bus() else { return };

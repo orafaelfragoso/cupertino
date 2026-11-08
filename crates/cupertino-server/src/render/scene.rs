@@ -13,7 +13,7 @@ use cupertino_scene::{
     Clip, ImageRole, OutputPoint, Placement, RoundedRect, SceneItem, SceneKind, Shadow, Source,
     SurfaceRole,
 };
-use cupertino_theme::{Appearance, MaterialOptions, Theme};
+use cupertino_theme::{Appearance, MaterialOptions, Theme, WindowState};
 use cupertino_wm::{OutputId, Presentation, Rect, WindowId, Wm};
 use smithay::backend::renderer::element::Element;
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -222,7 +222,18 @@ pub fn placed_plan(
 }
 
 /// Recipes by material name, appearance and Reduce Transparency.
-type RecipeCache = HashMap<(String, Appearance, bool), Option<Rc<GpuRecipe>>>;
+/// The variant of a material a backdrop draws: the opaque one with Reduce Transparency, and the inactive one for a
+/// window that is not active.
+fn material_options(reduce_transparency: bool, window: WindowState) -> MaterialOptions {
+    MaterialOptions {
+        reduce_transparency,
+        window,
+        ..MaterialOptions::default()
+    }
+}
+
+/// Recipes by material, appearance, Reduce Transparency and whether the window is inactive.
+type RecipeCache = HashMap<(String, Appearance, bool, bool), Option<Rc<GpuRecipe>>>;
 
 /// Plan of window `id` on its output at `now` (None when the window cannot be drawn). With Reduce
 /// Motion in `options` a full-screen transition draws the window at its new frame (`render::motion`).
@@ -323,7 +334,29 @@ impl RenderResources {
         appearance: Appearance,
         reduce_transparency: bool,
     ) -> Option<Rc<GpuRecipe>> {
-        let key = (material.to_string(), appearance, reduce_transparency);
+        self.window_recipe(
+            material,
+            appearance,
+            reduce_transparency,
+            WindowState::Active,
+        )
+    }
+
+    /// [`Self::recipe`] for a backdrop of a window in `window` state: an inactive window draws the material's
+    /// inactive variant.
+    pub fn window_recipe(
+        &self,
+        material: &str,
+        appearance: Appearance,
+        reduce_transparency: bool,
+        window: WindowState,
+    ) -> Option<Rc<GpuRecipe>> {
+        let key = (
+            material.to_string(),
+            appearance,
+            reduce_transparency,
+            window == WindowState::Inactive,
+        );
         self.recipes
             .borrow_mut()
             .entry(key)
@@ -332,10 +365,7 @@ impl RenderResources {
                 match theme.recipe(
                     appearance,
                     material,
-                    &MaterialOptions {
-                        reduce_transparency,
-                        ..MaterialOptions::default()
-                    },
+                    &material_options(reduce_transparency, window),
                 ) {
                     Ok(r) => Some(Rc::new(GpuRecipe::new(&r))),
                     Err(e) => {
@@ -784,7 +814,12 @@ fn window_elements(
         cropped_backdrops(backdrops, visual_local)
     };
     // a square backdrop follows the window's rounded corners where it reaches them, as the content does
-    let mut backdrops = backdrop_elements(p, &backdrops, alpha);
+    let state = if active {
+        WindowState::Active
+    } else {
+        WindowState::Inactive
+    };
+    let mut backdrops = backdrop_elements(p, &backdrops, alpha, state);
     if matches!(clip, Clip::Rounded { .. }) {
         for piece in &mut backdrops {
             if let Piece::Material(m) = piece {
@@ -1374,7 +1409,12 @@ fn layer_elements(p: &mut SceneParams<'_>, layer: Layer, captures: &mut Vec<Piec
         if look.is_some() {
             out.extend(bar_backdrop_elements(p, &backdrops, opacity, captures));
         } else {
-            out.extend(backdrop_elements(p, &backdrops, opacity));
+            out.extend(backdrop_elements(
+                p,
+                &backdrops,
+                opacity,
+                WindowState::Active,
+            ));
         }
     }
     out
@@ -1449,11 +1489,12 @@ fn popup_backdrop_elements(
 }
 
 /// Material pieces of committed backdrops, to go directly below the owning surface's pieces
-/// (the list is front to back, so later backdrops come first).
+/// (the list is front to back, so later backdrops come first), in the variant of a window in `window` state.
 fn backdrop_elements(
     p: &mut SceneParams<'_>,
     backdrops: &[BackdropArea],
     opacity: f32,
+    window: WindowState,
 ) -> Vec<Piece> {
     let mut out = Vec::new();
     let mut glass = GlassGroups::default();
@@ -1462,7 +1503,7 @@ fn backdrop_elements(
             glass.add(b, out.len());
             continue;
         }
-        out.extend(material_layer(
+        out.extend(window_material_layer(
             p,
             SceneKind::Backdrop,
             b.key,
@@ -1470,6 +1511,7 @@ fn backdrop_elements(
             b.area,
             b.radius,
             b.alpha as f32 * opacity,
+            window,
         ));
     }
     glass.finish(p, out, opacity)
@@ -1629,6 +1671,7 @@ fn bar_backdrop_elements(
             b.radius,
             alpha,
             MaterialStage::Composite { owner },
+            WindowState::Active,
         );
         let Some(composite) = composite else {
             out.push(fallback_fill(
@@ -1651,6 +1694,7 @@ fn bar_backdrop_elements(
             0.0,
             alpha,
             MaterialStage::Capture { owner },
+            WindowState::Active,
         ));
         out.push(composite);
     }
@@ -1667,6 +1711,30 @@ pub(crate) fn material_layer(
     radius: f64,
     alpha: f32,
 ) -> Vec<Piece> {
+    window_material_layer(
+        p,
+        kind,
+        index,
+        material,
+        area,
+        radius,
+        alpha,
+        WindowState::Active,
+    )
+}
+
+/// [`material_layer`] for a backdrop of a window in `window` state.
+#[allow(clippy::too_many_arguments)]
+fn window_material_layer(
+    p: &mut SceneParams<'_>,
+    kind: SceneKind,
+    index: u64,
+    material: &str,
+    area: smithay::utils::Rectangle<f64, Logical>,
+    radius: f64,
+    alpha: f32,
+    window: WindowState,
+) -> Vec<Piece> {
     match material_piece(
         p,
         kind,
@@ -1676,6 +1744,7 @@ pub(crate) fn material_layer(
         radius,
         alpha,
         MaterialStage::Full,
+        window,
     ) {
         Some(m) => vec![m],
         None => vec![fallback_fill(p, kind, index, area, radius, alpha)],
@@ -1693,6 +1762,7 @@ fn material_piece(
     radius: f64,
     alpha: f32,
     stage: MaterialStage,
+    window: WindowState,
 ) -> Option<Piece> {
     let dark = p.config.is_dark();
     let appearance = p
@@ -1702,7 +1772,7 @@ fn material_piece(
     let (shared, recipe) = (
         p.res.material.clone()?,
         p.res
-            .recipe(material, appearance, p.display.reduce_transparency)?,
+            .window_recipe(material, appearance, p.display.reduce_transparency, window)?,
     );
     if !shared.borrow().is_ready() {
         return None;
@@ -2135,6 +2205,31 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_inactive_window_draws_the_inactive_variant_of_its_sidebar() {
+        let theme = Theme::load().unwrap();
+        let sidebar = |window| {
+            theme
+                .recipe(
+                    Appearance::Dark,
+                    "Sidebar",
+                    &super::material_options(false, window),
+                )
+                .unwrap()
+        };
+        let (active, inactive) = (sidebar(WindowState::Active), sidebar(WindowState::Inactive));
+        assert!(
+            active.has_backdrop(),
+            "the active sidebar blurs what is behind"
+        );
+        assert!(
+            !inactive.has_backdrop(),
+            "the inactive one is a solid grey tinted by the wallpaper"
+        );
+        assert!(inactive.uses_tint_layer());
+        assert_eq!(inactive.rendition_key, "inactive.normal");
+    }
+
     use super::super::material::{MaterialElement, MaterialGl};
     use super::super::shader_rect::ElementKey;
     use super::*;

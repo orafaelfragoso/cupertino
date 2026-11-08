@@ -397,6 +397,37 @@ fn a_modal_child_maps_as_a_sheet_under_the_parent_title_bar_and_slides_in_and_ou
     );
 }
 
+/// Under Reduce Motion an opening sheet is drawn at its place from the start and only fades in.
+#[test]
+fn under_reduce_motion_a_sheet_fades_in_at_its_place() {
+    let Some(mut h) = Harness::new() else { return };
+    let (client, _, _) = parent_window(&mut h);
+    let child = map_child(&mut h, &client, true);
+    let rest = h.state.wm.window(child).unwrap().geometry();
+    let reduced = cupertino_defaults::accessibility::DisplayOptions {
+        reduce_motion: true,
+        ..h.state.display_options()
+    };
+    let t0 = h.state.now();
+    let drawn = |h: &Harness, t: f64, options| {
+        cupertino_server::render::scene::plan_for(
+            &h.state.wm,
+            h.state.entry(child).unwrap(),
+            0.0,
+            t,
+            &h.state.fx,
+            options,
+        )
+        .expect("the sheet is drawn")
+        .1
+    };
+    let half = drawn(&h, t0 + 0.065, reduced);
+    assert_eq!(half.frame, rest, "no slide");
+    assert!(half.opacity > 0.0 && half.opacity < 1.0, "{}", half.opacity);
+    let normal = drawn(&h, t0 + 0.065, h.state.display_options());
+    assert!(normal.frame.y < rest.y, "the slide without Reduce Motion");
+}
+
 #[test]
 fn a_parent_under_a_sheet_is_dimmed_as_the_sheet_shows_and_its_content_takes_no_clicks() {
     use cupertino_server::events::BTN_LEFT;

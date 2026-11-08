@@ -40,6 +40,12 @@ pub fn skips_frame_animation(state: LifecycleState, options: DisplayOptions) -> 
         )
 }
 
+/// Whether a window of `kind` in `state` is drawn at its resting frame while it keeps its opacity: under Reduce
+/// Motion an opening sheet fades in where it rests instead of sliding down into place.
+pub fn skips_sheet_slide(kind: WindowKind, state: LifecycleState, options: DisplayOptions) -> bool {
+    options.reduce_motion && kind == WindowKind::Sheet && state == LifecycleState::Opening
+}
+
 /// The close transform of a window of `kind` given its normal one: a sheet closes at once under
 /// Reduce Motion.
 pub fn close_transform(
@@ -218,6 +224,30 @@ mod tests {
         ] {
             assert!(!skips_frame_animation(state, reduced()), "{state:?}");
         }
+    }
+
+    #[test]
+    fn under_reduce_motion_only_an_opening_sheet_loses_its_slide() {
+        assert!(skips_sheet_slide(
+            WindowKind::Sheet,
+            LifecycleState::Opening,
+            reduced()
+        ));
+        assert!(!skips_sheet_slide(
+            WindowKind::Sheet,
+            LifecycleState::Opening,
+            DisplayOptions::default()
+        ));
+        assert!(!skips_sheet_slide(
+            WindowKind::Sheet,
+            LifecycleState::Normal,
+            reduced()
+        ));
+        assert!(!skips_sheet_slide(
+            WindowKind::Alert,
+            LifecycleState::Opening,
+            reduced()
+        ));
     }
 
     #[test]

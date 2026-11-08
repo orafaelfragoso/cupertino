@@ -428,6 +428,27 @@ fn a_light_session_darkens_the_glass_by_about_a_quarter() {
 }
 
 #[test]
+fn the_opaque_panel_of_reduce_transparency_holds_edit_controls_too() {
+    let (frame, _) = Run::start(tokens(Appearance::Dark, true), Presentation::SHOWN).capture();
+    // beside the Edit Controls capsule, at its height, and just above the panel's bottom edge under it
+    for (x, y) in [(40, 480), (154, 496)] {
+        let pixel = frame.pixel(x, y).unwrap();
+        assert_eq!(pixel.alpha(), 255, "opaque at ({x}, {y})");
+        assert!(
+            pixel.red().abs_diff(77) <= 2,
+            "the panel's grey at ({x}, {y}): {}",
+            pixel.red()
+        );
+    }
+    let capsule = frame.pixel(154, 470).unwrap();
+    assert!(
+        capsule.red() < 40,
+        "the capsule is a dark tile on the panel: {}",
+        capsule.red()
+    );
+}
+
+#[test]
 fn the_open_wifi_view_matches_its_golden() {
     check("wifi-detail", Appearance::Dark, false, WIFI_OPEN);
 }

@@ -439,7 +439,8 @@ impl<M: 'static> Widget<M> for Place<M> {
 /// panel.
 struct Board<M> {
     alpha: f64,
-    /// Height of the tiles the opaque panel of Reduce Transparency goes around: the grid, or an open detail view.
+    /// Height of the tiles the opaque panel of Reduce Transparency goes around: the grid and Edit Controls, or an open
+    /// detail view.
     height: f64,
     on_outside: M,
     children: Vec<Element<M>>,
@@ -1873,9 +1874,10 @@ impl<M: Clone + 'static> Builder<'_, M> {
         )
     }
 
-    /// Height of what the tiles cover: the grid, going to the open detail view's height as it opens.
+    /// Height of what the tiles cover: the grid with the Edit Controls capsule under it, going to the open detail
+    /// view's height as it opens.
     fn height(&self) -> f64 {
-        let grid = layout::GRID_HEIGHT;
+        let grid = layout::edit_frame().max_y();
         self.presentation.detail.map_or(grid, |o| {
             let open = layout::detail_frame(self.row_count(o.detail)).height();
             grid + (open - grid) * o.progress.clamp(0.0, 1.0)

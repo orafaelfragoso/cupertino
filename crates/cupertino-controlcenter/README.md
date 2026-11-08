@@ -47,7 +47,7 @@ join one glass container with an 8 pt blend, less than the 12 pt between them, s
 detail view blends where it passes them. The glass alpha follows the fade; the content fades as one layer. In a light
 session each tile lays black at 0.27 over its glass, so over a white page it reads as a mid-light grey under its white text.
 With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners, 8 pt around the grid and
-around an open detail view while it is taller. With Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of
+the Edit Controls capsule, closing in to an open detail view as it opens. With Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of
 grey 0.341, with no glass. A
 tile the window cannot show glass under fills a dark grey instead. `view::catcher` is a transparent window with no drawing
 that takes a left or right press anywhere on it. The process's `PanelRoles` gives the panel (`view::APP_ID`) an overlay

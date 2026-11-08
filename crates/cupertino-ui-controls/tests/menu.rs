@@ -528,7 +528,20 @@ fn a_pop_up_button_opens_its_options_over_itself_with_the_chosen_one_checked_on_
     assert_eq!(size.states.expanded, Some(false));
     h.tap(DOWN);
     assert_eq!(h.model().menu, Some(Open::Sizes), "Down opens it too");
-    h.send(WindowEvent::PopupDone);
+    let dismiss = |h: &mut Harness<Editor>| {
+        h.window = popup(h, "sizes").expect("open");
+        h.send(WindowEvent::PopupDone);
+        h.window = main;
+        assert_eq!(h.model().menu, None);
+    };
+    dismiss(&mut h);
+    h.ask(&Key::from("size"), Action::Click);
+    assert_eq!(
+        (h.model().menu.clone(), h.model().size),
+        (Some(Open::Sizes), 2),
+        "and assistive technology, choosing nothing"
+    );
+    dismiss(&mut h);
     h.click(h.center("size"));
     assert_eq!(h.model().menu, Some(Open::Sizes), "and a click");
     let id = popup(&h, "sizes").expect("open");

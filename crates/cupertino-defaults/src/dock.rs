@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | bare lines, `pin`, `pinned` | an application: desktop file ID, `app_id` or command | — |
 //! | `tile_size` | points; valid `0 < v < 257`, rounded up ([`sanitize_tile_size`]) | 64, 52 on displays at most 800 pt tall |
-//! | `large_size` | points; valid `0 < v < 513`, rounded up ([`sanitize_large_size`]) | 88 |
+//! | `large_size` | points; valid `0 < v < 513`, rounded up ([`sanitize_large_size`]) | 128 |
 //! | `magnification`, `autohide`, `recents` | `on`, `off` | off, off, on |
 //! | `position` | `bottom`, `left`, `right` | `bottom` |
 //! | `corner_top_left` … `spread` ([`TRIGGER_KEYS`]) | `none`, `app-grid`, `exec:<command line>`, a server action name | [`ActionMap::default`] |
@@ -27,7 +27,7 @@ pub const DOCK_CONF_ENV: &str = "CUPERTINO_DOCK_CONFIG";
 pub const SMALL_DISPLAY_HEIGHT: f64 = 800.0;
 pub const DEFAULT_TILE_SIZE: f64 = 64.0;
 pub const DEFAULT_TILE_SIZE_SMALL_DISPLAY: f64 = 52.0;
-pub const DEFAULT_LARGE_SIZE: f64 = 88.0;
+pub const DEFAULT_LARGE_SIZE: f64 = 128.0;
 
 /// Tile size default for a display of the given height in points.
 pub fn default_tile_size(display_height: f64) -> f64 {
@@ -453,7 +453,7 @@ mod tests {
             "small displays get the small default"
         );
         assert_eq!(sanitize_large_size(Some(512.5)), 513.0);
-        assert_eq!(sanitize_large_size(Some(513.0)), 88.0);
+        assert_eq!(sanitize_large_size(Some(513.0)), 128.0);
         assert_eq!(sanitize_large_size(Some(96.0)), 96.0);
     }
 

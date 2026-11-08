@@ -82,7 +82,7 @@ pub const RECENTS_MAX: usize = 3;
 pub struct DockConfig {
     /// default 64 (52 on displays at most 800 pt tall, see [`DockConfig::for_display_height`]).
     pub tile_size: f64,
-    /// default 88.
+    /// default 128.
     pub large_size: f64,
     /// default off.
     pub magnification: bool,

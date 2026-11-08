@@ -1238,7 +1238,7 @@ fn verified_defaults() {
     let c = DockConfig::default();
     assert_eq!(
         (c.tile_size, c.large_size, c.magnification),
-        (64.0, 88.0, false)
+        (64.0, 128.0, false)
     );
     assert_eq!(c.autohide_delay, 0.15);
     assert_eq!(c.autohide_time_modifier, 1.0);
@@ -1250,7 +1250,7 @@ fn verified_defaults() {
     assert_eq!(sanitize_tile_size(Some(300.0), 1080.0), 64.0);
     assert_eq!(sanitize_tile_size(Some(0.0), 700.0), 52.0);
     assert_eq!(sanitize_tile_size(Some(40.2), 1080.0), 41.0);
-    assert_eq!(sanitize_large_size(Some(513.0)), 88.0);
+    assert_eq!(sanitize_large_size(Some(513.0)), 128.0);
     assert_eq!(sanitize_large_size(Some(200.5)), 201.0);
     let p = DockConfig::from_preferences(None, Some(256.0), Some(true), 900.0);
     assert_eq!(
@@ -1280,11 +1280,11 @@ fn default_dock_hovers_exactly_the_large_size_with_the_verified_fisheye() {
     let t = settle(&mut d, 0.0);
     let l = d.layout(SCREEN, t);
     let big = l.tiles.iter().find(|p| p.id == target.id).unwrap();
-    assert!((big.rect.w - 88.0).abs() < 1e-6, "{}", big.rect.w);
-    assert!((big.rect.h - 88.0).abs() < 1e-6);
-    // the dock grows by twice the real scale: (88 − 64) / 2 / sin(π/12) on either side
+    assert!((big.rect.w - 128.0).abs() < 1e-6, "{}", big.rect.w);
+    assert!((big.rect.h - 128.0).abs() < 1e-6);
+    // the dock grows by twice the real scale: (128 − 64) / 2 / sin(π/12) on either side
     let growth = l.bar.w - rest.bar.w;
-    assert!(growth > 0.0 && growth <= 2.0 * 46.37 + 1e-6, "{growth}");
+    assert!(growth > 0.0 && growth <= 2.0 * 123.65 + 1e-6, "{growth}");
 }
 
 #[test]
@@ -1654,12 +1654,16 @@ fn the_pointer_in_the_gap_between_two_tiles_is_on_one_of_them() {
     }
 }
 
-// ---- magnification and the launch hop at the default size ---------------------------------------------------------
+// ---- magnification at an 88 pt magnified size, and the launch hop, at the default tile size -----------------------
 
-/// Centres of seven tiles in a row with the pointer at `c` along the unmagnified row, fully magnified.
+/// The magnified size the bulge tests use, over the default 64 pt tiles.
+const MAGNIFIED_88: f64 = 88.0;
+
+/// Centres of seven tiles in a row with the pointer at `c` along the unmagnified row, fully magnified to 88 pt.
 fn magnified_centres(c: f64) -> Vec<f64> {
     let cfg = DockConfig {
         magnification: true,
+        large_size: MAGNIFIED_88,
         ..DockConfig::default()
     };
     layout(&cfg, 7, Some(c), 1.0)
@@ -1669,12 +1673,12 @@ fn magnified_centres(c: f64) -> Vec<f64> {
 }
 
 #[test]
-fn the_default_magnified_size_is_88_pt_and_the_tile_under_the_pointer_takes_it() {
+fn the_tile_under_the_pointer_takes_the_whole_magnified_size() {
     let cfg = DockConfig {
         magnification: true,
+        large_size: MAGNIFIED_88,
         ..DockConfig::default()
     };
-    assert_eq!(cfg.large_size, 88.0);
     let f = layout(&cfg, 7, Some(3.0 * 68.0 + 32.0), 1.0);
     assert!((f[3].size - 88.0).abs() < 1e-9);
 }
@@ -1692,6 +1696,7 @@ fn magnification_is_a_local_bulge_whose_neighbours_grow_too() {
     // far along a long row the tiles keep their places: the bulge is local
     let cfg = DockConfig {
         magnification: true,
+        large_size: MAGNIFIED_88,
         ..DockConfig::default()
     };
     let row = layout(&cfg, 20, Some(2.0 * 68.0 + 32.0), 1.0);

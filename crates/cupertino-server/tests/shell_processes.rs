@@ -844,10 +844,10 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
     });
 
     // magnification alone (the path the separator menu's Turn Magnification On takes too) deepens the surface for the
-    // 88 pt magnified tiles
+    // 128 pt magnified tiles
     cupertino_defaults::atomic::write_atomic(&conf, b"tile_size = 36\n").unwrap();
     server.wait_until("magnification to be off", |s| {
-        layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h < 88)
+        layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h < 128)
     });
     let plain = layer_geometry(&server.state, "cupertino-dock")
         .unwrap()
@@ -858,7 +858,7 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
     server.wait_until(
         "the surface to make room for the magnified tiles",
         move |s| {
-            layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h > plain && g.size.h >= 88)
+            layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h > plain && g.size.h >= 128)
         },
     );
 }

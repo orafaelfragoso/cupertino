@@ -39,7 +39,7 @@ When `CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE=id,id` is set, `capture.sh` builds a s
 | `XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID` | Set by the dock, to the xdg-activation token, in the environment of every application it launches (the command and the detached start are `cupertino_apps::launch`, shared with the menu bar). |
 
 Preference defaults: tile size 64 (52 for displays at most 800 pt tall,
-`DockConfig::for_display_height`), large size 88, magnification off, launch animation on, auto-hide off, auto-hide delay
+`DockConfig::for_display_height`), large size 128, magnification off, launch animation on, auto-hide off, auto-hide delay
 0.15 s, time modifier 1.0. Validation is `sanitize_tile_size`, `sanitize_large_size` and `DockConfig::from_preferences`.
 
 ## How it works

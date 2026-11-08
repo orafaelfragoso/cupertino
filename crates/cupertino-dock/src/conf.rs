@@ -139,7 +139,7 @@ mod tests {
                 defaults.magnification,
                 defaults.autohide
             ),
-            (64.0, 88.0, false, false)
+            (64.0, 128.0, false, false)
         );
         assert_eq!(
             dock_config(None, 768.0).tile_size,

@@ -1143,6 +1143,48 @@ mod tests {
     }
 
     #[test]
+    fn a_search_keeps_the_sidebar_rows_of_the_panes_it_finds_and_one_of_them_opens_its_pane() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
+        // the sidebar's rows top to bottom
+        let rows = |driver: &TestDriver<SettingsApp>| {
+            let snapshot = driver.runtime().snapshot(window).unwrap();
+            let mut rows: Vec<(f64, String)> = snapshot
+                .accessibility
+                .iter()
+                .filter(|(_, n)| n.role == Role::ListItem)
+                .filter_map(|(id, n)| {
+                    let rect = snapshot.nodes.iter().find(|m| m.id == *id)?.rect;
+                    Some((rect.origin.y, n.name.clone()?))
+                })
+                .collect();
+            rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+            rows.into_iter().map(|(_, name)| name).collect::<Vec<_>>()
+        };
+        let all = rows(&driver);
+        click(&mut driver, window, "search");
+        for c in "keyboard".chars() {
+            key(&mut driver, window, c as u32, Some(c), Mods::NONE);
+        }
+        let shown = rows(&driver);
+        let kept: Vec<String> = all.iter().filter(|r| shown.contains(r)).cloned().collect();
+        assert_eq!(shown, kept, "the rows found, in the sidebar's order");
+        assert!(
+            shown.len() >= 2 && shown.contains(&"Keyboard".to_owned()),
+            "{shown:?}"
+        );
+        assert!(!shown.contains(&"Desktop & Dock".to_owned()), "{shown:?}");
+        // a row counts among the rows shown: the last of them is not the pane at its place among all the rows
+        let last = shown.last().unwrap().clone();
+        assert_ne!(all.iter().position(|r| *r == last), Some(shown.len() - 1));
+        let row = node(&driver, window, Role::ListItem, &last);
+        click_node(&mut driver, window, row);
+        assert_eq!(title(&mut driver, window), last);
+        assert_eq!(rows(&driver), all, "choosing a row ends the search");
+    }
+
+    #[test]
     fn a_navigation_row_opens_its_page_and_back_and_forward_go_through_the_history() {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();

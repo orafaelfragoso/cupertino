@@ -440,6 +440,8 @@ const WIDE: Size = Size::new(240.0, 56.0);
 const TALL: Size = Size::new(200.0, 112.0);
 const SIDEBAR: Size = Size::new(200.0, 250.0);
 const SHEET: Size = Size::new(400.0, 220.0);
+/// An alert hangs a tall column of stacked buttons under the toolbar row.
+const ALERT: Size = Size::new(400.0, 360.0);
 /// A compact module of a panel, 62 pt square inside the cell padding.
 const MODULE: Size = Size::new(86.0, 86.0);
 
@@ -952,7 +954,7 @@ fixtures! {
             buttons: vec![choice("Cancel", DialogAction::Cancel), choice("Rename", DialogAction::Default)],
         }),
     }.into();
-    alert: "alert", SHEET, &[State::Normal, State::Hover, State::Pressed, State::Focused], |_| Modal {
+    alert: "alert", ALERT, &[State::Normal, State::Hover, State::Pressed, State::Focused], |_| Modal {
         content: body("Document"),
         dialog: Some(Dialog {
             kind: DialogKind::Alert,

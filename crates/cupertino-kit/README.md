@@ -21,6 +21,10 @@ compositor. `app::run_on` and `app::run_on_with` run on a window system a deskto
 `app::run_lock_screen_on_with` does the same for the lock screen, whose AT-SPI adapter the session's lock never mutes
 (`AtspiAdapter::lock_screen`). The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
 
+The widgets' icons are the asset packs' symbols. `Icons::application`, the icon an alert shows, is the icon named by
+the `Icon=` of the desktop entry whose id is the running program's file name (`cupertino-files.desktop` for
+`cupertino-files`), from the packs, else from the host icon themes or a file, else the packs' generic application icon.
+
 `file_icons::FileIcons` gives apps that list files the icon of each item's type as image renditions (1× and 2×) for
 `controls::Image`: the asset packs' and the host icon theme's icon of the type's kind or its nearest ancestor's (as
 `cupertino_icons::document::document_icon_name` maps them), then the generic document icon, then the placeholder; a

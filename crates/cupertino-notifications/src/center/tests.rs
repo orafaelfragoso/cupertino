@@ -1,5 +1,6 @@
 use super::*;
 use crate::notification::Hints;
+use cupertino_defaults::notifications::{AppOverride, NotificationSettings, Previews};
 
 const VP: Size = Size {
     width: 1000.0,
@@ -52,49 +53,24 @@ fn ids_are_unique_and_replacement_keeps_the_id() {
 fn timeouts_follow_urgency_and_client_request() {
     let p = TimeoutPolicy::default();
     assert_eq!(
-        p.duration(Urgency::Normal, Expire::Default, false),
+        p.duration(Urgency::Normal, Expire::Default),
         Some(5.0)
     );
-    assert_eq!(p.duration(Urgency::Low, Expire::Default, false), Some(5.0));
-    assert_eq!(p.duration(Urgency::Critical, Expire::Default, false), None);
-    assert_eq!(p.duration(Urgency::Normal, Expire::Never, false), None);
+    assert_eq!(p.duration(Urgency::Low, Expire::Default), Some(5.0));
+    assert_eq!(p.duration(Urgency::Critical, Expire::Default), None);
+    assert_eq!(p.duration(Urgency::Normal, Expire::Never), None);
     assert_eq!(
-        p.duration(Urgency::Normal, Expire::Millis(1500), false),
+        p.duration(Urgency::Normal, Expire::Millis(1500)),
         Some(1.5)
     );
     assert_eq!(
-        p.duration(Urgency::Critical, Expire::Millis(1500), false),
+        p.duration(Urgency::Critical, Expire::Millis(1500)),
         None
     );
     assert_eq!(
-        p.duration(Urgency::Normal, Expire::Millis(10_000_000), false),
+        p.duration(Urgency::Normal, Expire::Millis(10_000_000)),
         Some(60.0)
     );
-}
-
-#[test]
-fn the_lock_screen_lifetime_is_10_s_for_default_timeouts_only() {
-    let p = TimeoutPolicy::default();
-    assert_eq!(
-        p.duration(Urgency::Normal, Expire::Default, true),
-        Some(10.0)
-    );
-    assert_eq!(p.duration(Urgency::Critical, Expire::Default, true), None);
-    assert_eq!(
-        p.duration(Urgency::Normal, Expire::Millis(1500), true),
-        Some(1.5)
-    );
-}
-
-#[test]
-fn a_banner_shown_on_the_lock_screen_expires_after_10_s() {
-    let mut c = center();
-    c.set_screen_locked(true);
-    let id = c.notify(input("app", "locked"), 0.0);
-    c.tick(9.9);
-    assert!(closed(&mut c).is_empty());
-    c.tick(10.1);
-    assert_eq!(closed(&mut c), vec![(id, CloseReason::Expired)]);
 }
 
 #[test]
@@ -601,4 +577,312 @@ fn banners_only_keeps_pinned_and_is_offered_only_with_both_kinds() {
     assert_ne!(normal, pinned);
     assert_eq!(c.clear_scope(ClearScope::All, 4.0), 1);
     assert_eq!(c.history_len(), 0);
+}
+
+// ---- the lock screen
+
+fn locked_center() -> NotificationCenter {
+    let mut c = center();
+    c.set_screen_locked(true, 0.0);
+    c
+}
+
+fn mail(summary: &str, body: &str) -> NotifyInput {
+    let mut i = NotifyInput::new("Mail", summary, body);
+    i.hints.desktop_entry = Some("org.example.Mail.desktop".into());
+    i
+}
+
+fn with_policy(c: &mut NotificationCenter, app: &str, own: AppOverride) {
+    let mut policy = c.policy().clone();
+    assert!(policy.set_app(app, own));
+    c.set_policy(policy);
+}
+
+fn previews(p: Previews) -> AppOverride {
+    AppOverride {
+        show_previews: Some(p),
+        ..AppOverride::default()
+    }
+}
+
+#[test]
+fn a_notification_arriving_while_locked_goes_to_the_centre_and_the_lock_list_redacted() {
+    let mut c = locked_center();
+    let id = c.notify(mail("Bank", "Your code is 482913"), 1.0);
+    assert_eq!(c.visible_count() + c.queued_count(), 0, "no banner");
+    assert_eq!(c.history_len(), 1, "kept in the centre");
+    assert_eq!(
+        c.lock_screen(),
+        [LockItem {
+            id,
+            app: "Mail".into(),
+            title: REDACTED_TITLE.into(),
+            body: String::new(),
+        }]
+    );
+    // nothing counts down, nothing expires, nothing closes
+    c.tick(100.0);
+    assert_eq!(c.next_wakeup(100.0), None);
+    assert!(closed(&mut c).is_empty());
+}
+
+#[test]
+fn a_transient_notification_arriving_while_locked_is_closed_unseen() {
+    let mut c = locked_center();
+    let mut i = input("Volume", "50 %");
+    i.hints.transient = true;
+    let id = c.notify(i, 1.0);
+    assert_eq!(closed(&mut c), vec![(id, CloseReason::Undefined)]);
+    assert!(c.get(id).is_none() && c.lock_screen().is_empty());
+}
+
+#[test]
+fn do_not_disturb_keeps_arrivals_off_the_lock_list() {
+    let mut c = locked_center();
+    c.set_dnd(DndMode::On, 0.0);
+    c.notify(mail("Bank", "Your code is 482913"), 1.0);
+    assert_eq!(c.history_len(), 1);
+    assert!(c.lock_screen().is_empty());
+}
+
+#[test]
+fn a_replacement_while_locked_updates_the_centre_and_the_lock_list_in_place() {
+    let mut c = center();
+    let earlier = c.notify(mail("Lunch", "noon?"), 0.0);
+    c.tick(6.0);
+    c.tick(6.3);
+    assert_eq!(c.visible_count(), 0, "in the centre only");
+    c.set_screen_locked(true, 7.0);
+    assert!(c.lock_screen().is_empty(), "it arrived before the lock");
+    let mut r = mail("Lunch", "one o'clock?");
+    r.replaces_id = earlier;
+    assert_eq!(c.notify(r, 8.0), earlier);
+    assert_eq!(c.visible_count() + c.queued_count(), 0, "still no banner");
+    assert_eq!(c.history_len(), 1);
+    assert_eq!(c.get(earlier).unwrap().body, "one o'clock?");
+    let listed = c.lock_screen();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, earlier);
+    // closed by its application: off the lock list
+    c.close(earlier, 9.0);
+    assert!(c.lock_screen().is_empty());
+}
+
+#[test]
+fn locking_freezes_the_banner_on_screen_and_sends_the_waiting_one_to_the_centre() {
+    let mut c = center();
+    let shown = c.notify(input("app", "shown"), 0.0);
+    let waiting = c.notify(input("app", "waiting"), 0.5);
+    assert_eq!(c.queued_count(), 1);
+    c.set_hover(Some(shown), 0.6);
+    c.set_screen_locked(true, 0.6);
+    assert_eq!(c.queued_count(), 0, "the waiting banner went to the centre");
+    assert_eq!(c.visible_ids(), vec![shown]);
+    assert_eq!(c.history_len(), 2);
+    assert!(c.get(waiting).is_some());
+    // long past its lifetime it is still there, and nothing wakes the host for it
+    c.tick(600.0);
+    assert_eq!(c.visible_ids(), vec![shown]);
+    assert!(closed(&mut c).is_empty());
+    assert_eq!(c.next_wakeup(600.0), None);
+    assert!(c.lock_screen().is_empty(), "both arrived before the lock");
+}
+
+#[test]
+fn a_replacement_of_the_frozen_banner_waits_for_the_unlock_with_its_new_lifetime() {
+    let mut c = center();
+    let id = c.notify(input("app", "one"), 0.0);
+    c.set_screen_locked(true, 4.0);
+    let mut r = input("app", "two");
+    r.replaces_id = id;
+    c.notify(r, 10.0);
+    c.tick(100.0);
+    assert_eq!(c.visible_ids(), vec![id], "frozen, updated in place");
+    assert_eq!(c.get(id).unwrap().summary, "two");
+    assert_eq!(c.lock_screen().len(), 1, "an update while locked is listed");
+    c.set_screen_locked(false, 200.0);
+    // the whole new lifetime, from the unlock
+    c.tick(204.9);
+    assert!(closed(&mut c).is_empty());
+    c.tick(205.0);
+    assert_eq!(closed(&mut c), vec![(id, CloseReason::Expired)]);
+}
+
+#[test]
+fn unlocking_resumes_the_rest_of_the_lifetime_quietly_and_empties_the_lock_list() {
+    let mut c = center();
+    let id = c.notify(input("app", "shown"), 0.0);
+    c.set_screen_locked(true, 2.0);
+    c.notify(mail("Bank", "code"), 3.0);
+    assert_eq!(c.lock_screen().len(), 1);
+    assert!(!c.is_quiet(id));
+    c.set_screen_locked(false, 50.0);
+    assert!(c.lock_screen().is_empty());
+    assert!(c.is_quiet(id), "back on screen, said already");
+    assert_eq!(c.visible_ids(), vec![id], "nothing that arrived while locked shows");
+    // 3 s of its 5 s were left
+    assert_eq!(c.next_wakeup(50.3), Some(Wakeup::At(53.0)));
+    c.tick(53.0);
+    assert_eq!(closed(&mut c), vec![(id, CloseReason::Expired)]);
+    // locking again lists only what arrives from then on
+    c.set_screen_locked(true, 60.0);
+    assert!(c.lock_screen().is_empty());
+}
+
+#[test]
+fn a_banner_with_almost_nothing_left_at_the_unlock_stays_the_minimum_time() {
+    let mut c = center();
+    let id = c.notify(input("app", "shown"), 0.0);
+    c.set_screen_locked(true, 4.9);
+    c.set_screen_locked(false, 10.0);
+    c.tick(10.9);
+    assert!(closed(&mut c).is_empty());
+    c.tick(11.0);
+    assert_eq!(closed(&mut c), vec![(id, CloseReason::Expired)]);
+}
+
+#[test]
+fn an_update_after_the_unlock_is_no_longer_quiet() {
+    let mut c = center();
+    let id = c.notify(input("app", "one"), 0.0);
+    c.set_screen_locked(true, 1.0);
+    c.set_screen_locked(false, 2.0);
+    assert!(c.is_quiet(id));
+    let mut r = input("app", "two");
+    r.replaces_id = id;
+    c.notify(r, 3.0);
+    assert!(!c.is_quiet(id));
+}
+
+#[test]
+fn an_application_kept_off_the_lock_screen_is_not_listed_and_others_are() {
+    let mut c = locked_center();
+    with_policy(
+        &mut c,
+        "org.example.Mail",
+        AppOverride {
+            show_on_lock_screen: Some(false),
+            ..AppOverride::default()
+        },
+    );
+    c.notify(mail("Bank", "code"), 1.0);
+    let chat = c.notify(input("Chat", "hi"), 2.0);
+    assert_eq!(
+        c.lock_screen().iter().map(|i| i.id).collect::<Vec<_>>(),
+        [chat]
+    );
+    // the default off, one application back on
+    let mut policy = NotificationSettings {
+        show_on_lock_screen: false,
+        ..NotificationSettings::UNSET
+    };
+    policy.set_app(
+        "org.example.Mail",
+        AppOverride {
+            show_on_lock_screen: Some(true),
+            ..AppOverride::default()
+        },
+    );
+    c.set_policy(policy);
+    assert_eq!(
+        c.lock_screen().iter().map(|i| i.app.as_str()).collect::<Vec<_>>(),
+        ["Mail"]
+    );
+}
+
+#[test]
+fn each_preview_setting_decides_what_the_lock_list_and_the_unlocked_cards_show() {
+    for (setting, on_lock, unlocked) in [
+        (Previews::Always, true, true),
+        (Previews::WhenUnlocked, false, true),
+        (Previews::Never, false, false),
+    ] {
+        let mut c = locked_center();
+        with_policy(&mut c, "org.example.Mail", previews(setting));
+        let id = c.notify(
+            mail("Bank", "Your code is <b>482913</b>").with_action("copy", "Copy"),
+            1.0,
+        );
+        let item = &c.lock_screen()[0];
+        assert_eq!(item.app, "Mail");
+        if on_lock {
+            assert_eq!(
+                (item.title.as_str(), item.body.as_str()),
+                ("Bank", "Your code is 482913"),
+                "{setting:?}"
+            );
+        } else {
+            assert_eq!(
+                (item.title.as_str(), item.body.as_str()),
+                (REDACTED_TITLE, ""),
+                "{setting:?}"
+            );
+        }
+        c.set_screen_locked(false, 2.0);
+        let shown = c.shown(c.get(id).unwrap()).into_owned();
+        if unlocked {
+            assert_eq!(shown.summary, "Bank", "{setting:?}");
+            assert_eq!(shown.button_actions().count(), 1);
+        } else {
+            assert_eq!(shown.summary, REDACTED_TITLE);
+            assert!(shown.body.is_empty() && shown.spans.is_empty());
+            assert_eq!(shown.button_actions().count(), 0, "a label may hold content");
+        }
+    }
+}
+
+#[test]
+fn the_default_preview_setting_applies_to_applications_without_their_own() {
+    let mut c = locked_center();
+    c.set_policy(NotificationSettings {
+        show_previews: Previews::Always,
+        ..NotificationSettings::UNSET
+    });
+    with_policy(&mut c, "Chat", previews(Previews::WhenUnlocked));
+    c.notify(mail("Bank", "code"), 1.0);
+    c.notify(input("Chat", "secret"), 2.0);
+    let titles: Vec<String> = c.lock_screen().into_iter().map(|i| i.title).collect();
+    assert_eq!(titles, [REDACTED_TITLE, "Bank"], "newest first");
+}
+
+#[test]
+fn the_lock_list_is_bounded_and_each_text_capped() {
+    use crate::notification::{MAX_APP_NAME_CHARS, MAX_SUMMARY_CHARS};
+    let mut c = locked_center();
+    c.set_policy(NotificationSettings {
+        show_previews: Previews::Always,
+        ..NotificationSettings::UNSET
+    });
+    for i in 0..LOCK_SCREEN_LIMIT + 5 {
+        let mut n = NotifyInput::new(
+            &"a".repeat(MAX_APP_NAME_CHARS * 2),
+            &"s".repeat(MAX_SUMMARY_CHARS * 2),
+            &"b".repeat(LOCK_SCREEN_BODY_CHARS * 2),
+        );
+        n.hints.desktop_entry = Some(format!("app{i}"));
+        c.notify(n, i as f64);
+    }
+    let listed = c.lock_screen();
+    assert_eq!(listed.len(), LOCK_SCREEN_LIMIT);
+    for item in &listed {
+        assert_eq!(item.app.chars().count(), MAX_APP_NAME_CHARS);
+        assert_eq!(item.title.chars().count(), MAX_SUMMARY_CHARS);
+        assert_eq!(item.body.chars().count(), LOCK_SCREEN_BODY_CHARS);
+    }
+}
+
+#[test]
+fn the_applications_are_listed_once_by_their_key() {
+    let mut c = center();
+    c.notify(mail("a", ""), 0.0);
+    c.notify(mail("b", ""), 0.0);
+    c.notify(input("Chat", "c"), 0.0);
+    assert_eq!(
+        c.applications(),
+        [
+            ("Chat".to_owned(), "Chat".to_owned()),
+            ("org.example.Mail".to_owned(), "Mail".to_owned())
+        ]
+    );
 }

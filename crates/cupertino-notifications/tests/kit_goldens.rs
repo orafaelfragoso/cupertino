@@ -102,7 +102,10 @@ impl Application for Scripted {
                     }
                     Step::At(t) => model.now = t,
                     Step::OpenCentre => model.ui.centre_open = true,
-                    Step::Lock(locked) => model.center.get_mut().set_screen_locked(locked),
+                    Step::Lock(locked) => model
+                        .center
+                        .get_mut()
+                        .set_screen_locked(locked, model.now),
                 }
                 model.center.get_mut().tick(model.now);
                 vec![next(&model.steps)]
@@ -612,41 +615,83 @@ fn a_banner_is_neither_said_nor_readable_while_the_screen_is_locked() {
     assert!(run.windows().is_empty(), "nothing shows on the lock screen");
     assert_eq!(run.heard(), [], "nothing is said while locked");
     assert!(!readable(&run).contains("482913"));
-    // at the unlock the banner on screen appears and is said
+    // at the unlock the banner that was on screen comes back; what arrived while locked is in the centre
     run.step(Step::Lock(false));
     run.step(Step::At(1.6));
-    let said = run.heard();
-    assert!(
-        said.iter().any(|(_, text)| text.contains("482913")),
-        "{said:?}"
-    );
+    assert_eq!(run.windows().len(), 1, "only the banner from before the lock");
+    assert!(readable(&run).contains("Lunch"));
+    assert!(!readable(&run).contains("482913"), "the new one went to the centre");
     assert_eq!(
-        said.len(),
-        run.windows().len(),
-        "each banner shown is said once"
+        run.heard(),
+        [],
+        "nothing is said again at the unlock, and nothing that arrived while locked"
     );
 }
 
 #[test]
-fn a_banner_leaving_at_the_unlock_is_not_said_again() {
+fn a_banner_back_at_the_unlock_is_not_said_again_but_its_next_update_is() {
     let mut run = Run::new();
     run.notify(mail("Lunch", "Are you free at noon?"));
     run.step(Step::At(1.0));
     assert_eq!(run.heard().len(), 1);
     run.step(Step::Lock(true));
-    // a new banner takes over while locked: the one heard before the lock is still sliding out at the unlock
-    run.notify(mail("Bank", "Your sign-in code is 482913"));
-    run.step(Step::At(1.1));
+    run.step(Step::At(30.0));
     run.step(Step::Lock(false));
-    assert_eq!(run.windows().len(), 2, "both cards are on screen");
+    run.step(Step::At(30.1));
+    assert_eq!(run.windows().len(), 1, "it kept the rest of its lifetime");
+    assert_eq!(run.heard(), [], "said once, as it arrived");
+    // an update after the unlock is news
+    let mut update = mail("Lunch", "Can we make it one o'clock?");
+    update.replaces_id = 1;
+    run.notify(update);
+    run.step(Step::At(30.5));
     assert_eq!(
         run.heard(),
         [(
             Live::Polite,
-            "Mail: Bank, Your sign-in code is 482913".to_owned()
-        )],
-        "only the banner taking the screen is said, not the one going away"
+            "Mail: Lunch, Can we make it one o'clock?".to_owned()
+        )]
     );
+    // a new arrival after the unlock is said as it shows
+    run.step(Step::At(40.0));
+    run.notify(mail("Dinner", "At eight?"));
+    run.step(Step::At(40.5));
+    assert_eq!(
+        run.heard(),
+        [(Live::Polite, "Mail: Dinner, At eight?".to_owned())]
+    );
+}
+
+#[test]
+fn a_banner_of_an_application_without_previews_shows_and_says_only_notification() {
+    use cupertino_defaults::notifications::{AppOverride, NotificationSettings, Previews};
+    let mut run = Run::new();
+    let mut policy = NotificationSettings::UNSET;
+    policy.set_app(
+        "org.cupertino.Mail",
+        AppOverride {
+            show_previews: Some(Previews::Never),
+            ..AppOverride::default()
+        },
+    );
+    run.driver
+        .runtime()
+        .model()
+        .center
+        .borrow_mut()
+        .set_policy(policy);
+    run.notify(mail("Bank", "Your sign-in code is 482913").with_action("copy", "Copy 482913"));
+    run.step(Step::At(1.0));
+    assert_eq!(
+        run.heard(),
+        [(Live::Polite, "Mail: Notification".to_owned())]
+    );
+    let words = readable(&run);
+    assert!(!words.contains("482913") && !words.contains("Bank"), "{words}");
+    run.step(Step::OpenCentre);
+    let words = readable(&run);
+    assert!(words.contains("Mail: Notification"), "{words}");
+    assert!(!words.contains("482913") && !words.contains("Bank"), "{words}");
 }
 
 #[test]

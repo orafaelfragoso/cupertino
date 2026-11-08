@@ -1420,6 +1420,7 @@ dependencies = [
  "async-io",
  "cupertino-animation",
  "cupertino-assets",
+ "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-kit",
  "cupertino-modifiers",

@@ -22,7 +22,9 @@
 //! it arrives. A bridge to assistive technology announces a live node only as it appears or is renamed, and says its
 //! name alone, so a banner is named after what it shows ([`banner_speech`]): a new banner, or one whose text changes
 //! in place, is said whole. While the screen is locked no window is open, as the lock screen hides them; a banner
-//! still on screen at the unlock appears then and is said. The cards of the centre are not live. They are the items of
+//! still on screen at the unlock appears then without being said again, as it was said when it arrived. A banner or
+//! card of an application whose previews are off shows only "Notification" ([`NotificationCenter::shown`]). The cards
+//! of the centre are not live. They are the items of
 //! a list, named after their application and summary with the whole body as description, Tab stops that Return or
 //! Space activates and Delete clears.
 
@@ -525,7 +527,8 @@ pub fn centre_key() -> WindowKey {
 
 /// The windows for the model at `now`: the banners on screen, or the open centre instead of them (they stay in the
 /// model and show again when it closes). None while the screen is locked: the lock screen hides them, so assistive
-/// technology has nothing of them to read, and a banner still on screen at the unlock appears then and is announced.
+/// technology has nothing of them to read, and a banner still on screen at the unlock appears then, not announced
+/// again ([`NotificationCenter::is_quiet`]).
 pub fn windows<M: Clone + 'static>(
     center: &mut NotificationCenter,
     ui: &Ui,
@@ -545,7 +548,8 @@ pub fn windows<M: Clone + 'static>(
         .into_iter()
         .filter(|p| p.opacity > MIN_OPACITY)
         .filter_map(|p| {
-            let n = center.get(p.id)?.clone();
+            let n = center.shown(center.get(p.id)?).into_owned();
+            let quiet = center.is_quiet(p.id);
             let layout = metrics.card(&n, p.rect.width(), Fold::Banner);
             let card = Rect::new(p.rect.x(), SHADOW_MARGIN, p.rect.width(), p.rect.height());
             // the resting card and its close button, which reaches past its corner: the swipe keeps the pointer with an
@@ -564,7 +568,7 @@ pub fn windows<M: Clone + 'static>(
                 vec![region, close_rect(region)],
                 p.opacity,
                 p.hovered,
-                p.leaving,
+                p.leaving || quiet,
                 width,
                 map,
             ))
@@ -716,14 +720,14 @@ fn banner_window<M: Clone + 'static>(
     region: Vec<Rect>,
     opacity: f64,
     hovered: bool,
-    leaving: bool,
+    unannounced: bool,
     width: f64,
     map: fn(Input) -> M,
 ) -> Window<M> {
     let size = Size::new(width, card.height() + 2.0 * SHADOW_MARGIN);
     // a banner going away is no longer live: one whose window appears only as it leaves (at the unlock, or as the
-    // centre closes) is not said again
-    let live = match (leaving, n.urgency) {
+    // centre closes) is not said again; nor is one that comes back at the unlock, said already as it arrived
+    let live = match (unannounced, n.urgency) {
         (true, _) => None,
         (false, Urgency::Critical) => Some(Live::Assertive),
         (false, _) => Some(Live::Polite),
@@ -847,7 +851,8 @@ fn centre_window<M: Clone + 'static>(
     let mut y = HEADER_GAP.max(CLOSE_OUTSET);
     let mut cards = Vec::new();
     for (index, group) in groups.iter().enumerate() {
-        let front = group.notifications[0];
+        let shown = center.shown(group.notifications[0]);
+        let front: &Notification = &shown;
         let count = group.notifications.len();
         let fold = if ui.unfolded.contains(&front.id) {
             Fold::Unfolded

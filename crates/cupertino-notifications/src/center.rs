@@ -10,14 +10,42 @@
 //! banner on screen and one waiting, a 5 s lifetime, a 1 s minimum before a waiting banner takes
 //! over, a hover hold polled every second, a slide by the banner width and a drag that dismisses
 //! rightwards and springs back leftwards.
+//!
+//! While the session is locked ([`NotificationCenter::set_screen_locked`]) nothing counts down: the banner on screen
+//! keeps the rest of its lifetime until the unlock, the waiting one goes to the centre, and every notification that
+//! arrives goes straight to the centre. Those the policy allows ([`NotificationSettings`]) are listed for the lock
+//! screen ([`NotificationCenter::lock_screen`]), with their title and body only when its preview setting is
+//! [`Previews::Always`]. At the unlock the banner on screen comes back without being announced again
+//! ([`NotificationCenter::is_quiet`]).
 
 use crate::notification::{
-    CloseReason, Expire, Notification, NotifyInput, Urgency, DEFAULT_ACTION_KEY,
+    cap, CloseReason, Expire, Notification, NotifyInput, Urgency, DEFAULT_ACTION_KEY,
+    MAX_APP_NAME_CHARS, MAX_SUMMARY_CHARS,
 };
 use cupertino_animation::{CubicBezier, Spring, SpringParams};
+use cupertino_defaults::notifications::{NotificationSettings, Policy, Previews};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::Theme;
+use std::borrow::Cow;
 use std::collections::VecDeque;
+
+/// What a notification without its preview says in place of its title.
+pub const REDACTED_TITLE: &str = "Notification";
+
+/// The most notifications listed for the lock screen, newest first.
+pub const LOCK_SCREEN_LIMIT: usize = 20;
+/// The most of a body listed for the lock screen, in characters (it shows two lines of it at most).
+pub const LOCK_SCREEN_BODY_CHARS: usize = 256;
+
+/// A notification as the lock screen may show it: its application always, its title and body only when the
+/// application's previews are [`Previews::Always`], else [`REDACTED_TITLE`] and no body. Each text is cut to its cap.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LockItem {
+    pub id: u32,
+    pub app: String,
+    pub title: String,
+    pub body: String,
+}
 
 /// Banner lifetimes.
 #[derive(Clone, Debug, PartialEq)]
@@ -36,9 +64,6 @@ pub struct TimeoutPolicy {
     pub max_client_timeout: f64,
     /// Lifetime of a banner shown while another one is already waiting: 1.0 s.
     pub pending_lifetime: f64,
-    /// Lifetime of a default-timeout banner while the screen is locked: 10.0 s instead of 5.0 s
-    /// (constant).
-    pub lock_screen_lifetime: f64,
     /// A visible banner gives way to a waiting one only after this long on screen: 1.0 s
     /// (constant, elapsed-time source).
     pub min_on_screen: f64,
@@ -56,7 +81,6 @@ impl Default for TimeoutPolicy {
             client_timeout_for_critical: false,
             max_client_timeout: 60.0,
             pending_lifetime: 1.0,
-            lock_screen_lifetime: 10.0,
             min_on_screen: 1.0,
             hover_recheck: 1.0,
         }
@@ -64,16 +88,14 @@ impl Default for TimeoutPolicy {
 }
 
 impl TimeoutPolicy {
-    /// Seconds until the banner expires, `None` for a banner that stays until dismissed. On the
-    /// lock screen a default timeout becomes [`TimeoutPolicy::lock_screen_lifetime`].
-    pub fn duration(&self, urgency: Urgency, expire: Expire, screen_locked: bool) -> Option<f64> {
+    /// Seconds until the banner expires, `None` for a banner that stays until dismissed.
+    pub fn duration(&self, urgency: Urgency, expire: Expire) -> Option<f64> {
         let by_urgency = match urgency {
             Urgency::Low => self.low,
             Urgency::Normal => self.normal,
             Urgency::Critical => self.critical,
         };
         match expire {
-            Expire::Default if screen_locked => by_urgency.map(|_| self.lock_screen_lifetime),
             Expire::Default => by_urgency,
             Expire::Never => None,
             Expire::Millis(ms) => {
@@ -472,6 +494,10 @@ struct Banner {
     /// `None`: an alert without a timer.
     lifetime: Option<f64>,
     deadline: Option<f64>,
+    /// The rest of the lifetime while the session is locked: nothing counts down until the unlock.
+    paused: Option<f64>,
+    /// The revision that came back on screen at the unlock: it was announced as it arrived, so it is not again.
+    quiet_revision: Option<u32>,
     hovered: bool,
     drag: Option<Drag>,
     /// Transition offset (0 at rest, the banner width outside).
@@ -490,6 +516,8 @@ struct Entry {
     read: bool,
     closed_signalled: bool,
     banner: Option<Banner>,
+    /// It arrived, or was replaced, while the session was locked and do not disturb was off: the lock screen lists it.
+    locked_arrival: bool,
 }
 
 pub struct NotificationCenter {
@@ -499,6 +527,7 @@ pub struct NotificationCenter {
     next_seq: u64,
     dnd: DndMode,
     screen_locked: bool,
+    policy: NotificationSettings,
     events: VecDeque<Event>,
     last_rects: Vec<(u32, Rect)>,
     revision: u64,
@@ -519,6 +548,7 @@ impl NotificationCenter {
             next_seq: 0,
             dnd: DndMode::Off,
             screen_locked: false,
+            policy: NotificationSettings::UNSET,
             events: VecDeque::new(),
             last_rects: Vec::new(),
             revision: 0,
@@ -592,10 +622,145 @@ impl NotificationCenter {
         self.entries.iter().find(|e| e.n.id == id).map(|e| &e.n)
     }
 
-    /// Whether banners shown from now on get the lock-screen lifetime. Banners already
-    /// shown keep the lifetime they were created with.
-    pub fn set_screen_locked(&mut self, locked: bool) {
+    /// The session was locked or unlocked at `now`. At the lock the banner on screen stops counting down (it keeps the
+    /// rest of its lifetime), the waiting banner goes to the centre and a swipe or hover ends. At the unlock the banner
+    /// on screen counts down again, at least [`TimeoutPolicy::min_on_screen`], and is quiet ([`Self::is_quiet`]); the
+    /// lock screen's list empties.
+    pub fn set_screen_locked(&mut self, locked: bool, now: f64) {
+        if self.screen_locked == locked {
+            return;
+        }
         self.screen_locked = locked;
+        if locked {
+            if let Some(p) = self.pending_index() {
+                self.drop_pending(p);
+            }
+            if let Some(i) = self.visible_index() {
+                let b = self.entries[i].banner.as_mut().expect("visible banner");
+                b.paused = b.deadline.take().map(|d| (d - now).max(0.0));
+                b.hovered = false;
+                if b.drag.take().is_some() {
+                    b.offset = Track::Still(0.0);
+                }
+            }
+            self.gc();
+        } else {
+            let min = self.config.timeouts.min_on_screen;
+            for e in &mut self.entries {
+                e.locked_arrival = false;
+                let revision = e.n.revision;
+                if let Some(b) = e.banner.as_mut() {
+                    if let Some(rest) = b.paused.take() {
+                        b.deadline = Some(now + rest.max(min));
+                    }
+                    if matches!(b.phase, Phase::Visible { .. }) {
+                        b.quiet_revision = Some(revision);
+                    }
+                }
+            }
+            self.promote(now);
+        }
+        self.touch();
+    }
+
+    /// Whether the banner of `id` came back on screen at the unlock with the text it was announced with: it is not
+    /// announced again. An update after the unlock is news, and is.
+    pub fn is_quiet(&self, id: u32) -> bool {
+        self.entries.iter().any(|e| {
+            e.n.id == id
+                && e.banner
+                    .as_ref()
+                    .is_some_and(|b| b.quiet_revision == Some(e.n.revision))
+        })
+    }
+
+    /// Follow the settings of `notifications.conf`; the windows and the lock screen's list show them from now on.
+    pub fn set_policy(&mut self, policy: NotificationSettings) {
+        if self.policy != policy {
+            self.policy = policy;
+            // a banner with or without its preview is another height
+            for b in self.entries.iter_mut().filter_map(|e| e.banner.as_mut()) {
+                b.measured_revision = None;
+            }
+            self.touch();
+        }
+    }
+
+    pub fn policy(&self) -> &NotificationSettings {
+        &self.policy
+    }
+
+    /// The policy of `n`'s application, named by its [`Notification::group_key`].
+    pub fn policy_of(&self, n: &Notification) -> Policy {
+        self.policy.policy(&n.group_key())
+    }
+
+    /// `n` as the banners and the centre show it: whole, or without its preview when its application's previews are
+    /// [`Previews::Never`] ([`redacted`]).
+    pub fn shown<'a>(&self, n: &'a Notification) -> Cow<'a, Notification> {
+        match self.policy_of(n).show_previews {
+            Previews::Never => Cow::Owned(redacted(n)),
+            Previews::Always | Previews::WhenUnlocked => Cow::Borrowed(n),
+        }
+    }
+
+    /// The notifications the lock screen shows, newest first, at most [`LOCK_SCREEN_LIMIT`]: those that arrived while
+    /// the session is locked, from applications allowed on the lock screen, redacted unless their previews are
+    /// [`Previews::Always`]. Empty while the session is unlocked.
+    pub fn lock_screen(&self) -> Vec<LockItem> {
+        if !self.screen_locked {
+            return Vec::new();
+        }
+        let mut listed: Vec<&Notification> = self
+            .entries
+            .iter()
+            .filter(|e| e.locked_arrival && e.in_centre && !e.closed_signalled)
+            .map(|e| &e.n)
+            .filter(|n| self.policy_of(n).show_on_lock_screen)
+            .collect();
+        listed.sort_by(|a, b| b.timestamp.total_cmp(&a.timestamp).then(b.id.cmp(&a.id)));
+        listed
+            .into_iter()
+            .take(LOCK_SCREEN_LIMIT)
+            .map(|n| {
+                let app = match n.app_name.trim() {
+                    "" => REDACTED_TITLE.to_owned(),
+                    app => cap(app, MAX_APP_NAME_CHARS).into_owned(),
+                };
+                let (title, body) = if self.policy_of(n).show_previews.shows_content(true) {
+                    (
+                        cap(&n.summary, MAX_SUMMARY_CHARS).into_owned(),
+                        cap(&n.body_text(), LOCK_SCREEN_BODY_CHARS).into_owned(),
+                    )
+                } else {
+                    (REDACTED_TITLE.to_owned(), String::new())
+                };
+                LockItem {
+                    id: n.id,
+                    app,
+                    title,
+                    body,
+                }
+            })
+            .collect()
+    }
+
+    /// The applications of the notifications on screen and in the centre: their [`Notification::group_key`] and
+    /// name, sorted by key, each once.
+    pub fn applications(&self) -> Vec<(String, String)> {
+        let mut apps: Vec<(String, String)> = Vec::new();
+        for e in &self.entries {
+            let key = e.n.group_key();
+            if !apps.iter().any(|(k, _)| *k == key) {
+                let name = match e.n.app_name.trim() {
+                    "" => key.clone(),
+                    name => cap(name, MAX_APP_NAME_CHARS).into_owned(),
+                };
+                apps.push((key, name));
+            }
+        }
+        apps.sort();
+        apps
     }
 
     /// Whether the screen is locked, as the host last said ([`Self::set_screen_locked`]).
@@ -632,11 +797,10 @@ impl NotificationCenter {
         Banner {
             phase: Phase::Pending,
             seq: 0,
-            lifetime: self
-                .config
-                .timeouts
-                .duration(n.urgency, n.expire, self.screen_locked),
+            lifetime: self.config.timeouts.duration(n.urgency, n.expire),
             deadline: None,
+            paused: None,
+            quiet_revision: None,
             hovered: false,
             drag: None,
             slide: Track::Still(0.0),
@@ -674,20 +838,22 @@ impl NotificationCenter {
         };
         let mut n = Notification::from_input(id, input, now);
         let in_centre = !n.transient;
+        // while locked nothing new takes the screen: it goes to the centre, and the lock screen lists it
+        let locked = self.screen_locked;
+        let held = suppressed || locked;
+        let locked_arrival = locked && !suppressed;
         let mut queued = None;
         match existing {
             Some(i) => {
                 n.revision = self.entries[i].n.revision + 1;
-                let lifetime =
-                    self.config
-                        .timeouts
-                        .duration(n.urgency, n.expire, self.screen_locked);
+                let lifetime = self.config.timeouts.duration(n.urgency, n.expire);
                 let deadline = self.arm(lifetime, now);
                 let e = &mut self.entries[i];
                 e.n = n;
                 e.read = false;
                 e.closed_signalled = false;
                 e.in_centre = in_centre;
+                e.locked_arrival |= locked_arrival;
                 match &mut e.banner {
                     // shown again in place: the timer restarts, the banner does not slide again; a swipe in
                     // progress ends, as the banner's window may be made again for the new height
@@ -696,20 +862,29 @@ impl NotificationCenter {
                             b.offset = Track::Still(0.0);
                         }
                         b.lifetime = lifetime;
-                        b.deadline = deadline;
+                        // while locked the new lifetime waits for the unlock
+                        if locked {
+                            b.paused = lifetime;
+                            b.deadline = None;
+                        } else {
+                            b.deadline = deadline;
+                        }
                         b.phase = Phase::Visible { shown_at: now };
                     }
                     Some(b) if b.phase == Phase::Pending => b.lifetime = lifetime,
                     _ => {
                         e.banner = None;
-                        if !suppressed {
+                        if !held {
                             queued = Some(i);
+                        } else if !in_centre {
+                            // a transient update while held is never seen
+                            self.signal_if_needed(i, CloseReason::Undefined);
                         }
                     }
                 }
             }
             None => {
-                if suppressed && !in_centre {
+                if held && !in_centre {
                     self.events.push_back(Event::Closed {
                         id,
                         reason: CloseReason::Undefined,
@@ -721,8 +896,9 @@ impl NotificationCenter {
                         read: false,
                         closed_signalled: false,
                         banner: None,
+                        locked_arrival,
                     });
-                    if !suppressed {
+                    if !held {
                         queued = Some(self.entries.len() - 1);
                     }
                 }
@@ -789,7 +965,7 @@ impl NotificationCenter {
 
     /// Show the waiting banner when the slot is free.
     fn promote(&mut self, now: f64) {
-        if self.visible_index().is_some() {
+        if self.screen_locked || self.visible_index().is_some() {
             return;
         }
         let Some(i) = self.pending_index() else {
@@ -1006,9 +1182,9 @@ impl NotificationCenter {
         let Some(i) = self.visible_index() else {
             return;
         };
-        let want = Some(self.entries[i].n.id) == id;
+        let want = Some(self.entries[i].n.id) == id && !self.screen_locked;
         let b = self.entries[i].banner.as_mut().expect("visible banner");
-        if b.hovered == want {
+        if b.hovered == want || b.paused.is_some() {
             return;
         }
         b.hovered = want;
@@ -1207,7 +1383,11 @@ impl NotificationCenter {
                 .expect("visible id");
             let b = e.banner.as_mut().expect("banner");
             if b.measured_revision != Some(e.n.revision) {
-                b.height = measure.banner_height(&e.n, layout.width).max(1.0);
+                let shown = match self.policy.policy(&e.n.group_key()).show_previews {
+                    Previews::Never => Cow::Owned(redacted(&e.n)),
+                    _ => Cow::Borrowed(&e.n),
+                };
+                b.height = measure.banner_height(&shown, layout.width).max(1.0);
                 b.measured_revision = Some(e.n.revision);
             }
             let x = viewport.width - layout.right_margin - layout.width
@@ -1294,6 +1474,25 @@ impl NotificationCenter {
             }
         }
         groups
+    }
+}
+
+/// `n` without its preview: its title [`REDACTED_TITLE`], no body, image or action buttons. Its default action stays,
+/// so a click still opens the application.
+pub fn redacted(n: &Notification) -> Notification {
+    Notification {
+        summary: REDACTED_TITLE.to_owned(),
+        body: String::new(),
+        spans: Vec::new(),
+        actions: n
+            .actions
+            .iter()
+            .filter(|a| a.key == DEFAULT_ACTION_KEY)
+            .cloned()
+            .collect(),
+        image: None,
+        image_path: None,
+        ..n.clone()
     }
 }
 

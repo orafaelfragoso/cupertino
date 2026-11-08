@@ -27,6 +27,7 @@ app = [
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
 cupertino-animation = { path = "../cupertino-animation" }
+cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }

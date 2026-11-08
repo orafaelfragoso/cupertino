@@ -363,14 +363,14 @@ fn no_window_is_open_while_the_screen_is_locked() {
     let mut c = NotificationCenter::default();
     c.notify(NotifyInput::new("app", "Hello", "World"), 0.0);
     let ui = Ui::default();
-    c.set_screen_locked(true);
+    c.set_screen_locked(true, 1.0);
     assert!(windows::<Input>(&mut c, &ui, &m, 1.0, |i| i).is_empty());
     let centre = Ui {
         centre_open: true,
         ..Ui::default()
     };
     assert!(windows::<Input>(&mut c, &centre, &m, 1.0, |i| i).is_empty());
-    c.set_screen_locked(false);
+    c.set_screen_locked(false, 1.5);
     assert_eq!(windows::<Input>(&mut c, &ui, &m, 1.5, |i| i).len(), 1);
 }
 

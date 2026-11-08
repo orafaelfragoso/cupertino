@@ -275,14 +275,14 @@ impl Notifications {
             Pending::Activate(id) | Pending::Invoke(id, _) => id,
         };
         let c = self.server.center();
-        let n = c.get(id)?;
+        let n = c.shown(c.get(id)?).into_owned();
         let window = if self.ui.centre_open {
             centre_key()
         } else {
             let width = c.config.layout.width;
             banner_key(
-                n,
-                self.metrics.as_ref()?.card(n, width, Fold::Banner).height,
+                &n,
+                self.metrics.as_ref()?.card(&n, width, Fold::Banner).height,
             )
         };
         Some(Command::ActivationToken {
@@ -397,7 +397,8 @@ impl Application for Notifications {
                         }
                     }
                     Note::Lock(locked) => {
-                        model.server.center().set_screen_locked(locked);
+                        let now = model.server.now();
+                        model.server.center().set_screen_locked(locked, now);
                         if locked {
                             model.ui = Ui::default();
                         }

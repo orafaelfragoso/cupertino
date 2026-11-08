@@ -1,9 +1,13 @@
 //! The application grid: a large floating panel centred over the windows, opened by the app-grid action the server
-//! forwards (`toggle_app_grid`). Top to bottom it holds a search field, a row of category pills, a first row of the
-//! recently used applications, a separator and then every application in alphabetical order, scrolled under a scroll
-//! indicator. The dock owns it whole: this module holds the geometry, the categories, the search rule, the keyboard
-//! (selection, pills, the two-step Escape), the scrolling and the show and hide animation, and says what a click or
-//! a key asks for. The Kit view is `view/grid.rs`.
+//! forwards (`toggle_app_grid`). Top to bottom it holds a search field over a separator, a row of category pills, a
+//! first row of the recently used applications, a separator and then every application in alphabetical order, scrolled
+//! under a scroll indicator that shows while it scrolls. The dock owns it whole: this module holds the geometry, the
+//! categories, the search rule, the keyboard (selection, pills, the two-step Escape), the scrolling and the animations,
+//! and says what a click or a key asks for. The Kit view is `view/grid.rs`.
+//!
+//! Escape steps back one level at a time: with a query typed it clears the query; otherwise the first Escape folds the
+//! panel into its search capsule (its rows fade out at once, then the panel shrinks into the capsule along its top
+//! edge) and the next one closes the grid. Typing in the capsule unfolds the panel again on the matches.
 //!
 //! Coordinates are top-down points in the grid's layer: the output within the dock bar's exclusive zone, so the dock
 //! stays visible beside the panel, with the menu bar's strip at the top.
@@ -17,10 +21,22 @@ use crate::desktop::DesktopIndex;
 pub const COLUMNS: usize = 7;
 
 /// Show and hide durations. The panel enters from opacity 0 at scale 1.05 with ease-in and leaves the reverse way with
-/// ease-out; under Reduce Motion it only fades.
+/// ease-out; under Reduce Motion it only fades. The search capsule the panel folded into only fades out, quicker.
 pub const SHOW_DURATION: f64 = 0.25;
 pub const HIDE_DURATION: f64 = 0.25;
+pub const CAPSULE_HIDE_DURATION: f64 = 0.08;
 pub const ENTER_SCALE: f64 = 1.05;
+
+/// How long the rows take to fade out when the panel folds into its capsule; the panel starts shrinking after them.
+pub const FOLD_FADE: f64 = 0.05;
+/// The fold's motion: a critically damped spring with this response, in seconds, from the panel to the capsule and
+/// back. It is taken as settled after [`FOLD_SETTLE`].
+pub const FOLD_RESPONSE: f64 = 0.24;
+pub const FOLD_SETTLE: f64 = 0.4;
+
+/// How long the scroll indicator stays after the content last scrolled, then how long it takes to fade out.
+pub const SCROLLER_LINGER: f64 = 0.8;
+pub const SCROLLER_FADE: f64 = 0.25;
 
 /// Wayland layer-shell namespace of the grid's surface.
 pub const NAMESPACE: &str = "cupertino-dock-app-grid";
@@ -180,11 +196,15 @@ pub struct GridLayout {
     pub panel: Rect,
     /// The search field's row along the panel's top.
     pub search: Rect,
+    /// The search capsule the panel folds into: as wide as [`GridLayout::CAPSULE_WIDTH`] where the panel allows,
+    /// centred on it, along its top edge.
+    pub capsule: Rect,
     /// The row the pills share.
     pub pills: Rect,
     /// The scrolled area: the recents row, the separator and every application.
     pub content: Rect,
-    /// Width of one of the [`COLUMNS`].
+    /// Where the first of the [`COLUMNS`] begins, and the width of each.
+    pub columns_x: f64,
     pub column: f64,
 }
 
@@ -195,16 +215,23 @@ impl GridLayout {
     pub const PANEL_MARGIN: f64 = 24.0;
     /// Corner radius of the panel.
     pub const PANEL_RADIUS: f64 = 24.0;
-    /// The side inset of the search field, the pills, the separator and the columns.
+    /// The search capsule's width; its height is the search row's.
+    pub const CAPSULE_WIDTH: f64 = 640.0;
+    /// The side inset of the pills and the separators.
     pub const INSET: f64 = 20.0;
+    /// The columns' insets from the panel's left and right edges: the right one leaves the scroll indicator its lane.
+    pub const COLUMNS_LEFT: f64 = 24.0;
+    pub const COLUMNS_RIGHT: f64 = 18.0;
     /// The search row: its height, the magnifying glass's size and centre from the row's left, where the text begins,
     /// and the text's size and weight.
     pub const SEARCH_HEIGHT: f64 = 56.0;
     pub const SEARCH_SYMBOL: f64 = 20.0;
     pub const SEARCH_SYMBOL_X: f64 = 34.0;
-    pub const SEARCH_TEXT_X: f64 = 56.0;
-    pub const SEARCH_FONT_PT: f64 = 24.0;
+    pub const SEARCH_TEXT_X: f64 = 61.0;
+    pub const SEARCH_FONT_PT: f64 = 28.0;
     pub const SEARCH_WEIGHT: u16 = 400;
+    /// The separator under the search row, from the panel's top.
+    pub const SEARCH_SEPARATOR: f64 = 56.0;
     /// The pills: the row's top from the panel's top, the pills' height, corner radius, the text's size and weight,
     /// its padding at each end, the gap between pills and the most a pill grows to fill the row.
     pub const PILLS_TOP: f64 = 68.0;
@@ -219,12 +246,12 @@ impl GridLayout {
     pub const PILL_CHAR_EM: f64 = 0.58;
     /// The scrolled area's top from the panel's top and the room left under the last row.
     pub const CONTENT_TOP: f64 = 104.0;
-    pub const CONTENT_BOTTOM: f64 = 12.0;
+    pub const CONTENT_BOTTOM: f64 = 0.0;
     /// A row: its height, the icon's top in it and size, the label's centre line, size and weight.
     pub const ROW_HEIGHT: f64 = 102.0;
-    pub const ICON_TOP: f64 = 16.0;
+    pub const ICON_TOP: f64 = 18.0;
     pub const ICON: f64 = 60.0;
-    pub const LABEL_CY: f64 = 94.0;
+    pub const LABEL_CY: f64 = 96.0;
     pub const LABEL_FONT_PT: f64 = 13.0;
     pub const LABEL_WEIGHT: u16 = 400;
     /// The label's inset from its cell's sides.
@@ -232,13 +259,13 @@ impl GridLayout {
     /// The selection highlight's inset from its cell, horizontally and vertically, and its corner radius.
     pub const SELECTION_INSET: (f64, f64) = (6.0, 4.0);
     pub const SELECTION_RADIUS: f64 = 12.0;
-    /// The block between the recents row and the rest, and the separator's line in it.
-    pub const SEPARATOR_BLOCK: f64 = 20.0;
-    pub const SEPARATOR_LINE: f64 = 12.0;
+    /// The block between the recents row and the rest, and the separator's line at its end.
+    pub const SEPARATOR_BLOCK: f64 = 15.0;
+    pub const SEPARATOR_LINE: f64 = 15.0;
     /// The scroll indicator: its width, its inset from the panel's right edge and from the ends of the scrolled area,
     /// and the least length of its thumb.
-    pub const SCROLLER_WIDTH: f64 = 5.0;
-    pub const SCROLLER_INSET: f64 = 6.0;
+    pub const SCROLLER_WIDTH: f64 = 6.0;
+    pub const SCROLLER_INSET: f64 = 3.0;
     pub const SCROLLER_END_INSET: f64 = 8.0;
     pub const SCROLLER_MIN: f64 = 32.0;
     /// "No Results": its size and weight.
@@ -253,12 +280,20 @@ impl GridLayout {
         let y = (MENU_BAR_BAND + (height - MENU_BAR_BAND - h) / 2.0).floor();
         let panel = Rect::new(x, y, w, h);
         let inner = (w - 2.0 * Self::INSET).max(0.0);
+        let columns = (w - Self::COLUMNS_LEFT - Self::COLUMNS_RIGHT).max(0.0);
         let content_top = y + Self::CONTENT_TOP;
+        let capsule_w = Self::CAPSULE_WIDTH.min(w);
         Self {
             width,
             height,
             panel,
             search: Rect::new(x, y, w, Self::SEARCH_HEIGHT),
+            capsule: Rect::new(
+                x + ((w - capsule_w) / 2.0).floor(),
+                y,
+                capsule_w,
+                Self::SEARCH_HEIGHT.min(h),
+            ),
             pills: Rect::new(
                 x + Self::INSET,
                 y + Self::PILLS_TOP,
@@ -271,8 +306,29 @@ impl GridLayout {
                 inner,
                 (panel.bottom() - Self::CONTENT_BOTTOM - content_top).max(0.0),
             ),
-            column: (inner / COLUMNS as f64).floor(),
+            columns_x: x + Self::COLUMNS_LEFT,
+            column: (columns / COLUMNS as f64).floor(),
         }
+    }
+
+    /// The panel's shape `fold` of the way into its capsule (0 the panel, 1 the capsule), and its corner radius: the
+    /// top edge stays, the sides close in on the capsule and the bottom rises to it.
+    pub fn folded(&self, fold: f64) -> (Rect, f64) {
+        let f = fold.clamp(0.0, 1.0);
+        let lerp = |a: f64, b: f64| a + (b - a) * f;
+        let (p, c) = (self.panel, self.capsule);
+        let rect = Rect::new(lerp(p.x, c.x), p.y, lerp(p.w, c.w), lerp(p.h, c.h));
+        (rect, lerp(Self::PANEL_RADIUS, c.h / 2.0).min(rect.h / 2.0))
+    }
+
+    /// The separator under the search row, inset like the pills.
+    pub fn search_separator(&self) -> Rect {
+        Rect::new(
+            self.panel.x + Self::INSET,
+            self.panel.y + Self::SEARCH_SEPARATOR,
+            (self.panel.w - 2.0 * Self::INSET).max(0.0),
+            1.0,
+        )
     }
 
     /// The pills' rectangles in the pill row. Each is as wide as its text is reckoned to be plus its padding; a row
@@ -313,7 +369,7 @@ impl GridLayout {
     /// The cell of column `col` whose row starts `row_y` points down the scrolled content, scrolled by `scroll`.
     pub fn cell(&self, col: usize, row_y: f64, scroll: f64) -> Rect {
         Rect::new(
-            self.content.x + col as f64 * self.column,
+            self.columns_x + col as f64 * self.column,
             self.content.y + row_y - scroll,
             self.column,
             Self::ROW_HEIGHT,
@@ -391,7 +447,50 @@ pub enum Zone {
 enum Phase {
     Entering(f64),
     Shown,
-    Leaving(f64),
+    /// Since when, and for how long.
+    Leaving(f64, f64),
+}
+
+/// The panel folding into its search capsule, or unfolding out of it: 0 is the panel, 1 the capsule.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Fold {
+    /// Where the fold was when it set off, where it goes, and when it set off.
+    from: f64,
+    to: f64,
+    at: f64,
+}
+
+impl Fold {
+    const OPEN: Fold = Fold {
+        from: 0.0,
+        to: 0.0,
+        at: 0.0,
+    };
+
+    /// When the shape starts moving: folding waits for the rows to fade out.
+    fn start(&self) -> f64 {
+        if self.to > self.from {
+            self.at + FOLD_FADE
+        } else {
+            self.at
+        }
+    }
+
+    fn settled(&self, now: f64) -> bool {
+        now - self.start() >= FOLD_SETTLE
+    }
+
+    /// How far into the capsule the shape is at `now`, along a critically damped spring.
+    fn value(&self, now: f64) -> f64 {
+        let t = (now - self.start()).max(0.0);
+        let x = if self.settled(now) {
+            1.0
+        } else {
+            let w = std::f64::consts::TAU / FOLD_RESPONSE;
+            1.0 - (1.0 + w * t) * (-w * t).exp()
+        };
+        self.from + (self.to - self.from) * x
+    }
 }
 
 /// Opacity and scale of the whole grid this frame.
@@ -432,6 +531,11 @@ pub struct AppGrid {
     scroll: f64,
     layout: Option<GridLayout>,
     phase: Phase,
+    fold: Fold,
+    /// When the content last scrolled, for the scroll indicator.
+    scrolled_at: Option<f64>,
+    /// The time of the key or scroll being handled.
+    clock: f64,
     /// Reduce Motion: the show and hide keep their opacity and drop the scale step.
     reduce_motion: bool,
 }
@@ -471,6 +575,9 @@ impl AppGrid {
             scroll: 0.0,
             layout: None,
             phase: Phase::Entering(now),
+            fold: Fold::OPEN,
+            scrolled_at: None,
+            clock: now,
             reduce_motion: false,
         }
     }
@@ -704,6 +811,65 @@ impl AppGrid {
         self.layout.map(|l| l.panel)
     }
 
+    /// Whether the panel is folded into its search capsule, or folding: the next Escape closes the grid.
+    pub fn is_folded(&self) -> bool {
+        self.fold.to >= 1.0
+    }
+
+    /// How far the panel is into its capsule at `now`: 0 the panel, 1 the capsule.
+    pub fn fold(&self, now: f64) -> f64 {
+        self.fold.value(now)
+    }
+
+    /// The shape drawn at `now`, the panel folding into the capsule or out of it, and its corner radius.
+    pub fn shape(&self, now: f64) -> Option<(Rect, f64)> {
+        self.layout.map(|l| l.folded(self.fold(now)))
+    }
+
+    /// How much of the rows, the pills and the separators shows at `now`: they fade out at once when the panel folds,
+    /// and come back as it unfolds.
+    pub fn content_alpha(&self, now: f64) -> f64 {
+        let f = self.fold;
+        if f.to >= 1.0 {
+            (1.0 - f.from) * (1.0 - (now - f.at) / FOLD_FADE).clamp(0.0, 1.0)
+        } else {
+            1.0 - f.value(now)
+        }
+    }
+
+    /// Fold towards `to` from where the fold is at `now`; under Reduce Motion the shape changes at once and only the
+    /// rows fade.
+    fn fold_to(&mut self, to: f64, now: f64) {
+        self.fold = if self.reduce_motion {
+            Fold {
+                from: to,
+                to,
+                at: now - FOLD_FADE - FOLD_SETTLE,
+            }
+        } else {
+            Fold {
+                from: self.fold.value(now),
+                to,
+                at: now,
+            }
+        };
+    }
+
+    /// How much the scroll indicator shows at `now`: whole while the content scrolls and for a moment after, then it
+    /// fades out.
+    pub fn scroller_alpha(&self, now: f64) -> f64 {
+        self.scrolled_at.map_or(0.0, |at| {
+            (1.0 - (now - at - SCROLLER_LINGER) / SCROLLER_FADE).clamp(0.0, 1.0)
+        })
+    }
+
+    /// The content scrolled from `before`: the scroll indicator shows.
+    fn scrolled(&mut self, before: f64) {
+        if self.scroll != before {
+            self.scrolled_at = Some(self.clock);
+        }
+    }
+
     /// The search field's row, once sized.
     pub fn search_rect(&self) -> Option<Rect> {
         self.layout.map(|l| l.search)
@@ -727,6 +893,7 @@ impl AppGrid {
         let Some(layout) = self.layout else {
             return;
         };
+        let before = self.scroll;
         let y = self.row_y(index);
         if y < self.scroll {
             self.scroll = y;
@@ -734,6 +901,7 @@ impl AppGrid {
             self.scroll = y + GridLayout::ROW_HEIGHT - layout.content.h;
         }
         self.scroll = self.scroll.clamp(0.0, self.max_scroll());
+        self.scrolled(before);
     }
 
     fn select(&mut self, index: usize) {
@@ -741,12 +909,15 @@ impl AppGrid {
         self.reveal(index);
     }
 
-    /// Scroll by `dy` points, within the content.
-    pub fn scroll_by(&mut self, dy: f64) {
-        if !dy.is_finite() {
+    /// Scroll by `dy` points at `now`, within the content; the capsule does not scroll.
+    pub fn scroll_by(&mut self, dy: f64, now: f64) {
+        if !dy.is_finite() || self.is_folded() {
             return;
         }
+        self.clock = now;
+        let before = self.scroll;
         self.scroll = (self.scroll + dy).clamp(0.0, self.max_scroll());
+        self.scrolled(before);
     }
 
     /// Turn `pill` on, or off when it is on: the results start over.
@@ -778,20 +949,38 @@ impl AppGrid {
         self.scroll = 0.0;
     }
 
-    /// A key; `Char` types into the search field. Returns what the process has to do, if anything.
-    pub fn key(&mut self, key: Key) -> Option<Outcome> {
-        if matches!(self.phase, Phase::Leaving(_)) {
+    /// A key at `now`; `Char` types into the search field. Returns what the process has to do, if anything.
+    pub fn key(&mut self, key: Key, now: f64) -> Option<Outcome> {
+        if matches!(self.phase, Phase::Leaving(..)) {
+            return None;
+        }
+        self.clock = now;
+        if self.is_folded() {
+            // the capsule: Escape closes, typing unfolds the panel on the matches, nothing else applies
+            match key {
+                Key::Escape => return Some(Outcome::Close),
+                Key::Char(c) => {
+                    self.fold_to(0.0, now);
+                    self.query.push(c);
+                    self.zone = Zone::Grid;
+                    self.refilter();
+                }
+                _ => {}
+            }
             return None;
         }
         match key {
-            // with a query typed, Escape clears it and the grid shows every application again; else it closes
+            // with a query typed, Escape clears it and the grid shows every application again; else it folds the panel
+            // into its search capsule
             Key::Escape => {
                 if self.query.is_empty() {
-                    return Some(Outcome::Close);
+                    self.fold_to(1.0, now);
+                    self.selected = None;
+                } else {
+                    self.query.clear();
+                    self.refilter();
                 }
-                self.query.clear();
                 self.zone = Zone::Grid;
-                self.refilter();
                 return None;
             }
             Key::Char(c) if !(c == ' ' && self.zone == Zone::Pills) => {
@@ -930,7 +1119,7 @@ impl AppGrid {
     /// Scroll a screenful down (`1`) or up (`-1`).
     fn page(&mut self, direction: i32) {
         if let Some(l) = self.layout {
-            self.scroll_by(f64::from(direction) * l.content.h);
+            self.scroll_by(f64::from(direction) * l.content.h, self.clock);
         }
     }
 
@@ -938,11 +1127,15 @@ impl AppGrid {
     /// it turns that pill on or off, on an application it opens it; anywhere else on the panel it does nothing.
     /// Presses during the exit are ignored.
     pub fn click(&mut self, p: Point) -> Option<Outcome> {
-        if matches!(self.phase, Phase::Leaving(_)) {
+        if matches!(self.phase, Phase::Leaving(..)) {
             return None;
         }
-        let panel = self.panel()?;
-        if !panel.contains(p) {
+        let layout = self.layout?;
+        if self.is_folded() {
+            // the capsule takes a press and does nothing with it; anywhere else closes
+            return (!layout.capsule.contains(p)).then_some(Outcome::Close);
+        }
+        if !layout.panel.contains(p) {
             return Some(Outcome::Close);
         }
         if let Some((pill, _)) = self.pill_rects().into_iter().find(|(_, r)| r.contains(p)) {
@@ -950,7 +1143,6 @@ impl AppGrid {
             self.toggle_pill(pill);
             return None;
         }
-        let layout = self.layout?;
         if !layout.content.contains(p) {
             return None;
         }
@@ -969,20 +1161,26 @@ impl AppGrid {
         }
     }
 
-    /// Start the exit animation; a second close changes nothing.
+    /// Start the exit animation: the panel's, or the capsule's quicker fade once folded. A second close changes
+    /// nothing.
     pub fn close(&mut self, now: f64) {
-        if !matches!(self.phase, Phase::Leaving(_)) {
-            self.phase = Phase::Leaving(now);
+        if !matches!(self.phase, Phase::Leaving(..)) {
+            let duration = if self.is_folded() {
+                CAPSULE_HIDE_DURATION
+            } else {
+                HIDE_DURATION
+            };
+            self.phase = Phase::Leaving(now, duration);
         }
     }
 
     pub fn is_closing(&self) -> bool {
-        matches!(self.phase, Phase::Leaving(_))
+        matches!(self.phase, Phase::Leaving(..))
     }
 
     /// Whether the exit animation has finished and the surface can go.
     pub fn is_gone(&self, now: f64) -> bool {
-        matches!(self.phase, Phase::Leaving(at) if now - at >= HIDE_DURATION)
+        matches!(self.phase, Phase::Leaving(at, d) if now - at >= d)
     }
 
     /// Settle finished animations.
@@ -992,13 +1190,17 @@ impl AppGrid {
         }
     }
 
-    /// Whether a frame per refresh is needed (an entry or an exit under way).
+    /// Whether a frame per refresh is needed: an entry, an exit, a fold or the scroll indicator's fade under way.
     pub fn animating(&self, now: f64) -> bool {
-        match self.phase {
+        let shown = match self.phase {
             Phase::Entering(at) => now - at < SHOW_DURATION,
             Phase::Shown => false,
-            Phase::Leaving(at) => now - at < HIDE_DURATION,
-        }
+            Phase::Leaving(at, d) => now - at < d,
+        };
+        let scroller = self
+            .scrolled_at
+            .is_some_and(|at| now - at < SCROLLER_LINGER + SCROLLER_FADE);
+        shown || !self.fold.settled(now) || scroller
     }
 
     /// Opacity and scale: in with ease-in from (0, 1.05), out with ease-out to the same. Under Reduce Motion the scale
@@ -1010,9 +1212,11 @@ impl AppGrid {
                 (e, ENTER_SCALE - (ENTER_SCALE - 1.0) * e)
             }
             Phase::Shown => (1.0, 1.0),
-            Phase::Leaving(at) => {
-                let e = CubicBezier::EASE_OUT.eval(((now - at) / HIDE_DURATION).clamp(0.0, 1.0));
-                (1.0 - e, 1.0 + (ENTER_SCALE - 1.0) * e)
+            Phase::Leaving(at, d) => {
+                let e = CubicBezier::EASE_OUT.eval(((now - at) / d).clamp(0.0, 1.0));
+                // the capsule only fades
+                let grow = if self.is_folded() { 0.0 } else { e };
+                (1.0 - e, 1.0 + (ENTER_SCALE - 1.0) * grow)
             }
         };
         Visual {
@@ -1112,15 +1316,39 @@ mod tests {
         assert_eq!(l.search, Rect::new(299.0, 139.0, 842.0, 56.0));
         assert_eq!(l.pills, Rect::new(319.0, 207.0, 802.0, 26.0));
         assert_eq!(l.content.y, 139.0 + 104.0);
-        assert_eq!(l.content.bottom(), l.panel.bottom() - 12.0);
-        assert_eq!(l.column, 114.0, "seven columns in the inset width");
+        assert_eq!(
+            l.content.bottom(),
+            l.panel.bottom(),
+            "the rows run to the panel's edge"
+        );
+        assert_eq!(
+            (l.content.x, l.content.w),
+            (319.0, 802.0),
+            "the rows' clip is inset like the pills"
+        );
+        assert_eq!(
+            (l.columns_x, l.column),
+            (299.0 + 24.0, 114.0),
+            "seven columns between their insets"
+        );
+        assert_eq!(
+            l.search_separator(),
+            Rect::new(319.0, 139.0 + 56.0, 802.0, 1.0)
+        );
+        assert_eq!(l.capsule, Rect::new(299.0 + 101.0, 139.0, 640.0, 56.0));
         let small = GridLayout::new(800.0, 600.0);
         assert_eq!(
             (small.panel.w, small.panel.h),
             (752.0, 528.0),
             "the panel keeps its margins on a small output"
         );
-        assert_eq!(small.column, (712.0f64 / 7.0).floor());
+        assert_eq!(small.column, ((752.0f64 - 24.0 - 18.0) / 7.0).floor());
+        assert_eq!(
+            small.capsule.w, 640.0,
+            "the capsule fits the panel of a small output"
+        );
+        let tiny = GridLayout::new(500.0, 400.0);
+        assert_eq!(tiny.capsule.w, tiny.panel.w, "never wider than the panel");
     }
 
     #[test]
@@ -1216,16 +1444,16 @@ mod tests {
             ["Books", "Clock", "Atlas", "Books", "Clock"],
             "recents (known, once each), then all by name"
         );
-        assert_eq!(g.separator_y(), Some(102.0 + 12.0));
+        assert_eq!(g.separator_y(), Some(102.0 + 15.0));
         let l = *g.layout().unwrap();
         assert_eq!(g.cell_of(0), Some(l.cell(0, 0.0, 0.0)));
         assert_eq!(
             g.cell_of(2),
-            Some(l.cell(0, 102.0 + 20.0, 0.0)),
+            Some(l.cell(0, 102.0 + 15.0, 0.0)),
             "the list starts under the separator block"
         );
-        assert_eq!(g.content_height(), 102.0 + 20.0 + 102.0);
-        g.key(Key::Char('a'));
+        assert_eq!(g.content_height(), 102.0 + 15.0 + 102.0);
+        g.key(Key::Char('a'), 0.0);
         assert!(!g.shows_recents(), "a search hides the recents");
         assert_eq!(names(&g), ["Atlas"]);
     }
@@ -1254,21 +1482,109 @@ mod tests {
     }
 
     #[test]
-    fn one_escape_closes_and_with_a_query_typed_the_first_clears_it() {
-        let mut g = sized(AppGrid::new(apps(3), &[], 0.0));
-        assert_eq!(
-            g.key(Key::Escape),
-            Some(Outcome::Close),
-            "one Escape closes"
+    fn the_first_escape_folds_the_panel_into_its_capsule_and_the_next_closes() {
+        let mut g = sized(AppGrid::new(apps(3), &["app-01".into()], 0.0));
+        g.tick(1.0);
+        g.key(Key::Down, 1.0);
+        assert_eq!(g.key(Key::Escape, 2.0), None, "the first Escape folds");
+        assert!(g.is_folded());
+        assert_eq!(g.selected(), None);
+        let l = *g.layout().unwrap();
+        assert_eq!(g.shape(2.0), Some((l.panel, GridLayout::PANEL_RADIUS)));
+        assert!(g.animating(2.0));
+        assert_eq!(g.content_alpha(2.0), 1.0);
+        assert!(
+            g.content_alpha(2.0 + FOLD_FADE / 2.0) < 0.6,
+            "the rows fade at once"
         );
-
-        let mut g = sized(AppGrid::new(apps(3), &[], 0.0));
-        g.key(Key::Char('0'));
-        g.key(Key::Char('1'));
-        assert_eq!(g.results().count(), 1);
-        g.key(Key::Down);
+        assert!(g.content_alpha(2.0 + FOLD_FADE) < 1e-9);
         assert_eq!(
-            g.key(Key::Escape),
+            g.shape(2.0 + FOLD_FADE).unwrap().0,
+            l.panel,
+            "the shape waits for the rows"
+        );
+        let mid = g.shape(2.0 + FOLD_FADE + 0.07).unwrap().0;
+        assert!(
+            mid.h < l.panel.h * 0.6 && mid.h > l.capsule.h,
+            "half way and more after a third of the response: {mid:?}"
+        );
+        assert_eq!(mid.y, l.panel.y, "the top edge stays");
+        assert!(
+            (mid.cx() - l.panel.cx()).abs() < 1.0,
+            "the sides close in evenly"
+        );
+        let end = 2.0 + FOLD_FADE + FOLD_SETTLE + 1e-9;
+        assert_eq!(g.shape(end), Some((l.capsule, l.capsule.h / 2.0)));
+        assert!(!g.animating(end));
+        assert_eq!(
+            (l.capsule.w, l.capsule.h, l.capsule.y, l.capsule.cx()),
+            (640.0, 56.0, l.panel.y, l.panel.cx())
+        );
+        // the capsule ignores the grid's keys and the wheel, and takes a press
+        for key in [Key::Down, Key::Return, Key::Tab, Key::Backspace] {
+            assert_eq!(g.key(key, 3.0), None);
+        }
+        assert_eq!(g.selected(), None);
+        g.scroll_by(500.0, 3.0);
+        assert_eq!(g.scroll(), 0.0);
+        assert_eq!(g.click(l.capsule.center()), None);
+        assert_eq!(
+            g.key(Key::Escape, 3.0),
+            Some(Outcome::Close),
+            "the next Escape closes"
+        );
+        g.close(3.0);
+        assert_eq!(g.visual(3.04).scale, 1.0, "the capsule only fades");
+        assert!(!g.is_gone(3.0 + CAPSULE_HIDE_DURATION - 1e-3));
+        assert!(g.is_gone(3.0 + CAPSULE_HIDE_DURATION));
+    }
+
+    #[test]
+    fn typing_in_the_capsule_unfolds_the_panel_on_the_matches_and_a_press_outside_closes() {
+        let mut g = sized(AppGrid::new(apps(12), &[], 0.0));
+        g.key(Key::Escape, 1.0);
+        assert_eq!(
+            g.click(g.layout().unwrap().panel.center()),
+            Some(Outcome::Close),
+            "under the capsule, where the panel was"
+        );
+        g.key(Key::Char('1'), 2.0);
+        assert!(!g.is_folded());
+        assert_eq!(g.query(), "1");
+        assert_eq!(g.result_count(), 2, "App 10 and App 11");
+        assert!(g.fold(2.0) > 0.99 && g.fold(2.0 + FOLD_SETTLE + 1e-9) == 0.0);
+        assert!(
+            g.content_alpha(2.0 + 0.1) > 0.5,
+            "the rows come back as it opens"
+        );
+        // Escape clears the query first, then folds, then closes
+        assert_eq!(g.key(Key::Escape, 3.0), None);
+        assert_eq!((g.query(), g.is_folded()), ("", false));
+        assert_eq!(g.key(Key::Escape, 3.1), None);
+        assert!(g.is_folded());
+        assert_eq!(g.key(Key::Escape, 3.2), Some(Outcome::Close));
+    }
+
+    #[test]
+    fn under_reduce_motion_the_panel_becomes_the_capsule_at_once() {
+        let mut g = sized(AppGrid::new(apps(3), &[], 0.0));
+        g.set_reduce_motion(true);
+        g.key(Key::Escape, 1.0);
+        let l = *g.layout().unwrap();
+        assert_eq!(g.shape(1.0).unwrap().0, l.capsule);
+        assert_eq!(g.content_alpha(1.0), 0.0);
+        assert!(!g.animating(1.0));
+    }
+
+    #[test]
+    fn with_a_query_typed_the_first_escape_clears_it() {
+        let mut g = sized(AppGrid::new(apps(3), &[], 0.0));
+        g.key(Key::Char('0'), 0.0);
+        g.key(Key::Char('1'), 0.0);
+        assert_eq!(g.results().count(), 1);
+        g.key(Key::Down, 0.0);
+        assert_eq!(
+            g.key(Key::Escape, 0.0),
             None,
             "the first Escape clears the query"
         );
@@ -1281,7 +1597,14 @@ mod tests {
             "the panel stays open"
         );
         assert!(!g.visible().is_empty());
-        assert_eq!(g.key(Key::Escape), Some(Outcome::Close), "the next closes");
+        assert!(!g.is_folded());
+        assert_eq!(g.key(Key::Escape, 0.0), None, "the next folds");
+        assert!(g.is_folded());
+        assert_eq!(
+            g.key(Key::Escape, 0.0),
+            Some(Outcome::Close),
+            "the third closes"
+        );
     }
 
     #[test]
@@ -1294,20 +1617,24 @@ mod tests {
             &[],
             0.0,
         ));
-        g.key(Key::Char('f'));
-        g.key(Key::Char('o'));
+        g.key(Key::Char('f'), 0.0);
+        g.key(Key::Char('o'), 0.0);
         assert_eq!(names(&g), ["Foot"]);
         assert_eq!(
-            g.key(Key::Return),
+            g.key(Key::Return, 0.0),
             Some(Outcome::Launch("foot".into())),
             "Return with a query opens the first result"
         );
-        g.key(Key::Backspace);
-        g.key(Key::Backspace);
+        g.key(Key::Backspace, 0.0);
+        g.key(Key::Backspace, 0.0);
         assert_eq!(g.result_count(), 2);
-        assert_eq!(g.key(Key::Return), None, "nothing selected and no query");
+        assert_eq!(
+            g.key(Key::Return, 0.0),
+            None,
+            "nothing selected and no query"
+        );
         for c in "nautilus".chars() {
-            g.key(Key::Char(c));
+            g.key(Key::Char(c), 0.0);
         }
         assert_eq!(
             names(&g),
@@ -1320,32 +1647,35 @@ mod tests {
     fn arrows_walk_the_rows_and_cross_from_the_recents_to_the_list() {
         let recent: Vec<String> = (0..3).map(|i| format!("app-{i:02}")).collect();
         let mut g = sized(AppGrid::new(apps(20), &recent, 0.0));
-        g.key(Key::Right);
+        g.key(Key::Right, 0.0);
         assert_eq!(
             g.selected(),
             Some(0),
             "the first arrow selects the first item"
         );
-        g.key(Key::Right);
-        g.key(Key::Right);
-        g.key(Key::Down);
+        g.key(Key::Right, 0.0);
+        g.key(Key::Right, 0.0);
+        g.key(Key::Down, 0.0);
         assert_eq!(
             g.selected(),
             Some(3 + 2),
             "down from the recents keeps the column"
         );
-        g.key(Key::Down);
+        g.key(Key::Down, 0.0);
         assert_eq!(g.selected(), Some(3 + 7 + 2));
-        g.key(Key::Up);
-        g.key(Key::Up);
+        g.key(Key::Up, 0.0);
+        g.key(Key::Up, 0.0);
         assert_eq!(g.selected(), Some(2), "up into the recents row");
-        g.key(Key::End);
+        g.key(Key::End, 0.0);
         assert_eq!(g.selected(), Some(22));
-        g.key(Key::Down);
+        g.key(Key::Down, 0.0);
         assert_eq!(g.selected(), Some(22), "nothing below the last row");
-        assert_eq!(g.key(Key::Return), Some(Outcome::Launch("app-19".into())));
-        g.key(Key::Home);
-        g.key(Key::Up);
+        assert_eq!(
+            g.key(Key::Return, 0.0),
+            Some(Outcome::Launch("app-19".into()))
+        );
+        g.key(Key::Home, 0.0);
+        g.key(Key::Up, 0.0);
         assert_eq!(
             g.zone(),
             Zone::Pills,
@@ -1363,19 +1693,19 @@ mod tests {
             &[],
             0.0,
         ));
-        g.key(Key::Tab);
+        g.key(Key::Tab, 0.0);
         assert_eq!((g.zone(), g.pill_focus()), (Zone::Pills, Some(0)));
-        g.key(Key::Right);
+        g.key(Key::Right, 0.0);
         assert_eq!(g.pill_focus(), Some(1));
-        g.key(Key::Char(' '));
+        g.key(Key::Char(' '), 0.0);
         assert_eq!(g.pill(), Some(Pill::System), "Space turns the pill on");
         assert_eq!(names(&g), ["Terminal"]);
-        g.key(Key::Return);
+        g.key(Key::Return, 0.0);
         assert_eq!(g.pill(), None, "Return turns it off");
-        g.key(Key::BackTab);
+        g.key(Key::BackTab, 0.0);
         assert_eq!(g.zone(), Zone::Grid);
-        g.key(Key::Tab);
-        g.key(Key::Char('w'));
+        g.key(Key::Tab, 0.0);
+        g.key(Key::Char('w'), 0.0);
         assert_eq!(g.zone(), Zone::Grid, "typing goes to the search");
         assert_eq!(names(&g), ["Browser"]);
     }
@@ -1388,19 +1718,34 @@ mod tests {
         assert_eq!(g.max_scroll(), 15.0 * 102.0 - l.content.h);
         let thumb = g.scroller_thumb().expect("the content does not fit");
         assert_eq!(thumb.y, l.scroller_track().y, "at the top");
-        g.scroll_by(-50.0);
+        assert_eq!(
+            g.scroller_alpha(0.0),
+            0.0,
+            "the indicator shows only while scrolling"
+        );
+        g.scroll_by(-50.0, 0.0);
         assert_eq!(g.scroll(), 0.0);
-        g.scroll_by(1e6);
+        assert_eq!(g.scroller_alpha(0.0), 0.0, "nothing scrolled");
+        g.scroll_by(1e6, 5.0);
         assert_eq!(g.scroll(), g.max_scroll());
+        assert_eq!(g.scroller_alpha(5.0 + SCROLLER_LINGER), 1.0);
+        assert!(g.animating(5.0 + SCROLLER_LINGER));
+        assert!(g.scroller_alpha(5.0 + SCROLLER_LINGER + SCROLLER_FADE / 2.0) < 0.6);
+        assert!(g.scroller_alpha(5.0 + SCROLLER_LINGER + SCROLLER_FADE) < 1e-9);
+        assert_eq!(
+            (thumb.w, l.panel.right() - thumb.right()),
+            (6.0, 3.0),
+            "the thumb's width and its inset from the panel's edge"
+        );
         let thumb = g.scroller_thumb().unwrap();
         assert!(
             (thumb.bottom() - l.scroller_track().bottom()).abs() < 1e-9,
             "at the bottom"
         );
-        g.key(Key::Home);
+        g.key(Key::Home, 0.0);
         assert_eq!((g.selected(), g.scroll()), (Some(0), 0.0));
         for _ in 0..6 {
-            g.key(Key::Down);
+            g.key(Key::Down, 0.0);
         }
         let cell = g.cell_of(42).unwrap();
         assert!(
@@ -1446,7 +1791,7 @@ mod tests {
             None,
             "a leaving grid takes nothing"
         );
-        assert_eq!(g.key(Key::Return), None);
+        assert_eq!(g.key(Key::Return, 0.0), None);
     }
 
     #[test]

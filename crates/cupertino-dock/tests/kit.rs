@@ -826,7 +826,8 @@ fn the_focus_dock_shortcut_is_dropped_while_the_grid_or_the_dialog_has_the_keybo
         events: vec![DockEvent::Engage],
     });
     run.send_to(grid, WindowEvent::Focus(true));
-    // with nothing typed, one Escape dismisses the grid
+    // with nothing typed, the first Escape folds the grid into its capsule and the next dismisses it
+    run.key(grid, ESCAPE);
     run.key(grid, ESCAPE);
     run.advance(1.0);
     assert!(run.window(&format!("{GRID_APP_ID}@1")).is_none());
@@ -1199,9 +1200,10 @@ fn named(run: &Run, window: WindowId, role: Role) -> Vec<String> {
 
 /// The grid is a panel inside the output, not the whole of it: its search field on top, the pills of the categories
 /// its applications are in, the recently used applications in a row of their own above a separator, then every
-/// application by name. One Escape dismisses the grid.
+/// application by name. The first Escape folds the panel into its search capsule, without the pills and the rows, and
+/// the next dismisses the grid.
 #[test]
-fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_one_escape_closes_it() {
+fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_two_escapes_close_it() {
     let mut run = Run::start();
     run.record.borrow_mut().recent = vec![format!("{TERMINAL}.desktop")];
     let grid = open_grid(&mut run);
@@ -1264,6 +1266,21 @@ fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_one_escape_clo
     );
     run.key(grid, ESCAPE);
     run.advance(1.0);
+    assert!(
+        run.window(&format!("{GRID_APP_ID}@1")).is_some(),
+        "the first Escape keeps the grid up"
+    );
+    assert!(named(&run, grid, Role::CheckBox).is_empty(), "no pills");
+    assert!(named(&run, grid, Role::Button).is_empty(), "no rows");
+    let capsule = run.bounds(grid, Role::TextInput, "Applications");
+    assert_eq!(capsule, kit_rect(layout.capsule), "the search capsule");
+    assert_eq!(
+        run.record.borrow().keyboard.last().copied(),
+        Some((Part::Grid, true)),
+        "the capsule keeps the keyboard"
+    );
+    run.key(grid, ESCAPE);
+    run.advance(1.0);
     assert!(run.window(&format!("{GRID_APP_ID}@1")).is_none());
     assert_eq!(
         run.record.borrow().keyboard.last().copied(),
@@ -1272,7 +1289,8 @@ fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_one_escape_clo
 }
 
 /// Typing searches at once; with a query typed, the first Escape clears it and leaves the grid open on every
-/// application, and the next closes it. An application that runs is brought forward rather than started again.
+/// application, the next folds it into its capsule and the one after closes it. An application that runs is brought
+/// forward rather than started again.
 #[test]
 fn typing_searches_at_once_and_an_application_that_runs_comes_forward() {
     let mut run = Run::start();
@@ -1292,8 +1310,14 @@ fn typing_searches_at_once_and_an_application_that_runs_comes_forward() {
     run.key(grid, ESCAPE);
     run.advance(1.0);
     assert!(
+        run.window(&format!("{GRID_APP_ID}@1")).is_some(),
+        "the next folds the panel"
+    );
+    run.key(grid, ESCAPE);
+    run.advance(1.0);
+    assert!(
         run.window(&format!("{GRID_APP_ID}@1")).is_none(),
-        "the next closes"
+        "the one after closes"
     );
     let grid = open_grid(&mut run);
     run.type_text(grid, "term");

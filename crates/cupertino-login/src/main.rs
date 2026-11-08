@@ -9,8 +9,14 @@ mod options;
 mod roles;
 mod screen;
 
+use cupertino_login_ipc::zeroing::ZeroOnFree;
 use options::{Options, USAGE};
 use std::process::ExitCode;
+
+/// The lock screen and the login screen handle passwords: nothing they free keeps one, the `CString` that PAM's binding
+/// drops without clearing included.
+#[global_allocator]
+static ALLOCATOR: ZeroOnFree<std::alloc::System> = ZeroOnFree(std::alloc::System);
 
 fn main() -> ExitCode {
     let options = match Options::parse(std::env::args().skip(1)) {

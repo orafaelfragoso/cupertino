@@ -173,7 +173,7 @@ from the first are a wrong password. Any other failure is an error: the screen s
 modules (`PAM_TEXT_INFO`, `PAM_ERROR_MSG`: the `pam_faillock` lockout, a password about to expire) shows as the notice under the
 field until the next edit, also after a wrong password. Every prompt but the password one is refused.
 
-The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Memory the process has freed is not zeroed here, and swap can hold a password (no `mlockall`).
+The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Its global allocator (`cupertino_login_ipc::zeroing::ZeroOnFree`) zeroes every block it frees, so the `CString` that pam-client2 drops unzeroed once it has copied the answer into PAM's buffer is cleared too (`tests/zeroing.rs`); PAM clears its own copy. Swap can hold a password (no `mlockall`).
 
 While it is typed the password lives in the field's `SecureBuffer` (Kit's, zeroed when the field goes), which holds at most
 `MAX_PASSWORD_BYTES` (512, `PAM_MAX_RESP_SIZE`): a key past it is refused, not an edit and not announced, and text from an input

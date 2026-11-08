@@ -88,8 +88,13 @@ from the application's model and reports changes as messages.
   28 pt capsule buttons 16 pt from the sides and the bottom. Two buttons whose labels fit half the row (reckoned from
   the character count) go side by side at equal widths in their given order; otherwise they are stacked full width,
   8 pt apart, in the reverse order, so the default is on top. The default capsule takes the accent, the others a quiet
-  fill; a destructive answer has a red label (a red capsule in high contrast). Dialogs show and go at once: the window
-  draws no motion for them.
+  fill; a destructive answer has a red label (a red capsule in high contrast). The alert is not glass: `PaintCx::glass`
+  is drawn by the compositor under the window's surface, so over the window's own opaque content it would not show,
+  and the alert is part of that surface. Glass would need the alert on a surface of its own above the window, which
+  Kit's popups are not fit for: a popup without a grab gets no keyboard, one with a grab needs the serial of a press
+  (an alert raised by a timer or a task has none) and is dismissed by a press outside, and no anchor hangs one centred
+  under the toolbar row. Dialogs show and go at once: the window draws no motion for them, since a fade keyed to the
+  clock would leave them unseen in every test harness whose clock stands still.
 - **Window drag regions.** `WindowDragArea` marks its content as a drag region of the window, and the toolbar row of
   `NavigationStack` is one, so every Kit app with a navigation toolbar gets it. A left press there that no control
   takes starts an interactive move (`WindowRequest::Move`, answering the press) once the pointer travels more than

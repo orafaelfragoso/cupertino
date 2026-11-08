@@ -27,8 +27,8 @@ pub enum Key {
     Escape,
 }
 
-/// What the host does for the model.
-#[derive(Debug, PartialEq, Eq)]
+/// What the host does for the model. `Debug` never prints an answer.
+#[derive(PartialEq, Eq)]
 pub enum Effect {
     /// Start the helper for this user and this cookie, dropping any running one.
     StartHelper { user: User, cookie: String },
@@ -36,6 +36,30 @@ pub enum Effect {
     Answer(Zeroizing<Vec<u8>>),
     /// Drop the running helper, then answer the request of this cookie with this outcome.
     Finish { cookie: String, outcome: Outcome },
+}
+
+impl std::fmt::Debug for Effect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Effect::StartHelper { user, cookie } => f
+                .debug_struct("StartHelper")
+                .field("user", user)
+                .field("cookie", cookie)
+                .finish(),
+            Effect::Answer(_) => f.write_str("Answer(<secret>)"),
+            Effect::Finish { cookie, outcome } => f
+                .debug_struct("Finish")
+                .field("cookie", cookie)
+                .field("outcome", outcome)
+                .finish(),
+        }
+    }
+}
+
+/// An empty field, allocated at [`MAX_ANSWER`] so that typing never moves its text and leaves a copy behind in the
+/// block it left; it is zeroed when it drops.
+fn empty_field() -> Zeroizing<String> {
+    Zeroizing::new(String::with_capacity(MAX_ANSWER))
 }
 
 /// Where the prompt on screen is.
@@ -58,6 +82,7 @@ pub struct Prompt {
     pub question: String,
     /// Whether the field shows what is typed; false for a secret.
     pub echo: bool,
+    /// What is typed, in a block of its own that never grows ([`empty_field`]).
     field: Zeroizing<String>,
     /// How many characters the field showed when the answer went to the helper; it keeps showing them while checking.
     sent_len: usize,
@@ -169,7 +194,7 @@ impl Agent {
         }
         prompt.user = user;
         prompt.phase = Phase::Waiting;
-        prompt.field = Zeroizing::new(String::new());
+        prompt.field = empty_field();
         prompt.error = None;
         prompt.info = None;
         vec![Effect::StartHelper {
@@ -204,7 +229,8 @@ impl Agent {
                 prompt.sent_len = prompt.field.chars().count();
                 prompt.phase = Phase::Checking;
                 prompt.error = None;
-                let field = std::mem::replace(&mut prompt.field, Zeroizing::new(String::new()));
+                // the answer is copied once, into a block of its exact size; the field it came from is zeroed here
+                let field = std::mem::replace(&mut prompt.field, empty_field());
                 return vec![Effect::Answer(Zeroizing::new(field.as_bytes().to_vec()))];
             }
         }
@@ -232,7 +258,7 @@ impl Agent {
                 prompt.phase = Phase::Asking;
                 prompt.question = shown(&text);
                 prompt.echo = echo;
-                prompt.field = Zeroizing::new(String::new());
+                prompt.field = empty_field();
             }
             Line::Error(text) => prompt.error = Some(shown(&text)),
             Line::Info(text) => prompt.info = Some(shown(&text)),
@@ -302,7 +328,7 @@ impl Agent {
             phase: Phase::Waiting,
             question: String::new(),
             echo: false,
-            field: Zeroizing::new(String::new()),
+            field: empty_field(),
             sent_len: 0,
             error: None,
             info: None,

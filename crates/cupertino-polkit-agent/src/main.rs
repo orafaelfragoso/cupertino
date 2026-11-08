@@ -7,6 +7,12 @@ mod logind;
 
 use std::process::ExitCode;
 
+use cupertino_polkit_agent::zeroing::ZeroOnFree;
+
+/// The agent handles passwords: nothing it frees keeps one.
+#[global_allocator]
+static ALLOCATOR: ZeroOnFree<std::alloc::System> = ZeroOnFree(std::alloc::System);
+
 fn main() -> ExitCode {
     if let Err(e) = harden::harden() {
         eprintln!("cupertino-polkit-agent: hardening the process: {e}");

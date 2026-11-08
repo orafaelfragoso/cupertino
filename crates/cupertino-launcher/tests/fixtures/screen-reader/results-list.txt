@@ -15,3 +15,11 @@ Window
       ListItem "Firefox", "Web Browser" item=1 [selected] actions=[Click]
     Group "Applications"
       ListItem "Firewall Configuration" item=2 actions=[Click]
+  Group "Preview"
+    StaticText "Firefox"
+    StaticText "Application"
+    StaticText "Web Browser"
+    Group "Actions" items=3
+      Button "Open" item=1 [selected] actions=[Click]
+      Button "New Window" item=2 actions=[Click]
+      Button "New Private Window" item=3 actions=[Click]

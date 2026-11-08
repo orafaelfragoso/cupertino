@@ -22,7 +22,9 @@ app = [
     "dep:cupertino-protocol-app",
     "dep:cupertino-shell-client",
     "dep:cupertino-ui-wayland",
+    "dep:cupertino-thumbnails",
     "dep:cupertino-wayland-client",
+    "dep:libc",
     "dep:zbus",
 ]
 
@@ -39,9 +41,11 @@ cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
 cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
+cupertino-thumbnails = { path = "../cupertino-thumbnails", optional = true }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
+libc = { version = "0.2", optional = true }
 serde_json = "1"
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
 

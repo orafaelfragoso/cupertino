@@ -44,7 +44,9 @@ from the application's model and reports changes as messages.
   Click sends `on_open`, and without it the row reads as disabled. `FormHeader` is the card at the top of a page, its
   large tile over a bold title and a centred description, read as the title described by the description.
   `FormBackground` fills its room with the colour behind the groups. `SearchField` is a `TextField` drawn as a capsule
-  with a magnifying glass; it edits and reads as its field does.
+  with a magnifying glass; it edits and reads as its field does. `BareField` is a `TextField` with no chrome, its
+  text and placeholder at its own size (whole points), for a field standing on a surface drawn around it such as a
+  launcher capsule; it edits and reads as its field does (`tests/bare_field.rs`).
 - **Tiled sidebar.** `TileSidebar` lists a settings window's pages: rows of `TILE_SIDEBAR_ROW_HEIGHT`, a tile before
   each label, in groups set apart by space, under an optional header (a `SearchField`) that does not scroll. The
   selected row fills with the selected control colour, its label bold. Keys, Tab stop, reporting and assistive

@@ -820,6 +820,73 @@ fn the_centre_stacks_each_application_s_notifications() {
 }
 
 #[test]
+fn a_click_expands_a_group_into_its_cards_and_show_less_collapses_it() {
+    let mut run = Run::new();
+    for (t, summary) in [(0.0, "First"), (1.0, "Second"), (2.0, "Third")] {
+        run.step(Step::At(t));
+        run.notify(mail(summary, "From the inbox"));
+    }
+    run.step(Step::At(3.0));
+    run.notify(NotifyInput::new("Calendar", "Stand-up", "In 5 minutes"));
+    run.step(Step::At(4.0));
+    run.step(Step::OpenCentre);
+    let window = run.only_window();
+    let items = |run: &Run| -> Vec<(Option<String>, Option<bool>)> {
+        let snapshot = run.snapshot(window);
+        let mut items: Vec<_> = snapshot
+            .accessibility
+            .iter()
+            .filter(|(_, a)| a.role == Role::ListItem)
+            .map(|(_, a)| (a.item_index, a.name.clone(), a.states.expanded))
+            .collect();
+        items.sort();
+        items
+            .into_iter()
+            .map(|(_, name, expanded)| (name, expanded))
+            .collect()
+    };
+    assert_eq!(
+        items(&run),
+        [
+            (Some("Calendar: Stand-up".into()), None),
+            (Some("Mail: Third".into()), Some(false))
+        ],
+        "a collapsed group reads as its front card, not expanded"
+    );
+    let front = rect(&run.snapshot(window), "card-3");
+    run.click(window, front.center());
+    assert!(run.host().is_empty(), "the click expands the group");
+    // half-way the cards are on their way out of the stack
+    run.step(Step::At(4.08));
+    let moving = rect(&run.snapshot(window), "card-2");
+    run.step(Step::At(6.0));
+    let settled = rect(&run.snapshot(window), "card-2");
+    assert!(
+        front.min_y() < moving.min_y()
+            && moving.min_y() < settled.min_y()
+            && moving.width() < settled.width(),
+        "the card comes out from behind the front one, narrower until it is in place: {front:?} {moving:?} \
+         {settled:?}"
+    );
+    assert_eq!(
+        items(&run),
+        [
+            (Some("Calendar: Stand-up".into()), None),
+            (Some("Mail: Third".into()), None),
+            (Some("Mail: Second".into()), None),
+            (Some("Mail: First".into()), None)
+        ],
+        "an expanded group lists each of its cards"
+    );
+    let dump = format!("{}{}", run.frame("expanded"), run.announced());
+    golden("centre-expanded", &dump);
+    let show_less = rect(&run.snapshot(window), "show-less");
+    run.click(window, show_less.center());
+    run.step(Step::At(8.0));
+    assert_eq!(items(&run).len(), 2, "Show Less collapses the group");
+}
+
+#[test]
 fn a_swipe_drags_the_banner_and_a_release_past_the_distance_dismisses_it() {
     let mut run = Run::new();
     run.notify(mail("Lunch", "Are you free at noon?"));
@@ -1236,6 +1303,11 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
         .find(|(_, a)| a.role == cupertino_kit::core::Role::List)
         .expect("the cards are a list");
     assert_eq!(list.1.children.len(), 3, "one card for each application");
+    // the newest card fronts a collapsed group of two: Return expands the group, and then activates the card
+    run.key(window, 0xff0d);
+    assert!(run.host().is_empty(), "Return expands the group");
+    assert_eq!(run.ui().expanded.len(), 1);
+    assert_eq!(focused(&run), key_of(4), "the focus stays on the card");
     run.key(window, 0xff0d);
     assert_eq!(
         run.host(),
@@ -1257,8 +1329,16 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
         "and then to the next group's card"
     );
 
+    // the pointer over a card reveals its close button
+    let card = rect(&run.snapshot(window), "card-1");
+    run.pointer(
+        window,
+        PointerEvent::Motion {
+            position: card.center(),
+        },
+    );
+    assert_eq!(run.ui().revealed, Some(1));
     let snapshot = run.snapshot(window);
-    let card = rect(&snapshot, "card-1");
     let close = subtree(&snapshot, keyed(&snapshot, "card-1").unwrap().id)
         .into_iter()
         .find(|n| n.key.as_ref().is_some_and(|k| *k == "close".into()))
@@ -1349,15 +1429,18 @@ fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_
     let snapshot = run.snapshot(window);
     let regions = run.materials(window).last().cloned().unwrap();
     let rects: Vec<Rect> = regions.iter().map(|r| r.rect).collect();
-    let header = rect(&snapshot, "header-row");
     assert_eq!(
-        rects,
-        vec![
-            Rect::new(28.0, header.min_y(), 344.0, view::HEADER_HEIGHT),
-            rect(&snapshot, "card-3"),
-            rect(&snapshot, "card-1"),
-        ],
-        "the header and each front card; the cards behind a group's front one are opaque"
+        rects[1..],
+        [rect(&snapshot, "card-3"), rect(&snapshot, "card-1")],
+        "each front card is glass, and nothing behind the header"
+    );
+    let container = |r: &MaterialRegion| r.glass.map(|g| (g.container, g.spacing));
+    assert!(
+        rects.len() == 3
+            && container(&regions[0]) == container(&regions[1])
+            && container(&regions[0]).is_some_and(|(c, spacing)| c != 0 && spacing == 0.0)
+            && container(&regions[2]) != container(&regions[0]),
+        "the sheet behind a group's front card joins its glass in one shape: {regions:?}"
     );
 
     let mut run = Run::with(Setup {
@@ -1387,4 +1470,139 @@ fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_
         fills, 1,
         "the card's shape is filled once, as the clipped source of its shadow outside the glass"
     );
+}
+
+#[test]
+fn past_the_glass_one_window_shows_the_lower_groups_sheets_go_opaque_and_every_card_keeps_its_glass(
+) {
+    let mut run = Run::with(Setup {
+        effects: true,
+        ..Setup::default()
+    });
+    // fourteen collapsed groups of three: a card and two sheets each, more glass than one window shows
+    let apps: Vec<String> = (0..14).map(|n| format!("App {n}")).collect();
+    let mut t = 0.0;
+    for app in &apps {
+        for n in 0..3 {
+            t += 0.01;
+            run.step(Step::At(t));
+            run.notify(NotifyInput::new(app, &format!("Summary {n}"), "Body"));
+        }
+    }
+    run.step(Step::At(t + 1.0));
+    run.step(Step::OpenCentre);
+    let window = run.only_window();
+    let snapshot = run.snapshot(window);
+    let regions = run.materials(window).last().cloned().unwrap();
+    assert!(
+        regions.len() <= cupertino_kit::core::MAX_MATERIALS,
+        "{} glass regions",
+        regions.len()
+    );
+    let model = run.driver.runtime().model();
+    let fronts: Vec<u32> = model
+        .center
+        .borrow()
+        .groups()
+        .iter()
+        .map(|g| g.notifications[0].id)
+        .collect();
+    assert_eq!(fronts.len(), 14);
+    for id in fronts {
+        let card = rect(&snapshot, &format!("card-{id}"));
+        assert!(
+            regions.iter().any(|r| r.rect == card),
+            "card {id} at {card:?} keeps its glass: {regions:?}"
+        );
+    }
+    // the sheets of the groups at the top keep theirs, a whole group at a time
+    let sheets = regions.len() - 14;
+    assert!(sheets > 0 && sheets % 2 == 0, "{sheets} sheets of glass");
+}
+
+#[test]
+fn the_keyboard_reveals_the_card_it_is_on_and_tab_reaches_its_buttons_whatever_the_pointer_does() {
+    let mut run = Run::new();
+    for (t, app) in [(0.0, "Calendar"), (0.1, "Weather")] {
+        run.step(Step::At(t));
+        let mut input = NotifyInput::new(app, "Summary", "Body");
+        input.actions = vec!["open".into(), "Open".into()];
+        run.notify(input);
+    }
+    run.step(Step::At(1.0));
+    run.step(Step::OpenCentre);
+    let window = run.only_window();
+    run.send(window, WindowEvent::Focus(true));
+    let focused_key = |run: &Run| -> Option<String> {
+        let snapshot = run.snapshot(window);
+        let node = snapshot
+            .nodes
+            .iter()
+            .find(|n| Some(n.id) == snapshot.focus)?;
+        node.key.as_ref().map(|k| format!("{k:?}"))
+    };
+    let buttons_of = |run: &Run, id: u32| -> Vec<String> {
+        let snapshot = run.snapshot(window);
+        let card = keyed(&snapshot, &format!("card-{id}")).unwrap().id;
+        let mut keys: Vec<String> = subtree(&snapshot, card)
+            .into_iter()
+            .filter(|n| Some(n.id) != Some(card))
+            .filter_map(|n| n.key.as_ref().map(|k| format!("{k:?}")))
+            .filter(|k| k.contains("close") || k.contains("action"))
+            .collect();
+        keys.sort();
+        keys
+    };
+    // Tab goes from card to card until one shows its ring; that card shows its buttons
+    let mut on = None;
+    for _ in 0..4 {
+        run.key(window, 0xff09);
+        if let Some(id) = run.ui().focused {
+            on = Some(id);
+            break;
+        }
+    }
+    let id = on.expect("the keyboard reveals a card");
+    assert_eq!(focused_key(&run), Some(format!("{:?}", view::card_key(id))));
+    assert!(
+        !buttons_of(&run, id).is_empty(),
+        "the card the keyboard is on shows its buttons"
+    );
+    let other = if id == 1 { 2 } else { 1 };
+    assert!(buttons_of(&run, other).is_empty(), "and only that card");
+    // the pointer moving over no card, then over the other card, takes nothing from the keyboard's card
+    let card = rect(&run.snapshot(window), &format!("card-{id}"));
+    run.pointer(
+        window,
+        PointerEvent::Motion {
+            position: Point::new(card.center().x, card.max_y() + 200.0),
+        },
+    );
+    assert_eq!(run.ui().focused, Some(id));
+    assert!(!buttons_of(&run, id).is_empty());
+    let over = rect(&run.snapshot(window), &format!("card-{other}"));
+    run.pointer(
+        window,
+        PointerEvent::Motion {
+            position: over.center(),
+        },
+    );
+    assert_eq!(
+        run.ui().revealed,
+        Some(other),
+        "hover reveals the other card"
+    );
+    assert!(
+        !buttons_of(&run, id).is_empty(),
+        "and the keyboard's keeps its buttons"
+    );
+    // Tab goes on into the card's buttons, and the card stays revealed while the keyboard is in it
+    run.key(window, 0xff09);
+    let inside = focused_key(&run).expect("a focused node");
+    assert!(
+        buttons_of(&run, id).contains(&inside),
+        "{inside} is one of card {id}'s buttons {:?}",
+        buttons_of(&run, id)
+    );
+    assert_eq!(run.ui().focused, Some(id));
 }

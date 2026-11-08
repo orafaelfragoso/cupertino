@@ -50,8 +50,8 @@ fn a_card_is_as_tall_as_its_text_and_never_shorter_than_its_icon() {
     let title = m.card(&notification("Title", ""), WIDTH, Fold::Banner);
     assert_eq!(
         title.height,
-        2.0 * PADDING + ICON_SIZE,
-        "one line is shorter than the icon"
+        (2.0 * PADDING + ICON_SIZE).max(MIN_CARD_HEIGHT),
+        "one line is shorter than the icon, and no card is shorter than its least height"
     );
     assert!(title.body.is_none());
     let column = CardMetrics::column_width(WIDTH);
@@ -64,7 +64,12 @@ fn a_card_is_as_tall_as_its_text_and_never_shorter_than_its_icon() {
             .height
     };
     let text = line("Title", FontWeight::SEMIBOLD) + LINE_GAP + line("Body", FontWeight::REGULAR);
-    assert_eq!(body.height, (2.0 * PADDING + text.max(ICON_SIZE)).ceil());
+    assert_eq!(
+        body.height,
+        (2.0 * PADDING + text.max(ICON_SIZE))
+            .ceil()
+            .max(MIN_CARD_HEIGHT)
+    );
     let mut c = NotificationCenter::default();
     let id = c.notify(
         NotifyInput::new("app", "Title", "Body").with_action("reply", "Reply"),
@@ -76,6 +81,13 @@ fn a_card_is_as_tall_as_its_text_and_never_shorter_than_its_icon() {
         (2.0 * PADDING + text + BUTTON_TOP_GAP + BUTTON_ROW).ceil()
     );
     assert_eq!(actions.actions, vec![("reply".into(), "Reply".into())]);
+    // a centre card shows its buttons only while it is revealed
+    let n = c.get(id).unwrap();
+    assert!(m.card(n, WIDTH, Fold::Folded).actions.is_empty());
+    assert_eq!(
+        m.card_with(n, WIDTH, Fold::Folded, true).height,
+        actions.height
+    );
 }
 
 #[test]
@@ -123,8 +135,8 @@ fn a_centre_card_unfolds_to_more_lines_and_no_further_than_its_limit() {
     assert!(unfolded.height > folded.height);
     assert_eq!(
         folded.summary_width,
-        column - m.disclosure_side() - BUTTON_GAP,
-        "the summary leaves room for the disclosure button"
+        column - AGE_WIDTH - m.disclosure_side() - BUTTON_GAP,
+        "the summary leaves room for the age and the disclosure button"
     );
 
     let huge = notification("Title", &long(3000));
@@ -433,4 +445,55 @@ fn a_press_that_never_travels_is_a_click_and_activates() {
         apply(&mut c, &mut ui, Input::SwipeEnd(id), 1.1),
         Some(HostAction::Activate(id))
     );
+}
+
+#[test]
+fn the_age_reads_now_then_minutes_hours_and_days() {
+    assert_eq!(age(100.0, 100.0), "now");
+    assert_eq!(age(100.0, 159.0), "now");
+    assert_eq!(age(0.0, 60.0), "1m ago");
+    assert_eq!(age(0.0, 3599.0), "59m ago");
+    assert_eq!(age(0.0, 7200.0), "2h ago");
+    assert_eq!(age(0.0, 3.0 * 86_400.0), "3d ago");
+    // a clock that went back says now
+    assert_eq!(age(100.0, 50.0), "now");
+}
+
+#[test]
+fn a_group_expands_and_collapses_with_a_spring_and_at_once_under_reduce_motion() {
+    let mut c = NotificationCenter::default();
+    c.notify(NotifyInput::new("Mail", "One", ""), 0.0);
+    c.notify(NotifyInput::new("Mail", "Two", ""), 0.1);
+    let key = c.groups()[0].key.clone();
+    let mut ui = Ui::default();
+    assert_eq!(ui.expansion(&key, 1.0), 0.0);
+    apply(&mut c, &mut ui, Input::Expand(key.clone(), true), 1.0);
+    assert!(ui.is_animating(1.1));
+    let early = ui.expansion(&key, 1.05);
+    let later = ui.expansion(&key, 1.2);
+    assert!(
+        0.0 < early && early < later && later < 1.0,
+        "{early} {later}"
+    );
+    assert_eq!(ui.expansion(&key, 3.0), 1.0);
+    assert!(!ui.is_animating(3.0));
+    apply(&mut c, &mut ui, Input::Expand(key.clone(), false), 3.0);
+    let closing = ui.expansion(&key, 3.1);
+    assert!(0.0 < closing && closing < 1.0);
+    assert_eq!(ui.expansion(&key, 5.0), 0.0);
+
+    c.config.motion.reduce_motion = true;
+    apply(&mut c, &mut ui, Input::Expand(key.clone(), true), 6.0);
+    assert_eq!(
+        ui.expansion(&key, 6.0),
+        1.0,
+        "Reduce Motion expands at once"
+    );
+    assert!(!ui.is_animating(6.0));
+    apply(&mut c, &mut ui, Input::Expand(key.clone(), false), 6.0);
+    assert_eq!(ui.expansion(&key, 6.0), 0.0);
+
+    // clearing the group clears each of its notifications
+    apply(&mut c, &mut ui, Input::ClearGroup(key), 7.0);
+    assert!(c.groups().is_empty());
 }

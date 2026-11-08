@@ -210,19 +210,82 @@ fn scrolling_follows_the_selection() {
 }
 
 #[test]
-fn tab_completes_to_the_selected_title() {
+fn tab_and_shift_tab_traverse_the_selected_results_actions_round() {
     let (mut p, mut l) = open();
     type_str(&mut p, &mut l, "fire");
+    assert_eq!(p.selected_item().unwrap().title, "Firefox");
+    // Open, New Window, New Private Window
+    let labels: Vec<String> = l
+        .actions(p.selected_item().unwrap())
+        .into_iter()
+        .map(|a| a.label)
+        .collect();
+    assert_eq!(labels, ["Open", "New Window", "New Private Window"]);
+    let shift = Mods {
+        shift: true,
+        ..Mods::NONE
+    };
+    for expected in [1, 2, 0, 1] {
+        assert_eq!(
+            p.handle_key(Key::Tab, Mods::NONE, &mut l, now(0.0)),
+            PanelEvent::Changed
+        );
+        assert_eq!(p.action(), expected);
+    }
+    for expected in [0, 2] {
+        p.handle_key(Key::Tab, shift, &mut l, now(0.0));
+        assert_eq!(p.action(), expected);
+    }
+    assert_eq!(p.query(), "fire", "Tab never edits the query");
+    assert_eq!(p.focus(), Focus::Field);
+}
+
+#[test]
+fn the_arrows_traverse_actions_in_the_list_and_stop_at_the_ends() {
+    let (mut p, mut l) = open();
+    type_str(&mut p, &mut l, "fire");
+    p.handle_key(Key::Down, Mods::NONE, &mut l, now(0.0));
+    assert_eq!(p.focus(), Focus::List);
+    p.set_selected(0);
     assert_eq!(
-        p.handle_key(Key::Tab, Mods::NONE, &mut l, now(0.0)),
-        PanelEvent::Changed
+        p.handle_key(Key::Left, Mods::NONE, &mut l, now(0.0)),
+        PanelEvent::None,
+        "the first action is the start"
     );
-    assert_eq!(p.query(), "Firefox");
-    assert_eq!(p.field().caret(), 7);
+    for expected in [1, 2, 2] {
+        p.handle_key(Key::Right, Mods::NONE, &mut l, now(0.0));
+        assert_eq!(p.action(), expected);
+    }
+    p.handle_key(Key::Left, Mods::NONE, &mut l, now(0.0));
+    assert_eq!(p.action(), 1);
+    // a new selection starts at its own activation again
+    p.handle_key(Key::Down, Mods::NONE, &mut l, now(0.0));
+    assert_eq!(p.action(), 0);
+}
+
+#[test]
+fn enter_carries_out_the_chosen_action() {
+    let (mut p, mut l) = open();
+    type_str(&mut p, &mut l, "fire");
+    p.handle_key(Key::Tab, Mods::NONE, &mut l, now(0.0));
+    p.handle_key(Key::Tab, Mods::NONE, &mut l, now(0.0));
+    let ev = p.handle_key(Key::Enter, Mods::NONE, &mut l, now(1.0));
+    let PanelEvent::Activate(Activation::Run(cmd)) = ev else {
+        panic!("{ev:?}")
+    };
+    assert_eq!(cmd.args, ["--private-window"]);
+    assert!(!p.is_visible());
+}
+
+#[test]
+fn a_result_with_one_action_has_nothing_to_traverse() {
+    let (mut p, mut l) = open();
+    type_str(&mut p, &mut l, "2+2");
     assert_eq!(
         p.handle_key(Key::Tab, Mods::NONE, &mut l, now(0.0)),
         PanelEvent::None
     );
+    assert_eq!(p.action(), 0);
 }
 
 #[test]
@@ -357,8 +420,8 @@ fn escape_clears_the_query_before_it_closes() {
 
 #[test]
 fn list_focus_keys_return_to_the_field() {
-    // Tab, Delete and Escape inside the list only hand the keyboard back to the field.
-    for key in [Key::Tab, Key::Backspace, Key::Delete, Key::Escape] {
+    // Delete and Escape inside the list only hand the keyboard back to the field.
+    for key in [Key::Backspace, Key::Delete, Key::Escape] {
         let (mut p, mut l) = open();
         type_str(&mut p, &mut l, "e");
         p.handle_key(Key::Down, Mods::NONE, &mut l, now(0.0));

@@ -12,6 +12,7 @@
 //! mints an xdg-activation token per launch, which is put in the command's environment.
 
 use crate::calc;
+use crate::convert;
 use crate::desktop::DesktopEntry;
 use crate::exec::{self, CommandSpec};
 use crate::files::FileIndex;
@@ -34,6 +35,8 @@ pub enum Action {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ItemKind {
     Calculator,
+    /// A unit conversion ([`crate::convert`]), shown as the calculator's result is.
+    Conversion,
     Application,
     ApplicationAction,
     Folder,
@@ -46,6 +49,7 @@ pub enum SectionKind {
     /// The single best match across the other sections (at most one top hit).
     TopHit,
     Calculator,
+    Conversion,
     Suggestions,
     Applications,
     /// Declared before `Folders`: equal-scoring sections follow the design default category
@@ -60,6 +64,7 @@ impl SectionKind {
         match self {
             SectionKind::TopHit => "Top Hit",
             SectionKind::Calculator => "Calculator",
+            SectionKind::Conversion => "Conversion",
             SectionKind::Suggestions => "Suggestions",
             SectionKind::Applications => "Applications",
             SectionKind::Folders => "Folders",
@@ -217,6 +222,38 @@ pub struct LaunchRequest {
 }
 
 pub type TokenHook = Box<dyn FnMut(&LaunchRequest) -> Option<String> + Send>;
+
+/// What one of a result's actions does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ActionKind {
+    /// The result's own activation: launch, open, copy the value or search.
+    Default,
+    /// Open the folder holding a file, or a folder itself, in the file manager.
+    Reveal,
+    /// Put the path of a file or folder on the clipboard.
+    CopyPath,
+    /// One of an application's desktop actions, by its id.
+    Desktop(String),
+}
+
+/// One action of a result, as the panel offers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemAction {
+    pub label: String,
+    pub kind: ActionKind,
+}
+
+impl ItemAction {
+    fn new(label: &str, kind: ActionKind) -> Self {
+        Self {
+            label: label.to_owned(),
+            kind,
+        }
+    }
+}
+
+/// The desktop id of the session's file manager, which Reveal opens a folder in when it is installed.
+pub const FILE_MANAGER_ID: &str = "cupertino-files.desktop";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Activation {
@@ -453,7 +490,23 @@ impl Launcher {
         let mut sections: Vec<Section> = Vec::new();
 
         if self.config.show_calculator {
-            if let Some(c) = calc::evaluate(text) {
+            if let Some(c) = convert::convert(text) {
+                let item = ResultItem {
+                    id: "convert".into(),
+                    kind: ItemKind::Conversion,
+                    title: c.text.clone(),
+                    subtitle: format!("{} =", c.from),
+                    icon: None,
+                    score: f64::MAX,
+                    highlights: Vec::new(),
+                    action: Action::CopyText(c.text),
+                };
+                results.sections.push(Section {
+                    kind: SectionKind::Conversion,
+                    title: SectionKind::Conversion.title().into(),
+                    items: vec![item],
+                });
+            } else if let Some(c) = calc::evaluate(text) {
                 let item = ResultItem {
                     id: "calc".into(),
                     kind: ItemKind::Calculator,
@@ -648,6 +701,102 @@ impl Launcher {
             Action::OpenPath(p) => self.open_with(&p.to_string_lossy()),
             Action::OpenUrl(u) => self.open_with(u),
             Action::CopyText(_) => None,
+        }
+    }
+
+    /// The actions `item` offers, its own activation first: Open, Reveal in Files and Copy Path for a file; Open and
+    /// Copy Path for a folder; Open and each desktop action for an application; Copy for a calculation or a
+    /// conversion; Search for the web search.
+    pub fn actions(&self, item: &ResultItem) -> Vec<ItemAction> {
+        let mut actions = Vec::new();
+        match item.kind {
+            ItemKind::Calculator | ItemKind::Conversion => {
+                actions.push(ItemAction::new("Copy", ActionKind::Default))
+            }
+            ItemKind::WebSearch => actions.push(ItemAction::new("Search", ActionKind::Default)),
+            ItemKind::ApplicationAction => {
+                actions.push(ItemAction::new("Open", ActionKind::Default))
+            }
+            ItemKind::Application => {
+                actions.push(ItemAction::new("Open", ActionKind::Default));
+                if let Action::LaunchApp { desktop_id, .. } = &item.action {
+                    if let Some(entry) = self.entry(desktop_id) {
+                        actions.extend(entry.actions.iter().map(|a| ItemAction {
+                            label: a.name.clone(),
+                            kind: ActionKind::Desktop(a.id.clone()),
+                        }));
+                    }
+                }
+            }
+            ItemKind::File => {
+                actions.push(ItemAction::new("Open", ActionKind::Default));
+                actions.push(ItemAction::new("Reveal in Files", ActionKind::Reveal));
+                actions.push(ItemAction::new("Copy Path", ActionKind::CopyPath));
+            }
+            ItemKind::Folder => {
+                actions.push(ItemAction::new("Open", ActionKind::Default));
+                actions.push(ItemAction::new("Copy Path", ActionKind::CopyPath));
+            }
+        }
+        actions
+    }
+
+    /// The folder Reveal opens for `path`: the path itself when it is a folder, else the folder holding it.
+    pub fn reveal_folder(path: &std::path::Path) -> PathBuf {
+        if path.is_dir() {
+            path.to_path_buf()
+        } else {
+            path.parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| path.to_path_buf())
+        }
+    }
+
+    /// The command that opens the folder of `path` in the session's file manager ([`FILE_MANAGER_ID`]) when it is
+    /// installed, else with the open command.
+    pub fn reveal_command(&self, path: &std::path::Path) -> Option<CommandSpec> {
+        let folder = Self::reveal_folder(path).to_string_lossy().into_owned();
+        match self.entry(FILE_MANAGER_ID) {
+            Some(entry) => exec::command_for_entry(entry, &[folder]),
+            None => self.open_with(&folder),
+        }
+    }
+
+    /// Carry out `action` of `item`: its own activation as [`Launcher::activate`] does; Reveal opens its folder in the
+    /// file manager; Copy Path copies its path; a desktop action launches it. Frecency is recorded for every action
+    /// that opens something.
+    pub fn activate_action(
+        &mut self,
+        item: &ResultItem,
+        action: &ItemAction,
+        query: &str,
+        now: f64,
+    ) -> Activation {
+        match (&action.kind, &item.action) {
+            (ActionKind::Default, _) => self.activate(item, query, now),
+            (ActionKind::Reveal, Action::OpenPath(path)) => match self.reveal_command(path) {
+                Some(spec) => {
+                    self.frecency
+                        .record(&item.id, &Query::new(query).normalized(), now);
+                    Activation::Run(spec)
+                }
+                None => Activation::Nothing,
+            },
+            (ActionKind::CopyPath, Action::OpenPath(path)) => {
+                Activation::CopyToClipboard(path.to_string_lossy().into_owned())
+            }
+            (ActionKind::Desktop(id), Action::LaunchApp { desktop_id, .. }) => {
+                let launch = ResultItem {
+                    id: format!("app:{desktop_id}#{id}"),
+                    action: Action::LaunchApp {
+                        desktop_id: desktop_id.clone(),
+                        action: Some(id.clone()),
+                    },
+                    ..item.clone()
+                };
+                self.activate(&launch, query, now)
+            }
+            _ => Activation::Nothing,
         }
     }
 

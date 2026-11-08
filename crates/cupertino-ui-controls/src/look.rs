@@ -99,10 +99,20 @@ pub(crate) fn paragraph(
     text: &str,
     direction: Option<Direction>,
 ) -> Option<ParagraphLayout> {
+    paragraph_sized(env, text, direction, env.theme.type_scale.body.size)
+}
+
+/// [`paragraph`] with the body type's weight at `size` points.
+pub(crate) fn paragraph_sized(
+    env: &Environment,
+    text: &str,
+    direction: Option<Direction>,
+    size: f32,
+) -> Option<ParagraphLayout> {
     let body = env.theme.type_scale.body;
     let style = TextStyle {
         weight: FontWeight(body.weight),
-        ..TextStyle::new(body.size)
+        ..TextStyle::new(size)
     };
     let paragraph = env
         .text
@@ -131,8 +141,12 @@ pub(crate) fn centred(layout: &ParagraphLayout, chrome: Rect, env: &Environment)
 
 /// The baseline of body text centred in `chrome`.
 pub(crate) fn baseline(chrome: Rect, env: &Environment) -> f64 {
-    let size = f64::from(env.theme.type_scale.body.size);
-    chrome.min_y() + chrome.height() / 2.0 + size * BASELINE_SHARE
+    baseline_sized(chrome, env.theme.type_scale.body.size)
+}
+
+/// The baseline of text `size` points large centred in `chrome`.
+pub(crate) fn baseline_sized(chrome: Rect, size: f32) -> f64 {
+    chrome.min_y() + chrome.height() / 2.0 + f64::from(size) * BASELINE_SHARE
 }
 
 /// The y of `layout`'s top that puts its first baseline at [`baseline`].

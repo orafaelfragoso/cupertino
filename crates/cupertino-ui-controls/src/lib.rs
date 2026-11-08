@@ -1071,6 +1071,14 @@ pub struct SearchField<M> {
     pub field: TextField<M>,
 }
 
+/// A [`TextField`] without chrome, its text set at `size` points (whole points, 1 to 200): for a field that stands on a
+/// surface drawn around it, such as a launcher's search capsule. It behaves, edits and reads to assistive technology
+/// as its field does; its placeholder takes the secondary label colour, as a search field's.
+pub struct BareField<M> {
+    pub field: TextField<M>,
+    pub size: f64,
+}
+
 /// A row of a [`TileSidebar`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct TileSidebarItem {

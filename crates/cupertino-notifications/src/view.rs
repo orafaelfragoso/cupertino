@@ -28,18 +28,20 @@
 //! a list, named after their application and summary with the whole body as description, Tab stops that Return or
 //! Space activates and Delete clears.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
+use cupertino_animation::{Spring, SpringParams};
 use cupertino_kit::controls::{
     Button, ButtonRole, ButtonStyle, DisclosureButton, DisclosureStyle, Icon, IconDirection,
-    RichText, ScrollView, Scroller, Spacer, Stack, Text, TextLink, TextRole,
+    RichText, ScrollView, Scroller, Stack, Text, TextLink, TextRole,
 };
 use cupertino_kit::core::{
-    Action, Change, CommandRegistry, Element, Event, EventCx, Key, Live, MeasureCx, PaintCx, Phase,
-    Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
+    AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event, EventCx, Glass,
+    Key, Live, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget, Window,
+    WindowBackground, WindowKey, MAX_MATERIALS,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
@@ -72,13 +74,21 @@ pub const SHADOW_MARGIN: f64 = 12.0;
 /// Banners below this opacity get no window.
 pub const MIN_OPACITY: f64 = 0.002;
 
-/// Card corner radius: 16 pt, as the banner platter.
-pub const CORNER_RADIUS: f64 = 16.0;
-/// Space between a card's edge and its content.
+/// Card corner radius.
+pub const CORNER_RADIUS: f64 = 18.0;
+/// Space between a card's top and bottom edges and its content.
 pub const PADDING: f64 = 12.0;
-/// The application icon at the card's leading edge.
+/// Space between a card's leading edge and its icon, and between its text and its trailing edge.
+pub const LEADING: f64 = 13.0;
+pub const TRAILING: f64 = 16.0;
+/// The application icon at the card's leading edge, and the gap between it and the text.
 pub const ICON_SIZE: f64 = 32.0;
-pub const ICON_GAP: f64 = 10.0;
+pub const ICON_GAP: f64 = 14.0;
+/// The least height of a card.
+pub const MIN_CARD_HEIGHT: f64 = 58.0;
+/// Room kept at the end of a summary's lines for the age at the card's top right, and the age's type size.
+pub const AGE_WIDTH: f64 = 56.0;
+pub const AGE_SIZE: f64 = 11.0;
 /// Space between the summary, the body and the row of buttons.
 pub const LINE_GAP: f64 = 2.0;
 /// The summary wraps to at most this many lines, the last ending in an ellipsis.
@@ -106,11 +116,20 @@ pub const CLOSE_OUTSET: f64 = CLOSE_DIAMETER / 2.0;
 const _: () = assert!(CLOSE_OUTSET <= SHADOW_MARGIN);
 /// Outline of a card: 0.5 pt.
 pub const OUTLINE_WIDTH: f64 = 0.5;
-/// The centre's header panel (title and Clear), the gap under it (the one between groups) and the Clear button's inset
-/// from the panel's right edge.
-pub const HEADER_HEIGHT: f64 = 36.0;
-pub const HEADER_GAP: f64 = 6.0;
-pub const HEADER_TRAILING: f64 = 6.0;
+/// The centre's header row (title and Clear All), the gap under it and the title's inset from the cards' leading edge.
+pub const HEADER_HEIGHT: f64 = 44.0;
+pub const HEADER_GAP: f64 = 5.0;
+pub const TITLE_INSET: f64 = 3.0;
+/// The centre's title size.
+pub const TITLE_SIZE: f64 = 19.0;
+/// The header's clear button: a circle of [`CLOSE_DIAMETER`] that grows into a capsule this wide, naming itself, while
+/// the pointer is over it or it has the keyboard.
+pub const CLEAR_WIDTH: f64 = 86.0;
+/// An expanded group: its header row (its application, Show Less and its clear button) and the gap between its cards.
+pub const GROUP_HEADER: f64 = 30.0;
+pub const CARD_GAP: f64 = 6.0;
+/// How long a group takes to expand or collapse, as a spring's perceptual duration, without bounce.
+pub const EXPAND_DURATION: f64 = 0.35;
 /// Space between the centre's list and the bottom edge of the output.
 pub const BOTTOM_MARGIN: f64 = 16.0;
 /// The Clear menu's width and row height.
@@ -161,16 +180,67 @@ pub enum Input {
     ClearScope(ClearScope),
     /// Escape, or a press outside the cards.
     CloseCentre,
+    /// The pointer moved onto this card of the centre; `None` when the pointer is over no card. A revealed card shows
+    /// its close and action buttons.
+    Reveal(Option<u32>),
+    /// The keyboard came to this card or into it, its focus ring showing (`true`), or left it (`false`). The card the
+    /// keyboard is on shows its buttons too, whatever the pointer does, so Tab reaches them.
+    Focused(u32, bool),
+    /// Expand (`true`) or collapse the group with this key.
+    Expand(String, bool),
+    /// Clear every notification of the group with this key.
+    ClearGroup(String),
 }
 
 /// What the windows show beyond the model: whether the centre and its Clear menu are open, where its list is
-/// scrolled to and which of its cards are unfolded.
+/// scrolled to, which of its cards are unfolded, which one is revealed, and which groups are expanded or collapsing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ui {
     pub centre_open: bool,
     pub menu_open: bool,
     pub scroll: ScrollState,
     pub unfolded: BTreeSet<u32>,
+    pub revealed: Option<u32>,
+    /// The card the keyboard is on (or in), its focus ring showing: it shows its buttons as a revealed card does.
+    pub focused: Option<u32>,
+    /// Expanded groups by key, with when they began to expand.
+    pub expanded: BTreeMap<String, f64>,
+    /// Groups collapsing by key, with when they began to.
+    pub collapsing: BTreeMap<String, f64>,
+}
+
+/// The spring a group expands and collapses with.
+fn expand_spring() -> Spring {
+    Spring::new(SpringParams::from_perceptual(EXPAND_DURATION, 0.0))
+}
+
+impl Ui {
+    /// How far the group `key` is expanded at `now`: 0 collapsed, 1 expanded.
+    pub fn expansion(&self, key: &str, now: f64) -> f64 {
+        let spring = expand_spring();
+        let progress = |start: f64| {
+            let t = now - start;
+            if t >= spring.settling_duration() {
+                1.0
+            } else {
+                spring.value(t).clamp(0.0, 1.0)
+            }
+        };
+        match (self.expanded.get(key), self.collapsing.get(key)) {
+            (Some(&start), _) => progress(start),
+            (None, Some(&start)) => 1.0 - progress(start),
+            (None, None) => 0.0,
+        }
+    }
+
+    /// Whether a group is expanding or collapsing at `now`, so the centre needs frames.
+    pub fn is_animating(&self, now: f64) -> bool {
+        let settle = expand_spring().settling_duration();
+        self.expanded
+            .values()
+            .chain(self.collapsing.values())
+            .any(|&start| now - start < settle)
+    }
 }
 
 impl Default for Ui {
@@ -184,6 +254,10 @@ impl Default for Ui {
                 viewport: Size::ZERO,
             },
             unfolded: BTreeSet::new(),
+            revealed: None,
+            focused: None,
+            expanded: BTreeMap::new(),
+            collapsing: BTreeMap::new(),
         }
     }
 }
@@ -257,7 +331,7 @@ impl CardMetrics {
 
     /// The width of a card's text column.
     pub fn column_width(width: f64) -> f64 {
-        width - 2.0 * PADDING - ICON_SIZE - ICON_GAP
+        width - LEADING - ICON_SIZE - ICON_GAP - TRAILING
     }
 
     /// The side of a disclosure button, which Kit takes from the theme's control size.
@@ -387,8 +461,14 @@ impl CardMetrics {
             .collect()
     }
 
-    /// What `n`'s card shows `width` points wide in `fold`, and its height.
+    /// What `n`'s card shows `width` points wide in `fold`, and its height: a banner shows its action buttons, a centre
+    /// card only while it is revealed ([`CardMetrics::card_with`]).
     pub fn card(&self, n: &Notification, width: f64, fold: Fold) -> CardLayout {
+        self.card_with(n, width, fold, fold == Fold::Banner)
+    }
+
+    /// What `n`'s card shows `width` points wide in `fold`, with its action buttons or without, and its height.
+    pub fn card_with(&self, n: &Notification, width: f64, fold: Fold, actions: bool) -> CardLayout {
         let column = Self::column_width(width);
         let role = self.theme.type_scale.body;
         let body = body_text(n);
@@ -404,9 +484,9 @@ impl CardMetrics {
         };
         let side = self.disclosure_side();
         let summary_width = if foldable {
-            column - side - BUTTON_GAP
+            column - AGE_WIDTH - side - BUTTON_GAP
         } else {
-            column
+            column - AGE_WIDTH
         };
         let summary = self.fit(
             &plain(&cap(&n.summary, MAX_SUMMARY_CHARS), FontWeight::SEMIBOLD),
@@ -439,7 +519,7 @@ impl CardMetrics {
         });
         let labels = n
             .button_actions()
-            .take(MAX_BUTTONS)
+            .take(if actions { MAX_BUTTONS } else { 0 })
             .map(|a| (a.key.clone(), a.label.clone()))
             .collect::<Vec<_>>();
         if !labels.is_empty() {
@@ -451,7 +531,9 @@ impl CardMetrics {
             body,
             foldable,
             actions: self.fit_labels(labels, column),
-            height: (2.0 * PADDING + text.max(ICON_SIZE)).ceil(),
+            height: (2.0 * PADDING + text.max(ICON_SIZE))
+                .ceil()
+                .max(MIN_CARD_HEIGHT),
         }
     }
 }
@@ -541,7 +623,7 @@ pub fn windows<M: Clone + 'static>(
     }
     let width = strip_width(&center.config.layout, &center.config.swipe);
     if ui.centre_open {
-        return vec![centre_window(center, ui, metrics, width, map)];
+        return vec![centre_window(center, ui, metrics, width, now, map)];
     }
     let placements = center.placements(Size::new(width, 0.0), &mut metrics.clone(), now);
     placements
@@ -570,6 +652,7 @@ pub fn windows<M: Clone + 'static>(
                 p.hovered,
                 p.leaving || quiet,
                 width,
+                &age(n.timestamp, now),
                 map,
             ))
         })
@@ -602,6 +685,12 @@ pub fn apply(
         Input::Clear(id) => {
             center.clear(id, now);
             ui.unfolded.remove(&id);
+            if ui.revealed == Some(id) {
+                ui.revealed = None;
+            }
+            if ui.focused == Some(id) {
+                ui.focused = None;
+            }
         }
         Input::ClearFocused(id) => {
             let fronts = |c: &NotificationCenter| -> Vec<u32> {
@@ -643,6 +732,43 @@ pub fn apply(
         }
         Input::CloseCentre if ui.menu_open => ui.menu_open = false,
         Input::CloseCentre => *ui = Ui::default(),
+        Input::Reveal(id) => ui.revealed = id,
+        Input::Focused(id, true) => ui.focused = Some(id),
+        Input::Focused(id, false) => {
+            if ui.focused == Some(id) {
+                ui.focused = None;
+            }
+        }
+        Input::Expand(key, expand) => {
+            // with Reduce Motion a group is at once where it goes
+            let start = if center.config.motion.reduce_motion {
+                f64::NEG_INFINITY
+            } else {
+                now
+            };
+            if expand {
+                ui.collapsing.remove(&key);
+                ui.expanded.insert(key, start);
+            } else if ui.expanded.remove(&key).is_some() {
+                ui.collapsing.insert(key, start);
+            }
+            ui.revealed = None;
+        }
+        Input::ClearGroup(key) => {
+            let ids: Vec<u32> = center
+                .groups()
+                .iter()
+                .filter(|g| g.key == key)
+                .flat_map(|g| g.notifications.iter().map(|n| n.id))
+                .collect();
+            for id in ids {
+                center.clear(id, now);
+                ui.unfolded.remove(&id);
+            }
+            ui.expanded.remove(&key);
+            ui.collapsing.remove(&key);
+            ui.revealed = None;
+        }
     }
     None
 }
@@ -722,6 +848,7 @@ fn banner_window<M: Clone + 'static>(
     hovered: bool,
     unannounced: bool,
     width: f64,
+    age: &str,
     map: fn(Input) -> M,
 ) -> Window<M> {
     let size = Size::new(width, card.height() + 2.0 * SHADOW_MARGIN);
@@ -737,29 +864,21 @@ fn banner_window<M: Clone + 'static>(
         card,
         map,
         children: vec![Element::new(Card {
-            id: n.id,
-            rect: card,
             opacity,
-            brightness: 0.0,
-            material: true,
             // a bridge announces a live node by its name alone, as it appears or is renamed: the name is everything
             // the card shows in words, so a new banner and a banner whose text changes in place are said whole
             name: banner_speech(n, layout),
-            description: String::new(),
-            role: Role::Group,
-            index: None,
-            first: false,
             live,
-            clickable: false,
-            map,
             children: card_content(
                 n,
                 layout,
                 card.size,
+                age,
                 hovered.then_some(Input::Dismiss(n.id)),
                 None,
                 map,
             ),
+            ..Card::plain(n.id, card, true, map)
         })
         .key(card_key(n.id))],
     });
@@ -770,11 +889,13 @@ fn banner_window<M: Clone + 'static>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn centre_window<M: Clone + 'static>(
     center: &NotificationCenter,
     ui: &Ui,
     metrics: &CardMetrics,
     width: f64,
+    now: f64,
     map: fn(Input) -> M,
 ) -> Window<M> {
     let layout = &center.config.layout;
@@ -783,148 +904,268 @@ fn centre_window<M: Clone + 'static>(
     let groups = center.groups();
     let scopes = center.clear_scopes();
 
-    let mut header = vec![
-        Element::new(Text {
-            content: plain(CENTRE_TITLE, FontWeight::SEMIBOLD),
-            role: TextRole::Section,
-            wrap: false,
-            secondary: false,
-            selected: false,
-        }),
-        Element::new(Spacer::default()),
-    ];
-    if !scopes.is_empty() {
+    // the title over the cards' leading edge, the clear button at their trailing edge; no panel behind them
+    let mut header = vec![Element::new(Label {
+        text: CENTRE_TITLE.to_owned(),
+        size: TITLE_SIZE,
+        weight: FontWeight::BOLD.0,
+        secondary: false,
+        align: TextAlign::Start,
+        rect: Some(Rect::new(
+            x + TITLE_INSET,
+            0.0,
+            layout.width - CLEAR_WIDTH - TITLE_INSET,
+            HEADER_HEIGHT,
+        )),
+        hidden: false,
+    })
+    .key("title")];
+    if let Some(&only) = scopes.first() {
+        let message = if scopes.len() > 1 {
+            Input::ToggleClearMenu
+        } else {
+            Input::ClearScope(only)
+        };
         header.push(
-            Element::new(Button {
-                label: "Clear".into(),
-                role: ButtonRole::Normal,
-                style: ButtonStyle::Bordered,
-                enabled: true,
-                busy: false,
-                on_press: Some(map(Input::ToggleClearMenu)),
+            Element::new(ClearButton {
+                rect: Rect::new(
+                    x + layout.width - CLEAR_WIDTH,
+                    ((HEADER_HEIGHT - CLOSE_DIAMETER) / 2.0).round(),
+                    CLEAR_WIDTH,
+                    CLOSE_DIAMETER,
+                ),
+                label: "Clear All".into(),
+                message: map(message),
             })
             .key("clear"),
         );
     }
-    let header_rect = Rect::new(x, 0.0, layout.width, HEADER_HEIGHT);
     let header = Element::new(Layer {
         size: Size::new(width, HEADER_HEIGHT),
         role: None,
         count: 0,
-        children: vec![
-            // the panel keeps the title readable on any wallpaper
-            Element::new(Card {
-                id: 0,
-                rect: header_rect,
-                opacity: 1.0,
-                brightness: 0.0,
-                material: true,
-                name: String::new(),
-                description: String::new(),
-                role: Role::Group,
-                index: None,
-                first: false,
-                live: None,
-                clickable: false,
-                map,
-                children: Vec::new(),
-            }),
-            Element::new(Place {
-                rect: header_rect,
-                axis: Axis::Horizontal,
-                align: Align::Center,
-                padding: Insets {
-                    left: PADDING,
-                    right: HEADER_TRAILING,
-                    top: 0.0,
-                    bottom: 0.0,
-                },
-                spacing: BUTTON_GAP,
-                children: header,
-            })
-            .key("header"),
-        ],
+        children: header,
     })
     .key("header-row");
 
-    // the list: the first card a gap below the header, room for its close button, each group as tall as its stack
+    // the list: the first card a gap below the header, room for its close button, each group as tall as its stack, or
+    // as its cards one below the other while it is expanded
     let mut y = HEADER_GAP.max(CLOSE_OUTSET);
-    let mut cards = Vec::new();
-    for (index, group) in groups.iter().enumerate() {
-        let shown = center.shown(group.notifications[0]);
-        let front: &Notification = &shown;
-        let count = group.notifications.len();
-        let fold = if ui.unfolded.contains(&front.id) {
-            Fold::Unfolded
+    let mut cards: Vec<Piece<M>> = Vec::new();
+    let mut index = 0usize;
+    for (number, group) in groups.iter().enumerate() {
+        let shown: Vec<Notification> = group
+            .notifications
+            .iter()
+            .map(|n| center.shown(n).into_owned())
+            .collect();
+        let count = shown.len();
+        let container = number as u32 + 1;
+        let expansion = if count > 1 {
+            ui.expansion(&group.key, now)
         } else {
-            Fold::Folded
+            0.0
         };
-        let card = metrics.card(front, layout.width, fold);
-        let rect = Rect::new(x, y, layout.width, card.height);
-        // the cards behind first, the farthest first, so the front card covers them; they are opaque, as a material
-        // under the front card would show through it
-        for behind in stack.cards(rect, count).into_iter().rev() {
-            cards.push(Element::new(Card {
-                id: front.id,
-                rect: behind.rect,
-                opacity: 1.0,
-                brightness: behind.brightness,
-                material: false,
-                name: String::new(),
-                description: String::new(),
-                role: Role::Group,
-                index: None,
-                first: false,
-                live: None,
-                clickable: false,
-                map,
-                children: Vec::new(),
-            }));
-        }
-        let mut description = front.body_text();
-        if count > 1 {
-            let more = format!("{} more from {}", count - 1, group.app_name);
-            description = if description.is_empty() {
-                more
+        let fold = |n: &Notification| {
+            if ui.unfolded.contains(&n.id) {
+                Fold::Unfolded
             } else {
-                format!("{description}; {more}")
-            };
-        }
-        let disclosure = card.foldable.then_some((front.id, fold == Fold::Unfolded));
-        cards.push(
-            Element::new(Card {
-                id: front.id,
-                rect,
-                opacity: 1.0,
-                brightness: 0.0,
-                material: true,
-                name: accessible_name(front),
-                description,
+                Fold::Folded
+            }
+        };
+        let revealed = |n: &Notification| ui.revealed == Some(n.id) || ui.focused == Some(n.id);
+        let front = &shown[0];
+        let front_layout = metrics.card_with(front, layout.width, fold(front), revealed(front));
+        let collapsed = Rect::new(x, y, layout.width, front_layout.height);
+        let sheets = stack.cards(collapsed, count);
+        let card = |n: &Notification, layout_of: &CardLayout, rect: Rect, item: usize| {
+            let disclosure = layout_of
+                .foldable
+                .then_some((n.id, fold(n) == Fold::Unfolded));
+            Card {
+                name: accessible_name(n),
+                description: n.body_text(),
                 role: Role::ListItem,
-                index: Some(index),
-                first: index == 0,
-                live: None,
+                index: Some(item),
+                first: item == 0,
                 clickable: true,
-                map,
+                container,
+                revealed: Some(revealed(n)),
                 children: card_content(
-                    front,
-                    &card,
+                    n,
+                    layout_of,
                     rect.size,
-                    Some(Input::Clear(front.id)),
+                    &age(n.timestamp, now),
+                    revealed(n).then_some(Input::Clear(n.id)),
                     disclosure,
                     map,
                 ),
+                ..Card::plain(n.id, rect, true, map)
+            }
+        };
+        let open = count > 1 && (ui.expanded.contains_key(&group.key) || expansion > 0.0);
+        if !open {
+            // collapsed: the sheets behind first, the farthest first, then the front card, all one glass shape
+            for behind in sheets.iter().rev() {
+                let cover = Rect::new(
+                    collapsed.x() - behind.rect.x(),
+                    collapsed.y() - behind.rect.y(),
+                    collapsed.width(),
+                    collapsed.height(),
+                );
+                cards.push(Piece::Sheet(Card {
+                    brightness: behind.brightness,
+                    container,
+                    cover: Some(cover),
+                    ..Card::plain(front.id, behind.rect, true, map)
+                }));
+            }
+            let mut front_card = card(front, &front_layout, collapsed, index);
+            if count > 1 {
+                front_card.description = format!(
+                    "{}{}{} more from {}",
+                    front_card.description,
+                    if front_card.description.is_empty() {
+                        ""
+                    } else {
+                        "; "
+                    },
+                    count - 1,
+                    group.app_name
+                );
+                front_card.press = Some(Input::Expand(group.key.clone(), true));
+                front_card.expanded = Some(false);
+                front_card.children = card_content(
+                    front,
+                    &front_layout,
+                    collapsed.size,
+                    &age(front.timestamp, now),
+                    revealed(front).then_some(Input::ClearGroup(group.key.clone())),
+                    front_layout
+                        .foldable
+                        .then_some((front.id, fold(front) == Fold::Unfolded)),
+                    map,
+                );
+            }
+            cards.push(Piece::Card(front_card));
+            index += 1;
+            y += stack.height(front_layout.height, count);
+            continue;
+        }
+        // expanded, or on the way: the header row fades in, each card moves from its place in the stack to its own
+        let mut header = vec![
+            Element::new(Label {
+                text: cap(group.app_name, MAX_APP_NAME_CHARS).into_owned(),
+                size: 15.0,
+                weight: FontWeight::SEMIBOLD.0,
+                secondary: false,
+                align: TextAlign::Start,
+                rect: None,
+                hidden: false,
             })
-            .key(card_key(front.id)),
+            .fill(),
+            Element::new(Button {
+                label: "Show Less".into(),
+                role: ButtonRole::Normal,
+                style: ButtonStyle::Pill,
+                enabled: true,
+                busy: false,
+                on_press: Some(map(Input::Expand(group.key.clone(), false))),
+            })
+            .key("show-less"),
+        ];
+        header.push(
+            Element::new(ClearButton {
+                rect: Rect::new(0.0, 0.0, CLOSE_DIAMETER, CLOSE_DIAMETER),
+                label: "Clear".into(),
+                message: map(Input::ClearGroup(group.key.clone())),
+            })
+            .key("clear-group"),
         );
-        y += stack.height(card.height, count);
+        let header_rect = Rect::new(x, y, layout.width, GROUP_HEADER);
+        cards.push(Piece::Other(
+            Element::new(Fade {
+                rect: header_rect,
+                opacity: expansion,
+                children: vec![Element::new(Place {
+                    rect: Rect::from_origin_size(Point::ZERO, header_rect.size),
+                    axis: Axis::Horizontal,
+                    align: Align::Center,
+                    padding: Insets {
+                        left: TITLE_INSET,
+                        right: 0.0,
+                        top: 0.0,
+                        bottom: 0.0,
+                    },
+                    spacing: BUTTON_GAP,
+                    children: header,
+                })],
+            })
+            .key(format!("group-{}", group.key)),
+        ));
+        let lerp = |a: f64, b: f64| a + (b - a) * expansion;
+        let mut top = y + GROUP_HEADER;
+        let mut placed = Vec::new();
+        for (i, n) in shown.iter().enumerate() {
+            let layout_of = if i == 0 {
+                front_layout.clone()
+            } else {
+                metrics.card_with(n, layout.width, fold(n), revealed(n))
+            };
+            let to = Rect::new(x, top, layout.width, layout_of.height);
+            top += layout_of.height + CARD_GAP;
+            let from = match i {
+                0 => collapsed,
+                _ => sheets
+                    .get(i.min(sheets.len()) - 1)
+                    .map_or(collapsed, |s| s.rect),
+            };
+            let rect = Rect::new(
+                lerp(from.x(), to.x()),
+                lerp(from.y(), to.y()),
+                lerp(from.width(), to.width()),
+                lerp(from.height(), to.height()),
+            );
+            placed.push((n, layout_of, rect, to));
+        }
+        // the deepest first, so the front card covers the others while they still overlap
+        let first = index;
+        for (i, (n, layout_of, rect, to)) in placed.into_iter().enumerate().rev() {
+            let mut element = card(n, &layout_of, rect, first + i);
+            if i > 0 {
+                // the text of a card coming out of the stack shows once it is nearly in place
+                let shown = ((expansion - 0.5) * 2.0).clamp(0.0, 1.0);
+                element.children = if shown > 0.0 {
+                    vec![Element::new(Fade {
+                        rect: Rect::from_origin_size(Point::ZERO, to.size),
+                        opacity: shown,
+                        children: std::mem::take(&mut element.children),
+                    })]
+                } else {
+                    Vec::new()
+                };
+            }
+            cards.push(Piece::Card(element));
+        }
+        index += count;
+        let expanded = top - CARD_GAP - y + stack.bottom_padding;
+        y += lerp(stack.height(front_layout.height, count), expanded);
     }
-    let content_height = y;
+    let content_height = y.ceil();
+    // what of the list is in view, with a card's height to spare for a scroll the state has not caught up with; all
+    // of it before the list was first laid out
+    let scroll = ui.scroll;
+    let in_view = move |rect: Rect| {
+        scroll.viewport.height <= 0.0
+            || (rect.max_y() > scroll.offset.y - MIN_CARD_HEIGHT
+                && rect.min_y() < scroll.offset.y + scroll.viewport.height + MIN_CARD_HEIGHT)
+    };
+    let cards = glass_within_budget(cards, in_view);
     let list = Element::from(ScrollView {
         content: Element::new(Layer {
             size: Size::new(width, content_height),
             role: Some(Role::List),
-            count: groups.len(),
+            count: index,
             children: cards,
         })
         .key("list-content"),
@@ -970,20 +1211,8 @@ fn centre_window<M: Clone + 'static>(
                 role: None,
                 count: 0,
                 children: vec![Element::new(Card {
-                    id: 0,
-                    rect,
-                    opacity: 1.0,
-                    brightness: 0.0,
-                    // over the cards: the window's material lies under all of it, so the menu paints its fill
-                    material: false,
+                    // over the cards, whose glass lies under all of it: the menu paints its fill
                     name: "Clear".into(),
-                    description: String::new(),
-                    role: Role::Group,
-                    index: None,
-                    first: false,
-                    live: None,
-                    clickable: false,
-                    map,
                     children: vec![Element::new(Place {
                         rect: Rect::new(0.0, 0.0, MENU_WIDTH, height),
                         axis: Axis::Vertical,
@@ -997,6 +1226,7 @@ fn centre_window<M: Clone + 'static>(
                         spacing: 0.0,
                         children: rows,
                     })],
+                    ..Card::plain(0, rect, false, map)
                 })
                 .key("clear-menu")],
             })
@@ -1006,6 +1236,7 @@ fn centre_window<M: Clone + 'static>(
     let content = Element::new(CentreRoot {
         map,
         menu_open: ui.menu_open,
+        revealed: ui.revealed.is_some(),
         children,
     });
     // the layer surface spans the output's right edge from top to bottom; this height is what the list asks for
@@ -1079,10 +1310,23 @@ fn body_text(n: &Notification) -> Option<BodyText> {
 
 /// The icon, the summary, the body and the action buttons of a card `size` large, its close button when `close` is
 /// given, and the disclosure button of a foldable centre card (its id and whether it is unfolded).
+/// How long ago `then` was at `now` (seconds of one clock), as the card's corner says it.
+pub fn age(then: f64, now: f64) -> String {
+    let seconds = (now - then).max(0.0);
+    match seconds {
+        s if s < 60.0 => "now".to_owned(),
+        s if s < 3600.0 => format!("{}m ago", (s / 60.0) as u64),
+        s if s < 86_400.0 => format!("{}h ago", (s / 3600.0) as u64),
+        s => format!("{}d ago", (s / 86_400.0) as u64),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn card_content<M: Clone + 'static>(
     n: &Notification,
     layout: &CardLayout,
     size: Size,
+    age: &str,
     close: Option<Input>,
     disclosure: Option<(u32, bool)>,
     map: fn(Input) -> M,
@@ -1119,7 +1363,7 @@ fn card_content<M: Clone + 'static>(
             content: body.content.clone(),
             role: TextRole::Body,
             wrap: true,
-            secondary: true,
+            secondary: false,
             links: body
                 .links
                 .iter()
@@ -1165,9 +1409,9 @@ fn card_content<M: Clone + 'static>(
         align: Align::Start,
         padding: Insets {
             top: PADDING,
-            left: PADDING,
+            left: LEADING,
             bottom: PADDING,
-            right: PADDING,
+            right: TRAILING,
         },
         spacing: ICON_GAP,
         children: vec![
@@ -1188,6 +1432,25 @@ fn card_content<M: Clone + 'static>(
             .fill(),
         ],
     })];
+    if !age.is_empty() {
+        content.push(
+            Element::new(Label {
+                text: age.to_owned(),
+                size: AGE_SIZE,
+                weight: FontWeight::REGULAR.0,
+                secondary: true,
+                align: TextAlign::End,
+                rect: Some(Rect::new(
+                    size.width - TRAILING - AGE_WIDTH,
+                    PADDING + 1.0,
+                    AGE_WIDTH,
+                    AGE_SIZE * 1.4,
+                )),
+                hidden: false,
+            })
+            .key("age"),
+        );
+    }
     if let Some(close) = close {
         content.push(
             Element::new(CloseButton {
@@ -1339,6 +1602,8 @@ impl<M: 'static> Widget<M> for Strip<M> {
 struct CentreRoot<M> {
     map: fn(Input) -> M,
     menu_open: bool,
+    /// A card is revealed: the pointer moving over no card, or leaving the window, hides its buttons again.
+    revealed: bool,
     children: Vec<Element<M>>,
 }
 
@@ -1360,7 +1625,7 @@ impl<M: 'static> Widget<M> for CentreRoot<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.menu_open != old.menu_open {
+        if self.menu_open != old.menu_open || self.revealed != old.revealed {
             Change::Paint
         } else {
             Change::None
@@ -1387,6 +1652,13 @@ impl<M: 'static> Widget<M> for CentreRoot<M> {
             Event::Dismiss => {
                 cx.emit((self.map)(Input::CloseCentre));
                 Propagation::Stop
+            }
+            // a card stops the motions over it: this one is over none
+            Event::Pointer(PointerEvent::Motion { .. } | PointerEvent::Leave, _)
+                if self.revealed && cx.phase() != Phase::Capture =>
+            {
+                cx.emit((self.map)(Input::Reveal(None)));
+                Propagation::Continue
             }
             _ => Propagation::Continue,
         }
@@ -1644,8 +1916,105 @@ struct Card<M> {
     /// A click, Return or Space on the card activates it and Delete clears it (the centre's cards; a banner's clicks
     /// come from its swipe).
     clickable: bool,
+    /// The glass container the card joins (a collapsed group's front card and the sheets behind it); 0 alone.
+    container: u32,
+    /// For a sheet behind a group's front card: the front card's rect in the sheet's frame, which the sheet's own
+    /// paint (its shadow, darkening and outline) stays out of.
+    cover: Option<Rect>,
+    /// What a click, Return, Space or assistive technology's click sends; `None` activates the notification.
+    press: Option<Input>,
+    /// A collapsed group's front card (`false`): pressing it expands the group.
+    expanded: Option<bool>,
+    /// A centre card: whether it shows its close and action buttons, which hover and keyboard focus reveal.
+    revealed: Option<bool>,
     map: fn(Input) -> M,
     children: Vec<Element<M>>,
+}
+
+impl<M> Card<M> {
+    /// A card at `rect` that is decoration only, painted as `material` says; the other fields are set by the caller.
+    fn plain(id: u32, rect: Rect, material: bool, map: fn(Input) -> M) -> Self {
+        Card {
+            id,
+            rect,
+            opacity: 1.0,
+            brightness: 0.0,
+            material,
+            name: String::new(),
+            description: String::new(),
+            role: Role::Group,
+            index: None,
+            first: false,
+            live: None,
+            clickable: false,
+            container: 0,
+            cover: None,
+            press: None,
+            expanded: None,
+            revealed: None,
+            map,
+            children: Vec::new(),
+        }
+    }
+
+    fn pressed(&self) -> Input {
+        self.press.clone().unwrap_or(Input::Activate(self.id))
+    }
+}
+
+/// A piece of the centre's list before its glass is counted.
+enum Piece<M> {
+    /// A notification's card, keyed by its id.
+    Card(Card<M>),
+    /// A sheet peeking under a collapsed group's front card.
+    Sheet(Card<M>),
+    Other(Element<M>),
+}
+
+/// The list's pieces with their glass kept within what one window shows ([`MAX_MATERIALS`]), counting what is in view
+/// (`in_view` of a piece's rect): every card keeps its glass, and the sheets of collapsed groups keep theirs a whole group
+/// at a time down the list while there is room. The sheets past it are drawn as opaque sheets, so no card further down
+/// loses its glass to a sheet above it and no group mixes glass and opaque sheets.
+fn glass_within_budget<M: 'static>(
+    pieces: Vec<Piece<M>>,
+    in_view: impl Fn(Rect) -> bool,
+) -> Vec<Element<M>> {
+    let cards = pieces
+        .iter()
+        .filter(|p| matches!(p, Piece::Card(c) if c.material && in_view(c.rect)))
+        .count();
+    // the sheets in view of each group, by container, which numbers the groups down the list
+    let mut sheets = BTreeMap::<u32, usize>::new();
+    for piece in &pieces {
+        if let Piece::Sheet(sheet) = piece {
+            if sheet.material && in_view(sheet.rect) {
+                *sheets.entry(sheet.container).or_default() += 1;
+            }
+        }
+    }
+    let mut room = MAX_MATERIALS.saturating_sub(cards);
+    let mut glass = BTreeSet::new();
+    for (container, count) in sheets {
+        if count > room {
+            break;
+        }
+        room -= count;
+        glass.insert(container);
+    }
+    pieces
+        .into_iter()
+        .map(|piece| match piece {
+            Piece::Card(card) => {
+                let key = card_key(card.id);
+                Element::new(card).key(key)
+            }
+            Piece::Sheet(sheet) => Element::new(Card {
+                material: sheet.material && glass.contains(&sheet.container),
+                ..sheet
+            }),
+            Piece::Other(element) => element,
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1724,6 +2093,11 @@ impl<M: 'static> Widget<M> for Card<M> {
             || self.first != old.first
             || self.live != old.live
             || self.clickable != old.clickable
+            || self.container != old.container
+            || self.cover != old.cover
+            || self.press != old.press
+            || self.expanded != old.expanded
+            || self.revealed != old.revealed
         {
             Change::Paint
         } else {
@@ -1761,13 +2135,31 @@ impl<M: 'static> Widget<M> for Card<M> {
                 if pressed {
                     state.armed = true;
                 } else if std::mem::take(&mut state.armed) && cx.hit(position) {
-                    cx.emit((self.map)(Input::Activate(self.id)));
+                    cx.emit((self.map)(self.pressed()));
                 }
                 Propagation::Stop
             }
+            // hover reveals a centre card's buttons; the motion goes no further, so the centre knows the pointer is
+            // over a card
+            Event::Pointer(PointerEvent::Enter { .. } | PointerEvent::Motion { .. }, _)
+                if self.revealed.is_some() =>
+            {
+                if self.revealed == Some(false) {
+                    cx.emit((self.map)(Input::Reveal(Some(self.id))));
+                }
+                Propagation::Stop
+            }
+            // the keyboard on the card or in it reveals its buttons, as long as its focus ring shows; a focus moving
+            // between the card and its buttons is lost and gained again in that order, so it stays revealed
+            Event::Focus { gained, visible } | Event::FocusWithin { gained, visible }
+                if self.revealed.is_some() =>
+            {
+                cx.emit((self.map)(Input::Focused(self.id, gained && visible)));
+                Propagation::Continue
+            }
             Event::Key(key, _) if active && key.pressed && cx.node() == cx.target() => {
                 match key.keysym {
-                    RETURN | KEYPAD_ENTER | SPACE => cx.emit((self.map)(Input::Activate(self.id))),
+                    RETURN | KEYPAD_ENTER | SPACE => cx.emit((self.map)(self.pressed())),
                     DELETE | BACKSPACE => cx.emit((self.map)(Input::ClearFocused(self.id))),
                     // the arrows and page keys scroll the list
                     _ => return Propagation::Continue,
@@ -1783,7 +2175,7 @@ impl<M: 'static> Widget<M> for Card<M> {
                 Propagation::Continue
             }
             Event::Action(ref request) if request.action == Action::Click && self.id != 0 => {
-                cx.emit((self.map)(Input::Activate(self.id)));
+                cx.emit((self.map)(self.pressed()));
                 Propagation::Stop
             }
             _ => Propagation::Continue,
@@ -1804,8 +2196,24 @@ impl<M: 'static> Widget<M> for Card<M> {
         let Some(fill) = theme.surface(Surface::Popover).fill else {
             return;
         };
-        if self.material && cx.material(Surface::Popover, radius, opacity) {
-            // the compositor draws the material under the card: the shadow is drawn only outside the card, from an
+        // a sheet's own paint stays off the front card in front of it, which is glass of the same shape
+        if let Some(cover) = self.cover {
+            let mut ring = rounded_path(rect.outset(SHADOW_REACH), 0.0);
+            ring.extend(rounded_path(cover, CORNER_RADIUS.min(cover.height() / 2.0)));
+            cx.push(PaintOp::PushClip(Shape::Path {
+                verbs: ring,
+                fill_rule: FillRule::EvenOdd,
+            }));
+        }
+        let glass = self.material
+            && cx.glass(
+                Glass::regular()
+                    .radius(radius)
+                    .container(self.container, 0.0)
+                    .alpha(opacity),
+            );
+        if glass {
+            // the compositor draws the glass under the card: the shadow is drawn only outside the card, from an
             // opaque copy of its shape the clip hides, and the text casts none
             cx.set_group(opacity as f32, Vec::new());
             let mut ring = rounded_path(rect.outset(SHADOW_REACH), 0.0);
@@ -1824,6 +2232,13 @@ impl<M: 'static> Widget<M> for Card<M> {
             });
             cx.push(PaintOp::PopLayer);
             cx.push(PaintOp::PopClip);
+            // a sheet deeper in its group is a little darker
+            if self.brightness < 0.0 {
+                cx.push(PaintOp::Fill {
+                    shape: shape.clone(),
+                    paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, (-self.brightness * 2.0) as f32)),
+                });
+            }
         } else {
             cx.set_group(opacity as f32, vec![shadow]);
             let darken = (1.0 + self.brightness).clamp(0.0, 1.0) as f32;
@@ -1839,6 +2254,9 @@ impl<M: 'static> Widget<M> for Card<M> {
                 width: OUTLINE_WIDTH,
                 paint: Paint::Solid(outline),
             });
+        }
+        if self.cover.is_some() {
+            cx.push(PaintOp::PopClip);
         }
         if cx.is_focused() && cx.focus_visible() && cx.window_active() {
             let ring = &theme.focus;
@@ -1875,6 +2293,12 @@ impl<M: 'static> Widget<M> for Card<M> {
         if let Some(index) = self.index {
             cx.item_index(index);
         }
+        if self.expanded.is_some() {
+            cx.states(AccessibleStates {
+                expanded: self.expanded,
+                ..AccessibleStates::default()
+            });
+        }
         if self.clickable {
             cx.focusable();
             if self.first {
@@ -1885,6 +2309,410 @@ impl<M: 'static> Widget<M> for Card<M> {
             cx.action(Action::Click);
         }
     }
+}
+
+/// Text at a size and weight of its own, in the label or secondary label colour: the centre's title, a card's age and
+/// an expanded group's name, which the text roles' sizes do not cover. With a rect it is placed there, its text
+/// centred vertically in it; without one it takes the width its parent gives it.
+#[derive(Clone, Debug, PartialEq)]
+struct Label {
+    text: String,
+    size: f64,
+    weight: u16,
+    secondary: bool,
+    align: TextAlign,
+    rect: Option<Rect>,
+    hidden: bool,
+}
+
+impl Label {
+    fn laid_out(&self, env: &Environment, width: f64) -> Option<ParagraphLayout> {
+        if self.text.is_empty() {
+            return None;
+        }
+        let style = TextStyle {
+            weight: FontWeight(self.weight),
+            ..TextStyle::new(self.size as f32)
+        };
+        let paragraph = ParagraphStyle {
+            align: self.align,
+            wrap: Wrap::None,
+            max_lines: Some(1),
+            ellipsis: true,
+            ..ParagraphStyle::default()
+        };
+        let text = env
+            .text
+            .paragraph(&AttributedText::plain(&self.text, style), &paragraph)
+            .ok()?;
+        Some(text.layout(width.is_finite().then_some(width.max(0.0) as f32)))
+    }
+}
+
+impl<M: 'static> Widget<M> for Label {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        match self.rect {
+            Some(rect) => LayoutSpec {
+                width: SizeSpec::Fixed(rect.width()),
+                height: SizeSpec::Fixed(rect.height()),
+                position: rect.origin,
+                flex: Flex::NONE,
+                ..LayoutSpec::new(ContainerKind::Leaf)
+            },
+            None => LayoutSpec::new(ContainerKind::Leaf),
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if (&self.text, self.size, self.weight, self.rect)
+            != (&old.text, old.size, old.weight, old.rect)
+        {
+            Change::Layout
+        } else if self != old {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), constraints: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        if let Some(rect) = self.rect {
+            return Measured {
+                size: rect.size,
+                baseline: None,
+            };
+        }
+        match self.laid_out(cx.env(), constraints.width.max()) {
+            Some(layout) => Measured {
+                size: layout.size(),
+                baseline: layout.lines().first().map(|line| line.baseline),
+            },
+            None => no_measure(),
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        let Some(layout) = self.laid_out(cx.env(), size.width) else {
+            return;
+        };
+        let role = if self.secondary {
+            ColorRole::SecondaryText
+        } else {
+            ColorRole::Text
+        };
+        let Some(color) = color(cx, role) else {
+            return;
+        };
+        let top = ((size.height - layout.size().height) / 2.0)
+            .max(0.0)
+            .round();
+        for line in layout.lines() {
+            for run in &line.runs {
+                cx.push(PaintOp::Glyphs {
+                    origin: Point::new(0.0, top) + run.origin,
+                    run: run.run.clone(),
+                    color,
+                });
+            }
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        if self.hidden {
+            cx.hidden();
+            return;
+        }
+        cx.role(Role::StaticText);
+        cx.name(self.text.clone());
+    }
+}
+
+/// A round button with a cross that grows into a capsule naming itself, against its rect's trailing edge, while the
+/// pointer is over it or it has the keyboard: the centre's Clear All, and an expanded group's clear button.
+struct ClearButton<M> {
+    rect: Rect,
+    label: String,
+    message: M,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ClearState {
+    armed: bool,
+    hovered: bool,
+}
+
+impl<M: Clone + 'static> ClearButton<M> {
+    /// The button's shape now, in its own frame: the circle, or the capsule wide enough for its label.
+    fn shape(
+        &self,
+        state: &ClearState,
+        open: bool,
+        env: &Environment,
+    ) -> (Rect, Option<ParagraphLayout>) {
+        let size = self.rect.size;
+        let height = size.height;
+        if !(state.hovered || open) {
+            return (Rect::new(size.width - height, 0.0, height, height), None);
+        }
+        let label = Label {
+            text: self.label.clone(),
+            size: 12.0,
+            weight: FontWeight::SEMIBOLD.0,
+            secondary: false,
+            align: TextAlign::Start,
+            rect: None,
+            hidden: true,
+        };
+        let layout = label.laid_out(env, f64::INFINITY);
+        let text = layout.as_ref().map_or(0.0, |l| l.size().width);
+        let width = (text + height).clamp(height, size.width);
+        (Rect::new(size.width - width, 0.0, width, height), layout)
+    }
+}
+
+impl<M: Clone + 'static> Widget<M> for ClearButton<M> {
+    type State = ClearState;
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.rect.width()),
+            height: SizeSpec::Fixed(self.rect.height()),
+            position: self.rect.origin,
+            flex: Flex::NONE,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) -> ClearState {
+        ClearState::default()
+    }
+
+    fn update(&self, old: &Self, _: &mut ClearState) -> Change {
+        if self.rect != old.rect {
+            Change::Layout
+        } else if self.label != old.label {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &ClearState, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.rect.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, state: &mut ClearState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        if cx.phase() == Phase::Capture {
+            return Propagation::Continue;
+        }
+        match *event {
+            Event::Pointer(PointerEvent::Enter { .. } | PointerEvent::Motion { .. }, _) => {
+                if !state.hovered {
+                    state.hovered = true;
+                    cx.request_paint();
+                }
+                Propagation::Continue
+            }
+            Event::Pointer(PointerEvent::Leave, _) => {
+                state.hovered = false;
+                state.armed = false;
+                cx.request_paint();
+                Propagation::Continue
+            }
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Left,
+                    pressed,
+                    position,
+                    ..
+                },
+                _,
+            ) => {
+                if pressed {
+                    state.armed = true;
+                    cx.capture_pointer();
+                } else if std::mem::take(&mut state.armed) {
+                    cx.release_pointer();
+                    if cx.hit(position) {
+                        cx.emit(self.message.clone());
+                    }
+                }
+                Propagation::Stop
+            }
+            Event::Key(key, _) if key.pressed && cx.node() == cx.target() => match key.keysym {
+                RETURN | KEYPAD_ENTER | SPACE => {
+                    cx.emit(self.message.clone());
+                    Propagation::Stop
+                }
+                _ => Propagation::Continue,
+            },
+            Event::Focus { .. } => {
+                cx.request_paint();
+                Propagation::Continue
+            }
+            Event::Cancel => {
+                state.armed = false;
+                Propagation::Continue
+            }
+            Event::Action(ref request) if request.action == Action::Click => {
+                cx.emit(self.message.clone());
+                Propagation::Stop
+            }
+            _ => Propagation::Continue,
+        }
+    }
+
+    fn paint(&self, state: &ClearState, cx: &mut PaintCx<'_>) {
+        let open = cx.is_focused() && cx.focus_visible();
+        let env = cx.env().clone();
+        let (rect, label) = self.shape(state, open, &env);
+        let (Some(fill), Some(mark)) = (
+            color(cx, ColorRole::ControlFill),
+            color(cx, ColorRole::SecondaryText),
+        ) else {
+            return;
+        };
+        let radius = rect.height() / 2.0;
+        let shape = Shape::RoundedRect { rect, radius };
+        cx.push(PaintOp::Fill {
+            shape: shape.clone(),
+            paint: Paint::Solid(fill),
+        });
+        if let Some(edge) = color(cx, ColorRole::Separator) {
+            cx.push(PaintOp::Stroke {
+                shape: shape.clone(),
+                width: OUTLINE_WIDTH,
+                paint: Paint::Solid(edge),
+            });
+        }
+        match label {
+            Some(layout) => {
+                let Some(text) = color(cx, ColorRole::Text) else {
+                    return;
+                };
+                let origin = Point::new(
+                    rect.x() + ((rect.width() - layout.size().width) / 2.0).round(),
+                    ((rect.height() - layout.size().height) / 2.0).round(),
+                );
+                for line in layout.lines() {
+                    for run in &line.runs {
+                        cx.push(PaintOp::Glyphs {
+                            origin: origin + run.origin,
+                            run: run.run.clone(),
+                            color: text,
+                        });
+                    }
+                }
+            }
+            None => {
+                let d = rect.height();
+                let (a, b) = (d * 0.32, d * 0.68);
+                let x = rect.x();
+                cx.push(PaintOp::Stroke {
+                    shape: Shape::Path {
+                        verbs: vec![
+                            PathVerb::MoveTo(Point::new(x + a, a)),
+                            PathVerb::LineTo(Point::new(x + b, b)),
+                            PathVerb::MoveTo(Point::new(x + b, a)),
+                            PathVerb::LineTo(Point::new(x + a, b)),
+                        ],
+                        fill_rule: Default::default(),
+                    },
+                    width: 1.5,
+                    paint: Paint::Solid(mark),
+                });
+            }
+        }
+        if open {
+            let theme = cx.env().theme.clone();
+            if let Some(ring) = theme
+                .colors
+                .get(ColorRole::KeyboardFocusIndicator, StateVariant::NORMAL)
+            {
+                cx.push(PaintOp::Stroke {
+                    shape: Shape::RoundedRect {
+                        rect: rect.outset(theme.focus.width / 2.0 + 1.0),
+                        radius: radius + theme.focus.width / 2.0 + 1.0,
+                    },
+                    width: theme.focus.width,
+                    paint: Paint::Solid(ring),
+                });
+            }
+        }
+    }
+
+    fn semantics(&self, _: &ClearState, cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::Button);
+        cx.name(self.label.clone());
+        cx.focusable();
+        cx.action(Action::Click);
+    }
+}
+
+/// Its children at `rect`, drawn at `opacity`: an expanded group's header row and the text of a card coming out of
+/// the stack, as they fade in.
+struct Fade<M> {
+    rect: Rect,
+    opacity: f64,
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for Fade<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.rect.width()),
+            height: SizeSpec::Fixed(self.rect.height()),
+            position: self.rect.origin,
+            overflow: Overflow::Visible,
+            ..LayoutSpec::new(ContainerKind::Absolute)
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.rect != old.rect {
+            Change::Layout
+        } else if self.opacity != old.opacity {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if self.opacity < 1.0 {
+            cx.set_group(self.opacity.clamp(0.0, 1.0) as f32, Vec::new());
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// The round close button centred on a card's top-leading corner.

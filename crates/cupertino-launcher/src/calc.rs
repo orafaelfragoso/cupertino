@@ -3,8 +3,8 @@
 //! Grammar (highest precedence first): numbers (`12`, `3.5`, `.5`, `1e3`, `1_000`), constants
 //! (`pi`, `e`, `tau`), parentheses, function calls (`sqrt sin cos tan asin acos atan ln log log2
 //! exp abs floor ceil round`), postfix percent (`50%` = 0.5), unary `+`/`−`, right-associative
-//! power `^` (`**` also), multiplication and division (`* / × ÷`), modulo (`%` followed by an
-//! operand), and addition and subtraction (`+ − –`). Trigonometry works in radians.
+//! power `^` (`**` also), multiplication and division (`* / × ÷`), modulo (`%` followed by a
+//! number, a name or a parenthesis; before a sign it is percent, so `50% + 10` is 10.5), and addition and subtraction (`+ − –`). Trigonometry works in radians.
 //!
 //! [`evaluate`] only answers for input that is arithmetic rather than a word or a plain number:
 //! it must contain at least one operator, a function call, a constant or a parenthesis. Division by
@@ -126,11 +126,10 @@ struct Parser {
     depth: usize,
 }
 
+/// Whether a `%` before `t` is modulo rather than percent: it is followed by a number, a name or a parenthesis. A sign
+/// after it is the next operator, so `50% + 10` adds to a percentage.
 fn starts_operand(t: Option<&Tok>) -> bool {
-    matches!(
-        t,
-        Some(Tok::Num(_) | Tok::Ident(_) | Tok::LParen | Tok::Minus | Tok::Plus)
-    )
+    matches!(t, Some(Tok::Num(_) | Tok::Ident(_) | Tok::LParen))
 }
 
 impl Parser {
@@ -313,25 +312,41 @@ fn looks_like_math(toks: &[Tok]) -> bool {
     has_value && structural
 }
 
-/// Evaluate `input`; `None` when it is not (valid) arithmetic.
-pub fn evaluate(input: &str) -> Option<Calculation> {
-    let input = input.trim().trim_start_matches('=').trim();
-    if input.is_empty() || input.len() > 200 {
-        return None;
-    }
-    let toks = lex(input)?;
-    if !looks_like_math(&toks) {
-        return None;
-    }
+/// The longest input evaluated, in bytes.
+const MAX_INPUT: usize = 200;
+
+/// The value of the whole of `toks`, `None` when they are not valid arithmetic or the value is not finite.
+fn value_of(toks: Vec<Tok>) -> Option<f64> {
     let mut p = Parser {
         t: toks,
         p: 0,
         depth: 0,
     };
     let value = p.expr()?;
-    if p.p != p.t.len() || !value.is_finite() {
+    (p.p == p.t.len() && value.is_finite()).then_some(value)
+}
+
+/// The value of `input` as a number or any arithmetic, a bare number included (`12`, `-3.5`, `2*(1+2)`): the quantity
+/// of a conversion. `None` for anything else, and on the same failures as [`evaluate`].
+pub fn number(input: &str) -> Option<f64> {
+    let input = input.trim();
+    if input.is_empty() || input.len() > MAX_INPUT {
         return None;
     }
+    value_of(lex(input)?)
+}
+
+/// Evaluate `input`; `None` when it is not (valid) arithmetic.
+pub fn evaluate(input: &str) -> Option<Calculation> {
+    let input = input.trim().trim_start_matches('=').trim();
+    if input.is_empty() || input.len() > MAX_INPUT {
+        return None;
+    }
+    let toks = lex(input)?;
+    if !looks_like_math(&toks) {
+        return None;
+    }
+    let value = value_of(toks)?;
     Some(Calculation {
         expression: input.to_string(),
         value,
@@ -371,7 +386,7 @@ pub fn format_number(v: f64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn val(s: &str) -> f64 {
@@ -420,6 +435,11 @@ mod tests {
         assert!((val("200*15%") - 30.0).abs() < 1e-12);
         assert_eq!(val("10 % 3 + 1"), 2.0);
         assert!((val("5%") - 0.05).abs() < 1e-12);
+        // a sign after the percent sign is the next operator, not the start of a divisor
+        assert!((val("50% + 10") - 10.5).abs() < 1e-12);
+        assert!((val("10%-5") + 4.9).abs() < 1e-12);
+        assert!((val("50%*-2") + 1.0).abs() < 1e-12);
+        assert_eq!(val("7 % (0-2)"), 1.0);
     }
 
     #[test]
@@ -537,6 +557,217 @@ mod tests {
         assert_eq!(format_number(1234.5), "1234.5");
         assert_eq!(format_number(1.5e-7), "1.5e-7");
         assert_eq!(format_number(-2.5e22), "-2.5e22");
+    }
+
+    #[test]
+    fn division_by_zero_is_no_result() {
+        for s in [
+            "1/0",
+            "0/0",
+            "5 ÷ 0",
+            "1/(2-2)",
+            "7 % (3-3)",
+            "1/0*0",
+            "-1/0",
+        ] {
+            assert!(evaluate(s).is_none(), "{s:?}");
+        }
+        assert_eq!(val("0/5"), 0.0);
+    }
+
+    #[test]
+    fn huge_numbers_stay_finite_or_give_no_result() {
+        assert_eq!(text("99999999999999999999*1"), "1e20");
+        assert_eq!(text("1e300*1e8"), "1e308");
+        assert_eq!(text("2^1000*1"), "1.07150860719e301");
+        for s in [
+            "1e308*10",
+            "2^1024",
+            "10^400",
+            "exp(1000)",
+            "1e309+1",
+            "-1e308*10",
+        ] {
+            assert!(evaluate(s).is_none(), "{s:?} overflows");
+        }
+        assert_eq!(text("1/1e300"), "1e-300");
+        assert!(evaluate("1e-320*1").is_some(), "subnormals still show");
+    }
+
+    #[test]
+    fn a_number_is_any_arithmetic_or_a_bare_number() {
+        assert_eq!(number("42"), Some(42.0));
+        assert_eq!(number("-3.5"), Some(-3.5));
+        assert_eq!(number(" 2*(1+2) "), Some(6.0));
+        assert_eq!(number("pi"), Some(std::f64::consts::PI));
+        for s in ["", "abc", "1/0", "2^2000", "1 2", "(1", &"1+".repeat(150)] {
+            assert_eq!(number(s), None, "{s:?}");
+        }
+    }
+
+    /// Pieces the fuzz tests put together: numbers at the edges of the float range, every operator and name the
+    /// calculator and the converter read, separators, and characters they do not (a decimal comma, a factorial, NUL,
+    /// a combining accent, letters whose lower case changes length, an emoji).
+    pub(crate) const FUZZ_PIECES: &[&str] = &[
+        "0",
+        "1",
+        "7",
+        "9",
+        "12.5",
+        ".",
+        "_",
+        "e",
+        "E",
+        "1e308",
+        "1e-320",
+        "1e999",
+        "9e9999999999",
+        "pi",
+        "π",
+        "τ",
+        "tau",
+        "sqrt(",
+        "ln(",
+        "log(",
+        "log2(",
+        "exp(",
+        "abs(",
+        "sin(",
+        "(",
+        ")",
+        "+",
+        "-",
+        "−",
+        "–",
+        "*",
+        "**",
+        "×",
+        "·",
+        "/",
+        "÷",
+        "^",
+        "%",
+        "!",
+        ",",
+        " ",
+        "\t",
+        "=",
+        " in ",
+        " to ",
+        " as ",
+        "->",
+        "→",
+        "km",
+        "mi",
+        "°c",
+        "f",
+        "k",
+        "K",
+        "ft",
+        "\"",
+        "'",
+        "m²",
+        "fl oz",
+        "\u{130}",
+        "\u{1e9e}",
+        "\u{212a}",
+        "é",
+        "ß",
+        "😀",
+        "\0",
+        "\u{301}",
+    ];
+
+    /// A small deterministic generator, so a failure names its seed and repeats.
+    pub(crate) struct Fuzz(pub u64);
+
+    impl Fuzz {
+        pub(crate) fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        pub(crate) fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+
+        /// Up to `pieces` pieces, now and then a character from anywhere in Unicode instead.
+        pub(crate) fn input(&mut self, pieces: usize) -> String {
+            let mut s = String::new();
+            for _ in 0..self.below(pieces + 1) {
+                if self.below(16) == 0 {
+                    s.extend(char::from_u32(self.next() as u32 % 0x11_0000));
+                } else {
+                    s.push_str(FUZZ_PIECES[self.below(FUZZ_PIECES.len())]);
+                }
+            }
+            s
+        }
+    }
+
+    /// Whatever the input, the calculator returns, and a value it gives is finite and reads as a number.
+    fn check(input: &str) {
+        if let Some(c) = evaluate(input) {
+            assert!(c.value.is_finite(), "{input:?} gave {}", c.value);
+            assert!(
+                !c.text.is_empty() && !c.text.contains("inf") && !c.text.contains("NaN"),
+                "{input:?} shows {:?}",
+                c.text
+            );
+        }
+        if let Some(v) = number(input) {
+            assert!(v.is_finite(), "{input:?} gave {v}");
+        }
+    }
+
+    #[test]
+    fn fuzzed_input_never_panics_and_never_shows_a_non_finite_value() {
+        let mut fuzz = Fuzz(0x9e37_79b9_7f4a_7c15);
+        for _ in 0..20_000 {
+            check(&fuzz.input(24));
+        }
+        // past the input limit, and nesting of every kind far past the depth limit
+        for n in [63, 64, 65, 100, 199, 200, 201, 10_000] {
+            for input in [
+                format!("{}1{}", "(".repeat(n), ")".repeat(n)),
+                format!("{}1", "-".repeat(n)),
+                format!("2{}", "^2".repeat(n)),
+                format!("{}1{}", "sqrt(".repeat(n), ")".repeat(n)),
+                format!("1{}", "%".repeat(n)),
+                "9".repeat(n) + "*1",
+                "1+".repeat(n) + "1",
+            ] {
+                check(&input);
+            }
+        }
+        // the float range's edges
+        for input in [
+            "0^0",
+            "0^-1",
+            "(-8)^(1/3)",
+            "1e308+1e308",
+            "-1e308-1e308",
+            "1e-320/1e10",
+            "0*1e999",
+            "1e999-1e999",
+            "exp(709)",
+            "exp(710)",
+            "ln(0)",
+            "tan(pi/2)",
+            "asin(2)",
+            "5!",
+            "1,5+1",
+            "1.5e+308*10",
+            "2^-1074",
+            "2^-1075",
+            "10^308",
+            "10^309",
+        ] {
+            check(input);
+        }
+        assert_eq!(val("0^0"), 1.0);
     }
 
     #[test]

@@ -9,8 +9,9 @@
 //! | Down / Ctrl+N, Up / Ctrl+P | next / previous result, no wrap-around; Up on the first result returns to the field |
 //! | Primary+Down, Primary+Up | first result of the next / previous section |
 //! | PageDown, PageUp | move by a page |
-//! | Tab | in the field: complete the query to the selected result's title; in the list: back to the field |
-//! | Enter | activate the selected result and close |
+//! | Tab, Shift+Tab | next / previous action of the selected result, wrapping round ([`Launcher::actions`]) |
+//! | Right, Left with list focus | next / previous action of the selected result, stopping at the ends |
+//! | Enter | carry out the selected result's chosen action (its own activation unless Tab or the arrows chose another) and close |
 //! | Alt+1 … Alt+9 | activate the n-th result (authored extension) |
 //! | Escape | list focus: back to the field; non-empty query: clear it; empty query: close ("Escape twice") |
 //! | Primary+Enter / Primary+R, +B, +I, +Y, +K, +L, +D, +, +H | [`PanelCommand`] events for the host |
@@ -22,7 +23,7 @@
 //! Every query change re-runs [`Launcher::query`] synchronously (the matcher answers 5 000
 //! applications in a few milliseconds) and selects the first result.
 
-use crate::engine::{Activation, Launcher, ResultItem, Results};
+use crate::engine::{Activation, ItemAction, Launcher, ResultItem, Results};
 use cupertino_animation::{AnimatedValue, Curve, SpringParams};
 use cupertino_ui_text::TextBuffer;
 
@@ -158,6 +159,7 @@ pub fn takes_key(key: Key, mods: Mods, focus: Focus) -> bool {
     }
     match (key, mods) {
         (Key::Escape | Key::Enter, _) => true,
+        (Key::Left | Key::Right, _) if focus == Focus::List => true,
         (Key::Char('1'..='9'), m) if m.alt => true,
         (Key::Char(' '), m) if focus == Focus::List && !m.ctrl && !m.alt && !m.primary => true,
         (Key::Char('n' | 'p'), m) if m.ctrl => true,
@@ -174,6 +176,8 @@ pub struct Panel {
     field: TextBuffer,
     results: Results,
     selected: usize,
+    /// The chosen action of the selected result, an index into its [`Launcher::actions`]; 0 is its own activation.
+    action: usize,
     scroll_row: usize,
     visible: bool,
     focus: Focus,
@@ -195,6 +199,7 @@ impl Panel {
             field: TextBuffer::with_max_len(QUERY_MAX_LEN),
             results: Results::default(),
             selected: 0,
+            action: 0,
             scroll_row: 0,
             visible: false,
             focus: Focus::Field,
@@ -239,6 +244,46 @@ impl Panel {
 
     pub fn selected_item(&self) -> Option<&ResultItem> {
         self.results.get(self.selected)
+    }
+
+    /// The chosen action of the selected result: 0 for its own activation, else an index into its actions.
+    pub fn action(&self) -> usize {
+        self.action
+    }
+
+    /// Choose action `index` of the selected result; out of range chooses its own activation.
+    pub fn set_action(&mut self, index: usize, launcher: &Launcher) -> PanelEvent {
+        let count = self.action_count(launcher);
+        let index = if index < count { index } else { 0 };
+        if index == self.action {
+            return PanelEvent::None;
+        }
+        self.action = index;
+        PanelEvent::Changed
+    }
+
+    fn action_count(&self, launcher: &Launcher) -> usize {
+        self.selected_item()
+            .map_or(0, |item| launcher.actions(item).len())
+    }
+
+    /// Move the chosen action by `delta`, wrapping round the selected result's actions or stopping at their ends.
+    fn step_action(&mut self, delta: isize, wrap: bool, launcher: &Launcher) -> PanelEvent {
+        let count = self.action_count(launcher) as isize;
+        if count <= 1 {
+            return PanelEvent::None;
+        }
+        let target = self.action as isize + delta;
+        let next = if wrap {
+            target.rem_euclid(count)
+        } else {
+            target.clamp(0, count - 1)
+        } as usize;
+        if next == self.action {
+            return PanelEvent::None;
+        }
+        self.action = next;
+        PanelEvent::Changed
     }
 
     pub fn scroll_row(&self) -> usize {
@@ -342,12 +387,14 @@ impl Panel {
         let keep = self.selected;
         self.results = launcher.query(self.field.text(), now.unix);
         self.selected = keep.min(self.results.len().saturating_sub(1));
+        self.action = 0;
         self.clamp_scroll();
     }
 
     fn requery(&mut self, launcher: &Launcher, unix: f64) {
         self.results = launcher.query(self.field.text(), unix);
         self.selected = 0;
+        self.action = 0;
         self.scroll_row = 0;
     }
 
@@ -403,6 +450,7 @@ impl Panel {
             return PanelEvent::None;
         }
         self.selected = new;
+        self.action = 0;
         self.clamp_scroll();
         PanelEvent::Changed
     }
@@ -457,8 +505,30 @@ impl Panel {
             return PanelEvent::None;
         }
         self.selected = flat;
+        self.action = 0;
         self.clamp_scroll();
         PanelEvent::Changed
+    }
+
+    /// Carry out action `index` of the result at `flat` (a click on one of its action buttons, Enter on a chosen
+    /// action) and close. Its own activation is [`Panel::activate_index`].
+    pub fn activate_action(
+        &mut self,
+        flat: usize,
+        index: usize,
+        launcher: &mut Launcher,
+        now: Now,
+    ) -> PanelEvent {
+        let Some(item) = self.results.get(flat).cloned() else {
+            return PanelEvent::None;
+        };
+        let actions: Vec<ItemAction> = launcher.actions(&item);
+        let Some(action) = actions.get(index) else {
+            return PanelEvent::None;
+        };
+        let activation = launcher.activate_action(&item, action, self.field.text(), now.unix);
+        self.hide(now.mono);
+        PanelEvent::Activate(activation)
     }
 
     /// Activate the result at a flat index (click, Alt+digit) and close.
@@ -522,6 +592,9 @@ impl Panel {
                     PanelEvent::Close
                 }
             }
+            (Key::Enter, _) if self.action > 0 => {
+                self.activate_action(self.selected, self.action, launcher, now)
+            }
             (Key::Enter, _) => self.activate_index(self.selected, launcher, now),
             (Key::Char(c @ '1'..='9'), m) if m.alt => {
                 self.activate_index(c as usize - '1' as usize, launcher, now)
@@ -531,22 +604,18 @@ impl Panel {
             }
             (Key::Char('n'), m) if m.ctrl => self.arrow(true),
             (Key::Char('p'), m) if m.ctrl => self.arrow(false),
-            // Delete and Tab in the list only return the keyboard to the field.
-            (Key::Backspace | Key::Delete | Key::Tab, _) if self.focus == Focus::List => {
+            // Delete in the list only returns the keyboard to the field.
+            (Key::Backspace | Key::Delete, _) if self.focus == Focus::List => {
                 self.focus = Focus::Field;
                 PanelEvent::Changed
             }
+            (Key::Tab, m) => self.step_action(if m.shift { -1 } else { 1 }, true, launcher),
+            (Key::Right, _) if self.focus == Focus::List => self.step_action(1, false, launcher),
+            (Key::Left, _) if self.focus == Focus::List => self.step_action(-1, false, launcher),
             (Key::Down, _) => self.arrow(true),
             (Key::Up, _) => self.arrow(false),
             (Key::PageDown, _) => self.move_selection(page, false),
             (Key::PageUp, _) => self.move_selection(-page, false),
-            (Key::Tab, _) => match self.selected_item().map(|i| i.title.clone()) {
-                Some(t) if t != self.field.text() => {
-                    self.set_query(&t, launcher, now);
-                    PanelEvent::Changed
-                }
-                _ => PanelEvent::None,
-            },
             _ => PanelEvent::Edit,
         }
     }

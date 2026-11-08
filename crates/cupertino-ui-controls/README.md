@@ -76,6 +76,27 @@ from the application's model and reports changes as messages.
   and reads as a group whose interactive parts are its children, layered over the drawing. `Grid` lays out fixed,
   auto and fraction tracks row by row; `Element::span` covers several cells, and rows past the declared ones fit
   their content.
+- **Dialogs.** `Modal` shows its content and, while it has a `Dialog`, dims the content with the scrim, takes every
+  press meant for it, hides it from assistive technology and the Tab order, and hangs the dialog 52 pt below the
+  window's top (under the toolbar row), centred across. Return answers with the default button and Escape with the
+  cancel one once the focused control passes them on; Tab and Shift+Tab stay inside; every other key stops there. The
+  first control of the body takes the focus, else the least destructive button (Cancel, then the default, then
+  another). A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
+  shadow, a dark hairline outside its edge and, in the dark appearance, a faint light rim inside it; the title, the
+  message, the body and a trailing row of buttons, 20 pt in. A `DialogKind::Alert` is 260 pt wide, a nearly opaque
+  grey (97 %, opaque under Reduce Transparency and Increase Contrast) with a light rim, a 26 pt radius and the
+  hairline: the application's icon (`Icons::application`, 64 pt)
+  22 pt in from the top and the leading side, the title in bold body text below it, the message 10 pt under that, then
+  28 pt capsule buttons 16 pt from the sides and the bottom. Two buttons whose labels fit half the row (reckoned from
+  the character count) go side by side at equal widths in their given order; otherwise they are stacked full width,
+  8 pt apart, in the reverse order, so the default is on top. The default capsule takes the accent, the others a quiet
+  fill; a destructive answer has a red label (a red capsule in high contrast). The alert is not glass: `PaintCx::glass`
+  is drawn by the compositor under the window's surface, so over the window's own opaque content it would not show,
+  and the alert is part of that surface. Glass would need the alert on a surface of its own above the window, which
+  Kit's popups are not fit for: a popup without a grab gets no keyboard, one with a grab needs the serial of a press
+  (an alert raised by a timer or a task has none) and is dismissed by a press outside, and no anchor hangs one centred
+  under the toolbar row. Dialogs show and go at once: the window draws no motion for them, since a fade keyed to the
+  clock would leave them unseen in every test harness whose clock stands still.
 - **Window drag regions.** `WindowDragArea` marks its content as a drag region of the window, and the toolbar row of
   `NavigationStack` is one, so every Kit app with a navigation toolbar gets it. A left press there that no control
   takes starts an interactive move (`WindowRequest::Move`, answering the press) once the pointer travels more than

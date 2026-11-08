@@ -2,7 +2,9 @@
 //! with a soft shadow. The search, the pills, the rows, the selection, the scroll and the motion are the model's
 //! ([`AppGrid`]); the parts are where [`GridLayout`] puts them, scaled about the panel's centre by the entry's and the
 //! exit's zoom, and the whole content fades with them. The rows scroll inside a clip; only the rows shown are nodes.
-//! Every application shown is a button for assistive technology, which can click it; every pill is a check box.
+//! Every application shown is a button for assistive technology, which can click it; every pill is a check box. When
+//! the panel folds into its search capsule, the pills, the rows and the separators fade out as one layer and leave the
+//! tree once gone; the panel's shape shrinks into the capsule around the search field.
 
 use cupertino_kit::core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, CommandRegistry, Element, Event,
@@ -23,7 +25,8 @@ use crate::app_grid::{AppGrid, GridLayout, Pill, Zone};
 pub const TITLE: &str = "Applications";
 /// What assistive technology calls the recents row, the group its applications are in apart from the full list.
 pub const RECENTS: &str = "Recently Used";
-/// The search field's placeholder and the text shown when nothing matches.
+/// The search field's placeholder in the capsule (the panel's says [`TITLE`]), and the text shown when nothing
+/// matches.
 pub const PLACEHOLDER: &str = "Search";
 pub const NO_RESULTS: &str = "No Results";
 
@@ -104,16 +107,16 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
     let grid = view.grid;
     let visual = grid.visual(view.now);
     let mut children: Vec<Element<M>> = Vec::new();
-    if let (Some(layout), Some(panel)) = (grid.layout().copied(), grid.panel()) {
+    if let (Some(layout), Some((shape, radius))) = (grid.layout().copied(), grid.shape(view.now)) {
         let zoom = Zoom {
             centre: Point::new(layout.panel.cx(), layout.panel.cy()),
             scale: visual.scale,
         };
         let s = zoom.scale;
-        let radius = GridLayout::PANEL_RADIUS;
+        let content_alpha = grid.content_alpha(view.now);
         children.push(
             Element::new(PanelNode {
-                rect: zoom.rect(&panel),
+                rect: zoom.rect(&shape),
                 radius: radius * s,
                 alpha: visual.alpha,
             })
@@ -124,19 +127,41 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
             Zone::Pills => grid.pill_focus().is_none(),
             Zone::Grid => grid.selected().is_none(),
         };
-        if let Some(search) = grid.search_rect() {
-            children.push(
-                Element::new(SearchNode {
-                    rect: zoom.rect(&search),
-                    query: grid.query().to_owned(),
-                    scale: s,
-                    focus: search_focus,
+        // the search row stays at the top of the shape as it folds
+        let search = cupertino_wm::geometry::Rect::new(
+            shape.x,
+            shape.y,
+            shape.w,
+            GridLayout::SEARCH_HEIGHT.min(shape.h),
+        );
+        children.push(
+            Element::new(SearchNode {
+                rect: zoom.rect(&search),
+                query: grid.query().to_owned(),
+                placeholder: if grid.is_folded() { PLACEHOLDER } else { TITLE },
+                scale: s,
+                focus: search_focus,
+            })
+            .key("search"),
+        );
+        // what folds away: the separators, the pills, the rows and the scroll indicator, faded as one layer
+        let mut faded: Vec<Element<M>> = Vec::new();
+        if content_alpha > 0.0 {
+            faded.push(
+                Element::new(SeparatorNode {
+                    rect: zoom.rect(&layout.search_separator()),
+                    announced: false,
                 })
-                .key("search"),
+                .key("search-separator"),
             );
         }
-        for (i, (pill, rect)) in grid.pill_rects().into_iter().enumerate() {
-            children.push(
+        for (i, (pill, rect)) in grid
+            .pill_rects()
+            .into_iter()
+            .enumerate()
+            .filter(|_| content_alpha > 0.0)
+        {
+            faded.push(
                 Element::new(PillNode {
                     pill,
                     rect: zoom.rect(&rect),
@@ -148,7 +173,7 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
                 .key(Key::from(format!("pill-{}", pill.name()))),
             );
         }
-        {
+        if content_alpha > 0.0 {
             let content = zoom.rect(&layout.content);
             let mut rows: Vec<Element<M>> = Vec::new();
             let mut recents: Vec<Element<M>> = Vec::new();
@@ -200,6 +225,7 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
                     rows.push(
                         Element::new(SeparatorNode {
                             rect: Rect::new(0.0, line * s, content.width(), 1.0),
+                            announced: true,
                         })
                         .key("separator"),
                     );
@@ -214,7 +240,7 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
                     .key("no-results"),
                 );
             }
-            children.push(
+            faded.push(
                 Element::new(ClipNode {
                     rect: content,
                     name: TITLE,
@@ -222,14 +248,26 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
                 })
                 .key("content"),
             );
-            if let Some(thumb) = grid.scroller_thumb() {
-                children.push(
+            let thumb_alpha = grid.scroller_alpha(view.now);
+            if let Some(thumb) = grid.scroller_thumb().filter(|_| thumb_alpha > 0.0) {
+                faded.push(
                     Element::new(ThumbNode {
                         rect: zoom.rect(&thumb),
+                        alpha: thumb_alpha,
                     })
                     .key("scroller"),
                 );
             }
+        }
+        if !faded.is_empty() {
+            children.push(
+                Element::new(FadeNode {
+                    size: Size::new(layout.width, layout.height),
+                    alpha: content_alpha,
+                    children: faded,
+                })
+                .key("folding"),
+            );
         }
     }
     let size = grid
@@ -439,6 +477,8 @@ fn follow_focus<M>(
 struct SearchNode {
     rect: Rect,
     query: String,
+    /// What the empty field says.
+    placeholder: &'static str,
     scale: f64,
     /// The keys are on the field: neither a pill nor an application has them.
     focus: bool,
@@ -462,7 +502,11 @@ impl<M: 'static> Widget<M> for SearchNode {
         }
         if self.rect != old.rect {
             Change::Layout
-        } else if self.query != old.query || self.scale != old.scale || self.focus != old.focus {
+        } else if self.query != old.query
+            || self.placeholder != old.placeholder
+            || self.scale != old.scale
+            || self.focus != old.focus
+        {
             Change::Paint
         } else {
             Change::None
@@ -516,7 +560,7 @@ impl<M: 'static> Widget<M> for SearchNode {
             let placeholder = role(cx, ColorRole::PlaceholderText, secondary);
             paint::text(
                 cx,
-                PLACEHOLDER,
+                self.placeholder,
                 font,
                 GridLayout::SEARCH_WEIGHT,
                 x + CARET_WIDTH * s + 1.0,
@@ -553,7 +597,7 @@ impl<M: 'static> Widget<M> for SearchNode {
         }
         cx.role(Role::TextInput);
         cx.name(TITLE.to_owned());
-        cx.description(PLACEHOLDER.to_owned());
+        cx.description(self.placeholder.to_owned());
         cx.value(AccessibleValue::Text {
             value: self.query.clone(),
             editing: None,
@@ -850,9 +894,70 @@ impl<M: Clone + 'static> Widget<M> for ItemNode<M> {
     }
 }
 
-/// The line between the recents row and the rest.
+/// What fades out when the panel folds into its capsule, painted as one layer at `alpha` while it fades; it covers the
+/// window, so its children keep the window's coordinates.
+struct FadeNode<M> {
+    size: Size,
+    alpha: f64,
+    children: Vec<Element<M>>,
+}
+
+impl<M: Clone + 'static> Widget<M> for FadeNode<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.size.width.max(0.0)),
+            height: SizeSpec::Fixed(self.size.height.max(0.0)),
+            ..LayoutSpec::new(ContainerKind::Absolute)
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.size != old.size {
+            Change::Layout
+        } else if self.alpha != old.alpha {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if self.alpha < 1.0 {
+            cx.set_group(self.alpha.clamp(0.0, 1.0) as f32, Vec::new());
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// A separator: under the search row, and between the recents row and the rest. Only the one that splits the rows is
+/// `announced` to assistive technology; the one under the search row is decoration.
 struct SeparatorNode {
     rect: Rect,
+    announced: bool,
 }
 
 impl<M: 'static> Widget<M> for SeparatorNode {
@@ -894,7 +999,9 @@ impl<M: 'static> Widget<M> for SeparatorNode {
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.role(Role::Separator);
+        if self.announced {
+            cx.role(Role::Separator);
+        }
     }
 }
 
@@ -962,9 +1069,10 @@ impl<M: 'static> Widget<M> for NoResultsNode {
     }
 }
 
-/// The scroll indicator's thumb.
+/// The scroll indicator's thumb, at `alpha` while it fades out.
 struct ThumbNode {
     rect: Rect,
+    alpha: f64,
 }
 
 impl<M: 'static> Widget<M> for ThumbNode {
@@ -979,6 +1087,8 @@ impl<M: 'static> Widget<M> for ThumbNode {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.rect != old.rect {
             Change::Layout
+        } else if self.alpha != old.alpha {
+            Change::Paint
         } else {
             Change::None
         }
@@ -1001,7 +1111,7 @@ impl<M: 'static> Widget<M> for ThumbNode {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let size = cx.size();
-        let c = share(label_color(cx), THUMB_SHARE);
+        let c = share(label_color(cx), THUMB_SHARE * self.alpha as f32);
         paint::fill(
             cx,
             Rect::new(0.0, 0.0, size.width, size.height),

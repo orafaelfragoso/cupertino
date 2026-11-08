@@ -1585,6 +1585,7 @@ impl Model {
     }
 
     fn grid_pointer(&mut self, pointer: Pointer) -> Vec<Command<Message>> {
+        let now = self.now();
         let Some(grid) = self.grid.as_mut().filter(|g| !g.grid.is_closing()) else {
             return Vec::new();
         };
@@ -1594,7 +1595,7 @@ impl Model {
                 self.grid_outcome(outcome)
             }
             Pointer::Scroll(_, delta) => {
-                grid.grid.scroll_by(delta.y);
+                grid.grid.scroll_by(delta.y, now);
                 Vec::new()
             }
             _ => Vec::new(),
@@ -1605,6 +1606,7 @@ impl Model {
         if !key.pressed {
             return Vec::new();
         }
+        let now = self.now();
         let Some(grid) = self.grid.as_mut().filter(|g| !g.grid.is_closing()) else {
             return Vec::new();
         };
@@ -1637,7 +1639,7 @@ impl Model {
         });
         match mapped {
             Some(k) => {
-                let outcome = grid.grid.key(k);
+                let outcome = grid.grid.key(k, now);
                 self.grid_outcome(outcome)
             }
             None => Vec::new(),
@@ -2441,9 +2443,14 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::Sized(Sized::Grid, w, h) => {
+            // the grid's layer leaves out the bar's room; the panel is centred on the whole output
+            let outside = model
+                .placement()
+                .map(|p| app_grid::Outside::dock(p.orientation, p.bar_depth))
+                .unwrap_or_default();
             if let Some(grid) = model.grid.as_mut() {
                 grid.sized = true;
-                grid.grid.set_size(w, h);
+                grid.grid.set_size(w, h, outside);
             }
             Vec::new()
         }

@@ -175,17 +175,20 @@ impl ClientData for ClientState {
 }
 
 /// The window model's minimize and restore timing for the minimize effect of `effects`: the effect generators carry their
-/// own easing, so the model's progress is linear over the effect duration (durations); without
-/// an effect the model's own curves.
+/// own easing, so the model's progress is linear over the effect's duration each way (the bend into the slot and the
+/// unfold back out of it); without an effect the model's own curves.
 pub fn set_minimize_timing(cfg: &mut WmConfig, effects: crate::fx::EffectsConfig) {
     let defaults = WmConfig::default().animation;
     let (minimizing, restoring) = match effects.minimize {
         Some(kind) => {
-            let linear = cupertino_animation::Curve::Timed {
-                duration: kind.duration_s(false),
+            let linear = |duration| cupertino_animation::Curve::Timed {
+                duration,
                 bezier: cupertino_animation::CubicBezier::LINEAR,
             };
-            (linear, linear)
+            (
+                linear(kind.duration_s(false)),
+                linear(kind.restore_duration_s(false)),
+            )
         }
         None => (defaults.minimizing, defaults.restoring),
     };

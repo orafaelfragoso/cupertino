@@ -6,8 +6,8 @@ use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Environment, Event, EventCx, MeasureCx,
     PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
-use cupertino_ui_theme::{ColorRole, ThemeTokens};
+use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
+use cupertino_ui_theme::{Color, ColorRole, InteractionVariant, ThemeTokens};
 
 impl<M> Button<M> {
     /// The fill and text roles: the role picks the colour family, a borderless button fills only while pressed.
@@ -77,13 +77,103 @@ pub(crate) struct SheetButton<M> {
     pub(crate) button: Button<M>,
     /// Takes the focus when the sheet opens.
     pub(crate) initial: bool,
+    /// An alert's button: a capsule as wide as its place, see [`paint_capsule`].
+    pub(crate) capsule: bool,
+}
+
+/// An alert's capsule button: its height and the least room on each side of its label.
+pub(crate) const CAPSULE_HEIGHT: f64 = 28.0;
+pub(crate) const CAPSULE_INSET: f64 = 12.0;
+/// The quiet capsule's fill: a share of white in the dark appearance and of black in the light one, more under the
+/// pointer and more again while pressed.
+const QUIET_DARK: f32 = 0.10;
+const QUIET_LIGHT: f32 = 0.06;
+const QUIET_HOVER: f32 = 0.04;
+const QUIET_PRESSED: f32 = 0.10;
+
+/// An alert's button: the default answer in the accent capsule with its light label, the others on a quiet capsule
+/// with the control text, or the destructive red for a destructive one (a red capsule in high contrast). A capsule
+/// fills its node's width.
+fn paint_capsule<M>(button: &Button<M>, press: &Press, cx: &mut PaintCx<'_>) {
+    let theme = cx.env().theme.clone();
+    let state = ControlState {
+        enabled: button.enabled,
+        hovered: press.hovered(),
+        pressed: press.pressed(),
+        focused: cx.is_focused(),
+        focus_visible: cx.focus_visible(),
+        window_active: cx.window_active(),
+        busy: button.busy,
+        ..ControlState::default()
+    };
+    let size = cx.size();
+    let height = CAPSULE_HEIGHT.min(size.height);
+    let chrome = Rect::new(0.0, (size.height - height) / 2.0, size.width, height);
+    let radius = height / 2.0;
+    let high_contrast = theme.preferences.appearance.is_high_contrast();
+    let (fill, text) = match button.role {
+        ButtonRole::Default => (
+            look::color(&theme, ColorRole::DefaultButtonFill, &state),
+            look::color(&theme, ColorRole::DefaultButtonText, &state),
+        ),
+        // in high contrast a red label on a quiet capsule may not stand out: the capsule takes the red instead
+        ButtonRole::Destructive if high_contrast => (
+            look::color(&theme, ColorRole::DestructiveFill, &state),
+            look::color(&theme, ColorRole::DestructiveText, &state),
+        ),
+        role => {
+            let dark = theme.preferences.appearance.is_dark();
+            let share = if dark { QUIET_DARK } else { QUIET_LIGHT }
+                + match look::variant(&state).interaction {
+                    InteractionVariant::Pressed => QUIET_PRESSED,
+                    InteractionVariant::Hover => QUIET_HOVER,
+                    _ => 0.0,
+                };
+            let tone = if dark { 1.0 } else { 0.0 };
+            let text = if role == ButtonRole::Destructive {
+                look::color(&theme, ColorRole::DestructiveFill, &state)
+            } else {
+                look::color(&theme, ColorRole::ControlText, &state)
+            };
+            (Some(Color::new(tone, tone, tone, share)), text)
+        }
+    };
+    look::fill(cx, chrome, radius, fill);
+    if high_contrast {
+        look::stroke(
+            cx,
+            chrome.inset(cupertino_geometry::Insets::uniform(0.5)),
+            radius - 0.5,
+            1.0,
+            look::color(&theme, ColorRole::ControlBorder, &state),
+        );
+    }
+    if let Some(label) = look::label(cx.env(), &button.label) {
+        let origin = look::centred(&label, chrome, cx.env());
+        let text = text.map(|c| {
+            if state.enabled {
+                c
+            } else {
+                Color::new(c.r, c.g, c.b, c.a * 0.5)
+            }
+        });
+        look::glyphs(cx, &label, origin, text);
+    }
+    paint_focus_ring(cx, chrome, radius);
 }
 
 impl<M: Clone + 'static> Widget<M> for SheetButton<M> {
     type State = Press;
 
     fn layout(&self) -> LayoutSpec {
-        self.button.layout()
+        if self.capsule {
+            LayoutSpec {
+                width: SizeSpec::Fill,
+                ..LayoutSpec::new(ContainerKind::Leaf)
+            }
+        } else {
+            self.button.layout()
+        }
     }
 
     fn state(&self) -> Press {
@@ -91,11 +181,21 @@ impl<M: Clone + 'static> Widget<M> for SheetButton<M> {
     }
 
     fn update(&self, old: &Self, press: &mut Press) -> Change {
+        if self.capsule != old.capsule {
+            return Change::Layout;
+        }
         self.button.update(&old.button, press)
     }
 
     fn measure(&self, press: &Press, constraints: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
-        self.button.measure(press, constraints, cx)
+        if !self.capsule {
+            return self.button.measure(press, constraints, cx);
+        }
+        let label = look::label(cx.env(), &self.button.label).map_or(0.0, |l| l.size().width);
+        Measured {
+            size: Size::new(label + 2.0 * CAPSULE_INSET, CAPSULE_HEIGHT),
+            baseline: None,
+        }
     }
 
     fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
@@ -103,7 +203,11 @@ impl<M: Clone + 'static> Widget<M> for SheetButton<M> {
     }
 
     fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
-        self.button.paint(press, cx)
+        if self.capsule {
+            paint_capsule(&self.button, press, cx);
+        } else {
+            self.button.paint(press, cx)
+        }
     }
 
     fn semantics(&self, press: &Press, cx: &mut SemanticsCx<'_>) {

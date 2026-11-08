@@ -193,6 +193,8 @@ pub struct Shell {
     split: SplitLayout,
     sidebar_scroll: ScrollState,
     content_scroll: ScrollState,
+    /// Where the sheet's list is scrolled, and the rows it was scrolled on: another list starts at its top.
+    sheet_scroll: (Vec<String>, ScrollState),
     query: String,
     query_revision: u64,
     /// The pop-up button whose menu is open.
@@ -207,6 +209,8 @@ pub enum Message {
     Split(SplitLayout),
     SidebarScroll(ScrollState),
     ContentScroll(ScrollState),
+    /// The sheet's list scrolled.
+    SheetScroll(ScrollState),
     Query(TextChange),
     /// Return in the search field: the first result.
     Search,
@@ -334,6 +338,10 @@ impl Shell {
             Message::Split(split) => self.split = split,
             Message::SidebarScroll(scroll) => self.sidebar_scroll = scroll,
             Message::ContentScroll(scroll) => self.content_scroll = scroll,
+            Message::SheetScroll(scroll) => {
+                let rows = self.state.sheet.as_ref().and_then(|s| s.rows());
+                self.sheet_scroll = (rows.map(|(r, _)| r).unwrap_or_default(), scroll);
+            }
             Message::Query(change) => {
                 self.query = change.text;
                 self.query_revision = change.revision;
@@ -602,6 +610,7 @@ impl Application for SettingsApp {
             },
             sidebar_scroll: UNSCROLLED,
             content_scroll: UNSCROLLED,
+            sheet_scroll: (Vec::new(), UNSCROLLED),
             query: String::new(),
             query_revision: 0,
             open: None,
@@ -658,7 +667,13 @@ impl Application for SettingsApp {
             background: WindowBackground::None,
             content: Element::from(Modal {
                 content: split,
-                dialog: shell.state.sheet.as_ref().map(sheets::dialog),
+                dialog: shell.state.sheet.as_ref().map(|sheet| {
+                    let scroll = match sheet.rows() {
+                        Some((rows, _)) if rows == shell.sheet_scroll.0 => shell.sheet_scroll.1,
+                        _ => UNSCROLLED,
+                    };
+                    sheets::dialog(sheet, scroll)
+                }),
             }),
             popup: None,
             menus: Some(Menus {
@@ -1313,6 +1328,71 @@ mod tests {
         settle(&mut driver, window);
         settle(&mut driver, window);
         assert_eq!(bars(&driver), 0, "in a window tall enough it fits");
+    }
+
+    /// A sheet's long list scrolls inside a sheet that fits the window at its least height, its buttons in reach; a
+    /// short list keeps its own height and does not scroll.
+    #[test]
+    fn a_sheets_long_list_scrolls_inside_the_window() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let apps = |n: usize| -> Vec<crate::clipboard::App> {
+            (0..n)
+                .map(|i| crate::clipboard::App {
+                    name: format!("App {i:02}"),
+                    icon: None,
+                    program: Some(format!("/usr/bin/app{i:02}").into()),
+                    reason: None,
+                })
+                .collect()
+        };
+        let bounds = |driver: &TestDriver<SettingsApp>, role: Role| {
+            driver
+                .runtime()
+                .snapshot(driver.runtime().windows()[0].1)
+                .unwrap()
+                .accessibility
+                .into_iter()
+                .filter(|(_, n)| n.role == role)
+                .map(|(_, n)| n.bounds)
+                .collect::<Vec<_>>()
+        };
+        let (mut driver, window) =
+            start_with(dir.path(), PaneId::Wifi, Some(Sheet::apps(apps(40))));
+        let active = WindowStates {
+            activated: true,
+            ..WindowStates::default()
+        };
+        driver
+            .window_system_mut()
+            .configure(
+                window,
+                Some(Size::new(metrics::DEFAULT_WIDTH, metrics::MIN_HEIGHT)),
+                active,
+            )
+            .unwrap();
+        settle(&mut driver, window);
+        settle(&mut driver, window);
+        let sheet = bounds(&driver, Role::Dialog)[0];
+        assert!(
+            sheet.max_y() <= metrics::MIN_HEIGHT,
+            "the sheet fits the window: {sheet:?}"
+        );
+        assert!(
+            bounds(&driver, Role::ScrollView)
+                .iter()
+                .any(|list| sheet.contains(list.center()) && list.height() < 40.0 * 20.0),
+            "its list scrolls"
+        );
+
+        let (driver, _) = start_with(dir.path(), PaneId::Wifi, Some(Sheet::apps(apps(3))));
+        let sheet = bounds(&driver, Role::Dialog)[0];
+        assert!(
+            !bounds(&driver, Role::ScrollView)
+                .iter()
+                .any(|list| sheet.contains(list.center())),
+            "a short list does not scroll"
+        );
     }
 
     #[test]

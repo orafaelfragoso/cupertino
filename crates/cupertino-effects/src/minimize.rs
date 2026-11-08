@@ -1,10 +1,10 @@
 //! Reversible, interruptible minimize animations on top of the three mesh generators.
 //!
-//! Durations are as designed: warp 500 ms, funnel 400 ms, scale 200 ms, doubled
-//! while the slow-motion modifier is held. The progress runs linearly from 0 (window) to 1 (slot);
-//! the easing is inside the generators. Restoring evaluates the same meshes with the progress
-//! running backwards, and the animation may be redirected at any time: the new run starts from the
-//! current progress and, for a partial run, takes proportionally less time (approximate).
+//! Durations: the warp bends into the slot in 450 ms and unfolds back out of it in 420 ms; the funnel takes 400 ms and
+//! the scale 200 ms either way. All are doubled while the slow-motion modifier is held. The progress runs linearly from
+//! 0 (window) to 1 (slot); the easing is inside the generators, which already start and end slowly. Restoring
+//! evaluates the same meshes with the progress running backwards, and the animation may be redirected at any time: the
+//! new run starts from the current progress and, for a partial run, takes proportionally less time (approximate).
 
 use crate::ease::{Driver, Ease, ProgressAnimator};
 use crate::funnel::{funnel_mesh, FunnelParams};
@@ -15,7 +15,7 @@ use cupertino_geometry::Rect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MinimizeKind {
-    /// Two-phase funnel, 500 ms.
+    /// Two-phase funnel, 450 ms to the slot and 420 ms back.
     Warp,
     /// Grid of vertices flying to the slot, 400 ms.
     Funnel,
@@ -30,16 +30,30 @@ impl MinimizeKind {
         MinimizeKind::Scale,
     ];
 
+    /// How long a whole run from the window into the slot takes.
     pub fn duration_ms(self) -> f64 {
         match self {
-            MinimizeKind::Warp => 500.0,
+            MinimizeKind::Warp => 450.0,
+            MinimizeKind::Funnel => 400.0,
+            MinimizeKind::Scale => 200.0,
+        }
+    }
+
+    /// How long a whole run from the slot back to the window takes: the warp unfolds a little faster than it bends.
+    pub fn restore_duration_ms(self) -> f64 {
+        match self {
+            MinimizeKind::Warp => 420.0,
             MinimizeKind::Funnel => 400.0,
             MinimizeKind::Scale => 200.0,
         }
     }
 
     pub fn duration_s(self, slow_motion: bool) -> f64 {
-        self.duration_ms() / 1000.0 * if slow_motion { 2.0 } else { 1.0 }
+        self.duration_ms() / 1000.0 * slow_factor(slow_motion)
+    }
+
+    pub fn restore_duration_s(self, slow_motion: bool) -> f64 {
+        self.restore_duration_ms() / 1000.0 * slow_factor(slow_motion)
     }
 
     /// Largest vertex count the generator can emit.
@@ -49,6 +63,15 @@ impl MinimizeKind {
             MinimizeKind::Funnel => 400,
             MinimizeKind::Scale => 4,
         }
+    }
+}
+
+/// How much the slow-motion modifier stretches every minimize run.
+fn slow_factor(slow_motion: bool) -> f64 {
+    if slow_motion {
+        2.0
+    } else {
+        1.0
     }
 }
 
@@ -141,15 +164,26 @@ pub struct MinimizeAnimation {
 impl MinimizeAnimation {
     /// Starts un-minimized (progress 0) and idle.
     pub fn new(effect: MinimizeEffect, slow_motion: bool) -> Self {
-        let driver = Driver::Timed {
-            duration: effect.kind.duration_s(slow_motion),
-            ease: Ease::Linear,
-        };
         Self {
             effect,
-            anim: ProgressAnimator::new(driver, 0.0),
+            anim: ProgressAnimator::new(Self::driver(effect.kind.duration_s(slow_motion)), 0.0),
             slow_motion,
         }
+    }
+
+    fn driver(duration: f64) -> Driver {
+        Driver::Timed {
+            duration,
+            ease: Ease::Linear,
+        }
+    }
+
+    /// Run to `to` from the current progress on a whole run of `duration`.
+    fn run(&mut self, to: f64, duration: f64, now: f64) {
+        let mut anim = ProgressAnimator::new(Self::driver(duration), 0.0);
+        anim.set(self.anim.value(now));
+        anim.animate_to(to, now);
+        self.anim = anim;
     }
 
     pub fn slow_motion(&self) -> bool {
@@ -158,12 +192,14 @@ impl MinimizeAnimation {
 
     /// Run towards the slot from the current progress.
     pub fn minimize(&mut self, now: f64) {
-        self.anim.animate_to(1.0, now);
+        let duration = self.effect.kind.duration_s(self.slow_motion);
+        self.run(1.0, duration, now);
     }
 
     /// Run back to the window from the current progress.
     pub fn restore(&mut self, now: f64) {
-        self.anim.animate_to(0.0, now);
+        let duration = self.effect.kind.restore_duration_s(self.slow_motion);
+        self.run(0.0, duration, now);
     }
 
     /// Redirect: minimize if currently restoring or idle at the window, restore otherwise.
@@ -222,10 +258,53 @@ mod tests {
 
     #[test]
     fn durations_are_verified() {
-        assert_eq!(MinimizeKind::Warp.duration_ms(), 500.0);
+        assert_eq!(MinimizeKind::Warp.duration_ms(), 450.0);
         assert_eq!(MinimizeKind::Funnel.duration_ms(), 400.0);
         assert_eq!(MinimizeKind::Scale.duration_ms(), 200.0);
         assert_eq!(MinimizeKind::Scale.duration_s(true), 0.4);
+    }
+
+    #[test]
+    fn the_warp_unfolds_faster_than_it_bends_and_the_others_take_as_long_both_ways() {
+        assert_eq!(MinimizeKind::Warp.restore_duration_ms(), 420.0);
+        assert!((MinimizeKind::Warp.restore_duration_s(true) - 0.84).abs() < 1e-12);
+        for kind in [MinimizeKind::Funnel, MinimizeKind::Scale] {
+            assert_eq!(kind.restore_duration_ms(), kind.duration_ms(), "{kind:?}");
+        }
+        let mut a = MinimizeAnimation::new(effect(MinimizeKind::Warp), false);
+        a.minimize(0.0);
+        assert!(a.is_animating(0.449) && !a.is_animating(0.451));
+        a.restore(1.0);
+        assert!(a.is_animating(1.419) && !a.is_animating(1.421));
+        assert!(
+            a.progress(1.21) > 0.49 && a.progress(1.21) < 0.51,
+            "linear: half way at half time"
+        );
+    }
+
+    /// The progress is linear in time: the slow start and end of the bend come from the generators' own easing, so the
+    /// far edge of the window has not moved at the first tenth of the run and the slot is reached only at the end.
+    #[test]
+    fn the_bend_eases_itself_on_a_linear_progress() {
+        let e = MinimizeEffect::new(
+            MinimizeKind::Warp,
+            Rect::new(40.0, 60.0, 999.0, 649.0),
+            Rect::new(980.0, 916.0, 59.0, 39.0),
+            DockEdge::Bottom,
+        );
+        let top = |p: f64| e.mesh(p).bounds().min_y();
+        assert!((top(0.1) - 60.0).abs() < 8.0, "{}", top(0.1));
+        let mut last = top(0.5);
+        let mut steps = Vec::new();
+        for k in 6..=10 {
+            let y = top(k as f64 / 10.0);
+            steps.push(y - last);
+            last = y;
+        }
+        assert!(
+            steps[4] < steps[1],
+            "the far edge slows down into the slot: {steps:?}"
+        );
     }
 
     #[test]
@@ -337,13 +416,14 @@ mod tests {
         let mut up = down;
         up.restore(1.0);
         let d = MinimizeKind::Warp.duration_s(false);
+        let r = MinimizeKind::Warp.restore_duration_s(false);
         for k in 0..=10 {
             let f = k as f64 / 10.0;
             let a = down.mesh(f * d);
-            let b = up.mesh(1.0 + (1.0 - f) * d);
+            let b = up.mesh(1.0 + (1.0 - f) * r);
             assert!(a.max_distance(&b) < 1e-2, "f={f}");
         }
-        assert!(up.mesh(1.0 + d + 0.01).bounds().height() > 400.0);
+        assert!(up.mesh(1.0 + r + 0.01).bounds().height() > 400.0);
     }
 
     #[test]

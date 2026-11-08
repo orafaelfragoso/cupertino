@@ -26,9 +26,16 @@ pub trait Icons: Send + Sync + fmt::Debug {
     /// The symbol `name` drawn in `color` to fit `px` × `px` device pixels, mirrored left to right when `mirrored`.
     /// The same request gives the same image and id while the source keeps it.
     fn symbol(&self, name: &str, px: u32, color: Color, mirrored: bool) -> IconImage;
+
+    /// The running application's own icon, drawn to fit `px` × `px` device pixels, as an alert shows it; `None` when
+    /// the source has no icon for it.
+    fn application(&self, _px: u32) -> Option<IconImage> {
+        None
+    }
 }
 
-/// Draws every symbol as the outline of a square, for tests and for apps without asset packs.
+/// Draws every symbol, and the application's icon, as the outline of a square, for tests and for apps without asset
+/// packs.
 #[derive(Debug, Default)]
 pub struct PlaceholderIcons {
     drawn: Mutex<HashMap<(u32, [u8; 4]), IconImage>>,
@@ -66,5 +73,9 @@ impl Icons for PlaceholderIcons {
                 }
             })
             .clone()
+    }
+
+    fn application(&self, px: u32) -> Option<IconImage> {
+        Some(self.symbol("", px, Color::new(0.5, 0.5, 0.5, 1.0), false))
     }
 }

@@ -40,10 +40,10 @@ impl MinimizeEffect {
         MinimizeEffect::FunnelMinimize,
     ];
 
-    /// Effect duration in milliseconds: warp 500, scale 200, funnel 400.
+    /// Effect duration in milliseconds, into the slot: warp 450, scale 200, funnel 400.
     pub fn duration_ms(self) -> f64 {
         match self {
-            MinimizeEffect::WarpMinimize => 500.0,
+            MinimizeEffect::WarpMinimize => 450.0,
             MinimizeEffect::Scale => 200.0,
             MinimizeEffect::FunnelMinimize => 400.0,
         }

@@ -72,8 +72,8 @@ a parabola with a 700 ms cycle capped at 120 s and lift `0.2·(len − 8) + 6` p
 with amplitudes 1/0.5/0.25, repeating every 2000 ms with lift `len + 1` pt (informational plays it once, critical loops).
 `BounceConfig::parametric keeps the old generic arcs (approximate).
 
-**Minimize effect durations**. `MinimizeEffect::duration_ms` gives warp 500, scale 200 and funnel
-400 ms, doubled with the slow-motion modifier.
+**Minimize effect durations**. `MinimizeEffect::duration_ms` gives warp 450, scale 200 and funnel
+400 ms into the slot, doubled with the slow-motion modifier; the warp unfolds back out of the slot in 420 ms.
 
 ### Bar and tiles
 
@@ -297,23 +297,26 @@ sits inside the dock bar's exclusive zone; under auto-hide, which reserves no zo
 as the bar (`Placement::bar_depth`). The dock therefore stays visible beside the open grid and keeps magnifying under the
 pointer, and an auto-hidden bar is held out while the grid is open.
 
-**Panel.** One floating rounded panel, 842 × 576 pt with a 24 pt radius, centred in the surface below the menu bar's 24 pt
-strip and shrunk to keep 24 pt from the surface's edges on a small output. It has the `Menu` material (the launcher's), asked
+**Panel.** One floating rounded panel, 842 × 576 pt with a 24 pt radius, centred on the whole output (the surface stops at the
+dock bar, so the bar's room outside it counts too) and moved only as far as it takes to keep 24 pt inside the surface and
+below the menu bar's 24 pt strip; it shrinks to keep those margins on a small output. It has the `Menu` material (the launcher's), asked
 for by the panel's node (`PaintCx::material`), or the theme's opaque menu fill under Reduce Transparency and Increase
 Contrast. A soft shadow (offset 8, blur 24, black 0.28) is drawn outside its shape only, and a hairline in the separator
 colour outlines it. Top to bottom, with a 20 pt side inset:
 
-- The search field, 56 pt tall: a magnifier and the query in 24 pt regular text, or the placeholder "Search", with a caret.
+- The search field, 56 pt tall: a magnifier centred 34 pt in and the query from 61 pt in, in 28 pt regular text, or the
+  placeholder "Applications" (in the capsule, "Search"), with a caret. A hairline inset 20 pt runs under it.
 - The pills, a row 26 pt tall 68 pt below the panel's top: one per category that holds an application, in the order
   Productivity, Development, Creativity, Media, Internet, Games, Education, Utilities, System, Other. Each pill is as wide as
   its 14 pt medium text (reckoned from the character count) plus 10 pt at each end, with 10 pt gaps. A row with room left
   widens every pill by up to 24 pt, and a row that would overflow shrinks them all in proportion. A pill that is on takes
   the selected-control fill.
-- The content, from 104 pt down to 12 pt above the panel's bottom, in seven columns of rows 102 pt tall. Each item is a
-  60 pt icon 16 pt below the row's top with its 13 pt name centred 94 pt down, ellipsized at the end. The first row holds
-  the recently used applications, up to seven. A 20 pt band with a hairline 12 pt down separates it from every
-  application in alphabetical order. A scroll indicator (5 pt wide, 6 pt from the edge, at least 32 pt long) shows
-  while the content is taller than its viewport. A search with no match says "No Results".
+- The content, from 104 pt down to the panel's bottom, in seven columns of rows 102 pt tall, the columns 24 pt in from
+  the left edge and 18 pt from the right. Each item is a 60 pt icon 18 pt below the row's top with its 13 pt name
+  centred 96 pt down, ellipsized at the end. The first row holds the recently used applications, up to seven. A 15 pt
+  band ending in a hairline (inset 20 pt) separates it from every application in alphabetical order. The scroll
+  indicator is an overlay: a 6 pt thumb 3 pt from the panel's edge, at least 32 pt long, shown while the content
+  scrolls and for 0.8 s after, then faded out over 0.25 s. A search with no match says "No Results".
 
 **Categories.** Each desktop entry's freedesktop `Categories` (main and additional) map to the pills
 (`Pill::of_category`): office and project categories to Productivity; development and its tools to Development; graphics,
@@ -325,8 +328,16 @@ maps to, and under Other when none does.
 **Recents.** The first row is the launcher's frecency history (`cupertino_apps::frecency`), read when the grid opens, most
 recent first, limited to installed entries shown in the grid. It shows only while no query is typed and no pill is on.
 
-**Escape.** With nothing typed, one Escape closes the grid. With a query typed, the first Escape clears it, the grid
-showing every application again with nothing selected, and the next closes the grid.
+**Escape.** With nothing typed, the first Escape folds the panel into its search capsule, 640 × 56 pt, its top where
+the panel's top was and centred on it; the next Escape closes the grid. With a query typed, the first Escape clears it,
+the grid showing every application again with nothing selected, and the next ones fold and close it. The capsule keeps
+the keyboard: typing in it unfolds the panel on the matches; the arrows, Tab, Return, the wheel and a press on it do
+nothing, and a press outside it (where the panel was included) closes the grid.
+
+The fold: the pills, the separators, the rows and the scroll indicator fade out together in 0.05 s, then the panel's
+shape closes in on the capsule along a critically damped spring (0.24 s response, settled at 0.4 s), the top edge
+fixed and the sides closing in evenly, the corner radius growing into the capsule's half height. Unfolding runs the
+spring back with the rows fading in as it opens. Closing from the capsule fades it out in 0.08 s without the scale step.
 
 **Motion.** The grid fades and scales in from 1.05 over 0.25 s ease-in, and out the reverse way. The entry starts once
 the grid's surface is sized. Opening the grid waits for none of its icons: each pass of the model loads at most a row of
@@ -336,7 +347,8 @@ dock's own host loads every icon of the grid on a thread as soon as the dock sta
 show they are all there; the bar likewise loads only its resting icon side on the spot and the magnified side in the
 background (each icon and side asked for once, a tile that comes later as it comes). An application whose only icon is
 its window's own image is loaded on the spot when the rest arrive. Under
-Reduce Motion (the session's display options) the grid only fades.
+Reduce Motion (the session's display options) the grid only fades, and the panel becomes the capsule (and back) at
+once while its rows fade.
 
 **Input.**
 
@@ -356,10 +368,10 @@ Reduce Motion (the session's display options) the grid only fades.
 - The grid also closes when the keyboard leaves it, and goes at once, without the exit animation, on `locked`.
 
 **Accessibility.** The grid is a dialog named "Applications". The search field is a text input named "Applications" with
-the description "Search", focused while the grid is open. Pills are check boxes with a toggle state and a Click action.
+its placeholder as the description, focused while the grid is open; the folded capsule shows only that field. Pills are check boxes with a toggle state and a Click action.
 The content is a group named "Applications" whose items are buttons named after their applications; the recents row is a
 group of its own in it, named "Recently Used", so an application it repeats from the list is told apart, and the separator
-is a separator. Only the rows on screen, even in part, are nodes.
+is a separator (the hairline under the search row is not a node). Only the rows on screen, even in part, are nodes.
 
 **Decisions** (conservative, recorded here):
 
@@ -367,6 +379,7 @@ is a separator. Only the rows on screen, even in part, are nodes.
 - The pills are our own names for the freedesktop categories. Only pills that hold an application show.
 - The recents row is hidden while a query or a pill filters the list, so the results are one alphabetical list.
 - Pill widths are reckoned from the character count, not measured; the text is centred and ellipsized in them.
+- The panel says "Applications" and the capsule "Search": our own wording for what each is.
 
 ### Overview
 

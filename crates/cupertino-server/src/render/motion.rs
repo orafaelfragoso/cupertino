@@ -40,6 +40,12 @@ pub fn skips_frame_animation(state: LifecycleState, options: DisplayOptions) -> 
         )
 }
 
+/// Whether a window of `kind` in `state` is drawn at its resting frame while it keeps its opacity: under Reduce
+/// Motion an opening sheet fades in where it rests instead of sliding down into place.
+pub fn skips_sheet_slide(kind: WindowKind, state: LifecycleState, options: DisplayOptions) -> bool {
+    options.reduce_motion && kind == WindowKind::Sheet && state == LifecycleState::Opening
+}
+
 /// The close transform of a window of `kind` given its normal one: a sheet closes at once under
 /// Reduce Motion.
 pub fn close_transform(
@@ -113,9 +119,9 @@ mod tests {
         assert_eq!(minimize_opacity(1.5, reduced()), 0.0);
     }
 
-    /// The window model's progress is linear over the drawn effect's duration, the same both ways: the bend takes
-    /// half a second to the slot and half a second back out of it; the scale that stands in for it under Reduce
-    /// Motion takes a fifth.
+    /// The window model's progress is linear over the drawn effect's duration each way: the bend takes 0.45 s to the
+    /// slot and 0.42 s back out of it; the scale that stands in for it under Reduce Motion takes a fifth of a second
+    /// both ways.
     #[test]
     fn the_minimize_timing_is_the_drawn_effects_duration_both_ways() {
         use cupertino_animation::{CubicBezier, Curve};
@@ -138,7 +144,7 @@ mod tests {
         };
         assert_eq!(
             timing(Some(MinimizeKind::Warp), DisplayOptions::default()),
-            (Some(0.5), Some(0.5))
+            (Some(0.45), Some(0.42))
         );
         assert_eq!(
             timing(Some(MinimizeKind::Warp), reduced()),
@@ -218,6 +224,30 @@ mod tests {
         ] {
             assert!(!skips_frame_animation(state, reduced()), "{state:?}");
         }
+    }
+
+    #[test]
+    fn under_reduce_motion_only_an_opening_sheet_loses_its_slide() {
+        assert!(skips_sheet_slide(
+            WindowKind::Sheet,
+            LifecycleState::Opening,
+            reduced()
+        ));
+        assert!(!skips_sheet_slide(
+            WindowKind::Sheet,
+            LifecycleState::Opening,
+            DisplayOptions::default()
+        ));
+        assert!(!skips_sheet_slide(
+            WindowKind::Sheet,
+            LifecycleState::Normal,
+            reduced()
+        ));
+        assert!(!skips_sheet_slide(
+            WindowKind::Alert,
+            LifecycleState::Opening,
+            reduced()
+        ));
     }
 
     #[test]

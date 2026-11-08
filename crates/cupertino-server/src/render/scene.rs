@@ -36,7 +36,9 @@ use super::lower::id_hash;
 use super::material::glass::{area_generation, Below, GlassContainer, ToneProbe};
 use super::material::{GpuRecipe, MaterialStage, SharedMaterial};
 use super::mesh::{MeshGl, SharedMesh};
-use super::motion::{cross_fade_opacity, skips_frame_animation, WorkspaceTransition};
+use super::motion::{
+    cross_fade_opacity, skips_frame_animation, skips_sheet_slide, WorkspaceTransition,
+};
 use super::programs::Programs;
 use super::shader_rect::{to_physical_rect, ElementCache, Sig};
 use super::{CupertinoElement, SceneLayer};
@@ -226,7 +228,8 @@ pub fn placed_plan(
 type RecipeCache = HashMap<(String, Appearance, bool), Option<Rc<GpuRecipe>>>;
 
 /// Plan of window `id` on its output at `now` (None when the window cannot be drawn). With Reduce
-/// Motion in `options` a full-screen transition draws the window at its new frame (`render::motion`).
+/// Motion in `options` a full-screen transition draws the window at its new frame, and an opening sheet fades in at
+/// its resting frame (`render::motion`).
 pub fn plan_for(
     wm: &Wm,
     entry: &WindowEntry,
@@ -240,7 +243,9 @@ pub fn plan_for(
         return None;
     }
     let w = wm.window(entry.id)?;
-    if skips_frame_animation(w.state(), options) {
+    if skips_frame_animation(w.state(), options)
+        || skips_sheet_slide(w.lifecycle.kind(), w.state(), options)
+    {
         pres.frame = w.lifecycle.target_frame();
     }
     let animating = w.lifecycle.is_animating(now) || entry.shrink != Shrink::None;

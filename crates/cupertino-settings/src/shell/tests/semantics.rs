@@ -471,8 +471,8 @@ fn each_sheet_is_a_modal_dialog_that_reads_its_title_message_field_and_buttons()
                 "  AlertDialog \"Forget “Keyboard”?\" modal",
                 "    StaticText \"Forget “Keyboard”?\"",
                 "    StaticText \"The device will need to be paired again to be used.\"",
-                "    Button \"Cancel\" focusable focused",
                 "    Button \"Forget Device\" focusable",
+                "    Button \"Cancel\" focusable focused",
             ],
         ),
         (

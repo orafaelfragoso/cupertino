@@ -148,6 +148,60 @@ impl<const FIELD: bool, const CANCEL: bool> Application for Page<FIELD, CANCEL> 
     }
 }
 
+/// The bounds of the button named `name`.
+fn button_rect<A: Application>(h: &Harness<A>, name: &str) -> cupertino_geometry::Rect {
+    h.snapshot()
+        .accessibility
+        .into_iter()
+        .find(|(_, n)| n.role == Role::Button && n.name.as_deref() == Some(name))
+        .map(|(_, n)| n.bounds)
+        .unwrap_or_else(|| panic!("no button {name}"))
+}
+
+/// Three answers are stacked as full-width capsules, the default on top and the given order reversed below it; two
+/// short ones go side by side at equal widths in their given order, the default trailing. The alert hangs under the
+/// toolbar row, centred across the window.
+#[test]
+fn an_alert_stacks_three_answers_default_first_and_puts_two_short_ones_side_by_side() {
+    let mut h = opened::<false, true>();
+    h.resize(Size::new(480.0, 440.0));
+    let (save, cancel, dont) = (
+        button_rect(&h, "Save"),
+        button_rect(&h, "Cancel"),
+        button_rect(&h, "Don't Save"),
+    );
+    assert!(save.max_y() <= cancel.min_y() && cancel.max_y() <= dont.min_y());
+    assert_eq!(cancel.min_y() - save.max_y(), 8.0, "8 pt between capsules");
+    for b in [save, cancel, dont] {
+        assert_eq!(
+            (b.min_x(), b.width(), b.height()),
+            (save.min_x(), 228.0, 28.0)
+        );
+    }
+    assert_eq!(
+        save.min_x(),
+        (480.0 - 260.0) / 2.0 + 16.0,
+        "16 pt in from the alert's sides"
+    );
+    let alert = h
+        .snapshot()
+        .accessibility
+        .into_iter()
+        .find(|(_, n)| n.role == Role::AlertDialog)
+        .map(|(_, n)| n.bounds)
+        .unwrap();
+    assert_eq!((alert.min_y(), alert.width()), (52.0, 260.0));
+    assert_eq!(alert.max_y() - dont.max_y(), 16.0, "16 pt under the last");
+
+    let mut two = opened::<false, false>();
+    two.resize(Size::new(480.0, 440.0));
+    let (dont, save) = (button_rect(&two, "Don't Save"), button_rect(&two, "Save"));
+    assert_eq!(dont.min_y(), save.min_y(), "side by side");
+    assert_eq!(dont.width(), save.width(), "at equal widths");
+    assert_eq!(dont.width(), (228.0 - 8.0) / 2.0);
+    assert_eq!(save.min_x() - dont.max_x(), 8.0);
+}
+
 /// The accessibility node with `role` named `name`.
 fn find<A: Application>(h: &Harness<A>, role: Role, name: &str) -> Option<NodeId> {
     h.snapshot()
@@ -194,8 +248,8 @@ fn the_sheet_takes_the_focus_keeps_tab_inside_and_gives_it_back_when_it_closes()
     }
     assert_eq!(
         seen,
-        ["Cancel", "Save", "Don't Save", "Cancel"],
-        "Tab wraps inside the sheet"
+        ["Cancel", "Don't Save", "Save", "Cancel"],
+        "Tab goes down the alert's column (Save, Cancel, Don't Save) and wraps inside it"
     );
 
     h.tap(ESCAPE);
@@ -219,7 +273,6 @@ fn return_activates_the_default_button_wherever_the_focus_is_in_the_sheet() {
 #[test]
 fn space_activates_the_focused_button() {
     let mut h = opened::<false, true>();
-    h.tap(TAB);
     h.tap(TAB);
     assert_eq!(focus(&h).as_deref(), Some("Don't Save"));
     h.tap(SPACE);

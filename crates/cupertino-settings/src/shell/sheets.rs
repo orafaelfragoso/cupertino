@@ -1,7 +1,10 @@
 //! A pane's sheet as a Kit dialog over the window: its title, its message, its field or list, Cancel and its action.
 
-use cupertino_kit::controls::{Dialog, DialogAction, DialogButton, DialogKind};
-use cupertino_kit::geometry::Insets;
+use cupertino_kit::controls::{
+    Dialog, DialogAction, DialogButton, DialogKind, Grid, ScrollView, Scroller,
+};
+use cupertino_kit::geometry::{Insets, Size};
+use cupertino_kit::layout::{ScrollState, Track};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::{ContentPurpose, SecureBuffer};
 
@@ -46,13 +49,19 @@ pub fn apply(state: &mut State, action: Action) -> Option<Outcome> {
     })
 }
 
+/// Each row of a sheet's list: a borderless button and the gap under it.
+const ROW_PITCH: f64 = 22.0;
+/// The most a sheet's list takes before it scrolls: nine rows, so the sheet still fits the window at its least height.
+const LIST_MAX: f64 = 9.0 * ROW_PITCH;
+
 fn typed(secret: &SecureBuffer) -> Secret {
     let mut typed = Secret::new();
     secret.with_secret(|s| typed.push_str(s));
     typed
 }
 
-fn body(sheet: &Sheet) -> Option<Element<Message>> {
+/// The sheet's field or list; a list taller than [`LIST_MAX`] scrolls at `scroll`.
+fn body(sheet: &Sheet, scroll: ScrollState) -> Option<Element<Message>> {
     if let Some((rows, highlighted)) = sheet.rows() {
         let mut children = Vec::new();
         if matches!(sheet.kind, Kind::Picker { .. }) {
@@ -84,13 +93,35 @@ fn body(sheet: &Sheet) -> Option<Element<Message>> {
             })
             .key(i as u64)
         }));
-        return Some(Element::new(Stack {
+        let count = children.len();
+        let list = Element::new(Stack {
             axis: Axis::Vertical,
             padding: Insets::ZERO,
             spacing: 2.0,
             align: Align::Stretch,
             children,
-        }));
+        });
+        if count as f64 * ROW_PITCH <= LIST_MAX {
+            return Some(list);
+        }
+        return Some(
+            Element::new(Grid {
+                columns: vec![Track::Fraction(1.0)],
+                rows: vec![Track::Fixed(LIST_MAX)],
+                padding: Insets::ZERO,
+                spacing: Size::ZERO,
+                children: vec![Element::from(ScrollView {
+                    content: list,
+                    state: scroll,
+                    horizontal: false,
+                    vertical: true,
+                    scroller: Scroller::Overlay,
+                    on_scroll: Box::new(Message::SheetScroll),
+                })
+                .key("list")],
+            })
+            .key("rows"),
+        );
     }
     match &sheet.kind {
         Kind::Passphrase { .. } => Some(
@@ -130,7 +161,8 @@ fn body(sheet: &Sheet) -> Option<Element<Message>> {
     }
 }
 
-pub fn dialog(sheet: &Sheet) -> Dialog<Message> {
+/// The sheet as a dialog, its list scrolled at `scroll`.
+pub fn dialog(sheet: &Sheet, scroll: ScrollState) -> Dialog<Message> {
     let destructive = matches!(sheet.kind, Kind::Forget { .. });
     Dialog {
         kind: if destructive {
@@ -140,7 +172,7 @@ pub fn dialog(sheet: &Sheet) -> Dialog<Message> {
         },
         title: sheet.title(),
         message: sheet.message(),
-        body: body(sheet),
+        body: body(sheet, scroll),
         buttons: vec![
             DialogButton {
                 label: "Cancel".into(),

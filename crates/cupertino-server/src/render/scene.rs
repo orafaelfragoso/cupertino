@@ -1395,6 +1395,7 @@ fn popup_backdrop_elements(
     backdrops: &[BackdropArea],
     opacity: f32,
 ) -> Vec<Piece> {
+    note_not_glass(p, backdrops);
     let mut out: Vec<Piece> = Vec::new();
     let params = p.decor.popup_shadow_params();
     let rim = p.decor.rim_color(p.scale);
@@ -1461,6 +1462,7 @@ fn backdrop_elements(
     backdrops: &[BackdropArea],
     opacity: f32,
 ) -> Vec<Piece> {
+    note_not_glass(p, backdrops);
     let mut out = Vec::new();
     let mut glass = GlassGroups::default();
     for b in backdrops.iter().rev() {
@@ -1479,6 +1481,18 @@ fn backdrop_elements(
         ));
     }
     glass.finish(p, out, opacity)
+}
+
+/// Note the backdrops drawn as a material other than glass: one whose face was measured while it was glass goes back
+/// to the appearance's tone ([`crate::app_effects_v1::BackdropTones`]).
+fn note_not_glass(p: &SceneParams<'_>, backdrops: &[BackdropArea]) {
+    if let Some(m) = &p.res.material {
+        let plain = backdrops
+            .iter()
+            .filter(|b| b.glass.is_none())
+            .map(|b| b.key);
+        m.borrow_mut().note_unadapted(plain);
+    }
 }
 
 /// Glass backdrops of one surface joined per container while its backdrops are laid out front to back: a container
@@ -1643,6 +1657,7 @@ fn bar_backdrop_elements(
     opacity: f32,
     captures: &mut Vec<Piece>,
 ) -> Vec<Piece> {
+    note_not_glass(p, backdrops);
     let mut out = Vec::new();
     let output = smithay::utils::Rectangle::<f64, Logical>::new(
         (0.0, 0.0).into(),

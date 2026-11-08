@@ -91,13 +91,21 @@ impl BackdropTones {
     }
 
     /// Take the faces measured under small backdrops (`readings`, oldest first) and the backdrops drawn too large to
-    /// follow what lies behind them (`unadapted`), and send each backdrop whose tone changed its new tone.
+    /// follow what lies behind them or as a material other than glass (`unadapted`), and send each backdrop whose tone
+    /// changed its new tone. Only the backdrops named are looked at, so a frame that measured nothing costs a lookup
+    /// per backdrop drawn.
     pub fn apply(&mut self, readings: &[ToneReading], unadapted: &[u64]) {
-        for (serial, tone) in next_tones(
-            self.tracked.iter().map(|(s, t)| (*s, t.sent)),
-            readings,
-            unadapted,
-        ) {
+        let mut named: Vec<u64> = readings
+            .iter()
+            .map(|r| r.serial)
+            .chain(unadapted.iter().copied())
+            .collect();
+        named.sort_unstable();
+        named.dedup();
+        let sent = named
+            .into_iter()
+            .filter_map(|s| self.tracked.get(&s).map(|t| (s, t.sent)));
+        for (serial, tone) in next_tones(sent, readings, unadapted) {
             let Some(t) = self.tracked.get_mut(&serial) else {
                 continue;
             };
@@ -119,8 +127,9 @@ impl BackdropTones {
 }
 
 /// The tones that change, given the tone each backdrop was last sent (`sent`), the faces measured since (oldest
-/// first) and the backdrops drawn too large since: a measured face moves the tone through [`face_tone`], with its
-/// margin; a backdrop drawn too large goes back to the appearance. A backdrop not in `sent` is ignored.
+/// first) and the backdrops drawn too large, or not as glass, since: a measured face moves the tone through
+/// [`face_tone`], with its margin; a backdrop drawn too large or not as glass goes back to the appearance. A
+/// backdrop not in `sent` is ignored.
 pub fn next_tones(
     sent: impl IntoIterator<Item = (u64, WireTone)>,
     readings: &[ToneReading],

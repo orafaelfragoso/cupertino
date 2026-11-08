@@ -230,6 +230,12 @@ impl Client {
         self.panel.commit();
     }
 
+    /// The small control's backdrop becomes the material `name`, which is not glass.
+    fn plain_small(&self, name: &str) {
+        self.small.set_material(name.to_string());
+        self.panel.commit();
+    }
+
     fn draw_labels(&self, qh: &QueueHandle<Client>, labels: &Labels) {
         let buffer = labels_buffer(&self.shm, qh, labels);
         self.panel.attach(Some(&buffer), 0, 0);
@@ -238,10 +244,12 @@ impl Client {
     }
 }
 
-/// What the test asks of the client: a wall of one colour, or labels on the glass.
+/// What the test asks of the client: a wall of one colour, labels on the glass, or a material other than glass under
+/// the small control.
 enum Ask {
     Wall([u8; 3]),
     Labels(Labels),
+    Plain(&'static str),
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Client {
@@ -381,6 +389,7 @@ fn spawn_asking(socket: PathBuf, version: u32, heard: Heard) -> Sender<Ask> {
                 match ask {
                     Ask::Wall(rgb) => client.paint_wall(&qh, rgb),
                     Ask::Labels(labels) => client.draw_labels(&qh, &labels),
+                    Ask::Plain(name) => client.plain_small(name),
                 }
             }
             if queue.roundtrip(&mut client).is_err() {
@@ -440,6 +449,34 @@ fn a_small_dark_glass_control_is_told_its_face_turned_light_and_a_large_panel_is
     h.wait_until("the small control's dark face again", move |_| {
         small(&seen) == [Tone::Dark, Tone::Light, Tone::Dark]
     });
+}
+
+#[test]
+fn a_small_control_that_stops_being_glass_goes_back_to_the_appearance_once() {
+    let Some(mut h) = Harness::new(Appearance::Dark) else {
+        return;
+    };
+    let heard = Heard::default();
+    let client = spawn_asking(h.socket_path(), 7, heard.clone());
+    let small = |h: &Heard| heard_of(h, Which::Small);
+    let seen = heard.clone();
+    h.wait_until("the small control's dark face", move |_| {
+        small(&seen) == [Tone::Dark]
+    });
+    client.send(Ask::Wall([255, 255, 255])).unwrap();
+    let seen = heard.clone();
+    h.wait_until("the small control's light face", move |_| {
+        small(&seen) == [Tone::Dark, Tone::Light]
+    });
+    // a material that is not glass: its text keeps the appearance's colours, and the client is told so once
+    client.send(Ask::Plain("Sidebar")).unwrap();
+    let seen = heard.clone();
+    h.wait_until("the small control back to the appearance", move |_| {
+        small(&seen) == [Tone::Dark, Tone::Light, Tone::Appearance]
+    });
+    client.send(Ask::Wall([0, 0, 0])).unwrap();
+    settle(&mut h);
+    assert_eq!(small(&heard), [Tone::Dark, Tone::Light, Tone::Appearance]);
 }
 
 #[test]

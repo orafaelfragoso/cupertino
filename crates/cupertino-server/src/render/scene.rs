@@ -32,7 +32,7 @@ use super::compose::{
 };
 use super::gles::{Gles, GlesCompletion, GlesResources, GlesTarget};
 use super::lower::id_hash;
-use super::material::glass::{area_generation, GlassContainer};
+use super::material::glass::{area_generation, Below, GlassContainer};
 use super::material::{GpuRecipe, MaterialStage, SharedMaterial};
 use super::mesh::{MeshGl, SharedMesh};
 use super::motion::{cross_fade_opacity, skips_frame_animation, WorkspaceTransition};
@@ -2039,8 +2039,8 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
     let mut running = Sig::new();
     let mut acc: u64 = 0;
     let mut captured: Vec<(u64, u64)> = Vec::new();
-    // the elements so far, bottom to top: identity, commit and geometry
-    let mut below: Vec<(u64, u64, smithay::utils::Rectangle<i32, Physical>)> = Vec::new();
+    // the elements so far, bottom to top
+    let mut below: Vec<Below> = Vec::new();
     for e in elements.iter_mut().rev() {
         if let CupertinoElement::Glass(g) = e {
             // glass reads only the area it samples: what changes elsewhere leaves its blurred levels alone
@@ -2079,7 +2079,12 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
             .u(g.size.h as u64);
         h = h.u(id_hash(e.id()));
         acc = h.finish();
-        below.push((id_hash(e.id()), c, g));
+        below.push(Below {
+            id: id_hash(e.id()),
+            commit: c,
+            alpha: e.alpha(),
+            geometry: g,
+        });
         let _ = &mut running;
     }
 }

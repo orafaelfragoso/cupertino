@@ -7,6 +7,13 @@
 //! the one in `cupertino-glass`). The textures are kept per container and made again only when the backdrop below the
 //! sampled area changed: [`area_generation`] signs the elements below that overlap it, so a change elsewhere on the
 //! output, or above the glass, leaves them alone.
+//!
+//! A capture is clean only when the whole area was drawn afresh below the glass; elsewhere the framebuffer still holds
+//! the last frame, glass and all. So textures are made again only when the element's commit advanced (its backdrop or
+//! its look changed, and the damage tracker repaints the whole area), and [`GlassCache`] never drops the textures of a
+//! container the frame being built shows: past [`MAX_CACHED`] it keeps them all. Textures it does drop (the least
+//! recently drawn past the limit, or after [`STALE_AFTER`] draws unused) mark their container lost, and the next build
+//! advances that element's commit so it is captured clean again.
 
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -30,10 +37,17 @@ const GLASS_FRAG: &str = include_str!("../../shaders/glass.frag");
 
 /// Uniform block binding of the glass composite.
 const BIND_GLASS: GLuint = 2;
-/// Most containers whose textures are kept; the least recently drawn goes first.
+/// Containers whose textures are kept once they no longer show; past it the least recently drawn goes first. Containers
+/// the frame being built shows are kept even past it.
 const MAX_CACHED: usize = 16;
+/// Textures kept per container: one per output it shows on, as each output's capture differs.
+const MAX_PER_OWNER: usize = 2;
 /// Draws after which the textures of a container that no longer draws are released.
 const STALE_AFTER: u64 = 2048;
+/// Lost containers remembered until their element is built again; older ones are forgotten.
+const MAX_LOST: usize = 4 * MAX_CACHED;
+/// Released textures kept for reuse after a glass draw; the rest are deleted.
+const FREE_KEPT: usize = 12;
 
 /// A glass container of a frame: its shapes (output-local points), blend width and mode.
 #[derive(Clone, Debug)]
@@ -59,6 +73,15 @@ impl GlassContainer {
         }
     }
 
+    /// Identity of the textures the container needs: its look, the backdrop signature and the scale.
+    pub fn state(&self, generation: u64, scale: f32) -> u64 {
+        Sig::new()
+            .u(generation)
+            .u(self.key)
+            .u(scale.to_bits() as u64)
+            .finish()
+    }
+
     /// What of the backdrop the container reads, in output-local points.
     pub fn sample_area(&self) -> Option<Rectangle<f64, Logical>> {
         let [x, y, w, h] = self.container.sample_area()?;
@@ -71,19 +94,31 @@ impl GlassContainer {
     }
 }
 
-/// The signature of the backdrop of an element covering `area`: of the elements below it (`below`, bottom to top:
-/// identity, commit and geometry) those that overlap `area`, in order. Elements that do not touch it do not count, so
-/// the glass keeps its blurred textures while the rest of the output changes.
+/// One element below a glass element, as its backdrop signature sees it.
+#[derive(Clone, Copy, Debug)]
+pub struct Below {
+    pub id: u64,
+    pub commit: u64,
+    /// The opacity the element is drawn at: a window can fade without a new commit.
+    pub alpha: f32,
+    pub geometry: Rectangle<i32, Physical>,
+}
+
+/// The signature of the backdrop of an element covering `area`: of the elements below it (`below`, bottom to top)
+/// those that overlap `area`, in order. Elements that do not touch it do not count, so the glass keeps its blurred
+/// textures while the rest of the output changes.
 pub fn area_generation(
     area: Rectangle<i32, Physical>,
-    below: impl IntoIterator<Item = (u64, u64, Rectangle<i32, Physical>)>,
+    below: impl IntoIterator<Item = Below>,
 ) -> u64 {
     let mut sig = Sig::new().u(0x67_6c_61_73_73);
-    for (id, commit, g) in below {
+    for b in below {
+        let g = b.geometry;
         if g.overlaps(area) {
             sig = sig
-                .u(id)
-                .u(commit)
+                .u(b.id)
+                .u(b.commit)
+                .u(u64::from(b.alpha.to_bits()))
                 .u(g.loc.x as u64)
                 .u(g.loc.y as u64)
                 .u(g.size.w as u64)
@@ -150,16 +185,175 @@ pub(super) struct GlassGl {
     proj: GLint,
     quad: GLint,
     ubo: GLuint,
-    cache: Vec<CachedGlass>,
+    cache: GlassCache<CachedGlass>,
 }
 
 /// The blurred backdrop of one container: its textures and which of them each level and the blur fill reads.
 struct CachedGlass {
-    owner: u64,
-    sig: u64,
     targets: Vec<Target>,
     slots: [usize; BLUR_LEVELS + 1],
+}
+
+/// One container's kept textures (`T`).
+struct Entry<T> {
+    owner: u64,
+    /// [`GlassContainer::state`] of what they were made for.
+    state: u64,
+    /// `state` and where in the framebuffer they were captured.
+    sig: u64,
+    payload: T,
     last_used: u64,
+    /// The build that last showed the container.
+    shown: u64,
+}
+
+/// What the glass pass keeps per container, and which containers lost theirs (see the module documentation).
+///
+/// A *build* is the lowering of one output's frame: [`GlassCache::check`] runs for every glass element while it is
+/// built, before any of them draws ([`GlassCache::begin_draw`]).
+pub struct GlassCache<T> {
+    entries: Vec<Entry<T>>,
+    lost: Vec<u64>,
+    build: u64,
+    drawn: bool,
+    tick: u64,
+}
+
+impl<T> Default for GlassCache<T> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            lost: Vec::new(),
+            build: 0,
+            drawn: true,
+            tick: 0,
+        }
+    }
+}
+
+impl<T> GlassCache<T> {
+    /// While a frame is built: keep the textures of `owner` for `state` through it, and whether they are still
+    /// whole. `false` (once) when they were dropped while the container still showed: the caller must have the whole
+    /// area repainted, so that the next capture reads a freshly drawn backdrop.
+    pub fn check(&mut self, owner: u64, state: u64) -> bool {
+        if std::mem::replace(&mut self.drawn, false) {
+            self.build += 1;
+        }
+        let build = self.build;
+        for e in &mut self.entries {
+            if e.owner == owner && e.state == state {
+                e.shown = build;
+            }
+        }
+        match self.lost.iter().position(|o| *o == owner) {
+            Some(i) => {
+                self.lost.remove(i);
+                false
+            }
+            None => true,
+        }
+    }
+
+    /// Before one container draws: count the draw and drop what containers that stopped drawing kept.
+    pub fn begin_draw(&mut self) -> Vec<T> {
+        self.drawn = true;
+        self.tick += 1;
+        let (tick, build) = (self.tick, self.build);
+        let mut dropped = Vec::new();
+        let mut i = 0;
+        while i < self.entries.len() {
+            let e = &self.entries[i];
+            if e.shown != build && tick.saturating_sub(e.last_used) > STALE_AFTER {
+                let e = self.entries.swap_remove(i);
+                self.mark_lost(e.owner);
+                dropped.push(e.payload);
+            } else {
+                i += 1;
+            }
+        }
+        dropped
+    }
+
+    /// The textures `owner` keeps for `sig`.
+    pub fn get(&mut self, owner: u64, sig: u64) -> Option<&T> {
+        let tick = self.tick;
+        let e = self
+            .entries
+            .iter_mut()
+            .find(|e| e.owner == owner && e.sig == sig)?;
+        e.last_used = tick;
+        Some(&e.payload)
+    }
+
+    /// Keep `payload` for `owner`, made for `state` and captured as `sig`, and give back what that drops: the oldest
+    /// textures of the same container past [`MAX_PER_OWNER`], and past [`MAX_CACHED`] the least recently drawn of
+    /// containers this build does not show.
+    pub fn insert(&mut self, owner: u64, state: u64, sig: u64, payload: T) -> Vec<T> {
+        let mut dropped = Vec::new();
+        loop {
+            let same = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.owner == owner);
+            if same.clone().count() < MAX_PER_OWNER {
+                break;
+            }
+            let oldest = same
+                .min_by_key(|(_, e)| e.last_used)
+                .map(|(i, _)| i)
+                .unwrap();
+            dropped.push(self.entries.swap_remove(oldest).payload);
+        }
+        while self.entries.len() >= MAX_CACHED {
+            let build = self.build;
+            let Some(oldest) = (0..self.entries.len())
+                .filter(|i| self.entries[*i].shown != build)
+                .min_by_key(|i| self.entries[*i].last_used)
+            else {
+                break;
+            };
+            let e = self.entries.swap_remove(oldest);
+            self.mark_lost(e.owner);
+            dropped.push(e.payload);
+        }
+        self.entries.push(Entry {
+            owner,
+            state,
+            sig,
+            payload,
+            last_used: self.tick,
+            shown: self.build,
+        });
+        dropped
+    }
+
+    fn mark_lost(&mut self, owner: u64) {
+        if self.entries.iter().any(|e| e.owner == owner) || self.lost.contains(&owner) {
+            return;
+        }
+        if self.lost.len() >= MAX_LOST {
+            self.lost.remove(0);
+        }
+        self.lost.push(owner);
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Everything kept.
+    pub fn drain(&mut self) -> Vec<T> {
+        self.lost.clear();
+        std::mem::take(&mut self.entries)
+            .into_iter()
+            .map(|e| e.payload)
+            .collect()
+    }
 }
 
 impl GlassGl {
@@ -181,12 +375,13 @@ impl GlassGl {
             proj: uniform_loc(gl, program, "u_proj"),
             quad: uniform_loc(gl, program, "u_quad"),
             ubo,
-            cache: Vec::new(),
+            cache: GlassCache::default(),
         })
     }
 
     pub(super) fn targets(&mut self) -> Vec<Target> {
-        std::mem::take(&mut self.cache)
+        self.cache
+            .drain()
             .into_iter()
             .flat_map(|c| c.targets)
             .collect()
@@ -328,6 +523,16 @@ impl MaterialGl {
                 *s = any;
             }
         }
+        // the capture itself is read only through the levels made from it
+        if !slots.contains(&0) {
+            self.free.push(targets.swap_remove(0));
+            let last = targets.len();
+            for s in &mut slots {
+                if *s == last {
+                    *s = 0;
+                }
+            }
+        }
         Some((targets, slots))
     }
 
@@ -348,42 +553,29 @@ impl MaterialGl {
         let Some(fb) = framebuffer_rect(&p.projection, viewport, p.area) else {
             return Ok(());
         };
+        let state = p.glass.state(p.generation, p.scale);
         let sig = Sig::new()
-            .u(p.generation)
-            .u(p.glass.key)
-            .u(p.scale.to_bits() as u64)
+            .u(state)
             .u(fb[0] as u64)
             .u(fb[1] as u64)
             .u(fb[2] as u64)
             .u(fb[3] as u64)
             .finish();
-        let tick = self.tick;
-        // release what containers that stopped drawing kept
-        let mut i = 0;
-        while i < self.glass.cache.len() {
-            if tick.saturating_sub(self.glass.cache[i].last_used) > STALE_AFTER {
-                let old = self.glass.cache.swap_remove(i);
-                self.free.extend(old.targets);
-            } else {
-                i += 1;
-            }
-        }
-        let hit = self
+        let released = self.glass.cache.begin_draw();
+        self.free
+            .extend(released.into_iter().flat_map(|c| c.targets));
+        let kept = self
             .glass
             .cache
-            .iter()
-            .position(|c| c.owner == p.owner && c.sig == sig);
-        let idx = match hit {
-            Some(i) => {
+            .get(p.owner, sig)
+            .map(|c| c.slots.map(|s| c.targets[s].tex));
+        let textures = match kept {
+            Some(textures) => {
                 self.stats.backdrop_hits += 1;
-                i
+                textures
             }
             None => {
                 self.stats.backdrop_misses += 1;
-                if let Some(i) = self.glass.cache.iter().position(|c| c.owner == p.owner) {
-                    let old = self.glass.cache.swap_remove(i);
-                    self.free.extend(old.targets);
-                }
                 let Some((targets, slots)) = self.process_glass(
                     gl,
                     saved.draw_fbo as GLuint,
@@ -394,29 +586,16 @@ impl MaterialGl {
                     saved.restore(gl);
                     return Err("glass backdrop processing failed (framebuffer incomplete?)".into());
                 };
-                if self.glass.cache.len() >= MAX_CACHED {
-                    let oldest = (0..self.glass.cache.len())
-                        .min_by_key(|i| self.glass.cache[*i].last_used)
-                        .unwrap();
-                    let old = self.glass.cache.swap_remove(oldest);
-                    self.free.extend(old.targets);
-                }
-                self.glass.cache.push(CachedGlass {
-                    owner: p.owner,
-                    sig,
-                    targets,
-                    slots,
-                    last_used: tick,
-                });
-                self.glass.cache.len() - 1
+                let textures = slots.map(|s| targets[s].tex);
+                let dropped =
+                    self.glass
+                        .cache
+                        .insert(p.owner, state, sig, CachedGlass { targets, slots });
+                self.free
+                    .extend(dropped.into_iter().flat_map(|c| c.targets));
+                textures
             }
         };
-        self.glass.cache[idx].last_used = tick;
-        let textures: Vec<GLuint> = self.glass.cache[idx]
-            .slots
-            .iter()
-            .map(|s| self.glass.cache[idx].targets[*s].tex)
-            .collect();
 
         let uv = capture_uv(&p.projection, viewport, fb);
         let quad = [
@@ -466,8 +645,19 @@ impl MaterialGl {
             gl.ActiveTexture(ffi::TEXTURE0 + unit as u32);
             gl.BindTexture(ffi::TEXTURE_2D, 0);
         }
+        // what dropped textures released goes back to the driver beyond a few for reuse
+        while self.free.len() > FREE_KEPT {
+            let t = self.free.remove(0);
+            self.destroy_target(gl, t);
+        }
         saved.restore(gl);
         Ok(())
+    }
+
+    /// While a frame is built: whether the textures of glass `owner` for `state` are whole, keeping them through the
+    /// frame ([`GlassCache::check`]).
+    pub fn glass_check(&mut self, owner: u64, state: u64) -> bool {
+        self.glass.cache.check(owner, state)
     }
 }
 
@@ -517,7 +707,8 @@ impl GlassElement {
             opacity,
             scale,
         };
-        e.finalize(0, cache);
+        // the id until `finalize`, which sets the commit: asking with a provisional signature would advance it
+        (e.id, e.commit) = cache.peek(key, e.sig(0));
         e
     }
 
@@ -529,16 +720,26 @@ impl GlassElement {
         self.generation
     }
 
-    /// Set the backdrop signature ([`area_generation`]) and refresh the id and commit counter from the cache.
-    pub fn finalize(&mut self, generation: u64, cache: &mut ElementCache) {
-        self.generation = generation;
-        let sig = Sig::new()
+    fn sig(&self, generation: u64) -> u64 {
+        Sig::new()
             .rect(self.area)
             .f(self.opacity as f64)
             .u(self.glass.key)
             .u(generation)
-            .finish();
-        let (id, commit) = cache.slot(self.key, sig);
+            .finish()
+    }
+
+    /// Set the backdrop signature ([`area_generation`]) and refresh the id and commit counter from the cache. Call
+    /// once per frame: the commit also advances when the pass dropped the container's textures while it showed, so the
+    /// whole area is repainted for the next capture.
+    pub fn finalize(&mut self, generation: u64, cache: &mut ElementCache) {
+        self.generation = generation;
+        let state = self.glass.state(generation, self.scale as f32);
+        let whole = self.shared.borrow_mut().glass_check(self.owner(), state);
+        let (id, mut commit) = cache.slot(self.key, self.sig(generation));
+        if !whole {
+            commit = cache.advance(self.key).unwrap_or(commit);
+        }
         self.id = id;
         self.commit = commit;
     }
@@ -688,8 +889,14 @@ mod tests {
     #[test]
     fn the_backdrop_signature_changes_only_with_what_lies_below_the_sampled_area() {
         let area = rect(100, 100, 200, 100);
-        let inside = |commit| (1, commit, rect(150, 120, 50, 50));
-        let outside = |commit| (2, commit, rect(400, 400, 50, 50));
+        let below = |id, commit, geometry| Below {
+            id,
+            commit,
+            alpha: 1.0,
+            geometry,
+        };
+        let inside = |commit| below(1, commit, rect(150, 120, 50, 50));
+        let outside = |commit| below(2, commit, rect(400, 400, 50, 50));
         let base = area_generation(area, [inside(0), outside(0)]);
         // a change outside the area keeps the blurred levels
         assert_eq!(base, area_generation(area, [inside(0), outside(5)]));
@@ -698,20 +905,158 @@ mod tests {
         assert_ne!(base, area_generation(area, [inside(1), outside(0)]));
         assert_ne!(
             base,
-            area_generation(area, [(1, 0, rect(160, 120, 50, 50)), outside(0)])
+            area_generation(area, [below(1, 0, rect(160, 120, 50, 50)), outside(0)])
         );
         assert_ne!(
             base,
             area_generation(
                 area,
-                [inside(0), (3, 0, rect(290, 190, 20, 20)), outside(0)]
+                [inside(0), below(3, 0, rect(290, 190, 20, 20)), outside(0)]
             )
         );
         // an element that moves into the area counts from then on
         assert_ne!(
             base,
-            area_generation(area, [inside(0), (2, 0, rect(280, 150, 50, 50))])
+            area_generation(area, [inside(0), below(2, 0, rect(280, 150, 50, 50))])
         );
+        // a window under the glass fading without a new commit
+        let fading = Below {
+            alpha: 0.5,
+            ..inside(0)
+        };
+        assert_ne!(base, area_generation(area, [fading, outside(0)]));
+    }
+
+    /// One frame of `shown` containers (owner, state, sig): every build checks them, then each draws, making its
+    /// textures (a payload naming it) when it has none. What each build's checks say, and what was dropped.
+    fn frame(cache: &mut GlassCache<u64>, shown: &[(u64, u64, u64)]) -> (Vec<bool>, Vec<u64>) {
+        let whole = shown
+            .iter()
+            .map(|(o, st, _)| cache.check(*o, *st))
+            .collect();
+        let mut dropped = Vec::new();
+        for (owner, state, sig) in shown {
+            dropped.extend(cache.begin_draw());
+            if cache.get(*owner, *sig).is_none() {
+                dropped.extend(cache.insert(*owner, *state, *sig, *owner));
+            }
+        }
+        (whole, dropped)
+    }
+
+    #[test]
+    fn the_cache_keeps_what_the_frame_shows_even_past_its_limit() {
+        let mut cache = GlassCache::default();
+        let many: Vec<(u64, u64, u64)> =
+            (0..MAX_CACHED as u64 + 4).map(|i| (i, 7, 70 + i)).collect();
+        let (whole, dropped) = frame(&mut cache, &many);
+        assert!(whole.iter().all(|w| *w) && dropped.is_empty());
+        assert_eq!(
+            cache.len(),
+            MAX_CACHED + 4,
+            "nothing the frame shows is dropped"
+        );
+        // an unchanged second frame draws every container from what it kept
+        let (whole, dropped) = frame(&mut cache, &many);
+        assert!(whole.iter().all(|w| *w) && dropped.is_empty());
+        // one new container once the others stopped showing: the least recently drawn ones make room
+        let (_, dropped) = frame(&mut cache, &[(99, 7, 990)]);
+        assert_eq!(dropped, (0..5).collect::<Vec<_>>());
+        assert_eq!(cache.len(), MAX_CACHED);
+        // a dropped container that shows again is reported once, so its element repaints the whole area
+        let (whole, _) = frame(&mut cache, &[(0, 7, 70), (6, 7, 76)]);
+        assert_eq!(whole, vec![false, true]);
+        let (whole, _) = frame(&mut cache, &[(0, 7, 70)]);
+        assert_eq!(whole, vec![true]);
+    }
+
+    #[test]
+    fn a_container_keeps_one_capture_per_output_and_a_new_look_replaces_the_oldest() {
+        let mut cache = GlassCache::default();
+        // the same container on two outputs: two captures, each drawn from what it kept
+        frame(&mut cache, &[(1, 10, 100)]);
+        frame(&mut cache, &[(1, 11, 110)]);
+        let (whole, dropped) = frame(&mut cache, &[(1, 10, 100)]);
+        assert!(whole[0] && dropped.is_empty());
+        assert_eq!(cache.len(), 2);
+        // its backdrop changes: the new capture replaces the least recently drawn, which is not a loss
+        let (_, dropped) = frame(&mut cache, &[(1, 12, 120)]);
+        assert_eq!(dropped, vec![1]);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(frame(&mut cache, &[(1, 12, 120)]).0, vec![true]);
+    }
+
+    #[test]
+    fn textures_unused_for_long_are_released_and_their_container_repaints_when_it_shows_again() {
+        let mut cache = GlassCache::default();
+        frame(&mut cache, &[(1, 10, 100), (2, 20, 200)]);
+        // container 2 keeps drawing (a video under it) while container 1 does not
+        let mut dropped = Vec::new();
+        for i in 0..=STALE_AFTER {
+            dropped.extend(frame(&mut cache, &[(2, 21 + i, 210 + i)]).1);
+        }
+        assert!(dropped.contains(&1), "container 1's textures were released");
+        assert_eq!(frame(&mut cache, &[(1, 10, 100)]).0, vec![false]);
+    }
+
+    /// Glass under `frames` builds of the same scene: its commit after each.
+    fn commits(
+        shared: &SharedMaterial,
+        cache: &mut ElementCache,
+        frames: usize,
+    ) -> Vec<CommitCounter> {
+        let container = Rc::new(GlassContainer::new(Container::new(
+            vec![GlassShape::new([40.0, 30.0, 200.0, 60.0], 16.0)],
+            0.0,
+            GlassMode::default(),
+        )));
+        (0..frames)
+            .map(|_| {
+                let mut e = GlassElement::new(
+                    ElementKey::new("backdrop", 1),
+                    cache,
+                    container.sample_area().unwrap(),
+                    container.clone(),
+                    shared.clone(),
+                    1.0,
+                    1.0,
+                );
+                e.finalize(42, cache);
+                cache.end_frame();
+                e.current_commit()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_unchanged_glass_element_keeps_its_commit_so_the_area_is_not_repainted() {
+        let shared = MaterialGl::detached();
+        let mut cache = ElementCache::default();
+        let c = commits(&shared, &mut cache, 3);
+        assert_eq!(c[1], c[0]);
+        assert_eq!(c[2], c[0]);
+    }
+
+    #[test]
+    fn a_glass_element_whose_textures_were_dropped_repaints_once() {
+        let shared = MaterialGl::detached();
+        let mut cache = ElementCache::default();
+        let before = commits(&shared, &mut cache, 1)[0];
+        {
+            let owner = {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                ElementKey::new("backdrop", 1).hash(&mut h);
+                h.finish()
+            };
+            let mut m = shared.borrow_mut();
+            m.glass.cache.mark_lost(owner);
+        }
+        let after = commits(&shared, &mut cache, 2);
+        assert_ne!(
+            after[0], before,
+            "the commit advances, so the whole area is repainted"
+        );
+        assert_eq!(after[1], after[0], "once");
     }
 
     #[test]

@@ -1320,7 +1320,13 @@ fn the_dock_stays_shown_beside_the_open_grid() {
 #[test]
 fn the_grid_opens_without_waiting_for_its_icons_and_fills_them_in_over_its_frames() {
     let more = (0..60)
-        .map(|i| entry_with(&format!("org.example.App{i:02}"), &format!("App {i:02}"), ""))
+        .map(|i| {
+            entry_with(
+                &format!("org.example.App{i:02}"),
+                &format!("App {i:02}"),
+                "",
+            )
+        })
         .collect();
     let mut run = Run::on_desktop(tokens(false), ActionMap::default(), true, more);
     let grid_loads = |run: &Run| -> Vec<String> {
@@ -1376,7 +1382,9 @@ fn the_grid_opens_without_waiting_for_its_icons_and_fills_them_in_over_its_frame
         "every icon shown is loaded: {visible:?} of {loads:?}"
     );
     assert!(
-        loads[..visible.len()].iter().all(|key| visible.contains(key)),
+        loads[..visible.len()]
+            .iter()
+            .all(|key| visible.contains(key)),
         "the rows shown came first: {loads:?}"
     );
     assert!(loads.len() > visible.len(), "then the rows near them");

@@ -1676,7 +1676,9 @@ impl Model {
             if self.icons.get(&key).is_some_and(|k| k.contains_key(&px)) {
                 continue;
             }
-            if loaded == GRID_ICONS_PER_PASS || (loaded > 0 && started.elapsed() >= GRID_ICON_BUDGET) {
+            if loaded == GRID_ICONS_PER_PASS
+                || (loaded > 0 && started.elapsed() >= GRID_ICON_BUDGET)
+            {
                 pending = true;
                 break;
             }

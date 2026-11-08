@@ -285,7 +285,11 @@ fn only_an_application_the_desktop_shows_stays_in_the_dock_without_windows() {
             entry("org.example.Helper", "NoDisplay=true\n"),
         ],
     );
-    for app in ["org.example.Notes", "org.example.Helper", "org.example.Portal"] {
+    for app in [
+        "org.example.Notes",
+        "org.example.Helper",
+        "org.example.Portal",
+    ] {
         s.window(1, app, "dialog", false, 0.0);
         s.set_resident(app, true, 0.0);
         s.window_closed(1, 1.0);

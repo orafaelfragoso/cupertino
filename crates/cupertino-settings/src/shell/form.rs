@@ -71,7 +71,7 @@ pub fn header(pane: PaneId, title: &str, description: &str) -> Element<Message> 
 
 /// What assistive technology calls each control of `sections`: its row's label, with the section's title after it
 /// where the same label stands in more than one section, so that, as each application's "Show previews", every one
-/// has a name of its own.
+/// has a name of its own. Names still alike (two applications of one name) are numbered in the order they show.
 pub fn control_names(sections: &[Section]) -> Names {
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for row in sections.iter().flat_map(|s| &s.rows) {
@@ -87,6 +87,18 @@ pub fn control_names(sections: &[Section]) -> Names {
                 _ => row.label.clone(),
             };
             names.push((row.id, name));
+        }
+    }
+    let mut alike: HashMap<String, usize> = HashMap::new();
+    for (_, name) in &names {
+        *alike.entry(name.clone()).or_default() += 1;
+    }
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for (_, name) in &mut names {
+        if alike[name.as_str()] > 1 {
+            let n = seen.entry(name.clone()).or_default();
+            *n += 1;
+            *name = format!("{name} ({n})");
         }
     }
     Names(names)
@@ -154,12 +166,15 @@ fn control(row: &Row, name: &str, open: Option<ControlId>) -> Option<Element<Mes
     let enabled = row.disabled.is_none();
     let commit = move |value: Value| Message::Commit(id, value);
     let control = match &row.control {
-        Control::Switch { on } => Element::new(Toggle {
-            label: name.to_owned(),
-            on: *on,
-            enabled,
-            on_toggle: Some(Box::new(move |on| commit(Value::Bool(on)))),
-        }),
+        Control::Switch { on } => Element::new(
+            Toggle {
+                label: name.to_owned(),
+                on: *on,
+                enabled,
+                on_toggle: Some(Box::new(move |on| commit(Value::Bool(on)))),
+            }
+            .small(),
+        ),
         Control::Segmented { segments, selected } => Element::new(SegmentedControl {
             label: name.to_owned(),
             segments: segments.iter().map(|s| s.to_string()).collect(),
@@ -489,4 +504,64 @@ pub fn menu(
         Message::Open(None),
     );
     Some(menu.windows(WindowKey(format!("menu-{id:?}").into())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controls::Control;
+    use crate::live::Live;
+    use crate::pane::PaneId;
+    use crate::panes::sections;
+
+    #[test]
+    fn two_apps_of_one_name_get_popups_of_names_of_their_own() {
+        let live = Live {
+            notifying_apps: vec![
+                ("org.example.Mail".into(), "Mail".into()),
+                ("org.other.Mail".into(), "Mail".into()),
+                ("org.example.Chat".into(), "Chat".into()),
+            ],
+            ..Live::default()
+        };
+        let settings = crate::settings::Settings {
+            dock: Default::default(),
+            compositor: Default::default(),
+            menubar: cupertino_defaults::menubar::MenuBarSettings {
+                clock: cupertino_defaults::menubar::ClockSettings::UNSET,
+            },
+            keyboard: Default::default(),
+            power: Default::default(),
+            accessibility: Default::default(),
+            display_height: 1080.0,
+            clipboard: Default::default(),
+            screen_sharing: Default::default(),
+            notifications: Default::default(),
+        };
+        let session = crate::panes::Session {
+            dark: false,
+            display: Default::default(),
+        };
+        let shown = sections(PaneId::Notifications, &settings, session, &live);
+        let names = control_names(&shown);
+        let mut popups: Vec<&str> = shown
+            .iter()
+            .flat_map(|s| &s.rows)
+            .filter(|r| matches!(r.control, Control::Popup { .. }))
+            .map(|r| names.get(r.id).unwrap())
+            .collect();
+        popups.sort_unstable();
+        assert_eq!(
+            popups,
+            [
+                "Show on lock screen, Chat",
+                "Show on lock screen, Mail (1)",
+                "Show on lock screen, Mail (2)",
+                "Show previews, Chat",
+                "Show previews, Lock Screen",
+                "Show previews, Mail (1)",
+                "Show previews, Mail (2)",
+            ]
+        );
+    }
 }

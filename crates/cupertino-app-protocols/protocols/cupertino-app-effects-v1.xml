@@ -12,12 +12,12 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="6">
+  <interface name="cupertino_app_effects_v1" version="7">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
       event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
       event of cupertino_appearance_v1, version 6 the unified_compact and sidebar title bar styles and
-      set_glass of cupertino_backdrop_v1; the other interfaces of the protocol are unchanged in each.
+      set_glass of cupertino_backdrop_v1, version 7 the tone event of cupertino_backdrop_v1; the other interfaces of the protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -134,7 +134,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_backdrop_v1" version="6">
+  <interface name="cupertino_backdrop_v1" version="7">
     <description summary="a material region below a surface">
       All state is double-buffered: it applies on the next wl_surface.commit of the surface the
       backdrop was created for, together with that commit's buffer, so the backdrop and the content
@@ -202,6 +202,31 @@
       <arg name="container" type="uint"/>
       <arg name="spacing" type="fixed"/>
     </request>
+
+    <enum name="tone" since="7">
+      <description summary="what the text and symbols over a glass backdrop are drawn with">
+        The face of the glass is what the server draws for the backdrop: what lies behind it, blurred and coloured.
+      </description>
+      <entry name="appearance" value="0" summary="the appearance's: light text and symbols in the dark appearance, dark ones in the light appearance"/>
+      <entry name="dark" value="1" summary="the face is dark: light text and symbols, as in the dark appearance"/>
+      <entry name="light" value="2" summary="the face is light: dark text and symbols, as in the light appearance"/>
+    </enum>
+
+    <event name="tone" since="7">
+      <description summary="the face behind the backdrop's text and symbols changed tone">
+        Sent for glass backdrops only. A small glass shape follows what lies behind it: the server
+        measures its face, without stalling the drawing, whenever what lies behind the shape
+        changes, and sends dark or light when the face's luminance crosses a threshold, past a
+        margin on the other side, so a backdrop moving about the threshold does not make the text
+        flicker. A shape whose shorter side is 64 logical points or more, or that joins a container
+        whose bounds are that large, keeps the appearance; the server sends appearance when a shape
+        that had a tone grows past that size or stops being glass. Nothing is sent while the tone
+        stays the same, and before the first measurement the client draws as for appearance. The
+        client draws the text and symbols that lie directly on the backdrop with the tone; colours
+        of their own (an accent, a fill of the client's) are unchanged.
+      </description>
+      <arg name="tone" type="uint" enum="tone"/>
+    </event>
   </interface>
 
   <interface name="cupertino_appearance_v1" version="5">

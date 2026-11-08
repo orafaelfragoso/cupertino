@@ -15,7 +15,9 @@ use cupertino_app_protocols::server::scroll::cupertino_pointer_scroll_v1::Cupert
 use cupertino_app_protocols::server::scroll::cupertino_scroll_v1::{self, CupertinoScrollV1};
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_geometry::Rect;
-use cupertino_protocol_app::{AppEffects, AppEvent, GlassStyle, ScrollCounts, WindowControls};
+use cupertino_protocol_app::{
+    AppEffects, AppEvent, BackdropId, BackdropTone, GlassStyle, ScrollCounts, WindowControls,
+};
 use cupertino_wayland_client::{
     BufferFormat, Connection, Decorations, Error, Event, PointerEvent, SurfaceId, Toplevel,
     ToplevelConfig, WindowConfigure,
@@ -430,7 +432,11 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Mock {
         match request {
             cupertino_app_effects_v1::Request::GetBackdrop { id, surface } => {
                 let state = Arc::new(Mutex::new(BackdropState::default()));
-                init.init(id, state.clone());
+                let backdrop = init.init(id, state.clone());
+                // the face behind every backdrop is light, from version 7, which tells it
+                if backdrop.version() >= 7 {
+                    backdrop.tone(cupertino_backdrop_v1::Tone::Light);
+                }
                 surface
                     .data::<SurfaceData>()
                     .unwrap()
@@ -809,6 +815,50 @@ fn glass_backdrops_name_their_container_and_fall_back_to_a_material_on_an_older_
             },
             "server version {version}"
         );
+    }
+}
+
+#[test]
+fn a_version_7_server_tells_each_backdrop_its_tone_and_an_older_one_tells_none() {
+    for version in [7, 6] {
+        let (mut conn, _control, committed, _seen) = connect_at(version);
+        let effects = AppEffects::bind(&mut conn).unwrap();
+        let window = window(&mut conn);
+        let mut stash = Stash::new();
+        configured(&mut conn, &mut stash, window);
+        let first = effects.backdrop(&conn, window.surface()).unwrap();
+        let second = effects.backdrop(&conn, window.surface()).unwrap();
+        assert_ne!(first.id(), second.id());
+        assert_eq!(first.tells_tone(), version >= 7);
+        for b in [&first, &second] {
+            b.set_glass(GlassStyle::Regular, 0, 0.0).unwrap();
+            b.set_shape(&Rect::new(4.0, 6.0, 40.0, 20.0), 10.0).unwrap();
+        }
+        present(&mut conn, &mut stash, window.surface(), (920, 436));
+        committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        // a few more round trips, so that an event the server sent would have arrived
+        for _ in 0..3 {
+            stash.extend(conn.wait(Some(Duration::from_millis(30))).unwrap());
+        }
+        let tones: Vec<(BackdropId, BackdropTone)> = stash
+            .iter()
+            .filter_map(app_event)
+            .filter_map(|e| match e {
+                AppEvent::BackdropTone { backdrop, tone } => Some((backdrop, tone)),
+                _ => None,
+            })
+            .collect();
+        if version >= 7 {
+            assert_eq!(
+                tones,
+                vec![
+                    (first.id(), BackdropTone::Light),
+                    (second.id(), BackdropTone::Light)
+                ]
+            );
+        } else {
+            assert!(tones.is_empty(), "{tones:?}");
+        }
     }
 }
 

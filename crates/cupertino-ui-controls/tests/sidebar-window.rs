@@ -124,3 +124,35 @@ fn the_top_of_the_sidebar_moves_the_window_and_a_double_click_zooms_it() {
         requests(&h)
     );
 }
+
+#[test]
+fn where_the_sidebar_meets_the_content_a_rim_is_drawn_not_a_separator_line() {
+    use cupertino_ui_render::{Paint, PaintOp, Shape};
+    use cupertino_ui_theme::{ColorRole, InteractionVariant};
+    let h = harness();
+    let separator = support::color(ColorRole::Separator, InteractionVariant::Normal, false);
+    let background = support::color(
+        ColorRole::WindowBackground,
+        InteractionVariant::Normal,
+        false,
+    );
+    // the fills of the one-point strip beside the sidebar, the whole window high
+    let strip: Vec<_> = h
+        .snapshot()
+        .display_list
+        .nodes
+        .into_iter()
+        .flat_map(|n| n.ops)
+        .filter_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::RoundedRect { rect: r, .. },
+                paint: Paint::Solid(c),
+            } if r.min_x() == SIDEBAR && r.width() <= 1.0 && r.height() == 400.0 => Some(c),
+            _ => None,
+        })
+        .collect();
+    assert!(!strip.contains(&separator), "{strip:?}");
+    assert_eq!(strip.first(), Some(&background), "{strip:?}");
+    let rim = strip.last().unwrap();
+    assert!(rim.a > 0.0 && rim.a < 0.2, "a fine rim over it: {strip:?}");
+}

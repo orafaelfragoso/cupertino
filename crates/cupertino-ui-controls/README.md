@@ -72,7 +72,8 @@ from the application's model and reports changes as messages.
 - **Window shell and toolbar.** `SidebarWindow` lays out a window opened with `DecorationMode::Sidebar`: the sidebar
   panel from the window's top edge to its bottom edge, its 52 pt top (`SIDEBAR_TOP`) left free for the compositor's
   window control buttons and a drag region of the window as a toolbar is, then an optional header slot
-  (`sidebar_header`, for a search field) and the sidebar's content; beside it, past a `SplitView` divider, the content
+  (`sidebar_header`, for a search field) and the sidebar's content; beside it, past a `SplitView` divider drawn as a rim one device pixel wide on the sidebar's
+  side over the content's colour (no separator line), the content
   pane paints the window background up to the window's top edge, so the window paints none. The panel meets the
   window's edges (`SIDEBAR_PANEL_INSET` 0); an inset panel would take the window's 16 pt corner less the inset. The
   floating toolbar controls are 36 pt tall in the middle of the 52 pt row, 8 pt from its edges and 8 pt apart:

@@ -3,6 +3,7 @@
 //! the sidebar's content; beside it the content pane, which runs to the window's top edge under its floating toolbar.
 
 use crate::glass::{nested_radius, paint_glass, GlassRole};
+use crate::split::{split_element, DividerLook};
 use crate::toolbar::TOOLBAR_ROW;
 use crate::window_drag::DragState;
 use crate::{Handler, SplitLayout, SplitView};
@@ -79,16 +80,20 @@ impl<M: 'static> From<SidebarWindow<M>> for Element<M> {
         let content = Element::new(ContentPane {
             children: vec![window.content.fill()],
         });
-        Element::from(SplitView {
-            label: window.label,
-            axis: Axis::Horizontal,
-            leading: panel,
-            trailing: content,
-            layout: window.layout,
-            min_leading: window.min_sidebar,
-            min_trailing: window.min_content,
-            on_change: window.on_change,
-        })
+        // where the sidebar's glass meets the content a fine rim, not a separator line
+        split_element(
+            SplitView {
+                label: window.label,
+                axis: Axis::Horizontal,
+                leading: panel,
+                trailing: content,
+                layout: window.layout,
+                min_leading: window.min_sidebar,
+                min_trailing: window.min_content,
+                on_change: window.on_change,
+            },
+            DividerLook::SidebarRim,
+        )
     }
 }
 

@@ -31,7 +31,7 @@ CupertinoKit is the toolkit that Cupertino's own apps draw with. This page says 
 
 ## Menus
 
-A Kit window publishes its menus to the desktop's menu bar, and an item chosen there sends its message back to the app. A Kit app can also ask for an activation token for another application, and the Dock and the window switcher show the icon that a window sets for itself.
+A Kit window publishes its menus to the desktop's menu bar, and an item chosen there sends its message back to the app. Kit's own menus (pop-up buttons, context menus) follow the pointer and keys as the menu bar's do, through `cupertino-menu-model`'s `tracking`: a press dragged onto an item chooses it on release while a quick click leaves the menu open, a submenu stays open while the pointer heads into it, and typed letters find an item. A Kit app can also ask for an activation token for another application, and the Dock and the window switcher show the icon that a window sets for itself.
 
 ## Frame time
 

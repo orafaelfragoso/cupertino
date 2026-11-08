@@ -172,6 +172,8 @@ running dot follows it:
   (`src/activate.rs`, on a thread of its own). The activation token goes in the platform data as `activation-token` and
   `desktop-startup-id`. Otherwise, or when the call fails or is not answered within 3 s (`ACTIVATE_TIMEOUT`), the dock
   starts the entry again with an activation token, and a running instance opens a window. Neither bounces the tile: the application is already running.
+- Only an application the desktop shows stays without windows: a process with no desktop entry, or with a `NoDisplay`
+  one (a portal's dialogs, a helper), is in the dock while it shows a window, as before.
 - The dot goes when the server reports the application no longer resident (its process exited or crashed) and it has no
   window left.
 - No duplicate launches. A second ask for the same tile within 5 s (`OPEN_GUARD`) is dropped while no window has come,

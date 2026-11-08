@@ -155,11 +155,15 @@ impl Session {
 
     /// The server reported whether a process of `app_id` that showed a window is still connected. A resident
     /// application keeps (or, for one the dock had not seen, gets) its running dot without windows; one that stops
-    /// being resident with no window left has quit.
+    /// being resident with no window left has quit. Only an application the desktop shows is kept so: a process with
+    /// no desktop entry, or one whose entry is `NoDisplay` (a portal's dialogs, a helper), is in the dock while it
+    /// shows a window and no longer.
     pub fn set_resident(&mut self, app_id: &str, resident: bool, now: f64) {
         let key = self.key_of(app_id);
         if resident {
-            if self.resident.insert(app_id.to_owned())
+            let shown = self.desktop.find(app_id).is_some_and(|e| !e.no_display);
+            if shown
+                && self.resident.insert(app_id.to_owned())
                 && !self.windows.values().any(|w| w.key == key)
             {
                 self.dock.app_started(&key, now);

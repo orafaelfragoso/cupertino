@@ -62,6 +62,35 @@ impl From<io::Error> for TrashError {
     }
 }
 
+/// The `directorysizes` line a folder just moved to the trash still needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingSize {
+    trash_dir: PathBuf,
+    name: String,
+}
+
+impl PendingSize {
+    /// Sum the trashed folder's files and add its line. Nothing is written for a folder that has left the trash
+    /// meanwhile (put back or emptied), whose line would only be stale.
+    pub fn record(&self) -> io::Result<()> {
+        let size = dir_size(&self.trash_dir.join("files").join(&self.name));
+        let info = self
+            .trash_dir
+            .join("info")
+            .join(format!("{}.trashinfo", self.name));
+        let mtime = match fs::metadata(&info) {
+            Ok(meta) => meta.mtime(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.trash_dir.join("directorysizes"))?;
+        writeln!(f, "{} {} {}", size, mtime, encode_path(&self.name))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrashedItem {
     /// Name inside `files/`.
@@ -204,8 +233,22 @@ impl Trash {
         Ok((d, Some(top)))
     }
 
-    /// Move `path` to the trash and return the record.
+    /// Move `path` to the trash and return the record, a trashed folder's `directorysizes` line written.
     pub fn trash(&self, path: &Path) -> Result<TrashedItem, TrashError> {
+        let (item, size) = self.trash_unsized(path)?;
+        if let Some(size) = size {
+            size.record()?;
+        }
+        Ok(item)
+    }
+
+    /// Move `path` to the trash as [`Trash::trash`] does, but leave a trashed folder's `directorysizes` line to the
+    /// [`PendingSize`] returned with the record, which may be written later and on another thread: summing a large
+    /// folder reads every file in it, while the move itself is one rename.
+    pub fn trash_unsized(
+        &self,
+        path: &Path,
+    ) -> Result<(TrashedItem, Option<PendingSize>), TrashError> {
         let abs = if path.is_absolute() {
             path.to_path_buf()
         } else {
@@ -268,21 +311,17 @@ impl Trash {
             let _ = fs::remove_file(&info_path);
             return Err(e.into());
         }
-        if meta.is_dir() {
-            let size = dir_size(&files.join(&name));
-            let mtime = fs::metadata(&info_path)?.mtime();
-            let mut f = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join("directorysizes"))?;
-            writeln!(f, "{} {} {}", size, mtime, encode_path(&name))?;
-        }
-        Ok(TrashedItem {
+        let size = meta.is_dir().then(|| PendingSize {
+            trash_dir: dir.clone(),
+            name: name.clone(),
+        });
+        let item = TrashedItem {
             name,
             trash_dir: dir,
             original_path: abs,
             deletion_date: date,
-        })
+        };
+        Ok((item, size))
     }
 
     /// List the items of one trash directory.
@@ -520,6 +559,32 @@ mod tests {
         assert_eq!(t.restore(&listed[0]).unwrap(), f);
         assert_eq!(fs::read(&f).unwrap(), b"hi");
         assert!(t.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_folders_size_is_written_when_asked_and_not_once_it_has_left_the_trash() {
+        let (d, t) = setup();
+        let folder = d.path().join("dir");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("f"), vec![0u8; 10]).unwrap();
+        let (item, size) = t.trash_unsized(&folder).unwrap();
+        let sizes = item.trash_dir.join("directorysizes");
+        assert!(item.file_path().is_dir(), "the folder is moved at once");
+        assert!(!sizes.exists(), "its size is not summed yet");
+        let size = size.expect("a folder has a size to write");
+        size.record().unwrap();
+        assert!(fs::read_to_string(&sizes).unwrap().starts_with("10 "));
+
+        let other = d.path().join("other");
+        fs::create_dir(&other).unwrap();
+        let (item, size) = t.trash_unsized(&other).unwrap();
+        t.restore(&item).unwrap();
+        size.unwrap().record().unwrap();
+        assert_eq!(fs::read_to_string(&sizes).unwrap().lines().count(), 1);
+
+        let file = d.path().join("file");
+        fs::write(&file, "f").unwrap();
+        assert_eq!(t.trash_unsized(&file).unwrap().1, None);
     }
 
     #[test]

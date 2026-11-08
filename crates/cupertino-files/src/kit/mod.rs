@@ -1761,10 +1761,35 @@ impl BrowserWindow {
     /// Move the selected items to the trash; the listing drops them when the watcher reports it.
     fn trash_selection(&self, session: &Session) {
         let paths = self.selected_paths();
-        session.failed_some(
-            Action::Trash,
-            paths.iter().map(|path| (path, session.trash.trash(path))),
-        );
+        let mut sizes = Vec::new();
+        let moved: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                let moved = session.trash.trash_unsized(path).map(|(item, size)| {
+                    sizes.extend(size);
+                    item
+                });
+                (path, moved)
+            })
+            .collect();
+        session.failed_some(Action::Trash, moved);
+        // each move is a rename; summing a trashed folder's files can take long, so it runs on a thread of its own
+        if !sizes.is_empty() {
+            let spawned = std::thread::Builder::new()
+                .name("trash-sizes".into())
+                .spawn(move || {
+                    for size in sizes {
+                        if let Err(e) = size.record() {
+                            eprintln!(
+                                "cupertino-files: cannot record a trashed folder's size: {e}"
+                            );
+                        }
+                    }
+                });
+            if let Err(e) = spawned {
+                eprintln!("cupertino-files: cannot sum the trashed folders' sizes: {e}");
+            }
+        }
     }
 
     /// Put the selected items of the trash back where they came from.

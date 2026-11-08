@@ -250,7 +250,8 @@ off by a closed window. Each operation runs once; its outcome is handed over onc
 * The window that started an operation, if still open, selects what arrived when it shows the folder it went to, edits
   the new folder's name after New Folder with Selection, and reads its free space again.
 * Decisions: a move to the trash from a menu or Primary+Backspace stays on the window's thread (it renames, and is not a
-  transfer); a drop on the Trash is an operation like any drop. A failed operation is shown in the progress window and
+  transfer), but a trashed folder's `directorysizes` line, which sums every file in it, is written from a thread of its
+  own (`Trash::trash_unsized` and `PendingSize`; a folder put back first gets no line); a drop on the Trash is an operation like any drop. A failed operation is shown in the progress window and
   is no longer a notification while a window is open. The delay, the window's title and sizes and its wording are
   approximate; Stop is a text button, and the progress window gives no time estimate.
 
@@ -362,7 +363,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `context_menu`, `menu_spec` | context menus | `menu_spec::{item_menu, background_menu, condense}` (the rows in order), `MenuItem`, `Command`, `common_apps` (the Open With list of a selection) |
 | `menu_bar`, `search_field` | the menu bar and the search field | `menu_bar(MenuState)`, `MenuAction`, `chords`, `enabled`; `SearchWidth::{want, tick, follow_toolbar, width}`, `open_width` |
 | `name_edit`, `operations` | rename in place and file changes | `NameEdit::{field, field_mut, commit}`; `rename_item` (no replace), `new_folder`, `drop_action`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`), `duplicate_with` (Duplicate with them), `stopped` |
-| `trash` | freedesktop Trash 1.0 | `Trash::{trash, list, restore, delete, empty, purge_older_than}`; home and mount-point trash, `.trashinfo`, `directorysizes`; `trashed_item`, `forget` (an item moved out of a trash) |
+| `trash` | freedesktop Trash 1.0 | `Trash::{trash, trash_unsized, list, restore, delete, empty, purge_older_than}`, `PendingSize`; home and mount-point trash, `.trashinfo`, `directorysizes`; `trashed_item`, `forget` (an item moved out of a trash) |
 | `thumbnail` | freedesktop thumbnail cache | `Thumbnailer::{lookup, lookup_at_least, create, get_or_create}`, `ThumbSize::for_icon`, `file_uri`, failure markers |
 | `tags`, `mime` | metadata | `read_tags` / `write_tags` (`user.xdg.tags`), `TagColor` (seven label colours), `parse_reference_tags`; `detect`, `kind_group`, `kind_description` |
 | `open` | opening files | `open_command` (default application of `mimeapps.list` through `cupertino-apps`; `Terminal=true` under `--terminal`), `command_with`, `open_with` (Open With list: default first, rest by name), `OpenError` |

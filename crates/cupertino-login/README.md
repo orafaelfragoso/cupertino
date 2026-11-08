@@ -180,7 +180,9 @@ field until the next edit, also after a wrong password. Every prompt but the pas
 line of its own, which would count each failure twice where the distribution has one, and nothing in it can pass a password the
 shared stack refused (`packaging/test_release.py`, `test_the_lock_screen_counts_towards_the_account_lockout`). `pam_faillock`
 runs in this process, as the user, and records the failure in the user's own tally file (`/run/faillock/$USER` by default); the
-lockout message it prints shows as the notice. Not verified on an installed system: enter wrong passwords at the lock screen,
+directory is root's, so the file must exist already: `pam_faillock` makes it, owned by the user, when it runs as root for the
+session's login (the shared stack's `authsucc`, or the `authsucc` line of `cupertino-autologin` for a session that started
+without a password). The lockout message it prints shows as the notice. Not verified on an installed system: enter wrong passwords at the lock screen,
 then `faillock --user $USER` on another console lists them.
 
 The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Its global allocator (`cupertino_login_ipc::zeroing::ZeroOnFree`) zeroes every block it frees, so the `CString` that pam-client2 drops unzeroed once it has copied the answer into PAM's buffer is cleared too (`tests/zeroing.rs`); PAM clears its own copy. Swap can hold a password (no `mlockall`).

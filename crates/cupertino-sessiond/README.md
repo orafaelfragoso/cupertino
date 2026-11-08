@@ -49,7 +49,7 @@ the unit's restrictions and a session must be able to run `sudo`.
 
 **PAM services.** `cupertino-greeter`: `auth` and `account` `pam_permit.so`, `session` `pam_loginuid.so` and `pam_systemd.so`.
 `cupertino-session`: `auth`, `account` and `session` include `system-local-login` (`pam_faillock`, `pam_unix`, `pam_loginuid`,
-`pam_systemd`, `pam_limits`, `pam_env`), then `pam_gnome_keyring` for `auth` and `session` (see "Secret Service"). `cupertino-autologin`: `auth` `pam_permit.so`, `account` and `session` include `system-local-login`, then `pam_gnome_keyring`'s `session` line. `cupertino-login` (the lock screen's) adds `pam_gnome_keyring`'s `auth` line. **Accounts.** `u cupertino-greeter -
+`pam_systemd`, `pam_limits`, `pam_env`), then `pam_gnome_keyring` for `auth` and `session` (see "Secret Service"). `cupertino-autologin`: `auth` `pam_permit.so`, then `pam_faillock.so authsucc` (optional: it makes the tally file the lock screen, which runs as the user, records failures in), `account` and `session` include `system-local-login`, then `pam_gnome_keyring`'s `session` line. `cupertino-login` (the lock screen's) adds `pam_gnome_keyring`'s `auth` line. **Accounts.** `u cupertino-greeter -
 "Cupertino login screen" / /usr/bin/nologin` (sysusers; home `/` because the worker's `chdir($HOME)` must not fail and the
 account has no private directory), no group.
 

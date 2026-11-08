@@ -142,6 +142,11 @@ class SecretServiceTest(unittest.TestCase):
                 self.assertFalse([line for line in lock if re.search(r'pam_(permit|succeed_if|faillock)\.so', line)],
                                  'the shared stack alone passes or counts')
                 self.assertIn(self.LOCK_ACCOUNT[fmt], lock)
+                # the lock screen runs as the user and pam_faillock records a failure only in a tally file that exists:
+                # a session that started without a password gets one from a module run as root, at no cost to its login
+                autologin = self.lines(fmt, 'cupertino-autologin')
+                self.assertEqual([line for line in autologin if line.split()[0] in ('auth', '-auth')],
+                                 ['auth required pam_permit.so', '-auth optional pam_faillock.so authsucc'])
 
     def test_every_format_installs_the_provider_its_pam_module_and_a_client(self):
         meta = tomllib.loads((release.ROOT / 'crates/cupertino-server/Cargo.toml').read_text())['package']['metadata']

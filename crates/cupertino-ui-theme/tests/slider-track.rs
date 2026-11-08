@@ -99,7 +99,10 @@ fn a_slider_track_stands_three_to_one_against_the_window() {
             }
         }
         // the knob stays apart from the track it slides on
-        let knob = contrast(normal(ColorRole::SwitchThumb), normal(ColorRole::SliderTrack));
+        let knob = contrast(
+            normal(ColorRole::SwitchThumb),
+            normal(ColorRole::SliderTrack),
+        );
         assert!(knob >= TRACK, "{name}: knob on track {knob:.2}:1");
     }
 }
@@ -114,7 +117,10 @@ fn a_panel_slider_track_stands_three_to_one_against_its_module() {
         let panel = over(normal(ColorRole::WindowBackground), black);
         let module = over(normal(ColorRole::GroupFill), panel);
         for state in enabled() {
-            let track = over(theme.colors.get(ColorRole::PanelTrack, state).unwrap(), module);
+            let track = over(
+                theme.colors.get(ColorRole::PanelTrack, state).unwrap(),
+                module,
+            );
             let ratio = contrast(track, module);
             assert!(
                 ratio >= TRACK,
@@ -122,7 +128,10 @@ fn a_panel_slider_track_stands_three_to_one_against_its_module() {
             );
         }
         // the fill, in the thumb's colour, stays apart from the empty part
-        let fill = contrast(normal(ColorRole::SwitchThumb), normal(ColorRole::PanelTrack));
+        let fill = contrast(
+            normal(ColorRole::SwitchThumb),
+            normal(ColorRole::PanelTrack),
+        );
         assert!(fill >= TRACK, "{name}: fill on panel track {fill:.2}:1");
     }
 }

@@ -247,6 +247,8 @@ pub struct Model {
     windows: BTreeMap<u64, BrowserWindow>,
     next_window: u64,
     session: Session,
+    /// Files asked to exit: the messages left in that turn neither wait for the notices again nor exit again.
+    exiting: bool,
 }
 
 /// What every window shares.
@@ -530,6 +532,7 @@ impl Application for Files {
         let mut model = Model {
             windows: BTreeMap::new(),
             next_window: 0,
+            exiting: false,
             session: Session {
                 standard_places: start.places.len(),
                 places: start.places,
@@ -622,11 +625,12 @@ impl Model {
 
     /// Exit once no browser window is open, no file operation runs and the progress window lists nothing, after the
     /// notices posted are sent.
-    fn exit_when_done(&self) -> Option<Command<Message>> {
+    fn exit_when_done(&mut self) -> Option<Command<Message>> {
         let jobs = &self.session.jobs;
-        if !self.windows.is_empty() || !jobs.running.is_empty() || jobs.visible() {
+        if self.exiting || !self.windows.is_empty() || !jobs.running.is_empty() || jobs.visible() {
             return None;
         }
+        self.exiting = true;
         self.session.notices.flush(EXIT_NOTICES);
         Some(Command::Exit)
     }

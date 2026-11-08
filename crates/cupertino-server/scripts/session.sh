@@ -96,6 +96,12 @@ set-mute) echo "$level $3" >"$node" ;;
 esac
 EOF
 chmod +x "$AUDIO/bin/wpctl"
+# the shell's prompt and the terminal title it sets name neither the user nor the machine, so a terminal looks the same
+# on every machine
+cat >"$FHOME/.bashrc" <<'EOF'
+PS1='\W \$ '
+unset PROMPT_COMMAND
+EOF
 touch -d 2026-01-01T12:00:00 "$FHOME" "$FHOME"/* "$FHOME"/*/* "$FHOME"/*/*/* 2>/dev/null || true
 
 python3 -I - "$ROOT/packaging/files/etc/cupertino/compositor.json" "$SCRATCH/server.json" "$FHOME" "${CONFIG_JSON:-{\}}" <<'EOF'

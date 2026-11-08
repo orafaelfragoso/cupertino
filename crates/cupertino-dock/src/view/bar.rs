@@ -252,7 +252,7 @@ impl<M: Clone + 'static> Widget<M> for BarMaterial {
 }
 
 /// The bar's fine edge and rim over its material or fill, in the bar's rectangle `all`.
-fn paint_edge(cx: &mut PaintCx<'_>, all: Rect, radius: f64) {
+pub(crate) fn paint_edge(cx: &mut PaintCx<'_>, all: Rect, radius: f64) {
     let env = cx.env().clone();
     let (dark, contrast) = (paint::is_dark(&env), paint::is_high_contrast(&env));
     let edge = if dark { EDGE_DARK } else { EDGE_LIGHT };

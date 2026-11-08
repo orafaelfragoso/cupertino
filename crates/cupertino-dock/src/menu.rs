@@ -133,6 +133,10 @@ pub fn tile_menu(f: &TileFacts<'_>) -> Vec<MenuItem> {
     match f.kind {
         TileKind::Separator | TileKind::MinimizedWindow => Vec::new(),
         TileKind::Trash => vec![MenuItem::item("Open", MenuCommand::OpenTrash)],
+        TileKind::Folder => vec![MenuItem::item(
+            &format!("Open \u{201c}{}\u{201d}", crate::stack::folder_name(f.key)),
+            MenuCommand::ShowInFileManager(PathBuf::from(f.key)),
+        )],
         // the file manager's menus have an empty Options submenu and no Quit:
         // running, Show All Windows and Hide; not running, Open. Its Relaunch is not offered
         // (approximate: the dock has no relaunch path)

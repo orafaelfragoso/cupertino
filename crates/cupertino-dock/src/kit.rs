@@ -35,6 +35,7 @@ use crate::menu::{self, MenuCommand, MenuItem, TileFacts};
 use crate::overview_kit::{OverviewInput, OverviewRequest, OverviewSurface};
 use crate::overview_ui::{Mode, WindowEntry, Workspace};
 use crate::session::{Activation, Session};
+use crate::stack::{self, StackEntry, StackHit, StackLayout};
 use crate::switcher_kit::{SwitcherEntry, SwitcherInput, SwitcherRequest, SwitcherSurface};
 use crate::tile_drag::{Poof, TilePress};
 use crate::tiles::{TileId, TileKind, TileLifecycle};
@@ -283,6 +284,17 @@ pub trait Host {
     fn read_conf(&mut self, last_good: &DockSettings) -> Option<DockSettings>;
     /// The terminal emulator that runs entries with `Terminal=true`, if one is installed.
     fn terminal(&mut self) -> Option<String>;
+    /// The folders the bar shows as stacks, with the theme names of their icons, in order (the user's downloads
+    /// folder); none by default.
+    fn folders(&mut self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+    /// The entries of `folder` its stack shows: the newest first, at most [`stack::MAX_ENTRIES`]
+    /// ([`stack::newest_first`]).
+    fn folder_entries(&mut self, folder: &str) -> Vec<StackEntry> {
+        let _ = folder;
+        Vec::new()
+    }
     /// The desktop file IDs of the recently used applications, the most recent first: the grid's first row.
     fn recent_apps(&mut self) -> Vec<String> {
         Vec::new()
@@ -395,6 +407,16 @@ struct Pending {
     asked: f64,
 }
 
+/// A folder's stack open over its tile.
+struct OpenStack {
+    tile: TileId,
+    folder: String,
+    name: String,
+    entries: Vec<StackEntry>,
+    /// When it opened: it comes in over [`stack::ENTRY_S`] from then.
+    opened: f64,
+}
+
 /// An open context menu.
 struct OpenMenu {
     tile: TileId,
@@ -453,6 +475,10 @@ pub struct Model {
     press: Option<TilePress>,
     poof: Option<Poof>,
     menu: Option<OpenMenu>,
+    stack: Option<OpenStack>,
+    /// The folders the host shows as stacks were asked for, and their icons' theme names by path.
+    folders_asked: bool,
+    folder_icons: HashMap<String, String>,
     /// The bar has the keyboard.
     pub engaged: bool,
     /// Focus Dock came: the first tile takes the focus.
@@ -528,6 +554,9 @@ impl Model {
             press: None,
             poof: None,
             menu: None,
+            stack: None,
+            folders_asked: false,
+            folder_icons: HashMap::new(),
             engaged: false,
             focus_first: false,
             menu_takes_keyboard: false,
@@ -864,8 +893,77 @@ impl Model {
             Some(Activation::Launch(key)) => self.begin_launch(key),
             Some(Activation::Reopen { key, .. }) => self.reopen(key),
             Some(Activation::OpenTrash) => self.open_in_file_manager(TRASH_URI),
+            Some(Activation::ToggleStack(id)) => {
+                self.toggle_stack(id);
+                Vec::new()
+            }
             None => Vec::new(),
         }
+    }
+
+    /// Open the stack of folder tile `id` over it, or close it when it is the one open. Opening it closes a menu.
+    fn toggle_stack(&mut self, id: TileId) {
+        if self.stack.take().is_some_and(|s| s.tile == id) {
+            return;
+        }
+        let Some(tile) = self.session.dock.tile(id) else {
+            return;
+        };
+        let folder = tile.key.clone();
+        self.menu = None;
+        self.press = None;
+        let mut entries = self.host.folder_entries(&folder);
+        entries.truncate(stack::MAX_ENTRIES);
+        self.stack = Some(OpenStack {
+            tile: id,
+            name: stack::folder_name(&folder),
+            folder,
+            entries,
+            opened: self.now(),
+        });
+    }
+
+    /// A click on the open stack, on its release: an entry opens and the stack closes; the button opens the folder.
+    fn stack_pointer(&mut self, pointer: Pointer) -> Vec<Command<Message>> {
+        let Pointer::Release(p) = pointer else {
+            return Vec::new();
+        };
+        let Some(open) = &self.stack else {
+            return Vec::new();
+        };
+        match StackLayout::new(open.entries.len()).hit(Point::new(p.x, p.y), open.entries.len()) {
+            Some(StackHit::Entry(i)) => self.open_stack_entry(i),
+            Some(StackHit::OpenFolder) => self.open_stack_folder(),
+            None => Vec::new(),
+        }
+    }
+
+    fn open_stack_entry(&mut self, index: usize) -> Vec<Command<Message>> {
+        let Some(open) = self.stack.take() else {
+            return Vec::new();
+        };
+        if let Some(entry) = open.entries.get(index) {
+            self.host.open(&entry.path.to_string_lossy());
+        }
+        Vec::new()
+    }
+
+    fn open_stack_folder(&mut self) -> Vec<Command<Message>> {
+        match self.stack.take() {
+            Some(open) => self.open_in_file_manager(&open.folder),
+            None => Vec::new(),
+        }
+    }
+
+    /// The folders the host shows as stacks, asked for once.
+    fn ask_folders(&mut self) {
+        if std::mem::replace(&mut self.folders_asked, true) {
+            return;
+        }
+        let folders = self.host.folders();
+        let paths: Vec<&str> = folders.iter().map(|(p, _)| p.as_str()).collect();
+        self.session.dock.set_folders(&paths);
+        self.folder_icons = folders.into_iter().collect();
     }
 
     /// Open the application of tile `key` as a click on its tile does, also when it has no tile: raise its windows,
@@ -878,7 +976,9 @@ impl Model {
             }
             Activation::Reopen { key, .. } => self.reopen(key),
             Activation::Launch(key) => self.begin_launch(key),
-            Activation::RestoreWindow(_) | Activation::OpenTrash => Vec::new(),
+            Activation::RestoreWindow(_) | Activation::OpenTrash | Activation::ToggleStack(_) => {
+                Vec::new()
+            }
         }
     }
 
@@ -1058,6 +1158,7 @@ impl Model {
     /// The menu of the tile or the separator.
     fn open_menu(&mut self, id: TileId) {
         self.menu = None;
+        self.stack = None;
         self.press = None;
         let Some(tile) = self.session.dock.tile(id) else {
             return;
@@ -1810,6 +1911,12 @@ impl Model {
         let tile = self.session.dock.tile(id)?;
         Some(match tile.kind {
             TileKind::Trash => IconKey::Trash(self.trash_full),
+            TileKind::Folder => IconKey::Named(
+                self.folder_icons
+                    .get(&tile.key)
+                    .cloned()
+                    .unwrap_or_else(|| stack::FOLDER_ICON.to_owned()),
+            ),
             _ => IconKey::App(tile.key.clone()),
         })
     }
@@ -1896,6 +2003,16 @@ impl Model {
         for (app, side) in switched {
             self.icon_set(&IconKey::App(app), &[side]);
         }
+        if let Some(open) = &self.stack {
+            let keys: Vec<IconKey> = open
+                .entries
+                .iter()
+                .map(|e| IconKey::Named(e.icon.clone()))
+                .collect();
+            for key in keys {
+                self.icon_set(&key, &[StackLayout::ICON]);
+            }
+        }
         self.prefill_grid();
     }
 
@@ -1949,7 +2066,7 @@ impl Model {
             self.engaged = false;
         }
         // an auto-hidden bar shows while it has the keyboard, and beside the open grid
-        self.session.dock.keep_shown = self.engaged || grid_open;
+        self.session.dock.keep_shown = self.engaged || grid_open || self.stack.is_some();
         if let Some(screen) = self.screen() {
             self.session.dock.pointer_moved(self.pointer, screen, now);
         }
@@ -1994,6 +2111,14 @@ impl Model {
             }
         }
         let mut commands = self.expire_tokens(now);
+        self.ask_folders();
+        if self
+            .stack
+            .as_ref()
+            .is_some_and(|s| self.session.dock.tile(s.tile).is_none())
+        {
+            self.stack = None;
+        }
         self.refresh_recents(now);
         self.tell_host();
         commands.extend(self.preload());
@@ -2169,6 +2294,7 @@ impl Model {
         };
         match tile.kind {
             TileKind::Trash => TRASH_NAME.to_owned(),
+            TileKind::Folder => stack::folder_name(&tile.key),
             TileKind::Separator => String::new(),
             TileKind::MinimizedWindow if !tile.title.is_empty() => tile.title.clone(),
             _ => match self.entry_name(&tile.key) {
@@ -2232,6 +2358,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
                 model.force_quit = None;
                 model.grid = None;
                 model.menu = None;
+                model.stack = None;
                 model.press = None;
                 model.engaged = false;
                 model.edge = None;
@@ -2323,6 +2450,19 @@ fn input_message(model: &mut Model, input: Input) -> Vec<Command<Message>> {
         }
         Input::MenuClosed => {
             model.menu = None;
+            Vec::new()
+        }
+        Input::Stack(pointer) => model.stack_pointer(pointer),
+        Input::StackKey(key) => {
+            if key.pressed && key.keysym == ESCAPE {
+                model.stack = None;
+            }
+            Vec::new()
+        }
+        Input::StackEntry(i) => model.open_stack_entry(i),
+        Input::StackOpenFolder => model.open_stack_folder(),
+        Input::StackClosed => {
+            model.stack = None;
             Vec::new()
         }
         Input::Grid(pointer) => model.grid_pointer(pointer),
@@ -2513,6 +2653,26 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             },
             message,
         ));
+        if let Some(open) = &model.stack {
+            if layout.tiles.iter().any(|t| t.id == open.tile) {
+                let lookup = |name: &str| -> IconSet {
+                    model.icon(&IconKey::Named(name.to_owned()), &[StackLayout::ICON])
+                };
+                windows.push(view::stack::window(
+                    view::stack::StackView {
+                        parent: key.clone(),
+                        tile: open.tile.0,
+                        orientation,
+                        name: &open.name,
+                        entries: &open.entries,
+                        icons: &lookup,
+                        since: now - open.opened,
+                        reduce_motion: model.reduce_motion,
+                    },
+                    message,
+                ));
+            }
+        }
         if let Some(menu) = &model.menu {
             if let Some(anchor) = layout.tiles.iter().find(|t| t.id == menu.tile) {
                 windows.extend(view::menu::windows(

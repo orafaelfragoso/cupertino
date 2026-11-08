@@ -104,11 +104,18 @@ struct Record {
     leave_out: Vec<IconKey>,
     /// The ends of the programs started, in order: a send makes it exit.
     exits: Vec<async_channel::Sender<()>>,
+    /// The folders shown as stacks, with their icons, and the entries every folder lists.
+    folders: Vec<(String, String)>,
+    folder_entries: Vec<cupertino_dock::stack::StackEntry>,
+    /// What was opened with the session's opener, in order.
+    opened: Vec<String>,
 }
 
 thread_local! {
     /// The next run's host loads icons in the background, leaving these out.
     static BACKGROUND: RefCell<Option<Vec<IconKey>>> = const { RefCell::new(None) };
+    /// The next run's host shows these folders as stacks.
+    static FOLDERS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
 }
 
 struct FakeHost(Rc<RefCell<Record>>);
@@ -170,7 +177,15 @@ impl Host for FakeHost {
             let _ = exited.recv().await;
         }))
     }
-    fn open(&mut self, _: &str) {}
+    fn open(&mut self, target: &str) {
+        self.0.borrow_mut().opened.push(target.to_owned());
+    }
+    fn folders(&mut self) -> Vec<(String, String)> {
+        self.0.borrow().folders.clone()
+    }
+    fn folder_entries(&mut self, _: &str) -> Vec<cupertino_dock::stack::StackEntry> {
+        self.0.borrow().folder_entries.clone()
+    }
     fn shell(&mut self, command: &str) {
         self.0.borrow_mut().shell.push(command.to_owned());
     }
@@ -325,6 +340,7 @@ impl Run {
         let record = Rc::new(RefCell::new(Record {
             background: leave_out.is_some(),
             leave_out: leave_out.unwrap_or_default(),
+            folders: FOLDERS.take(),
             ..Record::default()
         }));
         let mut dock = Dock::new(DockConfig::default());
@@ -1943,6 +1959,115 @@ fn without_recents_the_bar_has_one_separator() {
     let row = bar_row(&mut run);
     assert_eq!(row.len(), 4, "{row:?}");
     assert_eq!(&row[..3], ["Editor", "Terminal", "|"]);
+}
+
+const DOWNLOADS: &str = "/fixture/Downloads";
+
+/// A run whose host shows the downloads folder as a stack of `count` files.
+fn stack_run(count: usize) -> Run {
+    FOLDERS.set(vec![(DOWNLOADS.to_owned(), "folder-download".to_owned())]);
+    let run = Run::start();
+    run.record.borrow_mut().folder_entries = (0..count)
+        .map(|i| cupertino_dock::stack::StackEntry {
+            name: format!("file-{i}.txt"),
+            path: format!("{DOWNLOADS}/file-{i}.txt").into(),
+            icon: "text-x-generic".to_owned(),
+        })
+        .collect();
+    run
+}
+
+/// The stack's popup window, while it is open.
+fn stack_window(run: &Run) -> Option<WindowId> {
+    run.driver
+        .runtime()
+        .windows()
+        .into_iter()
+        .map(|(_, id)| id)
+        .find(|&id| {
+            run.driver.runtime().snapshot(id).is_some_and(|s| {
+                s.accessibility
+                    .iter()
+                    .any(|(_, n)| n.role == Role::Dialog && n.name.as_deref() == Some("Downloads"))
+            })
+        })
+}
+
+/// The downloads folder is a tile after the applications, before the trash; a click opens its stack, a grabbing
+/// popup over it with the folder's name, its newest files as buttons and a button that opens the folder. A click on
+/// a file opens it and closes the stack; a second click on the tile closes it too.
+#[test]
+fn the_downloads_folder_is_a_tile_before_the_trash_whose_click_opens_its_stack() {
+    let mut run = stack_run(7);
+    let row = bar_row(&mut run);
+    assert_eq!(
+        &row[..4],
+        ["Editor", "Terminal", "|", "Downloads"],
+        "{row:?}"
+    );
+    assert_eq!(row.len(), 5, "then the trash: {row:?}");
+    assert!(stack_window(&run).is_none());
+    let bar = run.bar();
+    let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
+    run.click(bar, tile);
+    run.advance(0.5);
+    let stack = stack_window(&run).expect("the stack opened");
+    let buttons = named(&run, stack, Role::Button);
+    assert_eq!(buttons.len(), 8, "{buttons:?}");
+    assert_eq!(buttons[0], "file-0.txt");
+    assert!(buttons.contains(&"Open in Files".to_owned()));
+    let layout = cupertino_dock::stack::StackLayout::new(7);
+    let bounds = run.bounds(stack, Role::Button, "Open in Files");
+    assert_eq!(
+        bounds,
+        kit_rect(layout.button),
+        "the button where the layout puts it"
+    );
+    run.click(stack, centre(run.bounds(stack, Role::Button, "file-2.txt")));
+    assert_eq!(
+        run.record.borrow().opened,
+        [format!("{DOWNLOADS}/file-2.txt")]
+    );
+    run.settle();
+    assert!(
+        stack_window(&run).is_none(),
+        "opening a file closes the stack"
+    );
+
+    run.click(bar, tile);
+    run.advance(0.5);
+    assert!(stack_window(&run).is_some());
+    run.click(bar, tile);
+    run.settle();
+    assert!(stack_window(&run).is_none(), "a second click closes it");
+}
+
+/// Escape closes the stack; its button opens the folder in the file manager (here the session's opener, as no file
+/// manager is installed) and closes it.
+#[test]
+fn escape_closes_the_stack_and_its_button_opens_the_folder() {
+    let mut run = stack_run(0);
+    let bar = run.bar();
+    let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
+    run.click(bar, tile);
+    run.advance(0.5);
+    let stack = stack_window(&run).expect("the stack opened");
+    let texts = named(&run, stack, Role::StaticText);
+    assert!(texts.contains(&"No Items".to_owned()), "{texts:?}");
+    run.send_to(stack, WindowEvent::Focus(true));
+    run.key(stack, ESCAPE);
+    run.settle();
+    assert!(stack_window(&run).is_none());
+    run.click(bar, tile);
+    run.advance(0.5);
+    let stack = stack_window(&run).expect("the stack opened again");
+    run.click(
+        stack,
+        centre(run.bounds(stack, Role::Button, "Open in Files")),
+    );
+    run.settle();
+    assert_eq!(run.record.borrow().opened, [DOWNLOADS.to_owned()]);
+    assert!(stack_window(&run).is_none());
 }
 
 /// A new bar role's first group lists every resident application: one the dock still holds that it does not list

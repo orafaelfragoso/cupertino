@@ -34,6 +34,8 @@ pub enum Activation {
     Reopen { key: String, app_id: String },
     /// Open the trash.
     OpenTrash,
+    /// Open, or close, the stack of the folder tile with this id.
+    ToggleStack(TileId),
 }
 
 /// The command that starts an application.
@@ -280,6 +282,7 @@ impl Session {
             }),
             TileKind::App | TileKind::Recent => Some(self.opening(&tile.key)),
             TileKind::Trash => Some(Activation::OpenTrash),
+            TileKind::Folder => Some(Activation::ToggleStack(id)),
             TileKind::Separator => None,
         }
     }

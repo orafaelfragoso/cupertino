@@ -22,6 +22,7 @@ use cupertino_dock::kit::{
 };
 use cupertino_dock::overview_ui::{Mode, Workspace};
 use cupertino_dock::session::Session;
+use cupertino_dock::stack::StackEntry;
 use cupertino_dock::view::{
     edge, IconSet, BAR_APP_ID, DRAG_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, GRID_APP_ID,
     OVERVIEW_APP_ID, SWITCHER_APP_ID,
@@ -567,6 +568,8 @@ struct AppHost {
     /// The icons loaded in the background ([`Host::preload`]), on a thread of their own; made on the first load.
     preloader: Arc<Mutex<Option<Icons>>>,
     assets: Assets,
+    /// The file types, for a stack's icons; loaded when a stack first opens.
+    mime: Option<cupertino_apps::MimeDatabase>,
     /// Where the pins are stored (`None` when neither `XDG_CONFIG_HOME` nor `HOME` is set).
     pins_path: Option<PathBuf>,
     conf_path: Option<PathBuf>,
@@ -767,6 +770,59 @@ impl Host for AppHost {
                 image(pixmap)
             })
             .collect()
+    }
+
+    /// The user's downloads folder (`XDG_DOWNLOAD_DIR` of `user-dirs.dirs`, else `~/Downloads`), when it exists.
+    fn folders(&mut self) -> Vec<(String, String)> {
+        let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) else {
+            return Vec::new();
+        };
+        let home = PathBuf::from(home);
+        let config = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|c| !c.is_empty())
+            .map_or_else(|| home.join(".config"), PathBuf::from);
+        let user_dirs = std::fs::read_to_string(config.join("user-dirs.dirs")).ok();
+        let downloads = cupertino_dock::stack::downloads_dir(user_dirs.as_deref(), &home);
+        if !downloads.is_dir() {
+            return Vec::new();
+        }
+        vec![(
+            downloads.to_string_lossy().into_owned(),
+            cupertino_dock::stack::DOWNLOADS_ICON.to_owned(),
+        )]
+    }
+
+    /// Read when the stack opens: the folder's entries with their last change, each with its type's generic icon.
+    fn folder_entries(&mut self, folder: &str) -> Vec<StackEntry> {
+        let Ok(dir) = std::fs::read_dir(folder) else {
+            return Vec::new();
+        };
+        let mime = self.mime.get_or_insert_with(|| {
+            let dirs = cupertino_apps::XdgDirs::from_env()
+                .map(|d| d.all_data_dirs())
+                .unwrap_or_default();
+            cupertino_apps::MimeDatabase::load(&dirs).unwrap_or_default()
+        });
+        let items = dir
+            .flatten()
+            .filter_map(|e| {
+                let path = e.path();
+                let meta = std::fs::metadata(&path).ok()?;
+                let changed = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                let icon = if meta.is_dir() {
+                    cupertino_dock::stack::FOLDER_ICON.to_owned()
+                } else {
+                    mime.generic_icon_name(mime.file_type(&path, false))
+                };
+                let entry = StackEntry {
+                    name: e.file_name().to_string_lossy().into_owned(),
+                    path,
+                    icon,
+                };
+                Some((entry, changed))
+            })
+            .collect();
+        cupertino_dock::stack::newest_first(items)
     }
 
     /// An application's icon loads from the theme name of its entry; one without, or whose name the theme lacks, is
@@ -1015,6 +1071,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         icons: Icons::new(&assets),
         preloader: Arc::default(),
         assets: assets.clone(),
+        mime: None,
         pins_path,
         conf_path,
         terminal: options.terminal.clone(),

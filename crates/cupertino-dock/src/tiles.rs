@@ -16,6 +16,8 @@ pub enum TileKind {
     Recent,
     MinimizedWindow,
     Separator,
+    /// A folder whose files open as a stack over the bar; its key is the folder's path.
+    Folder,
     Trash,
 }
 

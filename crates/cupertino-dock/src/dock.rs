@@ -2,7 +2,7 @@
 //!
 //! Section order along the axis: apps (pinned first, then running unpinned),
 //! a separator, recents (optional, followed by a separator of their own),
-//! minimized-window tiles, trash.
+//! folders, minimized-window tiles, trash.
 
 use std::collections::HashMap;
 
@@ -197,6 +197,8 @@ pub struct Dock {
     apps: Vec<Tile>,
     recents: Vec<Tile>,
     minimized: Vec<Tile>,
+    /// The folders shown as stacks, before the minimized windows.
+    folders: Vec<Tile>,
     trash: Tile,
     sep_main: Tile,
     sep_recents: Tile,
@@ -271,6 +273,7 @@ impl Dock {
             apps: Vec::new(),
             recents: Vec::new(),
             minimized: Vec::new(),
+            folders: Vec::new(),
             trash: Tile::new(TRASH, TileKind::Trash, "trash"),
             sep_main: Tile::new(SEP_MAIN, TileKind::Separator, "section"),
             sep_recents: Tile::new(SEP_RECENTS, TileKind::Separator, "recents"),
@@ -586,6 +589,18 @@ impl Dock {
         self.recents = new;
     }
 
+    /// The folders the bar shows as stacks, by path, in order. A folder already shown keeps its tile.
+    pub fn set_folders(&mut self, paths: &[&str]) {
+        let old = std::mem::take(&mut self.folders);
+        self.folders = paths
+            .iter()
+            .map(|path| match old.iter().find(|t| t.key == *path) {
+                Some(t) => t.clone(),
+                None => self.alloc(TileKind::Folder, path),
+            })
+            .collect();
+    }
+
     pub fn set_trash_full(&mut self, full: bool) {
         self.trash.full = full;
     }
@@ -706,6 +721,7 @@ impl Dock {
         if self.live_recents() {
             out.push(Slot::Tile(&self.sep_recents));
         }
+        out.extend(self.folders.iter().map(Slot::Tile));
         out.extend(self.minimized.iter().map(Slot::Tile));
         if ghost {
             out.push(Slot::Placeholder(tile));

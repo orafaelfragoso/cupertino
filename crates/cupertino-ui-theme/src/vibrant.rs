@@ -34,21 +34,45 @@ fn neutral(c: Color) -> bool {
     white || black
 }
 
+/// How far a grey channel may stray from the others for the colour to count as grey.
+const GREY_SPREAD: f32 = 0.02;
+
+/// How strongly the label colour `c` is drawn, as the opacity of its appearance's foreground, or `None` for a colour
+/// that is not a label's: white or black at its own opacity, and an opaque grey (the labels of the high-contrast
+/// themes) as far as it lies towards the appearance's foreground, white in the `dark` appearance, black in the light.
+fn label_strength(c: Color, dark: bool) -> Option<f32> {
+    if neutral(c) {
+        return Some(c.a);
+    }
+    let (lo, hi) = (c.r.min(c.g).min(c.b), c.r.max(c.g).max(c.b));
+    if hi - lo > GREY_SPREAD {
+        return None;
+    }
+    let lightness = (c.r + c.g + c.b) / 3.0;
+    Some(c.a * if dark { lightness } else { 1.0 - lightness })
+}
+
 impl ThemeTokens {
-    /// The theme of what a window draws on glass whose face was measured as `tone`: the neutral label colours of text
-    /// and symbols take [`glass_foreground`] at their [`vibrant_level`] (a disabled label keeps its own opacity); a
-    /// selected label, drawn on the fill of its selection, and every other colour are unchanged.
+    /// The theme of what a window draws on glass whose face was measured as `tone`: the label colours of text and
+    /// symbols (white, black or grey) take [`glass_foreground`] at their [`vibrant_level`], or at their own strength
+    /// where that is more ([`label_strength`]; a disabled label keeps its own); a selected label, drawn on the fill of
+    /// its selection, and every other colour are unchanged. The foreground is the same in every accessibility mode.
     pub fn on_glass(&self, tone: Option<FaceTone>) -> ThemeTokens {
-        let fg = glass_foreground(self.preferences.appearance.is_dark(), tone);
+        let dark = self.preferences.appearance.is_dark();
+        let fg = glass_foreground(dark, tone);
         let colors = self.colors.map(|role, state, c| {
-            // a selected label is drawn on its selection's fill, not on the glass
-            let Some(level) = vibrant_level(role).filter(|_| neutral(c) && !state.selected) else {
+            let (Some(level), Some(strength)) = (vibrant_level(role), label_strength(c, dark))
+            else {
                 return c;
             };
+            // a selected label is drawn on its selection's fill, not on the glass
+            if state.selected {
+                return c;
+            }
             let a = if state.interaction == InteractionVariant::Disabled {
-                c.a
+                strength
             } else {
-                c.a.max(level)
+                strength.max(level)
             };
             Color { a, ..fg }
         });
@@ -138,5 +162,38 @@ mod tests {
                 .get(ColorRole::ControlText, selected),
             light.colors.get(ColorRole::ControlText, selected)
         );
+    }
+
+    #[test]
+    fn grey_labels_of_the_high_contrast_themes_go_through_the_matrix_as_strongly_as_they_were() {
+        for appearance in [Appearance::LightHighContrast, Appearance::DarkHighContrast] {
+            let t = theme(appearance);
+            let dark = appearance.is_dark();
+            let glass = t.on_glass(None);
+            let fg = glass_foreground(dark, None);
+            for role in [
+                ColorRole::Text,
+                ColorRole::SecondaryText,
+                ColorRole::PlaceholderText,
+            ] {
+                let before = get(&t, role);
+                let after = get(&glass, role);
+                let strength = label_strength(before, dark).expect("a label colour");
+                assert_eq!(
+                    [after.r, after.g, after.b],
+                    [fg.r, fg.g, fg.b],
+                    "{appearance:?} {role:?}"
+                );
+                assert!(
+                    after.a >= strength && after.a >= vibrant_level(role).unwrap(),
+                    "{appearance:?} {role:?}: {before:?} became {after:?}"
+                );
+            }
+        }
+        // a colour that is not grey is not a label's
+        assert_eq!(label_strength(Color::new(0.2, 0.5, 1.0, 1.0), true), None);
+        // an opaque light grey in the dark appearance is that far towards white
+        let grey = label_strength(Color::new(0.6, 0.6, 0.6, 1.0), true).unwrap();
+        assert!((grey - 0.6).abs() < 1e-6);
     }
 }

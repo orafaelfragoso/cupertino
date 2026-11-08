@@ -944,6 +944,21 @@ pub struct Sidebar<M> {
     pub on_accessory: Option<Handler<Key, M>>,
 }
 
+/// How a [`Sidebar`] draws its rows. `Element::from` draws [`SidebarLook::Accent`]; [`Sidebar::with_look`] picks
+/// another.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SidebarLook {
+    /// The selected row is filled with the accent and its symbol and label take the selected text colour; the other
+    /// rows' symbols are the accent.
+    #[default]
+    Accent,
+    /// A file browser's list of places: taller rows with larger symbols, the selected row filled with a neutral grey
+    /// and its label in the semibold weight. Every symbol keeps its tint, selected or not: the accent in each section
+    /// `accent` marks `true` (by the sections' order), the secondary label colour in the others and in a section it
+    /// does not reach. A section heading without rows is drawn alone.
+    Neutral { accent: Vec<bool> },
+}
+
 /// Flexible empty space in a stack.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Spacer {

@@ -240,8 +240,6 @@ pub mod menu {
     pub const SUBMENU_TOP_OFFSET: f64 = 5.0;
     /// The menu keeps this far from the output's edges. approximate.
     pub const SCREEN_MARGIN: f64 = 4.0;
-    /// A submenu opens this long after the pointer rests on its row..
-    pub const SUBMENU_DELAY: f64 = 0.2;
     /// The tag row's view: 192 wide for the colour dots plus 24, 49 tall (`TLabelViewForMenu`).
     pub const TAG_ROW_WIDTH: f64 = 216.0;
     pub const TAG_ROW_HEIGHT: f64 = 49.0;

@@ -48,6 +48,8 @@ use crate::{mime, Entry, SortKey};
 pub(super) const SIDEBAR_WIDTH: f64 = sidebar::DEFAULT_WIDTH;
 /// The side of a list row's icon, in points.
 const ROW_ICON: f64 = list_view::ICON_SIZE_DEFAULT as f64;
+/// From a name cell's leading edge to its text: the item's icon and the gap after it.
+pub(super) const NAME_TEXT_X: f64 = ROW_ICON + metrics::PATH_ICON_GAP;
 /// A list row: the icon size over the row padding, as the list view's rows.
 const ROW_HEIGHT: f64 = ROW_ICON + list_view::ROW_PADDING;
 /// How far beyond the viewport items count as shown, in points: their thumbnails are made before they scroll in.
@@ -572,6 +574,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 window: id,
                 index: row,
                 name: column == 0,
+                label: (column == 0).then(|| entries[row].name.clone()),
                 selection: cell_selection.clone(),
                 presses: Rc::clone(&cell_presses),
                 children: vec![cell],

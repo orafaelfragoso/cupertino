@@ -839,6 +839,11 @@ fn tab_and_shift_tab_select_the_next_and_previous_item_by_name() {
     assert_eq!(run.selected_icons(), ["b.txt"]);
 }
 
+/// A point on the text of a list row's name, near its start: past the text the name cell is the row's blank part.
+fn on_text(name: cupertino_kit::geometry::Rect) -> cupertino_kit::geometry::Point {
+    cupertino_kit::geometry::Point::new(name.min_x() + 6.0, name.center().y)
+}
+
 /// The list's row showing `name`.
 fn row_bounds(run: &Run, name: &str) -> cupertino_kit::geometry::Rect {
     run.listed()
@@ -956,7 +961,7 @@ fn in_the_list_ctrl_click_opens_the_menu_a_double_click_opens_and_a_pause_rename
     };
     run.frames(600, 100);
     let name = run.bounds(Role::StaticText, "b.txt");
-    run.press_at(name.center(), MouseButton::Left);
+    run.press_at(on_text(name), MouseButton::Left);
     assert!(!field(&run));
     run.frames(600, 100);
     assert!(
@@ -1004,7 +1009,7 @@ fn in_the_list_a_key_the_triangle_or_a_held_press_keeps_a_pending_rename_from_st
     let name = run.bounds(Role::StaticText, "Notes");
 
     // a key the table takes for itself: Right opens the folder, and no rename follows
-    run.press_at(name.center(), MouseButton::Left);
+    run.press_at(on_text(name), MouseButton::Left);
     run.key(RIGHT, None);
     run.wait_until(|run| run.rows().len() == 4);
     run.frames(600, 100);
@@ -1016,7 +1021,7 @@ fn in_the_list_a_key_the_triangle_or_a_held_press_keeps_a_pending_rename_from_st
     // the triangle stops its press before the row sees it
     let notes = row_bounds(&run, "Notes");
     let triangle = Point::new(notes.min_x() + 18.0, notes.center().y);
-    run.press_at(name.center(), MouseButton::Left);
+    run.press_at(on_text(name), MouseButton::Left);
     run.press_at(triangle, MouseButton::Left);
     run.wait_until(|run| run.rows().len() == 4);
     run.frames(600, 100);
@@ -1026,10 +1031,10 @@ fn in_the_list_a_key_the_triangle_or_a_held_press_keeps_a_pending_rename_from_st
     run.frames(600, 100);
 
     // a press held past the interval may still be a drag: the rename waits for the release
-    press_down(&mut run, name.center());
+    press_down(&mut run, on_text(name));
     run.frames(600, 100);
     assert!(!field(&run), "no rename while the button is held");
-    run.release(name.center(), Mods::NONE);
+    run.release(on_text(name), Mods::NONE);
     run.frames(100, 50);
     assert!(field(&run), "the release starts the rename that came due");
 }

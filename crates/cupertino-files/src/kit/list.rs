@@ -1,5 +1,5 @@
 //! What the list view does beyond the toolkit's outline table: a press on empty space under the rows, or on a row's
-//! blank part (any cell but its name) that then moves, draws a rubber band ([`super::band`]), which scrolls the rows at
+//! blank part (anywhere but its icon and the text of its name) that then moves, draws a rubber band ([`super::band`]), which scrolls the rows at
 //! the view's top and bottom edges; a double click opens a row, a press on the name of the only selected row renames it after
 //! the double-click interval ([`super::clicks`]), a press with Ctrl held opens the context menu, a press that moves
 //! drags the selected rows out of the window, and Tab and Shift+Tab on a row select the next and the previous item by
@@ -24,6 +24,7 @@ use cupertino_kit::layout::{
     ScrollState, SizeSpec,
 };
 use cupertino_kit::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent};
+use cupertino_kit::text::{AttributedText, FontWeight, ParagraphStyle, TextStyle};
 
 use super::band::{self, Band};
 use super::clicks::Clicks;
@@ -113,6 +114,8 @@ pub(super) struct RowCell {
     pub index: usize,
     /// The row's first cell, which holds its name.
     pub name: bool,
+    /// The name the first cell shows, which tells where its text ends; `None` in the other cells.
+    pub label: Option<String>,
     pub selection: Selection,
     pub presses: SharedPresses,
     pub children: Vec<Element<Message>>,
@@ -121,6 +124,36 @@ pub(super) struct RowCell {
 impl RowCell {
     fn emit(&self, event: WindowEvent, cx: &mut EventCx<'_, Message>) {
         cx.emit(Message::Window(self.window, event));
+    }
+
+    /// Whether `position` lands on the row's icon or the text of its name, rather than on the blank part of the name
+    /// cell past them (a cell other than the name's is all blank).
+    fn on_name(&self, position: Point, cx: &EventCx<'_, Message>) -> bool {
+        if !self.name {
+            return false;
+        }
+        let (Some(label), Some(bounds)) = (self.label.as_deref(), cx.bounds()) else {
+            return true;
+        };
+        // the name in the body role, as the cell shows it
+        let body = cx.env().theme.type_scale.body;
+        let style = TextStyle {
+            weight: FontWeight(body.weight),
+            ..TextStyle::new(body.size)
+        };
+        let Ok(paragraph) = cx.env().text.paragraph(
+            &AttributedText::plain(label, style),
+            &ParagraphStyle::default(),
+        ) else {
+            return true;
+        };
+        let end =
+            (super::view::NAME_TEXT_X + paragraph.layout(None).size().width).min(bounds.width());
+        let from_leading = match cx.env().direction {
+            LayoutDirection::Ltr => position.x - bounds.min_x(),
+            LayoutDirection::Rtl => bounds.max_x() - position.x,
+        };
+        from_leading <= end
     }
 
     fn press(&self, position: Point, mods: Mods, cx: &mut EventCx<'_, Message>) -> Propagation {
@@ -134,18 +167,16 @@ impl RowCell {
         let index = self.index;
         let sole = self.selection.len() == 1 && self.selection.contains(index);
         let plain = !mods.contains(Mods::SHIFT) && !mods.contains(Mods::PRIMARY);
+        let on_name = self.on_name(position, cx);
         let mut presses = self.presses.borrow_mut();
-        if presses
-            .clicks
-            .press(index, self.name, sole, plain, cx.now())
-        {
+        if presses.clicks.press(index, on_name, sole, plain, cx.now()) {
             presses.press = None;
             drop(presses);
             self.emit(WindowEvent::Open(index), cx);
             return Propagation::Stop;
         }
         presses.clicks.arm(cx);
-        if !self.name {
+        if !on_name {
             // the row's blank part: the table selects the row, and a move draws a band from here
             presses.press = None;
             presses.blank = Some(BlankPress {

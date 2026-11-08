@@ -253,3 +253,61 @@ fn a_band_from_a_rows_blank_part_held_at_the_bottom_edge_scrolls_the_list_on_sel
     assert_eq!(run.rows(), held, "a release stops the scroll");
     assert_eq!(selected_items(&run), after);
 }
+
+/// The bounds of the name cell (the first) of the list's row that shows `name`.
+fn name_cell(run: &Run, name: &str) -> Rect {
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let nodes: HashMap<_, _> = snapshot
+        .accessibility
+        .iter()
+        .map(|(id, n)| (*id, n))
+        .collect();
+    let row = run.row_bounds(name);
+    snapshot
+        .accessibility
+        .iter()
+        .find(|(_, n)| n.role == Role::Row && n.bounds == row)
+        .and_then(|(_, n)| n.children.first())
+        .map(|cell| nodes[cell].bounds)
+        .unwrap_or_else(|| panic!("no name cell for {name:?}"))
+}
+
+#[test]
+fn in_the_name_cell_a_band_starts_past_the_name_and_a_press_on_the_name_does_not_draw_one() {
+    let mut run = window();
+    let row_height = run.row_bounds("item 04.txt").min_y() - run.row_bounds("item 03.txt").min_y();
+
+    // past the end of a short name, the name cell is the row's blank part: a move draws a band over the rows below
+    let cell = name_cell(&run, "item 03.txt");
+    let from = Point::new(cell.max_x() - 10.0, cell.center().y);
+    let to = Point::new(from.x, from.y + 2.0 * row_height);
+    pointer(&mut run, PointerEvent::Motion { position: from });
+    button(&mut run, from, true);
+    pointer(
+        &mut run,
+        PointerEvent::Motion {
+            position: Point::new(from.x, from.y + row_height),
+        },
+    );
+    pointer(&mut run, PointerEvent::Motion { position: to });
+    button(&mut run, to, false);
+    run.frames(100, 50);
+    assert_eq!(selected_items(&run), [3, 4, 5]);
+
+    // on the name's text the press grabs the row: a move draws no band
+    let cell = name_cell(&run, "item 10.txt");
+    let from = Point::new(cell.min_x() + 26.0, cell.center().y);
+    let to = Point::new(from.x, from.y + 2.0 * row_height);
+    pointer(&mut run, PointerEvent::Motion { position: from });
+    button(&mut run, from, true);
+    pointer(
+        &mut run,
+        PointerEvent::Motion {
+            position: Point::new(from.x, from.y + row_height),
+        },
+    );
+    pointer(&mut run, PointerEvent::Motion { position: to });
+    button(&mut run, to, false);
+    run.frames(100, 50);
+    assert_eq!(selected_items(&run), [10]);
+}

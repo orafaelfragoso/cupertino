@@ -517,6 +517,19 @@ fn a_folder_opens_in_a_second_window_whose_menus_act_on_it_alone() {
 }
 
 #[test]
+fn the_go_menu_shows_recents_and_the_home_folder_and_back_returns() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("go-recents");
+    assert_eq!(run.title(), "Recents");
+    run.menu("go-home");
+    assert_ne!(run.title(), "Recents");
+    run.wait_until(|run| run.rows().iter().any(|row| row == "Documents"));
+    run.menu("go-back");
+    assert_eq!(run.title(), "Recents");
+}
+
+#[test]
 fn a_name_edited_in_one_window_does_not_take_the_keyboard_from_another() {
     const RETURN: u32 = 0xff0d;
     let mut run = Run::new();

@@ -39,6 +39,10 @@ pub enum MenuAction {
     Back,
     Forward,
     EnclosingFolder,
+    /// Show the files opened lately.
+    Recents,
+    /// Show the home folder.
+    Home,
     /// Show the progress window of the file operations.
     ShowProgress,
 }
@@ -121,6 +125,8 @@ impl MenuAction {
             Back => (Scope::Win, "go-back"),
             Forward => (Scope::Win, "go-forward"),
             EnclosingFolder => (Scope::Win, "go-enclosing-folder"),
+            Recents => (Scope::Win, "go-recents"),
+            Home => (Scope::Win, "go-home"),
             ShowProgress => (Scope::Win, "show-progress"),
         };
         ActionName::new(scope, name).expect("the menu's action names are valid")
@@ -155,6 +161,8 @@ impl MenuAction {
             Back,
             Forward,
             EnclosingFolder,
+            Recents,
+            Home,
             ShowProgress,
         ];
         fixed
@@ -200,6 +208,8 @@ impl MenuAction {
             Back => chord(&[Primary], "bracketleft"),
             Forward => chord(&[Primary], "bracketright"),
             EnclosingFolder => chord(&[Primary], "Up"),
+            Recents => chord(&[Shift, Primary], "f"),
+            Home => chord(&[Shift, Primary], "h"),
             OpenInNewWindow | PutBack | Rename | SortBy(..) | FullScreen | ShowProgress => None,
         }
     }
@@ -333,11 +343,14 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
     );
     let go = Menu::new(
         "Go",
-        vec![vec![
-            item("Back", Back),
-            item("Forward", Forward),
-            item("Enclosing Folder", EnclosingFolder),
-        ]],
+        vec![
+            vec![
+                item("Back", Back),
+                item("Forward", Forward),
+                item("Enclosing Folder", EnclosingFolder),
+            ],
+            vec![item("Recents", Recents), item("Home", Home)],
+        ],
     );
     let window = Menu::new("Window", vec![vec![item("Show Progress", ShowProgress)]]);
     MenuBar {
@@ -522,6 +535,9 @@ mod tests {
                 "  Back win.go-back",
                 "  Forward win.go-forward",
                 "  Enclosing Folder win.go-enclosing-folder",
+                "  ---",
+                "  Recents win.go-recents",
+                "  Home win.go-home",
                 "Window:",
                 "  Show Progress win.show-progress",
             ]

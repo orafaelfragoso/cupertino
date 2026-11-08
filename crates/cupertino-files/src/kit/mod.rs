@@ -1284,6 +1284,8 @@ impl Model {
             MenuAction::Back => window.step(Step::Back, session),
             MenuAction::Forward => window.step(Step::Forward, session),
             MenuAction::EnclosingFolder => window.step(Step::Parent, session),
+            MenuAction::Recents => window.go(crate::recents::location().to_path_buf(), session),
+            MenuAction::Home => window.go(session.home.clone(), session),
             MenuAction::MoveToTrash => window.trash_selection(session),
             MenuAction::PutBack => window.put_back(session),
             MenuAction::NewFolder => match operations::new_folder(window.browser.dir()) {

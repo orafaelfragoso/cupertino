@@ -124,6 +124,14 @@ impl Application for Counter {
                 }]
             }
             m if m.starts_with("presented ") => model.presented.push(m[10..].to_owned()),
+            m if m.starts_with("later ") => {
+                let (nanos, name) = m[6..].split_once(' ').unwrap();
+                return vec![Command::After {
+                    delay: Duration::from_nanos(nanos.parse().unwrap()),
+                    message: format!("due {name}"),
+                }];
+            }
+            m if m.starts_with("due ") => model.presented.push(m.to_owned()),
             m if m.starts_with("token ") => model
                 .tokens
                 .push(Some(m[6..].to_owned()).filter(|t| !t.is_empty())),
@@ -509,6 +517,36 @@ fn a_message_waits_until_the_window_has_presented_its_first_frame() {
         rt.on_presented.is_empty(),
         "the message for a window that never opened was dropped"
     );
+}
+
+/// A message asked for after a delay comes once the runtime's clock has passed it and not before, those due together in
+/// the order they were asked for; the time of the next one bounds the runtime's wait.
+#[test]
+fn a_message_asked_for_after_a_delay_comes_once_the_clock_reaches_it() {
+    let clock = Arc::new(FakeClock::default());
+    let damage = Rc::default();
+    let mut options = options(&damage);
+    options.clock = clock.clone();
+    let mut rt = Rt::new(FakeSystem::default(), options);
+    rt.step(steps()).unwrap();
+    clock.0.store(1_000, Ordering::SeqCst);
+    for message in ["later 500 b", "later 200 a", "later 500 c"] {
+        rt.messages.push_back(message.into());
+    }
+    rt.step(steps()).unwrap();
+    assert!(rt.model().presented.is_empty());
+    assert_eq!(rt.pending().next_wake, Some(Timestamp(1_200)));
+    clock.0.store(1_199, Ordering::SeqCst);
+    rt.step(steps()).unwrap();
+    assert!(rt.model().presented.is_empty(), "not before its time");
+    clock.0.store(1_200, Ordering::SeqCst);
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().presented, ["due a"]);
+    assert_eq!(rt.pending().next_wake, Some(Timestamp(1_500)));
+    clock.0.store(2_000, Ordering::SeqCst);
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().presented, ["due a", "due b", "due c"]);
+    assert_eq!(rt.pending().next_wake, None);
 }
 
 /// The image is laid out at whole points and drawn at the window's scale rounded up to whole pixels per point, with the

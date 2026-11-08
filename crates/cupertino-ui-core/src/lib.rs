@@ -335,6 +335,12 @@ pub enum Command<M> {
         window: WindowKey,
         message: M,
     },
+    /// Sends `message` once `delay` has passed on the runtime's clock, after the messages of earlier `After`s due at
+    /// the same time. Nothing cancels it: an application that may no longer want it tells so in the message.
+    After {
+        delay: std::time::Duration,
+        message: M,
+    },
     Exit,
 }
 

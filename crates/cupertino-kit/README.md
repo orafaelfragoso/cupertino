@@ -19,7 +19,8 @@ fn paint(cx: &mut PaintCx<'_>) {
 `ThemeTokens::neutral` when there is none or it is unusable (one line on stderr says why), so an application runs on any
 compositor. `app::run_on` and `app::run_on_with` run on a window system a desktop shell set up with its surface roles;
 `app::run_lock_screen_on_with` does the same for the lock screen, whose AT-SPI adapter the session's lock never mutes
-(`AtspiAdapter::lock_screen`). The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
+(`AtspiAdapter::lock_screen`), and `app::run_on_with_appearance` passes the session's appearance through a function first, for a
+shell surface that keeps the dark appearance in a light session. The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
 
 `file_icons::FileIcons` gives apps that list files the icon of each item's type as image renditions (1× and 2×) for
 `controls::Image`: the asset packs' and the host icon theme's icon of the type's kind or its nearest ancestor's (as

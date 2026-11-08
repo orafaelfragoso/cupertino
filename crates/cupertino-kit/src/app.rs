@@ -64,6 +64,23 @@ pub fn run_on<A: Application>(
     run_on_with::<A>(system, |_| start)
 }
 
+/// [`run_on`], with the session's appearance passed through `appearance` before the theme follows it: a shell surface
+/// that keeps the dark appearance in a light session maps `dark` to true and follows the display options as they are.
+pub fn run_on_with_appearance<A: Application>(
+    system: WaylandWindowSystem,
+    start: (A::Model, Vec<Command<A::Message>>),
+    appearance: fn(SystemAppearance) -> SystemAppearance,
+) -> Result<(), AppError> {
+    let first = appearance(system.appearance().unwrap_or_default());
+    let (mut options, theme) = options_and_theme(preferences(&first))?;
+    let follow = mapped(theme_for(theme, Arc::clone(&options.theme)), appearance);
+    options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
+    Runtime::<A, _>::start(system, options, start)
+        .with_theme_for(follow)
+        .run()
+        .map_err(AppError::Runtime)
+}
+
 /// [`run_on`], starting from what `start` makes of the runtime's options: a model that measures text itself does so
 /// with the text system the windows draw with.
 pub fn run_on_with<A: Application>(
@@ -121,6 +138,14 @@ pub fn preferences(appearance: &SystemAppearance) -> ThemePreferences {
         reduce_transparency: appearance.reduce_transparency,
         reduce_motion: appearance.reduce_motion,
     }
+}
+
+/// `follow`, with the session's appearance passed through `appearance` first.
+fn mapped(
+    mut follow: ThemeForAppearance,
+    appearance: fn(SystemAppearance) -> SystemAppearance,
+) -> ThemeForAppearance {
+    Box::new(move |session| follow(&appearance(*session)))
 }
 
 /// Makes the Cupertino theme for each appearance from `theme`. Without theme data, or where it lacks something the
@@ -345,6 +370,23 @@ mod tests {
         let expected = ThemeTokens::cupertino(&Theme::load().unwrap(), preferences(&dark)).unwrap();
         assert_eq!(*tokens, expected);
         assert!(tokens.motion.reduce);
+    }
+
+    #[test]
+    fn a_surface_can_keep_the_dark_appearance_and_follow_the_display_options() {
+        let dark = |session: SystemAppearance| SystemAppearance {
+            dark: true,
+            ..session
+        };
+        let start =
+            Arc::new(ThemeTokens::neutral(preferences(&SystemAppearance::default())).unwrap());
+        let mut follow = mapped(theme_for(None, start), dark);
+        let light = follow(&SystemAppearance {
+            reduce_transparency: true,
+            ..SystemAppearance::default()
+        });
+        assert_eq!(light.preferences.appearance, Appearance::Dark);
+        assert!(light.preferences.reduce_transparency);
     }
 
     #[test]

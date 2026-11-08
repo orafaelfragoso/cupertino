@@ -79,6 +79,26 @@ fn glass_environment(env: &Environment, tone: GlassTone) -> Environment {
     }
 }
 
+/// What a node lies on, which its children inherit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Under {
+    /// The window's own content.
+    Window,
+    /// A material other than glass: its text keeps the window's colours.
+    Material,
+    /// Glass with the tone of its face.
+    Glass(GlassTone),
+}
+
+/// Whether `outer` holds `inner` whole, to within the rounding of a pixel edge.
+fn holds(outer: &Rect, inner: &Rect) -> bool {
+    const SLACK: f64 = 0.5;
+    inner.min_x() >= outer.min_x() - SLACK
+        && inner.min_y() >= outer.min_y() - SLACK
+        && inner.max_x() <= outer.max_x() + SLACK
+        && inner.max_y() <= outer.max_y() + SLACK
+}
+
 /// The index of a tone in the painter's glass environments.
 fn tone_index(tone: GlassTone) -> usize {
     match tone {
@@ -289,9 +309,12 @@ impl Painter {
                     .map(|tone| glass_environment(input.env, tone))
             })
             .clone();
-        // The glass each node lies on, as its children inherit it: the window's material when it is glass and shown,
-        // and below a node that shows glass that node's region.
-        let mut on_glass: HashMap<NodeId, Option<GlassTone>> = HashMap::new();
+        // What each node lies on, as its children inherit it: the window's material when it is glass and shown, below
+        // a node that shows a material that node's region. A node with nothing under it from its ancestors lies on
+        // the glass painted before it that holds it whole: a panel's content is often drawn beside the node of its
+        // glass, after it.
+        let mut on_glass: HashMap<NodeId, Under> = HashMap::new();
+        let mut glass_shown: Vec<(Rect, GlassTone)> = Vec::new();
         let window_glass = match input.background {
             WindowBackground::Surface { surface, .. } if input.backdrop => input
                 .env
@@ -299,8 +322,8 @@ impl Painter {
                 .surface(surface)
                 .material
                 .and_then(GlassStyle::of_material)
-                .map(|_| self.tones.window),
-            _ => None,
+                .map_or(Under::Window, |_| Under::Glass(self.tones.window)),
+            _ => Under::Window,
         };
         let mut list = DisplayList::default();
         let mut animating = Vec::new();
@@ -338,9 +361,21 @@ impl Painter {
                     shown.translate(-origin.x, -origin.y)
                 });
             let can_show = input.materials && materials.len() < MAX_MATERIALS;
-            let inherited = match node.parent {
-                Some(parent) => on_glass.get(&parent).copied().flatten(),
+            let under = match node.parent {
+                Some(parent) => on_glass.get(&parent).copied().unwrap_or(Under::Window),
                 None => window_glass,
+            };
+            let inherited = match under {
+                Under::Glass(tone) => Some(tone),
+                Under::Material => None,
+                Under::Window => {
+                    let shown = visible.translate(origin.x, origin.y);
+                    glass_shown
+                        .iter()
+                        .rev()
+                        .find(|(glass, _)| !shown.is_empty() && holds(glass, &shown))
+                        .map(|(_, tone)| *tone)
+                }
             };
             let foreground = Foreground {
                 on: inherited,
@@ -457,16 +492,20 @@ impl Painter {
             let painted = &self.nodes[&id];
             on_glass.insert(
                 id,
-                match painted.material {
-                    Some(NodeMaterial { glass: Some(_), .. }) => Some(foreground.own),
-                    Some(_) => None,
-                    None => inherited,
+                match (painted.material, inherited) {
+                    (Some(NodeMaterial { glass: Some(_), .. }), _) => Under::Glass(foreground.own),
+                    (Some(_), _) => Under::Material,
+                    (None, Some(tone)) => Under::Glass(tone),
+                    (None, None) => under,
                 },
             );
             blank.push(painted.ops.is_empty() && painted.group.is_none());
             if let Some(material) = painted.material {
                 let shown = visible.translate(origin.x, origin.y);
                 if shown.width() > 0.0 && shown.height() > 0.0 {
+                    if material.glass.is_some() {
+                        glass_shown.push((shown, foreground.own));
+                    }
                     let radius = if material.capsule {
                         placement.rect.size.width.min(placement.rect.size.height) / 2.0
                     } else {

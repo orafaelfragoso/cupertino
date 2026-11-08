@@ -6,18 +6,8 @@
 //! is busier: a primary label at full strength, a secondary one and a placeholder somewhat less.
 
 use crate::{Color, ColorRole, InteractionVariant, ThemeTokens};
-use cupertino_theme::glass::{apply_matrix, foreground_matrix_for, FaceTone};
-
-/// How strongly a primary label (text, a control's text, a header) is drawn on glass.
-pub const VIBRANT_PRIMARY: f32 = 1.0;
-/// How strongly a secondary label is drawn on glass.
-pub const VIBRANT_SECONDARY: f32 = 0.75;
-/// How strongly a text field's placeholder is drawn on glass.
-pub const VIBRANT_PLACEHOLDER: f32 = 0.7;
-
-/// The face the foreground matrix is applied to when the window does not know the face: a mid grey. Both matrices
-/// carry any face but the darkest to white or to black, so the exact face hardly matters.
-const NOMINAL_FACE: f32 = 0.5;
+use cupertino_theme::glass::{foreground_rgb, FaceTone};
+pub use cupertino_theme::glass::{VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY, VIBRANT_SECONDARY};
 
 /// How strongly the text of `role` is drawn on glass, or `None` for a colour that stays as the theme has it (fills,
 /// accents, the text of a filled control).
@@ -33,14 +23,8 @@ pub fn vibrant_level(role: ColorRole) -> Option<f32> {
 /// The colour of text and symbols on glass of the `dark` appearance whose face was measured as `tone` (`None` when it
 /// was not, or when the shape is too large to follow what lies behind it), opaque.
 pub fn glass_foreground(dark: bool, tone: Option<FaceTone>) -> Color {
-    let m = foreground_matrix_for(dark, tone);
-    let out = apply_matrix(&m, [NOMINAL_FACE, NOMINAL_FACE, NOMINAL_FACE, 1.0]);
-    Color::new(
-        out[0].clamp(0.0, 1.0),
-        out[1].clamp(0.0, 1.0),
-        out[2].clamp(0.0, 1.0),
-        1.0,
-    )
+    let [r, g, b] = foreground_rgb(dark, tone);
+    Color::new(r, g, b, 1.0)
 }
 
 /// Whether `c` is a neutral label colour: white or black at any opacity, as the theme draws text on a plain window.

@@ -659,6 +659,32 @@ pub fn apply_matrix(m: &ColorMatrix, c: [f32; 4]) -> [f32; 4] {
     })
 }
 
+/// How strongly a primary label (text, a control's text, a header) is drawn on glass: the face behind it is busier
+/// than a window's background, so labels on glass are drawn more opaque than on a plain window.
+pub const VIBRANT_PRIMARY: f32 = 1.0;
+/// How strongly a secondary label is drawn on glass.
+pub const VIBRANT_SECONDARY: f32 = 0.75;
+/// How strongly a text field's placeholder is drawn on glass.
+pub const VIBRANT_PLACEHOLDER: f32 = 0.7;
+
+/// The face the foreground matrix is applied to when the window does not know the face: a mid grey. Both matrices
+/// carry any face but the darkest to white or to black, so the exact face hardly matters.
+const NOMINAL_FACE: f32 = 0.5;
+
+/// The colour of text and symbols on glass of the `dark` appearance whose face was measured as `tone`
+/// ([`foreground_matrix_for`]), as an encoded sRGB colour the window draws at a label's opacity.
+pub fn foreground_rgb(dark: bool, tone: Option<FaceTone>) -> [f32; 3] {
+    let out = apply_matrix(
+        &foreground_matrix_for(dark, tone),
+        [NOMINAL_FACE, NOMINAL_FACE, NOMINAL_FACE, 1.0],
+    );
+    [
+        out[0].clamp(0.0, 1.0),
+        out[1].clamp(0.0, 1.0),
+        out[2].clamp(0.0, 1.0),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

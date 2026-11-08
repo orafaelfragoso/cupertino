@@ -1002,6 +1002,109 @@ fn text_on_glass_takes_the_matrix_of_its_face_and_text_beside_it_keeps_the_theme
 }
 
 #[test]
+fn text_drawn_after_a_glass_node_and_inside_it_lies_on_that_glass() {
+    use cupertino_ui_platform::GlassTone;
+    use cupertino_ui_theme::{Appearance, ColorTokens};
+    let label = Color::new(1.0, 1.0, 1.0, 0.85);
+    let secondary = Color::new(1.0, 1.0, 1.0, 0.55);
+    let mut env = env();
+    let mut theme = (*env.theme).clone();
+    theme.preferences.appearance = Appearance::Dark;
+    theme.colors = ColorTokens::new([
+        ((ColorRole::Text, StateVariant::NORMAL), label),
+        ((ColorRole::SecondaryText, StateVariant::NORMAL), secondary),
+    ]);
+    env.theme = Arc::new(theme);
+
+    // a panel's glass as a node of its own, then its content beside it in the tree: a label over the glass, one
+    // that straddles its edge and one past it
+    let mut tree = Tree::<M>::new(8);
+    let glass = Element::new(GlassPanel {
+        glass: true,
+        children: Vec::new(),
+    });
+    let labels = [TextSwatch, TextSwatch, TextSwatch].map(Element::new);
+    let root = tree
+        .reconcile(
+            None,
+            Element::new(crate::test_support::group(
+                std::iter::once(glass).chain(labels).collect(),
+            )),
+        )
+        .unwrap();
+    let [glass, over, straddling, past] = tree.get(root).unwrap().children.clone()[..] else {
+        unreachable!()
+    };
+    let mut geometry = Geometry::new();
+    for (id, rect) in [
+        (root, Rect::new(0.0, 0.0, 400.0, 200.0)),
+        (glass, Rect::new(20.0, 20.0, 240.0, 120.0)),
+        (over, Rect::new(40.0, 40.0, 80.0, 20.0)),
+        (straddling, Rect::new(220.0, 40.0, 80.0, 20.0)),
+        (past, Rect::new(300.0, 40.0, 80.0, 20.0)),
+    ] {
+        geometry.insert(
+            id,
+            Placement {
+                rect,
+                target: rect,
+                clip: None,
+                own_clip: None,
+            },
+        );
+    }
+    let mut painter = Painter::default();
+    let paint = |painter: &mut Painter| {
+        let painting = painter.paint(
+            &tree,
+            root,
+            &geometry,
+            &PaintInput {
+                env: &env,
+                focus: None,
+                focus_visible: false,
+                window_active: true,
+                background: WindowBackground::None,
+                backdrop: false,
+                materials: true,
+                now: Timestamp(0),
+            },
+        );
+        let of = |id: NodeId| {
+            painting
+                .list
+                .nodes
+                .iter()
+                .find(|n| n.id == id.into())
+                .map(fills)
+                .unwrap()
+        };
+        [of(over), of(straddling), of(past)]
+    };
+    let vibrant = |c: Color| {
+        vec![
+            Color {
+                a: cupertino_ui_theme::VIBRANT_PRIMARY,
+                ..c
+            },
+            Color {
+                a: cupertino_ui_theme::VIBRANT_SECONDARY,
+                ..c
+            },
+        ]
+    };
+    let theme = vec![label, secondary];
+    let [over_glass, straddling, past] = paint(&mut painter);
+    assert_eq!(over_glass, vibrant(Color::new(1.0, 1.0, 1.0, 1.0)));
+    assert_eq!((&straddling, &past), (&theme, &theme));
+    // the label over the glass follows the tone of the glass's face
+    painter.tones.regions = vec![GlassTone::Light];
+    let [over_glass, _, past] = paint(&mut painter);
+    assert_eq!(over_glass, vibrant(Color::new(0.0, 0.0, 0.0, 1.0)));
+    assert_eq!(past, theme);
+}
+
+#[test]
 fn text_on_a_window_of_glass_takes_the_windows_tone() {
     use cupertino_ui_platform::GlassTone;
     use cupertino_ui_theme::{Appearance, ColorTokens, Surface};

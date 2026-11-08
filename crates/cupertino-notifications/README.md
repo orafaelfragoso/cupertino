@@ -65,14 +65,22 @@ surface, ends the process with a failure status so the server restarts it.
   (`cupertino-login`) reads the list over the bus (`LockScreenNotifications`, below), which is empty while unlocked.
 - **Policy.** `notifications.conf` (`cupertino_defaults::notifications`, written by Settings > Notifications) holds Show
   on lock screen (on by default) and Show previews (Always, When Unlocked by default, Never), each with a per-application
-  override. The application id is the `desktop-entry` hint, else the application name (`Notification::group_key`). The
-  daemon reads the file at start and follows its changes (`set_policy`). Never also hides the content of the
+  override. The application id is the `desktop-entry` hint, else the application name (`Notification::group_key`).
+  Both are what the sender says of itself: nothing ties them to the sending process, so an application can name
+  another's id and be shown with that id's policy. It gains no other application's content that way, only the
+  showing of its own: with an id set to Always, its own title and body on the lock screen. That is the reach any sender
+  already has through the application name it chooses, which the lock screen always shows; set Always only for an
+  application whose words you are content to see there. The daemon reads the file at start and follows its changes
+  (`set_policy`). Never also hides the content of the
   application's banners and centre cards while unlocked (`shown`, `redacted`): its application, the title
   "Notification", no body, image or action buttons; a click still runs the default action. Changing the policy
   measures the cards again.
 - **Bounds.** `Notify` cuts the application name to `MAX_APP_NAME_CHARS` (64), the summary to `MAX_SUMMARY_CHARS`
   (256) and the body to `MAX_BODY_CHARS` (8192) characters, each cut ending in an ellipsis (`notification::cap`), so the
-  model, the bus replies and the lock screen never hold more. The cards cut again where they draw: the summary and
+  model, the bus replies and the lock screen never hold more. A cut falls between grapheme clusters, so a letter keeps
+  its marks and an emoji sequence or flag stays whole; text is cut in its logical order, right-to-left text included.
+  The body is cut before its markup is parsed, and a cut inside a tag or an entity drops what is left of it
+  (`cap_markup`), so no half tag shows as text. A `desktop-entry` hint longer than a file name (255 bytes) is dropped. The cards cut again where they draw: the summary and
   application name by the same caps, the body at its byte bound and line limit, all ending in an ellipsis.
 - **Accessibility.** A banner is a live region, polite or assertive when critical, so a screen reader reads it as it
   arrives without the banner taking the focus. The AT-SPI bridge announces a live node only as it appears or is
@@ -123,7 +131,7 @@ The process owns `org.freedesktop.Notifications` on the session bus. It requests
 | `SetDoNotDisturb(b) | Turns do not disturb on (until turned off) or off. The caller is checked (`cupertino-peer`): a Flatpak, a Snap or a caller the bus cannot name is refused with an `org.cupertino.Error.*` name and nothing changes; other processes of the user may call it. |
 | `SetDoNotDisturbFor(s) (same caller check) | Turns it on for one of the `FocusLifetimes` rows (`a(ss): identifier and title, in menu order). |
 | `DoNotDisturb` property | Tells whether it is in effect, with change signals, also when a duration runs out. The menu bar's Focus item shows these rows. |
-| `LockScreenNotifications` → `a(usss)` | The lock screen's list (`lock_screen()`): id, application, title and body of each, already redacted by the policy; empty while unlocked. Same caller check as `SetDoNotDisturb`. |
+| `LockScreenNotifications` → `a(usss)` | The lock screen's list (`lock_screen()`): id, application, title and body of each, already redacted by the policy; empty while unlocked. Same caller check as `SetDoNotDisturb`: any unsandboxed process of the user may call it, a Flatpak or a Snap may not. With previews Always, such a process can read the titles and bodies listed while locked; it could already read every notification as it is sent, since a process of the user may monitor its own session bus, so the method opens nothing new. With When Unlocked or Never no reply holds a title, body, image or action. |
 | `Applications` → `a(ss)` | The applications of the notifications on screen and in the centre: the id their settings are kept under and their name, for Settings > Notifications. Same caller check. |
 | `LockScreenChanged` signal | The lock screen's list changed (an arrival, a replacement, a close, the lock or the unlock, a policy change). It carries nothing, so no content goes out to every listener on the bus: the lock screen asks for the list again, and again whenever the daemon's name changes owner. |
 

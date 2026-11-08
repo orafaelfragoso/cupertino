@@ -17,6 +17,7 @@
 pub mod calc;
 #[cfg(feature = "app")]
 pub mod control;
+pub mod convert;
 pub use cupertino_apps::entry as desktop;
 pub mod engine;
 pub use cupertino_apps::exec;

@@ -313,25 +313,41 @@ fn looks_like_math(toks: &[Tok]) -> bool {
     has_value && structural
 }
 
-/// Evaluate `input`; `None` when it is not (valid) arithmetic.
-pub fn evaluate(input: &str) -> Option<Calculation> {
-    let input = input.trim().trim_start_matches('=').trim();
-    if input.is_empty() || input.len() > 200 {
-        return None;
-    }
-    let toks = lex(input)?;
-    if !looks_like_math(&toks) {
-        return None;
-    }
+/// The longest input evaluated, in bytes.
+const MAX_INPUT: usize = 200;
+
+/// The value of the whole of `toks`, `None` when they are not valid arithmetic or the value is not finite.
+fn value_of(toks: Vec<Tok>) -> Option<f64> {
     let mut p = Parser {
         t: toks,
         p: 0,
         depth: 0,
     };
     let value = p.expr()?;
-    if p.p != p.t.len() || !value.is_finite() {
+    (p.p == p.t.len() && value.is_finite()).then_some(value)
+}
+
+/// The value of `input` as a number or any arithmetic, a bare number included (`12`, `-3.5`, `2*(1+2)`): the quantity
+/// of a conversion. `None` for anything else, and on the same failures as [`evaluate`].
+pub fn number(input: &str) -> Option<f64> {
+    let input = input.trim();
+    if input.is_empty() || input.len() > MAX_INPUT {
         return None;
     }
+    value_of(lex(input)?)
+}
+
+/// Evaluate `input`; `None` when it is not (valid) arithmetic.
+pub fn evaluate(input: &str) -> Option<Calculation> {
+    let input = input.trim().trim_start_matches('=').trim();
+    if input.is_empty() || input.len() > MAX_INPUT {
+        return None;
+    }
+    let toks = lex(input)?;
+    if !looks_like_math(&toks) {
+        return None;
+    }
+    let value = value_of(toks)?;
     Some(Calculation {
         expression: input.to_string(),
         value,
@@ -537,6 +553,52 @@ mod tests {
         assert_eq!(format_number(1234.5), "1234.5");
         assert_eq!(format_number(1.5e-7), "1.5e-7");
         assert_eq!(format_number(-2.5e22), "-2.5e22");
+    }
+
+    #[test]
+    fn division_by_zero_is_no_result() {
+        for s in [
+            "1/0",
+            "0/0",
+            "5 ÷ 0",
+            "1/(2-2)",
+            "7 % (3-3)",
+            "1/0*0",
+            "-1/0",
+        ] {
+            assert!(evaluate(s).is_none(), "{s:?}");
+        }
+        assert_eq!(val("0/5"), 0.0);
+    }
+
+    #[test]
+    fn huge_numbers_stay_finite_or_give_no_result() {
+        assert_eq!(text("99999999999999999999*1"), "1e20");
+        assert_eq!(text("1e300*1e8"), "1e308");
+        assert_eq!(text("2^1000*1"), "1.07150860719e301");
+        for s in [
+            "1e308*10",
+            "2^1024",
+            "10^400",
+            "exp(1000)",
+            "1e309+1",
+            "-1e308*10",
+        ] {
+            assert!(evaluate(s).is_none(), "{s:?} overflows");
+        }
+        assert_eq!(text("1/1e300"), "1e-300");
+        assert!(evaluate("1e-320*1").is_some(), "subnormals still show");
+    }
+
+    #[test]
+    fn a_number_is_any_arithmetic_or_a_bare_number() {
+        assert_eq!(number("42"), Some(42.0));
+        assert_eq!(number("-3.5"), Some(-3.5));
+        assert_eq!(number(" 2*(1+2) "), Some(6.0));
+        assert_eq!(number("pi"), Some(std::f64::consts::PI));
+        for s in ["", "abc", "1/0", "2^2000", "1 2", "(1", &"1+".repeat(150)] {
+            assert_eq!(number(s), None, "{s:?}");
+        }
     }
 
     #[test]

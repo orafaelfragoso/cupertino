@@ -441,8 +441,8 @@ async fn credentials(
 /// Whether the caller `credentials` describe may use Files: a process of user `own_uid` that runs in no Flatpak (a
 /// `/.flatpak-info` in its root) and no Snap (an AppArmor label starting `snap.`). The process is held by the
 /// descriptor the daemon passed (`ProcessFD`), so its id cannot name another process while it is judged; a daemon
-/// that passes none is asked for the `ProcessID`. A process whose root cannot be read is refused. `proc_root` is
-/// `/proc`.
+/// that passes none is asked for the `ProcessID`, and a descriptor is opened for it here. A process that is gone, or
+/// whose root cannot be read, is refused. `proc_root` is `/proc`.
 fn judge(
     credentials: &ConnectionCredentials,
     own_uid: u32,
@@ -451,12 +451,22 @@ fn judge(
     if credentials.unix_user_id() != Some(own_uid) {
         return Err("the caller runs as another user");
     }
-    let pidfd = credentials.process_fd().map(AsFd::as_fd);
-    let pid = match pidfd {
-        Some(fd) => pid_of(fd).filter(|pid| credentials.process_id().is_none_or(|p| p == *pid)),
-        None => credentials.process_id(),
-    }
-    .ok_or("the bus gave no process for the caller")?;
+    let opened;
+    let (pid, pidfd) = match credentials.process_fd() {
+        Some(fd) => {
+            let fd = fd.as_fd();
+            let pid = pid_of(fd).filter(|pid| credentials.process_id().is_none_or(|p| p == *pid));
+            (pid, fd)
+        }
+        None => {
+            let pid = credentials
+                .process_id()
+                .ok_or("the bus gave no process for the caller")?;
+            opened = pidfd_open(pid).map_err(|_| "the caller is gone")?;
+            (Some(pid), opened.as_fd())
+        }
+    };
+    let pid = pid.ok_or("the bus gave no process for the caller")?;
     if credentials
         .linux_security_label()
         .is_some_and(|label| label.starts_with(b"snap."))
@@ -464,7 +474,7 @@ fn judge(
         return Err("a Snap may not use Files over the bus");
     }
     let process = proc_root.join(pid.to_string());
-    if std::fs::read(process.join("attr/current")).is_ok_and(|l| l.starts_with(b"snap.")) {
+    if apparmor_label(&process).is_some_and(|l| l.starts_with(b"snap.")) {
         return Err("a Snap may not use Files over the bus");
     }
     match std::fs::metadata(process.join("root/.flatpak-info")) {
@@ -473,10 +483,31 @@ fn judge(
         Err(_) => return Err("the caller's process cannot be checked"),
     }
     // what was read describes the caller only while the descriptor still names a live process
-    if pidfd.is_some_and(exited) {
+    if exited(pidfd) {
         return Err("the caller is gone");
     }
     Ok(())
+}
+
+/// The AppArmor label of the process at `process` (its `/proc` entry): AppArmor's own entry, else the one of the first
+/// security module, which is AppArmor's when it is the only one that keeps a label.
+fn apparmor_label(process: &Path) -> Option<Vec<u8>> {
+    std::fs::read(process.join("attr/apparmor/current"))
+        .or_else(|_| std::fs::read(process.join("attr/current")))
+        .ok()
+}
+
+/// A descriptor that holds process `pid`; fails when it is gone.
+fn pidfd_open(pid: u32) -> io::Result<std::os::fd::OwnedFd> {
+    let pid =
+        libc::pid_t::try_from(pid).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // Safety: pidfd_open takes a pid and flags and returns a new descriptor or -1.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // Safety: the descriptor was just made and nothing else owns it.
+    Ok(unsafe { std::os::fd::FromRawFd::from_raw_fd(fd as i32) })
 }
 
 /// The process id a pidfd names, as the kernel shows it.
@@ -873,11 +904,7 @@ mod tests {
 
     /// The pidfd of this process.
     fn own_pidfd() -> std::os::fd::OwnedFd {
-        // Safety: pidfd_open takes a pid and flags and returns a new descriptor or -1.
-        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, std::process::id(), 0) };
-        assert!(fd >= 0, "pidfd_open: {}", io::Error::last_os_error());
-        // Safety: the descriptor was just made and nothing else owns it.
-        unsafe { std::os::fd::FromRawFd::from_raw_fd(fd as i32) }
+        pidfd_open(std::process::id()).expect("pidfd_open")
     }
 
     #[test]
@@ -914,6 +941,19 @@ mod tests {
         let process = proc_root.path().join(std::process::id().to_string());
         std::fs::create_dir_all(process.join("root")).unwrap();
         assert_eq!(judge(&me, uid, proc_root.path()), Ok(()));
+        // a Snap's label in AppArmor's own entry, behind another security module's
+        std::fs::create_dir_all(process.join("attr/apparmor")).unwrap();
+        std::fs::write(process.join("attr/current"), "unconfined").unwrap();
+        std::fs::write(
+            process.join("attr/apparmor/current"),
+            "snap.app.app (enforce)",
+        )
+        .unwrap();
+        assert!(
+            judge(&me, uid, proc_root.path()).is_err(),
+            "a Snap by AppArmor's entry"
+        );
+        std::fs::remove_dir_all(process.join("attr")).unwrap();
         std::fs::write(process.join("root/.flatpak-info"), "[Application]\n").unwrap();
         assert!(judge(&me, uid, proc_root.path()).is_err(), "a Flatpak");
         std::fs::remove_file(process.join("root/.flatpak-info")).unwrap();
@@ -928,12 +968,21 @@ mod tests {
 
     #[test]
     fn a_process_that_exited_is_refused() {
+        // named by its process id alone, as a daemon without process descriptors names it
+        let mut gone = std::process::Command::new("true").spawn().unwrap();
+        let gone_pid = gone.id();
+        gone.wait().unwrap();
+        let uid = own_uid();
+        let named = ConnectionCredentials::default()
+            .set_unix_user_id(uid)
+            .set_process_id(gone_pid);
+        assert_eq!(
+            judge(&named, uid, Path::new("/proc")),
+            Err("the caller is gone")
+        );
+
         let mut child = std::process::Command::new("true").spawn().unwrap();
-        let pid = child.id();
-        // Safety: as in own_pidfd.
-        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
-        assert!(fd >= 0);
-        let fd: std::os::fd::OwnedFd = unsafe { std::os::fd::FromRawFd::from_raw_fd(fd as i32) };
+        let fd = pidfd_open(child.id()).unwrap();
         child.wait().unwrap();
         assert!(exited(fd.as_fd()));
         assert!(!exited(own_pidfd().as_fd()));

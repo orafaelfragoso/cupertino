@@ -479,7 +479,7 @@ fn an_inactive_windows_row_icons_take_the_secondary_label_colour() {
 
 #[test]
 fn a_busy_row_turns_an_activity_indicator_where_its_eject_button_was() {
-    let mut h = Harness::<Devices>::animated();
+    let h = Harness::<Devices>::animated();
     let spokes = |h: &Harness<Devices>, name: &str| -> Vec<Rect> {
         let id = PaintNodeId::from(row(h, name));
         h.snapshot()

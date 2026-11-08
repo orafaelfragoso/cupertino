@@ -427,11 +427,10 @@ fn open_popup(h: &mut Harness, app: &App) {
     h.wait_until("the popup to show", |s| {
         s.windows.iter().any(|w| {
             w.window.toplevel().is_some_and(|t| {
-                PopupManager::popups_for_surface(t.wl_surface())
-                    .any(|(p, _)| {
-                        with_renderer_surface_state(p.wl_surface(), |r| r.buffer().is_some())
-                            .unwrap_or(false)
-                    })
+                PopupManager::popups_for_surface(t.wl_surface()).any(|(p, _)| {
+                    with_renderer_surface_state(p.wl_surface(), |r| r.buffer().is_some())
+                        .unwrap_or(false)
+                })
             })
         })
     });

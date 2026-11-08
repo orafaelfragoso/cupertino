@@ -841,7 +841,11 @@ pub(crate) fn shadow_item(
 
 /// The physical origin of a window's surface tree in output-local device pixels: its visual origin, inset by the
 /// decorations, less the window geometry's offset into the surface.
-fn window_surface_origin(entry: &WindowEntry, plan: &WindowPlan, p: &SceneParams<'_>) -> Point<i32, Physical> {
+fn window_surface_origin(
+    entry: &WindowEntry,
+    plan: &WindowPlan,
+    p: &SceneParams<'_>,
+) -> Point<i32, Physical> {
     let scale = Scale::from(p.scale);
     let geo = entry.window.geometry();
     let ins = entry.insets();

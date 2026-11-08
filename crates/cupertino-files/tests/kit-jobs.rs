@@ -16,7 +16,7 @@ use cupertino_files::kit::{Observer, Start, PROGRESS_WINDOW_DELAY};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::PlaceKind;
 use cupertino_kit::core::{Key, Role, WindowKey};
-use cupertino_kit::platform::{Mods, WindowEvent, WindowId};
+use cupertino_kit::platform::{Mods, WindowEvent, WindowId, WindowStates};
 use cupertino_kit::theme::{Appearance, ThemePreferences};
 use cupertino_test_bus::{missing_tool, PrivateBus};
 use zbus::zvariant::OwnedValue;
@@ -198,6 +198,15 @@ fn named_in(run: &Run, window: WindowId, role: Role) -> Vec<String> {
         .collect()
 }
 
+/// Have the compositor configure `window`, so it draws a frame.
+fn present(run: &mut Run, window: WindowId) {
+    run.driver
+        .window_system_mut()
+        .configure(window, None, WindowStates::default())
+        .unwrap();
+    run.settle();
+}
+
 /// Ask `window` to close, as its title bar's close button does.
 fn close(run: &mut Run, window: WindowId) {
     run.driver
@@ -289,6 +298,8 @@ fn stop_in_the_progress_window_stops_the_copy_and_leaves_nothing_half_written() 
         .expect("the copy started");
     wait(&mut run, |run| progress(run).is_some());
     let shown = progress(&run).unwrap();
+    present(&mut run, shown);
+    run.driver.look(shown, "files-progress-window").unwrap();
     run.window = shown;
     run.click_named(Role::Button, "Stop");
     gate.release();
@@ -426,6 +437,8 @@ fn a_name_taken_gives_the_arrival_a_free_one_and_a_failure_opens_the_progress_wi
         texts.contains(&"Permission denied.".to_owned()),
         "{texts:?}"
     );
+    present(&mut run, shown);
+    run.driver.look(shown, "files-progress-failure").unwrap();
     assert!(bus.heard.recv_timeout(Duration::from_millis(200)).is_err());
 
     // its Close forgets the failure; with no browser window a failure is also posted, and opens it again

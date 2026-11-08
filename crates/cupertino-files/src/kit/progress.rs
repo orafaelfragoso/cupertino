@@ -28,7 +28,7 @@ const TITLE: &str = "File Operations";
 const WIDTH: f64 = 420.0;
 const MAX_ROWS: usize = 4;
 /// A row: about its height, which sizes the window, the room around it and between its parts, and its folder icon.
-const ROW_HEIGHT: f64 = 64.0;
+const ROW_HEIGHT: f64 = 76.0;
 const ROW_INSETS: Insets = Insets {
     top: 8.0,
     left: 16.0,
@@ -40,7 +40,7 @@ const LINE_SPACING: f64 = 4.0;
 const ICON: f64 = 32.0;
 /// The symbol beside an operation, and beside a failure.
 const FOLDER_SYMBOL: &str = "symbol.folder";
-const FAILURE_SYMBOL: &str = "symbol.exclamationmark.triangle";
+const FAILURE_SYMBOL: &str = "symbol.xmark.circle";
 /// The text of a row's title, and of the line under it.
 const TITLE_SIZE: f32 = 13.0;
 const DETAIL_SIZE: f32 = 11.0;

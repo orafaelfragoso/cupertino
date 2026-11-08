@@ -148,7 +148,7 @@ def main() -> int:
             command = [sys.executable, str(Path(__file__).resolve().with_name("build-test-fixtures.py")),
                        "--locked", *fixture_options, "--", *command]
         lease = os.environ.get("CUPERTINO_BUILD_LOCK_FD")
-        inherited = () if lease is None else (int(lease),)
+        inherited = () if lease is None else tuple(map(int, lease.split(",")))
         for descriptor in inherited:
             os.fstat(descriptor)
         return subprocess.run(command, check=False, pass_fds=inherited).returncode

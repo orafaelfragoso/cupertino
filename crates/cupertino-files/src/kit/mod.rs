@@ -67,6 +67,7 @@ use crate::thumbnail::Thumbnailer;
 use crate::trash::Trash;
 use crate::udisks::{Media, Passphrase, Report, Volumes};
 use crate::window::ViewMode;
+use crate::window_prefs::WindowPrefs;
 use crate::SortSpec;
 
 /// Identifier of the window for the server, as the desktop entry names it.
@@ -86,7 +87,9 @@ pub struct Start {
     volumes: Option<Volumes>,
     media_woken: async_channel::Receiver<()>,
     trash: Trash,
-    view: ViewMode,
+    /// What a new window starts with, and the file that keeps it between launches.
+    prefs: WindowPrefs,
+    prefs_file: Option<PathBuf>,
     home: Option<PathBuf>,
     observer: Option<Observer>,
     /// How long a file operation runs before the progress window opens by itself.
@@ -137,7 +140,8 @@ impl Start {
             volumes,
             media_woken,
             trash: Trash::new(),
-            view: ViewMode::Icons,
+            prefs: WindowPrefs::default(),
+            prefs_file: None,
             home: None,
             observer: None,
             progress_delay: jobs::PROGRESS_WINDOW_DELAY,
@@ -166,7 +170,20 @@ impl Start {
 
     /// The windows opening in `view` in place of the icon view.
     pub fn with_view(self, view: ViewMode) -> Start {
-        Start { view, ..self }
+        Start {
+            prefs: WindowPrefs { view, ..self.prefs },
+            ..self
+        }
+    }
+
+    /// The windows opening with the view and bars kept at `file` ([`crate::window_prefs`]), and a window's change of
+    /// them kept there. Without it nothing is read or written.
+    pub fn with_prefs_file(self, file: PathBuf) -> Start {
+        Start {
+            prefs: WindowPrefs::load(&file),
+            prefs_file: Some(file),
+            ..self
+        }
     }
 
     /// The sidebar's standard places read again from `source` whenever one of `folders` changes, besides the trash's
@@ -292,8 +309,10 @@ struct Session {
     /// Where a window on a file system that goes away goes.
     home: PathBuf,
     trash: Trash,
-    /// How a new window shows its folder.
-    view: ViewMode,
+    /// How a new window shows its folder and which bars it shows: the last choice any window made.
+    prefs: std::cell::Cell<WindowPrefs>,
+    /// Where that choice is kept between launches.
+    prefs_file: Option<PathBuf>,
     /// What Copy took last, for Paste Item and Move Item Here in any window.
     pasteboard: Vec<PathBuf>,
     /// The file operations, which outlive the windows that started them, and the progress window.
@@ -588,7 +607,8 @@ impl Application for Files {
                     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
                 }),
                 trash: start.trash,
-                view: start.view,
+                prefs: std::cell::Cell::new(start.prefs),
+                prefs_file: start.prefs_file,
                 pasteboard: Vec::new(),
                 jobs: jobs::Jobs::new(start.progress_delay, start.observer),
                 places_watch,
@@ -719,11 +739,12 @@ impl Model {
         let id = self.next_window;
         self.next_window += 1;
         let wake = self::woken(&woken, Message::Window(id, Event::Woken));
+        let prefs = self.session.prefs.get();
         let mut window = BrowserWindow {
             browser,
             woken,
-            path_bar: false,
-            status_bar: false,
+            path_bar: prefs.path_bar,
+            status_bar: prefs.status_bar,
             available: None,
             mounted_read_only: false,
             search: String::new(),
@@ -742,7 +763,7 @@ impl Model {
             rename_when_listed: None,
             full_screen: false,
             unlock: None,
-            view: self.session.view,
+            view: prefs.view,
             context: None,
             pressed: None,
             sidebar_focused: false,
@@ -1292,6 +1313,14 @@ impl Model {
             }
             MenuAction::View(_) => {}
         }
+        if matches!(
+            action,
+            MenuAction::TogglePathBar | MenuAction::ToggleStatusBar | MenuAction::View(_)
+        ) {
+            if let Some(window) = self.windows.get(&id) {
+                self.session.remember(window);
+            }
+        }
         if matches!(action, MenuAction::MoveToTrash | MenuAction::PutBack) {
             // the first item trashed makes the trash: its place comes at once
             self.session.follow_places();
@@ -1503,6 +1532,26 @@ impl Model {
 }
 
 impl Session {
+    /// `window`'s view and bars become what a new window starts with, kept in the prefs file when there is one.
+    fn remember(&self, window: &BrowserWindow) {
+        let prefs = WindowPrefs {
+            view: window.view,
+            path_bar: window.path_bar,
+            status_bar: window.status_bar,
+        };
+        if self.prefs.replace(prefs) == prefs {
+            return;
+        }
+        if let Some(file) = &self.prefs_file {
+            if let Err(e) = prefs.save(file) {
+                eprintln!(
+                    "cupertino-files: cannot keep the window's view in {}: {e}",
+                    file.display()
+                );
+            }
+        }
+    }
+
     fn failed(&self, action: Action, items: &[&Path], error: &dyn std::fmt::Display) {
         self.notices.post(notice::failure(action, items, error));
     }

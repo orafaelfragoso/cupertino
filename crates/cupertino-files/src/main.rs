@@ -16,6 +16,7 @@ use cupertino_files::places::{session_places, SessionPlaces};
 use cupertino_files::recents;
 use cupertino_files::thumbnail::Thumbnailer;
 use cupertino_files::trash::Trash;
+use cupertino_files::window_prefs;
 use cupertino_kit::file_icons::FileIcons;
 
 const USAGE: &str =
@@ -153,12 +154,16 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
         system,
     )
     .map(|start| {
-        start
+        let start = start
             .with_file_icons(icons)
             .with_thumbnails(Thumbnailer::from_env(kit::APP_ID))
             .with_places_source(source, watched)
             .with_instance(service)
-            .with_activation_token(token)
+            .with_activation_token(token);
+        match window_prefs::location() {
+            Some(file) => start.with_prefs_file(file),
+            None => start,
+        }
     })
     .map_err(|e| io::Error::new(e.kind(), format!("cannot open {}: {e}", folder.display())))
 }

@@ -200,6 +200,74 @@ fn the_bars_show_the_path_and_the_item_count() {
 }
 
 #[test]
+fn a_window_keeps_its_view_and_bars_and_a_new_window_starts_with_the_last_choice() {
+    use cupertino_files::window::ViewMode;
+    use cupertino_files::window_prefs::WindowPrefs;
+    let home = tempfile::tempdir().unwrap();
+    let documents = home.path().join("Documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    std::fs::write(documents.join("a.txt"), "a").unwrap();
+    let prefs = home.path().join("config/cupertino/files/window.json");
+    let kept = WindowPrefs {
+        view: ViewMode::Icons,
+        path_bar: true,
+        status_bar: false,
+    };
+    kept.save(&prefs).unwrap();
+    let places = vec![place("Documents", &documents, PlaceKind::Documents)];
+    let file = prefs.clone();
+    let preferences = cupertino_kit::theme::ThemePreferences {
+        appearance: cupertino_kit::theme::Appearance::Light,
+        reduce_transparency: false,
+        reduce_motion: false,
+    };
+    let mut run = Run::start_configured(
+        home,
+        documents,
+        places,
+        Notices::start(None),
+        None,
+        preferences,
+        move |start| start.with_prefs_file(file),
+    );
+    // the window opens as the file says: the icon view, the path bar shown and the status bar hidden
+    assert_eq!(run.menu_label("toggle-path-bar"), "Hide Path Bar");
+    assert_eq!(run.menu_label("toggle-status-bar"), "Show Status Bar");
+    assert!(
+        run.named(Role::Table).is_empty(),
+        "the icon view has no table"
+    );
+    let first = run.window;
+
+    run.menu("toggle-status-bar");
+    run.menu("view-list");
+    let chosen = WindowPrefs {
+        view: ViewMode::List,
+        path_bar: true,
+        status_bar: true,
+    };
+    assert_eq!(WindowPrefs::load(&prefs), chosen, "the last choice is kept");
+
+    run.menu("new");
+    let second = *run.windows().last().unwrap();
+    assert_ne!(second, first);
+    run.activate(second);
+    assert_eq!(run.menu_label("toggle-status-bar"), "Hide Status Bar");
+    assert_eq!(
+        run.named(Role::Table),
+        ["Documents"],
+        "the new window lists"
+    );
+
+    // each window keeps its own: hiding the new window's path bar leaves the first one's
+    run.menu("toggle-path-bar");
+    assert_eq!(run.menu_label("toggle-path-bar"), "Show Path Bar");
+    assert!(!WindowPrefs::load(&prefs).path_bar);
+    run.activate(first);
+    assert_eq!(run.menu_label("toggle-path-bar"), "Hide Path Bar");
+}
+
+#[test]
 fn items_moved_to_the_trash_are_put_back_where_they_were() {
     let mut run = Run::with(true, Notices::start(None));
     run.wait_until(|run| run.rows().len() == 3);

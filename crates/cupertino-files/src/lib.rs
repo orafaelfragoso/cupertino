@@ -57,6 +57,7 @@ pub mod typeselect;
 #[cfg(feature = "app")]
 pub mod udisks;
 pub mod window;
+pub mod window_prefs;
 
 pub use browser::{Activation, Browser};
 pub use entry::{Entry, Kind};

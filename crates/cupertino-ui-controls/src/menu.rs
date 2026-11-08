@@ -413,7 +413,7 @@ struct PanelState {
     /// The pointer came onto a row that can be chosen, other than the one it was on as the menu opened.
     reached: bool,
     pointer: Option<Point>,
-    /// The row the pointer last chose to highlight.
+    /// The row, of any kind, the pointer was last found on outside the way into a submenu.
     hovered: Option<usize>,
     aim: SubmenuAim,
     pending: Option<(Timestamp, Pending)>,
@@ -480,11 +480,11 @@ impl<M: Clone + 'static> Panel<M> {
     }
 
     /// The row under `p` takes the highlight, and its submenu opens, or the open one closes, once the pointer rests.
+    /// On a row that cannot be chosen the open submenu closes too; on the panel's padding it stays.
     fn hover(&self, state: &mut PanelState, p: Point, bounds: Rect, cx: &mut EventCx<'_, M>) {
-        let row = self
-            .row_at(p, bounds)
-            .filter(|&i| self.slots[i].position.is_some());
-        if row.is_some() && row != self.start {
+        let row = self.row_at(p, bounds);
+        let position = row.and_then(|i| self.slots[i].position);
+        if position.is_some() && row != self.start {
             state.reached = true;
         }
         if row == state.hovered {
@@ -496,7 +496,7 @@ impl<M: Clone + 'static> Panel<M> {
             state.pending = state.pending.filter(|(_, p)| *p == Pending::Collapse);
             return;
         };
-        if let Some(position) = self.slots[index].position {
+        if let Some(position) = position {
             cx.focus_item(FocusTarget::Index(position));
         }
         let now = cx.now();

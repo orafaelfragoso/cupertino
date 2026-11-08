@@ -590,3 +590,17 @@ fn typed_letters_find_a_row_return_chooses_it_and_escape_closes_one_level_then_t
     assert!(h.focused("canvas"), "and the focus back on the canvas");
     assert_eq!(h.model().chosen, ["Reload"]);
 }
+
+#[test]
+fn resting_on_a_separator_closes_the_open_submenu_as_another_row_does() {
+    let mut h = Harness::<Browser>::new();
+    let mut ptr = Pointer::new(&h);
+    sort_by_open(&mut h, &mut ptr);
+    // down and away from the submenu, in one move
+    let separator = row_point(&h, "menu", 4, 0.2);
+    ptr.wait(&mut h, 16);
+    ptr.move_to(&mut h, separator);
+    assert_eq!(h.model().submenus, [0], "not at once");
+    ptr.wait(&mut h, 310);
+    assert!(h.model().submenus.is_empty());
+}

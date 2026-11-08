@@ -309,3 +309,36 @@ fn the_agent_registers_again_when_polkitd_restarts() {
     assert_eq!((again.1.as_str(), again.3.as_str()), ("c2", AGENT_PATH));
     assert!(running.registrations.try_recv().is_err());
 }
+
+#[test]
+fn a_restart_of_polkitd_that_the_bus_did_not_report_registers_nothing() {
+    let Some(running) = start() else { return };
+    // another peer says polkitd has a new owner, to the agent directly and to everyone
+    let peer = running.bus.connect();
+    let restarted = (POLKIT, "", peer.unique_name().unwrap().to_string());
+    for to in [Some(running.agent.as_str()), None] {
+        peer.emit_signal(
+            to,
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameOwnerChanged",
+            &restarted,
+        )
+        .unwrap();
+    }
+    assert!(
+        running
+            .registrations
+            .recv_timeout(Duration::from_millis(300))
+            .is_err(),
+        "a forged restart is ignored"
+    );
+    // the genuine restart after the forged one is still followed
+    drop(running.polkitd);
+    let (registered, registrations) = channel();
+    let _restarted = polkitd(&running.bus, registered);
+    assert_eq!(
+        registrations.recv_timeout(WAIT).expect("registered").3,
+        AGENT_PATH
+    );
+}

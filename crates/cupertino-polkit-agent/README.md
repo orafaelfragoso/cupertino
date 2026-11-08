@@ -22,6 +22,10 @@ The process:
   polkitd for that session, again whenever polkitd restarts;
 - answers only polkitd: a `BeginAuthentication` or `CancelAuthentication` from any other bus name is refused, and at
   most four authentications may wait at once;
+- believes a signal only from its sender: polkitd's restart only from the bus daemon's own `NameOwnerChanged`, and the
+  session's `Active` only from the connection that owns logind's name when the change arrives. The bus delivers a signal
+  addressed to the agent whatever its match rules say, so the agent reads plain match-rule streams and checks each message
+  itself rather than rely on the filtering of zbus's proxy streams; its session proxy keeps no property cache;
 - reaches the helper through polkit's socket (`/run/polkit/agent-helper.socket`) when it answers, else starts
   `polkit-agent-helper-1` from `/usr/lib/polkit-1/` or `/usr/libexec/` with an empty environment and the cookie on its
   standard input.
@@ -69,7 +73,8 @@ approximate in `panel` and `render` are Cupertino's own.
 ## Tests
 
 `cargo test -p cupertino-polkit-agent`: the model, the panel, the text and the helper's protocol as unit tests;
-`tests/agent.rs` the agent on a private bus with a fake polkitd (registration, refusals, limits); `tests/flow.rs` a whole
+`tests/agent.rs` the agent on a private bus with a fake polkitd (registration, refusals, limits, a forged restart that
+registers nothing); the `logind` unit test a forged `Active` change ignored and logind's own followed; `tests/flow.rs` a whole
 authentication without a display: a fake polkitd asks, the model and `conversation` run the fixture helper
 (`tests/fixtures/polkit-agent-helper-1`, which accepts "right"), and the test types. It checks the reason and the
 application the prompt shows, that a valid password answers polkitd, that three wrong ones are retried and then end the

@@ -991,9 +991,10 @@ impl WindowSystem for WaylandWindowSystem {
             })
             .map_err(platform_error)?;
         // the style goes with the surface's first commit, before any buffer
-        if let (Some(style), Some((effects, _))) =
-            (convert::window_style(spec.decorations), self.effects.as_ref())
-        {
+        if let (Some(style), Some((effects, _))) = (
+            convert::window_style(spec.decorations),
+            self.effects.as_ref(),
+        ) {
             effects
                 .set_window_style(&self.conn, toplevel.surface(), style)
                 .map_err(|e| PlatformError::Protocol(e.to_string()))?;

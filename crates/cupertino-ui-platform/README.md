@@ -4,6 +4,12 @@ CupertinoKit's window-system interface: the `WindowSystem` trait (windows, popup
 input method, activation tokens, drags), its events and `Capabilities`. MPL-2.0. Implemented by `cupertino-ui-wayland` on the desktop and by
 `cupertino-ui-test` headless.
 
+`WindowSpec::decorations` chooses the window's style: `Preferred` (titled: the compositor's title bar over the
+content), `Client`, `None`, and the styles whose content fills the window and draws the row the compositor's window
+control buttons lie in (`DecorationMode::content_fills_window`): `Unified` (the 52 pt toolbar row), `UnifiedCompact`
+(the 38 pt one) and `Sidebar` (the buttons at the top of a full-height sidebar). Without the desktop's effects those
+three are titled.
+
 `start_drag(window, DragRequest)` drags data out of a window from the pointer button held in it: the data in each of
 its MIME types (`ClipboardData`), the `DropAction`s a drop may take, and an optional `DragImage` (premultiplied RGBA at a
 whole number of pixels per point, both sides whole points, with the pointer at its `hotspot`). It returns a

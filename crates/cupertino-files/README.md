@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search, 6 drag and 9 drop tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search, 6 drag and 9 drop tests, 8 spring-loaded folder tests, 4 type-to-select and band tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
@@ -134,8 +134,11 @@ cell as the list draws it (icon and name, mirrored right to left), with the coun
 rows. The image is drawn at 0.8 opacity
 (`dragged::OPACITY`), at the window's scale rounded up. A press on an item of a selection keeps the selection, and its
 release without a drag selects that item alone. The window does nothing when the drag ends (the receiving application
-copies or moves; a move is not undone here), a cancelled or refused drag takes the image away at once with no return to
-the item, and the selection stays.
+copies or moves; a move is not undone here) and the selection stays. A drag released where nothing takes it, refused, or
+cancelled with Escape does not drop its image: the compositor, which draws every drag's image, flies it back to where
+the press was and then removes it, or fades it where it was let go when the window it came from is gone or hidden
+(`cupertino-server`, `drag_return.rs`). A cancelled drag also takes the window back from the folders it sprang open
+(below), so the item is where the image lands.
 
 **Dropping in.** The window takes a `text/uri-list` of local files dragged from any application, this one included
 (`kit::drops`, two `DropTarget`s): on a folder of the list or the icon grid, on a place of the sidebar, and anywhere
@@ -152,7 +155,21 @@ source hears the drop is finished only after the files are in place, and with wh
 item left its place, a copy when every item was copied, and otherwise nothing (an item that failed, or one dropped on
 the folder already holding it), so a source never removes items Files did not take. A list is taken whole or not at
 all: one with a URI of another scheme or host, a relative path, a `.` or `..` step or a NUL is refused. A drag of the window's own items has nowhere to go
-on one of the dragged folders or in the folder holding them all. Folders do not spring open under a drag.
+on one of the dragged folders or in the folder holding them all. The folders of the path bar take drops as the folder
+area does when it shows them (a third `DropTarget`).
+
+**Spring-loaded folders** (`spring`, `kit::spring`). A drag of files from any application, this one included, held
+over a folder of the list or the grid, a folder place of the sidebar or a folder of the path bar for
+`spring::SPRING_DELAY` (0.668 s) opens that folder in the same window; for the last `spring::SPRING_FLASH` (0.1 s) the
+folder flashes, drawn as selected (the path bar's folder as the folder shown). Moving onto another folder starts the
+wait again, and moving off every folder stops it; the folder shown, a file, a place that takes no drop (Recents, a
+read-only medium, a folder of the dragged items) and the Trash open nothing. The drag goes on in the folder that opened,
+so it can spring further down. The window remembers its folder, history, selection, view and scroll position from
+before the drag first opened a folder: the drag leaving the window (`DropTarget::on_leave`), released where nothing in
+the window takes it, or cancelled (Escape, or a refusal of the window's own drag) takes the window back there, the
+history as it was (the folders sprung through are not in it) and the selection and scroll position once the listing is
+read again; a drop keeps the folder the drag opened. The timers are `Command::After` messages of the dwell's
+generation, so one of a dwell that ended does nothing.
 
 **Failures.** A failure of something a person did (open, a new folder, duplicate, make alias, show original, put back,
 tags, rename, a name that can't be used, copy, paste, move to the trash) is one transient notification from "Files" on
@@ -256,7 +273,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `natural`, `sort`, `group` | name collation (case-, width-insensitive, numeric, localized), ordering, the date buckets dates read in | `NameKey`, `compare_names`, `SortSpec { key, ascending, folders_first }`, `sort_entries`, `insertion_index`, `date_bucket` |
 | `settings` | per-folder view state | `ViewSettings` (icon / list / column / gallery), `ViewStyle`, `default_columns`, `SettingsStore` (atomic JSON, keyed by device + inode), `FolderKey` |
 | `selection` | selection model | `Selection::{mouse_down, mouse_up, click_empty, move_focus, on_insert, on_remove, on_move}`, `Modifiers` |
-| `rename`, `typeselect` | interaction logic | `RenameTrigger`, `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`; `TypeSelect::{type_text, tab}` |
+| `rename`, `typeselect`, `spring` | interaction logic | `RenameTrigger`, `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`; `TypeSelect::{type_text, tab}`; `SpringLoad::{hover, due, cancel, flashing}` (a drag's dwell over folders, with `SPRING_DELAY` and `SPRING_FLASH`) |
 | `context_menu`, `menu_spec` | context menus | `menu_spec::{item_menu, background_menu, condense}` (the rows in order), `MenuItem`, `Command`, `common_apps` (the Open With list of a selection) |
 | `menu_bar`, `search_field` | the menu bar and the search field | `menu_bar(MenuState)`, `MenuAction`, `chords`, `enabled`; `SearchWidth::{want, tick, follow_toolbar, width}`, `open_width` |
 | `name_edit`, `operations` | rename in place and file changes | `NameEdit::{field, field_mut, commit}`; `rename_item` (no replace), `new_folder`, `drop_action`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`) |
@@ -267,11 +284,11 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `layout::icon` | icon view | `ideal_cell_size`, `max_title_lines`, `layout` (flow / justified, 32 pt section headers), `IconLayout::{hit, hits_in_rect, neighbour}`, `FreeGrid` |
 | `layout::list` | list view | `row_height`, `layout` (columns, rows with level and expanded state, disclosure, indentation), `ListLayout::{row_at, visible_rows}` |
 | `history`, `places`, `recents` | navigation state | `History::{visit, back, forward}`; `standard_places` (Recents, Applications, Desktop, Documents, Downloads, the computer, Trash), `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder`; `recents::{parse_xbel, recent_entries}` (the bookmark file is read with `cupertino_apps::recent`, which `parse_xbel` and `XBEL_NAME` re-export) |
-| `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space}`: model, history, the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
+| `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space, visit, return_to, is_loading}`: model, history (a `Visit` to go back to, with its selection), the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name` → `Notice`; `Notices::{start, post}`; `shown`, `escape` |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails` and `with_places_source`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `list` (the list view's presses and band), `band` (the rubber band), `clicks` (double-click and click-to-rename), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (paste and move off the window's thread), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places and the folder shown), `item_icons` (items' icons and thumbnails) |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails` and `with_places_source`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `list` (the list view's presses and band), `band` (the rubber band), `clicks` (double-click and click-to-rename), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (paste and move off the window's thread), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons and thumbnails) |
 | `thumbnail_service` | thumbnails of the items in view | `ThumbnailService::{new, want, forget, get, queued, memory}`, `Stamp`, `has_thumbnail`, `MEMORY_BUDGET`, `WORKERS` |
 | `main` (feature `app`) | the binary | arguments, the session's places, types, associations and buses, then `kit::run` |
 
@@ -341,8 +358,14 @@ locked -- env CUPERTINO_REPAINT_DIR=DIR BINARY --ignored --nocapture --exact rep
   the CPU: 60–70 ms a frame at 3840×2160, over the 8 ms budget. Opening a folder and the key of a search whose results
   fill the listing take as long. At scale 1 the search field's animation and typing a new name take 8–10 ms. See Frame
   time.
-* A folder does not spring open under a drag, and a drop from another application shows a move while it is held even
-  when it will copy across devices. The drag badge holds three digits.
+* A drop from another application shows a move while it is held even when it will copy across devices. The drag badge
+  holds three digits.
+* A drag that ends without a drop flies back to the point it was pressed at, kept relative to its window: the compositor
+  knows the window, not the item, so after the item is removed (or scrolled away by something other than a spring-loaded
+  folder, which the window returns from) the image still lands where the item was. It fades in place only when the
+  window is gone or hidden.
+* The list's rubber band starts only under the rows, so its edge scroll comes into play only when the rows grow while it
+  is held; the icon grid's band scrolls at both edges (`tests/kit-select.rs`).
 * Thumbnails are made for PNG, JPEG and WebP pictures only (what `cupertino-thumbnails` decodes): no external
   thumbnailers, so videos, PDFs and other documents show their type's icon. Thumbnails are decoded for a 2× display;
   a 1× display draws them shrunk. The sidebar keeps the design's template symbols, as the places are not files.

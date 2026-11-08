@@ -240,7 +240,10 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   objects, when a service's name changes owner, once a minute and after every action. A service that is not running, or has
   no device, hides its item. Any other failure hides it too and is reported on stderr once per reason. Without a system bus
   only the Focus item can show. The order next to the control panel is Wi-Fi, battery, Bluetooth, Focus, then the status
-  notifier items.
+  notifier items. The task's queue is bounded (`QUEUE`, 16): any peer can send the process signals, so a refresh is queued
+  only when none waits (the read a waiting refresh causes starts after the new signal, so it sees what it announced), the
+  session agent is a value the next read takes and never queued or lost, and an action that finds the queue full (the task
+  stuck on a service that does not answer) is dropped and reported on stderr instead of queued without bound.
   - Wi-Fi: a `Wi-Fi` switch row, then "Known Network(s)" and "Other Network(s)", each by name. A saved, open or OWE network is
     joined without a passphrase. The bar has no passphrase prompt, so other networks are listed disabled.
   - Battery: "Battery N%", "Power Source: Battery / Power Adapter", and "Charging" while charging (rows approximate).
@@ -301,4 +304,5 @@ cargo clippy -p cupertino-menubar --all-targets
 | `src/tone.rs` tests | The bar's text reaches 4.5:1 with its scrim at every lightness from 0 to 1000 for every tone it can hold there, and through each appearance's `MenuBar` colour ops (from `cupertino-glass`, a dev-dependency) for every wallpaper grey; no scrim outside the mid band or on the appearance's palette; the scrim values at 500 and 549. |
 | `tests/app-menus.rs` (feature `app`) | The menus Files and Settings publish with `cupertino-ui-menus`, read by the bar's worker over a private bus, open from their title and choose an item: the application hears that item's action. It builds the menus from `cupertino_files::menu_bar` and `cupertino_settings::menu_bar` themselves, so it needs these two apps-layer crates as dev-dependencies, which are the layer graph's dev-only exceptions for this crate. |
 | `tests/bar-view.rs` (feature `app`) | The bar, the bar with the File menu open, and the open menu as CupertinoKit draws them match the goldens in `tests/goldens`: the frame at 1x (x86_64 only, within 2/255 a channel) and its focus and accessibility tree. A press on a title opens its menu as a popup of the bar, and a click on a row chooses the row's item; a screen reader does both through the titles' and rows' Click action. Every settled frame passes `cupertino-ui-test`'s accessibility audit: each menu title and row says its place and its bar or menu its count (separators and the Help search field not counted). |
+| `src/extras_bus.rs` tests | 10 000 refreshes in a burst wait as one; a queue filled with actions stays at its bound, a refresh then is not needed, the newest session agent is kept, and a task that is gone is reported. |
 | `tests/extras_bus.rs` (feature `app`) | Stand-ins for the network, power, Bluetooth and notification services, served on one bus used as both system and session bus. Checks what the extras read, that joining an open network calls `Connect` without a passphrase and is read back, and that a service leaving the bus hides its item. |

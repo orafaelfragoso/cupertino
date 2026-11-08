@@ -7,6 +7,13 @@
 //! service's bus name changes owner (a daemon that starts later is picked up), on [`ExtrasBus::refresh`], and after
 //! every action. Properties are read from the service every time, never from a cache. A service that cannot be read
 //! hides its item; why is reported on stderr once per new reason.
+//!
+//! The task's queue is bounded ([`QUEUE`]). Any peer on a bus can send this process signals, so a refresh is queued
+//! only when none waits already: the read that a waiting refresh causes starts after the new signal arrived, so it
+//! sees what the signal announced. The session agent is a value the next read takes, not a queued command, so a
+//! newer agent replaces an older one and is never lost. An action waits in the queue; should the queue be full (the
+//! task is stuck on a service that does not answer), the action is dropped and reported rather than queued without
+//! bound.
 
 use crate::extras::{
     BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, FocusLifetime, FocusState,
@@ -15,8 +22,9 @@ use crate::extras::{
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use zbus::message::Type;
 use zbus::names::UniqueName;
 use zbus::proxy::{Builder, CacheProperties};
@@ -46,10 +54,12 @@ type DeviceRecord = (u32, String, String, String, String, String, String);
 /// A row of `GetNetworks`: SSID, signal (dBm, `i32::MIN` when unknown), security, saved, connected.
 type NetworkRecord = (String, i32, String, bool, bool);
 
+/// How many commands may wait for the task: at most one refresh, the rest actions.
+pub const QUEUE: usize = 16;
+
 enum Command {
     Refresh,
     Act(ExtraAction),
-    Agent(SessionAgent),
 }
 
 /// Which process may answer as the session agent, as the server names it. Nothing is trusted until it does.
@@ -63,9 +73,74 @@ pub enum SessionAgent {
     Any,
 }
 
+/// The task's queue, as the process and the signal followers fill it.
+#[derive(Clone)]
+struct Queue {
+    commands: async_channel::Sender<Command>,
+    /// A refresh waits in `commands`: another would read nothing newer.
+    refresh_waiting: Arc<AtomicBool>,
+    /// The session agent the next read takes.
+    agent: Arc<Mutex<SessionAgent>>,
+}
+
+impl Queue {
+    fn new() -> (Queue, async_channel::Receiver<Command>) {
+        let (commands, rx) = async_channel::bounded(QUEUE);
+        let queue = Queue {
+            commands,
+            refresh_waiting: Arc::new(AtomicBool::new(false)),
+            agent: Arc::new(Mutex::new(SessionAgent::None)),
+        };
+        (queue, rx)
+    }
+
+    /// Ask for a read, unless one waits already. Fails only when the task is gone.
+    fn refresh(&self) -> Result<(), WorkerGone> {
+        if self.refresh_waiting.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        match self.commands.try_send(Command::Refresh) {
+            Ok(()) => Ok(()),
+            // a full queue reads after each of its commands anyway
+            Err(async_channel::TrySendError::Full(_)) => {
+                self.refresh_waiting.store(false, Ordering::Release);
+                Ok(())
+            }
+            Err(async_channel::TrySendError::Closed(_)) => Err(WorkerGone),
+        }
+    }
+
+    /// The task took a refresh: the next signal queues another.
+    fn took_refresh(&self) {
+        self.refresh_waiting.store(false, Ordering::Release);
+    }
+
+    /// Queue an action; one that finds the queue full is dropped and reported. Fails only when the task is gone.
+    fn act(&self, action: ExtraAction) -> Result<(), WorkerGone> {
+        match self.commands.try_send(Command::Act(action)) {
+            Ok(()) => Ok(()),
+            Err(async_channel::TrySendError::Full(Command::Act(action))) => {
+                eprintln!("cupertino-menubar: {action:?} dropped: the services do not answer");
+                Ok(())
+            }
+            Err(async_channel::TrySendError::Full(_)) => Ok(()),
+            Err(async_channel::TrySendError::Closed(_)) => Err(WorkerGone),
+        }
+    }
+
+    fn set_agent(&self, agent: SessionAgent) -> Result<(), WorkerGone> {
+        *self.agent.lock().unwrap_or_else(|e| e.into_inner()) = agent;
+        self.refresh()
+    }
+
+    fn agent(&self) -> SessionAgent {
+        *self.agent.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 /// Handle on the extras task.
 pub struct ExtrasBus {
-    commands: async_channel::Sender<Command>,
+    queue: Queue,
 }
 
 impl ExtrasBus {
@@ -83,36 +158,31 @@ impl ExtrasBus {
         system: impl Future<Output = zbus::Result<Connection>> + Send + 'static,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> (ExtrasBus, mpsc::Receiver<Extras>) {
-        let (commands, rx) = async_channel::unbounded();
+        let (queue, rx) = Queue::new();
         let (out, events) = mpsc::channel();
         let executor = session.executor().clone();
         executor
             .spawn(
-                run(session, system, commands.clone(), rx, out, Arc::new(wake)),
+                run(session, system, queue.clone(), rx, out, Arc::new(wake)),
                 "cupertino-extras",
             )
             .detach();
-        (ExtrasBus { commands }, events)
+        (ExtrasBus { queue }, events)
     }
 
     /// Read every service again (the duration rows change with the hour).
     pub fn refresh(&self) -> Result<(), WorkerGone> {
-        self.commands
-            .try_send(Command::Refresh)
-            .map_err(|_| WorkerGone)
+        self.queue.refresh()
     }
 
     /// Name the process that is the session agent; the system menu is read again.
     pub fn session_agent(&self, agent: SessionAgent) -> Result<(), WorkerGone> {
-        self.commands
-            .try_send(Command::Agent(agent))
-            .map_err(|_| WorkerGone)
+        self.queue.set_agent(agent)
     }
 
+    /// Carry out an action; dropped and reported when the queue is full.
     pub fn act(&self, action: ExtraAction) -> Result<(), WorkerGone> {
-        self.commands
-            .try_send(Command::Act(action))
-            .map_err(|_| WorkerGone)
+        self.queue.act(action)
     }
 }
 
@@ -142,7 +212,7 @@ impl Reasons {
 async fn run(
     session: Connection,
     system: impl Future<Output = zbus::Result<Connection>>,
-    commands: async_channel::Sender<Command>,
+    queue: Queue,
     rx: async_channel::Receiver<Command>,
     out: mpsc::Sender<Extras>,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -163,21 +233,27 @@ async fn run(
             (UPOWER_NAME, UPOWER_PATH),
             (UPOWER_NAME, UPOWER_DISPLAY_DEVICE_PATH),
         ] {
-            follow(system, name, path, &commands).await;
+            follow(system, name, path, &queue).await;
         }
     }
-    follow(&session, CENTRE_NAME, CENTRE_PATH, &commands).await;
-    follow(&session, LOGIN_NAME, LOGIN_PATH, &commands).await;
+    follow(&session, CENTRE_NAME, CENTRE_PATH, &queue).await;
+    follow(&session, LOGIN_NAME, LOGIN_PATH, &queue).await;
 
     let mut reasons = Reasons::default();
     let mut last: Option<Extras> = None;
-    let mut agent = SessionAgent::None;
     loop {
         let previous = last
             .as_ref()
             .and_then(|e| e.session.as_ref())
             .map(|s| s.caps);
-        let extras = read_all(system.as_ref(), &session, agent, previous, &mut reasons).await;
+        let extras = read_all(
+            system.as_ref(),
+            &session,
+            queue.agent(),
+            previous,
+            &mut reasons,
+        )
+        .await;
         if last.as_ref() != Some(&extras) {
             // a closed channel means the process is shutting down
             if out.send(extras.clone()).is_err() {
@@ -186,38 +262,25 @@ async fn run(
             wake();
             last = Some(extras);
         }
-        match rx.recv().await {
-            Ok(Command::Refresh) => {}
-            Ok(Command::Agent(named)) => agent = named,
-            Ok(Command::Act(action)) => {
-                if let Err(e) = act(system.as_ref(), &session, &action).await {
-                    eprintln!("cupertino-menubar: {action:?} failed: {e}");
-                }
-            }
-            Err(_) => return,
-        }
-        // collapse a burst of signals into one read
-        while let Ok(command) = rx.try_recv() {
+        let Ok(command) = rx.recv().await else {
+            return;
+        };
+        // collapse a burst of commands into one read
+        for command in std::iter::once(command).chain(std::iter::from_fn(|| rx.try_recv().ok())) {
             match command {
                 Command::Act(action) => {
                     if let Err(e) = act(system.as_ref(), &session, &action).await {
                         eprintln!("cupertino-menubar: {action:?} failed: {e}");
                     }
                 }
-                Command::Agent(named) => agent = named,
-                Command::Refresh => {}
+                Command::Refresh => queue.took_refresh(),
             }
         }
     }
 }
 
 /// Queue a refresh for every signal on `path` and every owner change of `name`.
-async fn follow(
-    conn: &Connection,
-    name: &'static str,
-    path: &'static str,
-    commands: &async_channel::Sender<Command>,
-) {
+async fn follow(conn: &Connection, name: &'static str, path: &'static str, queue: &Queue) {
     let rules = [
         MatchRule::builder()
             .msg_type(Type::Signal)
@@ -243,12 +306,12 @@ async fn follow(
                 continue;
             }
         };
-        let commands = commands.clone();
+        let queue = queue.clone();
         conn.executor()
             .spawn(
                 async move {
                     while stream.next().await.is_some() {
-                        if commands.send(Command::Refresh).await.is_err() {
+                        if queue.refresh().is_err() {
                             break;
                         }
                     }
@@ -564,6 +627,40 @@ fn session_caps(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_flood_of_refreshes_waits_as_one_and_a_full_queue_drops_actions_not_the_agent() {
+        let (queue, rx) = Queue::new();
+        for _ in 0..10_000 {
+            queue.refresh().unwrap();
+        }
+        assert_eq!(rx.len(), 1, "one refresh waits for the whole burst");
+        // the task takes it: the next signal queues another
+        assert!(matches!(rx.try_recv(), Ok(Command::Refresh)));
+        queue.took_refresh();
+        queue.refresh().unwrap();
+        assert_eq!(rx.len(), 1);
+
+        // a stuck task: the queue fills with actions, and stays at its bound
+        for _ in 0..QUEUE * 4 {
+            queue.act(ExtraAction::SetWifiEnabled(false)).unwrap();
+        }
+        assert_eq!(rx.len(), QUEUE);
+        // a refresh finds it full and is not needed: the queued commands read after them
+        queue.took_refresh();
+        queue.refresh().unwrap();
+        assert_eq!(rx.len(), QUEUE);
+        // the agent is never dropped: the next read takes the newest
+        queue.set_agent(SessionAgent::Process(7)).unwrap();
+        queue.set_agent(SessionAgent::Any).unwrap();
+        assert_eq!(queue.agent(), SessionAgent::Any);
+
+        // the task is gone: every call says so
+        drop(rx);
+        assert!(queue.act(ExtraAction::SetWifiEnabled(true)).is_err());
+        queue.took_refresh();
+        assert!(queue.refresh().is_err());
+    }
 
     #[test]
     fn an_unreported_capability_is_off_but_an_unreadable_map_offers_everything() {

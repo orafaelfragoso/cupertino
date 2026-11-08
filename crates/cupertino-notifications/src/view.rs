@@ -180,9 +180,12 @@ pub enum Input {
     ClearScope(ClearScope),
     /// Escape, or a press outside the cards.
     CloseCentre,
-    /// The pointer moved onto this card of the centre, or the keyboard went to it; `None` when the pointer is over no
-    /// card. A revealed card shows its close and action buttons.
+    /// The pointer moved onto this card of the centre; `None` when the pointer is over no card. A revealed card shows
+    /// its close and action buttons.
     Reveal(Option<u32>),
+    /// The keyboard came to this card or into it, its focus ring showing (`true`), or left it (`false`). The card the
+    /// keyboard is on shows its buttons too, whatever the pointer does, so Tab reaches them.
+    Focused(u32, bool),
     /// Expand (`true`) or collapse the group with this key.
     Expand(String, bool),
     /// Clear every notification of the group with this key.
@@ -198,6 +201,8 @@ pub struct Ui {
     pub scroll: ScrollState,
     pub unfolded: BTreeSet<u32>,
     pub revealed: Option<u32>,
+    /// The card the keyboard is on (or in), its focus ring showing: it shows its buttons as a revealed card does.
+    pub focused: Option<u32>,
     /// Expanded groups by key, with when they began to expand.
     pub expanded: BTreeMap<String, f64>,
     /// Groups collapsing by key, with when they began to.
@@ -250,6 +255,7 @@ impl Default for Ui {
             },
             unfolded: BTreeSet::new(),
             revealed: None,
+            focused: None,
             expanded: BTreeMap::new(),
             collapsing: BTreeMap::new(),
         }
@@ -682,6 +688,9 @@ pub fn apply(
             if ui.revealed == Some(id) {
                 ui.revealed = None;
             }
+            if ui.focused == Some(id) {
+                ui.focused = None;
+            }
         }
         Input::ClearFocused(id) => {
             let fronts = |c: &NotificationCenter| -> Vec<u32> {
@@ -724,6 +733,12 @@ pub fn apply(
         Input::CloseCentre if ui.menu_open => ui.menu_open = false,
         Input::CloseCentre => *ui = Ui::default(),
         Input::Reveal(id) => ui.revealed = id,
+        Input::Focused(id, true) => ui.focused = Some(id),
+        Input::Focused(id, false) => {
+            if ui.focused == Some(id) {
+                ui.focused = None;
+            }
+        }
         Input::Expand(key, expand) => {
             // with Reduce Motion a group is at once where it goes
             let start = if center.config.motion.reduce_motion {
@@ -958,7 +973,7 @@ fn centre_window<M: Clone + 'static>(
                 Fold::Folded
             }
         };
-        let revealed = |n: &Notification| ui.revealed == Some(n.id);
+        let revealed = |n: &Notification| ui.revealed == Some(n.id) || ui.focused == Some(n.id);
         let front = &shown[0];
         let front_layout = metrics.card_with(front, layout.width, fold(front), revealed(front));
         let collapsed = Rect::new(x, y, layout.width, front_layout.height);
@@ -2134,8 +2149,12 @@ impl<M: 'static> Widget<M> for Card<M> {
                 }
                 Propagation::Stop
             }
-            Event::FocusWithin { gained: true, .. } if self.revealed == Some(false) => {
-                cx.emit((self.map)(Input::Reveal(Some(self.id))));
+            // the keyboard on the card or in it reveals its buttons, as long as its focus ring shows; a focus moving
+            // between the card and its buttons is lost and gained again in that order, so it stays revealed
+            Event::Focus { gained, visible } | Event::FocusWithin { gained, visible }
+                if self.revealed.is_some() =>
+            {
+                cx.emit((self.map)(Input::Focused(self.id, gained && visible)));
                 Propagation::Continue
             }
             Event::Key(key, _) if active && key.pressed && cx.node() == cx.target() => {

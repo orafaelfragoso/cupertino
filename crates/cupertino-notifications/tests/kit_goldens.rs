@@ -1519,3 +1519,90 @@ fn past_the_glass_one_window_shows_the_lower_groups_sheets_go_opaque_and_every_c
     let sheets = regions.len() - 14;
     assert!(sheets > 0 && sheets % 2 == 0, "{sheets} sheets of glass");
 }
+
+#[test]
+fn the_keyboard_reveals_the_card_it_is_on_and_tab_reaches_its_buttons_whatever_the_pointer_does() {
+    let mut run = Run::new();
+    for (t, app) in [(0.0, "Calendar"), (0.1, "Weather")] {
+        run.step(Step::At(t));
+        let mut input = NotifyInput::new(app, "Summary", "Body");
+        input.actions = vec!["open".into(), "Open".into()];
+        run.notify(input);
+    }
+    run.step(Step::At(1.0));
+    run.step(Step::OpenCentre);
+    let window = run.only_window();
+    run.send(window, WindowEvent::Focus(true));
+    let focused_key = |run: &Run| -> Option<String> {
+        let snapshot = run.snapshot(window);
+        let node = snapshot
+            .nodes
+            .iter()
+            .find(|n| Some(n.id) == snapshot.focus)?;
+        node.key.as_ref().map(|k| format!("{k:?}"))
+    };
+    let buttons_of = |run: &Run, id: u32| -> Vec<String> {
+        let snapshot = run.snapshot(window);
+        let card = keyed(&snapshot, &format!("card-{id}")).unwrap().id;
+        let mut keys: Vec<String> = subtree(&snapshot, card)
+            .into_iter()
+            .filter(|n| Some(n.id) != Some(card))
+            .filter_map(|n| n.key.as_ref().map(|k| format!("{k:?}")))
+            .filter(|k| k.contains("close") || k.contains("action"))
+            .collect();
+        keys.sort();
+        keys
+    };
+    // Tab goes from card to card until one shows its ring; that card shows its buttons
+    let mut on = None;
+    for _ in 0..4 {
+        run.key(window, 0xff09);
+        if let Some(id) = run.ui().focused {
+            on = Some(id);
+            break;
+        }
+    }
+    let id = on.expect("the keyboard reveals a card");
+    assert_eq!(focused_key(&run), Some(format!("{:?}", view::card_key(id))));
+    assert!(
+        !buttons_of(&run, id).is_empty(),
+        "the card the keyboard is on shows its buttons"
+    );
+    let other = if id == 1 { 2 } else { 1 };
+    assert!(buttons_of(&run, other).is_empty(), "and only that card");
+    // the pointer moving over no card, then over the other card, takes nothing from the keyboard's card
+    let card = rect(&run.snapshot(window), &format!("card-{id}"));
+    run.pointer(
+        window,
+        PointerEvent::Motion {
+            position: Point::new(card.center().x, card.max_y() + 200.0),
+        },
+    );
+    assert_eq!(run.ui().focused, Some(id));
+    assert!(!buttons_of(&run, id).is_empty());
+    let over = rect(&run.snapshot(window), &format!("card-{other}"));
+    run.pointer(
+        window,
+        PointerEvent::Motion {
+            position: over.center(),
+        },
+    );
+    assert_eq!(
+        run.ui().revealed,
+        Some(other),
+        "hover reveals the other card"
+    );
+    assert!(
+        !buttons_of(&run, id).is_empty(),
+        "and the keyboard's keeps its buttons"
+    );
+    // Tab goes on into the card's buttons, and the card stays revealed while the keyboard is in it
+    run.key(window, 0xff09);
+    let inside = focused_key(&run).expect("a focused node");
+    assert!(
+        buttons_of(&run, id).contains(&inside),
+        "{inside} is one of card {id}'s buttons {:?}",
+        buttons_of(&run, id)
+    );
+    assert_eq!(run.ui().focused, Some(id));
+}

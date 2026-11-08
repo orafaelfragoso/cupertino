@@ -1809,8 +1809,8 @@ fn the_dock_process_opens_a_menu_above_what_was_clicked_inside_the_output() {
 }
 
 /// The application grid is the dock process's alone: the forwarded action makes it map a keyboard-exclusive overlay
-/// surface over the output, the menu bar included, above the dock bar, and draw it; Escape, delivered to that surface,
-/// removes it after the exit animation.
+/// surface over the output, the menu bar included, above the dock bar, and draw its panel; Escape, delivered to that
+/// surface, collapses the panel to its search field, and a second Escape removes it after the exit animation.
 #[test]
 fn the_dock_process_opens_the_app_grid_on_the_action_and_escape_closes_it() {
     const ESCAPE: u32 = 1 + 8;
@@ -1845,7 +1845,7 @@ fn the_dock_process_opens_the_app_grid_on_the_action_and_escape_closes_it() {
         commands: Vec::new(),
         ops: vec![ShellOp::ToggleAppGrid],
     });
-    // the dots and the search field are drawn whatever the host's desktop entries; the entry fades them in over 0.25 s
+    // the panel and its search field are drawn whatever the host's desktop entries; the entry fades them in over 0.25 s
     server.wait_until("the grid to be drawn", |s| {
         committed_buffer(s, GRID)
             .is_some_and(|(bytes, data)| opaque_brightness(&bytes, &data).len() >= 40)
@@ -1860,14 +1860,16 @@ fn the_dock_process_opens_the_app_grid_on_the_action_and_escape_closes_it() {
         geometry.size.h < OUTPUT.1,
         "and stops above the dock bar: {geometry:?}"
     );
-    server
-        .state
-        .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Pressed, 0);
-    server.step();
-    server
-        .state
-        .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Released, 0);
-    server.step();
+    for _ in 0..2 {
+        server
+            .state
+            .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Pressed, 0);
+        server.step();
+        server
+            .state
+            .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Released, 0);
+        server.step();
+    }
     server.wait_until("the grid to leave and go", |s| {
         committed_buffer(s, GRID).is_none()
     });

@@ -88,6 +88,12 @@ struct Record {
     shell: Vec<String>,
     /// What the next read of `dock.conf` finds.
     conf: Option<DockSettings>,
+    /// The desktop file IDs the launcher's history lists, the most recent first.
+    recent: Vec<String>,
+    /// The `org.freedesktop.Application.Activate` calls: the bus name and the activation token.
+    activated: Vec<(String, Option<String>)>,
+    /// The application does not answer on the bus: an activation over it fails.
+    no_bus: bool,
 }
 
 struct FakeHost(Rc<RefCell<Record>>);
@@ -157,6 +163,15 @@ impl Host for FakeHost {
     fn terminal(&mut self) -> Option<String> {
         None
     }
+    fn recent_apps(&mut self) -> Vec<String> {
+        self.0.borrow().recent.clone()
+    }
+    fn dbus_activate(&mut self, bus_name: &str, token: Option<String>) -> Option<kit::BusCall> {
+        let mut record = self.0.borrow_mut();
+        record.activated.push((bus_name.to_owned(), token));
+        let ok = !record.no_bus;
+        Some(Box::pin(async move { ok }))
+    }
     fn icon(&mut self, _: &DesktopIndex, _: &IconKey, side: f64) -> IconSet {
         [1.0, 2.0]
             .iter()
@@ -211,12 +226,13 @@ impl Application for Dockside {
     }
 }
 
-fn entry(id: &str, name: &str) -> cupertino_dock::desktop::DesktopEntry {
+/// A desktop entry with more `key=value` lines.
+fn entry_with(id: &str, name: &str, extra: &str) -> cupertino_dock::desktop::DesktopEntry {
     let exec = name.to_lowercase();
     parse_entry(
         id,
         Path::new("x"),
-        &format!("[Desktop Entry]\nName={name}\nExec={exec} %U\n"),
+        &format!("[Desktop Entry]\nName={name}\nExec={exec} %U\n{extra}"),
     )
     .unwrap()
 }
@@ -259,7 +275,15 @@ impl Run {
         let mut dock = Dock::new(DockConfig::default());
         dock.set_pinned(&[EDITOR, TERMINAL]);
         let desktop = DesktopIndex {
-            entries: vec![entry(EDITOR, "Editor"), entry(TERMINAL, "Terminal")],
+            // the terminal's entry is D-Bus activatable, the editor's is not
+            entries: vec![
+                entry_with(EDITOR, "Editor", "Categories=Development;TextEditor;\n"),
+                entry_with(
+                    TERMINAL,
+                    "Terminal",
+                    "Categories=System;TerminalEmulator;\nDBusActivatable=true\n",
+                ),
+            ],
         };
         let model = Model::new(
             Session::new(dock, desktop),
@@ -712,6 +736,8 @@ fn the_focus_dock_shortcut_is_dropped_while_the_grid_or_the_dialog_has_the_keybo
         events: vec![DockEvent::Engage],
     });
     run.send_to(grid, WindowEvent::Focus(true));
+    // the first Escape collapses the grid to its search field, the second dismisses it
+    run.key(grid, ESCAPE);
     run.key(grid, ESCAPE);
     run.advance(1.0);
     assert!(run.window(&format!("{GRID_APP_ID}@1")).is_none());
@@ -1052,6 +1078,408 @@ fn the_application_grid_takes_the_keyboard_filters_as_one_types_and_launches_wit
         Some((Part::Grid, false)),
         "the grid closes and gives the keyboard back"
     );
+}
+
+fn kit_rect(r: WmRect) -> Rect {
+    Rect::new(r.x, r.y, r.w, r.h)
+}
+
+/// Open the grid on the main display at its size, and give it the keyboard.
+fn open_grid(run: &mut Run) -> WindowId {
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::ToggleAppGrid],
+    });
+    let grid = run
+        .window(&format!("{GRID_APP_ID}@1"))
+        .expect("the grid opened on the dock's output");
+    run.message(Message::Sized(Sized::Grid, 1280.0, 800.0));
+    run.advance(1.0);
+    run.send_to(grid, WindowEvent::Focus(true));
+    grid
+}
+
+/// The names of the nodes of `role` in `window`, in order.
+fn named(run: &Run, window: WindowId, role: Role) -> Vec<String> {
+    run.nodes(window)
+        .into_iter()
+        .filter(|n| n.0 == role)
+        .map(|n| n.1)
+        .collect()
+}
+
+/// The grid is a panel inside the output, not the whole of it: its search field on top, the pills of the categories
+/// its applications are in, the recently used applications in a row of their own above a separator, then every
+/// application by name. The first Escape leaves the search field alone, the second dismisses the grid.
+#[test]
+fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_escape_collapses_it_first() {
+    let mut run = Run::start();
+    run.record.borrow_mut().recent = vec![format!("{TERMINAL}.desktop")];
+    let grid = open_grid(&mut run);
+    let layout = cupertino_dock::app_grid::GridLayout::new(1280.0, 800.0);
+    let search = run.bounds(grid, Role::TextInput, "Applications");
+    assert_eq!(
+        search,
+        kit_rect(layout.search),
+        "the search field heads the panel"
+    );
+    assert!(
+        layout.panel.w < 1280.0 && layout.panel.h < 800.0 - 24.0,
+        "{:?}",
+        layout.panel
+    );
+    assert_eq!(
+        named(&run, grid, Role::CheckBox),
+        ["Development", "Utilities", "System"],
+        "a pill for each category an application is in, in their order"
+    );
+    assert_eq!(
+        named(&run, grid, Role::Button),
+        ["Terminal", "Editor", "Terminal"],
+        "the recent row, then every application by name"
+    );
+    let separator = run
+        .nodes(grid)
+        .into_iter()
+        .find(|n| n.0 == Role::Separator)
+        .expect("a separator under the recent row");
+    let terminal_rows: Vec<f64> = run
+        .nodes(grid)
+        .into_iter()
+        .filter(|n| n.0 == Role::Button)
+        .map(|n| n.3.y())
+        .collect();
+    assert!(terminal_rows[0] < separator.3.y() && separator.3.y() < terminal_rows[1]);
+    assert_eq!(run.focused(grid).as_deref(), Some("Applications"));
+
+    run.key(grid, ESCAPE);
+    assert!(
+        run.window(&format!("{GRID_APP_ID}@1")).is_some(),
+        "the first Escape keeps the grid open"
+    );
+    assert!(named(&run, grid, Role::CheckBox).is_empty());
+    assert!(named(&run, grid, Role::Button).is_empty());
+    let collapsed = run.bounds(grid, Role::TextInput, "Applications");
+    assert_eq!(
+        collapsed,
+        kit_rect(layout.collapsed),
+        "only the search field is left"
+    );
+    assert_eq!(
+        run.record.borrow().keyboard.last().copied(),
+        Some((Part::Grid, true))
+    );
+    run.key(grid, ESCAPE);
+    run.advance(1.0);
+    assert!(run.window(&format!("{GRID_APP_ID}@1")).is_none());
+    assert_eq!(
+        run.record.borrow().keyboard.last().copied(),
+        Some((Part::Grid, false))
+    );
+}
+
+/// Typing searches at once, from the collapsed field too, which opens again on the results; an application that runs
+/// is brought forward rather than started again.
+#[test]
+fn typing_searches_at_once_and_an_application_that_runs_comes_forward() {
+    let mut run = Run::start();
+    let grid = open_grid(&mut run);
+    run.key(grid, ESCAPE);
+    run.type_text(grid, "term");
+    assert_eq!(named(&run, grid, Role::Button), ["Terminal"]);
+    assert!(
+        !named(&run, grid, Role::CheckBox).is_empty(),
+        "the panel opened again"
+    );
+    run.key(grid, RETURN);
+    assert!(
+        run.requests()
+            .contains(&(1, Request::ActivateApp(TERMINAL.to_owned()))),
+        "{:?}",
+        run.requests()
+    );
+    assert!(run.record.borrow().spawned.is_empty());
+}
+
+/// Tab moves the keys between the pills and the applications; Return on a pill filters by its category, and the arrows
+/// then pick among what is left.
+#[test]
+fn tab_moves_between_the_pills_and_the_grid_and_a_pill_filters() {
+    let mut run = Run::start();
+    let grid = open_grid(&mut run);
+    run.key(grid, TAB);
+    assert_eq!(
+        run.focused(grid).as_deref(),
+        Some("Development"),
+        "the first pill has the keys"
+    );
+    run.key(grid, RIGHT);
+    assert_eq!(run.focused(grid).as_deref(), Some("Utilities"));
+    run.key(grid, LEFT);
+    run.key(grid, RETURN);
+    assert_eq!(named(&run, grid, Role::Button), ["Editor"]);
+    run.key(grid, TAB);
+    run.key(grid, RETURN);
+    let spawned = run.record.borrow().spawned.clone();
+    assert_eq!(spawned.len(), 1, "{spawned:?}");
+    assert_eq!(spawned[0].0, ["editor"]);
+    let token = spawned[0].1.as_deref().expect("an activation token");
+    assert!(token.starts_with("headless-activation-"), "{token}");
+
+    // the arrows move through the rows; the selection follows the keys
+    run.advance(1.0);
+    let grid = open_grid(&mut run);
+    run.key(grid, RIGHT);
+    assert_eq!(
+        run.focused(grid).as_deref(),
+        Some("Editor"),
+        "the first arrow selects"
+    );
+    run.key(grid, RIGHT);
+    assert_eq!(run.focused(grid).as_deref(), Some("Terminal"));
+    run.key(grid, RETURN);
+    assert!(run
+        .requests()
+        .contains(&(1, Request::ActivateApp(TERMINAL.to_owned()))));
+}
+
+/// The dock stays where it is, shown, beside the open grid: an auto-hidden bar comes out while the grid is open (its
+/// magnification while held out is tested on the model, `tests/dock.rs`).
+#[test]
+fn the_dock_stays_shown_beside_the_open_grid() {
+    let mut run = Run::start();
+    let editor_y = |run: &mut Run| {
+        let bar = run.bar();
+        run.bounds(bar, Role::Button, "Editor").y()
+    };
+    let shown = editor_y(&mut run);
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::ToggleAutoHide],
+    });
+    for _ in 0..4 {
+        run.advance(0.5);
+    }
+    assert!(editor_y(&mut run) > shown, "the bar hid");
+    let placement = run.record.borrow().placements.last().copied().unwrap();
+    assert_eq!(placement.exclusive_zone, 0);
+    assert!(
+        placement.bar_depth > 0.0,
+        "the grid keeps clear of the bar it does not reserve room for"
+    );
+    let _grid = open_grid(&mut run);
+    for _ in 0..4 {
+        run.advance(0.5);
+    }
+    assert_eq!(
+        editor_y(&mut run),
+        shown,
+        "the bar is shown beside the grid"
+    );
+}
+
+// ---- residency --------------------------------------------------------------------------------------------------
+
+fn resident(run: &mut Run, output: u32, app_id: &str, on: bool) {
+    run.message(Message::Dock {
+        output,
+        events: vec![DockEvent::Resident {
+            app_id: app_id.to_owned(),
+            resident: on,
+        }],
+    });
+}
+
+fn description(run: &Run, bar: WindowId, name: &str) -> String {
+    run.nodes(bar)
+        .into_iter()
+        .find(|n| n.0 == Role::Button && n.1 == name)
+        .unwrap_or_else(|| panic!("no tile {name}"))
+        .2
+}
+
+/// An application whose last window closed while its process runs keeps its running dot; opening it asks that process
+/// for a window over D-Bus with an activation token, once, without a launch bounce, and the dot goes when the process
+/// exits.
+#[test]
+fn a_resident_application_keeps_its_dot_and_is_asked_over_the_bus_for_a_window() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    resident(&mut run, 1, TERMINAL, true);
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::WindowClosed(7)],
+    });
+    run.advance(1.0);
+    assert_eq!(indicators(&run, bar).len(), 1, "the dot stays");
+    assert_eq!(description(&run, bar, "Terminal"), kit::RUNNING);
+
+    let terminal = centre(run.bounds(bar, Role::Button, "Terminal"));
+    run.click(bar, terminal);
+    run.click(bar, terminal);
+    let activated = run.record.borrow().activated.clone();
+    assert_eq!(activated.len(), 1, "asked once: {activated:?}");
+    assert_eq!(activated[0].0, TERMINAL, "by the desktop file ID");
+    let token = activated[0].1.as_deref().expect("an activation token");
+    assert!(token.starts_with("headless-activation-"), "{token}");
+    assert!(run.record.borrow().spawned.is_empty(), "nothing started");
+    assert!(
+        !run.requests()
+            .iter()
+            .any(|r| matches!(&r.1, Request::ActivateApp(_))),
+        "no window to raise"
+    );
+    assert_eq!(
+        description(&run, bar, "Terminal"),
+        kit::RUNNING,
+        "a running application does not bounce"
+    );
+
+    // the window comes; the process exits with it
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 8,
+            app_id: TERMINAL.to_owned(),
+            title: "shell".to_owned(),
+            minimized: false,
+        }],
+    });
+    resident(&mut run, 1, TERMINAL, false);
+    run.advance(1.0);
+    assert_eq!(indicators(&run, bar).len(), 1, "it still shows a window");
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::WindowClosed(8)],
+    });
+    run.advance(1.0);
+    assert!(indicators(&run, bar).is_empty(), "the dot went with it");
+    assert_eq!(description(&run, bar, "Terminal"), "");
+}
+
+/// A resident application whose entry is not D-Bus activatable, or whose bus call cannot be made, is asked for a window
+/// by starting its entry again with an activation token; a second click while that is under way starts nothing more.
+#[test]
+fn a_resident_application_without_the_bus_is_started_again_once() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    resident(&mut run, 1, EDITOR, true);
+    run.advance(1.0);
+    assert_eq!(
+        indicators(&run, bar).len(),
+        2,
+        "a resident application has a dot"
+    );
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.click(bar, editor);
+    run.click(bar, editor);
+    let spawned = run.record.borrow().spawned.clone();
+    assert_eq!(spawned.len(), 1, "{spawned:?}");
+    assert_eq!(spawned[0].0, ["editor"]);
+    assert!(spawned[0].1.is_some(), "with an activation token");
+    assert_eq!(description(&run, bar, "Editor"), kit::RUNNING);
+    resident(&mut run, 1, EDITOR, false);
+    run.advance(1.0);
+    assert_eq!(indicators(&run, bar).len(), 1, "the dot went");
+
+    run.record.borrow_mut().no_bus = true;
+    resident(&mut run, 1, TERMINAL, true);
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::WindowClosed(7)],
+    });
+    run.advance(1.0);
+    run.click(bar, centre(run.bounds(bar, Role::Button, "Terminal")));
+    let spawned = run.record.borrow().spawned.clone();
+    assert_eq!(spawned.len(), 2, "{spawned:?}");
+    assert_eq!(spawned[1].0, ["terminal"]);
+    assert!(spawned[1].1.is_some(), "with an activation token");
+}
+
+/// A launch asked for again before its window came starts nothing more: from the bar or from the grid.
+#[test]
+fn a_launch_is_not_asked_for_twice() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.click(bar, editor);
+    run.advance(0.5);
+    run.click(bar, editor);
+    let grid = open_grid(&mut run);
+    run.type_text(grid, "edi");
+    run.key(grid, RETURN);
+    assert_eq!(run.record.borrow().spawned.len(), 1);
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 8,
+            app_id: EDITOR.to_owned(),
+            title: "notes".to_owned(),
+            minimized: false,
+        }],
+    });
+    run.click(bar, centre(run.bounds(bar, Role::Button, "Editor")));
+    assert_eq!(run.record.borrow().spawned.len(), 1);
+    assert!(run
+        .requests()
+        .contains(&(1, Request::ActivateApp(EDITOR.to_owned()))));
+}
+
+/// A new bar role's first group lists every resident application: one the dock still holds that it does not list
+/// exited meanwhile, and loses its dot.
+#[test]
+fn a_resident_application_the_new_role_does_not_list_loses_its_dot() {
+    let mut run = Run::start();
+    resident(&mut run, 1, EDITOR, true);
+    run.advance(1.0);
+    let first = run.bar();
+    assert_eq!(indicators(&run, first).len(), 2);
+    let edge = run
+        .window(&format!("{EDGE_APP_ID}@2"))
+        .expect("an edge strip");
+    run.pointer(
+        edge,
+        PointerEvent::Enter {
+            position: Point::new(500.0, 0.5),
+        },
+    );
+    run.advance(kit::EDGE_DWELL + 0.05);
+    let bar = run
+        .window(&format!("{BAR_APP_ID}@2"))
+        .expect("the bar moved");
+    run.message(Message::Dock {
+        output: 2,
+        events: vec![DockEvent::Window {
+            id: 7,
+            app_id: TERMINAL.to_owned(),
+            title: "shell".to_owned(),
+            minimized: false,
+        }],
+    });
+    run.advance(1.0);
+    assert_eq!(indicators(&run, bar).len(), 1, "only the terminal runs");
+    assert_eq!(description(&run, bar, "Editor"), "");
+}
+
+// ---- Reduce Motion ----------------------------------------------------------------------------------------------
+
+/// Under Reduce Motion a launch dims its tile in place instead of bouncing it (the magnification and the dim are
+/// tested on the model, `tests/dock.rs`).
+#[test]
+fn under_reduce_motion_a_launch_does_not_bounce() {
+    let mut run = Run::start();
+    run.message(Message::ReduceMotion(true));
+    let bar = run.bar();
+    let rest = run.bounds(bar, Role::Button, "Editor");
+    run.click(bar, centre(rest));
+    assert_eq!(run.record.borrow().spawned.len(), 1);
+    let mut moved = false;
+    for _ in 0..12 {
+        run.advance(0.05);
+        moved |= run.bounds(bar, Role::Button, "Editor").y() != rest.y();
+    }
+    assert!(!moved, "the tile stays in place");
+    assert_eq!(description(&run, bar, "Editor"), kit::OPENING);
 }
 
 // ---- the bar drawn through Kit ---------------------------------------------------------------------------------
@@ -1785,5 +2213,24 @@ fn look_captures() {
         run.driver
             .look_into(&dir, chrome, "dock-overview-three-windows", scale, &looks)
             .unwrap();
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::OverviewClosed],
+        });
+        for _ in 0..12 {
+            run.advance(0.1);
+        }
+
+        run.record.borrow_mut().recent = vec![TERMINAL.to_owned(), EDITOR.to_owned()];
+        let grid = open_grid(&mut run);
+        run.driver
+            .look_into(&dir, grid, "dock-grid", scale, &looks)
+            .unwrap();
+        run.key(grid, ESCAPE);
+        run.driver
+            .look_into(&dir, grid, "dock-grid-collapsed", scale, &looks)
+            .unwrap();
+        run.key(grid, ESCAPE);
+        run.advance(1.0);
     }
 }

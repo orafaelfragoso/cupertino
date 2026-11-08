@@ -26,7 +26,7 @@ use cupertino_kit::platform::{KeyEvent, Keysym, Mods};
 use cupertino_wm::geometry::{Point, Rect};
 
 use crate::actions::{ActionMap, ActionTarget, Trigger};
-use crate::app_grid::{self, AppGrid, GridLayout, Outcome, PER_PAGE};
+use crate::app_grid::{self, AppGrid, GridLayout, Outcome};
 use crate::conf::{dock_config, FILE_MANAGER};
 use crate::config::Orientation;
 use crate::desktop::DesktopIndex;
@@ -53,6 +53,13 @@ pub const TRASH_CHECK_EVERY: f64 = 1.0;
 
 /// Device pixels per point the icons are loaded for, so they stay sharp at every output scale.
 pub const ICON_SCALES: [f64; 3] = [1.0, 2.0, 3.0];
+
+/// How long after asking an application to open (a launch, or a new window of its resident process) a second ask is
+/// dropped while no window of it has appeared, in seconds: a double click opens it once.
+pub const OPEN_GUARD: f64 = 5.0;
+
+/// How much a bouncing tile dims at the top of a hop under Reduce Motion, where it stays in place.
+pub const REDUCED_BOUNCE_DIM: f64 = 0.5;
 
 /// Side of an icon in the Force Quit dialog's rows and in its question, in points.
 const FORCE_QUIT_ROW_ICON: f64 = 16.0;
@@ -98,6 +105,11 @@ pub enum DockEvent {
     WindowIcon(WindowIcon),
     WindowClosed(u32),
     Launching(String),
+    /// Whether a process of the application that showed a window is still connected, with or without windows now.
+    Resident {
+        app_id: String,
+        resident: bool,
+    },
     ToggleAutoHide,
     ToggleAppGrid,
     /// The switcher's list and selection, for its panel on the output with key `output`.
@@ -180,6 +192,9 @@ pub enum AppAction {
     Quit,
 }
 
+/// An `org.freedesktop.Application.Activate` call under way ([`Host::dbus_activate`]): whether it succeeded.
+pub type BusCall = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
+
 /// Where the bar's layer surface is: its output, its edge, its depth and the area it keeps windows out of.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
@@ -188,6 +203,9 @@ pub struct Placement {
     /// Depth of the surface in points: room for the magnified tiles and the bounces.
     pub extent: f64,
     pub exclusive_zone: i32,
+    /// Depth of the bar itself in points, whether or not it reserves room: the grid keeps clear of it while
+    /// auto-hide leaves no exclusive zone.
+    pub bar_depth: f64,
 }
 
 /// The layer surfaces whose keyboard interactivity the model changes.
@@ -246,6 +264,17 @@ pub trait Host {
     fn read_conf(&mut self, last_good: &DockSettings) -> Option<DockSettings>;
     /// The terminal emulator that runs entries with `Terminal=true`, if one is installed.
     fn terminal(&mut self) -> Option<String>;
+    /// The desktop file IDs of the recently used applications, the most recent first: the grid's first row.
+    fn recent_apps(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+    /// Ask the application on the bus name `bus_name` for a window (`org.freedesktop.Application.Activate`), handing
+    /// it the activation token: the call under way, which ends in whether it succeeded, or `None` when it cannot be
+    /// made. Where it cannot be made or fails, the model starts the entry again.
+    fn dbus_activate(&mut self, bus_name: &str, token: Option<String>) -> Option<BusCall> {
+        let _ = (bus_name, token);
+        None
+    }
     /// The renditions of `icon` at `side` points for each of [`ICON_SCALES`].
     fn icon(&mut self, desktop: &DesktopIndex, icon: &IconKey, side: f64) -> IconSet;
     /// A window set its own icon, or removed it; `apps` are its application id and the dock's key for it.
@@ -276,6 +305,12 @@ pub enum Message {
     KeyboardLeft(u32),
     /// The activation token of the launch waiting as `launch` arrived (`None` when there is none).
     Token(u64, Option<String>),
+    /// The bus call that asked the resident application of tile `key` for a window ended; `ok` is whether it
+    /// succeeded.
+    BusActivated {
+        key: String,
+        ok: bool,
+    },
     Wake(u64),
     /// `dock.conf` changed on disk.
     ConfChanged,
@@ -306,11 +341,19 @@ impl From<Input> for Message {
     }
 }
 
+/// What is waiting for an activation token.
+enum Opening {
+    /// A program to start; its tile bounces once it started when `bounce` is set.
+    Spawn { argv: Vec<String>, bounce: bool },
+    /// A D-Bus activatable application to ask for a window, by its bus name.
+    Activate(String),
+}
+
 /// An application waiting for its activation token.
 struct Pending {
-    /// Key of the tile that bounces once the program started.
+    /// Key of the tile of the application.
     key: String,
-    argv: Vec<String>,
+    opening: Opening,
 }
 
 /// An open context menu.
@@ -331,8 +374,10 @@ struct ForceQuit {
 struct Grid {
     output: u32,
     grid: AppGrid,
-    /// Known once the compositor sized the surface.
-    layout: Option<GridLayout>,
+    /// The compositor sized the surface.
+    sized: bool,
+    /// The entry animation started: once the surface was sized and the icons it shows first were loaded.
+    entered: bool,
 }
 
 /// The window-manager surfaces of one output.
@@ -354,6 +399,8 @@ pub struct Model {
     bar_generation: u64,
     /// The bar's role told nothing yet: its first group is the whole window list.
     awaiting_list: bool,
+    /// The same for the list of resident applications.
+    awaiting_residents: bool,
     pub dark: bool,
     pub reduce_motion: bool,
     pub locked: bool,
@@ -383,6 +430,8 @@ pub struct Model {
     wm: BTreeMap<u32, WmSurfaces>,
     pending: HashMap<u64, Pending>,
     next_launch: u64,
+    /// The applications asked to open and when, by tile key, until a window of theirs appears ([`OPEN_GUARD`]).
+    opening: HashMap<String, f64>,
     /// The edge strip the pointer is on, and since when.
     edge: Option<(u32, f64)>,
     /// The icons loaded, by key and side in whole points.
@@ -419,6 +468,7 @@ impl Model {
             bar_size: None,
             bar_generation: 0,
             awaiting_list: true,
+            awaiting_residents: true,
             dark: false,
             reduce_motion: false,
             locked: false,
@@ -439,6 +489,7 @@ impl Model {
             wm: BTreeMap::new(),
             pending: HashMap::new(),
             next_launch: 0,
+            opening: HashMap::new(),
             edge: None,
             icons: HashMap::new(),
             names: HashMap::new(),
@@ -505,6 +556,7 @@ impl Model {
             extent: self.session.dock.surface_extent().ceil(),
             // windows keep clear of the bar, not of the room magnified tiles and bounces need
             exclusive_zone: self.session.dock.exclusive_zone().ceil() as i32,
+            bar_depth: self.session.dock.bar_depth().ceil(),
         })
     }
 
@@ -534,6 +586,8 @@ impl Model {
                 self.session.window_closed(id, now);
             }
         }
+        let first_group = from_bar && self.awaiting_residents;
+        let mut residents = std::collections::BTreeSet::new();
         let mut commands = Vec::new();
         for event in events {
             if event.is_shared() && !from_bar {
@@ -545,7 +599,18 @@ impl Model {
                     app_id,
                     title,
                     minimized,
-                } => self.session.window(id, &app_id, &title, minimized, now),
+                } => {
+                    self.opening.remove(&self.session.key_of(&app_id));
+                    self.session.window(id, &app_id, &title, minimized, now)
+                }
+                DockEvent::Resident { app_id, resident } => {
+                    if resident {
+                        residents.insert(app_id.clone());
+                    } else {
+                        self.opening.remove(&self.session.key_of(&app_id));
+                    }
+                    self.session.set_resident(&app_id, resident, now);
+                }
                 DockEvent::WindowIcon(icon) => {
                     if let Some(w) = self.session.window_info(icon.id) {
                         let apps = [w.app_id.clone(), w.key.clone()];
@@ -599,6 +664,11 @@ impl Model {
             }
         }
         if from_bar {
+            if first_group {
+                // the first group of a new role lists every resident application
+                self.awaiting_residents = false;
+                self.session.residents_listed(&residents, now);
+            }
             self.session.list_taken();
             self.refresh_force_quit();
         }
@@ -738,8 +808,50 @@ impl Model {
                 Vec::new()
             }
             Some(Activation::Launch(key)) => self.begin_launch(key),
+            Some(Activation::Reopen { key, .. }) => self.reopen(key),
             Some(Activation::OpenTrash) => self.open_in_file_manager(TRASH_URI),
             None => Vec::new(),
+        }
+    }
+
+    /// Open the application of tile `key` as a click on its tile does, also when it has no tile: raise its windows,
+    /// ask its resident process for a window, or start it.
+    fn open_app(&mut self, key: String) -> Vec<Command<Message>> {
+        match self.session.opening(&key) {
+            Activation::ActivateApp(app_id) => {
+                self.bar_request(Request::ActivateApp(app_id));
+                Vec::new()
+            }
+            Activation::Reopen { key, .. } => self.reopen(key),
+            Activation::Launch(key) => self.begin_launch(key),
+            Activation::RestoreWindow(_) | Activation::OpenTrash => Vec::new(),
+        }
+    }
+
+    /// Whether the application of tile `key` was asked to open a moment ago and shows no window yet: a second ask
+    /// would open it twice.
+    fn opening_now(&self, key: &str) -> bool {
+        let now = self.now();
+        self.pending.values().any(|p| p.key == key)
+            || self
+                .opening
+                .get(key)
+                .is_some_and(|&at| now - at < OPEN_GUARD)
+    }
+
+    /// Ask the resident process of tile `key` for a new window: through `org.freedesktop.Application.Activate` when its
+    /// desktop entry is D-Bus activatable, else by starting the entry again (a running instance opens a window). The
+    /// tile keeps its running dot and does not bounce.
+    fn reopen(&mut self, key: String) -> Vec<Command<Message>> {
+        if self.opening_now(&key) {
+            return Vec::new();
+        }
+        match self.session.bus_name(&key) {
+            Some(name) => {
+                self.opening.insert(key.clone(), self.now());
+                self.ask_token(key, Opening::Activate(name))
+            }
+            None => self.start(key, false),
         }
     }
 
@@ -747,7 +859,10 @@ impl Model {
     /// token, so its window takes the focus, and a bounce); without it through the default handler.
     fn open_in_file_manager(&mut self, target: &str) -> Vec<Command<Message>> {
         match self.session.file_manager_command(target) {
-            Some(argv) => self.ask_token(FILE_MANAGER.to_owned(), argv),
+            Some(argv) => self.ask_token(
+                FILE_MANAGER.to_owned(),
+                Opening::Spawn { argv, bounce: true },
+            ),
             None => {
                 self.host.open(target);
                 Vec::new()
@@ -755,8 +870,17 @@ impl Model {
         }
     }
 
-    /// Fetch an activation token for the launch of the tile with `key`; the program starts when it arrives.
+    /// Fetch an activation token for the launch of the tile with `key`; the program starts when it arrives. A launch
+    /// asked for again before the first one showed a window is dropped.
     fn begin_launch(&mut self, key: String) -> Vec<Command<Message>> {
+        if self.opening_now(&key) {
+            return Vec::new();
+        }
+        self.start(key, true)
+    }
+
+    /// Start the entry of tile `key` with an activation token, bouncing its tile when `bounce` is set.
+    fn start(&mut self, key: String, bounce: bool) -> Vec<Command<Message>> {
         let launch = self.session.launch(&key);
         let mut argv = launch.argv;
         if launch.terminal {
@@ -772,13 +896,14 @@ impl Model {
             eprintln!("cupertino-dock: {key} has no command");
             return Vec::new();
         }
-        self.ask_token(key, argv)
+        self.opening.insert(key.clone(), self.now());
+        self.ask_token(key, Opening::Spawn { argv, bounce })
     }
 
-    fn ask_token(&mut self, key: String, argv: Vec<String>) -> Vec<Command<Message>> {
+    fn ask_token(&mut self, key: String, opening: Opening) -> Vec<Command<Message>> {
         let launch = self.next_launch;
         self.next_launch += 1;
-        self.pending.insert(launch, Pending { key, argv });
+        self.pending.insert(launch, Pending { key, opening });
         let window = self
             .bar_key()
             .unwrap_or_else(|| view::bar_key(0, self.bar_generation));
@@ -789,15 +914,47 @@ impl Model {
         }]
     }
 
-    /// Start the program that waited for `token` and bounce its tile.
-    fn complete(&mut self, launch: u64, token: Option<String>) {
-        let Some(Pending { key, argv }) = self.pending.remove(&launch) else {
-            return;
+    /// Start the program that waited for `token` and bounce its tile, or ask the application for a window; an
+    /// application that cannot be asked is started again with the token.
+    fn complete(&mut self, launch: u64, token: Option<String>) -> Vec<Command<Message>> {
+        let Some(Pending { key, opening }) = self.pending.remove(&launch) else {
+            return Vec::new();
         };
-        if self.host.spawn(argv, token) {
-            let now = self.now();
-            self.session.dock.app_launching(&key, now);
+        match opening {
+            Opening::Spawn { argv, bounce } => {
+                if self.host.spawn(argv, token) {
+                    if bounce {
+                        let now = self.now();
+                        self.session.dock.app_launching(&key, now);
+                    }
+                } else {
+                    self.opening.remove(&key);
+                }
+                Vec::new()
+            }
+            Opening::Activate(name) => match self.host.dbus_activate(&name, token) {
+                Some(call) => vec![Command::Perform(Box::pin(async move {
+                    Message::BusActivated {
+                        key,
+                        ok: call.await,
+                    }
+                }))],
+                None => {
+                    self.opening.remove(&key);
+                    self.start(key, false)
+                }
+            },
         }
+    }
+
+    /// The bus call for a window of tile `key` ended: when it failed and no window came meanwhile, start the entry
+    /// again instead (a running instance opens a window).
+    fn bus_activated(&mut self, key: String, ok: bool) -> Vec<Command<Message>> {
+        if ok || self.session.has_windows(&key) {
+            return Vec::new();
+        }
+        self.opening.remove(&key);
+        self.start(key, false)
     }
 
     // ---- context menus --------------------------------------------------------------------------------------
@@ -861,7 +1018,7 @@ impl Model {
             MenuCommand::Hide(app) => self.bar_request(Request::App(app, AppAction::Hide)),
             MenuCommand::Quit(app) => self.bar_request(Request::App(app, AppAction::Quit)),
             MenuCommand::ForceQuit(app) => self.open_force_quit(Some(&app)),
-            MenuCommand::Open(key) => return self.begin_launch(key),
+            MenuCommand::Open(key) => return self.open_app(key),
             MenuCommand::OpenTrash => return self.open_in_file_manager(TRASH_URI),
             MenuCommand::ToggleAutoHide => self.session.dock.toggle_autohide(now),
             MenuCommand::ToggleMagnification => {
@@ -880,6 +1037,7 @@ impl Model {
         self.output = Some(output);
         self.bar_size = None;
         self.awaiting_list = true;
+        self.awaiting_residents = true;
         self.menu = None;
         self.press = None;
         self.poof = None;
@@ -937,6 +1095,7 @@ impl Model {
             self.bar_generation += 1;
             self.bar_size = None;
             self.awaiting_list = true;
+            self.awaiting_residents = true;
             self.menu = None;
             self.press = None;
             self.engaged = false;
@@ -1127,12 +1286,14 @@ impl Model {
         let Some(output) = self.output else {
             return;
         };
-        let mut grid = AppGrid::from_desktop(self.session.desktop(), self.now());
+        let recent = self.host.recent_apps();
+        let mut grid = AppGrid::from_desktop(self.session.desktop(), &recent, self.now());
         grid.set_reduce_motion(self.reduce_motion);
         self.grid = Some(Grid {
             output,
             grid,
-            layout: None,
+            sized: false,
+            entered: false,
         });
     }
 
@@ -1144,12 +1305,13 @@ impl Model {
         }
     }
 
-    /// What a key or click on the grid asked for: a launch goes through the tiles' path and closes the grid.
+    /// What a key or click on the grid asked for: an application opens as its tile would open it (its windows come
+    /// forward, its resident process is asked for one, or it starts with a token) and the grid closes.
     fn grid_outcome(&mut self, outcome: Option<Outcome>) -> Vec<Command<Message>> {
         match outcome {
             Some(Outcome::Launch(key)) => {
                 self.close_grid();
-                self.begin_launch(key)
+                self.open_app(key)
             }
             Some(Outcome::Close) => {
                 self.close_grid();
@@ -1160,20 +1322,16 @@ impl Model {
     }
 
     fn grid_pointer(&mut self, pointer: Pointer) -> Vec<Command<Message>> {
-        let now = self.now();
         let Some(grid) = self.grid.as_mut().filter(|g| !g.grid.is_closing()) else {
             return Vec::new();
         };
         match pointer {
             Pointer::Press(p, _) => {
-                let Some(layout) = grid.layout.as_ref() else {
-                    return Vec::new();
-                };
-                let outcome = grid.grid.click(Point::new(p.x, p.y), layout, now);
+                let outcome = grid.grid.click(Point::new(p.x, p.y));
                 self.grid_outcome(outcome)
             }
             Pointer::Scroll(_, delta) => {
-                grid.grid.scroll(delta.x, delta.y, now);
+                grid.grid.scroll_by(delta.y);
                 Vec::new()
             }
             _ => Vec::new(),
@@ -1181,7 +1339,6 @@ impl Model {
     }
 
     fn grid_key(&mut self, key: KeyEvent) -> Vec<Command<Message>> {
-        let now = self.now();
         if !key.pressed {
             return Vec::new();
         }
@@ -1200,6 +1357,9 @@ impl Model {
             END => Some(app_grid::Key::End),
             PAGE_UP => Some(app_grid::Key::PageUp),
             PAGE_DOWN => Some(app_grid::Key::PageDown),
+            TAB if key.mods.contains(Mods::SHIFT) => Some(app_grid::Key::BackTab),
+            TAB => Some(app_grid::Key::Tab),
+            LEFT_TAB => Some(app_grid::Key::BackTab),
             _ => None,
         };
         let command = key.mods.contains(Mods::CTRL)
@@ -1214,7 +1374,7 @@ impl Model {
         });
         match mapped {
             Some(k) => {
-                let outcome = grid.grid.key(k, now);
+                let outcome = grid.grid.key(k);
                 self.grid_outcome(outcome)
             }
             None => Vec::new(),
@@ -1226,7 +1386,7 @@ impl Model {
             .grid
             .as_ref()
             .filter(|g| !g.grid.is_closing())
-            .and_then(|g| g.grid.result(index))
+            .and_then(|g| g.grid.item(index))
             .map(|app| app.key.clone());
         match key {
             Some(key) => self.grid_outcome(Some(Outcome::Launch(key))),
@@ -1517,24 +1677,15 @@ impl Model {
         for (app, side) in switched {
             self.icon_set(&IconKey::App(app), &[side]);
         }
+        // the icons of the rows shown and of a screenful either way, at the grid's icon size
         let grid_icons: Vec<(String, f64)> = match &self.grid {
-            Some(Grid {
-                grid,
-                layout: Some(layout),
-                ..
-            }) => {
-                let side = layout
-                    .image_rect(&layout.cell_rect(&layout.page_frame(0, 0.0), 0))
-                    .w;
-                let page = grid.page();
-                let from = page.saturating_sub(1) * PER_PAGE;
-                let to = (page + 2) * PER_PAGE;
-                (from..to)
-                    .filter_map(|i| grid.result(i))
-                    .map(|app| (app.icon.clone(), side))
-                    .collect()
-            }
-            _ => Vec::new(),
+            Some(Grid { grid, .. }) => grid
+                .nearby()
+                .into_iter()
+                .filter_map(|i| grid.item(i))
+                .map(|app| (app.icon.clone(), GridLayout::ICON))
+                .collect(),
+            None => Vec::new(),
         };
         for (name, side) in grid_icons {
             self.icon_set(&IconKey::Named(name), &[side]);
@@ -1582,15 +1733,16 @@ impl Model {
         let now = self.now();
         // the locked session, the grid, the overview and the Force Quit dialog hold the keyboard while they are up: a
         // Focus Dock meanwhile is dropped, not kept for when they go
+        let grid_open = self.grid.as_ref().is_some_and(|g| !g.grid.is_closing());
         if self.locked
             || self.force_quit.is_some()
-            || self.grid.as_ref().is_some_and(|g| !g.grid.is_closing())
+            || grid_open
             || self.overview_keyboard().is_some()
         {
             self.engaged = false;
         }
-        // an auto-hidden bar shows while it has the keyboard
-        self.session.dock.keep_shown = self.engaged;
+        // an auto-hidden bar shows while it has the keyboard, and beside the open grid
+        self.session.dock.keep_shown = self.engaged || grid_open;
         if let Some(screen) = self.screen() {
             self.session.dock.pointer_moved(self.pointer, screen, now);
         }
@@ -1613,7 +1765,6 @@ impl Model {
             self.open_menu(id);
         }
         if let Some(grid) = self.grid.as_mut() {
-            grid.grid.settle(now);
             grid.grid.tick(now);
             if grid.grid.is_gone(now) {
                 self.grid = None;
@@ -1637,6 +1788,11 @@ impl Model {
         }
         self.tell_host();
         self.prefill();
+        // the grid's entry runs whole on the frames after its icons were loaded, however long that took
+        if let Some(grid) = self.grid.as_mut().filter(|g| g.sized && !g.entered) {
+            grid.entered = true;
+            grid.grid.restart_entry(self.host.now());
+        }
         let mut commands = self.focus_commands();
         commands.extend(self.schedule(now));
         commands
@@ -1716,19 +1872,13 @@ impl Model {
             .filter(|s| !s.switcher.is_shown(now))
             .filter_map(|s| s.switcher.next_wake(now))
             .map(|at| (at - now).max(0.0));
-        let wheel = self.grid.as_ref().and_then(|g| g.grid.until_settled(now));
         let hold = self.press.as_ref().and_then(|p| p.hold_due(now));
         let edge = self
             .edge
             .filter(|(o, _)| Some(*o) != self.output)
             .map(|(_, since)| (since + EDGE_DWELL - now).max(0.0));
         let moving = self.animating(now).then_some(FRAME_FALLBACK);
-        let due = panel
-            .chain(wheel)
-            .chain(hold)
-            .chain(edge)
-            .chain(moving)
-            .reduce(f64::min);
+        let due = panel.chain(hold).chain(edge).chain(moving).reduce(f64::min);
         let Some(due) = due else {
             return Vec::new();
         };
@@ -1757,6 +1907,8 @@ const ESCAPE: Keysym = Keysym(0xff1b);
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
 const BACKSPACE: Keysym = Keysym(0xff08);
+const TAB: Keysym = Keysym(0xff09);
+const LEFT_TAB: Keysym = Keysym(0xfe20);
 
 impl Model {
     /// What assistive technology calls the tile with `id`.
@@ -1815,6 +1967,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         }
         Message::ReduceMotion(on) => {
             model.reduce_motion = on;
+            model.session.dock.set_reduce_motion(on);
             if let Some(grid) = model.grid.as_mut() {
                 grid.grid.set_reduce_motion(on);
             }
@@ -1849,13 +2002,9 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::Sized(Sized::Grid, w, h) => {
-            let now = model.now();
             if let Some(grid) = model.grid.as_mut() {
-                if grid.layout.is_none() {
-                    // the entry animation starts with the first frame
-                    grid.grid.restart_entry(now);
-                }
-                grid.layout = Some(GridLayout::new(w, h));
+                grid.sized = true;
+                grid.grid.set_size(w, h);
             }
             Vec::new()
         }
@@ -1869,10 +2018,8 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             }
             Vec::new()
         }
-        Message::Token(launch, token) => {
-            model.complete(launch, token);
-            Vec::new()
-        }
+        Message::Token(launch, token) => model.complete(launch, token),
+        Message::BusActivated { key, ok } => model.bus_activated(key, ok),
         Message::Wake(generation) => {
             if generation == model.wake_generation {
                 model.wake_at = None;
@@ -1929,10 +2076,9 @@ fn input_message(model: &mut Model, input: Input) -> Vec<Command<Message>> {
             Vec::new()
         }
         Input::GridItem(i) => model.grid_item(i),
-        Input::GridPage(i) => {
-            let now = model.now();
-            if let Some(grid) = model.grid.as_mut() {
-                grid.grid.go_to_page(i, now);
+        Input::GridPill(pill) => {
+            if let Some(grid) = model.grid.as_mut().filter(|g| !g.grid.is_closing()) {
+                grid.grid.toggle_pill(pill);
             }
             Vec::new()
         }
@@ -2073,7 +2219,8 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 kind: t.kind,
                 rect: view::kit_rect(&t.visible_rect(orientation)),
                 rest: view::kit_rect(&t.rect),
-                opacity: t.presence,
+                // under Reduce Motion a bounce dims the tile in place instead of lifting it
+                opacity: t.presence * (1.0 - REDUCED_BOUNCE_DIM * t.pulse),
                 indicator: t.indicator,
                 icon: model
                     .tile_icon(t.id)
@@ -2176,7 +2323,6 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 view::grid::GridView {
                     output: grid.output,
                     grid: &grid.grid,
-                    layout: grid.layout,
                     now,
                     icons: &lookup,
                     size: Size::new(out.width, out.height),

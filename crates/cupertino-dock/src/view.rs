@@ -78,10 +78,10 @@ pub enum Input {
     GridKey(KeyEvent),
     /// The grid lost the keyboard.
     GridLeft,
-    /// Assistive technology's click on the grid's result at this index.
+    /// Assistive technology's click on the grid's item at this index (`AppGrid::item`).
     GridItem(usize),
-    /// Assistive technology's click on the grid's page dot at this index.
-    GridPage(usize),
+    /// Assistive technology's click on the grid's pill for this category.
+    GridPill(crate::app_grid::Pill),
     ForceQuit(Pointer),
     ForceQuitKey(KeyEvent),
     /// Assistive technology's click on a row or a button of the dialog.

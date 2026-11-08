@@ -104,7 +104,7 @@ menu taking the keyboard as it opens.
 **Accessibility.** The bar is a toolbar named "Dock". Every tile is a button named after its application (the desktop
 entry's name), "Trash", or the minimized window's title, with the actions Click and Show Menu. Its description says what
 the tile shows: "Running", "Opening", "Not responding" or "Needs attention" for an application, "Minimized window" for a window, and "Contains items" for a trash with something in it. Separators
-are separators. The menus are Kit menus, the grid's results and page dots and the Force Quit rows and buttons are named
+are separators. The menus are Kit menus, the grid's items and pills (see *Application grid*) and the Force Quit rows and buttons are named
 nodes with a Click action. The Force Quit dialog reads its heading, its footer and its empty or unsaved-changes notes
 as text; its rows are a list named "Applications" whose items say their place and count, and the selected row takes
 the keyboard focus, so a screen reader follows the arrows. The switcher's entries say their place and count. The
@@ -113,9 +113,16 @@ edge strips are groups named "Dock edge".
 **Reduce Motion, Reduce Transparency and Increase Contrast.** These follow the session as in the other Kit shells. With
 Reduce Transparency or Increase Contrast the theme gives the bar, the menus, the grid and the dialog an opaque fill instead
 of a material, and Increase Contrast draws the running indicators fully opaque and the separators at twice their alpha.
-Reduce Motion drops the grid's scale step and keeps its fade.
+Reduce Motion drops the grid's scale step and keeps its fade. The bar follows it too:
 
-- A click on a running application's tile calls `activate_app`.
+- Magnification follows the pointer at once instead of ramping in and out.
+- A launch or attention bounce dims the tile in place: its opacity dips to half at the top of each hop, so the tile does
+  not rise.
+- The launch hop of an application that appears unannounced becomes the same dim.
+- The server's minimize effect becomes the scale effect (server README, *Minimize*).
+
+- A click on a running application's tile calls `activate_app`; a click on a resident one without windows asks it for a
+  window (see *Residency*).
 - A click on a pinned application that is not running launches its desktop entry with an xdg-activation token and bounces.
   **Launching without a token** (decision): when Kit gets no token (the bar's window is gone, or the compositor offers
   none), the program still starts, without `XDG_ACTIVATION_TOKEN`, and the tile still bounces. The token decides whether
@@ -154,11 +161,30 @@ Reduce Motion drops the grid's scale step and keeps its fade.
 - `attention` (the server refused an application's activation) bounces its tile once (informational attention).
 - An application's own icon comes from `cupertino-icons` (its desktop entry's `Icon=`: an absolute path or `hicolor` only); the trash is the asset `trash.empty` or `trash.full` (the home trash folder has an entry or not, looked at once a second).
 
-**Animation and repaints.** What moves by itself (bounces, slides, auto-hide, the drag's settle, the grid's entry and pages,
+**Residency.** From shell version 19 the server tells the dock which applications are resident
+(`app_resident`): a process of the application that showed a window is still connected, with or without windows now. The
+running dot follows it:
+
+- An application whose last window closes while its process runs keeps its dot. It does not quit, so it does not bounce again
+  when its next window comes.
+- Opening it (a click on its tile, its menu's Open, the grid) asks that process for a new window. When the desktop entry
+  says `DBusActivatable=true`, the dock calls `org.freedesktop.Application.Activate` on the bus name of the desktop file ID
+  (`src/activate.rs`, on a thread of its own). The activation token goes in the platform data as `activation-token` and
+  `desktop-startup-id`. Otherwise, or when the call fails, the dock starts the entry again with an activation token, and a
+  running instance opens a window. Neither bounces the tile: the application is already running.
+- The dot goes when the server reports the application no longer resident (its process exited or crashed) and it has no
+  window left.
+- No duplicate launches. A second ask for the same tile within 5 s (`OPEN_GUARD`) is dropped while no window has come,
+  and so is one whose activation token is still on the way.
+- No false dots. A new bar role (the dock moved to another display, or the server restarted) gets every resident
+  application in its first group; one the dock still held that is not listed has gone.
+- With a server older than version 19 there is no residency: the dot goes with the last window, as before.
+
+**Animation and repaints.** What moves by itself (bounces, slides, auto-hide, the drag's settle, the grid's entry and exit,
 the switcher's fade, the overview's glide and fade) runs on the frame callbacks of the window that shows it: the window's
 root asks for the next frame while its view moves, and every frame wakes the model (`Input::Frame`). A slow wake every
 0.1 s (`kit::FRAME_FALLBACK`) keeps it going if the frames stop (a surface the compositor does not show). Delays are
-timers: the switcher's, the held press, the edge dwell and the wheel. Reduce Motion applies as before. A window repaints
+timers: the switcher's, the held press and the edge dwell. Reduce Motion applies as before. A window repaints
 only the nodes whose view changed: the bar's material, marks and tiles are separate nodes, so the pointer moving over the
 bar with magnification off repaints nothing, and a desktop entry's name is looked up once per application. The bar does
 present again when its surface is given a new placement or keyboard interactivity, which apply with the surface's next
@@ -202,39 +228,76 @@ Code: `src/app_grid.rs`, `src/view/grid.rs` and the grid part of `src/kit.rs`. T
 hot corner, four-finger pinch) as `toggle_app_grid` and keeps nothing else.
 
 **Surface.** The dock opens the grid on an overlay layer surface (namespace `cupertino-dock-app-grid`) anchored to every edge of
-its output. The surface covers the menu bar (the bar's reservation is not a layer zone) and sits inside the dock
-bar's exclusive zone, so the dock bar stays visible. It takes exclusive keyboard focus and the `AppGrid`
-material as a server-rendered backdrop (blur 30, saturate 1.8, gain 0.55 / bias 0.05292).
+its output. It takes exclusive keyboard focus and draws nothing outside its panel, so the windows show around it. The surface
+sits inside the dock bar's exclusive zone; under auto-hide, which reserves no zone, it gets a margin on the dock's edge as deep
+as the bar (`Placement::bar_depth`). The dock therefore stays visible beside the open grid and keeps magnifying under the
+pointer, and an auto-hidden bar is held out while the grid is open.
 
-**Content and geometry.** Every desktop entry without `NoDisplay` is listed, sorted by name (the design keeps the user's
-arrangement: approximate), on pages of 7 × 5. The geometry is the design's layout routine on the surface as the
-layer. The dock bar's zone stands for the design's dock extent, an mapping.
+**Panel.** One floating rounded panel, 842 × 576 pt with a 24 pt radius, centred in the surface below the menu bar's 24 pt
+strip and shrunk to keep 24 pt from the surface's edges on a small output. It has the `Menu` material (the launcher's), asked
+for by the panel's node (`PaintCx::material`), or the theme's opaque menu fill under Reduce Transparency and Increase
+Contrast. A soft shadow (offset 8, blur 24, black 0.28) is drawn outside its shape only, and a hairline in the separator
+colour outlines it. Top to bottom, with a 20 pt side inset:
 
-- Side margins are `max(90, m/2)` widened by the zoom factor, with 35 pt top and bottom minimums.
-- Cells are `trunc(page / 7 | 5)`, and the icon is `min(cell) − 46` through the icon rule.
-- The label is 13 pt medium white, 22 pt tall, with its black 0.2 shadow (blur not drawn).
-- The page dots are 15 × 15 at pitch 20 (white, others at 0.2).
-- The search field is 250 × 25, 15 pt above the page, with a light 16 pt text.
+- The search field, 56 pt tall: a magnifier and the query in 24 pt regular text, or the placeholder "Search", with a caret.
+- The pills, a row 26 pt tall 68 pt below the panel's top: one per category that holds an application, in the order
+  Productivity, Development, Creativity, Media, Internet, Games, Education, Utilities, System, Other. Each pill is as wide as
+  its 14 pt medium text (reckoned from the character count) plus 10 pt at each end, with 10 pt gaps. A row with room left
+  widens every pill by up to 24 pt, and a row that would overflow shrinks them all in proportion. A pill that is on takes
+  the selected-control fill.
+- The content, from 104 pt down to 12 pt above the panel's bottom, in seven columns of rows 102 pt tall. Each item is a
+  60 pt icon 16 pt below the row's top with its 13 pt name centred 94 pt down, ellipsized at the end. The first row holds
+  the recently used applications, up to seven. A 20 pt band with a hairline 12 pt down separates it from every
+  application in alphabetical order. A scroll indicator (5 pt wide, 6 pt from the edge, at least 32 pt long) shows
+  while the content is taller than its viewport. A search with no match says "No Results".
+
+**Categories.** Each desktop entry's freedesktop `Categories` (main and additional) map to the pills
+(`Pill::of_category`): office and project categories to Productivity; development and its tools to Development; graphics,
+photography and publishing to Creativity; audio and video to Media; network, mail, chat and browsers to Internet; games to
+Games; education, science and reference to Education; utilities, text editors, terminals and file managers to Utilities;
+settings, system tools, monitors and package managers to System. An application is under every pill one of its categories
+maps to, and under Other when none does.
+
+**Recents.** The first row is the launcher's frecency history (`cupertino_apps::frecency`), read when the grid opens, most
+recent first, limited to installed entries shown in the grid. It shows only while no query is typed and no pill is on.
+
+**Collapse.** The first Escape collapses the panel to its search field alone: a 640 × 52 capsule with the same top and
+centre. The second Escape dismisses the grid. Typing in the collapsed field opens the panel again on the results, Down opens
+it on the full list, and Return opens the first result.
 
 **Motion.** The grid fades and scales in from 1.05 over 0.25 s ease-in, and out the reverse way. The entry starts once
-the grid's surface is first sized. Each frame lays the items, the dots and the search field out scaled about the centre and draws
-them at the fade's opacity. A page flip takes 0.5 s on the curve. Under Reduce Motion (the session's display options) the grid keeps its opacity
-animation and skips the scale step.
+the grid's surface is sized and the icons it shows first are loaded, so a slow first load does not use up the fade. Under Reduce Motion (the session's display options) the grid only fades.
 
 **Input.**
 
-- Typing filters with the search rule of: title, word, camel-case and initials prefixes, the space-stripped title,
-  then the desktop file ID as words. Diacritics are not folded (approximate).
-- Arrows move the selection and follow it across pages. Page Up / Down and Home / End flip. Return launches the selection (or
-  the first result of a search). Escape closes.
-- The wheel accumulates twice the dominant delta and flips one page 75 ms after the burst (positive flips forward,
-  ).
-- A click on an item launches it through the tiles' path (desktop entry, activation token, bounce) and closes the grid. A click
-  on a dot flips the page. A click on the search field does nothing. A click anywhere else closes the grid.
+- Typing searches at once, with the search rule: title, word, camel-case and initials prefixes, the space-stripped title,
+  then the desktop file ID as words. Diacritics are not folded (approximate). Backspace deletes the last character.
+- Tab and Shift+Tab move the keys between the pills and the applications. On the pills, Left and Right move along the row,
+  Home and End go to its ends, Return or Space turns the focused pill on or off (one pill at a time), and Down goes to
+  the applications.
+- On the applications, the arrows move the selection along and across the rows, the separator included. Up from the
+  first row goes to the pills. Page Up and Page Down move by the rows the viewport shows, and Home and End go to the
+  first and last items. The content scrolls to keep the selection in view. Return opens the selection, or the first
+  result of a search.
+- The wheel and the touchpad scroll the content.
+- A click on an item opens it and closes the grid. A click on a pill turns it on or off. A click on the collapsed field opens
+  the panel again. A click outside the panel closes the grid.
+- Opening an item goes the way a click on its tile goes: an application with windows comes forward (`activate_app`), a
+  resident one is asked for a window (see *Residency*), and any other starts with an activation token and bounces its tile.
 - The grid also closes when the keyboard leaves it, and goes at once, without the exit animation, on `locked`.
 
-approximate chrome: the keyboard selection (white 0.2, radius 8), the search field's fill, stroke and inset, the placeholder's
-alpha, "No Results" as white at gray 0.204, end-of-text truncation instead of the middle.
+**Accessibility.** The grid is a dialog named "Applications". The search field is a text input named "Applications" with
+the description "Search", focused while the grid is open. Pills are check boxes with a toggle state and a Click action.
+The content is a group named "Applications" whose items are buttons named after their applications, and the separator is
+a separator. Only the rows on screen, and a screen's worth either way, are nodes.
+
+**Decisions** (conservative, recorded here):
+
+- The frecency history is read only. The grid writes nothing back; the launcher keeps its own counts.
+- The pills are our own names for the freedesktop categories. Only pills that hold an application show.
+- The recents row is hidden while a query or a pill filters the list, so the results are one alphabetical list.
+- The collapse to the search field is immediate, not animated.
+- Pill widths are reckoned from the character count, not measured; the text is centred and ellipsized in them.
 
 ### Overview
 
@@ -308,7 +371,8 @@ menu stays until its own key changes in the file.
 
 ## Protocols / D-Bus it speaks
 
-The process speaks the server's dock protocol and `cupertino_session_v1`, and has no D-Bus dependency. The messages are named
+The process speaks the server's dock protocol (version 19) and `cupertino_session_v1`. On the session bus it only calls
+`org.freedesktop.Application.Activate` to ask a resident D-Bus-activatable application for a window (see *Residency*). The messages are named
 where they are used above. In the Overview chrome a press on a window sends `overview_select` and on empty space
 `overview_close`. A press on a slot sends `switch_workspace` when released in place, or `move_workspace` when dragged past 4 pt
 to another slot (approximate slack). The add slot sends `add_workspace` and the remove button `remove_workspace`.
@@ -316,10 +380,10 @@ to another slot (approximate slack). The add slot sends `add_workspace` and the 
 
 ## Open issues
 
-- **Not wired.** A recents source, window thumbnails in minimized tiles and in the
+- **Not wired.** A recents source for the bar, window thumbnails in minimized tiles and in the
   workspaces bar, a key to toggle auto-hide, and changing the position at run time.
 - **Switcher.** The all-displays preference, scroll, and drag and drop.
-- **Application grid.** Folders, edit mode and drag, the pinch spring, mouse-drag paging and the rubber band, and
+- **Application grid.** Folders, edit mode and drag, the pinch spring, the rubber band at the ends of the scroll, and
   the Shift slow-motion durations.
 - **Overview.** Thumbnails of the workspaces are not drawn, and the slots are plain (approximate).
 - **Context menus.** Deviations (approximate): the Options submenu is flattened. There is no Open at Login (no login-items
@@ -336,7 +400,9 @@ cargo test -p cupertino-dock --features app
 
 | Test | Proves |
 |---|---|
-| App grid unit tests | The layout against the computed table of the app-grid (§5.5), the icon rule, item and dot hit-testing, the search rule, typing and the ID fallback, arrows and page keys, the flip curve, the wheel burst, clicks, the entry and exit visuals, and the painted tiles, dots, selection and search field. |
+| App grid unit tests | The panel, collapsed field, search field, pills and content geometry; the category mapping and the pills shown; pills fitting the row; the recents row, the separator and the alphabetical order; pill filtering; the two-step Escape; typing; arrows across rows, the separator and into the pills; Tab between pills and grid; scrolling and the rows on screen; clicks; the search rule; the fade, and Reduce Motion. |
+| Activation unit tests (`src/activate.rs`) | The object path of a desktop file ID and the token in the platform data. |
+| `tests/activate.rs` | `Activate` reaches a fake `org.freedesktop.Application` on a private session bus (`cupertino-test-bus`) at the desktop file ID's path, with the token in its platform data; a name nobody owns fails. |
 | Switcher unit tests | Layout, hit-testing, delay and fade timing, hover slack, colours. |
 | Icon unit tests (`src/icons.rs`) | The generic application icon, the trash icons, the placeholder, a window's own image, averaging down a large image, a sharp edge at the drawn size. |
 | Magnification unit tests | The ramp, and the fisheye: exact large size under the pointer, neighbour sizes, growth, monotonic fall-off, continuity. |
@@ -345,4 +411,4 @@ cargo test -p cupertino-dock --features app
 | `tests/dock.rs` | Sections, orientations, hit-testing, minimize targets and drag-reorder: the grab, the gap rule, the slide, the strip and section limits, the removal gate, the dim, the settle and the removal fade. |
 | `tests/wm_surfaces.rs` | The overview and switcher on Kit, headless: three windows of different sizes clear the workspaces bar by 20 pt and each other on four outputs at scales 1, 1.25, 1.5 and 2, and hit-test to themselves; the keys, the bar's slots, add and remove, screen-reader reading and presses, the closing fade, reflow, Reduce Motion, opaque fills under Reduce Transparency and Increase Contrast; the switcher's delay, pointer and screen-reader activation, live label, step, commit and cancel fades, and a lost panel resumed. With `CUPERTINO_LOOK_DIR` set, `look_captures` writes light and dark pictures at 1× and 2×. |
 | `tests/session.rs` | Windows and tiles, the launch bounce (announced, not doubled, unannounced, not for the first list) and the refused-activation hop. |
-| `tests/kit.rs` | The dock as CupertinoKit runs it, headless (`cupertino-ui-test`), behind a fake host: the bar's accessible tree, a click that activates or launches with an activation token, a drag off the bar that removes a pin, a tile menu whose item reaches the server, Focus Dock with the arrows, Return and Escape, the move to another display by resting on its edge strip, the window list from the bar's role only and a gesture from any, the bar's material as one region of the window (none under Reduce Transparency), the Force Quit dialog from the keyboard, the application grid typed into and launched from, and the lock. Also the running indicators under their tiles, an attention bounce and a launch bounce run on frames with no timer faster than the fallback and back to rest, the tile menu as a grabbing popup anchored to its tile, every Focus Dock starting on the first tile with the ring shown, the focus moving to a neighbour when its tile goes, a keyboard leave ending Focus Dock except the menu's own, no new frame for pointer motion that changes nothing, a new frame for every change the bar shows (an application starting or quitting, a bounce, a new scale, Focus Dock, and a `dock.conf` turning magnification on, which changes only the surface's depth, or changing the tile size, position or auto-hide) and for the strip of a plugged-in output and the bar moved off an unplugged one, the switcher on the output the server names with desktop names and a click that switches, and the overview taking the keyboard, framing three windows and closing. With `CUPERTINO_LOOK_DIR` set, `look_captures` writes the bar, a tile's menu, the switcher and the overview's chrome over three windows, light and dark at 1× and 2×. |
+| `tests/kit.rs` | The dock as CupertinoKit runs it, headless (`cupertino-ui-test`), behind a fake host: the bar's accessible tree, a click that activates or launches with an activation token, a drag off the bar that removes a pin, a tile menu whose item reaches the server, Focus Dock with the arrows, Return and Escape, the move to another display by resting on its edge strip, the window list from the bar's role only and a gesture from any, the bar's material as one region of the window (none under Reduce Transparency), the Force Quit dialog from the keyboard, the application grid typed into and launched from, and the lock. Also the running indicators under their tiles, an attention bounce and a launch bounce run on frames with no timer faster than the fallback and back to rest, the tile menu as a grabbing popup anchored to its tile, every Focus Dock starting on the first tile with the ring shown, the focus moving to a neighbour when its tile goes, a keyboard leave ending Focus Dock except the menu's own, no new frame for pointer motion that changes nothing, a new frame for every change the bar shows (an application starting or quitting, a bounce, a new scale, Focus Dock, and a `dock.conf` turning magnification on, which changes only the surface's depth, or changing the tile size, position or auto-hide) and for the strip of a plugged-in output and the bar moved off an unplugged one, the switcher on the output the server names with desktop names and a click that switches, and the overview taking the keyboard, framing three windows and closing. The grid: its panel with pills, recents, a separator and every application, the first Escape collapsing it and the second dismissing it, typing from the collapsed field, Tab between pills and grid with a pill filtering, a running application brought forward, and the bar shown and magnifying beside it under auto-hide. Residency: the dot kept after the last window, a resident application asked over D-Bus with a token once and without a bounce, started again with a token without the bus or when the call fails, no second launch from the bar or the grid, and the dot dropped when the process goes or a new role does not list it. Reduce Motion: a launch that dims in place and magnification at once. With `CUPERTINO_LOOK_DIR` set, `look_captures` writes the bar, a tile's menu, the switcher, the overview's chrome over three windows and the application grid, light and dark at 1× and 2×. |

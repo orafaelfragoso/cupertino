@@ -463,3 +463,87 @@ fn default_category_order_lists_documents_before_folders() {
         (3, 1)
     );
 }
+
+#[test]
+fn a_file_offers_open_reveal_and_copy_path_and_reveal_opens_its_folder_in_files() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("budget.ods"), "x").unwrap();
+    let mut l = launcher();
+    l.set_file_index(Some(Arc::new(FileIndex::build(FileSearchConfig::new(
+        d.path(),
+    )))));
+    let item = l
+        .query("budget", NOW)
+        .iter()
+        .find(|i| i.kind == ItemKind::File)
+        .cloned()
+        .expect("the file is found");
+    let actions = l.actions(&item);
+    let labels: Vec<&str> = actions.iter().map(|a| a.label.as_str()).collect();
+    assert_eq!(labels, ["Open", "Reveal in Files", "Copy Path"]);
+    let folder = d.path().to_string_lossy().into_owned();
+    // without the session's file manager the folder opens with the open command
+    let Activation::Run(open) = l.activate_action(&item, &actions[1], "budget", NOW) else {
+        panic!()
+    };
+    assert_eq!(
+        (open.program.as_str(), open.args.clone()),
+        ("xdg-open", vec![folder.clone()])
+    );
+    assert_eq!(l.frecency.launches(&item.id), 1);
+    // with it, the file manager's entry opens the folder
+    let mut entries = l.entries().to_vec();
+    entries.push(app(
+        "cupertino-files",
+        "Files",
+        "File Manager",
+        "cupertino-files %F",
+    ));
+    l.set_entries(entries);
+    let Activation::Run(files) = l.activate_action(&item, &actions[1], "budget", NOW) else {
+        panic!()
+    };
+    assert_eq!(files.program, "cupertino-files");
+    assert_eq!(files.args, vec![folder]);
+    assert_eq!(files.desktop_id.as_deref(), Some(FILE_MANAGER_ID));
+    let path = d.path().join("budget.ods").to_string_lossy().into_owned();
+    assert_eq!(
+        l.activate_action(&item, &actions[2], "budget", NOW),
+        Activation::CopyToClipboard(path)
+    );
+}
+
+#[test]
+fn a_folder_reveals_itself_and_values_offer_copy() {
+    let d = tempfile::tempdir().unwrap();
+    assert_eq!(Launcher::reveal_folder(d.path()), d.path());
+    assert_eq!(
+        Launcher::reveal_folder(&d.path().join("a.txt")),
+        d.path().to_path_buf()
+    );
+    let l = launcher();
+    let calc = l.query("2+2", NOW).iter().next().cloned().unwrap();
+    assert_eq!(calc.kind, ItemKind::Calculator);
+    let labels: Vec<String> = l.actions(&calc).into_iter().map(|a| a.label).collect();
+    assert_eq!(labels, ["Copy"]);
+}
+
+#[test]
+fn a_conversion_leads_the_results_and_copies_its_value() {
+    let mut l = launcher();
+    let r = l.query("10 km in mi", NOW);
+    assert_eq!(r.sections[0].kind, SectionKind::Conversion);
+    let item = r.sections[0].items[0].clone();
+    assert_eq!(item.kind, ItemKind::Conversion);
+    assert!(item.title.starts_with("6.21371"), "{item:?}");
+    assert_eq!(item.subtitle, "10 km =");
+    let Activation::CopyToClipboard(text) = l.activate(&item, "10 km in mi", NOW) else {
+        panic!()
+    };
+    assert_eq!(text, item.title);
+    // arithmetic without units stays the calculator's
+    assert_eq!(
+        l.query("10 * 3", NOW).sections[0].kind,
+        SectionKind::Calculator
+    );
+}

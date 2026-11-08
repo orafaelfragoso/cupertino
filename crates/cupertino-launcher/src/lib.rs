@@ -26,6 +26,7 @@ pub mod frecency;
 pub mod kit;
 pub mod matcher;
 pub mod panel;
+pub mod preview;
 pub mod view;
 
 pub use desktop::{DesktopAction, DesktopEntry};

@@ -1,8 +1,9 @@
 # cupertino-launcher
 
 The launcher ("search panel") of the Cupertino desktop. It stands in for the design's launcher. It does desktop
-entry indexing, tiered fuzzy matching with persisted frecency, a calculator, a bounded file search, sectioned results and keyboard
-navigation, and draws its panel with CupertinoKit.
+entry indexing, tiered fuzzy matching with persisted frecency, a calculator and unit conversions (its own parser, no network), a
+bounded file search, sectioned results beside a preview of the selected one with its actions, and keyboard navigation, and draws
+its panel with CupertinoKit.
 
 The crate has no Smithay dependency. The engine and the panel state are separate from the window, so a host can run queries on
 any thread. The `cupertino-launcher` process is the host for the desktop: a CupertinoKit application whose windows sit on layer
@@ -38,11 +39,13 @@ fill and the high-contrast colours.
 **Windows.** The process is one Kit application with three windows, each on a layer surface (namespace `cupertino-launcher`)
 that `LauncherRoles` gives it, none of them on an output, so the server puts them on the output under the pointer:
 
-* the panel: overlay layer, anchored to the top only (so centred horizontally), its top edge at one fifth of the output's height,
-  as wide as the panel and as tall as its rows (`view::panel_height`), with exclusive keyboard interactivity. When its rows change
-  height the model asks the host to resize the surface (`LayerSurface::set_placement`), and the server's configure gives Kit the
-  new size. Its background is Kit's `Surface::Menu` material with the panel's corner radius; the content and the material fade in
-  together with the appear spring;
+* the panel: overlay layer, anchored to the top only (so centred horizontally), the panel's top edge at one fifth of the output's
+  height, with exclusive keyboard interactivity. The window is the panel (`view::panel_height` tall) plus room for its shadow on
+  every side (`view::window_size`); its input region is the panel alone (`view::panel_rect`), so a press beside the panel reaches
+  the catcher. When its rows change height the model asks the host to resize the surface (`LayerSurface::set_placement`), and the
+  server's configure gives Kit the new size. The window is transparent: the panel is regular glass (`PaintCx::glass`) with the
+  panel's corner radius, a soft shadow drawn only outside its shape and a thin dark edge; without the desktop's effects it paints
+  `Surface::Menu`'s fill instead. The glass, the shadow and the content fade in together with the appear spring;
 * the catcher: top layer, over the whole output, below the panel; a press on it closes the panel;
 * while the panel is hidden, one transparent point that takes no input, so the process always has a mapped surface.
 
@@ -53,19 +56,33 @@ margin is first guessed from the first output's height, since the output the ser
 catcher's configure gives the height of the output both were put on, and `LauncherRoles` corrects the margin
 (`LayerSurface::set_margin`) when it differs, before the panel's first frame commits it.
 
-**Input and dismissal.** The query is Kit's `TextField`, which has the keyboard while the panel is open. The panel's own keys never
+**Input and dismissal.** The query is Kit's `BareField`, a text field without chrome set at 26 pt, which has the keyboard while
+the panel is open. The panel's own keys never
 reach it: the panel's root widget takes them in the capture phase (`panel::takes_key`, with Kit's key event translated by
 `view::panel_key`: named keys by keysym, typing by the layout's character, command chords by the lower-case letter) and the model
 runs them through `Panel::handle_key`. Every other key edits the field, which reports the query back. Hover selects a row, a click on
-a row activates it, and `Escape` clears the query and then closes. The panel also closes when its window loses the keyboard (another
+a row activates it, a click on an action button carries that action out, and `Escape` clears the query and then closes.
+
+**Preview and actions.** Beside the results the pane shows the selected result: a file's picture (a thumbnail through
+`cupertino-thumbnails`), the first lines of a text file or its type's icon, then its name, its type in words, its size (or a
+folder's item count), when it changed and its folder; an application's icon at the pane's size and its description; a
+calculation's or a conversion's value set large over its expression. The host reads a file's preview on a thread
+(`Host::preview`, `Message::Previewed`); a preview that arrives for a result no longer selected is dropped. Below it the
+result's actions are capsule buttons, the chosen one filled in the accent colour (`Launcher::actions`): Open, Reveal in Files and
+Copy Path for a file; Open and Copy Path for a folder; Open and the entry's desktop actions for an application; Copy for a value;
+Search for the web search. Tab and Shift+Tab move through them round and round; with the list focused, Left and Right move
+through them and stop at the ends; Return carries out the chosen one. Moving the selection chooses the result's own action
+again. The panel also closes when its window loses the keyboard (another
 window took it), on a press outside the panel, after a launch, and when the session locks: `LauncherRoles` sees the server's
 `cupertino_app_effects_v1` session-lock event (which Kit passes only to the accessibility adapter) and sends the model
 `Message::Locked`. The launch history is written when the panel closes.
 
 **Launching.** `Activation::Run` asks Kit for an `xdg-activation` token for the panel window (`Command::ActivationToken`, with the
 entry's desktop id), and starts the command with `XDG_ACTIVATION_TOKEN` / `DESKTOP_STARTUP_ID` when the token arrives. A copy
-result (the calculator's) goes on the system clipboard through `Command::SetClipboard`. Reveal and web search run `xdg-open`. The
-other panel commands are logged as not provided.
+result (a value, or a path) goes on the system clipboard through `Command::SetClipboard`. Reveal in Files (the action, or
+Primary+R) opens the folder holding a file, or a folder itself, in the session's file manager through its desktop entry
+(`engine::FILE_MANAGER_ID`, with an activation token), else with `xdg-open`; the file manager opens folders, so the file itself is
+not selected. Web search runs `xdg-open`. The other panel commands are logged as not provided.
 
 Screenshot: `cupertino-server/output/launcher-open.png`.
 
@@ -85,25 +102,30 @@ A call from a shell (`gdbus call ... --method org.cupertino.Launcher1.Toggle`) i
 ## Icons
 
 Application results show the entry's own `Icon=` (an absolute path or `hicolor`; `cupertino_icons::ThemeIcons`) and the asset
-`application.generic` when it has none. Folder results are the asset `folder`, file results `document.generic` (file results
-are not typed: the launcher holds no MIME database yet); they are loaded at the icon size for scales 1, 2 and 3 and shown as Kit images, which draw the rendition that covers the output's scale. The web
+`application.generic` when it has none. Folder results are the asset `folder`, file results `document.generic` in the list
+(the preview types the selected file with the MIME database and shows its type's icon through `cupertino_kit::file_icons`); they
+are loaded at the icon size for scales 1, 2 and 3 and shown as Kit images, which draw the rendition that covers the output's scale. The web
 search row is Kit's `symbol.magnifyingglass` symbol in the secondary label colour, as is the symbol in front of the query. The
-calculator row has no icon. Missing assets are reported once at start and drawn as placeholders.
+calculator and conversion rows have no icon. Missing assets are reported once at start and drawn as placeholders.
 
 ## Values applied
 
 
 | Item | Value |
 |---|---|
-| Panel width / collapsed height / minimum expanded height | 600 / 52 / 430 pt |
-| Corner radius | 16 pt, continuous |
-| Position | horizontally centred, top edge at 1/5 of the output height |
-| Input | Kit's text field after the search symbol, 20 pt side margins |
+| Panel width / collapsed height / minimum expanded height | 640 / 56 / 430 pt |
+| Corner radius | 28 pt (a capsule while collapsed), kept as the panel grows |
+| Material | regular glass; a shadow of 40 pt blur, 16 pt below, black at 0.5 (dark) or 0.22 (light); a 0.5 pt edge, black at 0.55 or 0.12 |
+| Position | horizontally centred, the panel's top edge at 1/5 of the output height |
+| Input | a 22 pt search symbol, 16 pt gap, the query at 26 pt without chrome, 22 pt side margins |
+| Results list / preview | 288 pt list, a separator, the preview in the rest with 16 pt padding |
+| Preview | picture at most 300 × 136 pt (6 pt corners), icon 64 pt, name 15 pt semibold, details 11 pt, value 28 pt |
+| Action buttons | 26 pt capsules, 4 pt apart, at most 4 shown around the chosen one |
 | Result icon, selection radius, cell inset | 32 pt, 12 pt continuous, 12 pt |
 | Selected-row fill | the theme's secondary selected-control fill, text keeps its label colours, no animation |
-| Material | Kit's `Surface::Menu` (the theme's opaque fill when transparency is reduced or contrast increased) |
-| Keyboard | no wrap, Up on the first result leaves the list, Primary+Up/Down jump sections, Tab/Delete/Esc in the list return to the field, Esc clears then closes, Primary+Return/R/B/I/Y/K/L/D/,/H commands, Space previews |
-| Top hit | one item, moved out of its section; a calculator result leads instead |
+| Keyboard | no wrap, Up on the first result leaves the list, Primary+Up/Down jump sections, Backspace/Delete/Esc in the list return to the field, Esc clears then closes, Tab/Shift+Tab cycle the actions, Left/Right step them in the list, Primary+Return/R/B/I/Y/K/L/D/,/H commands |
+| Top hit | one item, moved out of its section; a calculation or conversion leads instead |
+| Conversions | length, mass, US customary volume, area, time (a Julian year), data (decimal and binary), speed, temperature, angle; no currencies; 6 significant digits |
 | Section limits for hosts | 3 rows per section, 5 sections before "show more", 3 suggestions |
 | Category defaults | `engine::DEFAULT_CATEGORY_ORDER` (enablement list; runtime order is relevance driven) |
 | Show/hide animation | none found; the spring is kept as an authored fade |
@@ -117,9 +139,11 @@ calculator row has no icon. Missing assets are reported once at start and drawn 
 | `exec` (re-export of `cupertino-apps::exec`) | `Exec` quoting and field-code expansion, `CommandSpec` (with activation token and terminal wrapping) |
 | `matcher` | tiers exact › prefix › word-prefix › acronym › substring › fuzzy; field weights; highlight positions |
 | `frecency` | decayed launch counts + learned query→item associations, JSON persistence; the file format, its path and the ranking are `cupertino-apps::frecency` (re-exported `default_path`, `ItemRecord`, `FILE_VERSION`), which the menu bar reads the store with |
-| `calc` | arithmetic parser (`+ − × ÷ ^ % `, constants, `sqrt sin cos …), number formatting |
+| `calc` | arithmetic parser (`+ − × ÷ ^ % `, constants, `sqrt sin cos …), number formatting; division by zero, overflow and input past 200 bytes give no result |
+| `convert` | unit conversions (`10 km in mi`, `72 f to c`, `2^10 kib = kb`): the units table, the quantity through `calc` |
+| `preview` | what the preview shows of a file: its type in words, size, change date, folder, text excerpt |
 | `files` | bounded breadth-first walker, ignore rules, in-memory name index and search |
-| `engine` | `Launcher`: providers → `Results { sections }`; `activate` → `Activation` |
+| `engine` | `Launcher`: providers → `Results { sections }`; `actions` of a result; `activate` and `activate_action` → `Activation` |
 | `panel` | `Panel`: query editing, selection, scrolling, appear animation (spring); `takes_key` |
 | `view` | the panel, catcher and hidden windows on CupertinoKit, panel metrics, `panel_key` |
 | `kit` | `Model`, `Message`, `update` and `view`: the launcher as a Kit application, the session behind the `Host` trait |
@@ -132,7 +156,8 @@ use cupertino_launcher::kit::{self, Host, Message, Model};
 
 // startup: index XDG application dirs, load ~/.local/share/cupertino/launcher.json
 let launcher = Launcher::from_system(LauncherConfig::default());
-// `host` starts commands, opens paths, builds the file index, resizes the panel's surface, loads icons and tells the time
+// `host` starts commands, opens paths, builds the file index, resizes the panel's surface, loads icons, reads previews and
+// tells the time
 let mut model = Model::new(launcher, Box::new(host));
 // a Kit application: kit::update(&mut model, message) and kit::view(&model) are its update and view;
 // Message::Toggle shows or hides the panel
@@ -148,7 +173,8 @@ let mut model = Model::new(launcher, Box::new(host));
   - `Nothing` (unusable `Exec`).
 * `Panel` is the keyboard model without a window: `Panel::handle_key` returns what the host has to do (`PanelEvent`), and
   `panel::takes_key` tells beforehand whether a key is the panel's or the query field's. Its bindings are listed in `panel.rs`
-  (Up/Down without wrap, Primary+Up/Down section jumps, PageUp/PageDown, Tab, Alt+1…9, Enter, Escape). Shortcuts that need the
+  (Up/Down without wrap, Primary+Up/Down section jumps, PageUp/PageDown, Tab and Left/Right through the actions, Alt+1…9, Enter,
+  Escape). Shortcuts that need the
   host arrive as `PanelEvent::Command(PanelCommand)`; `Mods::primary` is the Super key.
 
 ## Matching and ranking
@@ -185,9 +211,9 @@ at shutdown.
 
 ## Open issues
 
-The keypad navigation keys without Num Lock are not mapped. The panel has no drop shadow of its own (the window is the panel's
-size), the query is set in Kit's field type rather than the design's 26 pt, and the field edits with Kit's standard chords rather
-than the user's keyboard profile.
+The keypad navigation keys without Num Lock are not mapped, and the field edits with Kit's standard chords rather than the user's
+keyboard profile. The preview's sized labels draw in the label colours themselves rather than through Kit's text roles. Reveal
+opens the folder without selecting the file, since the file manager takes folders only.
 
 ## Tests
 
@@ -202,6 +228,6 @@ cargo bench -p cupertino-launcher
 |---|---|
 | `tests/control.rs` | The `Toggle` interface against a private `dbus-daemon`, that a second launcher cannot take the name, and that another process (a `dbus-send` the test starts) is refused as `UntrustedCaller`. |
 | `cupertino-server/tests/shell_processes.rs` | The real process (`--no-files`) connects to the real server, maps its hidden window at start and keeps running. |
-| `src/view/tests.rs` | The windows run headless on Kit's test driver: the search field, the results list and keyboard navigation against the Inspector goldens in `tests/goldens/` and the screen-reader readings in `tests/fixtures/screen-reader/`; launching, the clipboard, hover, click and dismissal. |
-| `cargo test` | Matching, ranking, frecency, calculator, file search, panel state, that `takes_key` agrees with `handle_key`, and the `app` process code. |
+| `src/view/tests.rs` | The windows run headless on Kit's test driver: the search field, the results list and keyboard navigation against the Inspector goldens in `tests/goldens/` and the screen-reader readings in `tests/fixtures/screen-reader/`; launching, the clipboard, hover, click and dismissal; the preview arriving (and a stale one dropped), Reveal in Files, choosing an action with the arrows, a conversion. |
+| `cargo test` | Matching, ranking, frecency, calculator (division by zero, huge numbers, invalid input), conversions, preview words and dates, file search, panel state and action traversal, that `takes_key` agrees with `handle_key`, and the `app` process code. |
 | `cargo bench` | Scores 5 000 synthetic applications: about 1–3 ms per query in a release build (14 ms to build the index), calculator 0.6 µs. |

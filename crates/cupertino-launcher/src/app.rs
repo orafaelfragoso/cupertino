@@ -1,23 +1,29 @@
 //! Glue between the launcher's Kit application ([`cupertino_launcher::kit`]) and the session: the windows get their
 //! layer surfaces from [`LauncherRoles`], `Toggle` arrives from the bus as a message, and [`AppHost`] starts what the
-//! panel activates, builds the file index on a thread, resizes the panel's surface and loads the results' icons.
+//! panel activates, builds the file index on a thread, resizes the panel's surface, loads the results' icons and reads
+//! what the preview shows of the selected file on a thread.
 
+use cupertino_apps::{MimeDatabase, XdgDirs};
 use cupertino_assets::Assets;
 use cupertino_defaults::terminal::DEFAULT_TERMINALS;
 use cupertino_icons::{SystemIcons, ThemeIcons};
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{next_resource_id, Application, Command, Window};
+use cupertino_kit::file_icons::FileIcons;
+use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::WindowSpec;
 use cupertino_kit::render::{ImageResource, PixelFormat};
 use cupertino_launcher::control;
-use cupertino_launcher::engine::{ItemKind, ResultItem};
+use cupertino_launcher::engine::{Action, ItemKind, ResultItem};
 use cupertino_launcher::exec::CommandSpec;
 use cupertino_launcher::files::{FileIndex, FileSearchConfig};
 use cupertino_launcher::kit::{self, Host, Message, Model};
 use cupertino_launcher::panel::Now;
+use cupertino_launcher::preview::{self, Preview, PreviewBody, TEXT_SNIFF};
 use cupertino_launcher::view::{
-    APP_ID, CATCHER_APP_ID, DOCUMENT_ICON, FOLDER_ICON, GENERIC_APPLICATION_ICON, HIDDEN_APP_ID,
-    ICON_SIZE, SEARCH_SYMBOL, TOP_FRACTION, WIDTH,
+    window_size, APP_ID, CATCHER_APP_ID, DOCUMENT_ICON, FOLDER_ICON, GENERIC_APPLICATION_ICON,
+    HIDDEN_APP_ID, ICON_SIZE, PREVIEW_ICON_SIZE, PREVIEW_IMAGE, PREVIEW_TEXT_LINES, SEARCH_SYMBOL,
+    SHADOW_TOP, TOP_FRACTION,
 };
 use cupertino_launcher::{Launcher, LauncherConfig};
 use cupertino_modifiers::Profile;
@@ -26,10 +32,14 @@ use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     ShellEvent,
 };
+use cupertino_thumbnails::{ThumbSize, Thumbnailer};
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
 use cupertino_wayland_client::{Connection, Error as WaylandError, ExtensionEvent, SurfaceId};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::error::Error;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -45,6 +55,14 @@ const FRAME: Duration = Duration::from_micros(16_667);
 
 /// Device pixels the results' icons are loaded at: their size at scales 1 to 3, so they stay sharp on every output.
 const ICON_PX: [u32; 3] = [ICON_SIZE as u32, ICON_SIZE as u32 * 2, ICON_SIZE as u32 * 3];
+/// Device pixels the preview's application icon is loaded at.
+const PREVIEW_ICON_PX: [u32; 3] = [
+    PREVIEW_ICON_SIZE as u32,
+    PREVIEW_ICON_SIZE as u32 * 2,
+    PREVIEW_ICON_SIZE as u32 * 3,
+];
+/// The most items of a folder the preview counts.
+const MAX_COUNTED: usize = 100_000;
 
 /// Command line of the process.
 pub struct Options {
@@ -113,9 +131,10 @@ enum Signal {
     Locked,
 }
 
-/// The panel's top margin on an output `height` points tall.
+/// The top margin of the panel's window on an output `height` points tall: the panel at [`TOP_FRACTION`] of the
+/// height, less the room above it for its shadow.
 fn top_margin(height: f64) -> i32 {
-    (height * TOP_FRACTION).round() as i32
+    (height * TOP_FRACTION - SHADOW_TOP).round().max(0.0) as i32
 }
 
 impl LauncherRoles {
@@ -144,7 +163,10 @@ impl LauncherRoles {
                 config(
                     Layer::Overlay,
                     Anchor::Top,
-                    (WIDTH as u32, spec.size.height.ceil() as u32),
+                    (
+                        spec.size.width.ceil() as u32,
+                        spec.size.height.ceil() as u32,
+                    ),
                     top_margin(height),
                     KeyboardInteractivity::Exclusive,
                 )
@@ -300,6 +322,115 @@ struct AppHost {
     themes: ThemeIcons,
     /// The generic application, folder and document icons.
     system: SystemIcons,
+    /// File icons by type, and the type database, for the preview; made at the first preview of a file.
+    files: Option<FileIcons>,
+}
+
+/// The MIME database of the XDG data directories, empty when it cannot be read.
+fn mime_database() -> MimeDatabase {
+    let dirs = XdgDirs::from_env()
+        .map(|d| d.all_data_dirs())
+        .unwrap_or_default();
+    MimeDatabase::load(&dirs).unwrap_or_default()
+}
+
+/// Seconds east of UTC of local time at `time` (Unix seconds).
+fn local_offset(time: i64) -> i64 {
+    let tt = time as libc::time_t;
+    // SAFETY: a zeroed tm is a valid out value for localtime_r, which reads `tt` and writes only `tm`
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let converted = unsafe { !libc::localtime_r(&tt, &mut tm).is_null() };
+    if converted {
+        tm.tm_gmtoff
+    } else {
+        0
+    }
+}
+
+/// Straight RGBA as premultiplied, in place.
+fn premultiply(rgba: &mut [u8]) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        let a = u16::from(pixel[3]);
+        for channel in &mut pixel[..3] {
+            *channel = ((u16::from(*channel) * a + 127) / 255) as u8;
+        }
+    }
+}
+
+/// A picture of the image at `path` for the preview, at twice its size in points so it stays sharp at scale 2.
+fn picture(path: &Path) -> Option<PreviewBody> {
+    let edge = (2.0 * PREVIEW_IMAGE.width.max(PREVIEW_IMAGE.height)) as u32;
+    let mut pixels = Thumbnailer::from_env(NAMESPACE)
+        .pixels(path, ThumbSize::XLarge, edge)
+        .ok()?;
+    premultiply(&mut pixels.rgba);
+    let size = preview::fit(
+        Size::new(
+            f64::from(pixels.width) / 2.0,
+            f64::from(pixels.height) / 2.0,
+        ),
+        PREVIEW_IMAGE,
+    );
+    Some(PreviewBody::Image {
+        sources: vec![image(pixels.width, pixels.height, &pixels.rgba)],
+        size,
+    })
+}
+
+/// The start of the file at `path` as text, when it reads as text.
+fn excerpt(path: &Path) -> Option<PreviewBody> {
+    let mut bytes = Vec::with_capacity(TEXT_SNIFF);
+    std::fs::File::open(path)
+        .ok()?
+        .take(TEXT_SNIFF as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    preview::text_excerpt(&bytes, PREVIEW_TEXT_LINES).map(PreviewBody::Text)
+}
+
+/// What the preview shows of the file or folder at `path` of type `mime`: its picture or text, its size or how many
+/// items it holds, when it changed and where it is.
+fn read_preview(path: &Path, mime: &str, is_dir: bool, icon: Vec<ImageSource>) -> Preview {
+    let meta = std::fs::metadata(path).ok();
+    let mut details = Vec::new();
+    if is_dir {
+        if let Ok(entries) = std::fs::read_dir(path) {
+            let count = entries.take(MAX_COUNTED).count();
+            let items = if count == 1 { "item" } else { "items" };
+            details.push(("Contains".to_owned(), format!("{count} {items}")));
+        }
+    } else if let Some(meta) = &meta {
+        details.push(("Size".to_owned(), preview::human_size(meta.len())));
+    }
+    let modified = meta
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+    if let Some(time) = modified {
+        let now = unix_now() as i64;
+        details.push((
+            "Modified".to_owned(),
+            preview::format_date(time, local_offset(time), now),
+        ));
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    details.push(("Where".to_owned(), preview::location(path, home.as_deref())));
+    let body = if is_dir {
+        None
+    } else if mime.starts_with("image/") {
+        picture(path)
+    } else if meta.as_ref().is_some_and(|m| m.len() > 0) {
+        excerpt(path)
+    } else {
+        None
+    };
+    Preview {
+        body: body.unwrap_or(PreviewBody::Icon),
+        icon,
+        kind: preview::kind_name(mime),
+        details,
+    }
 }
 
 impl Host for AppHost {
@@ -332,7 +463,11 @@ impl Host for AppHost {
 
     fn resize(&mut self, height: f64) {
         if let Some(panel) = self.surfaces.borrow_mut().panel.as_mut() {
-            panel.set_placement(Anchor::Top, (WIDTH as u32, height.ceil() as u32));
+            let size = window_size(height);
+            panel.set_placement(
+                Anchor::Top,
+                (size.width.ceil() as u32, size.height.ceil() as u32),
+            );
         }
     }
 
@@ -360,7 +495,7 @@ impl Host for AppHost {
             }
             ItemKind::Folder => FOLDER_ICON,
             ItemKind::File => DOCUMENT_ICON,
-            ItemKind::WebSearch | ItemKind::Calculator => return Vec::new(),
+            ItemKind::WebSearch | ItemKind::Calculator | ItemKind::Conversion => return Vec::new(),
         };
         ICON_PX
             .iter()
@@ -369,6 +504,67 @@ impl Host for AppHost {
                 image(pixmap.width(), pixmap.height(), pixmap.data())
             })
             .collect()
+    }
+
+    fn preview(&mut self, item: &ResultItem) -> Vec<Command<Message>> {
+        let id = item.id.clone();
+        let ready = |id: String, preview: Preview| -> Vec<Command<Message>> {
+            vec![Command::Perform(Box::pin(async move {
+                Message::Previewed(id, Arc::new(preview))
+            }))]
+        };
+        match (&item.kind, &item.action) {
+            (ItemKind::Application | ItemKind::ApplicationAction, _) => {
+                let icon: Vec<ImageSource> = item
+                    .icon
+                    .as_deref()
+                    .map(|name| {
+                        PREVIEW_ICON_PX
+                            .iter()
+                            .filter_map(|&px| self.themes.load(name, px))
+                            .map(|pixmap| image(pixmap.width(), pixmap.height(), pixmap.data()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if icon.is_empty() {
+                    return Vec::new();
+                }
+                ready(
+                    id,
+                    Preview {
+                        body: PreviewBody::Icon,
+                        icon,
+                        kind: String::new(),
+                        details: Vec::new(),
+                    },
+                )
+            }
+            (ItemKind::File | ItemKind::Folder, Action::OpenPath(path)) => {
+                let path = path.clone();
+                let is_dir = path.is_dir();
+                let files = self
+                    .files
+                    .get_or_insert_with(|| FileIcons::discover(mime_database(), HashMap::new()));
+                let mime = files.database().file_type(&path, is_dir).to_owned();
+                let icon = files.images(&path, &mime, false, PREVIEW_ICON_SIZE);
+                // what shows if the reading thread is lost
+                let plain = Preview {
+                    body: PreviewBody::Icon,
+                    icon: icon.clone(),
+                    kind: preview::kind_name(&mime),
+                    details: Vec::new(),
+                };
+                let (sender, read) = async_channel::bounded(1);
+                std::thread::spawn(move || {
+                    let _ = sender.send_blocking(read_preview(&path, &mime, is_dir, icon));
+                });
+                vec![Command::Perform(Box::pin(async move {
+                    let preview = read.recv().await.unwrap_or(plain);
+                    Message::Previewed(id, Arc::new(preview))
+                }))]
+            }
+            _ => Vec::new(),
+        }
     }
 
     fn now(&self) -> Now {
@@ -469,6 +665,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
             &[GENERIC_APPLICATION_ICON, FOLDER_ICON, DOCUMENT_ICON],
             &[SEARCH_SYMBOL],
         ),
+        files: None,
     };
     let mut model = Model::new(Launcher::from_system(config), Box::new(host));
     model.files = files;

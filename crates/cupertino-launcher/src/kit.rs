@@ -1,11 +1,13 @@
 //! The launcher as a CupertinoKit application: the model around [`Panel`] and [`Launcher`], what each message does
 //! to it, and its windows. What needs the session (starting commands, opening paths, building the file index, the
-//! layer surface's size, the appear animation's timer) goes through [`Host`], so the model runs headless in tests.
+//! layer surface's size, the appear animation's timer, what the preview shows of a file) goes through [`Host`], so the
+//! model runs headless in tests.
 
-use crate::engine::{Action, Activation, Launcher, ResultItem};
+use crate::engine::{ActionKind, Activation, ItemAction, Launcher, ResultItem};
 use crate::exec::CommandSpec;
 use crate::files::{FileIndex, FileSearchConfig};
 use crate::panel::{Now, Panel, PanelCommand, PanelEvent};
+use crate::preview::Preview;
 use crate::view::{self, Input, PanelView, MAX_ROWS};
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{Command, Key, Window, WindowKey};
@@ -29,6 +31,9 @@ pub trait Host {
     fn frame(&mut self, frame: u64) -> Vec<Command<Message>>;
     /// The renditions of `item`'s icon, one per output scale it is loaded at; none to show its kind's symbol.
     fn icon(&mut self, item: &ResultItem) -> Vec<ImageSource>;
+    /// Find out what the preview shows of `item`, the selected result, off the loop; the commands deliver it as
+    /// [`Message::Previewed`]. None when the preview shows only the result itself.
+    fn preview(&mut self, item: &ResultItem) -> Vec<Command<Message>>;
     /// Both clocks now.
     fn now(&self) -> Now;
 }
@@ -52,6 +57,8 @@ pub enum Message {
     Locked,
     /// The server closed the hidden window (its output went away): a new one is opened, on an output still there.
     Remap,
+    /// What the preview shows of the result with this id.
+    Previewed(String, Arc<Preview>),
 }
 
 impl From<Input> for Message {
@@ -82,6 +89,9 @@ pub struct Model {
     frame: u64,
     /// The hidden window's generation: each one is a new window, so one the server closed is not kept.
     pub hidden: u64,
+    /// The id of the result the preview was last asked for, and what arrived for it.
+    previewing: Option<String>,
+    preview: Option<Arc<Preview>>,
 }
 
 impl Model {
@@ -102,6 +112,8 @@ impl Model {
             next_launch: 0,
             frame: 0,
             hidden: 0,
+            previewing: None,
+            preview: None,
         }
     }
 
@@ -141,6 +153,8 @@ impl Model {
     fn hide(&mut self) {
         let now = self.now();
         self.panel.hide(now.mono);
+        self.previewing = None;
+        self.preview = None;
         if let Err(e) = self.launcher.frecency.save_if_dirty() {
             eprintln!("cupertino-launcher: launch history not saved: {e}");
         }
@@ -155,10 +169,15 @@ impl Model {
         }
     }
 
-    /// After every change: the shown results' icons, and the panel's height.
-    fn changed(&mut self) {
+    /// What the preview shows of the selected result, once it has arrived.
+    pub fn preview(&self) -> Option<&Preview> {
+        self.preview.as_deref()
+    }
+
+    /// After every change: the shown results' icons, the selected one's preview, and the panel's height.
+    fn changed(&mut self) -> Vec<Command<Message>> {
         if !self.panel.is_visible() {
-            return;
+            return Vec::new();
         }
         if self.icons.len() > MAX_ICONS {
             self.icons.clear();
@@ -177,11 +196,21 @@ impl Model {
                 }
             }
         }
+        let mut commands = Vec::new();
+        let selected = self.panel.selected_item().cloned();
+        if selected.as_ref().map(|item| &item.id) != self.previewing.as_ref() {
+            self.previewing = selected.as_ref().map(|item| item.id.clone());
+            self.preview = None;
+            if let Some(item) = &selected {
+                commands = self.host.preview(item);
+            }
+        }
         let height = view::panel_height(&self.panel);
         if height != self.height {
             self.height = height;
             self.host.resize(height);
         }
+        commands
     }
 
     /// Carry out what the panel asked for.
@@ -226,16 +255,19 @@ impl Model {
     fn command(&mut self, command: PanelCommand) -> Vec<Command<Message>> {
         match command {
             PanelCommand::Reveal => {
-                if let Some(Action::OpenPath(path)) =
-                    self.panel.selected_item().map(|item| item.action.clone())
-                {
-                    let directory = if path.is_dir() {
-                        path
-                    } else {
-                        path.parent().map(|p| p.to_path_buf()).unwrap_or(path)
-                    };
-                    self.hide();
-                    self.host.open(&directory.to_string_lossy());
+                let reveal = self.panel.selected_item().and_then(|item| {
+                    self.launcher
+                        .actions(item)
+                        .iter()
+                        .position(|a: &ItemAction| a.kind == ActionKind::Reveal)
+                });
+                if let Some(index) = reveal {
+                    let now = self.now();
+                    let flat = self.panel.selected();
+                    let outcome = self
+                        .panel
+                        .activate_action(flat, index, &mut self.launcher, now);
+                    return self.outcome(outcome);
                 }
             }
             PanelCommand::WebSearch => {
@@ -250,6 +282,8 @@ impl Model {
                     ),
                 }
             }
+            // the preview pane always shows the selected result
+            PanelCommand::Preview => {}
             other => eprintln!("cupertino-launcher: {other:?} is not provided"),
         }
         Vec::new()
@@ -297,6 +331,12 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             let outcome = model.panel.activate_index(flat, &mut model.launcher, now);
             model.outcome(outcome)
         }
+        Message::Input(Input::RunAction(flat, index)) => {
+            let outcome = model
+                .panel
+                .activate_action(flat, index, &mut model.launcher, now);
+            model.outcome(outcome)
+        }
         Message::Input(Input::Dismiss) => {
             model.hide();
             Vec::new()
@@ -329,12 +369,19 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             model.hidden += 1;
             Vec::new()
         }
+        Message::Previewed(id, preview) => {
+            if model.previewing.as_ref() == Some(&id) {
+                model.preview = Some(preview);
+            }
+            Vec::new()
+        }
         Message::Unheard => {
             eprintln!("cupertino-launcher: the bus interface stopped");
             vec![Command::Exit]
         }
     };
-    model.changed();
+    let mut commands = commands;
+    commands.extend(model.changed());
     commands
 }
 
@@ -343,11 +390,18 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
     if !model.panel.is_visible() {
         return vec![view::hidden_window(model.hidden, Message::Remap)];
     }
+    let actions = model
+        .panel
+        .selected_item()
+        .map(|item| model.launcher.actions(item))
+        .unwrap_or_default();
     let panel = PanelView {
         panel: &model.panel,
         revision: model.revision,
         alpha: model.alpha(),
         icons: &model.icons,
+        actions: &actions,
+        preview: model.preview(),
     };
     vec![view::panel_window(&panel), view::catcher_window()]
 }

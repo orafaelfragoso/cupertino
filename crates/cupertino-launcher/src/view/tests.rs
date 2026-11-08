@@ -59,6 +59,16 @@ fn log(entry: String) {
     HOST.with_borrow_mut(|log| log.push(entry));
 }
 
+/// What the test host was asked to do, less the previews it was asked for.
+fn launches() -> Vec<String> {
+    HOST.with_borrow(|log| {
+        log.iter()
+            .filter(|entry| !entry.starts_with("preview "))
+            .cloned()
+            .collect()
+    })
+}
+
 /// Records what the model asks of the session; its clock stands still.
 struct TestHost;
 
@@ -94,6 +104,11 @@ impl Host for TestHost {
         Vec::new()
     }
 
+    fn preview(&mut self, item: &ResultItem) -> Vec<Command<Message>> {
+        log(format!("preview {}", item.id));
+        Vec::new()
+    }
+
     fn now(&self) -> Now {
         Now {
             mono: 0.0,
@@ -122,7 +137,11 @@ impl Application for TestApp {
     }
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
-        let inbox = matches!(message, Message::Toggle | Message::Locked);
+        // what a test delivers comes from the inbox, which is listened to again
+        let inbox = matches!(
+            message,
+            Message::Toggle | Message::Locked | Message::Indexed(_) | Message::Previewed(..)
+        );
         let mut commands = kit::update(model, message);
         if inbox {
             commands.push(listen());
@@ -263,7 +282,7 @@ impl Run {
                             continue;
                         }
                         self.panel_height = Some(height);
-                        Some(Size::new(WIDTH, height))
+                        Some(window_size(height))
                     }
                     _ if self.configured.contains(&id) => continue,
                     () if catcher => Some(OUTPUT),
@@ -556,6 +575,7 @@ const RETURN_CODE: u32 = 28;
 const ESCAPE_CODE: u32 = 1;
 const UP_CODE: u32 = 103;
 const DOWN_CODE: u32 = 108;
+const RIGHT_CODE: u32 = 106;
 
 #[test]
 fn the_search_field_takes_the_keyboard_when_the_panel_opens() {
@@ -638,7 +658,7 @@ fn return_launches_the_selection_with_its_token_and_closes() {
     assert!(!run.model().panel.is_visible());
     assert!(run.window("panel").is_none() && run.window("catcher").is_none());
     assert!(run.hidden().is_some(), "the hidden window stays mapped");
-    let host = HOST.with_borrow(Clone::clone);
+    let host = launches();
     assert_eq!(host.len(), 1, "{host:?}");
     assert!(
         host[0].starts_with("run Some(\"browser.desktop\") [\"firefox\"]"),
@@ -674,7 +694,7 @@ fn hover_selects_a_row_and_a_click_activates_it() {
     );
     run.click(panel, row);
     assert!(!run.model().panel.is_visible());
-    let host = HOST.with_borrow(Clone::clone);
+    let host = launches();
     assert!(
         host.iter().any(|h| h.contains("firewall-config")),
         "{host:?}"
@@ -701,7 +721,7 @@ fn a_screen_reader_s_click_on_a_result_launches_it_and_closes_the_panel() {
         .ask(&run.reader, row, cupertino_kit::core::Action::Click, None);
     run.settle();
     assert!(!run.model().panel.is_visible());
-    let host = HOST.with_borrow(Clone::clone);
+    let host = launches();
     assert!(
         host.iter().any(|h| h.contains("firewall-config")),
         "{host:?}"
@@ -883,6 +903,186 @@ fn the_panel_is_collapsed_without_results_and_expanded_with_them() {
     assert!(panel_height(&panel) >= MIN_EXPANDED_HEIGHT);
     assert_eq!(
         placement(OUTPUT, 430.0),
-        Rect::new(200.0, 140.0, WIDTH, 430.0)
+        Rect::new(180.0, 140.0, WIDTH, 430.0)
     );
+    // the window keeps room for the shadow around the panel, which alone takes input
+    let window = window_size(430.0);
+    let panel = panel_rect(430.0);
+    assert_eq!(
+        (window.width - panel.width(), window.height - panel.height()),
+        (2.0 * SHADOW_SIDE, SHADOW_TOP + SHADOW_BOTTOM)
+    );
+    assert_eq!(panel.origin.x, SHADOW_SIDE);
+}
+
+/// A file index of a folder holding `notes.txt`, and the folder.
+fn notes_index() -> (tempfile::TempDir, Arc<crate::files::FileIndex>) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("notes.txt"), "first line\nsecond line\n").unwrap();
+    let index = crate::files::FileIndex::build(FileSearchConfig::new(dir.path()));
+    (dir, Arc::new(index))
+}
+
+impl Run {
+    /// Asks the screen reader to press the object of `role` named `name` in the panel.
+    fn press(&mut self, role: Role, name: &str) {
+        let tree = self
+            .reader
+            .tree(self.panel())
+            .expect("the reader holds the panel");
+        let node = tree
+            .nodes
+            .iter()
+            .find(|(_, n)| n.role == role && n.name.as_deref() == Some(name))
+            .map(|(id, _)| *id)
+            .unwrap_or_else(|| panic!("the reader reads {role:?} {name:?}"));
+        self.driver
+            .ask(&self.reader, node, cupertino_kit::core::Action::Click, None);
+        self.settle();
+    }
+
+    /// The names of the panel's objects of `role`, by their item index.
+    fn names(&self, role: Role) -> Vec<String> {
+        let mut named: Vec<(Option<usize>, String)> = self
+            .snapshot()
+            .accessibility
+            .iter()
+            .filter(|(_, n)| n.role == role)
+            .filter_map(|(_, n)| Some((n.item_index, n.name.clone()?)))
+            .collect();
+        named.sort();
+        named.into_iter().map(|(_, name)| name).collect()
+    }
+}
+
+#[test]
+fn the_selected_file_shows_its_preview_once_the_host_reads_it() {
+    let (_dir, index) = notes_index();
+    let mut run = Run::new();
+    run.deliver(Message::Indexed(index));
+    run.type_text("notes");
+    let item = run
+        .model()
+        .panel
+        .selected_item()
+        .cloned()
+        .expect("a result");
+    assert!(item.id.starts_with("file:"), "{item:?}");
+    assert!(
+        HOST.with_borrow(|log| log.contains(&format!("preview {}", item.id))),
+        "the host is asked for the selected file's preview"
+    );
+    // until it arrives the pane shows the result itself and its actions
+    assert_eq!(
+        run.names(Role::Button),
+        ["Open", "Reveal in Files", "Copy Path"]
+    );
+    run.deliver(Message::Previewed(
+        item.id.clone(),
+        Arc::new(Preview {
+            body: PreviewBody::Text("first line\nsecond line".into()),
+            icon: Vec::new(),
+            kind: "Plain text".into(),
+            details: vec![("Size".into(), "23 bytes".into())],
+        }),
+    ));
+    let texts = run.names(Role::StaticText);
+    for expected in [
+        "notes.txt",
+        "Plain text",
+        "Size",
+        "23 bytes",
+        "first line\nsecond line",
+    ] {
+        assert!(
+            texts.iter().any(|t| t == expected),
+            "{expected:?} in {texts:?}"
+        );
+    }
+    assert!(run.names(Role::Group).iter().any(|g| g == "Preview"));
+    // a preview of a result no longer selected is dropped
+    run.deliver(Message::Previewed(
+        "file:/elsewhere".into(),
+        Arc::new(Preview {
+            body: PreviewBody::Icon,
+            icon: Vec::new(),
+            kind: "Elsewhere".into(),
+            details: Vec::new(),
+        }),
+    ));
+    assert!(!run.names(Role::StaticText).iter().any(|t| t == "Elsewhere"));
+}
+
+#[test]
+fn reveal_in_files_opens_the_folder_holding_the_file_and_closes() {
+    let (dir, index) = notes_index();
+    let mut run = Run::new();
+    run.deliver(Message::Indexed(index));
+    run.type_text("notes");
+    run.press(Role::Button, "Reveal in Files");
+    assert!(!run.model().panel.is_visible());
+    let folder = dir.path().to_string_lossy().into_owned();
+    // the test entries have no file manager of the session: the folder opens with the open command
+    assert_eq!(
+        launches(),
+        [format!("run None [\"xdg-open\", {folder:?}] token=true")]
+    );
+}
+
+#[test]
+fn the_arrows_choose_an_action_and_return_carries_it_out() {
+    let mut run = Run::new();
+    run.type_text("fire");
+    run.key("Down", DOWN_CODE, DOWN);
+    run.key("Up", UP_CODE, UP);
+    assert_eq!(run.model().panel.focus(), Focus::List);
+    run.key("Right", RIGHT_CODE, RIGHT);
+    run.key("Right", RIGHT_CODE, RIGHT);
+    let mut buttons: Vec<(Option<usize>, String, bool)> = run
+        .snapshot()
+        .accessibility
+        .iter()
+        .filter(|(_, n)| n.role == Role::Button)
+        .map(|(_, n)| {
+            (
+                n.item_index,
+                n.name.clone().unwrap_or_default(),
+                n.states.selected,
+            )
+        })
+        .collect();
+    buttons.sort();
+    let chosen: Vec<(String, bool)> = buttons.into_iter().map(|(_, n, s)| (n, s)).collect();
+    assert_eq!(
+        chosen,
+        [
+            ("Open".into(), false),
+            ("New Window".into(), false),
+            ("New Private Window".into(), true)
+        ]
+    );
+    run.key("Return", RETURN_CODE, RETURN);
+    let host = launches();
+    assert!(
+        host.len() == 1 && host[0].contains("--private-window"),
+        "{host:?}"
+    );
+}
+
+#[test]
+fn a_conversion_lists_its_value_and_copies_it() {
+    let mut run = Run::new();
+    run.type_text("10 km in mi");
+    let item = run
+        .model()
+        .panel
+        .selected_item()
+        .cloned()
+        .expect("a result");
+    assert_eq!(item.kind, ItemKind::Conversion);
+    assert!(run.names(Role::Group).iter().any(|g| g == "Conversion"));
+    assert!(run.names(Role::StaticText).contains(&item.title));
+    assert_eq!(run.names(Role::Button), ["Copy"]);
+    run.press(Role::Button, "Copy");
+    assert!(!run.model().panel.is_visible());
 }

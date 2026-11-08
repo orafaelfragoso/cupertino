@@ -3,7 +3,7 @@
 //! method, and assistive technology learns only that there is a value.
 
 use crate::look::{self, paint_focus_ring};
-use crate::{SearchField, SecureField, TextChange, TextField};
+use crate::{BareField, SearchField, SecureField, TextChange, TextField};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
@@ -75,15 +75,53 @@ pub(crate) enum FieldLook {
     Plain,
     /// A capsule with a magnifying glass before the text: a [`SearchField`].
     Search,
+    /// No chrome, the text at this many points: a [`BareField`].
+    Bare(u16),
 }
+
+/// A bare field's height as a share of its text size: one line with room for its ascenders and descenders.
+const BARE_LINE_SHARE: f64 = 1.3;
 
 impl FieldLook {
     fn height(self, theme: &ThemeTokens) -> f64 {
         match self {
             FieldLook::Plain => theme.metrics.field_height,
             FieldLook::Search => SEARCH_HEIGHT,
+            FieldLook::Bare(size) => (f64::from(size) * BARE_LINE_SHARE).ceil(),
         }
     }
+
+    /// The size of the field's text: the body type's, or a bare field's own.
+    fn text_size(self, theme: &ThemeTokens) -> f32 {
+        match self {
+            FieldLook::Plain | FieldLook::Search => theme.type_scale.body.size,
+            FieldLook::Bare(size) => f32::from(size),
+        }
+    }
+}
+
+/// `text` on one line in the field's type.
+fn field_paragraph(env: &Environment, text: &str, field: FieldLook) -> Option<ParagraphLayout> {
+    look::paragraph_sized(
+        env,
+        text,
+        Some(look::direction(env)),
+        field.text_size(&env.theme),
+    )
+}
+
+/// The placeholder on one line in the field's type; none when it is empty.
+fn field_label(env: &Environment, text: &str, field: FieldLook) -> Option<ParagraphLayout> {
+    if text.is_empty() {
+        return None;
+    }
+    look::paragraph_sized(env, text, None, field.text_size(&env.theme))
+}
+
+/// The y of `layout`'s top that puts its first baseline where the field's text sits in `chrome`.
+fn field_top(layout: &ParagraphLayout, chrome: Rect, env: &Environment, field: FieldLook) -> f64 {
+    let first = layout.lines().first().map_or(0.0, |line| line.baseline);
+    look::baseline_sized(chrome, field.text_size(&env.theme)) - first
 }
 
 /// The chrome is the field's height, centred in a node padded out to the minimum target.
@@ -99,6 +137,7 @@ fn interior(size: Size, theme: &ThemeTokens, look: FieldLook, direction: LayoutD
     let (start, end) = match look {
         FieldLook::Plain => (inset, inset),
         FieldLook::Search => (SEARCH_TEXT_X, inset),
+        FieldLook::Bare(_) => (0.0, 0.0),
     };
     let (left, right) = match direction {
         LayoutDirection::Ltr => (start, end),
@@ -144,12 +183,12 @@ fn placed(
     scroll: f64,
     field: FieldLook,
 ) -> Option<(ParagraphLayout, Point)> {
-    let layout = look::paragraph(env, text, Some(look::direction(env)))?;
+    let layout = field_paragraph(env, text, field)?;
     let chrome = chrome(size, &env.theme, field);
     let area = interior(size, &env.theme, field, env.direction);
     let origin = Point::new(
         leading_x(env, area, layout.size().width) - scroll,
-        look::top(&layout, chrome, env),
+        field_top(&layout, chrome, env, field),
     );
     Some((layout, origin))
 }
@@ -193,7 +232,7 @@ fn paint_text(
     let size = cx.size();
     let area = interior(size, &env.theme, field, env.direction);
     let chrome = chrome(size, &env.theme, field);
-    let Some(layout) = look::paragraph(&env, shown.text, Some(look::direction(&env))) else {
+    let Some(layout) = field_paragraph(&env, shown.text, field) else {
         return;
     };
     let caret = layout.caret_rect(shown.caret);
@@ -213,7 +252,7 @@ fn paint_text(
     scroll.set(offset);
     let origin = Point::new(
         leading_x(&env, area, layout.size().width) - offset,
-        look::top(&layout, chrome, &env),
+        field_top(&layout, chrome, &env, field),
     );
     let color = |role| look::color(&env.theme, role, look);
     cx.push(PaintOp::PushClip(Shape::Rect(area)));
@@ -227,15 +266,16 @@ fn paint_text(
         }
     }
     if shown.text.is_empty() {
-        if let Some(placeholder) = look::label(&env, placeholder) {
+        if let Some(placeholder) = field_label(&env, placeholder, field) {
             let at = Point::new(
                 leading_x(&env, area, placeholder.size().width),
-                look::top(&placeholder, chrome, &env),
+                field_top(&placeholder, chrome, &env, field),
             );
-            // a search field's placeholder reads as its label, so it is stronger than a plain field's
+            // a search field's placeholder, and a bare field's, read as its label, so they are stronger than a plain
+            // field's
             let role = match field {
                 FieldLook::Plain => ColorRole::PlaceholderText,
-                FieldLook::Search => ColorRole::SecondaryText,
+                FieldLook::Search | FieldLook::Bare(_) => ColorRole::SecondaryText,
             };
             look::glyphs(cx, &placeholder, at, color(role));
         }
@@ -245,7 +285,7 @@ fn paint_text(
     if let Some(range) = &shown.composition {
         let start = layout.caret_rect(position(range.start)).min_x();
         let end = layout.caret_rect(position(range.end)).min_x();
-        let y = look::baseline(chrome, &env) + COMPOSITION_DROP;
+        let y = look::baseline_sized(chrome, field.text_size(&env.theme)) + COMPOSITION_DROP;
         fill_rect(
             cx,
             Rect::new(origin.x + start, y, end - start, 1.0 / env.scale),
@@ -350,9 +390,14 @@ fn measure(constraints: Constraints, cx: &MeasureCx<'_>, field: FieldLook) -> Me
 fn paint_chrome(cx: &mut PaintCx<'_>, state: &ControlState, field: FieldLook) {
     let theme = cx.env().theme.clone();
     let rect = chrome(cx.size(), &theme, field);
-    if field == FieldLook::Search {
-        paint_search_chrome(cx, rect, state);
-        return;
+    match field {
+        FieldLook::Search => {
+            paint_search_chrome(cx, rect, state);
+            return;
+        }
+        // the surface it sits on is its chrome
+        FieldLook::Bare(_) => return,
+        FieldLook::Plain => {}
     }
     let radius = theme.metrics.field_radius;
     look::fill(
@@ -1170,4 +1215,61 @@ impl<M: Clone + 'static> Widget<M> for SearchField<M> {
     fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {
         self.field.semantics(state, cx)
     }
+}
+
+/// A bare field is its text field without chrome, its text at its own size: the same state, keys, input method and
+/// semantics.
+impl<M: Clone + 'static> Widget<M> for BareField<M> {
+    type State = FieldState;
+
+    fn layout(&self) -> LayoutSpec {
+        layout()
+    }
+
+    fn state(&self) -> FieldState {
+        FieldState {
+            look: bare_look(self.size),
+            ..self.field.state()
+        }
+    }
+
+    fn update(&self, old: &Self, state: &mut FieldState) -> Change {
+        let change = self.field.update(&old.field, state);
+        if self.size != old.size {
+            state.look = bare_look(self.size);
+            return Change::Layout;
+        }
+        change
+    }
+
+    fn measure(
+        &self,
+        _: &FieldState,
+        constraints: Constraints,
+        cx: &mut MeasureCx<'_>,
+    ) -> Measured {
+        measure(constraints, cx, bare_look(self.size))
+    }
+
+    fn target(&self, state: &FieldState, env: &Environment) -> Size {
+        self.field.target(state, env)
+    }
+
+    fn event(&self, state: &mut FieldState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        self.field.event(state, event, cx)
+    }
+
+    fn paint(&self, state: &FieldState, cx: &mut PaintCx<'_>) {
+        self.field.paint(state, cx)
+    }
+
+    fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {
+        self.field.semantics(state, cx)
+    }
+}
+
+/// The look of a bare field of text `size` points large, in whole points from 1 to 200.
+fn bare_look(size: f64) -> FieldLook {
+    let size = if size.is_finite() { size } else { 0.0 };
+    FieldLook::Bare(size.round().clamp(1.0, 200.0) as u16)
 }

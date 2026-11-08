@@ -188,7 +188,9 @@ Applications, Desktop, Documents and Downloads (the nearby-sharing item has no c
 computer (the file system root, under the pretty host name of `/etc/machine-info`, else the host name), removable media
 and Trash under Locations; and under a Tags heading, once a listed item carries a tag, each tag in use (above). Names are cut at the tail. The sidebar
 takes the toolkit's neutral look for lists of places (`SidebarLook::Neutral`): the selected row in a neutral tint with
-its label semibold, the Favorites' symbols in the accent colour and the others' in the secondary label colour. The places
+its label semibold, the Favorites' symbols in the accent colour and the others' in the secondary label colour; in a
+window that is not the one in use every symbol, the selected one too, is the secondary label colour, while an open
+context menu keeps the window in use. The places
 are live (`kit::places`): a change of the user directories or their configuration shows at once, and Trash comes with
 the first item trashed and leaves when the trash's folder goes. Recents (Go › Recents, without keys, as
 Shift+Primary+F is the system's full-screen shortcut; Go › Home is Shift+Primary+H) is the virtual folder `recent:///`, not a sidebar row: the existing files of

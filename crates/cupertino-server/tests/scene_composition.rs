@@ -157,3 +157,162 @@ fn a_capture_of_a_locked_output_holds_only_the_lock_surface_and_black() {
     }
     d.state.backend = Some(backend);
 }
+
+/// What the windows layer holds for the window: the clip of its content, and whether it has a shadow, a title bar and a
+/// rim.
+#[derive(Debug)]
+struct Framed {
+    clip: cupertino_scene::Clip,
+    shadow: bool,
+    titlebar: bool,
+    rim: bool,
+}
+
+fn framed(d: &mut Desktop) -> Framed {
+    let mut backend = d.state.backend.take().unwrap();
+    let items: Vec<(SceneKind, cupertino_scene::Clip)> = d
+        .state
+        .with_scene(backend.renderer(), 0, |r, mut p| {
+            compose_scene(r, &mut p)
+                .frame
+                .items()
+                .iter()
+                .filter(|(layer, _)| *layer == SceneLayer::Windows)
+                .map(|(_, item)| (item.id.kind, item.clip))
+                .collect()
+        })
+        .expect("render resources");
+    d.state.backend = Some(backend);
+    let has = |kind: SceneKind| items.iter().any(|(k, _)| *k == kind);
+    Framed {
+        clip: items
+            .iter()
+            .find(|(k, _)| *k == SceneKind::WindowContent)
+            .map(|(_, clip)| *clip)
+            .expect("the window's content"),
+        shadow: has(SceneKind::Shadow),
+        titlebar: has(SceneKind::TitleBar),
+        rim: has(SceneKind::Rim),
+    }
+}
+
+fn rounded(clip: &cupertino_scene::Clip) -> bool {
+    matches!(clip, cupertino_scene::Clip::Rounded { radius, .. } if *radius > 0.0)
+}
+
+/// A desktop with one window of a client that asks for `mode` decorations (none: it never binds the protocol), opened
+/// and settled.
+fn desktop_with(
+    mode: Option<
+        wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::Mode,
+    >,
+) -> (Desktop, cupertino_wm::WindowId) {
+    let mut d = Desktop::new(1.0);
+    match mode {
+        None => d.window(),
+        Some(mode) => {
+            let client = common::Client::decorated(d.socket(), mode);
+            d.clients.push(client);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while d.state.wm.windows().count() != 1 {
+                d.pump();
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the client did not map"
+                );
+            }
+        }
+    }
+    d.at(3000);
+    let id = d.state.wm.key_window().expect("the window is key");
+    (d, id)
+}
+
+/// The window's frame in each state the corner policy names: normal, zoomed, filling the usable area and full screen.
+fn frames_by_state(d: &mut Desktop, id: cupertino_wm::WindowId) -> [(&'static str, Framed); 4] {
+    use cupertino_wm::{Command, Requester, TileKind};
+    let normal = framed(d);
+    d.state.command(Command::ToggleZoom { window: id });
+    d.at(6000);
+    assert!(
+        d.state
+            .wm
+            .window(id)
+            .unwrap()
+            .lifecycle
+            .toplevel_states()
+            .maximized
+    );
+    let zoomed = framed(d);
+    d.state.command(Command::ToggleZoom { window: id });
+    d.at(9000);
+    d.state.command(Command::Tile {
+        window: id,
+        kind: TileKind::Fill,
+    });
+    d.at(12000);
+    assert_eq!(
+        d.state.wm.window(id).unwrap().state(),
+        cupertino_wm::LifecycleState::Tiled(TileKind::Fill)
+    );
+    let filled = framed(d);
+    d.state.command(Command::Fullscreen {
+        window: id,
+        output: None,
+        requested_by: Requester::User,
+    });
+    d.at(15000);
+    assert_eq!(
+        d.state.wm.window(id).unwrap().state(),
+        cupertino_wm::LifecycleState::FullScreen
+    );
+    let full_screen = framed(d);
+    [
+        ("normal", normal),
+        ("zoomed", zoomed),
+        ("filled", filled),
+        ("full screen", full_screen),
+    ]
+}
+
+#[test]
+fn a_zoomed_or_filled_window_keeps_its_rounded_corners_and_shadow_and_a_full_screen_one_is_square()
+{
+    use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::Mode;
+    // the compositor's decorations, and a client that never said whether it draws its own
+    for mode in [Some(Mode::ServerSide), None] {
+        let (mut d, id) = desktop_with(mode);
+        for (state, frame) in frames_by_state(&mut d, id) {
+            let decorated = mode.is_some();
+            if state == "full screen" {
+                assert!(!rounded(&frame.clip), "{mode:?} {state}: {frame:?}");
+                assert!(
+                    !(frame.shadow || frame.titlebar || frame.rim),
+                    "{mode:?} {state}: {frame:?}"
+                );
+            } else {
+                assert!(rounded(&frame.clip), "{mode:?} {state}: {frame:?}");
+                assert!(frame.shadow, "{mode:?} {state}: {frame:?}");
+                assert_eq!(
+                    (frame.titlebar, frame.rim),
+                    (decorated, decorated),
+                    "{mode:?} {state}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_window_whose_client_draws_its_own_decorations_keeps_its_own_shape_in_every_state() {
+    use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::Mode;
+    let (mut d, id) = desktop_with(Some(Mode::ClientSide));
+    assert!(d.state.entry(id).unwrap().draws_own_frame());
+    for (state, frame) in frames_by_state(&mut d, id) {
+        assert!(!rounded(&frame.clip), "{state}: {frame:?}");
+        assert!(
+            !(frame.shadow || frame.titlebar || frame.rim),
+            "{state}: {frame:?}"
+        );
+    }
+}

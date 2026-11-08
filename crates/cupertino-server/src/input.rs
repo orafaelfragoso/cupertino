@@ -1131,6 +1131,10 @@ impl KeyRouter {
         if self.suppressed.get(&sym).is_some_and(Option::is_some) {
             return KeyOutcome::Consumed(ActionPlan::default());
         }
+        // while the session is locked no shortcut of the desktop or its applications acts: every key goes to the lock
+        // screen, but the switch to another console. The screen reader's Super+Alt+S is not a binding here: it is matched
+        // before the router (`Cupertino::screen_reader_key`) and acts while the session is locked too, on purpose, so a
+        // person who needs the reader to unlock can turn it on at the lock screen.
         if ctx.locked {
             return match self.lookup(&ev) {
                 Some(Action::SwitchVt(n)) => {
@@ -1557,6 +1561,68 @@ mod tests {
             press(&mut r, "Ctrl+Alt+F3", &locked),
             KeyOutcome::Consumed(_)
         ));
+    }
+
+    #[test]
+    fn no_bound_shortcut_of_either_profile_acts_while_the_session_is_locked() {
+        let locked = ActionContext {
+            locked: true,
+            ..ctx()
+        };
+        for (profile, map) in [
+            ("cupertino", cupertino_input::ShortcutMap::defaults()),
+            (
+                "classic-pc",
+                cupertino_input::ShortcutMap::classic_pc_defaults(),
+            ),
+        ] {
+            let bindings = KeyBindings::from_shortcuts(&map, profile);
+            let entries = bindings.entries().to_vec();
+            assert!(entries.len() > 20, "{profile}: the defaults are bound");
+            let mut router = KeyRouter::new(bindings);
+            assert!(
+                router.tap_plan(&locked).is_none(),
+                "{profile}: the Super tap"
+            );
+            for (chord, action) in entries {
+                let outcome = router.key(
+                    KeyEvent {
+                        sym: chord.sym,
+                        pressed: true,
+                        mods: chord.mods,
+                        repeat: false,
+                        shifted: None,
+                    },
+                    &locked,
+                );
+                match (action, outcome) {
+                    (Action::SwitchVt(_), KeyOutcome::Consumed(_)) => {}
+                    (Action::SwitchVt(_), _) => {
+                        panic!("{profile}: {action:?} must switch consoles")
+                    }
+                    (_, KeyOutcome::Forward) => {}
+                    (_, _) => panic!("{profile}: {action:?} acted while the session is locked"),
+                }
+            }
+            // the screen reader's chord is no binding of the router: the compositor matches it before
+            let mods = Mods {
+                logo: true,
+                alt: true,
+                ..Mods::NONE
+            };
+            assert!(crate::screen_reader::is_chord(keysyms::KEY_s, &mods));
+            let reader = KeyEvent {
+                sym: keysyms::KEY_s,
+                pressed: true,
+                mods,
+                repeat: false,
+                shifted: None,
+            };
+            assert!(
+                router.lookup(&reader).is_none(),
+                "{profile}: Super+Alt+S is bound"
+            );
+        }
     }
 
     #[test]

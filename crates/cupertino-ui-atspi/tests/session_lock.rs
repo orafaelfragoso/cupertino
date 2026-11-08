@@ -5,9 +5,14 @@
 //! unmuted and again at its end; AccessKit sends its events in order, so what lies before and between the markers is
 //! exactly what each stage sent. The application that draws the lock screen is never muted by the lock it holds: the answer
 //! to a password attempt is announced.
+//!
+//! Acting as an assistive technology, a test reads an application's window while the session is locked: before the
+//! application learns the session is unlocked and while it is locked, its window is an empty frame without a name, and a
+//! click on a button read before the lock never reaches it; after the unlock the whole window reads again and the click
+//! does.
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::num::NonZeroU32;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Sender};
@@ -24,7 +29,7 @@ use cupertino_ui_core::{
     Role,
 };
 use cupertino_ui_platform::WindowId;
-use zbus::blocking::MessageIterator;
+use zbus::blocking::{Connection, MessageIterator, Proxy};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 use zbus::Message;
 
@@ -262,4 +267,223 @@ fn the_lock_screen_announces_the_answer_to_an_attempt_while_the_session_is_locke
         .skip_while(|s| *s != READY)
         .collect();
     assert_eq!(from_ready, [READY, "Incorrect password", PLAYED]);
+}
+
+/// What the reader application prints when it has done what the test asked.
+const ACK: &str = "ATSPI-ACK";
+
+/// A window titled "Downloads" with a status text and an OK button.
+fn content(status: &str) -> AccessibilityUpdate {
+    let mut update = tree(status, &[]);
+    let ok = AccessibilityNode {
+        role: Role::Button,
+        actions: vec![cupertino_ui_core::Action::Click],
+        ..text("OK", None)
+    };
+    update.nodes.push((id(3), ok));
+    update.nodes[0].1.children.push(id(3));
+    update.nodes[0].1.name = None;
+    update
+}
+
+/// The application the test reads: started muted, it learns the lock state from the commands on its standard input
+/// (`unlock`, `lock`), sends its window after each and acknowledges it on its standard output. A Click on OK while the
+/// session is locked fails it; one after the unlock is acknowledged. It ends with its input.
+fn reader_application() {
+    let mut adapter = AtspiAdapter::muted(Waker::from(Arc::new(Unpark(std::thread::current()))));
+    adapter.window_focus(WINDOW, true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !adapter.is_active() {
+        assert!(Instant::now() < deadline, "accessibility never turned on");
+        std::thread::park_timeout(Duration::from_millis(20));
+    }
+    let (commands, received) = channel();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lock().lines() {
+            let _ = commands.send(line.unwrap());
+        }
+    });
+    adapter.window_title(WINDOW, "Downloads");
+    adapter.update(&content("Ready"));
+    println!("{ACK} start");
+    let (mut locked, mut actions) = (true, Vec::new());
+    loop {
+        adapter.drain_actions(&mut actions);
+        for request in actions.drain(..) {
+            assert!(
+                !locked,
+                "{:?} reached the application behind the lock",
+                request.action
+            );
+            println!("{ACK} {:?}", request.action);
+        }
+        match received.recv_timeout(Duration::from_millis(20)) {
+            Ok(command) => {
+                locked = command == "lock";
+                adapter.session_locked(locked);
+                adapter.update(&content(if locked {
+                    "Behind the lock"
+                } else {
+                    "Unlocked"
+                }));
+                println!("{ACK} {command}");
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+fn accessible<'a>(conn: &Connection, peer: &str, path: &str) -> Proxy<'a> {
+    Proxy::new(
+        conn,
+        peer.to_owned(),
+        path.to_owned(),
+        "org.a11y.atspi.Accessible",
+    )
+    .unwrap()
+}
+
+fn children_of(conn: &Connection, peer: &str, path: &str) -> Vec<OwnedObjectPath> {
+    accessible(conn, peer, path)
+        .call::<_, _, Vec<(String, OwnedObjectPath)>>("GetChildren", &())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect()
+}
+
+fn name_of(conn: &Connection, peer: &str, path: &str) -> String {
+    accessible(conn, peer, path)
+        .get_property("Name")
+        .unwrap_or_default()
+}
+
+/// Wait until the window at `window` reads as `shown` (its content and title) or as an empty frame without a name.
+fn reads(conn: &Connection, peer: &str, window: &str, shown: bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let (children, name) = (children_of(conn, peer, window), name_of(conn, peer, window));
+        let now = if shown {
+            children.len() == 2 && name == "Downloads"
+        } else {
+            children.is_empty() && name.is_empty()
+        };
+        if now {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the window never read as {}: {} children, named {name:?}",
+            if shown { "shown" } else { "hidden" },
+            children.len()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn behind_the_lock_an_application_window_reads_as_an_empty_frame_and_takes_no_action() {
+    const NAME: &str =
+        "behind_the_lock_an_application_window_reads_as_an_empty_frame_and_takes_no_action";
+    if std::env::var_os(APPLICATION).is_some() {
+        return reader_application();
+    }
+    let Some(bus) = PrivateBus::start() else {
+        return;
+    };
+    let (embedded, embeds) = channel();
+    let _status = bus
+        .blocking_builder()
+        .name("org.a11y.Bus")
+        .unwrap()
+        .serve_at("/org/a11y/bus", Status)
+        .unwrap()
+        .build()
+        .unwrap();
+    let _registry = bus
+        .blocking_builder()
+        .name("org.a11y.atspi.Registry")
+        .unwrap()
+        .serve_at(ROOT, Socket(embedded))
+        .unwrap()
+        .build()
+        .unwrap();
+    let mut app = Command::new(std::env::current_exe().unwrap())
+        .args([NAME, "--exact", "--nocapture"])
+        .env(APPLICATION, "reader")
+        .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+        .env("AT_SPI_BUS_ADDRESS", &bus.address)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (said, acks) = channel();
+    let out = BufReader::new(app.stdout.take().unwrap());
+    std::thread::spawn(move || {
+        for line in out.lines().map_while(Result::ok) {
+            if let Some(ack) = line.strip_prefix(ACK) {
+                let _ = said.send(ack.trim().to_owned());
+            }
+        }
+    });
+    let ack = |what: &str| {
+        let got = acks
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("the application never acknowledged {what}"));
+        assert_eq!(got, what);
+    };
+    let mut input = app.stdin.take().unwrap();
+    let mut tell = |command: &str| writeln!(input, "{command}").unwrap();
+    let peer = embeds
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the root embedded");
+    ack("start");
+    let conn = bus.connect();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let window = loop {
+        if let Some(window) = children_of(&conn, &peer, ROOT).into_iter().next() {
+            break window;
+        }
+        assert!(Instant::now() < deadline, "the window never appeared");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // started without knowing whether the session is locked: nothing of it reads
+    reads(&conn, &peer, window.as_str(), false);
+
+    tell("unlock");
+    ack("unlock");
+    reads(&conn, &peer, window.as_str(), true);
+    let ok = children_of(&conn, &peer, window.as_str())
+        .into_iter()
+        .find(|path| name_of(&conn, &peer, path.as_str()) == "OK")
+        .expect("the OK button reads");
+    let click = |path: &OwnedObjectPath| -> zbus::Result<bool> {
+        Proxy::new(
+            &conn,
+            peer.clone(),
+            path.as_str().to_owned(),
+            "org.a11y.atspi.Action",
+        )
+        .unwrap()
+        .call("DoAction", &(0i32,))
+    };
+
+    tell("lock");
+    ack("lock");
+    reads(&conn, &peer, window.as_str(), false);
+    // a button read before the lock takes no click behind it; the application fails if one reaches it
+    let _ = click(&ok);
+
+    tell("unlock");
+    ack("unlock");
+    reads(&conn, &peer, window.as_str(), true);
+    let ok = children_of(&conn, &peer, window.as_str())
+        .into_iter()
+        .find(|path| name_of(&conn, &peer, path.as_str()) == "OK")
+        .expect("the OK button reads again");
+    let _ = click(&ok);
+    ack("Click");
+    drop(input);
+    assert!(app.wait().unwrap().success(), "the application failed");
 }

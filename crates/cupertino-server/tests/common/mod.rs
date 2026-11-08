@@ -44,6 +44,9 @@ use wayland_protocols::wp::relative_pointer::zv1::client::{
     zwp_relative_pointer_manager_v1, zwp_relative_pointer_v1,
 };
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1;
+use wayland_protocols::xdg::decoration::zv1::client::{
+    zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
+};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
@@ -136,6 +139,8 @@ struct LockStatus {
     relative: Vec<(f64, f64)>,
     /// The session lock's `locked` and the appearance observer's `session_lock` events, in order.
     lock_events: Vec<String>,
+    /// Whether each configure of the client's toplevel had the `activated` state, in order.
+    activations: Vec<bool>,
 }
 
 struct ClientState {
@@ -174,8 +179,9 @@ ignore_events!(
     wl_buffer::WlBuffer,
     wl_surface::WlSurface,
     wl_output::WlOutput,
-    xdg_toplevel::XdgToplevel,
     xdg_activation_v1::XdgActivationV1,
+    zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+    zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1,
     ext_session_lock_manager_v1::ExtSessionLockManagerV1,
     zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1,
     zwp_pointer_constraints_v1::ZwpPointerConstraintsV1,
@@ -199,6 +205,33 @@ impl Dispatch<CupertinoAppearanceV1, ()> for ClientState {
         if let cupertino_appearance_v1::Event::SessionLock { locked } = event {
             let mut status = state.lock_status.lock().unwrap();
             status.lock_events.push(format!("session_lock {locked}"));
+        }
+    }
+}
+
+/// `xdg_toplevel.configure`: whether it is activated is recorded.
+impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &xdg_toplevel::XdgToplevel,
+        event: xdg_toplevel::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_toplevel::Event::Configure { states, .. } = event {
+            let activated = states
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_ne_bytes(*c))
+                .any(|s| s == xdg_toplevel::State::Activated as u32);
+            state
+                .lock_status
+                .lock()
+                .unwrap()
+                .activations
+                .push(activated);
         }
     }
 }
@@ -618,6 +651,31 @@ impl Client {
         })
     }
 
+    /// A client with one mapped toplevel that asks for decorations in `mode` (`xdg-decoration`) before its first commit:
+    /// server-side ones the compositor draws, or client-side ones it says it draws itself.
+    pub fn decorated(socket: PathBuf, mode: zxdg_toplevel_decoration_v1::Mode) -> Client {
+        Self::run(socket, move |queue, client, globals| {
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
+            let manager: zxdg_decoration_manager_v1::ZxdgDecorationManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
+            let surface = compositor.create_surface(&qh, ());
+            let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
+            let toplevel = xdg.get_toplevel(&qh, ());
+            toplevel.set_app_id("org.example.decorated".to_string());
+            let decoration = manager.get_toplevel_decoration(&toplevel, &qh, ());
+            decoration.set_mode(mode);
+            surface.commit();
+            queue.roundtrip(client).unwrap();
+            Setup {
+                objects: Box::new((wm_base, manager, decoration, xdg, toplevel, surface)),
+                lock: None,
+                release: None,
+            }
+        })
+    }
+
     /// A client with one mapped toplevel of `app_id` on the seat: it records the keys its keyboard receives and the
     /// motions and button presses of its pointer.
     pub fn listening(socket: PathBuf, app_id: &'static str) -> Client {
@@ -906,6 +964,28 @@ impl Client {
     /// is told shows in [`Self::lock_events`].
     pub fn observing_locker(stream: UnixStream) -> Client {
         Self::locking(stream, true)
+    }
+
+    /// A lock client that asks for the lock and never presents anything, as one that hung right after it asked: it
+    /// makes no lock surface, so the lock stays pending until the compositor stops waiting for one.
+    pub fn hung_locker(stream: UnixStream) -> Client {
+        Self::run_over(stream, |queue, client, globals| {
+            let qh = queue.handle();
+            let manager: ext_session_lock_manager_v1::ExtSessionLockManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
+            let lock = manager.lock(&qh, ());
+            queue.roundtrip(client).unwrap();
+            Setup {
+                objects: Box::new(manager),
+                lock: Some(lock),
+                release: None,
+            }
+        })
+    }
+
+    /// Whether each configure of the client's toplevel had the `activated` state, in order.
+    pub fn activations(&self) -> Vec<bool> {
+        self.lock_status.lock().unwrap().activations.clone()
     }
 
     fn locking(stream: UnixStream, observe: bool) -> Client {

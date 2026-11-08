@@ -26,7 +26,7 @@ Not verified: how GDM treats the session on a real machine (the virtual console,
 | `Super+Q`, `Super+W`, `Super+M`, `Super+H` | quit application, close window, minimize, hide application |
 | `Super+Ctrl+F`, `Super+Ctrl+Left`, `Super+Ctrl+Right` | full screen, tile left, tile right |
 | `Super+Alt+Escape` | Force Quit |
-| `Super+Alt+S` | screen reader on or off, at the login screen too (the first of the installed readers, `/usr/bin/orca`; the same as **Settings > Accessibility > Screen reader**; no shortcuts file can take it while a reader is installed) |
+| `Super+Alt+S` | screen reader on or off, at the login screen and the lock screen too, the one shortcut that works on the lock screen besides switching consoles (the first of the installed readers, `/usr/bin/orca`; the same as **Settings > Accessibility > Screen reader**; no shortcuts file can take it while a reader is installed) |
 | `Shift+Super+/` | Help menu with its search field focused |
 
 To change a shortcut, add a `chord = action` line to `~/.config/cupertino/shortcuts.conf`, for example `Super+x = exec:foot`, or `Super+Tab = none` to free a chord. The file is applied on top of the defaults. `modifier_profile = classic-pc` in `~/.config/cupertino/keyboard.conf` switches to Windows and Linux habits (`Alt+Tab` switches, `Alt+F4` closes, `Ctrl` is the command key in Settings and text fields, and a tap of `Super` alone opens the launcher).

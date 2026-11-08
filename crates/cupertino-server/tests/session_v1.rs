@@ -609,3 +609,35 @@ fn a_lock_request_reaches_the_lock_screen_while_a_squatter_owns_the_login_name()
         "the squatter got a lock request"
     );
 }
+
+#[test]
+fn a_session_the_system_sleeps_on_before_it_is_locked_asks_the_lock_screen_to_take_it_over() {
+    let Some(mut h) = Harness::new() else { return };
+    h.state
+        .config
+        .shell_processes
+        .push(cupertino_server::config::ShellProcess {
+            name: "login".into(),
+            command: vec!["/usr/bin/false".into()],
+            roles: vec![ShellRole::SessionLock],
+        });
+    let login = Client::observer(h.login_stream(), 9);
+    h.wait_until("the observer to be told", |_| login.told().len() == 3);
+
+    // the lock screen did not lock before the sleep: the session is covered and the lock screen asked to lock
+    h.state.system_going_to_sleep();
+    h.wait_until("the lock screen to be asked to lock", |_| {
+        login.told().len() == 5
+    });
+    assert_eq!(
+        login.told()[3..],
+        [Told::Locked, Told::LockRequested(false)]
+    );
+    let successor = Client::locker(h.lock_stream());
+    h.wait_until("the lock screen to take the lock", |_| successor.locked());
+    successor.unlock();
+    h.wait_until("the unlock to reach the observer", |_| {
+        login.told().len() == 6
+    });
+    assert_eq!(login.told()[5], Told::Unlocked);
+}

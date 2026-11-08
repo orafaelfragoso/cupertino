@@ -9,7 +9,7 @@ zbus 5 on async-io, no tokio). AccessKit's types stay inside the crate.
 
 | Item | Contents |
 |---|---|
-| `AtspiAdapter` | `new(waker)` takes the window system's `Waker` (`WindowSystem::waker()`); the adapter goes into `RuntimeOptions.accessibility`. `muted(waker)` starts muted until the first `session_locked`, for an application that may start while the session is locked; `lock_screen(waker)` is never muted by `session_locked`, for the application that draws the lock screen |
+| `AtspiAdapter` | `new(waker)` takes the window system's `Waker` (`WindowSystem::waker()`); the adapter goes into `RuntimeOptions.accessibility`. `muted(waker)` starts muted and hidden until the first `session_locked`, for an application that may start while the session is locked (`cupertino_kit::app` uses it for every Kit application); `lock_screen(waker)` is never muted nor hidden by `session_locked`, for the application that draws the lock screen |
 
 ```rust
 let options = RuntimeOptions {
@@ -47,10 +47,17 @@ let runtime = Runtime::new(system, options);
   not export that, so a header without a description also says "Sorted ascending" or "Sorted descending" as one.
 - **Secrets.** A `PasswordInput` node, or any node whose value is `Protected`, carries no value and offers neither
   `SetValue` nor a selection, whatever core sent: a second defence after core's.
-- **Session lock.** While `session_locked(true)` holds, every node is sent without its live politeness, so nothing is
-  announced. AccessKit announces only as a live node is added or renamed, from the node it is sent then, so neither
-  the lock nor the unlock announces anything, and the first change after the unlock speaks as usual. The lock screen's own adapter (`lock_screen`) ignores the lock, so the
-  answer to a password attempt is announced while the session is locked.
+- **Session lock.** The lock state comes from the compositor's `cupertino_appearance_v1.session_lock` (core's
+  `session_locked`; a compositor without it is taken as unlocked). While the session is locked the application's content
+  is not readable: each window is published as an empty frame without a name (its root alone, so AccessKit drops every
+  other node), the window title is not published, and an action request from the bus is dropped before it is queued.
+  Core's updates are still taken into the adapter's copy, so the unlock publishes every window whole again, as it is
+  then. An adapter made with `muted` is hidden this way from its start until it learns the session is unlocked. Every
+  node is also sent without its live politeness while locked, and the tree published again at the unlock carries none:
+  AccessKit announces only as a live node is added or renamed, from the node it is sent then, so neither the lock nor
+  the unlock announces anything, and the first change after the unlock speaks as usual. The lock screen's own adapter
+  (`lock_screen`) ignores the lock, so the lock screen is what an assistive technology reads, and the answer to a
+  password attempt is announced while the session is locked.
 - **Actions.** A request from an assistive technology becomes core's `ActionRequest` (`Click`, `Focus`, `Increment`,
   `Decrement`, `Expand`, `Collapse`, `ShowMenu`, `ScrollIntoView`, `SetValue` with text or a number). It is kept only
   when its target advertised that action in its last update and it doesn't set a secret's value. It waits in a queue
@@ -58,6 +65,13 @@ let runtime = Runtime::new(system, options);
   core action, or with data the action doesn't take, is dropped.
 
 ## Limitations
+
+- **Other toolkits behind the lock.** Only CupertinoKit applications hide their tree while the session is locked. An
+  application on another toolkit (GTK, Qt, Electron, an X11 client) publishes its own tree on the same accessibility
+  bus and nothing in the session can make it stop, so an assistive technology can still read it, and act on it, behind
+  the lock screen. Check by hand in an installed session: open such an application next to a Kit one, lock with
+  `Super+Ctrl+Q`, and read the accessibility bus with Accerciser: the Kit windows are empty frames without a name, the
+  other application's content is still there.
 
 - **Text lines and extents.** Runs follow hard line breaks only: a line the editor wraps is one AT-SPI line. Runs carry
   no character positions, so `GetCharacterExtents` and `GetRangeExtents` have nothing to answer with.
@@ -74,7 +88,7 @@ cargo test -p cupertino-ui-atspi
 ```
 
 Unit tests cover the node and action mapping, text runs with their caret, selection, words and long lines, the
-password and protected-value defences, the action filter, and activation and deactivation, including a tree from before the last deactivation never being handed out.
+password and protected-value defences, the action filter, and activation and deactivation, including a tree from before the last deactivation never being handed out, and the frame a window is behind the lock (no name, no children, no action).
 `tests/atspi.rs` starts a private `dbus-daemon` (skipped when it is not installed) that serves a fake
 `org.a11y.Status` and AT-SPI registry. The application runs in a copy of the test binary, started with the bus
 addresses AccessKit reads from its environment. Acting as an assistive technology, the test reads the window and its
@@ -82,3 +96,8 @@ nodes with their roles and names (the untitled root by the window's title, an un
 the Click reaches the application. In a text field it reads the caret and selection in characters, sets a selection
 that reaches the application in bytes, and hears the caret and selection events of the update that shows it; the
 password field takes no selection. With accessibility off, the application never embeds its root.
+`tests/session_lock.rs` checks, on the same kind of bus, that no live region speaks before an application knows the
+session is unlocked nor while it is locked, that the lock screen's does, and that an assistive technology reads a
+Kit window as an empty frame without a name before the application learns the lock state and while the session is
+locked, that a click on a button read before the lock never reaches the application, and that the whole window reads
+again, and takes the click, after the unlock.

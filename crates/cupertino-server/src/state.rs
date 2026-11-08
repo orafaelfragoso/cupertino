@@ -19,6 +19,7 @@ use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction};
 use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1;
+use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{
     ClientData, ClientId, DisconnectReason, GlobalId,
@@ -240,6 +241,21 @@ impl WindowEntry {
     /// unified bar is drawn over the client's toolbar, which stays at the top of the output under the menu bar.
     pub const REVEALED_TITLEBAR: cupertino_decorations::TitlebarStyle =
         cupertino_decorations::TitlebarStyle::Standard;
+
+    /// Whether the client said it draws its own decorations (`xdg-decoration` client-side mode): its window keeps its
+    /// own shape, with no corner mask and no shadow of the compositor's.
+    pub fn draws_own_frame(&self) -> bool {
+        !self.server_side
+            && self
+                .toplevel
+                .with_pending_state(|st| st.decoration_mode == Some(DecorationMode::ClientSide))
+    }
+
+    /// Whether the compositor masks the window's corners and draws its shadow: a window it decorates, and, with
+    /// `style_client_decorated`, one whose client never said it draws its own decorations.
+    pub fn styled(&self, style_client_decorated: bool) -> bool {
+        self.server_side || (style_client_decorated && !self.draws_own_frame())
+    }
 
     /// The space the decorations take now: none while the window is full screen.
     pub fn insets(&self) -> crate::config::Insets {
@@ -1172,7 +1188,7 @@ impl Cupertino {
 
     /// Send the configures that shrinking frame animations held back once they end.
     fn send_deferred_configures(&mut self, now: f64) {
-        let key = self.wm.key_window();
+        let key = self.activated_window();
         for e in &mut self.windows {
             let Shrink::Deferred { frame, states } = e.shrink else {
                 continue;
@@ -1910,7 +1926,7 @@ impl Cupertino {
                     size,
                     states,
                 } => {
-                    let activated = self.wm.key_window() == Some(window);
+                    let activated = self.activated_window() == Some(window);
                     let now = self.now();
                     let (pos, animating) = self
                         .wm
@@ -2026,9 +2042,17 @@ impl Cupertino {
         }
     }
 
-    /// Make every toplevel's `activated` state match the model's key window.
+    /// The toplevel whose `activated` state is on: the model's key window, and none while the session is locked or about to
+    /// be, so no application behaves as the one in front behind the lock screen.
+    pub fn activated_window(&self) -> Option<WindowId> {
+        self.wm
+            .key_window()
+            .filter(|_| !self.session_lock.is_active())
+    }
+
+    /// Make every toplevel's `activated` state match [`Self::activated_window`].
     pub fn refresh_activation(&mut self) {
-        let key = self.wm.key_window();
+        let key = self.activated_window();
         for e in &self.windows {
             e.set_activated(Some(e.id) == key);
         }

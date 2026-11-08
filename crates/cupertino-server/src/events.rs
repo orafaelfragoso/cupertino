@@ -441,7 +441,9 @@ impl Cupertino {
                 text: handle.modified_sym().key_char(),
                 mods,
             };
-            // Super+Alt+S goes to the screen reader (the worker's at the login screen) before anything else sees it
+            // Super+Alt+S goes to the screen reader (the worker's at the login screen) before anything else sees it, while the
+            // session is locked too: it is the one shortcut that acts at the lock screen, so the reader can be turned on to
+            // unlock; the router turns every other one off then
             route = if st.screen_reader_key(code.raw(), sym, &mods, pressed) {
                 KeyRoute::Plan(crate::input::ActionPlan::default())
             } else {

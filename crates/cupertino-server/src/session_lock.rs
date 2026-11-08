@@ -5,6 +5,17 @@
 //! surfaces is drawn from then on, and `locked` is sent only once every output has presented such a frame and
 //! has a committed lock surface (or the surfaces took too long). A lock whose client disappears becomes
 //! `Orphaned`: the outputs stay black until another client takes the lock.
+//!
+//! While the session is locked or about to be, no toplevel is activated (`xdg_toplevel` `activated` is off for every
+//! window); the window that was active when the lock began is active again after the unlock.
+//!
+//! When the system is about to sleep ([`Cupertino::system_going_to_sleep`]) the session must not show when it wakes,
+//! whatever the lock client did. In a session with a lock screen (a shell process with the session lock role, not the
+//! login screen), a session that is not locked yet (the lock client hung or crashed before it asked) becomes `Orphaned`
+//! at once: black on every output, locked for the session's observers, taken over by the next lock client; the lock
+//! screen is asked to lock, as `lock_session` asks it. A pending lock stays in force should its client go before it
+//! confirms. The compositor holds the sleep back (a logind delay inhibitor, `power.rs`) until every output shows such a
+//! covered frame.
 
 use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::delegate_session_lock;
@@ -21,6 +32,8 @@ use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
+
+use cupertino_wm::WindowId;
 
 use crate::authorization::{authorized, ShellRole};
 use crate::render::scene::LockView;
@@ -54,6 +67,10 @@ pub struct SessionLock {
     state: LockState,
     /// An `unlock_and_destroy` arrived this dispatch round; acted on in [`Cupertino::tick_session_lock`].
     unlock_requested: bool,
+    /// The window that was active when the lock began: active again after the unlock.
+    active_before: Option<WindowId>,
+    /// The system is about to sleep and waits for every output to show a covered frame.
+    sleep_waiting: bool,
 }
 
 impl SessionLock {
@@ -64,12 +81,19 @@ impl SessionLock {
             }),
             state: LockState::Unlocked,
             unlock_requested: false,
+            active_before: None,
+            sleep_waiting: false,
         }
     }
 
     /// Whether the session is locked or about to be: normal drawing and input are off.
     pub fn is_active(&self) -> bool {
         !matches!(self.state, LockState::Unlocked)
+    }
+
+    /// Whether the compositor still holds back a system sleep until every output shows a covered frame.
+    pub fn holds_sleep(&self) -> bool {
+        self.sleep_waiting
     }
 
     /// Whether `client` may set or read the clipboard and the primary selection: any client while unlocked, only
@@ -133,11 +157,6 @@ impl SessionLockHandler for Cupertino {
             tracing::warn!("session lock refused: the session is already locked by another client");
             return;
         }
-        // a popup grab left over would eat the first click on the lock screen as an outside press
-        self.end_popup_grab(
-            smithay::utils::SERIAL_COUNTER.next_serial(),
-            std::time::Duration::from(self.clock.now()).as_millis() as u32,
-        );
         let takeover = matches!(self.session_lock.state, LockState::Orphaned);
         self.begin_session_lock(confirmation, takeover);
     }
@@ -175,7 +194,25 @@ impl Cupertino {
     /// Hide everything and wait for the first locked frames.
     fn begin_session_lock(&mut self, locker: SessionLocker, takeover: bool) {
         let now = self.now();
-        // grabs and drags of other clients end, the pointer and keyboard leave them
+        let was_active = self.session_lock.is_active();
+        self.session_lock.state = LockState::Pending {
+            locker,
+            since: now,
+            takeover,
+        };
+        self.seal_session(was_active);
+    }
+
+    /// The session became locked or covered (`was_active`: it was already, and a new lock client takes it over): grabs and
+    /// drags of other clients end, the pointer and keyboard leave them, the outputs wait for their first locked frames,
+    /// and on a new lock every toplevel is deactivated and the session's observers learn it is locked.
+    fn seal_session(&mut self, was_active: bool) {
+        let now = self.now();
+        // a popup grab left over would eat the first click on the lock screen as an outside press
+        self.end_popup_grab(
+            SERIAL_COUNTER.next_serial(),
+            std::time::Duration::from(self.clock.now()).as_millis() as u32,
+        );
         let (serial, time) = (SERIAL_COUNTER.next_serial(), (now * 1000.0) as u32);
         let pointer = self.pointer.clone();
         pointer.unset_grab(self, serial, time);
@@ -191,14 +228,10 @@ impl Cupertino {
         for o in &mut self.outputs {
             o.lock = OutputLock::default();
         }
-        let was_active = self.session_lock.is_active();
-        self.session_lock.state = LockState::Pending {
-            locker,
-            since: now,
-            takeover,
-        };
         // a takeover of an orphaned lock finds the session locked already
         if !was_active {
+            self.session_lock.active_before = self.wm.key_window();
+            self.refresh_activation();
             self.sessions.lock(true);
             crate::displays::management::session_locked(self);
         }
@@ -206,9 +239,77 @@ impl Cupertino {
         self.request_redraw();
     }
 
+    /// The system is about to sleep (logind's `PrepareForSleep(true)`): make sure the session does not show when it wakes,
+    /// and hold the sleep back until every output shows a covered frame ([`Self::sleep_covered`]).
+    pub fn system_going_to_sleep(&mut self) {
+        let lock_screen = self.has_lock_screen();
+        match &mut self.session_lock.state {
+            // without a lock screen to take it over (the login screen, a nested run) the cover would stay for good
+            LockState::Unlocked if !lock_screen => {
+                self.release_sleep();
+                return;
+            }
+            LockState::Unlocked => {
+                tracing::warn!(
+                    "the system goes to sleep before the session is locked: the outputs are covered until a lock client takes the lock"
+                );
+                self.session_lock.state = LockState::Orphaned;
+                self.seal_session(false);
+                // a lock screen that lives but did not hear of the sleep is asked to take the covered session over
+                self.lock_session();
+            }
+            // should the lock client go before it confirms, the session stays locked rather than open
+            LockState::Pending { takeover, .. } => *takeover = true,
+            LockState::Locked { .. } | LockState::Orphaned => {}
+        }
+        self.session_lock.sleep_waiting = true;
+        self.request_redraw();
+    }
+
+    /// Whether the session has a lock screen that takes a covered session over: a shell process with the session lock
+    /// role (the login process, restarted by its supervisor should it crash); never the login screen's server.
+    fn has_lock_screen(&self) -> bool {
+        !self.login_screen
+            && self
+                .config
+                .shell_processes
+                .iter()
+                .any(|p| p.roles.contains(&ShellRole::SessionLock))
+    }
+
+    /// Whether the session is hidden on every output: each shows a locked frame (the lock surfaces over black, or black)
+    /// or is powered off (it is not drawn, and its first frame once on is a locked one), or nothing reaches the screens
+    /// (the display sleeps, the session is paused).
+    pub fn sleep_covered(&self) -> bool {
+        self.session_lock.is_active()
+            && (crate::backend::shows_nothing(self)
+                || self
+                    .outputs
+                    .iter()
+                    .all(|o| o.lock.presented || !self.displays.powered(o.id)))
+    }
+
+    /// Let a held sleep go on once the session is covered.
+    fn tick_sleep_cover(&mut self) {
+        if !self.session_lock.sleep_waiting {
+            return;
+        }
+        if !self.session_lock.is_active() {
+            tracing::warn!("the session was unlocked before the system slept");
+        } else if !self.sleep_covered() {
+            self.request_redraw();
+            return;
+        } else {
+            tracing::info!("the session is covered: the system may sleep");
+        }
+        self.session_lock.sleep_waiting = false;
+        self.release_sleep();
+    }
+
     /// Send `locked` once every output shows a locked frame with a lock surface (or the wait is over), and
     /// notice a lock client that went away.
     pub fn tick_session_lock(&mut self) {
+        self.tick_sleep_cover();
         if std::mem::take(&mut self.session_lock.unlock_requested) {
             // the destructor request has destroyed the lock object of its sender by now; the owner's client must
             // still be connected, or the lock object died with a crash while another client sent the request
@@ -301,13 +402,21 @@ impl Cupertino {
         tracing::info!("session unlocked");
     }
 
-    /// Back to normal drawing and focus.
+    /// Back to normal drawing and focus; the window that was active when the lock began is active again.
     fn restore_after_lock(&mut self) {
         self.session_lock.state = LockState::Unlocked;
         self.sessions.lock(false);
         for o in &mut self.outputs {
             o.lock = OutputLock::default();
         }
+        // a window that opened behind the lock took the model's focus: the one in front before the lock gets it back
+        if let Some(window) = self.session_lock.active_before.take().filter(|w| {
+            self.wm.key_window() != Some(*w)
+                && self.wm.window(*w).is_some_and(|w| w.state().is_visible())
+        }) {
+            self.command(cupertino_wm::Command::FocusWindow { window });
+        }
+        self.refresh_activation();
         match self.exclusive_layer.clone() {
             Some(layer) => self.set_keyboard_focus(Some(layer)),
             None => self.restore_keyboard_focus(),

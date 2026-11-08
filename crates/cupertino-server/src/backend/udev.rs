@@ -242,6 +242,11 @@ impl UdevBackend {
         self.renderer_lost
     }
 
+    /// Whether no frame reaches the screens: the session is paused or every CRTC is off.
+    pub fn shows_nothing(&self) -> bool {
+        self.paused || self.asleep
+    }
+
     /// Switch every CRTC off (DPMS off) or let the next frame switch it back on with a full redraw.
     pub fn set_asleep(&mut self, asleep: bool) {
         if self.asleep == asleep {

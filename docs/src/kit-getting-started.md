@@ -78,11 +78,16 @@ Works:
 - Tests can check a whole window with `cupertino-ui-test`'s `accessibility_audit` (unnamed controls, missing values
   and states, focus that does not agree with the tree, masked text, items without place or count) and drive it as a
   screen reader would with its `AssistiveTechnology` stand-in, which also records what live regions announce.
+- While the session is locked, and until an application learns it is not, each of its windows reads as an empty frame
+  without a name and takes no action from the assistive technology; nothing is announced. The unlock publishes the
+  windows whole again. The lock screen is what an assistive technology reads behind the lock.
 
 Not done:
 
 - Bounds are window-relative, because a Wayland client does not know its window position.
 - A closed window's AT-SPI object stays until the application exits.
+- An application on another toolkit keeps publishing its tree while the session is locked: only Kit applications
+  hide theirs.
 
 Commands behind these statements:
 
@@ -92,7 +97,7 @@ cargo test -p cupertino-kit --test assistive-technology
 cargo test -p cupertino-kit --test control-fixtures
 ```
 
-The first runs the mapping and filter tests, a test of the live-region rules while the session is locked, and, when
+The first runs the mapping and filter tests, tests of the live-region rules and of the hidden windows while the session is locked, and, when
 `dbus-daemon` is installed, tests on a private bus with a fake AT-SPI registry, one of them following a text field's
 caret and selection (without `dbus-daemon` the bus tests print `SKIPPED`).
 The second changes a form value and moves focus through assistive-technology requests. The third audits every

@@ -47,8 +47,9 @@ search field, over the folder in the icon view (`kit::grid`, laid out by `layout
 holds and the last ends in an ellipsis) or the list view (`kit::list`: the toolkit's outline table, Name, Date Modified,
 Size, Kind, each cut with an ellipsis in its cell; a type the kind table does not list is described from its MIME
 subtype (`mime::kind_description`), in capitals only when it is an abbreviation of up to four letters and digits, else
-in words with the first capitalised; a header click sorts, again reverses; a folder's disclosure triangle, Left and
-Right open and close it in place). The toolbar is the window's drag region (Kit's
+in words with the first capitalised and, in a subtype of several words, each of up to three kept as an abbreviation
+("MS WMV movie"); a header click sorts, again reverses; a folder's disclosure triangle, Left and Right open and close
+it in place). The toolbar is the window's drag region (Kit's
 `NavigationStack`, under the server's title bar): a drag where no control lies moves the window and a double click there
 zooms it, as the old window's unified bar did; back / forward, the pop-up buttons and the search field keep their
 presses, and from the keyboard the compositor's Zoom shortcut (Super+Ctrl+Z by default) and the menu bar's Window menu

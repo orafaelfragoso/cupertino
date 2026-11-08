@@ -377,6 +377,12 @@ pub struct Toggle<M> {
     pub on_toggle: Option<Handler<bool, M>>,
 }
 
+/// A [`Toggle`] at the small size of a settings form's rows, made with [`Toggle::small`]: a 36 × 16 pt track and a
+/// capsule thumb. It behaves and reads to assistive technology as the toggle does.
+pub struct SmallToggle<M> {
+    pub toggle: Toggle<M>,
+}
+
 /// How a [`ModuleToggle`] sets out its symbol and text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ModuleLayout {

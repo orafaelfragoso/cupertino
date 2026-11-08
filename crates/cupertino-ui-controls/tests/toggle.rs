@@ -104,6 +104,59 @@ fn the_pill_lays_out_on_its_track_and_the_thumb_moves_to_the_end_when_on() {
     );
 }
 
+/// The same switch at the small size of a settings form's rows.
+struct SmallSwitch;
+
+impl Application for SmallSwitch {
+    type Model = Model;
+    type Message = Message;
+
+    fn init() -> (Model, Vec<Command<Message>>) {
+        (Model::default(), Vec::new())
+    }
+
+    fn update(model: &mut Model, Message::Toggled(on): Message) -> Vec<Command<Message>> {
+        model.on = on;
+        Vec::new()
+    }
+
+    fn view(model: &Model) -> Vec<Window<Message>> {
+        window(Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::ZERO,
+            spacing: 0.0,
+            align: Align::Start,
+            children: vec![Element::new(
+                Toggle {
+                    label: "Wi-Fi".into(),
+                    on: model.on,
+                    enabled: true,
+                    on_toggle: Some(Box::new(Message::Toggled)),
+                }
+                .small(),
+            )
+            .key("toggle")],
+        }))
+    }
+}
+
+#[test]
+fn the_small_switch_has_a_smaller_track_and_a_capsule_thumb_and_toggles_as_the_toggle_does() {
+    let mut h = Harness::<SmallSwitch>::new();
+    assert_eq!(h.rect("toggle"), Rect::new(0.0, 0.0, 36.0, 16.0));
+    let [track, thumb] = fills(&h)[..] else {
+        panic!("a track and a thumb")
+    };
+    assert_eq!((track.0, track.1), (Rect::new(0.0, 0.0, 36.0, 16.0), 8.0));
+    assert_eq!((thumb.0, thumb.1), (Rect::new(1.5, 1.5, 21.0, 13.0), 6.5));
+
+    h.click(h.center("toggle"));
+    assert!(h.model().on);
+    assert_eq!(fills(&h)[1].0.min_x(), 13.5, "on, the thumb is at the end");
+    h.click(h.center("toggle"));
+    assert!(!h.model().on, "a second click turns it off");
+}
+
 #[test]
 fn in_right_to_left_layout_the_thumb_starts_on_the_right() {
     let mut h = Harness::<App>::with_direction(LayoutDirection::Rtl);

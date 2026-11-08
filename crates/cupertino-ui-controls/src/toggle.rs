@@ -1,6 +1,6 @@
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
-use crate::Toggle;
+use crate::{SmallToggle, Toggle};
 use cupertino_geometry::{Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Environment, Event,
@@ -10,6 +10,33 @@ use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpe
 use cupertino_ui_theme::{ColorRole, ControlMetrics};
 
 impl<M: 'static> Toggle<M> {
+    fn paint_shaped(&self, press: &Press, cx: &mut PaintCx<'_>, shape: &SwitchShape) {
+        let theme = cx.env().theme.clone();
+        let direction = cx.env().direction;
+        let state = self.control_state(
+            press,
+            cx.is_focused(),
+            cx.focus_visible(),
+            cx.window_active(),
+        );
+        let track = track(cx.size(), shape);
+        let radius = track.height() / 2.0;
+        look::fill(
+            cx,
+            track,
+            radius,
+            look::color(&theme, ColorRole::SwitchTrack, &state),
+        );
+        let thumb = thumb(track, self.on, direction, shape);
+        look::fill(
+            cx,
+            thumb,
+            thumb.height() / 2.0,
+            look::color(&theme, ColorRole::SwitchThumb, &state),
+        );
+        paint_focus_ring(cx, track, radius);
+    }
+
     fn control_state(
         &self,
         press: &Press,
@@ -30,32 +57,69 @@ impl<M: 'static> Toggle<M> {
     }
 }
 
+/// The small switch's track, as in a settings form's rows.
+const SMALL_TRACK: Size = Size::new(36.0, 16.0);
+/// The small switch's thumb, a capsule wider than it is tall.
+const SMALL_THUMB: Size = Size::new(21.0, 13.0);
+/// Space between the small switch's thumb and the edge of its track.
+const SMALL_THUMB_INSET: f64 = 1.5;
+
+/// A switch's geometry: its track, its thumb and the space between the thumb and the track's edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SwitchShape {
+    track: Size,
+    thumb: Size,
+    inset: f64,
+}
+
+impl SwitchShape {
+    fn regular(metrics: &ControlMetrics) -> SwitchShape {
+        SwitchShape {
+            track: metrics.switch,
+            thumb: Size::new(metrics.switch_thumb, metrics.switch_thumb),
+            inset: metrics.switch_thumb_inset,
+        }
+    }
+
+    const SMALL: SwitchShape = SwitchShape {
+        track: SMALL_TRACK,
+        thumb: SMALL_THUMB,
+        inset: SMALL_THUMB_INSET,
+    };
+}
+
 /// The pill, centred in a node padded out to the minimum target.
-fn track(size: Size, metrics: &ControlMetrics) -> Rect {
+fn track(size: Size, shape: &SwitchShape) -> Rect {
     Rect::new(
-        (size.width - metrics.switch.width) / 2.0,
-        (size.height - metrics.switch.height) / 2.0,
-        metrics.switch.width,
-        metrics.switch.height,
+        (size.width - shape.track.width) / 2.0,
+        (size.height - shape.track.height) / 2.0,
+        shape.track.width,
+        shape.track.height,
     )
 }
 
 /// The thumb sits at the end when on and at the start when off; the end is on the left in right-to-left layouts.
-pub(crate) fn thumb(
-    track: Rect,
-    on: bool,
-    direction: LayoutDirection,
-    metrics: &ControlMetrics,
-) -> Rect {
-    let d = metrics.switch_thumb;
-    let inset = metrics.switch_thumb_inset;
+fn thumb(track: Rect, on: bool, direction: LayoutDirection, shape: &SwitchShape) -> Rect {
+    let Size { width, height } = shape.thumb;
     let at_right = on == (direction == LayoutDirection::Ltr);
     let x = if at_right {
-        track.max_x() - inset - d
+        track.max_x() - shape.inset - width
     } else {
-        track.min_x() + inset
+        track.min_x() + shape.inset
     };
-    Rect::new(x, track.min_y() + (track.height() - d) / 2.0, d, d)
+    Rect::new(
+        x,
+        track.min_y() + (track.height() - height) / 2.0,
+        width,
+        height,
+    )
+}
+
+impl<M: 'static> Toggle<M> {
+    /// The same switch at the small size of a settings form's rows: a 36 × 16 pt track and a capsule thumb.
+    pub fn small(self) -> SmallToggle<M> {
+        SmallToggle { toggle: self }
+    }
 }
 
 impl<M: 'static> Widget<M> for Toggle<M> {
@@ -78,9 +142,8 @@ impl<M: 'static> Widget<M> for Toggle<M> {
     }
 
     fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
-        let metrics = cx.env().theme.metrics;
         Measured {
-            size: metrics.switch,
+            size: SwitchShape::regular(&cx.env().theme.metrics).track,
             baseline: None,
         }
     }
@@ -107,30 +170,8 @@ impl<M: 'static> Widget<M> for Toggle<M> {
     }
 
     fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
-        let theme = cx.env().theme.clone();
-        let direction = cx.env().direction;
-        let state = self.control_state(
-            press,
-            cx.is_focused(),
-            cx.focus_visible(),
-            cx.window_active(),
-        );
-        let track = track(cx.size(), &theme.metrics);
-        let radius = track.height() / 2.0;
-        look::fill(
-            cx,
-            track,
-            radius,
-            look::color(&theme, ColorRole::SwitchTrack, &state),
-        );
-        let thumb = thumb(track, self.on, direction, &theme.metrics);
-        look::fill(
-            cx,
-            thumb,
-            thumb.height() / 2.0,
-            look::color(&theme, ColorRole::SwitchThumb, &state),
-        );
-        paint_focus_ring(cx, track, radius);
+        let shape = SwitchShape::regular(&cx.env().theme.metrics);
+        self.paint_shaped(press, cx, &shape);
     }
 
     fn semantics(&self, _: &Press, cx: &mut SemanticsCx<'_>) {
@@ -149,5 +190,45 @@ impl<M: 'static> Widget<M> for Toggle<M> {
             cx.focusable();
             cx.action(Action::Click);
         }
+    }
+}
+
+/// The small switch: the toggle's behaviour, reading and look at [`SwitchShape::SMALL`]'s size.
+impl<M: 'static> Widget<M> for SmallToggle<M> {
+    type State = Press;
+
+    fn layout(&self) -> LayoutSpec {
+        self.toggle.layout()
+    }
+
+    fn state(&self) -> Press {
+        Press::default()
+    }
+
+    fn update(&self, old: &Self, state: &mut Press) -> Change {
+        self.toggle.update(&old.toggle, state)
+    }
+
+    fn measure(&self, _: &Press, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: SwitchShape::SMALL.track,
+            baseline: None,
+        }
+    }
+
+    fn target(&self, press: &Press, env: &Environment) -> Size {
+        self.toggle.target(press, env)
+    }
+
+    fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        self.toggle.event(press, event, cx)
+    }
+
+    fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
+        self.toggle.paint_shaped(press, cx, &SwitchShape::SMALL);
+    }
+
+    fn semantics(&self, press: &Press, cx: &mut SemanticsCx<'_>) {
+        self.toggle.semantics(press, cx)
     }
 }

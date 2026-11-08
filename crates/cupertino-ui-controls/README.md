@@ -9,8 +9,10 @@ from the application's model and reports changes as messages.
   Space arms and activates on release; Return activates a button on press, never a switch; a key repeat never arms
   and Escape disarms Space.
 - **Look.** Disabled overrides every other state and pressed overrides hover; a switch that is on resolves its
-  colours as selected. In a high-contrast appearance every button that fills its chrome also strokes its border. A
-  theme without a colour for a role paints nothing rather than a guess. The keyboard focus
+  colours as selected. `Toggle::small` gives a `SmallToggle`, the switch of a settings form's rows: a 36 × 16 pt track
+  and a 21 × 13 pt capsule thumb 1.5 pt inside it, with the toggle's behaviour and reading. In a high-contrast
+  appearance every button that fills its chrome also strokes its border. A theme without a colour for a role paints
+  nothing rather than a guess. The keyboard focus
   ring is drawn only for a keyboard-visible focus, outside the chrome, without changing layout.
 - **Targets.** Chrome is centred in a node padded out to the theme's minimum target, so the whole padded node takes
   the press and nothing overlaps a neighbour.

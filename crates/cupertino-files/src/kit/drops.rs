@@ -91,6 +91,7 @@ pub(super) fn folder(
             }
         }),
         on_hover: None,
+        on_leave: None,
         on_drop: Box::new(move |dropped| {
             let item = dropped
                 .place
@@ -148,6 +149,7 @@ pub(super) fn sidebar(session: &Session, id: u64, content: Element<Message>) -> 
             offer(over, Some(key.clone()), to, &dragged, &*read_only)
         }),
         on_hover: None,
+        on_leave: None,
         on_drop: Box::new(move |dropped| {
             let to = dropped.place.as_ref().and_then(|key| {
                 let (_, to) = target.iter().find(|(place, _)| place == key)?;

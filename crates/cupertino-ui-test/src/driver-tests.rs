@@ -520,6 +520,7 @@ impl Application for Bin {
                         String::from_utf8_lossy(&dropped.data.bytes)
                     )
                 }),
+                on_leave: None,
             }),
             menus: None,
         }]

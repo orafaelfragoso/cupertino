@@ -2504,6 +2504,7 @@ impl Application for Shelf {
             }),
             on_hover: None,
             on_drop: Box::new(|_| "image dropped".to_string()),
+            on_leave: None,
         });
         let items = Element::new(row(vec![
             Element::new(leaf("a")).key("a"),
@@ -2544,6 +2545,7 @@ impl Application for Shelf {
                         String::from_utf8_lossy(&dropped.data.bytes)
                     )
                 }),
+                on_leave: Some("left".into()),
             }),
         }]
     }
@@ -2663,7 +2665,7 @@ fn a_drag_over_a_target_is_answered_highlighted_and_heard_as_it_moves_between_pl
     assert_eq!(last_answer(&rt), uri_answer(DropAction::Copy));
 
     drag(&mut rt, window, DropEvent::Leave);
-    assert_eq!(rt.model().heard.last().unwrap(), "hover None");
+    assert!(rt.model().heard.ends_with(&["hover None".into(), "left".into()]));
     assert!(highlights(&rt, window).is_empty());
     assert!(rt.window_system().drop_reads.is_empty());
     assert!(rt.window_system().drops_finished.is_empty());
@@ -2756,6 +2758,7 @@ fn a_drop_where_nothing_takes_it_or_whose_data_fails_is_refused() {
     drag(&mut rt, window, DropEvent::Drop);
     assert!(rt.window_system().drop_reads.is_empty());
     assert_eq!(rt.window_system().drops_finished, [(DropToken(7), None)]);
+    assert_eq!(rt.model().heard, ["left"], "nothing took it: the drag left");
 
     // the read fails: no data
     enter(&mut rt, window, Point::new(5.0, 5.0), &both);
@@ -2766,6 +2769,30 @@ fn a_drop_where_nothing_takes_it_or_whose_data_fails_is_refused() {
         [(DropToken(7), None), (DropToken(7), None)]
     );
     assert!(!rt.model().heard.iter().any(|m| m.starts_with("drop")));
+}
+
+/// The targets that ask for it hear once that a drag left the window, wherever it was over, and nothing of a drop a
+/// target took.
+#[test]
+fn a_drag_that_leaves_the_window_is_heard_once_and_a_drop_is_not_a_leave() {
+    let (mut rt, window) = shelf();
+    let both = [DropAction::Copy, DropAction::Move];
+    // over `c`, which takes nothing: no hover, but the window was entered
+    enter(&mut rt, window, Point::new(25.0, 5.0), &both);
+    assert!(rt.model().heard.is_empty());
+    drag(&mut rt, window, DropEvent::Leave);
+    drag(&mut rt, window, DropEvent::Leave);
+    assert_eq!(rt.model().heard, ["left"]);
+
+    rt.window_system_mut().drop_data = Some(ClipboardData {
+        mime: URI_LIST.into(),
+        bytes: b"file:///z".to_vec(),
+    });
+    enter(&mut rt, window, Point::new(5.0, 5.0), &both);
+    drag(&mut rt, window, DropEvent::Drop);
+    drag(&mut rt, window, DropEvent::Leave);
+    assert!(rt.model().heard.last().unwrap().starts_with("drop "));
+    assert_eq!(rt.model().heard.iter().filter(|m| *m == "left").count(), 1);
 }
 
 /// A row inside a container with no role, beside a second button; `drop` takes the row away.

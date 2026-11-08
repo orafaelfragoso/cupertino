@@ -544,3 +544,120 @@ fn new_folder_with_selection_moves_the_items_beside_the_window_then_edits_the_fo
         ["a.txt", "big.bin"]
     );
 }
+
+#[test]
+fn a_drop_of_the_windows_own_items_held_while_it_copies_does_not_make_other_drags_its_own() {
+    use cupertino_kit::geometry::Point;
+    use cupertino_kit::platform::{
+        ClipboardData, DragProgress, DropAction, MouseButton, PlatformEvent, PointerEvent,
+        Timestamp,
+    };
+    let gate = Gate::new();
+    let (reached, waits) = mpsc::channel();
+    let observer = Gate::observer(&gate, reached);
+    let mut run = window(Notices::start(None), |start| {
+        start.with_transfer_observer(observer)
+    });
+    run.menu("view-icons");
+    let window = run.window;
+    let cells = run.icon_cells();
+    let cell = |name: &str| cells.iter().find(|(n, _, _)| n == name).unwrap().1;
+    let (big, folder) = (cell("big.bin"), cell("Notes"));
+    // below the last row of icons: the folder shown, which holds big.bin
+    let low = cells
+        .iter()
+        .map(|(_, r, _)| r.origin.y + r.size.height)
+        .fold(0.0, f64::max);
+    let background = Point::new(folder.center().x, low + 30.0);
+
+    // big.bin is dragged out of the window and dropped on Notes with Option held: a copy, held open while it runs
+    let pointer = |run: &mut Run, event| run.send(WindowEvent::Pointer(event, Timestamp(0)));
+    pointer(
+        &mut run,
+        PointerEvent::Motion {
+            position: big.center(),
+        },
+    );
+    pointer(
+        &mut run,
+        PointerEvent::Button {
+            position: big.center(),
+            button: MouseButton::Left,
+            pressed: true,
+            serial: 1,
+            mods: Mods::NONE,
+        },
+    );
+    let moved = Point::new(big.center().x + 12.0, big.center().y + 6.0);
+    pointer(&mut run, PointerEvent::Motion { position: moved });
+    let started = run
+        .driver
+        .runtime()
+        .window_system()
+        .drags()
+        .last()
+        .cloned()
+        .expect("a drag");
+    let both: std::collections::BTreeSet<DropAction> = [DropAction::Copy, DropAction::Move].into();
+    let system = run.driver.window_system_mut();
+    let own = system
+        .drag_enter(
+            window,
+            big.center(),
+            started.request.data.clone(),
+            both.clone(),
+            Mods::NONE,
+        )
+        .unwrap();
+    system
+        .drag_move(window, folder.center(), Mods::ALT)
+        .unwrap();
+    run.settle();
+    assert!(run.driver.window_system_mut().drag_drop(window).unwrap());
+    // the source hears the drop was made, as the compositor tells it
+    run.driver
+        .window_system_mut()
+        .enqueue(PlatformEvent::Drag {
+            token: started.token,
+            progress: DragProgress::Dropped,
+        })
+        .unwrap();
+    run.settle();
+    waits
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the copy started");
+    run.settle();
+    let finished = |run: &Run, token| {
+        let system = run.driver.runtime().window_system();
+        system.incoming_drag(token).unwrap().finished
+    };
+    assert_eq!(finished(&run, own), None, "held while it copies");
+
+    // meanwhile another application drags a file onto the folder shown: it is no item of the window's, so it may go
+    let elsewhere = run.home().join("Elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::fs::write(elsewhere.join("x.txt"), "x").unwrap();
+    let list = vec![ClipboardData {
+        mime: "text/uri-list".into(),
+        bytes: format!("file://{}\r\n", elsewhere.join("x.txt").display()).into_bytes(),
+    }];
+    let system = run.driver.window_system_mut();
+    let other = system
+        .drag_enter(window, Point::new(1.0, 1.0), list, both, Mods::NONE)
+        .unwrap();
+    system.drag_move(window, background, Mods::NONE).unwrap();
+    run.settle();
+    let chosen = run
+        .driver
+        .runtime()
+        .window_system()
+        .incoming_drag(other)
+        .unwrap()
+        .chosen;
+    assert_eq!(chosen, Some(DropAction::Move), "within the device");
+
+    gate.release();
+    wait(&mut run, |run| finished(run, own).is_some());
+    assert_eq!(finished(&run, own), Some(Some(DropAction::Copy)));
+    assert_eq!(names(&notes(&run)), ["big.bin"]);
+}

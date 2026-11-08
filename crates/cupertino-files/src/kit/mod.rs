@@ -279,7 +279,8 @@ struct Session {
     icons: Rc<item_icons::ItemIcons>,
     /// What wakes when a thumbnail is made.
     thumbnails_woken: async_channel::Receiver<()>,
-    /// The items a drag out of a window carries, until it ends.
+    /// The items a drag out of a window carries, until it is dropped or ends: a drop held open while it copies does not
+    /// make later drags look like the window's own.
     dragged: Vec<PathBuf>,
     /// What the list words its dates relative to.
     clock: fn() -> SystemTime,
@@ -900,7 +901,10 @@ impl Model {
             Event::DragOut(grab) => return self.drag_out(id, &grab),
             Event::DragRows(grab) => return self.drag_rows(id, &grab),
             Event::Dragged(progress) => {
-                if matches!(progress, DragProgress::Finished | DragProgress::Cancelled) {
+                if matches!(
+                    progress,
+                    DragProgress::Dropped | DragProgress::Finished | DragProgress::Cancelled
+                ) {
                     self.session.dragged.clear();
                 }
                 return Vec::new();

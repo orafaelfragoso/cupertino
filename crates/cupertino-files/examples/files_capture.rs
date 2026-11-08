@@ -172,7 +172,8 @@ const SAMPLE_LINES: [&str; 6] = [
     "- Keep the sizes on the point grid",
 ];
 
-/// The contents of sample text file `name`, `size` bytes of plain lines; `None` for a file that is not text.
+/// The contents of sample text file `name`, `size` bytes of plain lines, the lines over again under a numbered heading
+/// so no stretch of the text reads as the start repeated; `None` for a file that is not text.
 fn sample_text(name: &str, size: u64) -> Option<Vec<u8>> {
     if ![".txt", ".md", ".rs"].iter().any(|ext| name.ends_with(ext)) {
         return None;
@@ -180,7 +181,11 @@ fn sample_text(name: &str, size: u64) -> Option<Vec<u8>> {
     let mut text = Vec::new();
     let mut n = 0;
     while (text.len() as u64) < size {
-        text.extend_from_slice(SAMPLE_LINES[n % SAMPLE_LINES.len()].as_bytes());
+        let round = n / SAMPLE_LINES.len();
+        match n % SAMPLE_LINES.len() {
+            0 if round > 0 => text.extend_from_slice(format!("Week {}", round + 1).as_bytes()),
+            line => text.extend_from_slice(SAMPLE_LINES[line].as_bytes()),
+        }
         text.push(b'\n');
         n += 1;
     }

@@ -1,7 +1,7 @@
 //! Spring-loaded folders in a window ([`crate::spring`]): a drag of files held over a folder of the list or the grid,
 //! a place of the sidebar or a folder of the path bar opens that folder in the window after the delay, the folder
-//! flashing just before. The window remembers its folder, history, selection, view and scroll position from before
-//! the first folder opened; the drag leaving the window or being cancelled takes it back there, and a drop keeps the
+//! flashing just before. The window remembers its folder, history, expanded folders, search, selection, view and
+//! scroll position from before the first folder opened; the drag leaving the window or being cancelled takes it back there, and a drop keeps the
 //! folder the drag opened.
 
 use std::path::PathBuf;
@@ -32,6 +32,8 @@ struct Origin {
     visit: Visit,
     view: ViewMode,
     scroll: ScrollState,
+    /// The search field's text.
+    search: String,
 }
 
 impl Springing {
@@ -84,6 +86,7 @@ impl BrowserWindow {
                     visit: self.browser.visit(),
                     view: self.view,
                     scroll: self.scroll,
+                    search: self.search.clone(),
                 };
                 let before = self.browser.dir().to_path_buf();
                 self.go(folder, session);
@@ -110,6 +113,13 @@ impl BrowserWindow {
             return;
         }
         self.entered();
+        if !origin.search.is_empty() {
+            // the search comes back with its text in the field
+            self.browser.set_filter(&origin.search);
+            self.search = origin.search;
+            self.search_revision += 1;
+            self.follow_search();
+        }
         self.view = origin.view;
         self.springing.scroll_back = Some(origin.scroll);
         self.spring_settle();

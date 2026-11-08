@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 15 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 10 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 19 removable media tests (a fake udisks2 on a private bus), 11 single-instance tests (a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 15 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 12 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 19 removable media tests (a fake udisks2 on a private bus), 11 single-instance tests (a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
@@ -218,11 +218,11 @@ over a folder of the list or the grid, a folder place of the sidebar or a folder
 folder flashes, drawn as selected (the path bar's folder as the folder shown). Moving onto another folder starts the
 wait again, and moving off every folder stops it; the folder shown, a file, a place that takes no drop (Recents, a
 read-only medium, a folder of the dragged items) and the Trash open nothing. The drag goes on in the folder that opened,
-so it can spring further down. The window remembers its folder, history, selection, view and scroll position from
-before the drag first opened a folder: the drag leaving the window (`DropTarget::on_leave`), released where nothing in
+so it can spring further down. The window remembers its folder, history, expanded folders, search, selection, view and
+scroll position from before the drag first opened a folder: the drag leaving the window (`DropTarget::on_leave`), released where nothing in
 the window takes it, or cancelled (Escape, or a refusal of the window's own drag) takes the window back there, the
-history as it was (the folders sprung through are not in it) and the selection and scroll position once the listing is
-read again; a drop keeps the folder the drag opened, also while its file operation holds the drop open and when the
+history as it was (the folders sprung through are not in it), the search with its text in the field, the folders
+expanded again as the listing reaches them, and the selection and scroll position once they are read again; a drop keeps the folder the drag opened, also while its file operation holds the drop open and when the
 source later hears the held drop cancelled. The timers are `Command::After` messages of the dwell's
 generation, so one of a dwell that ended does nothing.
 

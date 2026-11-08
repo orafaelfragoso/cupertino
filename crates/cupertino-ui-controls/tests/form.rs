@@ -6,8 +6,8 @@ mod support;
 use cupertino_geometry::{Insets, Point, Size};
 use cupertino_ui_controls::{
     FormGroup, FormHeader, FormRow, IconTile, NavigationRow, PopUpButton, SearchField, Stack, Text,
-    TextChange, TextField, TextRole, TileColor, TileSidebar, TileSidebarItem, Toggle, FORM_ROW_HEIGHT,
-    FORM_TILE_ROW_HEIGHT, TILE_SIDEBAR_ROW_HEIGHT,
+    TextChange, TextField, TextRole, TileColor, TileSidebar, TileSidebarItem, Toggle,
+    FORM_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT, TILE_SIDEBAR_ROW_HEIGHT,
 };
 use cupertino_ui_core::{
     AccessibilityNode, Action, Application, Command, Element, Key, NodeId, Role, Window,

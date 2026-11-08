@@ -38,7 +38,9 @@ from the application's model and reports changes as messages.
   `Sidebar::with_look(SidebarLook::Neutral { accent })` draws a list of places instead: taller rows with larger
   symbols, the selected row filled with a neutral tint, its label semibold and its symbol in the accent colour; the
   other rows' symbols are in the accent colour in the sections `accent` marks and in the secondary label colour in the
-  rest. The default look (`SidebarLook::Accent`, Settings') fills the selected row with the accent.
+  rest. In a window that is not active the selected row's symbol takes the secondary label colour as well, so it still
+  stands out from the neutral selection. The default look (`SidebarLook::Accent`, Settings') fills the selected row
+  with the accent.
 - **Settings form.** `FormGroup` sets rows on a rounded fill with a hairline between each, inset from both edges;
   `FormRow` is a row of it, at least `FORM_ROW_HEIGHT` tall (`FORM_TILE_ROW_HEIGHT` with an `IconTile`, a white
   symbol on a rounded square of a `TileColor`), and its content takes the rest of the row. `NavigationRow` is one Tab

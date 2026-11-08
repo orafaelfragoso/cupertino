@@ -191,9 +191,10 @@ without the display's colour profile, and the picker has no keyboard movement of
 - `bin/cupertino-portal`
 - `data/cupertino.portal` to `/usr/share/xdg-desktop-portal/portals/`
 - `data/cupertino-portals.conf` to `/usr/share/xdg-desktop-portal/`: Settings and FileChooser from this backend
-  first, then the GTK backend for what it does not serve; ScreenCast, AppChooser and Screenshot from this backend; every other interface from the
-  GTK backend
+  first, then the GTK backend for what it does not serve; ScreenCast, AppChooser and Screenshot (which carries
+  `PickColor`) from this backend only; Secret from gnome-keyring; every other interface from the GTK backend
 
-The packages ship the binary and `cupertino.portal`, with `packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf`
-in place of the one above: ScreenCast from this backend and every other interface from the GTK backend, until the
-Settings and FileChooser backends are routed here too.
+The packages ship the binary, `cupertino.portal` and the same routing file as
+`packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf`. `tests/portals_conf.rs` reads the packaged file
+and checks it against the D-Bus names of the interfaces this crate implements: each is routed here first, nothing else
+is, `cupertino.portal` lists exactly those, and the crate's copy is the same file.

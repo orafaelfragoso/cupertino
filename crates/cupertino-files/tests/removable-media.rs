@@ -440,10 +440,15 @@ impl Fake {
     }
 
     fn watch(&self) -> Watch {
+        self.watch_on(self.bus.connect())
+    }
+
+    /// [`Fake::watch`] on `system`.
+    fn watch_on(&self, system: Connection) -> Watch {
         let (woke, woken) = mpsc::channel();
         let woke = Mutex::new(woke);
         let volumes = Volumes::watch(
-            self.bus.connect(),
+            system,
             Notices::start(Some(self.bus.connect())),
             Arc::new(move || {
                 let _ = woke.lock().unwrap().send(());
@@ -792,6 +797,44 @@ fn a_removed_device_leaves_the_list() {
 
     fake.remove("sdb1");
     assert!(watch.devices(&[]).is_empty());
+}
+
+#[test]
+fn a_flood_of_changes_another_connection_sends_does_not_stop_the_list() {
+    let Some(fake) = Fake::start() else { return };
+    let system = fake.bus.connect();
+    let to = system.unique_name().unwrap().to_string();
+    let mut watch = fake.watch_on(system);
+    watch.devices(&[]);
+
+    // another user's program on the system bus, to this process directly, many times what a stream holds
+    let peer = fake.bus.connect();
+    let removed = (
+        OwnedObjectPath::try_from(block_path("sda1")).unwrap(),
+        Vec::<String>::new(),
+    );
+    for _ in 0..1000 {
+        peer.emit_signal(
+            Some(to.as_str()),
+            MANAGER_PATH,
+            "org.freedesktop.DBus.ObjectManager",
+            "InterfacesRemoved",
+            &removed,
+        )
+        .unwrap();
+    }
+    // udisks is still heard, and its devices still read
+    fake.drive("usb", "Kingston", "DataTraveler", false);
+    fake.block(
+        "sdb1",
+        Some("usb"),
+        Some("/run/media/ada/k"),
+        Block {
+            label: "KINGSTON",
+            ..Block::default()
+        },
+    );
+    watch.devices(&["KINGSTON"]);
 }
 
 #[test]

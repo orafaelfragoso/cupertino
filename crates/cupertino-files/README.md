@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search, 6 drag and 9 drop tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search, 6 drag and 9 drop tests; 16 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
@@ -189,7 +189,8 @@ every locked encrypted container. A block without a drive, such as a loop device
 drive's medium (`places::Medium`, from udisks' `Media` and `ConnectionBus`): `symbol.memory-card` for a flash card
 (a `flash_*` medium or an SD bus), `symbol.flash-drive` for a USB stick (`thumb`, or `flash` on USB), else
 `symbol.externaldrive`; none wears the computer's. It lists again whenever udisks reports a change or comes to the
-bus. Every call runs off the window's thread.
+bus; a change only asks for a read on a thread of its own (at most one waiting), so the signal streams never fill and a flood
+of signals another user sends the process costs one read, never the connection. Every call runs off the window's thread.
 * **Mount:** a click on a row that is not mounted mounts it and takes the window that asked to the mount point.
   Each partition of a drive is a row of its own.
 * **Unlock:** a click on a locked container opens a sheet that asks for its passphrase in a secure field; Unlock (or

@@ -21,6 +21,9 @@ pub struct RenderStats {
     /// Nodes whose own operations were painted, and those painted as a group layer.
     pub nodes_painted: u32,
     pub groups_painted: u32,
+    /// Nodes not painted, or painted without their own operations, because an opaque fill after them covers the
+    /// damaged rectangle.
+    pub hidden: u32,
     pub fills: u32,
     pub strokes: u32,
     pub images: u32,
@@ -36,6 +39,8 @@ pub struct RenderStats {
     pub layer_composite: Tally,
     pub crop: Tally,
     pub mask_apply: Tally,
+    /// Rectangles of pixels a node's fills cover fully, written as rows instead of through a scratch image.
+    pub spans: Tally,
     /// Cache fills this frame: images decoded to premultiplied pixels, glyphs rasterized.
     pub image_decode: Tally,
     pub glyph_rasterize: Tally,

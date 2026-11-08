@@ -2,6 +2,7 @@ use crate::effects::{self, div255};
 use crate::geometry::{self, Bounds};
 use crate::glyph_cache::GlyphCache;
 use crate::image_cache::ImageCache;
+use crate::spans;
 use crate::stats::RenderStats;
 use crate::validate;
 use crate::{
@@ -42,6 +43,8 @@ pub struct CpuRenderer<R> {
     valid: bool,
     next_id: u64,
     stats: RenderStats,
+    /// Takes the span path and skips what an opaque node hides; off only to check both give the same pixels.
+    fast: bool,
 }
 
 impl<R: GlyphRasterizer> CpuRenderer<R> {
@@ -64,7 +67,15 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             valid: false,
             next_id: 1,
             stats: RenderStats::default(),
+            fast: true,
         }
+    }
+
+    /// The renderer that paints every node the general way, to compare the fast paths against.
+    #[cfg(test)]
+    pub(crate) fn without_fast_paths(mut self) -> CpuRenderer<R> {
+        self.fast = false;
+        self
     }
 
     /// What the last [`render`](UiRenderer::render) call did, counted; empty when the request was refused before painting.
@@ -124,23 +135,42 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             glyphs: &mut self.glyphs,
             images: &mut self.images,
             rasterizer: &mut self.rasterizer,
+            fast: self.fast,
+            pending: spans::Pending::default(),
         };
         for d in dirty {
-            clear(&mut base, d);
-            painter
-                .stats
-                .clear
-                .add(u64::from(d.width()) * u64::from(d.height()) * 4);
+            let hidden = if self.fast {
+                painter.occluder(&tree, d, &whole)
+            } else {
+                None
+            };
+            // an opaque node over the whole rectangle writes every pixel of it
+            if hidden.is_none() {
+                if self.fast {
+                    painter.pending.set(*d, [0; 4]);
+                } else {
+                    clear(&mut base, d);
+                }
+                painter
+                    .stats
+                    .clear
+                    .add(u64::from(d.width()) * u64::from(d.height()) * 4);
+            }
             let mut target = Target {
                 pixmap: &mut base,
                 origin: (0, 0),
                 rect: whole,
                 limit: *d,
                 clips: Vec::new(),
+                hidden,
+                holes: Vec::new(),
+                covering: Vec::new(),
+                frame: true,
             };
             for &root in &tree.roots {
                 painter.subtree(&mut target, &tree, root, &mut Vec::new())?;
             }
+            painter.pending.flush_all(&mut base, (0, 0));
         }
         Ok(())
     }
@@ -221,6 +251,14 @@ struct Target<'a, 'b> {
     /// The window pixels whose result is needed.
     limit: Bounds,
     clips: Vec<Mask>,
+    /// The node whose opaque fill covers all of `limit`: what is painted before it is not painted.
+    hidden: Option<usize>,
+    /// Window pixels the node's fills and clips cover fully, which the span path writes itself: the fills that cover
+    /// them (by operation index, in `covering`) and the clips leave them out of the pixmap (see `holed`).
+    holes: Vec<Bounds>,
+    covering: Vec<bool>,
+    /// The frame itself, whose span writes wait in the painter's `pending` until something else paints there.
+    frame: bool,
 }
 
 impl Target<'_, '_> {
@@ -253,6 +291,12 @@ struct Tree<'n> {
     reach: Vec<i32>,
     children: Vec<Vec<usize>>,
     roots: Vec<usize>,
+    parent: Vec<Option<usize>>,
+    /// Each node's place in the order nodes are painted, and the last place in its subtree.
+    order: Vec<usize>,
+    last: Vec<usize>,
+    /// The node or an ancestor is painted as a group.
+    grouped: Vec<bool>,
 }
 
 impl<'n> Tree<'n> {
@@ -261,11 +305,31 @@ impl<'n> Tree<'n> {
             nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
         let mut children = vec![Vec::new(); nodes.len()];
         let mut roots = Vec::new();
+        let mut parent = vec![None; nodes.len()];
         for (i, node) in nodes.iter().enumerate() {
             match node.parent.and_then(|p| index.get(&p)) {
-                Some(&parent) => children[parent].push(i),
+                Some(&p) => {
+                    children[p].push(i);
+                    parent[i] = Some(p);
+                }
                 None => roots.push(i),
             }
+        }
+        let (mut order, mut last) = (vec![0; nodes.len()], vec![0; nodes.len()]);
+        let mut grouped = vec![false; nodes.len()];
+        let mut next = 0;
+        // (node, children done): a node is placed on the way down and closed on the way back up
+        let mut stack: Vec<(usize, bool)> = roots.iter().rev().map(|&r| (r, false)).collect();
+        while let Some((i, done)) = stack.pop() {
+            if done {
+                last[i] = next - 1;
+                continue;
+            }
+            order[i] = next;
+            next += 1;
+            grouped[i] = nodes[i].group.is_some() || parent[i].is_some_and(|p| grouped[p]);
+            stack.push((i, true));
+            stack.extend(children[i].iter().rev().map(|&c| (c, false)));
         }
         // children come after their parent, so walking backwards finishes each node's children first
         let mut reach = vec![0; nodes.len()];
@@ -288,7 +352,25 @@ impl<'n> Tree<'n> {
             reach,
             children,
             roots,
+            parent,
+            order,
+            last,
+            grouped,
         }
+    }
+
+    /// The ancestors of `i` that clip their descendants, outermost first.
+    fn clip_chain(&self, i: usize) -> Vec<&'n PaintNode> {
+        let mut chain = Vec::new();
+        let mut at = self.parent[i];
+        while let Some(p) = at {
+            if self.nodes[p].clip.is_some() {
+                chain.push(&self.nodes[p]);
+            }
+            at = self.parent[p];
+        }
+        chain.reverse();
+        chain
     }
 }
 
@@ -300,9 +382,147 @@ struct Painter<'a, R> {
     glyphs: &'a mut GlyphCache,
     images: &'a mut ImageCache,
     rasterizer: &'a mut R,
+    fast: bool,
+    /// Span writes to the frame not made yet.
+    pending: spans::Pending,
 }
 
 impl<R: GlyphRasterizer> Painter<'_, R> {
+    /// The last node painted into the frame whose opaque fill covers all of `d` with nothing over it but what
+    /// comes after it: no group above it and no anti-aliased edge inside `d`. What is painted before it there is
+    /// hidden.
+    fn occluder(&mut self, tree: &Tree<'_>, d: &Bounds, whole: &Bounds) -> Option<usize> {
+        let mut nodes: Vec<usize> = (0..tree.nodes.len()).collect();
+        nodes.sort_unstable_by_key(|&i| std::cmp::Reverse(tree.order[i]));
+        nodes.into_iter().find(|&i| {
+            let node = &tree.nodes[i];
+            let opaque = node
+                .ops
+                .iter()
+                .any(|op| matches!(op, PaintOp::Fill { paint: Paint::Solid(c), .. } if c.a >= 1.0));
+            if !opaque || tree.grouped[i] {
+                return false;
+            }
+            // the node is reached only when it and every ancestor touch the rectangle
+            let mut at = Some(i);
+            while let Some(n) = at {
+                if !Bounds::of_rect(&tree.nodes[n].bounds, self.scale).touches(d) {
+                    return false;
+                }
+                at = tree.parent[n];
+            }
+            let extent = tree.extents[i];
+            if extent.intersect(d) != *d {
+                return false;
+            }
+            let chain = tree.clip_chain(i);
+            let Some(area) = self.own_area(tree, i, &chain, whole, d) else {
+                return false;
+            };
+            if self.direct(tree, i, &chain, whole, d) {
+                return false;
+            }
+            self.solid(node, &chain, &area)
+                .is_some_and(|s| s.color[3] == 255 && s.core.iter().any(|c| c.intersect(d) == *d))
+        })
+    }
+
+    /// The span path's analysis of a node painted through a scratch image covering `area` (see `spans`).
+    fn solid(
+        &mut self,
+        node: &PaintNode,
+        chain: &[&PaintNode],
+        area: &Bounds,
+    ) -> Option<spans::Solid> {
+        let solid_fill = |op: &PaintOp| {
+            matches!(
+                op,
+                PaintOp::Fill {
+                    shape: Shape::Rect(_) | Shape::RoundedRect { .. },
+                    paint: Paint::Solid(_)
+                }
+            )
+        };
+        if !node.ops.iter().any(solid_fill) {
+            return None;
+        }
+        let mut glyphs = vec![None; node.ops.len()];
+        for (i, op) in node.ops.iter().enumerate() {
+            if let PaintOp::Glyphs { origin, run, color } = op {
+                let mut covered: Option<Bounds> = None;
+                self.place_glyphs(node, origin, run, *color, |x, y, g| {
+                    let b = Bounds {
+                        x0: x,
+                        y0: y,
+                        x1: x.saturating_add(g.width as i32),
+                        y1: y.saturating_add(g.height as i32),
+                    };
+                    covered = Some(covered.map_or(b, |c| c.union(&b)));
+                })
+                .ok()?;
+                glyphs[i] = Some(covered.unwrap_or(Bounds {
+                    x0: 0,
+                    y0: 0,
+                    x1: 0,
+                    y1: 0,
+                }));
+            }
+        }
+        spans::solid(node, chain, self.scale, (area.x0, area.y0), area, &glyphs)
+    }
+
+    /// The pixels of `rect` a node's own operations can change where `limit` is needed, under the clips of `chain`.
+    fn own_area(
+        &self,
+        tree: &Tree<'_>,
+        i: usize,
+        chain: &[&PaintNode],
+        rect: &Bounds,
+        limit: &Bounds,
+    ) -> Option<Bounds> {
+        let extent = tree.extents[i];
+        if extent.is_empty() {
+            return None;
+        }
+        let halo = node_support(&tree.nodes[i], self.scale);
+        let mut area = extent
+            .outset(halo)
+            .intersect(&limit.outset(halo))
+            .intersect(rect);
+        for owner in chain {
+            if let Some(clip) = &owner.clip {
+                area = area.intersect(&geometry::clip_bounds(clip, &owner.transform, self.scale));
+            }
+        }
+        (!area.is_empty()).then_some(area)
+    }
+
+    /// Whether a node's operations are painted straight into the target: nothing clips or cuts them and they only draw.
+    fn direct(
+        &self,
+        tree: &Tree<'_>,
+        i: usize,
+        chain: &[&PaintNode],
+        rect: &Bounds,
+        limit: &Bounds,
+    ) -> bool {
+        let node = &tree.nodes[i];
+        let reach = tree.extents[i]
+            .outset(node_support(node, self.scale))
+            .intersect(rect);
+        chain.iter().all(|owner| owner.clip.is_none())
+            && reach.intersect(limit) == reach
+            && node.ops.iter().all(|op| {
+                matches!(
+                    op,
+                    PaintOp::Fill { .. }
+                        | PaintOp::Stroke { .. }
+                        | PaintOp::Glyphs { .. }
+                        | PaintOp::Image { .. }
+                )
+            })
+    }
+
     fn subtree<'n>(
         &mut self,
         t: &mut Target<'_, '_>,
@@ -313,6 +533,14 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         let node = &tree.nodes[i];
         if !Bounds::of_rect(&node.bounds, self.scale).touches(&t.limit) {
             return Ok(());
+        }
+        if let Some(o) = t.hidden.filter(|&o| tree.order[i] < tree.order[o]) {
+            self.stats.hidden += 1;
+            if tree.last[i] < tree.order[o] {
+                return Ok(());
+            }
+            // an ancestor of the node that hides it: its own operations are hidden, its clip still applies
+            return self.children(t, tree, i, chain);
         }
         if let Some(group) = &node.group {
             return self.group(t, tree, i, group, chain);
@@ -372,6 +600,10 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 rect: area,
                 limit: area,
                 clips: Vec::new(),
+                hidden: None,
+                holes: Vec::new(),
+                covering: Vec::new(),
+                frame: false,
             };
             self.own(&mut inner, tree, i, &[])?;
             self.children(&mut inner, tree, i, &mut Vec::new())?;
@@ -379,7 +611,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         for effect in &group.effects {
             effects::apply(&mut layer, effect, self.scale);
         }
-        if let Some(mask) = self.chain_mask(chain, &area)? {
+        if let Some(mask) = self.chain_mask(chain, &area, &[])? {
             self.stats
                 .mask_apply
                 .add(u64::from(area.width()) * u64::from(area.height()) * 4);
@@ -400,7 +632,9 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
 
     /// Paints one node's own operations into a scratch image of just the pixels they can reach, under the
     /// ancestors' clips, and lays that over the target. A node that nothing clips or cuts, whose operations only draw,
-    /// is painted straight into the target instead: source-over is associative, so the result is the same.
+    /// is painted straight into the target instead: source-over is associative, so the result is the same. A node of
+    /// solid rectangles under rectangular clips writes the pixels its fills cover fully as rows and keeps the scratch
+    /// image only for the rest (see `spans`).
     fn own(
         &mut self,
         t: &mut Target<'_, '_>,
@@ -410,60 +644,118 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
     ) -> Result<(), RenderError> {
         let node = &tree.nodes[i];
         let extent = tree.extents[i];
-        if extent.is_empty() {
+        let Some(area) = self.own_area(tree, i, chain, &t.rect, &t.limit) else {
             return Ok(());
-        }
-        let halo = node_support(node, self.scale);
-        let mut area = extent
-            .outset(halo)
-            .intersect(&t.limit.outset(halo))
-            .intersect(&t.rect);
-        for owner in chain {
-            if let Some(clip) = &owner.clip {
-                area = area.intersect(&geometry::clip_bounds(clip, &owner.transform, self.scale));
-            }
-        }
-        if area.is_empty() {
-            return Ok(());
-        }
+        };
         self.stats.nodes_painted += 1;
-        let reach = extent.outset(halo).intersect(&t.rect);
-        let direct = chain.iter().all(|owner| owner.clip.is_none())
-            && reach.intersect(&t.limit) == reach
-            && node.ops.iter().all(|op| {
-                matches!(
-                    op,
-                    PaintOp::Fill { .. }
-                        | PaintOp::Stroke { .. }
-                        | PaintOp::Glyphs { .. }
-                        | PaintOp::Image { .. }
-                )
-            });
-        if direct {
+        let halo = node_support(node, self.scale);
+        let reach = Reach { extent, halo };
+        if self.direct(tree, i, chain, &t.rect, &t.limit) {
+            if t.frame {
+                let reach = extent.outset(halo).intersect(&t.rect).intersect(&t.limit);
+                self.pending.flush(t.pixmap, t.origin, &reach);
+            }
             let mut inner = Target {
                 pixmap: &mut *t.pixmap,
                 origin: t.origin,
                 rect: t.rect,
-                limit: reach,
+                limit: extent.outset(halo).intersect(&t.rect),
                 clips: Vec::new(),
+                hidden: None,
+                holes: Vec::new(),
+                covering: Vec::new(),
+                frame: false,
             };
             let mut pos = 0;
-            return self.run(&mut inner, node, Reach { extent, halo }, &mut pos);
+            return self.run(&mut inner, node, reach, &mut pos);
         }
-        let mut scratch = self.scratch(&area)?;
+        let solid = if self.fast {
+            self.solid(node, chain, &area)
+        } else {
+            None
+        };
+        let Some(solid) = solid else {
+            return self.through_scratch(t, node, chain, reach, &area, None);
+        };
+        // the rim: what the fills reach outside the pixels they cover fully, through the scratch image with those
+        // pixels left out of it
+        let rim = spans::subtract(solid.reach, &solid.core);
+        if !rim.is_empty() {
+            self.through_scratch(t, node, chain, reach, &area, Some((&solid, &rim)))?;
+        }
+        for core in &solid.core {
+            let shown = core.intersect(&t.limit);
+            self.stats
+                .spans
+                .add(u64::from(shown.width()) * u64::from(shown.height()) * 4);
+            if t.frame {
+                self.pending.over(t.pixmap, shown, solid.color);
+            } else {
+                spans::cover(
+                    t.pixmap,
+                    &shown.offset(-t.origin.0, -t.origin.1),
+                    solid.color,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Paints a node's operations into a scratch image covering `area` and lays it over the target. With `cut`, the
+    /// pixels of its first list are left out of the image and only those of its second list are laid over.
+    fn through_scratch(
+        &mut self,
+        t: &mut Target<'_, '_>,
+        node: &PaintNode,
+        chain: &[&PaintNode],
+        reach: Reach,
+        area: &Bounds,
+        cut: Option<(&spans::Solid, &[Bounds])>,
+    ) -> Result<(), RenderError> {
+        let (holes, covering) = cut.map_or_else(
+            || (Vec::new(), Vec::new()),
+            |(solid, _)| (solid.core.clone(), solid.covering.clone()),
+        );
+        let mut scratch = self.scratch(area)?;
         {
             let mut pm = scratch.as_mut();
             let mut inner = Target {
                 pixmap: &mut pm,
                 origin: (area.x0, area.y0),
-                rect: area,
-                limit: area,
-                clips: self.chain_mask(chain, &area)?.into_iter().collect(),
+                rect: *area,
+                limit: *area,
+                clips: self.chain_mask(chain, area, &holes)?.into_iter().collect(),
+                hidden: None,
+                holes,
+                covering,
+                frame: false,
             };
             let mut pos = 0;
-            self.run(&mut inner, node, Reach { extent, halo }, &mut pos)?;
+            self.run(&mut inner, node, reach, &mut pos)?;
         }
-        self.lay_over(t, scratch, &area, 1.0, Site::Node)
+        let Some((_, rim)) = cut else {
+            return self.lay_over(t, scratch, area, 1.0, Site::Node);
+        };
+        for piece in rim {
+            let visible = piece.intersect(&t.limit);
+            if visible.is_empty() {
+                continue;
+            }
+            self.stats
+                .node_composite
+                .add(u64::from(visible.width()) * u64::from(visible.height()) * 4);
+            if t.frame {
+                self.pending.flush(t.pixmap, t.origin, &visible);
+            }
+            source_over_part(
+                t.pixmap,
+                (visible.x0 - t.origin.0, visible.y0 - t.origin.1),
+                &scratch,
+                &visible.offset(-area.x0, -area.y0),
+                1.0,
+            );
+        }
+        Ok(())
     }
 
     fn scratch(&mut self, area: &Bounds) -> Result<Pixmap, RenderError> {
@@ -475,17 +767,19 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         Pixmap::new(area.width(), area.height()).ok_or(RenderError::ResourceLimit)
     }
 
-    /// The coverage of every clip on the chain, as a mask of just `area`; `None` when nothing is clipped.
+    /// The coverage of every clip on the chain, as a mask of just `area`, leaving out `holes` (window pixels, see
+    /// `holed`); `None` when nothing is clipped.
     fn chain_mask(
         &mut self,
         chain: &[&PaintNode],
         area: &Bounds,
+        holes: &[Bounds],
     ) -> Result<Option<Mask>, RenderError> {
         let mut mask: Option<Mask> = None;
         for owner in chain {
             let Some(clip) = &owner.clip else { continue };
             let ts = geometry::to_target(&owner.transform, self.scale, (area.x0, area.y0));
-            let path = geometry::path(clip);
+            let (path, ts) = holed(geometry::path(clip), ts, holes, (area.x0, area.y0));
             let rule = geometry::fill_rule(clip);
             match (mask.as_mut(), path) {
                 (None, path) => {
@@ -518,6 +812,9 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         let visible = area.intersect(&t.limit);
         if visible.is_empty() {
             return Ok(());
+        }
+        if t.frame {
+            self.pending.flush(t.pixmap, t.origin, &visible);
         }
         let shown = if visible == *area {
             image
@@ -560,7 +857,8 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             match op {
                 PaintOp::Fill { shape, paint } => {
                     self.stats.fills += 1;
-                    self.fill(t, node, shape, paint)
+                    let holed = t.covering.get(*pos - 1).copied().unwrap_or(false);
+                    self.fill(t, node, shape, paint, holed)
                 }
                 PaintOp::Stroke {
                     shape,
@@ -621,11 +919,20 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         Ok(())
     }
 
-    fn fill(&self, t: &mut Target<'_, '_>, node: &PaintNode, shape: &Shape, paint: &Paint) {
-        let (Some(path), Some(paint)) = (geometry::path(shape), skia_paint(paint)) else {
+    /// Fills `shape`; when `holed`, without the target's holes.
+    fn fill(
+        &self,
+        t: &mut Target<'_, '_>,
+        node: &PaintNode,
+        shape: &Shape,
+        paint: &Paint,
+        holed: bool,
+    ) {
+        let holes: &[Bounds] = if holed { &t.holes } else { &[] };
+        let (path, ts) = self::holed(geometry::path(shape), self.ts(t, node), holes, t.origin);
+        let (Some(path), Some(paint)) = (path, skia_paint(paint)) else {
             return;
         };
-        let ts = self.ts(t, node);
         t.pixmap.fill_path(
             &path,
             &paint,
@@ -730,12 +1037,29 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         run: &cupertino_ui_text::GlyphRun,
         color: Color,
     ) -> Result<(), RenderError> {
+        self.stats.glyphs += run.glyphs.len() as u32;
+        let mask = t.clips.last().map(Mask::data);
+        let limit = t.limit.offset(-t.origin.0, -t.origin.1);
+        let (pixmap, at) = (&mut *t.pixmap, t.origin);
+        self.place_glyphs(node, origin, run, color, |x, y, glyph| {
+            blend_glyph(pixmap, mask, &limit, x - at.0, y - at.1, glyph, color);
+        })
+    }
+
+    /// Hands each glyph of a run with a raster to `each`, with the window pixel of its raster's top-left corner.
+    fn place_glyphs(
+        &mut self,
+        node: &PaintNode,
+        origin: &cupertino_geometry::Point,
+        run: &cupertino_ui_text::GlyphRun,
+        color: Color,
+        mut each: impl FnMut(i32, i32, &RasterGlyph),
+    ) -> Result<(), RenderError> {
         let [a, b, c, d, e, f] = node.transform.0;
         let size_px = f64::from(run.size) * self.scale * a.hypot(b);
         if size_px > MAX_GLYPH_PX {
             return Err(RenderError::ResourceLimit);
         }
-        self.stats.glyphs += run.glyphs.len() as u32;
         for g in &run.glyphs {
             let (lx, ly) = (origin.x + f64::from(g.x), origin.y + f64::from(g.y));
             let px = (a * lx + c * ly + e) * self.scale;
@@ -752,17 +1076,9 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             let Some(glyph) = self.glyphs.get(key, self.rasterizer)? else {
                 continue;
             };
-            let x = ix as i32 + glyph.bearing_x - t.origin.0;
-            let y = py.round() as i32 - glyph.bearing_y - t.origin.1;
-            blend_glyph(
-                t.pixmap,
-                t.clips.last().map(Mask::data),
-                &t.limit.offset(-t.origin.0, -t.origin.1),
-                x,
-                y,
-                &glyph,
-                color,
-            );
+            let x = ix as i32 + glyph.bearing_x;
+            let y = py.round() as i32 - glyph.bearing_y;
+            each(x, y, &glyph);
         }
         Ok(())
     }
@@ -800,6 +1116,10 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 rect: area,
                 limit: area,
                 clips: Vec::new(),
+                hidden: None,
+                holes: Vec::new(),
+                covering: Vec::new(),
+                frame: false,
             };
             self.run(&mut inner, node, reach, pos)?;
         }
@@ -821,6 +1141,39 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         );
         Ok(())
     }
+}
+
+/// `path` placed by `ts` with `holes` (window pixels; the target's top-left at `origin`) cut out of it, and the
+/// transform to fill the result with. A hole is a contour of the opposite direction one pixel inside its rectangle, on
+/// whole pixels: under the non-zero rule the rasterizer then skips its pixels, and as its edges lie on pixel
+/// boundaries clear of every edge of the path, every pixel outside the rectangle is covered exactly as before.
+fn holed(
+    path: Option<tiny_skia::Path>,
+    ts: tiny_skia::Transform,
+    holes: &[Bounds],
+    origin: (i32, i32),
+) -> (Option<tiny_skia::Path>, tiny_skia::Transform) {
+    if holes.is_empty() {
+        return (path, ts);
+    }
+    let Some(placed) = path.and_then(|p| p.transform(ts)) else {
+        return (None, ts);
+    };
+    let mut b = tiny_skia::PathBuilder::new();
+    b.push_path(&placed);
+    for h in holes {
+        let h = h.outset(-1).offset(-origin.0, -origin.1);
+        if h.is_empty() {
+            continue;
+        }
+        let (x0, y0, x1, y1) = (h.x0 as f32, h.y0 as f32, h.x1 as f32, h.y1 as f32);
+        b.move_to(x0, y0);
+        b.line_to(x0, y1);
+        b.line_to(x1, y1);
+        b.line_to(x1, y0);
+        b.close();
+    }
+    (b.finish(), tiny_skia::Transform::identity())
 }
 
 fn node_support(node: &PaintNode, scale: f64) -> i32 {
@@ -874,7 +1227,7 @@ fn stops(stops: &[crate::GradientStop]) -> Option<Vec<GradientStop>> {
         .collect()
 }
 
-fn skia_paint(paint: &Paint) -> Option<tiny_skia::Paint<'static>> {
+pub(crate) fn skia_paint(paint: &Paint) -> Option<tiny_skia::Paint<'static>> {
     let shader = match paint {
         Paint::Solid(c) => tiny_skia::Shader::SolidColor(skia_color(*c)?),
         Paint::Linear {
@@ -915,9 +1268,26 @@ fn skia_paint(paint: &Paint) -> Option<tiny_skia::Paint<'static>> {
 /// Source-over of the premultiplied `src`, scaled by `opacity`, onto the pixmap with its top-left pixel at `at`, in
 /// 8-bit integers. Whatever of `src` falls outside the pixmap is not drawn.
 fn source_over(dst: &mut PixmapMut<'_>, at: (i32, i32), src: &Pixmap, opacity: f32) {
+    let whole = Bounds::of_size(src.width(), src.height());
+    source_over_part(dst, at, src, &whole, opacity);
+}
+
+/// [`source_over`] of the pixels `part` of `src` (in its own pixels), with the part's top-left pixel at `at`.
+fn source_over_part(
+    dst: &mut PixmapMut<'_>,
+    at: (i32, i32),
+    src: &Pixmap,
+    part: &Bounds,
+    opacity: f32,
+) {
     let k = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
     let stride = dst.width() as usize * 4;
-    let row = src.width() as usize * 4;
+    let part = part.intersect(&Bounds::of_size(src.width(), src.height()));
+    if part.is_empty() {
+        return;
+    }
+    let src_stride = src.width() as usize * 4;
+    let (from, row) = (part.x0 as usize * 4, part.width() as usize * 4);
     let (Ok(x), Ok(top)) = (usize::try_from(at.0), usize::try_from(at.1)) else {
         debug_assert!(false, "the layer starts before the target");
         return;
@@ -931,7 +1301,13 @@ fn source_over(dst: &mut PixmapMut<'_>, at: (i32, i32), src: &Pixmap, opacity: f
         return;
     }
     let dst = dst.data_mut();
-    for (y, s) in src.data().chunks_exact(row).enumerate() {
+    let lines = src
+        .data()
+        .chunks_exact(src_stride)
+        .skip(part.y0 as usize)
+        .take(part.height() as usize)
+        .map(|line| &line[from..from + row]);
+    for (y, s) in lines.enumerate() {
         let start = top
             .checked_add(y)
             .and_then(|line| line.checked_mul(stride))
@@ -1022,6 +1398,487 @@ fn blend_glyph(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        DisplayList, GradientStop, Group, ImageResource, PaintResources, PaintRevision, ResourceId,
+        ResourceRef, Transform,
+    };
+    use cupertino_ui_text::{FontId, GlyphId, GlyphRun, PositionedGlyph};
+    use std::sync::Arc;
+
+    /// Glyph rasters of half-covered boxes; glyph 7's are three em wide, past the box a node's extent allows a glyph.
+    struct NoGlyphs;
+
+    impl GlyphRasterizer for NoGlyphs {
+        fn rasterize(
+            &mut self,
+            key: &GlyphKey,
+        ) -> Result<Option<RasterGlyph>, cupertino_ui_text::TextError> {
+            let side = (key.size_q / 64).max(1);
+            let width = if key.glyph == GlyphId(7) {
+                side * 3
+            } else {
+                side / 2 + 1
+            };
+            let pixels: Vec<u8> = (0..width * side)
+                .map(|i| (i * 37 % 256) as u8 / 2 + key.subpixel_x * 16)
+                .collect();
+            Ok(Some(RasterGlyph {
+                format: GlyphFormat::Coverage,
+                width,
+                height: side,
+                stride: width,
+                bearing_x: -1,
+                bearing_y: side as i32 - 2,
+                pixels: Arc::from(pixels),
+            }))
+        }
+    }
+
+    /// The image the scenes draw.
+    const PICTURE: ResourceId = ResourceId(1);
+
+    fn resources() -> PaintResources {
+        let pixels: Vec<u8> = (0..8 * 8 * 4).map(|i| (i * 29 % 256) as u8).collect();
+        PaintResources {
+            images: [(
+                PICTURE,
+                ImageResource {
+                    revision: 1,
+                    width: 8,
+                    height: 8,
+                    stride: 32,
+                    format: crate::PixelFormat::Rgba8,
+                    pixels: Arc::from(pixels),
+                },
+            )]
+            .into(),
+        }
+    }
+
+    /// A small deterministic generator.
+    struct Draw(u64);
+
+    impl Draw {
+        fn next(&mut self) -> u32 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (self.0 >> 33) as u32
+        }
+
+        /// In `[lo, hi)`, on a grid of `1 / steps`; `steps` 0 for any value.
+        fn value(&mut self, lo: f64, hi: f64, steps: u32) -> f64 {
+            let unit = f64::from(self.next()) / f64::from(u32::MAX);
+            let v = lo + (hi - lo) * unit;
+            if steps == 0 {
+                v
+            } else {
+                (v * f64::from(steps)).floor() / f64::from(steps)
+            }
+        }
+
+        fn pick(&mut self, n: u32) -> u32 {
+            self.next() % n
+        }
+
+        fn color(&mut self) -> Color {
+            let a = match self.pick(5) {
+                0 | 1 => 1.0,
+                2 => 0.03,
+                3 => 0.5,
+                _ => self.value(0.0, 1.0, 0) as f32,
+            };
+            let mut c = || self.value(0.0, 1.0, 0) as f32;
+            Color::new(c(), c(), c(), a)
+        }
+
+        fn rect(&mut self, w: f64, h: f64, steps: u32) -> Rect {
+            let (x, y) = (self.value(-10.0, w, steps), self.value(-10.0, h, steps));
+            Rect::new(
+                x,
+                y,
+                self.value(0.5, w / 1.5, steps),
+                self.value(0.5, h / 1.5, steps),
+            )
+        }
+    }
+
+    const SCENE: (f64, f64) = (120.0, 90.0);
+
+    fn plain(id: u64, parent: Option<u64>, transform: (f64, f64), ops: Vec<PaintOp>) -> PaintNode {
+        PaintNode {
+            id: PaintNodeId(id),
+            parent: parent.map(PaintNodeId),
+            revision: PaintRevision(1),
+            transform: Transform([1.0, 0.0, 0.0, 1.0, transform.0, transform.1]),
+            clip: None,
+            group: None,
+            bounds: Rect::new(-20.0, -20.0, SCENE.0 + 40.0, SCENE.1 + 40.0),
+            hit: Rect::new(0.0, 0.0, 0.0, 0.0),
+            ops,
+        }
+    }
+
+    /// A window of the kind the fast paths are for: an opaque background, panes that clip, an opaque page over one of
+    /// them, and translucent and opaque rectangles and rounded rectangles at any offset, with nodes the fast paths
+    /// leave alone (strokes, paths, groups, rounded clips) among them.
+    fn scene(seed: u64) -> DisplayList {
+        let mut draw = Draw(seed);
+        let (w, h) = SCENE;
+        let steps = [0, 1, 2, 4, 8];
+        let grid = |draw: &mut Draw| steps[draw.pick(5) as usize];
+        let mut nodes = vec![plain(
+            1,
+            None,
+            (0.0, 0.0),
+            vec![PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, w, h)),
+                paint: Paint::Solid(Color::new(0.9, 0.9, 0.9, 1.0)),
+            }],
+        )];
+        let mut parents = vec![1];
+        for id in 2..5 {
+            let g = grid(&mut draw);
+            let origin = (draw.value(0.0, w / 3.0, g), draw.value(0.0, h / 3.0, g));
+            let clip = draw.rect(w, h, g);
+            let parent = parents[draw.pick(parents.len() as u32) as usize];
+            let mut pane = plain(id, Some(parent), origin, Vec::new());
+            pane.clip = Some(if draw.pick(5) == 0 {
+                Shape::RoundedRect {
+                    rect: clip,
+                    radius: 4.0,
+                }
+            } else {
+                Shape::Rect(clip)
+            });
+            nodes.push(pane);
+            parents.push(id);
+        }
+        // the page: an opaque rectangle over a whole pane
+        let g = grid(&mut draw);
+        nodes.push(plain(
+            5,
+            Some(2),
+            (0.0, 0.0),
+            vec![PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(
+                    draw.value(-5.0, 10.0, g),
+                    draw.value(-5.0, 10.0, g),
+                    w,
+                    h,
+                )),
+                paint: Paint::Solid(Color::new(0.2, 0.25, 0.3, 1.0)),
+            }],
+        ));
+        parents.push(5);
+        for id in 6..40 {
+            let g = grid(&mut draw);
+            let origin = (draw.value(-5.0, w / 2.0, g), draw.value(-5.0, h / 2.0, g));
+            let ops = (0..1 + draw.pick(4))
+                .flat_map(|_| {
+                    let rect = draw.rect(w / 2.0, h / 2.0, g);
+                    let paint = Paint::Solid(draw.color());
+                    let op = match draw.pick(17) {
+                        12 => PaintOp::Glyphs {
+                            origin: rect.origin,
+                            run: GlyphRun {
+                                font: FontId(1),
+                                size: draw.value(4.0, 14.0, 2) as f32,
+                                glyphs: (0..1 + draw.pick(6))
+                                    .map(|i| PositionedGlyph {
+                                        id: GlyphId(draw.pick(8)),
+                                        x: i as f32 * draw.value(2.0, 7.0, 4) as f32,
+                                        y: 0.0,
+                                        cluster: 0,
+                                    })
+                                    .collect(),
+                            },
+                            color: draw.color(),
+                        },
+                        13 => PaintOp::Image {
+                            image: ResourceRef {
+                                id: PICTURE,
+                                revision: 1,
+                            },
+                            src: Rect::new(0.0, 0.0, 8.0, 8.0),
+                            dst: Rect::new(rect.min_x(), rect.min_y(), 8.0, 8.0),
+                            sampling: crate::Sampling::Linear,
+                        },
+                        14 => PaintOp::Fill {
+                            shape: Shape::Rect(rect),
+                            paint: Paint::Linear {
+                                start: rect.origin,
+                                end: cupertino_geometry::Point::new(rect.max_x(), rect.max_y()),
+                                stops: vec![
+                                    GradientStop {
+                                        offset: 0.0,
+                                        color: draw.color(),
+                                    },
+                                    GradientStop {
+                                        offset: 1.0,
+                                        color: draw.color(),
+                                    },
+                                ],
+                            },
+                        },
+                        15 => {
+                            let inner = draw.rect(w / 2.0, h / 2.0, g);
+                            return vec![
+                                PaintOp::PushClip(Shape::Rect(rect)),
+                                PaintOp::Fill {
+                                    shape: Shape::Rect(inner),
+                                    paint,
+                                },
+                                PaintOp::PopClip,
+                            ];
+                        }
+                        0 => PaintOp::Stroke {
+                            shape: Shape::Rect(rect),
+                            width: 1.0,
+                            paint,
+                        },
+                        1 => PaintOp::Fill {
+                            shape: Shape::Path {
+                                verbs: vec![
+                                    crate::PathVerb::MoveTo(rect.origin),
+                                    crate::PathVerb::LineTo(cupertino_geometry::Point::new(
+                                        rect.max_x(),
+                                        rect.max_y(),
+                                    )),
+                                    crate::PathVerb::LineTo(cupertino_geometry::Point::new(
+                                        rect.min_x(),
+                                        rect.max_y(),
+                                    )),
+                                    crate::PathVerb::Close,
+                                ],
+                                fill_rule: crate::FillRule::NonZero,
+                            },
+                            paint,
+                        },
+                        2..=6 => PaintOp::Fill {
+                            shape: Shape::RoundedRect {
+                                rect,
+                                radius: draw.value(0.0, 12.0, g),
+                            },
+                            paint,
+                        },
+                        _ => PaintOp::Fill {
+                            shape: Shape::Rect(rect),
+                            paint,
+                        },
+                    };
+                    vec![op]
+                })
+                .collect();
+            let parent = parents[draw.pick(parents.len() as u32) as usize];
+            let mut leaf = plain(id, Some(parent), origin, ops);
+            if draw.pick(10) == 0 {
+                leaf.group = Some(Group {
+                    opacity: 0.7,
+                    effects: Vec::new(),
+                });
+            }
+            nodes.push(leaf);
+            parents.push(id);
+        }
+        DisplayList { nodes }
+    }
+
+    /// Renders the same frames with and without the fast paths and compares every byte; returns the fast renderer's
+    /// counters summed over the frames.
+    fn compare(seed: u64, scale: f64) -> (u64, u32) {
+        let none = resources();
+        let config = CpuConfig {
+            max_pixels: 1 << 22,
+            glyph_cache_bytes: 1 << 16,
+            image_cache_bytes: 1 << 16,
+            font_smoothing: true,
+        };
+        let mut fast = CpuRenderer::new(config, NoGlyphs);
+        let mut slow = CpuRenderer::new(config, NoGlyphs).without_fast_paths();
+        let mut draw = Draw(seed ^ 0x5eed);
+        let (width, height) = (
+            (SCENE.0 * scale).ceil() as u32,
+            (SCENE.1 * scale).ceil() as u32,
+        );
+        let mut list = scene(seed);
+        let (mut spans, mut hidden) = (0, 0);
+        for frame in 0..8 {
+            let damage = if frame == 0 {
+                DamageRegion::Full
+            } else {
+                // something changes, and the frame repaints a few rectangles of any size and offset
+                let i = 5 + draw.pick(list.nodes.len() as u32 - 5) as usize;
+                for op in &mut list.nodes[i].ops {
+                    if let PaintOp::Fill { paint, .. } = op {
+                        *paint = Paint::Solid(draw.color());
+                    }
+                }
+                let g = [0, 1, 4][draw.pick(3) as usize];
+                DamageRegion::Rects(
+                    (0..1 + draw.pick(3))
+                        .map(|_| {
+                            let r = draw.rect(SCENE.0, SCENE.1, g);
+                            if draw.pick(2) == 0 {
+                                // a control's worth
+                                Rect::new(r.min_x(), r.min_y(), r.width() / 4.0, r.height() / 4.0)
+                            } else {
+                                r
+                            }
+                        })
+                        .collect(),
+                )
+            };
+            let request = RenderRequest {
+                list: &list,
+                resources: &none,
+                scale,
+                width,
+                height,
+                damage: &damage,
+            };
+            let a = fast.render(&request).unwrap();
+            let b = slow.render(&request).unwrap();
+            spans += fast.stats().spans.count;
+            hidden += fast.stats().hidden;
+            let (a, b) = (fast.frame(a).unwrap(), slow.frame(b).unwrap());
+            if let Some(at) = (0..a.pixels.len()).find(|&i| a.pixels[i] != b.pixels[i]) {
+                let px = at / 4;
+                let (x, y) = (px as u32 % width, px as u32 / width);
+                panic!(
+                    "seed {seed}, scale {scale}, frame {frame}: pixel ({x}, {y}) is {:?} on the fast path and {:?} on the general one",
+                    &a.pixels[px * 4..px * 4 + 4],
+                    &b.pixels[px * 4..px * 4 + 4]
+                );
+            }
+        }
+        (spans, hidden)
+    }
+
+    #[test]
+    fn the_fast_paths_paint_the_same_bytes_as_the_general_one() {
+        let (mut spans, mut hidden) = (0, 0);
+        for seed in 0..40 {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                let (s, h) = compare(seed, scale);
+                spans += s;
+                hidden += h;
+            }
+        }
+        assert!(spans > 1000, "the span path ran {spans} times");
+        assert!(hidden > 20, "nodes hidden {hidden} times");
+    }
+
+    /// A window background, a pane that clips, an opaque page over it and a translucent rounded group on the page, all
+    /// larger than the damage: the shape of a settings window.
+    fn form(scale: f64) -> (DisplayList, u32, u32) {
+        let (w, h) = (300.0, 200.0);
+        let fill = |shape: Shape, c: Color| PaintOp::Fill {
+            shape,
+            paint: Paint::Solid(c),
+        };
+        let mut pane = plain(2, Some(1), (100.5, 0.0), Vec::new());
+        pane.clip = Some(Shape::Rect(Rect::new(0.0, 0.0, 199.5, h)));
+        let list = DisplayList {
+            nodes: vec![
+                plain(
+                    1,
+                    None,
+                    (0.0, 0.0),
+                    vec![fill(
+                        Shape::Rect(Rect::new(0.0, 0.0, w, h)),
+                        Color::new(0.9, 0.9, 0.9, 1.0),
+                    )],
+                ),
+                pane,
+                plain(
+                    3,
+                    Some(2),
+                    (100.5, 0.0),
+                    vec![fill(
+                        Shape::Rect(Rect::new(0.0, 0.0, 199.5, h)),
+                        Color::new(0.95, 0.95, 0.95, 1.0),
+                    )],
+                ),
+                plain(
+                    4,
+                    Some(3),
+                    (120.25, 20.0),
+                    vec![fill(
+                        Shape::RoundedRect {
+                            rect: Rect::new(0.0, 0.0, 160.0, 150.0),
+                            radius: 10.0,
+                        },
+                        Color::new(0.0, 0.0, 0.0, 0.05),
+                    )],
+                ),
+            ],
+        };
+        let size = |v: f64| (v * scale).ceil() as u32;
+        (list, size(w), size(h))
+    }
+
+    #[test]
+    fn a_page_over_the_window_background_hides_it_and_is_written_as_rows() {
+        let none = PaintResources::default();
+        let config = CpuConfig {
+            max_pixels: 1 << 22,
+            glyph_cache_bytes: 1 << 16,
+            image_cache_bytes: 1 << 16,
+            font_smoothing: true,
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            let (list, width, height) = form(scale);
+            let mut fast = CpuRenderer::new(config, NoGlyphs);
+            let mut slow = CpuRenderer::new(config, NoGlyphs).without_fast_paths();
+            for damage in [
+                DamageRegion::Full,
+                DamageRegion::Rects(vec![Rect::new(130.0, 40.0, 100.0, 80.0)]),
+            ] {
+                let request = RenderRequest {
+                    list: &list,
+                    resources: &none,
+                    scale,
+                    width,
+                    height,
+                    damage: &damage,
+                };
+                let (a, b) = (
+                    fast.render(&request).unwrap(),
+                    slow.render(&request).unwrap(),
+                );
+                assert_eq!(
+                    fast.frame(a).unwrap().pixels,
+                    slow.frame(b).unwrap().pixels,
+                    "scale {scale}, {damage:?}"
+                );
+            }
+            // the damage lies inside the page: the background is hidden, the page and the group's middle are rows,
+            // and only the group's rim goes through a scratch image
+            let stats = *fast.stats();
+            let general = *slow.stats();
+            assert_eq!(
+                stats.hidden, 2,
+                "scale {scale}: the window and the pane, above the page"
+            );
+            assert_eq!(
+                stats.spans.count, 2,
+                "scale {scale}: the page and the group"
+            );
+            assert_eq!(
+                stats.clear.count, 0,
+                "scale {scale}: the page writes every pixel"
+            );
+            assert_eq!(general.scratch_images.count, 3);
+            assert!(
+                stats.node_composite.bytes * 4 < general.node_composite.bytes / 4,
+                "scale {scale}: {} bytes composited, {} on the general path",
+                stats.node_composite.bytes,
+                general.node_composite.bytes
+            );
+        }
+    }
 
     /// A pixmap of premultiplied pixels drawn from `seed`, with every alpha from transparent to opaque.
     fn noise(width: u32, height: u32, seed: u64) -> Pixmap {

@@ -165,6 +165,7 @@ pub use bus::{fetch, fetch_served_by, watch};
 #[cfg(feature = "dbus")]
 mod bus {
     use super::{daemon_program, from_rows, live_path, Notice};
+    use cupertino_peer::signal::{from_owner, sent_by_bus};
     use cupertino_peer::Caller;
     use std::path::Path;
     use zbus::blocking::fdo::DBusProxy;
@@ -230,8 +231,13 @@ mod bus {
         }
     }
 
-    /// Pass the list to `on_list` now, at every `LockScreenChanged` and when the daemon's name changes owner, from
-    /// reader threads. A list that cannot be read is reported and passed on as empty, so nothing stale stays shown.
+    /// Pass the list to `on_list` now, at every `LockScreenChanged` from the owner of the daemon's name and when the name
+    /// changes owner. A list that cannot be read is reported and passed on as empty, so nothing stale stays shown.
+    ///
+    /// The readers of the signals never wait on the bus: a signal only asks a thread of its own for a read, with at most
+    /// one asked for while one runs. A stream that fills stops the connection, the replies to the read included, and the
+    /// bus hands this process any signal another peer sends it; a forged `LockScreenChanged` is dropped as it arrives
+    /// (`from_owner`), and a flood of owner changes costs one read at a time.
     pub fn watch(
         session: &Connection,
         on_list: impl Fn(Vec<Notice>) + Send + Sync + 'static,
@@ -250,18 +256,29 @@ mod bus {
             .member("NameOwnerChanged")?
             .add_arg(BUS_NAME)?
             .build();
-        let streams = [
-            MessageIterator::for_match_rule(changed, session, None)?,
-            MessageIterator::for_match_rule(owner, session, None)?,
-        ];
+        let changes = from_owner(session, BUS_NAME, changed, |_| {
+            eprintln!("cupertino-login: a LockScreenChanged not sent by the notification daemon was ignored")
+        })?;
+        let owners = MessageIterator::for_match_rule(owner, session, None)?.filter(|message| {
+            // zbus filters the rule's sender already; this does not rely on it
+            !matches!(message, Ok(message) if !sent_by_bus(message))
+        });
+        let streams: [Box<dyn Iterator<Item = zbus::Result<zbus::Message>> + Send>; 2] =
+            [Box::new(changes), Box::new(owners)];
         let report = std::sync::Arc::new(move |session: &Connection| {
             on_list(fetch(session).unwrap_or_else(|e| {
                 eprintln!("cupertino-login: the lock screen's notifications: {e}");
                 Vec::new()
             }))
         });
+        let (again, asked) = std::sync::mpsc::sync_channel::<()>(1);
+        let reader = session.clone();
+        std::thread::Builder::new()
+            .name("lock-notices-read".into())
+            .spawn(move || asked.into_iter().for_each(|()| report(&reader)))
+            .map_err(|e| zbus::Error::Failure(format!("starting the notifications reader: {e}")))?;
         for messages in streams {
-            let (session, report) = (session.clone(), report.clone());
+            let again = again.clone();
             std::thread::Builder::new()
                 .name("lock-notices".into())
                 .spawn(move || {
@@ -269,7 +286,7 @@ mod bus {
                         if message.is_err() {
                             break;
                         }
-                        report(&session);
+                        let _ = again.try_send(());
                     }
                     eprintln!(
                         "cupertino-login: the lock screen's notifications are no longer followed"
@@ -279,7 +296,8 @@ mod bus {
                     zbus::Error::Failure(format!("starting the notifications reader: {e}"))
                 })?;
         }
-        report(session);
+        // the first read, on the same thread as the later ones so the lists arrive in order
+        let _ = again.try_send(());
         Ok(())
     }
 }
@@ -287,6 +305,56 @@ mod bus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "dbus")]
+    #[test]
+    fn a_flood_of_forged_changes_reads_nothing_and_leaves_the_connection_reading() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        const NAME: &str = "org.cupertino.NotificationCenter1";
+        const PATH: &str = "/org/cupertino/NotificationCenter1";
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        // the name's owner is this test, not the daemon: each read is refused and passed on as an empty list
+        let owner = bus.connect();
+        owner.request_name(NAME).unwrap();
+        let login = bus.connect();
+        let (read, reads) = mpsc::channel();
+        let read = std::sync::Mutex::new(read);
+        watch(&login, move |list| {
+            let _ = read.lock().unwrap().send(list.len());
+        })
+        .unwrap();
+        assert_eq!(
+            reads.recv_timeout(Duration::from_secs(5)),
+            Ok(0),
+            "the first read"
+        );
+
+        let to = login.unique_name().unwrap().to_string();
+        let peer = bus.connect();
+        for _ in 0..500 {
+            peer.emit_signal(Some(to.as_str()), PATH, NAME, "LockScreenChanged", &())
+                .unwrap();
+        }
+        // a call on the same connection is answered after the flood
+        let daemon = zbus::blocking::fdo::DBusProxy::new(&login).unwrap();
+        assert!(daemon.name_has_owner(NAME.try_into().unwrap()).unwrap());
+        assert!(
+            reads.recv_timeout(Duration::from_millis(500)).is_err(),
+            "a forged change asks for no read"
+        );
+
+        owner
+            .emit_signal(None::<&str>, PATH, NAME, "LockScreenChanged", &())
+            .unwrap();
+        assert_eq!(
+            reads.recv_timeout(Duration::from_secs(5)),
+            Ok(0),
+            "the owner's change is read"
+        );
+    }
 
     fn row(id: u32, app: &str, title: &str, body: &str) -> (u32, String, String, String) {
         (id, app.into(), title.into(), body.into())

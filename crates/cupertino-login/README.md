@@ -170,7 +170,9 @@ menu), the power item is a button that opens a Kit menu, and the panels are moda
 While the session is locked the lock screen shows the notifications the notification daemon (`cupertino-notifications`)
 lists for it: the daemon's `org.cupertino.NotificationCenter1.LockScreenNotifications` on the session bus, read again at
 each `LockScreenChanged` signal (which carries nothing) and whenever the daemon's bus name changes owner
-(`lock_notices::watch`, on reader threads; no daemon is an empty list). The name alone is not trusted, as any process
+(`lock_notices::watch`; no daemon is an empty list). A `LockScreenChanged` counts only from the name's owner
+(`cupertino_peer::signal::from_owner`), and the signal readers never wait on the bus: a signal only asks a read thread
+for a read, at most one waiting, so a flood of signals cannot fill a stream and stop the connection. The name alone is not trusted, as any process
 of the user can own it while the daemon is not running: `lock_notices::fetch` asks the bus for the name's owner and its
 credentials, and asks that connection only when it is an unsandboxed process running `cupertino-notifications` from the
 lock screen's own directory; any other owner is not asked and the list is empty, so no other program can put words on

@@ -45,7 +45,8 @@ const F10: Keysym = Keysym(0xffc7);
 const RETURN: Keysym = Keysym(0xff0d);
 const SPACE: Keysym = Keysym(0x20);
 
-const PANEL_RADIUS: f64 = 8.0;
+/// The panel's corner radius.
+const PANEL_RADIUS: f64 = 10.0;
 /// The panel's own edge, drawn only over the opaque fill a window without the compositor's material paints.
 const EDGE: f64 = 1.0;
 /// Above the first row and below the last.

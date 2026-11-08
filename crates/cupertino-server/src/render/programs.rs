@@ -43,7 +43,7 @@ impl Programs {
                 v4("shape"),
                 v4("fill"),
                 v4("border"),
-                f("edge"),
+                v4("edge"),
             ],
         )?;
         let wallpaper = renderer.compile_custom_pixel_shader(

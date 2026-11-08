@@ -3,7 +3,9 @@
 
 use smithay::utils::{Logical, Rectangle};
 
-use super::programs::{corner_uniforms, u2, u4, Programs};
+use cupertino_scene::BorderFalloff;
+
+use super::programs::{corner_uniforms, u4, Programs};
 use super::shader_rect::{ElementCache, ElementKey, ShaderRect, Sig};
 
 /// Description of a rounded rectangle in output-local logical points.
@@ -17,9 +19,8 @@ pub struct RoundedRectSpec {
     pub fill: [f32; 4],
     /// Border width (points) and straight RGBA colour.
     pub border: Option<(f64, [f32; 4])>,
-    /// Power the border's strength follows the horizontal part of the edge's outward normal by: full along the sides,
-    /// nothing at the top and bottom. 0 draws it the same all around.
-    pub border_sides: f32,
+    /// How the border's strength follows the direction of the edge; the default draws it the same all around.
+    pub border_falloff: BorderFalloff,
     pub alpha: f32,
 }
 
@@ -31,7 +32,7 @@ impl RoundedRectSpec {
             continuous: true,
             fill,
             border: None,
-            border_sides: 0.0,
+            border_falloff: BorderFalloff::default(),
             alpha: 1.0,
         }
     }
@@ -77,7 +78,15 @@ pub fn rounded_rect(
         u4("shape", [extent, bw as f32, exponent, scale as f32]),
         u4("fill", spec.fill),
         u4("border", bc),
-        u2("edge", spec.border_sides, 0.0),
+        u4(
+            "edge",
+            [
+                spec.border_falloff.sides,
+                spec.border_falloff.ends,
+                spec.border_falloff.floor,
+                0.0,
+            ],
+        ),
     ];
     let mut s = Sig::new()
         .rect(area)
@@ -85,7 +94,9 @@ pub fn rounded_rect(
         .f(bw)
         .f(spec.alpha as f64)
         .f(scale)
-        .f(f64::from(spec.border_sides))
+        .f(f64::from(spec.border_falloff.sides))
+        .f(f64::from(spec.border_falloff.ends))
+        .f(f64::from(spec.border_falloff.floor))
         .u(spec.continuous as u64);
     for v in spec.fill.iter().chain(bc.iter()) {
         s = s.f(*v as f64);

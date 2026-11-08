@@ -401,7 +401,8 @@ impl Decorations {
         self.edge_of(EdgeKind::Window, active)
     }
 
-    /// The edge of a menu or popover in this appearance: an outline along its sides, no inner rim.
+    /// The edge of a menu or popover in this appearance: an outline along its sides and a light rim inside, brightest
+    /// at the top and bottom.
     pub fn menu_edge(&self) -> Edge {
         self.edge_of(EdgeKind::Menu, true)
     }

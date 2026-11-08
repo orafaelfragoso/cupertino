@@ -1115,7 +1115,7 @@ fn capture_orientation_and_mesh_drawing() {
             continuous: false,
             fill: c,
             border: None,
-            border_sides: 0.0,
+            border_falloff: Default::default(),
             alpha: 1.0,
         };
         CupertinoElement::from(rounded_rect(
@@ -1205,8 +1205,9 @@ fn capture_orientation_and_mesh_drawing() {
 }
 
 /// The border of a rounded rectangle with a side falloff (a menu's outline) is full along its sides, nothing along its
-/// top and bottom and half way round its corners, as `OutlineFalloff::weight` models it; without one it is the same
-/// all around (a window's outline).
+/// top and bottom and half way round its corners, as `OutlineFalloff::weight` models it; with an end falloff (a menu's
+/// inner rim) it is full along the top and bottom and its floor along the sides; without one it is the same all around
+/// (a window's outline).
 #[test]
 fn a_side_falloff_border_shows_on_the_sides_only() {
     use cupertino_decorations::OutlineFalloff;
@@ -1226,14 +1227,15 @@ fn a_side_falloff_border_shows_on_the_sides_only() {
     let res = RenderResources::new(&mut renderer).unwrap();
     let mut cache = ElementCache::default();
     let falloff = OutlineFalloff::Sides { power: 2.0 };
-    let mut ring = |sides: f32, key: u64| {
+    let mut ring = |falloff: OutlineFalloff, key: u64| {
+        let (sides, ends, floor) = falloff.shader();
         let spec = RoundedRectSpec {
             rect: Rectangle::<f64, Logical>::new((10.0, 10.0).into(), (80.0, 60.0).into()),
             radius: 20.0,
             continuous: false,
             fill: [0.0; 4],
             border: Some((2.0, [0.0, 0.0, 0.0, 1.0])),
-            border_sides: sides,
+            border_falloff: cupertino_scene::BorderFalloff { sides, ends, floor },
             alpha: 1.0,
         };
         let el = CupertinoElement::from(rounded_rect(
@@ -1252,8 +1254,13 @@ fn a_side_falloff_border_shows_on_the_sides_only() {
         )
         .unwrap()
     };
-    let sides = ring(falloff.power(), 1);
-    let uniform = ring(OutlineFalloff::Uniform.power(), 2);
+    let sides = ring(falloff, 1);
+    let uniform = ring(OutlineFalloff::Uniform, 2);
+    let ends_falloff = OutlineFalloff::Ends {
+        power: 1.0,
+        floor: 0.4,
+    };
+    let ends = ring(ends_falloff, 3);
     let dark =
         |img: &image::RgbaImage, x: u32, y: u32| 1.0 - f64::from(img.get_pixel(x, y)[0]) / 255.0;
     // the middle of the left and right sides, then of the top and bottom (pixel centres on the 2 pt band)
@@ -1264,8 +1271,11 @@ fn a_side_falloff_border_shows_on_the_sides_only() {
             dark(&sides, x, y)
         );
         assert!(dark(&uniform, x, y) > 0.95);
+        let got = dark(&ends, x, y);
+        assert!((got - 0.4).abs() < 0.03, "end falloff at the side: {got}");
     }
     for (x, y) in [(50, 11), (50, 68)] {
+        assert!(dark(&ends, x, y) > 0.95, "end falloff at the top or bottom");
         assert!(
             dark(&sides, x, y) < 0.02,
             "top or bottom at ({x}, {y}): {}",
@@ -1282,6 +1292,12 @@ fn a_side_falloff_border_shows_on_the_sides_only() {
     assert!(
         (got - expect).abs() < 0.12,
         "corner: {got} against {expect}"
+    );
+    let expect = ends_falloff.weight((-1.0, -1.0)) * dark(&uniform, x as u32, y as u32);
+    let got = dark(&ends, x as u32, y as u32);
+    assert!(
+        (got - expect).abs() < 0.12,
+        "end falloff corner: {got} against {expect}"
     );
     res.destroy(&mut renderer);
 }

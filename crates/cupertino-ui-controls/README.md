@@ -125,7 +125,7 @@ from the application's model and reports changes as messages.
   `MenuItem::Shortcut` is an item that shows the keys that choose it ("⇧⌘N") at its trailing edge in the secondary
   label colour (the row's colour when it is highlighted or disabled), which assistive technology reads as its
   description; the application binds the keys itself.
-  A row is 24 pt tall and a separator 11 pt. Labels start 15 pt in, or 31 pt when any row of the menu is checked
+  The panel has a 10 pt corner. A row is 24 pt tall and a separator 11 pt. Labels start 15 pt in, or 31 pt when any row of the menu is checked
   (the check mark is centred 17 pt in); the keys and a submenu's chevron end 20 pt from the trailing edge. A
   separator runs from the label column to 15 pt short of the trailing edge, translucent over the glass and the
   theme's separator colour over the opaque fill and with Increase Contrast. Over the glass the compositor draws the

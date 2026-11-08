@@ -1,12 +1,13 @@
-//! The edge of a window and of a menu: a fine dark outline just outside the shape and, for windows, a faint light
-//! rim just inside it.
+//! The edge of a window and of a menu: a fine dark outline just outside the shape and a faint light rim just inside it.
 //!
 //! The outline is half a point wide (one device pixel at 2×); with Increase Contrast it is a full point of the
 //! high-contrast `window-rim` colour, a visible border. A window's outline has the same strength all around. A menu's
 //! (and a popover's) follows the direction of its edge: full along the sides, fading around the corners to nothing at
-//! the top and bottom, where the glass lights its own rim ([`OutlineFalloff::Sides`]). The inner rim of a window is
-//! white at half the inner-rim density of its row of the shadow table, as wide in points as that row's inner-rim
-//! scale (1 pt in the dark appearance, ½ pt in the light one). Menus have none: their glass draws its own highlight.
+//! the top and bottom ([`OutlineFalloff::Sides`]). The inner rim of a window is white at half the inner-rim density of
+//! its row of the shadow table, as wide in points as that row's inner-rim scale (1 pt in the dark appearance, ½ pt in
+//! the light one). A menu's inner rim is a white line half a point wide, brightest along the top and bottom and fainter
+//! along the sides ([`OutlineFalloff::Ends`]), so the glass reads lit all around; with Increase Contrast the border
+//! stands alone.
 //!
 //! A line narrower than a device pixel is drawn one device pixel wide at the share of its strength the pixel's
 //! coverage gives ([`Hairline::device`]), so half a point at 1× is one pixel at half strength.
@@ -33,46 +34,70 @@ pub const INNER_RIM_SHARE: f64 = 0.5;
 /// How sharply a menu's outline fades from its sides towards its top and bottom: the outline's strength is the
 /// horizontal part of the edge's outward normal to this power.
 pub const SIDE_FALLOFF_POWER: f32 = 2.0;
+/// Width in points of the light rim inside a menu.
+pub const MENU_RIM_WIDTH: f64 = 0.5;
+/// Opacity of the white rim along the top and bottom of a menu in the dark appearance.
+pub const MENU_RIM_DARK: f32 = 0.22;
+/// Opacity of the white rim along the top and bottom of a menu in the light appearance.
+pub const MENU_RIM_LIGHT: f32 = 0.5;
+/// Share of the menu rim's top and bottom opacity left along its sides.
+pub const MENU_RIM_SIDE_SHARE: f32 = 0.45;
+/// How quickly the menu rim fades from its top and bottom towards its sides: the vertical part of the edge's outward
+/// normal to this power.
+pub const MENU_RIM_FALLOFF_POWER: f32 = 1.0;
 
 /// What carries the edge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EdgeKind {
     /// A window: a uniform outline and a light inner rim.
     Window,
-    /// A menu or popover of glass: an outline along the sides only.
+    /// A menu or popover of glass: an outline along the sides and a light rim brightest at the top and bottom.
     Menu,
 }
 
-/// How the outline's strength follows the direction of the edge.
+/// How the strength of a line of the edge follows the direction of the edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OutlineFalloff {
     /// The same all around.
     Uniform,
-    /// Full along the sides, `|n.x|^power` of the outward normal `n` elsewhere: nothing at the top and bottom.
+    /// Full along the sides, `|n.x|^power` of the unit outward normal `n` elsewhere: nothing at the top and bottom.
     Sides { power: f32 },
+    /// Full along the top and bottom, `floor + (1 − floor) · |n.y|^power` elsewhere: `floor` of it along the sides.
+    Ends { power: f32, floor: f32 },
 }
 
 impl OutlineFalloff {
-    /// The power a shader takes: 0 for a uniform outline.
-    pub fn power(self) -> f32 {
+    /// What a shader takes: the powers on the horizontal and the vertical part of the unit outward normal (0 leaves
+    /// that factor out) and the floor, for a strength of `floor + (1 − floor) · |n.x|^sides · |n.y|^ends`.
+    pub fn shader(self) -> (f32, f32, f32) {
         match self {
-            OutlineFalloff::Uniform => 0.0,
-            OutlineFalloff::Sides { power } => power,
+            OutlineFalloff::Uniform => (0.0, 0.0, 0.0),
+            OutlineFalloff::Sides { power } => (power, 0.0, 0.0),
+            OutlineFalloff::Ends { power, floor } => (0.0, power, floor),
         }
     }
 
-    /// Strength (0 to 1) of the outline where the edge's outward normal is `normal` (need not be unit length).
+    /// Strength (0 to 1) of the line where the edge's outward normal is `normal` (need not be unit length).
     pub fn weight(self, normal: (f64, f64)) -> f64 {
-        match self {
-            OutlineFalloff::Uniform => 1.0,
-            OutlineFalloff::Sides { power } => {
-                let len = normal.0.hypot(normal.1);
-                if len <= 0.0 || !len.is_finite() {
-                    return 0.0;
-                }
-                (normal.0.abs() / len).powf(f64::from(power))
-            }
+        let (sides, ends, floor) = self.shader();
+        if sides <= 0.0 && ends <= 0.0 {
+            return 1.0;
         }
+        let len = normal.0.hypot(normal.1);
+        let factor = if len > 0.0 && len.is_finite() {
+            let part = |c: f64, power: f32| {
+                if power > 0.0 {
+                    (c.abs() / len).powf(f64::from(power))
+                } else {
+                    1.0
+                }
+            };
+            part(normal.0, sides) * part(normal.1, ends)
+        } else {
+            0.0
+        };
+        let floor = f64::from(floor);
+        floor + (1.0 - floor) * factor
     }
 }
 
@@ -104,6 +129,7 @@ pub struct Edge {
     pub falloff: OutlineFalloff,
     /// Just inside the shape, over the content.
     pub inner: Option<Hairline>,
+    pub inner_falloff: OutlineFalloff,
 }
 
 /// The edge of `kind` in the dark or light appearance, active or not; with Increase Contrast the outline is
@@ -143,22 +169,44 @@ pub fn edge(
         },
         _ => OutlineFalloff::Uniform,
     };
-    let inner = (kind == EdgeKind::Window).then(|| {
-        let row = window_shadow(ShadowOption::Standard, active, dark, increased_contrast);
-        Hairline {
-            color: [
-                1.0,
-                1.0,
-                1.0,
-                (row.inner_rim_density * INNER_RIM_SHARE) as f32,
-            ],
-            width_pt: row.inner_rim_radius_scale,
+    let (inner, inner_falloff) = match kind {
+        EdgeKind::Window => {
+            let row = window_shadow(ShadowOption::Standard, active, dark, increased_contrast);
+            let rim = Hairline {
+                color: [
+                    1.0,
+                    1.0,
+                    1.0,
+                    (row.inner_rim_density * INNER_RIM_SHARE) as f32,
+                ],
+                width_pt: row.inner_rim_radius_scale,
+            };
+            (Some(rim), OutlineFalloff::Uniform)
         }
-    });
+        // the high-contrast border stands alone
+        EdgeKind::Menu if increased_contrast => (None, OutlineFalloff::Uniform),
+        EdgeKind::Menu => {
+            let rim = Hairline {
+                color: [
+                    1.0,
+                    1.0,
+                    1.0,
+                    if dark { MENU_RIM_DARK } else { MENU_RIM_LIGHT },
+                ],
+                width_pt: MENU_RIM_WIDTH,
+            };
+            let falloff = OutlineFalloff::Ends {
+                power: MENU_RIM_FALLOFF_POWER,
+                floor: MENU_RIM_SIDE_SHARE,
+            };
+            (Some(rim), falloff)
+        }
+    };
     Edge {
         outline,
         falloff,
         inner,
+        inner_falloff,
     }
 }
 
@@ -201,11 +249,26 @@ mod tests {
     }
 
     #[test]
-    fn a_menu_is_outlined_along_its_sides_and_has_no_inner_rim() {
+    fn a_menu_is_outlined_along_its_sides_and_lit_along_its_top_and_bottom() {
         let d = edge(EdgeKind::Menu, true, true, false, RIM);
         assert_eq!(d.outline.color[3], 0.65);
-        assert_eq!(d.inner, None, "the glass lights its own rim");
         assert_eq!(d.falloff, OutlineFalloff::Sides { power: 2.0 });
+        assert_eq!(
+            d.inner,
+            Some(Hairline {
+                color: [1.0, 1.0, 1.0, 0.22],
+                width_pt: 0.5
+            })
+        );
+        let rim = d.inner_falloff;
+        assert_eq!(rim.weight((0.0, -1.0)), 1.0, "full along the top");
+        assert_eq!(rim.weight((0.0, 1.0)), 1.0, "and the bottom");
+        assert!(
+            (rim.weight((1.0, 0.0)) - 0.45).abs() < 1e-6,
+            "fainter along the sides"
+        );
+        let light = edge(EdgeKind::Menu, false, true, false, RIM);
+        assert_eq!(light.inner.unwrap().color[3], 0.5);
         assert_eq!(
             edge(EdgeKind::Menu, false, true, false, RIM).outline.color[3],
             0.15
@@ -232,6 +295,7 @@ mod tests {
                 assert_eq!(e.falloff, OutlineFalloff::Uniform);
             }
         }
+        assert_eq!(edge(EdgeKind::Menu, true, true, true, RIM).inner, None);
         let inner = edge(EdgeKind::Window, true, true, true, RIM).inner.unwrap();
         assert!((inner.color[3] - 0.35).abs() < 1e-6 && inner.width_pt == 1.0);
     }
@@ -246,8 +310,24 @@ mod tests {
         assert!((f.weight((1.0, 1.0)) - 0.5).abs() < 1e-12, "half at 45°");
         assert_eq!(f.weight((0.0, 0.0)), 0.0);
         assert_eq!(OutlineFalloff::Uniform.weight((0.0, 1.0)), 1.0);
-        assert_eq!(OutlineFalloff::Uniform.power(), 0.0);
-        assert_eq!(f.power(), 2.0);
+        assert_eq!(OutlineFalloff::Uniform.shader(), (0.0, 0.0, 0.0));
+        assert_eq!(f.shader(), (2.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn the_end_falloff_is_full_at_the_top_and_bottom_and_its_floor_at_the_sides() {
+        let f = OutlineFalloff::Ends {
+            power: 1.0,
+            floor: 0.4,
+        };
+        assert_eq!(f.weight((0.0, -2.0)), 1.0);
+        assert_eq!(f.weight((0.0, 1.0)), 1.0);
+        assert!((f.weight((1.0, 0.0)) - 0.4).abs() < 1e-6);
+        assert!((f.weight((-1.0, 0.0)) - 0.4).abs() < 1e-6);
+        let diagonal = 0.4 + 0.6 * std::f64::consts::FRAC_1_SQRT_2;
+        assert!((f.weight((1.0, 1.0)) - diagonal).abs() < 1e-6);
+        assert!((f.weight((0.0, 0.0)) - 0.4).abs() < 1e-6, "no direction");
+        assert_eq!(f.shader(), (0.0, 1.0, 0.4));
     }
 
     #[test]

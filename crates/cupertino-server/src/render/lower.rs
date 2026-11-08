@@ -252,7 +252,7 @@ fn rounded(ctx: &mut Lowering<'_>, key: ElementKey, rect: &RoundedRect, alpha: f
         continuous: !rect.style.is_circular(),
         fill: rect.fill,
         border: rect.border,
-        border_sides: rect.border_sides,
+        border_falloff: rect.border_falloff,
         alpha,
     };
     rounded_rect(ctx.programs, ctx.cache, ctx.scale, key, &spec)

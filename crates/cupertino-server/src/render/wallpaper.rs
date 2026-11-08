@@ -125,12 +125,16 @@ fn linear(c: f64) -> f64 {
 
 /// CIE L* of relative luminance `y`, in tenths (0 black to 1000 white).
 fn lightness(y: f64) -> u16 {
-    let l = if y > 216.0 / 24_389.0 {
+    (l_star(y) * 10.0).round().clamp(0.0, 1000.0) as u16
+}
+
+/// CIE L* of relative luminance `y`, from 0 to 100.
+fn l_star(y: f64) -> f64 {
+    if y > 216.0 / 24_389.0 {
         116.0 * y.cbrt() - 16.0
     } else {
         y * 24_389.0 / 27.0
-    };
-    (l * 10.0).round().clamp(0.0, 1000.0) as u16
+    }
 }
 
 /// The lightness of an sRGB colour (channels from 0 to 1), as [`strip_lightness`] gives it with no colour operations.
@@ -151,20 +155,23 @@ pub fn strip_samples(pixmap: &Pixmap, rows: u32) -> Vec<[u8; 4]> {
     strip.iter().step_by(step).copied().collect()
 }
 
-/// The lightness under the menu bar of the [`strip_samples`] `samples`, seen through the bar material's colour
-/// operations `ops`: CIE L* of their mean relative luminance, in tenths (0 black to 1000 white). The operations apply to
-/// each pixel and the mean is taken before L*, as the material blurs what it covers.
+/// The lightness under the menu bar of the [`strip_samples`] `samples`, seen through the colour operations `ops`: the
+/// mean of each pixel's CIE L*, in tenths (0 black to 1000 white). The bar's text lies on the pixels themselves, not on
+/// a blur of them, so each pixel counts by how light it looks: a few thin bright lines over a dark strip leave it dark,
+/// where the mean of their luminance would call it light and give it dark text that is lost on most of the strip.
 pub fn strip_lightness(samples: &[[u8; 4]], ops: &[Op]) -> u16 {
     let sum: f64 = samples
         .iter()
         .map(|px| {
-            luminance(apply_color_ops(
+            l_star(luminance(apply_color_ops(
                 [0, 1, 2].map(|i| f32::from(px[i]) / 255.0),
                 ops,
-            ))
+            )))
         })
         .sum();
-    lightness(sum / samples.len().max(1) as f64)
+    (sum / samples.len().max(1) as f64 * 10.0)
+        .round()
+        .clamp(0.0, 1000.0) as u16
 }
 
 /// The relative luminance of an sRGB colour (channels from 0 to 1).
@@ -945,6 +952,24 @@ mod tests {
         // sRGB 119 is L* 50.0
         let grey = raw_lightness(&split_pixmap((64, 48), 48, 119, 119), 24);
         assert!(grey.abs_diff(500) <= 3, "{grey}");
+    }
+
+    #[test]
+    fn a_dark_strip_with_thin_bright_lines_measures_dark() {
+        // one row in four white, the others black: by luminance it is lighter than mid-grey, but most of what the text
+        // lies on is black
+        let mut pixmap = Pixmap::new(64, 24).unwrap();
+        let (pixels, _) = pixmap.data_mut().as_chunks_mut::<4>();
+        for (i, px) in pixels.iter_mut().enumerate() {
+            let v = if (i / 64) % 4 == 0 { 255 } else { 0 };
+            *px = [v, v, v, 255];
+        }
+        let measured = raw_lightness(&pixmap, 24);
+        assert_eq!(measured, 250, "a quarter of the way from black to white");
+        assert!(
+            colour_lightness([0.5; 3]) > 500,
+            "the mean colour of the strip would read light"
+        );
     }
 
     #[test]

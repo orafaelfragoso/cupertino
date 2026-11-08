@@ -206,7 +206,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   an icon and the open title's highlight. What keeps the appearance: the menus and the screen capture indicator's
   indigo. Third-party status items keep their own icons. Before the first value, below version 14, and while Reduce
   Transparency makes the bar solid, the whole bar keeps the appearance's palette. The server measures the wallpaper's
-  strip as it is, since nothing lies between it and the text. Outside the band the chosen text is the one that reads
+  strip as it is, since nothing lies between it and the text, as the mean of each pixel's L* (a few bright lines over a dark strip leave it dark). Outside the band the chosen text is the one that reads
   better, at 4.5:1 or more below 400 and above 600; inside it neither colour reaches 4.5:1 (about 4.0:1 at 500), and
   the bar paints nothing under its text to make up for it. A bar redraws when its tone changes.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and

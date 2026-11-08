@@ -1182,7 +1182,7 @@ impl Cupertino {
 
     /// Send the configures that shrinking frame animations held back once they end.
     fn send_deferred_configures(&mut self, now: f64) {
-        let key = self.wm.key_window();
+        let key = self.activated_window();
         for e in &mut self.windows {
             let Shrink::Deferred { frame, states } = e.shrink else {
                 continue;

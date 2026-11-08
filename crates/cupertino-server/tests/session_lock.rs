@@ -680,3 +680,40 @@ fn an_output_that_is_powered_off_holds_no_sleep_back_and_shows_the_cover_once_on
         "the session shows on an output powered on after the sleep"
     );
 }
+
+#[test]
+fn a_configure_held_back_by_a_shrinking_frame_activates_no_window_behind_the_lock() {
+    let Some(mut h) = Harness::new() else { return };
+    let (toplevel, _) = mapped_toplevel(&mut h);
+    let id = h.state.wm.key_window().unwrap();
+    h.wait_until("the toplevel to be active", |_| {
+        toplevel.activations().last() == Some(&true)
+    });
+    let locker = Client::locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked", |_| locker.locked());
+    h.wait_until("the toplevel to be deactivated", |_| {
+        toplevel.activations().last() == Some(&false)
+    });
+    let before = toplevel.activations().len();
+
+    // the configure a shrinking frame held back (an unzoom asked for just before or behind the lock) goes out once the
+    // animation ends
+    let frame = h.state.wm.window(id).unwrap().geometry();
+    h.state
+        .windows
+        .iter_mut()
+        .find(|e| e.id == id)
+        .unwrap()
+        .shrink = cupertino_server::state::Shrink::Deferred {
+        frame: cupertino_wm::Rect::new(frame.x, frame.y, frame.w - 10.0, frame.h - 10.0),
+        states: cupertino_wm::ToplevelStates::default(),
+    };
+    h.wait_until("the held configure to go out", |_| {
+        toplevel.activations().len() > before
+    });
+    assert_eq!(
+        toplevel.activations()[before..],
+        [false],
+        "the held configure activated the window behind the lock"
+    );
+}

@@ -18,9 +18,9 @@ use cupertino_menu_model::tracking::{
 use cupertino_theme::metrics::Control;
 use cupertino_typeahead::TypeAhead;
 use cupertino_ui_core::{
-    AccessibleStates, AccessibleValue, Action, Change, Checked, CommandRegistry, ControlState,
-    Element, Event, EventCx, FocusTarget, Key, MeasureCx, PaintCx, Phase, Popup, PopupAnchor,
-    Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
+    AccessibleStates, AccessibleValue, Action, ActivationSource, Change, Checked, CommandRegistry,
+    ControlState, Element, Event, EventCx, FocusTarget, Key, MeasureCx, PaintCx, Phase, Popup,
+    PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
@@ -1248,24 +1248,25 @@ impl<M: Clone + 'static> Widget<M> for PopUpButton<M> {
             }
         }
         // the menu opens on the press, so the pointer can drag to an option and let go there
-        if let Event::Pointer(
-            PointerEvent::Button {
-                button: MouseButton::Left,
-                pressed: true,
-                ..
-            },
-            _,
-        ) = event
-        {
-            if cx.phase() != Phase::Capture {
-                cx.emit(on_open.clone());
-                cx.request_paint();
-                return Propagation::Stop;
-            }
+        let pressed = cx.phase() != Phase::Capture
+            && matches!(
+                event,
+                Event::Pointer(
+                    PointerEvent::Button {
+                        button: MouseButton::Left,
+                        pressed: true,
+                        ..
+                    },
+                    _,
+                )
+            );
+        if pressed {
+            cx.emit(on_open.clone());
         }
         match press.event(event, true, Keys::SpaceAndReturn, cx) {
+            Outcome::Ignored if pressed => Propagation::Stop,
             Outcome::Ignored => Propagation::Continue,
-            Outcome::Changed => {
+            Outcome::Changed | Outcome::Activated(ActivationSource::Pointer) => {
                 cx.request_paint();
                 Propagation::Stop
             }

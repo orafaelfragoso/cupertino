@@ -462,7 +462,7 @@ to another slot (approximate slack). The add slot sends `add_workspace` and the 
 cargo test -p cupertino-dock --features app
 ```
 
-`cargo test -p cupertino-dock --features app` runs 219 tests; without the feature the process code is skipped.
+`cargo test -p cupertino-dock --features app` runs 265 tests; without the feature the process code is skipped.
 
 | Test | Proves |
 |---|---|

@@ -827,7 +827,8 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
         .size
         .h;
 
-    // the settings application writes atomically; the zone is the tile plus the padding and margin
+    // the settings application writes atomically; the zone is the bar (the tile and a padding that scales with it) and
+    // its margin: 85 + 5 pt at 64 pt tiles, 47.8 + 5 pt (53 whole) at 36
     cupertino_defaults::atomic::write_atomic(&conf, b"tile_size = 36\nmagnification = on\n")
         .unwrap();
     server.wait_until("the dock zone to shrink with the tile size", move |s| {
@@ -835,7 +836,7 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
     });
     assert_eq!(
         before - zone(&server.state),
-        28.0,
+        37.0,
         "64 pt tiles became 36 pt tiles"
     );
     server.wait_until("the dock surface to be resized", |s| {
@@ -843,10 +844,10 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
     });
 
     // magnification alone (the path the separator menu's Turn Magnification On takes too) deepens the surface for the
-    // 128 pt magnified tiles
+    // 88 pt magnified tiles
     cupertino_defaults::atomic::write_atomic(&conf, b"tile_size = 36\n").unwrap();
     server.wait_until("magnification to be off", |s| {
-        layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h < 128)
+        layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h < 88)
     });
     let plain = layer_geometry(&server.state, "cupertino-dock")
         .unwrap()
@@ -857,7 +858,7 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
     server.wait_until(
         "the surface to make room for the magnified tiles",
         move |s| {
-            layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h > plain && g.size.h >= 128)
+            layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h > plain && g.size.h >= 88)
         },
     );
 }

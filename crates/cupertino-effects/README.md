@@ -15,7 +15,7 @@ output a vertex grid with texture coordinates ([`Mesh`](src/mesh.rs)) that any r
 | `warp` | warp minimize: 2 × N vertex mesh, two overlapping phases (slide, stretch) with ease `0.5 − 0.5·cos(πx), phase delay from the acos overlap rule, S-curve side offsets, adaptive subdivision (stop below 8 pt, or below 128 pt when the chord error is below 0.6 pt, at most 400 samples) |
 | `funnel` | funnel minimize: grid of 70 pt cells, `clamp(int(w/70),1,19)` × `clamp(int(h/70),1,19)` cells (≤ 20 × 20 vertices), each vertex moves `dist − clamp(dist − D·e, 0, D) to its slot point |
 | `scale` | scale minimize: one quad, cosine ease |
-| `minimize` | the three effects as `MinimizeAnimation`: warp 500 ms, funnel 400 ms, scale 200 ms (×2 in slow motion), minimize / restore / reverse at any time |
+| `minimize` | the three effects as `MinimizeAnimation`: warp 450 ms into the slot and 420 ms back out of it, funnel 400 ms, scale 200 ms (×2 in slow motion), on a linear progress (the generators ease themselves), minimize / restore / reverse at any time |
 | `transitions` | per-`WindowKind` open / close transforms (`TransformKind`): plain windows none, document and app-modal grow-in 0.2 s (scale 0 → 1, alpha), utility and app-modal fade-out 0.15 s, alert pop-in 0.4 s (peak 1.2× at 60 %) and scale-down-and-out 0.15 s (1 → 0.9), pop-out 0.4 s, ×4 in slow motion, `sin²` ease |
 | | sheets (`WindowKind::Sheet`, `SheetIn` / `SheetOut`): 0.26 s on linear time, 32 pt slide eased `sin²` (the sample's `dy`), alpha `min(2p, 1)` in and `1 − p` out; slow motion leaves them unchanged |
 | | spring pop-in / pop-out (stiffness 385.53142 / 322.2728, damping 31.41593 / 30.51833) |

@@ -242,6 +242,14 @@ fn a_second_launch_without_a_folder_brings_the_first_window_forward_and_exits() 
         "the window comes forward"
     );
     assert!(owner(&bus).is_some(), "the first Files still serves");
+
+    // the name's owner runs another program (this test), so it gets the launch but not its token
+    let mut with_token = launch(&bus, &home, &home, &[]);
+    with_token.env("XDG_ACTIVATION_TOKEN", "launch-token");
+    let (ok, said) = run_launch(&mut run, with_token);
+    assert!(ok, "the launch still hands over: {said}");
+    assert!(said.contains("without its activation token"), "{said}");
+    assert_eq!(activations(&mut run, first), [None, None]);
 }
 
 #[test]

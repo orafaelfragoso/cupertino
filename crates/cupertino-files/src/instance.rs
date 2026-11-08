@@ -642,10 +642,19 @@ async fn forward(
         .await
         .map_err(failed)?;
     let owner = name_owner(&connection).await?;
-    if token.is_some() {
-        // only an owner that runs this very program gets the launch's focus grant
-        check_owner(&connection, &owner).await?;
-    }
+    // only an owner that runs this very program gets the launch's focus grant; another one (an older install at
+    // another path, or a program squatting the name) still gets the request, as a launch without a token does
+    let token = match token {
+        Some(token) if runs_this_program(owner_pid(&connection, &owner).await?) => Some(token),
+        Some(_) => {
+            eprintln!(
+                "cupertino-files: {BUS_NAME} is owned by another program; the launch is handed to it without its \
+                 activation token"
+            );
+            None
+        }
+        None => None,
+    };
     let mut data: HashMap<&str, Value<'_>> = HashMap::new();
     if let Some(token) = token {
         data.insert("activation-token", Value::from(token));
@@ -723,9 +732,9 @@ async fn name_owner(connection: &Connection) -> Result<OwnedUniqueName, Handover
     }
 }
 
-/// Refuse an owner that does not run this very program.
-async fn check_owner(connection: &Connection, owner: &OwnedUniqueName) -> Result<(), Handover> {
-    let pid: u32 = connection
+/// The process of the connection `owner`.
+async fn owner_pid(connection: &Connection, owner: &OwnedUniqueName) -> Result<u32, Handover> {
+    connection
         .call_method(
             Some("org.freedesktop.DBus"),
             "/org/freedesktop/DBus",
@@ -736,14 +745,7 @@ async fn check_owner(connection: &Connection, owner: &OwnedUniqueName) -> Result
         .await?
         .body()
         .deserialize()
-        .map_err(|e| Handover::Failed(e.to_string()))?;
-    if runs_this_program(pid) {
-        Ok(())
-    } else {
-        Err(Handover::Failed(format!(
-            "{BUS_NAME} is owned by another program; the launch is not handed to it"
-        )))
-    }
+        .map_err(|e| Handover::Failed(e.to_string()))
 }
 
 /// Whether process `pid` runs the same executable as this process. A binary replaced by a package upgrade while it

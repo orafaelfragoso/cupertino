@@ -61,7 +61,8 @@ environment at startup, so no program it starts inherits it, and raises its own 
 * Only an unsandboxed process of the same user may call: the caller is named by the bus daemon's credentials (its
   `ProcessFD`, else its `ProcessID`) and refused when it runs in a Flatpak (a `/.flatpak-info` in its root), in a Snap
   (an AppArmor label starting `snap.`), as another user, or when its root cannot be checked. A launch with a token
-  hands it only to an owner that runs the same program.
+  hands it only to an owner that runs the same program; another owner (an install at another path, or a program that
+  took the name) gets the request without the token, and the launch says so on stderr.
 * The window's thread never waits on the bus: a call reaches it through a channel (at most 16 waiting; more are refused
   with `LimitsExceeded`) and the bus thread waits for its answer. The service's connection reads no signals (the name
   is claimed with a plain `RequestName` call), so the credentials call made for each incoming call cannot stall behind a

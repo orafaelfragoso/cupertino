@@ -56,9 +56,11 @@ const CHEVRON: f64 = 9.0;
 const GRIP: f64 = 4.0;
 /// The width of the line between two columns.
 const DIVIDER: f64 = 1.0;
-/// From a list row's content box to the selection drawn around it: the list's content inset less its selection
-/// inset, which the highlight of a folder of the chain matches.
-const HIGHLIGHT_OUTSET: f64 = 6.0;
+/// From a column's sides to a row's selection, which the highlight of a folder of the chain matches.
+const SELECTION_INSET: f64 = 10.0;
+/// From a list row's content box to the selection drawn around it: the list's content inset less
+/// [`SELECTION_INSET`], none as the two are the same.
+const HIGHLIGHT_OUTSET: f64 = 0.0;
 /// The highlight's corner radius, the list's selection's.
 const HIGHLIGHT_RADIUS: f64 = 5.0;
 /// The side of an icon in the preview column.
@@ -443,7 +445,7 @@ fn active_column(session: &Session, id: u64, win: &BrowserWindow) -> Element<Mes
     };
     Element::new(ColumnKeys {
         window: id,
-        children: vec![Element::from(list).fill()],
+        children: vec![list.inset_element(SELECTION_INSET).fill()],
     })
 }
 
@@ -518,7 +520,7 @@ fn other_column(
         })),
         on_activate: None,
     };
-    Element::from(list)
+    list.inset_element(SELECTION_INSET)
 }
 
 /// A row: its icon and name, then a folder's chevron at the far end.

@@ -43,6 +43,11 @@ thread_local! {
     };
 }
 
+thread_local! {
+    /// The list's selection inset in place of the standard one ([`ListView::inset_element`]).
+    static INSET: Cell<Option<f64>> = const { Cell::new(None) };
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Message {
     Scroll(ScrollState),
@@ -142,7 +147,7 @@ impl Application for Listed {
                 on_row_key: None,
             }));
         }
-        window(Element::from(ListView {
+        let list = ListView {
             label: "Fruit".into(),
             count: setup.count,
             row_height: ROW,
@@ -156,7 +161,11 @@ impl Application for Listed {
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(Message::Select)),
             on_activate: Some(Box::new(Message::Activate)),
-        }))
+        };
+        window(match INSET.get() {
+            Some(inset) => list.inset_element(inset),
+            None => Element::from(list),
+        })
     }
 }
 
@@ -431,6 +440,32 @@ fn a_selected_row_fills_inset_with_the_selected_control_colour() {
                 true
             )),
         }]
+    );
+}
+
+#[test]
+fn a_list_built_with_its_own_selection_inset_fills_the_selection_that_far_in() {
+    INSET.set(Some(10.0));
+    let mut h = harness(1000, true, false);
+    h.click(row_center(&h, 1));
+    let id = PaintNodeId::from(row(&h, 1).unwrap());
+    let ops = h
+        .snapshot()
+        .display_list
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id)
+        .unwrap()
+        .ops;
+    assert!(
+        matches!(
+            ops.as_slice(),
+            [PaintOp::Fill {
+                shape: Shape::RoundedRect { rect, radius },
+                ..
+            }] if *rect == Rect::new(10.0, 0.0, 180.0, 20.0) && *radius == 5.0
+        ),
+        "{ops:?}"
     );
 }
 

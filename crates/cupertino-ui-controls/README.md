@@ -62,6 +62,8 @@ from the application's model and reports changes as messages.
   itself, with the row the keyboard is on; a message takes the key and `None` lets it go on, so Tab moves to the next
   control. A key on a column header never comes there, so an application can give Tab in the rows its own meaning while
   Tab and Shift+Tab still walk the headers in the order shown. `None` keeps the table as it was.
+- **Selection inset.** A list's selection and focus ring sit 4 pt in from a row's sides; `ListView::inset_element`
+  builds the list with another inset, for a list whose selection spans more of its column.
 - **Truncation.** A `Text` that does not wrap, and a tooltip's tip past its 300 pt text width, end in an ellipsis
   where they are cut; the accessible name keeps the whole text.
 - **Rich text.** `RichText` draws its links in the link colour over a 1 px underline 1.5 pt below the baseline. Each

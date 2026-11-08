@@ -309,8 +309,37 @@ Values live in `metrics.rs`.
 * Only `SettingsStore`, `Trash`, `Thumbnailer`, `operations` and the tag functions write files, into caller-supplied
   locations (tests use temporary directories).
 
+### Frame time
+
+`tests/kit-damage.rs` pins what each interaction repaints, from the damage of each presented frame: an arrow key
+repaints the row the selection left and the row it reached, the caret's blink repaints only the search field, the
+search field's animation repaints only the toolbar, a hover repaints no row, a wheel step repaints only the listing,
+and a window kept up to date from damage alone has, after each of these, the pixels of the window drawn whole (at
+scale 1.5), give or take the few levels by which the renderer's partial redraw blends an edge.
+
+`tests/kit-repaint.rs` holds `repaint_budget_report`, `#[ignore]`d because it measures wall time. In a generated folder of
+1500 files and with the window filling a 3840×2160 display at scales 2, 1.5 and 1, it times every frame of opening the
+folder, arrow-key selection among the rows in view and past them, hover, wheel scrolling, the search field opening
+and closing, the caret's blink, typing a search and typing a new name, and gives p50, p95, p99, maximum, the frames
+over 8 ms and the damaged share of the window. It uses the application's renderer and node limit and keeps no copy of
+the frames. Run it in the release profile:
+
+```sh
+cargo test --release -p cupertino-files --features app --test kit-repaint -- --ignored --nocapture --exact repaint_budget_report
+```
+
+`CUPERTINO_REPAINT_DIR=DIR` also writes `files-<scale>x.md` and `files-<scale>x.csv` (one line per frame) there, and
+`CUPERTINO_REPAINT_SCALES=2,1` measures other scales. Under `ci/worktree-build.py`, which keys its target on the
+`CUPERTINO_*` variables, build with `--no-run` and run the test binary it names under `python3 ci/worktree-build.py
+locked -- env CUPERTINO_REPAINT_DIR=DIR BINARY --ignored --nocapture --exact repaint_budget_report`.
+[What runs on CupertinoKit](../../docs/src/apps-on-kit.md#frame-time) has the last results.
+
 ## Open issues
 
+* Scrolling the listing, with the wheel or with an arrow key past the last row in view, repaints the whole listing on
+  the CPU: 60–70 ms a frame at 3840×2160, over the 8 ms budget. Opening a folder and the key of a search whose results
+  fill the listing take as long. At scale 1 the search field's animation and typing a new name take 8–10 ms. See Frame
+  time.
 * A folder does not spring open under a drag, and a drop from another application shows a move while it is held even
   when it will copy across devices. The drag badge holds three digits.
 * Thumbnails are made for PNG, JPEG and WebP pictures only (what `cupertino-thumbnails` decodes): no external

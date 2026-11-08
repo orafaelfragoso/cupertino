@@ -475,19 +475,12 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
             (column, order)
         });
     let now = win.now;
-    let rows: Vec<[String; 4]> = browser
-        .entries()
-        .iter()
-        .map(|e| COLUMNS.map(|id| cell_text(e, id, now)))
-        .collect();
+    // the table asks only for the rows it shows, so their text and icons are made then
+    let entries: Rc<[crate::Entry]> = browser.entries().into();
     let names: Rc<[String]> = browser.entries().iter().map(|e| e.name.clone()).collect();
     let type_names = Rc::clone(&names);
-    let icons: Vec<Vec<ImageSource>> = browser
-        .entries()
-        .iter()
-        .map(|e| session.icons.icon(e, ROW_ICON))
-        .collect();
-    let paths: Vec<std::path::PathBuf> = browser.entries().iter().map(|e| e.path.clone()).collect();
+    let item_icons = Rc::clone(&session.icons);
+    let paths = Rc::clone(&entries);
     let items = tree_items(browser.outline());
     let selected = selection(browser.selection());
     let cell_selection = selected.clone();
@@ -507,7 +500,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         columns,
         sort,
         on_sort: Some(send(id, Event::Sort)),
-        count: rows.len(),
+        count: entries.len(),
         row_height: ROW_HEIGHT,
         scroll: win.scroll,
         selection: selected.clone(),
@@ -526,7 +519,11 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 align: Align::Stretch,
                 children: vec![
                     Element::new(Spacer { min: 0.0 }),
-                    cell_text_element(rows[row][column].clone(), column, selected),
+                    cell_text_element(
+                        cell_text(&entries[row], COLUMNS[column], now),
+                        column,
+                        selected,
+                    ),
                     Element::new(Spacer { min: 0.0 }),
                 ],
             })
@@ -538,7 +535,10 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                     padding: Insets::ZERO,
                     spacing: metrics::PATH_ICON_GAP,
                     align: Align::Center,
-                    children: vec![item_image(icons[row].clone(), ROW_ICON), cell],
+                    children: vec![
+                        item_image(item_icons.icon(&entries[row], ROW_ICON), ROW_ICON),
+                        cell,
+                    ],
                 })
                 .fill(),
                 _ => cell,
@@ -571,7 +571,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 siblings: count,
             })
         }),
-        key: Some(Box::new(move |row| row_key(id, &paths[row]))),
+        key: Some(Box::new(move |row| row_key(id, &paths[row].path))),
         on_toggle: Some(send(id, Event::Toggle)),
     })
     .key("items");

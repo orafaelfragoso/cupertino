@@ -8,7 +8,7 @@ use crate::cx::{Effects, Status, WindowGesture};
 use crate::damage::DamageTracker;
 use crate::focus::{Focus, FocusChange};
 use crate::layout_view::{placements, TreeView};
-use crate::paint::{PaintInput, Painter};
+use crate::paint::{same_environment, PaintInput, Painter};
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
 use crate::scroll::{geometry_events, reveal_events};
@@ -23,7 +23,10 @@ use crate::{
 };
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::ActionName;
-use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
+use cupertino_ui_layout::{
+    layout, layout_cached, Constraints, LayoutCache, LayoutDirection, LayoutOptions, LayoutResult,
+    LayoutStats,
+};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
     ConstraintAdjust, DragImage, DragProgress, DragRequest, DragToken, DropAction, DropToken,
@@ -92,6 +95,14 @@ impl<M> WindowState<M> {
     fn invalidate(&mut self) {
         self.dirty = true;
         self.prepared = false;
+        self.laid_out = None;
+    }
+
+    /// Something in the window changed how it paints but no node's size or place: paint it again, and build its
+    /// semantics and geometry again from the layout it has.
+    fn repaint(&mut self) {
+        self.dirty = true;
+        self.prepared = false;
     }
 }
 
@@ -132,6 +143,8 @@ struct WindowState<M> {
     dirty: bool,
     /// Layout and semantics are up to date with the tree.
     prepared: bool,
+    /// The last layout, while it is up to date with the tree and the window's size.
+    laid_out: Option<LayoutResult<NodeId>>,
     focus: Focus,
     pointer: Pointer,
     touches: HashMap<i32, Vec<NodeId>>,
@@ -162,6 +175,10 @@ struct WindowState<M> {
     /// Frames held back in a row, so the model could take a scroll geometry first.
     held_paints: u8,
     layout: LayoutStats,
+    /// What earlier layouts measured, so an unchanged subtree is not measured again; good for the environment it was
+    /// measured in only.
+    layout_cache: LayoutCache<NodeId>,
+    measured_in: Option<Environment>,
     painter: Painter,
     damage: DamageTracker,
     display_list: DisplayList,
@@ -573,7 +590,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             sync_backdrop(&mut self.system, &mut w);
             sync_menus(&mut self.system, &mut w, menus);
             w.root = Some(self.tree.reconcile(w.root, content)?);
-            w.invalidate();
+            // what changed size the tree marked for the next layout
+            w.repaint();
             self.windows.push(w);
         }
         // each popup after its parent, which may be a popup declared later; one without an open parent stays closed
@@ -669,6 +687,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             presented: false,
             dirty: true,
             prepared: false,
+            laid_out: None,
             focus: Focus::default(),
             pointer: Pointer::default(),
             touches: HashMap::new(),
@@ -689,6 +708,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             scroll_heard: HashMap::new(),
             held_paints: 0,
             layout: LayoutStats::default(),
+            layout_cache: LayoutCache::new(),
+            measured_in: None,
             painter: Painter::default(),
             damage: DamageTracker::default(),
             display_list: DisplayList::default(),
@@ -868,7 +889,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.presented |= w.committed;
                 let animate = std::mem::take(&mut w.animate);
                 if !animate.is_empty() {
-                    w.invalidate();
+                    w.repaint();
                     let mut route = route(&mut self.tree, w, now, &mut effects);
                     for node in animate {
                         route.notify(node, &Event::AnimationFrame(time));
@@ -1098,10 +1119,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let now = self.options.clock.now();
         let w = &mut self.windows[i];
         self.messages.extend(effects.messages);
+        // a layout change is the tree's, which the next frame lays out
         for (node, change) in effects.changes {
             if self.tree.contains(node) {
                 self.tree.mark(node, change);
-                w.invalidate();
+                w.repaint();
             }
         }
         if let Some(cursor) = effects.cursor {
@@ -1122,11 +1144,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         w.wakes.extend(effects.wakes);
         if let Some((node, rect)) = effects.reveal {
             w.reveal = Some((node, Some(rect)));
-            w.invalidate();
+            w.repaint();
         }
         if !effects.animate.is_empty() {
             w.animate.extend(effects.animate);
-            w.invalidate();
+            w.repaint();
             if w.failed.is_none() {
                 self.system.request_frame(w.id);
             }
@@ -1142,7 +1164,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
         if let Some((node, target)) = effects.focus_item {
             w.focus_request = roving_target(&self.tree, w, node, target);
-            w.invalidate();
+            w.repaint();
         }
         if let Some(node) = effects.focus {
             let change = w.focus.set(&self.tree, Some(node), false);
@@ -1204,7 +1226,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let Some(change) = change else {
             return Effects::default();
         };
-        w.invalidate();
+        w.repaint();
         if change.visible {
             w.reveal = change.to.map(|node| (node, None));
         }
@@ -1361,8 +1383,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let Some(root) = w.root else {
             return Ok(());
         };
-        if relayout || paint_dirty.iter().any(|n| w.geometry.contains_key(n)) {
+        if relayout {
             w.invalidate();
+        } else if paint_dirty.iter().any(|n| w.geometry.contains_key(n)) {
+            w.repaint();
         }
         if !w.dirty {
             return Ok(());
@@ -1371,22 +1395,40 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let mut hold = false;
         let laid_out = !w.prepared;
         if !w.prepared {
-            let available = Constraints::tight(w.size).map_err(UiError::Layout)?;
-            let result = layout(
-                &TreeView {
-                    tree: &self.tree,
-                    env: &w.env,
-                },
-                root,
-                available,
-                &LayoutOptions {
-                    direction: w.env.direction,
-                    node_limit: self.options.node_limit,
-                },
-            )
-            .map_err(UiError::Layout)?;
-            w.layout = result.stats;
+            let result = match w.laid_out.take() {
+                Some(result) => result,
+                None => {
+                    let available = Constraints::tight(w.size).map_err(UiError::Layout)?;
+                    // a node measures in its environment's type and pixels, none of which its generation covers
+                    if !w
+                        .measured_in
+                        .as_ref()
+                        .is_some_and(|env| same_environment(env, &w.env))
+                    {
+                        w.layout_cache.clear();
+                        w.measured_in = Some(w.env.clone());
+                    }
+                    let result = layout_cached(
+                        &TreeView {
+                            tree: &self.tree,
+                            env: &w.env,
+                        },
+                        root,
+                        available,
+                        &LayoutOptions {
+                            direction: w.env.direction,
+                            node_limit: self.options.node_limit,
+                        },
+                        &mut w.layout_cache,
+                    )
+                    .map_err(UiError::Layout)?;
+                    w.layout = result.stats;
+                    result
+                }
+            };
+            // scroll offsets and hit targets are the nodes' own state, so the placements are made again
             w.geometry = placements(&self.tree, root, &result, &w.env);
+            w.laid_out = Some(result);
 
             let semantics = build(
                 &self.tree,
@@ -1531,7 +1573,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         w.resources = painting.resources;
         w.dirty = false;
         w.held_paints = 0;
-        if matches!(&damage, DamageRegion::Rects(r) if r.is_empty()) {
+        // a frame that repainted nothing sends nothing; one that repainted no pixel commits with no damage
+        if matches!(&damage, DamageRegion::Rects(r) if r.is_empty()) && !w.damage.repainted() {
             return Ok(());
         }
         let scale = w.env.scale;

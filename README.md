@@ -26,14 +26,14 @@ Cupertino is an Arch-based Linux distribution with its own Wayland desktop, writ
 
 ## Status
 
-Work is grouped in seven phases. Assessed on 2026-11-04 against merged commit `0a928c70`:
+Work is grouped in seven phases. Assessed on 2026-11-04 against merged commit `0a928c70`, phase 4 updated on 2026-11-07:
 
 | Phase | State |
 |---|---|
 | 1. Baseline and trust | Done |
 | 2. Transport and scene | Done |
 | 3. CupertinoKit core | Done |
-| 4. Apps and portals | In progress: Settings, OSD, Control Center, launcher, menu bar and notifications use Kit; Files has a parallel Kit window; five portal interfaces exist |
+| 4. Apps and portals | In progress: every Cupertino app and shell process draws with Kit, and five portal interfaces exist; installed-session and hardware checks remain |
 | 5. Command line, diagnostics, SDK | Started: the `cupertino` command with one subcommand, `cupertino-diagnose`, a first C interface |
 | 6. Hardware and distribution | In progress: ISO, installer, signed packages and rollback exist; hardware acceptance and transactional updates remain open |
 | 7. AI and voice | Not started |

@@ -3,8 +3,11 @@
 CupertinoKit rendering: the `DisplayList` of paint nodes core builds for each window (paths, gradients, images, glyph
 runs, clipped and isolated layers, materials already resolved to plain paint), `PaintResources`, `DamageRegion`, and
 the `UiRenderer` trait whose CPU frame (`CpuFrame`, premultiplied RGBA) the window system presents. MPL-2.0. `CpuRenderer` is the CPU backend (tiny-skia, private): it validates a request before touching the image it keeps, repaints
-only the damage (an incremental repaint equals a fresh one), executes clips, group opacity, blur and shadows on isolated
-layers, and caches rasterized glyphs and decoded images under explicit byte budgets.
+only the damage, executes clips, group opacity, blur and shadows on isolated
+layers, and caches rasterized glyphs and decoded images under explicit byte budgets. An incremental repaint matches a
+fresh one within a few levels: a group's layer covers the pixels its descendants' blurs and shadows read, but an
+anti-aliased curved or fractional edge cut by a damaged rectangle's border is sampled on a slightly different sub-pixel
+grid.
 
 `CpuRenderer::stats` counts what the last frame did (dirty pixels, nodes and groups painted, primitives, scratch and layer
 allocations, clip masks, and each copy site with its bytes: clear, node, group and layer composites, crops, mask

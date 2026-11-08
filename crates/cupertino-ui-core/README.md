@@ -40,10 +40,20 @@ all on one thread.
   window system. Dropping the runtime cancels every task.
 - **Frames.** A step lays out every changed window, rebuilds its accessibility tree and focus, and paints when the
   compositor is ready: before the first configure nothing is drawn, the first frame acknowledges it, and later frames
-  wait for the frame callback. A node repaints only when it, its size, its focus or the window's active state changed;
-  damage is where changed nodes were and are, and a frame with no damage sends no buffer. A window that cannot be
-  laid out, rendered or presented goes to `on_window_error` and tries again, whole, on its next change or configure,
-  whatever the cause: the renderer reports a target and content too large to draw with the same error. The same error
+  wait for the frame callback. A window lays out again only when a node changed size (`Change::Layout`), it was
+  resized or configured, or its environment changed; a focus move, a reveal, an animation frame or a paint-only
+  change paints on the layout it has, and a layout that does run reuses the measures of the subtrees that did not
+  change. A node repaints only when it, its size, its focus or the window's active state changed. Damage is where
+  the changed nodes that draw were and are, a clip cutting it one point past its edge, whose anti-aliased pixels
+  the content behind still reaches; a node with a group damages its whole subtree, and any node under a group with
+  effects that group's whole reach. A node that draws nothing, before and after (no operation and no group,
+  whose opacity reaches its children), damages nothing, so a container's repaint costs no pixels. A frame that
+  repainted nothing sends no buffer; one that repainted a node but no pixel commits with no damage, as an
+  animation's next frame and the state an application sets on its surface outside the frame wait for a commit. The
+  CPU renderer's partial redraw can sample an anti-aliased curved or fractional edge cut by a damaged rectangle's
+  border a few levels off a whole frame's, so the rectangles a change damages show in pixel fixtures. A window that
+  cannot be laid out, rendered or presented goes to `on_window_error` and tries again, whole, on its next change or
+  configure, whatever the cause: the renderer reports a target and content too large to draw with the same error. The same error
   again is not reported again, and the window's animations ask for no frames until a frame presents. An animation
   whose current value is what fails (a blur animating down from over the renderer's limit, say) therefore stays at
   that value until the application changes something or the compositor configures. Other windows go on, and only a
@@ -81,4 +91,5 @@ all on one thread.
 ## Not yet
 
 Popups (`create_popup`), clipboard reads, and image resources in `PaintResources` are not
-wired yet. Layout runs over the whole window on every change.
+wired yet. Scrolling repaints everything the scroll view shows: the CPU renderer draws it again rather than moving
+the pixels it has.

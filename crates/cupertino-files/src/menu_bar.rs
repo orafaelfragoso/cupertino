@@ -208,8 +208,9 @@ impl MenuAction {
             Back => chord(&[Primary], "bracketleft"),
             Forward => chord(&[Primary], "bracketright"),
             EnclosingFolder => chord(&[Primary], "Up"),
-            Recents => chord(&[Shift, Primary], "f"),
             Home => chord(&[Shift, Primary], "h"),
+            // Shift+Primary+F is the system's full-screen shortcut, which the compositor takes before any window
+            Recents => None,
             OpenInNewWindow | PutBack | Rename | SortBy(..) | FullScreen | ShowProgress => None,
         }
     }
@@ -466,6 +467,15 @@ mod tests {
             Some("\u{2318}\u{2191}")
         );
         assert_eq!(shown(MenuAction::Rename), None);
+        assert_eq!(
+            shown(MenuAction::Home).as_deref(),
+            Some("\u{21e7}\u{2318}H")
+        );
+        assert_eq!(
+            shown(MenuAction::Recents),
+            None,
+            "the system's full-screen keys are not offered"
+        );
     }
 
     /// Each menu as the bar reads it: titles, then `label action chord` per item, `---` between groups.

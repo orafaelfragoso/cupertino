@@ -145,8 +145,8 @@ and Trash under Locations; and a Tags heading once a listed item carries a tag. 
 takes the toolkit's neutral look for lists of places (`SidebarLook::Neutral`): the selected row in a neutral tint with
 its label semibold, the Favorites' symbols in the accent colour and the others' in the secondary label colour. The places
 are live (`kit::places`): a change of the user directories or their configuration shows at once, and Trash comes with
-the first item trashed and leaves when the trash's folder goes. Recents (Go › Recents, Shift+Primary+F; Go › Home is
-Shift+Primary+H) is the virtual folder `recent:///`, not a sidebar row: the existing files of
+the first item trashed and leaves when the trash's folder goes. Recents (Go › Recents, without keys, as
+Shift+Primary+F is the system's full-screen shortcut; Go › Home is Shift+Primary+H) is the virtual folder `recent:///`, not a sidebar row: the existing files of
 `$XDG_DATA_HOME/recently-used.xbel`, listed again whenever the file is rewritten, in the window's sort order.
 Applications is the first `applications` folder of `$XDG_DATA_DIRS`, a real folder rather than a merged virtual one
 (approximate).

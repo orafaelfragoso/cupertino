@@ -46,6 +46,7 @@ fn settings(dir: &std::path::Path) -> Settings {
         system_accessibility: None,
         data_control: None,
         screen_sharing: None,
+        notifications: None,
         screen_reader: None,
     };
     Settings::load(&paths, 1080.0).expect("defaults load without files")
@@ -593,6 +594,10 @@ impl FakeCentre {
             .unwrap()
             .push(format!("SetDoNotDisturbFor({id})"));
     }
+
+    fn applications(&self) -> Vec<(String, String)> {
+        vec![("org.example.Mail".into(), "Mail".into())]
+    }
 }
 
 #[test]
@@ -649,6 +654,41 @@ fn st13_focus_rows_are_the_lifetimes_and_call_the_centre() {
             "SetDoNotDisturbFor(tomorrow)"
         ]
     );
+}
+
+#[test]
+fn the_notifications_pane_lists_the_applications_the_centre_holds() {
+    let Some(bus) = common::bus() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let mut services = services(&bus);
+    assert!(
+        services.notifying_apps().is_empty(),
+        "no centre: no applications"
+    );
+    let _centre = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .serve_at(
+            "/org/cupertino/NotificationCenter1",
+            FakeCentre {
+                log: Log::default(),
+            },
+        )
+        .unwrap()
+        .name("org.cupertino.NotificationCenter1")
+        .unwrap()
+        .build()
+        .unwrap();
+    let live = Live {
+        notifying_apps: services.notifying_apps(),
+        ..Live::default()
+    };
+    assert_eq!(
+        live.notifying_apps,
+        [("org.example.Mail".to_string(), "Mail".to_string())]
+    );
+    let s = sections(PaneId::Notifications, &settings(dir.path()), LIGHT, &live);
+    assert_eq!(s[2].header.as_deref(), Some("Mail"));
+    assert_eq!(labels(&s[2]), ["Show on lock screen", "Show previews"]);
 }
 
 // ---- no daemon ---------------------------------------------------------------------------------------------------
@@ -916,6 +956,7 @@ fn the_colour_filter_button_shows_what_the_server_holds_not_the_file() {
         system_accessibility: None,
         data_control: None,
         screen_sharing: None,
+        notifications: None,
         screen_reader: None,
     };
     settings.reload(&paths).unwrap();

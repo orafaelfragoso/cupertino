@@ -678,6 +678,7 @@ mod tests {
             system_accessibility: None,
             data_control: Some(dir.join("data-control.conf")),
             screen_sharing: None,
+            notifications: Some(dir.join("notifications.conf")),
             // shown as installed; Settings never starts it
             screen_reader: Some(std::path::PathBuf::from("/usr/bin/orca")),
         }

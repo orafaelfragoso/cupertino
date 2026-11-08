@@ -276,8 +276,11 @@ pub struct Live {
     pub bluetooth: Reading<Bluetooth>,
     /// Shown only after `CanSetSystemAccessibility` said yes at this opening of the Accessibility pane.
     pub login_screen: Option<LoginScreen>,
-    /// The installed applications, read when the Privacy pane shows.
+    /// The installed applications, read when the Privacy or the Notifications pane shows.
     pub apps: Vec<crate::clipboard::Installed>,
+    /// The applications whose notifications the centre holds (`NotificationCenter1.Applications`): their settings id
+    /// and name, read while the Notifications pane shows.
+    pub notifying_apps: Vec<(String, String)>,
     /// A screen reader is installed (`Paths::screen_reader`): without one the Screen reader switch is disabled.
     pub screen_reader_installed: bool,
 }
@@ -298,6 +301,7 @@ impl Default for Live {
             bluetooth: Reading::Unknown,
             login_screen: None,
             apps: Vec::new(),
+            notifying_apps: Vec::new(),
             screen_reader_installed: false,
         }
     }

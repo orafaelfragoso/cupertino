@@ -92,7 +92,7 @@ fn pane_announces(pane: PaneId, title: &str, content: &[&str], services: Option<
 #[test]
 fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state() {
     let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
-    let panes: [(PaneId, &str, &[&str]); 13] = [
+    let panes: [(PaneId, &str, &[&str]); 14] = [
         (
             PaneId::Battery,
             "Energy Saver",
@@ -186,6 +186,19 @@ fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state()
         ),
         // the level and the mute depend on the machine's mixer: only the section is the same everywhere
         (PaneId::Sound, "Sound", &["StaticText \"Output\""]),
+        (
+            PaneId::Notifications,
+            "Notifications",
+            &[
+                "StaticText \"Lock Screen\"",
+                "Switch \"Show on lock screen\" on focusable",
+                "PopUpButton \"Show previews\" = \"When Unlocked\" focusable collapsed",
+                "StaticText \"Without previews, a notification shows only its app and the word Notification.\"",
+                "StaticText \"Application Notifications\"",
+                "StaticText \"No applications\"",
+                "StaticText \"Apps appear here once they send a notification. Default follows the settings above.\"",
+            ],
+        ),
         (
             PaneId::Focus,
             "Focus",

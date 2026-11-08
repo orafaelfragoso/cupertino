@@ -24,7 +24,7 @@ pub const GROUPS: [&[PaneId]; 5] = [
         PaneId::Displays,
         PaneId::Wallpaper,
     ],
-    &[PaneId::Sound, PaneId::Focus],
+    &[PaneId::Notifications, PaneId::Sound, PaneId::Focus],
     &[PaneId::LockScreen, PaneId::Privacy],
     &[PaneId::Keyboard, PaneId::Mouse, PaneId::Trackpad],
 ];
@@ -127,7 +127,7 @@ mod tests {
                     "Displays",
                     "Wallpaper"
                 ],
-                vec!["Sound", "Focus"],
+                vec!["Notifications", "Sound", "Focus"],
                 vec!["Lock Screen", "Privacy & Security"],
                 vec!["Keyboard", "Mouse", "Trackpad"],
             ]

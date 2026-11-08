@@ -495,6 +495,22 @@ impl Services {
         )
     }
 
+    /// The applications whose notifications the centre holds now, as (settings id, name); empty while it is not
+    /// running or does not answer.
+    pub fn notifying_apps(&mut self) -> Vec<(String, String)> {
+        let result = self
+            .session
+            .proxy(CENTRE_NAME, CENTRE_PATH, CENTRE_NAME)
+            .and_then(|p| p.call::<_, _, Vec<(String, String)>>("Applications", &()));
+        match self.session.checked(result) {
+            Ok(apps) => apps,
+            Err(e) => {
+                log_once(&format!("the notification centre's applications: {e}"));
+                Vec::new()
+            }
+        }
+    }
+
     /// The connected displays with a current mode: one short connection asks the server.
     pub fn displays(&self) -> Reading<Vec<Monitor>> {
         let outputs = cupertino_wayland_client::Connection::connect()

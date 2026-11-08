@@ -9,6 +9,7 @@ use cupertino_defaults::compositor::MinimizeEffectName;
 use cupertino_defaults::dock::{ActionTarget, Position, Trigger};
 use cupertino_defaults::keyboard::{FnKey, ModifierProfile};
 use cupertino_defaults::menubar::{HourCycle, ShowDate};
+use cupertino_defaults::notifications::{valid_app_id, Previews};
 use cupertino_defaults::power::Timer;
 
 use std::collections::HashMap;
@@ -112,6 +113,14 @@ pub enum ControlId {
     ClipboardAdd,
     /// A grant of `screen-sharing.conf`, by index: Forget.
     ScreenSharingGrant(usize),
+    /// Whether notifications show on the lock screen, for every application without its own choice.
+    NotificationsLockScreen,
+    /// How much of a notification shows, for every application without its own choice.
+    NotificationsPreviews,
+    /// An application of [`notification_apps`], by index: its own choice of [`ControlId::NotificationsLockScreen`].
+    NotificationAppLockScreen(usize),
+    /// An application of [`notification_apps`], by index: its own choice of [`ControlId::NotificationsPreviews`].
+    NotificationAppPreviews(usize),
 }
 
 /// What a control's value reaches the system through.
@@ -1334,6 +1343,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             out
         }
         PaneId::Focus => focus_sections(&live.focus),
+        PaneId::Notifications => notifications_sections(settings, live),
         PaneId::Sound => {
             let svc = Backend::Service("master");
             let (level, muted, reason) = match &live.volume {
@@ -1600,6 +1610,150 @@ fn login_screen_section(login: &LoginScreen) -> Section {
         ],
         footer: Some(LOGIN_SCREEN_FOOTER.to_string()),
     }
+}
+
+/// The most applications the Notifications pane lists.
+pub const MAX_NOTIFICATION_APPS: usize = 64;
+
+/// The choices of "Show previews", in the order of [`Previews::ALL`].
+const PREVIEW_CHOICES: [&str; 3] = ["Always", "When Unlocked", "Never"];
+
+fn previews_index(p: Previews) -> usize {
+    Previews::ALL
+        .iter()
+        .position(|q| *q == p)
+        .expect("every value is in Previews::ALL")
+}
+
+/// Under the lock screen's settings: what a notification shows there.
+const NOTIFICATIONS_FOOTER: &str =
+    "Without previews, a notification shows only its app and the word Notification.";
+/// Under the applications' title: which applications are listed and what Default means.
+const NOTIFICATION_APPS_FOOTER: &str =
+    "Apps appear here once they send a notification. Default follows the settings above.";
+
+/// The applications the Notifications pane lists, as (settings id, name): those `notifications.conf` holds a choice of
+/// and those whose notifications the centre holds now, each once, by name, at most [`MAX_NOTIFICATION_APPS`]. The
+/// name is the desktop entry's, else the one the centre gave, else the id.
+pub fn notification_apps(settings: &Settings, live: &Live) -> Vec<(String, String)> {
+    let named = |id: &str, given: Option<&str>| {
+        let file = format!("{id}.desktop");
+        live.apps
+            .iter()
+            .find(|i| i.entry.id == file)
+            .map(|i| i.entry.name.clone())
+            .or_else(|| given.map(str::to_owned))
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| id.to_owned())
+    };
+    let given = |id: &str| {
+        live.notifying_apps
+            .iter()
+            .find(|(k, _)| k == id)
+            .map(|(_, name)| name.as_str())
+    };
+    let mut apps: Vec<(String, String)> = settings
+        .notifications
+        .apps
+        .keys()
+        .map(|id| (id.clone(), named(id, given(id))))
+        .collect();
+    for (id, name) in &live.notifying_apps {
+        if valid_app_id(id) && !apps.iter().any(|(k, _)| k == id) {
+            apps.push((id.clone(), named(id, Some(name))));
+        }
+    }
+    apps.sort_by(|a, b| crate::sidebar::standard_compare(&a.1, &b.1));
+    apps.truncate(MAX_NOTIFICATION_APPS);
+    apps
+}
+
+/// The lock screen's settings for every application, then each listed application's own choices, where Default
+/// follows the former (`notifications.conf`; the pane's layout is Original).
+fn notifications_sections(settings: &Settings, live: &Live) -> Vec<Section> {
+    let n = &settings.notifications;
+    let key = |k| Backend::Key(File::Notifications, k);
+    let on_off = |on: bool| if on { "On" } else { "Off" };
+    let mut out = vec![Section {
+        header: header("Lock Screen"),
+        rows: vec![
+            row(
+                ControlId::NotificationsLockScreen,
+                "Show on lock screen",
+                switch(n.show_on_lock_screen),
+                key("show_on_lock_screen"),
+            ),
+            row(
+                ControlId::NotificationsPreviews,
+                "Show previews",
+                popup(PREVIEW_CHOICES, previews_index(n.show_previews)),
+                key("show_previews"),
+            ),
+        ],
+        footer: Some(NOTIFICATIONS_FOOTER.to_string()),
+    }];
+    let apps = notification_apps(settings, live);
+    out.push(Section {
+        header: header("Application Notifications"),
+        rows: if apps.is_empty() {
+            vec![row(
+                ControlId::Reading,
+                "No applications",
+                Control::Text {
+                    value: String::new(),
+                },
+                key("app"),
+            )]
+        } else {
+            Vec::new()
+        },
+        footer: Some(NOTIFICATION_APPS_FOOTER.to_string()),
+    });
+    for (i, (id, name)) in apps.iter().enumerate() {
+        let own = n.apps.get(id).copied().unwrap_or_default();
+        let lock_choices = vec![
+            format!("Default ({})", on_off(n.show_on_lock_screen)),
+            "On".to_string(),
+            "Off".to_string(),
+        ];
+        let lock_selected = match own.show_on_lock_screen {
+            None => 0,
+            Some(true) => 1,
+            Some(false) => 2,
+        };
+        let preview_choices = std::iter::once(format!(
+            "Default ({})",
+            PREVIEW_CHOICES[previews_index(n.show_previews)]
+        ))
+        .chain(PREVIEW_CHOICES.iter().map(|c| c.to_string()))
+        .collect();
+        let preview_selected = own.show_previews.map_or(0, |p| 1 + previews_index(p));
+        out.push(Section {
+            header: Some(name.clone()),
+            rows: vec![
+                row(
+                    ControlId::NotificationAppLockScreen(i),
+                    "Show on lock screen",
+                    Control::Popup {
+                        choices: lock_choices,
+                        selected: lock_selected,
+                    },
+                    key("app.<id>.show_on_lock_screen"),
+                ),
+                row(
+                    ControlId::NotificationAppPreviews(i),
+                    "Show previews",
+                    Control::Popup {
+                        choices: preview_choices,
+                        selected: preview_selected,
+                    },
+                    key("app.<id>.show_previews"),
+                ),
+            ],
+            footer: None,
+        });
+    }
+    out
 }
 
 /// Do Not Disturb and its durations (`NotificationCenter1`; the pane's layout is Original, §3).
@@ -2227,6 +2381,51 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
                 None => Vec::new(),
             }
         }
+        ControlId::NotificationsLockScreen => {
+            settings.notifications.show_on_lock_screen = bool_of(value);
+            store(File::Notifications)
+        }
+        ControlId::NotificationsPreviews => match Previews::ALL.get(index_of(value)) {
+            Some(p) => {
+                settings.notifications.show_previews = *p;
+                store(File::Notifications)
+            }
+            None => Vec::new(),
+        },
+        ControlId::NotificationAppLockScreen(i) | ControlId::NotificationAppPreviews(i) => {
+            let Some((app, _)) = notification_apps(settings, live).into_iter().nth(i) else {
+                return Vec::new();
+            };
+            let mut own = settings
+                .notifications
+                .apps
+                .get(&app)
+                .copied()
+                .unwrap_or_default();
+            let choice = index_of(value);
+            if matches!(id, ControlId::NotificationAppLockScreen(_)) {
+                own.show_on_lock_screen = match choice {
+                    0 => None,
+                    1 => Some(true),
+                    2 => Some(false),
+                    _ => return Vec::new(),
+                };
+            } else {
+                own.show_previews = match choice {
+                    0 => None,
+                    c => match Previews::ALL.get(c - 1) {
+                        Some(p) => Some(*p),
+                        None => return Vec::new(),
+                    },
+                };
+            }
+            if !settings.notifications.set_app(&app, own) {
+                return vec![Effect::Refuse(
+                    "This app's settings can't be saved.".to_string(),
+                )];
+            }
+            store(File::Notifications)
+        }
         ControlId::DoNotDisturb => vec![Effect::Service(Call::SetDoNotDisturb(bool_of(value)))],
         ControlId::FocusFor(i) => match live.focus.ready().and_then(|f| f.lifetimes.get(i)) {
             Some((id, _)) => vec![Effect::Service(Call::SetDoNotDisturbFor(id.clone()))],
@@ -2350,6 +2549,7 @@ mod tests {
             display_height: 1080.0,
             clipboard: crate::clipboard::List::default(),
             screen_sharing: crate::screen_sharing::Grants::default(),
+            notifications: cupertino_defaults::notifications::NotificationSettings::default(),
         }
     }
 
@@ -2552,6 +2752,7 @@ mod tests {
             }),
             login_screen: Some(crate::live::LoginScreen::default()),
             apps: Vec::new(),
+            notifying_apps: vec![("org.example.Mail".into(), "Mail".into())],
             screen_reader_installed: true,
         };
         for pane in crate::pane::PANES.iter().map(|p| p.id) {
@@ -3781,5 +3982,102 @@ mod tests {
         let sections = sections(PaneId::Wallpaper, &unset(), LIGHT, &live);
         assert!(matches!(sections[1].rows[0].control, Control::Tiles { .. }));
         assert!(matches!(sections[2].rows[0].control, Control::Tiles { .. }));
+    }
+
+    #[test]
+    fn the_notifications_pane_lists_the_default_then_each_app_with_default_first() {
+        use cupertino_defaults::notifications::AppOverride;
+        let mut s = unset();
+        assert!(s.notifications.set_app(
+            "org.example.Mail",
+            AppOverride {
+                show_on_lock_screen: Some(false),
+                show_previews: None,
+            },
+        ));
+        let live = Live {
+            notifying_apps: vec![
+                ("org.example.Chat".into(), "Chat".into()),
+                ("org.example.Mail".into(), "Mail".into()),
+                // an id the file cannot hold is not listed
+                ("bad=id".into(), "Bad".into()),
+            ],
+            ..Live::default()
+        };
+        let shown = sections(PaneId::Notifications, &s, LIGHT, &live);
+        let headers: Vec<_> = shown.iter().map(|s| s.header.as_deref()).collect();
+        assert_eq!(
+            headers,
+            [
+                Some("Lock Screen"),
+                Some("Application Notifications"),
+                Some("Chat"),
+                Some("Mail")
+            ]
+        );
+        assert_eq!(
+            shown[0].rows.iter().map(|r| &r.control).collect::<Vec<_>>(),
+            [&Control::Switch { on: true }, &popup(PREVIEW_CHOICES, 1),],
+            "unset: on the lock screen, previews when unlocked"
+        );
+        assert!(shown[1].rows.is_empty(), "a title over the apps");
+        let popup_of = |section: &Section, row: usize| match &section.rows[row].control {
+            Control::Popup { choices, selected } => (choices.clone(), *selected),
+            other => panic!("a pop-up, not {other:?}"),
+        };
+        assert_eq!(
+            popup_of(&shown[2], 0),
+            (vec!["Default (On)".into(), "On".into(), "Off".into()], 0)
+        );
+        assert_eq!(popup_of(&shown[3], 0).1, 2, "Mail: off");
+        assert_eq!(
+            popup_of(&shown[3], 1),
+            (
+                vec![
+                    "Default (When Unlocked)".into(),
+                    "Always".into(),
+                    "When Unlocked".into(),
+                    "Never".into()
+                ],
+                0
+            )
+        );
+        // the commit acts on the app shown at that index
+        assert_eq!(
+            change(
+                ControlId::NotificationAppPreviews(0),
+                Value::Index(3),
+                &mut s,
+                &live
+            ),
+            [Effect::Store(File::Notifications)]
+        );
+        assert_eq!(
+            s.notifications.policy("org.example.Chat").show_previews,
+            Previews::Never
+        );
+        assert_eq!(
+            change(
+                ControlId::NotificationAppPreviews(9),
+                Value::Index(1),
+                &mut s,
+                &live
+            ),
+            [],
+            "no app at that index"
+        );
+        let none = sections(PaneId::Notifications, &unset(), LIGHT, &Live::default());
+        assert_eq!(none.len(), 2);
+        assert_eq!(none[1].rows[0].label, "No applications");
+        let many = Live {
+            notifying_apps: (0..MAX_NOTIFICATION_APPS + 9)
+                .map(|i| (format!("org.example.App{i}"), format!("App {i}")))
+                .collect(),
+            ..Live::default()
+        };
+        assert_eq!(
+            notification_apps(&unset(), &many).len(),
+            MAX_NOTIFICATION_APPS
+        );
     }
 }

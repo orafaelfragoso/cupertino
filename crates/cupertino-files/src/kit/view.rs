@@ -10,8 +10,8 @@ use cupertino_kit::controls::{
     Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton, DialogKind, Icon,
     IconDirection, Image, ImageFit, ImageSource, MenuAnchor, Modal, NavigationStack, OutlineTable,
     Progress, ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
-    SidebarLook, SidebarSection, SidebarWindow, SortOrder, Spacer, Stack, TableView, Text, TextField,
-    TextRole, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarSearch,
+    SidebarLook, SidebarSection, SidebarWindow, SortOrder, Spacer, Stack, TableView, Text,
+    TextField, TextRole, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarSearch,
     ToolbarTitle, TreeItem,
 };
 use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground};

@@ -563,7 +563,8 @@ impl AppGrid {
         !self.recents.is_empty() && self.query.is_empty() && self.pill.is_none()
     }
 
-    fn recents_shown(&self) -> usize {
+    /// How many items of the recents row show: the first ones of [`Self::items`].
+    pub fn recents_shown(&self) -> usize {
         if self.shows_recents() {
             self.recents.len()
         } else {

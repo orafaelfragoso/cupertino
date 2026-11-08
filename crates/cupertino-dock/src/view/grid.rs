@@ -21,6 +21,8 @@ use crate::app_grid::{AppGrid, GridLayout, Pill, Zone};
 
 /// What assistive technology calls the grid, and the search field.
 pub const TITLE: &str = "Applications";
+/// What assistive technology calls the recents row, the group its applications are in apart from the full list.
+pub const RECENTS: &str = "Recently Used";
 /// The search field's placeholder and the text shown when nothing matches.
 pub const PLACEHOLDER: &str = "Search";
 pub const NO_RESULTS: &str = "No Results";
@@ -155,6 +157,7 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
         if !collapsed {
             let content = zoom.rect(&layout.content);
             let mut rows: Vec<Element<M>> = Vec::new();
+            let mut recents: Vec<Element<M>> = Vec::new();
             let selected = grid.selected().filter(|_| grid.zone() == Zone::Grid);
             for placed in grid.visible() {
                 let Some(app) = grid.item(placed.index) else {
@@ -163,7 +166,12 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
                 let cell = zoom.rect(&placed.cell);
                 let item = zoom.rect(&layout.item_rect(&placed.cell));
                 let icon = zoom.rect(&layout.icon_rect(&placed.cell));
-                rows.push(
+                let row = if placed.index < grid.recents_shown() {
+                    &mut recents
+                } else {
+                    &mut rows
+                };
+                row.push(
                     Element::new(ItemNode {
                         index: placed.index,
                         name: app.name.clone(),
@@ -178,6 +186,18 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
                     })
                     // the recents and the list may hold the same application
                     .key(Key::from(format!("item-{}-{}", placed.index, app.key))),
+                );
+            }
+            // the recents are a group of their own, so the applications they repeat from the list are told apart
+            if !recents.is_empty() {
+                rows.insert(
+                    0,
+                    Element::new(ClipNode {
+                        rect: Rect::new(0.0, 0.0, content.width(), content.height()),
+                        name: RECENTS,
+                        children: recents,
+                    })
+                    .key("recents"),
                 );
             }
             if let Some(y) = grid.separator_y() {
@@ -203,6 +223,7 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
             children.push(
                 Element::new(ClipNode {
                     rect: content,
+                    name: TITLE,
                     children: rows,
                 })
                 .key("content"),
@@ -658,9 +679,11 @@ impl<M: Clone + 'static> Widget<M> for PillNode<M> {
     }
 }
 
-/// The scrolled area: its rows are placed in it and cut at its edges.
+/// The scrolled area, or the recents row's group in it: its rows are placed in it and cut at its edges.
 struct ClipNode<M> {
     rect: Rect,
+    /// What assistive technology calls the group.
+    name: &'static str,
     children: Vec<Element<M>>,
 }
 
@@ -706,7 +729,7 @@ impl<M: Clone + 'static> Widget<M> for ClipNode<M> {
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Group);
-        cx.name(TITLE.to_owned());
+        cx.name(self.name.to_owned());
     }
 }
 

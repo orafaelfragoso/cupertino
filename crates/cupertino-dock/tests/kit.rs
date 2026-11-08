@@ -1169,6 +1169,23 @@ fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_escape_collaps
         .map(|n| n.3.y())
         .collect();
     assert!(terminal_rows[0] < separator.3.y() && separator.3.y() < terminal_rows[1]);
+    // the recents row is a group of its own, so the terminal it repeats from the list is told apart
+    let snapshot = run.driver.runtime().snapshot(grid).unwrap();
+    let nodes = &snapshot.accessibility;
+    let recents = nodes
+        .iter()
+        .find(|(_, n)| {
+            n.role == Role::Group && n.name.as_deref() == Some(cupertino_dock::view::grid::RECENTS)
+        })
+        .expect("a group for the recent row");
+    let in_recents: Vec<String> = recents
+        .1
+        .children
+        .iter()
+        .filter_map(|id| nodes.iter().find(|(i, _)| i == id))
+        .map(|(_, n)| n.name.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(in_recents, ["Terminal"]);
     assert_eq!(run.focused(grid).as_deref(), Some("Applications"));
 
     run.key(grid, ESCAPE);

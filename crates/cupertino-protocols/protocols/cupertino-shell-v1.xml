@@ -881,8 +881,9 @@
         application is still connected, with or without windows now: closing its last window
         does not end it, its process exiting (or its connection closing) does. The first group
         lists every resident application with resident 1; later groups send a change of either
-        kind, after the window events of the same group. The server's own connections and the
-        shell processes are never applications. The application id is cut like the window
+        kind, after the window events of the same group. The server's own connections, the
+        shell processes and the X11 bridge (one connection for the windows of every X11
+        application) are never applications. The application id is cut like the window
         event's.
       </description>
       <arg name="app_id" type="string"/>

@@ -633,8 +633,14 @@ impl Cupertino {
 
     /// Note the application of every mapped window of an application client as resident for that client, and have
     /// the client's disconnection reported ([`Cupertino::forget_gone_processes`]). The server's own connections and
-    /// the shell processes are not applications.
+    /// the shell processes are not applications, and neither is the X11 satellite: it shows the windows of every X11
+    /// application on its one connection, which outlives each of them, so an X11 application is in the dock while it
+    /// has a window.
     fn note_residents(&mut self) {
+        let satellite = self
+            .xwayland
+            .as_ref()
+            .and_then(crate::xwayland::XWayland::pid);
         for entry in self.windows.iter().filter(|e| e.mapped) {
             let Some(client) = entry.surface().client() else {
                 continue;
@@ -643,6 +649,11 @@ impl Cupertino {
                 continue;
             };
             if data.internal || !data.capabilities.is_empty() {
+                continue;
+            }
+            if satellite.is_some()
+                && (self.process_of)(&self.display_handle, &client).map(|(pid, _)| pid) == satellite
+            {
                 continue;
             }
             let Some(identity) = self

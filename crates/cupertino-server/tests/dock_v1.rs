@@ -1016,6 +1016,65 @@ fn an_application_stays_resident_after_its_last_window_until_its_client_disconne
     assert_eq!(late.error(), None);
 }
 
+/// The X11 satellite shows every X11 application's windows on its one connection, which outlives each of them: its
+/// windows make no application resident, so an X11 application leaves the dock with its last window.
+#[test]
+fn the_x11_satellite_makes_no_application_resident() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(mut h) = Harness::new() else { return };
+    let root = tempfile::tempdir().unwrap();
+    let (tmp, runtime) = (root.path().join("tmp"), root.path().join("run"));
+    let sockets = tmp.join(".X11-unix");
+    std::fs::create_dir_all(&sockets).unwrap();
+    std::fs::create_dir(&runtime).unwrap();
+    std::fs::set_permissions(&sockets, std::fs::Permissions::from_mode(0o1777)).unwrap();
+    let program = runtime.join("satellite");
+    std::fs::write(&program, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let display = cupertino_server::xwayland::XDisplay::open(&tmp, &runtime).unwrap();
+    let x_socket = sockets.join(display.name().replace(':', "X"));
+    let x = cupertino_server::xwayland::XWayland::start(
+        display,
+        program,
+        "wayland-test".into(),
+        &h.event_loop.handle(),
+        |s: &mut Cupertino| s.xwayland.as_mut(),
+        |_| {},
+    )
+    .unwrap();
+    h.state.xwayland = Some(x);
+    // an X11 program connects, and the satellite starts
+    let _x_client = UnixStream::connect(&x_socket).unwrap();
+    h.wait_until("the satellite to start", |s| {
+        s.xwayland.as_ref().and_then(|x| x.pid()).is_some()
+    });
+    let satellite = h.state.xwayland.as_ref().and_then(|x| x.pid()).unwrap();
+    // every connection of the test is the satellite's
+    h.state.process_of = Box::new(move |_, client| {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        client.id().hash(&mut hasher);
+        Some((satellite, hasher.finish()))
+    });
+
+    let app = spawn_app(h.socket_path(), "org.example.xterm");
+    let id = h.mapped_window(1).0 as u32;
+    let dock = DockClient::spawn_at(h.shell_stream(), true, 0, 19);
+    h.wait_for_groups(&dock, 1);
+    assert!(
+        matches!(&dock.groups()[0][..], [DockEvent::Window { id: w, .. }, DockEvent::Done] if *w == id),
+        "{:?}",
+        dock.groups()
+    );
+    app.commands.send(Cmd::CloseWindow).unwrap();
+    h.wait_for_groups(&dock, 2);
+    assert_eq!(
+        dock.groups()[1],
+        vec![DockEvent::Closed(id), DockEvent::Done]
+    );
+    assert!(h.state.resident_apps().is_empty());
+}
+
 #[test]
 fn an_application_id_and_a_title_longer_than_the_limit_are_cut_at_a_character_boundary() {
     let Some(mut h) = Harness::new() else { return };

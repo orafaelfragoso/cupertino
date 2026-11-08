@@ -749,7 +749,8 @@ mod tests {
         // an unreadable file shows no text and no error
         let secret = dir.path().join("secret.txt");
         std::fs::write(&secret, "hidden").unwrap();
-        std::fs::set_permissions(&secret, std::os::unix::fs::PermissionsExt::from_mode(0)).unwrap();
+        std::fs::set_permissions(&secret, std::os::unix::fs::PermissionsExt::from_mode(0o000))
+            .unwrap();
         if std::fs::File::open(&secret).is_err() {
             assert_eq!(excerpt(&secret), None);
         }

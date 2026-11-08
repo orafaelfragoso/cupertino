@@ -119,6 +119,28 @@ pub struct ToplevelStates {
     pub tiled: Edges,
 }
 
+/// How the compositor frames a window in its current states: the corner mask, the decorations and the shadow it draws
+/// around the window's content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameShape {
+    /// Rounded corners, the title bar and the shadow: every window that is not full screen, a zoomed window and one that
+    /// fills the usable area included.
+    Rounded,
+    /// Square corners, no decorations and no shadow: a full-screen window meets the edges of its output.
+    Square,
+}
+
+impl ToplevelStates {
+    /// The frame of a window in these states: only full screen squares it.
+    pub fn frame_shape(&self) -> FrameShape {
+        if self.fullscreen {
+            FrameShape::Square
+        } else {
+            FrameShape::Rounded
+        }
+    }
+}
+
 /// Everything the renderer needs to draw a window at one instant.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Presentation {
@@ -1064,6 +1086,48 @@ mod tests {
         l.exit_fullscreen(t);
         settle(&mut l, t);
         assert_eq!(l.state(), Zoomed);
+    }
+
+    #[test]
+    fn zoomed_and_filled_windows_stay_rounded_and_only_full_screen_is_square() {
+        let (mut l, t) = new_normal();
+        assert_eq!(l.toplevel_states().frame_shape(), FrameShape::Rounded);
+        assert!(l.zoom(ZOOM, t));
+        let t = settle(&mut l, t);
+        assert!(l.toplevel_states().maximized);
+        assert_eq!(l.toplevel_states().frame_shape(), FrameShape::Rounded);
+        assert_eq!(
+            l.presentation(t).shadow,
+            1.0,
+            "a zoomed window keeps its shadow"
+        );
+        assert!(l.unzoom(t));
+        let t = settle(&mut l, t);
+        assert!(l.tile(TileKind::Fill, ZOOM, t));
+        assert_eq!(l.toplevel_states().frame_shape(), FrameShape::Rounded);
+        let t = settle(&mut l, t);
+        assert_eq!(l.state(), Tiled(TileKind::Fill));
+        assert_eq!(l.toplevel_states().frame_shape(), FrameShape::Rounded);
+        assert_eq!(
+            l.presentation(t).shadow,
+            1.0,
+            "a filled window keeps its shadow"
+        );
+        assert!(l.fullscreen(OUT, t));
+        assert_eq!(
+            l.toplevel_states().frame_shape(),
+            FrameShape::Square,
+            "square from the start of the transition"
+        );
+        let t = settle(&mut l, t);
+        assert_eq!(l.toplevel_states().frame_shape(), FrameShape::Square);
+        assert_eq!(l.presentation(t).shadow, 0.0);
+        assert!(l.exit_fullscreen(t));
+        assert_eq!(l.toplevel_states().frame_shape(), FrameShape::Rounded);
+        let t = settle(&mut l, t);
+        assert_eq!(l.state(), Tiled(TileKind::Fill));
+        assert_eq!(l.toplevel_states().frame_shape(), FrameShape::Rounded);
+        assert_eq!(l.presentation(t).shadow, 1.0);
     }
 
     #[test]

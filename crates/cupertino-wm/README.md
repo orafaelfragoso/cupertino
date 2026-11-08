@@ -11,7 +11,7 @@ shadow, minimize progress).
 
 | Module | Role |
 |---|---|
-| `lifecycle` | toplevel state machine (`Opening`, `Normal`, `Minimizing`, `Minimized`, `Restoring`, `Zooming`, `Zoomed`, `Unzooming`, `EnterFullScreen`, `FullScreen`, `ExitFullScreen`, `Tiling(k)`, `Tiled(k)`, `Closing`, `Destroyed`); every transient state is interruptible |
+| `lifecycle` | toplevel state machine (`Opening`, `Normal`, `Minimizing`, `Minimized`, `Restoring`, `Zooming`, `Zoomed`, `Unzooming`, `EnterFullScreen`, `FullScreen`, `ExitFullScreen`, `Tiling(k)`, `Tiled(k)`, `Closing`, `Destroyed`); every transient state is interruptible. `ToplevelStates::frame_shape` is the corner policy: `Square` (no corner mask, decorations or shadow) only for a full-screen window, from the start of its enter transition to the start of its exit; `Rounded` for every other state, a zoomed window and one that fills the usable area (the fill tile) included |
 | `focus` | app versus window focus, MRU, hide / hide others, app switcher model (steps, hidden counter, quit and hide of the selection), in-app window cycling, modal blocking, attention for refused activations |
 | `activation` | the activation-token rule (`token_accepted`, `GRANT_LIFETIME`, `LATE_ACTIVATION`, `TYPING_QUIET`) |
 | `pieces` | visible pieces of a window (`visible_pieces`) and the magnetic guides they make (`window_guides`) |

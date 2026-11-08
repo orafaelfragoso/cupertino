@@ -775,3 +775,287 @@ fn glass_nodes_join_their_container_with_round_ends() {
         "both capsules, in the same container, opaque for an alpha that is not finite"
     );
 }
+
+/// A panel that is glass when `glass`, with children; it paints a label in the theme's text colour after asking.
+struct GlassPanel {
+    glass: bool,
+    children: Vec<Element<M>>,
+}
+
+/// A label in the theme's text colour and secondary text colour, as a fill each.
+struct TextSwatch;
+
+fn text_fills(cx: &mut PaintCx<'_>) {
+    for role in [ColorRole::Text, ColorRole::SecondaryText] {
+        let color = cx
+            .env()
+            .theme
+            .colors
+            .get(role, StateVariant::NORMAL)
+            .unwrap();
+        cx.push(PaintOp::Fill {
+            shape: Shape::Rect(Rect::new(0.0, 0.0, 10.0, 10.0)),
+            paint: Paint::Solid(color),
+        });
+    }
+}
+
+impl Widget<M> for GlassPanel {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if self.glass {
+            cx.glass(crate::Glass::regular().capsule());
+        }
+        text_fills(cx);
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+impl Widget<M> for TextSwatch {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        text_fills(cx);
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The colours of the fills a node painted, in order.
+fn fills(node: &PaintNode) -> Vec<Color> {
+    node.ops
+        .iter()
+        .filter_map(|op| match op {
+            PaintOp::Fill {
+                paint: Paint::Solid(c),
+                ..
+            } => Some(*c),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn text_on_glass_takes_the_matrix_of_its_face_and_text_beside_it_keeps_the_theme() {
+    use cupertino_ui_platform::GlassTone;
+    use cupertino_ui_theme::{Appearance, ColorTokens};
+    // the dark appearance's labels: white at 85 % and at 55 %
+    let label = Color::new(1.0, 1.0, 1.0, 0.85);
+    let secondary = Color::new(1.0, 1.0, 1.0, 0.55);
+    let mut env = env();
+    let mut theme = (*env.theme).clone();
+    theme.preferences.appearance = Appearance::Dark;
+    theme.colors = ColorTokens::new([
+        ((ColorRole::Text, StateVariant::NORMAL), label),
+        ((ColorRole::SecondaryText, StateVariant::NORMAL), secondary),
+    ]);
+    env.theme = Arc::new(theme);
+
+    // a small glass capsule with a label inside it, and a plain label beside it
+    let mut tree = Tree::<M>::new(8);
+    let panel = Element::new(GlassPanel {
+        glass: true,
+        children: vec![Element::new(TextSwatch)],
+    });
+    let plain = Element::new(GlassPanel {
+        glass: false,
+        children: vec![Element::new(TextSwatch)],
+    });
+    let root = tree
+        .reconcile(
+            None,
+            Element::new(crate::test_support::group(vec![panel, plain])),
+        )
+        .unwrap();
+    let [panel, plain] = tree.get(root).unwrap().children.clone()[..] else {
+        unreachable!()
+    };
+    let inner = |id: NodeId| tree.get(id).unwrap().children[0];
+    let window = Rect::new(0.0, 0.0, 300.0, 100.0);
+    let mut geometry = Geometry::new();
+    for (id, rect) in [
+        (root, window),
+        (panel, Rect::new(10.0, 20.0, 100.0, 36.0)),
+        (inner(panel), Rect::new(20.0, 24.0, 60.0, 20.0)),
+        (plain, Rect::new(130.0, 20.0, 100.0, 36.0)),
+        (inner(plain), Rect::new(140.0, 24.0, 60.0, 20.0)),
+    ] {
+        geometry.insert(
+            id,
+            Placement {
+                rect,
+                target: rect,
+                clip: None,
+                own_clip: None,
+            },
+        );
+    }
+    let mut painter = Painter::default();
+    let paint = |painter: &mut Painter| {
+        let painting = painter.paint(
+            &tree,
+            root,
+            &geometry,
+            &PaintInput {
+                env: &env,
+                focus: None,
+                focus_visible: false,
+                window_active: true,
+                background: WindowBackground::None,
+                backdrop: false,
+                materials: true,
+                now: Timestamp(0),
+            },
+        );
+        let of = |id: NodeId| {
+            painting
+                .list
+                .nodes
+                .iter()
+                .find(|n| n.id == id.into())
+                .map(fills)
+                .unwrap()
+        };
+        (
+            of(panel),
+            of(inner(panel)),
+            of(plain),
+            of(inner(plain)),
+            painting.materials.len(),
+        )
+    };
+    let white = |a: f32| Color::new(1.0, 1.0, 1.0, a);
+    let black = |a: f32| Color::new(0.0, 0.0, 0.0, a);
+    let vibrant = [
+        cupertino_ui_theme::VIBRANT_PRIMARY,
+        cupertino_ui_theme::VIBRANT_SECONDARY,
+    ];
+
+    // nothing measured: the appearance's matrix, labels at their strength on glass, on the glass node and inside it
+    let (glass, inside, beside, beside_inside, regions) = paint(&mut painter);
+    assert_eq!(regions, 1);
+    let on_glass = vec![white(vibrant[0]), white(vibrant[1])];
+    assert_eq!((&glass, &inside), (&on_glass, &on_glass));
+    // text beside the glass keeps the theme's colours
+    assert_eq!(beside, vec![label, secondary]);
+    assert_eq!(beside_inside, vec![label, secondary]);
+
+    // the compositor measured a light face under the small capsule: its text turns dark, the rest stays
+    painter.tones.regions = vec![GlassTone::Light];
+    let (glass, inside, beside, _, _) = paint(&mut painter);
+    let flipped = vec![black(vibrant[0]), black(vibrant[1])];
+    assert_eq!((&glass, &inside), (&flipped, &flipped));
+    assert_eq!(beside, vec![label, secondary]);
+
+    // and back to dark
+    painter.tones.regions = vec![GlassTone::Dark];
+    let (glass, inside, _, _, _) = paint(&mut painter);
+    assert_eq!((&glass, &inside), (&on_glass, &on_glass));
+}
+
+#[test]
+fn text_on_a_window_of_glass_takes_the_windows_tone() {
+    use cupertino_ui_platform::GlassTone;
+    use cupertino_ui_theme::{Appearance, ColorTokens, Surface};
+    let label = Color::new(0.0, 0.0, 0.0, 0.85);
+    let mut env = env();
+    let mut theme = (*env.theme).clone();
+    theme.preferences.appearance = Appearance::Light;
+    theme.colors = ColorTokens::new([
+        ((ColorRole::Text, StateVariant::NORMAL), label),
+        ((ColorRole::SecondaryText, StateVariant::NORMAL), label),
+    ]);
+    env.theme = Arc::new(theme);
+    let mut tree = Tree::<M>::new(4);
+    let root = tree.reconcile(None, Element::new(TextSwatch)).unwrap();
+    let window = Rect::new(0.0, 0.0, 300.0, 100.0);
+    let geometry = Geometry::from([(
+        root,
+        Placement {
+            rect: window,
+            target: window,
+            clip: None,
+            own_clip: None,
+        },
+    )]);
+    let mut painter = Painter::default();
+    let paint = |painter: &mut Painter, backdrop: bool| {
+        let painting = painter.paint(
+            &tree,
+            root,
+            &geometry,
+            &PaintInput {
+                env: &env,
+                focus: None,
+                focus_visible: false,
+                window_active: true,
+                background: WindowBackground::Surface {
+                    surface: Surface::Menu,
+                    radius: 10.0,
+                    alpha: 1.0,
+                },
+                backdrop,
+                materials: true,
+                now: Timestamp(0),
+            },
+        );
+        fills(&painting.list.nodes[0])[0]
+    };
+    // a menu window whose glass the window system shows: its labels are on glass
+    assert_eq!(
+        paint(&mut painter, true),
+        Color::new(0.0, 0.0, 0.0, cupertino_ui_theme::VIBRANT_PRIMARY)
+    );
+    painter.tones.window = GlassTone::Dark;
+    assert_eq!(paint(&mut painter, true), Color::new(1.0, 1.0, 1.0, 1.0));
+    // without the material the window paints its own fill, and its labels keep the theme's colours
+    assert_eq!(paint(&mut painter, false), label);
+}

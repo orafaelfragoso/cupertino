@@ -30,9 +30,9 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
     ConstraintAdjust, DragImage, DragProgress, DragRequest, DragToken, DropAction, DropToken,
-    KeyEvent, Keysym, MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PointerEvent,
-    PopupEdge, PopupSpec, PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent,
-    WindowId, WindowRequest, WindowSpec, WindowSystem,
+    GlassTone, KeyEvent, Keysym, MaterialRegion, MenuDescription, PlatformError, PlatformEvent,
+    PointerEvent, PopupEdge, PopupSpec, PresentOutcome, SystemAppearance, Timestamp, TouchEvent,
+    WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderError, RenderRequest, UiRenderer,
@@ -1016,6 +1016,25 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 return Ok(());
             }
             WindowEvent::Presented { .. } | WindowEvent::Discarded { .. } => return Ok(()),
+            WindowEvent::GlassTone { region, tone } => {
+                let tones = &mut w.painter.tones;
+                let slot = match region {
+                    None => &mut tones.window,
+                    Some(i) if i < w.materials.len() => {
+                        if tones.regions.len() <= i {
+                            tones.regions.resize(i + 1, GlassTone::Appearance);
+                        }
+                        &mut tones.regions[i]
+                    }
+                    Some(_) => return Ok(()),
+                };
+                if *slot != tone {
+                    *slot = tone;
+                    // what lies on the glass paints again with the colours of its face
+                    w.repaint();
+                }
+                return Ok(());
+            }
             WindowEvent::Drop(event) => {
                 self.drop_event(i, event);
                 return Ok(());
@@ -1627,6 +1646,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.materials.clear();
                 painting = paint(w, &self.tree);
             }
+            // regions past the new count lose their backdrops; one made again later starts unmeasured
+            let kept = w.materials.len();
+            w.painter.tones.regions.truncate(kept);
             w.damage.invalidate();
         }
         let damage = w.damage.damage(&painting);
@@ -2097,6 +2119,10 @@ fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
     let shown = system
         .request(w.id, WindowRequest::Backdrop(wanted.clone()))
         .is_ok();
+    // another material is a new backdrop, whose face nothing measured yet
+    if wanted.as_ref().map(|b| &b.material) != w.backdrop.as_ref().map(|b| &b.material) {
+        w.painter.tones.window = GlassTone::Appearance;
+    }
     w.backdrop = wanted.filter(|_| shown);
     // the material is shaped with the next present, which a change that paints nothing new (new corners on a material
     // the compositor draws) must still bring

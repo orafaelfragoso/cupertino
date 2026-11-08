@@ -8,11 +8,12 @@ use crate::route::Geometry;
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_ui_platform::{GlassRegion, MaterialRegion, Timestamp};
+use cupertino_ui_platform::{GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
 use cupertino_ui_render::{
     DisplayList, Effect, Group, ImageResource, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PathVerb, ResourceId, Shape, Transform,
 };
+use cupertino_ui_theme::FaceTone;
 use cupertino_ui_theme::{Color, ColorRole, StateVariant};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -35,6 +36,56 @@ struct Painted {
     materials: Option<bool>,
     /// The material the window shows under the node.
     material: Option<NodeMaterial>,
+    /// The glass the node painted on ([`Foreground`]).
+    foreground: Foreground,
+}
+
+/// The glass a node paints on, which picks the colours of its text and symbols: the tone of the glass it lies on, if
+/// any, and, for a node that asked for a material, the tone of the region it would get.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Foreground {
+    on: Option<GlassTone>,
+    own: GlassTone,
+}
+
+/// The tone of each glass region of a window ([`WindowEvent::GlassTone`](cupertino_ui_platform::WindowEvent)): the
+/// window's own material, and each region of the last materials asked for, by index.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct GlassTones {
+    pub(crate) window: GlassTone,
+    pub(crate) regions: Vec<GlassTone>,
+}
+
+impl GlassTones {
+    fn region(&self, i: usize) -> GlassTone {
+        self.regions.get(i).copied().unwrap_or_default()
+    }
+}
+
+/// The face tone a glass tone draws text with: none for the appearance's.
+fn face(tone: GlassTone) -> Option<FaceTone> {
+    match tone {
+        GlassTone::Appearance => None,
+        GlassTone::Dark => Some(FaceTone::Dark),
+        GlassTone::Light => Some(FaceTone::Light),
+    }
+}
+
+/// `env` with the theme of text on glass of `tone` ([`ThemeTokens::on_glass`](cupertino_ui_theme::ThemeTokens)).
+fn glass_environment(env: &Environment, tone: GlassTone) -> Environment {
+    Environment {
+        theme: Arc::new(env.theme.on_glass(face(tone))),
+        ..env.clone()
+    }
+}
+
+/// The index of a tone in the painter's glass environments.
+fn tone_index(tone: GlassTone) -> usize {
+    match tone {
+        GlassTone::Appearance => 0,
+        GlassTone::Dark => 1,
+        GlassTone::Light => 2,
+    }
 }
 
 /// The most compositor materials one window shows under its nodes ([`PaintCx::material`]); a node past them paints its
@@ -160,6 +211,10 @@ pub(crate) struct Painter {
     revision: u64,
     /// The environment the kept paint was made in; any other repaints every node.
     painted_in: Option<Environment>,
+    /// The tone of the window's glass regions; a change repaints what lies on the region.
+    pub(crate) tones: GlassTones,
+    /// The environments of text on glass of each tone, made from `painted_in`.
+    glass_envs: Option<[Environment; 3]>,
 }
 
 /// Whether paint made in `a` is paint made in `b`: the same theme, text system, icons and scale, the same direction.
@@ -225,7 +280,28 @@ impl Painter {
         {
             self.nodes.clear();
             self.painted_in = Some(input.env.clone());
+            self.glass_envs = None;
         }
+        let glass_envs = self
+            .glass_envs
+            .get_or_insert_with(|| {
+                [GlassTone::Appearance, GlassTone::Dark, GlassTone::Light]
+                    .map(|tone| glass_environment(input.env, tone))
+            })
+            .clone();
+        // The glass each node lies on, as its children inherit it: the window's material when it is glass and shown,
+        // and below a node that shows glass that node's region.
+        let mut on_glass: HashMap<NodeId, Option<GlassTone>> = HashMap::new();
+        let window_glass = match input.background {
+            WindowBackground::Surface { surface, .. } if input.backdrop => input
+                .env
+                .theme
+                .surface(surface)
+                .material
+                .and_then(GlassStyle::of_material)
+                .map(|_| self.tones.window),
+            _ => None,
+        };
         let mut list = DisplayList::default();
         let mut animating = Vec::new();
         let mut resources = PaintResources::default();
@@ -262,12 +338,22 @@ impl Painter {
                     shown.translate(-origin.x, -origin.y)
                 });
             let can_show = input.materials && materials.len() < MAX_MATERIALS;
+            let inherited = match node.parent {
+                Some(parent) => on_glass.get(&parent).copied().flatten(),
+                None => window_glass,
+            };
+            let foreground = Foreground {
+                on: inherited,
+                own: self.tones.region(materials.len()),
+            };
             let fresh = self.nodes.get(&id).is_some_and(|p| {
                 p.source == source
                     && p.background == background
                     && p.size == size
                     && p.visible.is_none_or(|v| v == visible)
                     && p.materials.is_none_or(|m| m == can_show)
+                    && p.foreground.on == foreground.on
+                    && (p.materials.is_none() || p.foreground.own == foreground.own)
             });
             if !fresh {
                 let mut ops = Vec::new();
@@ -325,7 +411,12 @@ impl Painter {
                     &mut PaintCx {
                         node: id,
                         size,
-                        env: input.env,
+                        env: match inherited {
+                            Some(tone) => &glass_envs[tone_index(tone)],
+                            None => input.env,
+                        },
+                        plain_env: input.env,
+                        glass_env: &glass_envs[tone_index(foreground.own)],
                         focused,
                         focus_visible: focused && input.focus_visible,
                         window_active: input.window_active,
@@ -359,10 +450,19 @@ impl Painter {
                         visible: reads_visible.then_some(visible),
                         materials: asked_material.then_some(can_show),
                         material,
+                        foreground,
                     },
                 );
             }
             let painted = &self.nodes[&id];
+            on_glass.insert(
+                id,
+                match painted.material {
+                    Some(NodeMaterial { glass: Some(_), .. }) => Some(foreground.own),
+                    Some(_) => None,
+                    None => inherited,
+                },
+            );
             blank.push(painted.ops.is_empty() && painted.group.is_none());
             if let Some(material) = painted.material {
                 let shown = visible.translate(origin.x, origin.y);

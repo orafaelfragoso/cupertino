@@ -11,15 +11,16 @@ use cupertino_geometry::{Rect, Size};
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
 use cupertino_modifiers::Profile;
 use cupertino_protocol_app::{
-    AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop as Material,
+    AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop as Material, BackdropId,
+    BackdropTone,
 };
 use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken,
     ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
-    DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, KeyEvent, Keysym, MaterialRegion,
-    MenuDescription, PlatformError, PlatformEvent, PopupSpec, PresentOutcome, SystemAppearance,
-    Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent, Keysym,
+    MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
+    SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -165,6 +166,32 @@ fn set_look(
             backdrop.set_material(name);
             Ok(())
         }
+    }
+}
+
+/// The window and region of the window's material that `backdrop` draws: `None` for the window's own backdrop, or
+/// the index of the region under a part of it.
+fn glass_region(windows: &[Window], backdrop: BackdropId) -> Option<(WindowId, Option<usize>)> {
+    windows.iter().find_map(|w| {
+        if w.backdrop
+            .as_ref()
+            .is_some_and(|b| b.material.id() == backdrop)
+        {
+            return Some((w.id, None));
+        }
+        w.materials
+            .iter()
+            .position(|m| m.material.id() == backdrop)
+            .map(|i| (w.id, Some(i)))
+    })
+}
+
+/// The toolkit's tone for the protocol's.
+fn glass_tone(tone: BackdropTone) -> GlassTone {
+    match tone {
+        BackdropTone::Appearance => GlassTone::Appearance,
+        BackdropTone::Dark => GlassTone::Dark,
+        BackdropTone::Light => GlassTone::Light,
     }
 }
 
@@ -868,6 +895,17 @@ impl WaylandWindowSystem {
                         }
                         Some(event) if apply_appearance(&mut self.appearance, event) => {
                             out.push(PlatformEvent::Appearance(self.appearance));
+                        }
+                        Some(AppEvent::BackdropTone { backdrop, tone }) => {
+                            if let Some((window, region)) = glass_region(&self.windows, *backdrop) {
+                                out.push(PlatformEvent::Window {
+                                    window,
+                                    event: WindowEvent::GlassTone {
+                                        region,
+                                        tone: glass_tone(*tone),
+                                    },
+                                });
+                            }
                         }
                         Some(event) => {
                             for w in &mut self.windows {

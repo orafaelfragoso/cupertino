@@ -690,6 +690,15 @@ impl SystemIcons {
         None
     }
 
+    /// Whether an asset pack gives the raster icon `name` as a file of its own (a PNG or a full-colour SVG), rather than
+    /// through the host icon theme or not at all.
+    pub fn pack_has_raster(&self, name: &str) -> bool {
+        self.assets
+            .icon_sources(&semantic(name), 32)
+            .into_iter()
+            .any(|(_, s)| matches!(s, IconSource::Raster(_) | IconSource::Svg(_)))
+    }
+
     /// Whether a source of the packs gives the raster icon `name` (at `px` pixels): `false` means it is drawn as a placeholder.
     pub fn has_raster(&mut self, name: &str, px: u32) -> bool {
         let name = semantic(name);

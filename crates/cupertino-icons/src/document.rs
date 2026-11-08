@@ -201,6 +201,11 @@ impl FileIcons {
         self.system.raster(name, px)
     }
 
+    /// Whether an asset pack gives the raster icon `name` as a file of its own ([`SystemIcons::pack_has_raster`]).
+    pub fn pack_has(&self, name: &str) -> bool {
+        self.system.pack_has_raster(name)
+    }
+
     /// The emblem of `badge` at `px` × `px` device pixels (the placeholder when no pack provides it).
     pub fn badge(&mut self, badge: Badge, px: u32) -> &tiny_skia::Pixmap {
         self.system.raster(badge.icon_name(), px)

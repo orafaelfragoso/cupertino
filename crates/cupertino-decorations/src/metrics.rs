@@ -146,8 +146,6 @@ pub struct DecorationMetrics {
     pub resize_corner: f64,
     /// corner resize zone of the bottom-right corner.
     pub resize_corner_bottom_right: f64,
-    /// rim width in device pixels.
-    pub rim_width_px: f64,
 }
 
 impl Default for DecorationMetrics {
@@ -190,7 +188,6 @@ impl DecorationMetrics {
             resize_inset: 3.0,
             resize_corner: 12.0,
             resize_corner_bottom_right: 15.0,
-            rim_width_px: 1.0,
         }
     }
 

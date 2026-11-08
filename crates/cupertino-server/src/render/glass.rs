@@ -32,8 +32,8 @@ use super::{
 };
 use crate::render::shader_rect::{to_physical_rect, ElementCache, ElementKey, Sig};
 
-const GLASS_VERT: &str = include_str!("../../shaders/glass.vert");
-const GLASS_FRAG: &str = include_str!("../../shaders/glass.frag");
+pub(super) const GLASS_VERT: &str = include_str!("../../shaders/glass.vert");
+pub(super) const GLASS_FRAG: &str = include_str!("../../shaders/glass.frag");
 
 /// Uniform block binding of the glass composite.
 const BIND_GLASS: GLuint = 2;

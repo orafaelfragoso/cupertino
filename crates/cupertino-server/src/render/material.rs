@@ -1106,6 +1106,61 @@ mod tests {
         assert_ne!(e.current_commit(), before);
     }
 
+    /// The source of a shader of `cupertino-glass`'s GLSL ES port, which the server's shaders copy.
+    fn glass_shader(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../cupertino-glass/shaders/gles")
+            .join(name);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    /// The text of `source` from the line holding `start` through the first line after it holding `end`.
+    fn span<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        let from = source.find(start).unwrap_or_else(|| panic!("no {start:?}"));
+        let to = source[from..]
+            .find(end)
+            .unwrap_or_else(|| panic!("no {end:?} after {start:?}"))
+            + from
+            + end.len();
+        &source[from..to]
+    }
+
+    #[test]
+    fn the_shaders_shared_with_the_glass_crate_stay_its_copies() {
+        // drawn by the server exactly as the glass crate draws them
+        for (name, server) in [
+            ("fullscreen.vert", FULLSCREEN_VERT),
+            ("downsample.frag", DOWNSAMPLE_FRAG),
+            ("blur.frag", BLUR_FRAG),
+            ("color.frag", COLOR_FRAG),
+            ("glass.vert", super::glass::GLASS_VERT),
+            ("glass.frag", super::glass::GLASS_FRAG),
+        ] {
+            assert!(
+                server == glass_shader(name),
+                "shaders/{name} is no longer a copy of cupertino-glass/shaders/gles/{name}"
+            );
+        }
+        // the material region is placed and sampled through the compositor's frame projection, but its uniform block,
+        // mask, blend modes and fill layers are the glass crate's
+        let (vert, frag) = (glass_shader("material.vert"), glass_shader("material.frag"));
+        let block = |s: &str| span(s, "layout(std140) uniform Region", "} R;").to_owned();
+        assert_eq!(block(MATERIAL_VERT), block(&vert), "material.vert block");
+        assert_eq!(block(MATERIAL_FRAG), block(&frag), "material.frag block");
+        for (start, end) in [
+            ("float region_sdf(", "\n}\n"),
+            ("float soft_light(", "\n}\n"),
+            ("vec3 blend(", "\n}\n"),
+            ("int n = int(R.info.x);", "frag_color = "),
+        ] {
+            assert_eq!(
+                span(MATERIAL_FRAG, start, end),
+                span(&frag, start, end),
+                "material.frag: {start}"
+            );
+        }
+    }
+
     #[test]
     fn gpu_recipe_flattens_the_menu_bar() {
         let g = GpuRecipe::new(&recipe(Appearance::Light, "MenuBar"));

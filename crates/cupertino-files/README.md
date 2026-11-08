@@ -84,8 +84,9 @@ environment at startup, so no program it starts inherits it, and raises its own 
 The window is a split view: the sidebar of places, then a navigation stack whose toolbar holds back / forward, the
 folder's name (Section text, cut with an ellipsis), the View, Tags and Action pop-up buttons (`kit::toolbar`; each opens
 its menu below it: the view modes, the tags of the selection, the selection's context menu or the folder's) and the
-search field, over the folder in the icon view (`kit::grid`, laid out by `layout::icon`; a name wraps to the lines its cell
-holds and the last ends in an ellipsis) or the list view (`kit::list`: the toolkit's outline table, Name, Date Modified,
+search field, over the folder in the icon view (`kit::grid`, laid out by `layout::icon` from a 10 pt leading and 8 pt
+top inset; a name is centred and wraps to two lines, a longer one keeping its first line and cut in the middle of the
+rest with an ellipsis, so its end and extension stay) or the list view (`kit::list`: the toolkit's outline table, Name, Date Modified,
 Size, Kind, each cut with an ellipsis in its cell; a type the kind table does not list is described from its MIME
 subtype (`mime::kind_description`), in capitals only when it is an abbreviation of up to four letters and digits, else
 in words with the first capitalised and, in a subtype of several words, each of up to three kept as an abbreviation
@@ -94,8 +95,10 @@ it in place). The toolbar is the window's drag region (Kit's
 `NavigationStack`, under the server's title bar): a drag where no control lies moves the window and a double click there
 zooms it, as the old window's unified bar did; back / forward, the pop-up buttons and the search field keep their
 presses, and from the keyboard the compositor's Zoom shortcut (Super+Ctrl+Z by default) and the menu bar's Window menu
-zoom, minimize and tile it. A window opens in the icon view. Under the folder the path bar and the status bar can be
-shown; both are hidden by default. The path bar names the folder chain from the root (or from Trash / Recents), each
+zoom, minimize and tile it. Under the folder the path bar and the status bar can be shown from the View menu; both
+are hidden by default. Each window keeps its view mode and bars while it is open, and the last choice made in any
+window is kept in `$XDG_CONFIG_HOME/cupertino/files/window.json` (`window_prefs`): a window opened later, in this launch
+or the next, starts with it (the icon view without the bars at first). The path bar names the folder chain from the root (or from Trash / Recents), each
 folder with its icon, and a click on one, or Space or Return on it, goes there (each folder is a Tab stop, and the bar
 reads as the group "Path"); the status bar reads "N items, X available" (`statvfs` of the
 folder, read again whenever the listing changes and after a transfer). Changes on disk appear live. The sidebar shows
@@ -115,7 +118,9 @@ the next header and from the last into the rows; the table hands Files only its 
 **Item images** (`kit::item_icons`). Each item in the icon view, the list view and a drag image wears the icon of its
 type from the asset packs and the host icon theme, through the toolkit's `cupertino_kit::file_icons::FileIcons`: the
 icon of the type's kind or of its nearest ancestor's (PDF, image, audio, video, archive, text, program; an office
-document packed in a zip is not an archive), else the generic document icon, else the packs' placeholder. The home
+document packed in a zip is not an archive), else the generic document icon, else the packs' placeholder. Folders, text files, other documents and archives that
+no asset pack draws itself wear Files' own art (`item_art`: a folder, a page with a folded corner, with lines of text for
+text files, a zipper for archives), drawn in code at 1× and 2×; a pack's own icon for them wins. The home
 folder and the user directories wear their own folder icons (`places::folder_icons`), and a symbolic link the alias
 badge in its bottom-left corner. Each icon is drawn at 1× and 2× and keeps its image for the life of the process.
 A PNG, JPEG or WebP picture shows its thumbnail once it is made (a symbolic link keeps its type's icon and badge).
@@ -133,11 +138,15 @@ again; the old thumbnail shows until the new one is made, and a file that failed
 without them every icon is the built-in placeholder and no thumbnail is made, which is what the tests use unless they
 pass a fixture pack and a temporary cache.
 
-The sidebar lists the design's default Favorites, Recents, Applications, Desktop, Documents and Downloads (the
-nearby-sharing item has no counterpart), those that exist, and the computer (the file system root, under the pretty
-host name of `/etc/machine-info`, else the host name) and Trash under Locations; names are cut at the tail. The places
+The sidebar lists the design's default Favorites, headed by the home folder (a house and the user's name), then
+Applications, Desktop, Documents and Downloads (the nearby-sharing item has no counterpart), those that exist; the
+computer (the file system root, under the pretty host name of `/etc/machine-info`, else the host name), removable media
+and Trash under Locations; and a Tags heading once a listed item carries a tag. Names are cut at the tail. The sidebar
+takes the toolkit's neutral look for lists of places (`SidebarLook::Neutral`): the selected row in a neutral tint with
+its label semibold, the Favorites' symbols in the accent colour and the others' in the secondary label colour. The places
 are live (`kit::places`): a change of the user directories or their configuration shows at once, and Trash comes with
-the first item trashed and leaves when the trash's folder goes. Recents is the virtual folder `recent:///`: the existing files of
+the first item trashed and leaves when the trash's folder goes. Recents (Go › Recents, Shift+Primary+F; Go › Home is
+Shift+Primary+H) is the virtual folder `recent:///`, not a sidebar row: the existing files of
 `$XDG_DATA_HOME/recently-used.xbel`, listed again whenever the file is rewritten, in the window's sort order.
 Applications is the first `applications` folder of `$XDG_DATA_DIRS`, a real folder rather than a merged virtual one
 (approximate).
@@ -155,6 +164,8 @@ rows are `menu_spec`'s, walked in order (`kit::context`): rows without a backend
 Tags submenu of the seven colours (checked where every selected item has the tag), the view row is "as Icons", "as
 List" and the two views that are not built, disabled. Toolkit menus cannot swap rows while a modifier is held, so an
 alternate that does something (Open in New Window, Move Item Here) is a row of its own after the row it belongs to.
+A row whose action has keys in the window shows them at its trailing edge, from the same table as the menu bar's items
+(`MenuAction::chord`, shown by `menu_bar::glyphs`: "⌘O", "⇧⌘N", "⌘⌫").
 The menus track the pointer and keys as every menu does (`cupertino-ui-controls`, `cupertino-menu-model`'s
 `tracking`): the secondary press that opens the menu, dragged onto a row, chooses it on release, and a quick click
 leaves the menu open; a submenu opens after a rest on its row and stays open while the pointer heads into it (Sort By
@@ -362,7 +373,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `selection` | selection model | `Selection::{mouse_down, mouse_up, click_empty, move_focus, on_insert, on_remove, on_move}`, `Modifiers` |
 | `rename`, `typeselect`, `spring` | interaction logic | `RenameTrigger`, `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`; `TypeSelect::{type_text, tab}`; `SpringLoad::{hover, due, cancel, flashing}` (a drag's dwell over folders, with `SPRING_DELAY` and `SPRING_FLASH`) |
 | `context_menu`, `menu_spec` | context menus | `menu_spec::{item_menu, background_menu, condense}` (the rows in order), `MenuItem`, `Command`, `common_apps` (the Open With list of a selection) |
-| `menu_bar`, `search_field` | the menu bar and the search field | `menu_bar(MenuState)`, `MenuAction`, `chords`, `enabled`; `SearchWidth::{want, tick, follow_toolbar, width}`, `open_width` |
+| `menu_bar`, `search_field` | the menu bar and the search field | `menu_bar(MenuState)`, `MenuAction` (`chord`: its keys), `glyphs`, `chords`, `enabled`; `SearchWidth::{want, tick, follow_toolbar, width}`, `open_width` |
 | `name_edit`, `operations` | rename in place and file changes | `NameEdit::{field, field_mut, commit}`; `rename_item` (no replace), `new_folder`, `drop_action`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`), `duplicate_with` (Duplicate with them), `stopped` |
 | `trash` | freedesktop Trash 1.0 | `Trash::{trash, trash_unsized, list, restore, delete, empty, purge_older_than}`, `PendingSize`; home and mount-point trash, `.trashinfo`, `directorysizes`; `trashed_item`, `forget` (an item moved out of a trash) |
 | `thumbnail` | freedesktop thumbnail cache | `Thumbnailer::{lookup, lookup_at_least, create, get_or_create}`, `ThumbSize::for_icon`, `file_uri`, failure markers |
@@ -370,8 +381,10 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `open` | opening files | `open_command` (default application of `mimeapps.list` through `cupertino-apps`; `Terminal=true` under `--terminal`), `command_with`, `open_with` (Open With list: default first, rest by name), `OpenError` |
 | `layout::icon` | icon view | `ideal_cell_size`, `max_title_lines`, `layout` (flow / justified, 32 pt section headers), `IconLayout::{hit, hits_in_rect, neighbour}`, `FreeGrid` |
 | `layout::list` | list view | `row_height`, `layout` (columns, rows with level and expanded state, disclosure, indentation), `ListLayout::{row_at, visible_rows}` |
-| `history`, `places`, `recents` | navigation state | `History::{visit, back, forward}`; `standard_places` (Recents, Applications, Desktop, Documents, Downloads, the computer, Trash), `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder`; `recents::{parse_xbel, recent_entries}` (the bookmark file is read with `cupertino_apps::recent`, which `parse_xbel` and `XBEL_NAME` re-export) |
+| `history`, `places`, `recents` | navigation state | `History::{visit, back, forward}`; `standard_places` (the home folder, Applications, Desktop, Documents, Downloads, the computer, Trash), `recents_place`, `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder`; `recents::{parse_xbel, recent_entries}` (the bookmark file is read with `cupertino_apps::recent`, which `parse_xbel` and `XBEL_NAME` re-export) |
 | `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space, visit, return_to, is_loading}`: model, history (a `Visit` to go back to, with its selection), the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
+| `item_art` | Files' own item images | `Art::{for_icon}` (folder, text, document, archive), `draw(art, px, seed)` (premultiplied RGBA) |
+| `window_prefs` | the view and bars kept between windows | `WindowPrefs::{parse, text, load, save}`, `location` |
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name`, `finished` (an operation that ended unseen) → `Notice`; `Notices::{start, post, flush}`; `shown`, `escape`, `explained` (an error as a sentence for a window) |
@@ -470,7 +483,8 @@ locked -- env CUPERTINO_REPAINT_DIR=DIR BINARY --ignored --nocapture --exact rep
 * The folder icons of the user directories are read when the application starts; a user directory moved later keeps
   the plain folder icon until Files starts again.
 * The pasteboard is the application's own, not the session's clipboard.
-* Per-folder view settings, the sidebar width and the bars' visibility are not saved.
+* Per-folder view settings and the sidebar width are not saved; the view mode and the bars are kept for the next window,
+  not per folder.
 * Recents is listed in the window's sort order, not by last use, and opening a file does not add it to the list.
   Applications shows the desktop entry files of one folder; opening one does not launch the application.
 * The lock badge is not drawn, because entries carry no permission bits.

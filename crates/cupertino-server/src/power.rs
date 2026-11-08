@@ -293,7 +293,16 @@ mod bus {
     const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 
     pub fn start(events: Sender<BusEvent>, requests: Receiver<BusRequest>) -> zbus::Result<()> {
-        let conn = Connection::system()?;
+        start_on(Connection::system()?, events, requests)
+    }
+
+    /// The watchers and the request thread on `conn`, a connection to the system bus outside tests: the services are
+    /// found by their well-known names on whatever bus `conn` is on.
+    pub(super) fn start_on(
+        conn: Connection,
+        events: Sender<BusEvent>,
+        requests: Receiver<BusRequest>,
+    ) -> zbus::Result<()> {
         let ignored = |_: &zbus::Message| {
             tracing::warn!("ignored a power signal that its service did not send")
         };
@@ -608,5 +617,105 @@ mod tests {
             "the owner is heard also when it sends to the watcher alone"
         );
         assert!(hearing.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+
+    /// logind as the watcher sees it: the manager object with no inhibitor blocking anything, and no sleep delay given.
+    struct Logind;
+
+    #[zbus::interface(name = "org.freedesktop.login1.Manager")]
+    impl Logind {
+        #[zbus(property)]
+        fn block_inhibited(&self) -> String {
+            String::new()
+        }
+
+        fn inhibit(
+            &self,
+            _what: &str,
+            _who: &str,
+            _why: &str,
+            _mode: &str,
+        ) -> zbus::fdo::Result<zbus::zvariant::OwnedFd> {
+            Err(zbus::fdo::Error::AccessDenied(
+                "no delay in this test".into(),
+            ))
+        }
+    }
+
+    #[test]
+    fn the_watcher_ignores_a_forged_prepare_for_sleep_and_covers_the_session_for_logind() {
+        use super::BusEvent;
+        use std::time::{Duration, Instant};
+        const PATH: &str = "/org/freedesktop/login1";
+        const MANAGER: &str = "org.freedesktop.login1.Manager";
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        // logind's name on a private bus: the watcher never opens the system bus
+        let logind = bus
+            .blocking_builder()
+            .serve_at(PATH, Logind)
+            .unwrap()
+            .name("org.freedesktop.login1")
+            .unwrap()
+            .build()
+            .unwrap();
+        let watcher = bus.blocking_builder().build().unwrap();
+        let to = watcher.unique_name().map(|n| n.to_owned());
+        let (events, received) = smithay::reexports::calloop::channel::channel();
+        let (_requests, requests) = std::sync::mpsc::channel();
+        super::bus::start_on(watcher, events, requests).unwrap();
+        let (heard, hearing) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(event) = received.recv() {
+                if heard.send(event).is_err() {
+                    return;
+                }
+            }
+        });
+        // the next sleep or wake the watcher reports within `wait`; the other facts are skipped
+        let next_sleep = |wait: Duration| {
+            let until = Instant::now() + wait;
+            loop {
+                let left = until.checked_duration_since(Instant::now())?;
+                match hearing.recv_timeout(left).ok()? {
+                    event @ (BusEvent::Sleeping | BusEvent::Resumed) => return Some(event),
+                    _ => continue,
+                }
+            }
+        };
+
+        // another connection sends PrepareForSleep straight to the watcher and to everyone: nothing is covered
+        let impostor = bus.connect();
+        for _ in 0..100 {
+            impostor
+                .emit_signal(to.clone(), PATH, MANAGER, "PrepareForSleep", &(true,))
+                .unwrap();
+            impostor
+                .emit_signal(None::<&str>, PATH, MANAGER, "PrepareForSleep", &(true,))
+                .unwrap();
+        }
+        let ignored = next_sleep(Duration::from_millis(500));
+        assert!(ignored.is_none(), "a forged signal was taken: {ignored:?}");
+
+        // logind's own signals are taken, in order
+        logind
+            .emit_signal(None::<&str>, PATH, MANAGER, "PrepareForSleep", &(true,))
+            .unwrap();
+        assert!(matches!(
+            next_sleep(Duration::from_secs(10)),
+            Some(BusEvent::Sleeping)
+        ));
+        impostor
+            .emit_signal(to, PATH, MANAGER, "PrepareForSleep", &(false,))
+            .unwrap();
+        logind
+            .emit_signal(None::<&str>, PATH, MANAGER, "PrepareForSleep", &(false,))
+            .unwrap();
+        assert!(matches!(
+            next_sleep(Duration::from_secs(10)),
+            Some(BusEvent::Resumed)
+        ));
+        assert!(next_sleep(Duration::from_millis(300)).is_none());
     }
 }

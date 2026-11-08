@@ -974,6 +974,79 @@ mod tests {
         );
     }
 
+    /// At a fractional scale, where a capture texel does not fall on whole framebuffer pixels, every texel is filled
+    /// once: from the window where its centre lies inside it, and otherwise by one blit from a pixel inside the window.
+    #[test]
+    fn at_a_fractional_scale_each_texel_outside_the_window_is_filled_once_from_inside_it() {
+        let scale = Scale::from(1.5);
+        for (offset, size_pt) in [
+            ((20.3, 10.7), (150.2, 60.1)),
+            ((0.4, 33.3), (77.7, 9.9)),
+            ((101.1, 0.0), (99.9, 100.9)),
+        ] {
+            let window = to_physical_rect(Rectangle::new(offset.into(), size_pt.into()), scale);
+            let within = [window.loc.x, window.loc.y, window.size.w, window.size.h];
+            // an odd capture rectangle, so the half-scale capture is not a whole number of pixels per texel
+            let fb = [3, 7, 301, 151];
+            let size = (
+                (fb[2] as f32 * GLASS_BACKDROP_SCALE).ceil() as i32,
+                (fb[3] as f32 * GLASS_BACKDROP_SCALE).ceil() as i32,
+            );
+            let blits = edge_blits(fb, size, within);
+            let inside = |x: f32, y: f32| {
+                x >= within[0] as f32
+                    && x <= (within[0] + within[2]) as f32
+                    && y >= within[1] as f32
+                    && y <= (within[1] + within[3]) as f32
+            };
+            for (src, _) in &blits {
+                assert!(
+                    inside(src[0] as f32, src[1] as f32) && inside(src[2] as f32, src[3] as f32),
+                    "{offset:?}: read from inside the window: {src:?}"
+                );
+            }
+            for ty in 0..size.1 {
+                for tx in 0..size.0 {
+                    let filled = blits
+                        .iter()
+                        .filter(|(_, d)| d[0] <= tx && tx < d[2] && d[1] <= ty && ty < d[3])
+                        .count();
+                    // where the capture keeps its own texel, that texel's centre lies in the window
+                    let centre = (
+                        fb[0] as f32 + (tx as f32 + 0.5) * fb[2] as f32 / size.0 as f32,
+                        fb[1] as f32 + (ty as f32 + 0.5) * fb[3] as f32 / size.1 as f32,
+                    );
+                    assert!(
+                        filled == 1 || (filled == 0 && inside(centre.0, centre.1)),
+                        "{offset:?}: texel ({tx}, {ty}) at {centre:?} filled {filled} times"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Glass reading only part of what lies below it is another backdrop: the part is part of its identity, so a window
+    /// that moves or resizes captures again, and the same part keeps the same identity.
+    #[test]
+    fn the_part_a_container_reads_is_part_of_its_identity() {
+        let container = || {
+            GlassContainer::new(Container::new(
+                vec![GlassShape::new([40.0, 30.0, 200.0, 60.0], 16.0)],
+                0.0,
+                GlassMode::default(),
+            ))
+        };
+        let window = Rectangle::<f64, Logical>::new((10.0, 20.0).into(), (400.0, 300.0).into());
+        let moved = Rectangle::new((11.0, 20.0).into(), (400.0, 300.0).into());
+        let (all, part) = (container(), container().within(window));
+        assert_eq!(all.within, None);
+        assert_eq!(part.within, Some(window));
+        assert_ne!(all.key, part.key);
+        assert_eq!(part.key, container().within(window).key);
+        assert_ne!(part.key, container().within(moved).key);
+        assert_ne!(part.state(1, 1.0), container().within(moved).state(1, 1.0));
+    }
+
     #[test]
     fn a_flipped_projection_still_maps_the_area_onto_its_capture() {
         // rows from the top: y is mirrored in clip space

@@ -4,7 +4,7 @@
 
 use crate::cx::{Effects, EventCx, Status};
 use crate::tree::Tree;
-use crate::{Environment, Event, NodeId, Phase, Propagation};
+use crate::{Environment, Event, NodeId, Phase, Propagation, WindowKey};
 use cupertino_geometry::{Point, Rect};
 use std::collections::HashMap;
 
@@ -34,6 +34,7 @@ pub(crate) struct Route<'a, M> {
     pub(crate) geometry: &'a Geometry,
     pub(crate) env: &'a Environment,
     pub(crate) status: Status,
+    pub(crate) popups: &'a [(WindowKey, Rect)],
     pub(crate) effects: &'a mut Effects<M>,
 }
 
@@ -83,6 +84,7 @@ impl<M: 'static> Route<'_, M> {
             placement: self.geometry.get(&node).copied(),
             env: self.env,
             status: self.status,
+            popups: self.popups,
             effects: self.effects,
         };
         n.widget.event(&mut *n.state, event, &mut cx)

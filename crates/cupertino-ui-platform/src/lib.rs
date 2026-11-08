@@ -451,6 +451,9 @@ pub enum WindowEvent {
     Ime(ImeEvent),
     /// The compositor closed a popup.
     PopupDone,
+    /// The compositor placed a popup at this rectangle of its parent, in points: beside its anchor, or flipped or slid
+    /// where there was no room. Sent with each placement, before the [`WindowEvent::Configure`] that comes with it.
+    PopupPlaced(Rect),
     /// The compositor showed a presented frame at `time`.
     Presented {
         frame: RenderFrameId,

@@ -11,9 +11,11 @@
 //!
 //! Any process of the user could own the daemon's bus name while the daemon is not running, so the name alone is not
 //! trusted: [`fetch`] asks the bus for the name's owner, reads the owner's process from the credentials the bus gives
-//! and asks that very connection only when the process is unsandboxed and runs `cupertino-notifications` from this
-//! program's own directory ([`daemon_program`]). Any other owner gets no question and the list is empty, so no other
-//! program can put words on the lock screen.
+//! and asks that very connection only when the process is unsandboxed and runs one of the daemon's programs
+//! ([`daemon_programs`]): `cupertino-notifications` from this program's own directory, or found on `PATH` the way the
+//! server finds the shell processes it starts, when only root can change that file and the directories above it (so a
+//! program the user put in a `PATH` directory of their own does not count). Any other owner gets no question and the list
+//! is empty, so no other program can put words on the lock screen.
 
 use cupertino_geometry::Rect;
 
@@ -143,11 +145,39 @@ pub fn more_text(n: usize) -> String {
     }
 }
 
-/// The program the daemon runs as `/proc` names it: `cupertino-notifications` in the directory of `own`, this program's
-/// path. A program replaced on disk while it runs is named with " (deleted)" after its path; that mark is not part of
-/// the directory or the name compared.
+/// The file name of the daemon's program.
+pub const DAEMON: &str = "cupertino-notifications";
+
+/// The program the daemon runs as `/proc` names it when it is installed beside this one: [`DAEMON`] in the directory of
+/// `own`, this program's path. A program replaced on disk while it runs is named with " (deleted)" after its path; that
+/// mark is not part of the directory or the name compared.
 pub fn daemon_program(own: &std::path::Path) -> std::path::PathBuf {
-    own.with_file_name("cupertino-notifications")
+    own.with_file_name(DAEMON)
+}
+
+/// Every program the daemon may run, as `/proc` names a program (links resolved): [`daemon_program`] of `own`, then
+/// [`DAEMON`] in each directory of `path` (the `PATH` variable, searched as the server searches it for the shell
+/// processes it starts) where the file exists and `trusted` accepts it. The lock screen trusts only a file that root
+/// alone can change ([`cupertino_defaults::system::only_root_can_change`]).
+pub fn daemon_programs(
+    own: &std::path::Path,
+    path: Option<&std::ffi::OsStr>,
+    trusted: impl Fn(&std::path::Path) -> bool,
+) -> Vec<std::path::PathBuf> {
+    let mut programs = vec![daemon_program(own)];
+    for dir in path.map(std::env::split_paths).into_iter().flatten() {
+        // a relative entry names a directory of whoever starts the lock screen: not looked in
+        if !dir.is_absolute() {
+            continue;
+        }
+        let Ok(program) = std::fs::canonicalize(dir.join(DAEMON)) else {
+            continue;
+        };
+        if program.is_file() && trusted(&program) && !programs.contains(&program) {
+            programs.push(program);
+        }
+    }
+    programs
 }
 
 /// `exe` as `/proc/<pid>/exe` names it, without the mark of a program replaced on disk since it started.
@@ -164,7 +194,7 @@ pub use bus::{fetch, fetch_served_by, watch};
 
 #[cfg(feature = "dbus")]
 mod bus {
-    use super::{daemon_program, from_rows, live_path, Notice};
+    use super::{daemon_programs, from_rows, live_path, Notice};
     use cupertino_peer::signal::{from_owner, sent_by_bus};
     use cupertino_peer::Caller;
     use std::path::Path;
@@ -179,16 +209,24 @@ mod bus {
     const INTERFACE: &str = "org.cupertino.NotificationCenter1";
 
     /// The list the daemon gives the lock screen now, asked only of the real daemon ([`fetch_served_by`] with
-    /// [`daemon_program`] of this program). No daemon on the bus is an empty list.
+    /// [`daemon_programs`] of this program and `PATH`). No daemon on the bus is an empty list.
     pub fn fetch(session: &Connection) -> zbus::Result<Vec<Notice>> {
         let own = std::env::current_exe()
             .map_err(|e| zbus::Error::Failure(format!("this program's path: {e}")))?;
-        fetch_served_by(session, &daemon_program(&live_path(&own)))
+        let programs = daemon_programs(
+            &live_path(&own),
+            std::env::var_os("PATH").as_deref(),
+            cupertino_defaults::system::only_root_can_change,
+        );
+        fetch_served_by(session, &programs)
     }
 
-    /// The list, asked of the owner of the daemon's name only when it is an unsandboxed process running `program`;
-    /// any other owner is an error and is not asked. No owner is an empty list.
-    pub fn fetch_served_by(session: &Connection, program: &Path) -> zbus::Result<Vec<Notice>> {
+    /// The list, asked of the owner of the daemon's name only when it is an unsandboxed process running one of
+    /// `programs`; any other owner is an error and is not asked. No owner is an empty list.
+    pub fn fetch_served_by(
+        session: &Connection,
+        programs: &[std::path::PathBuf],
+    ) -> zbus::Result<Vec<Notice>> {
         let dbus = DBusProxy::new(session)?;
         let name = BusName::try_from(BUS_NAME)?;
         let owner = match dbus.get_name_owner(name) {
@@ -201,14 +239,17 @@ mod bus {
         let runs_program = match Caller::from_credentials(&credentials, Path::new("/proc")) {
             Caller::Process(process) => {
                 process.sandbox.is_none()
-                    && process.exe.as_deref().map(live_path).as_deref() == Some(program)
+                    && process
+                        .exe
+                        .as_deref()
+                        .map(live_path)
+                        .is_some_and(|exe| programs.contains(&exe))
             }
             Caller::Anonymous | Caller::Unclassified(_) => false,
         };
         if !runs_program {
             return Err(zbus::Error::Failure(format!(
-                "{BUS_NAME} is owned by a process that is not {}",
-                program.display()
+                "{BUS_NAME} is owned by a process that runs none of {programs:?}"
             )));
         }
         // the owner's own connection, so a new owner of the name cannot answer in its place
@@ -410,6 +451,48 @@ mod tests {
         );
     }
 
+    /// The daemon is looked for beside the lock screen and on `PATH`, as the server finds the shell processes it starts,
+    /// links resolved as `/proc` names a program; a file on `PATH` counts only when the check passes (only root can
+    /// change it), and relative or missing entries are skipped.
+    #[test]
+    fn the_daemon_is_found_beside_this_program_and_on_path_when_only_root_changes_it() {
+        use std::path::Path;
+        let dir = tempfile::tempdir().unwrap();
+        let dir = std::fs::canonicalize(dir.path()).unwrap();
+        let (bin, other, empty) = (dir.join("bin"), dir.join("other"), dir.join("empty"));
+        for d in [&bin, &other, &empty] {
+            std::fs::create_dir(d).unwrap();
+        }
+        std::fs::write(bin.join(DAEMON), "").unwrap();
+        // a link to the program, as a distribution's `/usr/bin` may hold: `/proc` names the file it leads to
+        std::os::unix::fs::symlink(bin.join(DAEMON), other.join(DAEMON)).unwrap();
+        let path = std::env::join_paths([
+            empty.as_path(),
+            Path::new("relative"),
+            bin.as_path(),
+            other.as_path(),
+        ])
+        .unwrap();
+        let own = Path::new("/opt/session/bin/cupertino-login");
+        assert_eq!(
+            daemon_programs(own, Some(&path), |_| true),
+            [
+                Path::new("/opt/session/bin/cupertino-notifications"),
+                &bin.join(DAEMON)
+            ]
+        );
+        // a file of the user's (the test's) own is not one only root can change
+        assert_eq!(
+            daemon_programs(
+                own,
+                Some(&path),
+                cupertino_defaults::system::only_root_can_change
+            ),
+            [Path::new("/opt/session/bin/cupertino-notifications")]
+        );
+        assert_eq!(daemon_programs(own, None, |_| true), [daemon_program(own)]);
+    }
+
     #[cfg(feature = "dbus")]
     struct Daemon;
 
@@ -435,7 +518,7 @@ mod tests {
         };
         let client = bus.connect();
         assert_eq!(
-            fetch_served_by(&client, std::path::Path::new("/nowhere")).unwrap(),
+            fetch_served_by(&client, &["/nowhere".into()]).unwrap(),
             Vec::new(),
             "no owner: an empty list"
         );
@@ -449,18 +532,29 @@ mod tests {
             .build()
             .unwrap();
         let own = live_path(&std::env::current_exe().unwrap());
-        let refused = fetch_served_by(&client, &daemon_program(&own));
+        let refused = fetch_served_by(&client, &[daemon_program(&own)]);
         assert!(
             refused.is_err(),
             "another program owning the name is not asked: {refused:?}"
         );
         assert!(fetch(&client).is_err(), "nor by the lock screen's fetch");
-        let listed = fetch_served_by(&client, &own).unwrap();
+        let listed = fetch_served_by(&client, &[daemon_program(&own), own.clone()]).unwrap();
         assert_eq!(
             listed.iter().map(|n| n.id).collect::<Vec<_>>(),
             [7],
             "the program expected is asked"
         );
+        // found on PATH, as the server finds the shell processes it starts: a directory where the daemon's name leads
+        // to the program that owns the name (the test's, trusted here as root's own would be)
+        let path = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(&own, path.path().join(super::DAEMON)).unwrap();
+        let programs = daemon_programs(
+            std::path::Path::new("/nowhere/cupertino-login"),
+            Some(path.path().as_os_str()),
+            |_| true,
+        );
+        let listed = fetch_served_by(&client, &programs).unwrap();
+        assert_eq!(listed.iter().map(|n| n.id).collect::<Vec<_>>(), [7]);
     }
 
     #[test]

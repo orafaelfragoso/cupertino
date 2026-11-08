@@ -10,7 +10,7 @@ layer = "shell"
 
 [features]
 default = []
-dbus = ["dep:zbus"]
+dbus = ["dep:zbus", "dep:cupertino-peer"]
 # the `cupertino-controlcenter` process: the panel on a layer surface as a client of the server
 app = [
     "dbus",
@@ -29,6 +29,7 @@ app = [
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
 cupertino-alsa = { path = "../cupertino-alsa" }
+cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-pipewire = { path = "../cupertino-pipewire" }
 cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-geometry = { path = "../cupertino-geometry" }

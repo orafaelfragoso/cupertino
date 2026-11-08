@@ -119,12 +119,23 @@ surface, ends the process with a failure status so the server restarts it.
 ## Protocols / D-Bus it speaks
 
 The process owns `org.freedesktop.Notifications` on the session bus. It requests the name with `DoNotQueue | AllowReplacement`;
+**Who may replace or close a notification.** The daemon asks the bus who sent each `Notify` and who calls
+`CloseNotification` (`cupertino_peer::identify`, the process from the daemon's `ProcessFD`). An unsandboxed process of the
+person may replace or close any notification: it can already act as the person, and the legitimate replacer cannot be
+told apart from it (`notify-send --replace-id` starts a new process for each call, an application reconnects under a new
+name). A Flatpak or Snap may replace or close only what its own sandbox instance sent (`cupertino_peer::same_instance`;
+a Snap matches only its own process, so a restarted Snap cannot close what it sent before), and a caller the bus cannot
+name nothing. A refused replacement is a new notification and a refused close does nothing, exactly as for an id that
+does not exist, so a sandboxed application learns nothing of another's ids. The daemon keeps the sending process of
+each live notification a sandboxed application sent (at most the centre's history), and forgets it with the
+notification.
+
 `replace_existing` adds `ReplaceExisting`. It also owns `org.cupertino.NotificationCenter1` at `/org/cupertino/NotificationCenter1`.
 
 | Call | Behaviour |
 |---|---|
-| `Notify` | Hints `urgency`, `category`, `transient` (not kept in the centre), `resident` (stays after an action), `image-data` / `image_data` / `icon_data` (RGB/RGBA, 8 bit), `image-path`, `desktop-entry`, `suppress-sound`. Actions are `[key, label, …]`, and key `default` is the banner click action. `replaces_id` keeps the id and restarts the timeout without re-sliding. |
-| `CloseNotification` | Removes the notification from stack and centre (`NotificationClosed`, reason 3; unknown ids are ignored). |
+| `Notify` | Hints `urgency`, `category`, `transient` (not kept in the centre), `resident` (stays after an action), `image-data` / `image_data` / `icon_data` (RGB/RGBA, 8 bit), `image-path`, `desktop-entry`, `suppress-sound`. Actions are `[key, label, …]`, and key `default` is the banner click action. `replaces_id` keeps the id and restarts the timeout without re-sliding, when the caller may change the notification (below); otherwise the call makes a new notification, as for an id that does not exist. |
+| `CloseNotification` | Removes the notification from stack and centre (`NotificationClosed`, reason 3; unknown ids are ignored, and so are ids the caller may not change). |
 | `GetCapabilities` | Configurable: `actions body body-markup persistence`. `icon-static` stays off until the cards draw `image-data`. |
 | `GetServerInformation` | Name `cupertino-notifications`, spec version `1.2`. |
 | `ToggleCentre | Opens the list or closes it. Same caller check as `SetDoNotDisturb`. |
@@ -225,7 +236,7 @@ cargo test -p cupertino-notifications
 
 | Test | Proves |
 |---|---|
-| `tests/dbus_integration.rs` | The server against a real client on a private `dbus-daemon`. Skipped when `dbus-daemon` is not installed. `Notify` caps the application name, summary and body; the lock screen gets only what the policy allows (redacted, full with Always, nothing for an application kept off it, empty unlocked), `LockScreenChanged` at each change, and `Applications`. |
+| `tests/dbus_integration.rs` | The server against a real client on a private `dbus-daemon`. Skipped when `dbus-daemon` is not installed. `Notify` caps the application name, summary and body; the lock screen gets only what the policy allows (redacted, full with Always, nothing for an application kept off it, empty unlocked), `LockScreenChanged` at each change, and `Applications`; a caller over anonymous TCP (no process the bus can name) neither closes nor replaces another's notification, while another unsandboxed process does both. The unit tests of `dbus.rs` cover the rest of `may_change`: a sandboxed caller changes only what its own instance sent. |
 | `src/center/tests.rs` | The model: arrival, transient and Do Not Disturb while locked; a replacement while locked stays in the centre or updates the frozen banner; locking freezes the banner on screen and sends the waiting one to the centre; the unlock resumes it quietly for at least the minimum time, while an update is heard; a per-application override; each preview policy on the lock screen and the banners; the list bounded and capped; `applications`. |
 | `tests/kit_goldens.rs` | The Kit windows on the headless window system against the Inspector dumps in `tests/goldens/`: a banner sliding in and at rest, a critical one taking over, with the screen-reader announcements (`banner`); the centre with a stacked group (`centre-stacked`); a swipe dragged 60 pt and mid-dismissal (`swipe-dismiss`). `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. Geometry and interaction: a long banner body wraps inside its card and stops at its line limit; the centre scrolls with the wheel, the touchpad and the keyboard and a click hits the card shown there; a banner's close button stays under the pointer past the card's edge and dismisses it; the disclosure button unfolds and folds a body; the keyboard activates and clears cards, the focus following to the card in a cleared one's place, the close button clears one and Escape closes an empty centre; each card's material region is its card and Reduce Transparency paints fills. Screen reader, through `cupertino-ui-test`'s stand-in reader, which announces as the AT-SPI bridge does (a live node's name, as it appears or is renamed): a new banner says its application, title and body and not its buttons; a banner updated in place is said again; nothing is said or readable while locked and nothing is said again at the unlock, while the next update of the banner back on screen is; an application without previews shows and says only its name and "Notification" (with `CUPERTINO_LOOK_DIR` set, capture `banner-without-previews`); banners arriving together are each said as they show; announcing never takes the focus; a reader's click on an action button invokes it; the centre's cards carry their whole body as description. |
 | `src/view/tests.rs` | `CardMetrics` against the built-in font: heights follow the text, wrapping, line limits and ellipsis, kept line breaks, the body byte bound, links cut at the ellipsis, buttons sharing a row, the close button on the corner clear of the icon and in the banner's input region, a banner's speech (order, spacing, the cut body), the caps drawn with an ellipsis, no window while locked, and the `apply` of scroll, unfold, clear and close. |

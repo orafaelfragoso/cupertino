@@ -4,6 +4,9 @@ CupertinoKit's window-system interface: the `WindowSystem` trait (windows, popup
 input method, activation tokens, drags), its events and `Capabilities`. MPL-2.0. Implemented by `cupertino-ui-wayland` on the desktop and by
 `cupertino-ui-test` headless.
 
+A popup asks for a place beside an anchor (`PopupSpec`); where the compositor put it, after flipping or sliding it to
+fit, arrives as `WindowEvent::PopupPlaced(rect)`, in its parent's coordinates, before each configure that places it.
+
 `start_drag(window, DragRequest)` drags data out of a window from the pointer button held in it: the data in each of
 its MIME types (`ClipboardData`), the `DropAction`s a drop may take, and an optional `DragImage` (premultiplied RGBA at a
 whole number of pixels per point, both sides whole points, with the pointer at its `hotspot`). It returns a

@@ -102,8 +102,11 @@ ext-foreign-toplevel-list-v1).
   `org.kde.StatusNotifierItem-<pid>-<n>` with a `com.canonical.dbusmenu` menu, registered with
   `org.kde.StatusNotifierWatcher` and again whenever a watcher appears): tooltip and first menu row "“<app>” is sharing
   “<source>”", then Stop Sharing, which ends the share and closes the session (`Closed`), and keeps a remembered
-  display (see Forgetting). The item goes when the share
-  ends for any reason. The server's privacy dot in the menu bar shows for any capture besides.
+  display (see Forgetting). The menu's events (`Event`, `EventGroup`) are taken only from the connection that owns
+  `org.kde.StatusNotifierWatcher` when they arrive, the menu bar the item registered with; any other caller gets
+  `org.freedesktop.DBus.Error.AccessDenied` and the share runs on, so another application cannot end a share it did not
+  start. Without a menu bar nobody can press Stop Sharing; the share still ends with the app or its session. The item goes
+  when the share ends for any reason. The server's privacy dot in the menu bar shows for any capture besides.
 - Frames are copied with an image copy session straight into the stream's memfds through a `wl_shm` pool, the cursor
   painted in when it is embedded. A frame is captured only while PipeWire has a free buffer, at most at the framerate
   the consumer fixed, and carries the copy session's damage. A resized source renegotiates the stream.

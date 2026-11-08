@@ -62,7 +62,10 @@ cargo run -p cupertino-netd --features app -- [--session-bus [--no-auth]] [--res
 - **Reading is open, writing is not.** `WirelessEnabled`, `Scan`, `Connect` and `Disconnect` need the caller's process,
   taken from the bus daemon with `GetConnectionCredentials`, to belong to a logind session that is `Active` and has a
   seat (rule 5). No polkit. The `Authorizer` is a copy of the one in `cupertino-powerd`, so the daemons
-  stay independent.
+  stay independent. The credentials are asked on a second connection to the bus (`cupertino_peer::lookup::Lookup`, a few
+  questions at once), never on the one that reads the calls: each answer carries a process descriptor, the bus daemon
+  queues at most 64 of them for one connection of the system bus and refuses every message to it beyond that, so answers
+  queued behind a flood of calls (or while the thread waits for logind) would have shut every other caller out.
 - **One Wi-Fi device.** The methods act on the first Wi-Fi device by index; further ones are listed in `Devices`.
 - **The radio switch** is the rfkill software block of every Wi-Fi radio. `WirelessEnabled` changes when the kernel reports
   the switch, not when the write returns. A hardware block makes the device `unavailable` and leaves the setting on.
@@ -112,7 +115,9 @@ release), the `model` (deduplication and order, the radio switch, success, a wro
 switching, roaming), and the `engine` against a fake machine and supplicant. `tests/dbus.rs` runs on a private
 `dbus-daemon` (skipped when missing): the NetworkManager values, `StateChanged`, `PropertiesChanged`, `WirelessEnabled`
 written by an authorised caller (the request reaches the engine) and refused for one outside the active session (nothing reaches the engine), `GetNetworks` after a fake scan, `Connect`
-arguments, errors named on the bus, `ConnectionFailed` once, and a second daemon refused.
+arguments, errors named on the bus, `ConnectionFailed` once, a second daemon refused, and, on a bus with the system bus's
+limits, 3000 calls sent at once while the authorizer is held (a slow logind) not making the bus daemon refuse another
+caller: it gets the daemon's own answer.
 
 Not covered: a real DHCP exchange (no `dnsmasq` on the development machine), the real `LogindAuthorizer` (covered in
 `cupertino-powerd`), iwd, and the packet socket on a wire.

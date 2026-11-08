@@ -626,11 +626,11 @@
   bus_name: org.cupertino.Launcher1
   owner_crate: cupertino-launcher
   owner_area: apps
-  scope: public
+  scope: shell-private
   test_owner: crates/cupertino-launcher/tests/control.rs
   source: crates/cupertino-launcher/src/control.rs
   source_match: "org.cupertino.Launcher1"
-  note: Toggle only changes the UI; open
+  note: Toggle accepts only the server (the parent) and the launcher itself
 - name: org.cupertino.ControlPanel1
   kind: dbus-interface
   version: 1
@@ -642,7 +642,7 @@
   test_owner: crates/cupertino-controlcenter/tests/control.rs
   source: crates/cupertino-controlcenter/src/control.rs
   source_match: "org.cupertino.ControlPanel1"
-  note: Toggle only changes the UI; open
+  note: Toggle only changes the UI; refused to a sandboxed caller or one the bus cannot name
 - name: org.cupertino.Settings1
   kind: dbus-interface
   version: 1
@@ -805,7 +805,7 @@
   test_owner: crates/cupertino-notifications/tests/dbus_integration.rs
   source: crates/cupertino-notifications/src/dbus.rs
   source_match: "org.freedesktop.Notifications"
-  note: any application may notify
+  note: any application may notify; a sandboxed one replaces or closes only what its own instance sent
 - name: org.cupertino.NotificationCenter1
   kind: dbus-interface
   version: 1
@@ -973,7 +973,7 @@
   test_owner: crates/cupertino-portal/tests/screen_cast.rs
   source: crates/cupertino-portal/src/sharing.rs
   source_match: "com.canonical.dbusmenu"
-  note: the screen-share item's menu, at the item's path: who shares what, and Stop Sharing, which ends the share; any session peer may send its events
+  note: the screen-share item's menu, at the item's path: who shares what, and Stop Sharing, which ends the share; its events are taken only from the owner of org.kde.StatusNotifierWatcher (the menu bar)
 - name: org.freedesktop.PolicyKit1.AuthenticationAgent
   kind: dbus-interface
   version: n/a

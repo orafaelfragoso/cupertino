@@ -80,7 +80,7 @@ the name and exits with failure. The interface lives in `control` (`BUS_NAME`, `
 
 | Method | Effect |
 |---|---|
-| `Toggle | Opens the panel (reading every backend first), or starts closing it when it is open. |
+| `Toggle | Opens the panel (reading every backend first), or starts closing it when it is open. Refused to a Flatpak, a Snap and a caller the bus cannot name (`org.cupertino.Error.FlatpakCaller`, `SnapCaller`, `AnonymousCaller`; `cupertino_peer::check_call`). Any unsandboxed process of the person may call it: the menu bar is a caller, and it is no relation of the panel (the server started both), so it cannot be told apart from another process of the person, as for `org.cupertino.NotificationCenter1`. |
 
 ```
 gdbus call --session --dest org.cupertino.ControlPanel1 --object-path /org/cupertino/ControlPanel1 --method org.cupertino.ControlPanel1.Toggle
@@ -192,7 +192,7 @@ cargo test -p cupertino-controlcenter --features app
 | Controller unit tests | Toggles and slider changes, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer, a vanish that hides at once, drops a drag and reads again on reopening. |
 | `tests/panel.rs` | The card as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`: the 1x frame and the focus and accessibility tree of every control), its material and window per battery case, the grid frames, a switch press, a slider drag and release, Escape; the catcher dismissing on a left or right press only. |
 | Process unit tests (`src/app.rs`) | The windows per phase (card over catcher when shown, the card alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, and the card's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a card that acts; the opening output is the first described one and the panel hears when its output goes. |
-| `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name. |
+| `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name; another process (a `dbus-send` the test starts, as the menu bar is to the panel) may toggle, and a connection over anonymous TCP (no process the bus can name) is refused as `AnonymousCaller`. |
 
 `cupertino-server`'s `tests/shell_processes.rs` runs the process with `--fake-backends` through output removal: open on an
 output that is unplugged while another remains, then on the last output, then after a display is plugged in again. Each

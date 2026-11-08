@@ -12,12 +12,22 @@
 //!   `CloseNotification`; use it to poke the host's event loop (for example a calloop ping).
 //!
 //! Spec version 1.2 is implemented, plus the `ActivationToken` signal of 1.3.
+//!
+//! Replacing a notification (`Notify` with a `replaces_id`) and `CloseNotification` are checked against who sent it
+//! ([`may_change`]): an unsandboxed process of the person may change any notification (it can act as the person
+//! already, and `notify-send --replace-id` starts a new process for each call, so no narrower caller can be told
+//! apart), a sandboxed application only the ones its own sandbox instance sent, and a caller the bus cannot name none.
+//! A refused replacement is a new notification and a refused close does nothing, as for an id that does not exist, so
+//! a sandboxed application learns nothing of another's ids.
 
 use crate::center::{CenterConfig, DndMode, Event, LockItem, NotificationCenter};
 use crate::focus::{self, Lifetime, LocalCalendar, SystemCalendar};
 use crate::notification::{Expire, Hints, ImageData, NotifyInput, Urgency};
-use cupertino_peer::{check_call, CallerError, Relation};
+use cupertino_peer::{
+    check_call, identify, same_instance, Caller, CallerError, Identified, Relation,
+};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -73,11 +83,38 @@ pub struct Shared {
     dnd_announced: AtomicBool,
     /// The lock screen's list as last announced (`LockScreenChanged`).
     lock_announced: Mutex<Vec<LockItem>>,
+    /// The sandboxed process that sent each notification a sandboxed application sent; no entry for the others.
+    origins: Mutex<HashMap<u32, Identified>>,
 }
 
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, NotificationCenter> {
         self.center.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn origins(&self) -> MutexGuard<'_, HashMap<u32, Identified>> {
+        self.origins.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// Whether `caller` may replace or close a notification that `origin` sent (`None`: an unsandboxed process, or one the
+/// bus could not name). An unsandboxed caller may change any; a sandboxed one only what its own sandbox instance sent
+/// ([`same_instance`], under `proc_root`); an anonymous or unclassified one none.
+pub fn may_change(caller: &Caller, origin: Option<&Identified>, proc_root: &Path) -> bool {
+    match caller {
+        Caller::Process(caller) if caller.sandbox.is_none() => true,
+        Caller::Process(caller) => {
+            origin.is_some_and(|origin| same_instance(caller, origin, proc_root))
+        }
+        Caller::Anonymous | Caller::Unclassified(_) => false,
+    }
+}
+
+/// The caller of a call with `header`.
+async fn caller_of(connection: &zbus::Connection, header: &zbus::message::Header<'_>) -> Caller {
+    match header.sender() {
+        Some(sender) => identify(connection, sender).await,
+        None => Caller::Anonymous,
     }
 }
 
@@ -189,6 +226,8 @@ impl Interface {
     #[allow(clippy::too_many_arguments)]
     async fn notify(
         &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
         app_name: String,
         replaces_id: u32,
@@ -199,6 +238,18 @@ impl Interface {
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
     ) -> u32 {
+        let caller = caller_of(connection, &header).await;
+        // a notification the caller may not change is not replaced: a new one is made, as for an id that does not exist
+        let replaces_id = if replaces_id != 0
+            && !may_change(
+                &caller,
+                self.0.origins().get(&replaces_id),
+                Path::new("/proc"),
+            ) {
+            0
+        } else {
+            replaces_id
+        };
         let input = NotifyInput {
             app_name,
             replaces_id,
@@ -214,6 +265,17 @@ impl Interface {
         let (id, events) = {
             let mut c = self.0.lock();
             let id = c.notify(input, now);
+            let mut origins = self.0.origins();
+            // the notifications that are gone take their senders with them
+            origins.retain(|id, _| c.get(*id).is_some());
+            match caller {
+                Caller::Process(sender) if sender.sandbox.is_some() => {
+                    origins.insert(id, sender);
+                }
+                _ => {
+                    origins.remove(&id);
+                }
+            }
             (id, c.take_events())
         };
         let _ = emit_events(&emitter, events).await;
@@ -223,9 +285,16 @@ impl Interface {
 
     async fn close_notification(
         &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
         id: u32,
     ) {
+        let caller = caller_of(connection, &header).await;
+        // a notification the caller may not change stays, as if it did not exist
+        if !may_change(&caller, self.0.origins().get(&id), Path::new("/proc")) {
+            return;
+        }
         let now = (self.0.clock)();
         let events = {
             let mut c = self.0.lock();
@@ -437,6 +506,7 @@ impl Server {
             info: opts.info,
             dnd_announced: AtomicBool::new(false),
             lock_announced: Mutex::new(Vec::new()),
+            origins: Mutex::new(HashMap::new()),
         });
         let builder = match &opts.address {
             Some(a) => zbus::blocking::connection::Builder::address(a.as_str())?,
@@ -578,6 +648,52 @@ mod tests {
         assert_eq!(allowed(&Caller::Anonymous, 1), Err(Denial::Anonymous));
     }
 
+    /// A notification is replaced or closed by any unsandboxed process (`notify-send --replace-id` is a new process each
+    /// time), by the sandbox instance that sent it, and by nobody else: not another sandboxed process, not a caller the
+    /// bus cannot name.
+    #[test]
+    fn only_the_sending_sandbox_or_an_unsandboxed_process_changes_a_notification() {
+        let own = std::process::id();
+        let parent = cupertino_peer::own_parent();
+        let proc = Path::new("/proc");
+        let from_flatpak = || match caller_of(own, Some(Sandbox::Flatpak)) {
+            Caller::Process(origin) => origin,
+            _ => unreachable!(),
+        };
+        // an unsandboxed process changes any notification, whoever sent it
+        assert!(may_change(&caller_of(parent, None), None, proc));
+        assert!(may_change(
+            &caller_of(parent, None),
+            Some(&from_flatpak()),
+            proc
+        ));
+        // the sandboxed sender changes its own
+        assert!(may_change(
+            &caller_of(own, Some(Sandbox::Flatpak)),
+            Some(&from_flatpak()),
+            proc
+        ));
+        // another sandboxed process does not (no shared instance), nor any sandbox one an unsandboxed process sent
+        assert!(!may_change(
+            &caller_of(parent, Some(Sandbox::Flatpak)),
+            Some(&from_flatpak()),
+            proc
+        ));
+        assert!(!may_change(
+            &caller_of(own, Some(Sandbox::Snap)),
+            Some(&from_flatpak()),
+            proc
+        ));
+        assert!(!may_change(
+            &caller_of(own, Some(Sandbox::Flatpak)),
+            None,
+            proc
+        ));
+        // a caller the bus cannot name changes nothing
+        assert!(!may_change(&Caller::Anonymous, None, proc));
+        assert!(!may_change(&Caller::Anonymous, Some(&from_flatpak()), proc));
+    }
+
     /// SEC-04: a call the bus gave no sender for is refused by every method of the centre control, and nothing changes.
     #[test]
     fn an_anonymous_call_changes_nothing_on_the_centre_control() {
@@ -588,6 +704,7 @@ mod tests {
             info: ServerInfo::default(),
             dnd_announced: AtomicBool::new(false),
             lock_announced: Mutex::new(Vec::new()),
+            origins: Mutex::new(HashMap::new()),
         });
         let toggled = Arc::new(AtomicBool::new(false));
         let control = CentreControl {

@@ -175,8 +175,12 @@ each `LockScreenChanged` signal (which carries nothing) and whenever the daemon'
 for a read, at most one waiting, so a flood of signals cannot fill a stream and stop the connection. The name alone is not trusted, as any process
 of the user can own it while the daemon is not running: `lock_notices::fetch` asks the bus for the name's owner and its
 credentials, and asks that connection only when it is an unsandboxed process running `cupertino-notifications` from the
-lock screen's own directory; any other owner is not asked and the list is empty, so no other program can put words on
-the lock screen. The daemon decides what may show (Settings >
+lock screen's own directory, or from a directory of `PATH` (searched as the server searches it for the shell processes it
+starts, links resolved) when only root can change that file and every directory above it
+(`cupertino_defaults::system::only_root_can_change`; `lock_notices::daemon_programs`): a program the user put in a
+`PATH` directory of their own does not count. A daemon configured by an absolute path elsewhere, outside `PATH` and the
+lock screen's directory, is not found and the list stays empty (the conservative choice). Any other owner is not asked and
+the list is empty, so no other program can put words on the lock screen. The daemon decides what may show (Settings >
 Notifications): only arrivals since the lock, only from applications allowed on the lock screen, and without previews
 the title is "Notification" and the body empty, so the rest of a notification never reaches this process, its windows
 or what assistive technology reads. The process keeps at most `MAX_NOTICES` (20) and cuts each text again to its cap

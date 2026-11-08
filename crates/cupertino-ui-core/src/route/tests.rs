@@ -15,6 +15,7 @@ fn status() -> Status {
         capture: None,
         window_active: true,
         now: Timestamp(0),
+        opening_press: None,
     }
 }
 
@@ -40,6 +41,7 @@ fn route(tree: &mut Tree<M>, path: &[NodeId]) -> (Propagation, Vec<String>) {
         geometry: &Geometry::new(),
         env: &env,
         status: status(),
+        popups: &[],
         effects: &mut effects,
     }
     .dispatch(path, &key());

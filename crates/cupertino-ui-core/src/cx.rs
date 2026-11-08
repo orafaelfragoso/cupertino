@@ -4,7 +4,7 @@ use crate::accessibility::{
 use crate::paint::NodeMaterial;
 use crate::route::Placement;
 use crate::widget::Change;
-use crate::{Environment, Key, NodeId, Phase};
+use crate::{Environment, Key, NodeId, Phase, WindowKey};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{CursorShape, Timestamp};
@@ -128,6 +128,8 @@ pub(crate) struct Status {
     pub(crate) capture: Option<NodeId>,
     pub(crate) window_active: bool,
     pub(crate) now: Timestamp,
+    /// When the pointer press that opened this popup went down, if one did.
+    pub(crate) opening_press: Option<Timestamp>,
 }
 
 pub struct EventCx<'a, M> {
@@ -137,6 +139,8 @@ pub struct EventCx<'a, M> {
     pub(crate) placement: Option<Placement>,
     pub(crate) env: &'a Environment,
     pub(crate) status: Status,
+    /// Where the compositor placed each open popup of the window.
+    pub(crate) popups: &'a [(WindowKey, Rect)],
     pub(crate) effects: &'a mut Effects<M>,
 }
 
@@ -171,6 +175,23 @@ impl<M> EventCx<'_, M> {
 
     pub fn now(&self) -> Timestamp {
         self.status.now
+    }
+
+    /// When the pointer press that opened this popup went down, on the clock of [`now`](Self::now): a popup opened
+    /// while a button was held, such as a menu opened by a press, times press-and-hold from it rather than from the
+    /// first event it hears. `None` in a toplevel and in a popup no press opened.
+    pub fn opening_press(&self) -> Option<Timestamp> {
+        self.status.opening_press
+    }
+
+    /// Where the compositor placed the open popup `key` of this window, in window coordinates as events carry them:
+    /// beside its anchor, or flipped or slid where there was no room. `None` until the compositor has placed it, and
+    /// again from when the popup is asked to move until it is placed anew.
+    pub fn popup_placement(&self, key: &WindowKey) -> Option<Rect> {
+        self.popups
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, rect)| *rect)
     }
 
     pub fn is_focused(&self) -> bool {

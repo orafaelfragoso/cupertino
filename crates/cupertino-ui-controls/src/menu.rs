@@ -155,6 +155,7 @@ impl<M: Clone + 'static> Menu<M> {
                 open: next
                     .zip(submenu.as_ref())
                     .map(|(index, (_, sub))| (index, height(sub))),
+                submenu: submenu.as_ref().map(|_| level_key(&key, depth + 1)),
                 collapse: on_open(path.to_vec()),
                 start: current.filter(|_| depth == 0 && over),
                 at_pointer: depth == 0 && at_pointer,
@@ -380,6 +381,8 @@ struct Panel<M> {
     slots: Vec<Slot<M>>,
     /// The item whose submenu is open, and the submenu's height.
     open: Option<(usize, f64)>,
+    /// The window of the open submenu.
+    submenu: Option<WindowKey>,
     /// Closes the submenus of this menu.
     collapse: M,
     /// The item over the pointer as the menu opens: a pop-up button's current option.
@@ -411,7 +414,8 @@ enum Pending {
 struct PanelState {
     /// The focus came in.
     entered: bool,
-    /// When the panel first heard of anything: about when the press that opened it went down.
+    /// When the panel first heard of anything: what press-and-hold times from when the runtime does not know the press
+    /// that opened the menu.
     opened: Option<Timestamp>,
     /// A press that went down on this panel.
     press: Option<Tracking>,
@@ -454,9 +458,28 @@ impl<M: Clone + 'static> Panel<M> {
         None
     }
 
-    /// The near edge of the open submenu, beside its row on the trailing side.
-    fn submenu_edge(&self, bounds: Rect, direction: LayoutDirection) -> Option<Edge> {
+    /// The near edge of the open submenu: of the window where the compositor placed it, on whichever side of the panel
+    /// it went, or, until it is placed, beside its row on the trailing side.
+    fn submenu_edge(
+        &self,
+        bounds: Rect,
+        direction: LayoutDirection,
+        placed: Option<Rect>,
+    ) -> Option<Edge> {
         let (index, height) = self.open?;
+        if let Some(placed) = placed {
+            let right =
+                placed.min_x() + placed.width() / 2.0 >= bounds.min_x() + bounds.width() / 2.0;
+            return Some(Edge {
+                x: if right {
+                    placed.min_x()
+                } else {
+                    placed.max_x()
+                },
+                top: placed.min_y(),
+                bottom: placed.max_y(),
+            });
+        }
         let above: f64 = self.slots[..index.min(self.slots.len())]
             .iter()
             .map(|s| s.height)
@@ -479,7 +502,11 @@ impl<M: Clone + 'static> Panel<M> {
             return;
         };
         state.pointer = Some(p);
-        let edge = self.submenu_edge(bounds, cx.env().direction);
+        let placed = self
+            .submenu
+            .as_ref()
+            .and_then(|key| cx.popup_placement(key));
+        let edge = self.submenu_edge(bounds, cx.env().direction, placed);
         if !state.aim.moved((p.x, p.y), seconds(cx.now()), edge) {
             self.hover(state, p, bounds, cx);
         }
@@ -569,7 +596,8 @@ impl<M: Clone + 'static> Panel<M> {
         }
         // a release without a press here ends the press that opened the menu
         let tracking = state.press.take().unwrap_or_else(|| {
-            let mut tracking = Tracking::from_title(seconds(state.opened.unwrap_or(now)));
+            let pressed = cx.opening_press().or(state.opened).unwrap_or(now);
+            let mut tracking = Tracking::from_title(seconds(pressed));
             if state.reached {
                 tracking.reach();
             }

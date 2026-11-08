@@ -9,6 +9,7 @@ description = "Who is on the other end of a session bus call: the process behind
 layer = "platform"
 
 [dependencies]
+async-lock = "3"
 libc = "0.2"
 rustix = { version = "1", features = ["event", "process"] }
 tracing = "0.1"

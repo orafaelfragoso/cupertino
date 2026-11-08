@@ -188,6 +188,11 @@ struct WindowState<M> {
     /// The error of the last frame, until one renders and presents; animations wait for that.
     failed: Option<UiError>,
     popup: Option<PopupState<M>>,
+    /// When the pointer press that opened this popup went down, if a button was held as it opened.
+    opening_press: Option<Timestamp>,
+    /// Where the compositor last placed each open popup of this window, in its coordinates; a popup asked to move is
+    /// not here until it is placed anew.
+    popups: Vec<(WindowKey, Rect)>,
     /// A drag from any application over the window.
     drop: Option<drops::DropState>,
 }
@@ -217,6 +222,9 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     awaiting_layout: Vec<WindowKey>,
     /// Whether the last press was a key: a popup opened by it shows its focus.
     keyboard: bool,
+    /// When the pointer button held down went down, on the runtime's clock, until it comes up: a popup opened meanwhile
+    /// was opened by that press.
+    press: Option<Timestamp>,
     exit: bool,
     theme_for: Option<ThemeForAppearance>,
     /// What each activation token asked for and not yet given turns into.
@@ -263,6 +271,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             view_dirty: true,
             awaiting_layout: Vec::new(),
             keyboard: false,
+            press: None,
             exit: false,
             theme_for: None,
             tokens: HashMap::new(),
@@ -536,6 +545,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     fn close(&mut self, w: WindowState<A::Message>) {
+        if let Some(popup) = &w.popup {
+            self.forget_placement(&popup.parent, &w.key);
+        }
         if let Some(root) = w.root {
             self.tree.unmount(root);
         }
@@ -543,6 +555,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             adapter.window_closed(w.id);
         }
         self.system.destroy(w.id);
+    }
+
+    /// Drops where the compositor placed popup `key` of `parent`: it moves or closes.
+    fn forget_placement(&mut self, parent: &WindowKey, key: &WindowKey) {
+        if let Some(parent) = self.windows.iter_mut().find(|w| &w.key == parent) {
+            parent.popups.retain(|(k, _)| k != key);
+        }
     }
 
     /// Rebuilds every window from the model and reconciles it with the tree.
@@ -735,6 +754,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             renderer: (self.options.renderers)(),
             failed: None,
             popup: None,
+            opening_press: None,
+            popups: Vec::new(),
             drop: None,
         }
     }
@@ -802,6 +823,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         };
         let mut w = self.new_window(key, id, spec);
         w.focus = Focus::shown(self.keyboard);
+        w.opening_press = self.press;
         w.env = env;
         w.size = size;
         w.popup = Some(PopupState {
@@ -863,6 +885,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             _ => {}
         }
         let now = self.options.clock.now();
+        if let WindowEvent::Pointer(PointerEvent::Button { pressed, .. }, _) = event {
+            self.press = pressed.then_some(now);
+        }
         let w = &mut self.windows[i];
         let mut effects = Effects::default();
         match event {
@@ -971,6 +996,16 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             WindowEvent::PopupDone => {
                 if let Some(popup) = &w.popup {
                     self.messages.push_back(popup.on_dismiss.clone());
+                }
+                return Ok(());
+            }
+            WindowEvent::PopupPlaced(rect) => {
+                let key = w.key.clone();
+                if let Some(parent) = w.popup.as_ref().map(|p| p.parent.clone()) {
+                    if let Some(parent) = self.windows.iter_mut().find(|w| w.key == parent) {
+                        parent.popups.retain(|(k, _)| *k != key);
+                        parent.popups.push((key, rect));
+                    }
                 }
                 return Ok(());
             }
@@ -1386,6 +1421,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             else {
                 continue;
             };
+            let parent = state.parent.clone();
             let w = &mut self.windows[i];
             let _ = self
                 .system
@@ -1393,6 +1429,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             if let Some(state) = &mut w.popup {
                 state.placed = placed;
             }
+            let key = w.key.clone();
+            self.forget_placement(&parent, &key);
         }
     }
 
@@ -2022,7 +2060,9 @@ fn route<'a, M: 'static>(
             capture: w.pointer.capture(),
             window_active: w.active,
             now,
+            opening_press: w.opening_press,
         },
+        popups: &w.popups,
         effects,
     }
 }

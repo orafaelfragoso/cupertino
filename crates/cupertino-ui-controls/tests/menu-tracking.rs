@@ -1,6 +1,7 @@
 //! Menus follow one pointer path across their windows as the compositor routes it: a press that opens a menu and is
 //! dragged onto an item chooses it on release, a quick click leaves the menu open, the way from a row into its submenu
-//! keeps the submenu while the pointer heads there and gives it up when the pointer rests or crawls, and typed letters
+//! keeps the submenu while the pointer heads there, on whichever side the compositor placed it, and gives it up when
+//! the pointer rests or crawls, press-and-hold counts from the press however late the menu opens, and typed letters
 //! find a row that Return chooses.
 
 mod support;
@@ -12,7 +13,12 @@ use cupertino_ui_controls::{
 };
 use cupertino_ui_core::{Application, Command, Element, Key, NodeId, Window, WindowKey};
 use cupertino_ui_layout::{Align, Axis, LayoutDirection};
-use cupertino_ui_platform::{Mods, MouseButton, PointerEvent, PopupEdge, WindowId, WindowStates};
+use cupertino_ui_platform::{
+    Mods, MouseButton, PointerEvent, PopupEdge, WindowEvent, WindowId, WindowStates,
+};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::time::Duration;
 use support::{window, Harness, RETURN};
 
 const RIGHT: u32 = 0xff53;
@@ -23,9 +29,18 @@ const MS: u64 = 1_000_000;
 
 const SIZES: [&str; 3] = ["Small", "Medium", "Large"];
 
+thread_local! {
+    /// Popups the test's compositor placed elsewhere than they asked, in their parent's coordinates.
+    static MOVED: RefCell<HashMap<WindowId, Rect>> = RefCell::new(HashMap::new());
+    /// How long after the secondary press the application opens the context menu, in milliseconds.
+    static LATE: Cell<u64> = const { Cell::new(0) };
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Message {
     Context(Point),
+    /// The context menu at this point, which the application opens later than the press.
+    Opened(Point),
     Sizes,
     Open(Vec<usize>),
     Close,
@@ -108,7 +123,16 @@ impl Application for Browser {
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         match message {
-            Message::Context(at) => model.menu = Some(Open::Context(at)),
+            Message::Context(at) => match LATE.with(Cell::get) {
+                0 => model.menu = Some(Open::Context(at)),
+                late => {
+                    return vec![Command::After {
+                        delay: Duration::from_millis(late),
+                        message: Message::Opened(at),
+                    }]
+                }
+            },
+            Message::Opened(at) => model.menu = Some(Open::Context(at)),
             Message::Sizes => model.menu = Some(Open::Sizes),
             Message::Open(path) => model.submenus = path,
             Message::Close => {
@@ -213,8 +237,12 @@ impl Pointer {
                 break;
             }
             for id in new {
-                // the compositor gives a popup the size it was placed at
+                // the compositor places a popup where it asked and gives it the size it was placed at
                 let size = h.rt.window_system().placement(id).unwrap().map(|p| p.size);
+                let placed = in_parent(h, id);
+                h.rt.window_system_mut()
+                    .enqueue_window(id, WindowEvent::PopupPlaced(placed))
+                    .unwrap();
                 h.rt.window_system_mut()
                     .configure(id, size, WindowStates::default())
                     .unwrap();
@@ -301,14 +329,23 @@ impl Pointer {
     }
 }
 
-/// The rect of the open window `id` in the main window's coordinates, from where it asked to be placed.
+/// The rect of the open window `id` in the main window's coordinates: where the compositor moved it, else where it
+/// asked to be placed.
 fn rect(h: &Harness<Browser>, id: WindowId) -> Rect {
     let system = h.rt.window_system();
     let Some(parent) = system.parent(id).unwrap() else {
         return Rect::new(0.0, 0.0, 200.0, 100.0);
     };
-    let spec = system.placement(id).unwrap().unwrap().clone();
     let base = rect(h, parent).origin;
+    if let Some(moved) = MOVED.with(|m| m.borrow().get(&id).copied()) {
+        return Rect::new(
+            base.x + moved.min_x(),
+            base.y + moved.min_y(),
+            moved.width(),
+            moved.height(),
+        );
+    }
+    let spec = system.placement(id).unwrap().unwrap().clone();
     let a = spec.anchor_rect;
     let ax = match spec.anchor {
         PopupEdge::Left | PopupEdge::TopLeft | PopupEdge::BottomLeft => a.min_x(),
@@ -336,6 +373,42 @@ fn rect(h: &Harness<Browser>, id: WindowId) -> Rect {
             _ => -hh / 2.0,
         };
     Rect::new(base.x + x, base.y + y, w, hh)
+}
+
+/// The rect of the open popup `id` in its parent's coordinates.
+fn in_parent(h: &Harness<Browser>, id: WindowId) -> Rect {
+    let r = rect(h, id);
+    let parent = h.rt.window_system().parent(id).unwrap().expect("a popup");
+    let base = rect(h, parent).origin;
+    Rect::new(
+        r.min_x() - base.x,
+        r.min_y() - base.y,
+        r.width(),
+        r.height(),
+    )
+}
+
+/// The compositor finds no room for the open submenu `key` on the side it asked for and moves it to the other side of
+/// its parent, overlapping it as much.
+fn flip(h: &mut Harness<Browser>, ptr: &Pointer, key: &str) {
+    let id = popup(h, key).expect("the submenu is open");
+    let parent = h.rt.window_system().parent(id).unwrap().expect("a popup");
+    let (menu, asked) = (rect(h, parent), rect(h, id));
+    let x = if asked.min_x() > menu.min_x() {
+        menu.min_x() + (menu.max_x() - asked.min_x()) - asked.width()
+    } else {
+        menu.max_x() - (asked.max_x() - menu.min_x())
+    };
+    let moved = Rect::new(
+        x - menu.min_x(),
+        asked.min_y() - menu.min_y(),
+        asked.width(),
+        asked.height(),
+    );
+    MOVED.with(|m| m.borrow_mut().insert(id, moved));
+    h.window = id;
+    h.send(WindowEvent::PopupPlaced(moved));
+    h.window = ptr.main;
 }
 
 fn popup(h: &Harness<Browser>, key: &str) -> Option<WindowId> {
@@ -473,34 +546,47 @@ fn a_quick_click_leaves_a_menu_open_and_a_held_or_dragged_press_on_a_pop_up_butt
 
 #[test]
 fn a_diagonal_into_a_submenu_keeps_it_across_the_rows_it_crosses() {
-    diagonal_into_a_submenu(LayoutDirection::Ltr);
+    diagonal_into_a_submenu(LayoutDirection::Ltr, false);
 }
 
 #[test]
 fn in_right_to_left_a_diagonal_into_a_submenu_on_the_left_keeps_it() {
-    diagonal_into_a_submenu(LayoutDirection::Rtl);
+    diagonal_into_a_submenu(LayoutDirection::Rtl, false);
 }
 
-fn diagonal_into_a_submenu(direction: LayoutDirection) {
+#[test]
+fn a_diagonal_into_a_submenu_the_compositor_flipped_to_the_left_keeps_it() {
+    diagonal_into_a_submenu(LayoutDirection::Ltr, true);
+}
+
+#[test]
+fn in_right_to_left_a_diagonal_into_a_submenu_flipped_to_the_right_keeps_it() {
+    diagonal_into_a_submenu(LayoutDirection::Rtl, true);
+}
+
+/// The way from Sort By into its submenu, which the compositor placed on the trailing side, or on the leading side
+/// when `flipped` (no room on the trailing side).
+fn diagonal_into_a_submenu(direction: LayoutDirection, flipped: bool) {
     let mut h = Harness::<Browser>::with_direction(direction);
     let mut ptr = Pointer::new(&h);
     sort_by_open(&mut h, &mut ptr);
+    if flipped {
+        flip(&mut h, &ptr, "menu/1");
+    }
     let menu = popup(&h, "menu").unwrap();
     let rows: Vec<(u64, Rect)> = (1..4).map(|i| (i, row_rect(&h, "menu", i))).collect();
-    // a little way into the submenu from the side it opened on
-    let along = match direction {
-        LayoutDirection::Ltr => 0.3,
-        LayoutDirection::Rtl => 0.7,
-    };
-    let size = row_point(&h, "menu/1", 3, along);
-    let from = ptr.at;
     let menu_rect = rect(&h, menu);
     let submenu_rect = rect(&h, popup(&h, "menu/1").unwrap());
+    let left = (direction == LayoutDirection::Rtl) != flipped;
     assert_eq!(
         submenu_rect.min_x() < menu_rect.min_x(),
-        direction == LayoutDirection::Rtl,
-        "the submenu opens on the trailing side"
+        left,
+        "the submenu is on the trailing side, or the leading side when flipped"
     );
+    // a little way into the submenu from the side it opened on
+    let along = if left { 0.7 } else { 0.3 };
+    let size = row_point(&h, "menu/1", 3, along);
+    let from = ptr.at;
     let mut crossed = Vec::new();
     for step in 1..=16 {
         let k = f64::from(step) / 16.0;
@@ -627,18 +713,25 @@ fn resting_on_a_separator_closes_the_open_submenu_as_another_row_does() {
 }
 
 /// A secondary press on the canvas whose menu the compositor slid to fit, leaving Copy under the pointer, which never
-/// moves but for a twitch; the release of the press `held_ms` later.
+/// moves but for a twitch; the application opens the menu `opened_ms` after the press, and the press is let go
+/// `held_ms` after that.
 fn release_on_a_menu_slid_under_the_pointer(
     h: &mut Harness<Browser>,
     main: WindowId,
+    opened_ms: u64,
     held_ms: u64,
 ) {
+    LATE.with(|late| late.set(opened_ms));
     h.window = main;
     let mut ptr = Pointer::new(h);
     let canvas = h.center("canvas");
     ptr.move_to(h, canvas);
     ptr.button(h, MouseButton::Right, true);
-    let menu = popup(h, "menu").expect("open on the press");
+    if opened_ms > 0 {
+        assert_eq!(popup(h, "menu"), None, "not yet");
+        ptr.wait(h, opened_ms);
+    }
+    let menu = popup(h, "menu").expect("open while the press is held");
     let copy = row_rect(h, "menu", 5);
     let origin = rect(h, menu).origin;
     let under = Point::new(
@@ -668,7 +761,7 @@ fn release_on_a_menu_slid_under_the_pointer(
 fn a_context_menu_opened_with_a_row_under_the_pointer_chooses_it_only_after_the_interval() {
     let mut h = Harness::<Browser>::new();
     let main = h.window;
-    release_on_a_menu_slid_under_the_pointer(&mut h, main, 30);
+    release_on_a_menu_slid_under_the_pointer(&mut h, main, 0, 30);
     assert!(
         h.model().chosen.is_empty(),
         "a quick click never chooses the row the menu opened under the pointer"
@@ -683,8 +776,25 @@ fn a_context_menu_opened_with_a_row_under_the_pointer_chooses_it_only_after_the_
     release_on_a_menu_slid_under_the_pointer(
         &mut h,
         main,
+        0,
         (TRACKING_INTERVAL * 1000.0) as u64 + 10,
     );
     assert_eq!(h.model().chosen, ["Copy"], "held, the release chooses it");
+    assert_eq!(popup(&h, "menu"), None);
+}
+
+/// The application opens the menu longer than the interval after the press, as one that first asks a service for the
+/// items does: a release just after it opens ends a press held long enough, and chooses.
+#[test]
+fn press_and_hold_counts_from_the_press_however_late_the_menu_opens() {
+    let mut h = Harness::<Browser>::new();
+    let main = h.window;
+    release_on_a_menu_slid_under_the_pointer(
+        &mut h,
+        main,
+        (TRACKING_INTERVAL * 1000.0) as u64 + 10,
+        30,
+    );
+    assert_eq!(h.model().chosen, ["Copy"], "held from the press");
     assert_eq!(popup(&h, "menu"), None);
 }

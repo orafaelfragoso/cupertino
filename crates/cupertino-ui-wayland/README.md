@@ -41,7 +41,8 @@ callback's time, for an animation clock, is `FrameCallback::time` of the transpo
 
 Windows and popups map one to one onto the transport's toplevels and popups; destroying a window destroys its popups.
 Configures, close, popup dismissal, scale, pointer, keys, keyboard focus and the input method arrive as `WindowEvent`s
-of the window whose surface they name. Key modifiers are logical (`Mods`), through the `Profile` the window system was
+of the window whose surface they name. A popup's configure comes after a `WindowEvent::PopupPlaced` with the rectangle
+the compositor placed it at in its parent, after any flip or slide. Key modifiers are logical (`Mods`), through the `Profile` the window system was
 made with. Input times are the compositor's milliseconds mapped onto the window system's clock (nanoseconds since it
 was made): the first one, and any that would land in the future or more than a second in the past, anchors the mapping
 at the time it was read, and the ones after keep the compositor's spacing. A button's serial is the transport's latest
@@ -77,7 +78,7 @@ its anchor rectangle; `reactive` is not sent.
 cargo test -p cupertino-ui-wayland
 ```
 
-Unit tests cover the pixel conversion, the damage cut, popup placement, the clipboard text, and the window system's
+Unit tests cover the pixel conversion, the damage cut, popup placement and where the compositor placed a popup, the clipboard text, and the window system's
 conversions, input timeline and carried-damage bound. `tests/protocol-flow.rs` drives the presenter, the clipboard and
 the window system (frame pacing, carried and missed damage, the input region, a click, the clipboard, a drag with its
 icon, the waker, refused requests)

@@ -46,19 +46,41 @@ const RETURN: Keysym = Keysym(0xff0d);
 const SPACE: Keysym = Keysym(0x20);
 
 const PANEL_RADIUS: f64 = 8.0;
+/// The panel's own edge, drawn only over the opaque fill a window without the compositor's material paints.
 const EDGE: f64 = 1.0;
 /// Above the first row and below the last.
 const PADDING_Y: f64 = 5.0;
-const ROW_HEIGHT: f64 = 22.0;
-const SEPARATOR_HEIGHT: f64 = 9.0;
-const PADDING_X: f64 = 10.0;
-/// Before the label, for the check mark.
-const MARK_COLUMN: f64 = 18.0;
-/// After the label, for a submenu's chevron.
-const ARROW_COLUMN: f64 = 14.0;
+const ROW_HEIGHT: f64 = 24.0;
+const SEPARATOR_HEIGHT: f64 = 11.0;
+/// From the leading edge to the labels of a menu without check marks.
+const LABEL_LEADING: f64 = 15.0;
+/// From the leading edge to the labels of a menu with a check mark on any row: the marks get a column of their own.
+const MARKED_LABEL_LEADING: f64 = 31.0;
+/// From the leading edge to the middle of a check mark.
+const MARK_CENTRE: f64 = 17.0;
+/// From the trailing edge to the end of a shortcut or a submenu's chevron.
+const TRAILING: f64 = 20.0;
+/// From the trailing edge to the end of a separator line; it starts under the labels.
+const SEPARATOR_TRAILING: f64 = 15.0;
+/// A separator line over the glass in the dark appearance: white at 14 %.
+const GLASS_SEPARATOR_DARK: Color = Color {
+    r: 1.0,
+    g: 1.0,
+    b: 1.0,
+    a: 0.14,
+};
+/// A separator line over the glass in the light appearance: black at 10 %.
+const GLASS_SEPARATOR_LIGHT: Color = Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 0.1,
+};
+/// The width of a submenu's chevron.
+const CHEVRON_WIDTH: f64 = 5.0;
 const MIN_WIDTH: f64 = 120.0;
-/// The least room between a row's label and its shortcut.
-const SHORTCUT_GAP: f64 = 24.0;
+/// The least room between a row's label and the shortcuts and chevrons of a menu that has any.
+const SHORTCUT_GAP: f64 = 23.0;
 /// Between a highlight and the panel's sides.
 const HIGHLIGHT_INSET: f64 = 5.0;
 const HIGHLIGHT_RADIUS: f64 = 4.0;
@@ -76,6 +98,36 @@ const MAX: Size = Size {
 const CHEVRONS_GAP: f64 = 6.0;
 /// Between a pop-up button's sides and its label or chevrons; its menu lines its rows' labels up with the label.
 const LABEL_INSET: f64 = 10.0;
+
+/// The columns every row of one menu lines up on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Columns {
+    /// From the leading edge to the labels: further in when any row has a check mark.
+    label: f64,
+    /// Some row has a shortcut or opens a submenu, so every row leaves room for them after its label.
+    trailing: bool,
+}
+
+impl Columns {
+    fn of<M>(items: &[MenuItem<M>]) -> Self {
+        let marks = items.iter().any(|item| {
+            matches!(
+                item,
+                MenuItem::Item { checked: true, .. } | MenuItem::Shortcut { checked: true, .. }
+            )
+        });
+        Columns {
+            label: if marks {
+                MARKED_LABEL_LEADING
+            } else {
+                LABEL_LEADING
+            },
+            trailing: items
+                .iter()
+                .any(|item| matches!(item, MenuItem::Shortcut { .. } | MenuItem::Submenu { .. })),
+        }
+    }
+}
 
 /// The key of the window of the submenu `depth` levels below the menu in `key`.
 fn level_key(key: &WindowKey, depth: usize) -> WindowKey {
@@ -121,7 +173,7 @@ impl<M: Clone + 'static> Menu<M> {
                 PopupAnchor::Over {
                     key,
                     offset: Point::new(
-                        LABEL_INSET - PADDING_X - MARK_COLUMN,
+                        LABEL_INSET - Columns::of(&items).label,
                         -(PADDING_Y + above + ROW_HEIGHT / 2.0),
                     ),
                 }
@@ -227,6 +279,7 @@ fn rows<M: Clone + 'static>(
     on_close: &M,
     typing: &Rc<RefCell<TypeAhead>>,
 ) -> Vec<Element<M>> {
+    let columns = Columns::of(items);
     let labels: Rc<[String]> = items
         .iter()
         .filter_map(|item| match item {
@@ -259,7 +312,12 @@ fn rows<M: Clone + 'static>(
                 _ => None,
             };
             let (label, enabled, checked, action) = match item {
-                MenuItem::Separator => return Element::new(Separator).key(index as u64),
+                MenuItem::Separator => {
+                    return Element::new(Separator {
+                        leading: columns.label,
+                    })
+                    .key(index as u64)
+                }
                 MenuItem::Item {
                     label,
                     enabled,
@@ -301,6 +359,7 @@ fn rows<M: Clone + 'static>(
                 enabled,
                 checked,
                 action,
+                columns,
                 labels: Rc::clone(&labels),
                 typing: Rc::clone(typing),
                 position,
@@ -766,8 +825,12 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         }
     }
 
-    /// The window paints the material or the opaque fill under it; the panel adds its edge.
+    /// The window paints the glass or, without the compositor's material, the opaque fill under it. The compositor
+    /// draws the glass's edge; over the opaque fill the panel draws its own.
     fn paint(&self, _: &PanelState, cx: &mut PaintCx<'_>) {
+        if cx.window_backdrop() {
+            return;
+        }
         let size = cx.size();
         let theme = &cx.env().theme;
         let edge = theme.colors.get(ColorRole::Separator, StateVariant::NORMAL);
@@ -803,6 +866,7 @@ struct Row<M> {
     enabled: bool,
     checked: bool,
     action: RowAction<M>,
+    columns: Columns,
     /// The labels of the menu's enabled rows, in order, for typing to move.
     labels: Rc<[String]>,
     /// What was typed so far, shared by the menu's rows.
@@ -937,6 +1001,7 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
     fn update(&self, old: &Self, _: &mut RowState) -> Change {
         if self.label != old.label
             || self.shortcut != old.shortcut
+            || self.columns != old.columns
             || matches!(self.action, RowAction::Open { .. })
                 != matches!(old.action, RowAction::Open { .. })
         {
@@ -958,8 +1023,14 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
             .shortcut
             .as_deref()
             .and_then(|s| look::label(cx.env(), s))
-            .map_or(0.0, |l| SHORTCUT_GAP + l.size().width);
-        let width = PADDING_X + MARK_COLUMN + label + shortcut + ARROW_COLUMN + PADDING_X;
+            .map_or(0.0, |l| l.size().width);
+        // the shortcuts and chevrons keep a column at the trailing edge when the menu has any
+        let trailing = if self.columns.trailing {
+            SHORTCUT_GAP + shortcut.max(CHEVRON_WIDTH)
+        } else {
+            0.0
+        };
+        let width = self.columns.label + label + trailing + TRAILING;
         Measured {
             size: Size::new(width.max(MIN_WIDTH), ROW_HEIGHT),
             baseline: None,
@@ -1042,14 +1113,14 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
         let leading = |x: f64, width: f64| if rtl { size.width - x - width } else { x };
         let middle = size.height / 2.0;
         if self.checked {
-            let x = leading(PADDING_X, MARK_COLUMN) + MARK_COLUMN / 2.0;
+            let x = leading(MARK_CENTRE, 0.0);
             symbol(cx, "symbol.checkmark", Point::new(x, middle), color, false);
         }
         if let Some(label) = look::label(&env, &self.label) {
             let width = label.size().width;
             let row = Rect::new(0.0, 0.0, size.width, size.height);
             let origin = Point::new(
-                leading(PADDING_X + MARK_COLUMN, width),
+                leading(self.columns.label, width),
                 look::top(&label, row, &env),
             );
             look::glyphs(cx, &label, origin, color);
@@ -1066,14 +1137,13 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
             let width = shortcut.size().width;
             let row = Rect::new(0.0, 0.0, size.width, size.height);
             let origin = Point::new(
-                leading(size.width - PADDING_X - width, width),
+                leading(size.width - TRAILING - width, width),
                 look::top(&shortcut, row, &env),
             );
             look::glyphs(cx, &shortcut, origin, keys);
         }
         if matches!(self.action, RowAction::Open { .. }) {
-            let x =
-                leading(size.width - PADDING_X - ARROW_COLUMN, ARROW_COLUMN) + ARROW_COLUMN / 2.0;
+            let x = leading(size.width - TRAILING - CHEVRON_WIDTH / 2.0, 0.0);
             symbol(
                 cx,
                 "symbol.chevron.right",
@@ -1107,7 +1177,11 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
     }
 }
 
-struct Separator;
+/// A line between groups of rows, under the labels: from the label column to near the trailing edge.
+struct Separator {
+    /// From the leading edge to the menu's labels.
+    leading: f64,
+}
 
 impl<M: 'static> Widget<M> for Separator {
     type State = ();
@@ -1118,8 +1192,12 @@ impl<M: 'static> Widget<M> for Separator {
 
     fn state(&self) {}
 
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.leading != old.leading {
+            Change::Paint
+        } else {
+            Change::None
+        }
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
@@ -1135,21 +1213,31 @@ impl<M: 'static> Widget<M> for Separator {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let size = cx.size();
-        let Some(color) = cx
-            .env()
-            .theme
-            .colors
-            .get(ColorRole::Separator, StateVariant::NORMAL)
-        else {
+        let theme = &cx.env().theme;
+        let appearance = theme.preferences.appearance;
+        // over the glass a translucent line that takes its colour; over the opaque fill and with Increase Contrast the
+        // theme's separator
+        let color = if cx.window_backdrop() && !appearance.is_high_contrast() {
+            Some(if appearance.is_dark() {
+                GLASS_SEPARATOR_DARK
+            } else {
+                GLASS_SEPARATOR_LIGHT
+            })
+        } else {
+            theme.colors.get(ColorRole::Separator, StateVariant::NORMAL)
+        };
+        let Some(color) = color else {
             return;
         };
+        let rtl = cx.env().direction == LayoutDirection::Rtl;
+        let length = (size.width - self.leading - SEPARATOR_TRAILING).max(0.0);
+        let x = if rtl {
+            SEPARATOR_TRAILING
+        } else {
+            self.leading
+        };
         cx.push(PaintOp::Fill {
-            shape: Shape::Rect(Rect::new(
-                PADDING_X,
-                (size.height - EDGE) / 2.0,
-                size.width - 2.0 * PADDING_X,
-                EDGE,
-            )),
+            shape: Shape::Rect(Rect::new(x, (size.height - EDGE) / 2.0, length, EDGE)),
             paint: Paint::Solid(color),
         });
     }

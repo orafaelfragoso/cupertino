@@ -13,7 +13,7 @@ path or the `hicolor` theme. Depends on `cupertino-assets`, `cupertino-defaults`
 
 | Item | Contents |
 |---|---|
-| `SystemIcons` | `new(&Assets)`; `required(&Assets, rasters, symbols)` the same, reporting on stderr every name no pack provides; `raster(name, px)` a raster icon (`folder`, `trash.full`, ...), `symbol(name, px, color)` a template symbol (`symbol.*`) tinted by the caller, both cached, the placeholder when no source loads; `has_raster(name, px) whether a source loads |
+| `SystemIcons` | `new(&Assets)`; `required(&Assets, rasters, symbols)` the same, reporting on stderr every name no pack provides; `raster(name, px)` a raster icon (`folder`, `trash.full`, ...), `symbol(name, px, color)` a template symbol (`symbol.*`) tinted by the caller, both cached, the placeholder when no source loads; `has_raster(name, px) whether a source loads; `pack_has_raster(name)` whether a pack lists a raster or SVG file of its own for the name (the icon theme not counted) |
 | `IconLookup` | an application's icon file: an `application.` name from the asset directory, an absolute path as it is, else the `hicolor` theme (`index.theme` size matching), then the flat `~/.icons` and pixmaps directories. `new(assets)` searches the asset directory, `~/.icons`, `<data dir>/icons` for every XDG data directory and `/usr/share/pixmaps`; `with_roots(assets, bases)` takes explicit roots; `find(name, size, scale) |
 | `ThemeIcons` | the icons of applications, not of the system: `load(name, px)` gives a `tiny_skia::Pixmap` for an application icon name, path or `file://` URI (through `IconLookup`); `load_for_entry(entry, px)` the `Icon=` of the installed desktop entry with that id (hidden entries and stock names give `None`) |
 | `load_icon(path, px) | decodes a PNG or renders an SVG (resvg) to an `IconImage` of `px` × `px` pixels |
@@ -33,7 +33,7 @@ prefix), `document.archive` (not for an office document packed in an archive: a 
 `x-office-` one, such as a spreadsheet, falls through), `document.text`, `document.executable`, else `document.generic`. Scripts use `document.text`
 because the payload has no `document.script` icon. `FileIcons` also holds the folders that wear an icon of their own (the home
 folder and the user directories: `folder.home`, `folder.documents`, ...), which the file manager passes in from its places.
-`FileIcons::with_system` takes the `SystemIcons` to draw with, so a test or a capture can use `SystemIcons::without_host`
+`FileIcons::pack_has(name)` says whether a pack ships its own file for an icon name. `FileIcons::with_system` takes the `SystemIcons` to draw with, so a test or a capture can use `SystemIcons::without_host`
 and never read the icon themes of the machine.
 
 Badges: the design's bottom-left slot shows the alias badge, else the lock badge: `alias.badge` for a

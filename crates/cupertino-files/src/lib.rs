@@ -14,7 +14,8 @@
 //!   the state of one browser window; [`window`]: its size limits, view modes, path bar and status bar text;
 //! * [`context_menu`], [`menu_spec`], [`menu_bar`]: the rows of the context menus and the menus of the menu bar;
 //! * [`search_field`]: the toolbar search field's width;
-//! * `udisks` (feature `app`): removable media on the system bus; `notice` (feature `app`): failures as notifications.
+//! * `udisks` (feature `app`): removable media on the system bus; `notice` (feature `app`): failures as notifications;
+//!   `instance` (feature `app`): one Files process per session, serving `org.freedesktop.Application`.
 
 pub mod browser;
 pub mod context_menu;
@@ -23,6 +24,8 @@ pub mod format;
 pub mod geom;
 pub mod group;
 pub mod history;
+#[cfg(feature = "app")]
+pub mod instance;
 #[cfg(feature = "app")]
 pub mod kit;
 pub mod layout;

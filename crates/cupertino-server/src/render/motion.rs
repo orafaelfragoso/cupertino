@@ -113,9 +113,9 @@ mod tests {
         assert_eq!(minimize_opacity(1.5, reduced()), 0.0);
     }
 
-    /// The window model's progress is linear over the drawn effect's duration, the same both ways: the bend takes
-    /// half a second to the slot and half a second back out of it; the scale that stands in for it under Reduce
-    /// Motion takes a fifth.
+    /// The window model's progress is linear over the drawn effect's duration each way: the bend takes 0.45 s to the
+    /// slot and 0.42 s back out of it; the scale that stands in for it under Reduce Motion takes a fifth of a second
+    /// both ways.
     #[test]
     fn the_minimize_timing_is_the_drawn_effects_duration_both_ways() {
         use cupertino_animation::{CubicBezier, Curve};
@@ -138,7 +138,7 @@ mod tests {
         };
         assert_eq!(
             timing(Some(MinimizeKind::Warp), DisplayOptions::default()),
-            (Some(0.5), Some(0.5))
+            (Some(0.45), Some(0.42))
         );
         assert_eq!(
             timing(Some(MinimizeKind::Warp), reduced()),

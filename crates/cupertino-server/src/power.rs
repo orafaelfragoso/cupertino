@@ -240,13 +240,13 @@ pub fn start_power_bus(state: &mut Cupertino) {
 
 mod bus {
     //! The watcher threads. The blocking `zbus` API is used as in `cupertino-login`: one reader thread per signal stream.
-    //! Each stream passes on a signal only from its service, the owner of the service's name or the bus daemon, checked when
-    //! the signal arrives ([`only_from`]): the bus delivers a signal addressed to this process whatever its rules say, so
-    //! another user could otherwise hold off the idle lock with a forged `BlockInhibited` or `PrepareForSleep`.
+    //! Each stream passes on a signal only from its service, the owner of the service's name (`from_owner`) or the bus daemon
+    //! ([`only_from`]), checked when the signal arrives: the bus delivers a signal addressed to this process whatever its
+    //! rules say, so another user could otherwise hold off the idle lock with a forged `BlockInhibited` or `PrepareForSleep`.
 
     use std::sync::mpsc::Receiver;
 
-    use cupertino_peer::signal::{sent_by_bus, sent_by_owner};
+    use cupertino_peer::signal::{from_owner, sent_by_bus};
     use smithay::reexports::calloop::channel::Sender;
     use zbus::blocking::{Connection, MessageIterator};
     use zbus::message::Type;
@@ -264,23 +264,22 @@ mod bus {
 
     pub fn start(events: Sender<BusEvent>, requests: Receiver<BusRequest>) -> zbus::Result<()> {
         let conn = Connection::system()?;
-        let changes =
-            |interface: &'static str, path: &'static str| -> zbus::Result<MessageIterator> {
-                let rule = MatchRule::builder()
-                    .msg_type(Type::Signal)
-                    .interface(PROPERTIES)?
-                    .member("PropertiesChanged")?
-                    .path(path)?
-                    .arg(0, interface)?
-                    .build();
-                MessageIterator::for_match_rule(rule, &conn, None)
-            };
-        let from_owner = |name: &'static str| {
-            let conn = conn.clone();
-            move |message: &zbus::Message| sent_by_owner(&conn, message, name)
+        let ignored = |_: &zbus::Message| {
+            tracing::warn!("ignored a power signal that its service did not send")
         };
-        let upower_changes = only_from(changes(UPOWER, UPOWER_PATH)?, from_owner(UPOWER));
-        let logind_changes = only_from(changes(LOGIND_MANAGER, LOGIND_PATH)?, from_owner(LOGIND));
+        let changes = |name: &str, interface: &str, path: &str| {
+            let rule = MatchRule::builder()
+                .msg_type(Type::Signal)
+                .sender(name)?
+                .interface(PROPERTIES)?
+                .member("PropertiesChanged")?
+                .path(path)?
+                .arg(0, interface)?
+                .build();
+            from_owner(&conn, name, rule, ignored)
+        };
+        let upower_changes = changes(UPOWER, UPOWER, UPOWER_PATH)?;
+        let logind_changes = changes(LOGIND, LOGIND_MANAGER, LOGIND_PATH)?;
         let owner_rule = MatchRule::builder()
             .msg_type(Type::Signal)
             .sender("org.freedesktop.DBus")?
@@ -298,10 +297,7 @@ mod bus {
             .interface(LOGIND_MANAGER)?
             .member("PrepareForSleep")?
             .build();
-        let sleeps = only_from(
-            MessageIterator::for_match_rule(sleep_rule, &conn, None)?,
-            from_owner(LOGIND),
-        );
+        let sleeps = from_owner(&conn, LOGIND, sleep_rule, ignored)?;
 
         // the subscriptions are up: read the current values
         report_on_battery(&conn, &events);

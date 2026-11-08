@@ -138,7 +138,7 @@ backend (winit | udev | headless)  ──input──▶  events.rs ─▶ input.
 | `shortcut_inhibit.rs` | `zwp_keyboard_shortcuts_inhibit_manager_v1`: which inhibitors are active, the release of the person, the notice (*Keyboard shortcuts inhibit*) |
 | `pointer_constraints.rs` | `zwp_pointer_constraints_v1`: which lock or confine is active, what it does to a motion (*Pointer constraints*) |
 | `display_power.rs` | the idle policy, pure on the model clock: dim, display sleep, lock, system sleep, dim factor and ramps; the fade-in after the session became active |
-| `power.rs` | the idle policy on the compositor state: input activity, effects (overlay, DPMS, lock, suspend), the dim overlay element, system bus watchers (UPower `OnBattery`, logind `BlockInhibited` and `PrepareForSleep`, `Suspend`), each signal taken only from its service's name owner or the bus daemon, checked on receipt |
+| `power.rs` | the idle policy on the compositor state: input activity, effects (overlay, DPMS, lock, suspend), the dim overlay element, system bus watchers (UPower `OnBattery`, logind `BlockInhibited` and `PrepareForSleep`, `Suspend`), each signal taken only from its service's name owner (`cupertino_peer::signal::from_owner`) or the bus daemon |
 | `quit.rs` | `org.cupertino.Session1`: quitting applications one at a time before a log out; the appearance and accessibility setters; each method checks its caller |
 | `caller.rs` | `identify`, `Caller`, `Need`, `Denial`: who is on the other end of a bus message (pidfd, Flatpak and Snap classification) |
 | `localed.rs` | the system keyboard layout of `org.freedesktop.locale1` (`X11Layout`, `X11Variant`, `X11Options`), read on a worker at login: the input sources when `keyboard.conf` sets none, and its xkb options |

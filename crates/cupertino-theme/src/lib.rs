@@ -14,12 +14,15 @@
 //! * [`window_shadow`]: the verified window shadow parameter table (32 rows) and the window corner radii.
 //! * [`recipe`]: material recipes (backdrop filter chain + fill layers) including opaque variants
 //!   for reduce-transparency and the high-contrast catalogs.
+//! * [`glass`]: glass recipes (background pass and foreground matrix) per appearance, style, accessibility option and
+//!   shape size.
 
 pub mod animation;
 pub mod appearance;
 pub mod color;
 pub mod error;
 pub mod evidence;
+pub mod glass;
 pub mod metrics;
 pub mod recipe;
 pub mod theme;
@@ -32,6 +35,7 @@ pub use appearance::Appearance;
 pub use color::{AccentColor, Color, SemanticColor};
 pub use error::{Error, Result};
 pub use evidence::Evidence;
+pub use glass::{GlassMode, GlassParams, GlassStyle};
 pub use metrics::{Control, ControlSize, ShapeTokens, WindowShadowPreset};
 pub use recipe::{
     Backdrop, Blend, Catalog, ColorOp, CornerCurve, Fill, Interaction, MaterialLibrary,

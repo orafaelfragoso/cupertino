@@ -4,7 +4,8 @@
 Run from the worktree root. All cooperating worktrees share per-user build slots: `run`, a plain
 `prepare` and `cleanup --target` take one of N slots (--slots or CUPERTINO_BUILD_SLOTS, default 2)
 and give their child about 1/N of the processors; seed and package operations take every slot.
-The child inherits its slot locks, so killing this wrapper does not release a running build.
+One operation at a time uses a worktree's target. The child inherits its locks, so killing this wrapper does not
+release a running build.
 Seeds are explicitly promoted snapshots, never arbitrary target directories.
 """
 import argparse
@@ -201,6 +202,23 @@ def acquire(directory: Path, slots: int, whole: bool) -> Iterator[tuple[int, ...
             print(f"worktree-build: holding build slot {granted} of {slots} ({slot_path(directory, granted).name})",
                   flush=True)
         yield tuple(leases)
+
+
+@contextlib.contextmanager
+def worktree_lease(directory: Path, root: Path) -> Iterator[int]:
+    """Hold this worktree's own lock, so two operations never use its target at once.
+
+    It is taken before the slot queue and released after the slots, in that order everywhere, so it adds no deadlock.
+    """
+    worktrees = directory / "worktrees"
+    worktrees.mkdir(parents=True, exist_ok=True)
+    path = worktrees / f"{hashlib.sha256(str(root).encode()).hexdigest()[:32]}.lock"
+    with contextlib.ExitStack() as held:
+        lease = try_lock(path, held)
+        if lease is None:
+            print(f"worktree-build: waiting for another operation in {root}", flush=True)
+            lease = try_lock(path, held, block=True)
+        yield cast(int, lease)
 
 
 def job_limits(environ: dict[str, str], slots: int) -> dict[str, str]:
@@ -466,7 +484,8 @@ def main() -> int:
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
         if not command:
             parser.error("locked requires a command")
-        with acquire(locks, slots, whole) as leases:
+        with worktree_lease(locks, root) as own, acquire(locks, slots, whole) as slot_leases:
+            leases = (own, *slot_leases)
             disk_room(root)
             if "CARGO_TARGET_DIR" in environ:
                 destination = Path(environ["CARGO_TARGET_DIR"]).resolve()
@@ -480,7 +499,8 @@ def main() -> int:
     if "CARGO_TARGET_DIR" in environ and Path(environ["CARGO_TARGET_DIR"]).resolve() != root / "target":
         raise ValueError("CARGO_TARGET_DIR must be this worktree's target directory")
     environ.update(CARGO_TARGET_DIR=str(root / "target"), CARGO_INCREMENTAL="0")
-    with acquire(locks, slots, whole) as leases:
+    with worktree_lease(locks, root) as own, acquire(locks, slots, whole) as slot_leases:
+        leases = (own, *slot_leases)
         if args.action == "cleanup":
             cleanup(root, state, args.target, args.expired_seeds)
             return 0
@@ -501,6 +521,7 @@ def main() -> int:
             write_marker(root / "target", metadata)
             return status if status >= 0 else 128 - status
     return 0
+
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, interrupted)

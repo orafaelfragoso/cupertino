@@ -223,15 +223,19 @@ class WorktreeBuildTest(unittest.TestCase):
             self.assertFalse(BUILD.read_marker(self.root / "target", str(self.root))["successful"])
             child.assert_called_once()
             self.assertEqual(child.call_args.args[0], ["cargo", "build", "--profile", "dev", "--workspace"])
+            # the worktree's lock and one slot
+            self.assertEqual(len(child.call_args.args[3]), 2)
             self.assertEqual(child.call_args.args[2]["CARGO_INCREMENTAL"], "0")
             self.assertEqual(child.call_args.args[2]["CARGO_TARGET_DIR"], str(self.root / "target"))
             child.return_value = 0
             self.assertEqual(BUILD.main(), 0)
             self.assertTrue(BUILD.read_marker(self.root / "target", str(self.root))["successful"])
 
-    def worker(self, slots, mode="shared"):
+    def worker(self, slots, mode="shared", worktree=None):
+        """A process taking the slots like the wrapper, after the lock of `worktree` when one is named."""
         worker = subprocess.Popen([sys.executable, "-I", str(Path(__file__)), "--lock-worker", str(self.root / "locks"),
-                                   str(slots), mode], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                   str(slots), mode, *([str(self.root / worktree)] if worktree else [])],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         def stop():
             if worker.poll() is None:
                 worker.kill()
@@ -340,6 +344,32 @@ class WorktreeBuildTest(unittest.TestCase):
         self.release(second)
         self.assertEqual(list((self.root / "locks" / "queue").iterdir()), [])
 
+    def test_a_second_operation_in_the_same_worktree_waits_without_holding_a_slot(self):
+        first = self.worker(2, worktree="one")
+        self.granted(first)
+        second = self.worker(2, worktree="one")
+        self.waits(second)
+        # It is not queued for a slot either, so another worktree takes the free one.
+        other = self.worker(2, worktree="two")
+        self.assertIn("build slot 1 of 2", self.granted(other))
+        self.release(first)
+        self.assertIn("build slot 0 of 2", self.granted(second))
+        self.release(second)
+        self.release(other)
+
+    def test_running_child_keeps_the_worktree_lock_when_wrapper_is_killed(self):
+        first = self.worker(2, "child", worktree="one")
+        self.assertIn("holding", self.line(first))
+        self.assertEqual(self.line(first), "child-ready\n")
+        first.kill()
+        first.wait(timeout=10)
+        second = self.worker(2, worktree="one")
+        self.waits(second)
+        first.stdin.write(b"release\n")
+        first.stdin.flush()
+        self.granted(second)
+        self.release(second)
+
     def test_operations_touching_seeds_or_packages_take_every_slot(self):
         expected = {("run", "--profile", "dev", "--", "cargo", "build"): False,
                     ("prepare", "--profile", "dev"): False,
@@ -438,6 +468,7 @@ class WorktreeBuildTest(unittest.TestCase):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--lock-worker":
         directory, slots, mode = Path(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+        worktree = Path(sys.argv[5]) if len(sys.argv) > 5 else None
         if mode == "old":
             # How a copy of the wrapper from before build slots takes its single lock.
             directory.mkdir(parents=True, exist_ok=True)
@@ -446,7 +477,9 @@ if __name__ == "__main__":
                 print("acquired", flush=True)
                 input()
             sys.exit()
-        with BUILD.acquire(directory, slots, mode == "whole") as leases:
+        with contextlib.ExitStack() as held:
+            own = () if worktree is None else (held.enter_context(BUILD.worktree_lease(directory, worktree)),)
+            leases = own + held.enter_context(BUILD.acquire(directory, slots, mode == "whole"))
             if mode == "child":
                 sys.exit(BUILD.child([sys.executable, "-c", "print('child-ready', flush=True); input()"],
                                      Path.cwd(), dict(os.environ), leases))

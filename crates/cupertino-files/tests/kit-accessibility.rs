@@ -1139,8 +1139,8 @@ fn assistive_technology_reads_the_lists_selection_over_atspi_and_a_rows_click_se
         "org.a11y.atspi.Action",
     )
     .unwrap();
-    let names: Vec<String> = (0..2)
-        .filter_map(|i| action.call("GetName", &(i as i32,)).ok())
+    let names: Vec<String> = (0..2_i32)
+        .filter_map(|i| action.call("GetName", &(i,)).ok())
         .collect();
     let click = names
         .iter()

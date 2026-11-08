@@ -115,7 +115,8 @@ Right goes into the selected folder (its first item selected) and Left back to t
 in the column shown, a click on a row of another column shows that column's folder, and Return, double click, drops,
 the context menus and rename work as in the other views. A selected item that is not a folder is previewed in a 240 pt
 column at the end (`cupertino-ui-controls`' `FilePreview`): a picture whole, the start of a text file, else its large
-icon, then its name, kind and size, its dates, and a More… button that opens the item's menu. The divider after a
+icon, then its name, kind and size, its dates, and a More… button (a ringed ellipsis over its label) that opens the
+item's menu. The divider after a
 column drags it wider or narrower (100–1000 pt; with Option held, every column), and the widths are kept with the
 window's view state (`window_prefs`, `column_width`). Each column is a list named for its folder, and the preview a
 group named "Preview of <name>".

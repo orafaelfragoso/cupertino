@@ -574,8 +574,17 @@ impl Widget<Message> for GlyphButton {
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let colors = &cx.env().theme.colors;
-        let ink = colors.get(ColorRole::SecondaryText, StateVariant::NORMAL);
-        let well = colors.get(ColorRole::QuaternaryLabel, StateVariant::NORMAL);
+        // the window's own buttons are solid discs with their glyph cut out; the + of a bar is a faint well
+        let (ink, well) = match self.glyph {
+            Glyph::Close | Glyph::FullScreen => (
+                colors.get(ColorRole::WindowBackground, StateVariant::NORMAL),
+                colors.get(ColorRole::SecondaryText, StateVariant::NORMAL),
+            ),
+            Glyph::Plus => (
+                colors.get(ColorRole::SecondaryText, StateVariant::NORMAL),
+                colors.get(ColorRole::QuaternaryLabel, StateVariant::NORMAL),
+            ),
+        };
         let (cx0, cy0) = (size.width / 2.0, size.height / 2.0);
         let half = GLYPH / 2.0;
         match self.glyph {
@@ -635,9 +644,18 @@ impl Widget<Message> for GlyphButton {
                 }
             }
             Glyph::FullScreen => {
+                if let Some(well) = well {
+                    cx.push(PaintOp::Fill {
+                        shape: Shape::RoundedRect {
+                            rect: Rect::new(cx0 - half, cy0 - half, GLYPH, GLYPH),
+                            radius: half,
+                        },
+                        paint: Paint::Solid(well),
+                    });
+                }
                 if let Some(ink) = ink {
-                    let reach = half * 0.8;
-                    let head = half * 0.45;
+                    let reach = half * 0.45;
+                    let head = half * 0.3;
                     let (l, t, r, b) = (cx0 - reach, cy0 - reach, cx0 + reach, cy0 + reach);
                     cx.push(PaintOp::Stroke {
                         shape: Shape::Path {

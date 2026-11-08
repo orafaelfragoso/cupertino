@@ -1,10 +1,13 @@
 //! The Files surfaces for look checks: `files/window`, a browser window (920 × 436 at 1×) on a sample home folder,
-//! and `files/sidebar`, the sidebar column of that window. The window is the Kit window ([`cupertino_files::kit`])
-//! drawn on the headless window system with the CPU renderer.
+//! and `files/sidebar`, the sidebar column of that window; `files/preview`, the preview window Space opens on the
+//! selection; `files/popover`, the tags popover of the selection; and `files/tabs`, the window with a second tab gone
+//! into Documents. The window is the Kit window ([`cupertino_files::kit`]) drawn on the headless window system with the
+//! CPU renderer.
 //!
 //! `ci/capture.sh files/window --view list --scale 2` (the flags are `cupertino-capture`'s)
 //!
-//! State flags: `--view icon|list` (default icon), `--selected NAME` (the item, selected) and `--devices removable`
+//! State flags: `--view icon|list|columns` (default icon), `--selected PATH` (the item, selected: a path under the home
+//! folder, its folders shown on the way in the column view) and `--devices removable`
 //! (three removable file systems under Locations: "Backup Disk" mounted, "Camera Card" busy, "KINGSTON" not
 //! mounted). The home folder `avery` is made under a temporary directory with the user folders and sample files; the
 //! places are those of a session with that home on a computer named `cupertino`. File types come from the system's
@@ -375,8 +378,13 @@ impl Capture {
                 system
                     .enqueue_window(newest, WindowEvent::Scale(f64::from(scale)))
                     .map_err(|e| fail(&e))?;
+                // a popup is the size it asked to be placed at, as a compositor makes it
+                let placed = system
+                    .placement(newest)
+                    .map_err(|e| fail(&e))?
+                    .map(|popup| popup.size);
                 system
-                    .configure(newest, None, active)
+                    .configure(newest, placed, active)
                     .map_err(|e| fail(&e))?;
                 // its motion runs on the frames' clock: present frames a sixtieth of a second apart until it rests
                 let mut at = 0;
@@ -571,6 +579,7 @@ impl App for Capture {
             "sidebar".into(),
             "preview".into(),
             "popover".into(),
+            "tabs".into(),
         ]
     }
 
@@ -591,6 +600,12 @@ impl App for Capture {
             "window" | "sidebar" => &[],
             "preview" => &[Step::Key(0x20, Mods::NONE)],
             "popover" => &[Step::Click("Tags")],
+            // a second tab, gone into Documents
+            "tabs" => &[
+                Step::Key(0x74, Mods::PRIMARY),
+                Step::Click("Documents"),
+                Step::Key(0xff54, Mods::PRIMARY),
+            ],
             _ => return Err(format!("{}: no such surface", r.surface)),
         };
         let mut view = ViewMode::Icons;

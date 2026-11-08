@@ -32,7 +32,10 @@ use crate::tags::TagColor;
 /// The popover's width.
 const WIDTH: f64 = 222.0;
 /// A tag's row: its height, the side of its colour's dot and the room after the dot.
-const ROW_HEIGHT: f64 = 20.0;
+const ROW_HEIGHT: f64 = 19.0;
+/// Between the title and the field, and from the field to the first row.
+const TITLE_GAP: f64 = 8.0;
+const ROWS_GAP: f64 = 8.0;
 const DOT: f64 = 11.0;
 const DOT_GAP: f64 = 6.0;
 /// From the row's leading edge to the dot.
@@ -178,15 +181,31 @@ pub(super) fn window(
         })
         .key(Key::from(format!("tag/{name}")))
     });
+    // the rows follow one another without gaps, set off from the field above them
+    let rows = Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets {
+            top: ROWS_GAP,
+            ..Insets::ZERO
+        },
+        spacing: 0.0,
+        align: Align::Stretch,
+        children: rows.collect(),
+    });
+    // the title centred over the field
+    let title = Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets::ZERO,
+        spacing: 0.0,
+        align: Align::Center,
+        children: vec![title],
+    });
     let content = Element::new(Stack {
         axis: Axis::Vertical,
         padding: Insets::ZERO,
-        spacing: 6.0,
+        spacing: TITLE_GAP,
         align: Align::Stretch,
-        children: std::iter::once(title)
-            .chain(std::iter::once(field))
-            .chain(rows)
-            .collect(),
+        children: vec![title, field, rows],
     })
     .width(WIDTH)
     .key("tags");

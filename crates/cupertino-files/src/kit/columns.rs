@@ -579,19 +579,14 @@ fn preview_pane(
     win: &BrowserWindow,
     entry: &Entry,
 ) -> Element<Message> {
+    // the glyph over its label, both in the secondary text colour
     let more = Element::new(Stack {
-        axis: Axis::Horizontal,
+        axis: Axis::Vertical,
         padding: Insets::ZERO,
-        spacing: 4.0,
+        spacing: 0.0,
         align: Align::Center,
         children: vec![
-            Element::new(Icon {
-                name: "symbol.ellipsis.circle".into(),
-                size: 15.0,
-                direction: IconDirection::Fixed,
-                label: None,
-                tint: Some(ColorRole::SecondaryText),
-            }),
+            Element::new(MoreGlyph),
             Element::new(Button {
                 label: MORE.into(),
                 role: ButtonRole::Normal,
@@ -846,6 +841,70 @@ impl Widget<Message> for ColumnFrame {
     fn paint(&self, _: &Resizing, _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &Resizing, _: &mut SemanticsCx<'_>) {}
+}
+
+/// The side of the More button's glyph: a ring holding three dots in a row.
+const MORE_GLYPH: f64 = 18.0;
+
+/// The More button's glyph, drawn here so it never depends on an icon a pack may lack.
+struct MoreGlyph;
+
+impl Widget<Message> for MoreGlyph {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(MORE_GLYPH),
+            height: SizeSpec::Fixed(MORE_GLYPH),
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(MORE_GLYPH, MORE_GLYPH),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let colors = &cx.env().theme.colors;
+        let Some(ink) = colors.get(ColorRole::SecondaryText, StateVariant::NORMAL) else {
+            return;
+        };
+        let side = MORE_GLYPH - 2.0;
+        cx.push(PaintOp::Stroke {
+            shape: Shape::RoundedRect {
+                rect: Rect::new(1.0, 1.0, side, side),
+                radius: side / 2.0,
+            },
+            paint: Paint::Solid(ink),
+            width: 1.2,
+        });
+        let middle = MORE_GLYPH / 2.0;
+        let dot = 2.0;
+        for x in [middle - 4.0, middle, middle + 4.0] {
+            cx.push(PaintOp::Fill {
+                shape: Shape::RoundedRect {
+                    rect: Rect::new(x - dot / 2.0, middle - dot / 2.0, dot, dot),
+                    radius: dot / 2.0,
+                },
+                paint: Paint::Solid(ink),
+            });
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// The line between two columns.

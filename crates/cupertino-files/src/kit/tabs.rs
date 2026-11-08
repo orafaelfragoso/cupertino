@@ -23,7 +23,7 @@ use cupertino_kit::layout::{
 use cupertino_kit::platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_kit::render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::text::{AttributedText, TextStyle};
-use cupertino_kit::theme::{ColorRole, StateVariant};
+use cupertino_kit::theme::{Color, ColorRole, StateVariant};
 
 use super::peek::{Glyph, GlyphButton};
 use super::{columns, Event as WindowEvent, Message};
@@ -35,6 +35,9 @@ use crate::window::ViewMode;
 /// The height of the track the tabs share, and of the tab shown inside it.
 const TRACK_HEIGHT: f64 = 28.0;
 const TAB_HEIGHT: f64 = 26.0;
+/// The tab shown in the dark appearance: the white over the track that lifts it, and its rim's.
+const ACTIVE_FILL_DARK: f32 = 0.02;
+const ACTIVE_RIM_DARK: f32 = 0.07;
 /// Around the track: above and below it, and at the window's sides.
 const BAR_VERTICAL: f64 = 4.0;
 const BAR_SIDE: f64 = 8.0;
@@ -433,7 +436,20 @@ impl Widget<Message> for TabItem {
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
         let colors = cx.env().theme.colors.clone();
         if self.active {
-            if let Some(fill) = colors.get(ColorRole::ControlFill, StateVariant::NORMAL) {
+            // light: a raised control on the track; dark: barely lifted off it, set apart by its rim
+            let dark = cx.env().theme.preferences.appearance.is_dark();
+            let white = Color::new(1.0, 1.0, 1.0, 1.0);
+            let (fill, rim) = match dark {
+                true => (
+                    Some(white.with_alpha(ACTIVE_FILL_DARK)),
+                    Some(white.with_alpha(ACTIVE_RIM_DARK)),
+                ),
+                false => (
+                    colors.get(ColorRole::ControlFill, StateVariant::NORMAL),
+                    colors.get(ColorRole::ControlBorder, StateVariant::NORMAL),
+                ),
+            };
+            if let Some(fill) = fill {
                 cx.push(PaintOp::Fill {
                     shape: Shape::RoundedRect {
                         rect,
@@ -442,7 +458,7 @@ impl Widget<Message> for TabItem {
                     paint: Paint::Solid(fill),
                 });
             }
-            if let Some(rim) = colors.get(ColorRole::ControlBorder, StateVariant::NORMAL) {
+            if let Some(rim) = rim {
                 cx.push(PaintOp::Stroke {
                     shape: Shape::RoundedRect {
                         rect: Rect::new(0.5, 0.5, size.width - 1.0, size.height - 1.0),

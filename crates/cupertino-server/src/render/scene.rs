@@ -839,33 +839,43 @@ pub(crate) fn shadow_item(
     )))
 }
 
-/// Elements of one window, front to back: popups, content (masked to the plan's corner radius,
-/// rescaled), shadow.
-fn window_elements(
+/// The physical origin of a window's surface tree in output-local device pixels: its visual origin, inset by the
+/// decorations, less the window geometry's offset into the surface.
+fn window_surface_origin(
+    entry: &WindowEntry,
+    plan: &WindowPlan,
+    p: &SceneParams<'_>,
+) -> Point<i32, Physical> {
+    let scale = Scale::from(p.scale);
+    let geo = entry.window.geometry();
+    let ins = entry.insets();
+    let v_phys = to_physical_rect(local(plan.visual, &p.rect), scale);
+    let geo_phys: Point<i32, Physical> = geo.loc.to_f64().to_physical(scale).to_i32_round();
+    let inset_phys: Point<i32, Physical> = Point::<f64, Logical>::from((ins.left, ins.top))
+        .to_physical(scale)
+        .to_i32_round();
+    v_phys.loc + inset_phys - geo_phys
+}
+
+/// Elements of one window's popups, front to back, each with its own backdrop directly below it: moved and scaled
+/// with the window's plan. On the desktop the key window's go to [`SceneLayer::Popups`], above every window and the bars
+/// ([`raised_popups_window`]).
+fn window_popup_elements(
     p: &mut SceneParams<'_>,
     entry: &WindowEntry,
     plan: &WindowPlan,
-    active: bool,
-    shadow: bool,
-    decorations: Vec<Piece>,
 ) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();
     let scale = Scale::from(p.scale);
     let geo = entry.window.geometry();
     let ins = entry.insets();
-    let style = p.config.window;
     let visual_local = local(plan.visual, &p.rect);
     let v_phys = to_physical_rect(visual_local, scale);
-    let geo_phys: Point<i32, Physical> = geo.loc.to_f64().to_physical(scale).to_i32_round();
-    let inset_phys: Point<i32, Physical> = Point::<f64, Logical>::from((ins.left, ins.top))
-        .to_physical(scale)
-        .to_i32_round();
-    let origin = v_phys.loc + inset_phys - geo_phys;
+    let origin = window_surface_origin(entry, plan, p);
     let Some(surface) = entry.window.wl_surface().map(|s| s.into_owned()) else {
         return out;
     };
     let alpha = plan.opacity as f32;
-
     for (popup, popup_offset) in PopupManager::popups_for_surface(&surface) {
         let offset: Point<i32, Physical> =
             (geo.loc + popup_offset - popup.geometry().loc).to_physical_precise_round(scale);
@@ -891,6 +901,31 @@ fn window_elements(
         );
         out.extend(popup_backdrop_elements(p, &backdrops, alpha));
     }
+    out
+}
+
+/// Elements of one window, front to back: decorations, content (masked to the plan's corner radius, rescaled), its
+/// backdrops, outline and shadow. Its popups are apart ([`window_popup_elements`]).
+fn window_elements(
+    p: &mut SceneParams<'_>,
+    entry: &WindowEntry,
+    plan: &WindowPlan,
+    active: bool,
+    shadow: bool,
+    decorations: Vec<Piece>,
+) -> Vec<Piece> {
+    let mut out: Vec<Piece> = Vec::new();
+    let scale = Scale::from(p.scale);
+    let geo = entry.window.geometry();
+    let ins = entry.insets();
+    let style = p.config.window;
+    let visual_local = local(plan.visual, &p.rect);
+    let v_phys = to_physical_rect(visual_local, scale);
+    let origin = window_surface_origin(entry, plan, p);
+    let Some(surface) = entry.window.wl_surface().map(|s| s.into_owned()) else {
+        return out;
+    };
+    let alpha = plan.opacity as f32;
 
     out.extend(decorations);
     let styled = entry.styled(style.style_client_decorated);
@@ -1278,7 +1313,10 @@ pub fn capture_window(
     let deco = window_decorations(p, entry, &plan, active);
     // a material samples what lies below it and keeps the target's alpha, so on the clear snapshot it would
     // leave its area transparent: the fallback fill stands in
-    let pieces = window_elements(p, entry, &plan, active, shadow, deco)
+    // the snapshot holds the window as it shows, its popups over it
+    let mut pieces = window_popup_elements(p, entry, &plan);
+    pieces.extend(window_elements(p, entry, &plan, active, shadow, deco));
+    let pieces = pieces
         .into_iter()
         .map(|piece| match piece {
             Piece::Material(m) => vec![fallback_fill(
@@ -1411,6 +1449,18 @@ pub fn top_layer_covered(wm: &Wm, shell: &crate::shell::Shell, output: OutputId)
     !shell.overview_open() && wm.fullscreen_front(output).is_some()
 }
 
+/// The window of `output` whose popups lie above every window and the bars ([`SceneLayer::Popups`]): the key window,
+/// unless another window covers the output in full screen. The popups of every other window stay with their window, in
+/// its place in the stack, so a popup left open in a window behind (a tooltip, a popup without a grab) never covers the
+/// window in front of it nor takes its pointer.
+pub fn raised_popups_window(wm: &Wm, output: OutputId) -> Option<WindowId> {
+    let key = wm.key_window()?;
+    match wm.fullscreen_front(output) {
+        Some(front) if front != key => None,
+        _ => Some(key),
+    }
+}
+
 /// Whether the `top` surface gives way to a full-screen window: all but a menu bar and a surface over the whole output,
 /// such as the outside-click catcher of the launcher or Control Center, which must still take the click that closes them.
 pub fn gives_way(surface: &LayerSurface, menu_bars: &crate::menu_bar::MenuBars) -> bool {
@@ -1517,8 +1567,15 @@ fn closing_elements(p: &mut SceneParams<'_>) -> Vec<Piece> {
 }
 
 /// Elements of the layer-shell `layer`, front to back. The backdrop captures of menu bars are
-/// appended to `captures`: they belong below the windows (see [`bar_backdrop_elements`]).
-fn layer_elements(p: &mut SceneParams<'_>, layer: Layer, captures: &mut Vec<Piece>) -> Vec<Piece> {
+/// appended to `captures`: they belong below the windows (see [`bar_backdrop_elements`]). The popups of a layer below
+/// the overlay layer (a menu bar's menus, a dock's menus) are appended to `popups`, for [`SceneLayer::Popups`] above
+/// every window and every bar; an overlay surface keeps its popups directly above it.
+fn layer_elements(
+    p: &mut SceneParams<'_>,
+    layer: Layer,
+    captures: &mut Vec<Piece>,
+    popups: &mut Vec<Piece>,
+) -> Vec<Piece> {
     let map = layer_map_for_output(p.output);
     let scale = Scale::from(p.scale);
     let mut out: Vec<Piece> = Vec::new();
@@ -1543,16 +1600,22 @@ fn layer_elements(p: &mut SceneParams<'_>, layer: Layer, captures: &mut Vec<Piec
         let origin: Point<f64, Logical> = geo.loc.to_f64() + Point::from((0.0, dy));
         let loc: Point<i32, Physical> = origin.to_physical_precise_round(scale);
         // popups above their parent, each with its own backdrop directly below it
+        let mut own = Vec::new();
         for (popup, popup_offset) in PopupManager::popups_for_surface(surface.wl_surface()) {
             let popup_origin = origin + (popup_offset - popup.geometry().loc).to_f64();
-            out.push(standalone(
+            own.push(standalone(
                 popup.wl_surface(),
                 SceneKind::LayerContent,
                 popup_origin.to_physical_precise_round(scale),
                 opacity,
             ));
             let backdrops = surface_backdrops(popup.wl_surface(), popup_origin);
-            out.extend(popup_backdrop_elements(p, &backdrops, opacity));
+            own.extend(popup_backdrop_elements(p, &backdrops, opacity));
+        }
+        if layer == Layer::Overlay {
+            out.append(&mut own);
+        } else {
+            popups.append(&mut own);
         }
         out.push(standalone(
             surface.wl_surface(),
@@ -2187,6 +2250,8 @@ fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
         };
         let active = key == Some(*id);
         let deco = window_decorations(p, entry, &plan, active);
+        // a window keeps its popups over it while it is a preview
+        windows_front_to_back.extend(window_popup_elements(p, entry, &plan));
         let els = window_elements(p, entry, &plan, active, true, deco);
         windows_front_to_back.extend(els);
     }
@@ -2213,13 +2278,15 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
     stack.push(SceneLayer::Wallpaper, wp);
 
     let mut captures: Vec<Piece> = Vec::new();
+    // front to back: the popups of the layer surfaces, the higher layer's first, then those of the windows
+    let mut popups: Vec<Piece> = Vec::new();
     for (layer, scene_layer) in [
-        (Layer::Background, SceneLayer::LayerBackground),
-        (Layer::Bottom, SceneLayer::LayerBottom),
-        (Layer::Top, SceneLayer::LayerTop),
         (Layer::Overlay, SceneLayer::LayerOverlay),
+        (Layer::Top, SceneLayer::LayerTop),
+        (Layer::Bottom, SceneLayer::LayerBottom),
+        (Layer::Background, SceneLayer::LayerBackground),
     ] {
-        let els = layer_elements(p, layer, &mut captures);
+        let els = layer_elements(p, layer, &mut captures, &mut popups);
         stack.extend(scene_layer, els);
     }
     stack.extend(SceneLayer::BackdropCapture, captures);
@@ -2235,6 +2302,7 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             p.now,
         );
         let key = p.wm.key_window();
+        let raised = raised_popups_window(p.wm, p.output_id);
         let mut front_to_back: Vec<Piece> = Vec::new();
         // strip thumbnails, drawn below every window on the stage
         let mut strip: Vec<Piece> = Vec::new();
@@ -2273,6 +2341,7 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             let active = key == Some(id);
             if in_strip {
                 let deco = window_decorations(p, entry, &plan, active);
+                strip.extend(window_popup_elements(p, entry, &plan));
                 strip.extend(window_elements(p, entry, &plan, active, true, deco));
                 continue;
             }
@@ -2301,6 +2370,13 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             }
             let mut deco = window_decorations(p, entry, &plan, active);
             deco.extend(revealed_titlebar(p, entry, &plan, active));
+            // the key window's popups go above every window and the bars; another window's stay over it
+            let own_popups = window_popup_elements(p, entry, &plan);
+            if raised == Some(id) {
+                popups.extend(own_popups);
+            } else {
+                front_to_back.extend(own_popups);
+            }
             front_to_back.extend(window_elements(p, entry, &plan, active, true, deco));
         }
         let mut ghosts: Vec<Piece> = closing_elements(p);
@@ -2308,6 +2384,7 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
         ghosts.append(&mut strip);
         stack.extend(SceneLayer::Windows, ghosts);
     }
+    stack.extend(SceneLayer::Popups, popups);
 
     snap_preview(p, stack);
     stack.extend(SceneLayer::InputHud, crate::kbd_ui::input_hud(p));

@@ -1,8 +1,8 @@
 //! Unit conversions typed into the launcher: `10 km in mi`, `3.5 kg to lb`, `72 °F as C`, `2*1.5 h = min`.
 //!
 //! The input is a quantity, a unit, a separator (`in`, `to`, `as`, `into`, `=`, `->` or `→`) and the target unit. The
-//! quantity is a number or any arithmetic [`crate::calc`] answers (`(3+4) ft in m`). Units are matched by name, case
-//! folded, longest name first, and a unit's name must not run on from a word before it. The last separator splits the
+//! quantity is a number or any arithmetic [`crate::calc`] answers (`(3+4) ft in m`). Units are matched by name, ASCII
+//! case folded, longest name first, and a unit's name must not run on from a word before it. The last separator splits the
 //! input, so a unit named like one (`5 in in cm`) still reads. Both units must measure the same quantity; temperature
 //! converts with its offsets. Nothing is fetched: there are no currencies.
 //!
@@ -334,20 +334,17 @@ pub struct Conversion {
     pub text: String,
 }
 
-/// The unit named `name` exactly (case folded, spaces around it ignored).
+/// The unit named `name` exactly (ASCII case folded, as [`split_unit`] matches; spaces around it ignored).
 pub fn find(name: &str) -> Option<&'static Unit> {
-    let name = name.trim().to_lowercase();
+    let name = name.trim().to_ascii_lowercase();
     UNITS.iter().find(|u| u.names.contains(&name.as_str()))
 }
 
 /// The unit `text` ends with and what comes before it: the longest name that `text` ends with and that does not run on
 /// from a letter before it.
 fn split_unit(text: &str) -> Option<(&str, &'static Unit)> {
-    let folded = text.to_lowercase();
-    // lower-casing keeps the byte length of everything a unit name matches against
-    if folded.len() != text.len() {
-        return None;
-    }
+    // ASCII case folding keeps every byte where it is, so an offset into `folded` is one into `text`
+    let folded = text.to_ascii_lowercase();
     let mut best: Option<(usize, &'static Unit)> = None;
     for unit in UNITS {
         for name in unit.names {
@@ -368,12 +365,9 @@ fn split_unit(text: &str) -> Option<(&str, &'static Unit)> {
 
 /// The input split at its last separator: the quantity with its unit, and the target unit.
 fn split(input: &str) -> Option<(&str, &str)> {
-    let folded = input.to_lowercase();
-    if folded.len() != input.len() {
-        // a character whose case folding changes its length: no unit has one, so the input cannot be a conversion
-        // unless only its target does; give up rather than misplace the split
-        return None;
-    }
+    // every separator is ASCII: folding only ASCII keeps every byte where it is, so an offset into `folded` is one into
+    // `input`, whatever else the input holds
+    let folded = input.to_ascii_lowercase();
     SEPARATORS
         .iter()
         .filter_map(|sep| folded.rfind(sep).map(|at| (at, sep.len())))
@@ -420,11 +414,14 @@ pub fn format_significant(v: f64, digits: usize) -> String {
     if v == 0.0 || !v.is_finite() {
         return calc::format_number(v);
     }
-    let magnitude = v.abs().log10().floor() as i32;
+    let prec = digits.saturating_sub(1);
+    // rounded to its significant digits in scientific notation, which keeps them at any magnitude (rounding to a
+    // number of decimals would take a value far below one to zero)
+    let rounded: f64 = format!("{v:.prec$e}").parse().unwrap_or(v);
+    let magnitude = rounded.abs().log10().floor() as i32;
     let decimals = (digits as i32 - 1 - magnitude).clamp(0, 20) as usize;
-    let rounded: f64 = format!("{v:.decimals$}").parse().unwrap_or(v);
     if !(1e-6..1e15).contains(&rounded.abs()) {
-        let s = format!("{rounded:.prec$e}", prec = digits.saturating_sub(1));
+        let s = format!("{rounded:.prec$e}");
         let (mantissa, exponent) = s.split_once('e').unwrap_or((&s, "0"));
         let mantissa = if mantissa.contains('.') {
             mantissa.trim_end_matches('0').trim_end_matches('.')
@@ -575,6 +572,54 @@ mod tests {
     }
 
     #[test]
+    fn fuzzed_input_never_panics_and_never_shows_a_non_finite_value() {
+        let mut fuzz = crate::calc::tests::Fuzz(0x2545_f491_4f6c_dd1d);
+        let units: Vec<&str> = UNITS.iter().flat_map(|u| u.names.iter().copied()).collect();
+        for round in 0..20_000 {
+            // every other input is shaped as a conversion, so the split and the units are reached
+            let input = if round % 2 == 0 {
+                fuzz.input(24)
+            } else {
+                format!(
+                    "{}{}{}{}{}",
+                    fuzz.input(6),
+                    units[fuzz.below(units.len())],
+                    SEPARATORS[fuzz.below(SEPARATORS.len())],
+                    units[fuzz.below(units.len())],
+                    fuzz.input(2),
+                )
+            };
+            if let Some(c) = convert(&input) {
+                assert!(c.value.is_finite(), "{input:?} gave {}", c.value);
+                for shown in [&c.text, &c.from] {
+                    assert!(
+                        !shown.contains("inf") && !shown.contains("NaN") && !shown.starts_with(' '),
+                        "{input:?} shows {shown:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn letters_whose_lower_case_is_longer_or_shorter_never_misplace_the_split() {
+        // U+0130 lower-cases one byte longer and U+1E9E one byte shorter, and U+212A (the Kelvin sign) two bytes
+        // shorter: together they keep the input's length while moving every byte between them
+        for input in [
+            "\u{130} in \u{1e9e}",
+            "5 \u{130}\u{130}\u{212a} to c",
+            "\u{130}\u{1e9e} 5 km in mi",
+            "5 km in \u{130}\u{1e9e}mi",
+            "\u{212a}\u{130}\u{130} in \u{130}",
+        ] {
+            let _ = convert(input);
+        }
+        // ASCII letters still fold, whatever else the input holds
+        assert_eq!(text("5 KM IN MI"), "3.10686 mi");
+        assert_eq!(text("100 °C TO °F"), "212 °F");
+    }
+
+    #[test]
     fn significant_digits() {
         assert_eq!(format_significant(6.213_711_922, 6), "6.21371");
         assert_eq!(format_significant(1234.5678, 6), "1234.57");
@@ -582,5 +627,10 @@ mod tests {
         assert_eq!(format_significant(-0.0, 6), "0");
         assert_eq!(format_significant(999_999.7, 6), "1000000");
         assert_eq!(format_significant(2.5e22, 6), "2.5e22");
+        // far below one, the digits stay: never "0e0"
+        assert_eq!(format_significant(1.234_567e-306, 6), "1.23457e-306");
+        assert_eq!(format_significant(5e-324, 6), "4.94066e-324");
+        assert_eq!(format_significant(9.999_996e-7, 6), "0.000001");
+        assert_eq!(text("1e-300 mm to km"), "1e-306 km");
     }
 }

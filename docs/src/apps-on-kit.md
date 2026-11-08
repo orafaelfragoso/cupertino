@@ -58,10 +58,10 @@ with a folder of 1500 files (p99 at scales 2 / 1.5 / 1, in ms):
 | Files: opening the folder of 1500 files | 57.1 / 58.9 / 61.0 | both frames |
 | Files: wheel scrolling the listing | 61.5 / 66.5 / 70.5 | all |
 | Files: an arrow key past the last row in view (scrolls a row) | 64.4 / 68.2 / 71.4 | all |
-| Settings: switching panes | 10.1 / 7.2 / 4.9 | 2 of 8 at scale 2 |
-| Settings: toggling a switch, dragging a slider, the caret | under 0.5 | none |
-| Settings: scrolling a pane (at its default size) | 5.7 / 3.3 / 1.9 | none |
-| Settings: typing a search (the results pop up) | 15.0 / 11.4 / 7.2 | 1 of 8 at scales 2 and 1.5 |
+| Settings: switching panes | 39.4 / 29.1 / 20.3 | all |
+| Settings: toggling a switch, dragging a slider, the caret | under 1 | none |
+| Settings: scrolling a pane (at its default size) | 1.4 / 0.9 / 0.5 | none |
+| Settings: typing a search (the page lists the results and the sidebar keeps the panes found) | 60.6 / 46.1 / 30.5 | 2 of 8 |
 
 Before this work every frame of Files but the caret's and a hover's repainted 85–95 % of the window and took
 57–96 ms, and switching Settings panes repainted 96–98 % in 16–21 ms. Now a node that draws nothing (a stack, a
@@ -69,6 +69,13 @@ scroll view's content, the listing's gesture layer) damages nothing, a node that
 that moves nothing keeps the layout. A scroll, a folder opened and the search results still repaint everything the
 listing shows, at about 9 ns a pixel: up to 7.6 million pixels a frame at scale 1. Meeting 8 ms there needs the
 renderer to move the pixels it has, or the GPU composition planned for Phase 6.
+
+The Settings rows were measured again on 2026-11-08, on the same machine, after its pages became grouped forms on
+their own background; before that, switching panes took 10.1 / 7.2 / 4.9 ms and typing a search 15.0 / 11.4 / 7.2 ms
+at p99. Switching panes repaints about the same share of the window (28 % at scale 2, 23 % before), but each damaged
+pixel now costs about 10.5 ns instead of 2.8, as the CPU renderer blends every layer it is given pixel by pixel. The
+page's own background, drawn over the window's, accounts for about a third of that; the groups' fills and the rest of
+the page add the remainder. Typing a search also repaints the sidebar, whose rows it filters.
 
 ## What this means for you
 

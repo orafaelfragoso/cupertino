@@ -11,4 +11,5 @@ written into a thumbnail is the one of the format found in the file's content. T
 must be a regular file of at most 256 MiB, and the picture at most 8192 pixels a side: a pipe named `x.png`, a huge file or
 a decompression bomb fails at once and is remembered as a failure.
 
-Used by `cupertino-files` and `cupertino-settings`, so both share one cache.
+Used by `cupertino-files` and `cupertino-settings`, so both share one cache. A `Thumbnailer` is `Clone`, so one
+application can keep a second handle on the same cache, as Files does for its larger previews.

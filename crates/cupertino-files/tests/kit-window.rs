@@ -212,6 +212,7 @@ fn a_window_keeps_its_view_and_bars_and_a_new_window_starts_with_the_last_choice
         view: ViewMode::Icons,
         path_bar: true,
         status_bar: false,
+        column_width: 245.0,
     };
     kept.save(&prefs).unwrap();
     let places = vec![place("Documents", &documents, PlaceKind::Documents)];
@@ -245,6 +246,7 @@ fn a_window_keeps_its_view_and_bars_and_a_new_window_starts_with_the_last_choice
         view: ViewMode::List,
         path_bar: true,
         status_bar: true,
+        column_width: 245.0,
     };
     assert_eq!(WindowPrefs::load(&prefs), chosen, "the last choice is kept");
 
@@ -412,7 +414,7 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
             "    RadioGroup \"View As\"",
             "      RadioButton \"Icons\" off focusable",
             "      RadioButton \"List\" on focusable selected",
-            "      RadioButton \"Columns\" off disabled",
+            "      RadioButton \"Columns\" off focusable",
             "      RadioButton \"Gallery\" off disabled",
             "    PopUpButton \"View\" focusable collapsed",
             "    Button \"Share\" disabled",
@@ -1144,7 +1146,8 @@ fn the_toolbars_view_tags_and_action_buttons_open_their_menus_below_them() {
         rows[..2],
         [("Icons".to_owned(), true), ("List".to_owned(), true)]
     );
-    assert!(rows.contains(&("Columns".to_owned(), false)));
+    assert!(rows.contains(&("Columns".to_owned(), true)));
+    assert!(rows.contains(&("Gallery".to_owned(), false)));
     run.choose("Icons");
     assert_eq!(run.rows(), Vec::<String>::new(), "shown as icons");
     run.click_named(Role::PopUpButton, "View");
@@ -1167,10 +1170,26 @@ fn the_toolbars_view_tags_and_action_buttons_open_their_menus_below_them() {
     );
     run.close_menu();
 
+    // with a selection Tags opens the tags editor, a popover of its own, and closes it again
+    let popovers = |run: &Run| {
+        run.driver
+            .runtime()
+            .windows()
+            .into_iter()
+            .filter(|(key, _)| format!("{key:?}").contains("tags/"))
+            .count()
+    };
+    run.click_named(Role::PopUpButton, "Tags");
+    assert_eq!(popovers(&run), 1, "the tags popover");
+    run.click_named(Role::PopUpButton, "Tags");
+    assert_eq!(popovers(&run), 0);
+    // without one its menu shows the tag colours unavailable
+    run.click_row_with("a.txt", Mods::PRIMARY);
+    assert!(run.selected_rows().is_empty());
     run.click_named(Role::PopUpButton, "Tags");
     let rows = labels(&mut run);
     assert_eq!(rows.len(), 7, "the tag colours: {rows:?}");
-    assert!(rows.iter().all(|(_, enabled)| *enabled));
+    assert!(rows.iter().all(|(_, enabled)| !*enabled), "{rows:?}");
     run.close_menu();
 }
 

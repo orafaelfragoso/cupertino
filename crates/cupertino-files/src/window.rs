@@ -33,6 +33,8 @@ pub mod metrics {
 pub enum ViewMode {
     Icons,
     List,
+    /// The chain of folders side by side ([`crate::columns`]).
+    Columns,
 }
 
 /// The folders the path bar shows for `dir`, outermost first, with their names. The chain starts at the file system

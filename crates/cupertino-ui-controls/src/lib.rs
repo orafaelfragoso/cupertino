@@ -23,6 +23,7 @@ mod navigation;
 mod pages;
 mod popover;
 mod press;
+mod preview;
 mod progress;
 mod rich_text;
 mod scroll;
@@ -659,6 +660,49 @@ pub struct Popover<M> {
     pub on_scroll: Handler<ScrollState, M>,
     /// Sent on Escape or a press outside; the application then stops declaring the popover.
     pub on_close: M,
+}
+
+/// What a [`FilePreview`] draws of a file.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreviewContent {
+    /// A picture, whole and as large as fits.
+    Picture(ImageSource),
+    /// The start of a text file, set in a fixed-pitch face on the text background.
+    Text(String),
+    /// The file's icon, centred, at most its largest size.
+    Icon(Vec<ImageSource>),
+}
+
+/// Where a [`FilePreview`] shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PreviewStyle {
+    /// Beside a list of files: the content in a box 200 pt tall, the name, the summary and the details under it, and
+    /// the footer pinned to the bottom edge.
+    #[default]
+    Pane,
+    /// A preview window's content: the content alone filling the room; a file shown by its icon has its name, summary
+    /// and details beside the icon.
+    Window,
+}
+
+/// A file's preview, drawn without opening the file in an application. It reads as a group named "Preview of" the
+/// file; a picture is read by the file's name, and a text file's content by its text. Build its element with
+/// `Element::from`.
+pub struct FilePreview<M> {
+    pub content: PreviewContent,
+    /// The fixed-pitch family a text file's content is set in; the theme's face without it.
+    pub text_family: Option<String>,
+    pub name: String,
+    /// The line under the name, as the kind and size.
+    pub summary: String,
+    /// Labelled details, as dates: label, value.
+    pub details: Vec<(String, String)>,
+    /// Under the details, at the bottom edge of a pane, with a hairline above it: an actions button.
+    pub footer: Option<Element<M>>,
+    pub style: PreviewStyle,
+    /// How far a text file's content is scrolled.
+    pub scroll: ScrollState,
+    pub on_scroll: Handler<ScrollState, M>,
 }
 
 /// A window's content with a modal sheet over it while `dialog` is set. The content behind takes no pointer, keyboard

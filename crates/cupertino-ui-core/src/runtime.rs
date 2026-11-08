@@ -439,28 +439,33 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         self.frame()
     }
 
+    /// Gives the focus to the node keyed `key` in the first window that has one: with its ring showing when `ring`, else
+    /// with the ring showing as it did.
+    fn focus_key(&mut self, key: &Key, ring: bool) {
+        let now = self.options.clock.now();
+        for i in 0..self.windows.len() {
+            let w = &mut self.windows[i];
+            let Some(root) = w.root else { continue };
+            let found = self.tree.preorder(root).into_iter().find(|&n| {
+                self.tree
+                    .get(n)
+                    .is_some_and(|n| n.key.as_ref() == Some(key))
+            });
+            if let Some(node) = found {
+                let visible = ring || w.focus.visible();
+                let change = w.focus.set(&self.tree, Some(node), visible);
+                let rest = Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
+                self.apply(i, rest);
+                break;
+            }
+        }
+    }
+
     fn command(&mut self, command: Command<A::Message>) {
         match command {
             Command::Perform(task) => self.executor.spawn(task),
-            Command::Focus(key) => {
-                let now = self.options.clock.now();
-                for i in 0..self.windows.len() {
-                    let w = &mut self.windows[i];
-                    let Some(root) = w.root else { continue };
-                    let found = self.tree.preorder(root).into_iter().find(|&n| {
-                        self.tree
-                            .get(n)
-                            .is_some_and(|n| n.key.as_ref() == Some(&key))
-                    });
-                    if let Some(node) = found {
-                        let change = w.focus.set(&self.tree, Some(node), true);
-                        let rest =
-                            Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
-                        self.apply(i, rest);
-                        break;
-                    }
-                }
-            }
+            Command::Focus(key) => self.focus_key(&key, true),
+            Command::MoveFocus(key) => self.focus_key(&key, false),
             Command::CloseWindow(key) => {
                 if let Some(i) = self.windows.iter().position(|w| w.key == key) {
                     let w = self.windows.remove(i);

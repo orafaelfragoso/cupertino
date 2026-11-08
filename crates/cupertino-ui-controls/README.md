@@ -67,6 +67,8 @@ from the application's model and reports changes as messages.
   itself, with the row the keyboard is on; a message takes the key and `None` lets it go on, so Tab moves to the next
   control. A key on a column header never comes there, so an application can give Tab in the rows its own meaning while
   Tab and Shift+Tab still walk the headers in the order shown. `None` keeps the table as it was.
+- **Selection inset.** A list's selection and focus ring sit 4 pt in from a row's sides; `ListView::inset_element`
+  builds the list with another inset, for a list whose selection spans more of its column.
 - **Truncation.** A `Text` that does not wrap, and a tooltip's tip past its 300 pt text width, end in an ellipsis
   where they are cut; the accessible name keeps the whole text.
 - **Rich text.** `RichText` draws its links in the link colour over a 1 px underline 1.5 pt below the baseline. Each
@@ -168,6 +170,14 @@ from the application's model and reports changes as messages.
   colour, 3:1 against the switch thumb's colour) is twice as wide, so the knob stands apart from a track of its own
   lightness. The empty part of the track is `SliderTrack` (a panel level slider's is `PanelTrack`), 3:1 or more
   against the surface under it in every palette; the filled part is the selected `ControlFill` (the accent).
+
+- **File preview.** `FilePreview` draws a file without opening it (`PreviewContent`): a picture whole and as large as
+  fits, the start of a text file in a fixed-pitch face (`text_family`, the theme's face without one) on the text
+  background, scrolled by the application's `ScrollState`, or the file's icon. `PreviewStyle::Pane` is the column a
+  file browser puts after its lists: the content in a 200 pt box, then the name, the summary (kind and size) and the
+  labelled details, clipped above an optional footer pinned to the bottom edge behind a hairline. `PreviewStyle::Window`
+  fills a preview window with the content alone, a file shown by its icon keeping its name, summary and details beside
+  it. It reads as a group named "Preview of <name>"; a picture reads by the file's name and text by its text.
 
 ## Not yet
 

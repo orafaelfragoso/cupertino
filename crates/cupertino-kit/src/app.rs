@@ -114,6 +114,14 @@ pub fn run_lock_screen_on_with<A: Application>(
         .map_err(AppError::Runtime)
 }
 
+/// The family of the asset packs' fixed-pitch face, which the runtime's text system loads with the interface face;
+/// `None` when no pack names one. Text that lines up by character, such as a file's contents, is set in it.
+pub fn mono_family() -> Option<String> {
+    Assets::discover()
+        .font_family(FontRole::Mono)
+        .map(str::to_owned)
+}
+
 /// The runtime options of an application on this system, in the light appearance with motion on. [`run`] starts in the
 /// session's appearance and display options instead and follows them.
 pub fn options() -> Result<RuntimeOptions, AppError> {

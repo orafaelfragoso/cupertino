@@ -20,7 +20,8 @@ fn paint(cx: &mut PaintCx<'_>) {
 compositor. `app::run_on` and `app::run_on_with` run on a window system a desktop shell set up with its surface roles;
 `app::run_lock_screen_on_with` does the same for the lock screen, whose AT-SPI adapter the session's lock never mutes
 (`AtspiAdapter::lock_screen`), and `app::run_on_with_appearance` passes the session's appearance through a function first, for a
-shell surface that keeps the dark appearance in a light session. The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
+shell surface that keeps the dark appearance in a light session. `app::mono_family` names the asset packs' fixed-pitch family, which the text system loads
+with the interface face, for text that lines up by character (a file's contents); `None` when no pack names one. The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
 
 The widgets' icons are the asset packs' symbols. `Icons::application`, the icon an alert shows, is the icon named by
 the `Icon=` of the desktop entry whose id is the running program's file name (`cupertino-files.desktop` for

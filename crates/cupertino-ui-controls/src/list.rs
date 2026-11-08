@@ -205,6 +205,15 @@ impl<M> Outline<M> {
 
 impl<M: 'static> From<ListView<M>> for Element<M> {
     fn from(list: ListView<M>) -> Self {
+        list.inset_element(SELECTION_INSET)
+    }
+}
+
+impl<M: 'static> ListView<M> {
+    /// The list's element with each row's selection and focus ring drawn `selection_inset` points in from the row's
+    /// sides, in place of the standard inset `Element::from` gives.
+    pub fn inset_element(self, selection_inset: f64) -> Element<M> {
+        let list = self;
         let rows = Rows {
             kind: Kind::List,
             label: list.label,
@@ -221,6 +230,7 @@ impl<M: 'static> From<ListView<M>> for Element<M> {
             on_activate: list.on_activate,
             on_row_key: None,
             outline: None,
+            selection_inset,
         };
         scroll::frame(
             Element::new(rows),
@@ -253,6 +263,7 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
                 item: tree.item,
                 on_toggle: tree.on_toggle,
             })),
+            selection_inset: SELECTION_INSET,
         };
         scroll::frame(
             Element::new(rows),
@@ -319,6 +330,7 @@ fn table_element<M: 'static>(
         on_activate: table.on_activate,
         on_row_key: table.on_row_key,
         outline,
+        selection_inset: SELECTION_INSET,
     };
     let on_sort = table.on_sort.map(Rc::new);
     let header = Element::new(Header {
@@ -371,6 +383,8 @@ struct Rows<M> {
     on_activate: Option<Handler<usize, M>>,
     on_row_key: Option<RowKeyHandler<M>>,
     outline: Option<Rc<Outline<M>>>,
+    /// From a row's sides to its selection.
+    selection_inset: f64,
 }
 
 /// What an assistive Click on row `index` reports: the row selected alone, unless it already is.
@@ -649,6 +663,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
                     item,
                     outline: self.outline.clone(),
                     pick: pick.clone(),
+                    selection_inset: self.selection_inset,
                     content,
                 })
                 .key(self.row_key(index))
@@ -748,6 +763,8 @@ struct ListRow<M> {
     outline: Option<Rc<Outline<M>>>,
     /// A row's assistive Click.
     pick: Option<Pick<M>>,
+    /// From the row's sides to its selection.
+    selection_inset: f64,
     content: Vec<Element<M>>,
 }
 
@@ -783,7 +800,9 @@ impl<M: 'static> Widget<M> for ListRow<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if (self.index, self.row_height) != (old.index, old.row_height) {
             Change::Layout
-        } else if (self.selected, self.cursor, self.item) != (old.selected, old.cursor, old.item) {
+        } else if (self.selected, self.cursor, self.item) != (old.selected, old.cursor, old.item)
+            || self.selection_inset != old.selection_inset
+        {
             Change::Paint
         } else {
             Change::None
@@ -850,9 +869,9 @@ impl<M: 'static> Widget<M> for ListRow<M> {
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let chrome = Rect::new(
-            SELECTION_INSET,
+            self.selection_inset,
             0.0,
-            (size.width - 2.0 * SELECTION_INSET).max(0.0),
+            (size.width - 2.0 * self.selection_inset).max(0.0),
             size.height,
         );
         let theme = cx.env().theme.clone();

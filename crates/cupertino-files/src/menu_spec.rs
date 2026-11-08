@@ -181,11 +181,11 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
     );
     rows.push(MenuItem::command("Make Alias", Command::MakeAlias, true));
     rows.push(
-        MenuItem::unavailable(&named(
-            subject,
-            "Quick Preview “{}”",
-            "Quick Preview {} Items",
-        ))
+        MenuItem::command(
+            &named(subject, "Quick Preview “{}”", "Quick Preview {} Items"),
+            Command::Peek,
+            true,
+        )
         .with_alternate(
             Mods::ALT,
             MenuItem::unavailable(&named(subject, "Slideshow “{}”", "Slideshow {} Items")),
@@ -336,15 +336,16 @@ pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
     condense(rows)
 }
 
-/// The toolbar's view-mode popup: the four view modes with the current one checked; Columns and Gallery are disabled until
-/// the window has those views.
+/// The toolbar's view-mode popup: the four view modes with the current one checked; Gallery is disabled until the
+/// window has that view.
 pub fn view_menu(current: ViewMode) -> Vec<MenuItem> {
     vec![
         MenuItem::command("Icons", Command::SetView(ViewMode::Icons), true)
             .checked(current == ViewMode::Icons),
         MenuItem::command("List", Command::SetView(ViewMode::List), true)
             .checked(current == ViewMode::List),
-        MenuItem::unavailable("Columns"),
+        MenuItem::command("Columns", Command::SetView(ViewMode::Columns), true)
+            .checked(current == ViewMode::Columns),
         MenuItem::unavailable("Gallery"),
     ]
 }
@@ -436,13 +437,7 @@ mod tests {
     #[test]
     fn rows_without_a_backend_are_present_and_disabled() {
         let items = item_menu(&subject(2), &apps());
-        for title in [
-            "Get Info",
-            "Compress 2 Items",
-            "Quick Preview 2 Items",
-            "Share",
-            "Quick Actions",
-        ] {
+        for title in ["Get Info", "Compress 2 Items", "Share", "Quick Actions"] {
             let item = items
                 .iter()
                 .find(|i| i.label == title)
@@ -652,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn the_view_popup_checks_the_mode_and_disables_the_views_not_built() {
+    fn the_view_popup_checks_the_mode_and_disables_the_gallery() {
         let items = view_menu(ViewMode::List);
         assert_eq!(labels(&items), ["Icons", "List", "Columns", "Gallery"]);
         assert_eq!(
@@ -660,7 +655,7 @@ mod tests {
                 .iter()
                 .map(|i| (i.enabled, i.checked))
                 .collect::<Vec<_>>(),
-            [(true, false), (true, true), (false, false), (false, false)]
+            [(true, false), (true, true), (true, false), (false, false)]
         );
         assert_eq!(
             items[0].kind,

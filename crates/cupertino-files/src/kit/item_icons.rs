@@ -46,6 +46,11 @@ fn thumbnail_edge(points: f64) -> u32 {
     (points * THUMBNAIL_SCALE).round().max(1.0) as u32
 }
 
+/// What the service knows window `window`'s previews by: apart from its items, as a window wants one size at a time.
+fn previews(window: u64) -> u64 {
+    window | 1 << 63
+}
+
 /// Whether `entry` is drawn with its thumbnail: a picture of a decoded format. A symbolic link shows its type's icon
 /// with the alias badge.
 fn shows_thumbnail(entry: &Entry) -> bool {
@@ -174,6 +179,29 @@ impl ItemIcons {
     pub(super) fn forget(&self, window: u64) {
         if let Some(service) = &self.thumbnails {
             service.forget(window);
+            service.forget(previews(window));
         }
+    }
+
+    /// The thumbnail of `entry` `points` square once it is made: a picture's preview, which has no icon to fall back
+    /// on.
+    pub(super) fn thumbnail(&self, entry: &Entry, points: f64) -> Option<ImageSource> {
+        let service = self
+            .thumbnails
+            .as_ref()
+            .filter(|_| shows_thumbnail(entry))?;
+        let thumbnail = service.get(&entry.path, thumbnail_edge(points))?;
+        Some(source(&thumbnail))
+    }
+
+    /// Window `window` previews `entries` `points` square, besides the items it shows: the preview column's and the
+    /// preview window's pictures.
+    pub(super) fn want_previews<'a>(
+        &self,
+        window: u64,
+        entries: impl IntoIterator<Item = &'a Entry>,
+        points: f64,
+    ) {
+        self.want(previews(window), entries, points);
     }
 }

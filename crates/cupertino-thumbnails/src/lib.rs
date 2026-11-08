@@ -152,6 +152,7 @@ fn open_checked(path: &Path) -> Result<fs::File, ThumbError> {
     Ok(file)
 }
 
+#[derive(Clone, Debug)]
 pub struct Thumbnailer {
     root: PathBuf,
     app: String,

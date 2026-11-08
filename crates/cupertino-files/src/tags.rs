@@ -119,24 +119,25 @@ pub fn format_tag_list(tags: &[String]) -> String {
         .join(",")
 }
 
-/// Read the tags of `path`; an absent attribute gives an empty list.
+/// Read the tags of `path`; an absent attribute gives an empty list. A symbolic link's tags are its target's: the
+/// system keeps no user attributes on a link itself.
 pub fn read_tags(path: &Path) -> io::Result<Vec<String>> {
-    match xattr::get(path, XATTR_NAME)? {
+    match xattr::get_deref(path, XATTR_NAME)? {
         Some(v) => Ok(parse_tag_list(&v)),
         None => Ok(Vec::new()),
     }
 }
 
-/// Replace the tags; an empty list removes the attribute.
+/// Replace the tags; an empty list removes the attribute. Through a symbolic link, its target's tags are replaced.
 pub fn write_tags(path: &Path, tags: &[String]) -> io::Result<()> {
     if tags.is_empty() {
-        match xattr::remove(path, XATTR_NAME) {
+        match xattr::remove_deref(path, XATTR_NAME) {
             Ok(()) => Ok(()),
             Err(e) if e.raw_os_error() == Some(libc::ENODATA) => Ok(()),
             Err(e) => Err(e),
         }
     } else {
-        xattr::set(path, XATTR_NAME, format_tag_list(tags).as_bytes())
+        xattr::set_deref(path, XATTR_NAME, format_tag_list(tags).as_bytes())
     }
 }
 
@@ -148,9 +149,11 @@ pub fn add_tag(path: &Path, tag: &str) -> io::Result<()> {
     write_tags(path, &t)
 }
 
+/// Take the tag `tag` off `path`, in any case, as a tag is matched when the file manager asks whether an item carries
+/// it.
 pub fn remove_tag(path: &Path, tag: &str) -> io::Result<()> {
     let mut t = read_tags(path)?;
-    t.retain(|x| x != tag);
+    t.retain(|x| !x.eq_ignore_ascii_case(tag));
     write_tags(path, &t)
 }
 
@@ -275,6 +278,31 @@ mod tests {
             }
             Err(e) => eprintln!("xattr unsupported here: {e}"),
         }
+    }
+
+    #[test]
+    fn a_link_is_tagged_through_to_its_target_and_a_tag_comes_off_in_any_case() {
+        let dir = tempfile::Builder::new()
+            .prefix("tags")
+            .tempdir_in(
+                std::env::var("CARGO_TARGET_TMPDIR")
+                    .unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_string()),
+            )
+            .unwrap();
+        let target = dir.path().join("f");
+        let link = dir.path().join("link");
+        std::fs::write(&target, b"x").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        if let Err(e) = write_tags(&target, &["Probe".into()]) {
+            eprintln!("xattr unsupported here: {e}");
+            return;
+        }
+        // the system refuses user attributes on a link itself, so a tag goes to the file it points to
+        write_tags(&link, &["Work".into()]).unwrap();
+        assert_eq!(read_tags(&target).unwrap(), vec!["Work"]);
+        assert_eq!(read_tags(&link).unwrap(), vec!["Work"]);
+        remove_tag(&link, "work").unwrap();
+        assert!(read_tags(&target).unwrap().is_empty());
     }
 
     #[test]

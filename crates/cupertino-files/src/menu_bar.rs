@@ -45,6 +45,16 @@ pub enum MenuAction {
     Home,
     /// Show the progress window of the file operations.
     ShowProgress,
+    /// Open a tab on the folder shown, after the tab shown.
+    NewTab,
+    /// Close the tab shown; the last tab closes the window.
+    CloseTab,
+    NextTab,
+    PreviousTab,
+    /// Show the tab bar while the window has one tab, or hide it again.
+    ToggleTabBar,
+    /// Preview the selection in the preview window, or close it.
+    Peek,
 }
 
 /// What the menus depend on.
@@ -70,6 +80,10 @@ pub struct MenuState {
     pub read_only: bool,
     /// Copy put items on the pasteboard.
     pub can_paste: bool,
+    /// How many tabs the window has.
+    pub tabs: usize,
+    /// The tab bar shows while the window has one tab.
+    pub tab_bar: bool,
     /// A file operation runs, or one that failed is listed in the progress window.
     pub jobs: bool,
 }
@@ -118,6 +132,7 @@ impl MenuAction {
             SelectAll => (Scope::Win, "select-all"),
             View(ViewMode::Icons) => (Scope::Win, "view-icons"),
             View(ViewMode::List) => (Scope::Win, "view-list"),
+            View(ViewMode::Columns) => (Scope::Win, "view-columns"),
             SortBy(key, _) => (Scope::Win, sort_name(key)),
             TogglePathBar => (Scope::Win, "toggle-path-bar"),
             ToggleStatusBar => (Scope::Win, "toggle-status-bar"),
@@ -128,6 +143,12 @@ impl MenuAction {
             Recents => (Scope::Win, "go-recents"),
             Home => (Scope::Win, "go-home"),
             ShowProgress => (Scope::Win, "show-progress"),
+            NewTab => (Scope::Win, "new-tab"),
+            CloseTab => (Scope::Win, "close-tab"),
+            NextTab => (Scope::Win, "next-tab"),
+            PreviousTab => (Scope::Win, "previous-tab"),
+            ToggleTabBar => (Scope::Win, "toggle-tab-bar"),
+            Peek => (Scope::Win, "peek"),
         };
         ActionName::new(scope, name).expect("the menu's action names are valid")
     }
@@ -155,6 +176,7 @@ impl MenuAction {
             SelectAll,
             View(ViewMode::Icons),
             View(ViewMode::List),
+            View(ViewMode::Columns),
             TogglePathBar,
             ToggleStatusBar,
             FullScreen,
@@ -164,6 +186,12 @@ impl MenuAction {
             Recents,
             Home,
             ShowProgress,
+            NewTab,
+            CloseTab,
+            NextTab,
+            PreviousTab,
+            ToggleTabBar,
+            Peek,
         ];
         fixed
             .into_iter()
@@ -203,12 +231,19 @@ impl MenuAction {
             SelectAll => chord(&[Primary], "a"),
             View(ViewMode::Icons) => chord(&[Primary], "1"),
             View(ViewMode::List) => chord(&[Primary], "2"),
+            View(ViewMode::Columns) => chord(&[Primary], "3"),
             TogglePathBar => chord(&[Alt, Primary], "p"),
             ToggleStatusBar => chord(&[Primary], "slash"),
             Back => chord(&[Primary], "bracketleft"),
             Forward => chord(&[Primary], "bracketright"),
             EnclosingFolder => chord(&[Primary], "Up"),
             Home => chord(&[Shift, Primary], "h"),
+            NewTab => chord(&[Primary], "t"),
+            CloseTab => chord(&[Primary], "w"),
+            NextTab => chord(&[Ctrl], "Tab"),
+            PreviousTab => chord(&[Ctrl, Shift], "Tab"),
+            ToggleTabBar => chord(&[Shift, Primary], "t"),
+            Peek => chord(&[Primary], "y"),
             // Shift+Primary+F is the system's full-screen shortcut, which the compositor takes before any window
             Recents => None,
             OpenInNewWindow | PutBack | Rename | SortBy(..) | FullScreen | ShowProgress => None,
@@ -269,18 +304,32 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
                 item("New Window", NewWindow),
                 item("New Folder", NewFolder),
                 item("New Folder with Selection", NewFolderWithSelection),
+                item("New Tab", NewTab),
             ],
-            vec![
-                item("Open", Open),
-                item("Open in New Window", OpenInNewWindow),
-                item("Close Window", CloseWindow),
-            ],
+            [
+                Some(item("Open", Open)),
+                Some(item("Open in New Window", OpenInNewWindow)),
+                // with tabs, the primary key and W closes the tab and Shift with them the window
+                Some(Entry::Item(Item::new(
+                    "Close Window",
+                    CloseWindow.name(),
+                    match state.tabs > 1 {
+                        true => chord(&[Modifier::Shift, Modifier::Primary], "w"),
+                        false => CloseWindow.chord(),
+                    },
+                ))),
+                (state.tabs > 1).then(|| item("Close Tab", CloseTab)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
             [
                 Some(item("Move to Trash", MoveToTrash)),
                 state.in_trash.then(|| item("Put Back", PutBack)),
                 Some(item("Rename", Rename)),
                 Some(item("Duplicate", Duplicate)),
                 Some(item("Make Alias", MakeAlias)),
+                Some(item("Quick Preview", Peek)),
                 Some(item("Show Original", ShowOriginal)),
             ]
             .into_iter()
@@ -319,8 +368,17 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
             vec![
                 item("as Icons", View(ViewMode::Icons)),
                 item("as List", View(ViewMode::List)),
+                item("as Columns", View(ViewMode::Columns)),
             ],
             vec![Entry::Submenu(sort_by)],
+            vec![item(
+                if state.tabs > 1 || state.tab_bar {
+                    "Hide Tab Bar"
+                } else {
+                    "Show Tab Bar"
+                },
+                ToggleTabBar,
+            )],
             vec![
                 item(
                     if state.path_bar {
@@ -353,7 +411,16 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
             vec![item("Recents", Recents), item("Home", Home)],
         ],
     );
-    let window = Menu::new("Window", vec![vec![item("Show Progress", ShowProgress)]]);
+    let window = Menu::new(
+        "Window",
+        vec![
+            vec![
+                item("Show Previous Tab", PreviousTab),
+                item("Show Next Tab", NextTab),
+            ],
+            vec![item("Show Progress", ShowProgress)],
+        ],
+    );
     MenuBar {
         app: Menu::new(&standard.app.title, Vec::new()),
         menus: vec![file, edit, view, go, window],
@@ -372,6 +439,7 @@ pub fn keysym(name: &str) -> Option<u32> {
     Some(match name {
         "BackSpace" => 0xff08,
         "Return" => 0xff0d,
+        "Tab" => 0xff09,
         "Escape" => 0xff1b,
         "Left" => 0xff51,
         "Up" => 0xff52,
@@ -436,6 +504,10 @@ pub fn enabled(state: &MenuState) -> Vec<(MenuAction, bool)> {
         (Forward, state.can_go_forward),
         (EnclosingFolder, state.has_parent),
         (ShowProgress, state.jobs),
+        (Peek, selected),
+        (CloseTab, state.tabs > 1),
+        (NextTab, state.tabs > 1),
+        (PreviousTab, state.tabs > 1),
     ]
 }
 
@@ -515,6 +587,7 @@ mod tests {
                 "  New Window app.new",
                 "  New Folder win.new-folder",
                 "  New Folder with Selection win.new-folder-with-selection",
+                "  New Tab win.new-tab",
                 "  ---",
                 "  Open win.open",
                 "  Open in New Window win.open-in-new-window",
@@ -524,6 +597,7 @@ mod tests {
                 "  Rename win.rename",
                 "  Duplicate win.duplicate",
                 "  Make Alias win.make-alias",
+                "  Quick Preview win.peek",
                 "  Show Original win.show-original",
                 "Edit:",
                 "  Copy win.copy",
@@ -534,8 +608,11 @@ mod tests {
                 "View:",
                 "  as Icons win.view-icons",
                 "  as List win.view-list",
+                "  as Columns win.view-columns",
                 "  ---",
                 "  Sort By ▸",
+                "  ---",
+                "  Show Tab Bar win.toggle-tab-bar",
                 "  ---",
                 "  Show Path Bar win.toggle-path-bar",
                 "  Show Status Bar win.toggle-status-bar",
@@ -549,6 +626,9 @@ mod tests {
                 "  Recents win.go-recents",
                 "  Home win.go-home",
                 "Window:",
+                "  Show Previous Tab win.previous-tab",
+                "  Show Next Tab win.next-tab",
+                "  ---",
                 "  Show Progress win.show-progress",
             ]
         );
@@ -578,6 +658,37 @@ mod tests {
         ] {
             assert!(lines.contains(&line.to_string()), "{line} in {lines:?}");
         }
+    }
+
+    #[test]
+    fn with_tabs_the_primary_key_and_w_closes_the_tab_and_shift_closes_the_window() {
+        let chords = |state: &MenuState| -> Vec<(String, MenuAction)> {
+            chords(&menu_bar(state))
+                .into_iter()
+                .filter(|(_, a)| matches!(a, MenuAction::CloseWindow | MenuAction::CloseTab))
+                .map(|(c, a)| (glyphs(&c), a))
+                .collect()
+        };
+        assert_eq!(
+            chords(&MenuState::default()),
+            [("\u{2318}W".to_string(), MenuAction::CloseWindow)]
+        );
+        let two = MenuState {
+            tabs: 2,
+            ..MenuState::default()
+        };
+        assert_eq!(
+            chords(&two),
+            [
+                ("\u{21e7}\u{2318}W".to_string(), MenuAction::CloseWindow),
+                ("\u{2318}W".to_string(), MenuAction::CloseTab)
+            ]
+        );
+        let lines = outline(&menu_bar(&two).exported());
+        assert!(lines.contains(&"  Hide Tab Bar win.toggle-tab-bar".to_string()));
+        let enabled = enabled(&two);
+        assert!(enabled.contains(&(MenuAction::NextTab, true)));
+        assert!(enabled.contains(&(MenuAction::Peek, false)));
     }
 
     #[test]

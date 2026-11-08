@@ -50,11 +50,18 @@ pub(super) fn folder(
     win: &BrowserWindow,
     content: Element<Message>,
 ) -> Element<Message> {
+    // the column view's other columns: their folders' rows, and the columns themselves for their folders
+    let columns = match win.view {
+        crate::window::ViewMode::Columns => win.columns.row_folders(id),
+        _ => Vec::new(),
+    };
+    let count = win.browser.entries().len();
     let folders: Rc<[Option<PathBuf>]> = win
         .browser
         .entries()
         .iter()
         .map(|e| e.is_dir.then(|| e.path.clone()))
+        .chain(columns.iter().map(|(_, folder)| folder.clone()))
         .collect();
     let here = shown(session, win.browser.dir());
     let dragged: Rc<[PathBuf]> = session.dragged.clone().into();
@@ -65,6 +72,12 @@ pub(super) fn folder(
             .iter()
             .enumerate()
             .map(|(i, e)| (view::row_key(id, &e.path), i as u64))
+            .chain(
+                columns
+                    .into_iter()
+                    .enumerate()
+                    .map(|(j, (key, _))| (key, (count + j) as u64)),
+            )
             .collect(),
     );
     let places = Rc::clone(&folders);

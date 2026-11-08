@@ -130,14 +130,15 @@ fn flatten(
 type SelectionPaths = (Vec<PathBuf>, Option<PathBuf>, Option<PathBuf>);
 
 /// The options every folder of a window is opened with: hidden files off (default,
-/// ), watched for live changes, tags not read, typed with the window's MIME database `types`.
+/// ), watched for live changes, each item's tags read (the sidebar lists them and the search finds by them), typed
+/// with the window's MIME database `types`.
 fn model_options(sort: SortSpec, types: &Option<Arc<MimeDatabase>>) -> ModelOptions {
     ModelOptions {
         batch_size: DEFAULT_BATCH,
         show_hidden: false,
         sort,
         watch: true,
-        read_tags: false,
+        read_tags: true,
         types: types.clone(),
     }
 }
@@ -224,8 +225,8 @@ impl Browser {
         (self.filter.is_some() && !self.model.is_loading()).then(|| self.item_count())
     }
 
-    /// Show only the items whose names contain `query`, ignoring case, as a flat list; an empty query shows the folder
-    /// again. approximate: the design's search field searches the whole computer by default; this one filters the
+    /// Show only the items whose names contain `query`, or that carry a tag of that name, ignoring case, as a flat
+    /// list; an empty query shows the folder again. approximate: the design's search field searches the whole computer by default; this one filters the
     /// folder shown. The selection stays on the items still shown.
     pub fn set_filter(&mut self, query: &str) {
         let filter = (!query.is_empty()).then(|| query.to_lowercase());
@@ -309,7 +310,7 @@ impl Browser {
                 .model
                 .entries()
                 .iter()
-                .filter(|e| e.name.to_lowercase().contains(query.as_str()))
+                .filter(|e| matches(e, query))
                 .cloned()
                 .collect();
             outline = vec![
@@ -423,13 +424,47 @@ impl Browser {
 
     /// Replace the model with one on `to`; the history is the caller's.
     fn show(&mut self, to: &Path) -> io::Result<()> {
-        self.model = open_model(
+        let model = open_model(
             to,
             self.sort,
             &self.recents_file,
             &self.types,
             self.notify.clone(),
         )?;
+        self.replace_model(model);
+        Ok(())
+    }
+
+    /// A live listing of `dir` opened as the window's own folders are, in its sort order and waking it when it changes:
+    /// a column of the column view, which [`Browser::go_with`] can show without reading the folder again.
+    pub fn open_listing(&self, dir: &Path) -> io::Result<DirectoryModel> {
+        open_model(
+            dir,
+            self.sort,
+            &self.recents_file,
+            &self.types,
+            self.notify.clone(),
+        )
+    }
+
+    /// Show the folder `model` lists, a listing of [`Browser::open_listing`], as far as it has read it, and select the
+    /// item named `select` once it is listed; the listing of the folder left is given back.
+    pub fn go_with(&mut self, model: DirectoryModel, select: Option<&str>) -> DirectoryModel {
+        let to = model.dir().to_path_buf();
+        let left = self.replace_model(model);
+        // what the listing queued before it was the window's own is applied at the next poll
+        self.queued.store(true, Ordering::SeqCst);
+        self.history.visit(to);
+        if let Some(name) = select {
+            self.select_when_listed = Some(name.to_owned());
+            self.select_pending();
+        }
+        left
+    }
+
+    /// Put `model` in place of the folder's model, forgetting what belonged to the old one; the old model.
+    fn replace_model(&mut self, model: DirectoryModel) -> DirectoryModel {
+        let old = std::mem::replace(&mut self.model, model);
         self.expanded.clear();
         self.filter = None;
         self.rebuild();
@@ -439,7 +474,7 @@ impl Browser {
         self.awaited = None;
         self.reselect = None;
         self.reopen.clear();
-        Ok(())
+        old
     }
 
     /// Where the window is, with its history and its selection, for [`Browser::return_to`].
@@ -835,9 +870,28 @@ fn file_system(dir: &Path) -> io::Result<libc::statvfs> {
     Ok(fs)
 }
 
+/// Whether `entry` is a result of the search `query` (lower case): its name contains it, or one of its tags is named it.
+fn matches(entry: &Entry, query: &str) -> bool {
+    entry.name.to_lowercase().contains(query)
+        || entry.tags.iter().any(|t| t.to_lowercase() == query)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_search_finds_names_holding_the_text_and_tags_of_that_whole_name() {
+        let mut entry = Entry::synthetic("Invoice March.pdf", false, 1);
+        entry.tags = vec!["Work".into(), "Red".into()];
+        assert!(matches(&entry, "march"));
+        assert!(
+            matches(&entry, "work"),
+            "a tag by its whole name, in any case"
+        );
+        assert!(!matches(&entry, "wor"), "not part of a tag's name");
+        assert!(!matches(&entry, "blue"));
+    }
 
     #[test]
     fn a_folder_on_a_file_system_mounted_read_only_is_told() {

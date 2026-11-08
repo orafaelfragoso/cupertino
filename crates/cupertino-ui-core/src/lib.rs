@@ -312,6 +312,9 @@ pub enum Command<M> {
     /// Runs a future on the runtime's executor and sends its output as a message.
     Perform(Task<M>),
     Focus(Key),
+    /// Moves the focus to the node keyed `key` as [`Command::Focus`] does, its ring showing only when it showed before:
+    /// the keyboard follows a click to another part of the window without the ring a click never shows.
+    MoveFocus(Key),
     CloseWindow(WindowKey),
     Window(WindowKey, WindowRequest),
     SetClipboard(String),

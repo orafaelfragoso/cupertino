@@ -19,7 +19,7 @@ use cupertino_launcher::exec::CommandSpec;
 use cupertino_launcher::files::{FileIndex, FileSearchConfig};
 use cupertino_launcher::kit::{self, Host, Message, Model};
 use cupertino_launcher::panel::Now;
-use cupertino_launcher::preview::{self, Preview, PreviewBody, TEXT_SNIFF};
+use cupertino_launcher::preview::{self, LatestOnly, Preview, PreviewBody, TEXT_SNIFF};
 use cupertino_launcher::view::{
     window_size, APP_ID, CATCHER_APP_ID, DOCUMENT_ICON, FOLDER_ICON, GENERIC_APPLICATION_ICON,
     HIDDEN_APP_ID, ICON_SIZE, PREVIEW_ICON_SIZE, PREVIEW_IMAGE, PREVIEW_TEXT_LINES, SEARCH_SYMBOL,
@@ -324,6 +324,17 @@ struct AppHost {
     system: SystemIcons,
     /// File icons by type, and the type database, for the preview; made at the first preview of a file.
     files: Option<FileIcons>,
+    /// Reads what the preview shows of a file, the newest asked for only; started at the first preview of a file.
+    previews: Option<LatestOnly<PreviewRead>>,
+}
+
+/// A file the preview reader is asked about, and where its answer goes.
+struct PreviewRead {
+    path: PathBuf,
+    mime: String,
+    is_dir: bool,
+    icon: Vec<ImageSource>,
+    reply: async_channel::Sender<Preview>,
 }
 
 /// The MIME database of the XDG data directories, empty when it cannot be read.
@@ -377,14 +388,27 @@ fn picture(path: &Path) -> Option<PreviewBody> {
     })
 }
 
+/// At most `limit` bytes from the start of `path`, when it is a regular file (a link is followed). It is opened without
+/// waiting, so a pipe or a device put in its place never holds the reader, and refused unless the opened file is
+/// regular.
+fn read_start(path: &Path, limit: usize) -> Option<Vec<u8>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)
+        .ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(limit);
+    file.take(limit as u64).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
 /// The start of the file at `path` as text, when it reads as text.
 fn excerpt(path: &Path) -> Option<PreviewBody> {
-    let mut bytes = Vec::with_capacity(TEXT_SNIFF);
-    std::fs::File::open(path)
-        .ok()?
-        .take(TEXT_SNIFF as u64)
-        .read_to_end(&mut bytes)
-        .ok()?;
+    let bytes = read_start(path, TEXT_SNIFF)?;
     preview::text_excerpt(&bytes, PREVIEW_TEXT_LINES).map(PreviewBody::Text)
 }
 
@@ -541,23 +565,39 @@ impl Host for AppHost {
             }
             (ItemKind::File | ItemKind::Folder, Action::OpenPath(path)) => {
                 let path = path.clone();
-                let is_dir = path.is_dir();
+                // the index knows a folder from a file: the loop asks the file system nothing
+                let is_dir = item.kind == ItemKind::Folder;
                 let files = self
                     .files
                     .get_or_insert_with(|| FileIcons::discover(mime_database(), HashMap::new()));
                 let mime = files.database().file_type(&path, is_dir).to_owned();
                 let icon = files.images(&path, &mime, false, PREVIEW_ICON_SIZE);
-                // what shows if the reading thread is lost
+                // what shows if the reader is lost; a read replaced by a newer one also ends here, for a result no
+                // longer selected, and the model drops it
                 let plain = Preview {
                     body: PreviewBody::Icon,
                     icon: icon.clone(),
                     kind: preview::kind_name(&mime),
                     details: Vec::new(),
                 };
-                let (sender, read) = async_channel::bounded(1);
-                std::thread::spawn(move || {
-                    let _ = sender.send_blocking(read_preview(&path, &mime, is_dir, icon));
-                });
+                if self.previews.is_none() {
+                    self.previews = LatestOnly::new("launcher-preview", |job: PreviewRead| {
+                        let preview = read_preview(&job.path, &job.mime, job.is_dir, job.icon);
+                        let _ = job.reply.send_blocking(preview);
+                    })
+                    .map_err(|e| eprintln!("cupertino-launcher: no preview reader: {e}"))
+                    .ok();
+                }
+                let (reply, read) = async_channel::bounded(1);
+                if let Some(previews) = &self.previews {
+                    previews.submit(PreviewRead {
+                        path,
+                        mime,
+                        is_dir,
+                        icon,
+                        reply,
+                    });
+                }
                 vec![Command::Perform(Box::pin(async move {
                     let preview = read.recv().await.unwrap_or(plain);
                     Message::Previewed(id, Arc::new(preview))
@@ -666,6 +706,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
             &[SEARCH_SYMBOL],
         ),
         files: None,
+        previews: None,
     };
     let mut model = Model::new(Launcher::from_system(config), Box::new(host));
     model.files = files;
@@ -674,4 +715,46 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let first = listen(&app.signals);
     cupertino_kit::app::run_on::<App>(system, (app, vec![first]))?;
     Err("the launcher's surfaces were closed".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_preview_reads_only_the_start_of_regular_files_and_never_waits() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = dir.path().join("notes.txt");
+        std::fs::write(&text, "x".repeat(3 * TEXT_SNIFF)).unwrap();
+        assert_eq!(
+            read_start(&text, TEXT_SNIFF).map(|b| b.len()),
+            Some(TEXT_SNIFF)
+        );
+        // a link is followed
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&text, &link).unwrap();
+        assert_eq!(read_start(&link, 10).map(|b| b.len()), Some(10));
+        // a pipe with no writer would hold a blocking open forever; a device reads without end
+        let fifo = dir.path().join("pipe.txt");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: `name` is a NUL-terminated path that outlives the call
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert_eq!(read_start(&fifo, TEXT_SNIFF), None);
+        assert_eq!(read_start(Path::new("/dev/zero"), TEXT_SNIFF), None);
+        assert_eq!(read_start(dir.path(), TEXT_SNIFF), None, "a folder");
+        assert_eq!(read_start(&dir.path().join("gone"), TEXT_SNIFF), None);
+        let fifo_link = dir.path().join("pipe-link.txt");
+        std::os::unix::fs::symlink(&fifo, &fifo_link).unwrap();
+        assert_eq!(read_start(&fifo_link, TEXT_SNIFF), None);
+        // an unreadable file shows no text and no error
+        let secret = dir.path().join("secret.txt");
+        std::fs::write(&secret, "hidden").unwrap();
+        std::fs::set_permissions(&secret, std::os::unix::fs::PermissionsExt::from_mode(0)).unwrap();
+        if std::fs::File::open(&secret).is_err() {
+            assert_eq!(excerpt(&secret), None);
+        }
+        // the whole preview of a pipe comes back with its details and the icon as its picture
+        let preview = read_preview(&fifo, "text/plain", false, Vec::new());
+        assert_eq!(preview.body, PreviewBody::Icon);
+    }
 }

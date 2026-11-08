@@ -66,8 +66,11 @@ a row activates it, a click on an action button carries that action out, and `Es
 **Preview and actions.** Beside the results the pane shows the selected result: a file's picture (a thumbnail through
 `cupertino-thumbnails`), the first lines of a text file or its type's icon, then its name, its type in words, its size (or a
 folder's item count), when it changed and its folder; an application's icon at the pane's size and its description; a
-calculation's or a conversion's value set large over its expression. The host reads a file's preview on a thread
-(`Host::preview`, `Message::Previewed`); a preview that arrives for a result no longer selected is dropped. Below it the
+calculation's or a conversion's value set large over its expression. The host reads a file's preview on one thread
+of its own that takes only the newest request (`preview::LatestOnly`, `Host::preview`, `Message::Previewed`), so moving
+through the results never piles reads up; it reads at most 4 KiB of text, only from a regular file opened without waiting
+(a pipe or device never holds it), and pictures through the thumbnailer's size and decode limits. A preview that arrives
+for a result no longer selected is dropped. Below it the
 result's actions are capsule buttons, the chosen one filled in the accent colour (`Launcher::actions`): Open, Reveal in Files and
 Copy Path for a file; Open and Copy Path for a folder; Open and the entry's desktop actions for an application; Copy for a value;
 Search for the web search. Tab and Shift+Tab move through them round and round; with the list focused, Left and Right move
@@ -141,7 +144,7 @@ calculator and conversion rows have no icon. Missing assets are reported once at
 | `frecency` | decayed launch counts + learned query→item associations, JSON persistence; the file format, its path and the ranking are `cupertino-apps::frecency` (re-exported `default_path`, `ItemRecord`, `FILE_VERSION`), which the menu bar reads the store with |
 | `calc` | arithmetic parser (`+ − × ÷ ^ % `, constants, `sqrt sin cos …), number formatting; division by zero, overflow and input past 200 bytes give no result |
 | `convert` | unit conversions (`10 km in mi`, `72 f to c`, `2^10 kib = kb`): the units table, the quantity through `calc` |
-| `preview` | what the preview shows of a file: its type in words, size, change date, folder, text excerpt |
+| `preview` | what the preview shows of a file: its type in words, size, change date, folder, text excerpt; the newest-only reader thread |
 | `files` | bounded breadth-first walker, ignore rules, in-memory name index and search |
 | `engine` | `Launcher`: providers → `Results { sections }`; `actions` of a result; `activate` and `activate_action` → `Activation` |
 | `panel` | `Panel`: query editing, selection, scrolling, appear animation (spring); `takes_key` |

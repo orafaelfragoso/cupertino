@@ -5,6 +5,7 @@
 
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::geometry::Size;
+use std::sync::{Arc, Condvar, Mutex};
 
 /// The picture the pane shows above the result's name.
 #[derive(Clone, Debug, PartialEq)]
@@ -199,10 +200,112 @@ pub fn fit(size: Size, limit: Size) -> Size {
     )
 }
 
+/// Runs jobs one at a time on a thread of its own, only the newest: a job handed over while another runs replaces the
+/// one still waiting, which is dropped unrun. Moving through the results asks for a preview at every step; this keeps
+/// the reads (and the decoding of large pictures) from piling up on threads of their own. The thread ends when the
+/// reader is dropped, after the job it runs.
+pub struct LatestOnly<J: Send + 'static> {
+    shared: Arc<(Mutex<Slot<J>>, Condvar)>,
+}
+
+struct Slot<J> {
+    job: Option<J>,
+    closed: bool,
+}
+
+impl<J: Send + 'static> LatestOnly<J> {
+    /// A reader whose thread, named `name`, hands each job to `run`.
+    pub fn new(name: &str, mut run: impl FnMut(J) + Send + 'static) -> std::io::Result<Self> {
+        let shared = Arc::new((
+            Mutex::new(Slot {
+                job: None,
+                closed: false,
+            }),
+            Condvar::new(),
+        ));
+        let theirs = Arc::clone(&shared);
+        std::thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || loop {
+                let (lock, ready) = &*theirs;
+                let mut slot = lock.lock().unwrap_or_else(|e| e.into_inner());
+                while slot.job.is_none() && !slot.closed {
+                    slot = ready.wait(slot).unwrap_or_else(|e| e.into_inner());
+                }
+                if slot.closed {
+                    return;
+                }
+                let job = slot.job.take();
+                drop(slot);
+                if let Some(job) = job {
+                    run(job);
+                }
+            })?;
+        Ok(Self { shared })
+    }
+
+    /// Run `job` next, in place of any job still waiting.
+    pub fn submit(&self, job: J) {
+        let (lock, ready) = &*self.shared;
+        lock.lock().unwrap_or_else(|e| e.into_inner()).job = Some(job);
+        ready.notify_one();
+    }
+}
+
+impl<J: Send + 'static> Drop for LatestOnly<J> {
+    fn drop(&mut self) {
+        let (lock, ready) = &*self.shared;
+        let mut slot = lock.lock().unwrap_or_else(|e| e.into_inner());
+        slot.closed = true;
+        slot.job = None;
+        ready.notify_one();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn only_the_newest_waiting_job_runs() {
+        let (started, starts) = mpsc::channel::<u32>();
+        let (release, gate) = mpsc::channel::<()>();
+        let (finished, ends) = mpsc::channel::<u32>();
+        let reader = LatestOnly::new("preview-test", move |job: (u32, mpsc::Sender<()>)| {
+            started.send(job.0).unwrap();
+            gate.recv().unwrap();
+            finished.send(job.0).unwrap();
+        })
+        .unwrap();
+        // each job holds a sender, so a job dropped unrun closes its receiver
+        let job = |n: u32| {
+            let (tx, rx) = mpsc::channel::<()>();
+            ((n, tx), rx)
+        };
+        let (first, _first_rx) = job(1);
+        reader.submit(first);
+        assert_eq!(starts.recv_timeout(Duration::from_secs(10)), Ok(1));
+        // while the first runs, three more are asked for: the second and third are replaced
+        let (second, second_rx) = job(2);
+        let (third, third_rx) = job(3);
+        let (fourth, _fourth_rx) = job(4);
+        reader.submit(second);
+        reader.submit(third);
+        reader.submit(fourth);
+        assert_eq!(second_rx.recv(), Err(mpsc::RecvError), "dropped unrun");
+        assert_eq!(third_rx.recv(), Err(mpsc::RecvError), "dropped unrun");
+        release.send(()).unwrap();
+        assert_eq!(ends.recv_timeout(Duration::from_secs(10)), Ok(1));
+        assert_eq!(starts.recv_timeout(Duration::from_secs(10)), Ok(4));
+        release.send(()).unwrap();
+        assert_eq!(ends.recv_timeout(Duration::from_secs(10)), Ok(4));
+        drop(reader);
+        // the thread ended with the reader: nothing else ever starts
+        assert_eq!(starts.recv(), Err(mpsc::RecvError));
+    }
 
     #[test]
     fn types_read_as_words() {

@@ -8,7 +8,7 @@ use crate::route::Geometry;
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_ui_platform::{MaterialRegion, Timestamp};
+use cupertino_ui_platform::{GlassRegion, MaterialRegion, Timestamp};
 use cupertino_ui_render::{
     DisplayList, Effect, Group, ImageResource, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PathVerb, ResourceId, Shape, Transform,
@@ -46,7 +46,10 @@ pub const MAX_MATERIALS: usize = 32;
 pub(crate) struct NodeMaterial {
     pub(crate) name: &'static str,
     pub(crate) radius: f64,
+    /// The corners are half the node's shorter side, whatever its size ([`crate::GlassCorners::Capsule`]).
+    pub(crate) capsule: bool,
     pub(crate) alpha: f64,
+    pub(crate) glass: Option<GlassRegion>,
 }
 
 /// How far a blur reaches beyond the content it blurs, per unit of radius.
@@ -364,11 +367,17 @@ impl Painter {
             if let Some(material) = painted.material {
                 let shown = visible.translate(origin.x, origin.y);
                 if shown.width() > 0.0 && shown.height() > 0.0 {
+                    let radius = if material.capsule {
+                        placement.rect.size.width.min(placement.rect.size.height) / 2.0
+                    } else {
+                        material.radius
+                    };
                     materials.push(MaterialRegion {
                         material: material.name.to_owned(),
                         rect: shown,
-                        radius: material.radius,
+                        radius,
                         alpha: material.alpha,
+                        glass: material.glass,
                     });
                 }
             }

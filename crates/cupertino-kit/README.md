@@ -3,6 +3,18 @@
 CupertinoKit, the Cupertino UI toolkit: the one crate applications depend on. It re-exports the `cupertino-ui-*` crates
 as modules and has a `prelude`. MPL-2.0.
 
+A node is glass when its `paint` calls `PaintCx::glass` (`Glass` and `GlassStyle` are in the `prelude`): the compositor
+draws the glass under it, and nodes in the same container merge into one shape (`cupertino-ui-core`, *Glass*):
+
+```rust
+use cupertino_kit::core::PaintCx;
+use cupertino_kit::prelude::Glass;
+
+fn paint(cx: &mut PaintCx<'_>) {
+    cx.glass(Glass::regular().radius(12.0).container(1, 6.0));
+}
+```
+
 `app::run` and `app::options` start on the Cupertino theme from the installed theme data, and on
 `ThemeTokens::neutral` when there is none or it is unusable (one line on stderr says why), so an application runs on any
 compositor. `app::run_on` and `app::run_on_with` run on a window system a desktop shell set up with its surface roles;

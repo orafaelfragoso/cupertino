@@ -268,7 +268,8 @@ mod tests {
     }
 
     #[test]
-    fn surfaces_ask_for_their_material_unless_transparency_is_reduced_or_contrast_is_high() {
+    fn surfaces_ask_for_their_material_and_glass_keeps_its_own_with_reduced_transparency_or_high_contrast(
+    ) {
         use crate::{Surface, SurfaceLook};
         let theme = Theme::load().unwrap();
         let look = |appearance, reduce_transparency, surface| {
@@ -296,11 +297,16 @@ mod tests {
         );
         assert_eq!(
             look(Appearance::Dark, false, Surface::Menu).material,
-            Some("Menu")
+            Some(crate::GLASS_MATERIAL)
         );
         assert_eq!(
             look(Appearance::Dark, false, Surface::Popover).material,
-            Some("Menu")
+            Some(crate::GLASS_MATERIAL)
+        );
+        // glass takes the recipe of reduced transparency rather than going opaque
+        assert_eq!(
+            look(Appearance::Light, true, Surface::Menu).material,
+            Some(crate::GLASS_MATERIAL)
         );
         assert_eq!(
             look(Appearance::Light, true, Surface::Sidebar).material,
@@ -322,8 +328,12 @@ mod tests {
             None
         );
         let high_contrast = look(Appearance::DarkHighContrast, false, Surface::Popover);
-        assert_eq!(high_contrast.material, None);
+        assert_eq!(high_contrast.material, Some(crate::GLASS_MATERIAL));
         assert_eq!(high_contrast.fill, window(Appearance::DarkHighContrast));
+        assert_eq!(
+            look(Appearance::DarkHighContrast, false, Surface::Sidebar).material,
+            None
+        );
         for appearance in Appearance::ALL {
             assert_eq!(look(appearance, true, Surface::Menu).fill.unwrap().a, 1.0);
         }

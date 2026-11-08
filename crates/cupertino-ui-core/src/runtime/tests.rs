@@ -1513,7 +1513,7 @@ fn reshaping_the_material_presents_the_window_again() {
 }
 
 #[test]
-fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaque_fill_in_its_shape_elsewhere(
+fn a_menu_window_shows_its_glass_where_the_desktop_draws_it_and_the_opaque_fill_in_its_shape_elsewhere(
 ) {
     let background = Color::new(0.9, 0.9, 0.9, 1.0);
     let (mut rt, window, _) = start_with(|o| {
@@ -1586,7 +1586,7 @@ fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaq
         "the compositor draws the material"
     );
     let menu = Backdrop {
-        material: "Menu".into(),
+        material: cupertino_ui_theme::GLASS_MATERIAL.into(),
         radius: 8.0,
         alpha: 1.0,
     };
@@ -1613,10 +1613,10 @@ fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaq
     rt.set_theme(Arc::new(reduced));
     assert_eq!(
         frame(&mut rt, None),
-        opaque,
-        "Reduce Transparency is opaque"
+        None,
+        "Reduce Transparency keeps the glass, which the compositor draws with its recipe for it"
     );
-    assert_eq!(backdrops(&rt).last(), Some(&None));
+    assert_eq!(backdrops(&rt).last(), Some(&Some(menu)));
 }
 
 /// One of four choices in a roving group; only the selected one is a Tab stop, or every one with `every_stop`, as in a

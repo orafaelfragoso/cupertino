@@ -13,6 +13,8 @@ libc = "0.2"
 rustix = { version = "1", features = ["event", "process"] }
 tracing = "0.1"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+ordered-stream = "0.2"
 
 [dev-dependencies]
+cupertino-test-bus = { path = "../cupertino-test-bus" }
 tempfile = "3"

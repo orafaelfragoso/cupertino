@@ -1473,7 +1473,9 @@ dependencies = [
 name = "cupertino-peer"
 version = "0.1.0"
 dependencies = [
+ "cupertino-test-bus",
  "libc",
+ "ordered-stream",
  "rustix 1.1.6",
  "tempfile",
  "tracing",

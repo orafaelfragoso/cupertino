@@ -1,5 +1,6 @@
-//! The menus Files publishes to the desktop's menu bar (menu bar spec §8): only what the window can do, and no Window
-//! or Help menu, which the bar adds. Each item's chord is the window's own key for it. Files exports no Quit: each
+//! The menus Files publishes to the desktop's menu bar (menu bar spec §8): only what the window can do, and no Help
+//! menu, which the bar adds. Its Window menu holds only Show Progress, which the bar lists below its own items. Each
+//! item's chord is the window's own key for it. Files exports no Quit: each
 //! window is a process of its own, so the bar's Quit, which closes every window of the application, quits Files.
 
 use cupertino_menu_model::standard::{self, Features};
@@ -38,6 +39,8 @@ pub enum MenuAction {
     Back,
     Forward,
     EnclosingFolder,
+    /// Show the progress window of the file operations.
+    ShowProgress,
 }
 
 /// What the menus depend on.
@@ -63,6 +66,8 @@ pub struct MenuState {
     pub read_only: bool,
     /// Copy put items on the pasteboard.
     pub can_paste: bool,
+    /// A file operation runs, or one that failed is listed in the progress window.
+    pub jobs: bool,
 }
 
 /// The sort choices the window has data for, with their action names.
@@ -116,6 +121,7 @@ impl MenuAction {
             Back => (Scope::Win, "go-back"),
             Forward => (Scope::Win, "go-forward"),
             EnclosingFolder => (Scope::Win, "go-enclosing-folder"),
+            ShowProgress => (Scope::Win, "show-progress"),
         };
         ActionName::new(scope, name).expect("the menu's action names are valid")
     }
@@ -149,6 +155,7 @@ impl MenuAction {
             Back,
             Forward,
             EnclosingFolder,
+            ShowProgress,
         ];
         fixed
             .into_iter()
@@ -282,9 +289,13 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
             item("Enclosing Folder", EnclosingFolder, chord(&[Primary], "Up")),
         ]],
     );
+    let window = Menu::new(
+        "Window",
+        vec![vec![item("Show Progress", ShowProgress, None)]],
+    );
     MenuBar {
         app: Menu::new(&standard.app.title, Vec::new()),
-        menus: vec![file, edit, view, go],
+        menus: vec![file, edit, view, go, window],
     }
 }
 
@@ -363,6 +374,7 @@ pub fn enabled(state: &MenuState) -> Vec<(MenuAction, bool)> {
         (Back, state.can_go_back),
         (Forward, state.can_go_forward),
         (EnclosingFolder, state.has_parent),
+        (ShowProgress, state.jobs),
     ]
 }
 
@@ -437,6 +449,8 @@ mod tests {
                 "  Back win.go-back",
                 "  Forward win.go-forward",
                 "  Enclosing Folder win.go-enclosing-folder",
+                "Window:",
+                "  Show Progress win.show-progress",
             ]
         );
         // the App menu exports nothing: About and Settings… have no handler, and the bar's Quit closes every window
@@ -563,6 +577,21 @@ mod tests {
             assert!(one_folder.contains(&(action, true)), "{action:?}");
         }
         assert!(one_folder.contains(&(MenuAction::PutBack, false)));
+    }
+
+    #[test]
+    fn show_progress_is_enabled_only_while_a_file_operation_is_listed() {
+        let idle = enabled(&MenuState::default());
+        assert!(idle.contains(&(MenuAction::ShowProgress, false)));
+        let busy = enabled(&MenuState {
+            jobs: true,
+            ..MenuState::default()
+        });
+        assert!(busy.contains(&(MenuAction::ShowProgress, true)));
+        assert_eq!(
+            MenuAction::from_name(&MenuAction::ShowProgress.name()),
+            Some(MenuAction::ShowProgress)
+        );
     }
 
     #[test]

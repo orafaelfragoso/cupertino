@@ -169,6 +169,8 @@ fn a_new_folder_is_named_in_its_row_and_a_duplicate_sits_next_to_its_file() {
 
     run.type_text("b");
     run.menu("duplicate");
+    // the copy runs beside the window
+    run.wait_until(|run| run.rows().contains(&"b copy.txt".to_owned()));
     assert_eq!(std::fs::read(documents.join("b copy.txt")).unwrap(), b"bb");
     let mut names: Vec<String> = std::fs::read_dir(&documents)
         .unwrap()

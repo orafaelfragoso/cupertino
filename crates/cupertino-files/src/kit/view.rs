@@ -26,11 +26,12 @@ use super::announce::Announcer;
 use super::context::Secondary;
 use super::drops;
 use super::grid::{self, IconGrid, Item};
+use super::jobs::Job;
 use super::list::{self, Gestures, RowCell};
+use super::progress::{self, ShowsProgress};
 use super::search::{no_results, SearchSlot};
 use super::sidebar::{Backdrop, FocusWatch, Opaque};
 use super::toolbar::{PathBar, PathSegment, ToolButton};
-use super::transfer::Transfer;
 use super::{window_key, BrowserWindow, Event, Message, Popup, Session, Unlock, COLUMNS};
 use crate::format::{human_size, relative_date};
 use crate::layout::icon::{self, Flow, FontMetrics, IconLayout, IconParams, SectionSpec};
@@ -333,7 +334,8 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
     })
     .key("navigation")
     .fill()];
-    children.extend(win.transfers.iter().map(|t| transfer_row(id, t)));
+    let started_here = session.jobs.running.iter().filter(|job| job.origin == id);
+    children.extend(started_here.map(transfer_row));
     if win.path_bar {
         children.push(path_bar(session, id, win));
     }
@@ -827,8 +829,10 @@ fn path_bar(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message>
     drops::path_bar(session, id, &folders, bar).key("path-bar")
 }
 
-/// A running paste or move: what it does, how far it came and its Stop button.
-fn transfer_row(id: u64, transfer: &Transfer) -> Element<Message> {
+/// A running file operation this window started: what it does and how far it came, which a click shows in the
+/// progress window, and its Stop button.
+fn transfer_row(job: &Job) -> Element<Message> {
+    let transfer = &job.transfer;
     let title = transfer.title();
     let progress = Element::new(Progress {
         label: title.clone(),
@@ -841,17 +845,11 @@ fn transfer_row(id: u64, transfer: &Transfer) -> Element<Message> {
         spacing: TRANSFER_SPACING,
         align: Align::Center,
         children: vec![
-            text(title, TextRole::Caption, true).fill(),
-            progress,
-            Element::new(Button {
-                label: "Stop".into(),
-                role: ButtonRole::Normal,
-                style: ButtonStyle::Bordered,
-                enabled: !transfer.cancel.is_cancelled(),
-                busy: false,
-                on_press: Some(Message::Window(id, Event::StopTransfer(transfer.id))),
-            })
-            .key("stop"),
+            Element::new(ShowsProgress {
+                spacing: TRANSFER_SPACING,
+                children: vec![text(title, TextRole::Caption, true).fill(), progress],
+            }),
+            progress::stop(job, "stop"),
         ],
     })
     .key(Key::from(format!("transfer-{}", transfer.id)))

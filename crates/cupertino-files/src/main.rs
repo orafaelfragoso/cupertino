@@ -1,5 +1,6 @@
 //! The `cupertino-files` process: browser windows on CupertinoKit, the first on a folder (the home folder when none is
-//! given). New windows open in the same process; it exits when the last window is closed. See the README.
+//! given). New windows open in the same process; it exits once the last window is closed and no file operation runs.
+//! See the README.
 
 use std::ffi::OsString;
 use std::io;

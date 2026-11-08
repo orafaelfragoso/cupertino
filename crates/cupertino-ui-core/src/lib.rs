@@ -325,8 +325,12 @@ pub enum Command<M> {
     /// Ends the drop `token` of a [`Dropped`] with what the application did with its data, given by the update that
     /// handles it: `Some(action)` took it so (after a move the source removes its own copy), `None` took none of it and
     /// the source keeps it all. A drop the update does not end so finishes with its agreed action; given later, it is
-    /// ignored.
+    /// ignored unless the update held the drop ([`Command::HoldDrop`]).
     FinishDrop(DropToken, Option<DropAction>),
+    /// Keeps the drop `token` of a [`Dropped`] open past the turn that hands it over, for work that ends later: its
+    /// source learns nothing until a later [`Command::FinishDrop`] with `token` says what was done. Given in the
+    /// update that handles the drop; later, or for a drop already finished, it is ignored.
+    HoldDrop(DropToken),
     /// Sends `message` once `window` has presented its first frame: the compositor configured it, a frame of its
     /// content was committed, and the compositor answered that frame's callback. At once when it already has; never
     /// when the window closes first, when the view that follows this command has no such window, or while the

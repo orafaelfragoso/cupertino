@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search, 6 drag and 9 drop tests, 8 spring-loaded folder tests, 4 type-to-select and band tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 11 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 9 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 18 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
@@ -118,10 +118,10 @@ alternate that does something (Open in New Window, Move Item Here) is a row of i
 pasteboard, the keyboard's and assistive technology's way in: Copy (the item menu, Edit › Copy, Primary+C) keeps the selection's paths; Paste Item
 (the folder menu, Edit › Paste Item, Primary+V) copies them into the folder shown and Move Item Here (Alt+Primary+V)
 moves them there and empties the pasteboard. A name that is taken gives the arrival a free one (`name copy`), a folder is
-never pasted into itself, and what arrived is selected. Both run beside the window (`kit::transfer`): a row under the
-folder names what it copies or moves where, with a bar of the bytes done, and its Stop button ends the transfer, removing what was half
-written and leaving the rest where it was; closing the window stops its transfers the same way and waits for them. An item moved out of the trash takes its `.trashinfo` record with it; a copy
-leaves the record with the trashed item. The pasteboard is not the session's clipboard: other
+never pasted into itself, and what arrived is selected. Both are file operations of the process (below): a row under
+the folder names what it copies or moves where, with a bar of the bytes done, and its Stop button ends the transfer,
+removing what was half written and leaving the rest where it was. An item moved out of the trash takes its `.trashinfo`
+record with it; a copy leaves the record with the trashed item. The pasteboard is not the session's clipboard: other
 applications neither see it nor fill it.
 
 **Dragging out.** Both views drag items out of the window (`kit::dragged`, hooked into `kit::grid`'s and `kit::list`'s
@@ -147,13 +147,20 @@ window, move the items to the trash, and only for a source that lets them go; Re
 place under the drag is highlighted with the accent at 0.3 opacity in rounded corners, with a 2 pt text-colour outline
 under Increase Contrast; a background drop highlights the whole folder area. With nothing held the items move within a
 device and are copied across devices, Option copies and the primary modifier moves (`operations::drop_action`), and
-the drop goes through `operations::drop_into`, as Paste Item does: a taken name gives the arrival a free one, a folder
-never goes into itself, the failures are one notice, and what arrives in the folder shown is selected. For the window's
+the drop is a file operation, as Paste Item is: a taken name gives the arrival a free one, a folder never goes into
+itself, a failure is listed in the progress window, and what arrives in the folder shown is selected. For the window's
 own drag the device is known while the drag moves, so the pointer shows the action; another application's files are
 known only at the drop, so with nothing held the drag shows a move and the drop copies what lies on another device. The
-source hears the drop is finished only after the files are in place, and with what was done: a move only when every
+drop stays open while the operation runs (`Command::HoldDrop`), so the source hears it is finished only after the files
+are in place, and with what was done: a move only when every
 item left its place, a copy when every item was copied, and otherwise nothing (an item that failed, or one dropped on
-the folder already holding it), so a source never removes items Files did not take. A list is taken whole or not at
+the folder already holding it), so a source never removes items Files did not take. Holding the offer open is what the
+drag-and-drop protocol asks of a target whose work ends later: the source has seen the drop performed and may free its
+data (a move's originals, or the temporary files of an archive) only once it hears the drop finished, and the
+compositor sets no time limit. Two things end a held drop early, as a cancel the source hears at once, while the
+operation goes on: closing the window it was dropped on (its offer goes with its surface), and more than eight drops
+held at once (the oldest is let go). A cancel makes a source keep its originals; a source that then frees temporary
+files can make that copy fail, and the failure is listed. A list is taken whole or not at
 all: one with a URI of another scheme or host, a relative path, a `.` or `..` step or a NUL is refused. A drag of the window's own items has nowhere to go
 on one of the dragged folders or in the folder holding them all. The folders of the path bar take drops as the folder
 area does when it shows them (a third `DropTarget`).
@@ -168,11 +175,41 @@ so it can spring further down. The window remembers its folder, history, selecti
 before the drag first opened a folder: the drag leaving the window (`DropTarget::on_leave`), released where nothing in
 the window takes it, or cancelled (Escape, or a refusal of the window's own drag) takes the window back there, the
 history as it was (the folders sprung through are not in it) and the selection and scroll position once the listing is
-read again; a drop keeps the folder the drag opened. The timers are `Command::After` messages of the dwell's
+read again; a drop keeps the folder the drag opened, also while its file operation holds the drop open and when the
+source later hears the held drop cancelled. The timers are `Command::After` messages of the dwell's
 generation, so one of a dwell that ended does nothing.
 
-**Failures.** A failure of something a person did (open, a new folder, duplicate, make alias, show original, put back,
-tags, rename, a name that can't be used, copy, paste, move to the trash) is one transient notification from "Files" on
+**File operations** (`kit::jobs`, `kit::transfer`, `kit::progress`). Paste Item, Move Item Here, Duplicate, New Folder
+with Selection and every drop, from Files or another application, run on a worker thread of their own; the window's
+thread never copies or moves an item. An operation belongs to the process, not to a window: the window that started it
+shows its row while it is open, and closing that window leaves it running. Files exits once no browser window is open,
+no operation runs and the progress window lists nothing (after the notices it posted are sent), so a copy is never cut
+off by a closed window. Each operation runs once; its outcome is handed over once.
+
+* **The progress window** ("File Operations", 420 pt wide, a row of about 76 pt per operation up to four, then its list
+  scrolls) lists every running operation: a folder symbol, what it does ("Copying “big.bin” to “Notes”"), a bar of the
+  bytes done (of the items for a move to the trash), its Stop button and how far it came ("1.0 MB of 4.2 MB"). It opens
+  by itself once an operation has run for one second (`PROGRESS_WINDOW_DELAY`), so a quick one never shows it, and closes
+  by itself once it lists nothing. Window › Show Progress (enabled while it has something to list) and a click on a
+  window's progress row show it again. Its Close button only hides it: nothing stops.
+* **Stop**, in a window's row or the progress window, cancels that operation: the item being copied is removed again,
+  the items before it stay where they arrived, the items after it stay where they were, and a drop's source keeps what
+  it has. A stop is not a failure.
+* **A failure** is listed in the progress window, which opens (again, if it was hidden): what was done ("Could not
+  duplicate “secret.txt”", "Moved 2 of 3 items to “Documents”") and the first error as a sentence. Closing the window
+  forgets it.
+* **An end nobody saw**: when an operation ends while the progress window is hidden and no browser window is open, it is
+  posted as a notification ("Copied “big.bin” to “Notes”", with the first error as its body); the window that started
+  it, if open, announces the end instead.
+* The window that started an operation, if still open, selects what arrived when it shows the folder it went to, edits
+  the new folder's name after New Folder with Selection, and reads its free space again.
+* Decisions: a move to the trash from a menu or Primary+Backspace stays on the window's thread (it renames, and is not a
+  transfer); a drop on the Trash is an operation like any drop. A failed operation is shown in the progress window and
+  is no longer a notification while a window is open. The delay, the window's title and sizes and its wording are
+  approximate; Stop is a text button, and the progress window gives no time estimate.
+
+**Failures.** A failure of something a person did (open, a new folder, make alias, show original, put back, tags,
+rename, a name that can't be used, copy and paste of text, move to the trash, a drop that cannot be taken) is one transient notification from "Files" on
 the session bus (`org.freedesktop.Notifications`), posted in order from a thread of its own (`notice`). It names one
 item, or counts several, and its body is the first error, with control and bidirectional formatting characters removed,
 cut at 256 characters and escaped, because the body is markup. Without a session bus, or when a post fails, that notice
@@ -183,7 +220,7 @@ free space, the default applications) stay on stderr. The wording is approximate
 action when assistive technology asks: the places and their eject buttons, back and forward, the View, Tags and Action
 pop-up buttons (each says whether its menu is open), the search field, the path bar's folders, the icon view's cells, the list's rows (selected, open or
 closed, with their level and position; Click selects a row alone, Expand and Collapse open and close a folder), the
-column headers (sorted up or down), the transfer row and its Stop button, the name editor and the context menu. Icons
+column headers (sorted up or down), the transfer row and its Stop button, the progress window's rows and Stop buttons, the name editor and the context menu. Icons
 are decorative, an item reads by its name and never by its path, and the rubber band is not read. Tab goes from the
 sidebar to the toolbar, the list's column headers in the order shown, the folder's items, the path bar's folders and the
 sidebar's separator, then around, and Shift+Tab visits the same stops in the opposite order. The
@@ -255,6 +292,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | Shift+Primary+N, Ctrl+Primary+N, Primary+D, Ctrl+Primary+A, Primary+R | new folder (its name is edited at once), new folder with the selection, duplicate, make alias, show original |
 | Rename in a menu | edit the name in place: the name without its extension is selected; Return commits, Escape cancels; a name that exists is refused (never replaced) and an invalid one keeps the editor open |
 | Primary+C, Primary+V, Alt+Primary+V | copy, paste item, move item here (above) |
+| Window › Show Progress, a click on a window's progress row | show the progress window (above); its Close button hides it, Stop stops one operation |
 | right press, Ctrl with a press, Menu, Shift+F10 | context menu (above) |
 | the toolbar's View, Tags and Action buttons | the view modes, the tags, the context menu, below the button |
 | click a folder of the path bar, or Space / Return on it | go there |
@@ -276,7 +314,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `rename`, `typeselect`, `spring` | interaction logic | `RenameTrigger`, `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`; `TypeSelect::{type_text, tab}`; `SpringLoad::{hover, due, cancel, flashing}` (a drag's dwell over folders, with `SPRING_DELAY` and `SPRING_FLASH`) |
 | `context_menu`, `menu_spec` | context menus | `menu_spec::{item_menu, background_menu, condense}` (the rows in order), `MenuItem`, `Command`, `common_apps` (the Open With list of a selection) |
 | `menu_bar`, `search_field` | the menu bar and the search field | `menu_bar(MenuState)`, `MenuAction`, `chords`, `enabled`; `SearchWidth::{want, tick, follow_toolbar, width}`, `open_width` |
-| `name_edit`, `operations` | rename in place and file changes | `NameEdit::{field, field_mut, commit}`; `rename_item` (no replace), `new_folder`, `drop_action`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`) |
+| `name_edit`, `operations` | rename in place and file changes | `NameEdit::{field, field_mut, commit}`; `rename_item` (no replace), `new_folder`, `drop_action`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`), `duplicate_with` (Duplicate with them), `stopped` |
 | `trash` | freedesktop Trash 1.0 | `Trash::{trash, list, restore, delete, empty, purge_older_than}`; home and mount-point trash, `.trashinfo`, `directorysizes`; `trashed_item`, `forget` (an item moved out of a trash) |
 | `thumbnail` | freedesktop thumbnail cache | `Thumbnailer::{lookup, lookup_at_least, create, get_or_create}`, `ThumbSize::for_icon`, `file_uri`, failure markers |
 | `tags`, `mime` | metadata | `read_tags` / `write_tags` (`user.xdg.tags`), `TagColor` (seven label colours), `parse_reference_tags`; `detect`, `kind_group`, `kind_description` |
@@ -287,8 +325,8 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space, visit, return_to, is_loading}`: model, history (a `Visit` to go back to, with its selection), the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
-| `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name` → `Notice`; `Notices::{start, post}`; `shown`, `escape` |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails` and `with_places_source`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `list` (the list view's presses and band), `band` (the rubber band), `clicks` (double-click and click-to-rename), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (paste and move off the window's thread), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons and thumbnails) |
+| `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name`, `finished` (an operation that ended unseen) → `Notice`; `Notices::{start, post, flush}`; `shown`, `escape`, `explained` (an error as a sentence for a window) |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails` and `with_places_source`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `list` (the list view's presses and band), `band` (the rubber band), `clicks` (double-click and click-to-rename), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons and thumbnails) |
 | `thumbnail_service` | thumbnails of the items in view | `ThumbnailService::{new, want, forget, get, queued, memory}`, `Stamp`, `has_thumbnail`, `MEMORY_BUDGET`, `WORKERS` |
 | `main` (feature `app`) | the binary | arguments, the session's places, types, associations and buses, then `kit::run` |
 
@@ -302,7 +340,7 @@ Values live in `metrics.rs`.
 | List view | 16 pt icons (16–32), 13 pt text, row = max(icon, font line) + 4 with no intercell spacing, a 20 pt pitch, 15 pt indentation; kinds are the design's type descriptions, capitalised |
 | Column view | 245 pt columns (min 100), 312 pt preview column |
 | Chrome | sidebar 200 pt default, 128 pt minimum, rows 24/28/32 pt; unified toolbar 52 pt; status bar 20 pt, path bar 28 pt; search field 112 pt at rest |
-| Timing | sidebar toggle 0.3 s, slow motion ×10; type-select reset after max(2 s, 2 × key-repeat delay); search field 0.2 s |
+| Timing | sidebar toggle 0.3 s, slow motion ×10; type-select reset after max(2 s, 2 × key-repeat delay); search field 0.2 s; progress window after 1 s (approximate) |
 | Selection look | icon bubble: the icon enlarged by its longest side / 16, that radius, quaternary label fill, white 50 % border of min(2, trunc(padding)), the same in an inactive window; the label pill is the accent (grey when inactive) |
 | Names | compare case-insensitively, numerically, width-insensitively, diacritics significant |
 
@@ -377,6 +415,10 @@ locked -- env CUPERTINO_REPAINT_DIR=DIR BINARY --ignored --nocapture --exact rep
 * The path bar does not shorten the names of the folders above the one shown when it runs out of room.
 * The free space is read again when the listing changes and after a transfer, not when another program writes
   elsewhere on the file system.
+* With no browser window open and the progress window hidden, nothing of Files is on screen while an operation runs:
+  the dock and the menu bar cannot show the progress window again until a browser window is open (a new launch is a
+  new process). The progress window gives no time estimate, and an operation's icon is a symbol, not the folder's
+  own icon.
 * The folder icons of the user directories are read when the application starts; a user directory moved later keeps
   the plain folder icon until Files starts again.
 * The pasteboard is the application's own, not the session's clipboard.

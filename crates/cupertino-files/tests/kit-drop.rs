@@ -108,10 +108,12 @@ fn drag_in(run: &mut Run, names: &[&str], at: Point, mods: Mods) -> DropToken {
     token
 }
 
+/// Drop the drag over the window, and wait until the file operation it started, if any, has ended: its row leaves.
 fn release(run: &mut Run) -> bool {
     let window = run.window;
     let dropped = run.driver.window_system_mut().drag_drop(window).unwrap();
     run.settle();
+    run.wait_until(|run| run.named(Role::ProgressIndicator).is_empty());
     dropped
 }
 

@@ -82,6 +82,7 @@ impl TrashedItem {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Trash {
     home_trash: PathBuf,
     uid: u32,

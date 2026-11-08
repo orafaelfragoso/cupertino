@@ -10,8 +10,10 @@ mod dragged;
 mod drops;
 mod grid;
 mod item_icons;
+mod jobs;
 mod list;
 mod places;
+mod progress;
 mod search;
 mod sidebar;
 mod spring;
@@ -21,6 +23,7 @@ mod view;
 
 pub use dragged::Grab;
 pub use drops::Destination;
+pub use jobs::{JobEvent, PROGRESS_WINDOW_DELAY};
 pub use list::RowGrab;
 pub use places::PlacesSource;
 pub use transfer::Observer;
@@ -32,7 +35,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use cupertino_apps::{launch, MimeApps, MimeDatabase};
 use cupertino_kit::controls::{
@@ -84,6 +87,8 @@ pub struct Start {
     view: ViewMode,
     home: Option<PathBuf>,
     observer: Option<Observer>,
+    /// How long a file operation runs before the progress window opens by itself.
+    progress_delay: Duration,
     places_source: Option<PlacesSource>,
     /// Folders whose changes may change the places, besides the trash.
     places_folders: Vec<PathBuf>,
@@ -129,6 +134,7 @@ impl Start {
             view: ViewMode::Icons,
             home: None,
             observer: None,
+            progress_delay: jobs::PROGRESS_WINDOW_DELAY,
             places_source: None,
             places_folders: Vec::new(),
             file_icons: None,
@@ -165,10 +171,18 @@ impl Start {
         }
     }
 
-    /// Every paste and move calling `observer` with its progress on its own thread, before it looks for a stop.
+    /// Every file operation calling `observer` with its progress on its own thread, before it looks for a stop.
     pub fn with_transfer_observer(self, observer: Observer) -> Start {
         Start {
             observer: Some(observer),
+            ..self
+        }
+    }
+
+    /// The progress window opening by itself once a file operation has run for `delay`, in place of the usual delay.
+    pub fn with_progress_delay(self, delay: Duration) -> Start {
+        Start {
+            progress_delay: delay,
             ..self
         }
     }
@@ -234,6 +248,8 @@ pub struct Model {
     windows: BTreeMap<u64, BrowserWindow>,
     next_window: u64,
     session: Session,
+    /// Files asked to exit: the messages left in that turn neither wait for the notices again nor exit again.
+    exiting: bool,
 }
 
 /// What every window shares.
@@ -258,16 +274,16 @@ struct Session {
     view: ViewMode,
     /// What Copy took last, for Paste Item and Move Item Here in any window.
     pasteboard: Vec<PathBuf>,
-    /// What each transfer calls with its progress.
-    observer: Option<Observer>,
-    next_transfer: u64,
+    /// The file operations, which outlive the windows that started them, and the progress window.
+    jobs: jobs::Jobs,
     places_source: Option<PlacesSource>,
     places_watch: places::PlacesWatch,
     /// The items' icons and thumbnails, shared with the list's rows, which ask for them as they show.
     icons: Rc<item_icons::ItemIcons>,
     /// What wakes when a thumbnail is made.
     thumbnails_woken: async_channel::Receiver<()>,
-    /// The items a drag out of a window carries, until it ends.
+    /// The items a drag out of a window carries, until it is dropped or ends: a drop held open while it copies does not
+    /// make later drags look like the window's own.
     dragged: Vec<PathBuf>,
     /// What the list words its dates relative to.
     clock: fn() -> SystemTime,
@@ -309,8 +325,6 @@ struct BrowserWindow {
     context: Option<context::OpenMenu>,
     /// What the latest secondary press was on, until its context menu opens: an item, or empty space.
     pressed: Option<Option<usize>>,
-    /// The pastes and moves into a folder of this window still running, oldest first.
-    transfers: Vec<transfer::Transfer>,
     /// The keyboard is in the sidebar.
     sidebar_focused: bool,
     /// The key of the sidebar row a click or the arrows last chose since the window last went to another folder: the
@@ -356,6 +370,8 @@ pub enum Message {
     Thumbnails,
     /// An event of the window with this id.
     Window(u64, Event),
+    /// A file operation, or the progress window.
+    Job(JobEvent),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -432,10 +448,6 @@ pub enum Event {
         action: cupertino_kit::platform::DropAction,
         mods: cupertino_kit::platform::Mods,
     },
-    /// The transfer with this id has progress or its results waiting.
-    Transferred(u64),
-    /// Stop the transfer with this id: its Stop button.
-    StopTransfer(u64),
     /// The keyboard came into the sidebar, or left it.
     SidebarFocus(bool),
     /// The keyboard came onto the folder's items, or left them.
@@ -501,9 +513,14 @@ fn window_key(window: u64) -> WindowKey {
     WindowKey(Key::from(format!("browser/{window}")))
 }
 
+/// How long Files waits, as it exits, for the notices it posted to be sent.
+const EXIT_NOTICES: Duration = Duration::from_secs(2);
+
 impl Application for Files {
     type Model = Model;
     type Message = Message;
+    /// Files exits itself ([`Model::exit_when_done`]): a file operation outlives the windows.
+    const RESIDENT: bool = true;
 
     fn init() -> (Model, Vec<Command<Message>>) {
         let start = START
@@ -524,6 +541,7 @@ impl Application for Files {
         let mut model = Model {
             windows: BTreeMap::new(),
             next_window: 0,
+            exiting: false,
             session: Session {
                 standard_places: start.places.len(),
                 places: start.places,
@@ -542,8 +560,7 @@ impl Application for Files {
                 trash: start.trash,
                 view: start.view,
                 pasteboard: Vec::new(),
-                observer: start.observer,
-                next_transfer: 0,
+                jobs: jobs::Jobs::new(start.progress_delay, start.observer),
                 places_watch,
                 places_source: start.places_source,
                 icons,
@@ -566,27 +583,9 @@ impl Application for Files {
     }
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
-        match message {
-            Message::Media => model.follow_media(),
-            Message::Places => {
-                model.session.follow_places();
-                vec![woken(&model.session.places_watch.woken, Message::Places)]
-            }
-            // the windows draw the thumbnails made
-            Message::Thumbnails => {
-                vec![woken(&model.session.thumbnails_woken, Message::Thumbnails)]
-            }
-            Message::Window(id, event) => {
-                let before = model.windows.get(&id).map(BrowserWindow::tally);
-                let commands = model.window_event(id, event);
-                if let (Some(before), Some(window)) = (before, model.windows.get_mut(&id)) {
-                    let after = window.tally();
-                    window.announcement.follow(before, after);
-                }
-                model.want_thumbnails(id);
-                commands
-            }
-        }
+        let mut commands = model.handle(message);
+        commands.extend(model.exit_when_done());
+        commands
     }
 
     fn view(model: &Model) -> Vec<Window<Message>> {
@@ -601,7 +600,48 @@ impl Application for Files {
                 std::iter::once(view::window(&model.session, id, window))
                     .chain(menu.into_iter().flatten())
             })
+            .chain(progress::window(&model.session.jobs))
             .collect()
+    }
+}
+
+impl Model {
+    /// Do what `message` asks.
+    fn handle(&mut self, message: Message) -> Vec<Command<Message>> {
+        match message {
+            Message::Job(event) => self.job_event(event),
+            Message::Media => self.follow_media(),
+            Message::Places => {
+                self.session.follow_places();
+                vec![woken(&self.session.places_watch.woken, Message::Places)]
+            }
+            // the windows draw the thumbnails made
+            Message::Thumbnails => {
+                vec![woken(&self.session.thumbnails_woken, Message::Thumbnails)]
+            }
+            Message::Window(id, event) => {
+                let before = self.windows.get(&id).map(BrowserWindow::tally);
+                let commands = self.window_event(id, event);
+                if let (Some(before), Some(window)) = (before, self.windows.get_mut(&id)) {
+                    let after = window.tally();
+                    window.announcement.follow(before, after);
+                }
+                self.want_thumbnails(id);
+                commands
+            }
+        }
+    }
+
+    /// Exit once no browser window is open, no file operation runs and the progress window lists nothing, after the
+    /// notices posted are sent.
+    fn exit_when_done(&mut self) -> Option<Command<Message>> {
+        let jobs = &self.session.jobs;
+        if self.exiting || !self.windows.is_empty() || !jobs.running.is_empty() || jobs.visible() {
+            return None;
+        }
+        self.exiting = true;
+        self.session.notices.flush(EXIT_NOTICES);
+        Some(Command::Exit)
     }
 }
 
@@ -660,7 +700,6 @@ impl Model {
             view: self.session.view,
             context: None,
             pressed: None,
-            transfers: Vec::new(),
             sidebar_focused: false,
             sidebar_row: None,
             band: None,
@@ -726,59 +765,145 @@ impl Model {
         vec![dragged::start_rows(id, window_key(id), grab, entries, icon)]
     }
 
-    /// Put `paths` dropped on window `id` where they go: into the trash, or moved or copied into a folder as
-    /// [`drops::chosen`] says. A name the folder has is given a free copy name; the failures are reported together,
-    /// and the last item to arrive in the folder the window shows is selected. What the source is told was done: a
-    /// move only when every item left its place, a copy when every item was copied, and nothing otherwise (an item
-    /// that failed, or one moved into the folder already holding it), so the source keeps what it has.
+    /// Put `paths` dropped on window `id` where they go, as a file operation: into the trash, or moved or copied into
+    /// a folder as [`drops::chosen`] says. A name the folder has is given a free copy name. The drop stays open until
+    /// the operation ends; then its source hears what was done ([`dropped`]), so it never lets go of an item before
+    /// Files has it.
     fn drop_items(
         &mut self,
         id: u64,
+        token: cupertino_kit::platform::DropToken,
         to: &Destination,
-        paths: &[PathBuf],
+        paths: Vec<PathBuf>,
         agreed: cupertino_kit::platform::DropAction,
         mods: cupertino_kit::platform::Mods,
-    ) -> Option<cupertino_kit::platform::DropAction> {
-        use cupertino_kit::platform::DropAction as Done;
-        let session = &self.session;
+    ) -> Vec<Command<Message>> {
         if paths.is_empty() {
-            return None;
+            return vec![Command::FinishDrop(token, None)];
         }
-        let dir = match to {
-            Destination::Trash => {
-                let trashed: Vec<_> = paths.iter().map(|path| session.trash.trash(path)).collect();
-                let all = trashed.iter().all(Result::is_ok);
-                session.failed_some(Action::Trash, paths.iter().zip(trashed));
-                return all.then_some(Done::Move);
+        let work = match to {
+            Destination::Trash => transfer::Work::Trash {
+                sources: paths,
+                trash: self.session.trash.clone(),
+            },
+            Destination::Folder(dir) => match drops::chosen(&paths, to, agreed, mods) {
+                Ok(action) => transfer::Work::Transfer {
+                    sources: paths,
+                    dest: dir.clone(),
+                    action,
+                },
+                Err(e) => {
+                    let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+                    self.session
+                        .failed(Action::Drop(DropAction::Move), &items, &e);
+                    return vec![Command::FinishDrop(token, None)];
+                }
+            },
+        };
+        let mut commands = vec![Command::HoldDrop(token)];
+        commands.extend(self.start_job(id, work, Some(token)));
+        commands
+    }
+
+    /// Start `work` for window `id`, which announces it and shows its row; for `drop`, if it is one.
+    fn start_job(
+        &mut self,
+        id: u64,
+        work: transfer::Work,
+        drop: Option<cupertino_kit::platform::DropToken>,
+    ) -> Vec<Command<Message>> {
+        let (job, commands) = self.session.jobs.start(work, id, drop);
+        let title = job.transfer.title();
+        if let Some(window) = self.windows.get_mut(&id) {
+            window.announcement.say(announce::About::Transfer, title);
+        }
+        commands
+    }
+
+    /// A file operation reported, or the progress window was used.
+    fn job_event(&mut self, event: JobEvent) -> Vec<Command<Message>> {
+        let jobs = &mut self.session.jobs;
+        match event {
+            JobEvent::Reported(jid) => match jobs.poll(jid) {
+                jobs::Polled::Gone => Vec::new(),
+                jobs::Polled::Running(wake) => vec![wake],
+                jobs::Polled::Ended(job, outcome, seen) => self.job_ended(job, outcome, seen),
+            },
+            JobEvent::Stop(jid) => {
+                jobs.stop(jid);
+                Vec::new()
             }
-            Destination::Folder(dir) => dir,
-        };
-        let action = match drops::chosen(paths, to, agreed, mods) {
-            Ok(action) => action,
-            Err(e) => {
-                let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-                session.failed(Action::Drop(DropAction::Move), &items, &e);
-                return None;
+            JobEvent::Due(jid) => {
+                jobs.due(jid);
+                Vec::new()
             }
-        };
-        let placed = operations::drop_into(paths, dir, action);
-        let arrived = placed.iter().rev().find_map(|p| p.as_ref().ok()).cloned();
-        let done = match action {
-            DropAction::Copy => placed.iter().all(Result::is_ok).then_some(Done::Copy),
-            // a move into the folder holding the item leaves it where it is
-            DropAction::Move => paths
-                .iter()
-                .zip(&placed)
-                .all(|(from, to)| to.as_ref().is_ok_and(|to| to != from))
-                .then_some(Done::Move),
-        };
-        session.failed_some(Action::Drop(action), paths.iter().zip(placed));
-        if let (Some(window), Some(path)) = (self.windows.get_mut(&id), arrived) {
-            if window.browser.dir() == dir.as_path() {
-                window.browser.select_when_appears(path);
+            JobEvent::Show => {
+                jobs.show();
+                Vec::new()
+            }
+            JobEvent::Hide => {
+                jobs.hide();
+                Vec::new()
+            }
+            JobEvent::Scroll(scroll) => {
+                jobs.scroll = scroll;
+                Vec::new()
             }
         }
-        done
+    }
+
+    /// A file operation ended. The window that started it, if still open, says so, selects what arrived where it
+    /// shows it (or edits the name of the folder New Folder with Selection made) and reads its free space again. A
+    /// failure is listed in the progress window, which opens; a stop is none. When neither a browser window nor the
+    /// progress window was shown (`seen`), the end is a notification. A drop's source hears what was done.
+    fn job_ended(
+        &mut self,
+        job: jobs::Job,
+        outcome: transfer::Outcome,
+        seen: bool,
+    ) -> Vec<Command<Message>> {
+        let jobs::Job {
+            transfer,
+            origin,
+            drop,
+        } = job;
+        let failures: Vec<_> = outcome.failures(transfer.sources()).collect();
+        let text = transfer.ended(outcome.stopped(), failures.len());
+        let reason = failures.first().map(|(_, e)| notice::explained(e));
+        let session = &mut self.session;
+        if !seen && self.windows.is_empty() {
+            session
+                .notices
+                .post(notice::finished(&text, reason.as_deref()));
+        }
+        if let Some(reason) = reason {
+            session.jobs.failed(jobs::Failure {
+                id: transfer.id,
+                title: text.clone(),
+                reason,
+            });
+        }
+        if let Some(window) = self.windows.get_mut(&origin) {
+            window.announcement.say(announce::About::Transfer, text);
+            let here = |p: &Path| p.parent() == Some(window.browser.dir());
+            match outcome.folder.clone() {
+                Some(folder) if here(&folder) => window.rename_new_folder(folder),
+                Some(_) => {}
+                None => {
+                    if let Some(path) = outcome.arrived().filter(|p| here(p)) {
+                        window.browser.select_when_appears(path.to_path_buf());
+                    }
+                }
+            }
+            window.read_available();
+        }
+        if matches!(transfer.work, transfer::Work::Trash { .. }) {
+            // the first item trashed makes the trash: its place comes at once
+            session.follow_places();
+        }
+        drop.map(|token| Command::FinishDrop(token, dropped(&transfer.work, &outcome)))
+            .into_iter()
+            .collect()
     }
 
     fn window_event(&mut self, id: u64, event: Event) -> Vec<Command<Message>> {
@@ -790,7 +915,10 @@ impl Model {
             Event::DragOut(grab) => return self.drag_out(id, &grab),
             Event::DragRows(grab) => return self.drag_rows(id, &grab),
             Event::Dragged(progress) => {
-                if matches!(progress, DragProgress::Finished | DragProgress::Cancelled) {
+                if matches!(
+                    progress,
+                    DragProgress::Dropped | DragProgress::Finished | DragProgress::Cancelled
+                ) {
                     self.session.dragged.clear();
                 }
                 // a cancelled drag takes the window it came from back to where it was
@@ -808,11 +936,14 @@ impl Model {
                 action,
                 mods,
             } => {
+                // the drop keeps the folder a drag opened, also while its operation holds the drop open
                 if let Some(window) = self.windows.get_mut(&id) {
                     window.spring_kept();
                 }
-                let done = to.and_then(|to| self.drop_items(id, &to, &paths, action, mods));
-                return vec![Command::FinishDrop(token, done)];
+                return match to {
+                    Some(to) => self.drop_items(id, token, &to, paths, action, mods),
+                    None => vec![Command::FinishDrop(token, None)],
+                };
             }
             event => event,
         };
@@ -940,7 +1071,6 @@ impl Model {
             Event::Close => {
                 self.windows.remove(&id);
             }
-            Event::Transferred(tid) => return window.transferred(id, tid, session),
             Event::SidebarFocus(focused) => window.sidebar_focused = focused,
             Event::ItemsFocus(focused) => window.items_focused = focused,
             Event::Band(band) => window.band = band,
@@ -977,11 +1107,6 @@ impl Model {
                     return window.begin_rename(id, index);
                 }
             }
-            Event::StopTransfer(tid) => {
-                if let Some(running) = window.transfers.iter().find(|t| t.id == tid) {
-                    running.stop();
-                }
-            }
         }
         Vec::new()
     }
@@ -1002,27 +1127,44 @@ impl Model {
                 if session.pasteboard.is_empty() {
                     return Vec::new();
                 }
-                let tid = session.next_transfer;
-                session.next_transfer += 1;
-                let sources = match moving {
-                    true => std::mem::take(&mut session.pasteboard),
-                    false => session.pasteboard.clone(),
+                let (sources, action) = match moving {
+                    true => (std::mem::take(&mut session.pasteboard), DropAction::Move),
+                    false => (session.pasteboard.clone(), DropAction::Copy),
                 };
                 let dest = window.browser.dir().to_path_buf();
-                let started =
-                    transfer::Transfer::start(tid, sources, dest, moving, session.observer.clone());
-                let wake = woken(&started.woken, Message::Window(id, Event::Transferred(tid)));
-                window
-                    .announcement
-                    .say(announce::About::Transfer, started.title());
-                window.transfers.push(started);
-                return vec![wake];
+                let work = transfer::Work::Transfer {
+                    sources,
+                    dest,
+                    action,
+                };
+                return self.start_job(id, work, None);
+            }
+            MenuAction::Duplicate => {
+                let sources = window.selected_paths();
+                if sources.is_empty() {
+                    return Vec::new();
+                }
+                return self.start_job(id, transfer::Work::Duplicate { sources }, None);
+            }
+            MenuAction::NewFolderWithSelection => {
+                let sources = window.selected_paths();
+                let dir = window.browser.dir().to_path_buf();
+                return self.start_job(id, transfer::Work::NewFolderWith { dir, sources }, None);
+            }
+            MenuAction::ShowProgress => {
+                self.session.jobs.show();
+                return Vec::new();
             }
             _ => {}
         }
         let session = &self.session;
         match action {
-            MenuAction::Copy | MenuAction::Paste | MenuAction::MoveHere => {}
+            MenuAction::Copy
+            | MenuAction::Paste
+            | MenuAction::MoveHere
+            | MenuAction::Duplicate
+            | MenuAction::NewFolderWithSelection
+            | MenuAction::ShowProgress => {}
             MenuAction::NewWindow => {
                 let folder = window.browser.dir().to_path_buf();
                 return self.open_windows(vec![folder]);
@@ -1067,26 +1209,11 @@ impl Model {
                 Ok(path) => window.rename_new_folder(path),
                 Err(e) => session.failed(Action::NewFolder, &[], &e),
             },
-            MenuAction::NewFolderWithSelection => {
-                let paths = window.selected_paths();
-                match operations::new_folder_with(window.browser.dir(), &paths) {
-                    Ok(path) => window.rename_new_folder(path),
-                    Err(e) => {
-                        let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-                        session.failed(Action::MoveIntoNewFolder, &items, &e);
-                    }
-                }
-            }
             MenuAction::Rename => {
                 let first = window.browser.selection().indices().next();
                 if let Some(index) = first {
                     return window.begin_rename(id, index);
                 }
-            }
-            MenuAction::Duplicate => {
-                let paths = window.selected_paths();
-                let duplicated = operations::duplicate(&paths);
-                session.failed_some(Action::Duplicate, paths.iter().zip(duplicated));
             }
             MenuAction::MakeAlias => {
                 let paths = window.selected_paths();
@@ -1532,48 +1659,6 @@ impl BrowserWindow {
         }
     }
 
-    /// The transfer `tid` of the window `id` reported: its row shows its progress; once it ended the failures are
-    /// reported together (a stop is none), the last item that arrived is selected when the window still shows where it
-    /// went, and the free space is read again.
-    fn transferred(&mut self, id: u64, tid: u64, session: &Session) -> Vec<Command<Message>> {
-        let Some(at) = self.transfers.iter().position(|t| t.id == tid) else {
-            return Vec::new();
-        };
-        let Some(results) = self.transfers[at].poll() else {
-            let wake = woken(
-                &self.transfers[at].woken,
-                Message::Window(id, Event::Transferred(tid)),
-            );
-            return vec![wake];
-        };
-        let done = self.transfers.remove(at);
-        let arrived = results.iter().rev().find_map(|p| p.as_ref().ok()).cloned();
-        let notice = match done.moving {
-            true => Action::Drop(DropAction::Move),
-            false => Action::Paste,
-        };
-        let stopped = results
-            .iter()
-            .any(|r| r.as_ref().is_err_and(operations::is_cancelled));
-        let failures = results
-            .iter()
-            .filter(|r| r.as_ref().is_err_and(|e| !operations::is_cancelled(e)))
-            .count();
-        self.announcement
-            .say(announce::About::Transfer, done.ended(stopped, failures));
-        let failed = done
-            .sources
-            .iter()
-            .zip(results)
-            .filter(|(_, r)| !r.as_ref().is_err_and(operations::is_cancelled));
-        session.failed_some(notice, failed);
-        if let Some(path) = arrived.filter(|p| p.parent() == Some(self.browser.dir())) {
-            self.browser.select_when_appears(path);
-        }
-        self.read_available();
-        Vec::new()
-    }
-
     /// Move the selected items to the trash; the listing drops them when the watcher reports it.
     fn trash_selection(&self, session: &Session) {
         let paths = self.selected_paths();
@@ -1991,6 +2076,7 @@ impl BrowserWindow {
                 .map(|i| session.places[i].name.clone()),
             read_only: self.read_only(session),
             can_paste: !session.pasteboard.is_empty(),
+            jobs: !session.jobs.is_empty(),
         }
     }
 
@@ -2027,6 +2113,30 @@ impl BrowserWindow {
     }
 }
 
+/// What the source of a drop is told was done once `work` ended with `outcome`: a move only when every item left its
+/// place, a copy when every item was copied, and nothing otherwise (an item that failed or was stopped, or one moved
+/// into the folder already holding it), so the source keeps what it has.
+fn dropped(
+    work: &transfer::Work,
+    outcome: &transfer::Outcome,
+) -> Option<cupertino_kit::platform::DropAction> {
+    use cupertino_kit::platform::DropAction as Done;
+    let all = outcome.results.iter().all(Result::is_ok);
+    match work {
+        transfer::Work::Trash { .. } => all.then_some(Done::Move),
+        transfer::Work::Transfer {
+            action: DropAction::Copy,
+            ..
+        } => all.then_some(Done::Copy),
+        transfer::Work::Transfer { sources, .. } => sources
+            .iter()
+            .zip(&outcome.results)
+            .all(|(from, to)| to.as_ref().is_ok_and(|to| to != from))
+            .then_some(Done::Move),
+        transfer::Work::Duplicate { .. } | transfer::Work::NewFolderWith { .. } => None,
+    }
+}
+
 /// Whether `entry` has the tag of `color`.
 fn has_tag(entry: &crate::Entry, color: TagColor) -> bool {
     entry
@@ -2035,7 +2145,7 @@ fn has_tag(entry: &crate::Entry, color: TagColor) -> bool {
         .any(|t| t.eq_ignore_ascii_case(color.title()))
 }
 
-/// Open the window on `start` and serve it until the last window closes.
+/// Open the window on `start` and serve it until the last window closes and every file operation has ended.
 pub fn run(start: Start) -> Result<(), cupertino_kit::app::AppError> {
     prepare(start);
     cupertino_kit::app::run::<Files>()

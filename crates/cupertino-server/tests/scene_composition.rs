@@ -319,3 +319,74 @@ fn a_window_whose_client_draws_its_own_decorations_keeps_its_own_shape_in_every_
         );
     }
 }
+
+/// At a fractional scale a window's frame need not lie on device pixels. The content's rounded mask covers whole device
+/// pixels (its edges rounded), and the outline lies just outside those pixels, so it meets the content wherever the
+/// window is, without a gap or an overlap that would make it softer or weaker.
+#[test]
+fn the_outline_meets_the_device_pixels_of_the_window_s_content_at_a_fractional_scale() {
+    let mut fractional = 0;
+    for scale in [1.25, 1.5, 1.75] {
+        let mut d = Desktop::new(scale);
+        d.window();
+        d.at(3000);
+        let mut backend = d.state.backend.take().unwrap();
+        let (clip, outline) = d
+            .state
+            .with_scene(backend.renderer(), 0, |r, mut p| {
+                let frame = compose_scene(r, &mut p).frame;
+                let items = frame.items();
+                let windows = || {
+                    items
+                        .iter()
+                        .filter(|(layer, _)| *layer == SceneLayer::Windows)
+                        .map(|(_, item)| item)
+                };
+                let clip = windows()
+                    .find(|item| item.id.kind == SceneKind::WindowContent)
+                    .map(|item| item.clip)
+                    .expect("the window's content");
+                let outline = windows()
+                    .find(|item| item.id.kind == SceneKind::Outline)
+                    .map(|item| item.source.clone())
+                    .expect("the window's outline");
+                (clip, outline)
+            })
+            .expect("render resources");
+        d.state.backend = Some(backend);
+        let cupertino_scene::Clip::Rounded { rect: mask, .. } = clip else {
+            panic!("a rounded mask: {clip:?}");
+        };
+        let cupertino_scene::Source::RoundedRect(ring) = outline else {
+            panic!("the outline is a rounded rectangle: {outline:?}");
+        };
+        let (width, _) = ring.border.expect("the outline is a border");
+        let edges = |r: &cupertino_geometry::Rect, inset: f64| {
+            [
+                r.origin.x + inset,
+                r.origin.y + inset,
+                r.origin.x + r.size.width - inset,
+                r.origin.y + r.size.height - inset,
+            ]
+        };
+        let content = edges(&mask.0, 0.0);
+        if content
+            .iter()
+            .any(|v| ((v * scale) - (v * scale).round()).abs() > 1e-6)
+        {
+            fractional += 1;
+        }
+        let inner = edges(&ring.rect.0, width);
+        for (got, mask) in inner.iter().zip(content) {
+            let pixel = (mask * scale).round();
+            assert!(
+                (got * scale - pixel).abs() < 1e-6,
+                "at {scale}x the outline's inner edge {got} is not the mask's device pixel edge {pixel} ({mask})"
+            );
+        }
+    }
+    assert!(
+        fractional > 0,
+        "some scale must put the frame off the device pixels for the test to mean anything"
+    );
+}

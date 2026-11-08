@@ -901,12 +901,25 @@ fn window_elements(
     }
     out.extend(backdrops);
     if shadow && styled {
-        // the fine outline just outside the frame, over the shadow, fading with it (none on a full-screen window)
+        // the fine outline just outside the frame, over the shadow, fading with it (none on a full-screen window);
+        // around the device pixels the content and its mask cover, so it meets them at every scale and position
         let edge = p.decor.edge(active);
+        let frame = smithay::utils::Rectangle::<f64, Logical>::new(
+            (
+                f64::from(v_phys.loc.x) / p.scale,
+                f64::from(v_phys.loc.y) / p.scale,
+            )
+                .into(),
+            (
+                f64::from(v_phys.size.w) / p.scale,
+                f64::from(v_phys.size.h) / p.scale,
+            )
+                .into(),
+        );
         out.extend(outline_item(
             SceneKind::Outline,
             entry.id.0,
-            visual_local,
+            frame,
             radius,
             style.continuous_corners,
             &edge,

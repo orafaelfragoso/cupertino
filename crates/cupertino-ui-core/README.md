@@ -37,7 +37,11 @@ all on one thread.
 - **Keys and focus.** Keys go to the focused node's path, then to the window's shortcuts, then Tab and Shift+Tab move
   the focus in reading order. A shortcut registered with `CommandRegistry::with_fresh` fires only on a fresh press:
   the repeats of a held key pass it by, so a key held since before a window opened cannot answer it. A focus scope (dialog, popover, menu) keeps Tab inside itself and gives the focus back
-  when it closes, to the node focused before or its nearest surviving ancestor.
+  when it closes, to the node focused before or its nearest surviving ancestor. A window paints as active
+  (`PaintCx::window_active`) while it has the keyboard or a popup opened from it has, as a menu takes the keyboard
+  while its window stays the one in use. It stays so after the popup closes, until the window hears of the keyboard
+  itself or a configure says it is no longer activated, so it does not flash inactive while the keyboard comes back.
+  Keys, focus and `EventCx::window_active` follow the keyboard alone.
 - **Tasks.** `Command::Perform` futures run only inside a step, on the UI thread; a wake from any thread wakes the
   window system. Dropping the runtime cancels every task.
 - **Frames.** A step lays out every changed window, rebuilds its accessibility tree and focus, and paints when the

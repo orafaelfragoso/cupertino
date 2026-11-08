@@ -273,12 +273,16 @@ impl Cupertino {
                 .any(|p| p.roles.contains(&ShellRole::SessionLock))
     }
 
-    /// Whether the session is hidden on every output: each shows a locked frame (the lock surfaces over black, or black),
-    /// or nothing reaches the screens (the display sleeps, the session is paused).
+    /// Whether the session is hidden on every output: each shows a locked frame (the lock surfaces over black, or black)
+    /// or is powered off (it is not drawn, and its first frame once on is a locked one), or nothing reaches the screens
+    /// (the display sleeps, the session is paused).
     pub fn sleep_covered(&self) -> bool {
         self.session_lock.is_active()
             && (crate::backend::shows_nothing(self)
-                || self.outputs.iter().all(|o| o.lock.presented))
+                || self
+                    .outputs
+                    .iter()
+                    .all(|o| o.lock.presented || !self.displays.powered(o.id)))
     }
 
     /// Let a held sleep go on once the session is covered.

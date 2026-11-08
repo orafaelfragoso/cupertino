@@ -659,3 +659,24 @@ fn a_lock_client_that_hangs_before_presenting_and_then_dies_leaves_a_sleeping_se
     let successor = Client::locker(common::session_agent(&h.state));
     h.wait_until("a new lock client to take the lock", |_| successor.locked());
 }
+
+#[test]
+fn an_output_that_is_powered_off_holds_no_sleep_back_and_shows_the_cover_once_on() {
+    let Some(mut h) = Harness::new() else { return };
+    with_lock_screen(&mut h);
+    let (_toplevel, _) = mapped_toplevel(&mut h);
+    let output = h.state.outputs[0].id;
+    // an output that is off is never drawn: no covered frame of it can reach the screen
+    h.state.set_output_power(output, false).unwrap();
+    h.state.system_going_to_sleep();
+    assert!(h.state.session_lock.holds_sleep());
+    h.wait_until("the sleep to go on", |s| !s.session_lock.holds_sleep());
+    assert!(h.state.session_lock.is_active());
+
+    h.state.set_output_power(output, true).unwrap();
+    assert_eq!(
+        h.center_pixel("powered on")[..3],
+        [0, 0, 0][..],
+        "the session shows on an output powered on after the sleep"
+    );
+}

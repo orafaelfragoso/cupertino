@@ -1261,11 +1261,11 @@ fn verified_defaults() {
 
 #[test]
 fn minimize_durations_are_verified() {
-    assert_eq!(MinimizeEffect::WarpMinimize.duration_ms(), 500.0);
+    assert_eq!(MinimizeEffect::WarpMinimize.duration_ms(), 450.0);
     assert_eq!(MinimizeEffect::Scale.duration_ms(), 200.0);
     assert_eq!(MinimizeEffect::FunnelMinimize.duration_ms(), 400.0);
-    assert_eq!(MinimizeEffect::WarpMinimize.duration_s(true), 1.0);
-    assert_eq!(DockConfig::default().minimize_duration_s(false), 0.5);
+    assert_eq!(MinimizeEffect::WarpMinimize.duration_s(true), 0.9);
+    assert_eq!(DockConfig::default().minimize_duration_s(false), 0.45);
 }
 
 #[test]

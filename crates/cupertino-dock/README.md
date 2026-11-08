@@ -72,8 +72,8 @@ a parabola with a 700 ms cycle capped at 120 s and lift `0.2·(len − 8) + 6` p
 with amplitudes 1/0.5/0.25, repeating every 2000 ms with lift `len + 1` pt (informational plays it once, critical loops).
 `BounceConfig::parametric keeps the old generic arcs (approximate).
 
-**Minimize effect durations**. `MinimizeEffect::duration_ms` gives warp 500, scale 200 and funnel
-400 ms, doubled with the slow-motion modifier.
+**Minimize effect durations**. `MinimizeEffect::duration_ms` gives warp 450, scale 200 and funnel
+400 ms into the slot, doubled with the slow-motion modifier; the warp unfolds back out of the slot in 420 ms.
 
 ### Bar and tiles
 

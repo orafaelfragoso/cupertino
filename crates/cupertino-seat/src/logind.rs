@@ -6,7 +6,10 @@
 //! the signal subscription is restricted to that sender: any peer can emit a signal on any
 //! object path, and a forged `PauseDevice` or `ResumeDevice` would otherwise pause or activate
 //! the session. Because of that binding a logind restart silences the subscription instead of
-//! ending it, so [`watch_owner`] reports the unique name going away.
+//! ending it, so [`watch_owner`] reports the unique name going away. That report comes from the
+//! bus daemon, and [`watch_owner`] checks the sender of each one it passes on: the bus delivers
+//! a signal addressed to this connection whatever its rules say, and the rule's own sender
+//! filter is zbus's (it treats the daemon's name as a unique name and filters on it).
 
 use std::collections::HashMap;
 use std::os::fd::OwnedFd;
@@ -194,9 +197,14 @@ pub fn subscribe(conn: &Connection, session: &SessionRef) -> Result<MessageItera
 
 /// The bus's `NameOwnerChanged` for logind's well-known name leaving the unique name the session
 /// was found on: logind exited or restarted, and every signal and call of the session is bound to
-/// a name that no longer exists. Any message from this iterator means the session is lost.
-/// Subscribe before `TakeControl`, as with [`subscribe`].
-pub fn watch_owner(conn: &Connection, session: &SessionRef) -> Result<MessageIterator, Error> {
+/// a name that no longer exists. Any message from this iterator means the session is lost. A
+/// `NameOwnerChanged` that another peer sent is dropped here ([`sent_by_bus`]): it would make
+/// the holder give up a session that is still there. Subscribe before `TakeControl`, as with
+/// [`subscribe`].
+pub fn watch_owner(
+    conn: &Connection,
+    session: &SessionRef,
+) -> Result<impl Iterator<Item = zbus::Result<Message>> + Send + 'static, Error> {
     let what = "watching logind's bus name";
     let rule = MatchRule::builder()
         .msg_type(Type::Signal)
@@ -207,7 +215,25 @@ pub fn watch_owner(conn: &Connection, session: &SessionRef) -> Result<MessageIte
         .and_then(|builder| builder.arg(1, session.owner.as_str()))
         .map_err(Error::bus(what))?
         .build();
-    MessageIterator::for_match_rule(rule, conn, None).map_err(Error::bus(what))
+    let changes = MessageIterator::for_match_rule(rule, conn, None).map_err(Error::bus(what))?;
+    Ok(changes.filter(|change| match change {
+        Ok(message) if !sent_by_bus(message) => {
+            tracing::warn!(
+                "ignoring a NameOwnerChanged for logind that the bus daemon did not send"
+            );
+            false
+        }
+        _ => true,
+    }))
+}
+
+/// Whether the bus daemon sent `message`. The daemon writes the sender of every message it
+/// routes, and only its own carry its name.
+fn sent_by_bus(message: &Message) -> bool {
+    message
+        .header()
+        .sender()
+        .is_some_and(|sender| sender.as_str() == BUS)
 }
 
 /// Turns a signal into a state machine input. Signals the session does not use (`Lock`,
@@ -400,6 +426,77 @@ mod tests {
             received.recv_timeout(Duration::from_millis(300)).is_err(),
             "reported once"
         );
+    }
+
+    #[test]
+    fn a_name_change_that_the_bus_did_not_send_does_not_lose_the_session() {
+        let Some(bus) = PrivateBus::start() else {
+            eprintln!("skipping: dbus-daemon is not available");
+            return;
+        };
+        let logind = bus.connect();
+        logind.request_name(LOGIND).unwrap();
+        let session = SessionRef {
+            path: OwnedObjectPath::try_from("/org/freedesktop/login1/session/_31").unwrap(),
+            owner: logind.unique_name().unwrap().to_owned(),
+        };
+        let compositor = bus.connect();
+        let mut changes = watch_owner(&compositor, &session).unwrap();
+        let (sender, received) = mpsc::channel();
+        std::thread::spawn(move || {
+            for message in changes.by_ref() {
+                let message = message.unwrap();
+                let sent_by = message.header().sender().unwrap().to_string();
+                let _ = sender.send(sent_by);
+            }
+        });
+
+        // another peer says logind left its name, to the compositor directly and to everyone
+        let peer = bus.connect();
+        let forged = (LOGIND, session.owner.as_str(), "");
+        let to = compositor.unique_name().unwrap().to_string();
+        peer.emit_signal(
+            Some(to.as_str()),
+            "/org/freedesktop/DBus",
+            BUS,
+            "NameOwnerChanged",
+            &forged,
+        )
+        .unwrap();
+        peer.emit_signal(
+            None::<&str>,
+            "/org/freedesktop/DBus",
+            BUS,
+            "NameOwnerChanged",
+            &forged,
+        )
+        .unwrap();
+        assert!(
+            received.recv_timeout(Duration::from_millis(300)).is_err(),
+            "a forged change is ignored"
+        );
+
+        // the bus daemon's own report still ends the session
+        logind.release_name(LOGIND).unwrap();
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(5)).as_deref(),
+            Ok(BUS)
+        );
+    }
+
+    #[test]
+    fn only_a_message_with_the_daemons_name_comes_from_the_bus() {
+        let change = |sender: Option<&str>| {
+            let mut builder =
+                Message::signal("/org/freedesktop/DBus", BUS, "NameOwnerChanged").unwrap();
+            if let Some(sender) = sender {
+                builder = builder.sender(sender).unwrap();
+            }
+            builder.build(&(LOGIND, ":1.7", "")).unwrap()
+        };
+        assert!(sent_by_bus(&change(Some(BUS))));
+        assert!(!sent_by_bus(&change(Some(":1.7"))));
+        assert!(!sent_by_bus(&change(None)));
     }
 
     #[test]

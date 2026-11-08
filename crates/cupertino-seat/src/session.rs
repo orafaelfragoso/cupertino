@@ -136,8 +136,11 @@ fn read_signals(signals: MessageIterator, sender: Sender<Delivery>) {
 
 /// Reports [`Error::SignalsEnded`] when logind leaves the bus name the session is bound to, or
 /// when the stream fails. Blocks like [`read_signals`].
-fn watch_owner(owner_changes: MessageIterator, sender: Sender<Delivery>) {
-    let delivery = match owner_changes.into_iter().next() {
+fn watch_owner(
+    mut owner_changes: impl Iterator<Item = zbus::Result<zbus::Message>>,
+    sender: Sender<Delivery>,
+) {
+    let delivery = match owner_changes.next() {
         Some(Err(source)) => Err(Error::bus("watching logind's bus name")(source)),
         Some(Ok(_)) | None => Err(Error::SignalsEnded),
     };

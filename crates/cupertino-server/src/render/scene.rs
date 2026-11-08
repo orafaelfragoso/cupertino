@@ -858,7 +858,8 @@ fn window_surface_origin(
 }
 
 /// Elements of one window's popups, front to back, each with its own backdrop directly below it: moved and scaled
-/// with the window's plan. On the desktop they go to [`SceneLayer::Popups`], above every window and the bars.
+/// with the window's plan. On the desktop the key window's go to [`SceneLayer::Popups`], above every window and the bars
+/// ([`raised_popups_window`]).
 fn window_popup_elements(
     p: &mut SceneParams<'_>,
     entry: &WindowEntry,
@@ -1446,6 +1447,18 @@ fn dock_edge(target: Rect, screen: &Rect) -> DockEdge {
 /// and panels are neither drawn nor hit while it covers the output, except in the overview.
 pub fn top_layer_covered(wm: &Wm, shell: &crate::shell::Shell, output: OutputId) -> bool {
     !shell.overview_open() && wm.fullscreen_front(output).is_some()
+}
+
+/// The window of `output` whose popups lie above every window and the bars ([`SceneLayer::Popups`]): the key window,
+/// unless another window covers the output in full screen. The popups of every other window stay with their window, in
+/// its place in the stack, so a popup left open in a window behind (a tooltip, a popup without a grab) never covers the
+/// window in front of it nor takes its pointer.
+pub fn raised_popups_window(wm: &Wm, output: OutputId) -> Option<WindowId> {
+    let key = wm.key_window()?;
+    match wm.fullscreen_front(output) {
+        Some(front) if front != key => None,
+        _ => Some(key),
+    }
 }
 
 /// Whether the `top` surface gives way to a full-screen window: all but a menu bar and a surface over the whole output,
@@ -2289,6 +2302,7 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             p.now,
         );
         let key = p.wm.key_window();
+        let raised = raised_popups_window(p.wm, p.output_id);
         let mut front_to_back: Vec<Piece> = Vec::new();
         // strip thumbnails, drawn below every window on the stage
         let mut strip: Vec<Piece> = Vec::new();
@@ -2356,8 +2370,13 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             }
             let mut deco = window_decorations(p, entry, &plan, active);
             deco.extend(revealed_titlebar(p, entry, &plan, active));
-            // popups go above every window and the bars, the topmost window's first
-            popups.extend(window_popup_elements(p, entry, &plan));
+            // the key window's popups go above every window and the bars; another window's stay over it
+            let own_popups = window_popup_elements(p, entry, &plan);
+            if raised == Some(id) {
+                popups.extend(own_popups);
+            } else {
+                front_to_back.extend(own_popups);
+            }
             front_to_back.extend(window_elements(p, entry, &plan, active, true, deco));
         }
         let mut ghosts: Vec<Piece> = closing_elements(p);

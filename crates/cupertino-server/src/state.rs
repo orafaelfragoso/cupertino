@@ -1605,51 +1605,65 @@ impl Cupertino {
         )
     }
 
-    /// The popup surface of a window under `pos` (global logical), from the topmost window down. Popups are drawn
-    /// above every window and the bars (`SceneLayer::Popups`), so the pointer finds them before either.
-    pub fn window_popup_under(&self, pos: Point<f64, Logical>) -> Option<WindowTarget> {
-        for (id, entry, plan) in self.input_windows(pos)? {
-            let geo = entry.window.geometry();
-            let ins = entry.insets();
-            let origin = Point::<f64, Logical>::from((
-                plan.visual.x + ins.left - geo.loc.x as f64,
-                plan.visual.y + ins.top - geo.loc.y as f64,
-            ));
-            let Some(root) = entry.window.toplevel().map(|t| t.wl_surface().clone()) else {
-                continue;
-            };
-            // every surface of a popup's tree: `Window::surface_under` with `POPUP` alone finds only the popups' roots
-            for (popup, location) in PopupManager::popups_for_surface(&root) {
-                let offset = geo.loc + location - popup.geometry().loc;
-                if let Some((surface, loc)) = smithay::desktop::utils::under_from_surface_tree(
-                    popup.wl_surface(),
-                    pos - origin,
-                    offset,
-                    WindowSurfaceType::ALL,
-                ) {
-                    return Some(WindowTarget::Surface {
-                        id,
-                        surface,
-                        origin: origin + loc.to_f64(),
-                    });
-                }
+    /// The surface of one of `entry`'s popups under `pos` (global logical), every surface of a popup's tree:
+    /// `Window::surface_under` with `POPUP` alone finds only the popups' roots.
+    fn popup_of_window_under(
+        id: WindowId,
+        entry: &WindowEntry,
+        plan: &crate::render::scene::WindowPlan,
+        pos: Point<f64, Logical>,
+    ) -> Option<WindowTarget> {
+        let geo = entry.window.geometry();
+        let ins = entry.insets();
+        let origin = Point::<f64, Logical>::from((
+            plan.visual.x + ins.left - geo.loc.x as f64,
+            plan.visual.y + ins.top - geo.loc.y as f64,
+        ));
+        let root = entry.window.toplevel().map(|t| t.wl_surface().clone())?;
+        for (popup, location) in PopupManager::popups_for_surface(&root) {
+            let offset = geo.loc + location - popup.geometry().loc;
+            if let Some((surface, loc)) = smithay::desktop::utils::under_from_surface_tree(
+                popup.wl_surface(),
+                pos - origin,
+                offset,
+                WindowSurfaceType::ALL,
+            ) {
+                return Some(WindowTarget::Surface {
+                    id,
+                    surface,
+                    origin: origin + loc.to_f64(),
+                });
             }
         }
         None
     }
 
-    /// What is under `pos` (global logical), from the top down: the popups of every window
-    /// ([`Self::window_popup_under`]), then per window, in this order: the window control buttons of a unified bar,
-    /// the resize zones (3 pt inside to 4 pt outside the frame, also for a client-decorated window, measured from its
-    /// window geometry), the client's surface inside the frame, the title bar and buttons of a server-decorated window.
-    /// Outside the frame and its resize band a window takes no input: a client-drawn shadow passes the pointer to what
-    /// lies below.
+    /// The popup surface under `pos` (global logical) of the window whose popups are drawn above every window and the
+    /// bars (`SceneLayer::Popups`, [`crate::render::scene::raised_popups_window`]), so the pointer finds them before
+    /// either. The popups of the other windows are part of their window ([`Self::window_target_under`]).
+    pub fn window_popup_under(&self, pos: Point<f64, Logical>) -> Option<WindowTarget> {
+        let out = self.output_at(pos)?;
+        let raised = crate::render::scene::raised_popups_window(&self.wm, out.id)?;
+        let (id, entry, plan) = self
+            .input_windows(pos)?
+            .into_iter()
+            .find(|(id, _, _)| *id == raised)?;
+        Self::popup_of_window_under(id, entry, &plan, pos)
+    }
+
+    /// What is under `pos` (global logical), from the top down: the raised popups of the key window
+    /// ([`Self::window_popup_under`]), then per window, in this order: the window control buttons of a unified bar, the
+    /// window's own popups (any other window's), the resize zones (3 pt inside to 4 pt outside the frame, also for a
+    /// client-decorated window, measured from its window geometry), the client's surface inside the frame, the title
+    /// bar and buttons of a server-decorated window. Outside the frame and its resize band a window takes no input: a
+    /// client-drawn shadow passes the pointer to what lies below.
     pub fn window_target_under(&self, pos: Point<f64, Logical>) -> Option<WindowTarget> {
         if let Some(popup) = self.window_popup_under(pos) {
             return Some(popup);
         }
         let out = self.output_at(pos)?;
         let now = self.now();
+        let raised = crate::render::scene::raised_popups_window(&self.wm, out.id);
         for (id, entry, plan) in self.input_windows(pos)? {
             let geo = entry.window.geometry();
             let ins = entry.insets();
@@ -1683,6 +1697,12 @@ impl Cupertino {
                         content,
                         local,
                     });
+                }
+            }
+            // the popups of a window other than the one whose popups are raised lie above it and its resize band
+            if Some(id) != raised {
+                if let Some(popup) = Self::popup_of_window_under(id, entry, &plan, pos) {
+                    return Some(popup);
                 }
             }
             // the title bar revealed with the menu bar over a full-screen window: its buttons act, the rest takes the
@@ -1789,8 +1809,8 @@ impl Cupertino {
         }
     }
 
-    /// Pointer focus target under `pos`: overlay layer surfaces, the popups of the other layer surfaces and of the
-    /// windows, top layer surfaces, windows, layer surfaces below (the drawing order).
+    /// Pointer focus target under `pos`: overlay layer surfaces, the popups of the other layer surfaces and of the key
+    /// window, top layer surfaces, windows (with the popups of the others), layer surfaces below (the drawing order).
     pub fn surface_under(
         &self,
         pos: Point<f64, Logical>,
@@ -1835,7 +1855,7 @@ impl Cupertino {
         if let Some(hit) = layer_hit(&[Layer::Overlay]) {
             return Some(hit);
         }
-        // the popups of the bars and of the windows are drawn above every window and bar (`SceneLayer::Popups`): a
+        // the popups of the bars and of the key window are drawn above every window and bar (`SceneLayer::Popups`): a
         // menu over the dock takes the pointer there
         let layer_popup_hit = || {
             let map = layer_map_for_output(&out.output);

@@ -16,8 +16,9 @@ pub enum SceneLayer {
     SnapPreview,
     /// Layer-shell `top` surfaces.
     LayerTop,
-    /// Popups of windows and of the layer-shell surfaces below the overlay layer (menus, popovers, tooltips): above
-    /// every window and the bars, so a menu that opens low on the screen covers the dock rather than going under it.
+    /// Popups of the key window and of the layer-shell surfaces below the overlay layer (menus, popovers, tooltips):
+    /// above every window and the bars, so a menu that opens low on the screen covers the dock rather than going under
+    /// it. Another window's popups stay with that window.
     Popups,
     /// Notification banners (above windows).
     Banners,

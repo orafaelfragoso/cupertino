@@ -1,7 +1,8 @@
 //! A window's popup that opens low on the screen lies over the dock: it is composed above the top layer-shell
 //! surfaces, its material reads the dock below it, and a click where the two overlap reaches the popup. One client maps
 //! a bar on the top layer at the bottom edge (as the dock does) and a window, then opens a popup with a `Menu`
-//! backdrop that reaches over the bar. Tests skip (pass) when no EGL device is available.
+//! backdrop that reaches over the bar. Only the key window's popups are raised so: a second window that comes in front
+//! keeps the first window's popup below it. Tests skip (pass) when no EGL device is available.
 
 mod common;
 
@@ -171,6 +172,7 @@ impl Harness {
 enum Role {
     Window,
     Popup,
+    Front,
 }
 
 struct Client {
@@ -178,6 +180,8 @@ struct Client {
     window: wl_surface::WlSurface,
     size: (i32, i32),
     popup: Option<wl_surface::WlSurface>,
+    /// The second window, mapped in front of the first once the popup is open.
+    front: Option<wl_surface::WlSurface>,
 }
 
 impl Client {
@@ -287,6 +291,11 @@ impl Dispatch<xdg_surface::XdgSurface, Role> for Client {
                     state.draw(surface, POPUP, [0; 4], qh);
                 }
             }
+            Role::Front => {
+                if let Some(surface) = &state.front {
+                    state.draw(surface, WINDOW, [255; 4], qh);
+                }
+            }
         }
     }
 }
@@ -313,17 +322,19 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, wl_surface::WlSurface> 
     }
 }
 
-/// The client: the bar and the window at once, the popup when `open` is set.
+/// The client: the bar and the window at once, the popup when `open` is set, a second window when `front` is set.
 struct App {
     open: Arc<AtomicBool>,
+    front: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 }
 
 impl App {
     fn spawn(socket: PathBuf) -> App {
         let open = Arc::new(AtomicBool::new(false));
+        let front = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
-        let (opening, stopping) = (open.clone(), stop.clone());
+        let (opening, fronting, stopping) = (open.clone(), front.clone(), stop.clone());
         std::thread::spawn(move || {
             let conn = Connection::from_socket(
                 UnixStream::connect(socket).expect("connecting to the compositor"),
@@ -363,7 +374,9 @@ impl App {
                 window,
                 size: WINDOW,
                 popup: None,
+                front: None,
             };
+            let mut front_toplevel: Option<xdg_toplevel::XdgToplevel> = None;
             let mut backdrop: Option<CupertinoBackdropV1> = None;
             while !stopping.load(Ordering::SeqCst) {
                 if queue.roundtrip(&mut client).is_err() {
@@ -387,13 +400,24 @@ impl App {
                     client.popup = Some(surface);
                     backdrop = Some(b);
                 }
+                if fronting.load(Ordering::SeqCst) && client.front.is_none() {
+                    let surface = compositor.create_surface(&qh, ());
+                    let xdg = wm_base.get_xdg_surface(&surface, &qh, Role::Front);
+                    let toplevel = xdg.get_toplevel(&qh, ());
+                    toplevel.set_app_id("org.example.popup-over-dock".into());
+                    toplevel.set_title("Front".into());
+                    surface.commit();
+                    client.front = Some(surface);
+                    front_toplevel = Some(toplevel);
+                }
                 std::thread::sleep(Duration::from_millis(5));
             }
             if let Some(b) = backdrop {
                 b.destroy();
             }
+            drop(front_toplevel);
         });
-        App { open, stop }
+        App { open, front, stop }
     }
 
     fn open_popup(&self) {
@@ -521,4 +545,73 @@ fn a_click_where_a_window_popup_overlaps_the_dock_reaches_the_popup() {
     if left > 210.0 {
         assert_eq!(h.under((205.0, 690.0)).as_deref(), Some("dock"));
     }
+}
+
+#[test]
+fn a_window_in_front_of_the_popups_window_covers_its_popup_and_takes_the_pointer() {
+    let Some((mut h, app)) = desktop() else {
+        return;
+    };
+    open_popup(&mut h, &app);
+    let back = h.state.wm.key_window().expect("a key window");
+    app.front.store(true, Ordering::SeqCst);
+    h.wait_until("the second window to map and take the keyboard", |s| {
+        s.windows.iter().filter(|w| w.mapped).count() == 2
+            && s.wm.key_window().is_some_and(|k| k != back)
+    });
+    h.settle();
+    assert!(h.popup_shown(), "the popup is still open");
+    let front = h.state.wm.key_window().unwrap();
+
+    // front to back: the second window, then the first window's popup with its window, all below the bar
+    let items = h.composed();
+    let popup = items
+        .iter()
+        .position(|(_, k)| *k == SceneKind::PopupContent)
+        .expect("the popup is composed");
+    assert_eq!(items[popup].0, SceneLayer::Windows, "{items:?}");
+    assert!(
+        !items.iter().any(|(l, _)| *l == SceneLayer::Popups),
+        "nothing of the window behind is raised: {items:?}"
+    );
+    let contents: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, k))| *k == SceneKind::WindowContent)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(contents.len(), 2, "{items:?}");
+    assert!(
+        contents[0] < popup && popup < contents[1],
+        "the popup lies between the window in front and its own window: {items:?}"
+    );
+
+    // the middle of the window in front, which the popup of the window behind reaches, belongs to the window in front
+    let frame = h.state.wm.window(front).unwrap().geometry();
+    let middle = (frame.x + frame.w / 2.0, frame.y + frame.h / 2.0);
+    let (id, ..) = h
+        .state
+        .window_surface_under(middle.into())
+        .expect("a window there");
+    assert_eq!(id, front, "the window in front takes the pointer");
+    assert_eq!(h.under(middle).as_deref(), Some("window"));
+    assert!(h.state.window_popup_under(middle.into()).is_none());
+
+    // the popup's window back in front and key: the popup is raised again and covers the other window
+    h.state
+        .command(cupertino_wm::Command::FocusWindow { window: back });
+    h.settle();
+    assert_eq!(h.state.wm.key_window(), Some(back));
+    assert_eq!(
+        h.under(middle).as_deref(),
+        Some("popup"),
+        "the popup reaches the middle of the other window"
+    );
+    let items = h.composed();
+    assert!(
+        items
+            .iter()
+            .any(|(l, k)| *l == SceneLayer::Popups && *k == SceneKind::PopupContent),
+        "{items:?}"
+    );
 }

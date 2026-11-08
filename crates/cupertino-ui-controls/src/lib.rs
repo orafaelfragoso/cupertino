@@ -1032,7 +1032,8 @@ pub enum SidebarLook {
     /// A file browser's list of places: taller rows with larger symbols, the selected row filled with a neutral grey
     /// and its label in the semibold weight, its symbol in the accent. The other rows' symbols are the accent in each
     /// section `accent` marks `true` (by the sections' order), the secondary label colour in the others and in a section
-    /// it does not reach. A section heading without rows is drawn alone.
+    /// it does not reach. In a window that is not active every symbol, the selected row's too, is the secondary label
+    /// colour. A section heading without rows is drawn alone.
     Neutral { accent: Vec<bool> },
 }
 

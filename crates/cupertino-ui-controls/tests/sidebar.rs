@@ -691,3 +691,37 @@ fn the_neutral_look_fills_the_selected_row_grey_and_tints_symbols_by_section() {
         "the selected row's symbol is the accent"
     );
 }
+
+#[test]
+fn the_neutral_looks_selected_symbol_turns_grey_with_the_others_when_the_window_is_not_active() {
+    let tints = std::sync::Arc::new(Tints::default());
+    let mut h =
+        Harness::<Neutral>::with_icons(cupertino_ui_layout::LayoutDirection::Ltr, tints.clone());
+    h.rt.window_system_mut()
+        .configure(
+            h.window,
+            Some(Size::new(200.0, 300.0)),
+            cupertino_ui_platform::WindowStates::default(),
+        )
+        .unwrap();
+    h.settle();
+    let normal = cupertino_ui_theme::StateVariant::NORMAL;
+    let theme = support::theme();
+    let secondary = theme.colors.get(ColorRole::SecondaryText, normal).unwrap();
+    let selection = theme
+        .colors
+        .get(ColorRole::QuaternaryLabel, normal)
+        .unwrap();
+    let asked: HashMap<String, _> = tints.asked.lock().unwrap().iter().cloned().collect();
+    for name in PLACES {
+        assert_eq!(
+            asked.get(&format!("symbol.{name}")).copied(),
+            Some(secondary),
+            "{name}: every symbol is the secondary label colour, the marked sections' and the selected row's too"
+        );
+    }
+    assert_ne!(
+        secondary, selection,
+        "the selected symbol stands out from the selection behind it"
+    );
+}

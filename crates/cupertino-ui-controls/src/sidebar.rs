@@ -572,21 +572,22 @@ impl<M: 'static> Widget<M> for Row<M> {
             }
         };
         if let Some(name) = &self.item.icon {
-            // in a window that is not active another row's icon is no longer the accent: it takes the secondary label
-            // colour, which keeps its contrast against the sidebar where the inactive accent would fade into it; the
-            // neutral look's selected row keeps the accent symbol, and its sections without the accent the secondary
+            // in a window that is not active no symbol is the accent: each takes the secondary label colour, which
+            // keeps its contrast against the sidebar and the neutral selection where the inactive accent would fade
+            // into them; in an active window the neutral look's selected row keeps the accent symbol, and its
+            // sections without the accent the secondary
             let accent = look::color(&theme, ColorRole::ControlFill, &selected);
             let secondary = theme
                 .colors
                 .get(ColorRole::SecondaryText, StateVariant::NORMAL);
             let tint = if self.selected && !neutral {
                 text
-            } else if neutral && self.selected {
-                accent
-            } else if !cx.window_active() || !self.style.accent {
+            } else if !cx.window_active() {
                 secondary
-            } else {
+            } else if self.selected || self.style.accent {
                 accent
+            } else {
+                secondary
             };
             if let Some(tint) = tint {
                 let area = Rect::new(

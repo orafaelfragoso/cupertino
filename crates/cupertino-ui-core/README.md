@@ -23,6 +23,7 @@ all on one thread.
 | `Runtime` | `new(window system, RuntimeOptions)`, `with_theme_for(hook)` (a new theme for each `PlatformEvent::Appearance`), `theme()`, `set_theme(theme)` (every window measures and paints again, focus and compositions stay; an equal theme changes nothing), `step(max_turns)` (non-blocking, never moves time, returns `StepStatus`), `run`, `protected_focus(window)`, `snapshot(window)`, `find`, `node_at`; `run` waits on the window system no longer than the earliest wake, and a test reads that time from `Pending::next_wake`. A focus change to the same node (only the keyboard ring shown or hidden) sends no blur or focus, only a repaint |
 | `RuntimeOptions` | theme, layout direction, node ceiling, a renderer factory (one renderer per window), an optional `AccessibilityAdapter` (told each `PlatformEvent::SessionLock` through `session_locked`), the `Clock`, an optional `on_window_error` handler |
 | `MonotonicClock` | `CLOCK_MONOTONIC`, the clock the window system stamps events with |
+| `Icons` | the widgets' images: `symbol(name, px, color, mirrored)`, and `application(px)`, the running application's own icon (`None` by default; `PlaceholderIcons` draws a square outline for both) |
 
 ## How it works
 

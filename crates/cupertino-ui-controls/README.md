@@ -33,6 +33,10 @@ from the application's model and reports changes as messages.
   `on_accessory`; without it the accessory reads as disabled. A busy row turns an activity indicator in the accessory's
   place, standing still under Reduce Motion. In a window that is not active the rows' icons take the secondary label
   colour.
+  `Sidebar::with_look(SidebarLook::Neutral { accent })` draws a list of places instead: taller rows with larger
+  symbols, the selected row filled with a neutral tint, its label semibold and its symbol in the accent colour; the
+  other rows' symbols are in the accent colour in the sections `accent` marks and in the secondary label colour in the
+  rest. The default look (`SidebarLook::Accent`, Settings') fills the selected row with the accent.
 - **Positions.** A menu item says its place among the menu's items and the menu says how many it holds, separators not
   counted; a tab and a page dot say their place and their tab list says its count.
 - **Outline table.** `OutlineTable` is a `TableView` whose rows form an outline, as a `TreeView`'s do: `item` gives
@@ -80,6 +84,9 @@ from the application's model and reports changes as messages.
   Escape closes one level and the focus goes back to its row, or to where the menu opened. The panel places the
   submenu's edge where it asked the compositor to put it, beside its row on the trailing side: a submenu the compositor
   flips to the other side keeps no triangle.
+  `MenuItem::Shortcut` is an item that shows the keys that choose it ("⇧⌘N") at its trailing edge in the secondary
+  label colour (the row's colour when it is highlighted or disabled), which assistive technology reads as its
+  description; the application binds the keys itself.
 - **Sliders.** `on_change` reports every value a drag passes; `on_end` reports the value once the change ends, when
   the pointer lets go or the drag is cancelled, and at once for a key or assistive technology step, so an
   application can write a level live and commit it once. With Increase Contrast the knob's ring (the control border

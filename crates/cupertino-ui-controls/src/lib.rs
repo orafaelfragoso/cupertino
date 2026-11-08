@@ -698,6 +698,16 @@ pub enum MenuItem<M> {
         checked: bool,
         on_select: M,
     },
+    /// An [`MenuItem::Item`] that shows the keys that choose it from the keyboard, as "⇧⌘N", at its trailing edge in the
+    /// secondary text colour; assistive technology reads them as the item's description. The application handles the
+    /// keys itself: the menu only shows them.
+    Shortcut {
+        label: String,
+        shortcut: String,
+        enabled: bool,
+        checked: bool,
+        on_select: M,
+    },
     /// Opens a menu of `items` beside itself on a click, Return, Space, the arrow toward the trailing side or once the
     /// pointer rests on it.
     Submenu {

@@ -67,6 +67,16 @@ fn item(label: &'static str, enabled: bool) -> MenuItem<Message> {
     }
 }
 
+fn shortcut(label: &'static str, keys: &str, enabled: bool) -> MenuItem<Message> {
+    MenuItem::Shortcut {
+        label: label.into(),
+        shortcut: keys.into(),
+        enabled,
+        checked: false,
+        on_select: Message::Choose(label),
+    }
+}
+
 fn sizes(model: &Model) -> PopUpButton<Message> {
     PopUpButton {
         label: "Size".into(),
@@ -135,8 +145,8 @@ impl Application for Editor {
                     label: "Canvas".into(),
                     items: vec![
                         item("Cut", true),
-                        item("Copy", true),
-                        item("Paste", false),
+                        shortcut("Copy", "\u{2318}C", true),
+                        shortcut("Paste", "\u{2318}V", false),
                         MenuItem::Separator,
                         MenuItem::Submenu {
                             label: "Share".into(),
@@ -490,6 +500,47 @@ fn assistive_technology_reads_a_menu_of_items_and_clicks_one() {
     assert_eq!(node(0).states.expanded, None);
     h.ask(&Key::from(1u64), Action::Click);
     assert_eq!(h.model().chosen, ["Copy"]);
+}
+
+#[test]
+fn an_items_shortcut_sits_at_its_trailing_edge_in_a_dimmer_colour_and_is_read_as_its_description() {
+    let mut h = Harness::<Editor>::assistive();
+    context(&mut h);
+    let description = |index: u64| semantic(&h, row(&h, index)).description;
+    assert_eq!(
+        (description(0), description(1), description(2)),
+        (
+            None,
+            Some("\u{2318}C".to_owned()),
+            Some("\u{2318}V".to_owned())
+        )
+    );
+    let glyphs = |index: u64| {
+        let id = PaintNodeId::from(row(&h, index));
+        let node = h
+            .snapshot()
+            .display_list
+            .nodes
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap();
+        node.ops
+            .into_iter()
+            .filter_map(|op| match op {
+                PaintOp::Glyphs { origin, color, .. } => Some((origin.x, color)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let copy = glyphs(1);
+    assert_eq!(copy.len(), 2, "the label and the keys");
+    let width = row_rect(&h, 1).width();
+    assert!(
+        copy[0].0 < 40.0 && copy[1].0 > width / 2.0,
+        "{copy:?} in {width}"
+    );
+    assert_ne!(copy[0].1, copy[1].1, "the keys are dimmer than the label");
+    assert_eq!(glyphs(0).len(), 1);
 }
 
 #[test]

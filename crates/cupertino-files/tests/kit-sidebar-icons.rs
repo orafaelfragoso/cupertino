@@ -174,3 +174,39 @@ fn an_inactive_windows_symbols_are_grey_and_the_selected_one_still_shows() {
         }
     }
 }
+
+#[test]
+fn the_symbols_turn_grey_when_the_keyboard_leaves_the_menu_for_another_application() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let mut run = run(appearance);
+        run.right_click_row("a.txt");
+        let menu = run.context_menu().expect("the item's menu is open");
+        let system = run.driver.window_system_mut();
+        system
+            .enqueue_window(run.window, WindowEvent::Focus(false))
+            .unwrap();
+        system
+            .enqueue_window(menu, WindowEvent::Focus(true))
+            .unwrap();
+        run.settle();
+        assert_accent(&mut run, &format!("{appearance:?}, with the menu open"));
+
+        // a press on another application takes the keyboard and dismisses the menu; this compositor tells the window
+        // nothing more, neither a keyboard enter nor a configure (the harness runs a turn per event, so the leave comes
+        // first, while the menu is still open to hear it)
+        let system = run.driver.window_system_mut();
+        system
+            .enqueue_window(menu, WindowEvent::Focus(false))
+            .unwrap();
+        system.enqueue_window(menu, WindowEvent::PopupDone).unwrap();
+        run.settle();
+        assert!(run.context_menu().is_none());
+        for name in ["Documents", "Downloads"] {
+            let (_, pixels) = symbol(&mut run, name);
+            assert!(
+                !pixels.iter().any(accent),
+                "{appearance:?}, the keyboard gone elsewhere: {name} is no longer the accent"
+            );
+        }
+    }
+}

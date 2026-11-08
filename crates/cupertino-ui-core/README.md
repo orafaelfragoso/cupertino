@@ -41,6 +41,8 @@ all on one thread.
   (`PaintCx::window_active`) while it has the keyboard or a popup opened from it has, as a menu takes the keyboard
   while its window stays the one in use. It stays so after the popup closes, until the window hears of the keyboard
   itself or a configure says it is no longer activated, so it does not flash inactive while the keyboard comes back.
+  A popup still open that loses the keyboard ends it, as the keyboard may have gone to another application without
+  the compositor deactivating the window.
   Keys, focus and `EventCx::window_active` follow the keyboard alone.
 - **Tasks.** `Command::Perform` futures run only inside a step, on the UI thread; a wake from any thread wakes the
   window system. Dropping the runtime cancels every task.

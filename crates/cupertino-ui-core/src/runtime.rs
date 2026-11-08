@@ -130,7 +130,7 @@ struct WindowState<M> {
     active: bool,
     /// A popup opened from this window has the keyboard, or had it as it closed and the window has not heard since
     /// where the keyboard went: the window still draws as active, as a menu takes the keyboard while the window it
-    /// opened from stays the one in use.
+    /// opened from stays the one in use. A popup that loses the keyboard while still open clears it.
     keyboard_in_popup: bool,
     /// The last configure said the window is maximized; a zoom asks for the other state.
     maximized: bool,
@@ -1065,13 +1065,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     /// Window `i` gained or lost the keyboard: a popup that gains it keeps the window its chain opens from drawn as
-    /// active, until that window hears of the keyboard itself.
+    /// active, until that window hears of the keyboard itself. A popup still open that loses it lets go: the keyboard
+    /// went to another popup of the chain, which takes the window up again in the same dispatch, or somewhere else,
+    /// which a compositor need not tell the window. One that closed before is no longer here to hear of it.
     fn keyboard_moved(&mut self, i: usize, focused: bool) {
         if self.windows[i].popup.is_none() {
             self.windows[i].keyboard_in_popup = false;
-            return;
-        }
-        if !focused {
             return;
         }
         let mut key = self.windows[i].key.clone();
@@ -1086,7 +1085,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
         }
         if let Some(opener) = self.windows.iter().position(|w| w.key == key) {
-            if !std::mem::replace(&mut self.windows[opener].keyboard_in_popup, true) {
+            if std::mem::replace(&mut self.windows[opener].keyboard_in_popup, focused) != focused {
                 self.invalidate_window(opener);
             }
         }

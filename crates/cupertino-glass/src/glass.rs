@@ -17,9 +17,11 @@
 //!    band's inner side: what lies past the edge bends into the rim.
 //! 4. **Bleed.** The widest blur level, mapped to the encoded range `[black, white]` after its own saturation, blends
 //!    into the face over a band `height` wide at `amount` percent: lighten on dark glass, darken on light glass.
-//! 5. **Key/fill highlight.** A thin rim band (half-width `height`, centred `offset` from the edge) lights the arc of
-//!    edge facing `angle` (width `spread`, falloff exponent `curvature`) towards the key colour `matrix · face`, and the
-//!    opposite arc towards the same colour shifted by `color_bias`, both at `amount`.
+//! 5. **Key/fill highlight.** A thin rim band (half-width `height`, centred `offset` from the edge) adds light along
+//!    the axis through `angle`: the key colour `matrix · face` at `amount` on the arc of edge facing `angle`, and the
+//!    same light at `amount · (1 + color_bias)` on the arc facing the opposite way, so the rim reads lit at both ends
+//!    of the axis. Each arc fades with the angle from its end of the axis ([`highlight_lobe`]: width `spread`,
+//!    exponent `curvature`) to nothing towards the sides.
 //! 6. **Shadow and ring shadow.** Outside the shape: a drop shadow offset by `offset`, blurred by `height` at
 //!    `amount` percent of its fill's alpha, and a ring `stroke` wide, offset by `ring_offset` and blurred by
 //!    `ring_blur`. Each is drawn at its opacity, which is 0 at rest.
@@ -232,21 +234,28 @@ fn angle_between(a: f32, b: f32) -> f32 {
     d.min(std::f32::consts::TAU - d)
 }
 
-/// How strongly an edge whose outward normal points at `normal_angle` is lit by a light at `light`, for an arc
-/// `spread` wide with falloff exponent `curvature`.
+/// How strongly an edge whose outward normal points at `normal_angle` is lit from `light`: a raised cosine of the angle
+/// between them, full where they agree and falling to nothing [`LOBE_REACH`] of `spread` away, with exponent
+/// `curvature`. For a light from the top and a spread of 120° the lobe ends at the sides, still lighting much of the
+/// corners on its way.
 pub fn highlight_lobe(normal_angle: f32, light: f32, spread: f32, curvature: f32) -> f32 {
-    if spread <= 0.0 {
+    let reach = spread * LOBE_REACH;
+    if reach <= 0.0 {
         return 0.0;
     }
-    let x = angle_between(normal_angle, light) / spread * std::f32::consts::PI;
-    if x >= std::f32::consts::FRAC_PI_2 {
+    let a = angle_between(normal_angle, light);
+    if a >= reach {
         return 0.0;
     }
-    x.cos().max(0.0).powf(curvature.max(1e-3))
+    (0.5 + 0.5 * (a / reach * std::f32::consts::PI).cos()).powf(curvature.max(1e-3))
 }
 
+/// How far from its end of the axis a highlight arc reaches, as a share of the spread.
+pub const LOBE_REACH: f32 = 0.75;
+
 /// Stage 5: the key and fill rim lights on the face `c` at distance `d` (negative inside, points) from the edge, with
-/// outward `normal` in y-down coordinates.
+/// outward `normal` in y-down coordinates: the key colour added at the end of the axis the light comes from, and at
+/// the other end the same light weakened by the colour bias.
 pub fn highlight(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
     let h = &p.highlight;
     if h.amount <= 0.0 || h.height <= 0.0 || (normal[0] == 0.0 && normal[1] == 0.0) {
@@ -256,19 +265,16 @@ pub fn highlight(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
     let band = (-x * x).exp();
     // y up for the angle
     let normal_angle = (-normal[1]).atan2(normal[0]);
-    let key_w = h.amount * band * highlight_lobe(normal_angle, h.angle, h.spread, h.curvature);
-    let fill_w = h.amount
-        * band
-        * highlight_lobe(
-            normal_angle,
-            h.angle + std::f32::consts::PI,
-            h.spread,
-            h.curvature,
-        );
-    let key = matrix_rgb(&h.matrix, c);
-    let fill = key.map(|v| (v + h.color_bias).clamp(0.0, 1.0));
-    let c = mix(c, key, key_w);
-    mix(c, fill, fill_w)
+    let key = highlight_lobe(normal_angle, h.angle, h.spread, h.curvature);
+    let fill = highlight_lobe(
+        normal_angle,
+        h.angle + std::f32::consts::PI,
+        h.spread,
+        h.curvature,
+    );
+    let w = h.amount * band * (key + fill * (1.0 + h.color_bias).max(0.0));
+    let light = matrix_rgb(&h.matrix, c);
+    std::array::from_fn(|i| (c[i] + light[i] * w).min(1.0))
 }
 
 fn matrix_rgb(m: &ColorMatrix, c: Rgb) -> Rgb {
@@ -755,21 +761,56 @@ mod tests {
     }
 
     #[test]
-    fn highlight_lights_the_top_edge_and_shades_the_bottom() {
+    fn highlight_lights_the_top_and_the_bottom_edge_and_not_the_sides() {
         let p = params(true);
-        let face = [0.5; 3];
+        let face = [0.2, 0.15, 0.6];
         let top = highlight(face, -0.5, [0.0, -1.0], &p);
         let bottom = highlight(face, -0.5, [0.0, 1.0], &p);
         let side = highlight(face, -0.5, [1.0, 0.0], &p);
-        assert!(top[0] > face[0], "key light: {top:?}");
+        for i in 0..3 {
+            assert!(
+                top[i] > face[i],
+                "the key light lifts every channel: {top:?}"
+            );
+            assert!(
+                bottom[i] > face[i],
+                "the fill end of the axis is lit too: {bottom:?}"
+            );
+        }
         assert!(
             bottom[0] < top[0],
-            "fill side is darker than the key: {bottom:?}"
+            "a little less than the key: {bottom:?} {top:?}"
         );
-        assert_eq!(side, face, "outside both arcs of 120°");
+        assert!(
+            bottom[0] - face[0] > 0.6 * (top[0] - face[0]),
+            "but nearly as bright: {bottom:?} {top:?}"
+        );
+        assert_eq!(side, face, "nothing at the sides");
+        // around a corner the light fades gradually rather than ending early
+        let corner = highlight(
+            face,
+            -0.5,
+            [
+                std::f32::consts::FRAC_1_SQRT_2,
+                -std::f32::consts::FRAC_1_SQRT_2,
+            ],
+            &p,
+        );
+        let (lift, full) = (corner[0] - face[0], top[0] - face[0]);
+        assert!(lift > 0.4 * full && lift < full, "{lift} of {full} at 45°");
         let deep = highlight(face, -6.0, [0.0, -1.0], &p);
         assert!(close(deep[0], face[0], 1e-3), "the rim is thin");
         assert_eq!(highlight_lobe(0.0, 0.0, 1.0, 0.75), 1.0);
+        let spread = p.highlight.spread;
+        assert_eq!(highlight_lobe(spread * LOBE_REACH, 0.0, spread, 0.75), 0.0);
+        let mut lobe = [0.0f32; 6];
+        for (i, l) in lobe.iter_mut().enumerate() {
+            *l = highlight_lobe(i as f32 * 0.25, 0.0, spread, 0.75);
+        }
+        assert!(
+            lobe.windows(2).all(|w| w[1] < w[0]),
+            "falls steadily: {lobe:?}"
+        );
     }
 
     #[test]

@@ -110,24 +110,25 @@ pub struct GlassBleed {
     pub darken: bool,
 }
 
-/// The key light along the edge facing the light and the fill along the opposite edge.
+/// The rim light along the axis of the light: the key along the edge facing the light and the fill, the same light a
+/// little weaker, along the opposite edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassHighlight {
     /// Strength of the rim light.
     pub amount: f32,
     /// Direction the light comes from, in radians, counter-clockwise from the right with y up (π/2 is the top).
     pub angle: f32,
-    /// Angular width of the lit arc in radians.
+    /// Angular width of each lit arc in radians; an arc fades to nothing three quarters of it from its end of the axis.
     pub spread: f32,
     /// Half-width of the rim band in points.
     pub height: f32,
     /// Where the band's centre lies relative to the edge, in points (negative is inside).
     pub offset: f32,
-    /// Tone of the fill side: the face is scaled by `1 + color_bias` there.
+    /// Strength of the fill side: the key light is scaled by `1 + color_bias` there.
     pub color_bias: f32,
     /// Exponent on the lit arc's falloff.
     pub curvature: f32,
-    /// Colour of the key light, from the face colour under it.
+    /// Colour of the light added to the rim, from the face colour under it.
     pub matrix: ColorMatrix,
 }
 

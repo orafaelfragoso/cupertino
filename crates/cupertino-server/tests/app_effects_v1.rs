@@ -153,6 +153,8 @@ enum Cmd {
         radius: f64,
     },
     SetAlpha(f64),
+    /// `set_glass(style, container, spacing)`.
+    SetGlass(cupertino_backdrop_v1::GlassStyle, u32, f64),
     SetKeyboard(zwlr_layer_surface_v1::KeyboardInteractivity),
     Commit,
 }
@@ -271,7 +273,8 @@ impl TestClient {
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
             let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
-            let effects: CupertinoAppEffectsV1 = globals.bind(&qh, 1..=1, ()).unwrap();
+            // version 6 for set_glass
+            let effects: CupertinoAppEffectsV1 = globals.bind(&qh, 1..=6, ()).unwrap();
             let surface = compositor.create_surface(&qh, ());
             let layer = layer_shell.get_layer_surface(
                 &surface,
@@ -308,6 +311,9 @@ impl TestClient {
                             radius,
                         } => client.backdrop.set_shape(x, y, width, height, radius),
                         Cmd::SetAlpha(a) => client.backdrop.set_alpha(a),
+                        Cmd::SetGlass(style, container, spacing) => {
+                            client.backdrop.set_glass(style, container, spacing)
+                        }
                         Cmd::SetKeyboard(mode) => layer.set_keyboard_interactivity(mode),
                         Cmd::Commit => client.surface.commit(),
                     }
@@ -440,6 +446,7 @@ fn an_exclusive_layer_surface_takes_the_keyboard_and_gives_it_back() {
 const UNKNOWN_MATERIAL: u32 = 0;
 const INVALID_SHAPE: u32 = 1;
 const INVALID_ALPHA: u32 = 2;
+const INVALID_GLASS: u32 = 3;
 
 fn assert_posts_error(cmd: Cmd, code: u32) {
     let Some(mut h) = Harness::new() else { return };
@@ -487,6 +494,59 @@ fn negative_size_or_radius_is_a_protocol_error() {
 #[test]
 fn alpha_outside_zero_to_one_is_a_protocol_error() {
     assert_posts_error(Cmd::SetAlpha(1.5), INVALID_ALPHA);
+}
+
+#[test]
+fn negative_glass_spacing_is_a_protocol_error() {
+    assert_posts_error(
+        Cmd::SetGlass(cupertino_backdrop_v1::GlassStyle::Regular, 1, -4.0),
+        INVALID_GLASS,
+    );
+}
+
+/// `set_glass` and `set_material` replace each other: the one sent last decides how the backdrop draws.
+#[test]
+fn the_last_of_set_glass_and_set_material_decides_the_look() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn(h.socket_path());
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    assert_eq!(h.backdrops()[0].glass, None);
+    client.send(Cmd::SetGlass(
+        cupertino_backdrop_v1::GlassStyle::Clear,
+        2,
+        12.0,
+    ));
+    client.send(Cmd::Commit);
+    h.wait_until("the glass commit", |s| {
+        layer_backdrops(&s.outputs[0].output)
+            .iter()
+            .any(|b| b.glass.is_some())
+    });
+    let glass = h.backdrops()[0].glass.unwrap();
+    assert_eq!(
+        (glass.style, glass.container, glass.spacing),
+        (cupertino_theme::GlassStyle::Clear, 2, 12.0)
+    );
+    client.send(Cmd::SetMaterial("Menu"));
+    client.send(Cmd::Commit);
+    h.wait_until("the material commit", |s| {
+        layer_backdrops(&s.outputs[0].output)
+            .iter()
+            .all(|b| b.glass.is_none())
+    });
+    assert_eq!(summary(&h.backdrops())[0].0, "Menu");
+    // a glass material name is glass on its own again
+    client.send(Cmd::SetMaterial("Glass"));
+    client.send(Cmd::Commit);
+    h.wait_until("the glass material commit", |s| {
+        layer_backdrops(&s.outputs[0].output)
+            .iter()
+            .any(|b| b.glass.is_some())
+    });
+    assert_eq!(h.backdrops()[0].glass.unwrap().container, 0);
+    assert_eq!(client.backdrop_error(), None);
 }
 
 /// The GLES material pass (shaders ported from `cupertino-glass`) against the CPU reference of the
@@ -660,7 +720,7 @@ fn glass_pass_matches_the_cpu_model() {
         let mean = sum / n as f64;
         eprintln!("glass dark={dark} {display:?}: mean abs diff {mean:.3}, max {max}");
         assert!(
-            mean < 1.5 && max <= 24,
+            mean < 1.0 && max <= 8,
             "glass dark={dark} {display:?}: GLES vs CPU mean {mean:.3} max {max}"
         );
         assert!(changed > 400 * 160 / 2, "the glass pass ran");

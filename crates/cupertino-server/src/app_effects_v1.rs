@@ -527,7 +527,11 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                     );
                     return;
                 }
-                data.edit(|e| e.material = Some(name));
+                // the last of set_material and set_glass wins
+                data.edit(|e| {
+                    e.material = Some(name);
+                    e.glass = None;
+                });
             }
             cupertino_backdrop_v1::Request::SetShape {
                 x,

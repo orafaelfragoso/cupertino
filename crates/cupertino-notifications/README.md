@@ -49,10 +49,31 @@ surface, ends the process with a failure status so the server restarts it.
   (by its distance, offsets kept on whole points) and the keyboard (Up, Down, Page Up, Page Down, Home, End); Tab moves
   between the cards and their buttons and the list follows the focus. On a focused card Return, keypad Enter and Space run its
   default action and Delete or Backspace clears it; the focus then goes to the card in its place (its group's next one, else the next group's, else the one before).
-- **Session.** On `locked` an open list closes and no window stays open until the unlock: the lock screen hides
-  them, so assistive technology has nothing of them to read. Banners expire on their own, a banner shown while locked
-  after `lock_screen_lifetime` (10 s); one still on screen at the unlock appears then and is announced, unless it is
-  already sliding out.
+- **Session.** The host passes the compositor's lock state (`cupertino_appearance_v1`'s session lock event) to
+  `set_screen_locked(locked, now)`. At the lock an open list closes and no window stays open until the unlock: the lock
+  screen hides them, so assistive technology has nothing of them to read. The banner on screen stops counting down and
+  keeps the rest of its lifetime; the waiting banner goes to the centre. While locked no banner is shown or counted
+  down: a new notification goes straight to the centre (a transient one is closed, reason 4), and a replacement of the
+  frozen banner updates it in place, frozen with a whole lifetime. At the unlock the frozen banner shows again and counts
+  down what it had left, at least the minimum time on screen (1 s); it is quiet (`is_quiet`), so assistive technology
+  does not hear it again, while its next update in place and every new arrival are heard.
+- **Lock screen.** While locked, `lock_screen()` lists the notifications that arrived since the lock and are still in
+  the centre, newest first, at most `LOCK_SCREEN_LIMIT` (20), from the applications whose policy allows the lock
+  screen; a notification held back by Do Not Disturb is not listed. Each is its id, application name, title and body;
+  unless the application's previews are Always, the title is "Notification" (`REDACTED_TITLE`) and the body empty, so
+  the rest never leaves this process. The body is cut to `LOCK_SCREEN_BODY_CHARS` (256). The lock screen
+  (`cupertino-login`) reads the list over the bus (`LockScreenNotifications`, below), which is empty while unlocked.
+- **Policy.** `notifications.conf` (`cupertino_defaults::notifications`, written by Settings > Notifications) holds Show
+  on lock screen (on by default) and Show previews (Always, When Unlocked by default, Never), each with a per-application
+  override. The application id is the `desktop-entry` hint, else the application name (`Notification::group_key`). The
+  daemon reads the file at start and follows its changes (`set_policy`). Never also hides the content of the
+  application's banners and centre cards while unlocked (`shown`, `redacted`): its application, the title
+  "Notification", no body, image or action buttons; a click still runs the default action. Changing the policy
+  measures the cards again.
+- **Bounds.** `Notify` cuts the application name to `MAX_APP_NAME_CHARS` (64), the summary to `MAX_SUMMARY_CHARS`
+  (256) and the body to `MAX_BODY_CHARS` (8192) characters, each cut ending in an ellipsis (`notification::cap`), so the
+  model, the bus replies and the lock screen never hold more. The cards cut again where they draw: the summary and
+  application name by the same caps, the body at its byte bound and line limit, all ending in an ellipsis.
 - **Accessibility.** A banner is a live region, polite or assertive when critical, so a screen reader reads it as it
   arrives without the banner taking the focus. The AT-SPI bridge announces a live node only as it appears or is
   renamed, and says its name alone, so the banner is named after the words it shows (`view::banner_speech`): its
@@ -62,7 +83,8 @@ surface, ends the process with a failure status so the server restarts it.
   Each banner a sighted user sees is said as it shows: a waiting banner as it takes the screen, and one a newer
   banner replaced in the waiting slot never, as it goes straight to the centre. A banner on screen whose window comes
   back (at the unlock, or as the centre closes) is said again; one sliding out is no longer live, so it is not said as
-  it leaves. Nothing is said or readable while the session is locked (see Session); Cupertino has no setting that hides a notification's content otherwise. The centre
+  it leaves. Nothing is said or readable while the session is locked, and nothing already said is said again at the
+  unlock (see Session); an application whose previews are Never is said as its application and "Notification". The centre
   is a group named "Notification Centre" holding a list of its cards (list items with their position); its cards are
   not live. Each is named "app: summary" with its whole body as description, read as a reader moves to it, and a
   group's front card says how many more it holds. The first card takes the focus when the list opens. Every card, close button and action button takes assistive technology's click, and the disclosure button reports
@@ -101,6 +123,9 @@ The process owns `org.freedesktop.Notifications` on the session bus. It requests
 | `SetDoNotDisturb(b) | Turns do not disturb on (until turned off) or off. The caller is checked (`cupertino-peer`): a Flatpak, a Snap or a caller the bus cannot name is refused with an `org.cupertino.Error.*` name and nothing changes; other processes of the user may call it. |
 | `SetDoNotDisturbFor(s) (same caller check) | Turns it on for one of the `FocusLifetimes` rows (`a(ss): identifier and title, in menu order). |
 | `DoNotDisturb` property | Tells whether it is in effect, with change signals, also when a duration runs out. The menu bar's Focus item shows these rows. |
+| `LockScreenNotifications` → `a(usss)` | The lock screen's list (`lock_screen()`): id, application, title and body of each, already redacted by the policy; empty while unlocked. Same caller check as `SetDoNotDisturb`. |
+| `Applications` → `a(ss)` | The applications of the notifications on screen and in the centre: the id their settings are kept under and their name, for Settings > Notifications. Same caller check. |
+| `LockScreenChanged` signal | The lock screen's list changed (an arrival, a replacement, a close, the lock or the unlock, a policy change). It carries nothing, so no content goes out to every listener on the bus: the lock screen asks for the list again, and again whenever the daemon's name changes owner. |
 
 Close reasons: expired 1, dismissed 2 (swipe, click without default action, clear, action invocation), closed 3, undefined 4
 (history trimmed or dropped while do-not-disturb).
@@ -109,10 +134,10 @@ Close reasons: expired 1, dismissed 2 (swipe, click without default action, clea
 
 | Module | Content |
 |---|---|
-| `center` | `NotificationCenter` (pure model), `CenterConfig` (`TimeoutPolicy`, `StackLayout`, `SwipeConfig`, `Motion`) |
+| `center` | `NotificationCenter` (pure model), `CenterConfig` (`TimeoutPolicy`, `StackLayout`, `SwipeConfig`, `Motion`), the lock state and the lock screen's list (`LockItem`), the policy of `notifications.conf` |
 | `focus` | The Focus durations: `offered` (by local hour), `end` (when a row started now ends), `LocalCalendar` (`SystemCalendar` with feature `dbus`) |
 | `stack` | `GroupStack`, `StackCard`: geometry of a collapsed group in the notification centre |
-| `notification` | `NotifyInput`, `Notification`, `Hints`, `ImageData`, `Urgency`, `CloseReason`, `Expire` |
+| `notification` | `NotifyInput`, `Notification`, `Hints`, `ImageData`, `Urgency`, `CloseReason`, `Expire`, the caps of the application name, summary and body (`cap`, `NotifyInput::capped`) |
 | `markup` | Body markup subset (`<b> <i> <u> <a href> <img alt>), entity decoding |
 | `view` | The banner and centre windows (`windows`), the user's `Input` and `apply` carrying it out on the model, `CardMetrics`, `strip_width` |
 | `dbus` (feature `dbus`) | `Server`, `ServerOptions`, `parse_hints` |
@@ -192,6 +217,7 @@ cargo test -p cupertino-notifications
 
 | Test | Proves |
 |---|---|
-| `tests/dbus_integration.rs` | The server against a real client on a private `dbus-daemon`. Skipped when `dbus-daemon` is not installed. |
-| `tests/kit_goldens.rs` | The Kit windows on the headless window system against the Inspector dumps in `tests/goldens/`: a banner sliding in and at rest, a critical one taking over, with the screen-reader announcements (`banner`); the centre with a stacked group (`centre-stacked`); a swipe dragged 60 pt and mid-dismissal (`swipe-dismiss`). `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. Geometry and interaction: a long banner body wraps inside its card and stops at its line limit; the centre scrolls with the wheel, the touchpad and the keyboard and a click hits the card shown there; a banner's close button stays under the pointer past the card's edge and dismisses it; the disclosure button unfolds and folds a body; the keyboard activates and clears cards, the focus following to the card in a cleared one's place, the close button clears one and Escape closes an empty centre; each card's material region is its card and Reduce Transparency paints fills. Screen reader, through `cupertino-ui-test`'s stand-in reader, which announces as the AT-SPI bridge does (a live node's name, as it appears or is renamed): a new banner says its application, title and body and not its buttons; a banner updated in place is said again; nothing is said or readable while locked and the banner on screen is said at the unlock, not one sliding out; banners arriving together are each said as they show; announcing never takes the focus; a reader's click on an action button invokes it; the centre's cards carry their whole body as description. |
-| `src/view/tests.rs` | `CardMetrics` against the built-in font: heights follow the text, wrapping, line limits and ellipsis, kept line breaks, the body byte bound, links cut at the ellipsis, buttons sharing a row, the close button on the corner clear of the icon and in the banner's input region, a banner's speech (order, spacing, the cut body), no window while locked, and the `apply` of scroll, unfold, clear and close. |
+| `tests/dbus_integration.rs` | The server against a real client on a private `dbus-daemon`. Skipped when `dbus-daemon` is not installed. `Notify` caps the application name, summary and body; the lock screen gets only what the policy allows (redacted, full with Always, nothing for an application kept off it, empty unlocked), `LockScreenChanged` at each change, and `Applications`. |
+| `src/center/tests.rs` | The model: arrival, transient and Do Not Disturb while locked; a replacement while locked stays in the centre or updates the frozen banner; locking freezes the banner on screen and sends the waiting one to the centre; the unlock resumes it quietly for at least the minimum time, while an update is heard; a per-application override; each preview policy on the lock screen and the banners; the list bounded and capped; `applications`. |
+| `tests/kit_goldens.rs` | The Kit windows on the headless window system against the Inspector dumps in `tests/goldens/`: a banner sliding in and at rest, a critical one taking over, with the screen-reader announcements (`banner`); the centre with a stacked group (`centre-stacked`); a swipe dragged 60 pt and mid-dismissal (`swipe-dismiss`). `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. Geometry and interaction: a long banner body wraps inside its card and stops at its line limit; the centre scrolls with the wheel, the touchpad and the keyboard and a click hits the card shown there; a banner's close button stays under the pointer past the card's edge and dismisses it; the disclosure button unfolds and folds a body; the keyboard activates and clears cards, the focus following to the card in a cleared one's place, the close button clears one and Escape closes an empty centre; each card's material region is its card and Reduce Transparency paints fills. Screen reader, through `cupertino-ui-test`'s stand-in reader, which announces as the AT-SPI bridge does (a live node's name, as it appears or is renamed): a new banner says its application, title and body and not its buttons; a banner updated in place is said again; nothing is said or readable while locked and nothing is said again at the unlock, while the next update of the banner back on screen is; an application without previews shows and says only its name and "Notification"; banners arriving together are each said as they show; announcing never takes the focus; a reader's click on an action button invokes it; the centre's cards carry their whole body as description. |
+| `src/view/tests.rs` | `CardMetrics` against the built-in font: heights follow the text, wrapping, line limits and ellipsis, kept line breaks, the body byte bound, links cut at the ellipsis, buttons sharing a row, the close button on the corner clear of the icon and in the banner's input region, a banner's speech (order, spacing, the cut body), the caps drawn with an ellipsis, no window while locked, and the `apply` of scroll, unfold, clear and close. |

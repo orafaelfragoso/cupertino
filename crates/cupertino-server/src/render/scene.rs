@@ -13,6 +13,7 @@ use cupertino_scene::{
     Clip, ImageRole, OutputPoint, Placement, RoundedRect, SceneItem, SceneKind, Shadow, Source,
     SurfaceRole,
 };
+use cupertino_theme::glass::adapts_foreground;
 use cupertino_theme::{Appearance, MaterialOptions, Theme};
 use cupertino_wm::{OutputId, Presentation, Rect, WindowId, Wm};
 use smithay::backend::renderer::element::Element;
@@ -32,7 +33,7 @@ use super::compose::{
 };
 use super::gles::{Gles, GlesCompletion, GlesResources, GlesTarget};
 use super::lower::id_hash;
-use super::material::glass::{area_generation, Below, GlassContainer};
+use super::material::glass::{area_generation, Below, GlassContainer, ToneProbe};
 use super::material::{GpuRecipe, MaterialStage, SharedMaterial};
 use super::mesh::{MeshGl, SharedMesh};
 use super::motion::{cross_fade_opacity, skips_frame_animation, WorkspaceTransition};
@@ -1569,12 +1570,42 @@ fn glass_pieces(p: &SceneParams<'_>, members: &[&BackdropArea], opacity: f32) ->
     if !ready {
         return glass_fallback(p, SceneKind::Backdrop, index, &container, alpha);
     }
+    let probes = tone_probes(members);
+    if probes.is_empty() {
+        if let Some(m) = &p.res.material {
+            m.borrow_mut().note_unadapted(members.iter().map(|b| b.key));
+        }
+    }
     vec![Piece::Glass(Box::new(super::compose::Glass {
-        glass: Rc::new(GlassContainer::new(container)),
+        glass: Rc::new(GlassContainer::new(container).with_probes(probes)),
         kind: SceneKind::Backdrop,
         index,
         opacity: alpha,
     }))]
+}
+
+/// The glass backdrops of a container (`members`) whose text follows what lies behind them: every one when the
+/// container's bounds are small enough ([`adapts_foreground`]), none otherwise, so the shapes of a larger panel keep
+/// the appearance together.
+fn tone_probes(members: &[&BackdropArea]) -> Vec<ToneProbe> {
+    let Some(bounds) = members.iter().map(|b| b.area).reduce(|a, b| a.merge(b)) else {
+        return Vec::new();
+    };
+    if !adapts_foreground(bounds.size.w.min(bounds.size.h) as f32) {
+        return Vec::new();
+    }
+    members
+        .iter()
+        .map(|b| ToneProbe {
+            serial: b.key,
+            rect: [
+                b.area.loc.x as f32,
+                b.area.loc.y as f32,
+                b.area.size.w as f32,
+                b.area.size.h as f32,
+            ],
+        })
+        .collect()
 }
 
 /// Translucent fills standing in for a glass container, one per shape.

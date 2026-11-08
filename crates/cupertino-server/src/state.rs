@@ -617,6 +617,8 @@ pub struct Cupertino {
     pub outputs: Vec<OutputEntry>,
     pub shell: Shell,
     pub render: Option<RenderResources>,
+    /// The tone each glass backdrop's text was last sent ([`crate::app_effects_v1::BackdropTones`]).
+    pub backdrop_tones: crate::app_effects_v1::BackdropTones,
     pub backend: Option<Backend>,
     pub next_window: u64,
     pub next_output: u64,
@@ -917,6 +919,7 @@ impl Cupertino {
             outputs: Vec::new(),
             shell,
             render: None,
+            backdrop_tones: Default::default(),
             backend: None,
             next_window: 1,
             next_output: 1,

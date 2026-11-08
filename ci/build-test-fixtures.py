@@ -75,7 +75,7 @@ def main() -> int:
         parser.error('provide the test command after --')
     os.environ["CARGO_INCREMENTAL"] = "0"
     lease = os.environ.get('CUPERTINO_BUILD_LOCK_FD')
-    inherited = () if lease is None else (int(lease),)
+    inherited = () if lease is None else tuple(map(int, lease.split(',')))
     for descriptor in inherited:
         os.fstat(descriptor)
     build = [os.environ.get('CARGO', 'cargo'), 'build', '--all-features', '--all-targets', '--timings',

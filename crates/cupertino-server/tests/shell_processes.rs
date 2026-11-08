@@ -2757,13 +2757,19 @@ fn shown(lines: &[String]) -> String {
 /// The server binary with `mode` (`--headless` or `--winit`): it listens on its own socket and connects its output.
 /// `None` when the output cannot be made for want of an EGL device, unless `CUPERTINO_EGL_REQUIRED=1` (CI), which makes
 /// that a failure. A nested server logs its Wayland traffic with the host, so a host that never configures the window
-/// is named as such.
-fn start_server_binary(mode: &str) -> Option<Daemon> {
+/// is named as such. The server gets a bus of its own (none without `dbus-daemon`): on the desktop's session bus, its
+/// names would meet those of the person's session and of another test run at the same time.
+fn start_server_binary(mode: &str) -> Option<(Daemon, Option<PrivateBus>)> {
     let config = TempDir::new(&format!("server-binary{mode}"));
+    let bus = PrivateBus::start();
+    let address = bus
+        .as_ref()
+        .map_or("unix:path=/nonexistent", |bus| bus.address.as_str());
     let mut command = Command::new(env!("CARGO_BIN_EXE_cupertino-server"));
     command
         .args([mode, "--size", "800x600"])
         .env("XDG_CONFIG_HOME", &config.0)
+        .env("DBUS_SESSION_BUS_ADDRESS", address)
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     if mode == "--winit" {
@@ -2820,7 +2826,8 @@ fn start_server_binary(mode: &str) -> Option<Daemon> {
         "{}",
         lines.join("\n")
     );
-    Some(server)
+    // the server is dropped, and so stopped, before its bus
+    Some((server, bus))
 }
 
 /// The shipped server binary starts headless: it listens and connects its output.

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Keep Cargo targets private to a worktree and serialize expensive local builds.
+"""Keep Cargo targets private to a worktree and bound how many expensive local builds run at once.
 
-Run from the worktree root. All cooperating worktrees use one per-user lock;
-the child inherits it, so killing this wrapper does not release a running build.
+Run from the worktree root. All cooperating worktrees share per-user build slots: `run`, a plain
+`prepare` and `cleanup --target` take one of N slots (--slots or CUPERTINO_BUILD_SLOTS, default 3)
+and give their child about 1/N of the processors; seed and package operations take every slot.
+The child inherits its slot locks, so killing this wrapper does not release a running build.
 Seeds are explicitly promoted snapshots, never arbitrary target directories.
 """
 import argparse
@@ -29,6 +31,16 @@ DISK_FLOOR = 30 * 1024**3
 SEED_LIMIT = 1
 SEED_AGE = 7 * 24 * 60 * 60
 MARKER = ".cupertino-build.json"
+# How many shared operations run at once unless --slots or the variable below says otherwise.
+DEFAULT_SLOTS = 3
+SLOTS_VARIABLE = "CUPERTINO_BUILD_SLOTS"
+# An exclusive operation takes every slot up to this bound, whatever N each caller chose.
+MAX_SLOTS = 16
+# How often a waiter checks the queue and the slots again, in seconds.
+POLL = 0.2
+# Parallelism caps given to a shared operation's child: they change how fast it runs, never what it produces.
+JOB_VARIABLES = ("CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS", "RUST_TEST_THREADS")
+UNFINGERPRINTED = frozenset({"CARGO_TARGET_DIR", "CUPERTINO_BUILD_LOCK_FD", SLOTS_VARIABLE, *JOB_VARIABLES})
 # Match compiler/build-tool inputs without tying snapshots to a terminal, credential or agent session.
 BUILD_ENV_NAMES = frozenset({
     "PATH", "HOME", "CC", "CXX", "CPP", "AS", "AR", "LD", "NM", "RANLIB", "STRIP", "OBJCOPY", "OBJDUMP",
@@ -64,13 +76,144 @@ def repository(root: Path, allow_primary: bool) -> Path:
     return common
 
 
+def slot_path(directory: Path, slot: int) -> Path:
+    # Slot 0 keeps the single lock's name, so an older copy of this script holding it counts as one slot.
+    return directory / ("heavy.lock" if slot == 0 else f"heavy-{slot}.lock")
+
+
 @contextlib.contextmanager
-def exclusive(path: Path) -> Iterator[int]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+") as lease:
-        print(f"worktree-build: waiting for {path}", flush=True)
-        fcntl.flock(lease, fcntl.LOCK_EX)
-        yield lease.fileno()
+def ticket(directory: Path, whole: bool) -> Iterator[Path]:
+    """Hold a place in the per-user queue: a file named by arrival time, locked while its owner waits."""
+    queue = directory / "queue"
+    queue.mkdir(parents=True, exist_ok=True)
+    name = f"{time.time_ns():020d}-{os.getpid()}-{'whole' if whole else 'shared'}"
+    # Lock before the name appears, so a peer never mistakes a new ticket for one left by a killed waiter.
+    staging = queue / f".{name}"
+    descriptor = os.open(staging, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        staging.rename(queue / name)
+        yield queue / name
+    finally:
+        (queue / name).unlink(missing_ok=True)
+        staging.unlink(missing_ok=True)
+        os.close(descriptor)
+
+
+def ahead(own: Path) -> tuple[int, bool]:
+    """Count the live waiters that arrived before `own`, and whether one wants every slot.
+
+    Tickets of waiters that were killed are removed on the way.
+    """
+    count, whole = 0, False
+    for entry in sorted(own.parent.iterdir()):
+        if entry.name.startswith("."):
+            continue
+        if entry.name >= own.name:
+            break
+        try:
+            descriptor = os.open(entry, os.O_RDONLY | os.O_CLOEXEC)
+        except FileNotFoundError:
+            continue
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            count += 1
+            whole = whole or entry.name.endswith("-whole")
+        else:
+            entry.unlink(missing_ok=True)
+        finally:
+            os.close(descriptor)
+    return count, whole
+
+
+def try_lock(path: Path, held: contextlib.ExitStack, block: bool = False) -> int | None:
+    lease = path.open("a+")
+    try:
+        fcntl.flock(lease, fcntl.LOCK_EX | (0 if block else fcntl.LOCK_NB))
+    except BlockingIOError:
+        lease.close()
+        return None
+    except BaseException:
+        lease.close()
+        raise
+    return held.enter_context(lease).fileno()
+
+
+def take_slot(directory: Path, slots: int, skip: int, held: contextlib.ExitStack) -> tuple[int, int] | None:
+    """Take a free slot after leaving `skip` free ones to the waiters ahead; return its number and lease."""
+    for slot in range(slots):
+        with contextlib.ExitStack() as probe:
+            lease = try_lock(slot_path(directory, slot), probe)
+            if lease is None:
+                continue
+            if skip:
+                skip -= 1
+                continue
+            held.enter_context(probe.pop_all())
+            return slot, lease
+    return None
+
+
+@contextlib.contextmanager
+def acquire(directory: Path, slots: int, whole: bool) -> Iterator[tuple[int, ...]]:
+    """Take one of `slots` build slots, or every slot when `whole`, in arrival order.
+
+    Waiters queue first come, first served, so nobody starves: a shared waiter takes a free slot only
+    when enough remain for the shared waiters ahead of it, and never passes a waiting exclusive
+    operation. That one keeps its place at the head while it takes slot 0, 1, ... in order, so no
+    new shared operation starts meanwhile and two exclusive operations cannot deadlock.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    wanted = "every build slot" if whole else f"one of {slots} build slots"
+    waiting = False
+
+    def wait() -> None:
+        nonlocal waiting
+        if not waiting:
+            print(f"worktree-build: waiting for {wanted} in {directory}", flush=True)
+            waiting = True
+
+    with contextlib.ExitStack() as held:
+        leases: list[int] = []
+        with ticket(directory, whole) as own:
+            while True:
+                count, exclusive_ahead = ahead(own)
+                if whole and not count:
+                    for slot in range(MAX_SLOTS):
+                        lease = try_lock(slot_path(directory, slot), held)
+                        if lease is None:
+                            wait()
+                            lease = try_lock(slot_path(directory, slot), held, block=True)
+                        leases.append(cast(int, lease))
+                    break
+                if not whole and not exclusive_ahead:
+                    taken = take_slot(directory, slots, count, held)
+                    if taken is not None:
+                        granted, lease = taken
+                        leases.append(lease)
+                        break
+                wait()
+                time.sleep(POLL)
+        if whole:
+            print(f"worktree-build: holding every build slot (0–{MAX_SLOTS - 1})", flush=True)
+        else:
+            print(f"worktree-build: holding build slot {granted} of {slots} ({slot_path(directory, granted).name})",
+                  flush=True)
+        yield tuple(leases)
+
+
+def job_limits(environ: dict[str, str], slots: int) -> dict[str, str]:
+    """Give a shared operation's child about 1/N of the processors; a value the caller set wins."""
+    jobs = str(max(1, len(os.sched_getaffinity(0)) // slots))
+    return {**{name: jobs for name in JOB_VARIABLES}, **environ}
+
+
+def slot_count(value: str | None) -> int:
+    count = DEFAULT_SLOTS if value is None or value == "" else int(value) if value.isdecimal() else 0
+    if not 1 <= count <= MAX_SLOTS:
+        raise ValueError(f"build slots must be a whole number from 1 to {MAX_SLOTS}")
+    return count
 
 
 def disk_room(path: Path) -> None:
@@ -103,7 +246,7 @@ def fingerprint(root: Path, profile: str, environ: dict[str, str]) -> str:
                 raise ValueError(f"{name}: external build directories and config includes are unsupported")
     environment = {key: value for key, value in environ.items()
                    if (key in BUILD_ENV_NAMES or key.startswith(BUILD_ENV_PREFIXES))
-                   and key not in {"CARGO_TARGET_DIR", "CUPERTINO_BUILD_LOCK_FD"}
+                   and key not in UNFINGERPRINTED
                    and not key.startswith("CUPERTINO_TEST_FIXTURE_")}
     environment["CARGO_INCREMENTAL"] = "0"
     identity = {"schema": 1, "profile": profile, "environment": environment, "inputs": inputs,
@@ -146,10 +289,10 @@ def group_running(group: int) -> bool:
     return False
 
 
-def child(command: list[str], root: Path, environ: dict[str, str], lease: int) -> int:
-    """Keep the resource lease until the whole child process group has stopped."""
-    child_environment = {**environ, "CUPERTINO_BUILD_LOCK_FD": str(lease)}
-    process = subprocess.Popen(command, cwd=root, env=child_environment, pass_fds=(lease,), start_new_session=True)
+def child(command: list[str], root: Path, environ: dict[str, str], leases: tuple[int, ...]) -> int:
+    """Keep the slot leases until the whole child process group has stopped."""
+    child_environment = {**environ, "CUPERTINO_BUILD_LOCK_FD": ",".join(map(str, leases))}
+    process = subprocess.Popen(command, cwd=root, env=child_environment, pass_fds=leases, start_new_session=True)
     try:
         return process.wait()
     finally:
@@ -167,7 +310,7 @@ def child(command: list[str], root: Path, environ: dict[str, str], lease: int) -
         process.wait()
 
 
-def clone(source: Path, destination: Path, root: Path, lease: int) -> None:
+def clone(source: Path, destination: Path, root: Path, leases: tuple[int, ...]) -> None:
     # Container/package targets have their own toolchain and never enter a host seed.
     entries = [str(path) for path in source.iterdir() if path.name != "package-build"]
     if not entries:
@@ -176,7 +319,7 @@ def clone(source: Path, destination: Path, root: Path, lease: int) -> None:
     # No copy fallback: an unsupported filesystem must fail visibly before a build starts.
     try:
         status = child(["cp", "--archive", "--reflink=always", *entries, str(destination)],
-                       root, dict(os.environ), lease)
+                       root, dict(os.environ), leases)
         if status:
             raise ValueError(f"reflink clone failed with exit status {status}")
     except BaseException:
@@ -191,7 +334,7 @@ def seed_directory(state: Path) -> Path:
     return seeds
 
 
-def prepare(root: Path, state: Path, identity: str, seed: str | None, lease: int) -> Metadata:
+def prepare(root: Path, state: Path, identity: str, seed: str | None, leases: tuple[int, ...]) -> Metadata:
     target = root / "target"
     if target.exists() or target.is_symlink():
         metadata = read_marker(target, str(root))
@@ -210,7 +353,7 @@ def prepare(root: Path, state: Path, identity: str, seed: str | None, lease: int
             raise ValueError(f"seed {seed}: incompatible toolchain, profile, configuration or environment")
         if time.time() - metadata["created"] >= SEED_AGE:
             raise ValueError(f"seed {seed}: expired; cleanup --expired-seeds")
-        clone(source, target, root, lease)
+        clone(source, target, root, leases)
     metadata = Metadata(schema=1, owner=str(root), fingerprint=identity, successful=False, created=time.time())
     write_marker(target, metadata)
     print(f"worktree-build: prepared {target}", flush=True)
@@ -243,7 +386,7 @@ def cargo_command(command: list[str], profile: str) -> list[str]:
     return command[:insertion] + [option, profile] + command[insertion:]
 
 
-def promote(root: Path, state: Path, identity: str, name: str, max_seed_gib: int, lease: int) -> None:
+def promote(root: Path, state: Path, identity: str, name: str, max_seed_gib: int, leases: tuple[int, ...]) -> None:
     target = root / "target"
     metadata = read_marker(target, str(root))
     if metadata.get("fingerprint") != identity or metadata.get("successful") is not True:
@@ -258,7 +401,7 @@ def promote(root: Path, state: Path, identity: str, name: str, max_seed_gib: int
         raise ValueError(f"target exceeds the positive --max-seed-gib budget ({max_seed_gib})")
     disk_room(seeds)
     destination = seeds / name
-    clone(target, destination, root, lease)
+    clone(target, destination, root, leases)
     write_marker(destination, Metadata(schema=1, owner=str(state), fingerprint=identity, successful=True, created=time.time()))
     print(f"worktree-build: promoted {destination}", flush=True)
 
@@ -285,8 +428,10 @@ def interrupted(signum: int, frame: object) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument("--slots", help=f"build slots shared by all worktrees (default ${SLOTS_VARIABLE} or {DEFAULT_SLOTS})")
     for action in ("prepare", "run", "promote"):
-        sub = commands.add_parser(action)
+        sub = commands.add_parser(action, parents=[shared])
         sub.add_argument("--profile", required=True)
         if action == "prepare":
             sub.add_argument("--seed")
@@ -295,63 +440,67 @@ def main() -> int:
         else:
             sub.add_argument("--name", required=True)
             sub.add_argument("--max-seed-gib", type=int, required=True)
-    locked = commands.add_parser("locked", help="hold the disk/resource guard around any command; preserve its target layout")
+    locked = commands.add_parser("locked", parents=[shared],
+                                 help="hold every build slot around any command; preserve its target layout")
     locked.add_argument("command", nargs=argparse.REMAINDER)
-    clean = commands.add_parser("cleanup")
+    clean = commands.add_parser("cleanup", parents=[shared])
     clean.add_argument("--target", action="store_true")
     clean.add_argument("--expired-seeds", action="store_true")
     args = parser.parse_args()
     for name in (getattr(args, "seed", None), getattr(args, "name", None)):
         if name is not None and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", name) is None:
             parser.error("seed names must be 1–64 lowercase letters, digits or hyphens")
+    if args.action == "cleanup" and not args.target and not args.expired_seeds:
+        parser.error("cleanup requires --target or --expired-seeds")
     root = Path.cwd().resolve()
     state = repository(root, args.action == "locked") / "cupertino-build"
     environ = dict(os.environ)
     if "CUPERTINO_BUILD_LOCK_FD" in environ:
         raise ValueError("nested worktree-build invocations would deadlock; wrap the outermost command only")
-    lock = Path.home() / ".cache" / "cupertino-build" / "heavy.lock"
+    slots = slot_count(args.slots if args.slots is not None else environ.get(SLOTS_VARIABLE))
+    locks = Path.home() / ".cache" / "cupertino-build"
+    # Shared operations touch only this worktree's target; seeds and package/container builds need every slot.
+    whole = (args.action in {"locked", "promote"} or (args.action == "prepare" and args.seed is not None)
+             or (args.action == "cleanup" and args.expired_seeds))
     if args.action == "locked":
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
         if not command:
             parser.error("locked requires a command")
-        with exclusive(lock) as lease:
+        with acquire(locks, slots, whole) as leases:
             disk_room(root)
             if "CARGO_TARGET_DIR" in environ:
                 destination = Path(environ["CARGO_TARGET_DIR"]).resolve()
                 while not destination.exists():
                     destination = destination.parent
                 disk_room(destination)
-            status = child(command, root, {**environ, "CARGO_INCREMENTAL": "0"}, lease)
+            status = child(command, root, {**environ, "CARGO_INCREMENTAL": "0"}, leases)
             return status if status >= 0 else 128 - status
     if any(name in environ for name in ("CARGO_BUILD_BUILD_DIR", "CARGO_BUILD_TARGET_DIR")):
         raise ValueError("remove Cargo build/target directory overrides")
     if "CARGO_TARGET_DIR" in environ and Path(environ["CARGO_TARGET_DIR"]).resolve() != root / "target":
         raise ValueError("CARGO_TARGET_DIR must be this worktree's target directory")
     environ.update(CARGO_TARGET_DIR=str(root / "target"), CARGO_INCREMENTAL="0")
-    with exclusive(lock) as lease:
+    with acquire(locks, slots, whole) as leases:
         if args.action == "cleanup":
-            if not args.target and not args.expired_seeds:
-                parser.error("cleanup requires --target or --expired-seeds")
             cleanup(root, state, args.target, args.expired_seeds)
             return 0
         identity = fingerprint(root, args.profile, environ)
         if args.action == "prepare":
-            prepare(root, state, identity, args.seed, lease)
+            prepare(root, state, identity, args.seed, leases)
         elif args.action == "promote":
-            promote(root, state, identity, args.name, args.max_seed_gib, lease)
+            promote(root, state, identity, args.name, args.max_seed_gib, leases)
         else:
             command = args.command[1:] if args.command[:1] == ["--"] else args.command
             command = cargo_command(command, args.profile)
-            metadata = prepare(root, state, identity, None, lease)
+            metadata = prepare(root, state, identity, None, leases)
             disk_room(root)
             metadata["successful"] = False
             write_marker(root / "target", metadata)
-            status = child(command, root, environ, lease)
+            status = child(command, root, job_limits(environ, slots), leases)
             metadata["successful"] = status == 0
             write_marker(root / "target", metadata)
             return status if status >= 0 else 128 - status
     return 0
-
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, interrupted)

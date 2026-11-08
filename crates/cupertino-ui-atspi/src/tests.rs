@@ -2,7 +2,7 @@ use super::*;
 use cupertino_geometry::Rect;
 use cupertino_ui_core::{AccessibilityNode, AccessibleStates, AccessibleValue, Role};
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::task::Wake;
 
 #[derive(Default)]
@@ -28,6 +28,7 @@ fn handlers() -> (Arc<Count>, Handlers, Handlers) {
     let shared = Arc::new(Shared {
         active: AtomicUsize::new(0),
         epoch: AtomicU64::new(0),
+        hidden: AtomicBool::new(false),
         actions: Mutex::new(Vec::new()),
         waker: Waker::from(Arc::clone(&count)),
     });
@@ -176,4 +177,51 @@ fn a_tree_from_before_the_last_window_deactivated_is_never_handed_over() {
     // core stopped sending: both trees may be stale, so both wait for core's whole one
     assert_eq!(first.request_initial_tree(), None);
     assert_eq!(second.request_initial_tree(), None);
+}
+
+#[test]
+fn behind_the_lock_a_window_is_an_empty_unnamed_frame_that_takes_no_action() {
+    let (count, mut h, _) = handlers();
+    publish(&h, Role::Button, None, vec![Action::Click]);
+    h.shared.hidden.store(true, Ordering::SeqCst);
+    let tree = h.request_initial_tree().expect("the frame is published");
+    assert_eq!(tree.tree.map(|t| t.root), Some(convert::node_id(id(1))));
+    assert_eq!(tree.nodes.len(), 1, "only the root");
+    let (root, node) = &tree.nodes[0];
+    assert_eq!(*root, convert::node_id(id(1)));
+    assert_eq!(node.role(), accesskit::Role::Window);
+    assert!(node.label().is_none() && node.children().is_empty());
+    let wakes = count.0.load(Ordering::SeqCst);
+    ask(&mut h, accesskit::Action::Click, None);
+    assert!(
+        queued(&h).is_empty(),
+        "an action reached the application behind the lock"
+    );
+    assert_eq!(count.0.load(Ordering::SeqCst), wakes);
+    h.shared.hidden.store(false, Ordering::SeqCst);
+    let tree = h.request_initial_tree().unwrap();
+    assert_eq!(
+        tree.nodes[0].1.label(),
+        Some("field"),
+        "the whole tree after the unlock"
+    );
+    ask(&mut h, accesskit::Action::Click, None);
+    assert_eq!(queued(&h), [Action::Click]);
+}
+
+#[test]
+fn an_adapter_that_may_start_behind_the_lock_hides_until_it_learns_the_session_is_unlocked() {
+    let waker = Waker::from(Arc::new(Count::default()));
+    let mut adapter = AtspiAdapter::muted(waker.clone());
+    assert!(adapter.hidden());
+    adapter.session_locked(false);
+    assert!(!adapter.hidden());
+    adapter.session_locked(true);
+    assert!(adapter.hidden());
+    let mut lock_screen = AtspiAdapter::lock_screen(waker);
+    lock_screen.session_locked(true);
+    assert!(
+        !lock_screen.hidden(),
+        "the lock screen is what is read behind the lock"
+    );
 }

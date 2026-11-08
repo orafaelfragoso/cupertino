@@ -4,12 +4,14 @@
 //! object. Nothing is exported until an assistive technology is on the accessibility bus; core builds no tree until
 //! then. AccessKit runs on an executor thread of its own; requests from assistive technology reach the application
 //! only through [`AccessibilityAdapter::drain_actions`] on its own loop, after the window system's waker woke it.
-//! While the session is locked no node it sends is a live region, so nothing is announced.
+//! While the session is locked the application's content is not published: each window is an empty, unnamed frame and
+//! takes no action, and no node it sends is a live region, so nothing is announced. The unlock publishes the whole tree
+//! again. The lock screen's own adapter ([`AtspiAdapter::lock_screen`]) is never hidden.
 
 mod convert;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::Waker;
 
@@ -21,6 +23,7 @@ use cupertino_ui_platform::WindowId;
 pub struct AtspiAdapter {
     shared: Arc<Shared>,
     windows: HashMap<WindowId, Window>,
+    /// The session is locked (or not known unlocked yet): nothing is announced and the content is hidden.
     muted: bool,
     /// The application draws the lock screen itself: the session's lock never mutes it.
     lock_screen: bool,
@@ -37,6 +40,9 @@ struct Shared {
     /// Counts the times the last window deactivated. Core stops sending then, so a tree from an earlier epoch may be
     /// stale; core sends every window whole once one is active again.
     epoch: AtomicU64,
+    /// The application's content is hidden behind the session lock: every window is published as an empty, unnamed
+    /// frame, and no action is taken.
+    hidden: AtomicBool,
     actions: Mutex<Vec<ActionRequest>>,
     waker: Waker,
 }
@@ -87,14 +93,32 @@ impl Published {
     }
 }
 
+fn tree_info(root: NodeId) -> TreeInfo {
+    let mut tree = TreeInfo::new(convert::node_id(root));
+    tree.toolkit_name = Some("CupertinoKit".into());
+    tree.toolkit_version = Some(env!("CARGO_PKG_VERSION").into());
+    tree
+}
+
+/// What a window publishes while the session is locked: its root as an empty frame without a name. AccessKit drops the
+/// nodes no longer reachable from it.
+fn hidden_tree(root: NodeId) -> TreeUpdate {
+    TreeUpdate {
+        nodes: vec![(
+            convert::node_id(root),
+            accesskit::Node::new(accesskit::Role::Window),
+        )],
+        tree: Some(tree_info(root)),
+        tree_id: accesskit::TreeId::ROOT,
+        focus: convert::node_id(root),
+    }
+}
+
 impl Mirror {
     fn full(&self, root: NodeId) -> TreeUpdate {
-        let mut tree = TreeInfo::new(convert::node_id(root));
-        tree.toolkit_name = Some("CupertinoKit".into());
-        tree.toolkit_version = Some(env!("CARGO_PKG_VERSION").into());
         TreeUpdate {
             nodes: self.nodes.iter().flat_map(|(id, p)| p.sent(*id)).collect(),
-            tree: Some(tree),
+            tree: Some(tree_info(root)),
             tree_id: accesskit::TreeId::ROOT,
             focus: convert::node_id(self.focus.unwrap_or(root)),
         }
@@ -119,6 +143,7 @@ impl AtspiAdapter {
             shared: Arc::new(Shared {
                 active: AtomicUsize::new(0),
                 epoch: AtomicU64::new(0),
+                hidden: AtomicBool::new(false),
                 actions: Mutex::new(Vec::new()),
                 waker,
             }),
@@ -137,12 +162,53 @@ impl AtspiAdapter {
         }
     }
 
-    /// Like [`Self::new`], but muted until the first [`AccessibilityAdapter::session_locked`]: an application started
-    /// while the session is locked announces nothing before it learns so.
+    /// Like [`Self::new`], but muted and hidden until the first [`AccessibilityAdapter::session_locked`]: an application
+    /// started while the session is locked announces and shows nothing before it learns so.
     pub fn muted(waker: Waker) -> AtspiAdapter {
-        AtspiAdapter {
+        let adapter = AtspiAdapter {
             muted: true,
             ..AtspiAdapter::new(waker)
+        };
+        adapter.shared.hidden.store(true, Ordering::Release);
+        adapter
+    }
+
+    fn hidden(&self) -> bool {
+        self.shared.hidden.load(Ordering::Acquire)
+    }
+
+    /// Hide the content of every window behind the session lock, or publish it again whole. A tree published again
+    /// carries no live region: AccessKit would announce every live node it adds, and the unlock announces nothing. A node
+    /// is live again from the next update core sends of it.
+    fn set_hidden(&mut self, hidden: bool) {
+        if self.shared.hidden.swap(hidden, Ordering::AcqRel) == hidden {
+            return;
+        }
+        let epoch = self.shared.epoch.load(Ordering::Acquire);
+        for window in self.windows.values_mut() {
+            let mirror = &window.mirror;
+            if !hidden {
+                for published in lock(mirror).nodes.values_mut() {
+                    published.node.clear_live();
+                }
+            }
+            // without a current tree there is nothing to hide or show: core sends the whole tree once it is asked
+            let root = {
+                let m = lock(mirror);
+                m.root.filter(|_| m.epoch == epoch)
+            };
+            let Some(root) = root else {
+                continue;
+            };
+            window.adapter.update_if_active(|| {
+                let mut m = lock(mirror);
+                m.initialized = true;
+                if hidden {
+                    hidden_tree(root)
+                } else {
+                    m.full(root)
+                }
+            });
         }
     }
 
@@ -176,6 +242,7 @@ impl AccessibilityAdapter for AtspiAdapter {
     fn update(&mut self, update: &AccessibilityUpdate) {
         let epoch = self.shared.epoch.load(Ordering::Acquire);
         let muted = self.muted;
+        let hidden = self.hidden();
         let window = self.window(update.window);
         let delta = {
             let mut m = lock(&window.mirror);
@@ -232,6 +299,16 @@ impl AccessibilityAdapter for AtspiAdapter {
             }
         };
         let mirror = &window.mirror;
+        if hidden {
+            // kept for the unlock; the frame shows nothing meanwhile
+            if !lock(mirror).initialized {
+                window.adapter.update_if_active(|| {
+                    lock(mirror).initialized = true;
+                    hidden_tree(update.root)
+                });
+            }
+            return;
+        }
         window.adapter.update_if_active(|| {
             let mut m = lock(mirror);
             if m.initialized {
@@ -247,9 +324,11 @@ impl AccessibilityAdapter for AtspiAdapter {
     /// while muted announces nothing and the next one sent after is announced as usual.
     fn session_locked(&mut self, locked: bool) {
         self.muted = locked && !self.lock_screen;
+        self.set_hidden(self.muted);
     }
 
     fn window_title(&mut self, window: WindowId, title: &str) {
+        let hidden = self.hidden();
         let window = self.window(window);
         let delta = {
             let mut m = lock(&window.mirror);
@@ -272,6 +351,9 @@ impl AccessibilityAdapter for AtspiAdapter {
                 focus: convert::node_id(m.focus.unwrap_or(root)),
             }
         };
+        if hidden {
+            return;
+        }
         let mirror = &window.mirror;
         window.adapter.update_if_active(|| {
             let mut m = lock(mirror);
@@ -314,6 +396,9 @@ impl ActivationHandler for Handlers {
             .root
             .filter(|_| m.epoch == self.shared.epoch.load(Ordering::Acquire))?;
         m.initialized = true;
+        if self.shared.hidden.load(Ordering::Acquire) {
+            return Some(hidden_tree(root));
+        }
         Some(m.full(root))
     }
 }
@@ -334,6 +419,10 @@ impl DeactivationHandler for Handlers {
 
 impl ActionHandler for Handlers {
     fn do_action(&mut self, request: accesskit::ActionRequest) {
+        // behind the session lock the application takes no request
+        if self.shared.hidden.load(Ordering::Acquire) {
+            return;
+        }
         let m = lock(&self.mirror);
         let Some(request) =
             convert::request(&request, |id| m.nodes.get(&id).map(|p| p.runs.as_slice()))

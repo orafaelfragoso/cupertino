@@ -238,8 +238,10 @@ fn a_combo_box_takes_typed_text_and_its_button_opens_the_choices() {
         rect.min_y() + rect.height() / 2.0,
     ));
     assert_eq!(h.model().opened, [Message::Combo]);
-    let mut model = Model::default();
-    model.typed = "Beta".into();
+    let model = Model {
+        typed: "Beta".into(),
+        ..Model::default()
+    };
     let menu = combo(&model).menu(
         WindowKey("w".into()),
         "combo".into(),

@@ -266,6 +266,19 @@ pub(crate) fn paint_ring(cx: &mut PaintCx<'_>, chrome: Rect, radius: f64) {
     stroke(cx, rect, radius, theme.focus.width, color);
 }
 
+/// A chevron `width` wide and half as high, centred on `centre`, its point up or down; stroke it.
+pub(crate) fn chevron(centre: Point, width: f64, up: bool) -> Shape {
+    let rise = if up { -width / 4.0 } else { width / 4.0 };
+    Shape::Path {
+        verbs: vec![
+            PathVerb::MoveTo(Point::new(centre.x - width / 2.0, centre.y - rise)),
+            PathVerb::LineTo(Point::new(centre.x, centre.y + rise)),
+            PathVerb::LineTo(Point::new(centre.x + width / 2.0, centre.y - rise)),
+        ],
+        fill_rule: Default::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,18 +347,5 @@ mod tests {
         let (rect, radius) = focus_ring(Rect::new(10.0, 10.0, 80.0, 20.0), 5.0, &ring);
         assert_eq!(rect, Rect::new(7.0, 7.0, 86.0, 26.0));
         assert_eq!(radius, 8.0);
-    }
-}
-
-/// A chevron `width` wide and half as high, centred on `centre`, its point up or down; stroke it.
-pub(crate) fn chevron(centre: Point, width: f64, up: bool) -> Shape {
-    let rise = if up { -width / 4.0 } else { width / 4.0 };
-    Shape::Path {
-        verbs: vec![
-            PathVerb::MoveTo(Point::new(centre.x - width / 2.0, centre.y - rise)),
-            PathVerb::LineTo(Point::new(centre.x, centre.y + rise)),
-            PathVerb::LineTo(Point::new(centre.x + width / 2.0, centre.y - rise)),
-        ],
-        fill_rule: Default::default(),
     }
 }

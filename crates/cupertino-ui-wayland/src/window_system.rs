@@ -162,6 +162,7 @@ fn set_look(
             let style = match g.style {
                 GlassStyle::Regular => cupertino_protocol_app::GlassStyle::Regular,
                 GlassStyle::Clear => cupertino_protocol_app::GlassStyle::Clear,
+                GlassStyle::LargePanel => cupertino_protocol_app::GlassStyle::LargePanel,
             };
             backdrop.set_glass(style, g.container, g.spacing)
         }

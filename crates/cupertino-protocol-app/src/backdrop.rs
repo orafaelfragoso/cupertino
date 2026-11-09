@@ -44,6 +44,8 @@ pub enum GlassStyle {
     Regular,
     /// The clearer glass of controls over rich content, such as media.
     Clear,
+    /// The regular glass of a large floating panel, toned further towards the middle, with a soft drop shadow.
+    LargePanel,
 }
 
 impl GlassStyle {
@@ -126,7 +128,8 @@ impl Backdrop {
     /// Draw the backdrop as glass of `style` instead of a material recipe. Backdrops of one surface with the same
     /// nonzero `container` join into one shape whose outlines blend over `spacing` points (0 joins them with a hard
     /// edge); container 0 keeps the backdrop on its own. A server before version 6 draws the backdrop with the
-    /// material of [`GlassStyle::fallback_material`] instead.
+    /// material of [`GlassStyle::fallback_material`] instead, and one before version 10 draws
+    /// [`GlassStyle::LargePanel`] as regular glass.
     pub fn set_glass(&self, style: GlassStyle, container: u32, spacing: f64) -> Result<(), Error> {
         if !(spacing.is_finite() && spacing >= 0.0) {
             return Err(Error::InvalidGlass);
@@ -138,6 +141,11 @@ impl Backdrop {
         let style = match style {
             GlassStyle::Regular => WireStyle::Regular,
             GlassStyle::Clear => WireStyle::Clear,
+            // a server before it draws the large panel as regular glass, without its shadow
+            GlassStyle::LargePanel if self.proxy.version() < LARGE_PANEL_VERSION => {
+                WireStyle::Regular
+            }
+            GlassStyle::LargePanel => WireStyle::LargePanel,
         };
         self.proxy.set_glass(style, container, spacing);
         Ok(())
@@ -155,6 +163,9 @@ impl Backdrop {
 
 /// The version of `cupertino_backdrop_v1` that has the `tone` event.
 const TONE_VERSION: u32 = 7;
+
+/// The version of `cupertino_backdrop_v1` that has the large panel glass style.
+const LARGE_PANEL_VERSION: u32 = 10;
 
 impl Dispatch<CupertinoBackdropV1, BackdropData> for State {
     fn event(

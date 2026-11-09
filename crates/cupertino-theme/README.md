@@ -9,7 +9,7 @@ and typography.
 |---|---|
 | `tokens.json` | `DesignTokens`: named colours per `Appearance` (sRGB `f32` + alpha) and the system font sizes, metrics and tracking table |
 | `materials.json` | `MaterialLibrary`/`Recipe`: backdrop filter chain + fill layers per window state and interaction, opaque variants, high-contrast catalogs |
-| `glass` (code) | `GlassParams::new(GlassMode, short_side)`: the glass recipe of an appearance, style (`GlassStyle::{Regular, Clear}`), Reduce Transparency, Increase Contrast and Reduce Motion, for a shape whose shorter side is `short_side` points; `foreground_matrix(dark)`, `adapts_foreground(side)`, `apply_matrix` for content on glass; `FaceTone`, `face_tone(luminance, previous)` (light above `FACE_TONE_THRESHOLD`, 0.179, where white and black text read alike, changing only `FACE_TONE_HYSTERESIS`, 0.03, past it), `foreground_matrix_for(dark, tone)` and `foreground_rgb(dark, tone)`, the colour of text on glass; `VIBRANT_PRIMARY`, `VIBRANT_SECONDARY`, `VIBRANT_PLACEHOLDER` (1, 0.75, 0.7), how opaque labels are drawn on glass; `relative_luminance`, `contrast_ratio` |
+| `glass` (code) | `GlassParams::new(GlassMode, short_side)`: the glass recipe of an appearance, style (`GlassStyle::{Regular, Clear, LargePanel}`), Reduce Transparency, Increase Contrast and Reduce Motion, for a shape whose shorter side is `short_side` points; `foreground_matrix(dark)`, `adapts_foreground(side)`, `apply_matrix` for content on glass; `FaceTone`, `face_tone(luminance, previous)` (light above `FACE_TONE_THRESHOLD`, 0.179, where white and black text read alike, changing only `FACE_TONE_HYSTERESIS`, 0.03, past it), `foreground_matrix_for(dark, tone)` and `foreground_rgb(dark, tone)`, the colour of text on glass; `VIBRANT_PRIMARY`, `VIBRANT_SECONDARY`, `VIBRANT_PLACEHOLDER` (1, 0.75, 0.7), how opaque labels are drawn on glass; `relative_luminance`, `contrast_ratio` |
 | `control_sizes` (code) | `control_geometry(ControlFamily, ControlSize, compact)`: each control family's height, width, corners, label size and inset at the five sizes (`ControlSize::ASCENDING`: mini, small, regular, large, extra large), normal and compact; `switch_geometry(compact)`, `slider_geometry(size)` and `choice_mark(size, compact)` for the parts of a switch, a slider and a check box or radio button |
 | `animations.json` | `AnimationPresets`: springs, timing functions, momentum, rubber band and dock timings as `cupertino-animation` types; `Easing` (bézier timing functions plus the cosine ease, which is not a bézier) via `AnimationPresets::easing(name)`; the dock auto-hide curve is `Easing::CosineEase` with the 0.15 s delay / 0.24 s duration; an unknown curve name is an error, not a silent fallback |
 
@@ -69,8 +69,8 @@ flag and its Increase Contrast option.
     `text-background` colour, copied opaque.
 - **Glass** (`glass.rs`, code). `GlassParams` holds every value of the glass background pass in stage order: the
   blur (`GlassBlur`: four levels of radius `radius·2^i`, widest first, each narrower one laid over at its opacity, and
-  a blur fill that darkens, lightens or covers), the face colour (`GlassFace`: saturation, white gain and per-channel
-  limit on linear light, a luminance cap, a black lift and a fill), the refraction (`GlassRefraction`: offset and band
+  a blur fill that darkens, lightens or covers), the face colour (`GlassFace`: a saturation about the luma of the encoded
+  colour, then a white gain and per-channel limit on linear light, a luminance cap, a black lift and a fill), the refraction (`GlassRefraction`: offset and band
   along the edge), the bleed of the widest level (`GlassBleed`), the key and fill rim lights (`GlassHighlight`) and the
   drop and ring shadows (`GlassShadow`, at opacity 0 at rest). Some values follow the shape's size: for regular glass
   the refraction offset (−min(s/2, 60)) and band (min(s/4, 20)), the bleed band (0.35·min(s, 140)), the opacity of the
@@ -81,7 +81,13 @@ flag and its Increase Contrast option.
   and lays a dense fill over it; Increase Contrast keeps the optics with firmer colours; both together use the
   reduced-transparency optics with the increased-contrast colours; Reduce Motion drops the refraction band and widens the
   narrowest blur. `GLASS_BACKDROP_SCALE` (0.5) is the scale the backdrop is read at. Content on glass is coloured by a
-  4×5 matrix per appearance; `adapts_foreground` tells which controls (shorter side under 64 pt) take it.
+  4×5 matrix per appearance; `adapts_foreground` tells which controls (shorter side under 64 pt) take it. The large
+  panel (`GlassStyle::LargePanel`) is regular glass with its tones pressed together, so a launcher-sized sheet reads as
+  one calm surface over any wallpaper: in the dark appearance a luminance cap of 0.102, a black lift of 0.15 and a
+  saturation of 1.15 (white comes out near 125, black near 53, a strong red keeps its colour), in the light one a cap
+  of 0.8, a lift of 0.5 and 1.1; and a drop shadow of its own (28 pt blur, 16 pt below, black at 0.5 dark or 0.22
+  light), drawn by the compositor outside the shape. With Reduce Transparency or Increase Contrast it takes regular
+  glass's recipes. `GlassParams::shadow_reach` is how far the shadow reaches past the shape.
 - **Display filter steps.** `ColorOp::{LinearMatrix, Invert, Contrast}` feed `cupertino-glass::display_filter`. No catalog
   recipe uses them.
 

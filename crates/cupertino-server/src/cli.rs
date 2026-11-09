@@ -146,6 +146,10 @@ pub struct Cli {
     /// Scripted shortcuts behave as if their modifiers were still held (the input-source HUD stays open).
     #[arg(long)]
     pub hold_modifiers: bool,
+    /// Once the Wayland socket is bound, write `WAYLAND_DISPLAY=<name>` and a line end to this open file descriptor and
+    /// close it (`cupertino desktop start` waits on it).
+    #[arg(long, value_name = "FD")]
+    pub ready_fd: Option<i32>,
 }
 
 pub fn parse_size(s: &str) -> Result<(u32, u32), String> {
@@ -673,6 +677,8 @@ pub fn run(cli: Cli) -> Result<()> {
         &assets,
     )?;
     state.login_screen = login_screen;
+    // before anything starts a child, which would inherit the ready descriptor
+    let _runtime_file = announce_start(&cli, mode, &state)?;
     if let Some(f) = cli.time_scale.filter(|f| *f > 0.0) {
         state.time_scale = f;
     }
@@ -950,6 +956,37 @@ pub fn publish_session(state: &Cupertino) {
         );
     }
     dbus.publish_session(variables, defaults);
+}
+
+/// The runtime file of this server, when `XDG_RUNTIME_DIR` is set (removed when the returned file drops, at the end of
+/// [`run`]), then the readiness line on `--ready-fd`. A runtime file that cannot be written is logged; a ready descriptor
+/// that is not open ends the start.
+fn announce_start(
+    cli: &Cli,
+    mode: Mode,
+    state: &Cupertino,
+) -> Result<Option<crate::runtime_info::RuntimeFile>> {
+    use crate::runtime_info;
+    let Some(display) = &state.socket_name else {
+        return Ok(None);
+    };
+    let backend = match mode {
+        Mode::Udev => "udev",
+        Mode::Winit => "winit",
+        Mode::Headless => "headless",
+    };
+    let file = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|dir| !dir.is_empty())
+        .and_then(|dir| {
+            let info = runtime_info::RuntimeInfo::now(display, backend);
+            runtime_info::write(std::path::Path::new(&dir), &info)
+                .inspect_err(|e| tracing::warn!(error = %e, "cannot write the runtime file"))
+                .ok()
+        });
+    if let Some(fd) = cli.ready_fd {
+        runtime_info::announce(fd, display).context("announcing the socket on --ready-fd")?;
+    }
+    Ok(file)
 }
 
 fn export_socket(state: &Cupertino) {

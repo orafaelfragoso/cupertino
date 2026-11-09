@@ -1687,6 +1687,7 @@ dependencies = [
  "clap",
  "cupertino-animation",
  "cupertino-assets",
+ "cupertino-build-info",
  "cupertino-cursor",
  "cupertino-decorations",
  "cupertino-defaults",

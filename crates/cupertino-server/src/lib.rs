@@ -53,6 +53,7 @@ pub mod protocols;
 pub mod quit;
 pub mod render;
 pub mod restart_policy;
+pub mod runtime_info;
 pub mod schedule;
 pub mod screen_reader;
 pub mod scroll_v1;

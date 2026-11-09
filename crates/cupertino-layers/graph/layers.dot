@@ -372,6 +372,7 @@ digraph "layers" {
   "cupertino-seat" -> "cupertino-test-bus" [label="dev"];
   "cupertino-server" -> "cupertino-animation";
   "cupertino-server" -> "cupertino-assets";
+  "cupertino-server" -> "cupertino-build-info";
   "cupertino-server" -> "cupertino-cursor";
   "cupertino-server" -> "cupertino-decorations";
   "cupertino-server" -> "cupertino-defaults";

@@ -32,6 +32,7 @@ dbus = []
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
+cupertino-build-info = { path = "../cupertino-build-info" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-displays = { path = "../cupertino-displays" }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["server"] }

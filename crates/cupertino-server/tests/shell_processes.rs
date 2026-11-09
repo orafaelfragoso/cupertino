@@ -2545,6 +2545,7 @@ fn the_network_bluetooth_and_power_daemons_own_their_bus_names() {
         Daemon(
             Command::new(shell_bin_dir().join(binary))
                 .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+                .env("CUPERTINO_ASSET_SEARCH_PATH", "")
                 .args(args)
                 .stdout(Stdio::null())
                 .stderr(std::fs::File::create(logs.file(binary)).unwrap())
@@ -2614,6 +2615,7 @@ fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
         std::fs::write(&file, text).unwrap();
         let output = Command::new(&sessiond)
             .arg("--check-config")
+            .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .env("CUPERTINO_LOGIN_CONF", &file)
             .output()
             .expect("the binary starts");
@@ -2661,6 +2663,7 @@ fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
     let output = Command::new(&sessiond)
         .arg("--check-config")
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env("CUPERTINO_LOGIN_CONF", &file)
         .output()
         .expect("the binary starts");
@@ -2680,6 +2683,7 @@ fn the_session_manager_binary_refuses_what_it_cannot_serve() {
     let sessiond = shell_bin_dir().join("cupertino-sessiond");
     let output = Command::new(&sessiond)
         .arg("no-such-mode")
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .output()
         .expect("the binary starts");
     assert!(!output.status.success());
@@ -2695,7 +2699,10 @@ fn the_session_manager_binary_refuses_what_it_cannot_serve() {
         eprintln!("skipping the start: root or a login.conf would let the manager run");
         return;
     }
-    let output = Command::new(&sessiond).output().expect("the binary starts");
+    let output = Command::new(&sessiond)
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+        .output()
+        .expect("the binary starts");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -2788,6 +2795,7 @@ fn start_server_binary(mode: &str) -> Option<(Daemon, Option<PrivateBus>)> {
         .args([mode, "--size", "800x600"])
         .env("XDG_CONFIG_HOME", &config.0)
         .env("DBUS_SESSION_BUS_ADDRESS", address)
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     if mode == "--winit" {

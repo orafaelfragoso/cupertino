@@ -38,6 +38,7 @@ fn record(dir: &Path, video: &Path, size: (u64, u64)) -> Option<Written> {
         .args(["--run-for", "1"])
         .env("XDG_CONFIG_HOME", dir.join("config"))
         .env("XDG_RUNTIME_DIR", dir)
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env("RUST_LOG", "info")
         .env("NO_COLOR", "1")
         .output()
@@ -129,6 +130,7 @@ fn a_fifo_nobody_reads_ends_the_server_with_an_error() {
         .arg(&fifo)
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_RUNTIME_DIR", dir.path())
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env("NO_COLOR", "1")
         .output()
         .expect("the server starts");

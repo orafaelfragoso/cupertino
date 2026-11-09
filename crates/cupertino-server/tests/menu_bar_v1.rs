@@ -2567,6 +2567,7 @@ impl Foreign {
     fn start_named(bus: &PrivateBus, name: &str) -> Foreign {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "foreign_menu_owner_process", "--nocapture"])
+            .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .env(FOREIGN_BUS, &bus.address)
             .env(FOREIGN_NAME_VAR, name)
             .stdin(std::process::Stdio::piped())

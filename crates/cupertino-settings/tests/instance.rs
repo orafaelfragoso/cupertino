@@ -36,6 +36,7 @@ fn about_has_an_independent_owner_and_only_its_own_program_receives_launches() {
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_cupertino-settings"))
         .arg("--about")
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("WAYLAND_SOCKET")
         .env_remove("XDG_ACTIVATION_TOKEN")
@@ -114,6 +115,7 @@ fn a_second_start_hands_its_pane_to_the_first_and_its_token_only_to_its_own_prog
         command
             .args(["--pane", "sound"])
             .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+            .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("XDG_ACTIVATION_TOKEN");
         if let Some(token) = token {

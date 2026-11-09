@@ -167,20 +167,23 @@ impl Drop for TempDir {
     }
 }
 
-/// A stand-in process: `script` runs under `sh` with the log file as `$1`, with the empty asset search path, as a script
-/// may start a binary of the workspace.
+/// A stand-in process: `script` runs under `sh` with the log file as `$1`, with the empty asset search path and the
+/// test's diagnostic store and journal, as a script may start a binary of the workspace.
 fn stand_in(name: &str, script: &str, log: &Path) -> ShellProcess {
     ShellProcess {
         name: name.into(),
-        command: vec![
-            "env".into(),
-            "CUPERTINO_ASSET_SEARCH_PATH=".into(),
-            "sh".into(),
-            "-c".into(),
-            script.into(),
-            "sh".into(),
-            log.display().to_string(),
-        ],
+        command: [
+            vec!["env".into(), "CUPERTINO_ASSET_SEARCH_PATH=".into()],
+            common::events::isolated().to_vec(),
+            vec![
+                "sh".into(),
+                "-c".into(),
+                script.into(),
+                "sh".into(),
+                log.display().to_string(),
+            ],
+        ]
+        .concat(),
         roles: roles_of(name),
     }
 }
@@ -445,12 +448,15 @@ fn real_process(binary: &str, bus: &PrivateBus) -> ShellProcess {
     let path = shell_bin_dir().join(binary);
     ShellProcess {
         name: binary.into(),
-        command: vec![
-            "env".into(),
-            format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
-            "CUPERTINO_ASSET_SEARCH_PATH=".into(),
-            path.display().to_string(),
-        ],
+        command: [
+            vec!["env".into(), "CUPERTINO_ASSET_SEARCH_PATH=".into()],
+            common::events::isolated().to_vec(),
+            vec![
+                format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
+                path.display().to_string(),
+            ],
+        ]
+        .concat(),
         roles: roles_of(binary),
     }
 }
@@ -2170,6 +2176,11 @@ fn the_screenshot_action_maps_the_overlay_and_a_drag_writes_a_png_of_the_selecti
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
+    server
+        .state
+        .config
+        .screenshot_command
+        .splice(1..1, common::events::isolated());
     server.state.execute_plan(ActionPlan {
         commands: Vec::new(),
         ops: vec![ShellOp::Screenshot(ScreenshotRequest::Selection)],
@@ -2249,6 +2260,11 @@ fn the_screenshot_toolbar_sits_at_the_bottom_and_return_captures_the_screen() {
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
+    server
+        .state
+        .config
+        .screenshot_command
+        .splice(1..1, common::events::isolated());
     server.state.execute_plan(ActionPlan {
         commands: Vec::new(),
         ops: vec![ShellOp::Screenshot(ScreenshotRequest::Toolbar)],
@@ -2331,6 +2347,11 @@ fn escape_on_the_screenshot_toolbar_removes_its_surfaces_and_gives_the_keyboard_
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
+    server
+        .state
+        .config
+        .screenshot_command
+        .splice(1..1, common::events::isolated());
     server.state.execute_plan(ActionPlan {
         commands: Vec::new(),
         ops: vec![ShellOp::Screenshot(ScreenshotRequest::Toolbar)],
@@ -2384,6 +2405,11 @@ fn the_screenshot_options_menu_opens_above_the_toolbar_on_its_output() {
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
+    server
+        .state
+        .config
+        .screenshot_command
+        .splice(1..1, common::events::isolated());
     server.state.execute_plan(ActionPlan {
         commands: Vec::new(),
         ops: vec![ShellOp::Screenshot(ScreenshotRequest::Toolbar)],
@@ -2459,6 +2485,11 @@ fn the_clipboard_screenshot_offers_a_png_of_the_output() {
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
+    server
+        .state
+        .config
+        .screenshot_command
+        .splice(1..1, common::events::isolated());
     server.state.execute_plan(ActionPlan {
         commands: Vec::new(),
         ops: vec![ShellOp::Screenshot(ScreenshotRequest::ScreenToClipboard)],
@@ -2612,6 +2643,7 @@ fn the_network_bluetooth_and_power_daemons_own_their_bus_names() {
     let daemon = |binary: &str, args: &[&str]| {
         Daemon(
             Command::new(shell_bin_dir().join(binary))
+                .envs(common::events::isolated_vars())
                 .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
                 .env("CUPERTINO_ASSET_SEARCH_PATH", "")
                 .args(args)
@@ -2682,6 +2714,7 @@ fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
     let check = |text: &str| {
         std::fs::write(&file, text).unwrap();
         let output = Command::new(&sessiond)
+            .envs(common::events::isolated_vars())
             .arg("--check-config")
             .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .env("CUPERTINO_LOGIN_CONF", &file)
@@ -2730,6 +2763,7 @@ fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
     let output = Command::new(&sessiond)
+        .envs(common::events::isolated_vars())
         .arg("--check-config")
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env("CUPERTINO_LOGIN_CONF", &file)
@@ -2750,6 +2784,7 @@ fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
 fn the_session_manager_binary_refuses_what_it_cannot_serve() {
     let sessiond = shell_bin_dir().join("cupertino-sessiond");
     let output = Command::new(&sessiond)
+        .envs(common::events::isolated_vars())
         .arg("no-such-mode")
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .output()
@@ -2768,6 +2803,7 @@ fn the_session_manager_binary_refuses_what_it_cannot_serve() {
         return;
     }
     let output = Command::new(&sessiond)
+        .envs(common::events::isolated_vars())
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .output()
         .expect("the binary starts");
@@ -2862,6 +2898,7 @@ fn start_server_binary(mode: &str) -> Option<(Daemon, Option<PrivateBus>)> {
     command
         .args([mode, "--size", "800x600"])
         .env("XDG_CONFIG_HOME", &config.0)
+        .env("XDG_STATE_HOME", config.0.join("state"))
         .env("DBUS_SESSION_BUS_ADDRESS", address)
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .stdout(Stdio::null())

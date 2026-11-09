@@ -1,8 +1,12 @@
 //! Rendering without a GPU: when no card offers a hardware renderer (a virtual machine without 3D, or a GPU whose
 //! driver did not load), the server draws the desktop with the software one instead of not starting. It says so in its
-//! log and in a line of the session's `session.log`, which `cupertino-diagnose` reports.
+//! log, in a line of the session's `session.log`, which `cupertino-diagnose` reports, and in the diagnostic event
+//! `server.renderer.software`.
+
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
 
 use crate::gpu_reset::{append, clean, local_now, state_dir};
 
@@ -31,13 +35,26 @@ pub fn choose<C, R>(
         .unwrap_or((first, opened)))
 }
 
-/// `gpu` renders with a software renderer: a warning in the server's log and a line of `session.log`.
+/// `gpu` renders with a software renderer: a warning in the server's log, the event `server.renderer.software` and a
+/// line of `session.log`.
 pub fn record(gpu: &str) {
+    record_in(state_dir(), gpu);
+}
+
+/// [`record`], with `session.log` in `dir`.
+fn record_in(dir: Option<PathBuf>, gpu: &str) {
     tracing::warn!(
         gpu,
         "only a software renderer is available: the CPU draws the desktop, slowly"
     );
-    let Some(dir) = state_dir() else { return };
+    diag::event(
+        Severity::Warn,
+        "server.renderer.software",
+        "only a software renderer is available",
+    )
+    .field("gpu", Value::Path(Path::new(gpu)))
+    .emit();
+    let Some(dir) = dir else { return };
     if let Err(e) = append(&dir.join("session.log"), &line(&local_now(), gpu)) {
         tracing::warn!(error = %e, "cannot record the software renderer in session.log");
     }
@@ -104,6 +121,27 @@ mod tests {
     #[test]
     fn a_chosen_card_that_does_not_open_is_the_error() {
         assert!(chosen("broken", &["hardware"]).is_err());
+    }
+
+    #[test]
+    fn a_software_renderer_is_a_warning_event_beside_its_session_log_line() {
+        crate::logging::test_events::memory();
+        let dir = tempfile::tempdir().unwrap();
+        record_in(Some(dir.path().to_owned()), "/dev/dri/card1");
+        let log = std::fs::read_to_string(dir.path().join("session.log")).unwrap();
+        assert!(
+            log.ends_with(
+                " only a software renderer is available: gpu=/dev/dri/card1; the CPU draws the desktop\n"
+            ),
+            "{log}"
+        );
+        assert_eq!(log.lines().count(), 1);
+        let events = crate::logging::test_events::recorded("server.renderer.software");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].severity, Severity::Warn);
+        assert_eq!(events[0].message, "only a software renderer is available");
+        assert_eq!(events[0].fields.get("gpu").unwrap(), "/dev/dri/card1");
+        assert!(events[0].redacted.is_empty());
     }
 
     #[test]

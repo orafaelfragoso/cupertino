@@ -18,6 +18,7 @@ path = "src/bin/cupertino.rs"
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-build-info = { path = "../cupertino-build-info" }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-diagnostics = { path = "../cupertino-diagnostics" }
 cupertino-layers = { path = "../cupertino-layers" }
 libc = "0.2"

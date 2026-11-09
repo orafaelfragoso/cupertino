@@ -249,6 +249,9 @@ cli_checks() {
     as_user cupertino --format jsonl diagnose > /tmp/u/diagnose.jsonl || status=$?
     check "cupertino --format jsonl diagnose: exit $status, end last" \
         jq -se --argjson s "$status" '$s == 0 and .[-1].type == "end" and .[-1].ok and ([.[] | select(.type == "end")] | length) == 1' /tmp/u/diagnose.jsonl
+    as_user cupertino diagnose export --output /tmp/u/export.json >/dev/null
+    check 'cupertino diagnose export writes one private JSON document with its keys' sh -c \
+        'test "$(stat -c %a /tmp/u/export.json)" = 600 && jq -e '"'"'.schema == "cupertino.diag.export.v1" and ((["created", "events", "report", "schema", "sources", "versions"] - keys) == [])'"'"' /tmp/u/export.json >/dev/null'
     # desktop start runs until stopped: started in the background, stopped with SIGTERM once the compositor is ready
     as_user XDG_RUNTIME_DIR=/tmp/u/runtime cupertino --format jsonl desktop start --backend headless --spawn true \
         > /tmp/u/desktop.jsonl 2> /tmp/u/desktop.err &

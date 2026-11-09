@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use cupertino_cli::{Context, Output, Runner, REGISTRY};
+use cupertino_diagnostics::events::JournalResult;
 use cupertino_diagnostics::{Area, Sources};
 use serde_json::json;
 use support::{args, envelope, kinds, records};
@@ -21,6 +22,14 @@ fn sources(dir: &Path, env: &[(&str, &str)]) -> Sources {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect::<HashMap<_, _>>(),
         unit_state: Box::new(|_, _| None),
+        journal: Box::new(|_| {
+            JournalResult::Unavailable("no journalctl in the fixture".to_owned())
+        }),
+        journal_follow: Box::new(|_| {
+            let mut command = std::process::Command::new("true");
+            command.env("CUPERTINO_ASSET_SEARCH_PATH", "");
+            command
+        }),
     }
 }
 

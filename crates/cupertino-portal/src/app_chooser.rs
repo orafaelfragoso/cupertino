@@ -13,7 +13,7 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{interface, Connection};
 
 use crate::file_chooser::plain;
-use crate::request::{from_frontend, Exported, PortalError, Response};
+use crate::request::{answered, from_frontend, Exported, PortalError, Response};
 
 /// The interface version served.
 pub const VERSION: u32 = 2;
@@ -211,68 +211,79 @@ impl AppChooser {
         choices: Vec<String>,
         options: Options,
     ) -> Result<(u32, HashMap<String, OwnedValue>), PortalError> {
-        from_frontend(&header, connection).await?;
-        let app_id = text("app_id", app_id)?;
-        let parent_window = text("parent_window", parent_window)?;
-        let choices = ids(choices)?;
-        let last_choice =
-            option::<String>(&options, "last_choice")?.filter(|id| choices.contains(id));
-        // the chooser is a window of its own over its parent either way
-        option::<bool>(&options, "modal")?;
-        option::<String>(&options, "content_type")?
-            .map(|t| text("content_type", t))
-            .transpose()?;
-        let uri = option::<String>(&options, "uri")?
-            .map(|uri| bounded("uri", uri, MAX_URI))
-            .transpose()?;
-        let filename = option::<String>(&options, "filename")?
-            .map(|name| text("filename", name))
-            .transpose()?;
-        let token = option::<String>(&options, "activation_token")?
-            .map(|token| text("activation_token", token))
-            .transpose()?;
+        let app = app_id.clone();
+        let result = async {
+            from_frontend(&header, connection).await?;
+            let app_id = text("app_id", app_id)?;
+            let parent_window = text("parent_window", parent_window)?;
+            let choices = ids(choices)?;
+            let last_choice =
+                option::<String>(&options, "last_choice")?.filter(|id| choices.contains(id));
+            // the chooser is a window of its own over its parent either way
+            option::<bool>(&options, "modal")?;
+            option::<String>(&options, "content_type")?
+                .map(|t| text("content_type", t))
+                .transpose()?;
+            let uri = option::<String>(&options, "uri")?
+                .map(|uri| bounded("uri", uri, MAX_URI))
+                .transpose()?;
+            let filename = option::<String>(&options, "filename")?
+                .map(|name| text("filename", name))
+                .transpose()?;
+            let token = option::<String>(&options, "activation_token")?
+                .map(|token| text("activation_token", token))
+                .transpose()?;
 
-        let pending = Pending::take(
-            &self.calls,
-            &handle,
-            Open {
-                app_id: app_id.clone(),
-                choices: choices.clone(),
-            },
-        )?;
-        let request = Exported::at(connection, handle.as_ref()).await?;
-        let (reply, answer) = async_channel::bounded(1);
-        (self.events)(Event::Ask {
-            handle: handle.clone(),
-            ask: Box::new(Ask {
-                app_id,
-                parent_window,
-                target: filename.or(uri).map(|t| plain(&t)),
-                choices: self.choices(&choices),
-                last_choice,
-                wants_token: token.is_none(),
-            }),
-            reply: Reply(reply),
-        });
-        let answer = futures_lite::future::or(async { Some(answer.recv().await.ok()) }, async {
-            request.closed().await;
-            None
-        })
+            let pending = Pending::take(
+                &self.calls,
+                &handle,
+                Open {
+                    app_id: app_id.clone(),
+                    choices: choices.clone(),
+                },
+            )?;
+            let request = Exported::at(connection, handle.as_ref()).await?;
+            let (reply, answer) = async_channel::bounded(1);
+            (self.events)(Event::Ask {
+                handle: handle.clone(),
+                ask: Box::new(Ask {
+                    app_id,
+                    parent_window,
+                    target: filename.or(uri).map(|t| plain(&t)),
+                    choices: self.choices(&choices),
+                    last_choice,
+                    wants_token: token.is_none(),
+                }),
+                reply: Reply(reply),
+            });
+            let answer =
+                futures_lite::future::or(async { Some(answer.recv().await.ok()) }, async {
+                    request.closed().await;
+                    None
+                })
+                .await;
+            request.remove().await;
+            Ok(match answer {
+                Some(Some(Answer::Chosen { id, token: made })) if pending.offers(&id) => {
+                    // the caller's own token is handed on unchanged; only without one does the server's count
+                    let made = made.filter(|made| token.is_none() && file_name(made));
+                    (Response::Success as u32, results(id, token.or(made))?)
+                }
+                Some(Some(Answer::Cancelled)) => (Response::Cancelled as u32, HashMap::new()),
+                Some(_) => (Response::Other as u32, HashMap::new()),
+                None => {
+                    (self.events)(Event::Close { handle });
+                    (Response::Other as u32, HashMap::new())
+                }
+            })
+        }
         .await;
-        request.remove().await;
-        Ok(match answer {
-            Some(Some(Answer::Chosen { id, token: made })) if pending.offers(&id) => {
-                // the caller's own token is handed on unchanged; only without one does the server's count
-                let made = made.filter(|made| token.is_none() && file_name(made));
-                (Response::Success as u32, results(id, token.or(made))?)
-            }
-            Some(Some(Answer::Cancelled)) => (Response::Cancelled as u32, HashMap::new()),
-            Some(_) => (Response::Other as u32, HashMap::new()),
-            None => {
-                (self.events)(Event::Close { handle });
-                (Response::Other as u32, HashMap::new())
-            }
-        })
+        answered(
+            "org.freedesktop.impl.portal.AppChooser",
+            "ChooseApplication",
+            Some(&app),
+            result,
+        )
     }
 
     async fn update_choices(
@@ -282,17 +293,26 @@ impl AppChooser {
         handle: OwnedObjectPath,
         choices: Vec<String>,
     ) -> Result<(), PortalError> {
-        from_frontend(&header, connection).await?;
-        let choices = ids(choices)?;
-        match lock(&self.calls).get_mut(&handle) {
-            Some(open) => open.choices = choices.clone(),
-            None => return Err(invalid(format!("{handle} is no open app chooser"))),
+        let result = async {
+            from_frontend(&header, connection).await?;
+            let choices = ids(choices)?;
+            match lock(&self.calls).get_mut(&handle) {
+                Some(open) => open.choices = choices.clone(),
+                None => return Err(invalid(format!("{handle} is no open app chooser"))),
+            }
+            (self.events)(Event::Update {
+                handle,
+                choices: self.choices(&choices),
+            });
+            Ok(())
         }
-        (self.events)(Event::Update {
-            handle,
-            choices: self.choices(&choices),
-        });
-        Ok(())
+        .await;
+        answered(
+            "org.freedesktop.impl.portal.AppChooser",
+            "UpdateChoices",
+            None,
+            result,
+        )
     }
 
     #[zbus(property, name = "version")]

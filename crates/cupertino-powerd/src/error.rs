@@ -2,6 +2,7 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use rustix::io::Errno;
 
 use crate::{backlight, supply};
@@ -58,6 +59,41 @@ impl Error {
             source: Box::new(source),
         }
     }
+}
+
+impl Error {
+    /// The kind of failure, as a diagnostic event names it.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Io { .. } => "io",
+            Self::Supply { .. } => "supply",
+            Self::Backlight { .. } => "backlight",
+            Self::Devices(_) => "devices",
+            Self::Evdev { .. } => "evdev",
+            Self::Open { .. } => "open",
+            Self::Poll(_) => "poll",
+            #[cfg(feature = "dbus")]
+            Self::Bus { .. } => "bus",
+            #[cfg(feature = "dbus")]
+            Self::NameTaken(_) => "name_taken",
+            #[cfg(feature = "dbus")]
+            Self::Seat(_) => "logind",
+        }
+    }
+}
+
+/// Records `power.backend.start_failed`: the step of the start that failed (`lid`, `logind`, `uevent`, `bus`), the
+/// error's kind and its text. The caller still returns the error.
+pub fn start_failed(step: &'static str, error: &Error) {
+    diag::event(
+        Severity::Error,
+        "power.backend.start_failed",
+        "the power service could not start",
+    )
+    .field("step", Value::Public(step))
+    .field("kind", Value::Public(error.kind()))
+    .field("error", Value::Public(&error.to_string()))
+    .emit();
 }
 
 impl fmt::Display for Error {

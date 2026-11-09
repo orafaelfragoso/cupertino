@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use cupertino_btd::auth::{AllowAll, Authorizer, LogindAuthorizer};
 use cupertino_btd::daemon::{Bus, Config, Daemon};
-use cupertino_btd::error::Error;
+use cupertino_btd::error::{start_failed, Error};
 use cupertino_btd::transport::{KernelTransport, NoBluetooth, Transport};
+use cupertino_diagnostic_events as diag;
 
 const USAGE: &str =
     "usage: cupertino-btd [--session-bus [--no-auth]] [--keys-dir PATH] [--read-only]";
@@ -57,16 +58,20 @@ impl Options {
 }
 
 fn main() -> ExitCode {
+    // first: the panic hook and the journal are in place for everything below
+    diag::init(diag::component!(), "bluetooth", diag::Sink::Journal);
     let options = match Options::parse(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(message) => {
             eprintln!("cupertino-btd: {message}\n{USAGE}");
+            diag::exit_error(&message);
             return ExitCode::FAILURE;
         }
     };
     // `run` only returns on failure
     let Err(e) = run(options);
     eprintln!("cupertino-btd: {e}");
+    diag::exit_error(&e);
     ExitCode::FAILURE
 }
 
@@ -75,7 +80,9 @@ fn run(options: Options) -> Result<Infallible, Error> {
         Box::new(AllowAll)
     } else {
         Box::new(LogindAuthorizer::new(
-            cupertino_seat::connect().map_err(Error::Seat)?,
+            cupertino_seat::connect()
+                .map_err(Error::Seat)
+                .inspect_err(|error| start_failed("logind", error))?,
         ))
     };
     let transport: Arc<dyn Transport> = match KernelTransport::open() {
@@ -86,7 +93,11 @@ fn run(options: Options) -> Result<Infallible, Error> {
             );
             Arc::new(NoBluetooth)
         }
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            let error = Error::from(error);
+            start_failed("management_socket", &error);
+            return Err(error);
+        }
     };
     let bus = if options.session_bus {
         Bus::Session

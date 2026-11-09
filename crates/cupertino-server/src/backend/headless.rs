@@ -132,6 +132,10 @@ pub fn init_displays(
     scale: Option<f64>,
 ) -> Result<()> {
     let mut renderer = create_renderer()?;
+    cupertino_diagnostic_events::set_context(
+        "renderer",
+        cupertino_diagnostic_events::Value::Public("gles"),
+    );
     state.render = Some(RenderResources::new(&mut renderer)?);
     super::init_buffers(state, &renderer);
     state.backend = Some(Backend::Headless(Box::new(HeadlessBackend {

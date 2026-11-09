@@ -382,6 +382,7 @@ fn while_locked_an_application_gets_no_input_and_a_return_from_another_console_k
 #[test]
 fn a_login_process_killed_while_locked_leaves_the_session_locked_until_its_successor_takes_the_lock(
 ) {
+    common::events::memory();
     let Some(mut session) = Session::start() else {
         return;
     };
@@ -440,6 +441,27 @@ fn a_login_process_killed_while_locked_leaves_the_session_locked_until_its_succe
         before,
         "the application got input under the successor's lock screen"
     );
+
+    // the diagnostic events of the crash: the lock client lost while locked, the server's own cover, and the supervised
+    // process's exit by the signal, restarted
+    let lost = common::events::recorded("server.lock.client_lost");
+    assert_eq!(lost.len(), 1, "{lost:?}");
+    assert_eq!(
+        lost[0].severity,
+        cupertino_diagnostic_events::Severity::Error
+    );
+    assert_eq!(lost[0].fields.get("stage").unwrap(), "locked");
+    assert_eq!(lost[0].fields.get("stays_locked").unwrap(), true);
+    let covered = common::events::recorded("server.lock.fallback_shown");
+    assert_eq!(covered.len(), 1, "{covered:?}");
+    assert_eq!(covered[0].fields.get("reason").unwrap(), "lock_client_lost");
+    let exited: Vec<_> = common::events::recorded("server.shell.exited")
+        .into_iter()
+        .filter(|e| e.fields.get("role").unwrap() == "cupertino-login")
+        .collect();
+    assert_eq!(exited.len(), 1, "{exited:?}");
+    assert_eq!(exited[0].fields.get("signal").unwrap(), libc::SIGKILL);
+    assert!(exited[0].fields.get("restart_in").is_some());
 }
 
 /// A stand-in for logind for the login process: session [`SESSION_ID`] is active on `seat0`, every power action is

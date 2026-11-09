@@ -9,6 +9,7 @@ mod options;
 mod roles;
 mod screen;
 
+use cupertino_diagnostic_events as diag;
 use cupertino_login_ipc::zeroing::ZeroOnFree;
 use options::{Options, USAGE};
 use std::process::ExitCode;
@@ -19,14 +20,17 @@ use std::process::ExitCode;
 static ALLOCATOR: ZeroOnFree<std::alloc::System> = ZeroOnFree(std::alloc::System);
 
 fn main() -> ExitCode {
+    diag::init(diag::component!(), "login_ui", diag::Sink::UserStore);
     let options = match Options::parse(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(problem) => {
+            diag::exit_error(&problem);
             eprintln!("cupertino-login: {problem}\n{USAGE}");
             return ExitCode::FAILURE;
         }
     };
     if let Err(e) = harden::harden() {
+        diag::exit_error(&e);
         eprintln!("cupertino-login: hardening the process: {e}");
         return ExitCode::FAILURE;
     }
@@ -44,6 +48,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         // a failure exit makes the server restart the process
         Err(e) => {
+            diag::exit_error(&e);
             eprintln!("cupertino-login: {e}");
             ExitCode::FAILURE
         }

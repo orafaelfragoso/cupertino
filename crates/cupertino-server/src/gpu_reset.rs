@@ -1,12 +1,13 @@
 //! Recovering from a GPU reset: the rendering context is lost, the backend makes a new renderer, every GPU object of the
 //! server is made again from it and every client buffer is imported again, so the clients stay connected. Each reset is
-//! a line in the session's `session.log`, which `cupertino-diagnose` reports. Too many resets in a row end the session as
-//! a lost context did before, so a GPU that keeps resetting cannot hang it.
+//! a line in the session's `session.log`, which `cupertino-diagnose` reports, and a `server.gpu.reset` diagnostic event.
+//! Too many resets in a row end the session as a lost context did before, so a GPU that keeps resetting cannot hang it.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use smithay::backend::renderer::gles::{GlesRenderer, GraphicsResetStatus};
 
 use crate::render::scene::RenderResources;
@@ -96,15 +97,33 @@ impl Cupertino {
     }
 }
 
-/// A reset of `gpu` for `reason`, and how recovering from it went, as a line of `session.log` in the session's state
-/// directory; nothing without one.
+/// A reset of `gpu` for `reason`, and how recovering from it went: a warning, the event `server.gpu.reset` (`warn` when
+/// the renderer was made again, `error` when the session ends) and a line of `session.log` in the session's state
+/// directory, none without one.
 pub fn record(gpu: &str, reason: &str, recovery: &Result<(), String>) {
+    record_in(state_dir(), gpu, reason, recovery);
+}
+
+/// [`record`], with `session.log` in `dir`.
+fn record_in(dir: Option<PathBuf>, gpu: &str, reason: &str, recovery: &Result<(), String>) {
     let outcome = match recovery {
         Ok(()) => "renderer remade, the clients stayed connected".to_owned(),
         Err(e) => format!("renderer not remade ({e}), the session ends"),
     };
     tracing::warn!(gpu, reason, outcome, "the GPU was reset");
-    let Some(dir) = state_dir() else { return };
+    let remade = recovery.is_ok();
+    let event = if remade {
+        diag::event(Severity::Warn, "server.gpu.reset", "the GPU was reset")
+    } else {
+        diag::event(Severity::Error, "server.gpu.reset", "the GPU was reset")
+    };
+    event
+        .field("gpu", Value::Path(Path::new(gpu)))
+        .field("reason", Value::Public(reason))
+        .field("outcome", Value::Public(&outcome))
+        .field("remade", Value::Bool(remade))
+        .emit();
+    let Some(dir) = dir else { return };
     if let Err(e) = append(
         &dir.join("session.log"),
         &line(&local_now(), gpu, reason, &outcome),
@@ -205,6 +224,79 @@ mod tests {
             Some(Loss::Reset("the cause is unknown".to_owned()))
         );
         assert_eq!(loss(GraphicsResetStatus::NoError), None);
+    }
+
+    /// The lines of `session.log` in `dir`, each without its time.
+    fn logged(dir: &Path) -> Vec<String> {
+        std::fs::read_to_string(dir.join("session.log"))
+            .unwrap()
+            .lines()
+            .map(|l| l[l.find(LOG_MARK).unwrap()..].to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_reset_the_renderer_survived_is_a_warning_event_beside_its_session_log_line() {
+        crate::logging::test_events::memory();
+        let dir = tempfile::tempdir().unwrap();
+        record_in(
+            Some(dir.path().to_owned()),
+            "/dev/dri/card1",
+            "another program caused it",
+            &Ok(()),
+        );
+        assert_eq!(
+            logged(dir.path()),
+            ["the GPU was reset: gpu=/dev/dri/card1 reason=another program caused it; renderer remade, the clients stayed connected"]
+        );
+        let events = crate::logging::test_events::recorded("server.gpu.reset");
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event.severity, Severity::Warn);
+        assert_eq!(event.message, "the GPU was reset");
+        assert_eq!(event.fields.get("gpu").unwrap(), "/dev/dri/card1");
+        assert_eq!(
+            event.fields.get("reason").unwrap(),
+            "another program caused it"
+        );
+        assert_eq!(
+            event.fields.get("outcome").unwrap(),
+            "renderer remade, the clients stayed connected"
+        );
+        assert_eq!(event.fields.get("remade").unwrap(), true);
+        assert!(event.redacted.is_empty(), "{:?}", event.redacted);
+    }
+
+    #[test]
+    fn a_reset_that_ends_the_session_is_an_error_event_and_its_private_paths_are_hashed() {
+        crate::logging::test_events::memory();
+        let dir = tempfile::tempdir().unwrap();
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/someone".into());
+        let error = format!("cannot read {home}/private/notes.txt");
+        record_in(
+            Some(dir.path().to_owned()),
+            "/dev/dri/card0",
+            "the server's rendering caused it",
+            &Err(error.clone()),
+        );
+        assert_eq!(
+            logged(dir.path()),
+            [format!("the GPU was reset: gpu=/dev/dri/card0 reason=the server's rendering caused it; renderer not remade ({error}), the session ends")]
+        );
+        let events = crate::logging::test_events::recorded("server.gpu.reset");
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event.severity, Severity::Error);
+        assert_eq!(event.fields.get("remade").unwrap(), false);
+        let outcome = event.fields.get("outcome").unwrap().as_str().unwrap();
+        assert!(outcome.starts_with("renderer not remade ("), "{outcome}");
+        assert!(outcome.ends_with("), the session ends"), "{outcome}");
+        assert!(!outcome.contains("private/notes.txt"), "{outcome}");
+        assert!(
+            event.redacted.contains(&"outcome".to_owned()),
+            "{:?}",
+            event.redacted
+        );
     }
 
     #[test]

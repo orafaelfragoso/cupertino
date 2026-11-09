@@ -33,9 +33,12 @@ fn about_has_an_independent_owner_and_only_its_own_program_receives_launches() {
     );
     assert!(cupertino_settings::instance::show_about(bus.builder(), &"x".repeat(4097)).is_err());
     assert!(rx.try_recv().is_err());
+    // what the process records goes to a store of the test's own
+    let state = tempfile::tempdir().unwrap();
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_cupertino-settings"))
         .arg("--about")
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+        .env("XDG_STATE_HOME", state.path())
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("WAYLAND_SOCKET")
@@ -109,12 +112,15 @@ fn a_second_start_hands_its_pane_to_the_first_and_its_token_only_to_its_own_prog
         tx.lock().unwrap().send((pane, token)).unwrap()
     })
     .expect("claims the name");
+    // what the process records goes to a store of the test's own
+    let state = tempfile::tempdir().unwrap();
     let second = |token: Option<&str>| {
         // no display: the second start must not need one
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_cupertino-settings"));
         command
             .args(["--pane", "sound"])
             .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+            .env("XDG_STATE_HOME", state.path())
             .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("XDG_ACTIVATION_TOKEN");

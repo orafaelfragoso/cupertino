@@ -16,7 +16,11 @@
 //! screen is asked to lock, as `lock_session` asks it. A pending lock stays in force should its client go before it
 //! confirms. The compositor holds the sleep back (a logind delay inhibitor, `power.rs`) until every output shows such a
 //! covered frame.
+//!
+//! A lock client that goes away is the diagnostic event `server.lock.client_lost`; each time the server covers the
+//! outputs itself, with no lock surface to show, it is `server.lock.fallback_shown`.
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::delegate_session_lock;
 use smithay::desktop::utils::under_from_surface_tree;
@@ -114,6 +118,41 @@ impl SessionLock {
             LockState::Unlocked | LockState::Orphaned => None,
         }
     }
+}
+
+/// `server.lock.client_lost`: the lock client disconnected at `stage` (`locking` before it was told the session is
+/// locked, `locked` after), and the session `stays_locked` (`error`) or opens again (`warn`).
+fn record_client_lost(stage: &'static str, stays_locked: bool) {
+    let event = if stays_locked {
+        diag::event(
+            Severity::Error,
+            "server.lock.client_lost",
+            "the lock client disconnected without unlocking",
+        )
+    } else {
+        diag::event(
+            Severity::Warn,
+            "server.lock.client_lost",
+            "the lock client disconnected without unlocking",
+        )
+    };
+    event
+        .field("stage", Value::Public(stage))
+        .field("stays_locked", Value::Bool(stays_locked))
+        .emit();
+}
+
+/// `server.lock.fallback_shown`: the server covers its `outputs` itself (black, with no lock surface) for `reason`,
+/// until a lock client takes the lock.
+fn record_fallback(reason: &'static str, outputs: usize) {
+    diag::event(
+        Severity::Warn,
+        "server.lock.fallback_shown",
+        "the server covers the outputs until a lock client takes the lock",
+    )
+    .field("reason", Value::Public(reason))
+    .field("outputs", Value::Count(outputs as u64))
+    .emit();
 }
 
 /// Lock surface and frame bookkeeping of one output.
@@ -258,6 +297,7 @@ impl Cupertino {
                 tracing::warn!(
                     "the system goes to sleep before the session is locked: the outputs are covered until a lock client takes the lock"
                 );
+                record_fallback("sleep_before_lock", self.outputs.len());
                 self.session_lock.state = LockState::Orphaned;
                 self.seal_session(false);
                 // a lock screen that lives but did not hear of the sleep is asked to take the covered session over
@@ -351,6 +391,8 @@ impl Cupertino {
             tracing::warn!(
                 "lock client disconnected while taking the lock: the session stays locked"
             );
+            record_client_lost("locking", true);
+            record_fallback("lock_client_lost", self.outputs.len());
             self.session_lock.state = LockState::Orphaned;
             self.request_redraw();
             return;
@@ -371,10 +413,13 @@ impl Cupertino {
                     tracing::warn!(
                         "lock client disconnected before taking the lock: the session stays locked"
                     );
+                    record_client_lost("locking", true);
+                    record_fallback("lock_client_lost", self.outputs.len());
                     self.session_lock.state = LockState::Orphaned;
                     self.request_redraw();
                 } else {
                     tracing::warn!("lock client disconnected before the session was locked");
+                    record_client_lost("locking", false);
                     self.restore_after_lock();
                 }
             }
@@ -389,6 +434,8 @@ impl Cupertino {
                 tracing::warn!(
                     "lock client disconnected without unlocking: the session stays locked"
                 );
+                record_client_lost("locked", true);
+                record_fallback("lock_client_lost", self.outputs.len());
                 self.session_lock.state = LockState::Orphaned;
                 for o in &mut self.outputs {
                     o.lock.surface = None;

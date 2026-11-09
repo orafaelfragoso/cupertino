@@ -43,6 +43,7 @@ impl Dirs {
             .env("HOME", self.path("home"))
             .env("XDG_CONFIG_HOME", self.path("config"))
             .env("XDG_STATE_HOME", self.path("state"))
+            .env("CUPERTINO_DIAG_JOURNAL_SOCKET", self.path("journal"))
             .env("XDG_DATA_HOME", self.path("data"))
             .env("XDG_RUNTIME_DIR", self.path("runtime"))
             .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")

@@ -174,6 +174,11 @@ fn the_login_screen_starts_no_program() {
         "-c".into(),
         touch("screenshot"),
     ];
+    // were it started, what it records stays with the test
+    h.state
+        .config
+        .screenshot_command
+        .splice(1..1, common::events::isolated());
     h.state.login_screen = true;
     h.state.spawn("sh", &["-c", &touch("spawned")]);
     h.state

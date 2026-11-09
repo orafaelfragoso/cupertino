@@ -459,6 +459,7 @@ fn a_role_does_not_carry_to_another_connection_or_another_role() {
 /// Each `get_*` of the shell global needs the role it creates.
 #[test]
 fn every_role_request_needs_its_own_role() {
+    common::events::memory();
     let Some(mut h) = Harness::new() else { return };
     let requests: [(&str, u16, ShellRole); 3] = [
         ("get_menu_bar", SHELL_GET_MENU_BAR, ShellRole::MenuBar),
@@ -493,6 +494,26 @@ fn every_role_request_needs_its_own_role() {
             Some((client.shell, PERMISSION)),
             "{name} without {needed:?}"
         );
+    }
+    // each refusal is an event with the interface, the client's program and the role it lacked
+    let refused = common::events::recorded("server.authorization.refused");
+    let roles: Vec<&str> = refused
+        .iter()
+        .map(|r| r.fields.get("role_required").unwrap().as_str().unwrap())
+        .collect();
+    assert_eq!(roles, ["MenuBar", "Dock", "Session"]);
+    // the connections are made in the test's own process, which stands for the shell process
+    let program = std::env::current_exe().unwrap();
+    let program = program.file_name().unwrap().to_str().unwrap();
+    for event in &refused {
+        assert_eq!(event.severity, cupertino_diagnostic_events::Severity::Warn);
+        assert_eq!(
+            event.message,
+            "a request needs a role the connection does not hold"
+        );
+        assert_eq!(event.fields.get("interface").unwrap(), "cupertino_shell_v1");
+        assert_eq!(event.fields.get("app_id").unwrap(), program);
+        assert!(event.redacted.is_empty(), "{event:?}");
     }
 }
 

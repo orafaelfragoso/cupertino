@@ -33,7 +33,7 @@ use wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_captu
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::geometry::{self, Placement};
-use crate::screen_cast::{Capture as Request, CursorMode, Running, Source, Started, Stream};
+use crate::screen_cast::{self, Capture as Request, CursorMode, Running, Source, Started, Stream};
 use crate::screenshot::{self, Failure, Output, Shoot, Shot};
 
 /// The name of every stream's node.
@@ -916,6 +916,10 @@ impl Capture {
                 "cupertino-portal: the share of {} ended: {reason}",
                 share.session
             );
+            // a share that had not started yet is recorded where its Start learns it
+            if share.started.is_none() {
+                screen_cast::screencast_failed(None, "running", reason);
+            }
         }
         if let Some(started) = share.started {
             started.send(Err(match end {

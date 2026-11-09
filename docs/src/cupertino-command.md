@@ -15,6 +15,10 @@ cupertino diagnose [--area AREA]... [--strict]
 cupertino desktop start --backend nested|headless|tty [--size WxH] [--scale S] [--spawn CMD]...
 cupertino appearance assets check DIR       # read the asset pack in DIR and report its problems
 cupertino --format jsonl diagnose           # JSON lines: one record per line
+cupertino diagnose events --since 24h       # the diagnostic events of the last day
+cupertino diagnose events --follow          # and the new ones, until Ctrl-C
+cupertino diagnose events clear --yes       # delete the stored events
+cupertino diagnose export --output FILE     # one JSON file for a bug report
 ```
 
 `--format` takes `human` (the default), `json` or `jsonl` and may stand anywhere on the line before a `--`. Any other value, or none, is a usage error. After `--`, every word belongs to the command. `cupertino help COMMAND` for a whole command also prints its description and examples, and marks a preview or deprecated command.
@@ -24,12 +28,17 @@ cupertino --format jsonl diagnose           # JSON lines: one record per line
 | Command | What it does |
 |---|---|
 | `appearance assets check DIR` | Reads the asset pack in `DIR` (it needs a `manifest.json`) the way the desktop processes do. It reports the pack's problems and what provides each logical name, the pack or the built-in fallback. A pack that cannot be read exits with 5. It replaces `cupertino-assets check DIR`. |
-| `diagnose` | Checks the GPU and its driver, the session, the portals, the services, how the last sessions ended and the logs; `--area` picks areas (repeatable), in the order `gpu`, `session`, `portals`, `services`, `crash`, `logs`. It exits 0 once the checks ran; with `--strict` a failed check exits with 5 (`checks_failed`). In the `json` form `data` is the report, the object `cupertino-diagnose --json` prints; in `jsonl` each check is a `check` event and the result counts the checks of each status. It replaces `cupertino-diagnose`. |
+| `diagnose` | Checks the GPU and its driver, the session, the portals, the services, how the last sessions ended, the logs and the errors the desktop recorded in the last day; `--area` picks areas (repeatable), in the order `gpu`, `session`, `portals`, `services`, `crash`, `logs`, `events`. It exits 0 once the checks ran; with `--strict` a failed check exits with 5 (`checks_failed`). In the `json` form `data` is the report, the object `cupertino-diagnose --json` prints; in `jsonl` each check is a `check` event and the result counts the checks of each status. It replaces `cupertino-diagnose`. |
+| `diagnose events [--since DURATION\|TIME] [--component NAME]... [--id PREFIX]... [--severity LEVEL] [--follow]` | Prints the diagnostic events of the user store, `session.log` and the system journal, merged in time order, one line each (an `event` record whose data is the `cupertino.diag.v1` record in the JSON forms); the final data lists the `sources` with their status (`ok`, `empty`, `denied`, `unavailable`, `corrupt`) and the `counts`. `--follow` goes on with the new events until stopped. |
+| `diagnose events clear --yes` | Deletes the stored events and keeps the salt; without `--yes` it fails with `confirmation_required` (exit 2). |
+| `diagnose export --output FILE [--include-logs] [--since DURATION\|TIME]` | Writes one JSON document, mode 0600, with the versions, the diagnostics report, the events and the sources, and with `--include-logs` the scrubbed `server.log`, `server.log.1` and `session.log`. A file that exists is never overwritten (`file_exists`, exit 5). |
 | `desktop start` | Starts the compositor and stays attached to it. `--backend nested` runs it in a window of the current desktop (it needs `WAYLAND_DISPLAY` or `DISPLAY`), `headless` offscreen; both need `XDG_RUNTIME_DIR` and take `--size`, `--scale` and `--spawn`. `--backend tty` becomes `cupertino-session`, the session of a text console, and refuses to run inside a graphical session (4, `inside_graphical_session`) or from anything but a text console (3, `not_a_vt`). Events: `starting`, `ready` (with the compositor's `WAYLAND_DISPLAY`), `exited` (its status or signal, and how long it ran). Ctrl-C or SIGTERM ask the compositor to end with SIGTERM; one still running 10 seconds later is killed, and the command exits 0. A compositor that fails, or ends before it is ready, exits the command with 3 (`server_failed`). |
 | `version` | One entry per part: `cli`, `runtime-package`, `data-package`, `compositor-running`, `c-abi`, `theme`, `asset-pack`, the output schemas, `os-image` and `kernel`, each with `name`, `version`, `source`, `status` (`ok`, `not_installed`, `unreadable`, `not_running`), `detail` and `commit`. A part that is not there never fails the command. |
 | `completions SHELL` | Prints the completion script of `bash`, `zsh` or `fish`, generated from the registry. |
 | `dev layers [--root DIR] [--graph]` | Preview. Checks that the crates of a source checkout depend on each other as the layer rules allow and that the licences the MPL-2.0 crates link are accepted. Outside a checkout it exits with 3 (`no_checkout`), without Cargo with 3 (`no_cargo`), on problems with 5 (`layer_violations`, each problem in `data.problems`). |
 | `dev manual DIR` | Preview. Writes the manual pages into `DIR`, dated by `SOURCE_DATE_EPOCH` or a fixed date, so two runs write the same bytes. |
+
+[Checking a machine](diagnose.md#diagnostic-events) describes the events, their limits, what they never contain and journal access.
 
 The registry that holds this list is `REGISTRY` in `crates/cupertino-cli/src/lib.rs`. The help, the JSON command tree, the dispatch, the completions and the manual pages all come from it.
 
@@ -75,11 +84,11 @@ While a streaming command runs, `Ctrl-C` (SIGINT) and SIGTERM ask it to stop, an
 | Code | `error.kind` | Meaning |
 |---|---|---|
 | 0 | | Success; also a closed standard output, and a command that runs until stopped when a stop ends it. |
-| 2 | `invalid_usage` | The command line is not valid: an unknown command or option, or a missing or wrong value. |
+| 2 | `invalid_usage` | The command line is not valid: an unknown command or option, or a missing or wrong value; also a command that needs a confirmation it did not get (`confirmation_required`). |
 | 3 | `unavailable` | What the command needs is not there or not running: no checkout or no Cargo for `dev layers`, no display, runtime directory, compositor or text console for `desktop start`, or a compositor that failed. |
 | 4 | `denied` | The caller is not allowed to do this here: `desktop start --backend tty` inside a graphical session. |
-| 5 | `validation` | What the command checked or read is not valid: a pack that cannot be read (`pack_unreadable`, `manifest_invalid`, `font_invalid`), layer problems (`layer_violations`, `metadata_failed`), or a failed check with `diagnose --strict` (`checks_failed`). |
-| 6 | `temporary` | A problem that may pass: output that cannot be written (`output_failed`), manual pages that cannot be written (`write_failed`), or a streaming command stopped before it finished (`interrupted`). |
+| 5 | `validation` | What the command checked or read is not valid: a pack that cannot be read (`pack_unreadable`, `manifest_invalid`, `font_invalid`), layer problems (`layer_violations`, `metadata_failed`), a failed check with `diagnose --strict` (`checks_failed`), an export file that exists (`file_exists`) or an event store that cannot be cleared (`store_unavailable`, `no_home`). |
+| 6 | `temporary` | A problem that may pass: output that cannot be written (`output_failed`), manual pages or an export file that cannot be written (`write_failed`), or a streaming command stopped before it finished (`interrupted`). |
 | 7 | `transaction_failed` | A system or package transaction failed. Reserved. |
 | 8 | `unsupported` | This release or this system does not do what was asked: the command groups kept for a later release, `system` and `ai`, answer `not_in_this_release`. |
 

@@ -12,7 +12,7 @@ use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{interface, Connection};
 
-use crate::request::{from_frontend, Exported, PortalError, Response};
+use crate::request::{answered, from_frontend, Exported, PortalError, Response};
 
 /// At most this many dialogs wait at once; another call is refused.
 pub const MAX_PENDING: usize = 16;
@@ -226,9 +226,19 @@ impl FileChooser {
         title: String,
         options: Options,
     ) -> Result<(u32, HashMap<String, OwnedValue>), PortalError> {
-        from_frontend(&header, connection).await?;
-        let ask = parse(Kind::Open, app_id, parent_window, title, &options)?;
-        self.ask(connection, handle, ask).await
+        let app = app_id.clone();
+        let result = async {
+            from_frontend(&header, connection).await?;
+            let ask = parse(Kind::Open, app_id, parent_window, title, &options)?;
+            self.ask(connection, handle, ask).await
+        }
+        .await;
+        answered(
+            "org.freedesktop.impl.portal.FileChooser",
+            "OpenFile",
+            Some(&app),
+            result,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -242,9 +252,19 @@ impl FileChooser {
         title: String,
         options: Options,
     ) -> Result<(u32, HashMap<String, OwnedValue>), PortalError> {
-        from_frontend(&header, connection).await?;
-        let ask = parse(Kind::Save, app_id, parent_window, title, &options)?;
-        self.ask(connection, handle, ask).await
+        let app = app_id.clone();
+        let result = async {
+            from_frontend(&header, connection).await?;
+            let ask = parse(Kind::Save, app_id, parent_window, title, &options)?;
+            self.ask(connection, handle, ask).await
+        }
+        .await;
+        answered(
+            "org.freedesktop.impl.portal.FileChooser",
+            "SaveFile",
+            Some(&app),
+            result,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -258,9 +278,19 @@ impl FileChooser {
         title: String,
         options: Options,
     ) -> Result<(u32, HashMap<String, OwnedValue>), PortalError> {
-        from_frontend(&header, connection).await?;
-        let ask = parse(Kind::SaveFiles, app_id, parent_window, title, &options)?;
-        self.ask(connection, handle, ask).await
+        let app = app_id.clone();
+        let result = async {
+            from_frontend(&header, connection).await?;
+            let ask = parse(Kind::SaveFiles, app_id, parent_window, title, &options)?;
+            self.ask(connection, handle, ask).await
+        }
+        .await;
+        answered(
+            "org.freedesktop.impl.portal.FileChooser",
+            "SaveFiles",
+            Some(&app),
+            result,
+        )
     }
 }
 

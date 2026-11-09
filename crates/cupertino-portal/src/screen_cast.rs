@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cupertino_defaults::screen_sharing::{is_id, Grant, ScreenSharingConf};
+use cupertino_diagnostic_events::{self as diag, Severity, Value as Field};
 
 use futures_lite::StreamExt;
 use zbus::message::Header;
@@ -24,7 +25,7 @@ use zbus::{interface, Connection};
 
 use crate::consent::identify;
 use crate::file_chooser::plain;
-use crate::request::{from_frontend, Exported, PortalError, Response, FRONTEND};
+use crate::request::{answered, from_frontend, Exported, PortalError, Response, FRONTEND};
 use crate::sharing::{Indicator, Shown};
 use crate::PORTAL_PATH;
 
@@ -325,7 +326,8 @@ impl Grants {
         let path = self.file.as_ref()?;
         let (conf, _) = ScreenSharingConf::load(path)
             .inspect_err(|e| {
-                eprintln!("cupertino-portal: {} restores nothing: {e}", path.display())
+                eprintln!("cupertino-portal: {} restores nothing: {e}", path.display());
+                store_failed("load", app_id, &e.to_string());
             })
             .ok()?;
         let grant = conf.find(id, app_id)?;
@@ -360,10 +362,13 @@ impl Grants {
             });
             match stored {
                 Ok(()) => return Some((id, Persist::Persistent)),
-                Err(e) => eprintln!(
-                    "cupertino-portal: the share is kept only while the app runs: {}: {e}",
-                    path.display()
-                ),
+                Err(e) => {
+                    eprintln!(
+                        "cupertino-portal: the share is kept only while the app runs: {}: {e}",
+                        path.display()
+                    );
+                    store_failed("save", app_id, &e.to_string());
+                }
             }
         }
         let mut transient = self.transient.lock().unwrap_or_else(|e| e.into_inner());
@@ -385,6 +390,35 @@ impl Grants {
             .unwrap_or_else(|e| e.into_inner())
             .retain(|t| t.id != id);
     }
+}
+
+/// Records `portal.permission.store_failed`: the remembered shares of `screen-sharing.conf` could not be read
+/// (`load`) or written (`save`) for `app_id`.
+fn store_failed(operation: &'static str, app_id: &str, error: &str) {
+    diag::event(
+        Severity::Warn,
+        "portal.permission.store_failed",
+        "the remembered screen shares could not be read or written",
+    )
+    .field("operation", Field::Public(operation))
+    .field("app_id", Field::Public(app_id))
+    .field("error", Field::Public(error))
+    .emit();
+}
+
+/// Records `portal.screencast.failed`: the share of `app_id` (when known) failed at `stage`, `start` before its stream
+/// reached the app or `running` after.
+pub fn screencast_failed(app_id: Option<&str>, stage: &'static str, error: &str) {
+    let mut event = diag::event(
+        Severity::Error,
+        "portal.screencast.failed",
+        "a screen share failed",
+    )
+    .field("stage", Field::Public(stage));
+    if let Some(app_id) = app_id {
+        event = event.field("app_id", Field::Public(app_id));
+    }
+    event.field("error", Field::Public(error)).emit();
 }
 
 /// A new grant id: 128 random bits in hexadecimal; `None` when the system has no randomness to give.
@@ -445,25 +479,29 @@ impl Session {
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] connection: &Connection,
     ) -> Result<(), PortalError> {
-        from_frontend(&header, connection).await?;
-        // a Start still waiting for the chooser or the share returns now
-        let _ = self.closed.try_send(());
-        let (connection, sessions, shares, path) = (
-            connection.clone(),
-            Arc::clone(&self.sessions),
-            Arc::clone(&self.shares),
-            self.path.clone(),
-        );
-        // the object is taken off the bus after this call returns, not from inside it
-        connection
-            .executor()
-            .clone()
-            .spawn(
-                async move { end(&connection, &sessions, &shares, &path, Ending::Closed).await },
-                "cupertino-portal-session-close",
-            )
-            .detach();
-        Ok(())
+        let result = async {
+            from_frontend(&header, connection).await?;
+            // a Start still waiting for the chooser or the share returns now
+            let _ = self.closed.try_send(());
+            let (connection, sessions, shares, path) = (
+                connection.clone(),
+                Arc::clone(&self.sessions),
+                Arc::clone(&self.shares),
+                self.path.clone(),
+            );
+            // the object is taken off the bus after this call returns, not from inside it
+            connection
+                .executor()
+                .clone()
+                .spawn(
+                    async move { end(&connection, &sessions, &shares, &path, Ending::Closed).await },
+                    "cupertino-portal-session-close",
+                )
+                .detach();
+            Ok(())
+        }
+        .await;
+        answered("org.freedesktop.impl.portal.Session", "Close", None, result)
     }
 
     /// The share ended without the frontend asking.
@@ -742,6 +780,7 @@ impl ScreenCast {
             Some(Ok(stream)) => stream,
             Some(Err(reason)) => {
                 eprintln!("cupertino-portal: the share of {session} did not start: {reason}");
+                screencast_failed(Some(&app_id), "start", &reason);
                 end(
                     connection,
                     &self.sessions,
@@ -846,47 +885,57 @@ impl ScreenCast {
         app_id: String,
         _options: Options,
     ) -> Result<(u32, HashMap<String, OwnedValue>), PortalError> {
-        from_frontend(&header, connection).await?;
-        let app_id = text("app_id", app_id)?;
-        let (closed, closed_receiver) = async_channel::bounded(1);
-        {
-            let mut sessions = lock(&self.sessions);
-            if sessions.contains_key(&session_handle) {
-                return Err(invalid(format!("{session_handle} is already a session")));
+        let app = app_id.clone();
+        let result = async {
+            from_frontend(&header, connection).await?;
+            let app_id = text("app_id", app_id)?;
+            let (closed, closed_receiver) = async_channel::bounded(1);
+            {
+                let mut sessions = lock(&self.sessions);
+                if sessions.contains_key(&session_handle) {
+                    return Err(invalid(format!("{session_handle} is already a session")));
+                }
+                let mine = sessions.values().filter(|e| e.app_id == app_id).count();
+                if sessions.len() >= MAX_SESSIONS || mine >= MAX_SESSIONS_PER_APP {
+                    return Err(PortalError::LimitsExceeded(
+                        "too many screen-cast sessions are open".to_owned(),
+                    ));
+                }
+                sessions.insert(
+                    session_handle.clone(),
+                    Entry {
+                        app_id,
+                        phase: Phase::Created,
+                        closed: closed_receiver,
+                        indicator: None,
+                        grant: None,
+                    },
+                );
             }
-            let mine = sessions.values().filter(|e| e.app_id == app_id).count();
-            if sessions.len() >= MAX_SESSIONS || mine >= MAX_SESSIONS_PER_APP {
-                return Err(PortalError::LimitsExceeded(
-                    "too many screen-cast sessions are open".to_owned(),
-                ));
+            let session = Session {
+                path: session_handle.clone(),
+                closed,
+                sessions: Arc::clone(&self.sessions),
+                shares: Arc::clone(&self.shares),
+            };
+            let added = connection
+                .object_server()
+                .at(&session_handle, session)
+                .await
+                .unwrap_or(false);
+            if !added {
+                lock(&self.sessions).remove(&session_handle);
+                return Err(invalid(format!("{session_handle} is already in use")));
             }
-            sessions.insert(
-                session_handle.clone(),
-                Entry {
-                    app_id,
-                    phase: Phase::Created,
-                    closed: closed_receiver,
-                    indicator: None,
-                    grant: None,
-                },
-            );
+            Ok((Response::Success as u32, HashMap::new()))
         }
-        let session = Session {
-            path: session_handle.clone(),
-            closed,
-            sessions: Arc::clone(&self.sessions),
-            shares: Arc::clone(&self.shares),
-        };
-        let added = connection
-            .object_server()
-            .at(&session_handle, session)
-            .await
-            .unwrap_or(false);
-        if !added {
-            lock(&self.sessions).remove(&session_handle);
-            return Err(invalid(format!("{session_handle} is already in use")));
-        }
-        Ok((Response::Success as u32, HashMap::new()))
+        .await;
+        answered(
+            "org.freedesktop.impl.portal.ScreenCast",
+            "CreateSession",
+            Some(&app),
+            result,
+        )
     }
 
     async fn select_sources(
@@ -898,42 +947,53 @@ impl ScreenCast {
         app_id: String,
         options: Options,
     ) -> Result<(u32, HashMap<String, OwnedValue>), PortalError> {
-        from_frontend(&header, connection).await?;
-        match self.phase(&session_handle, &app_id)? {
-            Phase::Created | Phase::Selected { .. } => {}
-            Phase::Starting | Phase::Started => {
-                return Err(invalid("sources are selected before Start"));
+        let app = app_id.clone();
+        let result = async {
+            from_frontend(&header, connection).await?;
+            match self.phase(&session_handle, &app_id)? {
+                Phase::Created | Phase::Selected { .. } => {}
+                Phase::Starting | Phase::Started => {
+                    return Err(invalid("sources are selected before Start"));
+                }
             }
-        }
-        let types = option::<u32>(&options, "types")?.unwrap_or(SourceTypes::MONITOR.bits());
-        if types == 0 || types & !SourceTypes::AVAILABLE.bits() != 0 {
-            return Err(invalid(format!("source types {types} are not served")));
-        }
-        let cursor =
-            match option::<u32>(&options, "cursor_mode")?.unwrap_or(CursorMode::Hidden as u32) {
+            let types = option::<u32>(&options, "types")?.unwrap_or(SourceTypes::MONITOR.bits());
+            if types == 0 || types & !SourceTypes::AVAILABLE.bits() != 0 {
+                return Err(invalid(format!("source types {types} are not served")));
+            }
+            let cursor = match option::<u32>(&options, "cursor_mode")?
+                .unwrap_or(CursorMode::Hidden as u32)
+            {
                 1 => CursorMode::Hidden,
                 2 => CursorMode::Embedded,
                 other => return Err(invalid(format!("cursor mode {other} is not served"))),
             };
-        // one source for each Start
-        option::<bool>(&options, "multiple")?;
-        let persist = option::<u32>(&options, "persist_mode")?.unwrap_or(0);
-        let persist = Persist::from_u32(persist)
-            .ok_or_else(|| invalid(format!("persist mode {persist} is not served")))?;
-        // restore data that is not this backend's, or names no grant, is ignored and the chooser shows
-        let restore = options
-            .get("restore_data")
-            .and_then(|value| restore_id(value));
-        self.set_phase(
-            &session_handle,
-            Phase::Selected {
-                types: SourceTypes(types),
-                cursor,
-                persist,
-                restore,
-            },
-        );
-        Ok((Response::Success as u32, HashMap::new()))
+            // one source for each Start
+            option::<bool>(&options, "multiple")?;
+            let persist = option::<u32>(&options, "persist_mode")?.unwrap_or(0);
+            let persist = Persist::from_u32(persist)
+                .ok_or_else(|| invalid(format!("persist mode {persist} is not served")))?;
+            // restore data that is not this backend's, or names no grant, is ignored and the chooser shows
+            let restore = options
+                .get("restore_data")
+                .and_then(|value| restore_id(value));
+            self.set_phase(
+                &session_handle,
+                Phase::Selected {
+                    types: SourceTypes(types),
+                    cursor,
+                    persist,
+                    restore,
+                },
+            );
+            Ok((Response::Success as u32, HashMap::new()))
+        }
+        .await;
+        answered(
+            "org.freedesktop.impl.portal.ScreenCast",
+            "SelectSources",
+            Some(&app),
+            result,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -947,46 +1007,56 @@ impl ScreenCast {
         parent_window: String,
         _options: Options,
     ) -> Result<(u32, HashMap<String, OwnedValue>), PortalError> {
-        from_frontend(&header, connection).await?;
-        let Phase::Selected {
-            types,
-            cursor,
-            persist,
-            restore,
-        } = self.phase(&session_handle, &app_id)?
-        else {
-            return Err(invalid("Start comes once, after SelectSources"));
-        };
-        let parent_window = text("parent_window", parent_window)?;
-        self.set_phase(&session_handle, Phase::Starting);
-        let identity = identify(&self.applications, &app_id);
-        let ask = Ask {
-            offer_remember: persist != Persist::None && !app_id.is_empty(),
-            app_id,
-            app_name: identity.name,
-            app_icon: identity.icon,
-            parent_window,
-            sources: (self.sources)()
-                .into_iter()
-                .filter(|s| types.contains(s.source_type()))
-                .map(Source::shown)
-                .collect(),
-        };
-        let started = self
-            .share(
-                connection,
-                handle,
-                session_handle.clone(),
-                ask,
+        let app = app_id.clone();
+        let result = async {
+            from_frontend(&header, connection).await?;
+            let Phase::Selected {
+                types,
                 cursor,
                 persist,
                 restore,
-            )
-            .await;
-        if started.is_err() {
-            self.set_phase(&session_handle, Phase::Created);
+            } = self.phase(&session_handle, &app_id)?
+            else {
+                return Err(invalid("Start comes once, after SelectSources"));
+            };
+            let parent_window = text("parent_window", parent_window)?;
+            self.set_phase(&session_handle, Phase::Starting);
+            let identity = identify(&self.applications, &app_id);
+            let ask = Ask {
+                offer_remember: persist != Persist::None && !app_id.is_empty(),
+                app_id,
+                app_name: identity.name,
+                app_icon: identity.icon,
+                parent_window,
+                sources: (self.sources)()
+                    .into_iter()
+                    .filter(|s| types.contains(s.source_type()))
+                    .map(Source::shown)
+                    .collect(),
+            };
+            let started = self
+                .share(
+                    connection,
+                    handle,
+                    session_handle.clone(),
+                    ask,
+                    cursor,
+                    persist,
+                    restore,
+                )
+                .await;
+            if started.is_err() {
+                self.set_phase(&session_handle, Phase::Created);
+            }
+            started
         }
-        started
+        .await;
+        answered(
+            "org.freedesktop.impl.portal.ScreenCast",
+            "Start",
+            Some(&app),
+            result,
+        )
     }
 
     #[zbus(property)]

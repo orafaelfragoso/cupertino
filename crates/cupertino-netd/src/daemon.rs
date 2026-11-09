@@ -24,7 +24,7 @@ use zbus::Address;
 
 use crate::auth::Authorizer;
 use crate::engine::{Command, CommandError};
-use crate::error::{Error, Result};
+use crate::error::{start_failed, Error, Result};
 use crate::interfaces::{
     Manager, NetworkObject, MANAGER_NAME, MANAGER_PATH, NETWORK_NAME, NETWORK_PATH,
 };
@@ -142,8 +142,13 @@ pub struct Daemon {
 
 impl Daemon {
     /// Connects to the bus and serves every object, without taking the names yet, so the host can
-    /// publish its first snapshot before anyone asks.
+    /// publish its first snapshot before anyone asks. A failure is recorded as
+    /// `network.backend.start_failed` (step `bus`).
     pub fn connect(config: Config) -> Result<(Self, Requests)> {
+        Self::serve(config).inspect_err(|error| start_failed("bus", error))
+    }
+
+    fn serve(config: Config) -> Result<(Self, Requests)> {
         let (sender, receiver) = channel();
         let waker = Arc::new(
             eventfd(0, EventfdFlags::NONBLOCK | EventfdFlags::CLOEXEC)
@@ -176,8 +181,13 @@ impl Daemon {
     }
 
     /// Takes both bus names. Fails with [`Error::NameTaken`] when another daemon (NetworkManager,
-    /// for instance) owns one of them.
+    /// for instance) owns one of them, recorded as `network.backend.start_failed` (step `bus_name`).
     pub fn claim_names(&self) -> Result<()> {
+        self.take_names()
+            .inspect_err(|error| start_failed("bus_name", error))
+    }
+
+    fn take_names(&self) -> Result<()> {
         for name in [MANAGER_NAME, NETWORK_NAME] {
             let reply = match self
                 .connection

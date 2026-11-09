@@ -149,13 +149,16 @@ fn the_portal_shares_the_chosen_display_as_a_stream_of_its_frames() {
     };
     let portal = ShellProcess {
         name: "cupertino-portal".into(),
-        command: vec![
-            "env".into(),
-            "CUPERTINO_ASSET_SEARCH_PATH=".into(),
-            format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
-            format!("PIPEWIRE_REMOTE={}", pipewire.remote().display()),
-            portal_binary().display().to_string(),
-        ],
+        command: [
+            vec!["env".into(), "CUPERTINO_ASSET_SEARCH_PATH=".into()],
+            common::events::isolated().to_vec(),
+            vec![
+                format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
+                format!("PIPEWIRE_REMOTE={}", pipewire.remote().display()),
+                portal_binary().display().to_string(),
+            ],
+        ]
+        .concat(),
         roles: vec![ShellRole::Capture],
     };
     let Some(mut server) = Server::start(vec![portal]) else {

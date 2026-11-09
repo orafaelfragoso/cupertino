@@ -4,9 +4,13 @@
 //! does not exist while the tests run. A binary started with a cleared environment finds the theme files only through
 //! `CUPERTINO_SPEC_DIR`, so every such spawn starts from [`cleared`], which always sets it.
 use std::ffi::OsStr;
+use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+
+use cupertino_diagnostic_events::journal::SOCKET_ENV;
 
 /// The theme files of the checkout.
 pub fn spec_dir() -> PathBuf {
@@ -15,16 +19,91 @@ pub fn spec_dir() -> PathBuf {
 
 /// `binary` with an empty environment but `PATH`, `HOME` (the folder `home`), `CUPERTINO_SPEC_DIR` and the empty asset
 /// search path (`CUPERTINO_ASSET_SEARCH_PATH`), so it draws with the built-in assets whatever packs the machine has
-/// installed; the caller adds the rest.
+/// installed, and with the diagnostic event store under `home` (`XDG_STATE_HOME`) and the test's journal socket
+/// ([`diagnostic_journal`]), so what it records reaches neither the user's store nor the system journal; the caller adds
+/// the rest.
 pub fn cleared(binary: impl AsRef<OsStr>, home: &Path) -> Command {
     let mut command = Command::new(binary);
     command
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", home)
+        .env("XDG_STATE_HOME", home.join(".local/state"))
+        .env(SOCKET_ENV, diagnostic_journal())
         .env("CUPERTINO_SPEC_DIR", spec_dir())
         .env("CUPERTINO_ASSET_SEARCH_PATH", "");
     command
+}
+
+/// Where the diagnostic events of the processes this test process starts go when the test reads none back.
+struct Diagnostics {
+    /// A state directory (`XDG_STATE_HOME`) under the target's temporary directory, shared by the test processes: the
+    /// store bounds itself and takes many writers.
+    state: PathBuf,
+    /// `journal-<pid>` beside it: a socket this process binds once and keeps open, which no one reads.
+    journal: PathBuf,
+    socket: UnixDatagram,
+}
+
+static DIAGNOSTICS: OnceLock<Diagnostics> = OnceLock::new();
+
+fn diagnostics() -> &'static Diagnostics {
+    DIAGNOSTICS.get_or_init(|| {
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("diagnostic-events");
+        let state = dir.join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        remove_stale_journals(&dir);
+        let journal = dir.join(format!("journal-{}", std::process::id()));
+        // a socket of an earlier process with the same id
+        let _ = std::fs::remove_file(&journal);
+        let socket = UnixDatagram::bind(&journal).unwrap();
+        extern "C" {
+            fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
+        }
+        extern "C" fn remove_journal() {
+            if let Some(diagnostics) = DIAGNOSTICS.get() {
+                let _ = std::fs::remove_file(&diagnostics.journal);
+            }
+        }
+        // SAFETY: `atexit` keeps a plain function pointer; `remove_journal` only removes a file.
+        unsafe {
+            atexit(remove_journal);
+        }
+        Diagnostics {
+            state,
+            journal,
+            socket,
+        }
+    })
+}
+
+/// Removes the journal sockets in `dir` whose test process is gone: one killed before it could remove its own.
+fn remove_stale_journals(dir: &Path) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let pid = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("journal-"))
+            .and_then(|pid| pid.parse::<u32>().ok());
+        if pid.is_some_and(|pid| !Path::new(&format!("/proc/{pid}")).exists()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// The shared diagnostic state directory of [`Diagnostics`].
+pub fn diagnostic_state() -> &'static Path {
+    &diagnostics().state
+}
+
+/// The journal socket of this test process ([`Diagnostics`]), removed when the process exits.
+pub fn diagnostic_journal() -> &'static Path {
+    &diagnostics().journal
+}
+
+/// The receiving end of [`diagnostic_journal`], for a test that reads what reached it.
+pub fn diagnostic_journal_socket() -> &'static UnixDatagram {
+    &diagnostics().socket
 }
 
 /// How long a child of [`wait_after`] may take to get to what is timed. Its own limit is for a child that hangs

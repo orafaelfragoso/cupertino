@@ -14,6 +14,7 @@ default = []
 app = ["dep:cupertino-assets", "dep:cupertino-icons", "dep:cupertino-kit", "dep:cupertino-protocol-app", "dep:cupertino-screencast", "dep:cupertino-shell-client", "dep:cupertino-ui-wayland", "dep:cupertino-wayland-client", "dep:rustix", "dep:wayland-client", "dep:wayland-protocols"]
 
 [dependencies]
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = "2"
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets", optional = true }

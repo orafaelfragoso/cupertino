@@ -17,6 +17,9 @@ cupertino completions bash|zsh|fish         # the completion script of a shell
 cupertino dev layers [--root <dir>] [--graph]      # preview: the layer and licence checks of a checkout
 cupertino dev manual <dir>                  # preview: write the manual pages into <dir>
 cupertino --format jsonl diagnose           # JSON lines: a check event per check, the counts, an end record
+cupertino diagnose events [--since 24h] [--component <name>]... [--id <prefix>]... [--severity info|warn|error|fatal] [--follow]
+cupertino diagnose events clear --yes       # delete the user store's events, keep its salt
+cupertino diagnose export --output <file> [--include-logs] [--since <duration|time>]
 ```
 
 `desktop start` runs `$CUPERTINO_SERVER` when it is set (for development), else the `cupertino-server` beside the
@@ -32,6 +35,40 @@ The packages install the command with `/usr/share/bash-completion/completions/cu
 `/usr/share/zsh/site-functions/_cupertino`, `/usr/share/fish/vendor_completions.d/cupertino.fish` and the pages
 `cupertino.1` and `cupertino-<group>.1`, all generated at build time by `cupertino completions` and
 `cupertino dev manual`.
+
+## Diagnostic events (`diagnose`)
+
+`src/diagnose_events.rs` reads the diagnostic events with `cupertino_diagnostics::events` (the user store,
+`session.log` and the system journal; [docs/src/diagnose.md](../../docs/src/diagnose.md#diagnostic-events) has the
+record, the limits and the redaction table). It takes its `Sources` from `Context::provided::<Sources>()` when a test
+gives some, else `Sources::system()`. It records no events of its own.
+
+- `diagnose events` is a `Run::Stream`: each event is an `event` whose data is the `cupertino.diag.v1` record, and one
+  human line (time, severity, component, id, message, then `key=value` fields, a value with spaces in JSON quotes). The
+  final data is `{sources, counts}`: each source's `name`, `status` (`ok`, `empty`, `denied`, `unavailable`,
+  `corrupt`), `events`, `corrupt`, `partial`, `path` and `detail`, and `counts` `{events, info, warn, error, fatal}`
+  of what was printed. A denied journal is a `denied`/`journal_denied` warning and corrupt lines a
+  `validation`/`corrupt_lines` one. A wrong `--since` is `invalid_usage`/`invalid_value`.
+- `--follow` (`Sink::follow`) then polls the store and `session.log` every 250 ms (`events::Follow`) and follows the
+  journal with the command `Sources::journal_follow` makes (`journalctl --follow` from the last cursor read). It never
+  blocks in a read or a wait: it `poll`s the child's non-blocking stdout with a timeout of at most 250 ms, reads only
+  what is there, and checks `Sink::stop_requested` between steps. A stop ends it with `reason: "stopped"`, a closed
+  output with exit 0; either way the child is killed and reaped.
+- `diagnose events clear` (`Run::Once`) deletes the store's segments with `Store::clear` (under the store's lock; the
+  salt stays). Without `--yes` it is `invalid_usage`/`confirmation_required`; a store that cannot be cleared is
+  `validation`/`store_unavailable` (`no_home` without a home).
+- `diagnose export` (`Run::Once`) writes one JSON document with `O_EXCL` and mode 0600: `schema`
+  (`cupertino.diag.export.v1`), `created`, `versions` (`cli`, `commit`, `os_image`, `kernel`, from
+  `cupertino-build-info`, the field names a version report uses), `report` (`cupertino_diagnostics::run(&sources, &[])`,
+  its `summary`, fact `value` and `fix` texts through the free-text scrubber), `events` and `sources` (their `path` and
+  `detail` scrubbed). `--include-logs` adds `logs`: `server.log`, `server.log.1` and `session.log` of the state
+  directory, each line through `events::policy` (the store's salt, so hashes match the events', else a random one). A
+  file that exists is `validation`/`file_exists`; one that cannot be written `temporary`/`write_failed`.
+
+`tests/diagnose-events.rs` runs them on a fixture home, a fake journal function and `sh` as a fake
+`journalctl --follow`: the three formats, the filters, the warnings, a follow that prints new store and journal lines
+and ends on a stop from another thread (promptly, its child reaped) and on a closed output, `clear` with and without
+`--yes`, and the export's keys, mode, refusal to overwrite and scrubbed logs.
 
 ## Output
 
@@ -76,11 +113,11 @@ and `problems` there.
 | Exit code | `kind` |
 |---|---|
 | 0 | (success; also a closed stdout, and a follow stream stopped by a signal) |
-| 2 | `invalid_usage` |
+| 2 | `invalid_usage`: also `confirmation_required` |
 | 3 | `unavailable`: `no_checkout`, `no_cargo`, `no_host_display`, `no_runtime_dir`, `server_not_installed`, `server_failed`, `not_a_vt`, `session_not_installed`, `session_failed` |
 | 4 | `denied`: `inside_graphical_session` |
-| 5 | `validation`: `pack_unreadable`, `manifest_invalid`, `font_invalid`, `checks_failed`, `layer_violations`, `metadata_failed` |
-| 6 | `temporary`: also `output_failed` (stdout cannot be written), `interrupted` (a finite stream stopped), `write_failed` |
+| 5 | `validation`: `pack_unreadable`, `manifest_invalid`, `font_invalid`, `checks_failed`, `layer_violations`, `metadata_failed`, `file_exists` (`diagnose export`) |
+| 6 | `temporary`: also `output_failed` (stdout cannot be written), `interrupted` (a finite stream stopped), `write_failed` (also an export file) |
 | 7 | `transaction_failed` (reserved) |
 | 8 | `unsupported`: also `not_in_this_release` for the reserved groups `system` and `ai` |
 
@@ -120,7 +157,8 @@ The help JSON (`cupertino --format json help`) lists, per command, `path`, `summ
 ## Design
 
 `src/lib.rs` holds the registry types and the runner; `src/stream.rs` the output writer, the stream rules and the stop
-flag; each group is a module (`appearance`, `diagnose`, `desktop`, `version`, `completions`, `dev`). `src/manual.rs`
+flag; each group is a module (`appearance`, `diagnose`, `desktop`, `version`, `completions`, `dev`; `diagnose_events`
+adds the event commands to the `diagnose` group). `src/manual.rs`
 and `src/completions.rs` generate the manual pages and the completion scripts from a registry, `GLOBAL_OPTIONS`,
 `BUILTINS` and `FailureKind::ALL`, so a new command or option needs no edit there. The completions take an option's
 value after the option or in the same word (`--area=gpu`; bash splits such a word at the `=`, and the script joins it

@@ -3,6 +3,7 @@
 //! One process serves the session: a launch while Files runs hands its folder (or its wish for a window) to it over the
 //! session bus and exits. See the README.
 
+use cupertino_diagnostic_events as diag;
 use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -58,9 +59,11 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
 }
 
 fn main() -> ExitCode {
+    diag::init(diag::component!(), "files", diag::Sink::UserStore);
     let options = match options(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(problem) => {
+            diag::exit_error(&problem);
             eprintln!("cupertino-files: {problem}\n{USAGE}");
             return ExitCode::FAILURE;
         }
@@ -87,6 +90,7 @@ fn main() -> ExitCode {
             None
         }
         Err(e @ LaunchError::Refused(_)) => {
+            diag::exit_error(&e);
             eprintln!("cupertino-files: {e}");
             return ExitCode::FAILURE;
         }
@@ -94,6 +98,7 @@ fn main() -> ExitCode {
     let start = match start(options, service, token) {
         Ok(start) => start,
         Err(e) => {
+            diag::exit_error(&e);
             eprintln!("cupertino-files: {e}");
             return ExitCode::FAILURE;
         }
@@ -101,6 +106,7 @@ fn main() -> ExitCode {
     match kit::run(start) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            diag::exit_error(&e);
             eprintln!("cupertino-files: {e}");
             ExitCode::FAILURE
         }

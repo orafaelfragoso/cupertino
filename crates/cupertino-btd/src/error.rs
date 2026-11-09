@@ -1,5 +1,7 @@
 use std::fmt;
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
+
 use crate::keys::KeyStoreError;
 
 /// Every failure of the daemon that is not a refused request (those are
@@ -25,6 +27,36 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl Error {
+    /// The kind of failure, as a diagnostic event names it.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Bluetooth(_) => "management_socket",
+            Self::Keys(_) => "keys",
+            #[cfg(feature = "dbus")]
+            Self::Bus { .. } => "bus",
+            #[cfg(feature = "dbus")]
+            Self::NameTaken(_) => "name_taken",
+            #[cfg(feature = "dbus")]
+            Self::Seat(_) => "logind",
+        }
+    }
+}
+
+/// Records `bluetooth.backend.start_failed`: the step of the start that failed (`logind`, `management_socket`, `bus`),
+/// the error's kind and its text. The caller still returns the error.
+pub fn start_failed(step: &'static str, error: &Error) {
+    diag::event(
+        Severity::Error,
+        "bluetooth.backend.start_failed",
+        "the Bluetooth service could not start",
+    )
+    .field("step", Value::Public(step))
+    .field("kind", Value::Public(error.kind()))
+    .field("error", Value::Public(&error.to_string()))
+    .emit();
+}
 
 #[cfg(feature = "dbus")]
 impl Error {

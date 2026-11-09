@@ -20,7 +20,7 @@ use zbus::zvariant::{ObjectPath, Value};
 use zbus::Connection;
 
 use crate::auth::Authorizer;
-use crate::error::{Error, Result};
+use crate::error::{start_failed, Error, Result};
 use crate::interfaces::{
     device_path, device_properties, keyboard_path, manager_properties, DeviceObject,
     KeyboardBacklightObject, Manager, PowerObject, Property, Target, DEVICE_INTERFACE,
@@ -176,8 +176,13 @@ pub struct Daemon {
 
 impl Daemon {
     /// Reads the hardware, serves every object and takes both bus names. Fails with
-    /// [`Error::NameTaken`] when another daemon (UPower, for instance) owns one of them.
+    /// [`Error::NameTaken`] when another daemon (UPower, for instance) owns one of them. A failure
+    /// is recorded as `power.backend.start_failed` (step `bus`).
     pub fn start(config: Config) -> Result<Self> {
+        Self::serve(config).inspect_err(|error| start_failed("bus", error))
+    }
+
+    fn serve(config: Config) -> Result<Self> {
         let snapshot = Snapshot::read(&config.sysfs_root, config.lid)?;
         let shared = Arc::new(Shared {
             sysfs_root: config.sysfs_root,

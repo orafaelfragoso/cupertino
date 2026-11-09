@@ -15,6 +15,7 @@ dbus = ["dep:zbus", "dep:cupertino-seat"]
 app = ["dbus"]
 
 [dependencies]
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-devices = { path = "../cupertino-devices" }
 cupertino-evdev = { path = "../cupertino-evdev" }
 cupertino-seat = { path = "../cupertino-seat", optional = true }

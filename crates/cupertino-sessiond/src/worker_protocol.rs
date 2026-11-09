@@ -55,6 +55,9 @@ pub enum ToWorker {
         path: String,
         /// The login screen starts with the screen reader on (the machine's `screen_reader_at_login`).
         screen_reader: bool,
+        /// How many attempts in a row were refused before this one, for the journal's `login.auth.failed`.
+        #[serde(default)]
+        failures: u64,
     },
     /// The answer to the last `Prompt`.
     Answer { secret: Secret },

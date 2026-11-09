@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use cupertino_diagnostic_events::{self as diag, AddressKind, Severity, Value};
 use cupertino_netlink::Security;
 use zbus::fdo;
 use zbus::message::Header;
@@ -59,6 +60,40 @@ async fn authorize(shared: &Shared, header: Option<&Header<'_>>) -> Result<(), R
             &error,
         )),
     }
+}
+
+/// Records `network.request.failed`: `method` of `interface` was answered with the D-Bus error `error`. An SSID the
+/// call named is kept as its salted hash.
+fn request_failed(interface: &'static str, method: &'static str, error: &str, ssid: Option<&str>) {
+    let mut event = diag::event(
+        Severity::Warn,
+        "network.request.failed",
+        "a request to the network service failed",
+    )
+    .field("interface", Value::Public(interface))
+    .field("method", Value::Public(method))
+    .field("error", Value::Public(error));
+    if let Some(ssid) = ssid {
+        event = event.field("ssid", Value::Address(AddressKind::Ssid, ssid));
+    }
+    event.emit();
+}
+
+/// `result` of `method` of `org.cupertino.Network1`, its error recorded.
+fn answered<T>(
+    method: &'static str,
+    ssid: Option<&str>,
+    result: Result<T, NetworkError>,
+) -> Result<T, NetworkError> {
+    if let Err(error) = &result {
+        request_failed(
+            NETWORK_NAME,
+            method,
+            zbus::DBusError::name(error).as_str(),
+            ssid,
+        );
+    }
+    result
 }
 
 /// The errors of `org.cupertino.Network1`.
@@ -124,8 +159,12 @@ pub struct NetworkObject(pub Arc<Shared>);
 impl NetworkObject {
     /// Asks for a scan. The list changes (`NetworksChanged`) when it ends.
     async fn scan(&self, #[zbus(header)] header: Header<'_>) -> Result<(), NetworkError> {
-        authorize(&self.0, Some(&header)).await?;
-        Ok(self.0.submit(Command::Scan).await?)
+        let result = async {
+            authorize(&self.0, Some(&header)).await?;
+            Ok(self.0.submit(Command::Scan).await?)
+        }
+        .await;
+        answered("Scan", None, result)
     }
 
     /// The networks of the last scan, strongest first.
@@ -155,14 +194,23 @@ impl NetworkObject {
         ssid: String,
         passphrase: String,
     ) -> Result<(), NetworkError> {
-        authorize(&self.0, Some(&header)).await?;
-        let passphrase = (!passphrase.is_empty()).then_some(passphrase);
-        Ok(self.0.submit(Command::Connect { ssid, passphrase }).await?)
+        let named = ssid.clone();
+        let result = async {
+            authorize(&self.0, Some(&header)).await?;
+            let passphrase = (!passphrase.is_empty()).then_some(passphrase);
+            Ok(self.0.submit(Command::Connect { ssid, passphrase }).await?)
+        }
+        .await;
+        answered("Connect", Some(&named), result)
     }
 
     async fn disconnect(&self, #[zbus(header)] header: Header<'_>) -> Result<(), NetworkError> {
-        authorize(&self.0, Some(&header)).await?;
-        Ok(self.0.submit(Command::Disconnect).await?)
+        let result = async {
+            authorize(&self.0, Some(&header)).await?;
+            Ok(self.0.submit(Command::Disconnect).await?)
+        }
+        .await;
+        answered("Disconnect", None, result)
     }
 
     /// Emitted when the list of networks changes.
@@ -191,7 +239,7 @@ impl NetworkObject {
         value: bool,
         #[zbus(header)] header: Option<Header<'_>>,
     ) -> zbus::Result<()> {
-        set_wireless(&self.0, value, header).await
+        set_wireless(&self.0, value, header, NETWORK_NAME).await
     }
 
     #[zbus(property)]
@@ -242,22 +290,35 @@ fn security_name(security: Security) -> &'static str {
     }
 }
 
-/// The write behind both `WirelessEnabled` properties.
+/// The write behind both `WirelessEnabled` properties, of `interface`; a refusal is recorded.
 async fn set_wireless(
     shared: &Shared,
     value: bool,
     header: Option<Header<'_>>,
+    interface: &'static str,
 ) -> zbus::Result<()> {
-    authorize(shared, header.as_ref())
-        .await
-        .map_err(|refusal| match refusal {
-            Refusal::Denied(reason) => fdo::Error::AccessDenied(reason),
-            Refusal::Failed(reason) => fdo::Error::Failed(reason),
-        })?;
-    shared
-        .submit(Command::SetWirelessEnabled(value))
-        .await
-        .map_err(|error| fdo::Error::Failed(error.to_string()))?;
+    let result = async {
+        authorize(shared, header.as_ref())
+            .await
+            .map_err(|refusal| match refusal {
+                Refusal::Denied(reason) => fdo::Error::AccessDenied(reason),
+                Refusal::Failed(reason) => fdo::Error::Failed(reason),
+            })?;
+        shared
+            .submit(Command::SetWirelessEnabled(value))
+            .await
+            .map_err(|error| fdo::Error::Failed(error.to_string()))
+    }
+    .await;
+    if let Err(error) = &result {
+        request_failed(
+            interface,
+            "WirelessEnabled",
+            zbus::DBusError::name(error).as_str(),
+            None,
+        );
+    }
+    result?;
     Ok(())
 }
 
@@ -300,7 +361,7 @@ impl Manager {
         value: bool,
         #[zbus(header)] header: Option<Header<'_>>,
     ) -> zbus::Result<()> {
-        set_wireless(&self.0, value, header).await
+        set_wireless(&self.0, value, header, MANAGER_NAME).await
     }
 
     /// `802-3-ethernet`, `802-11-wireless`, or empty without a primary connection.

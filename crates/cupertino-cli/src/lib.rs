@@ -20,6 +20,7 @@ pub mod completions;
 mod desktop;
 mod dev;
 mod diagnose;
+mod diagnose_events;
 pub mod manual;
 pub mod stream;
 mod version;

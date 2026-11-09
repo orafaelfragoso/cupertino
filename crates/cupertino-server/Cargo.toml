@@ -31,6 +31,7 @@ udev = [
 dbus = []
 
 [dependencies]
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-build-info = { path = "../cupertino-build-info" }
 cupertino-defaults = { path = "../cupertino-defaults" }

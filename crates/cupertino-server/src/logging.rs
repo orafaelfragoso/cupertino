@@ -9,11 +9,12 @@ use std::os::fd::IntoRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::ThreadId;
 use std::time::Duration;
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -61,7 +62,8 @@ pub fn open_log(path: &PathBuf) -> io::Result<File> {
 
 /// Installs the subscriber, a panic hook that writes the panic and its backtrace to the log before the default report,
 /// and the handler of the [`FATAL_SIGNALS`]. With a file, everything goes to it and only warnings and errors also reach
-/// standard error.
+/// standard error. The panic hook chains to the one there before: with the diagnostic emitter installed first, a panic
+/// is then recorded as `server.panic`, and the handler of the fatal signals records `server.fatal_signal`.
 pub fn init(file: Option<File>) {
     let filter =
         || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
@@ -103,12 +105,34 @@ pub fn init(file: Option<File>) {
         tracing::error!("panic: {info}\nbacktrace:\n{}", Backtrace::force_capture());
         previous(info);
     }));
+    prepare_fatal_record();
     catch_fatal_signals();
 }
 
 /// The signals that end the server at once, with no unwinding: an abort (a failed check in a library, a panic while
 /// panicking) and a fault.
 pub const FATAL_SIGNALS: [libc::c_int; 2] = [libc::SIGABRT, libc::SIGSEGV];
+
+/// The names the `signal` field of `server.fatal_signal` gives the [`FATAL_SIGNALS`], in the same order.
+const FATAL_SIGNAL_NAMES: [&str; FATAL_SIGNALS.len()] = ["SIGABRT", "SIGSEGV"];
+
+/// The `server.fatal_signal` lines made ready for the handler, one per signal; none without a diagnostic store.
+static FATAL_RECORD: OnceLock<diag::FatalRecord> = OnceLock::new();
+
+/// Makes the `server.fatal_signal` lines ready while allocating is still safe, with the context the process has so far.
+fn prepare_fatal_record() {
+    let Some(emitter) = diag::Emitter::get() else {
+        return;
+    };
+    if let Some(record) = emitter.prepare_fatal(
+        "server.fatal_signal",
+        "the server was ended by a fatal signal",
+        "signal",
+        &FATAL_SIGNAL_NAMES,
+    ) {
+        let _ = FATAL_RECORD.set(record);
+    }
+}
 
 /// Where a fatal signal writes: the log file, or standard error without one.
 static CRASH_LOG: AtomicI32 = AtomicI32::new(libc::STDERR_FILENO);
@@ -172,15 +196,17 @@ fn signal_stack() -> bool {
     }
 }
 
-/// Writes the signal to the session-end file and the log, then the backtrace, and ends the process as the signal's
-/// previous action would. The reason is written with no allocation first. The backtrace allocates and takes locks, which
-/// a crash inside the allocator may hold, so an alarm ends the process if it hangs.
+/// Writes the signal to the session-end file, the log and the diagnostic store (`server.fatal_signal`), then the
+/// backtrace, and ends the process as the signal's previous action would. The reason and the event are written with no
+/// allocation and no lock first. The backtrace allocates and takes locks, which a crash inside the allocator may hold, so
+/// an alarm ends the process if it hangs.
 extern "C" fn fatal_signal(signal: libc::c_int) {
     let name: &[u8] = match signal {
         libc::SIGABRT => b"SIGABRT",
         libc::SIGSEGV => b"SIGSEGV",
         _ => b"a fatal signal",
     };
+    let index = FATAL_SIGNALS.iter().position(|s| *s == signal);
     if let Some(end) = SESSION_END.get() {
         // a reason written already (a panic, a lost rendering context) is the real one, and a crash in the teardown it
         // started keeps it; `cupertino-session` removes the file before the start
@@ -199,6 +225,23 @@ extern "C" fn fatal_signal(signal: libc::c_int) {
     }
     let log = CRASH_LOG.load(Ordering::Relaxed);
     write_raw(log, &[b"fatal signal ", name, b"; backtrace:\n"]);
+    if let (Some(record), Some(index)) = (FATAL_RECORD.get(), index) {
+        let mut line = [0u8; diag::FATAL_LINE];
+        let len = record.render(index, &mut line);
+        // Safety: `open`, `write` and `close` are async-signal-safe; the path is a C string made before any crash, and
+        // the line was rendered into this stack buffer without allocating.
+        unsafe {
+            let fd = libc::open(
+                record.path().as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND | libc::O_CLOEXEC,
+                0o600,
+            );
+            if fd >= 0 {
+                write_raw(fd, &[&line[..len]]);
+                libc::close(fd);
+            }
+        }
+    }
     // Safety: `sigaction`, `sigprocmask` and `alarm` are async-signal-safe and take initialised values.
     unsafe {
         let mut default: libc::sigaction = std::mem::zeroed();
@@ -212,7 +255,6 @@ extern "C" fn fatal_signal(signal: libc::c_int) {
     }
     let trace = Backtrace::force_capture().to_string();
     write_raw(log, &[trace.as_bytes(), b"\n"]);
-    let index = FATAL_SIGNALS.iter().position(|s| *s == signal);
     // Safety: the previous action was read by `sigaction` itself; the signal stays blocked until this handler returns,
     // so the raised one is taken by that action then (or the fault happens again, for a fault).
     unsafe {
@@ -270,9 +312,11 @@ pub fn record_session_end(var: impl Fn(&str) -> Option<OsString>) {
     });
 }
 
-/// The session ends for `reason`: writes it for `cupertino-session` and exits with `status` once [`TEARDOWN_LIMIT`]
-/// has passed, if the server is still tearing down. Nothing without [`record_session_end`].
+/// The session ends for `reason`: records `server.session_end` ([`server_ended`]), writes the reason for
+/// `cupertino-session` and exits with `status` once [`TEARDOWN_LIMIT`] has passed, if the server is still tearing down.
+/// Only the event without [`record_session_end`].
 pub fn session_ends(reason: &str, status: i32) {
+    server_ended(status, Some(reason));
     let Some(end) = SESSION_END.get() else {
         return;
     };
@@ -286,6 +330,28 @@ pub fn session_ends(reason: &str, status: i32) {
         });
     if let Err(e) = write_reason(&end.path, reason) {
         tracing::warn!("cannot write the session end {}: {e}", end.path.display());
+    }
+}
+
+/// Whether `server.session_end` was recorded: the first end is the real one (a lost rendering context, then the error
+/// `main` returns for it).
+static ENDED: AtomicBool = AtomicBool::new(false);
+
+/// Records `server.session_end`, once per process: the `status` the server ends with and, on an error end, the error's
+/// text. `info` for status 0, `error` otherwise.
+pub fn server_ended(status: i32, error: Option<&str>) {
+    if ENDED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let event = if status == 0 {
+        diag::event(Severity::Info, "server.session_end", "the server ended")
+    } else {
+        diag::event(Severity::Error, "server.session_end", "the server ended")
+    };
+    let event = event.field("status", Value::Int(status.into()));
+    match error {
+        Some(error) => event.field("error", Value::Public(error)).emit(),
+        None => event.emit(),
     }
 }
 
@@ -312,10 +378,57 @@ fn write_reason(path: &Path, reason: &str) -> io::Result<()> {
     io::Write::write_all(&mut file, line.as_bytes())
 }
 
+/// The events this test process recorded, for the unit tests of the modules that record them. Each test that reads them
+/// installs a memory-only emitter first; nextest runs every test in a process of its own.
+#[cfg(test)]
+pub(crate) mod test_events {
+    use cupertino_diagnostic_events::{self as diag, Record};
+
+    /// Installs this process's emitter, which keeps its events in memory only.
+    pub fn memory() {
+        diag::init(diag::component!(), "server", diag::Sink::Memory);
+    }
+
+    /// The events of `id` this process recorded, oldest first.
+    pub fn recorded(id: &str) -> Vec<Record> {
+        diag::recent()
+            .iter()
+            .filter_map(|line| Record::parse(line.trim_end()).ok())
+            .filter(|record| record.id == id)
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Read;
+
+    #[test]
+    fn the_first_end_of_the_server_is_the_one_recorded() {
+        test_events::memory();
+        // a lost rendering context ends the session, then `main` gets the error it caused
+        session_ends("the rendering context was lost (the GPU hung)", 1);
+        server_ended(
+            1,
+            Some("the rendering context was lost; sessions in a row: 2"),
+        );
+        let ends = test_events::recorded("server.session_end");
+        assert_eq!(ends.len(), 1, "{ends:?}");
+        let end = &ends[0];
+        assert_eq!(end.severity, Severity::Error);
+        assert_eq!(end.message, "the server ended");
+        assert_eq!(end.fields.get("status").unwrap(), 1);
+        assert_eq!(
+            end.fields.get("error").unwrap(),
+            "the rendering context was lost (the GPU hung)"
+        );
+        assert!(
+            end.source.starts_with("cupertino-server:logging.rs:"),
+            "{}",
+            end.source
+        );
+    }
 
     fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsString> {
         move |key| {

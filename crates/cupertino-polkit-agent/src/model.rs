@@ -92,6 +92,11 @@ pub struct Prompt {
 }
 
 impl Prompt {
+    /// How many attempts of this prompt have failed so far.
+    pub fn failures(&self) -> u8 {
+        self.failures
+    }
+
     /// Characters the field shows.
     pub fn field_len(&self) -> usize {
         match self.phase {

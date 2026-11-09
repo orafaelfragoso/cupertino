@@ -29,6 +29,7 @@ app = [
 ]
 
 [dependencies]
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }

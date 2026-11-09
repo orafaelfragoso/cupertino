@@ -125,6 +125,9 @@ fn have(shell: &str) -> bool {
         .arg("exit 0")
         .env_clear()
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+        // nothing that runs here may keep diagnostic events: no store or journal socket can be made at these paths
+        .env("XDG_STATE_HOME", "/nonexistent")
+        .env("CUPERTINO_DIAG_JOURNAL_SOCKET", "/nonexistent")
         .output()
         .is_ok_and(|o| o.status.success());
     if !found {
@@ -152,6 +155,7 @@ fn shell(shell: &str, dir: &Path, code: &str) -> String {
         .env("HOME", dir)
         .env("PATH", "/usr/bin:/bin")
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+        .env("CUPERTINO_DIAG_JOURNAL_SOCKET", dir.join("journal"))
         .output()
         .unwrap();
     assert!(

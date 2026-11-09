@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 79 crates, 378 internal dependencies
-// per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
+// 81 crates, 403 internal dependencies
+// per layer: foundation 20, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
@@ -10,13 +10,14 @@
 digraph "layers" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (19)";
+    label="foundation (20)";
     "cupertino-animation";
     "cupertino-apps";
     "cupertino-assets";
     "cupertino-build-info";
     "cupertino-capture";
     "cupertino-defaults";
+    "cupertino-diagnostic-events";
     "cupertino-filepicker";
     "cupertino-geometry";
     "cupertino-glyph";
@@ -126,16 +127,19 @@ digraph "layers" {
     "cupertino-testclient";
   }
   "cupertino-btd" -> "cupertino-bluetooth";
+  "cupertino-btd" -> "cupertino-diagnostic-events";
   "cupertino-btd" -> "cupertino-seat";
   "cupertino-btd" -> "cupertino-test-bus" [label="dev"];
   "cupertino-capture" -> "cupertino-assets";
   "cupertino-cli" -> "cupertino-assets";
   "cupertino-cli" -> "cupertino-build-info";
+  "cupertino-cli" -> "cupertino-diagnostic-events";
   "cupertino-cli" -> "cupertino-diagnostics";
   "cupertino-cli" -> "cupertino-layers";
   "cupertino-controlcenter" -> "cupertino-alsa";
   "cupertino-controlcenter" -> "cupertino-assets" [label="dev"];
   "cupertino-controlcenter" -> "cupertino-defaults";
+  "cupertino-controlcenter" -> "cupertino-diagnostic-events";
   "cupertino-controlcenter" -> "cupertino-geometry";
   "cupertino-controlcenter" -> "cupertino-kit";
   "cupertino-controlcenter" -> "cupertino-modifiers";
@@ -155,12 +159,15 @@ digraph "layers" {
   "cupertino-decorations" -> "cupertino-glyph";
   "cupertino-decorations" -> "cupertino-theme";
   "cupertino-devices" -> "cupertino-evdev";
+  "cupertino-diagnostic-events" -> "cupertino-build-info";
   "cupertino-diagnostics" -> "cupertino-devices";
+  "cupertino-diagnostics" -> "cupertino-diagnostic-events";
   "cupertino-dock" -> "cupertino-animation";
   "cupertino-dock" -> "cupertino-apps";
   "cupertino-dock" -> "cupertino-assets";
   "cupertino-dock" -> "cupertino-assets" [label="dev"];
   "cupertino-dock" -> "cupertino-defaults";
+  "cupertino-dock" -> "cupertino-diagnostic-events";
   "cupertino-dock" -> "cupertino-geometry";
   "cupertino-dock" -> "cupertino-icons";
   "cupertino-dock" -> "cupertino-kit";
@@ -180,6 +187,7 @@ digraph "layers" {
   "cupertino-files" -> "cupertino-assets" [label="dev"];
   "cupertino-files" -> "cupertino-capture" [label="dev"];
   "cupertino-files" -> "cupertino-defaults";
+  "cupertino-files" -> "cupertino-diagnostic-events";
   "cupertino-files" -> "cupertino-kit";
   "cupertino-files" -> "cupertino-menu-model";
   "cupertino-files" -> "cupertino-modifiers";
@@ -226,6 +234,7 @@ digraph "layers" {
   "cupertino-launcher" -> "cupertino-assets";
   "cupertino-launcher" -> "cupertino-assets" [label="dev"];
   "cupertino-launcher" -> "cupertino-defaults";
+  "cupertino-launcher" -> "cupertino-diagnostic-events";
   "cupertino-launcher" -> "cupertino-icons";
   "cupertino-launcher" -> "cupertino-kit";
   "cupertino-launcher" -> "cupertino-modifiers";
@@ -242,6 +251,7 @@ digraph "layers" {
   "cupertino-login" -> "cupertino-apps";
   "cupertino-login" -> "cupertino-assets" [label="dev"];
   "cupertino-login" -> "cupertino-defaults";
+  "cupertino-login" -> "cupertino-diagnostic-events";
   "cupertino-login" -> "cupertino-geometry";
   "cupertino-login" -> "cupertino-kit";
   "cupertino-login" -> "cupertino-login-ipc";
@@ -259,6 +269,7 @@ digraph "layers" {
   "cupertino-menubar" -> "cupertino-apps";
   "cupertino-menubar" -> "cupertino-assets";
   "cupertino-menubar" -> "cupertino-defaults";
+  "cupertino-menubar" -> "cupertino-diagnostic-events";
   "cupertino-menubar" -> "cupertino-files" [label="dev", color=orange, style=dashed];
   "cupertino-menubar" -> "cupertino-glass" [label="dev"];
   "cupertino-menubar" -> "cupertino-icons";
@@ -279,6 +290,7 @@ digraph "layers" {
   "cupertino-menubar" -> "cupertino-ui-text";
   "cupertino-menubar" -> "cupertino-ui-wayland";
   "cupertino-menubar" -> "cupertino-wayland-client";
+  "cupertino-netd" -> "cupertino-diagnostic-events";
   "cupertino-netd" -> "cupertino-netlink";
   "cupertino-netd" -> "cupertino-peer";
   "cupertino-netd" -> "cupertino-seat";
@@ -286,6 +298,7 @@ digraph "layers" {
   "cupertino-notifications" -> "cupertino-animation";
   "cupertino-notifications" -> "cupertino-assets" [label="dev"];
   "cupertino-notifications" -> "cupertino-defaults";
+  "cupertino-notifications" -> "cupertino-diagnostic-events";
   "cupertino-notifications" -> "cupertino-geometry";
   "cupertino-notifications" -> "cupertino-kit";
   "cupertino-notifications" -> "cupertino-modifiers";
@@ -299,6 +312,7 @@ digraph "layers" {
   "cupertino-notifications" -> "cupertino-wayland-client";
   "cupertino-osd" -> "cupertino-alsa";
   "cupertino-osd" -> "cupertino-assets" [label="dev"];
+  "cupertino-osd" -> "cupertino-diagnostic-events";
   "cupertino-osd" -> "cupertino-geometry";
   "cupertino-osd" -> "cupertino-kit";
   "cupertino-osd" -> "cupertino-modifiers";
@@ -316,6 +330,7 @@ digraph "layers" {
   "cupertino-peer" -> "cupertino-test-bus" [label="dev"];
   "cupertino-polkit-agent" -> "cupertino-assets";
   "cupertino-polkit-agent" -> "cupertino-decorations";
+  "cupertino-polkit-agent" -> "cupertino-diagnostic-events";
   "cupertino-polkit-agent" -> "cupertino-geometry";
   "cupertino-polkit-agent" -> "cupertino-icons";
   "cupertino-polkit-agent" -> "cupertino-peer";
@@ -333,6 +348,7 @@ digraph "layers" {
   "cupertino-portal" -> "cupertino-assets";
   "cupertino-portal" -> "cupertino-assets" [label="dev"];
   "cupertino-portal" -> "cupertino-defaults";
+  "cupertino-portal" -> "cupertino-diagnostic-events";
   "cupertino-portal" -> "cupertino-filepicker";
   "cupertino-portal" -> "cupertino-geometry";
   "cupertino-portal" -> "cupertino-icons";
@@ -346,6 +362,7 @@ digraph "layers" {
   "cupertino-portal" -> "cupertino-ui-wayland";
   "cupertino-portal" -> "cupertino-wayland-client";
   "cupertino-powerd" -> "cupertino-devices";
+  "cupertino-powerd" -> "cupertino-diagnostic-events";
   "cupertino-powerd" -> "cupertino-evdev";
   "cupertino-powerd" -> "cupertino-seat";
   "cupertino-powerd" -> "cupertino-test-bus" [label="dev"];
@@ -362,6 +379,7 @@ digraph "layers" {
   "cupertino-screenshot" -> "cupertino-animation";
   "cupertino-screenshot" -> "cupertino-assets" [label="dev"];
   "cupertino-screenshot" -> "cupertino-defaults";
+  "cupertino-screenshot" -> "cupertino-diagnostic-events";
   "cupertino-screenshot" -> "cupertino-geometry";
   "cupertino-screenshot" -> "cupertino-kit";
   "cupertino-screenshot" -> "cupertino-modifiers";
@@ -380,6 +398,7 @@ digraph "layers" {
   "cupertino-server" -> "cupertino-decorations";
   "cupertino-server" -> "cupertino-defaults";
   "cupertino-server" -> "cupertino-devices";
+  "cupertino-server" -> "cupertino-diagnostic-events";
   "cupertino-server" -> "cupertino-displays";
   "cupertino-server" -> "cupertino-effects";
   "cupertino-server" -> "cupertino-evdev";
@@ -402,6 +421,7 @@ digraph "layers" {
   "cupertino-server" -> "cupertino-theme";
   "cupertino-server" -> "cupertino-wm";
   "cupertino-sessiond" -> "cupertino-defaults";
+  "cupertino-sessiond" -> "cupertino-diagnostic-events";
   "cupertino-sessiond" -> "cupertino-login-ipc";
   "cupertino-sessiond" -> "cupertino-peer";
   "cupertino-sessiond" -> "cupertino-seat";
@@ -410,6 +430,7 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-apps";
   "cupertino-settings" -> "cupertino-assets";
   "cupertino-settings" -> "cupertino-defaults";
+  "cupertino-settings" -> "cupertino-diagnostic-events";
   "cupertino-settings" -> "cupertino-displays";
   "cupertino-settings" -> "cupertino-filepicker";
   "cupertino-settings" -> "cupertino-icons";
@@ -501,6 +522,7 @@ digraph "layers" {
   "cupertino-wayland-client" -> "cupertino-geometry";
   "cupertino-wayland-client" -> "xkbcommon";
   "cupertino-windowmanager" -> "cupertino-defaults";
+  "cupertino-windowmanager" -> "cupertino-diagnostic-events";
   "cupertino-windowmanager" -> "cupertino-protocols";
   "cupertino-windowmanager" -> "cupertino-stage";
   "cupertino-windowmanager" -> "cupertino-wm";

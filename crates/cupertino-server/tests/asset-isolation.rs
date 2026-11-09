@@ -205,10 +205,14 @@ fn every_test_spawn_in_the_workspace_sets_the_empty_asset_search_path() {
         rust_files(&krate.join("src"), &mut sources);
     }
     assert!(tests.len() > 100, "the scan finds the test sources");
-    let this = Path::new(file!()).file_name().unwrap();
+    // this check and the diagnostic one hold example sources, not spawns
+    let checks = [
+        Path::new(file!()).file_name().unwrap(),
+        std::ffi::OsStr::new("diagnostic-isolation.rs"),
+    ];
     let mut checked: Vec<(PathBuf, usize, String)> = tests
         .into_iter()
-        .filter(|f| f.file_name() != Some(this))
+        .filter(|f| !checks.iter().any(|c| f.file_name() == Some(*c)))
         .map(|f| {
             let source = std::fs::read_to_string(&f).unwrap();
             (f, 0, source)

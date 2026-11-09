@@ -5,6 +5,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use cupertino_defaults::screen_sharing::ScreenSharingConf;
+use cupertino_diagnostic_events as diag;
 use cupertino_portal::app_chooser::AppChooser;
 use cupertino_portal::capture::Capture;
 use cupertino_portal::dialog::{inbox, Dialogs};
@@ -20,9 +21,12 @@ use cupertino_wayland_client::{Connection, Event};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn main() -> ExitCode {
+    // first: the panic hook and the user's event store are in place for everything below
+    diag::init(diag::component!(), "portal", diag::Sink::UserStore);
     // `run` only returns on failure, which makes the server restart the process
     if let Err(e) = run() {
         eprintln!("cupertino-portal: {e}");
+        diag::exit_error(&e);
     }
     ExitCode::FAILURE
 }
@@ -44,6 +48,7 @@ fn fold(mut appearance: Appearance, events: &[Event]) -> Appearance {
 fn dialogs() {
     if let Err(e) = cupertino_kit::app::run::<Dialogs>() {
         eprintln!("cupertino-portal: {e}");
+        diag::exit_error(&e);
     }
     std::process::exit(1);
 }

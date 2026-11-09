@@ -1,0 +1,21 @@
+[package]
+name = "cupertino-diagnostic-events"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "Versioned diagnostic events of every Cupertino process: the event model, redaction, a bounded store, a memory ring and a journald sink"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[lib]
+name = "cupertino_diagnostic_events"
+
+[dependencies]
+cupertino-build-info = { path = "../cupertino-build-info" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+proptest = "1.12"
+tempfile = "3"

@@ -13,6 +13,7 @@ layer = "shell"
 app = ["dep:cupertino-defaults", "dep:cupertino-protocols", "dep:wayland-client"]
 
 [dependencies]
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-stage = { path = "../cupertino-stage" }
 cupertino-wm = { path = "../cupertino-wm" }
 cupertino-defaults = { path = "../cupertino-defaults", optional = true }

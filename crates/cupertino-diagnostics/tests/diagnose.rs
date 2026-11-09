@@ -6,7 +6,10 @@ use std::fs;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 
-use cupertino_diagnostics::{run, Area, Check, Scope, Sources, Status, Unit, NOT_FOUND};
+use cupertino_diagnostics::events::JournalResult;
+use cupertino_diagnostics::{
+    run, Area, Check, JournalFn, JournalFollowFn, Scope, Sources, Status, Unit, NOT_FOUND,
+};
 
 struct Fixture {
     dir: tempfile::TempDir,
@@ -82,9 +85,24 @@ impl Fixture {
             root: self.dir.path().join("root"),
             env: self.env.clone(),
             unit_state: Box::new(move |_: Scope, name: &str| units.get(name).cloned()),
+            journal: no_journal(),
+            journal_follow: no_journal_follow(),
         };
         run(&sources, &[area]).checks
     }
+}
+
+/// A machine without journalctl; these areas never ask it.
+fn no_journal() -> JournalFn {
+    Box::new(|_| JournalResult::Unavailable("no journalctl in the fixture".to_owned()))
+}
+
+fn no_journal_follow() -> JournalFollowFn {
+    Box::new(|_| {
+        let mut command = std::process::Command::new("true");
+        command.env("CUPERTINO_ASSET_SEARCH_PATH", "");
+        command
+    })
 }
 
 fn find<'a>(checks: &'a [Check], id: &str) -> &'a Check {
@@ -447,6 +465,8 @@ fn the_json_form_names_every_field() {
         root: fixture.dir.path().join("root"),
         env: fixture.env.clone(),
         unit_state: Box::new(|_, _| None),
+        journal: no_journal(),
+        journal_follow: no_journal_follow(),
     };
     let report = run(&sources, &[Area::Logs]);
     let json: serde_json::Value = serde_json::to_value(&report).unwrap();

@@ -38,6 +38,10 @@ pub fn init(state: &mut Cupertino, size: (u32, u32), scale: Option<f64>) -> Resu
     let (mut graphics, events) = winit::init_from_attributes::<GlesRenderer>(attrs)
         .map_err(|e| anyhow!("winit backend: {e}"))?;
     graphics.window().set_cursor_visible(false);
+    cupertino_diagnostic_events::set_context(
+        "renderer",
+        cupertino_diagnostic_events::Value::Public("gles"),
+    );
     // the host's scale for the window unless the command line names one; stored settings do not apply
     let scale = scale.unwrap_or_else(|| graphics.scale_factor());
     state.render = Some(RenderResources::new(graphics.renderer())?);

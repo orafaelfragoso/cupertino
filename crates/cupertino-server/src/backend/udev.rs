@@ -630,6 +630,14 @@ pub fn run(
     if opened.software {
         software_render::record(&gpu_path.display().to_string());
     }
+    cupertino_diagnostic_events::set_context(
+        "renderer",
+        cupertino_diagnostic_events::Value::Public(if opened.software {
+            "software"
+        } else {
+            "gles"
+        }),
+    );
 
     let node = DrmNode::from_path(&gpu_path)
         .map_err(|e| anyhow!("drm node for {}: {e}", gpu_path.display()))?;

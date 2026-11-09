@@ -20,6 +20,7 @@ use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicI32, Ordering};
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use pam_client2::{Context, ConversationHandler, ErrorCode, Flag};
 
 use crate::channel::Channel;
@@ -33,15 +34,40 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 /// The seat of every session: the design has one console.
 const SEAT: &str = "seat0";
 
+/// How far a worker got, for the event of its failure.
+#[derive(Default)]
+struct Progress {
+    /// The PAM service of `Begin`, once it came.
+    service: Option<String>,
+    /// The session's leader runs: a failure from here on is not one of the start.
+    started: bool,
+}
+
 /// Entry point of `cupertino-sessiond worker`. Failures are reported to the manager and the journal, never with a secret.
 pub fn run() -> ExitCode {
     // Safety: standard input is the socketpair end the manager gave this process, and nothing else owns it.
     let stream = UnixStream::from(unsafe { OwnedFd::from_raw_fd(libc::STDIN_FILENO) });
     let mut channel = Channel::new(stream, MAX_FRAME);
-    match session(&mut channel) {
+    let mut progress = Progress::default();
+    match session(&mut channel, &mut progress) {
         Ok(status) => ExitCode::from(status),
         Err(e) => {
             eprintln!("cupertino-sessiond: worker: {e}");
+            if !progress.started {
+                // the error's text names steps and PAM's codes, never the account or what was typed
+                diag::event(
+                    Severity::Error,
+                    "login.session.start_failed",
+                    "a session could not be started",
+                )
+                .field("stage", Value::Public("worker"))
+                .field(
+                    "service",
+                    Value::Public(progress.service.as_deref().unwrap_or("")),
+                )
+                .field("error", Value::Public(&e.to_string()))
+                .emit();
+            }
             // the manager may have gone: the journal line above is the record
             if let Ok(frame) = cupertino_login_ipc::encode(
                 &FromWorker::Failed {
@@ -180,8 +206,8 @@ fn outcome_of(stage: Stage, code: ErrorCode, talk: Talk) -> Outcome {
     }
 }
 
-/// Steps 1 to 5; the exit status of the leader.
-fn session(channel: &mut Channel) -> Result<u8> {
+/// Steps 1 to 5; the exit status of the leader. `progress` says how far it got.
+fn session(channel: &mut Channel, progress: &mut Progress) -> Result<u8> {
     harden()?;
     let ToWorker::Begin {
         service,
@@ -194,10 +220,12 @@ fn session(channel: &mut Channel) -> Result<u8> {
         environment,
         path,
         screen_reader,
+        failures,
     } = channel.receive()?
     else {
         return Err("the first message is not Begin".into());
     };
+    progress.service = Some(service.clone());
 
     // the conversation reads the answers from the same socket; frames are read whole, so the two readers never split one
     let mut context = Context::new(
@@ -223,6 +251,18 @@ fn session(channel: &mut Channel) -> Result<u8> {
                 "cupertino-sessiond: worker: {stage:?} refused ({}): {e}",
                 outcome_name(outcome)
             );
+            // never the account: the login is not a field, and PAM's conversation is not recorded at all
+            diag::event(
+                Severity::Warn,
+                "login.auth.failed",
+                "an authentication was refused",
+            )
+            .field("service", Value::Public(&service))
+            .field("stage", Value::Public(stage_name(*stage)))
+            .field("error", Value::Public(&format!("{:?}", e.code())))
+            .field("outcome", Value::Public(outcome_name(outcome)))
+            .field("failures", Value::Count(failures.saturating_add(1)))
+            .emit();
             outcome
         }
     };
@@ -295,6 +335,7 @@ fn session(channel: &mut Channel) -> Result<u8> {
         MAX_FRAME,
     )?;
     let _ = channel.send_frame(&started);
+    progress.started = true;
     let status = match toggle {
         Some((mine, theirs)) => {
             drop(theirs);
@@ -671,6 +712,13 @@ fn wait_for(leader: libc::pid_t) -> u8 {
         libc::WEXITSTATUS(status) as u8
     } else {
         (128 + libc::WTERMSIG(status)) as u8
+    }
+}
+
+fn stage_name(stage: Stage) -> &'static str {
+    match stage {
+        Stage::Authenticate => "authenticate",
+        Stage::Account => "account",
     }
 }
 

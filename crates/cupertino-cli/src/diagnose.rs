@@ -11,11 +11,16 @@ use serde::Serialize;
 
 pub(crate) const GROUP: Group = Group {
     name: "diagnose",
-    summary: "Checks this machine and session for what the desktop needs",
+    summary: "Checks this machine and session for what the desktop needs, and reads what its processes recorded",
     description: "Commands that look at the machine and the session the desktop runs in and report what they find. \
-                  They read files and ask the service manager for unit states; they change nothing and open no \
-                  device.",
-    commands: &[COMMANDS],
+                  The checks read files and ask the service manager for unit states; they change nothing and open \
+                  no device.\n\n\
+                  The event commands read what the desktop's processes recorded when something failed. Every \
+                  process records diagnostic events (schema cupertino.diag.v1): the user's own processes in a \
+                  bounded store in ~/.local/state/cupertino/events, the system services in the system journal. The \
+                  starts and ends of sessions come from session.log. Nothing is uploaded; the events stay on this \
+                  machine until `cupertino diagnose events clear` deletes them or they expire after 14 days.",
+    commands: &[COMMANDS, crate::diagnose_events::COMMANDS],
 };
 
 /// The area names, in the order the checks run.
@@ -38,16 +43,17 @@ const fn area_name(area: Area) -> &'static str {
         Area::Services => "services",
         Area::Crash => "crash",
         Area::Logs => "logs",
+        Area::Events => "events",
     }
 }
 
 pub(crate) const COMMANDS: &[Command] = &[Command {
     path: &["diagnose"],
-    summary: "Checks the GPU and its driver, the session, the portals, the services, the last crash and the logs, and \
-              reports each check's status and what to do about it",
+    summary: "Checks the GPU and its driver, the session, the portals, the services, the last crash, the logs and \
+              the errors recorded in the last day, and reports each check's status and what to do about it",
     description: "Runs the checks of the areas given with --area, or of every area, in the order gpu, session, \
-                  portals, services, crash, logs. Each check has a stable dotted id (gpu.driver), a status (skip, ok, \
-                  warn or fail), a summary, the facts it found and, for warn and fail, a fix. Checks that need a \
+                  portals, services, crash, logs, events. Each check has a stable dotted id (gpu.driver), a status \
+                  (skip, ok, warn or fail), a summary, the facts it found and, for warn and fail, a fix. Checks that need a \
                   session are skipped outside one.\n\n\
                   The command exits 0 once the checks ran, whatever they found; with --strict a check that fails \
                   makes it exit 5 (checks_failed). In the JSON envelope data is the report itself (schema 1, the \

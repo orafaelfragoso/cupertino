@@ -24,7 +24,7 @@ use zbus::zvariant::OwnedObjectPath;
 use crate::capture::placement;
 use crate::geometry::Placement;
 use crate::pick::{cover, layout_changed, Picked, Picking};
-use crate::screenshot::{PickEvent, PickReply};
+use crate::screenshot::{screenshot_failed, PickEvent, PickReply};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -101,7 +101,10 @@ impl PickOverlay {
                     }
                     match self.open(conn, handle, displays, reply) {
                         Ok(active) => self.active = Some(active),
-                        Err(e) => eprintln!("cupertino-portal: no colour picker: {e}"),
+                        Err(e) => {
+                            eprintln!("cupertino-portal: no colour picker: {e}");
+                            screenshot_failed("PickColor", None, &e.to_string());
+                        }
                     }
                 }
                 PickEvent::Close { handle } => {
@@ -189,7 +192,8 @@ impl PickOverlay {
                 eprintln!(
                     "cupertino-portal: the colour pick for {} failed: {reason}",
                     active.handle
-                )
+                );
+                screenshot_failed("PickColor", None, &reason);
             }
             None => {}
         }

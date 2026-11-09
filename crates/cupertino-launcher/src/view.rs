@@ -22,8 +22,8 @@ use crate::panel::{takes_key, Focus, Key as PanelKey, Mods as PanelMods, Panel};
 use crate::preview::{Preview, PreviewBody};
 use crate::providers::Status;
 use cupertino_kit::controls::{
-    BareField, Icon, IconDirection, Image, ImageFit, ImageSource, Separator, Stack, Text,
-    TextChange, TextField, TextRole,
+    BareField, Icon, IconDirection, Image, ImageFit, ImageSource, Stack, Text, TextChange,
+    TextField, TextRole,
 };
 use cupertino_kit::core::{
     AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event, EventCx, Glass,
@@ -118,6 +118,11 @@ pub const SHADOW_BOTTOM: f64 = 1.5 * SHADOW_BLUR + SHADOW_OFFSET;
 pub const EDGE_WIDTH: f64 = 0.5;
 pub const EDGE_ALPHA_DARK: f32 = 0.55;
 pub const EDGE_ALPHA_LIGHT: f32 = 0.12;
+/// A separator line over the panel's glass: white at this opacity in the dark appearance, black at this one in the
+/// light appearance, so it reads as a faint line on any backdrop. Off the glass (the panel's opaque fill) and with
+/// Increase Contrast it takes the theme's separator colour.
+pub const GLASS_SEPARATOR_DARK: f32 = 0.175;
+pub const GLASS_SEPARATOR_LIGHT: f32 = 0.1;
 /// The preview pane: its padding, the largest picture or icon it shows, the text excerpt's size and lines, and the
 /// action buttons' height and gap.
 pub const PREVIEW_PADDING: f64 = 16.0;
@@ -651,7 +656,7 @@ where
     let panel = view.panel;
     let rows = visible_rows(panel);
     let separator = || {
-        Element::new(Separator {
+        Element::new(Hairline {
             axis: Axis::Horizontal,
         })
         .key("separator")
@@ -677,7 +682,7 @@ where
     }
     let body = vec![
         results(view, &rows).key("results"),
-        Element::new(Separator {
+        Element::new(Hairline {
             axis: Axis::Vertical,
         })
         .key("divider"),
@@ -1167,6 +1172,77 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
     }
 
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The colour of a separator line where `cx` paints: translucent over the panel's glass, the theme's separator over
+/// the opaque fill and with Increase Contrast.
+pub(crate) fn separator_color(cx: &PaintCx<'_>) -> Option<Color> {
+    let theme = &cx.env().theme;
+    let appearance = theme.preferences.appearance;
+    if cx.on_glass() && !appearance.is_high_contrast() {
+        Some(if appearance.is_dark() {
+            Color::new(1.0, 1.0, 1.0, GLASS_SEPARATOR_DARK)
+        } else {
+            Color::new(0.0, 0.0, 0.0, GLASS_SEPARATOR_LIGHT)
+        })
+    } else {
+        theme.colors.get(ColorRole::Separator, StateVariant::NORMAL)
+    }
+}
+
+/// A hairline across the panel along `axis`, in [`separator_color`]: under the query row and between the results and
+/// the preview.
+struct Hairline {
+    axis: Axis,
+}
+
+impl<M: 'static> Widget<M> for Hairline {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        let (width, height) = match self.axis {
+            Axis::Horizontal => (SizeSpec::Fill, SizeSpec::Fixed(1.0)),
+            Axis::Vertical => (SizeSpec::Fixed(1.0), SizeSpec::Fill),
+        };
+        LayoutSpec {
+            width,
+            height,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.axis != old.axis {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        if let Some(color) = separator_color(cx) {
+            cx.push(PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, size.width, size.height)),
+                paint: Paint::Solid(color),
+            });
+        }
+    }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }

@@ -776,8 +776,9 @@ impl<M: 'static> Widget<M> for SeparatorNode {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let size = cx.size();
-        let c = role(cx, ColorRole::Separator, Color::new(0.0, 0.0, 0.0, 0.1));
-        fill(cx, Rect::new(0.0, 0.0, size.width, size.height), 0.0, c);
+        if let Some(c) = super::separator_color(cx) {
+            fill(cx, Rect::new(0.0, 0.0, size.width, size.height), 0.0, c);
+        }
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {

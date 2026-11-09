@@ -197,9 +197,13 @@ fn budget() -> NonZeroU32 {
 }
 
 fn theme() -> ThemeTokens {
+    theme_in(Appearance::Light)
+}
+
+fn theme_in(appearance: Appearance) -> ThemeTokens {
     let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
     let preferences = ThemePreferences {
-        appearance: Appearance::Light,
+        appearance,
         reduce_transparency: false,
         reduce_motion: false,
     };
@@ -226,13 +230,18 @@ fn active() -> WindowStates {
 
 impl Run {
     fn new() -> Run {
+        Run::with(Appearance::Light, false)
+    }
+
+    /// A run in `appearance`, on a desktop that draws the panel's glass when `app_effects`.
+    fn with(appearance: Appearance, app_effects: bool) -> Run {
         let reader = AssistiveTechnology::new();
         let mut fonts = FontIndex::new();
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
         let glyphs = Arc::clone(&text);
         let options = RuntimeOptions {
-            theme: Arc::new(theme()),
+            theme: Arc::new(theme_in(appearance)),
             text,
             icons: Arc::new(PlaceholderIcons::default()),
             direction: LayoutDirection::Ltr,
@@ -253,7 +262,10 @@ impl Run {
             on_window_error: None,
         };
         let driver = TestDriver::new(
-            Capabilities::default(),
+            Capabilities {
+                app_effects,
+                ..Capabilities::default()
+            },
             options,
             ManualClock::new(Timestamp(0)),
         );
@@ -1635,4 +1647,65 @@ fn on_a_moving_clock_the_window_follows_the_browser_and_settles_at_the_search_fi
         window_extent(compact_shape()),
         "exactly the search field's window, not a point more"
     );
+}
+
+impl Run {
+    /// The colour of the fill the node `key` names in the panel paints.
+    fn fill_of(&self, key: &'static str) -> Option<Color> {
+        let id = self.driver.runtime().find(self.panel(), &Key::from(key))?;
+        let paint = cupertino_kit::render::PaintNodeId::from(id);
+        self.snapshot()
+            .display_list
+            .nodes
+            .iter()
+            .find(|n| n.id == paint)?
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                PaintOp::Fill {
+                    paint: Paint::Solid(c),
+                    ..
+                } => Some(*c),
+                _ => None,
+            })
+    }
+}
+
+/// Over the panel's glass a separator is a faint line of the label's tone, light on dark glass and dark on light
+/// glass; over the opaque fill the panel paints without glass it takes the theme's separator colour.
+#[test]
+fn separators_over_the_glass_are_a_faint_line_of_the_label_s_tone() {
+    let white = Color::new(1.0, 1.0, 1.0, GLASS_SEPARATOR_DARK);
+    let black = Color::new(0.0, 0.0, 0.0, GLASS_SEPARATOR_LIGHT);
+    for (appearance, glass, expected) in [
+        (Appearance::Dark, true, Some(white)),
+        (Appearance::Light, true, Some(black)),
+        (
+            Appearance::Dark,
+            false,
+            theme_in(Appearance::Dark)
+                .colors
+                .get(ColorRole::Separator, StateVariant::NORMAL),
+        ),
+    ] {
+        let mut run = Run::with(appearance, glass);
+        run.type_text("fire");
+        assert_eq!(
+            run.fill_of("separator"),
+            expected,
+            "search, {appearance:?}, glass {glass}"
+        );
+        assert_eq!(
+            run.fill_of("divider"),
+            expected,
+            "search's divider, {appearance:?}, glass {glass}"
+        );
+        // the browser unfolds from the search
+        run.deliver(Message::Browse);
+        assert_eq!(
+            run.fill_of("header-separator"),
+            expected,
+            "browser, {appearance:?}, glass {glass}"
+        );
+    }
 }

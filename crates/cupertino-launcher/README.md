@@ -162,6 +162,7 @@ calculator and conversion rows have no icon. Missing assets are reported once at
 | Position | horizontally centred, the panel's top edge at 1/5 of the output height |
 | Input | a 22 pt search symbol, 16 pt gap, the query at 26 pt without chrome, 22 pt side margins |
 | Results list / preview | 288 pt list, a separator, the preview in the rest with 16 pt padding |
+| Separators | over the glass a 1 pt line of white at 0.175 (dark) or black at 0.1 (light); the theme's separator colour over the opaque fill and with Increase Contrast |
 | Preview | picture at most 300 × 136 pt (6 pt corners), icon 64 pt, name 15 pt semibold, details 11 pt with labels ending at the pane's middle, value 28 pt; the pane takes the width the list leaves |
 | Action buttons | 26 pt capsules, 4 pt apart, at most 4 shown around the chosen one |
 | Result icon, selection radius, cell inset | 32 pt, 12 pt continuous, 12 pt |

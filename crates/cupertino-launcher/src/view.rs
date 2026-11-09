@@ -1169,8 +1169,11 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
                     _ => Propagation::Continue,
                 }
             }
-            // another window took the keyboard
-            Event::FocusWithin { gained: false, .. } if !cx.window_active() => {
+            // another window took the keyboard; the view options menu, a popup of this window, takes it while it is
+            // open (and closes itself if the keyboard goes anywhere else then)
+            Event::FocusWithin { gained: false, .. }
+                if !cx.window_active() && self.keys != KeyMode::Menu =>
+            {
                 cx.emit(M::from(Input::Dismiss));
                 Propagation::Continue
             }

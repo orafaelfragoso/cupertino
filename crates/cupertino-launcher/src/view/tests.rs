@@ -1705,6 +1705,36 @@ fn the_view_options_open_in_a_popup_below_their_button() {
     assert!(second.max_y() < spec.size.height, "{second:?} in {spec:?}");
 }
 
+/// On layer surfaces the keyboard leaves the panel for the menu's popup when it opens, and comes back when it
+/// closes: the panel stays open throughout, as it does for nothing else that takes the keyboard.
+#[test]
+fn the_panel_stays_open_while_its_view_options_menu_holds_the_keyboard() {
+    let mut run = Run::on_layer_surfaces();
+    run.deliver(Message::Browse);
+    let panel = run.panel();
+    run.click(panel, run.centre(browse::OPTIONS_BUTTON));
+    let menu = run.options_menu().expect("the press opened the menu");
+    // the keyboard's leave from the panel, then its enter on the popup, as the compositor sends them
+    run.send(panel, WindowEvent::Focus(false));
+    run.send(menu, WindowEvent::Focus(true));
+    assert!(run.model().panel.is_visible(), "the panel stayed open");
+    assert!(run.options_menu().is_some(), "and its menu");
+    // opened with the pointer, nothing is selected: the first Down selects Grid, the second List
+    run.menu_key("Down", DOWN_CODE, DOWN);
+    run.menu_key("Down", DOWN_CODE, DOWN);
+    run.menu_key("Return", RETURN_CODE, RETURN);
+    assert!(run.options_menu().is_none(), "Return chose");
+    run.send(panel, WindowEvent::Focus(true));
+    assert!(run.model().panel.is_visible());
+    assert_eq!(
+        run.model().browser.as_ref().unwrap().arrangement(),
+        Arrangement::List
+    );
+    // with the menu closed, losing the keyboard closes the panel as before
+    run.send(panel, WindowEvent::Focus(false));
+    assert!(!run.model().panel.is_visible());
+}
+
 /// The view options are drawn as every menu of the shell is: a menu on the menu material, which a desktop with glass
 /// shows as glass under the popup.
 #[test]
@@ -1772,8 +1802,8 @@ fn only_a_keyboard_choice_leaves_the_focus_ring_on_the_view_options_button() {
         Arrangement::List
     );
     assert!(!run.options_ring(), "no ring after a pointer choice");
+    // from the keyboard the menu opens on its first item, Grid
     run.open_options_by_keys();
-    run.menu_key("Up", UP_CODE, UP);
     run.menu_key("Return", RETURN_CODE, RETURN);
     assert!(run.options_menu().is_none(), "Return chose");
     assert_eq!(

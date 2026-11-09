@@ -921,8 +921,8 @@ impl<M: 'static> Widget<M> for Announcer {
 }
 
 /// The view options: a menu in a popup of the panel's window `parent`, below the button and free of the panel's
-/// bounds, on the menu material every menu of the shell uses. One item per arrangement, the current one checked and
-/// focused when it opens; choosing one sends [`Input::Arrange`], and Escape or a press outside [`Input::CloseMenu`].
+/// bounds, on the menu material every menu of the shell uses. One item per arrangement, the current one checked;
+/// choosing one sends [`Input::Arrange`], and Escape or a press outside [`Input::CloseMenu`].
 pub fn options_menu<M>(parent: WindowKey, current: Arrangement, key: WindowKey) -> Vec<Window<M>>
 where
     M: From<Input> + Clone + 'static,
@@ -942,7 +942,9 @@ where
         anchor: MenuAnchor::Below(Key::from(OPTIONS_BUTTON)),
         label: VIEW_OPTIONS.to_owned(),
         items,
-        current: arrangements.iter().position(|&a| a == current),
+        // nothing highlighted until the pointer or a key moves, as every menu the pointer opens; the check marks the
+        // current arrangement
+        current: None,
         open: Vec::new(),
         on_open: Box::new(|_| M::from(Input::CloseMenu)),
         on_close: M::from(Input::CloseMenu),

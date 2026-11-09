@@ -174,7 +174,7 @@ calculator and conversion rows have no icon. Missing assets are reported once at
 | Category defaults | `engine::DEFAULT_CATEGORY_ORDER` (enablement list; runtime order is relevance driven) |
 | Motion | open 0.18 s from 0.96 scale; content 0.08 s later over 0.10 s; shape spring 0.24 s, critically damped; unfolding content 0.06 s later over 0.12 s; fold fade 0.05 s; close 0.2 s (search 0.1 s); Reduce Motion: fades only |
 | Shape grid | settled widths and heights on multiples of 4 pt |
-| Browser | 844 × 576 pt, 24 pt corners, 7 columns of 102 pt rows (60 pt icons, 13 pt labels), 44 pt list rows (32 pt icons), 26 pt category filters, 96 pt kept free below on a short output |
+| Browser | 844 × 576 pt, 24 pt corners, 7 columns of 102 pt rows (60 pt icons, 13 pt labels), 44 pt list rows (32 pt icons), 26 pt category filters (14 pt regular), 96 pt kept free below on a short output |
 | Deadlines | file search 0.5 s, enlarged preview 1.5 s |
 | Row height 40, header 32, calculator row 64 | authored |
 

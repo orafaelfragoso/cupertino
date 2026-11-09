@@ -241,7 +241,7 @@ impl BrowseLayout {
     pub const FILTER_HEIGHT: f64 = 26.0;
     pub const FILTER_RADIUS: f64 = 7.0;
     pub const FILTER_FONT_PT: f64 = 14.0;
-    pub const FILTER_WEIGHT: u16 = 500;
+    pub const FILTER_WEIGHT: u16 = 400;
     pub const FILTER_PAD: f64 = 10.0;
     pub const FILTER_GAP: f64 = 10.0;
     pub const FILTER_GROW: f64 = 24.0;

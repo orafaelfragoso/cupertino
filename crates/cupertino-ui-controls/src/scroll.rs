@@ -275,6 +275,10 @@ pub struct ViewportState {
     /// The content's motion while a finger or touch drags it, it coasts or a stretch returns.
     motion: Option<ScrollMotion>,
     touch: Option<(i32, Point)>,
+    /// The time of the last input that moved the content, in seconds: the next one is never earlier.
+    input_at: f64,
+    /// The time the content was last drawn at, in seconds.
+    drawn_at: f64,
 }
 
 fn seconds(t: Timestamp) -> f64 {
@@ -331,11 +335,25 @@ impl<M: 'static> Viewport<M> {
         state.motion.get_or_insert_with(|| self.at_rest(at))
     }
 
+    /// When an input event stamped `at` moves the content, in seconds: when it happened, not when it is handled, so
+    /// movements delivered together keep their spacing and the speed a lift leaves is measured as the finger moved.
+    /// Kept in order after the last input, and never before the content was last drawn when it catches moving
+    /// content, which is caught where it shows.
+    fn input_seconds(&self, state: &mut ViewportState, at: Timestamp, cx: &EventCx<'_, M>) -> f64 {
+        let mut t = seconds(cx.input_time(at)).max(state.input_at);
+        if state.motion.as_ref().is_some_and(|m| !m.is_dragging()) {
+            t = t.max(state.drawn_at);
+        }
+        state.input_at = t;
+        t
+    }
+
     /// Sends the motion's offset at `now` and draws its stretch; the motion ends once it is at rest.
     fn show(&self, state: &mut ViewportState, now: f64, cx: &mut EventCx<'_, M>) {
         let Some(motion) = &state.motion else {
             return;
         };
+        state.drawn_at = state.drawn_at.max(now);
         let (offset, stretch) = (motion.offset(now), motion.stretch(now));
         let animating = motion.is_animating(now);
         let dragging = motion.is_dragging();
@@ -383,6 +401,7 @@ impl<M: 'static> Viewport<M> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn wheel(
         &self,
         state: &mut ViewportState,
@@ -390,10 +409,12 @@ impl<M: 'static> Viewport<M> {
         value120: Option<(i32, i32)>,
         source: ScrollSource,
         stop: bool,
+        at: Timestamp,
         cx: &mut EventCx<'_, M>,
     ) -> Propagation {
+        // the burst's end is timed on the clock its wake comes on; the movement at the time it happened
         let now = cx.now();
-        let t = seconds(now);
+        let t = self.input_seconds(state, at, cx);
         let direction = cx.env().direction;
         let delta = match (delta, value120) {
             (d, Some((x, y))) if d == Point::ZERO => {
@@ -572,8 +593,8 @@ impl<M: 'static> Widget<M> for Viewport<M> {
                     stop,
                     ..
                 },
-                _,
-            ) => return self.wheel(state, delta, value120, source, stop, cx),
+                at,
+            ) => return self.wheel(state, delta, value120, source, stop, at, cx),
             Event::Wake(_) => {
                 if state.wheel_until.is_some_and(|until| now >= until) {
                     state.wheel_until = None;
@@ -594,10 +615,11 @@ impl<M: 'static> Widget<M> for Viewport<M> {
                 state.touch = Some((id, position));
                 state.latch = Some(true);
             }
-            Event::Touch(TouchEvent::Motion { id, position }, _) => {
+            Event::Touch(TouchEvent::Motion { id, position }, at) => {
                 let Some((touch, last)) = state.touch.filter(|(t, _)| *t == id) else {
                     return Propagation::Continue;
                 };
+                let t = self.input_seconds(state, at, cx);
                 let direction = cx.env().direction;
                 let delta = Point::new(
                     self.along_x(direction, last.x - position.x),
@@ -607,8 +629,11 @@ impl<M: 'static> Widget<M> for Viewport<M> {
                 self.motion(state).drag(delta, t);
                 self.show(state, t, cx);
             }
-            Event::Touch(TouchEvent::Up { id }, _) if state.touch.is_some_and(|(t, _)| t == id) => {
+            Event::Touch(TouchEvent::Up { id }, at)
+                if state.touch.is_some_and(|(t, _)| t == id) =>
+            {
                 state.touch = None;
+                let t = self.input_seconds(state, at, cx);
                 self.lift(state, t, cx);
             }
             Event::Touch(TouchEvent::Cancel, _) | Event::Cancel => {

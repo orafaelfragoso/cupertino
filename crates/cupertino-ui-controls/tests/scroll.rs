@@ -624,6 +624,73 @@ fn a_new_finger_catches_coasting_content_where_it_is() {
     );
 }
 
+/// Where a flick of five movements of 2 points 10 ms apart, then a lift, leaves the content on frames from 66 ms to
+/// 1 s: delivered one at a time as they happen, or (`batched`) all at once when the window wakes at the lift, each
+/// with the time it happened.
+fn flick_trace(batched: bool) -> Vec<f64> {
+    let mut h = harness(Setup::default());
+    let at = point(50.0, 50.0);
+    let movement = |ms: u64, dy: f64, stop: bool| {
+        WindowEvent::Pointer(
+            PointerEvent::Scroll {
+                position: at,
+                delta: Point::new(0.0, dy),
+                value120: None,
+                source: ScrollSource::Finger,
+                stop,
+                inverted: (false, false),
+            },
+            Timestamp(ms * MS),
+        )
+    };
+    let mut events: Vec<(u64, WindowEvent)> = (1..=5)
+        .map(|i| (i * 10, movement(i * 10, 2.0, false)))
+        .collect();
+    events.push((50, movement(50, 0.0, true)));
+    if batched {
+        h.clock().advance_to(Timestamp(50 * MS)).unwrap();
+    }
+    for (ms, event) in events {
+        if !batched {
+            h.clock().advance_to(Timestamp(ms * MS)).unwrap();
+        }
+        h.rt.window_system_mut()
+            .enqueue_window(h.window, event)
+            .unwrap();
+        if !batched {
+            step(&mut h);
+        }
+    }
+    if batched {
+        step(&mut h);
+    }
+    assert_eq!(h.model().inner.offset.y, 10.0);
+    let mut trace = Vec::new();
+    let mut ms = 66;
+    while ms <= 1_000 {
+        frames(&mut h, ms, ms);
+        trace.push(drawn(&h));
+        ms += 16;
+    }
+    trace
+}
+
+#[test]
+fn a_flick_delivered_in_one_batch_coasts_as_one_delivered_as_it_happened() {
+    let spread = flick_trace(false);
+    let batched = flick_trace(true);
+    let rest = *spread.last().unwrap();
+    // 200 points a second coasts about 100 points
+    assert!(rest > 80.0, "the spread flick coasts to {rest}");
+    for (i, (s, b)) in spread.iter().zip(&batched).enumerate() {
+        let travel = s - 10.0;
+        assert!(
+            (b - s).abs() <= 0.02 * travel.abs().max(1.0),
+            "frame {i}: batched at {b}, spread at {s}"
+        );
+    }
+}
+
 #[test]
 fn a_cancelled_touch_stops_the_drag_and_the_stretch_returns() {
     use cupertino_ui_platform::TouchEvent;

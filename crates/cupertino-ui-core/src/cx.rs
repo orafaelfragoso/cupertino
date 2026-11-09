@@ -177,6 +177,18 @@ impl<M> EventCx<'_, M> {
         self.status.now
     }
 
+    /// When an input event carrying `at` happened, on the clock of [`now`](Self::now): its own time, so events
+    /// delivered together keep the spacing they happened with, as a speed measured from them needs. An event without
+    /// a time of its own (`at` zero, as one a program makes up) or with one later than now happened now.
+    pub fn input_time(&self, at: Timestamp) -> Timestamp {
+        let now = self.status.now;
+        if at.0 == 0 || at > now {
+            now
+        } else {
+            at
+        }
+    }
+
     /// When the pointer press that opened this popup went down, on the clock of [`now`](Self::now): a popup opened
     /// while a button was held, such as a menu opened by a press, times press-and-hold from it rather than from the
     /// first event it hears. `None` in a toplevel and in a popup no press opened.

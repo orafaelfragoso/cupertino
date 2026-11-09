@@ -1702,6 +1702,7 @@ dependencies = [
  "cupertino-seat",
  "cupertino-stage",
  "cupertino-test-bus",
+ "cupertino-test-pam",
  "cupertino-theme",
  "cupertino-wm",
  "image",

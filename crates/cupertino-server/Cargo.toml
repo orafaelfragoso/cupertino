@@ -87,6 +87,7 @@ features = ["desktop", "wayland_frontend", "backend_egl", "backend_drm", "backen
 [dev-dependencies]
 cupertino-screencast = { path = "../cupertino-screencast", features = ["fake"] }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
+cupertino-test-pam = { path = "../cupertino-test-pam" }
 tempfile = "3"
 async-io = "2"
 wayland-client = "0.31"

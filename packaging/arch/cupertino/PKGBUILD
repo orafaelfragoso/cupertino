@@ -9,7 +9,7 @@ arch=('x86_64')
 url='https://github.com/orafaelfragoso/cupertino'
 license=('GPL-3.0-or-later' 'MPL-2.0' 'MIT' 'OFL-1.1' 'LGPL-2.1-or-later' 'MIT-CMU' 'BSD-3-Clause')
 makedepends=('cargo' 'python' 'mesa' 'libglvnd' 'pam' 'gcc-libs' 'systemd' 'dbus' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'clang' 'libpipewire')
-checkdepends=('cargo-nextest>=0.9.151')
+checkdepends=('cargo-nextest>=0.9.151' 'git')
 # makepkg's LTO flags would reach the C code of build dependencies only; the release profile decides for Rust. No
 # split debug package: it is ~0.9 GB of debug info for the sixteen binaries.
 options=('!lto' '!debug')

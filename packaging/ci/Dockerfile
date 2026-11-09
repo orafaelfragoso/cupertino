@@ -1,12 +1,13 @@
 # The Arch package builder. Package dependencies and release tools are image layers; source and Cargo outputs are
-# mounted only at run time. sccache is used only when build-in-container.sh mounts its per-user compile cache.
+# mounted only at run time. sccache is used only when build-in-container.sh mounts its per-user compile cache; git is
+# a check dependency (cupertino-build-info reads a real repository's HEAD in its tests).
 FROM docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1 AS arch
 ARG CARGO_BUILD_JOBS=4
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo CARGO_INCREMENTAL=0 RUSTUP_TOOLCHAIN=1.99.1
 ENV CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS
 ENV PATH=/opt/cargo/bin:$PATH
 RUN pacman -Syu --noconfirm --needed -q rustup python mesa libglvnd pam dbus xkeyboard-config \
-      shared-mime-info gcc-libs systemd adwaita-icon-theme clang libpipewire pipewire namcap sccache \
+      shared-mime-info gcc-libs systemd adwaita-icon-theme clang libpipewire pipewire namcap sccache git \
  && rustup toolchain install 1.99.1 --profile minimal \
  && rustup default 1.99.1 \
  && useradd -m builder \

@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import unittest
 from argparse import Namespace
 from pathlib import Path
@@ -61,25 +60,17 @@ class PortalsConfTest(unittest.TestCase):
         conf.read(release.ROOT / 'packaging/files' / self.CONF)
         return [b for b in conf['preferred']['default'].split(';') if b]
 
-    def test_the_conf_is_in_the_runtime_package_of_every_format(self):
-        for fmt in ('deb', 'rpm', 'arch'):
-            with self.subTest(fmt):
-                self.assertIn(self.CONF, [rel for rel, _src, _mode, _conf in release.runtime(fmt)])
+    def test_the_conf_is_in_the_runtime_package(self):
+        self.assertIn(self.CONF, [rel for rel, _src, _mode, _conf in release.runtime()])
 
     def test_every_backend_it_prefers_is_installed_with_the_package(self):
-        meta = tomllib.loads((release.ROOT / 'crates/cupertino-server/Cargo.toml').read_text())['package']['metadata']
-        recommends = {
-            'deb': [r.strip() for r in meta['deb']['recommends'].split(',')],
-            'rpm': list(meta['generate-rpm']['recommends']),
-            'arch': re.findall(r"'([\w-]+)'", re.search(r'depends=\((.*?)\)', (
-                release.ROOT / 'packaging/arch/cupertino/PKGBUILD').read_text().split('package_cupertino()')[1], re.S)[1]),
-        }
+        depends = re.findall(r"'([\w-]+)'", re.search(r'depends=\((.*?)\)', (
+            release.ROOT / 'packaging/arch/cupertino/PKGBUILD').read_text().split('package_cupertino()')[1], re.S)[1])
         backends = self.backends()
         self.assertEqual(backends, ['gtk'])
-        for fmt, packages in recommends.items():
-            for backend in backends:
-                with self.subTest(fmt, backend=backend):
-                    self.assertIn(f'xdg-desktop-portal-{backend}', packages)
+        for backend in backends:
+            with self.subTest(backend=backend):
+                self.assertIn(f'xdg-desktop-portal-{backend}', depends)
 
 
 class SecretServiceTest(unittest.TestCase):
@@ -88,73 +79,56 @@ class SecretServiceTest(unittest.TestCase):
     AUTH = '-auth optional pam_gnome_keyring.so'
     SESSION = '-session optional pam_gnome_keyring.so auto_start'
 
-    def lines(self, fmt, service):
-        return [line for line in (self.PAM / fmt / service).read_text().splitlines() if line and not line.startswith('#')]
+    def lines(self, service):
+        return [line for line in (self.PAM / 'arch' / service).read_text().splitlines() if line and not line.startswith('#')]
 
-    # The stack that checks the password, per format and service. Fedora's system-auth ends its auth stack at
-    # `sufficient pam_unix.so`; an `include` would end this service's stack there too and the keyring line would never
-    # run, so rpm takes it as a substack (as the distributions' own display managers do).
-    STACK = {'arch': 'auth include system-local-login', 'deb': '@include common-auth', 'rpm': 'auth substack system-auth'}
-    LOCK_STACK = {'arch': 'auth include system-auth', 'deb': '@include common-auth', 'rpm': 'auth substack system-auth'}
+    # The stack that checks the password: the login's and the lock screen's.
+    STACK = 'auth include system-local-login'
+    LOCK_STACK = 'auth include system-auth'
 
     def test_a_login_with_a_password_unlocks_the_keyring_and_its_session_starts_the_daemon(self):
-        for fmt, stack in self.STACK.items():
-            with self.subTest(fmt):
-                lines = self.lines(fmt, 'cupertino-session')
-                # right after the stack that checks the password: the module only keeps the password it was given
-                self.assertEqual(lines[lines.index(self.AUTH) - 1], stack)
-                # last: pam_systemd has made the runtime directory, where the daemon's control socket is
-                self.assertEqual(lines[-1], self.SESSION)
-                self.assertEqual(lines.count(self.AUTH) + lines.count(self.SESSION), 2)
+        lines = self.lines('cupertino-session')
+        # right after the stack that checks the password: the module only keeps the password it was given
+        self.assertEqual(lines[lines.index(self.AUTH) - 1], self.STACK)
+        # last: pam_systemd has made the runtime directory, where the daemon's control socket is
+        self.assertEqual(lines[-1], self.SESSION)
+        self.assertEqual(lines.count(self.AUTH) + lines.count(self.SESSION), 2)
 
     def test_auto_login_starts_the_daemon_locked_and_the_lock_screen_unlocks_it(self):
-        for fmt in ('arch', 'deb', 'rpm'):
-            with self.subTest(fmt):
-                autologin = self.lines(fmt, 'cupertino-autologin')
-                self.assertEqual(autologin[-1], self.SESSION)
-                self.assertNotIn(self.AUTH, autologin)
-                lock = self.lines(fmt, 'cupertino-login')
-                self.assertEqual(lock[:2], [self.LOCK_STACK[fmt], self.AUTH], 'right after the password stack')
-                self.assertFalse([line for line in lock if line.startswith(('session', '-session'))])
-                self.assertFalse([line for line in self.lines(fmt, 'cupertino-greeter') if 'keyring' in line])
+        autologin = self.lines('cupertino-autologin')
+        self.assertEqual(autologin[-1], self.SESSION)
+        self.assertNotIn(self.AUTH, autologin)
+        lock = self.lines('cupertino-login')
+        self.assertEqual(lock[:2], [self.LOCK_STACK, self.AUTH], 'right after the password stack')
+        self.assertFalse([line for line in lock if line.startswith(('session', '-session'))])
+        self.assertFalse([line for line in self.lines('cupertino-greeter') if 'keyring' in line])
 
-    # Where each distribution's account phase runs: Debian's pam_faillock(8) and Fedora's authselect `with-faillock` reset
-    # the count of failures there, so the lock screen's `pam_acct_mgmt` must reach it.
-    LOCK_ACCOUNT = {'arch': 'account include system-auth', 'deb': '@include common-account',
-                    'rpm': 'account include system-auth'}
+    # pam_faillock(8) resets the count of failures in the account phase, so the lock screen's `pam_acct_mgmt` must reach it.
+    LOCK_ACCOUNT = 'account include system-auth'
 
     def test_the_lock_screen_counts_towards_the_account_lockout(self):
-        """The lock screen authenticates through the distribution's shared password stack and account stack, the ones where
-        each distribution puts pam_faillock (preauth, authfail, authsucc or the account reset): Arch's system-auth has it
-        by default, Debian's common-auth and common-account and Fedora's system-auth when it is turned on. Nothing before
-        the shared stack decides, and nothing after it can let a password through on its own, so every failed attempt at
-        the lock screen goes through the same count as a failed login."""
+        """The lock screen authenticates through the shared password stack and account stack, system-auth, which holds
+        pam_faillock (preauth, authfail, authsucc and the account reset) by default. Nothing before the shared stack
+        decides, and nothing after it can let a password through on its own, so every failed attempt at the lock screen
+        goes through the same count as a failed login."""
         service = (release.ROOT / 'crates/cupertino-login/src/auth.rs').read_text()
         self.assertIn('pub const SERVICE: &str = "cupertino-login";', service)
         self.assertIn('cupertino-login', release.PAM_SERVICES)
-        for fmt in ('arch', 'deb', 'rpm'):
-            with self.subTest(fmt):
-                lock = self.lines(fmt, 'cupertino-login')
-                auth = [line for line in lock if line.split()[0] in ('auth', '-auth') or line == self.LOCK_STACK[fmt]]
-                self.assertEqual(auth[0], self.LOCK_STACK[fmt], 'the shared stack comes first')
-                for line in auth[1:]:
-                    self.assertEqual(line.split()[1], 'optional', f'{line!r} cannot decide')
-                self.assertFalse([line for line in lock if re.search(r'pam_(permit|succeed_if|faillock)\.so', line)],
-                                 'the shared stack alone passes or counts')
-                self.assertIn(self.LOCK_ACCOUNT[fmt], lock)
-                # the lock screen runs as the user and pam_faillock records a failure only in a tally file that exists:
-                # a session that started without a password gets one from a module run as root, at no cost to its login
-                autologin = self.lines(fmt, 'cupertino-autologin')
-                self.assertEqual([line for line in autologin if line.split()[0] in ('auth', '-auth')],
-                                 ['auth required pam_permit.so', '-auth optional pam_faillock.so authsucc'])
+        lock = self.lines('cupertino-login')
+        auth = [line for line in lock if line.split()[0] in ('auth', '-auth') or line == self.LOCK_STACK]
+        self.assertEqual(auth[0], self.LOCK_STACK, 'the shared stack comes first')
+        for line in auth[1:]:
+            self.assertEqual(line.split()[1], 'optional', f'{line!r} cannot decide')
+        self.assertFalse([line for line in lock if re.search(r'pam_(permit|succeed_if|faillock)\.so', line)],
+                         'the shared stack alone passes or counts')
+        self.assertIn(self.LOCK_ACCOUNT, lock)
+        # the lock screen runs as the user and pam_faillock records a failure only in a tally file that exists:
+        # a session that started without a password gets one from a module run as root, at no cost to its login
+        autologin = self.lines('cupertino-autologin')
+        self.assertEqual([line for line in autologin if line.split()[0] in ('auth', '-auth')],
+                         ['auth required pam_permit.so', '-auth optional pam_faillock.so authsucc'])
 
-    def test_every_format_installs_the_provider_its_pam_module_and_a_client(self):
-        meta = tomllib.loads((release.ROOT / 'crates/cupertino-server/Cargo.toml').read_text())['package']['metadata']
-        deb = [d.strip() for d in meta['deb']['recommends'].split(',')]
-        for package in ('gnome-keyring', 'libpam-gnome-keyring', 'libsecret-tools'):
-            self.assertIn(package, deb)
-        for package in ('gnome-keyring', 'gnome-keyring-pam', 'libsecret'):
-            self.assertIn(package, meta['generate-rpm']['recommends'])
+    def test_the_package_installs_the_provider_its_pam_module_and_a_client(self):
         for recipe in ('packaging/arch/cupertino/PKGBUILD', 'packaging/arch/cupertino-git/PKGBUILD'):
             with self.subTest(recipe):
                 depends = re.search(r'^\s+depends=\((.*?)\)', (release.ROOT / recipe).read_text(), re.M | re.S).group(1)
@@ -173,14 +147,7 @@ class SecretServiceTest(unittest.TestCase):
 class RuntimeFloorTest(unittest.TestCase):
     """dbus 1.16 passes the caller's ProcessFD (dbus-broker does from 34); PipeWire 1.4 follows a screencast resize."""
 
-    def test_every_format_requires_the_floors(self):
-        meta = tomllib.loads((release.ROOT / 'crates/cupertino-server/Cargo.toml').read_text())['package']['metadata']
-        deb = [d.strip() for d in meta['deb']['depends'].split(',')]
-        rpm = meta['generate-rpm']['requires']
-        self.assertIn('dbus (>= 1.16)', deb)
-        self.assertIn('pipewire (>= 1.4)', deb)
-        self.assertEqual(rpm['dbus'], '>= 1:1.16')
-        self.assertEqual(rpm['pipewire-libs'], '>= 1.4')
+    def test_the_package_requires_the_floors(self):
         for recipe in ('packaging/arch/cupertino/PKGBUILD', 'packaging/arch/cupertino-git/PKGBUILD'):
             with self.subTest(recipe):
                 depends = re.search(r'^\s+depends=\((.*?)\)', (release.ROOT / recipe).read_text(), re.M | re.S).group(1)
@@ -383,25 +350,8 @@ GIT_RECIPE = Path(__file__).resolve().parent / 'arch/cupertino-git/PKGBUILD'
 class LicenceTest(unittest.TestCase):
     def test_a_list_missing_a_shipped_licence_is_reported(self):
         shipped = {'GPL-3.0-or-later', 'MPL-2.0'}
-        declared = {'PKGBUILD': {'GPL-3.0-or-later'}, 'rpm': {'GPL-3.0-or-later', 'MPL-2.0', 'OFL-1.1'}}
+        declared = {'PKGBUILD': {'GPL-3.0-or-later'}, 'cupertino-git PKGBUILD': {'GPL-3.0-or-later', 'MPL-2.0', 'OFL-1.1'}}
         self.assertEqual(release.missing_licenses(shipped, declared), ['PKGBUILD lacks MPL-2.0'])
-
-    def test_a_crate_the_copyright_file_gives_another_licence_is_reported(self):
-        text = ('Files: *\nCopyright: x\nLicense: GPL-3+\n\n'
-                'Files: crates/a/*\n crates/b/*\nCopyright: x\nLicense: MPL-2.0\n\n'
-                'Files: crates/*/protocols/*.xml\nCopyright: x\nLicense: MIT or Apache-2.0\n\n'
-                'Files: crates/b/src/*\nCopyright: x\nLicense: GPL-3+\n')
-        crates = {'a': 'MPL-2.0', 'b': 'MPL-2.0', 'c': 'MPL-2.0', 'd': 'GPL-3.0-or-later', 'e': 'MPL-2.0 AND OFL-1.1'}
-        paths = ['crates/a/Cargo.toml', 'crates/a/protocols/x.xml', 'crates/b/Cargo.toml', 'crates/b/src/lib.rs',
-                 'crates/c/Cargo.toml', 'crates/d/src/main.rs', 'crates/e/Cargo.toml', 'README.md']
-        self.assertEqual(release.crate_license_problems(text, crates, paths),
-                         ['crates/b/src/lib.rs is MPL-2.0 as its crate, the Debian copyright file gives it GPL-3.0-or-later',
-                          'crates/c/Cargo.toml is MPL-2.0 as its crate, the Debian copyright file gives it GPL-3.0-or-later'])
-
-    def test_every_workspace_crate_file_has_its_licence_in_the_copyright_file(self):
-        text = (release.ROOT / 'packaging/debian/cupertino.copyright').read_text()
-        problems = release.crate_license_problems(text, release.workspace_crate_licenses(), release.tracked_crate_files())
-        self.assertEqual(problems, [])
 
     def test_the_runtime_ships_the_licences_of_its_crates_and_embedded_notices(self):
         self.assertEqual(release.shipped_licenses('runtime'), {'GPL-3.0-or-later', 'MPL-2.0', 'MIT', 'OFL-1.1', 'LGPL-2.1-or-later', 'MIT-CMU', 'BSD-3-Clause'})

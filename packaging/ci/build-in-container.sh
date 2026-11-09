@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Build, inspect and install-test the native packages of one distribution in pinned containers.
+# Build, inspect and install-test the Arch packages in pinned containers.
 #
-#   packaging/ci/build-in-container.sh {arch|debian|fedora} DIST_DIR [--test-only|--upgrade]
+#   packaging/ci/build-in-container.sh arch DIST_DIR [--test-only|--upgrade]
 #
+# Arch is the only distribution the packages target; the first argument names it so callers read the same everywhere.
 # The source is the committed HEAD (git archive), so untracked or modified files never reach a package. A build
-# container compiles the workspace and makes the runtime and data packages (Arch: makepkg with check() on the release
-# source archive and the stable PKGBUILD, then namcap); release.py verifies each against the manifest. A second, fresh container of the same base installs them, checks the login-screen account, the unit
+# container makes the runtime and data packages with makepkg (check() included) on the release source archive and the
+# stable PKGBUILD, then runs namcap; release.py verifies each against the manifest. A second, fresh container of the same base installs them, checks the login-screen account, the unit
 # state, the payload and conffile preservation across a reinstall, then removes them. Packages, file lists and the
 # test log land in DIST_DIR. --test-only skips the build and install-tests the packages already in DIST_DIR. Needs Docker Buildx, Python 3 and git; nothing is installed on the host.
 #
@@ -14,7 +15,7 @@
 # upgrades to release 2 and checks that the version rose and that the account, conffile, unit state and payload survived.
 set -euo pipefail
 
-usage="usage: build-in-container.sh arch|debian|fedora DIST_DIR [--test-only|--upgrade]"
+usage="usage: build-in-container.sh arch DIST_DIR [--test-only|--upgrade]"
 distro=${1:?$usage}
 dist=${2:?$usage}
 mode=${3:-build}
@@ -25,22 +26,12 @@ if [ "$mode" != build ] && [ "$mode" != --test-only ] && [ "$mode" != --upgrade 
     echo "$usage" >&2
     exit 2
 fi
-# Fresh install tests retain their original distribution bases, never the dependency-filled builder images.
-case $distro in
-arch)
-    test_image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1
-    ;;
-debian)
-    test_image=docker.io/library/debian@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308
-    ;;
-fedora)
-    test_image=docker.io/library/fedora@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
-    ;;
-*)
-    echo "unknown distribution: $distro" >&2
+if [ "$distro" != arch ]; then
+    echo "unknown distribution: $distro (only arch is packaged)" >&2
     exit 2
-    ;;
-esac
+fi
+# Fresh install tests use the original distribution base, never the dependency-filled builder image.
+test_image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1
 mkdir -p "$dist"
 dist=$(cd "$dist" && pwd)
 # Every mode stores active container ids under target/, so cleanup must hold the same lifetime lease.
@@ -113,7 +104,7 @@ start_container() {
 }
 source_commit=$(git -C "$root" rev-parse HEAD)
 git -C "$root" archive --format=tar --prefix=src/ "$source_commit" | tar -x -C "$work"
-if [ "$distro" = arch ] && [ "$mode" != --test-only ]; then
+if [ "$mode" != --test-only ]; then
     mkdir "$work/src/arch-build"
     archive=$(python3 "$root/packaging/release.py" source --commit "$source_commit" --output "$work/src/arch-build" ${RELEASE_TAG:+--tag "$RELEASE_TAG"})
     python3 "$root/packaging/release.py" pkgbuild --commit "$source_commit" ${RELEASE_TAG:+--tag "$RELEASE_TAG"} "$archive" "$work/src/arch-build/PKGBUILD" >/dev/null
@@ -129,68 +120,27 @@ cd /src
 # Packages are stripped; generating debug information only consumes build storage.
 export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CARGO_PROFILE_RELEASE_DEBUG=0
 upgrade=$upgrade
-case $distro in
-arch)
-    chown -R builder /src/arch-build /src/target
-    chown builder /cargo-home
-    su builder -c 'cd /src/arch-build && makepkg --noconfirm'
-    df -h /src | tee /dist/disk-after-makepkg.log
-    namcap arch-build/PKGBUILD arch-build/*.pkg.tar.zst | tee /dist/namcap.log
-    publish() {
-        mkdir -p "\$1"
-        cp arch-build/*.pkg.tar.zst arch-build/PKGBUILD "\$1/"
-        python3 packaging/release.py verify --format arch --package runtime "\$1"/cupertino-0*.pkg.tar.zst
-        python3 packaging/release.py verify --format arch --package data "\$1"/cupertino-data-*.pkg.tar.zst
-        for p in "\$1"/*.pkg.tar.zst; do pacman -Qip "\$p" > "\$p.info"; pacman -Qlp "\$p" > "\$p.contents"; done
-    }
-    if [ "\$upgrade" = 1 ]; then
-        publish /dist/rev-1
-        rm arch-build/*.pkg.tar.zst
-        sed -i 's/^pkgrel=1\$/pkgrel=2/' arch-build/PKGBUILD
-        su builder -c 'cd /src/arch-build && makepkg --noconfirm --repackage'
-        publish /dist/rev-2
-    else
-        publish /dist
-    fi
-    exit 0
-    ;;
-debian)
-    export CUPERTINO_ADMIN_GROUPS=sudo
-    ;;
-esac
-rustc --version
-export RUSTFLAGS="--remap-path-prefix=/src=/usr/src/cupertino --remap-path-prefix=\${CARGO_HOME:-\$HOME/.cargo}=/cargo"
-cargo build --locked --release --workspace --all-features --bins
-mkdir -p /dist
-case $distro in
-debian|fedora)
-    strip --strip-unneeded \$(python3 -c 'import sys; sys.path.insert(0, "packaging"); import release; print(" ".join("target/release/" + b for b in release.BINARIES))')
-    ;;
-esac
-case $distro in
-debian)
-    package() {
-        mkdir -p "\$1"
-        cargo deb -p cupertino-server --no-build --output "\$1" "\${@:2}"
-        cargo deb -p cupertino-assets --no-build --output "\$1" "\${@:2}"
-        python3 packaging/release.py verify --format deb --package runtime "\$1"/cupertino_*_amd64.deb
-        python3 packaging/release.py verify --format deb --package data "\$1"/cupertino-data_*.deb
-        for p in "\$1"/*.deb; do dpkg-deb --info "\$p" > "\$p.info"; dpkg-deb --contents "\$p" > "\$p.contents"; done
-    }
-    if [ "\$upgrade" = 1 ]; then package /dist/rev-1; package /dist/rev-2 --deb-revision 2; else package /dist; fi
-    ;;
-fedora)
-    package() {
-        mkdir -p "\$1"
-        cargo generate-rpm -p crates/cupertino-server -o "\$1" "\${@:2}"
-        cargo generate-rpm -p crates/cupertino-assets -o "\$1" "\${@:2}"
-        python3 packaging/release.py verify --format rpm --package runtime "\$1"/cupertino-0*.rpm
-        python3 packaging/release.py verify --format rpm --package data "\$1"/cupertino-data-*.rpm
-        for p in "\$1"/*.rpm; do rpm -qip "\$p" > "\$p.info"; rpm -qlvp "\$p" > "\$p.contents"; rpm -qpR "\$p" > "\$p.requires"; done
-    }
-    if [ "\$upgrade" = 1 ]; then package /dist/rev-1; package /dist/rev-2 --set-metadata 'release = "2"'; else package /dist; fi
-    ;;
-esac
+chown -R builder /src/arch-build /src/target
+chown builder /cargo-home
+su builder -c 'cd /src/arch-build && makepkg --noconfirm'
+df -h /src | tee /dist/disk-after-makepkg.log
+namcap arch-build/PKGBUILD arch-build/*.pkg.tar.zst | tee /dist/namcap.log
+publish() {
+    mkdir -p "\$1"
+    cp arch-build/*.pkg.tar.zst arch-build/PKGBUILD "\$1/"
+    python3 packaging/release.py verify --format arch --package runtime "\$1"/cupertino-0*.pkg.tar.zst
+    python3 packaging/release.py verify --format arch --package data "\$1"/cupertino-data-*.pkg.tar.zst
+    for p in "\$1"/*.pkg.tar.zst; do pacman -Qip "\$p" > "\$p.info"; pacman -Qlp "\$p" > "\$p.contents"; done
+}
+if [ "\$upgrade" = 1 ]; then
+    publish /dist/rev-1
+    rm arch-build/*.pkg.tar.zst
+    sed -i 's/^pkgrel=1\$/pkgrel=2/' arch-build/PKGBUILD
+    su builder -c 'cd /src/arch-build && makepkg --noconfirm --repackage'
+    publish /dist/rev-2
+else
+    publish /dist
+fi
 EOF
 )
 
@@ -198,25 +148,10 @@ test_script=$(cat <<'EOF'
 set -euo pipefail
 check() { local label=$1; shift; "$@" || { echo "FAIL: $label"; exit 1; }; echo "$label"; }
 absent() { for p in "$@"; do [ ! -e "$p" ] || return 1; done; }
-case $1 in
-arch)
-    pacman -Syu --noconfirm -q >/dev/null
-    pacman -U --noconfirm /dist/cupertino-data-*.pkg.tar.zst /dist/cupertino-0*.pkg.tar.zst >/dev/null
-    reinstall() { pacman -U --noconfirm /dist/cupertino-0*.pkg.tar.zst >/dev/null 2>&1; }
-    remove() { pacman -Rns --noconfirm cupertino cupertino-data >/dev/null; }
-    ;;
-debian)
-    apt-get update -qq
-    apt-get install -y -qq /dist/cupertino-data_*.deb /dist/cupertino_*_amd64.deb >/dev/null
-    reinstall() { apt-get install -y -qq --reinstall -o Dpkg::Options::=--force-confold /dist/cupertino_*_amd64.deb >/dev/null; }
-    remove() { apt-get purge -y -qq cupertino cupertino-data >/dev/null; }
-    ;;
-fedora)
-    dnf install -y -q /dist/cupertino-data-*.rpm /dist/cupertino-0*.rpm >/dev/null
-    reinstall() { dnf reinstall -y -q /dist/cupertino-0*.rpm >/dev/null; }
-    remove() { dnf remove -y -q cupertino cupertino-data >/dev/null; }
-    ;;
-esac
+pacman -Syu --noconfirm -q >/dev/null
+pacman -U --noconfirm /dist/cupertino-data-*.pkg.tar.zst /dist/cupertino-0*.pkg.tar.zst >/dev/null
+reinstall() { pacman -U --noconfirm /dist/cupertino-0*.pkg.tar.zst >/dev/null 2>&1; }
+remove() { pacman -Rns --noconfirm cupertino cupertino-data >/dev/null; }
 echo "installed: $(ls /usr/bin/cupertino-* | wc -l) files in /usr/bin"
 getent passwd cupertino-greeter
 for u in cupertino-login cupertino-netd cupertino-btd cupertino-powerd; do
@@ -250,34 +185,13 @@ upgrade_script=$(cat <<'EOF'
 set -euo pipefail
 check() { local label=$1; shift; "$@" || { echo "FAIL: $label"; exit 1; }; echo "$label"; }
 absent() { for p in "$@"; do [ ! -e "$p" ] || return 1; done; }
-case $1 in
-arch)
-    pacman -Syu --noconfirm -q >/dev/null
-    install() { pacman -U --noconfirm "$1"/cupertino-data-*.pkg.tar.zst "$1"/cupertino-0*.pkg.tar.zst >/dev/null; }
-    version() { pacman -Q cupertino | cut -d' ' -f2; }
-    newer() { [ "$(vercmp "$1" "$2")" = 1 ]; }
-    files() { pacman -Qql cupertino cupertino-data; }
-    altered() { pacman -Qkk cupertino cupertino-data 2>&1 | grep '^warning' | grep -v '/etc/cupertino/login.conf' || true; }
-    remove() { pacman -Rns --noconfirm cupertino cupertino-data >/dev/null; }
-    ;;
-debian)
-    apt-get update -qq
-    install() { apt-get install -y -qq -o Dpkg::Options::=--force-confold "$1"/cupertino-data_*.deb "$1"/cupertino_*_amd64.deb >/dev/null; }
-    version() { dpkg-query -W -f='${Version}' cupertino; }
-    newer() { dpkg --compare-versions "$1" gt "$2"; }
-    files() { dpkg -L cupertino cupertino-data; }
-    altered() { dpkg --verify cupertino cupertino-data | grep -v ' c /etc/cupertino/login.conf' || true; }
-    remove() { apt-get purge -y -qq cupertino cupertino-data >/dev/null; }
-    ;;
-fedora)
-    install() { dnf install -y -q "$1"/cupertino-data-*.rpm "$1"/cupertino-0*.rpm >/dev/null; }
-    version() { rpm -q --qf '%{VERSION}-%{RELEASE}' cupertino; }
-    newer() { [ "$(rpm --eval "%{lua: print(rpm.vercmp('$1', '$2'))}")" = 1 ]; }
-    files() { rpm -ql cupertino cupertino-data; }
-    altered() { rpm -V cupertino cupertino-data | grep -v ' c /etc/cupertino/login.conf' || true; }
-    remove() { dnf remove -y -q cupertino cupertino-data >/dev/null; }
-    ;;
-esac
+pacman -Syu --noconfirm -q >/dev/null
+install() { pacman -U --noconfirm "$1"/cupertino-data-*.pkg.tar.zst "$1"/cupertino-0*.pkg.tar.zst >/dev/null; }
+version() { pacman -Q cupertino | cut -d' ' -f2; }
+newer() { [ "$(vercmp "$1" "$2")" = 1 ]; }
+files() { pacman -Qql cupertino cupertino-data; }
+altered() { pacman -Qkk cupertino cupertino-data 2>&1 | grep '^warning' | grep -v '/etc/cupertino/login.conf' || true; }
+remove() { pacman -Rns --noconfirm cupertino cupertino-data >/dev/null; }
 units() { for u in login netd btd powerd; do echo "cupertino-$u.service: $(systemctl is-enabled "cupertino-$u.service" 2>/dev/null || true)"; done; }
 install /dist/rev-1
 old=$(version)
@@ -316,7 +230,7 @@ check 'login enablement removed' absent /etc/systemd/system/multi-user.target.wa
 EOF
 )
 
-# Each worktree and distribution owns its Cargo outputs; no global volume can mix incompatible builds.
+# Each worktree owns its Cargo outputs; no global volume can mix incompatible builds.
 if [ "$mode" != --test-only ]; then
     target_root="$root/target/package-build/$distro"
     cargo_home="$target_root/cargo-home"
@@ -381,13 +295,13 @@ if [ "$mode" != --test-only ]; then
 fi
 if [ "$upgrade" = 1 ]; then
     container=$(docker create --cidfile "$work/test.cid" --name "cupertino-$distro-$(basename "$work")-test" \
-        -v "$dist:/dist:ro" "$test_image" bash -c "$upgrade_script" bash "$distro")
+        -v "$dist:/dist:ro" "$test_image" bash -c "$upgrade_script")
     start_container "$container" "$dist/upgrade-test-$distro.log"
 else
     container=$(docker create --cidfile "$work/test.cid" --name "cupertino-$distro-$(basename "$work")-test" \
-        -v "$dist:/dist:ro" "$test_image" bash -c "$test_script" bash "$distro")
+        -v "$dist:/dist:ro" "$test_image" bash -c "$test_script")
     start_container "$container" "$dist/install-test-$distro.log"
 fi
-if [ "$distro" = arch ] && [ "$mode" = build ]; then
+if [ "$mode" = build ]; then
     python3 "$root/packaging/release.py" record-packages "$dist" --commit "$source_commit" ${RELEASE_TAG:+--tag "$RELEASE_TAG"}
 fi

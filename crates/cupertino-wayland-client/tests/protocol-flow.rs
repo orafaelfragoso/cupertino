@@ -702,7 +702,6 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                         frame,
                     })
                     .unwrap();
-                return;
             }
             wl_surface::Request::Attach { buffer, x, y } => {
                 s.buffer = buffer;

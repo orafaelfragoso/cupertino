@@ -510,19 +510,30 @@ impl Cupertino {
     }
 
     /// Take the faces the glass pass measured under small backdrops and send the tones that changed. A readback still
-    /// in flight asks for another frame, which picks it up.
+    /// in flight is picked up by a later frame ([`Cupertino::poll_tones_again`]).
     fn send_backdrop_tones(&mut self, renderer: &mut GlesRenderer) {
         let Some(material) = self.render.as_ref().and_then(|r| r.material.clone()) else {
             return;
         };
         let polled = renderer.with_context(|gl| unsafe { material.borrow_mut().poll_tones(gl) });
-        let Ok((readings, pending)) = polled else {
+        let Ok((readings, _)) = polled else {
             return;
         };
         let unadapted = material.borrow_mut().take_unadapted();
         if !readings.is_empty() || !unadapted.is_empty() {
             self.backdrop_tones.apply(&readings, &unadapted);
         }
+    }
+
+    /// While readbacks of faces are in flight, ask for another frame, which polls them. Called once the output's
+    /// clients were called back, which settles the output's request for a frame: asked for before that, as the frame
+    /// is shown, the next frame would never come when nothing else changes, and the tone would stay stale.
+    fn poll_tones_again(&mut self) {
+        let pending = self
+            .render
+            .as_ref()
+            .and_then(|r| r.material.as_ref())
+            .is_some_and(|m| m.borrow().tone_reads_in_flight());
         if pending {
             self.request_redraw();
         }
@@ -627,6 +638,7 @@ impl Cupertino {
                 });
             }
             self.outputs[idx].scheduler.called_back();
+            self.poll_tones_again();
             return;
         }
         let visible = self.visible_window_ids(idx);
@@ -659,6 +671,7 @@ impl Cupertino {
             });
         }
         self.outputs[idx].scheduler.called_back();
+        self.poll_tones_again();
         self.popups.cleanup();
         // forget the surfaces on the output that are gone (`wl_surface.enter` keeps one entry per surface on it)
         self.outputs[idx].output.cleanup();

@@ -135,9 +135,11 @@ pub(crate) fn geometry_events<M: 'static>(
 
 /// [`Event::Reveal`] for each scroll container around `target` that has to move to show it, or `part` of it (in its
 /// coordinates), innermost first. Each outer container shows what of the target its inner one will show once moved.
+/// What the window's `raised` nodes cover of a viewport does not show it: the container shows it below them.
 pub(crate) fn reveal_events<M: 'static>(
     tree: &Tree<M>,
     geometry: &Geometry,
+    raised: &[(NodeId, Rect)],
     direction: LayoutDirection,
     target: NodeId,
     part: Option<Rect>,
@@ -150,10 +152,14 @@ pub(crate) fn reveal_events<M: 'static>(
         part.translate(bounds.origin.x, bounds.origin.y)
     });
     for id in tree.path(target).into_iter().rev().skip(1) {
-        let Some(s) = scroller(tree, geometry, id, direction) else {
+        let Some(mut s) = scroller(tree, geometry, id, direction) else {
             continue;
         };
         let max = s.max_offset();
+        // a container inside a raised node lies over what is raised, not under it
+        if !raised.iter().any(|(r, _)| tree.path(id).contains(r)) {
+            s.viewport = crate::paint::unobscured(s.viewport, raised);
+        }
         let mut next = s.offset;
         // how far the content moves on screen
         let mut moved = Point::new(0.0, 0.0);

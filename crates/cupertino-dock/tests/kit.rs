@@ -2399,12 +2399,10 @@ fn every_change_the_bar_shows_presents_a_new_frame() {
     let strip = run
         .window(&format!("{EDGE_APP_ID}@3"))
         .expect("the new output's strip");
-    assert!(!run
-        .driver
-        .window_system_mut()
-        .frames(strip)
-        .unwrap()
-        .is_empty());
+    // it draws nothing: shown as a transparent colour, without a frame
+    let system = run.driver.window_system_mut();
+    assert!(system.frames(strip).unwrap().is_empty());
+    assert!(!system.solids(strip).unwrap().is_empty());
     outputs.remove(0);
     run.message(Message::Outputs(outputs));
     run.advance(2.0);

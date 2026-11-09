@@ -168,7 +168,9 @@ fn an_idle_window_commits_no_frame_and_a_blinking_caret_one_per_edge() {
 #[test]
 fn the_search_field_s_animation_repaints_only_the_toolbar() {
     let mut run = start(10, 1.0);
+    // the listing fills the pane under the toolbar row
     let listing = rect_of(&run, "list");
+    let row = listing.min_y() + cupertino_kit::controls::TOOLBAR_ROW;
     let before = presented(&run);
     run.click("search");
     run.frames(1000, 16);
@@ -179,13 +181,12 @@ fn the_search_field_s_animation_repaints_only_the_toolbar() {
     assert!(
         damage
             .iter()
-            .all(|r| f64::from(r.y + r.height) <= (listing.min_y() + SHADE).ceil()),
-        "above the listing: {damage:?} reaches below {}",
-        listing.min_y()
+            .all(|r| f64::from(r.y + r.height) <= (row + SHADE).ceil()),
+        "in the toolbar row: {damage:?} reaches below {row}"
     );
     assert!(
-        damage.iter().all(|r| f64::from(r.y) < listing.min_y()),
-        "nothing of the listing itself: {damage:?}"
+        damage.iter().all(|r| f64::from(r.y) < row),
+        "nothing of the listing below the row: {damage:?}"
     );
 }
 

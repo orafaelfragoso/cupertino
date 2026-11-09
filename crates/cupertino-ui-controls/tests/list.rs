@@ -145,6 +145,7 @@ impl Application for Listed {
                 on_select: Some(Box::new(Message::Select)),
                 on_activate: Some(Box::new(Message::Activate)),
                 on_row_key: None,
+                header_top: 0.0,
             }));
         }
         let list = ListView {

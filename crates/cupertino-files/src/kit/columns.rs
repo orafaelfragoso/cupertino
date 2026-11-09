@@ -284,15 +284,17 @@ impl ColumnsView {
         rows.chain(columns).collect()
     }
 
-    /// The rows of the browser's column in view or near it.
-    pub fn shown(&self, browser: &Browser, margin: f64) -> Vec<usize> {
+    /// The rows of the browser's column in view or near it, its rows starting `under` points down its view (under a
+    /// toolbar row).
+    pub fn shown(&self, browser: &Browser, margin: f64, under: f64) -> Vec<usize> {
         let scroll = self.scroll(browser.dir());
         let height = match scroll.viewport.height {
             h if h > 0.0 => h,
             _ => window_metrics::DEFAULT_SIZE.1,
         };
-        let top = (scroll.offset.y - margin).max(0.0);
-        let bottom = scroll.offset.y + height + margin;
+        // the rows start below the toolbar row, and show under it too
+        let top = (scroll.offset.y - under - margin).max(0.0);
+        let bottom = scroll.offset.y - under + height + margin;
         let count = browser.entries().len();
         let first = (top / ROW_HEIGHT).floor() as usize;
         let last = ((bottom / ROW_HEIGHT).ceil() as usize).min(count);
@@ -314,7 +316,15 @@ pub(super) fn view(session: &Session, id: u64, win: &BrowserWindow) -> Element<M
         } else {
             let next = chain.folders.get(i + 1).or(chain.child.as_ref());
             match cols.listings.get(folder) {
-                Some(listing) => other_column(session, id, cols, folder, listing.entries(), next),
+                Some(listing) => other_column(
+                    session,
+                    id,
+                    cols,
+                    folder,
+                    listing.entries(),
+                    next,
+                    view::under_row(win),
+                ),
                 None => Element::new(Spacer { min: 0.0 }),
             }
         };
@@ -323,7 +333,15 @@ pub(super) fn view(session: &Session, id: u64, win: &BrowserWindow) -> Element<M
     }
     if let Some(child) = &chain.child {
         let column = match cols.listings.get(child) {
-            Some(listing) => other_column(session, id, cols, child, listing.entries(), None),
+            Some(listing) => other_column(
+                session,
+                id,
+                cols,
+                child,
+                listing.entries(),
+                None,
+                view::under_row(win),
+            ),
             None => Element::new(Spacer { min: 0.0 }),
         };
         children.push(frame(id, place, &layout, column, child));
@@ -331,11 +349,18 @@ pub(super) fn view(session: &Session, id: u64, win: &BrowserWindow) -> Element<M
     }
     if let Some(entry) = chain.preview.and_then(|i| browser.entries().get(i)) {
         let width = layout.columns.get(place).map_or(PREVIEW_WIDTH, |c| c.1);
-        children.push(
-            preview_pane(session, id, win, entry)
-                .key("preview")
-                .width(width),
-        );
+        // the preview starts below the toolbar row
+        let pane = Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets {
+                top: view::under_row(win),
+                ..Insets::ZERO
+            },
+            spacing: 0.0,
+            align: Align::Stretch,
+            children: vec![preview_pane(session, id, win, entry).fill()],
+        });
+        children.push(pane.key("preview").width(width));
     }
     let content = Element::new(Stack {
         axis: Axis::Horizontal,
@@ -448,7 +473,9 @@ fn active_column(session: &Session, id: u64, win: &BrowserWindow) -> Element<Mes
     };
     Element::new(ColumnKeys {
         window: id,
-        children: vec![list.inset_element(SELECTION_INSET).fill()],
+        children: vec![list
+            .under_element(SELECTION_INSET, view::under_row(win))
+            .fill()],
     })
 }
 
@@ -461,6 +488,7 @@ fn other_column(
     folder: &Path,
     entries: &[Entry],
     next: Option<&PathBuf>,
+    under: f64,
 ) -> Element<Message> {
     let highlighted = next.and_then(|n| entries.iter().position(|e| &e.path == n));
     let entries: Rc<[Entry]> = entries.into();
@@ -523,7 +551,7 @@ fn other_column(
         })),
         on_activate: None,
     };
-    list.inset_element(SELECTION_INSET)
+    list.under_element(SELECTION_INSET, under)
 }
 
 /// A row: its icon and name, then a folder's chevron at the far end.

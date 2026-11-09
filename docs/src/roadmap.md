@@ -1,6 +1,6 @@
 # Roadmap
 
-Assessed on 2026-11-04 against merged commit `0a928c70`. Phases 1–3 have recorded completion audits. Phases 4–6 remain incomplete. Phase 7 has not started. Hardware acceptance is a separate gate and remains open.
+Assessed on 2026-11-09 against merged commit `5a4f015f`. Phases 1–3 have recorded completion audits. Phases 4–6 remain incomplete. Phase 7 has not started. Hardware acceptance is a separate gate and remains open.
 
 This assessment compares the phase criteria, merged source, tests, packaging and issue checklists. Existing test results belong to their recorded commits. Reading a test here does not mean it ran again, and code coverage does not replace a hardware run.
 
@@ -10,6 +10,8 @@ Completed for the agreed scope, WP-00 and WP-01. The contracts registry, layer g
 
 Source: `docs/architecture/contracts.yaml`, `ci/contracts.py`, `crates/cupertino-layers`, `crates/cupertino-server/tests/shell_roles.rs` and `ci/goldens.sh`.
 
+Since the audit, every test that starts a Cupertino binary gives it an empty asset search path, so the tests draw with the built-in assets even where a pack is installed; `crates/cupertino-server/tests/asset-isolation.rs` checks the test sources for spawns that do not. Server tests wait for the events they check rather than for a fixed time, with a 60-second guard against a hang. The CI build, test and golden jobs run in pinned Arch containers, and the golden baselines are recorded on that image's renderer.
+
 Remaining security and coverage debt stays visible in [#28](https://github.com/orafaelfragoso/cupertino/issues/28) and [#53](https://github.com/orafaelfragoso/cupertino/issues/53). Completion of the baseline does not establish isolation from every same-user application.
 
 ## Phase 2: transport and scene
@@ -17,6 +19,14 @@ Remaining security and coverage debt stays visible in [#28](https://github.com/o
 Completed for the agreed scope, WP-02, WP-03 and the GLES half of WP-04. The standard Wayland client, neutral scene model and render API are merged. Layer rules keep the public toolkit separate from the private shell protocols. Settings and Files gained damage submission.
 
 Source: `crates/cupertino-wayland-client`, `crates/cupertino-scene`, `crates/cupertino-render-api` and the server's scene tests. The old client adapter is gone.
+
+Since the audit:
+
+- Every surface the server shows (windows, subsurfaces, popups, layer, lock, X11, cursor, drag icons and input-method popups) is told which outputs it is on through `wl_surface.enter` and `leave`. `wl_compositor` version 6 sends each surface its preferred buffer scale and transform, beside the exact fractional scale.
+- A window across two displays takes the scale of the display that holds most of it, and changes only when another holds clearly more, so it does not switch back and forth at the seam.
+- Displays keep a scale model with size choices, check a whole arrangement before applying it and roll it back if it fails, recover when a display goes and restore its windows when it returns. See [Displays and GPUs](displays-and-gpus.md).
+- A window's toolbar row can be a synchronized subsurface (app effects version 11), so content scrolls behind the toolbar glass with a soft edge under it. Reduce Transparency gives the row a solid fill.
+- Click catchers and scrims are single-pixel buffers the compositor stretches, so they cost no full-output upload.
 
 Frame scheduling, presentation tracking, scene serialization, dirty-region propagation and asynchronous resource preparation moved to Phase 6. Vulkan and comparisons between renderer backends remain deferred. Damage submission alone does not prove that Files meets its frame-time target ([#40](https://github.com/orafaelfragoso/cupertino/issues/40)).
 
@@ -26,11 +36,19 @@ Completed for WP-06 and the CPU half of WP-07. Runtime, layout, text editing, co
 
 Source: `crates/cupertino-kit/tests`, `crates/cupertino-ui-test`, `crates/cupertino-server/tests/standard-clients.rs` and `crates/cupertino-wayland-client/tests/mutter.rs`. See [Get started with CupertinoKit](kit-getting-started.md).
 
-GPU rendering and per-node GPU resource retirement belong to the deferred renderer work. External CJK input methods remain outside the agreed core scope ([#24](https://github.com/orafaelfragoso/cupertino/issues/24)). Core accessibility does not complete the app migration checks in Phase 4.
+Since the audit, Kit gained:
+
+- pointer and scrolling input: axis sources, acceleration profiles, kinetic scrolling timed from each event's own timestamp, and overlay scroll bars;
+- text input: inline composition, grapheme-safe input-method edits, multi-click and drag selection, a caret drawn as an overlay on device pixels, and a steady caret option;
+- one table of control sizes, a search field capsule for fields that sit on a material, and glass buttons;
+- menus and popups that open, track and close under touch;
+- a CPU renderer whose incremental frames are pixel-identical to full frames, checked by a property test.
+
+GPU rendering and per-node GPU resource retirement belong to the deferred renderer work. External CJK input methods remain out of scope ([#24](https://github.com/orafaelfragoso/cupertino/issues/24)). Core accessibility does not complete the app migration checks in Phase 4.
 
 ## Phase 4: apps and portals
 
-In progress, WP-08, WP-09 and WP-10. Updated on 2026-11-07 for the `phase-4` branch. The implementation work is complete; the phase stays open until the installed-session and hardware checks below have run and the maintainer has decided the open items.
+In progress, WP-08, WP-09 and WP-10. Updated on 2026-11-09. The implementation work is complete; the phase stays open until the installed-session and hardware checks below have run and the maintainer has decided the open items.
 
 Implemented:
 
@@ -40,10 +58,31 @@ Implemented:
 - Portals provide Settings, FileChooser, ScreenCast, AppChooser and Screenshot, with app icons, activation tokens, screenshot retry, colour picking, remembered screen shares (Forget in Settings, file locking between the portal and Settings), upright captures of rotated displays and the requesting app named in screen-sharing consent ([#116](https://github.com/orafaelfragoso/cupertino/issues/116)). The keyring unlocks at login and at the lock screen ([#117](https://github.com/orafaelfragoso/cupertino/issues/117)), the authentication prompt names the requesting app, and log out, restart and shut down can reopen windows at the next login ([#37](https://github.com/orafaelfragoso/cupertino/issues/37)).
 - Accessibility audit ([#30](https://github.com/orafaelfragoso/cupertino/issues/30)), building on the screen-reader checks of [#93](https://github.com/orafaelfragoso/cupertino/pull/93): every Kit surface, Files included, is checked by a shared audit on every settled frame in the tests, against a stand-in reader that follows the AT-SPI bridge's rules. These are automated checks; speech and braille with a real reader are checked by hand. Settings has a Screen reader switch and `Super+Alt+S` toggles the reader; long labels and footnotes wrap ([#35](https://github.com/orafaelfragoso/cupertino/issues/35)).
 - Frame time at 4K ([#40](https://github.com/orafaelfragoso/cupertino/issues/40)): Files and Settings repaint only what changed. Selection, hover, the caret, the search field and renaming in Files, and switches and sliders in Settings, meet 8 ms at 3840×2160 at scales 2 and 1.5, and so does scrolling a Settings pane at its default window size (a long pane fits a 4K window unscrolled); a Settings pane switch or search and closing the Files search field miss on one or two frames, and scale 1 misses more often. Scrolling the Files list, opening a large folder and the search keystroke that fills the list take 57–76 ms, as they repaint most of the window. Meeting 8 ms there needs a scroll blit or the GPU composition planned for Phase 6, pending maintainer acceptance. [Frame time](apps-on-kit.md#frame-time) has the measurements.
+- Look and materials: windows, menus, the Dock, the menu bar, toolbars and the Control Center draw on glass materials with their Reduce Transparency and Increase Contrast recipes, and text on glass follows the tone of what is behind it. Windows have a hairline outline and an inner rim, inactive windows use their own recipes, and the light window background is white. The Control Center is a grid of separate glass tiles with detail views. The launcher sits on a dimmer material for large panels, and the halo behind each menu bar item follows how unevenly light the wallpaper is under it (shell protocol version 21). The apps, folders, documents and the Trash use the project's own icon pack.
+- Launcher: one panel for search and the application browser, which the Dock opens. Its providers and previews can be cancelled, choosing a running app brings it forward, its status announcements wait until the results settle, and its icons load off the event loop. Its frame budgets are measured in CPU time.
+- Files has a column view, a preview window, tabs and tags, and its context menu groups the view modes in a Show As submenu. Files and Settings scroll their content under the toolbar row, Settings panes on the window background.
+- The window buttons the server draws, the revealed title bar of a full-screen window included, are exposed to assistive technology through AccessKit, with presses accepted only while a button is shown, enabled and unlocked.
+- A popup grab ends whenever the keyboard moves outside it: to a layer surface such as the launcher or the Control Center, the lock screen, the authentication prompt or another window.
 
 Still required:
 
-- Verify in an installed session and on hardware: browser file choosing and screen sharing through the portals, Orca speech and braille, USB and LUKS media ([#65](https://github.com/orafaelfragoso/cupertino/issues/65)), PAM logins and the keyring, suspend and console switches, display hotplug, a rotated monitor, and the lock screen. The installed-session check of the portals, polkit and credential services is tracked in [#23](https://github.com/orafaelfragoso/cupertino/issues/23).
+- Verify in an installed session and on hardware:
+  - browser file choosing and screen sharing through the portals;
+  - Orca speech and braille, and Orca and Accerciser on the window buttons the server draws;
+  - USB and LUKS media ([#65](https://github.com/orafaelfragoso/cupertino/issues/65));
+  - PAM logins and the keyring;
+  - suspend and console (VT) switches;
+  - display hotplug and a rotated monitor, including unplugging and replugging with windows, full-screen windows and the lock screen up;
+  - two displays at 60 Hz and 120 Hz, with the overview staying smooth;
+  - the pointer staying smooth on DRM while an app is stopped (`kill -STOP`);
+  - the lock screen on two displays, with nothing unlocked showing during a plug or unplug;
+  - the output events `xwayland-satellite` receives, read with `WAYLAND_DEBUG`;
+  - the `pkexec` authentication scrim as a single-pixel buffer, read with `WAYLAND_DEBUG`;
+  - menus and popups under a real touch screen;
+  - a window's toolbar scale across two displays of different scales;
+  - the launcher's frame budget in a release build on an idle machine.
+
+  The installed-session check of the portals, polkit and credential services is tracked in [#23](https://github.com/orafaelfragoso/cupertino/issues/23).
 - Maintainer decisions on the items the reviews left open, including [#40](https://github.com/orafaelfragoso/cupertino/issues/40)'s measured state.
 - The phase-end review.
 
@@ -75,6 +114,7 @@ Still required:
 
 - Finish output-presenter scheduling carried from Phase 2, atomic failure diagnostics, scanout reason counters and per-output metrics.
 - Run the Intel, AMD, NVIDIA and hybrid-GPU hardware matrix, including multi-monitor suspend, VT switching, capture revocation and GPU reset with clients alive.
+- Add touch-screen input to the compositor. `crates/cupertino-server/src/backend/input.rs` opens mice, touchpads and pointing sticks but not touch screens; Kit's menus and popups already handle touch.
 - Confirm offline master-key custody, distribute the public release key, and record a complete install, reboot, login and recovery run. No hosted package repository is published.
 - Implement `cupertino system update check|plan|apply|rollback` with snapshots, receipts, matched kernel images and interrupted-update recovery. The current pacman/ext4 path does not satisfy this criterion.
 - Complete installer encryption, ISO reproducibility, SBOM and signed-manifest work, then the phase-end review.
@@ -93,4 +133,4 @@ Not started, WP-17, WP-18 and WP-19. The planned scope is a per-user AI service,
 
 ## Deferred work
 
-The Vulkan half of WP-04 and the Verse adapter remain deferred. X11 applications already run through `xwayland-satellite`; XWayland is part of daily-driver acceptance, not a deferred feature. External CJK input remains outside the current scope. Translation and locale support remain open in [#66](https://github.com/orafaelfragoso/cupertino/issues/66).
+The Vulkan half of WP-04 and the Verse adapter remain deferred. X11 applications already run through `xwayland-satellite`; XWayland is part of daily-driver acceptance, not a deferred feature. External CJK input methods remain out of scope ([#24](https://github.com/orafaelfragoso/cupertino/issues/24)). Translation and locale support remain open in [#66](https://github.com/orafaelfragoso/cupertino/issues/66).

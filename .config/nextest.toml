@@ -9,3 +9,10 @@ fail-fast = false
 [[profile.default.overrides]]
 filter = 'package(cupertino-ui-abi) & binary(symbols)'
 slow-timeout = { period = "60s", terminate-after = 10 }
+
+# The launcher's frame budgets are held in the CPU time of the loop's thread. Tests running on every other processor
+# still slow that thread through the caches and cores they share, past the budgets' margin, so these tests run with no
+# other test beside them.
+[[profile.default.overrides]]
+filter = 'package(cupertino-launcher) & (test(/fits_the_budget/) | test(/keeps_icon_decoding_off_the_frames/))'
+threads-required = "num-cpus"

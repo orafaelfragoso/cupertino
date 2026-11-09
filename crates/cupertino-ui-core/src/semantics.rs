@@ -67,6 +67,7 @@ pub(crate) fn build<M: 'static>(
     geometry: &Geometry,
     focus: Option<NodeId>,
     direction: LayoutDirection,
+    raised: &[(NodeId, Rect)],
 ) -> SemanticsPass {
     let mut pass = SemanticsPass {
         nodes: BTreeMap::new(),
@@ -155,14 +156,32 @@ pub(crate) fn build<M: 'static>(
                         description,
                         value,
                         states,
-                        bounds: semantics.bounds.map_or(rect, |b| {
-                            Rect::new(
-                                rect.origin.x + b.origin.x,
-                                rect.origin.y + b.origin.y,
-                                b.size.width,
-                                b.size.height,
-                            )
-                        }),
+                        bounds: {
+                            let bounds = semantics.bounds.map_or(rect, |b| {
+                                Rect::new(
+                                    rect.origin.x + b.origin.x,
+                                    rect.origin.y + b.origin.y,
+                                    b.size.width,
+                                    b.size.height,
+                                )
+                            });
+                            // a scroll view under raised nodes shows its content only below them; what it scrolls
+                            // keeps its place, so assistive technology can still find and scroll to it
+                            let under = geometry
+                                .get(&id)
+                                .is_some_and(|p| p.raised != crate::route::Raised::In)
+                                && tree.get(id).is_some_and(|n| {
+                                    matches!(
+                                        n.spec.kind,
+                                        cupertino_ui_layout::ContainerKind::Scroll { .. }
+                                    )
+                                });
+                            if under && !raised.is_empty() {
+                                crate::paint::unobscured(bounds, raised)
+                            } else {
+                                bounds
+                            }
+                        },
                         actions: semantics.actions,
                         relations: semantics.relations,
                         children: Vec::new(),

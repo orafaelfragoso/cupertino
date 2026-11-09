@@ -8,7 +8,10 @@
 //! at their own sizes, as they open (the Editor with a short document typed in). `kit/scroll` is a list in a scroll
 //! view with overlay bars at a moment of a scroll, `--phase`: `rest`, `stretch` (a touchpad finger holding the list
 //! pulled down past its start), `shown` (just after a wheel scroll), `fading` (half way through the bar's fade) or
-//! `hidden` (after it). `--direction ltr|rtl` (default ltr) lays a surface out in that direction; the sheet shows both.
+//! `hidden` (after it). `kit/under-toolbar` is a list on a page under a toolbar row, the row drawn in a layer over the
+//! page as a desktop with app effects version 11 draws it, at `--phase` `rest`, `shown` or `hidden`: what passes under
+//! the row fades out under the scroll edge. `--direction ltr|rtl` (default ltr) lays a surface out in that direction;
+//! the sheet shows both.
 //!
 //! `kit/gallery` is every control family side by side: buttons (ordinary, default, destructive, disabled and glass),
 //! switches, check boxes, radio buttons, a segmented control, a pop-up button, a stepper, a text and a search field,
@@ -39,10 +42,10 @@ use std::sync::Arc;
 
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_kit::controls::{
-    CalendarDate, Canvas, CheckBox, ColorWell, ComboBox, DatePicker, Icon, IconDirection,
-    PopUpButton, Progress, PullDownButton, RadioGroup, ScrollView, Scroller, SearchField,
-    SegmentedControl, Sidebar, SidebarItem, SidebarSection, Slider, SliderStyle, Stepper, TextRole,
-    Tooltip, TooltipState, WINDOW_CONTENT_INSET,
+    unobscured_insets, CalendarDate, Canvas, CheckBox, ColorWell, ComboBox, DatePicker, Icon,
+    IconDirection, NavigationStack, PopUpButton, Progress, PullDownButton, RadioGroup, ScrollView,
+    Scroller, SearchField, SegmentedControl, Sidebar, SidebarItem, SidebarSection, Slider,
+    SliderStyle, Stepper, TextRole, ToolbarTitle, Tooltip, TooltipState, WINDOW_CONTENT_INSET,
 };
 use cupertino_kit::core::{Checked, CommandRegistry, Key, PaintCx};
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
@@ -446,6 +449,68 @@ impl Application for Scrolled {
     }
 }
 
+/// Thirty rows on a page under a toolbar row: the page fills the window, starts below the row and scrolls behind it,
+/// on a window system that draws the row in a layer over it.
+struct UnderToolbar;
+
+impl Application for UnderToolbar {
+    type Model = ScrollState;
+    type Message = ScrollState;
+
+    fn init() -> (ScrollState, Vec<Command<ScrollState>>) {
+        Places::init()
+    }
+
+    fn update(scroll: &mut ScrollState, message: ScrollState) -> Vec<Command<ScrollState>> {
+        *scroll = message;
+        Vec::new()
+    }
+
+    fn view(scroll: &ScrollState) -> Vec<Window<ScrollState>> {
+        let rows = (1..=30)
+            .map(|i| {
+                Element::new(Text {
+                    content: AttributedText::plain(format!("Row {i}"), TextStyle::new(13.0)),
+                    role: TextRole::Body,
+                    wrap: false,
+                    secondary: false,
+                    selected: false,
+                })
+            })
+            .collect();
+        let row = unobscured_insets(DecorationMode::Unified);
+        let mut windows = window("Under the toolbar", Size::new(320.0, 240.0), Vec::new());
+        windows[0].spec.decorations = DecorationMode::Unified;
+        windows[0].content = Element::from(NavigationStack {
+            content: Element::from(ScrollView {
+                content: Element::new(Stack {
+                    axis: Axis::Vertical,
+                    padding: Insets {
+                        top: row.top + 12.0,
+                        ..Insets::uniform(12.0)
+                    },
+                    spacing: 6.0,
+                    align: Align::Stretch,
+                    children: rows,
+                }),
+                state: *scroll,
+                horizontal: false,
+                vertical: true,
+                scroller: Scroller::Overlay,
+                on_scroll: Box::new(|scroll| scroll),
+            }),
+            toolbar: vec![Element::new(ToolbarTitle {
+                text: "Rows".into(),
+            })],
+            can_go_back: true,
+            can_go_forward: false,
+            on_navigate: None,
+            under_toolbar: true,
+        });
+        windows
+    }
+}
+
 /// What the gallery shows: the control under the pointer, the controls' size, the compact setting and what lies
 /// under the controls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -484,6 +549,9 @@ enum Held {
 
 thread_local! {
     static GALLERY: Cell<GalleryOptions> = Cell::new(GalleryOptions::default());
+    /// The window system draws a window's raised nodes in a layer over its content, as a desktop with app effects
+    /// version 11 does.
+    static LAYERED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// A backdrop of hard-edged diagonal bands of light and dark colours, for how the controls read over a busy picture.
@@ -839,7 +907,10 @@ fn draw_with<A: Application>(
     let turns = NonZeroU32::new(TURNS).expect("a turn budget");
     let fail = |e: &dyn std::fmt::Debug| format!("the headless window system: {e:?}");
     let mut driver = TestDriver::<A>::new(
-        Capabilities::default(),
+        Capabilities {
+            raised_layer: LAYERED.with(Cell::get),
+            ..Capabilities::default()
+        },
         options,
         ManualClock::new(Timestamp(0)),
     );
@@ -953,13 +1024,17 @@ fn draw_with<A: Application>(
             system.frame_ready(window, at).map_err(|e| fail(&e))?;
         }
     }
-    let frame = driver
-        .window_system_mut()
+    let system = driver.runtime().window_system();
+    let frame = system
         .frames(window)
         .map_err(|e| fail(&e))?
         .last()
         .ok_or("the window presented no frame")?;
-    let mut pixels = frame.pixels.clone();
+    // the raised layer over the content, as the compositor shows them
+    let mut pixels = match system.composited(window) {
+        Ok(Some(composited)) => composited,
+        _ => frame.pixels.clone(),
+    };
     if frame.format == PixelFormat::Rgba8 {
         for px in pixels.as_chunks_mut::<4>().0 {
             let a = u16::from(px[3]);
@@ -1029,6 +1104,7 @@ impl App for Capture {
             "virtual-list",
             "editor",
             "scroll",
+            "under-toolbar",
         ]
         .map(String::from)
         .to_vec()
@@ -1036,6 +1112,11 @@ impl App for Capture {
 
     fn sheet_states(&self, surface: &str) -> Vec<State> {
         let state = |key: &str, value: &str| vec![(key.to_string(), value.to_string())];
+        if surface == "under-toolbar" {
+            return ["rest", "shown", "hidden"]
+                .map(|p| state("phase", p))
+                .to_vec();
+        }
         if surface == "scroll" {
             return ["rest", "stretch", "shown", "fading", "hidden"]
                 .map(|p| state("phase", p))
@@ -1123,6 +1204,20 @@ impl App for Capture {
             "editor" => draw::<SampleEditor>(r.look, r.scale, direction, size),
             "scroll" => {
                 draw_with::<Scrolled>(r.look, r.scale, direction, size, phase, |_| {}, |_, _| None)
+            }
+            "under-toolbar" => {
+                LAYERED.with(|l| l.set(true));
+                let drawn = draw_with::<UnderToolbar>(
+                    r.look,
+                    r.scale,
+                    direction,
+                    size,
+                    phase,
+                    |_| {},
+                    |_, _| None,
+                );
+                LAYERED.with(|l| l.set(false));
+                drawn
             }
             _ => draw::<Icons>(r.look, r.scale, direction, size),
         }

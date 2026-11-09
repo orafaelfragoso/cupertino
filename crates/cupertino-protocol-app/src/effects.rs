@@ -78,7 +78,7 @@ pub struct AppEffects(CupertinoAppEffectsV1);
 impl AppEffects {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<AppEffects> {
-        conn.bind_extension(1..=10, Quiet).map(AppEffects)
+        conn.bind_extension(1..=11, Quiet).map(AppEffects)
     }
 
     /// Observe the session's appearance and display options: [`AppEvent::Appearance`] and
@@ -88,7 +88,8 @@ impl AppEffects {
         Appearance(self.0.get_appearance(&conn.queue_handle(), Quiet))
     }
 
-    /// A backdrop below the content of `surface`.
+    /// A backdrop below the content of `surface`. On a subsurface it draws only from version 11
+    /// ([`Self::draws_subsurface_backdrops`]): then directly below the subsurface, above the rest of its window.
     pub fn backdrop(&self, conn: &Connection, surface: SurfaceId) -> Result<Backdrop, Error> {
         let wl = conn.wl_surface(surface)?;
         Ok(Backdrop::new(self.0.get_backdrop(
@@ -180,6 +181,12 @@ impl AppEffects {
     pub fn can_set_disabled_controls(&self) -> bool {
         self.0.version() >= DISABLED_CONTROLS_VERSION
     }
+
+    /// Whether the backdrops of a subsurface draw (version 11): directly below the subsurface, above the rest of its
+    /// window, reading what of the window lies below them. Before it they draw nothing.
+    pub fn draws_subsurface_backdrops(&self) -> bool {
+        self.0.version() >= SUBSURFACE_BACKDROPS_VERSION
+    }
 }
 
 /// The version that adds the compact unified and the sidebar title bar styles.
@@ -192,6 +199,8 @@ const SESSION_LOCK_VERSION: u32 = 5;
 const SCROLL_BARS_VERSION: u32 = 8;
 /// The version whose display options say whether text carets keep from blinking.
 const STEADY_CARET_VERSION: u32 = 9;
+/// The version whose backdrops of a subsurface draw above the rest of its window.
+const SUBSURFACE_BACKDROPS_VERSION: u32 = 11;
 
 /// How the server decorates an application window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

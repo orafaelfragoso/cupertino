@@ -31,6 +31,7 @@ mod preview;
 mod progress;
 mod rich_text;
 mod scroll;
+pub mod scroll_edge;
 mod shell;
 mod sidebar;
 mod slider;
@@ -1038,6 +1039,10 @@ pub struct TableView<M> {
     /// keyboard is on: a message takes the key, `None` lets it go on, so Tab moves the focus to the next control. A key
     /// on a column header never comes here.
     pub on_row_key: Option<RowKeyHandler<M>>,
+    /// How far a toolbar row over the table covers its top, for a table that fills a pane under the row
+    /// ([`NavigationStack::under_toolbar`], [`unobscured_insets`]); 0 for none. The header then sits below the row and
+    /// draws with it, raised, and the rows start below the header and scroll under both.
+    pub header_top: f64,
 }
 
 /// A [`TableView`] whose rows form an outline, as a [`TreeView`]'s do: each row's first cell comes after its indent and
@@ -1188,7 +1193,7 @@ pub struct FormHeader {
     pub description: String,
 }
 
-/// `content` on the colour behind a form's groups (the text background), filling the room it is given. No node of its
+/// `content` on the colour behind a form's groups (the window background), filling the room it is given. No node of its
 /// own to assistive technology. Build its element with `Element::from`.
 pub struct FormBackground<M> {
     pub content: Element<M>,

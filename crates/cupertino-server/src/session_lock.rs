@@ -127,6 +127,11 @@ pub struct OutputLock {
 }
 
 impl OutputLock {
+    /// The surface of the lock screen on this output.
+    pub(crate) fn wl_surface(&self) -> Option<&WlSurface> {
+        self.surface.as_ref().map(|s| s.wl_surface())
+    }
+
     fn has_buffer(&self) -> bool {
         self.surface.as_ref().is_some_and(|s| {
             with_renderer_surface_state(s.wl_surface(), |st| st.buffer().is_some()).unwrap_or(false)

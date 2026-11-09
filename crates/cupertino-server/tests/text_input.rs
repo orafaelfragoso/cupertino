@@ -22,7 +22,7 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_output, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_protocols::wp::text_input::zv3::client::{
@@ -129,6 +129,8 @@ enum ImDo {
 struct ImShared {
     seen: Vec<ImSeen>,
     bound: bool,
+    /// What the input method's popup surface heard: `enter`, `leave` and `scale N` (`preferred_buffer_scale`).
+    popup: Vec<String>,
 }
 
 struct ImState {
@@ -158,9 +160,28 @@ macro_rules! ignore_im_events {
 ignore_im_events!(
     wl_seat::WlSeat,
     wl_compositor::WlCompositor,
-    wl_surface::WlSurface,
+    wl_output::WlOutput,
     zwp_input_popup_surface_v2::ZwpInputPopupSurfaceV2
 );
+
+impl Dispatch<wl_surface::WlSurface, ()> for ImState {
+    fn event(
+        state: &mut Self,
+        _: &wl_surface::WlSurface,
+        event: wl_surface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let heard = match event {
+            wl_surface::Event::Enter { .. } => "enter".to_string(),
+            wl_surface::Event::Leave { .. } => "leave".to_string(),
+            wl_surface::Event::PreferredBufferScale { factor } => format!("scale {factor}"),
+            _ => return,
+        };
+        state.shared.lock().unwrap().popup.push(heard);
+    }
+}
 
 impl Dispatch<zwp_input_method_manager_v2::ZwpInputMethodManagerV2, ()> for ImState {
     fn event(
@@ -248,6 +269,8 @@ impl InputMethod {
             let manager: zwp_input_method_manager_v2::ZwpInputMethodManagerV2 =
                 globals.bind(&qh, 1..=1, ()).unwrap();
             let im = manager.get_input_method(&seat, &qh, ());
+            // the output, so the popup can be told it is on it
+            let _output: wl_output::WlOutput = globals.bind(&qh, 1..=4, ()).unwrap();
             // a candidate popup, through which the compositor learns the field's cursor rectangle
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
             let popup_surface = compositor.create_surface(&qh, ());
@@ -302,6 +325,10 @@ impl InputMethod {
 
     fn clear(&self) {
         self.shared.lock().unwrap().seen.clear();
+    }
+
+    fn popup(&self) -> Vec<String> {
+        self.shared.lock().unwrap().popup.clone()
     }
 }
 
@@ -791,4 +818,56 @@ fn edits_after_the_field_disables_never_reach_it() {
         "{:?}",
         field.seen()
     );
+}
+
+/// The input method's popup is on the output of the field's text cursor while the input method is active, at that
+/// output's whole-number scale, and on none once the field disables its text input.
+#[test]
+fn the_input_methods_popup_is_on_the_output_of_the_text_cursor_while_active() {
+    let Some(mut h) = Harness::new() else {
+        return;
+    };
+    let im = InputMethod::connect(&mut h);
+    let field = Field::open(&mut h, "text-input.popup");
+    assert!(
+        im.popup().is_empty(),
+        "not shown before an activation: {:?}",
+        im.popup()
+    );
+    field.send(TiDo::Enable("text".into(), 2));
+    wait_im(&mut h, &im, "the activation", activated);
+    let shared = im.shared.clone();
+    h.wait_until("the popup to enter the output", move |_| {
+        shared.lock().unwrap().popup.contains(&"enter".to_string())
+    });
+    // at scale 1, which a wl_surface of version 6 needs not be told
+    assert!(
+        !im.popup().iter().any(|e| e.starts_with("scale")),
+        "{:?}",
+        im.popup()
+    );
+
+    // the output's scale changes: the popup is asked for the new one
+    let head = h.state.displays.heads[0].id;
+    let mut state = h.state.displays.heads[0].state;
+    state.scale = 2.0;
+    h.state
+        .configure_heads(&[(head, state)], false)
+        .expect("the scale applies");
+    h.state.heads_changed();
+    let shared = im.shared.clone();
+    h.wait_until("the popup's new scale", move |_| {
+        shared
+            .lock()
+            .unwrap()
+            .popup
+            .contains(&"scale 2".to_string())
+    });
+
+    field.send(TiDo::Disable);
+    let shared = im.shared.clone();
+    h.wait_until("the popup to leave the output", move |_| {
+        shared.lock().unwrap().popup.last() == Some(&"leave".to_string())
+    });
+    assert_eq!(im.popup(), ["enter", "scale 2", "leave"]);
 }

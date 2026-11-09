@@ -660,6 +660,8 @@ impl Cupertino {
         }
         self.outputs[idx].scheduler.called_back();
         self.popups.cleanup();
+        // forget the surfaces on the output that are gone (`wl_surface.enter` keeps one entry per surface on it)
+        self.outputs[idx].output.cleanup();
     }
 
     /// The tail of a frame of output `idx` that failed to draw. The screen still shows the frame before it, so nothing
@@ -735,6 +737,8 @@ impl Cupertino {
 
     /// Mark for a frame the outputs that show `surface`, all of them when none is known.
     pub fn request_redraw_for(&mut self, surface: &WlSurface) {
+        // a commit may resize its window, and so move its buttons
+        self.button_access.invalidate();
         match self.outputs_showing(surface) {
             Some(shown) => {
                 for idx in shown {

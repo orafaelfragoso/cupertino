@@ -2414,6 +2414,124 @@ fn the_top_edge_reveals_the_title_bar_of_a_full_screen_window_and_its_zoom_butto
     );
 }
 
+/// Keeps the window buttons the server publishes for assistive technology.
+#[derive(Clone, Default)]
+struct PublishedButtons(
+    Arc<Mutex<std::collections::HashMap<u64, cupertino_server::decor_access::WindowButtons>>>,
+);
+
+impl cupertino_server::decor_access::ButtonSink for PublishedButtons {
+    fn publish(
+        &mut self,
+        window: cupertino_wm::WindowId,
+        buttons: &cupertino_server::decor_access::WindowButtons,
+    ) {
+        self.0.lock().unwrap().insert(window.0, buttons.clone());
+    }
+    fn withdraw(&mut self, window: cupertino_wm::WindowId) {
+        self.0.lock().unwrap().remove(&window.0);
+    }
+}
+
+/// A full-screen window's buttons reach assistive technology while its title bar shows, revealed with the menu bar,
+/// with minimize disabled as drawn and at the bar's place; they are withdrawn when it hides. A pointer press on that
+/// disabled minimize does nothing.
+#[test]
+fn the_revealed_title_bar_of_a_full_screen_window_is_published_while_it_shows() {
+    use cupertino_decorations::{ButtonKind, TitlebarStyle};
+    use cupertino_geometry::Size;
+    use smithay::backend::input::ButtonState;
+
+    let Some(mut h) = Harness::new() else { return };
+    let published = PublishedButtons::default();
+    h.state.button_access.set_sink(Box::new(published.clone()));
+    let _bar = BarClient::spawn(h.shell_stream(), true);
+    let _app = AppClient::spawn(h.socket_path(), "org.example.full");
+    let id = h.mapped_window(1);
+    let out = h.state.outputs[0].id;
+    let width = h.state.outputs[0].rect.w;
+    h.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
+        window: id,
+        output: None,
+    });
+    h.advance(5.0);
+    h.advance(1.0);
+    assert_eq!(
+        h.state.wm.window(id).unwrap().state(),
+        LifecycleState::FullScreen
+    );
+    assert!(
+        !published.0.lock().unwrap().contains_key(&id.0),
+        "hidden with the bar: not published"
+    );
+
+    let t = h.state.now();
+    h.state.pointer_moved_to((500.0, 0.0).into(), 0, None);
+    common::set_time(&mut h.state, &mut h.event_loop, t + 0.3);
+    h.state.tick();
+    h.advance(1.0);
+    h.advance(1.0);
+    let height = h
+        .state
+        .decor
+        .decorations()
+        .config
+        .metrics
+        .titlebar_height(TitlebarStyle::Standard);
+    let shown = published.0.lock().unwrap().get(&id.0).cloned();
+    let shown = shown.expect("published while the title bar shows");
+    assert_eq!(
+        shown.frame,
+        cupertino_geometry::Rect::new(0.0, 24.0, width, height),
+        "at the revealed bar's place"
+    );
+    assert_eq!(
+        shown.buttons.map(|b| (b.kind, b.enabled)),
+        [
+            (ButtonKind::Close, true),
+            (ButtonKind::Minimize, false),
+            (ButtonKind::Zoom, true)
+        ],
+        "as drawn: a full-screen window does not minimize"
+    );
+
+    // a pointer press on the disabled minimize does nothing, as on the rest of that bar
+    let minimize = h
+        .state
+        .decor
+        .decorations()
+        .layout(Size::new(width, 300.0))
+        .button(ButtonKind::Minimize)
+        .center;
+    h.state
+        .pointer_moved_to((minimize.x, 24.0 + minimize.y).into(), 0, None);
+    h.advance(0.1);
+    h.state
+        .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Pressed, 0);
+    assert_eq!(h.state.decor.pressed, None, "no pressed look");
+    h.state
+        .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Released, 0);
+    h.state.press_published_button(id, ButtonKind::Minimize);
+    h.advance(1.0);
+    assert_eq!(
+        h.state.wm.window(id).unwrap().state(),
+        LifecycleState::FullScreen,
+        "minimize does nothing"
+    );
+
+    // the pointer leaves: the bar and its title bar hide, and the buttons are withdrawn
+    h.state.pointer_moved_to((500.0, 600.0).into(), 0, None);
+    for _ in 0..5 {
+        h.advance(1.0);
+    }
+    assert!(!h.state.menu_bars.set.is_revealed(out), "the bar hid");
+    assert!(
+        !published.0.lock().unwrap().contains_key(&id.0),
+        "withdrawn when the title bar hides"
+    );
+}
+
 /// The session agent's side: records which methods the server called.
 struct FakeLogin(Arc<Mutex<Vec<&'static str>>>);
 

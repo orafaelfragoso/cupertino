@@ -487,6 +487,8 @@ pub struct Cupertino {
     /// `wp_single_pixel_buffer_manager_v1`: one-pixel buffers of a solid colour, stretched by a viewport.
     pub single_pixel_buffer_state: SinglePixelBufferState,
     pub fractional_scale_state: FractionalScaleManagerState,
+    /// The outputs each window is on and the output whose scale it draws at (`displays::surface_output`).
+    pub surface_outputs: crate::displays::surface_output::SurfaceOutputs,
     pub presentation_state: PresentationState,
     /// `wp_content_type_manager_v1`: the kind of content a window says it shows (`WindowEntry::content_type`).
     pub content_type_state: ContentTypeState,
@@ -587,6 +589,9 @@ pub struct Cupertino {
     pub input_method: Option<crate::input_method::ImBridge>,
     /// Text cursor rectangle of the focused application (surface-local), from its text input.
     pub text_cursor: Option<Rectangle<i32, Logical>>,
+    /// The input method's popup surface, while it has one: it is told the output of the text cursor
+    /// (`displays::surface_output`).
+    pub input_popup: Option<smithay::wayland::input_method::PopupSurface>,
     /// Time (ms) of the held-back caps-lock press.
     pub caps_press_time: u32,
     pub gestures: cupertino_input::GestureRecognizer,
@@ -636,6 +641,8 @@ pub struct Cupertino {
 
     pub wm: Wm,
     pub decor: Decor,
+    /// The window control buttons published to assistive technology; off until a session on the hardware starts it.
+    pub button_access: crate::decor_access::ButtonAccessibility,
     pub fx: Effects,
     pub windows: Vec<WindowEntry>,
     pub outputs: Vec<OutputEntry>,
@@ -736,7 +743,7 @@ impl Cupertino {
             )
             .map_err(|e| anyhow::anyhow!("inserting display source: {e}"))?;
 
-        let compositor_state = CompositorState::new::<Self>(&dh);
+        let compositor_state = CompositorState::new_v6::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
         let xdg_dialog_state = XdgDialogState::new::<Self>(&dh);
@@ -858,6 +865,7 @@ impl Cupertino {
             viewporter_state,
             single_pixel_buffer_state,
             fractional_scale_state,
+            surface_outputs: Default::default(),
             presentation_state,
             content_type_state,
             xdg_activation_state,
@@ -911,6 +919,7 @@ impl Cupertino {
             input_method_state,
             input_method: None,
             text_cursor: None,
+            input_popup: None,
             caps_press_time: 0,
             gestures: cupertino_input::GestureRecognizer::new(
                 cupertino_input::GestureConfig::default(),
@@ -944,6 +953,7 @@ impl Cupertino {
             capture,
             wm,
             decor,
+            button_access: Default::default(),
             fx,
             windows: Vec::new(),
             outputs: Vec::new(),
@@ -988,6 +998,8 @@ impl Cupertino {
     }
 
     pub fn request_redraw(&mut self) {
+        // what shows changed, perhaps the window buttons too
+        self.button_access.invalidate();
         for o in &mut self.outputs {
             o.scheduler.damage();
         }
@@ -1055,6 +1067,8 @@ impl Cupertino {
             tracing::info!(output = id.0, "the overview's output went away");
             self.shell.overview = None;
         }
+        // told before the global goes, so a client hears `leave` for an output it can still name
+        self.leave_departing_output(idx);
         let entry = self.outputs.remove(idx);
         self.release_output_layers(&entry.output);
         let now = self.now();
@@ -1072,7 +1086,7 @@ impl Cupertino {
         self.note_placements();
         self.bring_pointer_onto_outputs();
         self.refocus_lock_keyboard();
-        self.refresh_window_scales();
+        self.refresh_surface_outputs();
         self.request_redraw();
     }
 
@@ -2000,6 +2014,8 @@ impl Cupertino {
     // ---- model effects ---------------------------------------------------------------------
 
     pub fn command(&mut self, cmd: Command) {
+        // the model may change a window's buttons: its title, its state, what it can do
+        self.button_access.invalidate();
         let now = self.now();
         // a minimize without a target (key binding, action) flies into the dock's slot
         let cmd = match cmd {
@@ -2038,6 +2054,8 @@ impl Cupertino {
         self.send_deferred_configures(now);
         // a drag that ended elsewhere than at a button (the session locked, the source went away)
         self.drag_ended();
+        // the cursor, a drag icon and an input method's popup follow the pointer and the text cursor
+        self.refresh_loose_surface_outputs();
         if self.fx.tick(now) {
             // an effect that ended leaves the screen; its last frame may still show it
             self.request_redraw();
@@ -2046,6 +2064,7 @@ impl Cupertino {
         self.tick_menu_bars(now);
         self.tick_input_timers(now);
         self.tick_overlays(now);
+        self.sync_button_access();
         let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
         self.refresh_shortcut_inhibitors(focus.as_ref());
         self.refresh_pointer_constraints(focus.as_ref());
@@ -2113,7 +2132,6 @@ impl Cupertino {
 
     pub fn apply_effects(&mut self, effects: Vec<Effect>) {
         let mut redraw = false;
-        let mut placed = Vec::new();
         for fx in effects {
             redraw = true;
             match fx {
@@ -2143,8 +2161,8 @@ impl Cupertino {
                         }
                     }
                 }
-                // a window that moved onto another output draws at that output's scale
-                Effect::Place { window, .. } => placed.push(window),
+                // a window that moved is told its outputs and scale below
+                Effect::Place { .. } => {}
                 Effect::RequestClose { window } => {
                     if let Some(e) = self.entry(window) {
                         e.close();
@@ -2206,9 +2224,8 @@ impl Cupertino {
                 | Effect::SnapPreview { .. } => {}
             }
         }
-        if self.outputs.len() > 1 {
-            self.refresh_scales_of(&placed);
-        }
+        // the outputs each window is on and the scale it draws at follow its frame (`displays::surface_output`)
+        self.refresh_window_outputs(false);
         if redraw {
             self.request_redraw();
             self.refresh_overview_windows();

@@ -13,6 +13,7 @@ fn main() -> ExitCode {
     let options = match app::Options::parse(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(problem) => {
+            diag::exit_error(&problem);
             eprintln!("cupertino-dock: {problem}\n{USAGE}");
             return ExitCode::FAILURE;
         }

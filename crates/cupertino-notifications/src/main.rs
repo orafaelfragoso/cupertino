@@ -14,6 +14,7 @@ fn main() -> ExitCode {
     let options = match app::Options::parse(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(arg) => {
+            diag::exit_error(&format_args!("unknown argument {arg}"));
             eprintln!("cupertino-notifications: unknown argument {arg}\n{USAGE}");
             return ExitCode::FAILURE;
         }

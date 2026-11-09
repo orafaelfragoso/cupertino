@@ -9,6 +9,7 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     diag::init(diag::component!(), "windowmanager", diag::Sink::UserStore);
     if let Some(arg) = std::env::args().nth(1) {
+        diag::exit_error(&format_args!("unexpected argument {arg:?}"));
         eprintln!(
             "cupertino-windowmanager: unexpected argument {arg:?}\nusage: cupertino-windowmanager"
         );

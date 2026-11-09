@@ -40,6 +40,7 @@ fn main() -> ExitCode {
     let pane = match options(std::env::args().skip(1)) {
         Ok(pane) => pane,
         Err(problem) => {
+            diag::exit_error(&problem);
             eprintln!("cupertino-settings: {problem}\n{USAGE}");
             return ExitCode::FAILURE;
         }
@@ -51,6 +52,7 @@ fn main() -> ExitCode {
         Ok(token) => token,
         Err(std::env::VarError::NotPresent) => String::new(),
         Err(std::env::VarError::NotUnicode(_)) => {
+            diag::exit_error(&"activation token is not valid UTF-8");
             eprintln!("cupertino-settings: activation token is not valid UTF-8");
             return ExitCode::FAILURE;
         }

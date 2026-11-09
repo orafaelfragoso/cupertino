@@ -85,6 +85,20 @@ struct Ended {
 
 /// `process` started in `dir` with `env` added; how it ended and what its store holds.
 fn run(process: &Process, dir: &Path, env: &[(&str, &str)]) -> Ended {
+    run_with(process, process.args, dir, |command| {
+        for (key, value) in env {
+            command.env(key, value);
+        }
+    })
+}
+
+/// `process` started in `dir` with `args`, and `adjust` applied to the command; how it ended and what its store holds.
+fn run_with(
+    process: &Process,
+    args: &[&str],
+    dir: &Path,
+    adjust: impl FnOnce(&mut std::process::Command),
+) -> Ended {
     let binary = common::fixtures::artifact(process.binary, "bin", process.binary);
     let runtime = dir.join("runtime");
     std::fs::create_dir_all(&runtime).unwrap();
@@ -95,7 +109,7 @@ fn run(process: &Process, dir: &Path, env: &[(&str, &str)]) -> Ended {
     .unwrap();
     let mut command = cleared(&binary, &dir.join("home"));
     command
-        .args(process.args)
+        .args(args)
         .env("XDG_STATE_HOME", dir.join("state"))
         .env("XDG_CONFIG_HOME", dir.join("config"))
         .env("XDG_DATA_HOME", dir.join("data"))
@@ -106,9 +120,7 @@ fn run(process: &Process, dir: &Path, env: &[(&str, &str)]) -> Ended {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    for (key, value) in env {
-        command.env(key, value);
-    }
+    adjust(&mut command);
     let mut child = command
         .spawn()
         .unwrap_or_else(|e| panic!("{}: {e}", binary.display()));
@@ -225,4 +237,63 @@ fn a_shell_process_or_app_that_cannot_start_records_its_error_beside_the_line_it
             ended.records
         );
     }
+}
+
+/// A wrong command line ends each process as before, with its usage on standard error and the failure status, and is
+/// recorded as `<area>.exit_error` with the problem.
+#[test]
+fn a_shell_process_or_app_given_a_wrong_argument_records_it_beside_its_usage() {
+    for process in &PROCESSES {
+        let dir = tempfile::tempdir().unwrap();
+        let ended = run_with(process, &["--no-such-option"], dir.path(), |_| {});
+        let name = process.binary;
+        assert_eq!(ended.code, Some(1), "{name}: {}", ended.stderr);
+        assert!(
+            ended.stderr.contains(&format!("usage: {name}")),
+            "{name}: {}",
+            ended.stderr
+        );
+        assert!(
+            ended.stderr.starts_with(&format!("{name}: ")),
+            "{name}: {}",
+            ended.stderr
+        );
+        assert_eq!(ended.records.len(), 1, "{name}: {:?}", ended.records);
+        let record = &ended.records[0];
+        assert_eq!(record.id, format!("{}.exit_error", process.area), "{name}");
+        assert_eq!(record.severity, Severity::Error, "{name}");
+        let error = record.fields.get("error").and_then(|e| e.as_str()).unwrap();
+        assert!(error.contains("--no-such-option"), "{name}: {error}");
+        // the problem is the first line printed, after the program's name
+        let first = ended.stderr.lines().next().unwrap();
+        assert_eq!(first, format!("{name}: {error}"), "{name}");
+    }
+}
+
+/// Settings started with an activation token that is not UTF-8 ends as before and records why.
+#[test]
+fn settings_given_an_activation_token_that_is_not_text_records_it() {
+    use std::os::unix::ffi::OsStrExt;
+    let process = PROCESSES
+        .iter()
+        .find(|p| p.binary == "cupertino-settings")
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let ended = run_with(process, process.args, dir.path(), |command| {
+        command.env(
+            "XDG_ACTIVATION_TOKEN",
+            std::ffi::OsStr::from_bytes(b"token-\xff"),
+        );
+    });
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    assert_eq!(
+        ended.stderr.trim_end(),
+        "cupertino-settings: activation token is not valid UTF-8"
+    );
+    assert_eq!(ended.records.len(), 1, "{:?}", ended.records);
+    assert_eq!(ended.records[0].id, "settings.exit_error");
+    assert_eq!(
+        ended.records[0].fields.get("error").unwrap(),
+        "activation token is not valid UTF-8"
+    );
 }

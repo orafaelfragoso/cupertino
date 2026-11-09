@@ -40,7 +40,7 @@ pub use control_sizes::{control_geometry, ControlFamily, ControlGeometry, Corner
 pub use error::{Error, Result};
 pub use evidence::Evidence;
 pub use glass::{GlassMode, GlassParams, GlassStyle};
-pub use metrics::{Control, ControlSize, ShapeTokens, WindowShadowPreset};
+pub use metrics::{ControlSize, ShapeTokens, WindowShadowPreset};
 pub use recipe::{
     Backdrop, Blend, Catalog, ColorOp, CornerCurve, Fill, Interaction, MaterialLibrary,
     MaterialOptions, Recipe, WindowState,

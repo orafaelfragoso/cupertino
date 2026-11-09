@@ -129,7 +129,8 @@ surface, ends the process with a failure status so the server restarts it.
   line breaks; text past the limit ends in an ellipsis and links past the cut are dropped. A centre card whose body is
   cut has a disclosure button beside its summary that unfolds the body to `UNFOLDED_BODY_LINES` (20); banners stay folded
   (the centre holds the whole message). Card heights come from `view::CardMetrics`, which measures the text with the
-  windows' own text system and theme, so the model's stack geometry and the drawn cards agree.
+  windows' own text system and theme, so the model's stack geometry and the drawn cards agree; the disclosure button's
+  side is the control size table's (`ControlFamily::Disclosure`) at the theme's control size, as Kit draws it.
 
 ## Protocols / D-Bus it speaks
 

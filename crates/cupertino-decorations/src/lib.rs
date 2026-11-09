@@ -50,7 +50,8 @@ pub use layout::{ButtonLayout, FrameLayout};
 pub use metrics::{
     ButtonKind, DecorationMetrics, DoubleClickAction, TitleAlignment, TitlebarStyle,
     COMPACT_BUTTON_LEADING, COMPACT_TOOLBAR_ROW_HEIGHT, TITLED_BAR_HEIGHT, TOOLBAR_ROW_HEIGHT,
-    WINDOW_BUTTON_DIAMETER, WINDOW_BUTTON_PITCH, WINDOW_CORNER_RADIUS,
+    WINDOW_BUTTON_DIAMETER, WINDOW_BUTTON_DIAMETER_SMALL, WINDOW_BUTTON_PITCH,
+    WINDOW_CORNER_RADIUS,
 };
 pub use palette::Palette;
 pub use render::{DecorationConfig, DecorationState, Decorations};

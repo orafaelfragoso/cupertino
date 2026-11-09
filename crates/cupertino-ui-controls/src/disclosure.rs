@@ -2,14 +2,13 @@ use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::{DisclosureButton, DisclosureStyle};
 use cupertino_geometry::{Insets, Point, Rect, Size};
-use cupertino_theme::metrics::Control;
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Environment, Event, EventCx, MeasureCx,
     PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
-use cupertino_ui_theme::ColorRole;
+use cupertino_ui_theme::{ColorRole, ControlFamily};
 
 /// The square a triangle is drawn in.
 const TRIANGLE: f64 = 13.0;
@@ -92,7 +91,7 @@ impl<M: Clone + 'static> Widget<M> for DisclosureButton<M> {
 
     fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         let theme = &cx.env().theme;
-        let side = look::metric(Control::DisclosureButton, theme);
+        let side = look::geometry(theme, ControlFamily::Disclosure).height;
         Measured {
             size: Size::new(side, side),
             baseline: None,
@@ -162,7 +161,10 @@ impl<M: Clone + 'static> Widget<M> for DisclosureButton<M> {
                 paint_focus_ring(cx, area, TRIANGLE / 2.0);
             }
             DisclosureStyle::Bordered => {
-                let chrome = centred(size, look::metric(Control::DisclosureButton, &theme));
+                let chrome = centred(
+                    size,
+                    look::geometry(&theme, ControlFamily::Disclosure).height,
+                );
                 let radius = theme.metrics.button_radius;
                 look::fill(
                     cx,

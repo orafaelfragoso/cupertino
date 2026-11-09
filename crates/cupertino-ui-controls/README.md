@@ -38,7 +38,9 @@ from the application's model and reports changes as messages.
   size table (`control_geometry`) at the theme's `ControlMetrics::size` and `compact` setting: mini, small, regular,
   large and extra large. `ControlMetrics::at_size` gives the metrics at another size. At the regular size a button,
   a pop-up button, a field and a segmented control are 24 pt tall, a check box 16 pt square and a switch 54 × 24 pt
-  with a 32 × 20 pt capsule thumb (38 × 20 pt in the compact setting).
+  with a 32 × 20 pt capsule thumb (38 × 20 pt in the compact setting). A tab view's segments are a segmented
+  control's height and a disclosure button is the table's `ControlFamily::Disclosure` square (20 pt at regular);
+  no control reads another table of sizes.
 - **Held thumbs.** While a switch is held or dragged its thumb becomes a lens about 1.6 times its width, and a dragged
   slider's knob one about 1.33 times its size: a capsule (a rounded rectangle for the knob) with a soft shade, a
   translucent body through which the track shows shrunk about the lens's centre, a light band along its top and

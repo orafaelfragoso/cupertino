@@ -32,10 +32,12 @@ pub enum ControlFamily {
     Stepper,
     /// A date written out in a field, with a stepper beside it.
     DatePicker,
+    /// A bordered square button with a chevron that shows or hides more.
+    Disclosure,
 }
 
 impl ControlFamily {
-    pub const ALL: [ControlFamily; 14] = [
+    pub const ALL: [ControlFamily; 15] = [
         ControlFamily::PushButton,
         ControlFamily::GlassButton,
         ControlFamily::Switch,
@@ -50,6 +52,7 @@ impl ControlFamily {
         ControlFamily::Segmented,
         ControlFamily::Stepper,
         ControlFamily::DatePicker,
+        ControlFamily::Disclosure,
     ];
 }
 
@@ -120,6 +123,8 @@ const STEPPER_WIDTH_COMPACT: BySize = [9.0, 11.0, 13.0, 23.0, 30.0];
 /// A date picker's field and its stepper, side by side.
 const DATE_HEIGHT: BySize = [21.0, 21.0, 24.0, 28.0, 36.0];
 const DATE_WIDTH: BySize = [155.0, 159.0, 162.0, 165.0, 172.0];
+/// A disclosure button's side, the same with the compact metrics.
+const DISCLOSURE: BySize = [13.0, 16.0, 20.0, 24.0, 24.0];
 /// The label's type size.
 const LABEL: BySize = [9.0, 11.0, 13.0, 13.0, 15.0];
 /// The room beside an action button's label.
@@ -215,6 +220,13 @@ pub fn control_geometry(
             corners: bezel_corners(size),
             label_size,
             inset: FIELD_INSET,
+        },
+        Disclosure => ControlGeometry {
+            height: at(DISCLOSURE, size),
+            width: Some(at(DISCLOSURE, size)),
+            corners: Corners::Radius(at(BEZEL_RADIUS, size.min_regular())),
+            label_size,
+            inset: 0.0,
         },
     }
 }
@@ -414,6 +426,17 @@ mod tests {
                 knob: (20.0, 16.0)
             }
         );
+    }
+
+    #[test]
+    fn a_disclosure_button_is_square_and_keeps_its_size_with_the_compact_metrics() {
+        for compact in [false, true] {
+            assert_eq!(heights(Disclosure, compact), [13.0, 16.0, 20.0, 24.0, 24.0]);
+            for size in SIZES {
+                let g = control_geometry(Disclosure, size, compact);
+                assert_eq!(g.width, Some(g.height));
+            }
+        }
     }
 
     #[test]

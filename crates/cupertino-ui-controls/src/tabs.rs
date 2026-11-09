@@ -2,7 +2,6 @@ use crate::choice::{items, no_measure, paint_segments, segment_width, Look, SEGM
 use crate::look;
 use crate::Tabs;
 use cupertino_geometry::{Insets, Point, Rect};
-use cupertino_theme::metrics::Control;
 use cupertino_ui_core::{
     Change, ControlState, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Role,
     SemanticsCx, Widget,
@@ -11,7 +10,7 @@ use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_render::{FillRule, PaintOp, PathVerb, Shape};
-use cupertino_ui_theme::ColorRole;
+use cupertino_ui_theme::{ColorRole, ControlFamily};
 
 const PANEL_RADIUS: f64 = 6.0;
 const PANEL_PADDING: f64 = 12.0;
@@ -103,7 +102,7 @@ impl<M: 'static> Widget<M> for TabView<M> {
             ..ControlState::default()
         };
         let size = cx.size();
-        let height = look::metric(Control::SegmentedControl, &theme);
+        let height = look::geometry(&theme, ControlFamily::Segmented).height;
         let width = segment_width(&env, &self.tabs) * self.tabs.len() as f64;
         let chrome = Rect::new((size.width - width) / 2.0, 0.0, width, height);
         let top = (chrome.center().y * env.scale).round() / env.scale;

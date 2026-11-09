@@ -205,6 +205,9 @@ set -euo pipefail
 check() { local label=$1; shift; "$@" || { echo "FAIL: $label"; exit 1; }; echo "$label"; }
 absent() { for p in "$@"; do [ ! -e "$p" ] || return 1; done; }
 pacman -Syu --noconfirm -q >/dev/null
+# The container image's pacman.conf skips manual pages, documentation and most locales (NoExtract). An installed system
+# has no such rule, and the packages are tested as it would extract them.
+sed -i '/^NoExtract/d' /etc/pacman.conf
 pacman -U --noconfirm /dist/cupertino-data-*.pkg.tar.zst /dist/cupertino-0*.pkg.tar.zst >/dev/null
 reinstall() { pacman -U --noconfirm /dist/cupertino-0*.pkg.tar.zst >/dev/null 2>&1; }
 remove() { pacman -Rns --noconfirm cupertino cupertino-data >/dev/null; }
@@ -359,6 +362,9 @@ set -euo pipefail
 check() { local label=$1; shift; "$@" || { echo "FAIL: $label"; exit 1; }; echo "$label"; }
 absent() { for p in "$@"; do [ ! -e "$p" ] || return 1; done; }
 pacman -Syu --noconfirm -q >/dev/null
+# The container image's pacman.conf skips manual pages, documentation and most locales (NoExtract). An installed system
+# has no such rule, and the packages are tested as it would extract them.
+sed -i '/^NoExtract/d' /etc/pacman.conf
 install() { pacman -U --noconfirm "$1"/cupertino-data-*.pkg.tar.zst "$1"/cupertino-0*.pkg.tar.zst "$1"/cupertino-kit-*.pkg.tar.zst >/dev/null; }
 version() { pacman -Q cupertino | cut -d' ' -f2; }
 newer() { [ "$(vercmp "$1" "$2")" = 1 ]; }

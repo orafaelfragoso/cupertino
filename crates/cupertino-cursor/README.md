@@ -28,6 +28,8 @@ XCURSOR_PATH=/tmp/themes XCURSOR_THEME=Cupertino <program>
 cargo run -p cupertino-cursor --release --example contact_sheet -- <theme dir> sheet.png 48
 ```
 
+The contact sheet puts each cursor whole on a light and a dark tile side by side and marks its hotspot in red.
+
 Library:
 
 ```rust

@@ -1,5 +1,5 @@
 //! Contact sheet of an XCursor theme: first frame of every cursor file (symlinks skipped) at one
-//! nominal size, on a light and a dark tile, with the hotspot marked.
+//! nominal size, on a light and a dark tile side by side, with the hotspot marked.
 //!
 //! `cargo run -p cupertino-cursor --release --example contact_sheet -- [THEME_DIR] [OUT.png] [SIZE]`
 //!
@@ -54,35 +54,48 @@ fn main() {
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .collect();
     files.sort_by_key(|e| e.file_name());
-    let cell = want * 2 + 24;
+    // Each cursor's first frame at the size nearest `want`.
+    let images: Vec<xcursor::XCursorImage> = files
+        .iter()
+        .map(|f| {
+            let images = xcursor::parse(&std::fs::read(f.path()).unwrap()).unwrap();
+            let size = images
+                .iter()
+                .map(|i| i.nominal_size)
+                .min_by_key(|s| s.abs_diff(want))
+                .unwrap();
+            images.into_iter().find(|i| i.nominal_size == size).unwrap()
+        })
+        .collect();
+    // A tile holds the largest image whole; a cell is a light and a dark tile side by side.
+    let tile_size = images
+        .iter()
+        .map(|i| i.width.max(i.height))
+        .max()
+        .unwrap_or(want)
+        + 8;
     let cols = 8u32;
-    let rows = (files.len() as u32).div_ceil(cols);
-    let mut sheet = Pixmap::new(cols * cell, rows * cell).unwrap();
+    let rows = (images.len() as u32).div_ceil(cols);
+    let mut sheet = Pixmap::new(cols * tile_size * 2, rows * tile_size).unwrap();
     sheet.fill(Color::from_rgba8(128, 128, 128, 255));
-    for (i, f) in files.iter().enumerate() {
-        let images = xcursor::parse(&std::fs::read(f.path()).unwrap()).unwrap();
-        let sizes: Vec<u32> = images.iter().map(|i| i.nominal_size).collect();
-        let size = sizes
-            .iter()
-            .copied()
-            .min_by_key(|s| s.abs_diff(want))
-            .unwrap();
-        let img = images.iter().find(|i| i.nominal_size == size).unwrap();
+    for (i, img) in images.iter().enumerate() {
         let mut pm = Pixmap::new(img.width, img.height).unwrap();
         for (dst, p) in pm.pixels_mut().iter_mut().zip(&img.pixels) {
             let (a, r, g, b) = ((p >> 24) as u8, (p >> 16) as u8, (p >> 8) as u8, *p as u8);
             *dst = tiny_skia::PremultipliedColorU8::from_rgba(r.min(a), g.min(a), b.min(a), a)
                 .unwrap();
         }
-        let (cx, cy) = ((i as u32 % cols) * cell, (i as u32 / cols) * cell);
-        for (dark, oy) in [(false, 0u32), (true, cell / 2)] {
-            let (tx, ty) = (cx as i32, (cy + oy) as i32);
-            let _ = oy;
+        let (cx, cy) = (
+            (i as u32 % cols) * tile_size * 2,
+            (i as u32 / cols) * tile_size,
+        );
+        for (dark, ox) in [(false, 0u32), (true, tile_size)] {
+            let (tx, ty) = ((cx + ox) as i32, cy as i32);
             tile(
                 &mut sheet,
-                tx + 2,
-                ty + 2,
-                cell / 2 - 4,
+                tx + 1,
+                ty + 1,
+                tile_size - 2,
                 if dark {
                     Color::from_rgba8(40, 40, 44, 255)
                 } else {
@@ -90,8 +103,8 @@ fn main() {
                 },
             );
             let (px, py) = (
-                tx + (cell / 2) as i32 / 2 - img.xhot as i32,
-                ty + (cell / 2) as i32 / 2 - img.yhot as i32,
+                tx + (tile_size - img.width) as i32 / 2,
+                ty + (tile_size - img.height) as i32 / 2,
             );
             sheet.draw_pixmap(
                 px,
@@ -103,8 +116,8 @@ fn main() {
             );
             tile(
                 &mut sheet,
-                tx + (cell / 2) as i32 / 2 - 1,
-                ty + (cell / 2) as i32 / 2 - 1,
+                px + img.xhot as i32 - 1,
+                py + img.yhot as i32 - 1,
                 3,
                 Color::from_rgba8(255, 0, 80, 255),
             );

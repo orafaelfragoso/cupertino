@@ -68,7 +68,8 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         disabled_selected_switch_track: [166, 198, 232, 255],
         disabled_switch_thumb: gray(248),
         disabled_panel_track: gray(185),
-        inactive_sidebar_selection: gray(246),
+        // darker than the opaque sidebar under it, as the active selection is, only less
+        inactive_sidebar_selection: gray(224),
     },
 };
 
@@ -308,6 +309,7 @@ mod tests {
         use ColorRole::*;
         const TEXT: f32 = 4.5;
         const BOUNDARY: f32 = 3.0;
+        const INACTIVE_SELECTION_TEXT: f32 = 4.0;
         let text_pairs = [
             (Text, WindowBackground),
             (Text, TextBackground),
@@ -360,14 +362,14 @@ mod tests {
                     check(pair, TEXT);
                 }
                 // a sidebar's selected row: its label is the text colour in an active window, the secondary label
-                // colour in one that is not
-                let label = if state.window_active {
-                    Text
-                } else {
-                    SecondaryText
-                };
+                // colour in one that is not, which reads on the faint inactive selection about as it does on the
+                // opaque sidebar around it (the selection being a little darker than the sidebar)
                 if !disabled {
-                    check((label, SidebarSelection), TEXT);
+                    if state.window_active {
+                        check((Text, SidebarSelection), TEXT);
+                    } else {
+                        check((SecondaryText, SidebarSelection), INACTIVE_SELECTION_TEXT);
+                    }
                 }
                 for pair in link_pairs.into_iter().chain(thumb_pairs) {
                     if !disabled {

@@ -243,7 +243,8 @@ mod tests {
             let colors = palette.resolve();
             for interaction in [Normal, Hover, Pressed] {
                 for selected in [false, true] {
-                    let get = |active| colors.get(SidebarSelection, state(interaction, selected, active));
+                    let get =
+                        |active| colors.get(SidebarSelection, state(interaction, selected, active));
                     assert_eq!(get(true), Some(palette.normal(SidebarSelection)));
                     assert_eq!(get(false), Some(palette.states.inactive_sidebar_selection));
                 }

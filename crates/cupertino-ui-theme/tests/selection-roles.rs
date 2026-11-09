@@ -61,7 +61,13 @@ fn every_selected_fill_is_the_accent_token_unprocessed() {
             // a menu's highlighted item, the default button and an on switch
             assert_eq!(get(ColorRole::SelectedControlFill, normal), accent);
             assert_eq!(get(ColorRole::DefaultButtonFill, normal), accent);
-            assert_eq!(get(ColorRole::SwitchTrack, state(InteractionVariant::Normal, true, false)), accent);
+            assert_eq!(
+                get(
+                    ColorRole::SwitchTrack,
+                    state(InteractionVariant::Normal, true, false)
+                ),
+                accent
+            );
             // the selected text on it is opaque white: nothing lets the accent show through it differently
             let text = get(ColorRole::SelectedControlText, normal);
             assert_eq!((text.r, text.g, text.b, text.a), (1.0, 1.0, 1.0, 1.0));
@@ -77,7 +83,10 @@ fn every_selected_fill_is_the_accent_token_unprocessed() {
 fn a_sidebar_s_neutral_selection_adds_no_hue_to_the_material() {
     for appearance in [Appearance::Light, Appearance::Dark] {
         let t = tokens(appearance);
-        let active = t.colors.get(ColorRole::SidebarSelection, StateVariant::NORMAL).unwrap();
+        let active = t
+            .colors
+            .get(ColorRole::SidebarSelection, StateVariant::NORMAL)
+            .unwrap();
         let inactive = t
             .colors
             .get(
@@ -85,9 +94,18 @@ fn a_sidebar_s_neutral_selection_adds_no_hue_to_the_material() {
                 state(InteractionVariant::Normal, true, false),
             )
             .unwrap();
-        assert!(active.r == active.g && active.g == active.b, "{appearance:?}: a grey");
-        assert!(inactive.r == inactive.g && inactive.g == inactive.b, "{appearance:?}: a grey");
-        assert!(inactive.a < active.a, "{appearance:?}: fainter when inactive");
+        assert!(
+            active.r == active.g && active.g == active.b,
+            "{appearance:?}: a grey"
+        );
+        assert!(
+            inactive.r == inactive.g && inactive.g == inactive.b,
+            "{appearance:?}: a grey"
+        );
+        assert!(
+            inactive.a < active.a,
+            "{appearance:?}: fainter when inactive"
+        );
         // a navy material, as a sidebar over a blue wallpaper is
         let material = [34.0 / 255.0, 39.0 / 255.0, 56.0 / 255.0];
         let lifted = over(active, material);
@@ -96,7 +114,9 @@ fn a_sidebar_s_neutral_selection_adds_no_hue_to_the_material() {
             .zip(material)
             .map(|(l, m)| (l - m) * 255.0)
             .collect();
-        let (min, max) = steps.iter().fold((f32::MAX, f32::MIN), |(a, b), &s| (a.min(s), b.max(s)));
+        let (min, max) = steps
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), &s| (a.min(s), b.max(s)));
         assert!(max - min <= 3.0, "{appearance:?}: even channels {steps:?}");
         if appearance.is_dark() {
             // the selected row of a place lifts the material by about 29 of 255

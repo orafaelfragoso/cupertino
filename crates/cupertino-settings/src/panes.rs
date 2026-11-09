@@ -70,6 +70,8 @@ pub enum ControlId {
     FnKey,
     AccentPicker,
     ReduceMotion,
+    /// The text cursor stays shown instead of blinking (`steady_caret`).
+    SteadyCaret,
     ReduceTransparency,
     IncreaseContrast,
     DifferentiateWithoutColor,
@@ -1136,6 +1138,12 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     display_label(DisplayOption::ReduceMotion),
                     switch(d.reduce_motion),
                     set("reduce_motion"),
+                ),
+                row(
+                    ControlId::SteadyCaret,
+                    "Steady text cursor",
+                    switch(a.steady_caret),
+                    set(cupertino_defaults::accessibility::STEADY_CARET),
                 ),
                 row(
                     ControlId::ReduceTransparency,
@@ -2463,12 +2471,14 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             store(File::Keyboard)
         }
         ControlId::ReduceMotion
+        | ControlId::SteadyCaret
         | ControlId::ReduceTransparency
         | ControlId::IncreaseContrast
         | ControlId::DifferentiateWithoutColor
         | ControlId::InvertColors => {
             let key = match id {
                 ControlId::ReduceMotion => "reduce_motion",
+                ControlId::SteadyCaret => cupertino_defaults::accessibility::STEADY_CARET,
                 ControlId::ReduceTransparency => "reduce_transparency",
                 ControlId::IncreaseContrast => "increase_contrast",
                 ControlId::DifferentiateWithoutColor => "differentiate_without_color",
@@ -3547,6 +3557,33 @@ mod tests {
             panic!("a popup")
         };
         assert_eq!(choices[selected], "5 minutes", "the 300 s default");
+    }
+
+    #[test]
+    fn the_steady_text_cursor_follows_the_accessibility_setting_and_asks_the_server() {
+        let mut s = unset();
+        let shown = |s: &Settings| {
+            sections(PaneId::Accessibility, s, LIGHT, &Live::default())
+                .into_iter()
+                .flat_map(|sec| sec.rows)
+                .find(|r| r.id == ControlId::SteadyCaret)
+                .map(|r| r.control)
+        };
+        assert_eq!(shown(&s), Some(switch(false)));
+        s.accessibility.steady_caret = true;
+        assert_eq!(shown(&s), Some(switch(true)));
+        assert_eq!(
+            change(
+                ControlId::SteadyCaret,
+                Value::Bool(false),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::SetAccessibility {
+                key: "steady_caret",
+                value: "off".into()
+            }]
+        );
     }
 
     #[test]

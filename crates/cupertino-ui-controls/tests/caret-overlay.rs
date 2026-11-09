@@ -101,14 +101,6 @@ fn pixels(h: &Harness<Form>) -> (usize, Vec<u8>) {
     (frame.width as usize, frame.pixels.clone())
 }
 
-/// The window's pixels drawn whole, not over the last frame: a frame at another scale, then one at `scale` again.
-fn whole(h: &mut Harness<Form>, scale: f64) -> (usize, Vec<u8>) {
-    h.send(WindowEvent::Scale(scale + 0.25));
-    h.send(WindowEvent::Scale(scale));
-    h.settle();
-    pixels(h)
-}
-
 /// The pixels `on` (a window `width` pixels wide) changed from `off` are one solid rectangle of one colour: none is
 /// covered in part and blended with what lies under it. Its size in pixels.
 fn solid(width: usize, on: &[u8], off: &[u8], case: &str) -> (usize, usize) {
@@ -169,9 +161,9 @@ fn every_pixel_of_the_compositions_underline_is_covered_whole_or_not_at_all_at_f
     for (editor, scale, top) in cases() {
         EDITOR.set(editor);
         let mut h = focused(top, scale);
-        // the caret in the off phase of its blink; both frames drawn whole, so what differs is what the composition drew
+        // the caret in the off phase of its blink, so what the next frame changes is what the composition drew
         at(&mut h, 500);
-        let (width, off) = whole(&mut h, scale);
+        let (width, off) = pixels(&h);
         // spaces with no caret: what changes is the underline alone
         h.send(WindowEvent::Ime(ImeEvent::Done(ImeBatch {
             preedit: Some(Preedit {
@@ -182,7 +174,7 @@ fn every_pixel_of_the_compositions_underline_is_covered_whole_or_not_at_all_at_f
             ..ImeBatch::default()
         })));
         h.settle();
-        let (_, on) = whole(&mut h, scale);
+        let (_, on) = pixels(&h);
         let what = if editor { "an editor" } else { "a field" };
         let case = format!("in {what} at {scale}x, {top} points down and in");
         let (columns, rows) = solid(width, &on, &off, &case);

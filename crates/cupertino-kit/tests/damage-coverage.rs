@@ -2,8 +2,7 @@
 //! strokes, rings drawn past their box, shadows and blurs in a layer, groups with an opacity or a shadow, clipping
 //! containers, containers that draw nothing while their children move, items added, removed and reordered) are drawn
 //! from damage, and each frame is compared with the window drawn whole before and after it: a pixel that differs
-//! between the two whole frames lies inside the damage, a pixel outside it is the whole frame's exactly, and one
-//! inside differs from it by no more than the renderer's own rounding of an image of part of the window.
+//! between the two whole frames lies inside the damage, and every pixel, inside it or out, is the whole frame's exactly.
 
 mod support;
 
@@ -27,16 +26,6 @@ const WINDOW: Size = Size::new(220.0, 150.0);
 
 /// Changes in each seeded run.
 const STEPS: usize = 30;
-
-/// How far a pixel drawn again inside a damaged rectangle may be from the same pixel of a whole frame, for shapes with
-/// square corners at a whole scale: the CPU renderer draws a shape that crosses a damaged rectangle's border through an
-/// image of its own, and blends it into the window with its own rounding.
-const ROUNDING: u8 = 2;
-
-/// The same for any shape at any scale: in that image of its own, the rasterizer cuts a curve at the image's border
-/// and rounds a point that falls on its sub-pixel grid differently (at a fractional scale), which moves an anti-aliased
-/// edge by up to a quarter of a pixel, a quarter of the full range.
-const QUARTER_PIXEL: u8 = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Kind {
@@ -700,9 +689,9 @@ fn every_pixel_at(scale: f64) {
     for curves in [false, true] {
         for seed in SEEDS {
             let furthest = check(seed, scale, curves);
-            assert!(
-                furthest <= QUARTER_PIXEL,
-                "seed {seed}, curves {curves}: a redrawn pixel is {furthest} levels from the whole frame"
+            assert_eq!(
+                furthest, 0,
+                "seed {seed}, scale {scale}, curves {curves}: a redrawn pixel is {furthest} levels from the whole frame"
             );
         }
     }
@@ -729,8 +718,8 @@ fn square_shapes_drawn_again_in_part_are_the_whole_frame_s_at_whole_scales() {
     for scale in [1.0, 2.0] {
         for seed in 5..=8 {
             let furthest = check(seed, scale, false);
-            assert!(
-                furthest <= ROUNDING,
+            assert_eq!(
+                furthest, 0,
                 "seed {seed}, scale {scale}: a redrawn pixel is {furthest} levels from the whole frame"
             );
         }

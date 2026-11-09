@@ -51,8 +51,9 @@ opaque grey at 3:1 or more in the built-in palettes; the shown page's dot is `Te
 
 `ThemeTokens::surface` gives each surface the material to ask the compositor for (`Sidebar`, `Glass` for menus,
 popovers and the Dock, `LoginWindowControl` for a heads-up display, `AppGrid` for the application grid's panel,
-`Switcher` for the application switcher's panel, `RunningIndicator` for the Dock's running dot and `WindowBackground`
-for a window's background) and the opaque window background to paint where there is none. With reduced transparency or
+`Switcher` for the application switcher's panel, `RunningIndicator` for the Dock's running dot, `WindowBackground`
+for a window's background and `TextBackground` for the colour behind a form's groups) and the opaque fill to paint
+where there is none (the text background colour for `TextBackground`, the window background for the others). With reduced transparency or
 in high contrast it asks for no material, except for the surfaces above that keep theirs.
 
 Approximate: every state colour, the disabled fills and borders, the opaque thumb, the dark white role text and the
@@ -69,13 +70,15 @@ are no exception (above).
 ## Theme tokens
 
 `ThemeTokens::cupertino(theme, preferences)` is the Cupertino theme: the colours above for the preferred appearance;
-button and field heights (20 pt) and the switch (38 × 22 pt) from the regular control metrics table of `cupertino-theme`
-(not from the theme data); body (13 pt) and caption (11 pt) sizes and the font family from the theme's type scale; the
-reduce-motion preference. With reduced transparency, light and dark take the opaque neutral colours, which also raise
-text, borders and the focus ring to their contrast ratios; high contrast is opaque already. Approximate: button inset 10
-pt and radius 5 pt, field inset 6 pt and radius 5 pt, switch thumb 18 pt with a 2 pt inset, 24 × 24 pt minimum target,
-section 12 pt and title 15 pt semibold, a 2 pt focus ring 2 pt outside the chrome with 3 pt added radius, and 500 ms
-caret phases.
+the regular, non-compact row of `cupertino-theme`'s control size table (`ControlMetrics::regular`: buttons and fields
+24 pt with a 6 pt corner, button inset 13.5 pt, field inset 6 pt, the switch 54 × 24 pt with a 20 pt thumb 2 pt in);
+body (13 pt) and caption (11 pt) sizes and the font family from the theme's type scale; the reduce-motion preference.
+`ControlMetrics::at_size(size, compact)` gives the metrics at another size and setting, keeping the minimum target, and
+`ControlMetrics::geometry(family)` the geometry of any family at the metrics' size. With reduced transparency, light and
+dark take the opaque neutral colours, which also raise text, borders and the focus ring to their contrast ratios; high
+contrast is opaque already. Approximate: 24 × 24 pt minimum target, section 12 pt and title 15 pt semibold, a 2 pt
+focus ring 2 pt outside the chrome with 3 pt added radius, and 500 ms caret phases. The accent and the selection are
+a softer, less saturated blue than the system blue.
 
 `ThemeTokens::neutral(preferences)` is the theme without theme data: the neutral colours on the same metrics, body 13 pt
 and caption 11 pt (the theme data's sizes), and no font family, so the application's UI font draws the text.

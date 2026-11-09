@@ -101,7 +101,8 @@ struct Globals {
     /// `zxdg_output_manager_v1`, placing the output at (1920, 0) with a 1280 × 720 logical size.
     output_layout: bool,
     text_input: bool,
-    /// Offer `wl_seat` version 8, whose wheels report half notches in 120ths, instead of 7.
+    /// Offer `wl_seat` version 9, whose wheels report half notches in 120ths and say the physical direction of each
+    /// axis, instead of 7.
     high_resolution_wheel: bool,
     /// `wp_presentation` on `CLOCK_MONOTONIC`.
     presentation: bool,
@@ -1381,7 +1382,7 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
         }
         if globals.seat {
             dh.create_global::<Mock, WlSeat, _>(
-                if globals.high_resolution_wheel { 8 } else { 7 },
+                if globals.high_resolution_wheel { 9 } else { 7 },
                 (),
             );
         }
@@ -1622,6 +1623,10 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
                     pointer.axis_value120(axis, notches * 60);
                 } else {
                     pointer.axis_discrete(axis, notches);
+                }
+                if pointer.version() >= 9 && axis == wl_pointer::Axis::VerticalScroll {
+                    pointer
+                        .axis_relative_direction(axis, wl_pointer::AxisRelativeDirection::Inverted);
                 }
                 pointer.axis(900, axis, value);
             }
@@ -4208,6 +4213,26 @@ fn without_cursor_shapes_the_cursor_is_drawn_from_the_theme_at_the_pointers_scal
     wait_for(&mut conn, &mut stash, |e| {
         matches!(e, Event::ScaleChanged { .. }).then_some(())
     });
+    // the cursor showing is drawn again for the new scale without being set again
+    let redrawn = std::iter::repeat_with(|| next_seen(&seen))
+        .find_map(|s| match s {
+            Seen::Commit { size, scale, .. } => Some((size, scale)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(redrawn, ((32, 32), 2));
+    let shown = next_seen(&seen);
+    assert!(
+        matches!(
+            shown,
+            Seen::Cursor {
+                hotspot: (0, 1),
+                surface: true,
+                ..
+            }
+        ),
+        "the hotspot in points: {shown:?}"
+    );
     assert_eq!(
         cursor(&mut conn, CursorShape::Text),
         (((48, 48), 2), (4, 8))
@@ -4330,7 +4355,10 @@ fn an_output_reports_its_identification_size_and_effective_scale() {
 
 #[test]
 fn the_axes_of_one_pointer_frame_arrive_as_one_scroll() {
-    for (high_resolution_wheel, detents) in [(false, (120, -240)), (true, (60, -120))] {
+    for (high_resolution_wheel, detents, inverted) in [
+        (false, (120, -240), (false, false)),
+        (true, (60, -120), (false, true)),
+    ] {
         let (mut conn, control, _seen) = connect(Globals {
             seat: true,
             high_resolution_wheel,
@@ -4351,10 +4379,11 @@ fn the_axes_of_one_pointer_frame_arrive_as_one_scroll() {
                             source,
                             value120,
                             stop,
+                            inverted,
                             ..
                         },
                     ..
-                } => Some((*time, *dx, *dy, *source, *value120, *stop)),
+                } => Some((*time, *dx, *dy, *source, *value120, *stop, *inverted)),
                 _ => None,
             })
         };
@@ -4366,12 +4395,21 @@ fn the_axes_of_one_pointer_frame_arrive_as_one_scroll() {
                 -5.0,
                 Some(ScrollSource::Wheel),
                 Some(detents),
-                false
+                false,
+                inverted
             )
         );
         assert_eq!(
             scroll(),
-            (950, 0.0, 0.0, Some(ScrollSource::Finger), None, true)
+            (
+                950,
+                0.0,
+                0.0,
+                Some(ScrollSource::Finger),
+                None,
+                true,
+                (false, false)
+            )
         );
     }
 }

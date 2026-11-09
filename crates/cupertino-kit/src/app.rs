@@ -77,6 +77,7 @@ pub fn run_on_with_appearance<A: Application>(
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
+        .timed()
         .run()
         .map_err(AppError::Runtime)
 }
@@ -94,6 +95,7 @@ pub fn run_on_with<A: Application>(
     let start = start(&options);
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
+        .timed()
         .run()
         .map_err(AppError::Runtime)
 }
@@ -110,8 +112,65 @@ pub fn run_lock_screen_on_with<A: Application>(
     let start = start(&options);
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
+        .timed()
         .run()
         .map_err(AppError::Runtime)
+}
+
+/// Names the file that [`Timed::timed`] appends the timing of each scroll to.
+pub const SCROLL_TIMING_ENV: &str = "CUPERTINO_SCROLL_TIMING";
+
+/// A runtime that reports how long scrolls take to reach the screen when [`SCROLL_TIMING_ENV`] names an absolute path:
+/// one JSON object a line per scroll event, its stages in nanoseconds (`input`, `handled`, `updated`, `submitted`,
+/// `presented`; `null` for a stage that did not happen). Without the variable the runtime keeps no timing.
+pub trait Timed {
+    fn timed(self) -> Self;
+}
+
+impl<A: Application, W: WindowSystem> Timed for Runtime<A, W> {
+    fn timed(self) -> Self {
+        let Some(path) = std::env::var_os(SCROLL_TIMING_ENV).map(std::path::PathBuf::from) else {
+            return self;
+        };
+        if !path.is_absolute() {
+            eprintln!(
+                "{SCROLL_TIMING_ENV}: {} is not an absolute path",
+                path.display()
+            );
+            return self;
+        }
+        let file = match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                eprintln!("{SCROLL_TIMING_ENV}: {}: {error}", path.display());
+                return self;
+            }
+        };
+        let mut out = std::io::LineWriter::new(file);
+        self.with_scroll_timing(Box::new(move |t| {
+            use std::io::Write;
+            let _ = writeln!(out, "{}", scroll_timing_json(&t));
+        }))
+    }
+}
+
+/// One line of the scroll timing report.
+pub fn scroll_timing_json(t: &cupertino_ui_core::ScrollTiming) -> String {
+    let ns = |t: Option<cupertino_ui_platform::Timestamp>| {
+        t.map_or("null".to_string(), |t| t.0.to_string())
+    };
+    format!(
+        r#"{{"input":{},"handled":{},"updated":{},"submitted":{},"presented":{}}}"#,
+        t.input.0,
+        t.handled.0,
+        ns(t.updated),
+        t.submitted.0,
+        ns(t.presented)
+    )
 }
 
 /// The family of the asset packs' fixed-pitch face, which the runtime's text system loads with the interface face;
@@ -314,6 +373,24 @@ fn fonts(assets: &Assets) -> (FontIndex, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scroll_timing_line_is_one_json_object_with_null_for_a_missing_stage() {
+        use cupertino_ui_platform::{Timestamp, WindowId};
+        let t = cupertino_ui_core::ScrollTiming {
+            window: WindowId(1),
+            input: Timestamp(100),
+            handled: Timestamp(150),
+            updated: None,
+            submitted: Timestamp(200),
+            presented: Some(Timestamp(400)),
+        };
+        let line = scroll_timing_json(&t);
+        assert_eq!(
+            line,
+            r#"{"input":100,"handled":150,"updated":null,"submitted":200,"presented":400}"#
+        );
+    }
 
     #[test]
     fn the_session_appearance_picks_the_theme_appearance_and_its_preferences() {

@@ -4,6 +4,10 @@
 use cupertino_geometry::Size;
 use std::collections::HashMap;
 
+pub use cupertino_theme::control_sizes::{
+    choice_mark, control_geometry, slider_geometry, switch_geometry, ControlFamily,
+    ControlGeometry, Corners, SliderGeometry, SwitchGeometry,
+};
 pub use cupertino_theme::glass::FaceTone;
 pub use cupertino_theme::{Appearance, Color, ControlSize, DesignTokens};
 
@@ -219,10 +223,12 @@ impl ColorTokens {
     }
 }
 
-/// Regular-size control geometry, in logical points.
+/// The control geometry of one control size, in logical points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ControlMetrics {
     pub size: ControlSize,
+    /// The compact metrics: tighter heights and room at the three smaller sizes.
+    pub compact: bool,
     pub button_height: f64,
     pub button_inset: f64,
     pub button_radius: f64,
@@ -234,6 +240,35 @@ pub struct ControlMetrics {
     pub switch_thumb_inset: f64,
     /// The smallest pointer and touch target, reached with layout padding.
     pub min_target: Size,
+}
+
+impl ControlMetrics {
+    /// The geometry of `family` at these metrics' size.
+    pub fn geometry(&self, family: ControlFamily) -> ControlGeometry {
+        control_geometry(family, self.size, self.compact)
+    }
+
+    /// These metrics at another size, the buttons', fields' and switch's geometry following it; the minimum target
+    /// and the other values stay.
+    pub fn at_size(self, size: ControlSize, compact: bool) -> Self {
+        let button = control_geometry(ControlFamily::PushButton, size, compact);
+        let field = control_geometry(ControlFamily::TextField, size, compact);
+        let switch = switch_geometry(compact);
+        Self {
+            size,
+            compact,
+            button_height: button.height,
+            button_inset: button.inset,
+            button_radius: button.corners.radius(button.height),
+            field_height: field.height,
+            field_inset: field.inset,
+            field_radius: field.corners.radius(field.height),
+            switch: Size::new(switch.track.0, switch.track.1),
+            switch_thumb: switch.thumb.1,
+            switch_thumb_inset: switch.inset,
+            ..self
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -294,6 +329,9 @@ pub enum Surface {
     /// A window's own background drawn by the compositor, so glass over it in the window reads the window rather than
     /// the desktop; opaque, so kept with reduced transparency and in high contrast.
     WindowBackground,
+    /// The colour behind a form's groups drawn by the compositor, as [`Surface::WindowBackground`] is, so glass over it
+    /// in the window shows; opaque, so kept with reduced transparency and in high contrast.
+    TextBackground,
 }
 
 /// How a surface paints: the compositor material to ask for, if any, and the opaque fill to paint where there is none.
@@ -342,16 +380,19 @@ impl ThemeTokens {
                 prefs.appearance.is_dark() && !prefs.appearance.is_high_contrast(),
             ),
             Surface::WindowBackground => ("WindowBackground", true),
+            Surface::TextBackground => ("TextBackground", true),
         };
         let material = match surface {
             Surface::DockIndicator => kept.then_some(material),
             _ => (kept || !opaque).then_some(material),
         };
+        let fill = match surface {
+            Surface::TextBackground => ColorRole::TextBackground,
+            _ => ColorRole::WindowBackground,
+        };
         SurfaceLook {
             material,
-            fill: self
-                .colors
-                .get(ColorRole::WindowBackground, StateVariant::NORMAL),
+            fill: self.colors.get(fill, StateVariant::NORMAL),
         }
     }
 }

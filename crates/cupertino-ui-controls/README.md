@@ -1,7 +1,7 @@
 # cupertino-ui-controls
 
 The standard CupertinoKit controls: `Text`, `Icon`, `Button`, `Toggle`, `TextField`, `SecureField`, `Stack`, `Spacer`,
-`Separator` and the settings form controls so far. MPL-2.0. Each control reads every colour and metric from the theme tokens, takes its value
+`Separator`, the choice, value and picker controls and the settings form controls so far. MPL-2.0. Each control reads every colour and metric from the theme tokens, takes its value
 from the application's model and reports changes as messages.
 
 - **Arming.** A pointer or touch press arms a button or switch, release over it activates once, release elsewhere
@@ -9,13 +9,44 @@ from the application's model and reports changes as messages.
   Space arms and activates on release; Return activates a button on press, never a switch; a key repeat never arms
   and Escape disarms Space.
 - **Look.** Disabled overrides every other state and pressed overrides hover; a switch that is on resolves its
-  colours as selected. `Toggle::small` gives a `SmallToggle`, the switch of a settings form's rows: a 36 × 16 pt track
+  colours as selected. Every control keeps its states apart: enabled or disabled, focused, selected, pressed or at
+  rest, and in an active window or not. A disabled control is fainter (its bezel and its label); a control in a window
+  that is not active keeps its look, but for a default button, which rests as an ordinary one there
+  (`tests/contract.rs`). An ordinary button, a pop-up or pull-down button, a segmented control and a stepper rest on
+  a quiet bezel with no edge (white at 7.5 % over a dark window, black at 7.5 % over a light one, stronger under the
+  pointer and pressed); a check box, a radio button, an off switch and the empty part of a slider or progress track
+  on a slightly stronger well. A default button is the accent; a destructive one a red label over a faint red tint
+  (a red fill with a light label under Increase Contrast). `ButtonStyle::Glass` is an action on glass of its own: a
+  translucent body with a fine bright rim, toolkit-painted since the compositor's glass lies under the window's
+  opaque content. `Toggle::small` gives a `SmallToggle`, the switch of a settings form's rows: a 36 × 16 pt track
   and a 21 × 13 pt capsule thumb 1.5 pt inside it, with the toggle's behaviour and reading. In a high-contrast
-  appearance every button that fills its chrome also strokes its border. A theme without a colour for a role paints
+  appearance every bezel and well strokes its border and every quiet fill is a little stronger. A theme without a colour for a role paints
   nothing rather than a guess. The keyboard focus
   ring is drawn only for a keyboard-visible focus, outside the chrome, without changing layout.
+- **Scroll views.** `ScrollView` moves its content with `cupertino-ui-core`'s scroll motion. A touchpad finger or a
+  touch drags it, stretches it past an edge and leaves kinetic motion at the lift (none under Reduce Motion; a stretch
+  still returns). A wheel, a tilted wheel and a continuous source step it inside the range at once, with no stretch
+  and no inertia of their own. The model's offset never leaves the range: the stretch is drawn on top of it. A gesture
+  belongs to the view its first movement can move, or for a finger to the view it pulls past an edge along an axis
+  that view scrolls; the content coasts on while the pointer goes elsewhere, and a new finger catches it where it is.
 - **Targets.** Chrome is centred in a node padded out to the theme's minimum target, so the whole padded node takes
-  the press and nothing overlaps a neighbour.
+  the press and nothing overlaps a neighbour. The layout never follows the paint: a held thumb's lens, a press or a
+  focus ring draws past the chrome without moving anything.
+- **Sizes.** Each family takes its height, width, corners, label size and inset from `cupertino-theme`'s control
+  size table (`control_geometry`) at the theme's `ControlMetrics::size` and `compact` setting: mini, small, regular,
+  large and extra large. `ControlMetrics::at_size` gives the metrics at another size. At the regular size a button,
+  a pop-up button, a field and a segmented control are 24 pt tall, a check box 16 pt square and a switch 54 × 24 pt
+  with a 32 × 20 pt capsule thumb (38 × 20 pt in the compact setting).
+- **Held thumbs.** While a switch is held or dragged its thumb becomes a lens about 1.6 times its width, and a dragged
+  slider's knob one about 1.33 times its size: a capsule (a rounded rectangle for the knob) with a soft shade, a
+  translucent body through which the track shows shrunk about the lens's centre, a light band along its top and
+  bottom, a bright rim and a fine dark outline. At rest both thumbs are plain; buttons, check boxes and fields never
+  take a lens. Increase Contrast strengthens the rim and outline, Reduce Transparency makes the body nearly opaque,
+  and Reduce Motion leaves the lens as it is: it is a state, not a motion.
+- **Dragging.** A switch's thumb follows a drag along its track once the pointer moves 3 pt; let go over the switch,
+  it takes the side the thumb is nearer, and let go away from it the drag is cancelled. A segmented control dragged
+  from one segment across the others keeps the chosen segment marked and shows the one under the pointer pressed;
+  the release chooses that one, and a release off the control chooses nothing.
 - **Fields.** `TextField` edits through `cupertino-ui-text`'s chords (the binding table of
   `cupertino-key-bindings`, no settings or file watching) with the platform's logical modifiers. Edits report the
   committed text with a revision; the field takes the model's text only at or past its last reported revision, so a
@@ -47,7 +78,11 @@ from the application's model and reports changes as messages.
   stop that opens a page: a tile, the label and a trailing chevron; a click, Return, Space or assistive technology's
   Click sends `on_open`, and without it the row reads as disabled. `FormHeader` is the card at the top of a page, its
   large tile over a bold title and a centred description, read as the title described by the description.
-  `FormBackground` fills its room with the colour behind the groups. `SearchField` is a `TextField` drawn as a capsule
+  `FormBackground` fills its room with the colour behind the groups: the compositor draws it
+  (`Surface::TextBackground`) where the desktop can, below the window's glass, so a toolbar's capsules over a form
+  show, and it paints it where the desktop cannot. A `TextField`'s chrome is a recessed well: darker than what it
+  sits on in the dark appearance (black at 25 %), the text background in the light one, with a faint edge (the
+  theme's stronger border under Increase Contrast). `SearchField` is a `TextField` drawn as a capsule
   with a magnifying glass; it edits and reads as its field does. `BareField` is a `TextField` with no chrome, its
   text and placeholder at its own size (whole points), for a field standing on a surface drawn around it such as a
   launcher capsule; it edits and reads as its field does (`tests/bare_field.rs`).
@@ -132,16 +167,25 @@ from the application's model and reports changes as messages.
   group to the tree. `ToolbarMenuButton` is a 47 pt capsule of a symbol and a chevron, `ToolbarButton` a 36 pt circle,
   `ToolbarSearch` a search field that rests as such a circle and passes the press to the field under it, and
   `ToolbarTitle` the 15 pt bold title that takes the room the controls leave. `NavigationStack` puts its back and
-  forward buttons in such a group. Glyphs recede to the secondary label colour in an inactive window and to the
-  disabled colour when disabled.
-- **Glass.** Each glass surface names a `GlassRole` (`ToolbarGroup`, `SidebarPanel`) and `GlassRole::material` says
-  what draws it: the sidebar panel asks for the compositor's sidebar material under the node, with the surface's
-  opaque fill where the window cannot show it; a toolbar group is regular glass (`PaintCx::glass`) in one container
+  forward buttons in such a group. With `under_toolbar` its page fills the whole pane and the row lies over it (the
+  row takes the pointer first); the page lays out below the row with `unobscured_insets(mode)`, the top the window's
+  chrome covers (52 pt for the unified and sidebar modes, 40 pt compact, none for a title bar above the content), so a
+  `ScrollView` whose content starts that far down scrolls behind the row. The compositor draws a window's glass and
+  materials below everything the window paints, so opaque content scrolled under the row covers the row's glass:
+  Files and Settings keep the page below the row. Glyphs recede to the secondary label colour in an inactive window and to the
+  disabled colour when disabled. Besides symbols a toolbar item may draw a glyph of its own (`ToolbarGlyph`): the
+  back and forward chevrons, `More`'s three dots and `Tag`, a tag outline pointing up and to the trailing side with its
+  hole by the point, mirrored right to left.
+- **Glass.** Each glass surface names a `GlassRole` (`ToolbarGroup`, `SidebarPanel`, `GlassButton`, `ThumbLens`) and `GlassRole::material` says
+t; a toolbar group is regular glass (`PaintCx::glass`) in one container
   per window (`GlassRole::container`, blending only when two controls come closer than the 8 pt gap between them),
   kept by the compositor with Reduce Transparency and Increase Contrast, over the content pane's background, which the
   compositor draws below it; where the desktop shows no glass it paints a translucent body with a one-pixel rim (and a
   soft shade in the light appearance). The field under a resting `ToolbarSearch` button is not drawn, so the button's
   glass shows what lies below the field. Moving a role to another material is its one arm in `GlassRole::material`.
+  `GlassRole::floating` tells the floating controls (toolbar groups, glass buttons, a held thumb) from the content
+  surfaces (the sidebar panel). Glass is never laid on glass: a node on glass the window shows
+  (`PaintCx::on_glass`) draws none of its own, so a glass button on a toolbar group shows its label alone.
 - **Menus.** `Menu` levels follow the pointer as the menu bar's do (`cupertino-menu-model`'s `tracking`): the row
   under the pointer takes the focus and the highlight, a submenu opens once the pointer rests 0.2 s on its row and
   closes once it rests 0.3 s on another, and while the pointer heads from a row into its open submenu (each move inside
@@ -155,7 +199,10 @@ from the application's model and reports changes as messages.
   the leading side, or slid, keeps its triangle; until the compositor has placed it, the edge is where the panel
   asked for it, beside its row on the trailing side. The 0.5 s of a held press count from the press
   (`EventCx::opening_press`), however late after it the application opens the menu, and from when the panel first
-  hears of anything only for a menu no held press opened.
+  hears of anything only for a menu no held press opened. A press dragged over the menus and let go away from all of
+  them chooses nothing and closes them; one that never came over them leaves them open. Escape closes them at once,
+  mid-drag too, and a pop-up button keeps its value. None of this waits on how a menu appears: it tracks alike with
+  Reduce Motion (`tests/menu-tracking.rs`).
   `MenuItem::Shortcut` is an item that shows the keys that choose it ("⇧⌘N") at its trailing edge in the secondary
   label colour (the row's colour when it is highlighted or disabled), which assistive technology reads as its
   description; the application binds the keys itself.
@@ -166,12 +213,21 @@ from the application's model and reports changes as messages.
   panel's edge; over the opaque fill the panel strokes its own.
 - **Popovers.** A popover is glass with a 16 pt corner, like a menu: the compositor draws its body and edge, and
   over the opaque fill (no material) it strokes its own edge.
+- **Pickers.** `PullDownButton` is titled with what it does and opens a menu of actions below itself on the press,
+  with a single downward chevron where a `PopUpButton` has two opposing ones; its menu marks nothing.
+  `ColorWell` shows a colour in a capsule set in a quiet rim, sends `on_open` on a press, Space or Return, and reads as
+  its colour (`#RRGGBB`). `DatePicker` shows a `CalendarDate` as `YYYY-MM-DD` in a field's well with a stepper
+  beside it; a click or Left and Right pick the year, month or day, and Up, Down and the stepper step that part,
+  wrapping within its range and fitting the day to the month. `ComboBox` is an editable field in a well with a small
+  bezel button at its end that opens a menu of choices below it (built with `Element::from`); the field takes any
+  text and its value is marked in the menu (`tests/pickers.rs`).
 - **Sliders.** `on_change` reports every value a drag passes; `on_end` reports the value once the change ends, when
   the pointer lets go or the drag is cancelled, and at once for a key or assistive technology step, so an
-  application can write a level live and commit it once. With Increase Contrast the knob's ring (the control border
-  colour, 3:1 against the switch thumb's colour) is twice as wide, so the knob stands apart from a track of its own
-  lightness. The empty part of the track is `SliderTrack` (a panel level slider's is `PanelTrack`), 3:1 or more
-  against the surface under it in every palette; the filled part is the selected `ControlFill` (the accent).
+  application can write a level live and commit it once. A regular knob is a white capsule 1.25 times as wide as
+  it is high with a soft shade; with Increase Contrast it is ringed in the control border colour, so it stands apart
+  from a track of its own lightness. The empty part of the track is a quiet well, and `SliderTrack` (3:1 or more
+  against the surface under it) under Increase Contrast; a panel level slider's is `PanelTrack`; the filled part is
+  the selected `ControlFill` (the accent).
 
 - **File preview.** `FilePreview` draws a file without opening it (`PreviewContent`): a picture whole and as large as
   fits, the start of a text file in a fixed-pitch face (`text_family`, the theme's face without one) on the text

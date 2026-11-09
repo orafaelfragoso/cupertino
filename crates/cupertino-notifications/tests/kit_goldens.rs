@@ -1160,6 +1160,7 @@ fn the_centre_scrolls_with_the_wheel_the_touchpad_and_the_keyboard_and_keeps_its
             value120: Some((0, 120)),
             source: ScrollSource::Wheel,
             stop: false,
+            inverted: (false, false),
         },
     );
     assert_eq!(
@@ -1176,6 +1177,7 @@ fn the_centre_scrolls_with_the_wheel_the_touchpad_and_the_keyboard_and_keeps_its
             value120: None,
             source: ScrollSource::Finger,
             stop: false,
+            inverted: (false, false),
         },
     );
     assert_eq!(

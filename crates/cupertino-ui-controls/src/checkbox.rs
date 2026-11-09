@@ -2,18 +2,16 @@ use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::CheckBox;
 use cupertino_geometry::{Insets, Point, Rect, Size};
-use cupertino_theme::metrics::Control;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Environment, Event,
     EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
-use cupertino_ui_theme::ColorRole;
+use cupertino_ui_theme::{choice_mark, ColorRole, ControlFamily};
 
 /// Between the box and its label.
 const LABEL_GAP: f64 = 6.0;
-const BOX_RADIUS: f64 = 3.0;
 const MARK_WIDTH: f64 = 2.0;
 /// The mixed state's bar.
 const MIXED: Size = Size::new(8.0, 2.0);
@@ -78,7 +76,7 @@ impl<M: 'static> Widget<M> for CheckBox<M> {
 
     fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         let theme = &cx.env().theme;
-        let side = look::metric(Control::CheckBoxRadio, theme);
+        let side = choice_mark(theme.metrics.size, theme.metrics.compact);
         let label = look::label(cx.env(), &self.label).map(|l| l.size());
         let width = side + label.map_or(0.0, |l| LABEL_GAP + l.width);
         let height = label.map_or(side, |l| side.max(l.height));
@@ -113,22 +111,28 @@ impl<M: 'static> Widget<M> for CheckBox<M> {
         let env = cx.env().clone();
         let theme = &env.theme;
         let state = self.control_state(press, cx);
-        let side = look::metric(Control::CheckBoxRadio, theme);
+        let side = choice_mark(theme.metrics.size, theme.metrics.compact);
+        let radius = look::geometry(theme, ControlFamily::CheckBox)
+            .corners
+            .radius(side);
         let size = cx.size();
         let b = check_box(size, side, env.direction);
-        look::fill(
-            cx,
-            b,
-            BOX_RADIUS,
-            look::color(theme, ColorRole::ControlFill, &state),
-        );
-        look::stroke(
-            cx,
-            b.inset(Insets::uniform(0.5)),
-            BOX_RADIUS - 0.5,
-            1.0,
-            look::color(theme, ColorRole::ControlBorder, &state),
-        );
+        // unchecked a quiet well, checked (or mixed) the accent, subdued in a window that is not active
+        let fill = if self.checked == Checked::False {
+            Some(look::quiet(theme, look::WELL, &state))
+        } else {
+            look::color(theme, ColorRole::ControlFill, &state)
+        };
+        look::fill(cx, b, radius, fill);
+        if theme.preferences.appearance.is_high_contrast() {
+            look::stroke(
+                cx,
+                b.inset(Insets::uniform(0.5)),
+                radius - 0.5,
+                1.0,
+                look::color(theme, ColorRole::ControlBorder, &state),
+            );
+        }
         let mark = look::color(theme, ColorRole::ControlText, &state);
         match (self.checked, mark) {
             (Checked::True, Some(color)) => cx.push(PaintOp::Stroke {
@@ -166,7 +170,7 @@ impl<M: 'static> Widget<M> for CheckBox<M> {
                 look::color(theme, ColorRole::Text, &text),
             );
         }
-        paint_focus_ring(cx, b, BOX_RADIUS);
+        paint_focus_ring(cx, b, radius);
     }
 
     fn semantics(&self, _: &Press, cx: &mut SemanticsCx<'_>) {

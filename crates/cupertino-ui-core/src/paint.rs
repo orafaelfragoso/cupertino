@@ -456,6 +456,7 @@ impl Painter {
                         focused,
                         focus_visible: focused && input.focus_visible,
                         window_active: input.window_active,
+                        on_glass: inherited.is_some(),
                         backdrop: input.backdrop,
                         now: input.now,
                         ops: &mut ops,

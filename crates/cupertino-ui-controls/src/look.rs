@@ -4,12 +4,13 @@ use cupertino_geometry::{Point, Rect};
 use cupertino_theme::metrics::{alignment_height, Control};
 use cupertino_ui_core::{ControlState, Environment, PaintCx};
 use cupertino_ui_layout::LayoutDirection;
-use cupertino_ui_render::{Paint, PaintOp, Shape};
+use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_text::{
     AttributedText, Direction, FontWeight, Paragraph, ParagraphLayout, ParagraphStyle, TextStyle,
 };
 use cupertino_ui_theme::{
-    Color, ColorRole, ControlSize, FocusRing, InteractionVariant, StateVariant, ThemeTokens,
+    Color, ColorRole, ControlFamily, ControlGeometry, ControlSize, FocusRing, InteractionVariant,
+    StateVariant, ThemeTokens,
 };
 
 /// Disabled overrides everything; pressed overrides hover. Keyboard focus is drawn as a ring, not a colour.
@@ -33,6 +34,66 @@ pub(crate) fn variant(state: &ControlState) -> StateVariant {
 /// A theme without the role paints nothing rather than a guessed colour.
 pub(crate) fn color(theme: &ThemeTokens, role: ColorRole, state: &ControlState) -> Option<Color> {
     theme.colors.get(role, variant(state))
+}
+
+/// How strongly a quiet fill shows: a share of white in the dark appearance and of black in the light one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Shares {
+    pub normal: f32,
+    pub hover: f32,
+    pub pressed: f32,
+    pub disabled: f32,
+}
+
+/// The bezel of an ordinary button, a menu button, a segmented control and a stepper: a quiet fill with no edge.
+pub(crate) const BEZEL: Shares = Shares {
+    normal: 0.075,
+    hover: 0.10,
+    pressed: 0.16,
+    disabled: 0.035,
+};
+/// The well of a check box, a radio button and an empty track: a little stronger than a bezel.
+pub(crate) const WELL: Shares = Shares {
+    normal: 0.095,
+    hover: 0.12,
+    pressed: 0.18,
+    disabled: 0.05,
+};
+/// With Increase Contrast every quiet fill is this much stronger, and the control strokes its edge too.
+const CONTRAST_BOOST: f32 = 0.06;
+
+/// The quiet fill of `shares` in `state`. Disabled is fainter than an inactive window's, which keeps the normal fill:
+/// a window that is not active subdues its accents, never its controls' fills.
+pub(crate) fn quiet(theme: &ThemeTokens, shares: Shares, state: &ControlState) -> Color {
+    let share = match variant(state).interaction {
+        InteractionVariant::Disabled => shares.disabled,
+        InteractionVariant::Pressed => shares.pressed,
+        InteractionVariant::Hover => shares.hover,
+        InteractionVariant::Normal => shares.normal,
+    } + if theme.preferences.appearance.is_high_contrast() {
+        CONTRAST_BOOST
+    } else {
+        0.0
+    };
+    let tone = if theme.preferences.appearance.is_dark() {
+        1.0
+    } else {
+        0.0
+    };
+    Color::new(tone, tone, tone, share)
+}
+
+/// `color` at `share` of its alpha.
+pub(crate) fn faded(color: Option<Color>, share: f32) -> Option<Color> {
+    color.map(|c| Color {
+        a: c.a * share,
+        ..c
+    })
+}
+
+/// The geometry of `family` at the theme's control size.
+pub(crate) fn geometry(theme: &ThemeTokens, family: ControlFamily) -> ControlGeometry {
+    theme.metrics.geometry(family)
 }
 
 /// The height of `control` at the theme's control size, else at the regular size.
@@ -205,6 +266,19 @@ pub(crate) fn paint_ring(cx: &mut PaintCx<'_>, chrome: Rect, radius: f64) {
     stroke(cx, rect, radius, theme.focus.width, color);
 }
 
+/// A chevron `width` wide and half as high, centred on `centre`, its point up or down; stroke it.
+pub(crate) fn chevron(centre: Point, width: f64, up: bool) -> Shape {
+    let rise = if up { -width / 4.0 } else { width / 4.0 };
+    Shape::Path {
+        verbs: vec![
+            PathVerb::MoveTo(Point::new(centre.x - width / 2.0, centre.y - rise)),
+            PathVerb::LineTo(Point::new(centre.x, centre.y + rise)),
+            PathVerb::LineTo(Point::new(centre.x + width / 2.0, centre.y - rise)),
+        ],
+        fill_rule: Default::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +312,29 @@ mod tests {
             interaction(state(false, true, true)),
             InteractionVariant::Disabled
         );
+    }
+
+    #[test]
+    fn a_disabled_fill_is_fainter_than_an_inactive_windows() {
+        let theme = ThemeTokens::neutral(cupertino_ui_theme::ThemePreferences {
+            appearance: cupertino_ui_theme::Appearance::Dark,
+            reduce_transparency: false,
+            reduce_motion: false,
+        })
+        .unwrap();
+        let inactive = ControlState {
+            window_active: false,
+            ..state(true, false, false)
+        };
+        let disabled = state(false, false, false);
+        let active = state(true, false, false);
+        assert_eq!(
+            quiet(&theme, BEZEL, &inactive),
+            quiet(&theme, BEZEL, &active)
+        );
+        assert!(quiet(&theme, BEZEL, &disabled).a < quiet(&theme, BEZEL, &inactive).a);
+        assert!(quiet(&theme, BEZEL, &state(true, true, true)).a > quiet(&theme, BEZEL, &active).a);
+        assert!(quiet(&theme, WELL, &active).a > quiet(&theme, BEZEL, &active).a);
     }
 
     #[test]

@@ -1,7 +1,9 @@
-"""Tests of the golden log check: `python3 -I ci/test_goldens_log.py`."""
+"""Tests of the golden log check and the renderer image's package source guard: `python3 -I ci/test_goldens_log.py`."""
 import os
 import hashlib
+import itertools
 import json
+import re
 import signal
 import subprocess
 import sys
@@ -288,6 +290,72 @@ class UpdateStatusTest(unittest.TestCase):
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.communicate(timeout=3)
+
+
+# The pacman.conf of the pinned base image: its repositories all read the mirror list.
+STOCK_PACMAN_CONF = """[options]
+HoldPkg     = pacman glibc
+Architecture = auto
+#[core-testing]
+#Include = /etc/pacman.d/mirrorlist
+
+[core]
+Include = /etc/pacman.d/mirrorlist
+
+[extra]
+Include = /etc/pacman.d/mirrorlist
+"""
+
+
+class ImageSourceGuardTest(unittest.TestCase):
+    """The renderer image's package source guard, run outside docker on stand-in configuration files: everything the
+    Dockerfile's package RUN does before it calls pacman, with the two /etc paths moved into a scratch directory."""
+
+    def setUp(self):
+        text = (Path(__file__).resolve().parent / "goldens/Dockerfile").read_text()
+        self.archive = re.search(r"^ARG ARCHIVE=(\S+)$", text, re.M)[1]
+        self.dockerfile = text
+        run = next(block for block in re.split(r"\n(?=[A-Z]+ )", text)
+                   if block.startswith("RUN ") and "archive.archlinux.org" in block)
+        commands = re.sub(r"\\\n", " ", run.removeprefix("RUN ")).split(" && ")
+        self.guard = " && ".join(c.strip() for c in itertools.takewhile(lambda c: not c.strip().startswith("pacman"),
+                                                                         commands))
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.etc = Path(scratch.name)
+        (self.etc / "pacman.d").mkdir()
+        (self.etc / "pacman.conf").write_text(STOCK_PACMAN_CONF)
+
+    def run_guard(self):
+        # the files move; the Include value the guard matches in pacman.conf (after "= ") stays the real path
+        script = re.sub(r"(?<!= )/etc/", f"{self.etc}/", self.guard)
+        return subprocess.run(["sh", "-c", script], env=dict(os.environ, ARCHIVE=self.archive),
+                              capture_output=True, text=True)
+
+    def mirrorlist(self):
+        return (self.etc / "pacman.d/mirrorlist").read_text()
+
+    def test_the_archive_date_becomes_the_only_server(self):
+        self.assertIn("printf", self.guard)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.mirrorlist(),
+                         f"Server = https://archive.archlinux.org/repos/{self.archive}/$repo/os/$arch\n")
+
+    def test_a_server_in_pacman_conf_fails(self):
+        (self.etc / "pacman.conf").write_text(STOCK_PACMAN_CONF + "\n[extra]\nServer = https://mirror.example/$repo\n")
+        self.assertNotEqual(self.run_guard().returncode, 0)
+
+    def test_a_repository_that_reads_another_mirror_list_fails(self):
+        (self.etc / "pacman.conf").write_text(STOCK_PACMAN_CONF + "\n[other]\nInclude = /etc/pacman.d/mirrorlist-fast\n")
+        self.assertNotEqual(self.run_guard().returncode, 0)
+
+    def test_the_archive_date_is_the_base_image_date(self):
+        # base-devel-YYYYMMDD.N.BUILD: the image's own packages are from that day, so the archive date moves them by
+        # hours, not months, and its keyring knows every key the archive signed with.
+        image = re.search(r"archlinux:base-devel-(\d{4})(\d{2})(\d{2})\.", self.dockerfile)
+        self.assertIsNotNone(image, "the Dockerfile names the image tag its digest pins")
+        self.assertEqual(self.archive, "/".join(image.groups()))
 
 
 if __name__ == "__main__":

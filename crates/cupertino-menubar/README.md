@@ -207,8 +207,11 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   indigo. Third-party status items keep their own icons. Before the first value, below version 14, and while Reduce
   Transparency makes the bar solid, the whole bar keeps the appearance's palette. The server measures the wallpaper's
   strip as it is, since nothing lies between it and the text, as the mean of each pixel's L* (a few bright lines over a dark strip leave it dark). Outside the band the chosen text is the one that reads
-  better, at 4.5:1 or more below 400 and above 600; inside it neither colour reaches 4.5:1 (about 4.0:1 at 500), and
-  the bar paints nothing under its text to make up for it. A bar redraws when its tone changes.
+  better, at 4.5:1 or more below 400 and above 600; inside it neither colour reaches 4.5:1 (about 4.0:1 at 500). A
+  strip's mean can hide light and dark parts side by side, so each slot's text, symbol or mark keeps a soft halo of the
+  opposite tone (black at 0.45 under light text, white at 0.6 under dark text, 2.5 pt wide, `view::halo_color`): over
+  a wallpaper as dark or as light as the strip's mean it does not show, and where the picture under a title is as light
+  as its text it sets the text apart. A solid bar draws no halo. A bar redraws when its tone changes.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and
   opens `Extras::system_menu`: About This Computer, Settings…, Recent Items, Force Quit…, then Sleep, Restart…, Shut Down…, Lock Screen, Log
   Out <name>… and, when the session agent can switch, Login Window…, with separators between the groups. Every row and

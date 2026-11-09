@@ -51,7 +51,13 @@ impl Press {
         self.pointer || self.touch.is_some() || self.key
     }
 
-    fn disarm(&mut self) -> Outcome {
+    /// Armed by the pointer, inside the control or not.
+    pub(crate) fn pointer_armed(&self) -> bool {
+        self.pointer
+    }
+
+    /// Disarms without activating, as a drag the control took over ends.
+    pub(crate) fn disarm(&mut self) -> Outcome {
         let was = self.armed();
         self.pointer = false;
         self.touch = None;

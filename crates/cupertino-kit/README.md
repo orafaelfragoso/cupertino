@@ -21,6 +21,11 @@ compositor. `app::run_on` and `app::run_on_with` run on a window system a deskto
 `app::run_lock_screen_on_with` does the same for the lock screen, whose AT-SPI adapter the session's lock never mutes
 (`AtspiAdapter::lock_screen`), and `app::run_on_with_appearance` passes the session's appearance through a function first, for a
 shell surface that keeps the dark appearance in a light session. The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
+Every one of them reports scroll timing when `CUPERTINO_SCROLL_TIMING` (`app::SCROLL_TIMING_ENV`) names an absolute path:
+one JSON line a pointer scroll event, appended, with its stages in nanoseconds of `CLOCK_MONOTONIC` (`input`, the
+window system's timestamp; `handled`; `updated`, the model update and view, or `null`; `submitted`, the frame that drew
+it; `presented`, the compositor's time for that frame, or `null` when it was dropped). Without the variable no timing
+is kept (`app::Timed`, on `Runtime::with_scroll_timing`).
 `app::mono_family` names the asset packs' fixed-pitch family, which the text system loads with the interface face, for
 text that lines up by character (a file's contents); `None` when no pack names one.
 
@@ -58,9 +63,12 @@ makes any other part of a window one; `EventCx::move_window` and `EventCx::zoom_
 The keyboard has no move: the compositor's Zoom, Minimize and tile shortcuts and the menu bar's Window menu cover
 it (see `cupertino-ui-controls`).
 
-`ci/capture.sh kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them)
-headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`,
-`kit/virtual-list` and `kit/editor` draw the examples' windows as they open.
+`ci/capture.sh kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them),
+and `kit/scroll` a scroll view at rest, stretched and with its bar shown, fading and hidden (`--phase`), headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`,
+`kit/virtual-list` and `kit/editor` draw the examples' windows as they open. `kit/gallery` draws every control family
+side by side, `--state rest|held-button|held-switch|held-slider|held-segment|disabled` holding the pointer down on one
+or disabling them all, at `--control-size mini|small|regular|large|extra-large` and `--compact on|off`, over
+`--backdrop flat|busy`.
 
 The `control-fixtures` test renders every control in each state it has (normal, hover, pressed, disabled, focused,
 selected) in Light, Dark and both high-contrast appearances, left to right and right to left, through the CPU renderer,

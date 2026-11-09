@@ -27,6 +27,27 @@ use cupertino_ui_theme::{Color, ColorRole};
 
 /// The toolbar row's height: the controls lie in its middle.
 pub const TOOLBAR_ROW: f64 = 52.0;
+/// The compact toolbar row's height.
+pub const COMPACT_TOOLBAR_ROW: f64 = 40.0;
+
+/// How far the chrome covers the top of a window's content: the unobscured rectangle is the content less these insets.
+/// A window whose content fills it ([`DecorationMode::content_fills_window`]) draws its toolbar row over its top, 52 pt
+/// ([`TOOLBAR_ROW`]) or 40 pt compact ([`COMPACT_TOOLBAR_ROW`]); the other modes put the title bar above the content and
+/// cover none of it.
+pub fn unobscured_insets(mode: cupertino_ui_platform::DecorationMode) -> Insets {
+    use cupertino_ui_platform::DecorationMode;
+    let top = match mode {
+        DecorationMode::Unified | DecorationMode::Sidebar => TOOLBAR_ROW,
+        DecorationMode::UnifiedCompact => COMPACT_TOOLBAR_ROW,
+        DecorationMode::Preferred | DecorationMode::Client | DecorationMode::None => 0.0,
+    };
+    Insets {
+        top,
+        left: 0.0,
+        bottom: 0.0,
+        right: 0.0,
+    }
+}
 /// The room between the toolbar's controls and the edges of the pane it floats over.
 pub const TOOLBAR_EDGE: f64 = 8.0;
 /// The room between neighbouring toolbar controls.
@@ -82,6 +103,8 @@ pub enum ToolbarGlyph {
     Forward,
     /// Three dots: more actions.
     More,
+    /// A tag outline pointing up and away from the reading direction's start, with its hole: the item's tags.
+    Tag,
 }
 
 /// One button of a [`ToolbarGroup`].
@@ -717,6 +740,26 @@ impl<M: Clone + 'static> Widget<M> for Segment<M> {
                     paint: Paint::Solid(color),
                 });
             }
+            ToolbarGlyph::Tag => {
+                let rtl = direction == LayoutDirection::Rtl;
+                let (outline, hole) = tag(area, rtl);
+                cx.push(PaintOp::Stroke {
+                    shape: outline,
+                    width: TAG_STROKE,
+                    paint: Paint::Solid(color),
+                });
+                look::fill(
+                    cx,
+                    Rect::new(
+                        hole.x - TAG_HOLE / 2.0,
+                        hole.y - TAG_HOLE / 2.0,
+                        TAG_HOLE,
+                        TAG_HOLE,
+                    ),
+                    TAG_HOLE / 2.0,
+                    Some(color),
+                );
+            }
             ToolbarGlyph::More => {
                 let centre = Point::new(area.width() / 2.0, area.height() / 2.0);
                 for i in [-1.0, 0.0, 1.0] {
@@ -784,6 +827,61 @@ impl<M: Clone + 'static> Widget<M> for Segment<M> {
             cx.action(Action::Click);
         }
     }
+}
+
+/// The tag glyph's body: its length and width before it is turned 45°, the length of its point, its stroke, and the
+/// side of its hole.
+const TAG: Size = Size {
+    width: 15.0,
+    height: 8.5,
+};
+const TAG_POINT: f64 = 4.25;
+const TAG_STROKE: f64 = 1.5;
+const TAG_HOLE: f64 = 2.25;
+
+/// The tag in the middle of `area`: its outline, the point towards the top right (top left when `mirrored`), and the
+/// centre of its hole near the point.
+fn tag(area: Rect, mirrored: bool) -> (Shape, Point) {
+    let centre = Point::new(
+        area.min_x() + area.width() / 2.0,
+        area.min_y() + area.height() / 2.0,
+    );
+    // laid out pointing right, then turned a quarter of a half turn up
+    let k = std::f64::consts::FRAC_1_SQRT_2;
+    let turn = |x: f64, y: f64| {
+        let (x, y) = ((x + y) * k, (y - x) * k);
+        let x = if mirrored { -x } else { x };
+        Point::new(centre.x + x, centre.y + y)
+    };
+    let (w, h) = (TAG.width / 2.0, TAG.height / 2.0);
+    let corners = [
+        (-w, -h),
+        (w - TAG_POINT, -h),
+        (w, 0.0),
+        (w - TAG_POINT, h),
+        (-w, h),
+    ];
+    let mut verbs: Vec<PathVerb> = corners
+        .iter()
+        .enumerate()
+        .map(|(i, &(x, y))| {
+            let p = turn(x, y);
+            if i == 0 {
+                PathVerb::MoveTo(p)
+            } else {
+                PathVerb::LineTo(p)
+            }
+        })
+        .collect();
+    verbs.push(PathVerb::Close);
+    let hole = turn(w - TAG_POINT - TAG_HOLE / 2.0, 0.0);
+    (
+        Shape::Path {
+            verbs,
+            fill_rule: Default::default(),
+        },
+        hole,
+    )
 }
 
 /// The chevron in the middle of `area`, pointing right when `forward` and left otherwise.
@@ -938,5 +1036,47 @@ impl<M: 'static> Widget<M> for ToolbarTitle {
             };
             cx.bounds(Rect::new(x, 0.0, width, size.height));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn points(shape: &Shape) -> Vec<Point> {
+        let Shape::Path { verbs, .. } = shape else {
+            panic!("a path");
+        };
+        verbs
+            .iter()
+            .filter_map(|v| match v {
+                PathVerb::MoveTo(p) | PathVerb::LineTo(p) => Some(*p),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_tag_points_up_and_to_the_trailing_side_with_its_hole_by_the_point() {
+        let area = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let (outline, hole) = tag(area, false);
+        let corners = points(&outline);
+        assert_eq!(corners.len(), 5);
+        // the point is the corner furthest up and right; the hole lies between it and the middle
+        let point = corners[2];
+        assert!(point.x > 10.0 && point.y < 10.0, "{point:?}");
+        assert!(hole.x > 10.0 && hole.x < point.x && hole.y < 10.0 && hole.y > point.y);
+        for p in &corners {
+            assert!(
+                (0.0..=20.0).contains(&p.x) && (0.0..=20.0).contains(&p.y),
+                "{p:?}"
+            );
+        }
+        // right to left it points up and to the left, the mirror image
+        let (mirrored, mirrored_hole) = tag(area, true);
+        for (a, b) in corners.iter().zip(points(&mirrored)) {
+            assert!((a.x - (20.0 - b.x)).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9);
+        }
+        assert!((hole.x - (20.0 - mirrored_hole.x)).abs() < 1e-9);
     }
 }

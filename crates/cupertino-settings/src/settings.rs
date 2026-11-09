@@ -9,7 +9,7 @@ use cupertino_defaults::accessibility::{
     AccessibilitySettings, PersonalAccessibility, SystemAccessibility, ACCESSIBILITY_ENV,
     ACCESSIBILITY_FILE, SYSTEM_ACCESSIBILITY,
 };
-use cupertino_defaults::compositor::{CompositorSettings, MinimizeEffectName};
+use cupertino_defaults::compositor::{CompositorSettings, MinimizeEffectName, ScrollBarsName};
 use cupertino_defaults::conf::Problem;
 use cupertino_defaults::data_control::DataControlConf;
 use cupertino_defaults::dock::{sanitize_large_size, sanitize_tile_size, DockSettings, Position};
@@ -520,6 +520,15 @@ impl Settings {
 
     pub fn mouse_acceleration(&self) -> bool {
         self.compositor.mouse_acceleration.unwrap_or(true)
+    }
+
+    /// Automatic unless the file says otherwise.
+    pub fn show_scroll_bars(&self) -> ScrollBarsName {
+        self.compositor.show_scroll_bars.unwrap_or_default()
+    }
+
+    pub fn trackpad_acceleration(&self) -> bool {
+        self.compositor.trackpad_acceleration.unwrap_or(true)
     }
 
     pub fn natural_scrolling(&self) -> bool {

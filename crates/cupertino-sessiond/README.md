@@ -57,8 +57,8 @@ account has no private directory), no group.
 
 An administrator is a member of any of the administrators' groups. They are `admin-groups` of `login.conf` (group names
 separated by commas, spaces around them allowed; empty names nobody) when that file is root-owned and writable by root alone, the same rule as auto
-login; otherwise the build's: `CUPERTINO_ADMIN_GROUPS` at compile time (the packaging sets the distribution's, `sudo` for
-Debian and Ubuntu), else `wheel`. An untrusted file's `admin-groups` is logged and the build's groups apply. The bus checks ask
+login; otherwise the build's: `CUPERTINO_ADMIN_GROUPS` at compile time (the Arch packages leave it unset), else
+`wheel`. An untrusted file's `admin-groups` is logged and the build's groups apply. The bus checks ask
 the account's groups at every call (`getgrouplist`, so a primary group and a directory service's groups count); the login
 screen's administrator list and the power dialog read the members `/etc/group` lists, so an account whose primary group is
 an administrators' group, and is not listed there, is not found by them.
@@ -271,7 +271,7 @@ target gnome-keyring.
 | Lock at logout | the session command `cupertino-session` (below) |
 | The prompt for a locked keyring | gcr's system prompter (`org.gnome.keyring.SystemPrompter`, a GTK window started on demand). It is not a Cupertino surface |
 | Sandboxed applications | xdg-desktop-portal's Secret portal, routed to gnome-keyring in `cupertino-portals.conf` |
-| Packages | Arch (`cupertino`, `cupertino-git`) depends on `gnome-keyring` and `libsecret` (`secret-tool`); the live image lists both. The deb recommends `gnome-keyring`, `libpam-gnome-keyring`, `libsecret-tools`; the rpm recommends `gnome-keyring`, `gnome-keyring-pam`, `libsecret`. The `-` before each PAM line skips it silently when the module is not installed |
+| Packages | Arch (`cupertino`, `cupertino-git`) depends on `gnome-keyring` and `libsecret` (`secret-tool`); the live image lists both. The `-` before each PAM line skips it silently when the module is not installed |
 
 | Case | What happens |
 |---|---|

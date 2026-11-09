@@ -3,7 +3,8 @@
 //! Coordinates are relative to the top-left corner of the decorated frame: the titlebar occupies
 //! `y ∈ [0, titlebar_height)` and the client content sits below it. The frame is
 //! `content.width × (reserved + content.height)`, where `reserved` is the titlebar height of a
-//! standard bar and zero for a unified one, whose strip lies over the content.
+//! standard bar and zero for a unified one, whose strip lies over the content. `unobscured` is the part of the content
+//! no chrome covers (the content below a unified strip), where the client's layout starts ([`crate::chrome`]).
 
 use crate::metrics::{ButtonKind, DecorationMetrics, TitleAlignment, TitlebarStyle};
 use cupertino_geometry::{Point, Rect, Size};
@@ -23,6 +24,8 @@ pub struct FrameLayout {
     pub frame: Rect,
     pub titlebar: Rect,
     pub content: Rect,
+    /// The part of `content` the title bar or the client's toolbar row does not cover.
+    pub unobscured: Rect,
     pub buttons: [ButtonLayout; 3],
     /// Bounding box of the three art boxes: the area whose hover reveals the glyphs of all buttons.
     pub button_group: Rect,
@@ -42,11 +45,21 @@ impl FrameLayout {
         let frame = Rect::new(0.0, 0.0, content.width, reserved + content.height);
         let titlebar = Rect::new(0.0, 0.0, content.width, tb);
         let content_rect = Rect::new(0.0, reserved, content.width, content.height);
+        let covered = (tb - reserved).clamp(0.0, content.height);
+        let unobscured = Rect::new(
+            0.0,
+            reserved + covered,
+            content.width,
+            content.height - covered,
+        );
         // the frame view centres the 16 pt cell in the bar; the disc is centred in its cell
         let cy = tb / 2.0;
         let first = metrics.button_leading(style) + metrics.button_cell.0 / 2.0;
+        let rtl = metrics.direction == crate::chrome::Direction::RightToLeft;
         let buttons = ButtonKind::ALL.map(|kind| {
             let cx = first + kind.index() as f64 * metrics.button_pitch();
+            // right to left: the same distance from the right edge, close outermost
+            let cx = if rtl { content.width - cx } else { cx };
             let a = metrics.button_art;
             ButtonLayout {
                 kind,
@@ -61,6 +74,7 @@ impl FrameLayout {
             frame,
             titlebar,
             content: content_rect,
+            unobscured,
             buttons,
             button_group: group,
             corner_radius,
@@ -90,6 +104,16 @@ impl FrameLayout {
     /// Right edge of the button group.
     pub fn group_right(&self) -> f64 {
         self.button_group.max_x()
+    }
+
+    /// How far the button group reaches in from the edge it sits at: its right edge left to right, the frame's width
+    /// less its left edge right to left. A centred title keeps this far from both edges.
+    pub fn group_reach(&self) -> f64 {
+        if self.button_group.min_x() > self.frame.width() / 2.0 {
+            self.frame.width() - self.button_group.min_x()
+        } else {
+            self.button_group.max_x()
+        }
     }
 }
 
@@ -163,7 +187,7 @@ mod tests {
         }
         assert_eq!(
             layout(TitlebarStyle::UnifiedCompact).titlebar.height(),
-            38.0
+            40.0
         );
         assert_eq!(layout(TitlebarStyle::Sidebar).titlebar.height(), 52.0);
     }
@@ -198,9 +222,63 @@ mod tests {
         ];
         for (style, c) in centres {
             let l = layout(style);
-            assert_eq!(l.buttons[0].center, Point::new(c, c), "{style:?}");
+            let cy = l.titlebar.height() / 2.0;
+            assert_eq!(l.buttons[0].center, Point::new(c, cy), "{style:?}");
             assert_eq!(l.buttons[2].center.x, c + 46.0, "{style:?}");
         }
+    }
+
+    #[test]
+    fn the_buttons_lie_where_the_chrome_model_puts_them() {
+        use crate::chrome::{Capabilities, ChromeLayout, ChromeStyle, Direction};
+        for direction in [Direction::LeftToRight, Direction::RightToLeft] {
+            let m = DecorationMetrics {
+                direction,
+                ..DecorationMetrics::default()
+            };
+            for style in TitlebarStyle::ALL {
+                let l = FrameLayout::new(Size::new(800.0, 600.0), style, &m, 16.0);
+                let chrome = ChromeLayout::new(
+                    Size::new(800.0, 600.0),
+                    ChromeStyle::of_titlebar(style),
+                    Capabilities::ALL,
+                    direction,
+                    &[],
+                );
+                for (b, c) in l.buttons.iter().zip(&chrome.buttons) {
+                    assert_eq!(b.kind, c.kind);
+                    assert_eq!(
+                        b.center,
+                        c.bounds.center(),
+                        "{style:?} {direction:?} {:?}",
+                        b.kind
+                    );
+                    assert_eq!(2.0 * b.radius, c.bounds.width());
+                }
+                assert_eq!(l.frame, chrome.frame, "{style:?}");
+                assert_eq!(l.unobscured, chrome.unobscured, "{style:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_unobscured_content_starts_below_the_strip_the_client_draws() {
+        assert_eq!(
+            layout(TitlebarStyle::Standard).unobscured,
+            Rect::new(0.0, 32.0, 800.0, 600.0)
+        );
+        assert_eq!(
+            layout(TitlebarStyle::Unified).unobscured,
+            Rect::new(0.0, 52.0, 800.0, 548.0)
+        );
+        assert_eq!(
+            layout(TitlebarStyle::UnifiedCompact).unobscured,
+            Rect::new(0.0, 40.0, 800.0, 560.0)
+        );
+        assert_eq!(
+            layout(TitlebarStyle::Sidebar).unobscured,
+            Rect::new(0.0, 52.0, 800.0, 548.0)
+        );
     }
 
     #[test]

@@ -251,6 +251,50 @@ pub struct Monitor {
     pub refresh_mhz: Option<u32>,
     /// Device pixels per logical point.
     pub scale: f64,
+    /// The connector name (`eDP-1`), which output configurations name the display by; `None` when the server gave
+    /// none.
+    pub connector: Option<String>,
+    /// The size of the picture in millimetres, `None` when unknown.
+    pub physical_mm: Option<(u32, u32)>,
+    /// The size the desktop has on it, in points (turned with the display); `None` when the server gave none.
+    pub logical: Option<(u32, u32)>,
+    /// Turned by 90 or 270 degrees.
+    pub rotated: bool,
+}
+
+impl Monitor {
+    /// The display's "looks like" choices at its current mode; empty when its physical size is unknown, so its
+    /// density is.
+    pub fn catalogue(&self) -> cupertino_displays::Catalogue {
+        let built_in = self
+            .connector
+            .as_deref()
+            .is_some_and(cupertino_displays::is_built_in);
+        self.physical_mm
+            .and_then(|mm| cupertino_displays::Panel::from_physical(self.mode, mm, self.rotated))
+            .map(|panel| {
+                cupertino_displays::catalogue(
+                    &panel.built_in(built_in),
+                    self.refresh_mhz.unwrap_or(0),
+                )
+            })
+            .unwrap_or(cupertino_displays::Catalogue {
+                choices: Vec::new(),
+                default: None,
+            })
+    }
+
+    /// The points the desktop has on this display at `choice`, turned with the display like `logical`: a choice is
+    /// sized on the mode as the display scans it out, so a display turned by 90 or 270 degrees shows it with its sides
+    /// swapped.
+    pub fn choice_logical(&self, choice: &cupertino_displays::Candidate) -> (u32, u32) {
+        let (w, h) = (choice.mode.width, choice.mode.height);
+        if self.rotated {
+            (h, w)
+        } else {
+            (w, h)
+        }
+    }
 }
 
 /// Every live reading.

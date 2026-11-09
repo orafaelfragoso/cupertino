@@ -83,9 +83,9 @@ environment at startup, so no program it starts inherits it, and raises its own 
 
 The window is in the full-height-sidebar style (Kit's `SidebarWindow`, `DecorationMode::Sidebar`): the sidebar of places
 from the window's top edge to its bottom edge, the window control buttons in its top, then a navigation stack whose
-floating toolbar holds the back / forward group, the folder's name (Kit's `ToolbarTitle`, cut with an ellipsis), the
+floating toolbar holds the back / forward group, the folder's name (Kit's `ToolbarTitle`, cut with an ellipsis; in the column view the folder selected in the last column, as the window's title is), the
 view-mode choice (icons, list and columns, and gallery disabled), the View menu button, the group of share (disabled),
-Tags and Action (each opens below its button: the view modes, the tags popover of the selection (below), else a menu of
+Tags (its own drawn tag, as a host symbol theme may have none) and Action (each opens below its button: the view modes, the tags popover of the selection (below), else a menu of
 the tags unavailable, the selection's context menu or the folder's) and the search field, which rests as a round button, over the folder in the icon view (`kit::grid`, laid out by `layout::icon` from a 10 pt leading and 8 pt
 top inset; a name is centred and wraps to two lines, a longer one keeping its first line and cut in the middle of the
 rest with an ellipsis, so its end and extension stay) or the list view (`kit::list`: the toolkit's outline table, Name, Date Modified,
@@ -186,7 +186,7 @@ pass a fixture pack and a temporary cache.
 The sidebar lists the design's default Favorites, headed by the home folder (a house and the user's name), then
 Applications, Desktop, Documents and Downloads (the nearby-sharing item has no counterpart), those that exist; the
 computer (the file system root, under the pretty host name of `/etc/machine-info`, else the host name), removable media
-and Trash under Locations; and under a Tags heading, once a listed item carries a tag, each tag in use (above). Names are cut at the tail. The sidebar
+and Trash under Locations; and under a Tags heading, always there, each tag a listed item carries (above). Names are cut at the tail. The sidebar
 takes the toolkit's neutral look for lists of places (`SidebarLook::Neutral`): the selected row in a neutral tint with
 its label semibold, the Favorites' symbols in the accent colour and the others' in the secondary label colour; in a
 window that is not the one in use every symbol, the selected one too, is the secondary label colour, while an open

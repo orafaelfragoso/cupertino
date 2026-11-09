@@ -25,6 +25,7 @@
 //! approximate and configurable.
 
 pub mod buttons;
+pub mod chrome;
 pub mod edge;
 pub mod field;
 pub use cupertino_glyph as glyph;
@@ -39,13 +40,17 @@ pub mod shape;
 pub mod text;
 
 pub use buttons::{ButtonState, ButtonVisual};
+pub use chrome::{
+    button_presence, Accessory, AccessoryEdge, ButtonPlacement, Capabilities, ChromeLayout,
+    ChromeStyle, Direction, FrameKind, Presence, TitleArrangement, ToolbarStyle,
+};
 pub use edge::{Edge, EdgeKind, Hairline, OutlineFalloff};
 pub use hit::{resize_hit, Hit, ResizeEdge};
 pub use layout::{ButtonLayout, FrameLayout};
 pub use metrics::{
     ButtonKind, DecorationMetrics, DoubleClickAction, TitleAlignment, TitlebarStyle,
-    COMPACT_TOOLBAR_ROW_HEIGHT, TITLED_BAR_HEIGHT, TOOLBAR_ROW_HEIGHT, WINDOW_BUTTON_DIAMETER,
-    WINDOW_BUTTON_PITCH, WINDOW_CORNER_RADIUS,
+    COMPACT_BUTTON_LEADING, COMPACT_TOOLBAR_ROW_HEIGHT, TITLED_BAR_HEIGHT, TOOLBAR_ROW_HEIGHT,
+    WINDOW_BUTTON_DIAMETER, WINDOW_BUTTON_PITCH, WINDOW_CORNER_RADIUS,
 };
 pub use palette::Palette;
 pub use render::{DecorationConfig, DecorationState, Decorations};

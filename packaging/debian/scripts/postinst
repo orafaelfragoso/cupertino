@@ -1,9 +1,0 @@
-#!/bin/sh
-# Creates the login-screen account and reloads unit files. Enables, starts and restarts nothing.
-set -e
-if [ "$1" = configure ]; then
-    systemd-sysusers cupertino-greeter.conf
-    if [ -d /run/systemd/system ]; then
-        systemctl daemon-reload
-    fi
-fi

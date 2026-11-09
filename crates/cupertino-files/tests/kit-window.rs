@@ -407,6 +407,7 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
             "      Group \"Favorites\"",
             "        ListItem \"Documents\" focusable selected",
             "        ListItem \"Downloads\"",
+            "      Group \"Tags\"",
             "  Toolbar",
             "    Button \"Back\" disabled",
             "    Button \"Forward\" disabled",

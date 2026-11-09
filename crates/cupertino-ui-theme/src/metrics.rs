@@ -1,23 +1,13 @@
-//! The Cupertino theme's regular control geometry, type roles, focus ring and caret timing. Control heights and the
-//! switch size come from `cupertino_theme`'s control metrics table (not from the theme data), body and caption sizes
+//! The Cupertino theme's regular control geometry, type roles, focus ring and caret timing. Control geometry comes
+//! from `cupertino_theme`'s control size table (not from the theme data), body and caption sizes
 //! from the theme's type scale; every other value is a design value of its own (approximate).
 
 use crate::{
     ColorTokens, ControlMetrics, ControlSize, FocusRing, Motion, Size, ThemePreferences,
     ThemeTokens, TypeRole, TypeScale,
 };
-use cupertino_theme::metrics::{alignment_height, control_metric, Control};
 use cupertino_theme::{Result, Theme};
 
-/// Horizontal space between a button's chrome and its label.
-const BUTTON_INSET: f64 = 10.0;
-const BUTTON_RADIUS: f64 = 5.0;
-/// Horizontal space between a text field's chrome and its text.
-const FIELD_INSET: f64 = 6.0;
-const FIELD_RADIUS: f64 = 5.0;
-const SWITCH_THUMB: f64 = 18.0;
-/// Space between the switch thumb and the edge of its track.
-const SWITCH_THUMB_INSET: f64 = 2.0;
 /// The smallest pointer and touch target, reached with layout padding.
 const MIN_TARGET: f64 = 24.0;
 const REGULAR: u16 = 400;
@@ -32,6 +22,28 @@ const CARET_PHASE_MS: u32 = 500;
 /// Body and caption sizes without theme data: the theme data's regular and small sizes.
 const NEUTRAL_BODY_SIZE: f64 = 13.0;
 const NEUTRAL_CAPTION_SIZE: f64 = 11.0;
+
+impl ControlMetrics {
+    /// The regular size with the normal metrics: buttons, fields and the switch from the control size table.
+    pub fn regular() -> Self {
+        let unset = Size::new(0.0, 0.0);
+        ControlMetrics {
+            size: ControlSize::Regular,
+            compact: false,
+            button_height: 0.0,
+            button_inset: 0.0,
+            button_radius: 0.0,
+            field_height: 0.0,
+            field_inset: 0.0,
+            field_radius: 0.0,
+            switch: unset,
+            switch_thumb: 0.0,
+            switch_thumb_inset: 0.0,
+            min_target: Size::new(MIN_TARGET, MIN_TARGET),
+        }
+        .at_size(ControlSize::Regular, false)
+    }
+}
 
 impl ThemeTokens {
     /// The Cupertino theme for `preferences`: colours from [`ColorTokens::cupertino`], or the opaque
@@ -73,14 +85,6 @@ impl ThemeTokens {
         body: f64,
         caption: f64,
     ) -> Result<Self> {
-        let regular = |control| {
-            alignment_height(control, ControlSize::Regular).ok_or_else(|| {
-                cupertino_theme::Error::NotFound(format!("regular height of {control:?}"))
-            })
-        };
-        let switch_width = control_metric(Control::Switch)
-            .fixed_width(ControlSize::Regular)
-            .ok_or_else(|| cupertino_theme::Error::NotFound("regular width of Switch".into()))?;
         let role = |size: f64, weight| TypeRole {
             size: size as f32,
             weight,
@@ -88,19 +92,7 @@ impl ThemeTokens {
         Ok(ThemeTokens {
             preferences,
             colors,
-            metrics: ControlMetrics {
-                size: ControlSize::Regular,
-                button_height: regular(Control::PushButton)?,
-                button_inset: BUTTON_INSET,
-                button_radius: BUTTON_RADIUS,
-                field_height: regular(Control::TextField)?,
-                field_inset: FIELD_INSET,
-                field_radius: FIELD_RADIUS,
-                switch: Size::new(switch_width, regular(Control::Switch)?),
-                switch_thumb: SWITCH_THUMB,
-                switch_thumb_inset: SWITCH_THUMB_INSET,
-                min_target: Size::new(MIN_TARGET, MIN_TARGET),
-            },
+            metrics: ControlMetrics::regular(),
             type_scale: TypeScale {
                 family,
                 body: role(body, REGULAR),
@@ -141,26 +133,14 @@ mod tests {
     }
 
     #[test]
-    fn heights_and_the_switch_come_from_the_theme_metrics_and_the_rest_from_the_spec() {
+    fn the_metrics_are_the_regular_size_of_the_control_size_table() {
         let theme = Theme::load().unwrap();
         let tokens = ThemeTokens::cupertino(&theme, preferences(Appearance::Light)).unwrap();
-        let regular = |control| alignment_height(control, ControlSize::Regular).unwrap();
         let m = tokens.metrics;
-        assert_eq!(m.size, ControlSize::Regular);
-        assert_eq!(m.button_height, regular(Control::PushButton));
-        assert_eq!(m.field_height, regular(Control::TextField));
-        assert_eq!(
-            m.switch,
-            Size::new(
-                control_metric(Control::Switch)
-                    .fixed_width(ControlSize::Regular)
-                    .unwrap(),
-                regular(Control::Switch)
-            )
-        );
+        assert_eq!((m.size, m.compact), (ControlSize::Regular, false));
         assert_eq!(
             (m.button_height, m.field_height, m.switch),
-            (20.0, 20.0, Size::new(38.0, 22.0))
+            (24.0, 24.0, Size::new(54.0, 24.0))
         );
         assert_eq!(
             (
@@ -169,9 +149,9 @@ mod tests {
                 m.field_inset,
                 m.field_radius
             ),
-            (10.0, 5.0, 6.0, 5.0)
+            (13.5, 6.0, 6.0, 6.0)
         );
-        assert_eq!((m.switch_thumb, m.switch_thumb_inset), (18.0, 2.0));
+        assert_eq!((m.switch_thumb, m.switch_thumb_inset), (20.0, 2.0));
         assert_eq!(m.min_target, Size::new(24.0, 24.0));
         assert_eq!(
             tokens.focus,
@@ -182,6 +162,22 @@ mod tests {
             }
         );
         assert_eq!(tokens.motion.caret_phase_ms, 500);
+    }
+
+    #[test]
+    fn other_sizes_follow_the_table_and_keep_the_minimum_target() {
+        let regular = ControlMetrics::regular();
+        let mini = regular.at_size(ControlSize::Mini, true);
+        assert_eq!((mini.button_height, mini.button_radius), (13.0, 4.0));
+        assert_eq!(mini.switch, Size::new(38.0, 20.0));
+        assert_eq!(mini.min_target, regular.min_target);
+        let large = regular.at_size(ControlSize::ExtraLarge, false);
+        assert_eq!((large.button_height, large.button_radius), (36.0, 18.0));
+        assert_eq!(
+            large.geometry(crate::ControlFamily::Stepper).width,
+            Some(30.0)
+        );
+        assert_eq!(regular.at_size(ControlSize::Regular, false), regular);
     }
 
     #[test]
@@ -382,6 +378,10 @@ mod tests {
                 assert_eq!(
                     look(appearance, reduced, Surface::WindowBackground).material,
                     Some("WindowBackground")
+                );
+                assert_eq!(
+                    look(appearance, reduced, Surface::TextBackground).material,
+                    Some("TextBackground")
                 );
             }
         }

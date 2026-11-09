@@ -316,12 +316,22 @@ pub const RUNNING_INDICATOR_LIFT: f32 = 0.49;
 /// Name of the window background material, a code recipe (see [`window_background`]).
 pub const WINDOW_BACKGROUND_MATERIAL: &str = "WindowBackground";
 
+/// Name of the text background material: the colour behind a form's groups and other text areas, drawn by the
+/// compositor as the window background is (see [`opaque_background`]).
+pub const TEXT_BACKGROUND_MATERIAL: &str = "TextBackground";
+
 /// A window's own background drawn by the compositor: the opaque colour `color` and nothing of what lies behind, so
 /// glass over it in the same window reads the window's background rather than the desktop.
 pub fn window_background(color: Color) -> Recipe {
+    opaque_background(WINDOW_BACKGROUND_MATERIAL, color)
+}
+
+/// An opaque background of the window drawn by the compositor under the material `name`: the colour `color` and
+/// nothing of what lies behind.
+pub fn opaque_background(name: &str, color: Color) -> Recipe {
     Recipe {
-        name: WINDOW_BACKGROUND_MATERIAL.into(),
-        material: WINDOW_BACKGROUND_MATERIAL.into(),
+        name: name.into(),
+        material: name.into(),
         fills: vec![Fill {
             rgba: [color.r, color.g, color.b, 1.0],
             blend: Blend::Copy,

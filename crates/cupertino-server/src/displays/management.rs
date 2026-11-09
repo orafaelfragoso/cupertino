@@ -455,7 +455,9 @@ impl Dispatch<ZwlrOutputConfigurationV1, ConfigurationData> for Cupertino {
                 s.mode = p.mode.unwrap_or(s.mode);
                 s.position = p.position.unwrap_or(s.position);
                 s.transform = p.transform.unwrap_or(s.transform);
-                s.scale = p.scale.unwrap_or(s.scale);
+                if let Some(scale) = p.scale {
+                    s.scale = super::exact_choice_scale(head, s.mode, scale);
+                }
             }
             wanted.push((*id, s));
         }

@@ -3,6 +3,8 @@ name: CI
 # Pull requests and main run policy checks plus the gates and crates affected by the change.
 # Main is the trusted cache writer; newer pushes cancel obsolete integration runs.
 # Reusable full validation also checks default features, Weston, goldens and the package environment.
+# Arch is the only target: every job that builds, tests or lints the code runs in an Arch container (see `gate` for the
+# setup every such job repeats); the Ubuntu runner is only the VM that hosts the container.
 on:
   pull_request:
   push:
@@ -64,22 +66,42 @@ jobs:
           echo "Selected gates: $checks" >> "$GITHUB_STEP_SUMMARY"
 
   # Source policy: no provenance text, no vendor names, no forbidden or binary files except the pinned built-in font.
+  #
+  # The setup of every Arch container job: the image is pinned by digest (archlinux:base-devel-20261101.0.620205) and
+  # pacman brings it up to date; ci/arch-ci.sh installs the job's packages and makes the unprivileged user `ci`, which
+  # runs every `run` step (the job's default shell) except the setup steps, which say `shell: bash` and run as root.
+  # Actions run as root, so the user is given back what a cache restore wrote. git comes first: without it,
+  # actions/checkout downloads an archive instead of a repository.
   gate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: &arch-image docker.io/library/archlinux:base-devel@sha256:2de80105abb49f813a85393c6758a4334deb6bcec4a2411bd2f059c0bee6ee4c
+    defaults: &as-ci
+      run:
+        shell: runuser -u ci -- bash --noprofile --norc -eo pipefail {0}
     steps:
+      - &arch-bootstrap
+        name: Pacman keyring and git
+        shell: bash
+        run: pacman -Sy --noconfirm --needed archlinux-keyring && pacman -Su --noconfirm --needed git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: System packages and the build user
+        shell: bash
+        run: ci/arch-ci.sh install gate && ci/arch-ci.sh user
       - run: python3 -I ci/test_gate.py
       - run: python3 -I ci/test_replace.py
       - run: python3 -I ci/test_soak.py
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
-        with:
-          toolchain: 1.99.1
+      - run: python3 -I ci/test_arch_ci.py
+      - &rust-toolchain
+        name: Rust 1.99.1
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          echo RUSTUP_TOOLCHAIN=1.99.1 >> "$GITHUB_ENV"
       # check-metadata and test_release read the dependency graph with cargo metadata --offline.
       - run: cargo fetch --locked
       - run: python3 -I packaging/test_release.py
       # the session command's logout lock runs against the real keyring daemon too
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends dbus gnome-keyring
       - run: python3 -I packaging/test_session.py
         env:
           CUPERTINO_KEYRING_REQUIRED: "1"
@@ -101,8 +123,11 @@ jobs:
   docs:
     needs: selection
     if: fromJSON(needs.selection.outputs.checks).docs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # The tools are prebuilt release binaries; the job needs nothing beyond the base image, and runs as root.
+    container:
+      image: *arch-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: mdBook and link checker
@@ -156,19 +181,28 @@ jobs:
   layers:
     needs: selection
     if: fromJSON(needs.selection.outputs.checks).layers
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: *arch-image
+    defaults: *as-ci
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
+      - *arch-bootstrap
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
-        with:
-          toolchain: 1.99.1
+      - name: System packages and the build user
+        shell: bash
+        run: ci/arch-ci.sh install build && ci/arch-ci.sh user
+      - *rust-toolchain
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: layers-ubuntu-26.04
+          shared-key: layers-arch
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - &own-restored
+        name: Give the build user the restored cache
+        shell: bash
+        run: ci/arch-ci.sh user
       - run: cargo fetch --locked
       - run: cargo run --locked -p cupertino-layers
 
@@ -177,34 +211,43 @@ jobs:
     needs: selection
     if: needs.selection.outputs.packages != '[]'
     name: Clippy
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
+    container: &arch-with-room
+      image: *arch-image
+      # The runner VM's Android SDK, .NET, Haskell and CodeQL are never used here and take about 30 GB of its 72 GB
+      # disk; the build and its cache need the room. They are mounted so that the job can remove them from inside.
+      volumes:
+        - /usr/local/lib/android:/host/android
+        - /usr/share/dotnet:/host/dotnet
+        - /opt/ghc:/host/ghc
+        - /opt/hostedtoolcache/CodeQL:/host/codeql
+    defaults: *as-ci
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CUPERTINO_CI_PACKAGES: ${{ needs.selection.outputs.packages }}
     steps:
+      - &free-disk
+        name: Free disk space
+        shell: bash
+        run: |
+          df -h "$GITHUB_WORKSPACE"
+          find /host -mindepth 2 -maxdepth 2 -exec rm -rf {} +
+          df -h "$GITHUB_WORKSPACE"
+      - *arch-bootstrap
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The image's Android SDK, .NET, Haskell and CodeQL are never used here and take about 30 GB of the 72 GB disk;
-      # the build and its cache need the room.
-      - name: Free disk space
+      - name: System packages and the build user
+        shell: bash
+        run: ci/arch-ci.sh install build && ci/arch-ci.sh user
+      - name: Rust 1.99.1 with Clippy
         run: |
-          df -h .
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h .
-      - name: System packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 xkb-data zstd \
-            clang libclang-dev libpipewire-0.3-dev pipewire
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
-        with:
-          toolchain: 1.99.1
-          components: clippy
+          rustup toolchain install 1.99.1 --profile minimal --component clippy
+          echo RUSTUP_TOOLCHAIN=1.99.1 >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: clippy-ubuntu-26.04
+          shared-key: clippy-arch
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - *own-restored
       - run: cargo fetch --locked
       - name: Clippy
         run: python3 -I ci/affected.py run clippy
@@ -221,7 +264,6 @@ jobs:
       # its default features and only the dependencies it names.
       - name: Default features, one package at a time
         if: inputs.full == true
-        shell: bash
         run: |
           packages=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
           [ -n "$packages" ] || { echo "::error::cargo metadata listed no packages"; exit 1; }
@@ -238,15 +280,17 @@ jobs:
   # the built-in assets alone. The second leg runs the tests as the Arch package's check() does: binaries compiled with
   # the installed theme directory, which does not exist here, and CUPERTINO_SPEC_DIR pointing at the checkout. A test
   # that starts a binary with a cleared environment and does not pass CUPERTINO_SPEC_DIR fails only there.
-  # Ubuntu 26.04, not 24.04: the tests need a dbus-daemon that gives the caller's ProcessFD (24.04's 1.14 does not, and
-  # the server and sessiond check a caller only through it) and a PipeWire on which a screencast stream follows a resize
-  # (24.04's 1.0 never streams the new size). Every distribution the packages target ships newer versions of both.
+  # The tests need a dbus-daemon that gives the caller's ProcessFD (1.15 and later; the server and sessiond check a caller
+  # only through it) and a PipeWire on which a screencast stream follows a resize (1.4 and later; 1.0 never streams the
+  # new size). Arch ships newer versions of both, and the package requires them (dbus>=1.16, pipewire>=1:1.4).
   tests:
     needs: selection
     if: needs.selection.outputs.packages != '[]'
     name: Tests${{ matrix.package-env && ' (package build environment)' || '' }}
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
+    container: *arch-with-room
+    defaults: *as-ci
     strategy:
       fail-fast: false
       matrix:
@@ -258,23 +302,13 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CUPERTINO_CI_PACKAGES: ${{ needs.selection.outputs.packages }}
     steps:
+      - *free-disk
+      - *arch-bootstrap
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The image's Android SDK, .NET, Haskell and CodeQL are never used here and take about 30 GB of the 72 GB disk;
-      # the build and its cache need the room.
-      - name: Free disk space
-        run: |
-          df -h .
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h .
-      - name: System packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 xkb-data zstd \
-            clang libclang-dev libpipewire-0.3-dev pipewire gnome-keyring libsecret-tools
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
-        with:
-          toolchain: 1.99.1
+      - name: System packages and the build user
+        shell: bash
+        run: ci/arch-ci.sh install test && ci/arch-ci.sh user
+      - *rust-toolchain
       - name: The package build environment
         if: matrix.package-env
         run: |
@@ -282,12 +316,13 @@ jobs:
           echo "CUPERTINO_SPEC_DIR=$GITHUB_WORKSPACE/data/theme" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: tests-ubuntu-26.04-package-env-${{ matrix.package-env }}
+          shared-key: tests-arch-package-env-${{ matrix.package-env }}
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - *own-restored
       - run: cargo fetch --locked
       # The keymap oracle's recordings are only valid for the xkeyboard-config releases they were made with
-      # (crates/cupertino-xkbcommon/tests/fixtures/xkb-data.txt), and the runner's distribution ships another. This is
-      # one of those releases' package (byte-identical data), verified against a pinned checksum.
+      # (crates/cupertino-xkbcommon/tests/fixtures/xkb-data.txt), and the container's rolling package can move past them.
+      # This is one of those releases' package (byte-identical data), verified against a pinned checksum.
       - name: xkeyboard-config 2.48 data
         run: |
           curl -sSfL -o xkeyboard-config.pkg.tar.zst \
@@ -297,7 +332,6 @@ jobs:
           tar --zstd -xf xkeyboard-config.pkg.tar.zst -C "$RUNNER_TEMP/xkb" usr/share/xkeyboard-config-2
           echo "XKB_CONFIG_ROOT=$RUNNER_TEMP/xkb/usr/share/xkeyboard-config-2" >> "$GITHUB_ENV"
       - name: Install Nextest 0.9.151
-        shell: bash
         run: &install-nextest |
           set -euo pipefail
           archive="$RUNNER_TEMP/cargo-nextest-0.9.151.tar.gz"
@@ -338,34 +372,34 @@ jobs:
   # protocol and no Cupertino protocol. These tests are ignored in the other jobs, which have no Weston.
   weston:
     if: inputs.full == true
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: *arch-image
+    defaults: *as-ci
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
+      - *arch-bootstrap
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: System packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 xkb-data zstd \
-            clang libclang-dev libpipewire-0.3-dev pipewire weston
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
-        with:
-          toolchain: 1.99.1
+      - name: System packages and the build user
+        shell: bash
+        run: ci/arch-ci.sh install weston && ci/arch-ci.sh user
+      - *rust-toolchain
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: weston-ubuntu-latest
+          shared-key: weston-arch
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - *own-restored
       - name: Install Nextest 0.9.151
-        shell: bash
         run: *install-nextest
       - name: simple-window on Weston
         run: python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked -p cupertino-wayland-client --run-ignored only --no-fail-fast
 
-  # The headless golden scenes. Their baselines are valid only on the renderer of ci/goldens/Dockerfile (an image pinned
-  # by digest, with Mesa from one Debian snapshot), so the job runs ci/goldens.sh, which fails on any other renderer. The
-  # tests job skips these tests (they are ignored there).
+  # The headless golden scenes. Their baselines are valid only on the renderer of ci/goldens/Dockerfile (an Arch image
+  # pinned by digest, with every package from one Arch Linux Archive date), so the job runs ci/goldens.sh, which fails on
+  # any other renderer. The tests job skips these tests (they are ignored there). It runs docker on the runner VM, so it
+  # is not a container job itself.
   goldens:
     if: inputs.full == true
     runs-on: ubuntu-latest

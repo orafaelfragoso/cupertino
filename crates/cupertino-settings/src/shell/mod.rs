@@ -1,5 +1,5 @@
 //! The Settings window on CupertinoKit: the full-height sidebar of panes with the search field at its top, beside the
-//! page under a floating back and forward toolbar; the page's header card and sections as Kit controls, its sheets as
+//! page under a floating back and forward toolbar with the page's title; a hub pane's header card and the sections as Kit controls, its sheets as
 //! dialogs and its menus on the desktop's menu bar. What the window shows and does lives in [`state`]; this module only
 //! shows it.
 
@@ -61,14 +61,14 @@ const OVERFLOW_SLACK: f64 = 0.5;
 
 /// Window metrics (§4.1).
 pub mod metrics {
-    /// The default content width before the scale factor and the height.
-    pub const DEFAULT_WIDTH: f64 = 715.0;
+    /// The default content width before the scale factor, and the height.
+    pub const DEFAULT_WIDTH: f64 = 739.0;
     pub const DEFAULT_HEIGHT: f64 = 625.0;
     /// Smallest window height: approximate (the standard panel's minimum content height, by analogy; O6).
     pub const MIN_HEIGHT: f64 = 400.0;
 }
 
-/// The default window size at interface width factor `f`: `(ceil(715 f), 625)`.
+/// The default window size at interface width factor `f`: `(ceil(739 f), 625)`.
 pub fn default_size(f: f64) -> Size {
     Size::new((metrics::DEFAULT_WIDTH * f).ceil(), metrics::DEFAULT_HEIGHT)
 }
@@ -519,16 +519,17 @@ impl Shell {
         .key("sidebar")
     }
 
-    /// A sub-page's title after the back and forward buttons; a pane's own page shows its title on its header card.
+    /// The page's title after the back and forward buttons, sharing the toolbar row; none for a pane whose page shows
+    /// its title on its header card ([`pages::has_header_card`]).
     fn toolbar(&self) -> Vec<Element<Message>> {
         let page = self.state.history.current();
-        match page.sub {
-            Some(sub) => vec![Element::new(ToolbarTitle {
-                text: sub.title().into(),
-            })
-            .key("title")],
-            None => Vec::new(),
+        if page.sub.is_none() && pages::has_header_card(page.pane) {
+            return Vec::new();
         }
+        vec![Element::new(ToolbarTitle {
+            text: page.title(self.state.live.has_battery()).into(),
+        })
+        .key("title")]
     }
 
     fn content(&self) -> Element<Message> {
@@ -536,7 +537,7 @@ impl Shell {
             let page = self.state.history.current();
             let sections = self.state.sections();
             let has_battery = self.state.live.has_battery();
-            let header = page.sub.is_none().then(|| {
+            let header = (page.sub.is_none() && pages::has_header_card(page.pane)).then(|| {
                 form::header(
                     page.pane,
                     page.pane.title(has_battery),
@@ -576,6 +577,7 @@ impl Shell {
             can_go_back: self.state.history.can_go_back(),
             can_go_forward: self.state.history.can_go_forward(),
             on_navigate: Some(Box::new(Message::Navigate)),
+            under_toolbar: false,
         });
         Element::from(FormBackground { content: stack })
     }
@@ -734,6 +736,140 @@ mod tests {
     const HOME: u32 = 0xff50;
     const END: u32 = 0xff57;
 
+    /// The back and forward buttons share one glass capsule over the page, as in the file manager: where the desktop
+    /// draws materials, the form's background is the compositor's too, below the capsule's glass, so no opaque fill of
+    /// the window covers the glass.
+    #[test]
+    fn back_and_forward_share_a_glass_capsule_over_the_compositors_form_background() {
+        use cupertino_kit::platform::WindowRequest;
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+        let capabilities = Capabilities {
+            app_effects: true,
+            ..Capabilities::default()
+        };
+        let (driver, window) = start_hosted(
+            dir.path(),
+            PaneId::Appearance,
+            services,
+            |_| {},
+            capabilities,
+        );
+        let regions = driver
+            .runtime()
+            .window_system()
+            .requests(window)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|request| match request {
+                WindowRequest::Materials(regions) => Some(regions.clone()),
+                _ => None,
+            })
+            .expect("the window asks for materials");
+        let form = regions
+            .iter()
+            .position(|r| r.material == "TextBackground")
+            .unwrap_or_else(|| panic!("the form's background: {regions:?}"));
+        let capsules: Vec<_> = regions
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.glass.is_some() && r.rect.height() == 36.0)
+            .collect();
+        assert_eq!(
+            capsules.len(),
+            1,
+            "one capsule for both buttons: {regions:?}"
+        );
+        let (glass, capsule) = capsules[0];
+        assert!(form < glass, "the glass lies over the form: {regions:?}");
+        assert_eq!(capsule.rect.width(), 73.0, "two 36.5 pt segments");
+        assert_eq!(
+            capsule.rect.center().y,
+            26.0,
+            "in the middle of the 52 pt row"
+        );
+        // both buttons lie in it
+        let snapshot = driver.runtime().snapshot(window).unwrap();
+        for name in ["Back", "Forward"] {
+            let button = snapshot
+                .accessibility
+                .iter()
+                .find(|(_, n)| n.role == Role::Button && n.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("the {name} button"))
+                .1
+                .bounds;
+            assert!(
+                capsule.rect.intersection(&button) == Some(button),
+                "{name} {button:?} in {:?}",
+                capsule.rect
+            );
+        }
+    }
+
+    /// A pane's title shares the toolbar row after the back and forward buttons, with no header card; a pane that
+    /// gathers sub-pages opens with its header card instead and no title in the toolbar.
+    #[test]
+    fn a_page_shows_its_title_in_the_toolbar_row_unless_it_has_a_header_card() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        for (pane, title, card) in [
+            (PaneId::Appearance, "Appearance", false),
+            (PaneId::DesktopDock, "Desktop & Dock", false),
+            (PaneId::Accessibility, "Accessibility", true),
+            (PaneId::Privacy, "Privacy & Security", true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+            let (driver, window) = start_state(dir.path(), pane, services, |_| {});
+            let snapshot = driver.runtime().snapshot(window).unwrap();
+            let bounds = |name: &str, role: Option<Role>| {
+                snapshot
+                    .accessibility
+                    .iter()
+                    .filter(|(_, n)| {
+                        n.name.as_deref() == Some(name) && role.is_none_or(|r| n.role == r)
+                    })
+                    .map(|(_, n)| n.bounds)
+                    .collect::<Vec<_>>()
+            };
+            let forward = bounds("Forward", Some(Role::Button))[0];
+            let titles = bounds(title, Some(Role::StaticText));
+            let in_row: Vec<_> = titles
+                .iter()
+                .filter(|b| {
+                    b.min_x() > forward.max_x() && (b.center().y - forward.center().y).abs() < 2.0
+                })
+                .collect();
+            // the card reads the title with the pane's description; nothing else does
+            let description: Vec<_> = snapshot
+                .accessibility
+                .iter()
+                .filter(|(_, n)| n.description.as_deref() == Some(pages::description(pane, None)))
+                .collect();
+            if card {
+                assert!(
+                    in_row.is_empty(),
+                    "{pane:?}: no title in the toolbar row: {titles:?}"
+                );
+                assert_eq!(description.len(), 1, "{pane:?}: its header card");
+            } else {
+                assert_eq!(
+                    in_row.len(),
+                    1,
+                    "{pane:?}: the title after the buttons: {titles:?}"
+                );
+                assert!(description.is_empty(), "{pane:?}: no header card");
+            }
+            // the first section's title starts at the page's inset below the row, as a card would
+            if pane == PaneId::DesktopDock {
+                let dock = bounds("Dock", Some(Role::StaticText))[0];
+                let top = cupertino_kit::controls::TOOLBAR_ROW + PAGE_INSET.top;
+                assert!((dock.min_y() - top).abs() < 1.0, "{dock:?}, not at {top}");
+            }
+        }
+    }
+
     #[test]
     fn the_default_size_follows_the_width_factor() {
         let sizes: Vec<(f64, f64)> = [1.0, 1.1, 1.3]
@@ -741,7 +877,7 @@ mod tests {
             .map(|f| default_size(*f))
             .map(|s| (s.width, s.height))
             .collect();
-        assert_eq!(sizes, [(715.0, 625.0), (787.0, 625.0), (930.0, 625.0)]);
+        assert_eq!(sizes, [(739.0, 625.0), (813.0, 625.0), (961.0, 625.0)]);
     }
 
     #[test]
@@ -854,6 +990,17 @@ mod tests {
         services: Services,
         prepare: impl FnOnce(&mut State),
     ) -> (TestDriver<SettingsApp>, WindowId) {
+        start_hosted(dir, pane, services, prepare, Capabilities::default())
+    }
+
+    /// [`start_state`] on a host with `capabilities`.
+    fn start_hosted(
+        dir: &Path,
+        pane: PaneId,
+        services: Services,
+        prepare: impl FnOnce(&mut State),
+        capabilities: Capabilities,
+    ) -> (TestDriver<SettingsApp>, WindowId) {
         let (wake, woken) = async_channel::bounded(1);
         let (notify, background) = background_channel(move || {
             let _ = wake.try_send(());
@@ -867,11 +1014,7 @@ mod tests {
             activation: String::new(),
         });
         let options = runtime_options();
-        let mut driver = TestDriver::new(
-            Capabilities::default(),
-            options,
-            ManualClock::new(Timestamp(0)),
-        );
+        let mut driver = TestDriver::new(capabilities, options, ManualClock::new(Timestamp(0)));
         driver.run_until_idle(budget()).unwrap();
         let window = driver.runtime().windows()[0].1;
         let active = WindowStates {

@@ -46,6 +46,10 @@ ends, the media tile and an open detail view with 32 pt corners, the display and
 join one glass container with an 8 pt blend, less than the 12 pt between them, so tiles at rest stay apart and a growing
 detail view blends where it passes them. The glass alpha follows the fade; the content fades as one layer. In a light
 session each tile lays black at 0.27 over its glass, so over a white page it reads as a mid-light grey under its white text.
+Over its glass each tile lays its own light: a soft white glow under its top edge fading out over 6 pt, and a fine rim
+0.75 pt wide, brightest along the top (white 0.42), faint down the sides (0.12) and at 0.6 of the top's along the bottom
+(0.30, 0.08 and 0.06 for the glow in a light session), so a tile reads as a raised piece of glass on any wallpaper. The
+solid tiles of Reduce Transparency and Increase Contrast draw none of it.
 With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners, 8 pt around the grid and
 the Edit Controls capsule, closing in to an open detail view as it opens. With Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of
 grey 0.341, with no glass. A

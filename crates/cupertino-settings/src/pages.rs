@@ -1,6 +1,7 @@
-//! The pages the window shows: each pane, and the pages some panes open from a navigation row. A pane's page starts
-//! with a header card (its tile, title and [`description`]); the sections a sub-page holds leave the pane's page,
-//! which shows a row for each sub-page where the first of them stood. The back and forward history holds pages.
+//! The pages the window shows: each pane, and the pages some panes open from a navigation row. The page of a pane
+//! that gathers sub-pages ([`has_header_card`]) starts with a header card (its tile, title and [`description`]); every
+//! other page shows its title in the toolbar row instead. The sections a sub-page holds leave the pane's page, which
+//! shows a row for each sub-page where the first of them stood. The back and forward history holds pages.
 
 use crate::pane::{Enclosure, PaneId};
 use crate::panes::Section;
@@ -115,6 +116,13 @@ pub fn symbols() -> Vec<&'static str> {
     SubPage::ALL.iter().map(|s| s.symbol()).collect()
 }
 
+/// Whether the pane's own page starts with a header card: the panes that gather sub-pages behind rows of their own
+/// (Accessibility, Privacy & Security). Their toolbar row shows no title; every other pane, and every sub-page, shows
+/// its title there, after the back and forward buttons, and has no card.
+pub fn has_header_card(pane: PaneId) -> bool {
+    matches!(pane, PaneId::Accessibility | PaneId::Privacy)
+}
+
 /// The pane's one-line description on its header card.
 pub fn description(pane: PaneId, has_battery: Option<bool>) -> &'static str {
     match pane {
@@ -133,7 +141,7 @@ pub fn description(pane: PaneId, has_battery: Option<bool>) -> &'static str {
         PaneId::DesktopDock => {
             "Set the Dock's size, position and behaviour, and what the screen corners do."
         }
-        PaneId::Displays => "Set the brightness and see the resolution of each display.",
+        PaneId::Displays => "Set the size and brightness of each display.",
         PaneId::Wallpaper => "Pick the picture behind your desktop, from ours or your own.",
         PaneId::Sound => "Choose where sound plays and how loud it is.",
         PaneId::Notifications => {

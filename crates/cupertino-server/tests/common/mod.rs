@@ -51,6 +51,7 @@ use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_ba
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 /// Memory order of an Argb8888 pixel is blue, green, red, alpha.
+pub mod absolute;
 pub mod desktop;
 pub mod overlays;
 pub mod shell;
@@ -139,6 +140,8 @@ struct LockStatus {
     relative: Vec<(f64, f64)>,
     /// The session lock's `locked` and the appearance observer's `session_lock` events, in order.
     lock_events: Vec<String>,
+    /// The bits of the appearance observer's `display_options` events, in order.
+    display_options: Vec<u32>,
     /// Whether each configure of the client's toplevel had the `activated` state, in order.
     activations: Vec<bool>,
 }
@@ -202,9 +205,15 @@ impl Dispatch<CupertinoAppearanceV1, ()> for ClientState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let cupertino_appearance_v1::Event::SessionLock { locked } = event {
-            let mut status = state.lock_status.lock().unwrap();
-            status.lock_events.push(format!("session_lock {locked}"));
+        let mut status = state.lock_status.lock().unwrap();
+        match event {
+            cupertino_appearance_v1::Event::SessionLock { locked } => {
+                status.lock_events.push(format!("session_lock {locked}"));
+            }
+            cupertino_appearance_v1::Event::DisplayOptions { options } => {
+                status.display_options.push(options.into());
+            }
+            _ => {}
         }
     }
 }
@@ -1119,6 +1128,11 @@ impl Client {
 
     pub fn locked(&self) -> bool {
         self.lock_status.lock().unwrap().locked
+    }
+
+    /// The bits of the appearance observer's `display_options` events the client got, in order.
+    pub fn display_options(&self) -> Vec<u32> {
+        self.lock_status.lock().unwrap().display_options.clone()
     }
 
     /// Button presses the client's pointer got (the lock surface has the pointer while the session is locked).

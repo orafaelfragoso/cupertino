@@ -7,7 +7,25 @@ use crate::tree::Tree;
 use crate::{Event, NodeId};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_layout::{ContainerKind, LayoutDirection};
+use cupertino_ui_platform::ScrollBars;
+use std::cell::Cell;
 use std::collections::HashMap;
+
+thread_local! {
+    static SESSION_SCROLL_BARS: Cell<Option<ScrollBars>> = const { Cell::new(None) };
+}
+
+/// How the session wants scroll views to show their bars, as the runtime on this thread last heard from its window
+/// system; `None` until it does, and with a window system that can't tell, when each view keeps its own style. A
+/// view built from the model reads it, and the runtime builds every window again when it changes.
+pub fn session_scroll_bars() -> Option<ScrollBars> {
+    SESSION_SCROLL_BARS.get()
+}
+
+/// Whether `bars` differs from what [`session_scroll_bars`] said before.
+pub(crate) fn set_session_scroll_bars(bars: Option<ScrollBars>) -> bool {
+    SESSION_SCROLL_BARS.replace(bars) != bars
+}
 
 /// A scroll container as laid out.
 struct Scroller {

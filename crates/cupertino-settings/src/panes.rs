@@ -5,7 +5,7 @@
 use cupertino_defaults::accessibility::{
     AccessibilitySettings, ColorFilter, DisplayOption, DisplayOptions, SYSTEM_KEYS,
 };
-use cupertino_defaults::compositor::MinimizeEffectName;
+use cupertino_defaults::compositor::{MinimizeEffectName, ScrollBarsName};
 use cupertino_defaults::dock::{ActionTarget, Position, Trigger};
 use cupertino_defaults::keyboard::{FnKey, ModifierProfile};
 use cupertino_defaults::menubar::{HourCycle, ShowDate};
@@ -34,6 +34,7 @@ pub enum ControlId {
     /// A read-only row of a live reading (battery, network devices): it changes nothing.
     Reading,
     Appearance,
+    ShowScrollBars,
     DockSize,
     Magnification,
     DockPosition,
@@ -61,6 +62,7 @@ pub enum ControlId {
     MouseAcceleration,
     MouseNatural,
     TrackpadSpeed,
+    TrackpadAcceleration,
     TrackpadNatural,
     ModifierProfile,
     CapsLockDelay,
@@ -80,6 +82,8 @@ pub enum ControlId {
     /// The session's screen reader on or off (`screen_reader`, which the server runs).
     ScreenReader,
     CursorSize,
+    CursorOutline,
+    CursorFill,
     ShakeToLocate,
     StickyKeys,
     StickyKeysShortcut,
@@ -96,6 +100,8 @@ pub enum ControlId {
     FocusFor(usize),
     Volume,
     Mute,
+    /// The size a display of `Live::displays` looks like, by index: one of its "looks like" choices.
+    DisplaySize(usize),
     /// The sound output, by index of `Live::outputs`.
     Output,
     Brightness,
@@ -201,6 +207,11 @@ pub enum Call {
     /// Make the PipeWire sink with this id the output applications play to.
     SetOutput(u32),
     SetBrightness(f64),
+    /// Set the display on `connector` to `scale` panel pixels per point (an output configuration of the server).
+    SetDisplayScale {
+        connector: String,
+        scale: f64,
+    },
     SetWirelessEnabled(bool),
     /// Join a network; `None`: ask for the passphrase first (a secured network that is not saved).
     Join {
@@ -254,6 +265,13 @@ const CORNERS: [(Trigger, &str, &str); 4] = [
         "Bottom Right",
         "corner_bottom_right",
     ),
+];
+
+/// When applications show their scroll bars.
+const SCROLL_BARS: [(&str, ScrollBarsName); 3] = [
+    ("Automatically", ScrollBarsName::Automatic),
+    ("When scrolling", ScrollBarsName::WhenScrolling),
+    ("Always", ScrollBarsName::Always),
 ];
 
 /// The minimize effects offered: Warp, Scale, Funnel (enum, `plain` is not offered).
@@ -725,6 +743,37 @@ fn header(text: &str) -> Option<String> {
     Some(text.to_string())
 }
 
+/// The colours the pointer's outline and fill pop-ups offer, opaque sRGB.
+pub const POINTER_COLORS: [(&str, [u8; 4]); 8] = [
+    ("White", [255, 255, 255, 255]),
+    ("Black", [0, 0, 0, 255]),
+    ("Red", [230, 40, 40, 255]),
+    ("Orange", [245, 140, 20, 255]),
+    ("Yellow", [250, 210, 20, 255]),
+    ("Green", [40, 180, 70, 255]),
+    ("Blue", [30, 110, 235, 255]),
+    ("Purple", [150, 70, 200, 255]),
+];
+/// The pointer's outline and fill when the file sets none: a white outline around a black fill.
+const POINTER_OUTLINE: [u8; 4] = [255, 255, 255, 255];
+const POINTER_FILL: [u8; 4] = [0, 0, 0, 255];
+
+/// A pointer colour pop-up showing `stored` (else `default`): the named colours, and a colour the file holds that is
+/// none of them as one more item, kept until the user picks another.
+fn pointer_color(stored: Option<[u8; 4]>, default: [u8; 4]) -> Control {
+    let color = stored.unwrap_or(default);
+    let mut choices: Vec<String> = POINTER_COLORS.iter().map(|(n, _)| n.to_string()).collect();
+    let selected = match POINTER_COLORS.iter().position(|(_, c)| *c == color) {
+        Some(i) => i,
+        None => {
+            let [r, g, b, a] = color;
+            choices.push(format!("#{r:02x}{g:02x}{b:02x}{a:02x}"));
+            POINTER_COLORS.len()
+        }
+    };
+    Control::Popup { choices, selected }
+}
+
 fn switch(on: bool) -> Control {
     Control::Switch { on }
 }
@@ -768,15 +817,27 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
     match pane {
         PaneId::Appearance => vec![Section {
             header: None,
-            rows: vec![row(
-                ControlId::Appearance,
-                "Appearance",
-                Control::Segmented {
-                    segments: vec!["Light", "Dark"],
-                    selected: usize::from(session.dark),
-                },
-                Backend::SetAppearance,
-            )],
+            rows: vec![
+                row(
+                    ControlId::Appearance,
+                    "Appearance",
+                    Control::Segmented {
+                        segments: vec!["Light", "Dark"],
+                        selected: usize::from(session.dark),
+                    },
+                    Backend::SetAppearance,
+                ),
+                // automatically: beside the content while a mouse is connected, else over it while it scrolls
+                row(
+                    ControlId::ShowScrollBars,
+                    "Show scroll bars",
+                    popup(
+                        SCROLL_BARS.iter().map(|(l, _)| *l),
+                        index_of(&SCROLL_BARS, settings.show_scroll_bars()),
+                    ),
+                    Backend::Key(File::Compositor, "show_scroll_bars"),
+                ),
+            ],
             footer: None,
         }],
         PaneId::DesktopDock => {
@@ -1050,6 +1111,12 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                         key("trackpad_speed"),
                     ),
                     row(
+                        ControlId::TrackpadAcceleration,
+                        "Pointer acceleration",
+                        switch(settings.trackpad_acceleration()),
+                        key("trackpad_acceleration"),
+                    ),
+                    row(
                         ControlId::TrackpadNatural,
                         "Natural scrolling",
                         switch(settings.natural_scrolling()),
@@ -1152,6 +1219,18 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                                 labels: ("Normal", "Large"),
                             },
                             pointer("cursor_size"),
+                        ),
+                        row(
+                            ControlId::CursorOutline,
+                            "Pointer outline color",
+                            pointer_color(settings.compositor.cursor_outline, POINTER_OUTLINE),
+                            pointer("cursor_outline"),
+                        ),
+                        row(
+                            ControlId::CursorFill,
+                            "Pointer fill color",
+                            pointer_color(settings.compositor.cursor_fill, POINTER_FILL),
+                            pointer("cursor_fill"),
                         ),
                         row(
                             ControlId::ShakeToLocate,
@@ -1395,9 +1474,11 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             let mut out: Vec<Section> = match &live.displays {
                 Reading::Ready(monitors) => monitors
                     .iter()
-                    .map(|m| Section {
+                    .enumerate()
+                    .map(|(i, m)| Section {
                         header: Some(m.title.clone()),
                         rows: [
+                            display_size_row(i, m),
                             Some(text("Resolution", about::mode_text(m.mode))),
                             m.refresh_mhz
                                 .map(|r| text("Refresh Rate", about::refresh_text(r))),
@@ -1437,6 +1518,63 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
         PaneId::Network => network_sections(&live.wifi),
         PaneId::Bluetooth => bluetooth_sections(&live.bluetooth),
     }
+}
+
+/// The label of a "looks like" choice of `monitor`: its size in points as the display shows it, with the default, the
+/// one with the biggest text and the one with the most room named.
+pub fn display_size_label(
+    monitor: &crate::live::Monitor,
+    list: &cupertino_displays::Catalogue,
+    index: usize,
+) -> String {
+    let size = about::mode_text(monitor.choice_logical(&list.choices[index]));
+    let note = if list.default == Some(index) {
+        Some("Default")
+    } else if index == 0 {
+        Some("Bigger")
+    } else if index + 1 == list.choices.len() {
+        Some("More Room")
+    } else {
+        None
+    };
+    match note {
+        Some(note) => format!("{size} ({note})"),
+        None => size,
+    }
+}
+
+/// The "looks like" choices of display `index` of `Live::displays`, from the biggest text to the most room, the one
+/// it shows selected. A size that is none of them (a scale set elsewhere) is an extra item at the end. `None` when the
+/// display has no choices (its physical size is unknown, or it is too small to scale).
+fn display_size_row(index: usize, monitor: &crate::live::Monitor) -> Option<Row> {
+    let list = monitor.catalogue();
+    if list.choices.is_empty() {
+        return None;
+    }
+    let mut choices: Vec<String> = (0..list.choices.len())
+        .map(|i| display_size_label(monitor, &list, i))
+        .collect();
+    let shown = monitor.logical.map(|logical| {
+        let at = list
+            .choices
+            .iter()
+            .position(|c| monitor.choice_logical(c) == logical);
+        (at, logical)
+    });
+    let selected = match shown {
+        Some((Some(i), _)) => i,
+        Some((None, logical)) => {
+            choices.push(about::mode_text(logical));
+            choices.len() - 1
+        }
+        None => list.default.unwrap_or(0),
+    };
+    Some(row(
+        ControlId::DisplaySize(index),
+        "Desktop Size",
+        Control::Popup { choices, selected },
+        Backend::Service("zwlr_output_manager_v1"),
+    ))
 }
 
 fn seconds(t: Timer) -> Option<u64> {
@@ -2186,6 +2324,10 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             settings.compositor.minimize_effect = Some(EFFECTS[index_of(value)].1);
             store(File::Compositor)
         }
+        ControlId::ShowScrollBars => {
+            settings.compositor.show_scroll_bars = Some(SCROLL_BARS[index_of(value)].1);
+            store(File::Compositor)
+        }
         ControlId::AutoHide => {
             settings.dock.autohide = Some(bool_of(value));
             store(File::Dock)
@@ -2260,6 +2402,10 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         }
         ControlId::TrackpadSpeed => {
             settings.compositor.trackpad_speed = Some(mapping::TRACKING_STOPS[index_of(value)]);
+            store(File::Compositor)
+        }
+        ControlId::TrackpadAcceleration => {
+            settings.compositor.trackpad_acceleration = Some(bool_of(value));
             store(File::Compositor)
         }
         ControlId::MouseAcceleration => {
@@ -2373,6 +2519,19 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             settings.compositor.shake_to_locate = Some(bool_of(value));
             store(File::Compositor)
         }
+        ControlId::CursorOutline | ControlId::CursorFill => {
+            // the extra item of a colour the file holds is already the value
+            let Some((_, color)) = POINTER_COLORS.get(index_of(value)) else {
+                return Vec::new();
+            };
+            let slot = if id == ControlId::CursorOutline {
+                &mut settings.compositor.cursor_outline
+            } else {
+                &mut settings.compositor.cursor_fill
+            };
+            *slot = Some(*color);
+            store(File::Compositor)
+        }
         ControlId::DisplaySleepBattery
         | ControlId::DisplaySleepAc
         | ControlId::RequirePassword
@@ -2469,6 +2628,29 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             None => Vec::new(),
         },
         ControlId::Brightness => vec![Effect::Service(Call::SetBrightness(fraction_of(value)))],
+        ControlId::DisplaySize(i) => {
+            let Some(monitor) = live.displays.ready().and_then(|d| d.get(i)) else {
+                return Vec::new();
+            };
+            let list = monitor.catalogue();
+            let Some(choice) = list.choices.get(index_of(value)) else {
+                // the extra item of a size that is none of the choices: choosing it again keeps it
+                return Vec::new();
+            };
+            if monitor.logical == Some(monitor.choice_logical(choice)) {
+                return Vec::new();
+            }
+            match &monitor.connector {
+                Some(connector) => vec![Effect::Service(Call::SetDisplayScale {
+                    connector: connector.clone(),
+                    scale: choice.scale,
+                })],
+                None => vec![Effect::Refuse(
+                    "This display does not say which it is, so its size can't be changed."
+                        .to_string(),
+                )],
+            }
+        }
         ControlId::WifiPower => vec![Effect::Service(Call::SetWirelessEnabled(bool_of(value)))],
         ControlId::WifiNetwork(i) => match live.wifi.ready().and_then(|w| w.networks.get(i)) {
             Some(n) if n.connected => vec![Effect::Service(Call::Disconnect)],
@@ -2653,6 +2835,10 @@ mod tests {
                 mode: (2560, 1440),
                 refresh_mhz: Some(59_951),
                 scale: 1.25,
+                connector: Some("DP-1".into()),
+                physical_mm: None,
+                logical: Some((2048, 1152)),
+                rotated: false,
             }]),
             brightness: Reading::Unavailable("This display has no brightness control".into()),
             ..Live::default()
@@ -2696,6 +2882,226 @@ mod tests {
                 Some("Brightness".to_string()),
                 vec![("Brightness".to_string(), Control::Level { value: 0.5 })]
             )
+        );
+    }
+
+    fn built_in_panel(logical: (u32, u32)) -> crate::live::Monitor {
+        crate::live::Monitor {
+            title: "Built-in Display".into(),
+            mode: (3024, 1964),
+            refresh_mhz: Some(120_000),
+            scale: 3024.0 / f64::from(logical.0),
+            connector: Some("eDP-1".into()),
+            physical_mm: Some((302, 196)),
+            logical: Some(logical),
+            rotated: false,
+        }
+    }
+
+    fn displays(monitors: Vec<crate::live::Monitor>) -> Live {
+        Live {
+            displays: crate::live::Reading::Ready(monitors),
+            ..Live::default()
+        }
+    }
+
+    fn size_row(live: &Live) -> Option<Row> {
+        sections(PaneId::Displays, &unset(), LIGHT, live)
+            .into_iter()
+            .flat_map(|s| s.rows)
+            .find(|r| matches!(r.id, ControlId::DisplaySize(_)))
+    }
+
+    #[test]
+    fn a_built_in_panel_offers_its_sizes_from_bigger_text_to_more_room() {
+        let row = size_row(&displays(vec![built_in_panel((1512, 982))])).expect("the size row");
+        assert_eq!(row.label, "Desktop Size");
+        let nb = '\u{202f}';
+        assert_eq!(
+            row.control,
+            Control::Popup {
+                choices: vec![
+                    format!("1024{nb}×{nb}665 (Bigger)"),
+                    format!("1147{nb}×{nb}745"),
+                    format!("1352{nb}×{nb}878"),
+                    format!("1512{nb}×{nb}982 (Default)"),
+                    format!("1800{nb}×{nb}1169 (More Room)"),
+                ],
+                selected: 3,
+            }
+        );
+        let larger = size_row(&displays(vec![built_in_panel((1147, 745))])).unwrap();
+        assert!(matches!(larger.control, Control::Popup { selected: 1, .. }));
+        // the size row comes first, the readings after it
+        let rows: Vec<String> = sections(
+            PaneId::Displays,
+            &unset(),
+            LIGHT,
+            &displays(vec![built_in_panel((1512, 982))]),
+        )
+        .remove(0)
+        .rows
+        .into_iter()
+        .map(|r| r.label)
+        .collect();
+        assert_eq!(
+            rows,
+            ["Desktop Size", "Resolution", "Refresh Rate", "Scale"]
+        );
+    }
+
+    #[test]
+    fn a_turned_display_shows_its_sizes_turned_and_the_one_it_shows_chosen() {
+        // a 27-inch 4K monitor turned upright, at 1.5: the desktop is 1440 x 2560 points
+        let upright = crate::live::Monitor {
+            title: "Studio 27".into(),
+            mode: (3840, 2160),
+            refresh_mhz: Some(60_000),
+            scale: 1.5,
+            connector: Some("DP-1".into()),
+            physical_mm: Some((597, 336)),
+            logical: Some((1440, 2560)),
+            rotated: true,
+        };
+        let live = displays(vec![upright.clone()]);
+        let list = upright.catalogue();
+        let at = list
+            .choices
+            .iter()
+            .position(|c| c.scale == 1.5)
+            .expect("1.5 is one of the choices");
+        let Control::Popup { choices, selected } = size_row(&live).unwrap().control else {
+            panic!("a popup");
+        };
+        assert_eq!(
+            choices.len(),
+            list.choices.len(),
+            "no extra size: {choices:?}"
+        );
+        assert_eq!(selected, at);
+        assert!(
+            choices[at].starts_with(&format!("1440{nb}×{nb}2560", nb = '\u{202f}')),
+            "{}",
+            choices[at]
+        );
+        assert_eq!(
+            change(
+                ControlId::DisplaySize(0),
+                Value::Index(at),
+                &mut unset(),
+                &live
+            ),
+            [],
+            "the size shown already"
+        );
+    }
+
+    #[test]
+    fn choosing_a_size_sets_its_exact_scale_on_its_display() {
+        let live = displays(vec![built_in_panel((1512, 982))]);
+        let mut settings = unset();
+        assert_eq!(
+            change(
+                ControlId::DisplaySize(0),
+                Value::Index(4),
+                &mut settings,
+                &live
+            ),
+            [Effect::Service(Call::SetDisplayScale {
+                connector: "eDP-1".into(),
+                scale: 3024.0 / 1800.0,
+            })]
+        );
+        assert_eq!(
+            change(
+                ControlId::DisplaySize(0),
+                Value::Index(0),
+                &mut settings,
+                &live
+            ),
+            [Effect::Service(Call::SetDisplayScale {
+                connector: "eDP-1".into(),
+                scale: 3024.0 / 1024.0,
+            })]
+        );
+        assert_eq!(
+            change(
+                ControlId::DisplaySize(0),
+                Value::Index(3),
+                &mut settings,
+                &live
+            ),
+            [],
+            "the size shown already"
+        );
+        assert_eq!(
+            change(
+                ControlId::DisplaySize(1),
+                Value::Index(0),
+                &mut settings,
+                &live
+            ),
+            []
+        );
+        let anonymous = displays(vec![crate::live::Monitor {
+            connector: None,
+            ..built_in_panel((1512, 982))
+        }]);
+        assert!(matches!(
+            change(
+                ControlId::DisplaySize(0),
+                Value::Index(0),
+                &mut settings,
+                &anonymous
+            )[..],
+            [Effect::Refuse(_)]
+        ));
+    }
+
+    #[test]
+    fn a_size_set_elsewhere_is_an_extra_choice_and_a_display_of_unknown_size_has_none() {
+        let custom = displays(vec![crate::live::Monitor {
+            scale: 1.5,
+            ..built_in_panel((2016, 1309))
+        }]);
+        let row = size_row(&custom).unwrap();
+        let Control::Popup { choices, selected } = row.control else {
+            panic!("a popup");
+        };
+        assert_eq!((choices.len(), selected), (6, 5));
+        assert_eq!(choices[5], format!("2016{nb}×{nb}1309", nb = '\u{202f}'));
+        assert_eq!(
+            change(
+                ControlId::DisplaySize(0),
+                Value::Index(5),
+                &mut unset(),
+                &custom
+            ),
+            [],
+            "choosing it again keeps it"
+        );
+        let unknown = displays(vec![crate::live::Monitor {
+            physical_mm: None,
+            ..built_in_panel((1512, 982))
+        }]);
+        assert_eq!(size_row(&unknown), None);
+        // an external monitor offers the bucket list around its own size
+        let external = displays(vec![crate::live::Monitor {
+            title: "Studio 27".into(),
+            mode: (3840, 2160),
+            refresh_mhz: Some(60_000),
+            scale: 1.5,
+            connector: Some("DP-1".into()),
+            physical_mm: Some((597, 336)),
+            logical: Some((2560, 1440)),
+            rotated: false,
+        }]);
+        let Control::Popup { choices, selected } = size_row(&external).unwrap().control else {
+            panic!("a popup");
+        };
+        assert_eq!(
+            choices[selected],
+            format!("2560{nb}×{nb}1440 (Default)", nb = '\u{202f}')
         );
     }
 
@@ -2820,6 +3226,10 @@ mod tests {
             Control::Switch { on: true }
         );
         assert_eq!(
+            control(PaneId::Trackpad, ControlId::TrackpadAcceleration, &s),
+            Control::Switch { on: true }
+        );
+        assert_eq!(
             control(PaneId::DesktopDock, ControlId::AutoHide, &s),
             Control::Switch { on: false }
         );
@@ -2851,6 +3261,36 @@ mod tests {
     }
 
     #[test]
+    fn show_scroll_bars_starts_automatic_and_writes_the_compositor_file() {
+        let mut s = unset();
+        let Control::Popup { choices, selected } =
+            control(PaneId::Appearance, ControlId::ShowScrollBars, &s)
+        else {
+            panic!("a popup")
+        };
+        assert_eq!(choices, ["Automatically", "When scrolling", "Always"]);
+        assert_eq!(selected, 0);
+        for (i, name) in ScrollBarsName::ALL.into_iter().enumerate() {
+            assert_eq!(
+                change(
+                    ControlId::ShowScrollBars,
+                    Value::Index(i),
+                    &mut s,
+                    &Live::default()
+                ),
+                [Effect::Store(File::Compositor)]
+            );
+            assert_eq!(s.compositor.show_scroll_bars, Some(name));
+            let Control::Popup { selected, .. } =
+                control(PaneId::Appearance, ControlId::ShowScrollBars, &s)
+            else {
+                panic!("a popup")
+            };
+            assert_eq!(selected, i);
+        }
+    }
+
+    #[test]
     fn changes_write_the_mapped_values_to_their_file() {
         let mut s = unset();
         assert_eq!(
@@ -2863,6 +3303,16 @@ mod tests {
             [Effect::Store(File::Compositor)]
         );
         assert_eq!(s.compositor.mouse_speed, Some(3.0));
+        assert_eq!(
+            change(
+                ControlId::TrackpadAcceleration,
+                Value::Bool(false),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::Store(File::Compositor)]
+        );
+        assert_eq!(s.compositor.trackpad_acceleration, Some(false));
         change(
             ControlId::DockSize,
             Value::Fraction(0.5),
@@ -3169,6 +3619,44 @@ mod tests {
             panic!("a slider")
         };
         assert_eq!(value, 1.0, "grayscale's default intensity 1.0");
+    }
+
+    #[test]
+    fn the_pointer_colours_start_white_around_black_and_keep_a_colour_of_the_file() {
+        let mut s = unset();
+        let popup = |id, s: &Settings| match control(PaneId::Accessibility, id, s) {
+            Control::Popup { choices, selected } => (choices, selected),
+            other => panic!("a pop-up, not {other:?}"),
+        };
+        let (choices, outline) = popup(ControlId::CursorOutline, &s);
+        assert_eq!((choices[outline].as_str(), choices.len()), ("White", 8));
+        let (choices, fill) = popup(ControlId::CursorFill, &s);
+        assert_eq!(choices[fill], "Black");
+        assert_eq!(
+            change(
+                ControlId::CursorFill,
+                Value::Index(6),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::Store(File::Compositor)]
+        );
+        assert_eq!(s.compositor.cursor_fill, Some([30, 110, 235, 255]));
+        assert_eq!(
+            s.compositor.cursor_outline, None,
+            "the outline is untouched"
+        );
+        s.compositor.cursor_outline = Some([1, 2, 3, 128]);
+        let (choices, outline) = popup(ControlId::CursorOutline, &s);
+        assert_eq!((choices[outline].as_str(), choices.len()), ("#01020380", 9));
+        assert!(change(
+            ControlId::CursorOutline,
+            Value::Index(8),
+            &mut s,
+            &Live::default()
+        )
+        .is_empty());
+        assert_eq!(s.compositor.cursor_outline, Some([1, 2, 3, 128]));
     }
 
     fn login_live(login: Option<LoginScreen>) -> Live {

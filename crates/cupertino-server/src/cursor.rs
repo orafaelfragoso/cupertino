@@ -30,6 +30,26 @@ pub struct CursorFrame {
     pub nominal: u32,
 }
 
+impl CursorFrame {
+    /// Logical points per image pixel for a cursor drawn `size` points nominal (the nominal size times the
+    /// cursor scale): the image's own scale, whatever the output's.
+    fn points_per_pixel(&self, size: f64) -> f64 {
+        size / f64::from(self.nominal)
+    }
+
+    /// The hotspot in logical points from the image's top-left corner, for a cursor drawn `size` points nominal.
+    pub fn hotspot_at(&self, size: f64) -> Point<f64, Logical> {
+        let k = self.points_per_pixel(size);
+        Point::from((f64::from(self.hotspot.x) * k, f64::from(self.hotspot.y) * k))
+    }
+
+    /// The image's size in logical points for a cursor drawn `size` points nominal.
+    pub fn size_at(&self, size: f64) -> (f64, f64) {
+        let k = self.points_per_pixel(size);
+        (f64::from(self.pixels.0) * k, f64::from(self.pixels.1) * k)
+    }
+}
+
 /// Fill and outline colours (sRGB, straight alpha) of the cursors the server draws. The design
 /// stores both and redraws its cursors with them once the user changed either.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,7 +66,8 @@ impl CursorColors {
     };
 }
 
-type BufferKey = (&'static str, u32);
+/// A cursor's name and the index of its image in the theme's list: each animation frame has a buffer of its own.
+type BufferKey = (&'static str, usize);
 type CursorBuffer = (Point<i32, Physical>, MemoryRenderBuffer);
 
 /// The cursors the server draws, read from the XCursor theme of the asset directory only (no host theme).
@@ -230,11 +251,12 @@ impl CursorLoader {
     /// largest, so the renderer scales down where it can.
     pub fn frame(&mut self, icon: CursorIcon, pixels: u32, time: Duration) -> CursorFrame {
         let name = icon.name();
-        let img = {
+        let (index, img) = {
             let imgs = self.images(icon);
-            pick_frame(imgs, pixels, time.as_millis() as u32)
+            let index = pick_frame(imgs, pixels, time.as_millis() as u32);
+            (index, imgs[index].clone())
         };
-        let key = (name, img.width ^ (img.delay << 16) ^ (img.xhot << 24));
+        let key = (name, index);
         let entry = self.buffers.entry(key).or_insert_with(|| {
             let buf = MemoryRenderBuffer::from_slice(
                 &img.pixels_rgba,
@@ -257,7 +279,7 @@ impl CursorLoader {
 
 /// The image for `size`: the smallest nominal size at least `size`, else the largest; then the
 /// animation frame of that size at `millis`.
-fn pick_frame(images: &[Image], size: u32, millis: u32) -> Image {
+fn pick_frame(images: &[Image], size: u32, millis: u32) -> usize {
     let largest = images
         .iter()
         .map(|i| i.size)
@@ -269,19 +291,21 @@ fn pick_frame(images: &[Image], size: u32, millis: u32) -> Image {
         .filter(|s| *s >= size)
         .min()
         .unwrap_or(largest);
-    let same: Vec<&Image> = images.iter().filter(|i| i.size == nominal).collect();
-    let total: u32 = same.iter().map(|i| i.delay).sum();
+    let same: Vec<usize> = (0..images.len())
+        .filter(|&i| images[i].size == nominal)
+        .collect();
+    let total: u32 = same.iter().map(|&i| images[i].delay).sum();
     if total == 0 {
-        return same[0].clone();
+        return same[0];
     }
     let mut m = millis % total;
-    for i in &same {
-        if m < i.delay {
-            return (*i).clone();
+    for &i in &same {
+        if m < images[i].delay {
+            return i;
         }
-        m -= i.delay;
+        m -= images[i].delay;
     }
-    same[0].clone()
+    same[0]
 }
 
 /// Shake to locate: the detector and the timer that runs its evaluations while the cursor is grown.
@@ -384,22 +408,40 @@ mod tests {
     #[test]
     fn frame_selection_follows_delay() {
         let imgs = vec![image(24, 100, 1), image(24, 100, 2)];
-        assert_eq!(pick_frame(&imgs, 24, 50).pixels_rgba[0], 1);
-        assert_eq!(pick_frame(&imgs, 24, 150).pixels_rgba[0], 2);
-        assert_eq!(pick_frame(&imgs, 24, 250).pixels_rgba[0], 1);
+        let pick = |millis| &imgs[pick_frame(&imgs, 24, millis)];
+        assert_eq!(pick(50).pixels_rgba[0], 1);
+        assert_eq!(pick(150).pixels_rgba[0], 2);
+        assert_eq!(pick(250).pixels_rgba[0], 1);
+        // frames of one size, delay and hotspot are told apart, so each keeps a buffer of its own
+        assert_ne!(pick_frame(&imgs, 24, 50), pick_frame(&imgs, 24, 150));
+    }
+
+    #[test]
+    fn each_frame_of_an_animated_cursor_is_drawn_from_a_buffer_of_its_own() {
+        // two frames of one size, delay and hotspot that differ only in their pixels
+        let mut loader = CursorLoader::load(None, CursorColors::DEFAULT);
+        loader.cache.insert(
+            CursorIcon::Default.name(),
+            vec![image(24, 100, 1), image(24, 100, 2)],
+        );
+        for millis in [50, 150, 250, 350] {
+            loader.frame(CursorIcon::Default, 24, Duration::from_millis(millis));
+        }
+        assert_eq!(
+            loader.buffers.len(),
+            2,
+            "the second frame is not shown from the first one's buffer"
+        );
     }
 
     #[test]
     fn the_smallest_image_at_least_the_size_is_picked() {
         let imgs = vec![image(24, 0, 1), image(48, 0, 2), image(64, 0, 3)];
-        assert_eq!(pick_frame(&imgs, 24, 0).size, 24);
+        let size = |pixels| imgs[pick_frame(&imgs, pixels, 0)].size;
+        assert_eq!(size(24), 24);
+        assert_eq!(size(30), 48, "scaled down from 48 rather than up from 24");
         assert_eq!(
-            pick_frame(&imgs, 30, 0).size,
-            48,
-            "scaled down from 48 rather than up from 24"
-        );
-        assert_eq!(
-            pick_frame(&imgs, 120, 0).size,
+            size(120),
             64,
             "past the largest image the largest is scaled up"
         );
@@ -512,6 +554,53 @@ mod tests {
                 (arrow.width, arrow.height),
                 "not the last-resort arrow"
             );
+        }
+    }
+
+    /// The built-in cursors keep each role's canvas and hotspot in logical points at output scales 1, 1.5 and 2 and
+    /// at a doubled cursor size: the image picked for the output's pixels is scaled so its hotspot stays on the
+    /// pointer's point.
+    #[test]
+    fn built_in_hotspots_stay_on_the_pointer_at_every_output_scale() {
+        let mut loader = CursorLoader {
+            theme: None,
+            size: 24,
+            colors: CursorColors::DEFAULT,
+            cache: HashMap::new(),
+            buffers: HashMap::new(),
+        };
+        for (icon, canvas, hotspot) in [
+            (CursorIcon::Default, (28.0, 40.0), (5.0, 5.0)),
+            (CursorIcon::Text, (23.0, 22.0), (12.0, 11.0)),
+            (CursorIcon::Pointer, (32.0, 32.0), (12.0, 8.0)),
+            (CursorIcon::Grab, (32.0, 32.0), (15.0, 16.0)),
+            (CursorIcon::Grabbing, (32.0, 32.0), (15.0, 16.0)),
+            (CursorIcon::ColResize, (30.0, 24.0), (15.0, 12.0)),
+            (CursorIcon::RowResize, (24.0, 28.0), (12.0, 14.0)),
+        ] {
+            for cursor_scale in [1.0, 2.0] {
+                for output_scale in [1.0, 1.5, 2.0] {
+                    // as `Cupertino::cursor_plan` asks for it
+                    let size = f64::from(loader.size()) * cursor_scale;
+                    let frame =
+                        loader.frame(icon, (size * output_scale).ceil() as u32, Duration::ZERO);
+                    assert!(
+                        f64::from(frame.pixels.1) >= canvas.1 * cursor_scale * output_scale,
+                        "{icon:?} drawn from an image at least as large as the output needs"
+                    );
+                    let at = frame.hotspot_at(size);
+                    assert_eq!(
+                        (at.x, at.y),
+                        (hotspot.0 * cursor_scale, hotspot.1 * cursor_scale),
+                        "{icon:?} cursor ×{cursor_scale} output ×{output_scale}"
+                    );
+                    assert_eq!(
+                        frame.size_at(size),
+                        (canvas.0 * cursor_scale, canvas.1 * cursor_scale),
+                        "{icon:?} cursor ×{cursor_scale} output ×{output_scale}"
+                    );
+                }
+            }
         }
     }
 

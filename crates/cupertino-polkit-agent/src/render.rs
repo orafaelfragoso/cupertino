@@ -3,6 +3,7 @@
 
 use std::f64::consts::PI;
 use std::fmt;
+use std::time::Duration;
 
 use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_decorations::field::{centred_baseline, draw_field, FieldContent, FieldStyle};
@@ -142,6 +143,19 @@ pub fn draw_scrim(pixmap: &mut Pixmap, palette: &Palette, opacity: f64) {
 /// The colour the scrim shows all over at `opacity` (0 to 1) of its own.
 pub fn scrim_color(palette: &Palette, opacity: f64) -> Rgba {
     with_alpha(palette.scrim, opacity)
+}
+
+/// How long the scrim takes to fade in.
+pub const SCRIM_FADE_IN: Duration = Duration::from_millis(200);
+
+/// The scrim's opacity of its own `elapsed` into its fade in: from 0 to 1 over [`SCRIM_FADE_IN`], easing out (cubic),
+/// and 1 from the start under Reduce Motion.
+pub fn scrim_opacity(elapsed: Duration, reduce_motion: bool) -> f64 {
+    if reduce_motion {
+        return 1.0;
+    }
+    let t = (elapsed.as_secs_f64() / SCRIM_FADE_IN.as_secs_f64()).min(1.0);
+    1.0 - (1.0 - t).powi(3)
 }
 
 /// Draws the panel; it keeps the fonts and the symbol between frames.

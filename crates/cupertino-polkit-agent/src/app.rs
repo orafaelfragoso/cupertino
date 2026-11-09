@@ -17,7 +17,7 @@ use cupertino_polkit_agent::model::{Agent, Effect, Key};
 use cupertino_polkit_agent::panel::{
     Command, Content, Control, Frames, Panel, PanelKey, Status, View, PADDING, WIDTH,
 };
-use cupertino_polkit_agent::render::{scrim_color, Painter, Palette};
+use cupertino_polkit_agent::render::{scrim_color, scrim_opacity, Painter, Palette};
 use cupertino_polkit_agent::surfaces;
 use cupertino_polkit_agent::users::{self, display_names};
 use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver};
@@ -37,8 +37,6 @@ pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 /// The window assistive technology knows the panel as.
 const PANEL_WINDOW: WindowId = WindowId(1);
-/// The scrim's fade in, ease-out.
-const FADE_IN: f64 = 0.2;
 /// How often the spinner turns a spoke while the answer is checked.
 const SPINNER_STEP: Duration = Duration::from_millis(83);
 
@@ -113,11 +111,7 @@ impl Shown {
     }
 
     fn fading(&self, reduce_motion: bool) -> f64 {
-        if reduce_motion {
-            return 1.0;
-        }
-        let t = (self.since.elapsed().as_secs_f64() / FADE_IN).min(1.0);
-        1.0 - (1.0 - t).powi(3)
+        scrim_opacity(self.since.elapsed(), reduce_motion)
     }
 }
 

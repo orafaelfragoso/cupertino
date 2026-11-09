@@ -3,19 +3,21 @@
 //!
 //! The panel runs on a clock that moves one 60 Hz frame at a time ([`FrameMeter`]), with its animation frames
 //! answered at each step, so the opening, unfolding and folding transitions run frame by frame as they do in the
-//! session. Each interaction keeps its frames ([`FrameSample`]: wall time, repainted pixels, whole repaints) and the
-//! glass region changes it sent the compositor ([`WindowRequest::Materials`]): each change makes the compositor
-//! sample and blur what is under the panel again, so a change on a frame that only moves a selection or a hover is a
-//! cost the panel should never pay.
+//! session. Each interaction keeps its frames ([`FrameSample`]: wall time, repainted pixels, whole repaints), the
+//! same frames with the CPU time the loop's thread spent on each, and the glass region changes it sent the compositor
+//! ([`WindowRequest::Materials`]): each change makes the compositor sample and blur what is under the panel again, so a
+//! change on a frame that only moves a selection or a hover is a cost the panel should never pay.
 //!
 //! `glass_follows_only_the_panel_s_shape_at_fractional_scales` checks that at every scale of [`SCALES`]: the arrows
 //! and hover inside a settled panel reshape no glass and repaint no whole window, and a transition reshapes it at
 //! most once a frame. `every_frame_of_the_panel_s_transitions_fits_the_budget_in_an_optimised_build` holds each
-//! frame of every interaction to the frame budget at 1x and 2x when the tests are built optimised (the release
-//! profile); unoptimised it measures nothing. `frame_cost_report` is `#[ignore]`d: it measures wall time, which depends on the machine, and
-//! is run by hand in the release profile (see the crate's README); the tables go to standard output and, when
-//! `CUPERTINO_REPAINT_DIR` names a folder, to `launcher-<scale>x.md` and `.csv` there; `CUPERTINO_REPAINT_SCALES` picks
-//! the scales and `CUPERTINO_REPAINT_OUTPUT` (`1512x982`) the output's size in points.
+//! frame of every interaction to the frame budget at 1x and 2x in the CPU time the loop's thread spends on it, when
+//! the tests are built optimised (the release profile); unoptimised it measures nothing. Its wall-time twin
+//! (`..._in_wall_time_on_an_idle_machine`) and `frame_cost_report` are `#[ignore]`d: they measure wall time, which
+//! depends on the machine and what else runs on it, and are run by hand in the release profile on an idle machine
+//! (see the crate's README); the report's tables go to standard output and, when `CUPERTINO_REPAINT_DIR` names a
+//! folder, to `launcher-<scale>x.md` and `.csv` there; `CUPERTINO_REPAINT_SCALES` picks the scales and
+//! `CUPERTINO_REPAINT_OUTPUT` (`1512x982`) the output's size in points.
 
 use super::*;
 use cupertino_kit::platform::WindowRequest;
@@ -126,13 +128,39 @@ thread_local! {
     /// The icons asked of the host so far, and the most waiting at once.
     static ICONS_ASKED: Cell<usize> = const { Cell::new(0) };
     static MOST_LOADING: Cell<usize> = const { Cell::new(0) };
-    /// The wall time the loop spent asking the host for icons.
+    /// The CPU time the loop spent asking the host for icons, in nanoseconds.
     static LOOP_ICON_NANOS: Cell<u128> = const { Cell::new(0) };
 }
 
 /// What loading and decoding one application icon costs the metered host's icon thread: about what a large theme icon
 /// takes to read and scale in this profile.
 const ICON_DECODE: std::time::Duration = std::time::Duration::from_millis(3);
+
+/// The CPU time the calling thread has used. The tests hold the loop's work to its budgets by this rather than by wall
+/// time: other work on a busy machine stretches a frame's wall time by however long the thread waited for a processor,
+/// while its CPU time grows only by what sharing caches and cores costs.
+fn thread_cpu() -> std::time::Duration {
+    use std::ffi::{c_int, c_long};
+    /// A `struct timespec` as the C library lays it out.
+    #[repr(C)]
+    struct Timespec {
+        seconds: c_long,
+        nanoseconds: c_long,
+    }
+    extern "C" {
+        fn clock_gettime(clock: c_int, now: *mut Timespec) -> c_int;
+    }
+    /// The clock of the CPU time the calling thread has used.
+    const CLOCK_THREAD_CPUTIME_ID: c_int = 3;
+    let mut now = Timespec {
+        seconds: 0,
+        nanoseconds: 0,
+    };
+    // SAFETY: `now` is a valid timespec for the call to fill, and the C library the test links has the function.
+    let read = unsafe { clock_gettime(CLOCK_THREAD_CPUTIME_ID, &mut now) };
+    assert_eq!(read, 0, "the thread's CPU clock reads");
+    std::time::Duration::new(now.seconds as u64, now.nanoseconds as u32)
+}
 
 /// A launcher listing `count` applications, each with an icon of its own.
 fn launcher_of(count: usize) -> crate::Launcher {
@@ -170,9 +198,9 @@ impl Host for MeteredHost {
         Vec::new()
     }
     /// As the session's host does: the icon is loaded and decoded on a thread of the host's, which spends
-    /// [`ICON_DECODE`] on it, and arrives as a message.
+    /// [`ICON_DECODE`] of its CPU time on it, and arrives as a message.
     fn app_icon(&mut self, app: &crate::browse::App) -> Vec<Command<Message>> {
-        let start = std::time::Instant::now();
+        let start = thread_cpu();
         ICONS_ASKED.set(ICONS_ASKED.get() + 1);
         let loads = ICON_THREAD.with_borrow_mut(|thread| {
             thread
@@ -180,7 +208,8 @@ impl Host for MeteredHost {
                     let (loads, queue) = std::sync::mpsc::channel::<IconLoad>();
                     std::thread::spawn(move || {
                         for (_, reply) in queue {
-                            std::thread::sleep(ICON_DECODE);
+                            let start = thread_cpu();
+                            while thread_cpu() - start < ICON_DECODE {}
                             let _ = reply.send_blocking(Vec::new());
                         }
                     });
@@ -194,7 +223,7 @@ impl Host for MeteredHost {
         let commands = vec![Command::Perform(Box::pin(async move {
             Message::AppIcon(id, loaded.recv().await.unwrap_or_default())
         }))];
-        LOOP_ICON_NANOS.set(LOOP_ICON_NANOS.get() + start.elapsed().as_nanos());
+        LOOP_ICON_NANOS.set(LOOP_ICON_NANOS.get() + (thread_cpu() - start).as_nanos());
         commands
     }
     fn now(&self) -> Now {
@@ -247,6 +276,8 @@ fn send(message: Message) {
 struct Measured {
     name: &'static str,
     frames: Vec<FrameSample>,
+    /// The same frames with the CPU time the loop's thread spent on each ([`thread_cpu`]) in place of the wall time.
+    cpu: Vec<FrameSample>,
     /// The glass region changes it sent.
     reshapes: usize,
 }
@@ -259,6 +290,8 @@ struct Metered {
     configured: BTreeMap<WindowId, Option<Size>>,
     /// The meter of the panel window shown, with that window.
     meter: Option<(FrameMeter, WindowId)>,
+    /// The meter's frames with their CPU time, since the last [`take`](Self::take).
+    cpu: Vec<FrameSample>,
     now: Timestamp,
     /// The panel's glass region changes counted so far.
     reshapes: usize,
@@ -302,6 +335,7 @@ impl Metered {
             scale,
             configured: BTreeMap::new(),
             meter: None,
+            cpu: Vec::new(),
             now: Timestamp(0),
             reshapes: 0,
         };
@@ -375,20 +409,24 @@ impl Metered {
         };
         if self.meter.as_ref().is_none_or(|(_, w)| *w != panel) {
             self.meter = Some((FrameMeter::new(panel, self.now), panel));
+            self.cpu.clear();
             self.reshapes = self.count_reshapes(panel);
         }
         let (meter, _) = self.meter.as_mut().unwrap();
-        let presented = meter
-            .step(&mut self.driver, |system, now| {
-                CLOCK.set(now.0 as f64 / 1e9);
-                if let Some(frame) = PENDING.take() {
-                    send(Message::Frame(frame));
-                }
-                input(system, panel);
-            })
-            .is_some();
+        let start = thread_cpu();
+        let presented = meter.step(&mut self.driver, |system, now| {
+            CLOCK.set(now.0 as f64 / 1e9);
+            if let Some(frame) = PENDING.take() {
+                send(Message::Frame(frame));
+            }
+            input(system, panel);
+        });
+        if let Some(sample) = presented {
+            let nanos = (thread_cpu() - start).as_nanos() as u64;
+            self.cpu.push(FrameSample { nanos, ..sample });
+        }
         self.now = meter.now();
-        presented
+        presented.is_some()
     }
 
     /// Steps until nothing presented for `quiet` steps in a row, at most `limit` steps.
@@ -419,6 +457,7 @@ impl Metered {
         Measured {
             name,
             frames,
+            cpu: std::mem::take(&mut self.cpu),
             reshapes,
         }
     }
@@ -713,6 +752,15 @@ fn browser_over_many(apps: usize, scale: f64, draw: bool) -> (Measured, usize) {
 /// loop would overrun several frames). What the loop spends asking for them is a small part of one frame budget, and
 /// the frames that show them arriving stay within it. The window's first frame, which lays out the browser whole, is held
 /// to the budget in an optimised build only (about 4 ms there at 1x); unoptimised it takes several times that.
+///
+/// The loop's work is measured in its thread's CPU time ([`thread_cpu`]), which other work on the machine does not
+/// stretch by the time the thread waits for a processor; wall time, under a busy loop on every processor, put the
+/// arriving frames' median at 15 ms unoptimised. What sharing the caches and cores adds stays: about 2 ms of CPU for the
+/// median arriving frame unoptimised on a quiet machine, 3 ms under that load, and about 0.2 ms, 0.3 ms under load, for
+/// all the icon requests. The limits keep their margin over that, and the regressions this test exists for still pass
+/// them: an icon decoded on the loop costs [`ICON_DECODE`] alone, three times the requests' limit, and a frame that lays
+/// the browser out again as an icon arrives costs what the first frame does, about 24 ms of CPU unoptimised, three
+/// times the frame budget.
 #[test]
 fn opening_the_browser_over_200_applications_keeps_icon_decoding_off_the_frames() {
     use cupertino_ui_test::repaint::FRAME_BUDGET;
@@ -731,34 +779,35 @@ fn opening_the_browser_over_200_applications_keeps_icon_decoding_off_the_frames(
         kit::MAX_APP_ICON_LOADS,
         "the loads waiting are capped"
     );
-    let summary = Summary::of(&run.frames);
+    let summary = Summary::of(&run.cpu);
     eprintln!(
-        "{}\n{}\nicon requests on the loop: {} us in all",
+        "CPU time:\n{}\n{}\nwall time:\n{}\nicon requests on the loop: {} us of CPU in all",
         Summary::markdown_header(),
         summary.markdown_row(run.name),
+        Summary::of(&run.frames).markdown_row(run.name),
         LOOP_ICON_NANOS.get() / 1000
     );
     assert!(
         LOOP_ICON_NANOS.get() < FRAME_BUDGET.as_nanos() / 8,
-        "asking for {nearby} icons took the loop {} us",
+        "asking for {nearby} icons took the loop {} us of CPU",
         LOOP_ICON_NANOS.get() / 1000
     );
-    let first_ms = run.frames[0].nanos as f64 / 1e6;
-    eprintln!("first frame: {first_ms:.2} ms");
+    let first_ms = run.cpu[0].nanos as f64 / 1e6;
+    eprintln!("first frame: {first_ms:.2} ms of CPU");
     if !cfg!(debug_assertions) {
         assert!(
             first_ms < FRAME_BUDGET.as_secs_f64() * 1000.0,
-            "the first frame lays out 200 applications in {first_ms:.2} ms"
+            "the first frame lays out 200 applications in {first_ms:.2} ms of CPU"
         );
     }
-    let arriving = Summary::of(&run.frames[1..]);
+    let arriving = Summary::of(&run.cpu[1..]);
     assert!(
         arriving.frames >= nearby / kit::MAX_APP_ICON_LOADS,
         "the icons show as they arrive: {arriving:?}"
     );
     assert!(
         arriving.p50_ms < FRAME_BUDGET.as_secs_f64() * 1000.0,
-        "frames as the icons arrive: {arriving:?}"
+        "CPU time of the frames as the icons arrive: {arriving:?}"
     );
 }
 
@@ -770,19 +819,21 @@ fn budget_ms(scale: f64) -> f64 {
     cupertino_ui_test::repaint::FRAME_BUDGET.as_secs_f64() * 1000.0 * scale.max(1.0)
 }
 
-/// In an optimised build, every frame of the panel opening and closing, unfolding and folding, typing, and the Dock
-/// opening the browser over 200 applications, drawn at 1x and at 2x, fits [`budget_ms`]. Each interaction is run once:
-/// a single frame over the budget fails it, the first frame of a window that just opened (its pixels, scratch images and
-/// glyphs made for the first time) included; it is not run again, since a second run on a warmed heap would hide a
-/// first frame that grew slower. It measures wall time, which builds running beside it stretch two to six times (cores
-/// and memory shared), so it is run on an otherwise idle machine. Unoptimised builds take several times as long and
-/// measure nothing.
-#[test]
-fn every_frame_of_the_panel_s_transitions_fits_the_budget_in_an_optimised_build() {
-    if cfg!(debug_assertions) {
-        eprintln!("frame budgets are held in optimised builds only");
-        return;
-    }
+/// The time a frame is held to its budget by.
+#[derive(Clone, Copy, Debug)]
+enum FrameTime {
+    /// The CPU time the loop's thread spent on it ([`Measured::cpu`]).
+    Cpu,
+    /// The wall time it took ([`Measured::frames`]).
+    Wall,
+}
+
+/// Every frame of the panel opening and closing, unfolding and folding, typing, and the Dock opening the browser over
+/// 200 applications, drawn at 1x and at 2x, takes under [`budget_ms`] by `time`. Each interaction is run once: a single
+/// frame over the budget fails it, the first frame of a window that just opened (its pixels, scratch images and glyphs
+/// made for the first time) included; it is not run again, since a second run on a warmed heap would hide a first frame
+/// that grew slower.
+fn assert_every_transition_frame_fits_the_budget(time: FrameTime) {
     for scale in [1.0, 2.0] {
         let budget = budget_ms(scale);
         let mut runs = interactions(scale, true);
@@ -791,7 +842,11 @@ fn every_frame_of_the_panel_s_transitions_fits_the_budget_in_an_optimised_build(
             .iter()
             .flat_map(|run| {
                 assert!(!run.frames.is_empty(), "{} presented no frames", run.name);
-                run.frames
+                let frames = match time {
+                    FrameTime::Cpu => &run.cpu,
+                    FrameTime::Wall => &run.frames,
+                };
+                frames
                     .iter()
                     .enumerate()
                     .map(|(i, f)| (run.name, i, f.nanos as f64 / 1e6))
@@ -800,7 +855,39 @@ fn every_frame_of_the_panel_s_transitions_fits_the_budget_in_an_optimised_build(
             .collect();
         assert!(
             over.is_empty(),
-            "at {scale}x, frames over {budget} ms (interaction, frame, ms): {over:?}"
+            "at {scale}x, frames over {budget} ms of {time:?} time (interaction, frame, ms): {over:?}"
         );
     }
+}
+
+/// In an optimised build, every frame of the panel's transitions fits [`budget_ms`] in the CPU time the loop's thread
+/// spends on it ([`assert_every_transition_frame_fits_the_budget`]), so it holds while builds and tests run beside it.
+/// CPU time leaves out the time the thread waits for a processor, which such work stretches two to six times; what
+/// remains of its cost is the caches and cores it shares: with a busy loop on every processor, the slowest frame of each
+/// interaction took up to a quarter more CPU time than on a quiet machine. The budget is kept as it is, which leaves that
+/// margin: on a quiet machine the slowest frames take about 2.5 ms of the 8 at 1x and 4.9 ms of the 16 at 2x (7 ms on a
+/// 1512×982 pt output), so a quarter more stays under it, while a frame doing three times the work of the slowest one
+/// (a few icons decoded on the loop, the browser laid out again on every frame) is over it. The wall-time budget is held
+/// by `every_frame_of_the_panel_s_transitions_fits_the_budget_in_wall_time_on_an_idle_machine`. Unoptimised builds take
+/// several times as long and measure nothing.
+#[test]
+fn every_frame_of_the_panel_s_transitions_fits_the_budget_in_an_optimised_build() {
+    if cfg!(debug_assertions) {
+        eprintln!("frame budgets are held in optimised builds only");
+        return;
+    }
+    assert_every_transition_frame_fits_the_budget(FrameTime::Cpu);
+}
+
+/// The same frames held to [`budget_ms`] in wall time, from the input to the presented frame, as the session sees them.
+/// `#[ignore]`d: wall time counts every moment the thread waits for a processor, so it is run by hand, in the release
+/// profile, on an otherwise idle machine (see the crate's README). Unoptimised it measures nothing.
+#[test]
+#[ignore = "wall time: run by hand on an idle machine in the release profile"]
+fn every_frame_of_the_panel_s_transitions_fits_the_budget_in_wall_time_on_an_idle_machine() {
+    if cfg!(debug_assertions) {
+        eprintln!("frame budgets are held in optimised builds only");
+        return;
+    }
+    assert_every_transition_frame_fits_the_budget(FrameTime::Wall);
 }

@@ -409,6 +409,11 @@ fn spawn(socket: PathBuf, version: u32, heard: Heard) -> Asker {
 
 /// [`spawn`], which also draws labels on the glass and changes the small control's material when asked.
 fn spawn_asking(socket: PathBuf, version: u32, heard: Heard) -> Asker {
+    spawn_late(socket, version, heard, Duration::ZERO)
+}
+
+/// [`spawn_asking`] for a client that does each thing asked `late`, as a client on a loaded machine may.
+fn spawn_late(socket: PathBuf, version: u32, heard: Heard, late: Duration) -> Asker {
     let (tx, rx): (Sender<Ask>, Receiver<Ask>) = channel();
     let progress = Arc::new(Progress::default());
     let asker = Asker {
@@ -467,6 +472,7 @@ fn spawn_asking(socket: PathBuf, version: u32, heard: Heard) -> Asker {
         loop {
             let mut syncs = 0;
             while let Ok(ask) = rx.try_recv() {
+                std::thread::sleep(late);
                 match ask {
                     Ask::Wall(rgb) => client.repaint_wall(&qh, rgb),
                     Ask::Labels(labels) => client.draw_labels(&qh, &labels),
@@ -596,6 +602,29 @@ fn light_glass_keeps_a_light_face_over_black_and_white() {
     settle(&mut h, &wall);
     assert_eq!(heard_of(&heard, Which::Small), [Tone::Light]);
     assert!(heard_of(&heard, Which::Large).is_empty());
+}
+
+/// A change counts once the server presented it and the client received its tone, however late the client makes it:
+/// right after settling, the tone the client heard is the new one.
+#[test]
+fn settling_waits_for_a_client_that_answers_late() {
+    let Some(mut h) = Harness::new(Appearance::Dark) else {
+        return;
+    };
+    let heard = Heard::default();
+    let wall = spawn_late(
+        h.socket_path(),
+        7,
+        heard.clone(),
+        Duration::from_millis(500),
+    );
+    let seen = heard.clone();
+    h.wait_until("the small control's dark face", move |_| {
+        heard_of(&seen, Which::Small) == [Tone::Dark]
+    });
+    wall.send([255, 255, 255]).unwrap();
+    settle(&mut h, &wall);
+    assert_eq!(heard_of(&heard, Which::Small), [Tone::Dark, Tone::Light]);
 }
 
 #[test]

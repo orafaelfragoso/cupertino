@@ -91,7 +91,15 @@ Maintainers (and a CI check, once it is enabled) reject files and strings that s
 
 A pull request runs `gate` and then what its diff needs: a docs-only change (`docs/`, top-level Markdown, the licence, the issue and pull request templates) builds the book; any other change runs fmt, deny, the lint and test build (`check`), the Weston test and the golden scenes. **CI result** is the check that must pass to merge. A push to `main` runs only the quick jobs, because its pull request ran the rest.
 
-Every night, if `main` changed, **Nightly** runs every job, including `check` in the package build environment, and builds and install-tests the Arch packages. A tag `vX.Y.Z-rcN` makes a release candidate: the full CI, the Arch packages, signing and a draft prerelease. A tag `vX.Y.Z` makes the final release, with the Debian and Fedora packages and the ISO. A maintainer publishes the draft by hand. The **ISO** workflow builds an image from any branch or tag when run from the Actions tab.
+Arch is the only target. Every job that builds, lints or tests the code runs in an Arch container (`archlinux:base-devel`, pinned by digest in `.github/workflows/ci.yml`), as an unprivileged user; the Ubuntu runner only hosts the container. The packages those jobs install are listed once, in `ci/arch-ci.sh`. Install the same set on your machine with `sudo pacman -S --needed $(ci/arch-ci.sh list test)`.
+
+Every night, if `main` changed, **Nightly** runs every job, including `check` in the package build environment, and builds and install-tests the Arch packages. A tag `vX.Y.Z-rcN` makes a release candidate: the full CI, the Arch packages, signing and a draft prerelease. A tag `vX.Y.Z` makes the final release: the same, plus the ISO. A maintainer publishes the draft by hand. The **ISO** workflow builds an image from any branch or tag when run from the Actions tab.
+
+### Golden scenes and the pinned renderer
+
+The headless golden scenes (`crates/cupertino-server/tests/goldens.rs`) are valid on one renderer only: the image of `ci/goldens/Dockerfile`, Arch pinned by digest with every package from one [Arch Linux Archive](https://archive.archlinux.org/) date, so Mesa and LLVM do not move. `ci/goldens.sh` runs them there (it needs Docker), as the `goldens` CI job does, and fails on any other renderer.
+
+A renderer bump (a new image digest or archive date, that is a new Mesa or LLVM) changes the pixels, so the same change re-records the baselines. Run `ci/goldens.sh --update`, or the **Record goldens** workflow from the Actions tab on your branch, which uploads the new baselines as the `goldens` artifact. Review the images, then commit `crates/cupertino-server/tests/fixtures/goldens`, `renderer.txt` included. Until then the `goldens` job fails with `baseline recorded on …, running on …`.
 
 ## Issues
 

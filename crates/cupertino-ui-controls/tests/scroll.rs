@@ -457,3 +457,240 @@ fn a_touchpad_flick_coasts_after_the_lift_unless_motion_is_reduced() {
         }
     }
 }
+
+/// Sends a pointer event and steps once, without settling: the content may be moving on its own.
+fn send_now(h: &mut Harness<Scrolled>, event: PointerEvent) {
+    h.rt.window_system_mut()
+        .enqueue_window(h.window, WindowEvent::Pointer(event, Timestamp(0)))
+        .unwrap();
+    step(h);
+}
+
+/// A finger on the touchpad moving the content by `dy` at `ms`, or lifting.
+fn finger(h: &mut Harness<Scrolled>, at: Point, ms: u64, dy: f64, stop: bool) {
+    h.clock().advance_to(Timestamp(ms * MS)).unwrap();
+    send_now(
+        h,
+        PointerEvent::Scroll {
+            position: at,
+            delta: Point::new(0.0, dy),
+            value120: None,
+            source: ScrollSource::Finger,
+            stop,
+            inverted: (false, false),
+        },
+    );
+}
+
+/// Animation frames every 16 ms from `from` to `to`.
+fn frames(h: &mut Harness<Scrolled>, from: u64, to: u64) {
+    let mut ms = from;
+    while ms <= to {
+        h.clock().advance_to(Timestamp(ms * MS)).unwrap();
+        next_frame(h);
+        ms += 16;
+    }
+}
+
+/// Where the content is drawn: the first row's top, which is 0 at rest at the start.
+fn drawn(h: &Harness<Scrolled>) -> f64 {
+    -h.rect("row 0").origin.y
+}
+
+#[test]
+fn a_finger_pulling_past_the_start_stretches_the_content_and_the_stretch_returns_after_the_lift() {
+    let mut h = harness(Setup::default());
+    let at = point(50.0, 50.0);
+    for i in 1..=8 {
+        finger(&mut h, at, i * 10, -30.0, false);
+    }
+    let stretch = -drawn(&h);
+    assert_eq!(
+        h.model().inner.offset.y,
+        0.0,
+        "the offset stays at the edge"
+    );
+    // eight pulls of 30 past a viewport of 100 show as 100 × (1 − 1 / (1 + 0.07 × 240 / 100)) ≈ 14.4
+    assert!(
+        (stretch - 14.4).abs() < 0.2,
+        "drawn {stretch} past the edge"
+    );
+    assert!(
+        !h.snapshot().pending.animating,
+        "a held stretch does not move on its own"
+    );
+
+    // the finger rests, then lifts: the stretch returns to the edge without overshooting it
+    finger(&mut h, at, 200, 0.0, true);
+    frames(&mut h, 216, 280);
+    let returning = -drawn(&h);
+    assert!(returning > 0.0 && returning < stretch, "{returning}");
+    frames(&mut h, 296, 600);
+    assert_eq!(drawn(&h), 0.0);
+    assert_eq!(h.model().inner.offset.y, 0.0);
+    assert!(!h.snapshot().pending.animating, "the return ends");
+}
+
+#[test]
+fn a_finger_moving_back_unwinds_the_stretch_before_it_moves_the_content() {
+    let mut h = harness(Setup::default());
+    let at = point(50.0, 50.0);
+    for i in 1..=4 {
+        finger(&mut h, at, i * 10, -30.0, false);
+    }
+    let stretch = -drawn(&h);
+    assert!(stretch > 0.0);
+    // a little back: still stretched, by less
+    finger(&mut h, at, 50, 30.0, false);
+    let less = -drawn(&h);
+    assert!(less > 0.0 && less < stretch, "{less} of {stretch}");
+    // back past the edge: the movement that reaches it stops there, the next moves the content
+    finger(&mut h, at, 60, 200.0, false);
+    assert_eq!(drawn(&h), 0.0);
+    finger(&mut h, at, 70, 20.0, false);
+    assert_eq!(h.model().inner.offset.y, 20.0);
+    assert_eq!(drawn(&h), 20.0);
+}
+
+#[test]
+fn a_wheel_steps_inside_the_range_with_no_stretch_and_no_inertia() {
+    let mut h = harness(Setup::default());
+    let at = point(50.0, 50.0);
+    for i in 1..=5 {
+        h.clock().advance_to(Timestamp(i * 10 * MS)).unwrap();
+        wheel(&mut h, at, -30.0, ScrollSource::Wheel, false);
+    }
+    assert_eq!(drawn(&h), 0.0, "no stretch at the edge");
+    // a new burst: the first one, which could not move the content, was nobody's
+    for i in 40..=44 {
+        h.clock().advance_to(Timestamp(i * 10 * MS)).unwrap();
+        wheel(&mut h, at, 20.0, ScrollSource::Wheel, false);
+    }
+    assert_eq!(h.model().inner.offset.y, 100.0);
+    assert!(
+        !h.snapshot().pending.animating,
+        "a wheel's movement is complete as it arrives"
+    );
+    h.clock().advance_to(Timestamp(800 * MS)).unwrap();
+    h.settle();
+    assert_eq!(h.model().inner.offset.y, 100.0);
+}
+
+#[test]
+fn a_flick_reaching_the_end_carries_past_it_and_returns() {
+    let mut h = harness(Setup::default());
+    let at = point(50.0, 50.0);
+    // 25 points every 10 ms, 2 500 points a second, from 100 of 140
+    for i in 1..=4 {
+        finger(&mut h, at, i * 10, 25.0, false);
+    }
+    assert_eq!(h.model().inner.offset.y, 100.0);
+    finger(&mut h, at, 40, 0.0, true);
+    let mut past = 0.0_f64;
+    let mut ms = 56;
+    while ms <= 1_500 {
+        frames(&mut h, ms, ms);
+        past = past.max(drawn(&h) - 140.0);
+        ms += 16;
+    }
+    assert!(past > 1.0, "the content carried {past} past the end");
+    assert_eq!(h.model().inner.offset.y, 140.0);
+    assert_eq!(drawn(&h), 140.0, "and returned to it");
+    assert!(!h.snapshot().pending.animating);
+}
+
+#[test]
+fn a_new_finger_catches_coasting_content_where_it_is() {
+    let mut h = harness(Setup::default());
+    let at = point(50.0, 50.0);
+    for i in 1..=4 {
+        finger(&mut h, at, i * 10, 8.0, false);
+    }
+    finger(&mut h, at, 40, 0.0, true);
+    frames(&mut h, 56, 104);
+    let caught = h.model().inner.offset.y;
+    assert!(caught > 32.0, "coasting to {caught}");
+    finger(&mut h, at, 104, 1.0, false);
+    let held = h.model().inner.offset.y;
+    assert!((held - caught - 1.0).abs() < 1e-6, "{held} after {caught}");
+    frames(&mut h, 120, 400);
+    assert_eq!(
+        h.model().inner.offset.y,
+        held,
+        "the content stays under the finger"
+    );
+}
+
+#[test]
+fn a_cancelled_touch_stops_the_drag_and_the_stretch_returns() {
+    use cupertino_ui_platform::TouchEvent;
+    let mut h = harness(Setup::default());
+    let send = |h: &mut Harness<Scrolled>, ms: u64, event| {
+        h.clock().advance_to(Timestamp(ms * MS)).unwrap();
+        h.rt.window_system_mut()
+            .enqueue_window(h.window, WindowEvent::Touch(event, Timestamp(0)))
+            .unwrap();
+        step(h);
+    };
+    send(
+        &mut h,
+        0,
+        TouchEvent::Down {
+            id: 1,
+            position: point(50.0, 20.0),
+        },
+    );
+    for i in 1..=4 {
+        let position = point(50.0, 20.0 + 30.0 * i as f64);
+        send(&mut h, i * 10, TouchEvent::Motion { id: 1, position });
+    }
+    assert!(
+        drawn(&h) < 0.0,
+        "the touch pulled the content down past the start"
+    );
+    send(&mut h, 50, TouchEvent::Cancel);
+    frames(&mut h, 66, 600);
+    assert_eq!(drawn(&h), 0.0);
+    assert!(!h.snapshot().pending.animating);
+}
+
+#[test]
+fn coasting_content_keeps_moving_while_the_pointer_scrolls_another_view() {
+    let mut h = harness(Setup {
+        nested: true,
+        ..Setup::default()
+    });
+    let inside = point(50.0, 30.0);
+    for i in 1..=4 {
+        finger(&mut h, inside, i * 10, 8.0, false);
+    }
+    finger(&mut h, inside, 40, 0.0, true);
+    frames(&mut h, 56, 88);
+    let coasting = h.model().inner.offset.y;
+    // below the inner view, in the outer one
+    let outside = point(50.0, 80.0);
+    send_now(&mut h, PointerEvent::Motion { position: outside });
+    h.clock().advance_to(Timestamp(96 * MS)).unwrap();
+    send_now(
+        &mut h,
+        PointerEvent::Scroll {
+            position: outside,
+            delta: Point::new(0.0, 20.0),
+            value120: None,
+            source: ScrollSource::Wheel,
+            stop: false,
+            inverted: (false, false),
+        },
+    );
+    assert_eq!(
+        h.model().outer.offset.y,
+        20.0,
+        "the wheel moves the view under it"
+    );
+    frames(&mut h, 104, 200);
+    assert!(
+        h.model().inner.offset.y > coasting,
+        "the inner view coasts on from {coasting} to {}",
+        h.model().inner.offset.y
+    );
+}

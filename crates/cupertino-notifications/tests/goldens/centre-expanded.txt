@@ -53,7 +53,7 @@ layout
   NodeId(32v1) cupertino_ui_controls::RichText<kit_goldens::Message> key=None parent=Some(NodeId(30v1)) children=[NodeId(33v1)] rect=[87,216.7294921875 91.37451171875x15.7294921875] clip=[0,84 388x153]
   NodeId(33v1) cupertino_ui_controls::rich_text::Body key=None parent=Some(NodeId(32v1)) children=[] rect=[87,216.7294921875 91.37451171875x15.7294921875] clip=[0,84 388x153]
   NodeId(34v1) cupertino_notifications::view::Label key=Some(Str("age")) parent=Some(NodeId(27v1)) children=[] rect=[300,200 56x15.399999999999999] clip=[0,84 388x153]
-  NodeId(35v1) cupertino_ui_controls::scroll::Bar<kit_goldens::Message> key=None parent=Some(NodeId(7v3)) children=[] rect=[372,84 16x153] clip=[none]
+  NodeId(35v1) cupertino_ui_controls::scroll::Bar<kit_goldens::Message> key=None parent=Some(NodeId(7v3)) children=[] rect=[371,84 17x153] clip=[none]
 semantics
   NodeId(21v1) role=StaticText name=Some("Stand-up") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[87,105 58.76025390625x15.7294921875] actions=[] relations=[] children=[]
   NodeId(23v1) role=StaticText name=Some("In 5 minutes") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[87,122.7294921875 74.66748046875x15.7294921875] actions=[] relations=[] children=[]
@@ -162,7 +162,7 @@ display
     Glyphs origin=0,12.59375 font=FontId(0) size=13 count=14 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
   paint 4294967330 parent=Some(4294967323) revision=26 bounds=[300,195.15625 68.998046875x27.5] hit=[300,200 56x15.400000000000006] clip=None transform=[1.0, 0.0, 0.0, 1.0, 300.0, 200.0]
     Glyphs origin=34.10205078125,11.65625 font=FontId(0) size=11 count=3 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }
-  paint 4294967331 parent=Some(12884901895) revision=68 bounds=[372,84 16x153] hit=[372,84 16x153] clip=None transform=[1.0, 0.0, 0.0, 1.0, 372.0, 84.0]
+  paint 4294967331 parent=Some(12884901895) revision=68 bounds=[371,84 17x153] hit=[371,84 17x153] clip=None transform=[1.0, 0.0, 0.0, 1.0, 371.0, 84.0]
 == announced
 Polite "Mail: First, From the inbox"
 Polite "Mail: Second, From the inbox"

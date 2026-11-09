@@ -290,6 +290,31 @@ impl Run {
             .bounds
     }
 
+    /// The size and colour of the glyphs of the label a screen reader reads as `name`: those of the paint node, which
+    /// takes in the glyphs' ink, whose centre lies nearest the label's.
+    fn glyphs(&self, name: &str) -> (f32, cupertino_kit::theme::Color) {
+        use cupertino_kit::render::PaintOp;
+        let label = self.bounds(Role::StaticText, name).center();
+        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
+        snapshot
+            .display_list
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                n.ops.iter().find_map(|op| match op {
+                    PaintOp::Glyphs { run, color, .. } => {
+                        let c = n.bounds.center();
+                        let distance = (c.x - label.x).hypot(c.y - label.y);
+                        Some((distance, run.size, *color))
+                    }
+                    _ => None,
+                })
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, size, color)| (size, color))
+            .unwrap_or_else(|| panic!("no glyphs for {name}"))
+    }
+
     /// The last frame's premultiplied pixels and the focus and accessibility lines of the dump.
     fn capture(&mut self) -> (Pixmap, String) {
         let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
@@ -425,6 +450,43 @@ fn a_light_session_darkens_the_glass_by_about_a_quarter() {
         dark.pixel(MEDIA_GLASS.0, MEDIA_GLASS.1).unwrap().alpha(),
         0,
         "the dark session draws the glass alone"
+    );
+}
+
+/// A tile's state is set in the theme's caption size under its title in the body size, and drawn quieter: the title
+/// in white at 0.85, the state at 0.70, so the state reads as a second line rather than a second title. The slider
+/// tiles' titles and Edit Controls are full white, in the body size. Increase Contrast draws the theme's own colours.
+#[test]
+fn a_tile_s_state_is_smaller_and_quieter_than_its_title() {
+    let run = Run::shown();
+    let alpha = |c: cupertino_kit::theme::Color| (c.a * 100.0).round() / 100.0;
+    for (title, state) in [("Wi-Fi", "Home Network"), ("Bluetooth", "Off")] {
+        let (title_size, title_color) = run.glyphs(title);
+        let (state_size, state_color) = run.glyphs(state);
+        assert_eq!((title_size, state_size), (13.0, 11.0), "{title}");
+        assert_eq!(
+            (alpha(title_color), alpha(state_color)),
+            (0.85, 0.7),
+            "{title}"
+        );
+    }
+    for full in ["Display", "Sound", "Edit Controls"] {
+        let (size, color) = run.glyphs(full);
+        assert_eq!((size, alpha(color)), (13.0, 1.0), "{full}");
+    }
+    assert_eq!(alpha(run.glyphs("Not Playing").1), 0.85);
+    assert_eq!(alpha(run.glyphs("Do Not Disturb").1), 0.85);
+
+    let contrast = Run::start(
+        tokens(Appearance::DarkHighContrast, false),
+        Presentation::SHOWN,
+    );
+    let (_, title) = contrast.glyphs("Wi-Fi");
+    let (size, state) = contrast.glyphs("Home Network");
+    assert_eq!(size, 11.0);
+    assert!(
+        alpha(title) > 0.85 && alpha(state) > 0.7,
+        "Increase Contrast keeps the theme's stronger labels: {title:?} {state:?}"
     );
 }
 

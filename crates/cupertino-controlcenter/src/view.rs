@@ -10,21 +10,24 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use cupertino_kit::controls::{Icon, IconDirection, Text, TextRole};
+use cupertino_kit::controls::{Icon, IconDirection};
 use cupertino_kit::core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, Checked, CommandRegistry,
-    Element, Event, EventCx, Glass, Key, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx,
-    Shortcut, Widget, Window, WindowBackground, WindowKey,
+    Element, Environment, Event, EventCx, Glass, Key, MeasureCx, PaintCx, Phase, Propagation, Role,
+    SemanticsCx, Shortcut, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
-    Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, Overflow, SizeSpec,
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
+    Overflow, SizeSpec,
 };
 use cupertino_kit::platform::{
     DecorationMode, Keysym, Mods, MouseButton, PointerEvent, WindowSpec,
 };
 use cupertino_kit::render::{GradientStop, Paint, PaintOp, Shape};
-use cupertino_kit::text::{AttributedText, FontWeight, TextStyle};
+use cupertino_kit::text::{
+    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, Wrap,
+};
 use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant};
 
 use crate::layout::{self, detail as rows, Outline, INSET, LARGE_RADIUS, WINDOW};
@@ -99,14 +102,20 @@ const ARTWORK: Color = Color::new(1.0, 1.0, 1.0, 0.12);
 const ARTWORK_RADIUS: f64 = 10.0;
 const SEPARATOR: Color = Color::new(1.0, 1.0, 1.0, 0.16);
 
-/// Type of the panel: titles 13 semibold, second lines 11, the Edit Controls label 12 medium, a detail's heading 11
-/// semibold, its rows 13.
-const TITLE_SIZE: f32 = 13.0;
+/// Type of the panel. Sizes come from the theme's type scale: titles in its body size (13) semibold, second lines in
+/// its caption size (11), the Edit Controls label in the body size medium, a detail's heading in the caption size
+/// semibold, its rows in the body size.
 const TITLE_WEIGHT: u16 = 600;
-const LINE_SIZE: f32 = 11.0;
-const EDIT_SIZE: f32 = 12.0;
+const LINE_WEIGHT: u16 = 400;
 const EDIT_WEIGHT: u16 = 500;
-const ROW_SIZE: f32 = 13.0;
+const ROW_WEIGHT: u16 = 400;
+
+/// How strongly the labels of a tile are drawn over its glass, as the opacity of the label colour: a title somewhat
+/// below full white, its second line clearly dimmer, so the state reads as a quieter line under the name. The slider
+/// tiles' titles and the Edit Controls label are drawn in full white. Increase Contrast draws every label in the
+/// theme's own colours.
+const TITLE_STRENGTH: f32 = 0.85;
+const LINE_STRENGTH: f32 = 0.70;
 
 /// A capsule's badge: its diameter, its inset from the capsule's leading and top edges, and where the text starts.
 const BADGE: f64 = 36.0;
@@ -266,31 +275,188 @@ fn symbol(controls: &Controls, module: Module) -> &'static str {
     }
 }
 
-fn style(size: f32, weight: u16) -> TextStyle {
-    TextStyle {
-        weight: FontWeight(weight),
-        ..TextStyle::new(size)
+/// Which size of the theme's type scale a label takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TypeSize {
+    Body,
+    Caption,
+}
+
+/// How a label is coloured.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tone {
+    /// A tile's title: the label colour at [`TITLE_STRENGTH`].
+    Title,
+    /// A tile's second line: the label colour at [`LINE_STRENGTH`].
+    Line,
+    /// The label colour at its full strength.
+    Primary,
+    /// The secondary label colour of the theme.
+    Secondary,
+}
+
+/// One label of the panel, set in its own size and weight and drawn in its tone. The kit's static text sets every
+/// label in the size of its role; the panel's second lines and headings are smaller than its titles.
+#[derive(Clone, Debug, PartialEq)]
+struct Label {
+    content: String,
+    size: TypeSize,
+    weight: u16,
+    tone: Tone,
+    /// Wraps onto more lines where its block is too narrow; else one line that ends in an ellipsis.
+    wrap: bool,
+}
+
+impl Label {
+    fn laid_out(&self, env: &Environment, width: f64) -> Option<ParagraphLayout> {
+        let scale = &env.theme.type_scale;
+        let size = match self.size {
+            TypeSize::Body => scale.body.size,
+            TypeSize::Caption => scale.caption.size,
+        };
+        let content = AttributedText::plain(
+            &self.content,
+            TextStyle {
+                weight: FontWeight(self.weight),
+                ..TextStyle::new(size)
+            },
+        );
+        let style = ParagraphStyle {
+            align: match env.direction {
+                LayoutDirection::Ltr => TextAlign::Left,
+                LayoutDirection::Rtl => TextAlign::Right,
+            },
+            wrap: if self.wrap { Wrap::Word } else { Wrap::None },
+            ellipsis: !self.wrap,
+            ..ParagraphStyle::default()
+        };
+        let paragraph = env.text.paragraph(&content, &style).ok()?;
+        let width = width.is_finite().then_some(width as f32);
+        if self.wrap {
+            return Some(paragraph.layout(width));
+        }
+        let line = paragraph.layout(None);
+        Some(match width {
+            Some(width) if line.size().width > f64::from(width) => {
+                let cut = paragraph.layout(Some(width));
+                paragraph.layout(Some(cut.size().width as f32))
+            }
+            _ => line,
+        })
+    }
+
+    /// The colour of the label where it is painted.
+    fn color(&self, cx: &PaintCx<'_>) -> Color {
+        let colors = &cx.env().theme.colors;
+        let white = |a: f32| Color::new(1.0, 1.0, 1.0, a);
+        let label = colors
+            .get(ColorRole::Text, StateVariant::NORMAL)
+            .unwrap_or(white(1.0));
+        let secondary = colors
+            .get(ColorRole::SecondaryText, StateVariant::NORMAL)
+            .unwrap_or(white(0.55));
+        let at = |strength: f32| Color {
+            a: label.a.min(strength),
+            ..label
+        };
+        match (self.tone, increase_contrast(cx)) {
+            (Tone::Title, false) => at(TITLE_STRENGTH),
+            (Tone::Line, false) => at(LINE_STRENGTH),
+            (Tone::Title | Tone::Primary, _) => label,
+            (Tone::Line | Tone::Secondary, _) => secondary,
+        }
     }
 }
 
-fn text<M: 'static>(content: &str, size: f32, weight: u16, secondary: bool) -> Element<M> {
-    Element::new(Text {
-        content: AttributedText::plain(content, style(size, weight)),
-        role: TextRole::Body,
+impl<M: 'static> Widget<M> for Label {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.content != old.content
+            || self.size != old.size
+            || self.weight != old.weight
+            || self.wrap != old.wrap
+        {
+            Change::Layout
+        } else if self != old {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), constraints: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        match self.laid_out(cx.env(), constraints.width.max()) {
+            Some(layout) => Measured {
+                size: layout.size(),
+                baseline: layout.lines().first().map(|line| line.baseline),
+            },
+            None => Measured {
+                size: Size::ZERO,
+                baseline: None,
+            },
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let width = cx.size().width;
+        let Some(layout) = self.laid_out(cx.env(), width) else {
+            return;
+        };
+        let origin = match cx.env().direction {
+            LayoutDirection::Ltr => Point::ZERO,
+            LayoutDirection::Rtl => Point::new(
+                width - layout.lines().first().map_or(0.0, |line| line.rect.width()),
+                0.0,
+            ),
+        };
+        let color = self.color(cx);
+        for line in layout.lines() {
+            for run in &line.runs {
+                cx.push(PaintOp::Glyphs {
+                    origin: origin + run.origin,
+                    run: run.run.clone(),
+                    color,
+                });
+            }
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::StaticText);
+        cx.name(self.content.clone());
+    }
+}
+
+/// A label on one line.
+fn text<M: 'static>(content: &str, size: TypeSize, weight: u16, tone: Tone) -> Element<M> {
+    Element::new(Label {
+        content: content.to_owned(),
+        size,
+        weight,
+        tone,
         wrap: false,
-        secondary,
-        selected: false,
     })
 }
 
-/// Text that wraps onto more lines where its block is too narrow, as a capsule's title and state do.
-fn wrapping<M: 'static>(content: &str, size: f32, weight: u16, secondary: bool) -> Element<M> {
-    Element::new(Text {
-        content: AttributedText::plain(content, style(size, weight)),
-        role: TextRole::Body,
+/// A label that wraps onto more lines where its block is too narrow, as a capsule's title and state do.
+fn wrapping<M: 'static>(content: &str, size: TypeSize, weight: u16, tone: Tone) -> Element<M> {
+    Element::new(Label {
+        content: content.to_owned(),
+        size,
+        weight,
+        tone,
         wrap: true,
-        secondary,
-        selected: false,
     })
 }
 
@@ -1354,9 +1520,9 @@ impl<M: Clone + 'static> Builder<'_, M> {
         width: f64,
         height: f64,
     ) -> Element<M> {
-        let mut children = vec![wrapping(title, TITLE_SIZE, TITLE_WEIGHT, false)];
+        let mut children = vec![wrapping(title, TypeSize::Body, TITLE_WEIGHT, Tone::Title)];
         if let Some(line) = line {
-            children.push(wrapping(line, LINE_SIZE, 400, true));
+            children.push(wrapping(line, TypeSize::Caption, LINE_WEIGHT, Tone::Line));
         }
         Place::stack(
             Rect::new(x, 0.0, (width - x - TEXT_END_INSET).max(0.0), height),
@@ -1486,8 +1652,8 @@ impl<M: Clone + 'static> Builder<'_, M> {
             Axis::Vertical,
             false,
             [
-                Some(text(title, TITLE_SIZE, TITLE_WEIGHT, false)),
-                artist.map(|a| text(a, LINE_SIZE, 400, true)),
+                Some(text(title, TypeSize::Body, TITLE_WEIGHT, Tone::Title)),
+                artist.map(|a| text(a, TypeSize::Caption, LINE_WEIGHT, Tone::Line)),
             ]
             .into_iter()
             .flatten()
@@ -1561,7 +1727,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
     fn slider(&self, slider: Slider, origin: Point, header: bool) -> Vec<Element<M>> {
         let module = slider.module();
         let detail = module.detail().expect("both sliders have a detail view");
-        let title = text(module.title(), TITLE_SIZE, TITLE_WEIGHT, false);
+        let title = text(module.title(), TypeSize::Body, TITLE_WEIGHT, Tone::Primary);
         let title_frame = Rect::new(
             SLIDER_TITLE_INSET - 8.0,
             SLIDER_TITLE_TOP - 4.0,
@@ -1764,7 +1930,12 @@ impl<M: Clone + 'static> Builder<'_, M> {
             ),
             Axis::Horizontal,
             false,
-            vec![text(detail.heading(), LINE_SIZE, TITLE_WEIGHT, true)],
+            vec![text(
+                detail.heading(),
+                TypeSize::Caption,
+                TITLE_WEIGHT,
+                Tone::Secondary,
+            )],
         ));
         let mut y = rows::HEADER + rows::HEADING;
         match self.rows(detail) {
@@ -1806,7 +1977,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
                     ),
                     Axis::Horizontal,
                     false,
-                    vec![text(&message, ROW_SIZE, 400, true)],
+                    vec![text(&message, TypeSize::Body, ROW_WEIGHT, Tone::Secondary)],
                 ));
                 y += rows::ITEM;
             }
@@ -1838,7 +2009,12 @@ impl<M: Clone + 'static> Builder<'_, M> {
                 false,
                 vec![
                     Element::new(Spacer8),
-                    text(detail.settings_label(), ROW_SIZE, 400, false),
+                    text(
+                        detail.settings_label(),
+                        TypeSize::Body,
+                        ROW_WEIGHT,
+                        Tone::Primary,
+                    ),
                 ],
             )],
         ));
@@ -1867,7 +2043,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
                 ),
                 Axis::Horizontal,
                 false,
-                vec![text(&row.label, ROW_SIZE, 400, false)],
+                vec![text(&row.label, TypeSize::Body, ROW_WEIGHT, Tone::Primary)],
             ),
         ];
         if let Some(trailing) = row.trailing {
@@ -1927,7 +2103,12 @@ impl<M: Clone + 'static> Builder<'_, M> {
                 Rect::from_origin_size(Point::ZERO, size),
                 true,
                 Some(Input::EditControls),
-                vec![text("Edit Controls", EDIT_SIZE, EDIT_WEIGHT, false)],
+                vec![text(
+                    "Edit Controls",
+                    TypeSize::Body,
+                    EDIT_WEIGHT,
+                    Tone::Primary,
+                )],
             )],
         )
     }

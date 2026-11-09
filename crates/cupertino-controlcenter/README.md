@@ -64,10 +64,15 @@ the top margin adds the theme's menu bar height. The catcher (`view::CATCHER_APP
 it, over the whole output.
 
 **Tiles.** A capsule shows a 36 pt badge 14 pt in from its leading and top edges, white with the symbol in the accent
-colour when the module is on, a light veil when it is off, and its title (13 semibold) over its state (11, secondary),
-wrapping onto a second line where the column is too narrow. The badge is the module's switch. On Wi-Fi and Bluetooth the
-text is a second control that opens the detail view. A circular tile is a switch or button as a whole, white when on. The
-media tile shows an artwork placeholder, what plays (or "Not Playing") and the previous, play or pause and next buttons,
+colour when the module is on, a light veil when it is off, and its title (13 semibold) over its state (11 regular),
+wrapping onto a second line where the column is too narrow. The sizes are the theme's body and caption sizes; the panel
+sets its labels itself (`view::Label`), since the kit's static text sets every label in its role's size. Over the glass a
+tile's title is white at 0.85 and its state white at 0.70, so the state reads as a quieter line under the name; the
+display and sound tiles' titles and the Edit Controls label (13 medium) are full white, and a detail's heading is 11
+semibold in the secondary label colour. Increase Contrast draws every label in the theme's own colours. The badge is the
+module's switch. On Wi-Fi and Bluetooth the text is a second control that opens the detail view. A circular tile is a
+switch or button as a whole, white when on. The media tile shows an artwork placeholder, what plays (or "Not Playing")
+and the previous, play or pause and next buttons,
 disabled while no player can take them. The display and sound tiles show their title, which opens the detail view, and a
 4 pt level, white over a faint track, without a knob, between their symbols; the sound tile also has the output button that
 opens its detail view. A press on a tile away from its controls does nothing; a press between the tiles dismisses the

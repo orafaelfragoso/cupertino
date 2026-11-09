@@ -119,7 +119,12 @@ fn send_display_options(observer: &CupertinoSessionV1, options: DisplayOptions) 
     observer.display_options(bits);
 }
 
-/// `display_options` with the bits of `options`, and `always_show_scroll_bars` when the scroll bars stay shown.
+/// The version of `cupertino_appearance_v1` that knows the `always_show_scroll_bars` display option; an older
+/// observer takes an unknown bit as a protocol error, so it is never sent one.
+const SCROLL_BARS_VERSION: u32 = 8;
+
+/// `display_options` with the bits of `options`, and `always_show_scroll_bars` when the scroll bars stay shown and the
+/// observer knows the bit.
 fn send_appearance_options(
     observer: &CupertinoAppearanceV1,
     options: DisplayOptions,
@@ -128,7 +133,7 @@ fn send_appearance_options(
     let mut bits = AppearanceOption::empty();
     bits.set(
         AppearanceOption::AlwaysShowScrollBars,
-        always_show_scroll_bars,
+        always_show_scroll_bars && observer.version() >= SCROLL_BARS_VERSION,
     );
     bits.set(AppearanceOption::ReduceMotion, options.reduce_motion);
     bits.set(
@@ -220,7 +225,10 @@ impl Cupertino {
         self.sessions.always_show_scroll_bars = always;
         let options = self.display_options();
         for observer in &self.sessions.appearance_observers {
-            send_appearance_options(observer, options, always);
+            // an older observer would be told the same options again
+            if observer.version() >= SCROLL_BARS_VERSION {
+                send_appearance_options(observer, options, always);
+            }
         }
     }
 

@@ -12,12 +12,13 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="7">
+  <interface name="cupertino_app_effects_v1" version="8">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
       event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
       event of cupertino_appearance_v1, version 6 the unified_compact and sidebar title bar styles and
-      set_glass of cupertino_backdrop_v1, version 7 the tone event of cupertino_backdrop_v1; the other interfaces of the protocol are unchanged in each.
+      set_glass of cupertino_backdrop_v1, version 7 the tone event of cupertino_backdrop_v1, version 8 the always_show_scroll_bars display
+      option of cupertino_appearance_v1; the other interfaces of the protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -229,7 +230,7 @@
     </event>
   </interface>
 
-  <interface name="cupertino_appearance_v1" version="5">
+  <interface name="cupertino_appearance_v1" version="8">
     <description summary="appearance and display options of the session">
       Right after the object is created the server sends appearance, then display_options, then
       from version 5 session_lock. The object has the version of the cupertino_app_effects_v1
@@ -254,20 +255,20 @@
       <entry name="reduce_transparency" value="2" summary="draw materials opaque"/>
       <entry name="increase_contrast" value="4" summary="draw with the high-contrast colours"/>
       <entry name="differentiate_without_color" value="8" summary="do not carry state by colour alone"/>
-      <entry name="always_show_scroll_bars" value="16" summary="show scroll bars beside the content at all times"/>
+      <entry name="always_show_scroll_bars" value="16" summary="show scroll bars beside the content at all times" since="8"/>
     </enum>
 
     <event name="display_options">
       <description summary="the accessibility display options of the session">
         The options that are on. The client draws again with them: with reduce_motion it fades
         what it would slide, scale or magnify; with reduce_transparency and increase_contrast it
-        picks its opaque and high-contrast palettes; with always_show_scroll_bars it gives its
+        picks its opaque and high-contrast palettes; from version 8, with always_show_scroll_bars it gives its
         scroll views tracks beside their content that stay shown, and without it thin scroll
         bars over the content that show only while it scrolls. The server sets
         always_show_scroll_bars from the session's scroll bar setting, deciding an automatic one by
         whether a mouse is connected. The materials of the client's backdrops
         follow the options in the server and need no request. Bits the client does not know
-        are reserved and stay 0.
+        are reserved and stay 0: an object below version 8 is never sent always_show_scroll_bars.
       </description>
       <arg name="options" type="uint" enum="display_option"/>
     </event>

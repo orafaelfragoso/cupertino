@@ -465,7 +465,7 @@ Shortcuts are the `cupertino-input` `ShortcutMap` (defaults approximate, `Super`
 | `trackpad_acceleration` | bool | `true` | pointer acceleration of touchpads; off gives a constant gain by `trackpad_speed` |
 | `natural_scrolling` | bool | `true` | natural scrolling of touchpads; applies live, to the next event of every touchpad. It no longer covers wheels: a file that sets it to `true` and has no `mouse_natural_scrolling` now scrolls wheels the traditional way |
 | `mouse_natural_scrolling` | bool | `false` | natural scrolling of wheels; applies live, to the next event of every mouse |
-| `show_scroll_bars` | `automatic`, `when-scrolling`, `always` | `automatic` | when applications show their scroll bars; `automatic` shows them beside the content while a mouse is connected; applies live |
+| `show_scroll_bars` | `automatic`, `when-scrolling`, `always` | `automatic` | when applications show their scroll bars; `automatic` shows them beside the content while a mouse is connected; applies live; appearance observers of version 8 and later are told (`always_show_scroll_bars`), older ones keep their own bars |
 | `wallpaper`, `wallpaper_dark` | absolute path | none | the wallpaper image (PNG or JPEG) and the one of the dark appearance (`wallpaper` serves both when only it is set); applies live |
 | `cursor_size` | number | `1.0` | cursor scale, clamped to 1 to 4 |
 | `cursor_fill`, `cursor_outline` | `#rrggbb` or `#rrggbbaa` | `#000000`, `#ffffffff` | cursor colours |

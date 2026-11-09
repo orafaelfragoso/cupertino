@@ -546,11 +546,13 @@ fn spawn_server(
                 Ok(Control::AppearanceChange) => {
                     let observer = mock.appearance.as_ref().unwrap();
                     observer.appearance(0);
-                    observer.display_options(
-                        DisplayOption::ReduceTransparency
-                            | DisplayOption::IncreaseContrast
-                            | DisplayOption::AlwaysShowScrollBars,
-                    );
+                    // as the server does, the scroll bar bit only to an observer that knows it
+                    let mut options =
+                        DisplayOption::ReduceTransparency | DisplayOption::IncreaseContrast;
+                    if observer.version() >= 8 {
+                        options |= DisplayOption::AlwaysShowScrollBars;
+                    }
+                    observer.display_options(options);
                 }
                 Ok(Control::Lock) => {
                     let observer = mock.appearance.as_ref().unwrap();
@@ -684,26 +686,31 @@ fn present(conn: &mut Connection, stash: &mut Stash, surface: SurfaceId, preferr
     stash.extend(conn.wait(Some(Duration::from_millis(50))).unwrap());
 }
 
+/// From version 8 each display options is followed by whether scroll bars stay shown; an older observer is never
+/// sent the bit and the views keep their own bars.
 #[test]
 fn the_appearance_and_display_options_arrive_at_once_and_on_every_change() {
-    let (mut conn, control, _committed, _seen) = connect();
-    let effects = AppEffects::bind(&mut conn).unwrap();
-    let _appearance = effects.appearance(&conn);
-    conn.roundtrip().unwrap();
-    let mut stash = Stash::new();
-    let mut changes = Vec::new();
-    wait_for(&mut conn, &mut stash, |e| {
-        changes.extend(app_event(e));
-        (changes.len() == 3).then_some(())
-    });
-    control.send(Control::AppearanceChange).unwrap();
-    wait_for(&mut conn, &mut stash, |e| {
-        changes.extend(app_event(e));
-        (changes.len() == 6).then_some(())
-    });
-    assert_eq!(
-        changes,
-        [
+    for version in [7, 8] {
+        let (mut conn, control, _committed, _seen) = connect_at(version);
+        let effects = AppEffects::bind(&mut conn).unwrap();
+        let _appearance = effects.appearance(&conn);
+        conn.roundtrip().unwrap();
+        let mut stash = Stash::new();
+        let mut changes = Vec::new();
+        let told = version >= 8;
+        let (first, all) = if told { (3, 6) } else { (2, 4) };
+        wait_for(&mut conn, &mut stash, |e| {
+            // the lock state is another test's
+            changes.extend(app_event(e).filter(|e| !matches!(e, AppEvent::SessionLock { .. })));
+            (changes.len() == first).then_some(())
+        });
+        control.send(Control::AppearanceChange).unwrap();
+        wait_for(&mut conn, &mut stash, |e| {
+            // the lock state is another test's
+            changes.extend(app_event(e).filter(|e| !matches!(e, AppEvent::SessionLock { .. })));
+            (changes.len() == all).then_some(())
+        });
+        let mut want = vec![
             AppEvent::Appearance { dark: true },
             AppEvent::DisplayOptions(DisplayOptions {
                 reduce_motion: true,
@@ -717,8 +724,12 @@ fn the_appearance_and_display_options_arrive_at_once_and_on_every_change() {
                 ..DisplayOptions::default()
             }),
             AppEvent::ScrollBars { always: true },
-        ]
-    );
+        ];
+        if !told {
+            want.retain(|e| !matches!(e, AppEvent::ScrollBars { .. }));
+        }
+        assert_eq!(changes, want, "version {version}");
+    }
 }
 
 #[test]
@@ -746,10 +757,10 @@ fn a_version_5_observer_is_told_the_lock_state_after_the_appearance_and_on_every
         if told {
             assert_eq!(
                 locks,
-                // after the appearance, the display options and the scroll bars
+                // after the appearance and the display options (no scroll bars below version 8)
                 [
-                    (3, &AppEvent::SessionLock { locked: false }),
-                    (4, &AppEvent::SessionLock { locked: true })
+                    (2, &AppEvent::SessionLock { locked: false }),
+                    (3, &AppEvent::SessionLock { locked: true })
                 ]
             );
         } else {

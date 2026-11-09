@@ -55,7 +55,7 @@ fn a_pack_without_a_required_symbol_names_it_and_the_start_goes_on() {
     let out = start(&bus, data.path(), Some(dir.path()));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("`symbol.trackpad`")
+        stderr.contains("`symbol.trackpad.fill`")
             && stderr.contains("cannot connect to the display server"),
         "{stderr}"
     );

@@ -79,7 +79,7 @@ pub enum Volume {
 }
 
 impl PlaceKind {
-    /// The semantic name of the sidebar's template symbol.
+    /// The semantic name of the place's template symbol, the outline the path bar shows.
     pub fn symbol(self) -> &'static str {
         match self {
             PlaceKind::Home => "symbol.house",
@@ -96,6 +96,27 @@ impl PlaceKind {
             PlaceKind::Removable(_, Medium::Disk) => "symbol.externaldrive",
             PlaceKind::Removable(_, Medium::Stick) => "symbol.flash-drive",
             PlaceKind::Removable(_, Medium::Card) => "symbol.memory-card",
+        }
+    }
+
+    /// The semantic name of the filled symbol the place's sidebar row wears: the template symbol's filled edition,
+    /// which reads at a sidebar's small size and takes the row's tint whole.
+    pub fn sidebar_symbol(self) -> &'static str {
+        match self {
+            PlaceKind::Home => "symbol.house.fill",
+            PlaceKind::Desktop => "symbol.desktop.fill",
+            PlaceKind::Documents => "symbol.document.fill",
+            PlaceKind::Downloads => "symbol.download.fill",
+            PlaceKind::Music => "symbol.music.fill",
+            PlaceKind::Pictures => "symbol.photo.fill",
+            PlaceKind::Videos => "symbol.film.fill",
+            PlaceKind::Recents => "symbol.recents.fill",
+            PlaceKind::Applications => "symbol.applications.fill",
+            PlaceKind::Computer => "symbol.computer.fill",
+            PlaceKind::Trash => "symbol.trash.fill",
+            PlaceKind::Removable(_, Medium::Disk) => "symbol.externaldrive.fill",
+            PlaceKind::Removable(_, Medium::Stick) => "symbol.flash-drive.fill",
+            PlaceKind::Removable(_, Medium::Card) => "symbol.memory-card.fill",
         }
     }
 
@@ -637,6 +658,32 @@ mod tests {
         assert_eq!(symbol(Medium::Card), "symbol.memory-card");
         for medium in [Medium::Disk, Medium::Stick, Medium::Card] {
             assert_ne!(symbol(medium), PlaceKind::Computer.symbol());
+        }
+    }
+
+    /// Each place's sidebar row wears the filled edition of the outline the path bar shows for it.
+    #[test]
+    fn a_sidebar_row_wears_the_filled_edition_of_its_place_s_symbol() {
+        let mut kinds = vec![
+            PlaceKind::Home,
+            PlaceKind::Desktop,
+            PlaceKind::Documents,
+            PlaceKind::Downloads,
+            PlaceKind::Music,
+            PlaceKind::Pictures,
+            PlaceKind::Videos,
+            PlaceKind::Recents,
+            PlaceKind::Applications,
+            PlaceKind::Computer,
+            PlaceKind::Trash,
+        ];
+        for medium in [Medium::Disk, Medium::Stick, Medium::Card] {
+            for volume in [Volume::Unmounted, Volume::Mounted, Volume::Busy] {
+                kinds.push(PlaceKind::Removable(volume, medium));
+            }
+        }
+        for kind in kinds {
+            assert_eq!(kind.sidebar_symbol(), format!("{}.fill", kind.symbol()), "{kind:?}");
         }
     }
 

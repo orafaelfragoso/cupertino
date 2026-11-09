@@ -188,7 +188,8 @@ Applications, Desktop, Documents and Downloads (the nearby-sharing item has no c
 computer (the file system root, under the pretty host name of `/etc/machine-info`, else the host name), removable media
 and Trash under Locations; and under a Tags heading, always there, each tag a listed item carries (above). Names are cut at the tail. The sidebar
 takes the toolkit's neutral look for lists of places (`SidebarLook::Neutral`): the selected row in a neutral tint with
-its label semibold, the Favorites' symbols in the accent colour and the others' in the secondary label colour; in a
+its label semibold, each row's symbol the filled edition of its place's (`PlaceKind::sidebar_symbol`, a tag's
+`symbol.tag.fill`; the path bar keeps the outlines), the Favorites' symbols in the accent colour and the others' in the secondary label colour; in a
 window that is not the one in use every symbol, the selected one too, is the secondary label colour, while an open
 context menu keeps the window in use. The places
 are live (`kit::places`): a change of the user directories or their configuration shows at once, and Trash comes with

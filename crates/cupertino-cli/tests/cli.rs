@@ -156,13 +156,26 @@ fn the_json_help_lists_the_command_tree_under_the_topic() {
         ]
     }]);
     for args in [
-        &["--format", "json", "help"][..],
-        &["--format", "json", "help", "appearance", "assets"],
+        &["--format", "json", "help", "appearance", "assets"][..],
         &["--format", "json", "appearance", "--help"],
     ] {
         let out = cupertino(args);
         assert_eq!((out.code, &json(&out)["data"]), (0, &tree), "{args:?}");
     }
+    // the whole tree: every command of the registry, in registry order, this one first
+    let all = cupertino(&["--format", "json", "help"]);
+    let entries = json(&all)["data"].as_array().unwrap().clone();
+    assert_eq!(entries[0], tree[0]);
+    let paths: Vec<&str> = entries
+        .iter()
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
+    let registry: Vec<String> = cupertino_cli::REGISTRY
+        .iter()
+        .flat_map(cupertino_cli::Group::commands)
+        .map(|c| c.name())
+        .collect();
+    assert_eq!(paths, registry);
     let unknown = cupertino(&["help", "packages"]);
     assert_eq!(
         (unknown.code, unknown.stderr.as_str()),

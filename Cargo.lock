@@ -1025,9 +1025,11 @@ version = "0.1.0"
 dependencies = [
  "cupertino-assets",
  "cupertino-build-info",
+ "cupertino-diagnostics",
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

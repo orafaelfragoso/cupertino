@@ -21,7 +21,7 @@ use crate::view::{self, Input, KeyMode, PanelView, MAX_ROWS};
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// A launch waiting for its activation token.
@@ -50,8 +50,9 @@ pub const BROWSE_BOTTOM_ROOM: f64 = 96.0;
 pub const STATUS_SETTLE: f64 = crate::providers::DEADLINE;
 /// How many queries the panel remembers having said a status of.
 const MAX_SAID: usize = 32;
-/// Application icons the browser loads in one pass; the rest come on the next passes.
-pub const BROWSE_ICONS_PER_PASS: usize = 14;
+/// The most application icons the browser has being loaded at once, off the loop: those nearest the view are asked
+/// first, and each one that arrives makes room for the next.
+pub const MAX_APP_ICON_LOADS: usize = 14;
 
 /// A file search for the host to run off the loop: [`engine::file_sections`] over `index`, answered as
 /// [`Message::Provided`] with `generation`, given up once `cancel` is cancelled.
@@ -111,9 +112,14 @@ pub trait Host {
     fn frame(&mut self, frame: u64) -> Vec<Command<Message>>;
     /// The renditions of `item`'s icon, one per output scale it is loaded at; none to show its kind's symbol.
     fn icon(&mut self, item: &ResultItem) -> Vec<ImageSource>;
-    /// The renditions of an application's icon at the browser's sizes; none draws a placeholder.
-    fn app_icon(&mut self, _app: &App) -> Vec<ImageSource> {
-        Vec::new()
+    /// Load and decode the renditions of an application's icon at the browser's sizes off the loop; the commands
+    /// deliver them as [`Message::AppIcon`] with its desktop ID, none to draw a placeholder. The default delivers none
+    /// at once.
+    fn app_icon(&mut self, app: &App) -> Vec<Command<Message>> {
+        let id = app.id.clone();
+        vec![Command::Perform(Box::pin(async move {
+            Message::AppIcon(id, Vec::new())
+        }))]
     }
     /// Find out what the preview shows of `item`, the selected result, off the loop; the commands deliver it as
     /// [`Message::Previewed`]. None when the preview shows only the result itself.
@@ -183,6 +189,8 @@ pub enum Message {
     PreviewOverdue(String),
     /// A slow provider answered.
     Provided(Update),
+    /// The renditions of the icon of the browser's application with this desktop ID arrived ([`Host::app_icon`]).
+    AppIcon(String, Vec<ImageSource>),
     /// The slow providers of this generation are overdue.
     Overdue(Generation),
     /// The query of this change ([`Model::query_change`]) has stood for [`STATUS_SETTLE`]: what the panel says of it
@@ -226,6 +234,8 @@ pub struct Model {
     pub icons: HashMap<String, Vec<ImageSource>>,
     /// Images of the browser's applications by desktop ID.
     pub app_icons: HashMap<String, Vec<ImageSource>>,
+    /// The applications whose icons are being loaded, at most [`MAX_APP_ICON_LOADS`].
+    app_icons_loading: HashSet<String>,
     /// Where the file index is built from; `None` without file results.
     pub files: Option<FileSearchConfig>,
     /// Put every transition at its end at once (the server's settled test clock).
@@ -278,6 +288,7 @@ impl Model {
             revision: 0,
             icons: HashMap::new(),
             app_icons: HashMap::new(),
+            app_icons_loading: HashSet::new(),
             files: None,
             settled: false,
             host,
@@ -674,7 +685,9 @@ impl Model {
         commands
     }
 
-    /// Load the icons of the browser's applications near the view, a few at a time; more frames while some are left.
+    /// Ask for the icons of the browser's applications near the view, nearest first, while fewer than
+    /// [`MAX_APP_ICON_LOADS`] are being loaded. The host loads and decodes them off the loop; each that arrives
+    /// ([`Message::AppIcon`]) makes room for the next.
     fn load_app_icons(&mut self) -> Vec<Command<Message>> {
         let Some(browser) = self
             .browser
@@ -683,23 +696,28 @@ impl Model {
         else {
             return Vec::new();
         };
+        let room = MAX_APP_ICON_LOADS.saturating_sub(self.app_icons_loading.len());
         let wanted: Vec<App> = browser
             .nearby()
             .into_iter()
             .filter_map(|i| browser.item(i))
-            .filter(|a| !self.app_icons.contains_key(&a.id))
+            .filter(|a| {
+                !self.app_icons.contains_key(&a.id) && !self.app_icons_loading.contains(&a.id)
+            })
+            .take(room)
             .cloned()
             .collect();
-        for app in wanted.iter().take(BROWSE_ICONS_PER_PASS) {
-            let sources = self.host.app_icon(app);
-            self.app_icons.insert(app.id.clone(), sources);
+        let mut commands = Vec::new();
+        for app in &wanted {
+            self.app_icons_loading.insert(app.id.clone());
+            commands.extend(self.host.app_icon(app));
         }
-        if wanted.len() > BROWSE_ICONS_PER_PASS {
-            self.frame += 1;
-            self.host.frame(self.frame)
-        } else {
-            Vec::new()
-        }
+        commands
+    }
+
+    /// The applications whose icons are being loaded now.
+    pub fn app_icons_loading(&self) -> usize {
+        self.app_icons_loading.len()
     }
 
     /// Carry out what the panel asked for.
@@ -1155,6 +1173,11 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
                     eprintln!("cupertino-launcher: the file search did not answer in time");
                 }
             }
+            Vec::new()
+        }
+        Message::AppIcon(id, sources) => {
+            model.app_icons_loading.remove(&id);
+            model.app_icons.insert(id, sources);
             Vec::new()
         }
         Message::Settled(change) => {

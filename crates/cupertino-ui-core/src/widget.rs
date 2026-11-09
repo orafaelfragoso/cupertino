@@ -69,7 +69,8 @@ pub trait Widget<M>: 'static {
     /// ([`PaintCx::obscured`]): scroll containers reveal what they scroll to below it and overlays such as a caret are
     /// cut from it. Where the window system has no raised layer
     /// ([`Capabilities::raised_layer`](cupertino_ui_platform::Capabilities)) the nodes draw in place, over what comes
-    /// before them, and paint their own fills for the materials they ask for. A widget whose answer changes returns
+    /// before them, with their materials under the window as any other's, and scroll containers outside them clip
+    /// what they scroll to the part the raised nodes leave, so nothing scrolls over those materials. A widget whose answer changes returns
     /// [`Change::Layout`] from its update.
     fn raised(&self, _state: &Self::State) -> bool {
         false

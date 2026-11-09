@@ -3,9 +3,9 @@
 //!
 //! The soft edge veils the content with the window background, strong over the upper part of the covered band and
 //! easing out to nothing at its bottom ([`soft_edge_opacity`]), so content fades as it passes under the row. The hard
-//! edge fills the band with the window background and draws a separator along its bottom: with Reduce Transparency, in
-//! high contrast, and where the window system has no raised layer (the row's controls then paint their own fills), so
-//! the row reads as a solid bar.
+//! edge fills the band with the window background and draws a separator along its bottom, so the row reads as a solid
+//! bar: with Reduce Transparency and in high contrast. Where the window system has no raised layer nothing scrolls
+//! under raised nodes (their scroll containers clip it away) and there is no edge.
 
 use cupertino_geometry::{Point, Rect};
 use cupertino_ui_core::{OverlayCx, PaintCx};
@@ -28,10 +28,9 @@ pub enum ScrollEdge {
     Hard,
 }
 
-/// The edge for the theme's preferences in a window whose raised nodes draw in a layer of their own (`layered`) or
-/// in place.
-pub fn scroll_edge(preferences: &ThemePreferences, layered: bool) -> ScrollEdge {
-    if !layered || preferences.reduce_transparency || preferences.appearance.is_high_contrast() {
+/// The edge for the theme's preferences.
+pub fn scroll_edge(preferences: &ThemePreferences) -> ScrollEdge {
+    if preferences.reduce_transparency || preferences.appearance.is_high_contrast() {
         ScrollEdge::Hard
     } else {
         ScrollEdge::Soft
@@ -76,15 +75,19 @@ pub(crate) struct EdgeLook {
 }
 
 impl EdgeLook {
-    /// The edge of a node `band` points of whose top raised nodes cover.
-    pub(crate) fn of(cx: &PaintCx<'_>, band: f64) -> Self {
+    /// The edge of a node `band` points of whose top raised nodes cover; none where they draw in place, with nothing
+    /// scrolled under them.
+    pub(crate) fn of(cx: &PaintCx<'_>, band: f64) -> Option<Self> {
+        if !cx.raised_layer() {
+            return None;
+        }
         let theme = &cx.env().theme;
         let state = StateVariant {
             window_active: cx.window_active(),
             ..StateVariant::NORMAL
         };
-        let edge = scroll_edge(&theme.preferences, cx.raised_layer());
-        Self {
+        let edge = scroll_edge(&theme.preferences);
+        Some(Self {
             edge,
             background: theme
                 .colors
@@ -95,7 +98,7 @@ impl EdgeLook {
                 ScrollEdge::Soft => None,
             },
             band,
-        }
+        })
     }
 
     pub(crate) fn paint(&self, cx: &mut OverlayCx<'_>) {
@@ -174,31 +177,18 @@ mod tests {
     }
 
     #[test]
-    fn reduce_transparency_high_contrast_and_no_layer_give_a_solid_edge() {
+    fn reduce_transparency_and_high_contrast_give_a_solid_edge() {
         let prefs = |appearance, reduce_transparency| ThemePreferences {
             appearance,
             reduce_transparency,
             reduce_motion: false,
         };
         for appearance in [Appearance::Light, Appearance::Dark] {
-            assert_eq!(
-                scroll_edge(&prefs(appearance, false), true),
-                ScrollEdge::Soft
-            );
-            assert_eq!(
-                scroll_edge(&prefs(appearance, true), true),
-                ScrollEdge::Hard
-            );
-            assert_eq!(
-                scroll_edge(&prefs(appearance, false), false),
-                ScrollEdge::Hard
-            );
+            assert_eq!(scroll_edge(&prefs(appearance, false)), ScrollEdge::Soft);
+            assert_eq!(scroll_edge(&prefs(appearance, true)), ScrollEdge::Hard);
         }
         for appearance in [Appearance::LightHighContrast, Appearance::DarkHighContrast] {
-            assert_eq!(
-                scroll_edge(&prefs(appearance, false), true),
-                ScrollEdge::Hard
-            );
+            assert_eq!(scroll_edge(&prefs(appearance, false)), ScrollEdge::Hard);
         }
     }
 }

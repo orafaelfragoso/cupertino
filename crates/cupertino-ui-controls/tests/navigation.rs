@@ -528,36 +528,92 @@ fn over_a_raised_layer_the_page_shows_under_the_row_through_a_soft_edge() {
 }
 
 #[test]
-fn reduce_transparency_and_a_window_system_without_a_layer_set_the_row_on_a_solid_band() {
+fn reduce_transparency_sets_the_row_on_a_solid_band() {
     let mut rt = support::theme();
     rt.preferences.reduce_transparency = true;
     let background = window_background();
     let bg = (background.g * 255.0).round() as u8;
     let separator = support::color(ColorRole::Separator, InteractionVariant::Normal, false);
     let sep = (separator.g * 255.0).round() as u8;
-    for mut h in [
-        Harness::<Behind>::with_layer(rt),
-        Harness::<Behind>::with_effects(support::theme()),
-    ] {
-        h.resize(Size::new(600.0, 300.0));
-        scrolled_by(&mut h, 30.0);
-        let fills = fills(&h);
-        assert!(
-            fills
-                .iter()
-                .any(|(rect, paint)| *rect == Rect::new(0.0, 0.0, 600.0, 52.0)
-                    && *paint == Paint::Solid(background)),
-            "the band is filled"
-        );
-        assert!(!fills.iter().any(
-            |(_, p)| matches!(p, Paint::Linear { stops, .. } if stops.len() == SOFT_EDGE_STOPS)
-        ));
-        for y in [2, 30, 50] {
-            assert_eq!(level(&h, 300, y), bg, "solid at {y}");
-        }
-        assert_eq!(level(&h, 300, 51), sep, "a separator along its bottom");
-        assert_eq!(level(&h, 300, 60), 0);
+    let mut h = Harness::<Behind>::with_layer(rt);
+    h.resize(Size::new(600.0, 300.0));
+    scrolled_by(&mut h, 30.0);
+    let fills = fills(&h);
+    assert!(
+        fills
+            .iter()
+            .any(|(rect, paint)| *rect == Rect::new(0.0, 0.0, 600.0, 52.0)
+                && *paint == Paint::Solid(background)),
+        "the band is filled"
+    );
+    assert!(!fills
+        .iter()
+        .any(|(_, p)| matches!(p, Paint::Linear { stops, .. } if stops.len() == SOFT_EDGE_STOPS)));
+    for y in [2, 30, 50] {
+        assert_eq!(level(&h, 300, y), bg, "solid at {y}");
     }
+    assert_eq!(level(&h, 300, 51), sep, "a separator along its bottom");
+    assert_eq!(level(&h, 300, 60), 0);
+}
+
+#[test]
+fn without_a_layer_nothing_scrolls_under_the_row_and_its_glass_stays_under_the_window() {
+    let mut h = Harness::<Behind>::with_effects(support::theme());
+    h.resize(Size::new(600.0, 300.0));
+    scrolled_by(&mut h, 30.0);
+    assert_eq!(h.model().0.offset.y, 30.0);
+    assert!(
+        !fills(&h)
+            .iter()
+            .any(|(_, p)| matches!(p, Paint::Linear { .. })),
+        "no edge: nothing passes under the row"
+    );
+    // the rows are cut at the row's bottom edge
+    let row0 = h.rect("row0");
+    assert_eq!(
+        row0.min_y(),
+        22.0,
+        "the first row lies partly behind the row"
+    );
+    let id = cupertino_ui_render::PaintNodeId::from(h.rt.find(h.window, &"row0".into()).unwrap());
+    let drawn = h
+        .snapshot()
+        .display_list
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id)
+        .unwrap();
+    // the bounds take in the anti-aliased edge of the clip
+    assert!(
+        drawn.bounds.min_y() >= 51.0,
+        "drawn only below the row: {:?}",
+        drawn.bounds
+    );
+    assert_eq!(
+        level(&h, 300, 40),
+        level(&h, 300, 2),
+        "none of it shows in the row"
+    );
+    assert_eq!(level(&h, 300, 60), 0);
+    let system = h.rt.window_system();
+    assert!(system.layers(h.window).unwrap().is_empty(), "no layer");
+    // the back button's glass is asked for as before, under the window
+    let regions = system
+        .requests(h.window)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            cupertino_ui_platform::WindowRequest::Materials(regions) => Some(regions.clone()),
+            _ => None,
+        })
+        .expect("the window asks for materials");
+    assert!(
+        regions
+            .iter()
+            .any(|r| r.glass.is_some() && !r.raised && r.rect.max_y() <= 52.0),
+        "{regions:?}"
+    );
 }
 
 #[test]

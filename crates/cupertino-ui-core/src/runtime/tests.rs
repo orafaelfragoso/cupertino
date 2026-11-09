@@ -4530,13 +4530,19 @@ fn content_scrolling_under_the_raised_row_presents_the_content_and_leaves_the_la
 }
 
 #[test]
-fn without_a_raised_layer_the_row_draws_in_place_over_the_content_with_its_own_fill() {
+fn without_a_raised_layer_the_row_draws_in_place_and_nothing_scrolls_under_its_glass() {
     let (rt, _) = under_row(false);
     assert!(rt.window_system().layer_presents.is_empty());
-    assert!(draws(&rt, false, ROW_MARK) && draws(&rt, false, ROW_FILL));
     assert!(
-        last_materials(&rt).is_empty(),
-        "no glass the content would cover"
+        draws(&rt, false, ROW_MARK),
+        "the row's mark is in the content"
+    );
+    assert!(!draws(&rt, false, ROW_FILL), "glass, no fill");
+    let materials = last_materials(&rt);
+    assert_eq!(materials.len(), 1, "{materials:?}");
+    assert!(
+        materials[0].glass.is_some() && !materials[0].raised,
+        "the glass lies under the window, as any other: {materials:?}"
     );
     let w = &rt.windows[0];
     let order: Vec<_> = w.display_list.nodes.iter().map(|n| n.id).collect();
@@ -4547,6 +4553,31 @@ fn without_a_raised_layer_the_row_draws_in_place_over_the_content_with_its_own_f
         .iter()
         .position(|&id| Some(id) == rt.find(w.id, &"row".into()).map(Into::into));
     assert!(page < row, "the row draws over the page");
+    // the page clips what it scrolls to below the row, so none of it covers the glass
+    let page: crate::NodeId = rt.find(w.id, &"page".into()).unwrap();
+    let node = w
+        .display_list
+        .nodes
+        .iter()
+        .find(|n| n.id == page.into())
+        .unwrap();
+    assert_eq!(
+        node.clip,
+        Some(Shape::Rect(Rect::new(0.0, 30.0, 200.0, 70.0))),
+        "cut at the row's bottom edge"
+    );
+    let target: crate::NodeId = rt.find(w.id, &"target".into()).unwrap();
+    let target = w
+        .display_list
+        .nodes
+        .iter()
+        .find(|n| n.id == target.into())
+        .unwrap();
+    assert!(
+        target.bounds.is_empty() || target.bounds.min_y() >= 29.0,
+        "the block under the row is not drawn there: {:?}",
+        target.bounds
+    );
 }
 
 #[test]

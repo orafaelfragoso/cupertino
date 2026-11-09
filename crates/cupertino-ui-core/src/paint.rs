@@ -583,9 +583,9 @@ impl Painter {
                 .map_or(Rect::new(0.0, 0.0, 0.0, 0.0), |shown| {
                     shown.translate(-origin.x, -origin.y)
                 });
-            // a raised node's material lies above the content only in a layer; without one it paints its own fill
-            let can_show =
-                input.materials && materials.len() < MAX_MATERIALS && (!raised || input.layer);
+            // without a layer a raised node's material lies under the window, as any other: what scrolls under it is
+            // clipped away (`placements`), so it shows
+            let can_show = input.materials && materials.len() < MAX_MATERIALS;
             let under = match node.parent {
                 Some(parent) => on_glass.get(&parent).copied().unwrap_or(Under::Window),
                 None => window_glass,

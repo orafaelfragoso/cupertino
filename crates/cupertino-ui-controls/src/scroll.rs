@@ -260,7 +260,9 @@ impl<M: 'static> Widget<M> for Frame<M> {
 
     fn paint(&self, edge: &Self::State, cx: &mut PaintCx<'_>) {
         let top = cx.obscured().top;
-        let look = (self.edge && top > 0.0).then(|| crate::scroll_edge::EdgeLook::of(cx, top));
+        let look = (self.edge && top > 0.0)
+            .then(|| crate::scroll_edge::EdgeLook::of(cx, top))
+            .flatten();
         edge.set(look);
         if look.is_some() {
             cx.overlay();

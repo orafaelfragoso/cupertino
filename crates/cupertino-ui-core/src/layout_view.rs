@@ -2,6 +2,7 @@
 //! window placements. A node's clip limits its children, so a node is clipped by its ancestors' clips only.
 
 use crate::cx::MeasureCx;
+use crate::paint::unobscured;
 use crate::route::{Geometry, Placement};
 use crate::tree::Tree;
 use crate::{Environment, NodeId};
@@ -55,21 +56,43 @@ impl<M: 'static> LayoutTree for TreeView<'_, M> {
 
 /// Window placements from a layout of the subtree under `root`. A scroll container's children move by its scroll
 /// offset, which counts from the start edge: in right-to-left layout, where layout mirrors the content, a horizontal
-/// offset moves the content right.
+/// offset moves the content right. A scroll container outside the raised subtrees `cut` (window rects) clips its
+/// content to the part of it they leave ([`unobscured`]): where raised nodes draw in place, what scrolls stays out
+/// from under them.
 pub(crate) fn placements<M: 'static>(
     tree: &Tree<M>,
     root: NodeId,
     layout: &LayoutResult<NodeId>,
     env: &Environment,
+    cut: &[(NodeId, Rect)],
 ) -> Geometry {
     let mut geometry = Geometry::with_capacity(layout.nodes.len());
-    let mut stack = vec![(root, Point::new(0.0, 0.0), None::<Rect>)];
-    while let Some((id, parent_origin, clip)) = stack.pop() {
+    let mut stack = vec![(root, Point::new(0.0, 0.0), None::<Rect>, false)];
+    while let Some((id, parent_origin, clip, raised)) = stack.pop() {
         let Some(node) = layout.nodes.get(&id) else {
             continue;
         };
         let rect = node.rect.translate(parent_origin.x, parent_origin.y);
-        let own_clip = node.clip.map(|c| c.translate(rect.origin.x, rect.origin.y));
+        let raised = raised || tree.get(id).is_some_and(|n| n.widget.raised(&*n.state));
+        let scrolls = tree
+            .get(id)
+            .is_some_and(|n| matches!(n.spec.kind, ContainerKind::Scroll { .. }));
+        let own_clip = node
+            .clip
+            .map(|c| c.translate(rect.origin.x, rect.origin.y))
+            .map(|c| {
+                if scrolls && !raised && !cut.is_empty() {
+                    let shown = unobscured(rect, cut);
+                    c.intersection(&shown).unwrap_or(Rect::new(
+                        c.origin.x,
+                        shown.min_y(),
+                        c.width(),
+                        0.0,
+                    ))
+                } else {
+                    c
+                }
+            });
         let least = tree
             .get(id)
             .map_or(Size::ZERO, |n| n.widget.target(&*n.state, env));
@@ -112,7 +135,7 @@ pub(crate) fn placements<M: 'static>(
                     origin.y -= offset.y;
                 }
             }
-            stack.extend(n.children.iter().map(|&c| (c, origin, inner)));
+            stack.extend(n.children.iter().map(|&c| (c, origin, inner, raised)));
         }
     }
     geometry
@@ -171,7 +194,7 @@ mod tests {
             stats: LayoutStats::default(),
         };
 
-        let g = placements(&tree, root, &layout, &env());
+        let g = placements(&tree, root, &layout, &env(), &[]);
 
         assert_eq!(g[&scroller].rect, Rect::new(10.0, 20.0, 100.0, 50.0));
         assert_eq!(
@@ -217,7 +240,13 @@ mod tests {
             .into(),
             stats: LayoutStats::default(),
         };
-        let geometry = placements(&tree, root, &layout, &Environment { direction, ..env() });
+        let geometry = placements(
+            &tree,
+            root,
+            &layout,
+            &Environment { direction, ..env() },
+            &[],
+        );
         (tree, root, geometry)
     }
 

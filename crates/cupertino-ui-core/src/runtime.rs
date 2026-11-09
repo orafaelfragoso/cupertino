@@ -1882,8 +1882,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
             };
             // scroll offsets and hit targets are the nodes' own state, so the placements are made again
-            w.geometry = placements(&self.tree, root, &result, &w.env);
+            w.geometry = placements(&self.tree, root, &result, &w.env, &[]);
             w.raised = raised_nodes(&self.tree, root, &w.geometry);
+            // raised nodes that draw in place leave what scrolls under them out: it would cover the glass under them
+            if !w.raised.is_empty() && !self.system.capabilities().raised_layer {
+                w.geometry = placements(&self.tree, root, &result, &w.env, &w.raised);
+            }
             w.laid_out = Some(result);
 
             let semantics = build(
@@ -2383,7 +2387,7 @@ fn drag_image<M: 'static>(
         },
     )
     .map_err(UiError::Layout)?;
-    let geometry = placements(&tree, root, &result, &env);
+    let geometry = placements(&tree, root, &result, &env, &[]);
     let painting = Painter::default().paint(
         &tree,
         root,

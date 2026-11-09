@@ -428,7 +428,8 @@ impl PaintCx<'_> {
 
     /// Whether the window system draws the window's raised nodes ([`Widget::raised`](crate::Widget::raised)) in a layer
     /// over the rest of it, with the glass they ask for between the two, so what lies under them shows through their
-    /// glass. Without it they draw in place, and what scrolls under them is clipped away.
+    /// glass (where the desktop draws materials; else the nodes paint their own fills there). Without it they draw in
+    /// place, and what scrolls under them is clipped away.
     pub fn raised_layer(&self) -> bool {
         self.layer
     }

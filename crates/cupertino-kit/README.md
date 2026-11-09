@@ -65,7 +65,8 @@ The keyboard has no move: the compositor's Zoom, Minimize and tile shortcuts and
 it (see `cupertino-ui-controls`).
 
 `ci/capture.sh kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them),
-and `kit/scroll` a scroll view at rest, stretched and with its bar shown, fading and hidden (`--phase`), headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`,
+and `kit/scroll` a scroll view at rest, stretched and with its bar shown, fading and hidden (`--phase`), `kit/under-toolbar` a
+page scrolling under a toolbar row drawn in a layer over it (`--phase rest|shown|hidden`), headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`,
 `kit/virtual-list` and `kit/editor` draw the examples' windows as they open. `kit/gallery` draws every control family
 side by side, `--state rest|held-button|held-switch|held-slider|held-segment|disabled` holding the pointer down on one
 or disabling them all, at `--control-size mini|small|regular|large|extra-large` and `--compact on|off`, over

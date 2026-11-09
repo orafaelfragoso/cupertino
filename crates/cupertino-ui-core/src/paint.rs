@@ -709,7 +709,7 @@ impl Painter {
                         pixels: &mut pixels,
                         obscured,
                         reads_obscured: &mut reads_obscured,
-                        layer: input.layer && input.materials,
+                        layer: input.layer,
                     },
                 );
                 if animate {

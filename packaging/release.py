@@ -2,18 +2,22 @@
 """Cupertino release tool: the one installation manifest behind the Arch packages.
 
 Usage:
-  release.py install [--format arch] --package {runtime,data} --destdir DIR [--bindir DIR]
-  release.py verify [--format arch] --package {runtime,data} ARTIFACT
+  release.py install [--format arch] --package {runtime,data} --destdir DIR [--bindir DIR] [--gendir DIR]
+  release.py verify [--format arch] --package {runtime,data} [--bindir DIR | --gendir DIR] ARTIFACT
   release.py check-metadata
   release.py third-party
   release.py source --output DIR
   release.py verify-tag TAG
   release.py pkgbuild ARCHIVE OUTPUT
 
-install         copies exactly the manifest's files into DIR with explicit modes (Arch package(), portable tarballs).
+install         copies exactly the manifest's files into DIR with explicit modes (Arch package(), portable tarballs):
+                built binaries from --bindir, the files the built `cupertino` generated (manual pages, completions)
+                from --gendir, and each package's build record, which it writes itself.
 verify          lists a built package (.pkg.tar.zst) and fails unless its files and modes equal the manifest plus
                 pacman's own metadata files. It also rejects setuid/setgid bits, wallpapers whose hash differs
-                from packaging/data/wallpapers.json and executables that hold a home-directory or checkout path.
+                from packaging/data/wallpapers.json, and executables and generated texts that hold a home-directory or
+                checkout path. For the runtime package, --bindir generates the pages and completions again with the
+                built `cupertino` and compares them (a page's date aside); --gendir takes the names from its MANIFEST.
 check-metadata  fails when THIRD-PARTY-LICENSES is stale, a shipped licence text is missing or a PKGBUILD licence list
                 misses a licence the package ships.
 third-party     regenerates packaging/licenses/THIRD-PARTY-LICENSES with cargo-about (0.9.3, on PATH or $CARGO_ABOUT): the
@@ -37,6 +41,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import tomllib
 import json
 import textwrap
@@ -55,7 +60,14 @@ BINARIES = (
     *APPS,
     'cupertino-sessiond', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd',
     'cupertino-diagnose',
+    'cupertino',
 )
+# The crate of a shipped binary whose name is not its crate's; the licence closure starts at the crates.
+BINARY_CRATES = {'cupertino': 'cupertino-cli'}
+# The completions the built `cupertino` writes into <gendir>/completions/<shell>, and where each shell finds them.
+COMPLETIONS = (('bash', 'usr/share/bash-completion/completions/cupertino'),
+               ('zsh', 'usr/share/zsh/site-functions/_cupertino'),
+               ('fish', 'usr/share/fish/vendor_completions.d/cupertino.fish'))
 # Besides an app's own entry, the only file an app crate may ship there: the session's default applications.
 MIMEAPPS = 'cupertino-mimeapps.list'
 PAM_SERVICES = ('cupertino-login', 'cupertino-session', 'cupertino-greeter', 'cupertino-autologin')
@@ -102,10 +114,38 @@ def applications(root, apps):
     return found
 
 
-def runtime():
-    """(destination, source relative to the checkout or None for a built binary, mode, config) of `cupertino`."""
+class Generated(str):
+    """A source relative to --gendir: a file the built `cupertino` wrote at build time."""
+
+
+class BuildRecord(str):
+    """A source `install` writes itself: the build record of the package it names, read by `cupertino version`."""
+
+
+def binary_crates():
+    """The crates the shipped binaries are built from."""
+    return {BINARY_CRATES.get(b, b) for b in BINARIES}
+
+
+def generated(gendir):
+    """(destination, Generated source, mode, config) of what the built `cupertino` wrote into gendir: the manual pages
+    man/*.1 (cupertino.1 and one per command group, as listed there: the groups are the command's to name) and
+    completions/<shell>."""
+    pages = sorted(p.name for p in (Path(gendir) / 'man').glob('*.1'))
+    if 'cupertino.1' not in pages:
+        fail(f'{gendir}/man has no cupertino.1: run `cupertino dev manual {gendir}/man` after the build')
+    files = [(f'usr/share/man/man1/{p}', Generated(f'man/{p}'), 0o644, False) for p in pages]
+    files += [(dest, Generated(f'completions/{shell}'), 0o644, False) for shell, dest in COMPLETIONS]
+    return files
+
+
+def runtime(gendir=None):
+    """(destination, source, mode, config) of `cupertino`: a source is relative to the checkout, None for a built
+    binary, a Generated file under gendir (left out without one) or a BuildRecord."""
     f = 'packaging/files'
     files = [(f'usr/bin/{b}', None, 0o755, False) for b in BINARIES]
+    files += generated(gendir) if gendir is not None else []
+    files.append(('usr/share/cupertino/build-info.json', BuildRecord('cupertino'), 0o644, False))
     files += [(p, f'{f}/{p}', mode, conf) for p, mode, conf in (
         ('usr/bin/cupertino-session', 0o755, False),
         ('usr/lib/cupertino/greeter', 0o755, False),
@@ -137,10 +177,11 @@ def runtime():
     return files
 
 
-def data():
-    """`cupertino-data`: the default asset pack and its per-component licences."""
+def data(gendir=None):
+    """`cupertino-data`: the default asset pack, its build record and its per-component licences."""
     a, d, fonts = 'usr/share/cupertino/assets', 'packaging/data', 'crates/cupertino-assets/fonts'
     files = [(f'{a}/{p}', f'{d}/{p}', 0o644, False) for p in ('manifest.json', 'icon-map.toml', 'wallpapers/credits.txt')]
+    files.append((f'{a}/build-info.json', BuildRecord('cupertino-data'), 0o644, False))
     files += [(f'{a}/fonts/{n}', f'{fonts}/{n}', 0o644, False) for n in ('InterVariable-subset.ttf', 'OFL.txt')]
     files += [(f'{a}/wallpapers/{w["file"]}', f'{d}/wallpapers/{w["file"]}', 0o644, False) for w in WALLPAPERS]
     original = ROOT / 'data/assets/cupertino'
@@ -166,14 +207,56 @@ def version(crate):
     return tomllib.loads((ROOT / 'crates' / crate / 'Cargo.toml').read_text())['package']['version']
 
 
+# The version each package's build record names: the runtime is versioned as the server, the data as the assets.
+RECORD_CRATES = {'cupertino': 'cupertino-server', 'cupertino-data': 'cupertino-assets'}
+COMMIT_VARIABLE, ARCHIVE_COMMIT = 'CUPERTINO_BUILD_COMMIT', 'data/build-commit'
+
+
+def full_commit(text):
+    """A full commit hash in lower case (40 or 64 hexadecimal digits), else None."""
+    text = (text or '').strip()
+    return text.lower() if len(text) in (40, 64) and re.fullmatch(r'[0-9a-fA-F]+', text) else None
+
+
+def build_commit(root=ROOT, environ=os.environ):
+    """The commit the sources come from, in the order the build-info crate uses: CUPERTINO_BUILD_COMMIT (which must
+    be a full hash), the data/build-commit a source archive carries, the HEAD of a checkout, else None."""
+    if COMMIT_VARIABLE in environ:
+        commit = full_commit(environ[COMMIT_VARIABLE])
+        if commit is None:
+            fail(f'{COMMIT_VARIABLE} is {environ[COMMIT_VARIABLE]!r}, not a full commit hash')
+        return commit
+    archive = root / ARCHIVE_COMMIT
+    commit = full_commit(archive.read_text()) if archive.is_file() else None
+    if commit is None and (root / '.git').exists():
+        head = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], capture_output=True, text=True)
+        commit = full_commit(head.stdout) if head.returncode == 0 else None
+    return commit
+
+
+def build_record(package, root=ROOT, environ=os.environ):
+    """The text of a package's build record: {package, version, commit, source_date_epoch}."""
+    epoch = environ.get('SOURCE_DATE_EPOCH', '').strip()
+    record = {'package': package, 'version': version(RECORD_CRATES[package]), 'commit': build_commit(root, environ),
+              'source_date_epoch': int(epoch) if epoch.isdigit() else None}
+    return json.dumps(record, indent=2) + '\n'
+
+
 def cmd_install(args):
     dest, bindir = Path(args.destdir), Path(args.bindir)
-    for rel, src, mode, _conf in MANIFESTS[args.package]():
-        source = bindir / Path(rel).name if src is None else ROOT / src
-        if not source.is_file():
-            fail(f'missing source {source} for /{rel}')
+    gendir = Path(args.gendir) if args.gendir else None
+    if args.package == 'runtime' and gendir is None:
+        fail('the runtime package needs --gendir: the manual pages and completions the built cupertino wrote')
+    for rel, src, mode, _conf in MANIFESTS[args.package](gendir):
         out = dest / rel
         out.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(src, BuildRecord):
+            out.write_text(build_record(src))
+            out.chmod(mode)
+            continue
+        source = bindir / Path(rel).name if src is None else gendir / src if isinstance(src, Generated) else ROOT / src
+        if not source.is_file():
+            fail(f'missing source {source} for /{rel}')
         shutil.copyfile(source, out)
         out.chmod(mode)
 
@@ -197,11 +280,59 @@ def entries(path):
     return tar_entries(subprocess.run(['zstd', '-dcq', str(path)], capture_output=True, check=True).stdout)
 
 
+def generate(cli, gendir):
+    """Writes into gendir what a package build writes with the built `cupertino` (as the PKGBUILDs' build() does):
+    the manual pages in man/, each shell's completions in completions/<shell>, and MANIFEST."""
+    gendir = Path(gendir)
+    (gendir / 'completions').mkdir(parents=True, exist_ok=True)
+    env = {'PATH': '/usr/bin:/bin', 'CUPERTINO_ASSET_SEARCH_PATH': ''}
+    subprocess.run([str(cli), 'dev', 'manual', str(gendir / 'man')], env=env, check=True, capture_output=True)
+    for shell, _dest in COMPLETIONS:
+        script = subprocess.run([str(cli), 'completions', shell], env=env, check=True, capture_output=True).stdout
+        (gendir / 'completions' / shell).write_bytes(script)
+    write_gen_manifest(gendir)
+
+
+def write_gen_manifest(gendir):
+    names = sorted(p.relative_to(gendir).as_posix() for p in Path(gendir).rglob('*') if p.is_file() and p.name != 'MANIFEST')
+    (Path(gendir) / 'MANIFEST').write_text(''.join(f'{n}\n' for n in names))
+
+
+def undated(page):
+    """A manual page with the date of its .TH line left out: the date is the build's SOURCE_DATE_EPOCH."""
+    return re.sub(rb'^(\.TH \S+ \S+) \S+', rb'\1 DATE', page, count=1)
+
+
+def expected_generated(args, tmp):
+    """The runtime manifest's generated entries and, with --bindir, the bytes the built cupertino writes for each."""
+    if args.bindir:
+        gendir = Path(tmp) / 'gen'
+        generate(Path(args.bindir) / 'cupertino', gendir)
+        bodies = {rel: undated((gendir / src).read_bytes()) for rel, src, _m, _c in generated(gendir)}
+        return gendir, bodies
+    if args.gendir:
+        listed = (Path(args.gendir) / 'MANIFEST').read_text().split()
+        gendir = Path(tmp) / 'gen'
+        for name in listed:
+            (gendir / name).parent.mkdir(parents=True, exist_ok=True)
+            (gendir / name).touch()
+        return gendir, {}
+    fail('verifying the runtime package needs --bindir (the built cupertino) or --gendir (its MANIFEST)')
+
+
 def cmd_verify(args):
     found = entries(Path(args.artifact).resolve())
-    expected = {rel: mode for rel, _src, mode, _c in MANIFESTS[args.package]()}
+    bodies, gendir = {}, None
+    with tempfile.TemporaryDirectory() as tmp:
+        if args.package == 'runtime':
+            gendir, bodies = expected_generated(args, tmp)
+        expected = {rel: mode for rel, _src, mode, _c in MANIFESTS[args.package](gendir)}
+        texts = {rel for rel, src, _m, _c in MANIFESTS[args.package](gendir) if isinstance(src, (Generated, BuildRecord))}
     problems = [f'unexpected file /{r}' for r in sorted(set(found) - set(expected) - EXTRA)]
     problems += [f'missing file /{r}' for r in sorted(set(expected) - set(found))]
+    for rel, body in sorted(bodies.items()):
+        if rel in found and undated(found[rel][1]) != body:
+            problems.append(f'/{rel}: differs from what the built cupertino generates')
     hashes = {f'usr/share/cupertino/assets/wallpapers/{w["file"]}': w['sha256'] for w in WALLPAPERS}
     # A build-tree or home path at the start of a path string; remapped paths (/usr/src/..., /cargo/...) pass.
     leak = re.compile(rb'(?<![\w./-])(' + re.escape(str(ROOT).encode()) + rb'|/home|/root)/')
@@ -212,10 +343,14 @@ def cmd_verify(args):
             problems.append(f'/{rel}: mode {stat.S_IMODE(mode):o}, manifest {expected[rel]:o}')
         if rel in hashes and hashlib.sha256(body).hexdigest() != hashes[rel]:
             problems.append(f'/{rel}: sha256 differs from wallpapers.json')
-        if body.startswith(b'\x7fELF'):
+        if body.startswith(b'\x7fELF') or rel in texts:
             hit = leak.search(body)
             if hit:
                 problems.append(f'/{rel}: holds the build or home path {body[hit.start():hit.start() + 60]!r}')
+        if rel in texts and rel.endswith('build-info.json'):
+            record = json.loads(body)
+            if set(record) != {'package', 'version', 'commit', 'source_date_epoch'}:
+                problems.append(f'/{rel}: fields {sorted(record)}')
     if problems:
         fail(f'{args.artifact}:\n  ' + '\n  '.join(problems))
     size = sum(len(b) for _m, b in found.values())
@@ -236,7 +371,7 @@ def linked_packages():
         if m:
             if m[1] == '0':
                 root = m[2]
-            if root in BINARIES:
+            if root in binary_crates():
                 linked.add((m[2], m[3]))
     meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', *base[:3]], cwd=ROOT,
                                      capture_output=True, text=True, check=True).stdout)
@@ -548,6 +683,10 @@ def main():
         c.add_argument('--package', choices=MANIFESTS, required=True)
     sub.choices['install'].add_argument('--destdir', required=True)
     sub.choices['install'].add_argument('--bindir', default=str(ROOT / 'target/release'))
+    sub.choices['install'].add_argument('--gendir', help='the files the built cupertino generated (runtime)')
+    built = sub.choices['verify'].add_mutually_exclusive_group()
+    built.add_argument('--bindir', help='the built binaries: the runtime check generates the pages again')
+    built.add_argument('--gendir', help='the generated files whose MANIFEST names the pages')
     sub.choices['verify'].add_argument('artifact')
     sub.add_parser('check-metadata')
     sub.add_parser('third-party')

@@ -11,7 +11,8 @@ makedepends=('git' 'cargo' 'python' 'mesa' 'libglvnd' 'pam' 'gcc-libs' 'systemd'
 checkdepends=('cargo-nextest>=0.9.151')
 # makepkg's LTO flags would reach the C code of build dependencies only; the release profile decides for Rust. No
 # split debug package: it is ~0.9 GB of debug info for the sixteen binaries.
-options=('!lto' '!debug')
+# The manual pages ship as release.py's manifest names them (usr/share/man/man1/*.1), uncompressed.
+options=('!lto' '!debug' '!zipman')
 provides=('cupertino')
 conflicts=('cupertino')
 source=("cupertino::git+$url.git")
@@ -49,6 +50,16 @@ build() {
   cd cupertino
   build_environment
   cargo build --frozen --release --workspace --all-features --bins
+  # The manual pages and the completions of the cupertino command, written by the binary just built from its registry;
+  # the pages are dated by makepkg's SOURCE_DATE_EPOCH. MANIFEST names what was written.
+  local cli="${CARGO_TARGET_DIR:-target}/release/cupertino" gen="$srcdir/gen" shell
+  rm -rf "$gen"
+  "$cli" dev manual "$gen/man" >/dev/null
+  install -d "$gen/completions"
+  for shell in bash zsh fish; do
+    "$cli" completions "$shell" > "$gen/completions/$shell"
+  done
+  (cd "$gen" && find . -type f ! -name MANIFEST -printf '%P\n' | LC_ALL=C sort > MANIFEST)
 }
 
 check() {
@@ -74,5 +85,6 @@ package() {
           'etc/pam.d/cupertino-login' 'etc/pam.d/cupertino-session'
           'etc/pam.d/cupertino-greeter' 'etc/pam.d/cupertino-autologin')
   cd cupertino
-  python3 packaging/release.py install --format arch --package runtime --destdir "$pkgdir" --bindir "${CARGO_TARGET_DIR:-target}/release"
+  python3 packaging/release.py install --format arch --package runtime --destdir "$pkgdir" --bindir "${CARGO_TARGET_DIR:-target}/release" \
+    --gendir "$srcdir/gen"
 }

@@ -439,6 +439,31 @@ def seed_directory(state: Path) -> Path:
     return seeds
 
 
+def outdate_older_sources(root: Path, seed_created: float) -> int:
+    """Give each worktree file (tracked, or untracked and not ignored) that is not newer than the seed the current time.
+
+    Cargo judges a workspace crate fresh when no file it read is newer than its last build; it never compares
+    contents. A seed's outputs carry the time they were built, so a worktree file older than the seed but with other
+    contents (a commit made before the seed was refreshed, or a checkout older than it) would be taken as already
+    built, and the seed's outputs of the other contents used. A file of the seed's own time or later is already
+    rebuilt. Returns how many files were changed.
+    """
+    now = time.time_ns()
+    names = output(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], root).split("\0")
+    changed = 0
+    for name in dict.fromkeys(filter(None, names)):
+        path = root / name
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            # a tracked file deleted in this worktree
+            continue
+        if stat.S_ISREG(info.st_mode) and info.st_mtime <= seed_created:
+            os.utime(path, ns=(info.st_atime_ns, now))
+            changed += 1
+    return changed
+
+
 def prepare(root: Path, state: Path, identity: str, seed: str | None, leases: tuple[int, ...],
             legacy: Callable[[], str] | None = None) -> Metadata:
     target = root / "target"
@@ -470,6 +495,11 @@ def prepare(root: Path, state: Path, identity: str, seed: str | None, leases: tu
             raise ValueError(f"seed {seed}: incompatible toolchain, profile, configuration or environment")
         if time.time() - metadata["created"] >= SEED_AGE:
             raise ValueError(f"seed {seed}: expired; cleanup --expired-seeds")
+        # Before the clone, so the seed's own outputs keep their times whatever the worktree ignores.
+        changed = outdate_older_sources(root, metadata["created"])
+        if changed:
+            print(f"worktree-build: {changed} files not newer than seed {seed} given the current time, "
+                  "so Cargo rebuilds what reads them", flush=True)
         clone(source, target, root, leases)
     metadata = Metadata(schema=SCHEMA, owner=str(root), fingerprint=identity, successful=False, created=time.time())
     write_marker(target, metadata)

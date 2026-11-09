@@ -98,6 +98,7 @@ class WorktreeBuildTest(unittest.TestCase):
 
     def test_matching_seed_is_reflinked_and_writes_do_not_change_seed(self):
         self.require_reflinks()
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         source = self.state / "seeds" / "host"
         self.metadata(source, self.state, fingerprint="matching", created=time.time())
         (source / "artifact").write_text("before")
@@ -206,6 +207,7 @@ class WorktreeBuildTest(unittest.TestCase):
                                     "successful": True, "created": 5})
         self.assertEqual(BUILD.read_marker(target, str(self.root)), metadata)
         shutil.rmtree(target)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         self.metadata(seed, self.state, schema=1, fingerprint="legacy-one")
         with patch.object(BUILD, "disk_room"), patch.object(BUILD, "clone") as clone:
             with self.assertRaisesRegex(ValueError, "seed old: made by an older worktree-build.py.*refresh-seed"):
@@ -288,6 +290,67 @@ class WorktreeBuildTest(unittest.TestCase):
                     BUILD.promote(self.root, self.state, "host", "parity-dev", 12, lease, replace=True)
                 self.assertEqual((seed / "artifact").read_text(), "old build")
                 self.assertEqual([path.name for path in seed.parent.iterdir()], ["parity-dev"])
+
+    def git_worktree(self, root, files):
+        root.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        for name, contents in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(contents)
+        subprocess.run(["git", "-C", str(root), "add", "--",
+                        *[name for name in files if name not in {"untracked.rs", "ignored.rs"}]], check=True)
+
+    def test_files_older_than_the_seed_get_the_current_time_and_nothing_else_is_touched(self):
+        worktree = self.root / "worktree"
+        self.git_worktree(worktree, {".gitignore": "/ignored.rs\n", "src/lib.rs": "", "src/new.rs": "",
+                                     "src/gone.rs": "", "untracked.rs": "", "ignored.rs": ""})
+        (worktree / "src/gone.rs").unlink()
+        (worktree / "link.rs").symlink_to("src/lib.rs")
+        subprocess.run(["git", "-C", str(worktree), "add", "link.rs"], check=True)
+        seed_time = time.time() - 600
+        old, new = seed_time - 3600, seed_time + 60
+        for name in (".gitignore", "src/lib.rs", "untracked.rs", "ignored.rs"):
+            os.utime(worktree / name, (old, old))
+        os.utime(worktree / "src/new.rs", (new, new))
+        os.utime(worktree / "link.rs", (old, old), follow_symlinks=False)
+        before = time.time()
+        self.assertEqual(BUILD.outdate_older_sources(worktree, seed_time), 3)
+        for name in (".gitignore", "src/lib.rs", "untracked.rs"):
+            with self.subTest(name=name):
+                self.assertGreaterEqual((worktree / name).stat().st_mtime, before)
+        self.assertEqual((worktree / "ignored.rs").stat().st_mtime, old)
+        self.assertEqual((worktree / "src/new.rs").stat().st_mtime, new)
+        self.assertEqual((worktree / "link.rs").lstat().st_mtime, old)
+
+    def test_a_worktree_older_than_the_seed_builds_its_own_sources_not_the_seeds(self):
+        """Cargo compares file times only: without new times, the seed's build of other contents is taken as fresh."""
+        self.require_reflinks()
+        cargo = shutil.which("cargo")
+        if cargo is None:
+            self.skipTest("cargo is not installed")
+        def crate(root, which):
+            self.git_worktree(root, {"Cargo.toml": '[package]\nname = "probe"\nversion = "0.1.0"\nedition = "2021"\n',
+                                     "src/main.rs": f'fn main() {{ print!("{which}"); }}\n'})
+            for name in ("Cargo.toml", "src/main.rs"):
+                os.utime(root / name, (time.time() - 3600, time.time() - 3600))
+        environment = {"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], "CARGO_HOME": str(self.root / "cargo-home"),
+                       "CARGO_INCREMENTAL": "0", "CARGO_TERM_COLOR": "never",
+                       **{name: os.environ[name] for name in ("RUSTUP_HOME", "RUSTUP_TOOLCHAIN") if name in os.environ}}
+        def run(root):
+            return subprocess.run([cargo, "run", "--quiet", "--offline"], cwd=root, check=True, capture_output=True,
+                                  text=True, env=dict(environment, CARGO_TARGET_DIR=str(root / "target"))).stdout
+        origin, worktree = self.root / "origin", self.root / "worktree"
+        crate(origin, "seed")
+        crate(worktree, "worktree")
+        self.assertEqual(run(origin), "seed")
+        seed = self.state / "seeds" / "dev"
+        seed.parent.mkdir(parents=True)
+        subprocess.run(["cp", "--archive", "--reflink=always", str(origin / "target"), str(seed)], check=True)
+        BUILD.write_marker(seed, {"schema": BUILD.SCHEMA, "owner": str(self.state), "fingerprint": "host",
+                                  "successful": True, "created": time.time()})
+        with patch.object(BUILD, "disk_room"), BUILD.acquire(self.root / "locks", 1, True) as lease:
+            BUILD.prepare(worktree, self.state, "host", "dev", lease)
+        self.assertEqual(run(worktree), "worktree")
 
     def test_a_staging_copy_left_by_a_killed_refresh_is_removed_and_never_counts_as_a_seed(self):
         self.require_reflinks()

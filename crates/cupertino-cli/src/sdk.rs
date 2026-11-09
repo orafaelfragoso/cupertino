@@ -10,6 +10,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Read as _, Write as _};
 use std::os::unix::fs::{DirBuilderExt, FileExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -705,10 +706,17 @@ fn tool(program: &Path, sdk: &Path, scratch: &Path) -> Process {
     command
 }
 
-/// Runs a tool to its end, or until the timeout or a stop request kills it.
-fn run_tool(mut command: Process, sink: &Sink, timeout: Duration) -> Result<Ran, Failure> {
+/// Runs a tool to its end, or until the timeout or a stop request (`stop`) kills it. The tool runs in a process group
+/// of its own, and a kill takes the whole group: a compiler driver's cc1, as and ld go with it, and none is left
+/// running. The group also keeps a terminal's Ctrl-C to this command, whose stop request then ends the tool.
+fn run_tool(
+    mut command: Process,
+    stop: impl Fn() -> bool,
+    timeout: Duration,
+) -> Result<Ran, Failure> {
     let name = command.get_program().to_string_lossy().into_owned();
     let mut child = command
+        .process_group(0)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -743,10 +751,14 @@ fn run_tool(mut command: Process, sink: &Sink, timeout: Duration) -> Result<Ran,
         })? {
             break status;
         }
-        if sink.stop_requested() || started.elapsed() > timeout {
-            let _ = child.kill();
+        let stopped = stop();
+        if stopped || started.elapsed() > timeout {
+            // the group's id is the tool's pid, which stays ours until the wait below reaps the tool
+            let group = libc::pid_t::try_from(child.id()).expect("a pid fits pid_t");
+            // SAFETY: kill takes no pointers; a negative pid names the process group the tool leads
+            unsafe { libc::kill(-group, libc::SIGKILL) };
             let _ = child.wait();
-            return Err(if sink.stop_requested() {
+            return Err(if stopped {
                 Failure::interrupted()
             } else {
                 Failure::new(
@@ -832,7 +844,7 @@ fn check(args: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure> {
     let query = |sink: &Sink, flag: &str| -> Result<Ran, Failure> {
         let mut command = tool(&pkg_config, &sdk, &scratch.0);
         command.args([flag, "cupertinokit"]);
-        run_tool(command, sink, PROBE_TIMEOUT)
+        run_tool(command, || sink.stop_requested(), PROBE_TIMEOUT)
     };
     let version = query(sink, "--modversion")?;
     if !version.success {
@@ -889,7 +901,7 @@ fn check(args: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure> {
     let mut compile = tool(&cc, &sdk, &scratch.0);
     compile.args(&line);
     let command = format!("{CC} {}", line.join(" "));
-    let compiled = run_tool(compile, sink, COMPILE_TIMEOUT)?;
+    let compiled = run_tool(compile, || sink.stop_requested(), COMPILE_TIMEOUT)?;
     if !compiled.success {
         return Err(Failure::new(
             FailureKind::Validation,
@@ -921,7 +933,7 @@ fn check(args: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure> {
     if sdk != Path::new("/") {
         probe.env("LD_LIBRARY_PATH", under(&sdk, "/usr/lib"));
     }
-    let ran = run_tool(probe, sink, PROBE_TIMEOUT)?;
+    let ran = run_tool(probe, || sink.stop_requested(), PROBE_TIMEOUT)?;
     let header = probe_version(&ran.stdout, "header");
     let library = probe_version(&ran.stdout, "library");
     let output = serde_json::json!({
@@ -1397,4 +1409,70 @@ fn new(args: &Args, cx: &Context) -> Result<Reply, Failure> {
         kit: (lang == "rust").then_some(kit),
     };
     Ok(Reply::new(&data, human))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Whether `pid` still runs: a process that is gone, or dead and waiting for its parent to reap it, does not.
+    fn running(pid: &str) -> bool {
+        fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            // the state follows the parenthesised command name
+            let state = stat.rsplit_once(") ").map(|(_, rest)| rest.chars().next());
+            !matches!(state, Some(Some('Z' | 'X')))
+        })
+    }
+
+    /// A tool that starts a child which outlives the tool's timeout, as a compiler driver starts cc1 and ld, then
+    /// waits for it. The timeout kills both.
+    fn tool_with_a_child(
+        stop: impl Fn() -> bool,
+        timeout: Duration,
+    ) -> (Result<Ran, Failure>, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("child.pid");
+        let script = dir.path().join("tool");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nsleep 60 &\necho $! > '{}'\nwait\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let ran = run_tool(Process::new(&script), stop, timeout);
+        let pid = fs::read_to_string(&pid_file).unwrap().trim().to_owned();
+        (ran, pid)
+    }
+
+    /// Waits up to 5 s for `pid` to stop running: a killed process is gone once its signal is delivered.
+    fn gone(pid: &str) -> bool {
+        let started = Instant::now();
+        while running(pid) && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        !running(pid)
+    }
+
+    #[test]
+    fn a_timeout_kills_the_tool_and_every_process_it_started() {
+        let (ran, child) = tool_with_a_child(|| false, Duration::from_millis(300));
+        let failure = ran.err().expect("the tool times out");
+        assert_eq!(failure.code, "timed_out");
+        assert!(gone(&child), "the tool's child {child} still runs");
+    }
+
+    #[test]
+    fn a_stop_request_kills_the_tool_and_every_process_it_started() {
+        let started = Instant::now();
+        let (ran, child) = tool_with_a_child(
+            || started.elapsed() > Duration::from_millis(300),
+            Duration::from_secs(60),
+        );
+        let failure = ran.err().expect("the stop ends the tool");
+        assert_eq!(failure.code, "interrupted");
+        assert!(gone(&child), "the tool's child {child} still runs");
+    }
 }

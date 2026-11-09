@@ -99,6 +99,19 @@ cargo run -p cupertino-netd --features app -- [--session-bus [--no-auth]] [--res
   iwd 3.12 sources (`src/station.c`, `src/network.c`, `src/agent.c`). Against a bus without iwd, every Wi-Fi call fails
   with "the supplicant (net.connman.iwd) is not on the bus".
 
+## Diagnostic events
+
+The daemon records versioned diagnostic events to the system journal (`CUPERTINO_DIAG_SCHEMA=1`,
+`SYSLOG_IDENTIFIER=cupertino-netd`), each beside the line or error it already gives; `main` installs the recorder
+before anything else. An SSID is recorded only as its salted hash (`ssid#` and eight hex digits), never as text.
+
+| Event | Severity | Fields | Where |
+|---|---|---|---|
+| `network.backend.start_failed` | error | `step` (`logind`, `rtnetlink`, `nl80211`, `host`, `supplicant`, `rfkill`, `bus`, `bus_name`), `kind` (the error's class, such as `name_taken`), `error` | a step of the start fails |
+| `network.request.failed` | warn | `interface`, `method` (`Scan`, `Connect`, `Disconnect`, `WirelessEnabled`), `error` (the D-Bus error name), `ssid` (hashed, for `Connect`) | a call or property write is answered with an error |
+| `network.exit_error` | error | `error` | the daemon ends with an error, or the arguments are wrong |
+| `network.panic` | fatal | `panic`, `location` | any panic |
+
 ## Open issues
 
 `zbus` stays on 5.x like the other services; 6.x exists.

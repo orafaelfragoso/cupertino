@@ -86,6 +86,20 @@ Not served: `GetCriticalAction`, `Technology`, `BatteryLevel`, `UpdateTime`, his
   the machine's level; other devices (line power, a mouse's battery) report 1. The session agent of `cupertino-login`
   turns the level into notifications.
 
+## Diagnostic events
+
+The daemon records versioned diagnostic events to the system journal (`CUPERTINO_DIAG_SCHEMA=1`,
+`SYSLOG_IDENTIFIER=cupertino-powerd`), each beside the line or error it already gives; `main` installs the recorder
+before anything else. Suspend and inhibitor locks are not this daemon's: they are logind's, asked by the session
+manager and the server, so it records none of their failures.
+
+| Event | Severity | Fields | Where |
+|---|---|---|---|
+| `power.backend.start_failed` | error | `step` (`lid`, `logind`, `uevent`, `bus`), `kind` (the error's class), `error` | a step of the start fails |
+| `power.request.failed` | warn | `interface`, `method` (`SetBrightness`), `error` (the D-Bus error name), `backlight` (the keyboard backlight's name) | a brightness change is answered with an error |
+| `power.exit_error` | error | `error` | the daemon ends with an error, or the arguments are wrong |
+| `power.panic` | fatal | `panic`, `location` | any panic |
+
 ## Tests
 
 ```

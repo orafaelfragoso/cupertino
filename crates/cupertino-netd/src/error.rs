@@ -2,6 +2,7 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use rustix::io::Errno;
 
 use crate::dhcp::message::DecodeError;
@@ -67,6 +68,42 @@ impl Error {
             source: Box::new(source),
         }
     }
+}
+
+impl Error {
+    /// The kind of failure, as a diagnostic event names it.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Netlink(_) => "netlink",
+            Self::Io { .. } => "io",
+            Self::Syscall { .. } => "syscall",
+            Self::Dhcp { .. } => "dhcp",
+            Self::SupplicantMissing => "supplicant_missing",
+            Self::UnknownDevice(_) => "unknown_device",
+            Self::SupplicantDevice(_) => "supplicant_device",
+            Self::SupplicantNetwork(_) => "supplicant_network",
+            #[cfg(feature = "dbus")]
+            Self::Bus { .. } => "bus",
+            #[cfg(feature = "dbus")]
+            Self::NameTaken(_) => "name_taken",
+            #[cfg(feature = "dbus")]
+            Self::Seat(_) => "logind",
+        }
+    }
+}
+
+/// Records `network.backend.start_failed`: the step of the start that failed (`logind`, `rtnetlink`, `nl80211`,
+/// `host`, `bus`, `supplicant`, `rfkill`, `bus_name`), the error's kind and its text. The caller still returns the error.
+pub fn start_failed(step: &'static str, error: &Error) {
+    diag::event(
+        Severity::Error,
+        "network.backend.start_failed",
+        "the network service could not start",
+    )
+    .field("step", Value::Public(step))
+    .field("kind", Value::Public(error.kind()))
+    .field("error", Value::Public(&error.to_string()))
+    .emit();
 }
 
 impl From<cupertino_netlink::Error> for Error {

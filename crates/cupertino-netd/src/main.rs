@@ -9,11 +9,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
+use cupertino_diagnostic_events as diag;
 use cupertino_netd::auth::{AllowAll, Authorizer, LogindAuthorizer};
 use cupertino_netd::daemon::{Bus, Config, Daemon};
 use cupertino_netd::dns;
 use cupertino_netd::engine::Engine;
-use cupertino_netd::error::{Error, Result};
+use cupertino_netd::error::{start_failed, Error, Result};
 use cupertino_netd::host::SystemHost;
 use cupertino_netd::iwd::IwdSupplicant;
 use cupertino_netd::model::DeviceKind;
@@ -65,17 +66,26 @@ impl Options {
 }
 
 fn main() -> ExitCode {
+    // first: the panic hook and the journal are in place for everything below
+    diag::init(diag::component!(), "network", diag::Sink::Journal);
     let options = match Options::parse(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(message) => {
             eprintln!("cupertino-netd: {message}\n{USAGE}");
+            diag::exit_error(&message);
             return ExitCode::FAILURE;
         }
     };
     // `run` only returns on failure
     let Err(e) = run(&options);
     eprintln!("cupertino-netd: {e}");
+    diag::exit_error(&e);
     ExitCode::FAILURE
+}
+
+/// `result`, with its error recorded as `network.backend.start_failed` at `step`.
+fn starting<T>(step: &'static str, result: Result<T>) -> Result<T> {
+    result.inspect_err(|error| start_failed(step, error))
 }
 
 /// What a descriptor in the poll set is for.
@@ -101,31 +111,38 @@ fn run(options: &Options) -> Result<Infallible> {
     let authorizer: Box<dyn Authorizer> = if options.no_auth {
         Box::new(AllowAll)
     } else {
-        Box::new(LogindAuthorizer::new(
-            cupertino_seat::connect().map_err(Error::Seat)?,
-        ))
+        Box::new(LogindAuthorizer::new(starting(
+            "logind",
+            cupertino_seat::connect().map_err(Error::Seat),
+        )?))
     };
     // Listening before the first read, so no change between the two is missed.
-    let route_monitor = RouteMonitor::open()?;
+    let route_monitor = starting("rtnetlink", RouteMonitor::open().map_err(Error::from))?;
     let wireless_monitor = match Nl80211Monitor::open() {
         Ok(monitor) => Some(monitor),
         Err(error) if is_unsupported(&error) => None,
-        Err(error) => return Err(Error::Netlink(error)),
+        Err(error) => return starting("nl80211", Err(Error::Netlink(error))),
     };
-    let host = SystemHost::open(Path::new(RFKILL_DEVICE), options.session_bus)?;
+    let host = starting(
+        "host",
+        SystemHost::open(Path::new(RFKILL_DEVICE), options.session_bus),
+    )?;
     let bus = if options.session_bus {
         Bus::Session
     } else {
         Bus::System
     };
     let (daemon, requests) = Daemon::connect(Config { bus, authorizer })?;
-    let supplicant = IwdSupplicant::new(daemon.connection().clone())?;
+    let supplicant = starting(
+        "supplicant",
+        IwdSupplicant::new(daemon.connection().clone()),
+    )?;
     let mut engine = Engine::new(host, supplicant, options.resolv_conf.clone());
 
     let origin = Instant::now();
     let now = || origin.elapsed();
     if let Some(rfkill) = engine.host().rfkill() {
-        let events = rfkill.read_events()?;
+        let events = starting("rfkill", rfkill.read_events().map_err(Error::from))?;
         engine.on_rfkill(now(), &events);
     }
     engine.resync(now());

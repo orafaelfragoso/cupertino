@@ -24,7 +24,9 @@ use zbus::Connection;
 
 use crate::auth::Authorizer;
 use crate::device::DeviceInfo;
-use crate::error::{Error, Result};
+use cupertino_diagnostic_events::{self as diag, AddressKind, Severity, Value};
+
+use crate::error::{start_failed, Error, Result};
 use crate::interfaces::{Bluetooth, DeviceView, AGENT_INTERFACE, BLUETOOTH_NAME, BLUETOOTH_PATH};
 use crate::keys::KeyStore;
 use crate::model::Model;
@@ -234,7 +236,20 @@ impl Shared {
                 Effect::LoadKeys { index, address } => match core.store.load(address) {
                     Ok(keys) => queue.extend(core.model.keys_loaded(now, index, keys)),
                     Err(error) => {
-                        eprintln!("cupertino-btd: adapter {address} stays unavailable: {error}")
+                        eprintln!("cupertino-btd: adapter {address} stays unavailable: {error}");
+                        diag::event(
+                            Severity::Error,
+                            "bluetooth.backend.start_failed",
+                            "the Bluetooth service could not start",
+                        )
+                        .field("step", Value::Public("keys"))
+                        .field("kind", Value::Public("keys"))
+                        .field(
+                            "adapter",
+                            Value::Address(AddressKind::Bluetooth, &address.to_string()),
+                        )
+                        .field("error", Value::Public(&error.to_string()))
+                        .emit();
                     }
                 },
                 // The pairing happened in the controller; the daemon says so and carries on.
@@ -284,8 +299,13 @@ pub struct Daemon {
 
 impl Daemon {
     /// Serves the object, takes the bus name and asks the kernel which controllers exist. Fails
-    /// with [`Error::NameTaken`] when another process owns the name.
+    /// with [`Error::NameTaken`] when another process owns the name. A failure is recorded as
+    /// `bluetooth.backend.start_failed` (step `bus`).
     pub fn start(config: Config) -> Result<Self> {
+        Self::serve(config).inspect_err(|error| start_failed("bus", error))
+    }
+
+    fn serve(config: Config) -> Result<Self> {
         let (deliveries, queue) = async_channel::unbounded();
         let shared = Arc::new(Shared {
             core: Mutex::new(Core {

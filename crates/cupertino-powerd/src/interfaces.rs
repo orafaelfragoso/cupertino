@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value as Field};
 use zbus::fdo;
 use zbus::message::Header;
 use zbus::names::BusName;
@@ -299,6 +300,28 @@ impl DeviceObject {
     }
 }
 
+/// Records `power.request.failed`: `method` of `interface` was answered with the D-Bus error `error`; `backlight` names
+/// the keyboard backlight a call was for.
+fn request_failed(
+    interface: &'static str,
+    method: &'static str,
+    error: &str,
+    backlight: Option<&str>,
+) {
+    let mut event = diag::event(
+        Severity::Warn,
+        "power.request.failed",
+        "a request to the power service failed",
+    )
+    .field("interface", Field::Public(interface))
+    .field("method", Field::Public(method))
+    .field("error", Field::Public(error));
+    if let Some(backlight) = backlight {
+        event = event.field("backlight", Field::Public(backlight));
+    }
+    event.emit();
+}
+
 /// Why a caller was not served, before the call reached the hardware.
 enum Refusal {
     Denied(String),
@@ -392,24 +415,16 @@ impl KeyboardBacklightObject {
         #[zbus(connection)] connection: &Connection,
         value: i32,
     ) -> Result<(), UPowerError> {
-        let keyboard = self.keyboard()?;
-        authorize(&self.shared, &header, connection)
-            .await
-            .map_err(|refusal| match refusal {
-                Refusal::Denied(reason) => {
-                    UPowerError::GeneralError(format!("not authorised: {reason}"))
-                }
-                Refusal::Failed(reason) => UPowerError::GeneralError(reason),
-            })?;
-        let value = u32::try_from(value)
-            .map_err(|_| UPowerError::GeneralError(format!("brightness {value} is negative")))?;
-        let level = self
-            .shared
-            .set_keyboard(&keyboard.name, value)
-            .map_err(|error| UPowerError::GeneralError(error.to_string()))?;
-        announce_keyboard(connection, &self.shared, &keyboard.name, level, "external")
-            .await
-            .map_err(|error| UPowerError::GeneralError(error.to_string()))
+        let result = self.set(&header, connection, value).await;
+        if let Err(error) = &result {
+            request_failed(
+                "org.freedesktop.UPower.KbdBacklight",
+                "SetBrightness",
+                zbus::DBusError::name(error).as_str(),
+                self.name.as_deref(),
+            );
+        }
+        result
     }
 
     #[zbus(signal)]
@@ -435,6 +450,35 @@ impl KeyboardBacklightObject {
                 .display()
                 .to_string(),
         )
+    }
+}
+
+impl KeyboardBacklightObject {
+    /// `SetBrightness`: authorises the caller, then writes the level.
+    async fn set(
+        &self,
+        header: &Header<'_>,
+        connection: &Connection,
+        value: i32,
+    ) -> Result<(), UPowerError> {
+        let keyboard = self.keyboard()?;
+        authorize(&self.shared, header, connection)
+            .await
+            .map_err(|refusal| match refusal {
+                Refusal::Denied(reason) => {
+                    UPowerError::GeneralError(format!("not authorised: {reason}"))
+                }
+                Refusal::Failed(reason) => UPowerError::GeneralError(reason),
+            })?;
+        let value = u32::try_from(value)
+            .map_err(|_| UPowerError::GeneralError(format!("brightness {value} is negative")))?;
+        let level = self
+            .shared
+            .set_keyboard(&keyboard.name, value)
+            .map_err(|error| UPowerError::GeneralError(error.to_string()))?;
+        announce_keyboard(connection, &self.shared, &keyboard.name, level, "external")
+            .await
+            .map_err(|error| UPowerError::GeneralError(error.to_string()))
     }
 }
 
@@ -482,20 +526,32 @@ impl PowerObject {
         #[zbus(connection)] connection: &Connection,
         value: u32,
     ) -> Result<(), PowerError> {
-        authorize(&self.0, &header, connection)
-            .await
-            .map_err(|refusal| match refusal {
-                Refusal::Denied(reason) => PowerError::NotAuthorized(reason),
-                Refusal::Failed(reason) => PowerError::Failed(reason),
+        let result = async {
+            authorize(&self.0, &header, connection)
+                .await
+                .map_err(|refusal| match refusal {
+                    Refusal::Denied(reason) => PowerError::NotAuthorized(reason),
+                    Refusal::Failed(reason) => PowerError::Failed(reason),
+                })?;
+            let level = self.0.set_display(value).map_err(|error| match error {
+                SetError::NoDevice => no_backlight(),
+                SetError::OutOfRange { .. } => PowerError::OutOfRange(error.to_string()),
+                SetError::Io(_) => PowerError::Failed(error.to_string()),
             })?;
-        let level = self.0.set_display(value).map_err(|error| match error {
-            SetError::NoDevice => no_backlight(),
-            SetError::OutOfRange { .. } => PowerError::OutOfRange(error.to_string()),
-            SetError::Io(_) => PowerError::Failed(error.to_string()),
-        })?;
-        announce_display(connection, level)
-            .await
-            .map_err(|error| PowerError::Failed(error.to_string()))
+            announce_display(connection, level)
+                .await
+                .map_err(|error| PowerError::Failed(error.to_string()))
+        }
+        .await;
+        if let Err(error) = &result {
+            request_failed(
+                POWER_NAME,
+                "SetBrightness",
+                zbus::DBusError::name(error).as_str(),
+                None,
+            );
+        }
+        result
     }
 
     /// Emitted when the display brightness changes, whoever changed it.

@@ -135,6 +135,21 @@ All approximate unless noted.
 | `DEVICE_TTL` | 120 s |
 | `LOOP_TICK` | 1 s |
 
+## Diagnostic events
+
+The daemon records versioned diagnostic events to the system journal (`CUPERTINO_DIAG_SCHEMA=1`,
+`SYSLOG_IDENTIFIER=cupertino-btd`), each beside the line or error it already gives; `main` installs the recorder before
+anything else. Adapter and device addresses are recorded only as salted hashes (`bluetooth#` and eight hex digits).
+
+| Event | Severity | Fields | Where |
+|---|---|---|---|
+| `bluetooth.backend.start_failed` | error | `step` (`logind`, `management_socket`, `bus`, `keys`), `kind` (the error's class), `error`, `adapter` (hashed, for `keys`) | a step of the start fails, or an adapter's keys cannot be loaded and it stays unavailable |
+| `bluetooth.request.failed` | warn | `interface`, `method` (`StartDiscovery`, `StopDiscovery`, `Pair`, `Connect`, `Disconnect`, `Remove`, `RegisterAgent`, `UnregisterAgent`, `Powered`), `error` (the D-Bus error name), `address` (hashed, when the call names a device) | a call or the `Powered` write is answered with an error |
+| `bluetooth.exit_error` | error | `error` | the daemon ends with an error, or the arguments are wrong |
+| `bluetooth.panic` | fatal | `panic`, `location` | any panic |
+
+The salt of the hashes is `diagnostic-salt` in the unit's `StateDirectory`; the key store does not read it.
+
 ## Open issues
 
 Out of scope: the link is paired, bonded and connected, but no profile runs on it.

@@ -8,9 +8,10 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use cupertino_devices::Monitor;
+use cupertino_diagnostic_events as diag;
 use cupertino_powerd::auth::{AllowAll, Authorizer, LogindAuthorizer};
 use cupertino_powerd::daemon::{Bus, Config, Daemon};
-use cupertino_powerd::error::Error;
+use cupertino_powerd::error::{start_failed, Error};
 use cupertino_powerd::events::concerns_power;
 use cupertino_powerd::lid::LidSwitch;
 use cupertino_powerd::sysfs::Lid;
@@ -62,25 +63,34 @@ impl Options {
 }
 
 fn main() -> ExitCode {
+    // first: the panic hook and the journal are in place for everything below
+    diag::init(diag::component!(), "power", diag::Sink::Journal);
     let options = match Options::parse(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(message) => {
             eprintln!("cupertino-powerd: {message}\n{USAGE}");
+            diag::exit_error(&message);
             return ExitCode::FAILURE;
         }
     };
     // `run` only returns on failure
     let Err(e) = run(&options);
     eprintln!("cupertino-powerd: {e}");
+    diag::exit_error(&e);
     ExitCode::FAILURE
 }
 
+/// `result`, with its error recorded as `power.backend.start_failed` at `step`.
+fn starting<T>(step: &'static str, result: Result<T, Error>) -> Result<T, Error> {
+    result.inspect_err(|error| start_failed(step, error))
+}
+
 fn run(options: &Options) -> Result<Infallible, Error> {
-    let mut lid_switch = LidSwitch::find(&options.sysfs_root)?;
+    let mut lid_switch = starting("lid", LidSwitch::find(&options.sysfs_root))?;
     let lid = match &lid_switch {
         Some(switch) => Lid {
             present: true,
-            closed: switch.closed()?,
+            closed: starting("lid", switch.closed())?,
         },
         None => Lid {
             present: false,
@@ -90,12 +100,13 @@ fn run(options: &Options) -> Result<Infallible, Error> {
     let authorizer: Box<dyn Authorizer> = if options.no_auth {
         Box::new(AllowAll)
     } else {
-        Box::new(LogindAuthorizer::new(
-            cupertino_seat::connect().map_err(Error::Seat)?,
-        ))
+        Box::new(LogindAuthorizer::new(starting(
+            "logind",
+            cupertino_seat::connect().map_err(Error::Seat),
+        )?))
     };
     // Listening before the first read, so no change between the two is missed.
-    let monitor = Monitor::new().map_err(Error::Devices)?;
+    let monitor = starting("uevent", Monitor::new().map_err(Error::Devices))?;
     let bus = if options.session_bus {
         Bus::Session
     } else {

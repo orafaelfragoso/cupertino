@@ -42,9 +42,17 @@ pub struct Cli {
     /// Output size in pixels, e.g. 1280x800 (nested window / headless output).
     #[arg(long, value_parser = parse_size, default_value = "1280x800")]
     pub size: (u32, u32),
-    /// Output scale (default: the host scale for the nested window, 1 otherwise).
+    /// Output scale (default: the host scale for the nested window, 1 otherwise; with `--physical-size` the
+    /// headless output's default scale).
     #[arg(long)]
     pub scale: Option<f64>,
+    /// Physical size of the headless output in millimetres, e.g. 302x196 (default: unknown). With it the output has a
+    /// density, and so "looks like" choices and a default scale of its own.
+    #[arg(long, value_parser = parse_size)]
+    pub physical_size: Option<(u32, u32)>,
+    /// Connector name of the headless output (default `headless-1`); `eDP-1` stands for the machine's own panel.
+    #[arg(long)]
+    pub connector: Option<String>,
     /// Appearance: light or dark.
     #[arg(long)]
     pub appearance: Option<String>,
@@ -689,11 +697,20 @@ pub fn run(cli: Cli) -> Result<()> {
         #[cfg(not(feature = "winit"))]
         Mode::Winit => return Err(anyhow!("built without the winit feature")),
         Mode::Headless => {
-            crate::backend::headless::init(
-                &mut state,
-                (cli.size.0 as i32, cli.size.1 as i32),
-                cli.scale.unwrap_or(1.0),
-            )?;
+            let physical_mm = cli
+                .physical_size
+                .map_or((0, 0), |(w, h)| (w as i32, h as i32));
+            let display = crate::backend::headless::HeadlessDisplay {
+                name: cli.connector.clone().unwrap_or_else(|| "headless-1".into()),
+                size: (cli.size.0 as i32, cli.size.1 as i32),
+                physical_mm,
+            };
+            // with a physical size the output starts at its own default scale unless one is given
+            let scale = match cli.physical_size {
+                Some(_) => cli.scale,
+                None => Some(cli.scale.unwrap_or(1.0)),
+            };
+            crate::backend::headless::init_displays(&mut state, &[display], scale)?;
             export_socket(&state);
             let recorder = cli
                 .record

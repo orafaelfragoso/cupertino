@@ -242,11 +242,11 @@ pub fn default_scale(mode: HeadMode, physical_mm: (i32, i32), built_in: bool) ->
         .map_or(1.0, |choice| choice.scale)
 }
 
-/// Output configurations carry a scale in 256ths of a pixel per point: a requested scale within half of that step of
-/// one of the display's "looks like" choices at `mode` is that choice's exact scale, so the output keeps exactly the
-/// choice's points.
+/// Output configurations carry a scale in 256ths of a pixel per point, which a client may round or truncate: a
+/// requested scale less than one of those steps from one of the display's "looks like" choices at `mode` is that
+/// choice's exact scale, so the output keeps exactly the choice's points.
 pub fn exact_choice_scale(head: &Head, mode: HeadMode, scale: f64) -> f64 {
-    const HALF_FIXED_STEP: f64 = 0.5 / 256.0;
+    const FIXED_STEP: f64 = 1.0 / 256.0;
     panel_of(
         mode,
         head.info.physical_mm,
@@ -257,7 +257,7 @@ pub fn exact_choice_scale(head: &Head, mode: HeadMode, scale: f64) -> f64 {
         list.choices
             .iter()
             .map(|c| c.scale)
-            .find(|exact| (exact - scale).abs() <= HALF_FIXED_STEP)
+            .find(|exact| (exact - scale).abs() < FIXED_STEP)
     })
     .unwrap_or(scale)
 }
@@ -969,13 +969,16 @@ mod tests {
             height: 1964,
             refresh_mhz: 120_000,
         };
-        let fixed = |s: f64| (s * 256.0).round() / 256.0;
+        let rounded = |s: f64| (s * 256.0).round() / 256.0;
+        let truncated = |s: f64| (s * 256.0).trunc() / 256.0;
         for width in [1024, 1147, 1352, 1512, 1800] {
             let exact = 3024.0 / f64::from(width);
-            let scale = exact_choice_scale(&built_in, mode, fixed(exact));
-            assert_eq!(scale, exact, "{width}");
-            let rect = output_rect(mode.output_mode(), scale, Transform::Normal, (0, 0));
-            assert_eq!(rect.w, f64::from(width));
+            for sent in [rounded(exact), truncated(exact)] {
+                let scale = exact_choice_scale(&built_in, mode, sent);
+                assert_eq!(scale, exact, "{width}: {sent}");
+                let rect = output_rect(mode.output_mode(), scale, Transform::Normal, (0, 0));
+                assert_eq!(rect.w, f64::from(width));
+            }
         }
         assert_eq!(
             exact_choice_scale(&built_in, mode, 1.5),

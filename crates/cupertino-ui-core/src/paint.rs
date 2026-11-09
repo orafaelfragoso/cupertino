@@ -455,6 +455,7 @@ impl Painter {
                 && match input.background {
                     WindowBackground::Theme => true,
                     WindowBackground::Surface { .. } => !input.backdrop,
+                    WindowBackground::Solid(color) => color.a > 0.0,
                     WindowBackground::None => false,
                 })
             .then_some(input.background);
@@ -537,6 +538,7 @@ impl Painter {
                             },
                             surface_fill(surface, alpha),
                         ),
+                        WindowBackground::Solid(color) => (Shape::Rect(bounds), Some(color)),
                         _ => {
                             let state = StateVariant {
                                 window_active: input.window_active,

@@ -83,6 +83,8 @@ impl Application for Counter {
                     alpha: 1.0,
                 }
             }
+            "catcher" => model.background = WindowBackground::Solid(Color::new(0.0, 0.0, 0.0, 0.0)),
+            "scrim" => model.background = WindowBackground::Solid(SCRIM),
             "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
             "wait" => return vec![Command::Perform(Box::pin(async { "done 7".to_string() }))],
             "launch" | "launch from gone" => {
@@ -184,6 +186,9 @@ impl Application for Counter {
 }
 
 use crate::Element;
+
+/// The colour of a window that dims what is under it.
+const SCRIM: Color = Color::new(0.0, 0.0, 0.0, 0.3);
 
 type Rt = Runtime<Counter, FakeSystem>;
 
@@ -297,6 +302,104 @@ fn a_window_is_drawn_only_after_its_first_configure_which_the_frame_acknowledges
     );
     assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
     assert_eq!(rt.step(steps()).unwrap(), StepStatus::Idle);
+}
+
+/// A window of one colour (here a transparent one that only takes input) is shown by the window system without a frame:
+/// nothing is rendered or presented, its content still takes the pointer, and it is shown again only to answer a
+/// configure or to show another colour; a new scale or a change of its content shows nothing new. Back on the theme's
+/// background it draws a whole frame.
+#[test]
+fn a_solid_window_is_shown_without_a_frame_and_again_only_for_a_configure_or_another_colour() {
+    let (mut rt, window, damage) = start();
+    rt.window_system_mut().solid = true;
+    rt.messages.push_back("catcher".into());
+    rt.step(steps()).unwrap();
+    configure(&mut rt, window, 4);
+    let clear = Color::new(0.0, 0.0, 0.0, 0.0);
+    assert_eq!(
+        rt.window_system().solids,
+        vec![(window, clear, Some(ConfigureId(4)))]
+    );
+    assert!(rt.window_system().presented.is_empty(), "no frame");
+    assert!(damage.borrow().is_empty(), "nothing rendered");
+    let frame = |rt: &mut Rt| {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+    };
+    frame(&mut rt);
+
+    click(&mut rt, window, 5.0);
+    assert_eq!(rt.model().count, 1, "the content takes the pointer");
+    rt.window_system_mut().send(window, WindowEvent::Scale(1.5));
+    rt.step(steps()).unwrap();
+    frame(&mut rt);
+    assert_eq!(rt.window_system().solids.len(), 1, "nothing new to show");
+
+    configure_at(&mut rt, window, 5, Size::new(100.0, 200.0));
+    assert_eq!(
+        rt.window_system().solids[1],
+        (window, clear, Some(ConfigureId(5)))
+    );
+    frame(&mut rt);
+    rt.messages.push_back("scrim".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids[2], (window, SCRIM, None));
+    assert!(rt.window_system().presented.is_empty());
+    assert!(damage.borrow().is_empty());
+
+    // a refused present waits for the window system, then shows the colour
+    frame(&mut rt);
+    rt.window_system_mut().refuse_next = true;
+    rt.messages.push_back("catcher".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids.len(), 3);
+    rt.window_system_mut().release(window);
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids[3], (window, clear, None));
+
+    frame(&mut rt);
+    rt.messages.push_back("panel".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().presented, vec![(window, None)]);
+    assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
+    assert_eq!(rt.window_system().solids.len(), 4);
+}
+
+/// Where the window system cannot show a colour without a frame, a solid window is drawn like any other: filled with
+/// its colour under its content, and not filled when the colour is transparent.
+#[test]
+fn a_solid_window_the_window_system_cannot_show_is_drawn_filled_with_its_colour() {
+    let (mut rt, window, damage) = start();
+    rt.messages.push_back("scrim".into());
+    rt.step(steps()).unwrap();
+    configure(&mut rt, window, 1);
+    assert!(rt.window_system().solids.is_empty());
+    assert_eq!(
+        rt.window_system().presented,
+        vec![(window, Some(ConfigureId(1)))]
+    );
+    assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
+    let first_op = |rt: &Rt| {
+        rt.snapshot(window).unwrap().display_list.nodes[0]
+            .ops
+            .first()
+            .cloned()
+    };
+    assert_eq!(
+        first_op(&rt),
+        Some(PaintOp::Fill {
+            shape: Shape::Rect(cupertino_geometry::Rect::new(0.0, 0.0, 200.0, 100.0)),
+            paint: Paint::Solid(SCRIM),
+        })
+    );
+
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.messages.push_back("catcher".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(first_op(&rt), None, "nothing to fill");
+    assert_eq!(rt.window_system().presented.len(), 2);
 }
 
 #[test]

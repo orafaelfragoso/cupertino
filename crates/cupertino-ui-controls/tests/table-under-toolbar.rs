@@ -109,14 +109,16 @@ fn bounds(h: &Harness<Under>, role: Role, name: &str) -> Rect {
         .bounds
 }
 
+/// Where the text `name` of a cell is laid out: under the header, its accessible bounds are cut to what shows.
 fn cell(h: &Harness<Under>, name: &str) -> Rect {
-    h.snapshot()
+    let snapshot = h.snapshot();
+    let id = snapshot
         .accessibility
-        .into_iter()
+        .iter()
         .find(|(_, n)| n.name.as_deref() == Some(name) && n.role != Role::ColumnHeader)
         .unwrap_or_else(|| panic!("the cell {name}"))
-        .1
-        .bounds
+        .0;
+    snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect
 }
 
 fn scrolled(h: &mut Harness<Under>, dy: f64) {
@@ -163,6 +165,16 @@ fn the_header_sits_below_the_row_and_the_rows_below_it_scroll_under_both() {
             52.0,
             "the header stays"
         );
+        // to assistive technology, the rows' scroll view shows them below the header
+        let view = h
+            .snapshot()
+            .accessibility
+            .into_iter()
+            .find(|(_, n)| n.role == Role::ScrollView)
+            .unwrap()
+            .1
+            .bounds;
+        assert_eq!(view, Rect::new(0.0, 80.0, 400.0, 220.0));
 
         // the header, not the row under it, takes a click on it
         h.click(Point::new(40.0, 66.0));

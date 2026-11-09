@@ -1896,6 +1896,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 &w.geometry,
                 w.focus.node(),
                 w.env.direction,
+                &w.raised,
             );
             w.focusable = semantics.focusable;
             w.roving_groups = semantics.roving_groups;
@@ -1933,6 +1934,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     &w.geometry,
                     w.focus.node(),
                     w.env.direction,
+                    &w.raised,
                 );
                 (pass.nodes, pass.focus)
             } else {

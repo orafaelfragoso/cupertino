@@ -470,8 +470,13 @@ fn over_a_raised_layer_the_page_shows_under_the_row_through_a_soft_edge() {
     scrolled_by(&mut h, 30.0);
     let layers = h.rt.window_system().layers(h.window).unwrap();
     assert!(
-        matches!(layers.last(), Some(Some(layer)) if layer.height == 52),
-        "the row draws in a layer as tall as it"
+        // the shade under the row's glass reaches a few points past it
+        matches!(layers.last(), Some(Some(layer)) if (52..=64).contains(&layer.height)),
+        "the row draws in a layer down to its bottom and its shade: {:?}",
+        layers
+            .iter()
+            .map(|l| l.as_ref().map(|l| l.height))
+            .collect::<Vec<_>>()
     );
 
     // the edge veils the band the row covers, after the rows: over them

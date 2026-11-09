@@ -4,11 +4,11 @@
 use cupertino_geometry::Size;
 use std::collections::HashMap;
 
-pub use cupertino_theme::glass::FaceTone;
 pub use cupertino_theme::control_sizes::{
-    control_geometry, slider_geometry, switch_geometry, ControlFamily, ControlGeometry, Corners,
-    SliderGeometry, SwitchGeometry,
+    choice_mark, control_geometry, slider_geometry, switch_geometry, ControlFamily,
+    ControlGeometry, Corners, SliderGeometry, SwitchGeometry,
 };
+pub use cupertino_theme::glass::FaceTone;
 pub use cupertino_theme::{Appearance, Color, ControlSize, DesignTokens};
 
 mod adapter;

@@ -15,6 +15,7 @@ mod glass;
 mod grid;
 mod icon;
 mod image;
+mod lens;
 mod list;
 mod look;
 mod menu;
@@ -43,6 +44,7 @@ mod tooltip;
 mod window_drag;
 mod window_group;
 
+pub use choice::{segment_at, ChoiceState};
 pub use editor::EditorState;
 pub use field::{FieldState, SecureState};
 pub use form::{FORM_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT};
@@ -56,6 +58,7 @@ pub use split::DividerState;
 pub use stepper::StepperState;
 pub use text_box::TextBoxState;
 pub use tile_sidebar::TILE_SIDEBAR_ROW_HEIGHT;
+pub use toggle::SwitchState;
 pub use toolbar::{
     ToolbarButton, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarSearch,
     ToolbarTitle, TOOLBAR_CHOICE_INSET, TOOLBAR_CHOICE_SEGMENT, TOOLBAR_CONTROL, TOOLBAR_DIVIDER,
@@ -222,6 +225,9 @@ pub enum ButtonStyle {
     Borderless,
     Pill,
     RoundIcon,
+    /// An action on glass of its own: a shaded translucent body with a fine bright rim, as against an ordinary
+    /// button's quiet fill. On glass already it draws no glass of its own.
+    Glass,
 }
 
 pub struct Button<M> {

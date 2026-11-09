@@ -1,8 +1,8 @@
 use crate::icon::symbol;
+use crate::lens::{paint_lens, Lens, LensKind};
 use crate::look::{self, paint_focus_ring};
 use crate::{Slider, SliderStyle};
 use cupertino_geometry::{Insets, Rect, Size};
-use cupertino_theme::metrics::Control;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
     Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
@@ -11,7 +11,8 @@ use cupertino_ui_layout::{
     Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_platform::{Keysym, MouseButton, PointerEvent};
-use cupertino_ui_theme::{ColorRole, ThemeTokens};
+use cupertino_ui_render::{Effect, PaintOp};
+use cupertino_ui_theme::{slider_geometry, Color, ColorRole, ThemeTokens};
 
 const HOME: Keysym = Keysym(0xff50);
 const LEFT: Keysym = Keysym(0xff51);
@@ -43,14 +44,20 @@ pub struct SliderState {
     dragging: bool,
 }
 
-/// The track's height and the knob's diameter.
-fn sizes(style: SliderStyle, theme: &ThemeTokens) -> (f64, f64) {
+/// The soft shade under a regular slider's white knob at rest.
+const KNOB_SHADE: f32 = 0.28;
+const KNOB_SHADE_BLUR: f64 = 1.5;
+const KNOB_SHADE_OFFSET: f64 = 0.5;
+
+/// The track's height and the knob's width and height: a regular slider's from the control size table (a capsule
+/// knob wider than it is high), a level slider's a round knob as high as its wide track.
+fn sizes(style: SliderStyle, theme: &ThemeTokens) -> (f64, Size) {
     match style {
-        SliderStyle::Regular => (
-            look::metric(Control::SliderTrack, theme),
-            look::metric(Control::SliderKnob, theme),
-        ),
-        SliderStyle::Level | SliderStyle::PanelLevel(_) => (LEVEL, LEVEL),
+        SliderStyle::Regular => {
+            let g = slider_geometry(theme.metrics.size);
+            (g.track, Size::new(g.knob.0, g.knob.1))
+        }
+        SliderStyle::Level | SliderStyle::PanelLevel(_) => (LEVEL, Size::new(LEVEL, LEVEL)),
     }
 }
 
@@ -178,9 +185,10 @@ impl<M: 'static> Widget<M> for Slider<M> {
         } else {
             0.0
         };
-        let height = knob.max(ticks);
+        // the held knob's lens reaches past this height, but only its paint: the layout never changes
+        let height = knob.height.max(ticks);
         Measured {
-            size: Size::new(constraints.width.ideal().max(knob), height),
+            size: Size::new(constraints.width.ideal().max(knob.width), height),
             baseline: None,
         }
     }
@@ -197,6 +205,7 @@ impl<M: 'static> Widget<M> for Slider<M> {
     ) -> Propagation {
         let direction = cx.env().direction;
         let (_, knob) = sizes(self.style, &cx.env().theme);
+        let knob = knob.width;
         match *event {
             Event::Pointer(PointerEvent::Enter { .. }, _) if cx.node() == cx.target() => {
                 state.hovered = true;
@@ -300,7 +309,8 @@ impl<M: 'static> Widget<M> for Slider<M> {
             ..look_state
         };
         let size = cx.size();
-        let (track_height, knob) = sizes(self.style, &theme);
+        let (track_height, knob_size) = sizes(self.style, &theme);
+        let knob = knob_size.width;
         let mid = size.height / 2.0;
         let track = Rect::new(0.0, mid - track_height / 2.0, size.width, track_height);
         let radius = track_height / 2.0;
@@ -377,26 +387,65 @@ impl<M: 'static> Widget<M> for Slider<M> {
                 symbol(cx, name, LEVEL_SYMBOL, color, false, area);
             }
         }
-        let thumb = Rect::new(centre - knob / 2.0, mid - knob / 2.0, knob, knob);
-        look::fill(
-            cx,
-            thumb,
-            knob / 2.0,
-            look::color(&theme, ColorRole::SwitchThumb, &look_state),
+        let thumb = Rect::new(
+            centre - knob / 2.0,
+            mid - knob_size.height / 2.0,
+            knob,
+            knob_size.height,
         );
-        let ring = if theme.preferences.appearance.is_high_contrast() {
+        let knob_radius = knob_size.height / 2.0;
+        let held = state.dragging && self.enabled && self.style == SliderStyle::Regular;
+        if let Some(lens) = Lens::of(LensKind::Slider, thumb, held) {
+            // held, the knob is a lens: the track and its fill show through it, shrunk about its centre
+            let empty = look::color(&theme, track_role, &look_state);
+            let fill = look::color(&theme, ColorRole::ControlFill, &filled_state);
+            paint_lens(cx, &lens, |cx, lens| {
+                let r = radius * lens.minify;
+                look::fill(cx, lens.through(track), r, empty);
+                look::fill(cx, lens.through(filled), r, fill);
+            });
+            paint_focus_ring(cx, thumb, knob_radius);
+            return;
+        }
+        let contrast = theme.preferences.appearance.is_high_contrast();
+        let ring = if contrast {
             KNOB_RING_HIGH_CONTRAST
         } else {
             KNOB_RING
         };
-        look::stroke(
+        // a regular knob stands out by a soft shade; a level knob on a fill of its own colour by its ring
+        let ringed = contrast || self.style != SliderStyle::Regular;
+        if !ringed && self.enabled {
+            cx.push(PaintOp::PushLayer {
+                opacity: 1.0,
+                effects: vec![Effect::Blur {
+                    radius: KNOB_SHADE_BLUR,
+                }],
+            });
+            look::fill(
+                cx,
+                thumb.translate(0.0, KNOB_SHADE_OFFSET),
+                knob_radius,
+                Some(Color::new(0.0, 0.0, 0.0, KNOB_SHADE)),
+            );
+            cx.push(PaintOp::PopLayer);
+        }
+        look::fill(
             cx,
-            thumb.inset(Insets::uniform(ring / 2.0)),
-            knob / 2.0 - ring / 2.0,
-            ring,
-            look::color(&theme, ColorRole::ControlBorder, &look_state),
+            thumb,
+            knob_radius,
+            look::color(&theme, ColorRole::SwitchThumb, &look_state),
         );
-        paint_focus_ring(cx, thumb, knob / 2.0);
+        if ringed {
+            look::stroke(
+                cx,
+                thumb.inset(Insets::uniform(ring / 2.0)),
+                knob_radius - ring / 2.0,
+                ring,
+                look::color(&theme, ColorRole::ControlBorder, &look_state),
+            );
+        }
+        paint_focus_ring(cx, thumb, knob_radius);
     }
 
     fn semantics(&self, _: &SliderState, cx: &mut SemanticsCx<'_>) {

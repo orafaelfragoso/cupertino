@@ -143,7 +143,12 @@ mod tests {
             (24.0, 24.0, Size::new(54.0, 24.0))
         );
         assert_eq!(
-            (m.button_inset, m.button_radius, m.field_inset, m.field_radius),
+            (
+                m.button_inset,
+                m.button_radius,
+                m.field_inset,
+                m.field_radius
+            ),
             (13.5, 6.0, 6.0, 6.0)
         );
         assert_eq!((m.switch_thumb, m.switch_thumb_inset), (20.0, 2.0));

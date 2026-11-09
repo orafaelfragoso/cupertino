@@ -139,7 +139,11 @@ fn bezel_corners(size: ControlSize) -> Corners {
 }
 
 /// The geometry of `family` at `size`, with the compact metrics when `compact`.
-pub fn control_geometry(family: ControlFamily, size: ControlSize, compact: bool) -> ControlGeometry {
+pub fn control_geometry(
+    family: ControlFamily,
+    size: ControlSize,
+    compact: bool,
+) -> ControlGeometry {
     use ControlFamily::*;
     let pick = |normal: BySize, tight: BySize| at(if compact { tight } else { normal }, size);
     let label_size = at(LABEL, size);
@@ -186,7 +190,7 @@ pub fn control_geometry(family: ControlFamily, size: ControlSize, compact: bool)
             corners: if family == Radio {
                 Corners::Capsule
             } else {
-                Corners::Radius(at(BEZEL_RADIUS, size.min_regular()) - 1.5)
+                Corners::Radius(at(BEZEL_RADIUS, size.min_regular()) - 2.0)
             },
             label_size,
             inset: 0.0,
@@ -272,10 +276,10 @@ pub fn slider_geometry(size: ControlSize) -> SliderGeometry {
     }
 }
 
-/// The side of a check box's box or a radio button's circle at `size`: the family's height less the room its label's
-/// line needs above and below.
+/// The side of a check box's box or a radio button's circle at `size`: the family's whole height, the label's line
+/// centred beside it.
 pub fn choice_mark(size: ControlSize, compact: bool) -> f64 {
-    control_geometry(ControlFamily::CheckBox, size, compact).height - 2.0
+    control_geometry(ControlFamily::CheckBox, size, compact).height
 }
 
 #[cfg(test)]
@@ -293,8 +297,16 @@ mod tests {
     #[test]
     fn bezels_grow_from_mini_to_extra_large_and_compact_tightens_only_the_smaller_three() {
         for family in [PushButton, PopUp, ComboBox, SearchField, Segmented, Stepper] {
-            assert_eq!(heights(family, false), [16.0, 20.0, 24.0, 28.0, 36.0], "{family:?}");
-            assert_eq!(heights(family, true), [13.0, 16.0, 20.0, 28.0, 36.0], "{family:?}");
+            assert_eq!(
+                heights(family, false),
+                [16.0, 20.0, 24.0, 28.0, 36.0],
+                "{family:?}"
+            );
+            assert_eq!(
+                heights(family, true),
+                [13.0, 16.0, 20.0, 28.0, 36.0],
+                "{family:?}"
+            );
         }
     }
 
@@ -334,8 +346,18 @@ mod tests {
         };
         assert_eq!(widths(Stepper, false), [13.0, 17.0, 20.0, 23.0, 30.0]);
         assert_eq!(widths(Stepper, true), [9.0, 11.0, 13.0, 23.0, 30.0]);
-        assert_eq!(widths(DatePicker, false), [155.0, 159.0, 162.0, 165.0, 172.0]);
-        for family in [PushButton, GlassButton, PopUp, Segmented, CheckBox, TextField] {
+        assert_eq!(
+            widths(DatePicker, false),
+            [155.0, 159.0, 162.0, 165.0, 172.0]
+        );
+        for family in [
+            PushButton,
+            GlassButton,
+            PopUp,
+            Segmented,
+            CheckBox,
+            TextField,
+        ] {
             assert_eq!(control_geometry(family, Regular, false).width, None);
         }
     }
@@ -347,9 +369,16 @@ mod tests {
         assert_eq!(corners(Regular), Corners::Radius(6.0));
         assert_eq!(corners(Large), Corners::Capsule);
         assert_eq!(corners(ExtraLarge), Corners::Capsule);
-        assert_eq!(control_geometry(SearchField, Regular, false).corners, Corners::Capsule);
+        assert_eq!(
+            control_geometry(SearchField, Regular, false).corners,
+            Corners::Capsule
+        );
         assert_eq!(Corners::Capsule.radius(28.0), 14.0);
-        assert_eq!(Corners::Radius(6.0).radius(8.0), 4.0, "never past half the height");
+        assert_eq!(
+            Corners::Radius(6.0).radius(8.0),
+            4.0,
+            "never past half the height"
+        );
     }
 
     #[test]
@@ -378,12 +407,18 @@ mod tests {
             assert_eq!(slider.knob.1, control_geometry(Slider, size, false).height);
             assert!(slider.track < slider.knob.1);
         }
-        assert_eq!(slider_geometry(Regular), SliderGeometry { track: 6.0, knob: (20.0, 16.0) });
+        assert_eq!(
+            slider_geometry(Regular),
+            SliderGeometry {
+                track: 6.0,
+                knob: (20.0, 16.0)
+            }
+        );
     }
 
     #[test]
-    fn a_choice_mark_leaves_room_for_its_label_line() {
-        assert_eq!(choice_mark(Regular, false), 14.0);
-        assert_eq!(choice_mark(Mini, true), 9.0);
+    fn a_choice_mark_is_as_high_as_its_control() {
+        assert_eq!(choice_mark(Regular, false), 16.0);
+        assert_eq!(choice_mark(Mini, true), 11.0);
     }
 }

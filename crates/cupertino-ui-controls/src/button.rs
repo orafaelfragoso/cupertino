@@ -1,3 +1,4 @@
+use crate::glass::GlassRole;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::{Button, ButtonRole, ButtonStyle};
@@ -7,21 +8,17 @@ use cupertino_ui_core::{
     PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
-use cupertino_ui_theme::{Color, ColorRole, InteractionVariant, ThemeTokens};
+use cupertino_ui_theme::{Color, ColorRole, ControlFamily, InteractionVariant, ThemeTokens};
 
 impl<M> Button<M> {
-    /// The fill and text roles: the role picks the colour family, a borderless button fills only while pressed.
-    fn roles(&self) -> (ColorRole, ColorRole) {
-        match self.role {
-            ButtonRole::Normal => (ColorRole::ControlFill, ColorRole::ControlText),
-            ButtonRole::Default => (ColorRole::DefaultButtonFill, ColorRole::DefaultButtonText),
-            ButtonRole::Destructive => (ColorRole::DestructiveFill, ColorRole::DestructiveText),
-        }
-    }
-
     fn radius(&self, chrome: Rect, theme: &ThemeTokens) -> f64 {
         match self.style {
-            ButtonStyle::Bordered | ButtonStyle::Borderless => theme.metrics.button_radius,
+            ButtonStyle::Bordered | ButtonStyle::Borderless => {
+                theme.metrics.button_radius.min(chrome.height() / 2.0)
+            }
+            ButtonStyle::Glass => look::geometry(theme, ControlFamily::GlassButton)
+                .corners
+                .radius(chrome.height()),
             ButtonStyle::Pill | ButtonStyle::RoundIcon => chrome.height() / 2.0,
         }
     }
@@ -31,10 +28,19 @@ impl<M> Button<M> {
     }
 }
 
+/// The chrome's height: the push button's at the theme's control size, a translucent button's its own.
+fn height(style: ButtonStyle, theme: &ThemeTokens) -> f64 {
+    match style {
+        ButtonStyle::Glass => look::geometry(theme, ControlFamily::GlassButton).height,
+        _ => theme.metrics.button_height,
+    }
+}
+
 /// The chrome: the button's height, centred in a node padded out to the minimum target. A round icon button is
-/// square.
-fn chrome(size: Size, style: ButtonStyle, theme: &ThemeTokens) -> Rect {
-    let height = theme.metrics.button_height;
+/// square. The chrome is what paints; the padded node is what takes the pointer and what the layout places, and
+/// neither changes while the button is pressed.
+pub(crate) fn chrome(size: Size, style: ButtonStyle, theme: &ThemeTokens) -> Rect {
+    let height = height(style, theme);
     let width = match style {
         ButtonStyle::RoundIcon => height,
         _ => size.width,
@@ -45,6 +51,89 @@ fn chrome(size: Size, style: ButtonStyle, theme: &ThemeTokens) -> Rect {
         width,
         height,
     )
+}
+
+/// What a button paints with in one state: its fill, the edge it strokes (only with Increase Contrast) and its label's
+/// colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ButtonLook {
+    pub fill: Option<Color>,
+    pub border: Option<Color>,
+    pub text: Option<Color>,
+}
+
+/// A destructive button's tinted bezel: a share of the destructive red.
+const DESTRUCTIVE_TINT: f32 = 0.10;
+/// A destructive button's red label while disabled: a share of the red.
+const DESTRUCTIVE_DISABLED: f32 = 0.45;
+
+impl ButtonLook {
+    /// An ordinary button is a quiet bezel with the control text; a default button the accent with its light label,
+    /// except in a window that is not active, where it rests as an ordinary button; a destructive button a red label
+    /// over a faint red tint. Disabled, every button is a fainter bezel with the disabled text: not the inactive
+    /// window's look, which keeps its labels. With Increase Contrast the bezel strokes its edge.
+    pub fn of(
+        role: ButtonRole,
+        style: ButtonStyle,
+        theme: &ThemeTokens,
+        state: &ControlState,
+    ) -> ButtonLook {
+        let contrast = theme.preferences.appearance.is_high_contrast();
+        let bezel = Some(look::quiet(theme, look::BEZEL, state));
+        let text = look::color(theme, ColorRole::ControlText, state);
+        let border = look::color(theme, ColorRole::ControlBorder, state).filter(|_| contrast);
+        let disabled = !state.enabled;
+        match role {
+            ButtonRole::Default
+                if !disabled && state.window_active && style != ButtonStyle::Glass =>
+            {
+                ButtonLook {
+                    fill: look::color(theme, ColorRole::DefaultButtonFill, state),
+                    border,
+                    text: look::color(theme, ColorRole::DefaultButtonText, state),
+                }
+            }
+            ButtonRole::Destructive if contrast && !disabled => ButtonLook {
+                fill: look::color(theme, ColorRole::DestructiveFill, state),
+                border,
+                text: look::color(theme, ColorRole::DestructiveText, state),
+            },
+            ButtonRole::Destructive => {
+                let red = look::color(
+                    theme,
+                    ColorRole::DestructiveFill,
+                    &ControlState {
+                        enabled: true,
+                        ..*state
+                    },
+                );
+                ButtonLook {
+                    fill: if disabled {
+                        bezel
+                    } else {
+                        look::faded(red, DESTRUCTIVE_TINT).map(|tint| {
+                            let quiet = look::quiet(theme, look::BEZEL, state);
+                            Color {
+                                a: tint.a + quiet.a - look::BEZEL.normal,
+                                ..tint
+                            }
+                        })
+                    },
+                    border,
+                    text: if disabled {
+                        look::faded(red, DESTRUCTIVE_DISABLED)
+                    } else {
+                        red
+                    },
+                }
+            }
+            _ => ButtonLook {
+                fill: bezel,
+                border,
+                text,
+            },
+        }
+    }
 }
 
 impl<M: Clone + 'static> Button<M> {
@@ -250,7 +339,7 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
             }
         };
         Measured {
-            size: Size::new(width, metrics.button_height),
+            size: Size::new(width, height(self.style, &cx.env().theme)),
             baseline: None,
         }
     }
@@ -277,26 +366,34 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         };
         let chrome = chrome(cx.size(), self.style, &theme);
         let radius = self.radius(chrome, &theme);
-        let (fill, text) = self.roles();
-        let fills = self.style != ButtonStyle::Borderless || state.pressed;
-        if fills {
-            look::fill(cx, chrome, radius, look::color(&theme, fill, &state));
+        let look = ButtonLook::of(self.role, self.style, &theme, &state);
+        if self.style == ButtonStyle::Glass {
+            crate::glass::paint_glass(cx, GlassRole::GlassButton, chrome, radius);
+            // a press darkens or lightens the glass a little, never moves or grows it
+            if state.pressed && state.enabled {
+                look::fill(
+                    cx,
+                    chrome,
+                    radius,
+                    Some(look::quiet(&theme, look::BEZEL, &state)),
+                );
+            }
+        } else if self.style != ButtonStyle::Borderless || state.pressed {
+            look::fill(cx, chrome, radius, look.fill);
         }
-        // in high contrast a filled button always shows its border: a fill alone may not stand out from the window
-        let high_contrast = theme.preferences.appearance.is_high_contrast();
-        if self.style != ButtonStyle::Borderless || (fills && high_contrast) {
+        if let Some(border) = look.border {
             look::stroke(
                 cx,
                 chrome.inset(cupertino_geometry::Insets::uniform(0.5)),
                 radius - 0.5,
                 1.0,
-                look::color(&theme, ColorRole::ControlBorder, &state),
+                Some(border),
             );
         }
         if self.style != ButtonStyle::RoundIcon {
             if let Some(label) = look::label(cx.env(), &self.label) {
                 let origin = look::centred(&label, chrome, cx.env());
-                look::glyphs(cx, &label, origin, look::color(&theme, text, &state));
+                look::glyphs(cx, &label, origin, look.text);
             }
         }
         paint_focus_ring(cx, chrome, radius);

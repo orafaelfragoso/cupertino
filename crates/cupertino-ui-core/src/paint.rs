@@ -3,7 +3,7 @@
 //! clips along the parent chain. Bounds cover what the node and its whole subtree draw, in window coordinates. A
 //! node repaints only when it changed or its size did, and keeps its paint revision otherwise.
 
-use crate::cx::PaintCx;
+use crate::cx::{OverlayCx, PaintCx};
 use crate::route::Geometry;
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
@@ -38,6 +38,8 @@ struct Painted {
     material: Option<NodeMaterial>,
     /// The glass the node painted on ([`Foreground`]).
     foreground: Foreground,
+    /// The node draws an overlay on every frame ([`PaintCx::overlay`]).
+    overlay: bool,
 }
 
 /// The glass a node paints on, which picks the colours of its text and symbols: the tone of the glass it lies on, if
@@ -235,6 +237,37 @@ pub(crate) struct Painter {
     pub(crate) tones: GlassTones,
     /// The environments of text on glass of each tone, made from `painted_in`.
     glass_envs: Option<[Environment; 3]>,
+    /// What each node's overlay drew last, and the revision it drew with, while the node asks for one: a caret that
+    /// shows again where it showed before is the same paint.
+    overlays: HashMap<NodeId, (Vec<PaintOp>, PaintRevision)>,
+    overlay_revision: u64,
+}
+
+/// The paint node of `node`'s overlay ([`Widget::overlay`](crate::Widget::overlay)): it comes after the node's
+/// subtree, as the node's last child, with its operations in window coordinates. Its id is apart from every node's.
+pub fn overlay_id(node: NodeId) -> PaintNodeId {
+    // a node's own id has a non-zero generation in its upper half; an overlay's has none
+    PaintNodeId(u64::from(node.index()))
+}
+
+/// An overlay waiting for the end of its node's subtree.
+struct Pending {
+    owner: NodeId,
+    node: PaintNode,
+    /// The clip of the node's ancestors.
+    clip: Option<Rect>,
+}
+
+/// Whether `ancestor` is `id` or holds it.
+fn within<M: 'static>(tree: &Tree<M>, ancestor: NodeId, id: NodeId) -> bool {
+    let mut at = Some(id);
+    while let Some(node) = at {
+        if node == ancestor {
+            return true;
+        }
+        at = tree.get(node).and_then(|n| n.parent);
+    }
+    false
 }
 
 /// Whether paint made in `a` is paint made in `b`: the same theme, text system, icons and scale, the same direction.
@@ -333,10 +366,28 @@ impl Painter {
         let mut materials = Vec::new();
         let mut blank = Vec::new();
         let window = geometry.get(&root).map(|p| p.rect);
+        let mut pending: Vec<Pending> = Vec::new();
+        let flush = |pending: &mut Vec<Pending>,
+                     until: Option<NodeId>,
+                     list: &mut DisplayList,
+                     clips: &mut Vec<Option<Rect>>,
+                     blank: &mut Vec<bool>| {
+            while let Some(top) = pending.last() {
+                if until.is_some_and(|id| within(tree, top.owner, id)) {
+                    break;
+                }
+                let done = pending.pop().expect("checked above");
+                list.nodes.push(done.node);
+                clips.push(done.clip);
+                blank.push(false);
+            }
+        };
+        let mut overlaid = HashSet::new();
         for id in tree.preorder(root) {
             let (Some(node), Some(placement)) = (tree.get(id), geometry.get(&id)) else {
                 continue;
             };
+            flush(&mut pending, Some(id), &mut list, &mut clips, &mut blank);
             let size = placement.rect.size;
             let focused = input.focus == Some(id);
             let background = (id == root
@@ -442,6 +493,7 @@ impl Painter {
                 let mut reads_visible = false;
                 let mut material = None;
                 let mut asked_material = false;
+                let mut overlay = false;
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
@@ -468,6 +520,7 @@ impl Painter {
                         materials: can_show,
                         material: &mut material,
                         asked_material: &mut asked_material,
+                        overlay: &mut overlay,
                     },
                 );
                 if animate {
@@ -489,6 +542,7 @@ impl Painter {
                         materials: asked_material.then_some(can_show),
                         material,
                         foreground,
+                        overlay,
                     },
                 );
             }
@@ -553,8 +607,36 @@ impl Painter {
             });
             clips.push(placement.clip);
             seen.insert(id);
+            if painted.overlay {
+                overlaid.insert(id);
+                let mut fills = Vec::new();
+                let mut clip = None;
+                node.widget.overlay(
+                    &*node.state,
+                    &mut OverlayCx {
+                        size,
+                        env: match inherited {
+                            Some(tone) => &glass_envs[tone_index(tone)],
+                            None => input.env,
+                        },
+                        now: input.now,
+                        origin,
+                        ops: &mut fills,
+                        clip: &mut clip,
+                    },
+                );
+                if let Some(overlay) = self.overlay(id, fills, clip, placement.clip) {
+                    pending.push(Pending {
+                        owner: id,
+                        node: overlay,
+                        clip: placement.clip,
+                    });
+                }
+            }
         }
+        flush(&mut pending, None, &mut list, &mut clips, &mut blank);
         self.nodes.retain(|id, _| seen.contains(id));
+        self.overlays.retain(|id, _| overlaid.contains(id));
         let mut own: Vec<Rect> = list.nodes.iter().map(|n| n.bounds).collect();
         // Children come after their parent, so walking backwards widens each parent by its finished children.
         let index: HashMap<PaintNodeId, usize> = list
@@ -603,6 +685,48 @@ impl Painter {
             resources,
             materials,
         }
+    }
+}
+
+impl Painter {
+    /// The paint node of `owner`'s overlay drawing `fills` (window coordinates) inside `clip` and the clip of the
+    /// owner's ancestors, `around`; none when it draws nothing. Its revision changes only when what it draws does.
+    fn overlay(
+        &mut self,
+        owner: NodeId,
+        fills: Vec<PaintOp>,
+        clip: Option<Rect>,
+        around: Option<Rect>,
+    ) -> Option<PaintNode> {
+        let reach = extent(&fills)?;
+        let reach = [clip, around.map(|c| c.outset(CLIP_EDGE))]
+            .into_iter()
+            .flatten()
+            .try_fold(reach, |reach, clip| reach.intersection(&clip))?;
+        let mut ops = Vec::with_capacity(fills.len() + 2);
+        ops.extend(clip.map(|c| PaintOp::PushClip(Shape::Rect(c))));
+        ops.extend(fills);
+        ops.extend(clip.map(|_| PaintOp::PopClip));
+        let revision = match self.overlays.get(&owner) {
+            Some((drawn, revision)) if *drawn == ops => *revision,
+            // counted apart from the nodes' revisions, which an overlay leaves as they were
+            _ => {
+                self.overlay_revision += 1;
+                PaintRevision(self.overlay_revision)
+            }
+        };
+        self.overlays.insert(owner, (ops.clone(), revision));
+        Some(PaintNode {
+            id: overlay_id(owner),
+            parent: Some(owner.into()),
+            revision,
+            transform: Transform::IDENTITY,
+            clip: None,
+            bounds: reach,
+            hit: Rect::new(reach.min_x(), reach.min_y(), 0.0, 0.0),
+            group: None,
+            ops,
+        })
     }
 }
 

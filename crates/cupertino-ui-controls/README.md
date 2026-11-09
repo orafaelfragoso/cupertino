@@ -58,9 +58,11 @@ from the application's model and reports changes as messages.
   as typed (committed and reported) and reset the input method. The composition draws a thin underline at the same
   distance below the baseline at every scale, the clause the input method is converting a heavier one and no caret,
   and otherwise a caret inside the composition where the input method puts it. The input method learns the committed
-  text around the caret and the caret's rectangle. The caret is a whole number of device pixels wide with its edges
-  on device pixels of the field (crisp at 1x and 2x, and at 1.5x where the field sits on whole pixels), and selection
-  bars snap the same way. It blinks in `caret_phase_ms` phases and stays on with Reduce Motion or a phase of 0 (a
+  text around the caret and the caret's rectangle. The caret and the composition's underlines are the field's overlay
+  (`Widget::overlay`): drawn over its paint with every edge on a device pixel of the window wherever the field lies,
+  so they are crisp at every scale, fractional ones included, and the caret a whole number of device pixels wide; the
+  selection bars' sides snap to device pixels of the field. The caret blinks in `caret_phase_ms` phases, each blink
+  drawing only the overlay again, no node, and stays on with Reduce Motion or a phase of 0 (a
   session that asks for a steady caret). Shift-click and shift-drag extend the selection; a drag held past the field's
   edge (an editor's top or bottom) keeps scrolling and selecting every 50 ms by the distance past the edge until the
   text ends; the caret scrolls into view after every edit and move.

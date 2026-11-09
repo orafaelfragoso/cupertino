@@ -8,7 +8,7 @@ use crate::{TextChange, TextEditor};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, Environment, Event, EventCx,
-    MeasureCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics, Widget,
+    MeasureCx, OverlayCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics, Widget,
 };
 use cupertino_ui_layout::{
     Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
@@ -331,6 +331,8 @@ pub struct EditorState {
     reported: u64,
     hovered: bool,
     blink: Blink,
+    /// The caret and underlines the last paint placed, for the overlay.
+    marks: field::Marks,
     lines: RefCell<Lines>,
     bordered: bool,
     /// The part of the editor that last showed, in its coordinates (set by paint): a drag held above or below it
@@ -655,6 +657,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
             reported: self.revision,
             hovered: false,
             blink: Blink::default(),
+            marks: field::Marks::default(),
             lines: RefCell::default(),
             bordered: self.bordered,
             visible: Cell::new(None),
@@ -733,6 +736,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
         let color = |role| look::color(&env.theme, role, &look);
         let visible = cx.visible();
         state.visible.set(Some(visible));
+        state.marks.clear();
         field::fill_rect(cx, visible, color(ColorRole::TextBackground));
         let inset = state.inset(&env);
         let mut lines = state.lines.borrow_mut();
@@ -778,8 +782,9 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
             }
             look::glyphs(cx, &laid.layout, origin, color(ColorRole::Text));
             if let Some(range) = composition.as_ref().and_then(part) {
-                field::paint_composition(
-                    cx,
+                field::mark_composition(
+                    &state.marks,
+                    env.scale,
                     &laid.layout,
                     origin,
                     range,
@@ -789,15 +794,19 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
             }
         }
         let drawn = field::drawn_caret(&state.buffer);
-        if focused && look.window_active && selection.is_empty() && state.blink.on(&env, cx.now()) {
+        if focused && look.window_active && selection.is_empty() {
             if let Some(caret) = drawn.and_then(|at| lines.caret_rect(at)) {
-                field::fill_rect(
-                    cx,
+                state.marks.caret(
                     field::caret_bar(caret.translate(inset, inset), env.scale),
                     color(ColorRole::Text),
                 );
             }
         }
+        state.marks.finish(cx);
+    }
+
+    fn overlay(&self, state: &EditorState, cx: &mut OverlayCx<'_>) {
+        state.marks.draw(&state.blink, cx);
     }
 
     fn semantics(&self, state: &EditorState, cx: &mut SemanticsCx<'_>) {

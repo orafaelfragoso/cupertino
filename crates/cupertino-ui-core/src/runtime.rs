@@ -1362,6 +1362,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             let _ = self.system.request(w.id, request);
         }
         w.wakes.extend(effects.wakes);
+        // the overlays draw again over the paint the window keeps
+        w.dirty |= effects.overlay;
         if let Some((node, rect)) = effects.reveal {
             w.reveal = Some((node, Some(rect)));
             w.repaint();

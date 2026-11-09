@@ -33,12 +33,14 @@ pub use accessibility::{
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
 pub use cupertino_ui_platform::GlassStyle;
-pub use cx::{EventCx, FocusTarget, Glass, GlassCorners, MeasureCx, PaintCx, SemanticsCx};
+pub use cx::{
+    EventCx, FocusTarget, Glass, GlassCorners, MeasureCx, OverlayCx, PaintCx, SemanticsCx,
+};
 pub use drop_target::{
     DropHandler, DropOver, DropPlace, DropTarget, Dropped, HoverHandler, PlaceHandler,
 };
 pub use icons::{next_resource_id, IconImage, Icons, PlaceholderIcons};
-pub use paint::MAX_MATERIALS;
+pub use paint::{overlay_id, MAX_MATERIALS};
 pub use pointer::SCROLL_IDLE_NS;
 pub use runtime::{
     RendererFactory, Runtime, RuntimeOptions, ThemeForAppearance, WindowErrorHandler,

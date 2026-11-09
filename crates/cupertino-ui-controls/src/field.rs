@@ -7,7 +7,8 @@ use crate::{BareField, SearchField, SecureField, TextChange, TextField};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
-    Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics, Widget,
+    Event, EventCx, MeasureCx, OverlayCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics,
+    Widget,
 };
 use cupertino_ui_layout::{
     Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
@@ -20,7 +21,7 @@ use cupertino_ui_text::{
     TextInputSession, TextPosition, CARET_WIDTH, SURROUNDING_MAX_BYTES,
 };
 use cupertino_ui_theme::{Color, ColorRole, ThemeTokens};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::time::Duration;
 
@@ -59,13 +60,73 @@ pub(crate) fn snap(at: f64, scale: f64) -> f64 {
 }
 
 /// The bar a caret `caret` (a layout's caret rectangle, in node points) draws as at `scale`: [`CARET_WIDTH`] in whole
-/// device pixels (at least one), its left edge, top and bottom on device pixel edges, so it stays sharp at every scale
-/// where the node lies on whole pixels.
+/// device pixels (at least one). The overlay that draws it puts its edges on the window's device pixel edges.
 pub(crate) fn caret_bar(caret: Rect, scale: f64) -> Rect {
-    let width = device_thickness(CARET_WIDTH, scale);
-    let top = snap(caret.min_y(), scale);
-    let bottom = snap(caret.max_y(), scale).max(top + device_thickness(0.0, scale));
-    Rect::new(snap(caret.min_x(), scale), top, width, bottom - top)
+    Rect::new(
+        caret.min_x(),
+        caret.min_y(),
+        device_thickness(CARET_WIDTH, scale),
+        caret.height(),
+    )
+}
+
+/// What a field or an editor draws over its paint ([`Widget::overlay`]), as its last paint placed it in its own
+/// coordinates: the caret and the composition's underlines. The overlay puts them on whole device pixels of the
+/// window wherever the field lies, and a blink draws only the overlay again.
+#[derive(Debug, Default)]
+pub(crate) struct Marks {
+    /// The caret and its colour, while it can show: the field has the keyboard in an active window, nothing is
+    /// selected and the input method shows its cursor. The blink decides when it does.
+    caret: Cell<Option<(Rect, Color)>>,
+    /// The composition's underlines and their colour.
+    underlines: RefCell<Vec<(Rect, Color)>>,
+    /// What they are clipped to, the field's interior; none for an editor, whose scroll view clips it.
+    clip: Cell<Option<Rect>>,
+}
+
+impl Marks {
+    /// Forgets the last paint's marks, before a paint places them again.
+    pub(crate) fn clear(&self) {
+        self.caret.set(None);
+        self.underlines.borrow_mut().clear();
+        self.clip.set(None);
+    }
+
+    pub(crate) fn caret(&self, bar: Rect, color: Option<Color>) {
+        self.caret.set(color.map(|color| (bar, color)));
+    }
+
+    fn underline(&self, rect: Rect, color: Option<Color>) {
+        if let Some(color) = color {
+            self.underlines.borrow_mut().push((rect, color));
+        }
+    }
+
+    fn clip(&self, rect: Rect) {
+        self.clip.set(Some(rect));
+    }
+
+    /// Asks for the overlay when there is something to draw in it.
+    pub(crate) fn finish(&self, cx: &mut PaintCx<'_>) {
+        if self.caret.get().is_some() || !self.underlines.borrow().is_empty() {
+            cx.overlay();
+        }
+    }
+
+    /// Draws the underlines, and the caret in the on phase of `blink`.
+    pub(crate) fn draw(&self, blink: &Blink, cx: &mut OverlayCx<'_>) {
+        if let Some(clip) = self.clip.get() {
+            cx.clip(clip);
+        }
+        for &(rect, color) in self.underlines.borrow().iter() {
+            cx.fill_pixels(rect, color);
+        }
+        if let Some((bar, color)) = self.caret.get() {
+            if blink.on(cx.env(), cx.now()) {
+                cx.fill_pixels(bar, color);
+            }
+        }
+    }
 }
 
 /// A selection rectangle with its left and right edges on device pixel edges, so it meets the caret and its neighbours
@@ -76,39 +137,36 @@ pub(crate) fn selection_bar(rect: Rect, scale: f64) -> Rect {
 }
 
 /// The composition's underline under `composition` (bytes of `layout`'s text) on each line it covers,
-/// [`COMPOSITION_DROP`] below the baseline, and a heavier one under `clause`, the part the input method is converting.
-/// The layout's origin is at `origin`, in node points.
-pub(crate) fn paint_composition(
-    cx: &mut PaintCx<'_>,
+/// [`COMPOSITION_DROP`] below the baseline, and a heavier one under `clause`, the part the input method is converting,
+/// as marks for the overlay. The layout's origin is at `origin`, in node points.
+pub(crate) fn mark_composition(
+    marks: &Marks,
+    scale: f64,
     layout: &ParagraphLayout,
     origin: Point,
     composition: Range<usize>,
     clause: Option<Range<usize>>,
     color: Option<Color>,
 ) {
-    let scale = cx.env().scale;
-    let underline = |cx: &mut PaintCx<'_>, range: Range<usize>, points: f64| {
+    let underline = |range: Range<usize>, points: f64| {
         for rect in layout.selection_rects(range) {
             let Some(line) = layout.lines().iter().find(|l| l.rect.y() == rect.y()) else {
                 continue;
             };
-            let bar = selection_bar(rect.translate(origin.x, 0.0), scale);
-            let top = snap(origin.y + line.baseline + COMPOSITION_DROP, scale);
-            fill_rect(
-                cx,
+            marks.underline(
                 Rect::new(
-                    bar.min_x(),
-                    top,
-                    bar.width(),
+                    origin.x + rect.min_x(),
+                    origin.y + line.baseline + COMPOSITION_DROP,
+                    rect.width(),
                     device_thickness(points, scale),
                 ),
                 color,
             );
         }
     };
-    underline(cx, composition, COMPOSITION_LINE);
+    underline(composition, COMPOSITION_LINE);
     if let Some(clause) = clause.filter(|c| !c.is_empty()) {
-        underline(cx, clause, CLAUSE_LINE);
+        underline(clause, CLAUSE_LINE);
     }
 }
 
@@ -325,13 +383,12 @@ struct Shown<'a> {
     composition: Option<Range<usize>>,
     /// The clause of the composition the input method is converting, drawn with a heavier underline.
     clause: Option<Range<usize>>,
-    /// The caret is in the on phase of its blink.
-    caret_on: bool,
 }
 
-/// Paints a field's text, or its placeholder while empty, with the selection and caret while focused and the
-/// composition's underline, all clipped to the interior. Scrolls so the caret stays inside while focused, and to the
-/// text's start otherwise.
+/// Paints a field's text, or its placeholder while empty, with the selection while focused, all clipped to the
+/// interior, and places the caret and the composition's underline as `marks` for the overlay. Scrolls so the caret
+/// stays inside while focused, and to the text's start otherwise.
+#[allow(clippy::too_many_arguments)]
 fn paint_text(
     cx: &mut PaintCx<'_>,
     look: &ControlState,
@@ -339,8 +396,10 @@ fn paint_text(
     shown: &Shown<'_>,
     placeholder: &str,
     scroll: &Cell<f64>,
+    marks: &Marks,
     field: FieldLook,
 ) {
+    marks.clear();
     let env = cx.env().clone();
     let size = cx.size();
     let area = interior(size, &env.theme, field, env.direction);
@@ -395,9 +454,12 @@ fn paint_text(
     } else {
         look::glyphs(cx, &layout, origin, color(ColorRole::Text));
     }
+    cx.push(PaintOp::PopClip);
+    marks.clip(area);
     if let Some(range) = &shown.composition {
-        paint_composition(
-            cx,
+        mark_composition(
+            marks,
+            env.scale,
             &layout,
             origin,
             range.clone(),
@@ -405,19 +467,13 @@ fn paint_text(
             color(ColorRole::Text),
         );
     }
-    if focused
-        && look.window_active
-        && shown.selection.is_empty()
-        && shown.caret_drawn
-        && shown.caret_on
-    {
-        fill_rect(
-            cx,
+    if focused && look.window_active && shown.selection.is_empty() && shown.caret_drawn {
+        marks.caret(
             caret_bar(caret.translate(origin.x, origin.y), env.scale),
             color(ColorRole::Text),
         );
     }
-    cx.push(PaintOp::PopClip);
+    marks.finish(cx);
 }
 
 /// After this long without an edit, move, click or focus, the caret stops blinking and stays on, so an idle window
@@ -485,8 +541,9 @@ impl Blink {
             self.arm(selecting, cx);
             cx.request_paint();
         } else if let Event::Wake(_) = event {
+            // the blink changes only the overlay
             self.arm(selecting, cx);
-            cx.request_paint();
+            cx.request_overlay();
         }
     }
 }
@@ -662,6 +719,8 @@ pub struct FieldState {
     /// Set by paint, where the field's width is known, and read by hit testing.
     scroll: Cell<f64>,
     blink: Blink,
+    /// The caret and underlines the last paint placed, for the overlay.
+    marks: Marks,
     look: FieldLook,
     /// Where the pointer is while a press drags, in window coordinates, so the selection scrolls on past the edge.
     drag_point: Option<Point>,
@@ -1012,6 +1071,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             hovered: false,
             scroll: Cell::new(0.0),
             blink: Blink::default(),
+            marks: Marks::default(),
             look: FieldLook::Plain,
             drag_point: None,
             reset_input: false,
@@ -1071,7 +1131,6 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             selection: state.buffer.selection(),
             composition: state.buffer.composition(),
             clause: state.buffer.composition_cursor(),
-            caret_on: state.blink.on(cx.env(), cx.now()),
         };
         paint_text(
             cx,
@@ -1080,8 +1139,13 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             &shown,
             &self.placeholder,
             &state.scroll,
+            &state.marks,
             state.look,
         );
+    }
+
+    fn overlay(&self, state: &FieldState, cx: &mut OverlayCx<'_>) {
+        state.marks.draw(&state.blink, cx);
     }
 
     fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {
@@ -1122,6 +1186,8 @@ pub struct SecureState {
     hovered: bool,
     scroll: Cell<f64>,
     blink: Blink,
+    /// The caret the last paint placed, for the overlay.
+    marks: Marks,
     /// The bullet a held press started from, while it drags.
     drag: Option<usize>,
     /// When and at which bullet the last press went down, for a double click.
@@ -1370,6 +1436,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             hovered: false,
             scroll: Cell::new(0.0),
             blink: Blink::default(),
+            marks: Marks::default(),
             drag: None,
             last_press: None,
         }
@@ -1431,7 +1498,6 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             selection: selection.start * width..selection.end * width,
             composition: None,
             clause: None,
-            caret_on: state.blink.on(cx.env(), cx.now()),
         };
         paint_text(
             cx,
@@ -1440,8 +1506,13 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             &shown,
             &self.placeholder,
             &state.scroll,
+            &state.marks,
             FieldLook::Plain,
         );
+    }
+
+    fn overlay(&self, state: &SecureState, cx: &mut OverlayCx<'_>) {
+        state.marks.draw(&state.blink, cx);
     }
 
     fn semantics(&self, _: &SecureState, cx: &mut SemanticsCx<'_>) {
@@ -1502,6 +1573,10 @@ impl<M: Clone + 'static> Widget<M> for SearchField<M> {
         self.field.paint(state, cx)
     }
 
+    fn overlay(&self, state: &FieldState, cx: &mut OverlayCx<'_>) {
+        self.field.overlay(state, cx)
+    }
+
     fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {
         self.field.semantics(state, cx)
     }
@@ -1551,6 +1626,10 @@ impl<M: Clone + 'static> Widget<M> for BareField<M> {
 
     fn paint(&self, state: &FieldState, cx: &mut PaintCx<'_>) {
         self.field.paint(state, cx)
+    }
+
+    fn overlay(&self, state: &FieldState, cx: &mut OverlayCx<'_>) {
+        self.field.overlay(state, cx)
     }
 
     fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {

@@ -77,6 +77,8 @@ pub(crate) struct Effects<M> {
     pub(crate) window: Vec<WindowGesture>,
     /// A part of a node, in its coordinates, for its scroll containers to show.
     pub(crate) reveal: Option<(NodeId, Rect)>,
+    /// The window's overlays draw again on the next frame ([`EventCx::request_overlay`]).
+    pub(crate) overlay: bool,
 }
 
 impl<M> Default for Effects<M> {
@@ -94,6 +96,7 @@ impl<M> Default for Effects<M> {
             clipboard: None,
             window: Vec::new(),
             reveal: None,
+            overlay: false,
         }
     }
 }
@@ -117,6 +120,7 @@ impl<M> Effects<M> {
         }
         self.window.extend(other.window);
         self.reveal = other.reveal.or(self.reveal);
+        self.overlay |= other.overlay;
     }
 }
 
@@ -257,6 +261,12 @@ impl<M> EventCx<'_, M> {
         self.effects.changes.push((self.node, Change::Layout));
     }
 
+    /// Draws the window's overlays ([`Widget::overlay`](crate::Widget::overlay)) again on the next frame without
+    /// painting any node: what changes only there, such as a caret's blink.
+    pub fn request_overlay(&mut self) {
+        self.effects.overlay = true;
+    }
+
     /// `None` hides the pointer.
     pub fn set_cursor(&mut self, cursor: Option<CursorShape>) {
         self.effects.cursor = Some(cursor);
@@ -333,6 +343,8 @@ pub struct PaintCx<'a> {
     pub(crate) material: &'a mut Option<NodeMaterial>,
     /// The node called [`PaintCx::material`].
     pub(crate) asked_material: &'a mut bool,
+    /// The node called [`PaintCx::overlay`].
+    pub(crate) overlay: &'a mut bool,
 }
 
 impl PaintCx<'_> {
@@ -395,6 +407,12 @@ impl PaintCx<'_> {
     /// moves by itself from its first paint, as an indeterminate progress bar does.
     pub fn request_animation_frame(&mut self) {
         *self.animate = true;
+    }
+
+    /// Draws this node's overlay ([`Widget::overlay`](crate::Widget::overlay)) on every frame until the node paints
+    /// again without asking.
+    pub fn overlay(&mut self) {
+        *self.overlay = true;
     }
 
     /// Draws all of `image` into `dst` (node coordinates). `id` names these pixels for good: new pixels take a new id
@@ -783,5 +801,79 @@ impl SemanticsCx<'_> {
     /// The part of the node assistive technology shows as the node, in node coordinates; the whole node by default.
     pub fn bounds(&mut self, bounds: Rect) {
         self.semantics.bounds = Some(bounds);
+    }
+}
+
+/// What a node draws over everything it painted, on every frame it asked for ([`PaintCx::overlay`]), without painting
+/// again: a text caret, which blinks and must sit on whole device pixels of the window wherever the node lies. Rects
+/// are in the node's coordinates; the window places them on device pixel edges after layout, so the node's paint never
+/// depends on where it lies.
+pub struct OverlayCx<'a> {
+    pub(crate) size: Size,
+    pub(crate) env: &'a Environment,
+    pub(crate) now: Timestamp,
+    /// The node's top-left corner in the window.
+    pub(crate) origin: Point,
+    pub(crate) ops: &'a mut Vec<PaintOp>,
+    /// What the overlay is clipped to, in window coordinates.
+    pub(crate) clip: &'a mut Option<Rect>,
+}
+
+impl OverlayCx<'_> {
+    /// The node's size.
+    pub fn size(&self) -> Size {
+        self.size
+    }
+
+    pub fn env(&self) -> &Environment {
+        self.env
+    }
+
+    pub fn now(&self) -> Timestamp {
+        self.now
+    }
+
+    /// Physical pixels per point, at least a usable one.
+    fn scale(&self) -> f64 {
+        let scale = self.env.scale;
+        if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        }
+    }
+
+    /// Fills `rect` with `color`, each edge moved to the nearest device pixel edge of the window and the rect at least
+    /// one device pixel each way, so every pixel is covered whole or not at all.
+    pub fn fill_pixels(&mut self, rect: Rect, color: cupertino_ui_theme::Color) {
+        let scale = self.scale();
+        let at = rect.translate(self.origin.x, self.origin.y);
+        // in device pixels, so the size is a whole number of them exactly
+        let pixel = |v: f64| (v * scale).round();
+        let (left, top) = (pixel(at.min_x()), pixel(at.min_y()));
+        let width = (pixel(at.max_x()) - left).max(1.0);
+        let height = (pixel(at.max_y()) - top).max(1.0);
+        self.ops.push(PaintOp::Fill {
+            shape: cupertino_ui_render::Shape::Rect(Rect::new(
+                left / scale,
+                top / scale,
+                width / scale,
+                height / scale,
+            )),
+            paint: cupertino_ui_render::Paint::Solid(color),
+        });
+    }
+
+    /// Clips the whole overlay to `rect`, widened to the device pixels it touches so a fill at its edge stays whole;
+    /// the clips around the node apply as well.
+    pub fn clip(&mut self, rect: Rect) {
+        let scale = self.scale();
+        let at = rect.translate(self.origin.x, self.origin.y);
+        *self.clip = Some(Rect::from_ltrb(
+            (at.min_x() * scale).floor() / scale,
+            (at.min_y() * scale).floor() / scale,
+            (at.max_x() * scale).ceil() / scale,
+            (at.max_y() * scale).ceil() / scale,
+        ));
     }
 }

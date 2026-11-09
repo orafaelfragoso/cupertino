@@ -362,7 +362,7 @@ impl<M: 'static> Viewport<M> {
             (d, _) => d,
         };
         let delta = Point::new(self.along_x(direction, delta.x), delta.y);
-        if source == ScrollSource::Wheel && state.wheel_until.is_some_and(|until| now >= until) {
+        if matches!(source, ScrollSource::Wheel | ScrollSource::WheelTilt) && state.wheel_until.is_some_and(|until| now >= until) {
             state.latch = None;
         }
         let mine = match state.latch {
@@ -376,7 +376,7 @@ impl<M: 'static> Viewport<M> {
             }
         };
         match source {
-            ScrollSource::Wheel => {
+            ScrollSource::Wheel | ScrollSource::WheelTilt => {
                 let until = Timestamp(now.0 + WHEEL_IDLE_NS);
                 state.wheel_until = Some(until);
                 cx.wake_at(until);
@@ -398,7 +398,7 @@ impl<M: 'static> Viewport<M> {
         if !mine {
             return Propagation::Continue;
         }
-        if source == ScrollSource::Wheel {
+        if matches!(source, ScrollSource::Wheel | ScrollSource::WheelTilt) {
             let offset = Point::new(state.offset.x + delta.x, state.offset.y + delta.y);
             self.scroll_to(state, offset, cx);
         } else {

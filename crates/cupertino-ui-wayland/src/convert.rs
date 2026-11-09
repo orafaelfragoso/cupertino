@@ -78,6 +78,7 @@ pub(crate) fn scroll_source(source: Option<wl::ScrollSource>) -> platform::Scrol
     match source {
         Some(wl::ScrollSource::Finger) => platform::ScrollSource::Finger,
         Some(wl::ScrollSource::Continuous) => platform::ScrollSource::Continuous,
+        Some(wl::ScrollSource::WheelTilt) => platform::ScrollSource::WheelTilt,
         _ => platform::ScrollSource::Wheel,
     }
 }
@@ -110,12 +111,14 @@ pub(crate) fn pointer(
             source,
             value120,
             stop,
+            inverted,
         } => platform::PointerEvent::Scroll {
             position,
             delta: Point::new(dx, dy),
             value120,
             source: scroll_source(source),
             stop,
+            inverted,
         },
     }
 }
@@ -478,6 +481,51 @@ mod tests {
             button(wl::Button::Other(0x117)),
             platform::MouseButton::Other(0x117)
         );
+    }
+
+    #[test]
+    fn a_scroll_keeps_its_source_detents_stop_and_physical_direction() {
+        let scroll = |source| {
+            pointer(
+                wl::PointerEvent::Scroll {
+                    dx: 0.25,
+                    dy: -7.5,
+                    position: Point::new(3.0, 4.0),
+                    source,
+                    value120: Some((0, -30)),
+                    stop: false,
+                    inverted: (false, true),
+                },
+                0,
+                platform::Mods::NONE,
+            )
+        };
+        assert_eq!(
+            scroll(Some(wl::ScrollSource::WheelTilt)),
+            platform::PointerEvent::Scroll {
+                position: Point::new(3.0, 4.0),
+                delta: Point::new(0.25, -7.5),
+                value120: Some((0, -30)),
+                source: platform::ScrollSource::WheelTilt,
+                stop: false,
+                inverted: (false, true),
+            }
+        );
+        for (wl_source, source) in [
+            (None, platform::ScrollSource::Wheel),
+            (
+                Some(wl::ScrollSource::Finger),
+                platform::ScrollSource::Finger,
+            ),
+            (
+                Some(wl::ScrollSource::Continuous),
+                platform::ScrollSource::Continuous,
+            ),
+        ] {
+            assert!(
+                matches!(scroll(wl_source), platform::PointerEvent::Scroll { source: s, .. } if s == source)
+            );
+        }
     }
 
     #[test]

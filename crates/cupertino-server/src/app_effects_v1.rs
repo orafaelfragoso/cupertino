@@ -25,7 +25,7 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, WEnum,
 };
 use smithay::utils::{Logical, Point, Rectangle};
-use smithay::wayland::compositor::{with_states, Cacheable};
+use smithay::wayland::compositor::{with_states, Cacheable, SurfaceData};
 
 use crate::menu_bar::AppMenuData;
 use crate::render::material::glass::ToneReading;
@@ -39,10 +39,15 @@ pub struct AppEffectsV1Global {
 impl AppEffectsV1Global {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(9, ()),
+            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(VERSION, ()),
         }
     }
 }
+
+/// The version of `cupertino_app_effects_v1` the server offers.
+const VERSION: u32 = 11;
+/// The version from which the backdrops of a subsurface are drawn, above the rest of its surface tree.
+pub const SUBSURFACE_BACKDROPS_VERSION: u32 = 11;
 
 /// Most backdrops one surface may hold: the notification centre puts one behind every visible card and one behind its
 /// menu, so this sits well above legitimate use and the per-client limit is the bound that counts.
@@ -202,6 +207,8 @@ struct BackdropEntry {
     glass: Option<GlassSpec>,
     shape: Shape,
     alpha: f64,
+    /// Made through an object of [`SUBSURFACE_BACKDROPS_VERSION`] or later: on a subsurface it is drawn.
+    on_subsurface: bool,
 }
 
 /// The backdrops of one surface in creation order, double-buffered with the surface.
@@ -236,44 +243,154 @@ pub struct BackdropArea {
 /// Committed, visible backdrops of `surface` (set material or glass, non-empty shape) in creation order,
 /// placed relative to `origin`, the logical position of the surface's local origin.
 pub fn surface_backdrops(surface: &WlSurface, origin: Point<f64, Logical>) -> Vec<BackdropArea> {
-    with_states(surface, |states| {
-        states
-            .cached_state
-            .get::<BackdropState>()
-            .current()
-            .entries
-            .iter()
-            .filter_map(|e| {
-                let glass = e.glass.or_else(|| {
-                    e.material
-                        .as_deref()
-                        .and_then(glass_material)
-                        .map(|style| GlassSpec {
-                            style,
-                            container: 0,
-                            spacing: 0.0,
-                        })
-                });
-                let material = match (&e.material, glass) {
-                    (Some(m), _) => m.clone(),
-                    (None, Some(_)) => String::new(),
-                    (None, None) => return None,
-                };
-                let s = e.shape;
-                (s.width > 0 && s.height > 0).then(|| BackdropArea {
-                    key: e.serial,
-                    material,
-                    glass,
-                    area: Rectangle::new(
-                        origin + Point::from((f64::from(s.x), f64::from(s.y))),
-                        (f64::from(s.width), f64::from(s.height)).into(),
-                    ),
-                    radius: s.radius,
-                    alpha: e.alpha,
-                })
+    with_states(surface, |states| committed_backdrops(states, origin, false))
+}
+
+/// Committed, visible backdrops of the subsurface `surface` that it draws ([`SUBSURFACE_BACKDROPS_VERSION`]), as
+/// [`surface_backdrops`] places them.
+pub fn subsurface_backdrops(surface: &WlSurface, origin: Point<f64, Logical>) -> Vec<BackdropArea> {
+    with_states(surface, |states| committed_backdrops(states, origin, true))
+}
+
+/// The committed backdrops of a surface's `states`, those a subsurface draws only with `subsurface`.
+fn committed_backdrops(
+    states: &SurfaceData,
+    origin: Point<f64, Logical>,
+    subsurface: bool,
+) -> Vec<BackdropArea> {
+    states
+        .cached_state
+        .get::<BackdropState>()
+        .current()
+        .entries
+        .iter()
+        .filter(|e| !subsurface || e.on_subsurface)
+        .filter_map(|e| {
+            let glass = e.glass.or_else(|| {
+                e.material
+                    .as_deref()
+                    .and_then(glass_material)
+                    .map(|style| GlassSpec {
+                        style,
+                        container: 0,
+                        spacing: 0.0,
+                    })
+            });
+            let material = match (&e.material, glass) {
+                (Some(m), _) => m.clone(),
+                (None, Some(_)) => String::new(),
+                (None, None) => return None,
+            };
+            let s = e.shape;
+            (s.width > 0 && s.height > 0).then(|| BackdropArea {
+                key: e.serial,
+                material,
+                glass,
+                area: Rectangle::new(
+                    origin + Point::from((f64::from(s.x), f64::from(s.y))),
+                    (f64::from(s.width), f64::from(s.height)).into(),
+                ),
+                radius: s.radius,
+                alpha: e.alpha,
             })
-            .collect()
-    })
+        })
+        .collect()
+}
+
+/// One part of a surface tree drawn with the backdrops of its subsurfaces, front to back ([`raised_parts`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum TreePart<S> {
+    /// Surfaces of the tree drawn together, front to back.
+    Surfaces(Vec<S>),
+    /// The backdrops of a subsurface, below the part holding its subtree and above the rest: the subsurface and its
+    /// rectangle, in logical points from the tree's origin.
+    Backdrops {
+        surface: S,
+        rect: Rectangle<f64, Logical>,
+    },
+}
+
+/// A surface tree walked front to back: each drawn surface, and the end of the subtree of each subsurface that draws
+/// backdrops of its own, which comes right after the last (backmost) surface of that subtree.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TreeStep<S> {
+    Surface(S),
+    End {
+        surface: S,
+        rect: Rectangle<f64, Logical>,
+    },
+}
+
+/// The parts of a walk (`steps`, front to back): the surfaces between the ends of raised subtrees, and after each such
+/// end the subsurface's backdrops. `None` when no subsurface draws backdrops, so the tree draws as one.
+pub fn split_tree<S>(steps: Vec<TreeStep<S>>) -> Option<Vec<TreePart<S>>> {
+    if !steps.iter().any(|s| matches!(s, TreeStep::End { .. })) {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let mut run = Vec::new();
+    for step in steps {
+        match step {
+            TreeStep::Surface(s) => run.push(s),
+            TreeStep::End { surface, rect } => {
+                if !run.is_empty() {
+                    parts.push(TreePart::Surfaces(std::mem::take(&mut run)));
+                }
+                parts.push(TreePart::Backdrops { surface, rect });
+            }
+        }
+    }
+    if !run.is_empty() {
+        parts.push(TreePart::Surfaces(run));
+    }
+    Some(parts)
+}
+
+/// The surface tree of `root` split around the backdrops its subsurfaces draw ([`SUBSURFACE_BACKDROPS_VERSION`]):
+/// each such subsurface's backdrops lie directly below it and the subsurfaces placed below it, above the rest of the
+/// tree. The walk is the one the renderer draws the tree in (only surfaces with a buffer, their children only then).
+/// `None` when no subsurface draws backdrops.
+pub fn raised_parts(root: &WlSurface) -> Option<Vec<TreePart<WlSurface>>> {
+    use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
+    use smithay::wayland::compositor::{with_surface_tree_downward, TraversalAction};
+    let view = |states: &SurfaceData| {
+        states
+            .data_map
+            .get::<RendererSurfaceStateUserData>()
+            .and_then(|d| d.lock().unwrap().view())
+    };
+    // the processor and the post-filter both add to the walk
+    let steps = std::cell::RefCell::new(Vec::new());
+    with_surface_tree_downward(
+        root,
+        Point::<f64, Logical>::from((0.0, 0.0)),
+        |_, states, at| match view(states) {
+            Some(v) => TraversalAction::DoChildren(*at + v.offset.to_f64()),
+            None => TraversalAction::SkipChildren,
+        },
+        |surface, states, _| {
+            if view(states).is_some() {
+                steps.borrow_mut().push(TreeStep::Surface(surface.clone()));
+            }
+        },
+        |surface, states, at| {
+            if surface == root {
+                return true;
+            }
+            let Some(v) = view(states) else {
+                return true;
+            };
+            let raised = !committed_backdrops(states, (0.0, 0.0).into(), true).is_empty();
+            if raised {
+                steps.borrow_mut().push(TreeStep::End {
+                    surface: surface.clone(),
+                    rect: Rectangle::new(*at + v.offset.to_f64(), v.dst.to_f64()),
+                });
+            }
+            true
+        },
+    );
+    split_tree(steps.into_inner())
 }
 
 /// Backdrops of a layer surface, in output-local logical coordinates.
@@ -413,6 +530,7 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                             glass: None,
                             shape: Shape::default(),
                             alpha: 1.0,
+                            on_subsurface: effects.version() >= SUBSURFACE_BACKDROPS_VERSION,
                         });
                 });
                 let resource = init.init(
@@ -747,6 +865,106 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
 mod tests {
     use super::*;
     use cupertino_theme::glass::{FACE_TONE_HYSTERESIS, FACE_TONE_THRESHOLD};
+
+    fn rect(y: f64) -> Rectangle<f64, Logical> {
+        Rectangle::new((0.0, y).into(), (100.0, 10.0).into())
+    }
+
+    fn surfaces(names: &[&'static str]) -> TreePart<&'static str> {
+        TreePart::Surfaces(names.to_vec())
+    }
+
+    #[test]
+    fn a_tree_whose_subsurfaces_draw_no_backdrops_stays_whole() {
+        let steps = vec![TreeStep::Surface("sub"), TreeStep::Surface("root")];
+        assert_eq!(split_tree(steps), None);
+        assert_eq!(split_tree::<&str>(Vec::new()), None);
+    }
+
+    #[test]
+    fn a_subsurface_s_backdrops_lie_below_its_subtree_and_above_the_rest() {
+        // front to back: a child over the toolbar, the toolbar, a child under it, its end, then the window and a
+        // subsurface placed below the window
+        let steps = vec![
+            TreeStep::Surface("glyphs"),
+            TreeStep::Surface("toolbar"),
+            TreeStep::Surface("under-toolbar"),
+            TreeStep::End {
+                surface: "toolbar",
+                rect: rect(0.0),
+            },
+            TreeStep::Surface("root"),
+            TreeStep::Surface("below-root"),
+        ];
+        assert_eq!(
+            split_tree(steps),
+            Some(vec![
+                surfaces(&["glyphs", "toolbar", "under-toolbar"]),
+                TreePart::Backdrops {
+                    surface: "toolbar",
+                    rect: rect(0.0),
+                },
+                surfaces(&["root", "below-root"]),
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_and_sibling_subsurfaces_each_get_their_backdrops_in_place() {
+        // a popover subsurface over the toolbar, the toolbar holding a nested subsurface with backdrops of its own,
+        // then the window
+        let steps = vec![
+            TreeStep::Surface("popover"),
+            TreeStep::End {
+                surface: "popover",
+                rect: rect(60.0),
+            },
+            TreeStep::Surface("button"),
+            TreeStep::End {
+                surface: "button",
+                rect: rect(10.0),
+            },
+            TreeStep::Surface("toolbar"),
+            TreeStep::End {
+                surface: "toolbar",
+                rect: rect(0.0),
+            },
+            TreeStep::Surface("root"),
+        ];
+        let parts = split_tree(steps).unwrap();
+        assert_eq!(
+            parts,
+            vec![
+                surfaces(&["popover"]),
+                TreePart::Backdrops {
+                    surface: "popover",
+                    rect: rect(60.0),
+                },
+                surfaces(&["button"]),
+                TreePart::Backdrops {
+                    surface: "button",
+                    rect: rect(10.0),
+                },
+                surfaces(&["toolbar"]),
+                TreePart::Backdrops {
+                    surface: "toolbar",
+                    rect: rect(0.0),
+                },
+                surfaces(&["root"]),
+            ]
+        );
+        // the toolbar is the last surface of the tree: nothing follows its backdrops
+        let last = split_tree(vec![
+            TreeStep::Surface("root"),
+            TreeStep::Surface("toolbar"),
+            TreeStep::End {
+                surface: "toolbar",
+                rect: rect(0.0),
+            },
+        ])
+        .unwrap();
+        assert!(matches!(last.last(), Some(TreePart::Backdrops { .. })));
+    }
 
     fn read(serial: u64, luminance: f32) -> ToneReading {
         ToneReading { serial, luminance }

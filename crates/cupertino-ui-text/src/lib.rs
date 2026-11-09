@@ -244,11 +244,13 @@ pub struct ContentHints {
 #[derive(Clone, PartialEq, Eq)]
 pub struct Preedit {
     pub text: String,
+    /// The input method's cursor, in bytes of `text`: a caret when empty, the clause being converted otherwise;
+    /// `None` hides it.
     pub cursor: Option<Range<usize>>,
 }
 
-/// One focused field's conversation with the input method. The field's owner bumps `revision` on every buffer change ([`TextInputSession::select`] does it for a selection change); an input method
-/// event that answers an older revision resets the composition instead of applying.
+/// One focused field's conversation with the input method. The field's owner bumps `revision` on every buffer change
+/// ([`TextInputSession::select`] does it for a selection change).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextInputSession {
     pub revision: u64,
@@ -287,17 +289,21 @@ pub struct TextInputState {
     pub cause: ChangeCause,
     /// The caret in window coordinates, so the candidate window can sit next to it; `None` before the first layout.
     pub cursor_rect: Option<Rect>,
+    /// The field dropped, or kept as typed, a composition the input method still holds (a click, Escape): the input
+    /// method is to start afresh. The window system acts on it once.
+    pub reset: bool,
 }
 
-/// One batch from the input method, applied whole and in this order: delete around the caret, insert `commit`,
-/// then show `preedit`.
+/// One batch from the input method, applied whole and in this order ([`TextBuffer::apply_ime`]): remove the shown
+/// composition, delete around the selection, insert `commit`, then show `preedit`.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct ImeBatch {
     pub preedit: Option<Preedit>,
     pub commit: Option<String>,
-    /// Bytes to delete before and after the caret.
+    /// Bytes to delete before and after the selection (the selection itself stays).
     pub delete: (u32, u32),
-    /// Whether the input method had seen the field's latest state; a stale batch resets the composition.
+    /// Whether the input method had seen the field's latest state. A stale batch applies all the same, but the field
+    /// does not answer it with its new state: the input method answers the newer one next.
     pub current: bool,
 }
 

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::{bidi, Affinity, Direction, TextPosition};
+use crate::{bidi, Affinity, Direction, ImeBatch, Surrounding, TextPosition};
 
 /// How long the caret shows and hides while it blinks; it shows for a whole period after every edit, move or click.
 /// Both are approximate: design values, not measured.
@@ -32,11 +32,13 @@ enum Group {
     Composing,
 }
 
-/// What a drag extends: characters, words (after a double click) or nothing (a triple click selects all).
+/// What a drag extends: characters, words (after a double click), paragraphs (after a triple click in a multi-line
+/// buffer) or nothing (a triple click in a field selects all of its one line).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Granularity {
     Character,
     Word,
+    Paragraph,
     All,
 }
 
@@ -65,6 +67,9 @@ pub struct TextBuffer {
     caret: usize,
     anchor: usize,
     composition: Option<Range<usize>>,
+    /// The input method's cursor in the composition, in bytes of the composed text: a caret when empty, the clause
+    /// being converted otherwise; `None` hides it.
+    composition_cursor: Option<Range<usize>>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     group: Option<Group>,
@@ -167,6 +172,34 @@ impl TextBuffer {
     /// The text an input method is composing (drawn underlined), if any.
     pub fn composition(&self) -> Option<Range<usize>> {
         self.composition.clone()
+    }
+
+    /// Where the input method puts its cursor in the composition, in bytes of the text: an empty range is the caret,
+    /// a longer one the clause being converted (drawn with a heavier underline, without a caret). `None` while nothing
+    /// is composed, or when the input method hides the cursor.
+    pub fn composition_cursor(&self) -> Option<Range<usize>> {
+        let composition = self.composition.as_ref()?;
+        let cursor = self.composition_cursor.as_ref()?;
+        Some(composition.start + cursor.start..composition.start + cursor.end)
+    }
+
+    /// The text without what an input method is still composing: what the field holds.
+    pub fn committed(&self) -> String {
+        match &self.composition {
+            Some(range) => format!("{}{}", &self.text[..range.start], &self.text[range.end..]),
+            None => self.text.clone(),
+        }
+    }
+
+    /// The bounded window of the committed text around the caret that the input method is told, at most `max_bytes`
+    /// long: without the composition, with the caret where the composition is inserted while there is one.
+    pub fn surrounding(&self, max_bytes: usize) -> Surrounding {
+        match &self.composition {
+            Some(range) => {
+                Surrounding::around(&self.committed(), range.start, range.start, max_bytes)
+            }
+            None => Surrounding::around(&self.text, self.caret, self.anchor, max_bytes),
+        }
     }
 
     /// How far the text is scrolled left, in points ([`TextBuffer::follow_caret`]).
@@ -286,19 +319,120 @@ impl TextBuffer {
         self.replace_selection(&self.clean(s), None);
     }
 
-    /// Show `preedit` as the text being composed, in place of the earlier composition or else the selection.
+    /// Show `preedit` as the text being composed, in place of the earlier composition or else the selection, with the
+    /// input method's caret after it.
     pub fn set_composition(&mut self, preedit: &str) {
-        match self.composition.take() {
+        self.set_composition_with_cursor(preedit, Some(preedit.len()..preedit.len()));
+    }
+
+    /// [`TextBuffer::set_composition`] with the input method's cursor at `cursor`, in bytes of `preedit` (see
+    /// [`TextBuffer::composition_cursor`]). A cursor past the text that ends up composed, or inside a character, is put
+    /// at the nearest character boundary before it.
+    pub fn set_composition_with_cursor(&mut self, preedit: &str, cursor: Option<Range<usize>>) {
+        let preedit = single_line(preedit);
+        if preedit.is_empty() {
+            self.cancel_composition();
+            return;
+        }
+        let composing = match self.composition.take() {
             Some(range) => {
                 self.anchor = range.start;
                 self.set_caret(range.end);
+                true
             }
             // a composition starts an undo step of its own
-            None => self.group = None,
-        }
+            None => {
+                self.group = None;
+                false
+            }
+        };
         let start = self.selection().start;
-        self.replace_selection(&single_line(preedit), Some(Group::Composing));
-        self.composition = (!preedit.is_empty()).then_some(start..self.caret);
+        let undo = self.undo.len();
+        self.replace_selection(&preedit, Some(Group::Composing));
+        if self.caret == start {
+            // no room under the length limit: nothing is composed, and the field is as it was before
+            if composing || self.undo.len() > undo {
+                self.composition = Some(start..start);
+                self.cancel_composition();
+            }
+            return;
+        }
+        self.composition = Some(start..self.caret);
+        let composed = &self.text[start..self.caret];
+        let floor = |at: usize| {
+            let at = at.min(composed.len());
+            (0..=at)
+                .rev()
+                .find(|i| composed.is_char_boundary(*i))
+                .unwrap_or(0)
+        };
+        self.composition_cursor =
+            cursor.map(|c| floor(c.start.min(c.end))..floor(c.end.max(c.start)));
+    }
+
+    /// Applies one input method batch as the text input protocol orders it: the shown composition goes, the bytes
+    /// `batch.delete` names before and after the selection go (cut inward to character boundaries), `batch.commit`
+    /// replaces the selection with the caret after it, and `batch.preedit` shows at the caret. The deletion and the
+    /// commit undo as one step with the typing around them. A batch that answers an older state applies all the same;
+    /// [`ImeBatch::current`] only says whether to answer it with the field's new state.
+    pub fn apply_ime(&mut self, batch: &ImeBatch) {
+        if self.composition.is_some() {
+            self.cancel_composition();
+        }
+        let (before, after) = (batch.delete.0 as usize, batch.delete.1 as usize);
+        let commit = batch
+            .commit
+            .as_deref()
+            .map(|c| self.clean(c))
+            .filter(|c| !c.is_empty());
+        if before > 0 || after > 0 {
+            self.delete_surrounding(before, after);
+        }
+        if let Some(commit) = commit {
+            self.replace_selection(&commit, Some(Group::Typing));
+        }
+        match &batch.preedit {
+            Some(preedit) if !preedit.text.is_empty() => {
+                self.set_composition_with_cursor(&preedit.text, preedit.cursor.clone())
+            }
+            _ => {}
+        }
+    }
+
+    /// Deletes up to `before` bytes before the selection and `after` bytes after it, the selection kept; each end is
+    /// cut inward to a character boundary, so a count that ends inside a character deletes less, never part of one.
+    /// It undoes with the typing around it.
+    pub fn delete_surrounding(&mut self, before: usize, after: usize) {
+        let selection = self.selection();
+        let char_floor = |at: usize| {
+            (0..=at)
+                .rev()
+                .find(|i| self.text.is_char_boundary(*i))
+                .unwrap_or(0)
+        };
+        let char_ceil = |at: usize| {
+            (at..=self.text.len())
+                .find(|i| self.text.is_char_boundary(*i))
+                .unwrap_or(self.text.len())
+        };
+        let tail = selection.end..char_floor((selection.end + after).min(self.text.len()));
+        let head = char_ceil(selection.start.saturating_sub(before))..selection.start;
+        if tail.is_empty() && head.is_empty() {
+            return;
+        }
+        if self.group != Some(Group::Typing) {
+            self.undo.push(self.snapshot());
+        }
+        self.redo.clear();
+        self.group = Some(Group::Typing);
+        self.composition = None;
+        self.text.replace_range(tail, "");
+        self.text.replace_range(head.clone(), "");
+        let shift = |at: usize| at - head.len();
+        let (caret, anchor) = (shift(self.caret), shift(self.anchor));
+        // a deletion that splits a cluster (half a flag pair) leaves the ends on the boundaries before them
+        self.set_caret(self.boundary_at_or_before(caret));
+        self.anchor = self.boundary_at_or_before(anchor);
     }
 
     /// Keep the composed text as typed text; what is typed next is a new undo step.
@@ -315,8 +449,8 @@ impl TextBuffer {
                 self.set_caret(before.caret);
                 self.anchor = before.anchor;
             }
+            self.group = None;
         }
-        self.group = None;
     }
 
     pub fn undo(&mut self) -> bool {
@@ -329,7 +463,9 @@ impl TextBuffer {
 
     /// The primary button went down at caret position `at` (from [`TextBuffer::index_at`], or a layout's `index_at`
     /// with the side of a direction change it hit); `extend` (Shift) extends the selection to it. A second and third
-    /// press within [`MULTI_CLICK_INTERVAL`] at the same place select the word and the whole text.
+    /// press within [`MULTI_CLICK_INTERVAL`] at the same place select the word and then the paragraph (the hard line,
+    /// with its line break) in a multi-line buffer, the whole text in a field. A press while composing keeps the
+    /// composed text as typed.
     pub fn press(&mut self, at: impl Into<TextPosition>, extend: bool, now: Instant) {
         self.press_at(at, extend, since_origin(now));
     }
@@ -359,12 +495,14 @@ impl TextBuffer {
         let granularity = match count {
             1 => Granularity::Character,
             2 => Granularity::Word,
+            _ if self.multiline => Granularity::Paragraph,
             _ => Granularity::All,
         };
         let origin = match granularity {
             Granularity::Character if extend => self.anchor..self.anchor,
             Granularity::Character => index..index,
             Granularity::Word => self.word_at(index),
+            Granularity::Paragraph => self.paragraph_at(index),
             Granularity::All => 0..self.text.len(),
         };
         self.drag = Some((origin, granularity));
@@ -381,6 +519,7 @@ impl TextBuffer {
         let reach = match granularity {
             Granularity::Character => index..index,
             Granularity::Word => self.word_at(index),
+            Granularity::Paragraph => self.paragraph_at(index),
             Granularity::All => origin.clone(),
         };
         if reach.start < origin.start {
@@ -789,6 +928,13 @@ impl TextBuffer {
             .map_or(self.text.len(), |w| w.end)
     }
 
+    /// The hard line a triple click at `at` selects, with the line break that ends it.
+    fn paragraph_at(&self, at: usize) -> Range<usize> {
+        let end = self.line_end(at);
+        let end = if end < self.text.len() { end + 1 } else { end };
+        self.line_start(at)..end
+    }
+
     /// The segment a double click at `at` selects: the word, or the run of spaces or the punctuation, under it.
     fn word_at(&self, at: usize) -> Range<usize> {
         let mut last = 0..0;
@@ -952,6 +1098,207 @@ mod tests {
         assert_eq!(b.text(), "one\nfour", "at a line's end the line break goes");
         b.move_to_line_end(true);
         assert_eq!(b.selected_text(), "four");
+    }
+
+    fn batch(
+        preedit: Option<(&str, Option<Range<usize>>)>,
+        commit: Option<&str>,
+        delete: (u32, u32),
+    ) -> ImeBatch {
+        ImeBatch {
+            preedit: preedit.map(|(text, cursor)| crate::Preedit {
+                text: text.into(),
+                cursor,
+            }),
+            commit: commit.map(Into::into),
+            delete,
+            current: true,
+        }
+    }
+
+    #[test]
+    fn a_composition_shows_in_place_of_the_selection_and_its_cursor_is_in_its_bytes() {
+        let mut b = buffer("ab");
+        b.select(1..2);
+        b.set_composition_with_cursor("かな", Some(3..3));
+        assert_eq!(b.text(), "aかな");
+        assert_eq!(b.composition(), Some(1..7));
+        assert_eq!(b.composition_cursor(), Some(4..4), "after the first kana");
+        assert_eq!(b.committed(), "a");
+        // the input method converts a clause: a range, no caret
+        b.set_composition_with_cursor("仮名", Some(0..6));
+        assert_eq!(b.composition_cursor(), Some(1..7));
+        b.set_composition_with_cursor("仮名", None);
+        assert_eq!(
+            b.composition_cursor(),
+            None,
+            "the input method hides its cursor"
+        );
+        b.cancel_composition();
+        assert_eq!(
+            (b.text(), b.selection()),
+            ("ab", 1..2),
+            "as before the composition"
+        );
+    }
+
+    #[test]
+    fn a_preedit_cursor_inside_a_character_or_past_the_text_moves_to_the_boundary_before_it() {
+        let mut b = buffer("");
+        b.set_composition_with_cursor("é字", Some(1..9));
+        assert_eq!(b.composition_cursor(), Some(0..5));
+        b.set_composition_with_cursor("ab", Some(2..1));
+        assert_eq!(
+            b.composition_cursor(),
+            Some(1..2),
+            "a reversed range is put in order"
+        );
+    }
+
+    #[test]
+    fn an_input_method_batch_removes_the_preedit_then_deletes_commits_and_composes_again() {
+        let mut b = buffer("x");
+        b.apply_ime(&batch(Some(("ni", Some(2..2))), None, (0, 0)));
+        assert_eq!((b.text(), b.composition()), ("xni", Some(1..3)));
+        // the delete counts from the caret without the preedit: the "x" goes, not part of "ni"
+        b.apply_ime(&batch(Some(("ha", None)), Some("你"), (1, 0)));
+        assert_eq!(b.text(), "你ha");
+        assert_eq!(b.committed(), "你");
+        assert_eq!(b.composition(), Some(3..5));
+        b.apply_ime(&batch(None, Some("好"), (0, 0)));
+        assert_eq!((b.text(), b.composition(), b.caret()), ("你好", None, 6));
+        assert!(b.undo());
+        assert_eq!(b.text(), "你", "each commit after a composition is a step");
+        assert!(b.undo());
+        assert_eq!(b.text(), "x", "the deletion and its commit undo as one");
+    }
+
+    #[test]
+    fn a_batch_without_a_preedit_ends_the_composition_and_an_empty_one_restores_the_text() {
+        let mut b = buffer("ab");
+        b.select(0..2);
+        b.apply_ime(&batch(Some(("k", None)), None, (0, 0)));
+        assert_eq!(b.text(), "k");
+        b.apply_ime(&batch(None, None, (0, 0)));
+        assert_eq!((b.text(), b.selection()), ("ab", 0..2));
+        b.set_composition("k");
+        b.set_composition("");
+        assert_eq!((b.text(), b.composition()), ("ab", None));
+        assert!(!b.undo(), "no step is left for the composition");
+    }
+
+    #[test]
+    fn a_surrounding_delete_keeps_the_selection_and_never_splits_a_character() {
+        let mut b = buffer("aé[sel]ñb");
+        b.select(3..8);
+        b.delete_surrounding(1, 1);
+        assert_eq!(
+            b.text(),
+            "aé[sel]ñb",
+            "a count inside é or ñ deletes nothing of them"
+        );
+        b.delete_surrounding(2, 2);
+        assert_eq!(b.text(), "a[sel]b");
+        assert_eq!(b.selected_text(), "[sel]");
+        let mut b = buffer("aé|ñb");
+        b.select(3..4);
+        b.delete_surrounding(2, 2);
+        assert_eq!(b.text(), "a|b");
+        assert_eq!(b.selection(), 1..2);
+        let mut b = buffer("aé");
+        b.select(3..3);
+        b.delete_surrounding(1, 0);
+        assert_eq!(b.text(), "aé", "one byte of é is no whole character");
+    }
+
+    #[test]
+    fn surrounding_text_leaves_out_the_composition_with_the_caret_where_it_goes() {
+        let mut b = buffer("前後");
+        b.select(3..3);
+        b.set_composition("ちゅう");
+        let around = b.surrounding(4000);
+        assert_eq!(around.text, "前後");
+        assert_eq!((around.cursor, around.anchor), (3, 3));
+        b.commit_composition();
+        let around = b.surrounding(4000);
+        assert_eq!(around.text, "前ちゅう後");
+        assert_eq!(around.cursor, 12);
+    }
+
+    #[test]
+    fn offsets_stay_on_grapheme_boundaries_in_emoji_combining_marks_and_cjk() {
+        // a family (ZWJ sequence), a flag pair, e with a combining acute, and a CJK character
+        let text = "👨\u{200d}👩\u{200d}👧🇳🇱e\u{301}字";
+        let mut b = buffer(text);
+        assert_eq!(b.boundaries(), vec![0, 18, 26, 29, 32]);
+        b.select(19..19);
+        assert_eq!(
+            b.caret(),
+            18,
+            "a selection inside a cluster goes to its start"
+        );
+        b.apply_ime(&batch(None, Some("!"), (0, 0)));
+        assert!(b.text().starts_with("👨\u{200d}👩\u{200d}👧!"));
+        // deleting half the flag pair before the caret leaves the caret on a boundary
+        let mut b = buffer("🇳🇱🇩🇪");
+        b.select(8..8);
+        b.delete_surrounding(4, 0);
+        assert_eq!(b.text(), "🇳🇩🇪");
+        assert!(
+            b.boundaries().contains(&b.caret()),
+            "caret {} on a boundary",
+            b.caret()
+        );
+        // the input method deletes a combining mark alone, so it can compose another
+        let mut b = buffer("e\u{301}");
+        b.select(3..3);
+        b.delete_surrounding(2, 0);
+        assert_eq!((b.text(), b.caret()), ("e", 1));
+    }
+
+    #[test]
+    fn a_press_while_composing_keeps_the_composition_as_typed() {
+        let mut b = buffer("a");
+        b.set_composition("に");
+        b.press_at(0, false, Duration::from_secs(1));
+        assert_eq!((b.text(), b.composition(), b.caret()), ("aに", None, 0));
+    }
+
+    #[test]
+    fn a_shift_press_extends_from_the_anchor() {
+        let mut b = buffer("hello world");
+        b.select(2..2);
+        b.press_at(8, true, Duration::from_secs(1));
+        assert_eq!(b.selection(), 2..8);
+        b.release();
+        b.press_at(0, true, Duration::from_secs(2));
+        assert_eq!(
+            b.selection(),
+            0..2,
+            "the anchor stays where the selection began"
+        );
+    }
+
+    #[test]
+    fn a_triple_press_selects_the_paragraph_in_an_editor_and_everything_in_a_field() {
+        let mut b = TextBuffer::multiline();
+        b.set_text("one two\nthree four\nfive");
+        for n in 0..3 {
+            b.press_at(10, false, Duration::from_millis(1000 + n * 100));
+        }
+        assert_eq!(b.selected_text(), "three four\n");
+        b.drag_to(22);
+        assert_eq!(
+            b.selected_text(),
+            "three four\nfive",
+            "the drag extends by paragraphs"
+        );
+        b.release();
+        let mut f = buffer("one two");
+        for n in 0..3 {
+            f.press_at(1, false, Duration::from_millis(1000 + n * 100));
+        }
+        assert_eq!(f.selected_text(), "one two");
     }
 
     /// Run with `cargo test --release -p cupertino-ui-text -- --ignored --nocapture timing`.

@@ -95,7 +95,9 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   blur, and only its text and symbols follow what is behind them (*Backdrop* below). Increase Contrast keeps it
   see-through. Under Reduce Transparency it is a solid strip: the bar's `MenuBar` backdrop, which the server draws with
   the material's opaque recipe (grey 0.1255 dark, 0.8549 light), covers the bar then and has no area otherwise
-  (`tone::solid_bar`). Each open menu level is an `xdg_popup` with a `Menu` backdrop. The process keeps its palette under
+  (`tone::solid_bar`). Each open menu level is an `xdg_popup` with a `Menu` backdrop. Its disabled rows, their submenu
+  arrows and checkmarks recede to the menu text at 0.26; with Increase Contrast they stay readable at 0.53 and the
+  separators strengthen to 0.47 (`MenuPalette::high_contrast`). The process keeps its palette under
   the display options (no recorded contrast palette for the menu bar text and status items).
 - **Menus.** The server's `cupertino_menu_bar_v1` feed names the active application and how its window exports menus:
   DBusMenu or GMenuModel. A window without menus gets the synthetic menus, whose actions go back as `window_command` /

@@ -4,6 +4,8 @@
 //! fails, so the variable can never pass a run.
 
 use super::*;
+
+mod frames;
 use crate::browse::Zone;
 use crate::engine::tests_support::test_launcher;
 use crate::exec::CommandSpec;

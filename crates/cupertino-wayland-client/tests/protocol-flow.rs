@@ -2607,9 +2607,18 @@ fn a_move_answers_the_touch_down_held_and_not_after_the_finger_lifts() {
         conn.flush().unwrap();
         assert_eq!(next_window_gesture(&seen), Seen::Move(down));
 
+        // the lift is sent from the compositor's thread: wait for it to arrive rather than for one round trip
         control.send(end).unwrap();
-        conn.roundtrip().unwrap();
-        stash.extend(conn.wait(Some(Duration::ZERO)).unwrap());
+        wait_for(&mut conn, &mut stash, |e| {
+            matches!(
+                e,
+                Event::Touch {
+                    event: TouchEvent::Up { .. } | TouchEvent::Cancel,
+                    ..
+                }
+            )
+            .then_some(())
+        });
         assert_eq!(conn.held_press(), None);
         assert!(matches!(
             conn.start_move(w),

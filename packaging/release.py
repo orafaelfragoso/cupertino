@@ -475,6 +475,13 @@ def expected_generated(args, tmp):
     fail('verifying the runtime package needs --bindir (the built cupertino) or --gendir (its MANIFEST)')
 
 
+def build_path(root):
+    """A build-tree (`root`) or home path at the start of a path string. Remapped paths (/usr/src/..., /cargo/...) pass,
+    and so does a path under some home written from `~` (`--root ~/src/cupertino` in an example), whatever the build
+    tree is called."""
+    return re.compile(rb'(?<![\w./~-])(' + re.escape(str(root).encode()) + rb'|/home|/root)/')
+
+
 def cmd_verify(args):
     bodies, gendir = {}, None
     with tempfile.TemporaryDirectory() as tmp:
@@ -491,8 +498,7 @@ def cmd_verify(args):
         if rel in found and undated(found[rel][1]) != body:
             problems.append(f'/{rel}: differs from what the built cupertino generates')
     hashes = {f'usr/share/cupertino/assets/wallpapers/{w["file"]}': w['sha256'] for w in WALLPAPERS}
-    # A build-tree or home path at the start of a path string; remapped paths (/usr/src/..., /cargo/...) pass.
-    leak = re.compile(rb'(?<![\w./-])(' + re.escape(str(ROOT).encode()) + rb'|/home|/root)/')
+    leak = build_path(ROOT)
     for rel, (mode, body) in sorted(found.items()):
         if mode & (stat.S_ISUID | stat.S_ISGID):
             problems.append(f'setuid/setgid bit on /{rel}')

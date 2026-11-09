@@ -922,6 +922,14 @@ class GeneratedFilesTest(unittest.TestCase):
                 mock.patch.object(release.Path, 'stat', return_value=mock.Mock(st_size=1)):
             release.cmd_verify(args)
 
+    def test_a_build_path_is_found_at_the_start_of_a_path_and_an_example_under_a_home_is_not(self):
+        leak = release.build_path(Path('/src'))
+        for text in (b'built in /src/target/release', b'"/src/cupertino"', b'see /home/builder/x', b'/root/.cargo/x'):
+            self.assertTrue(leak.search(text), text)
+        for text in (b'--root ~/src/cupertino', b'--source ~/src/cupertino', b'/usr/src/debug/cupertino/x',
+                     b'/cargo/registry/x', b'crates/src/x'):
+            self.assertIsNone(leak.search(text), text)
+
     def test_verify_takes_the_pages_from_the_manifest_and_finds_a_build_path_in_them(self):
         with tempfile.TemporaryDirectory() as tmp:
             gen = gendir(tmp)

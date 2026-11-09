@@ -12,7 +12,35 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 mod common;
 
+use common::events;
 use common::Client;
+use cupertino_diagnostic_events::{Record, Severity};
+
+/// The `server.lock.client_lost` events so far, as (severity, stage, stays_locked).
+fn clients_lost() -> Vec<(Severity, String, bool)> {
+    events::recorded("server.lock.client_lost")
+        .iter()
+        .map(|r| {
+            (
+                r.severity,
+                r.fields.get("stage").unwrap().as_str().unwrap().to_owned(),
+                r.fields.get("stays_locked").unwrap().as_bool().unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// The reasons of the `server.lock.fallback_shown` events so far; each covered the one output.
+fn fallbacks() -> Vec<String> {
+    events::recorded("server.lock.fallback_shown")
+        .iter()
+        .map(|r: &Record| {
+            assert_eq!(r.severity, Severity::Warn);
+            assert_eq!(r.fields.get("outputs").unwrap(), 1);
+            r.fields.get("reason").unwrap().as_str().unwrap().to_owned()
+        })
+        .collect()
+}
 
 const OUTPUT: (i32, i32) = (1000, 700);
 
@@ -169,6 +197,7 @@ fn a_lock_covers_the_toplevel_and_gives_the_pointer_and_keyboard_to_the_lock_sur
 
 #[test]
 fn a_lock_client_that_disconnects_leaves_the_session_locked_and_black() {
+    events::memory();
     let Some(mut h) = Harness::new() else { return };
     let (_toplevel, center) = mapped_toplevel(&mut h);
     let locker = Client::locker(common::session_agent(&h.state));
@@ -191,6 +220,11 @@ fn a_lock_client_that_disconnects_leaves_the_session_locked_and_black() {
         [0, 0, 0][..],
         "the output is black"
     );
+    assert_eq!(
+        clients_lost(),
+        [(Severity::Error, "locked".to_owned(), true)]
+    );
+    assert_eq!(fallbacks(), ["lock_client_lost"]);
 
     let successor = Client::locker(common::session_agent(&h.state));
     h.wait_until("a new client to take the lock", |_| successor.locked());
@@ -586,10 +620,12 @@ fn without_a_lock_screen_a_sleep_leaves_the_session_as_it_is() {
 #[test]
 fn a_session_the_system_sleeps_on_before_it_is_locked_is_covered_until_a_lock_client_takes_it_over()
 {
+    events::memory();
     let Some(mut h) = Harness::new() else { return };
     with_lock_screen(&mut h);
     let (toplevel, center) = mapped_toplevel(&mut h);
     assert_eq!(h.center_pixel("awake")[..3], [0, 0, 255][..]);
+    assert!(fallbacks().is_empty());
 
     // the lock client hung or crashed before it asked for the lock
     h.state.system_going_to_sleep();
@@ -615,6 +651,8 @@ fn a_session_the_system_sleeps_on_before_it_is_locked_is_covered_until_a_lock_cl
         h.surface_under(center).is_none(),
         "the pointer reaches nothing under the cover"
     );
+    assert_eq!(fallbacks(), ["sleep_before_lock"]);
+    assert!(clients_lost().is_empty());
     h.wait_until("the toplevel to be deactivated", |_| {
         toplevel.activations().last() == Some(&false)
     });
@@ -635,6 +673,7 @@ fn a_session_the_system_sleeps_on_before_it_is_locked_is_covered_until_a_lock_cl
 
 #[test]
 fn a_lock_client_that_hangs_before_presenting_and_then_dies_leaves_a_sleeping_session_covered() {
+    events::memory();
     let Some(mut h) = Harness::new() else { return };
     let (_toplevel, center) = mapped_toplevel(&mut h);
     // the model clock stands still: the lock stays pending however long the client takes
@@ -645,6 +684,11 @@ fn a_lock_client_that_hangs_before_presenting_and_then_dies_leaves_a_sleeping_se
     h.wait_until("the lock to be pending", |s| s.session_lock.is_active());
     first.kill();
     h.wait_until("the session to come back", |s| !s.session_lock.is_active());
+    assert_eq!(
+        clients_lost(),
+        [(Severity::Warn, "locking".to_owned(), false)]
+    );
+    assert!(fallbacks().is_empty(), "the session opened again");
 
     let hung = Client::hung_locker(common::session_agent(&h.state));
     h.wait_until("the lock to be pending", |s| s.session_lock.is_active());
@@ -670,6 +714,14 @@ fn a_lock_client_that_hangs_before_presenting_and_then_dies_leaves_a_sleeping_se
         "the session shows after the wake"
     );
     assert!(h.surface_under(center).is_none());
+    assert_eq!(
+        clients_lost(),
+        [
+            (Severity::Warn, "locking".to_owned(), false),
+            (Severity::Error, "locking".to_owned(), true)
+        ]
+    );
+    assert_eq!(fallbacks(), ["lock_client_lost"]);
 
     let successor = Client::locker(common::session_agent(&h.state));
     h.wait_until("a new lock client to take the lock", |_| successor.locked());

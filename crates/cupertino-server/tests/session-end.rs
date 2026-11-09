@@ -1,7 +1,8 @@
 //! A panic on the session's thread writes its reason, on one line, to the file `cupertino-session` names, and the
 //! process ends within the teardown limit even when the unwinding hangs; the session command logs that reason and ends
 //! the session within 5 s. The server itself, crashed with `--crash` (a panic, then an abort), leaves its backtrace in
-//! its log and the reason in the session log, and the session ends within 5 s of the crash.
+//! its log and the reason in the session log, and the session ends within 5 s of the crash. The crash is also in the
+//! server's diagnostic store: `server.panic` after `server.session_end` for a panic, `server.fatal_signal` for a signal.
 
 mod common;
 
@@ -11,6 +12,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use common::spawn::{run_child_test, run_child_test_after, spec_dir, wait_after};
+use cupertino_diagnostic_events::{store, Record, Severity};
 use cupertino_server::backend::headless;
 use cupertino_server::logging::{self, SESSION_END_ENV, TEARDOWN_LIMIT};
 
@@ -157,6 +159,24 @@ struct Crashed {
     after_the_crash: Duration,
     session_log: String,
     server_log: String,
+    /// What the server wrote to its diagnostic store, oldest first.
+    events: Vec<Record>,
+}
+
+impl Crashed {
+    /// The events of `id`.
+    fn events(&self, id: &str) -> Vec<&Record> {
+        self.events.iter().filter(|r| r.id == id).collect()
+    }
+
+    /// The ids of the events that record how the server ended, in the order they were written.
+    fn ends(&self) -> Vec<&str> {
+        self.events
+            .iter()
+            .map(|r| r.id.as_str())
+            .filter(|id| ["server.session_end", "server.panic", "server.fatal_signal"].contains(id))
+            .collect()
+    }
 }
 
 /// The session command running the headless server with `--crash CRASH_AT:how`; `None` without an EGL device (unless
@@ -206,6 +226,9 @@ fn crash_the_session(how: &str) -> Option<Crashed> {
     let (status, after_the_crash) = wait_after(child, || end.exists(), Duration::from_secs(20));
     let session_log = std::fs::read_to_string(state.join("session.log")).unwrap();
     let server_log = std::fs::read_to_string(state.join("server.log")).unwrap_or_default();
+    let events = store::read(&state.join("events"))
+        .map(|contents| contents.records.into_iter().map(|s| s.record).collect())
+        .unwrap_or_default();
     if session_log.contains(headless::NO_USABLE_DEVICE)
         && std::env::var("CUPERTINO_EGL_REQUIRED").as_deref() != Ok("1")
     {
@@ -218,6 +241,7 @@ fn crash_the_session(how: &str) -> Option<Crashed> {
         after_the_crash,
         session_log,
         server_log,
+        events,
     })
 }
 
@@ -240,6 +264,33 @@ fn a_panic_of_the_server_leaves_its_backtrace_and_ends_the_session_within_five_s
     assert!(
         log.contains("cupertino_server::cli::schedule_script"),
         "the backtrace names the frames:\n{log}"
+    );
+    // the server's hook runs first (the session's end), then the hook it chained to records the panic
+    assert_eq!(
+        crashed.ends(),
+        ["server.session_end", "server.panic"],
+        "{:?}",
+        crashed.events
+    );
+    let panic = crashed.events("server.panic")[0];
+    assert_eq!(panic.severity, Severity::Fatal);
+    assert_eq!(panic.component, "cupertino-server");
+    assert_eq!(
+        panic.fields.get("panic").unwrap(),
+        "the crash asked for with --crash"
+    );
+    let location = panic.fields.get("location").unwrap().as_str().unwrap();
+    assert!(location.starts_with("cli.rs:"), "{location}");
+    assert_eq!(panic.fields.get("backend").unwrap(), "headless");
+    assert_eq!(panic.fields.get("renderer").unwrap(), "gles");
+    let end = crashed.events("server.session_end")[0];
+    assert_eq!(end.severity, Severity::Error);
+    assert_eq!(end.fields.get("status").unwrap(), 101);
+    let error = end.fields.get("error").unwrap().as_str().unwrap();
+    assert!(error.starts_with("panic: panicked at "), "{error}");
+    assert!(
+        error.ends_with("the crash asked for with --crash"),
+        "{error}"
     );
     let after = crashed.after_the_crash;
     eprintln!("the session ended {after:?} after the panic");
@@ -269,6 +320,7 @@ fn an_abort_of_the_server_leaves_its_backtrace_and_ends_the_session_within_five_
         log.contains("cupertino_server::cli::schedule_script"),
         "the backtrace names the frames:\n{log}"
     );
+    assert_fatal_signal(&crashed, "SIGABRT");
     let after = crashed.after_the_crash;
     eprintln!("the session ended {after:?} after the abort");
     assert!(after < Duration::from_secs(5), "{after:?}");
@@ -293,7 +345,34 @@ fn a_stack_overflow_of_the_server_leaves_its_backtrace_and_ends_the_session_with
         log.contains("cupertino_server::cli::overflow"),
         "the backtrace names the frames"
     );
+    assert_fatal_signal(&crashed, "SIGSEGV");
     let after = crashed.after_the_crash;
     eprintln!("the session ended {after:?} after the overflow");
     assert!(after < Duration::from_secs(5), "{after:?}");
+}
+
+/// The server ended by `signal` wrote one `server.fatal_signal` line from its handler, and nothing else recorded the end.
+fn assert_fatal_signal(crashed: &Crashed, signal: &str) {
+    assert_eq!(
+        crashed.ends(),
+        ["server.fatal_signal"],
+        "{:?}",
+        crashed.events
+    );
+    let fatal = crashed.events("server.fatal_signal")[0];
+    assert_eq!(fatal.severity, Severity::Fatal);
+    assert_eq!(fatal.message, "the server was ended by a fatal signal");
+    assert_eq!(fatal.component, "cupertino-server");
+    assert_eq!(fatal.fields.get("signal").unwrap(), signal);
+    // the backend is known before the line is made ready
+    assert_eq!(fatal.fields.get("backend").unwrap(), "headless");
+    let written = cupertino_diagnostic_events::time::parse(&fatal.time).unwrap();
+    let age = std::time::SystemTime::now()
+        .duration_since(written)
+        .unwrap();
+    assert!(
+        age < Duration::from_secs(120),
+        "written at the crash: {}",
+        fatal.time
+    );
 }

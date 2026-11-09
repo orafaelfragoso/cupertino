@@ -53,6 +53,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 /// Memory order of an Argb8888 pixel is blue, green, red, alpha.
 pub mod absolute;
 pub mod desktop;
+pub mod events;
 pub mod overlays;
 pub mod shell;
 pub mod spawn;

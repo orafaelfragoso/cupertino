@@ -5,7 +5,9 @@
 //! `XAUTHORITY`: the display takes only clients that hold its cookie, since the abstract socket has no file permissions
 //! and any local user could reach it. When the satellite ends, the display listens again: after a failure only once
 //! the restart throttle ([`crate::restart_policy`]) has passed, so the next X11 program starts it again and a satellite
-//! that cannot run is not started in a loop. Its exit wakes the supervision pass of the shell processes (a pidfd).
+//! that cannot run is not started in a loop. Its exit wakes the supervision pass of the shell processes (a pidfd). A
+//! satellite that cannot be started is the diagnostic event `server.xwayland.start_failed`, its end
+//! `server.xwayland.exited`.
 
 use std::fs::OpenOptions;
 use std::io::{ErrorKind, Read, Write};
@@ -18,10 +20,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 
-use crate::restart_policy::Backoff;
+use crate::restart_policy::{with_exit_status, Backoff};
 
 /// The program, found on `PATH`.
 pub const SATELLITE: &str = "xwayland-satellite";
@@ -350,7 +353,17 @@ impl XWayland {
             }
             Err(e) => {
                 tracing::warn!(program = %self.program.display(), error = %e, "starting xwayland-satellite failed");
-                Phase::Waiting(now + self.backoff.next_interval(Duration::ZERO))
+                let retry = self.backoff.next_interval(Duration::ZERO);
+                diag::event(
+                    Severity::Warn,
+                    "server.xwayland.start_failed",
+                    "xwayland-satellite could not be started",
+                )
+                .field("program", Value::Path(&self.program))
+                .field("error", Value::Public(&e.to_string()))
+                .field("restart_in", Value::Duration(retry))
+                .emit();
+                Phase::Waiting(now + retry)
             }
         };
     }
@@ -362,16 +375,23 @@ impl XWayland {
                 Ok(None) => Phase::Running { child, started },
                 Ok(Some(status)) => {
                     tracing::info!(%status, "xwayland-satellite exited: the X display waits for the next X11 program");
-                    if status.success() && now.saturating_duration_since(started) >= self.quick_exit
-                    {
+                    let ran = now.saturating_duration_since(started);
+                    if status.success() && ran >= self.quick_exit {
                         // it ran: a run of failures before it is over
                         self.backoff = Backoff::default();
+                        record_exit(Some(status), ran, None, None);
                         Phase::Listening
                     } else {
                         // a failure, or a success at once (a build that cannot run, a usage error), which the waiting
                         // client would otherwise restart on every poll
-                        let ran = now.saturating_duration_since(started);
-                        Phase::Waiting(started + self.backoff.next_interval(ran))
+                        let at = started + self.backoff.next_interval(ran);
+                        record_exit(
+                            Some(status),
+                            ran,
+                            Some(at.saturating_duration_since(now)),
+                            None,
+                        );
+                        Phase::Waiting(at)
                     }
                 }
                 // the child cannot be waited for (it was reaped elsewhere): it counts as a failed exit, not as running
@@ -379,7 +399,9 @@ impl XWayland {
                     tracing::warn!(error = %e, "waiting on xwayland-satellite failed: treating it as ended");
                     let _ = child.kill();
                     let ran = now.saturating_duration_since(started);
-                    Phase::Waiting(started + self.backoff.next_interval(ran))
+                    let at = started + self.backoff.next_interval(ran);
+                    record_exit(None, ran, Some(at.saturating_duration_since(now)), Some(&e));
+                    Phase::Waiting(at)
                 }
             },
             Phase::Waiting(at) if at > now => Phase::Waiting(at),
@@ -435,6 +457,43 @@ impl XWayland {
     }
 }
 
+/// `server.xwayland.exited`: the satellite ended with `status` (unknown when it could not be waited for, for `error`)
+/// after a run of `ran`; the display listens again after `restart_in`, or at once. `info` for a run that ended
+/// successfully, `warn` for a failure or a satellite that ended at once.
+fn record_exit(
+    status: Option<std::process::ExitStatus>,
+    ran: Duration,
+    restart_in: Option<Duration>,
+    error: Option<&std::io::Error>,
+) {
+    let error = error.map(ToString::to_string);
+    let event = if restart_in.is_none() {
+        diag::event(
+            Severity::Info,
+            "server.xwayland.exited",
+            "xwayland-satellite exited",
+        )
+    } else {
+        diag::event(
+            Severity::Warn,
+            "server.xwayland.exited",
+            "xwayland-satellite exited",
+        )
+    };
+    let mut event = match status {
+        Some(status) => with_exit_status(event, status),
+        None => event,
+    };
+    event = event.field("ran", Value::Duration(ran)).field(
+        "restart_in",
+        Value::Duration(restart_in.unwrap_or_default()),
+    );
+    if let Some(error) = &error {
+        event = event.field("error", Value::Public(error));
+    }
+    event.emit();
+}
+
 impl Drop for XWayland {
     /// The satellite, and with it Xwayland, does not outlive the server.
     fn drop(&mut self) {
@@ -452,6 +511,7 @@ mod tests {
     use smithay::reexports::calloop::EventLoop;
 
     use super::*;
+    use crate::logging::test_events;
 
     struct Dirs {
         _root: tempfile::TempDir,
@@ -703,11 +763,20 @@ mod tests {
 
     #[test]
     fn a_crashed_satellite_is_started_again_by_the_waiting_x11_client_after_the_throttle() {
+        test_events::memory();
         let mut f = fixture("kill -SEGV $$");
         let _client = UnixStream::connect(&f.socket).unwrap();
         f.run_until(|f| f.starts().len() == 1 && f.state.as_ref().unwrap().pid().is_none());
         assert!(matches!(f.state.as_ref().unwrap().phase, Phase::Waiting(_)));
         let crashed = Instant::now();
+        let exits = test_events::recorded("server.xwayland.exited");
+        assert_eq!(exits.len(), 1, "{exits:?}");
+        assert_eq!(exits[0].severity, Severity::Warn);
+        assert_eq!(exits[0].message, "xwayland-satellite exited");
+        assert_eq!(exits[0].fields.get("signal").unwrap(), libc::SIGSEGV);
+        assert!(exits[0].fields.get("status").is_none());
+        let restart_in = exits[0].fields.get("restart_in").unwrap().as_u64().unwrap();
+        assert!((1..=1_000).contains(&restart_in), "{exits:?}");
 
         // nothing accepted the client: it is still waiting, and starts the satellite once the throttle has passed
         f.run_until(|f| f.starts().len() == 2);
@@ -719,10 +788,43 @@ mod tests {
 
     #[test]
     fn a_satellite_that_ran_and_ended_normally_leaves_the_display_listening_at_once() {
+        test_events::memory();
         let mut f = fixture("sleep 1.2; exit 0");
         let _client = UnixStream::connect(&f.socket).unwrap();
         f.run_until(|f| f.starts().len() == 1 && f.state.as_ref().unwrap().pid().is_none());
         assert!(matches!(f.state.as_ref().unwrap().phase, Phase::Listening));
+        let exits = test_events::recorded("server.xwayland.exited");
+        assert_eq!(exits.len(), 1, "{exits:?}");
+        assert_eq!(exits[0].severity, Severity::Info);
+        assert_eq!(exits[0].fields.get("status").unwrap(), 0);
+        assert_eq!(exits[0].fields.get("restart_in").unwrap(), 0);
+        assert!(exits[0].fields.get("ran").unwrap().as_u64().unwrap() >= 1_000);
+    }
+
+    #[test]
+    fn a_satellite_that_cannot_be_started_is_recorded_and_the_display_waits_out_the_throttle() {
+        test_events::memory();
+        let mut f = fixture("exit 0");
+        let missing = f._dirs.runtime.join("no-such-satellite");
+        f.state.as_mut().unwrap().program = missing;
+        let _client = UnixStream::connect(&f.socket).unwrap();
+        f.run_until(|f| matches!(f.state.as_ref().unwrap().phase, Phase::Waiting(_)));
+        assert!(f.starts().is_empty());
+        assert_eq!(f.state.as_ref().unwrap().pid(), None);
+        let failed = test_events::recorded("server.xwayland.start_failed");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        let failed = &failed[0];
+        assert_eq!(failed.severity, Severity::Warn);
+        assert_eq!(failed.message, "xwayland-satellite could not be started");
+        assert_eq!(
+            failed.fields.get("error").unwrap(),
+            "No such file or directory (os error 2)"
+        );
+        assert_eq!(failed.fields.get("restart_in").unwrap(), 1_000);
+        // a temporary directory is not a system one: the program's name is kept only as a hash
+        let program = failed.fields.get("program").unwrap().as_str().unwrap();
+        assert!(program.contains("…#"), "{program}");
+        assert!(test_events::recorded("server.xwayland.exited").is_empty());
     }
 
     #[test]

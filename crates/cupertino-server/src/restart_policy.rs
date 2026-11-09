@@ -2,8 +2,11 @@
 //! it for good), and never sooner than the throttle after its last start. The throttle starts at 1 s and doubles with every failure up to [`BACKOFF_CAP`], so a process that
 //! cannot run is tried less and less often; it starts over once a run lasted [`STABLE_AFTER`].
 
+use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 use std::time::{Duration, Instant};
+
+use cupertino_diagnostic_events::{Event, Value};
 
 /// Minimum time between the start of a process and its next start after the first failure.
 pub const RESTART_THROTTLE: Duration = Duration::from_secs(1);
@@ -49,6 +52,26 @@ pub enum Decision {
     Stop,
 }
 
+impl Decision {
+    /// How long after `now` the process starts again; `None` when it stays stopped.
+    pub fn restart_in(self, now: Instant) -> Option<Duration> {
+        match self {
+            Decision::RestartNow => Some(Duration::ZERO),
+            Decision::RestartAt(at) => Some(at.saturating_duration_since(now)),
+            Decision::Stop => None,
+        }
+    }
+}
+
+/// `event` with how a process ended: `status`, its exit code, or `signal`, the signal that ended it.
+pub fn with_exit_status(event: Event<'_>, status: ExitStatus) -> Event<'_> {
+    match (status.code(), status.signal()) {
+        (Some(code), _) => event.field("status", Value::Int(code.into())),
+        (None, Some(signal)) => event.field("signal", Value::Int(signal.into())),
+        (None, None) => event,
+    }
+}
+
 /// Decision for a process that exited with `status`, after it was last started at `last_start`.
 pub fn decide(
     status: ExitStatus,
@@ -70,8 +93,6 @@ pub fn decide(
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::process::ExitStatusExt;
-
     use super::*;
 
     const SUCCESS: i32 = 0;
@@ -172,6 +193,21 @@ mod tests {
             ),
             Decision::RestartAt(at(1_000, t0))
         );
+    }
+
+    #[test]
+    fn a_decision_says_how_long_until_the_restart() {
+        let t0 = Instant::now();
+        assert_eq!(Decision::RestartNow.restart_in(t0), Some(Duration::ZERO));
+        assert_eq!(
+            Decision::RestartAt(at(1_500, t0)).restart_in(at(500, t0)),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(
+            Decision::RestartAt(t0).restart_in(at(500, t0)),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(Decision::Stop.restart_in(t0), None);
     }
 
     #[test]

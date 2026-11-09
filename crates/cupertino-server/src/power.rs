@@ -17,6 +17,8 @@
 
 use std::sync::mpsc;
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
+
 use smithay::reexports::calloop::channel::{self, Event};
 
 use crate::display_power::{
@@ -82,6 +84,21 @@ pub enum BusEvent {
     Resumed,
     /// The watcher stopped; the facts it reported stay as they were.
     Stopped(String),
+}
+
+/// Records `power.suspend.failed`: the idle policy's system sleep did not happen, for `reason` (`no_system_bus`,
+/// `watcher_stopped`, `logind_refused`), with logind's answer when it gave one.
+fn suspend_failed(reason: &'static str, error: Option<&str>) {
+    let mut event = diag::event(
+        Severity::Error,
+        "power.suspend.failed",
+        "the system could not be put to sleep",
+    )
+    .field("reason", Value::Public(reason));
+    if let Some(error) = error {
+        event = event.field("error", Value::Public(error));
+    }
+    event.emit();
 }
 
 /// What the main loop asks of the bus.
@@ -153,9 +170,13 @@ impl Cupertino {
                         Some(bus) => {
                             if bus.send(BusRequest::Suspend).is_err() {
                                 tracing::warn!("the system bus watcher has stopped: cannot put the system to sleep");
+                                suspend_failed("watcher_stopped", None);
                             }
                         }
-                        None => tracing::warn!("no system bus: cannot put the system to sleep"),
+                        None => {
+                            tracing::warn!("no system bus: cannot put the system to sleep");
+                            suspend_failed("no_system_bus", None);
+                        }
                     }
                 }
             }
@@ -276,6 +297,7 @@ mod bus {
 
     use std::sync::mpsc::Receiver;
 
+    use cupertino_diagnostic_events::{self as diag, Severity, Value};
     use cupertino_peer::signal::{from_owner, sent_by_bus, FromOwner};
     use smithay::reexports::calloop::channel::Sender;
     use zbus::blocking::{Connection, MessageIterator};
@@ -416,6 +438,7 @@ mod bus {
                         BusRequest::Suspend => {
                             if let Err(e) = conn.call_method(Some(LOGIND), LOGIND_PATH, Some(LOGIND_MANAGER), "Suspend", &false) {
                                 tracing::warn!(error = %e, "logind refused to put the system to sleep");
+                                super::suspend_failed("logind_refused", Some(&e.to_string()));
                             }
                         }
                         BusRequest::HoldSleep => {
@@ -450,6 +473,15 @@ mod bus {
             Ok(fd) => Some(fd),
             Err(e) => {
                 tracing::warn!(error = %e, "logind gave no sleep delay: the screen may still show the session as the system sleeps");
+                diag::event(
+                    Severity::Warn,
+                    "power.inhibit.failed",
+                    "logind gave no sleep delay inhibitor",
+                )
+                .field("what", Value::Public("sleep"))
+                .field("mode", Value::Public("delay"))
+                .field("error", Value::Public(&e.to_string()))
+                .emit();
                 None
             }
         }
@@ -640,6 +672,63 @@ mod tests {
                 "no delay in this test".into(),
             ))
         }
+    }
+
+    /// logind refuses the sleep delay the watcher takes as it starts (`power.inhibit.failed`) and has no `Suspend`, so the
+    /// idle policy's sleep fails (`power.suspend.failed`); without a bus the sleep fails before it is asked for.
+    #[test]
+    fn a_refused_sleep_delay_and_a_failed_suspend_are_recorded() {
+        use cupertino_diagnostic_events::{self as diag, Record};
+        use std::time::{Duration, Instant};
+        const PATH: &str = "/org/freedesktop/login1";
+        diag::init(diag::component!(), "server", diag::Sink::Memory);
+        super::suspend_failed("no_system_bus", None);
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        let _logind = bus
+            .blocking_builder()
+            .serve_at(PATH, Logind)
+            .unwrap()
+            .name("org.freedesktop.login1")
+            .unwrap()
+            .build()
+            .unwrap();
+        let watcher = bus.blocking_builder().build().unwrap();
+        let (events, _received) = smithay::reexports::calloop::channel::channel();
+        let (requests, requested) = std::sync::mpsc::channel();
+        super::bus::start_on(watcher, events, requested).unwrap();
+        requests.send(super::BusRequest::Suspend).unwrap();
+        let recorded = |id: &str| -> Vec<Record> {
+            diag::recent()
+                .iter()
+                .map(|line| Record::parse(line.trim_end()).unwrap())
+                .filter(|record| record.id == id)
+                .collect()
+        };
+        let until = Instant::now() + Duration::from_secs(60);
+        while recorded("power.suspend.failed").len() < 2 {
+            assert!(
+                Instant::now() < until,
+                "no failed suspend: {:?}",
+                diag::recent()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let suspends = recorded("power.suspend.failed");
+        assert_eq!(suspends[0].fields.get("reason").unwrap(), "no_system_bus");
+        assert!(suspends[0].fields.get("error").is_none());
+        assert_eq!(suspends[1].fields.get("reason").unwrap(), "logind_refused");
+        let error = suspends[1].fields.get("error").unwrap().as_str().unwrap();
+        assert!(error.contains("UnknownMethod"), "{error}");
+        assert!(suspends.iter().all(|r| r.severity == diag::Severity::Error));
+        let inhibits = recorded("power.inhibit.failed");
+        assert_eq!(inhibits.len(), 1, "{inhibits:?}");
+        assert_eq!(inhibits[0].severity, diag::Severity::Warn);
+        assert_eq!(inhibits[0].fields.get("what").unwrap(), "sleep");
+        assert_eq!(inhibits[0].fields.get("mode").unwrap(), "delay");
+        let error = inhibits[0].fields.get("error").unwrap().as_str().unwrap();
+        assert!(error.contains("no delay in this test"), "{error}");
     }
 
     #[test]

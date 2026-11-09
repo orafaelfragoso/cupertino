@@ -3,13 +3,18 @@
 //! [`Supervisor::poll`] runs when a child's pidfd becomes readable (it exited) or at the earliest
 //! restart ([`Supervisor::next_deadline`]), see [`Wakeups`]; `try_wait` reaps it there. The server
 //! installs no SIGCHLD handler, and nothing wakes the loop while every child runs.
+//!
+//! Each exit and each start that fails is also a diagnostic event: `server.shell.exited` (restarted),
+//! `server.shell.gave_up` (not restarted) and `server.shell.start_failed`.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
+
 use crate::config::{check_built_in, BuiltIn, ShellProcess};
-use crate::restart_policy::{decide, Backoff, Decision};
+use crate::restart_policy::{decide, with_exit_status, Backoff, Decision};
 use crate::shell_connection::{bind_holder, hand_over, BoundConnection};
 use crate::xwayland::XDisplay;
 
@@ -117,7 +122,9 @@ impl Supervisor {
                     None => Phase::Running { child, started },
                     Some(status) => {
                         tracing::info!(name = p.spec.name, %status, "shell process exited");
-                        match decide(status, started, now, &mut p.backoff) {
+                        let decision = decide(status, started, now, &mut p.backoff);
+                        record_exit(&p.spec, status, decision, now);
+                        match decision {
                             Decision::RestartNow => start(
                                 &p.spec,
                                 p.built_in,
@@ -183,6 +190,56 @@ impl Supervisor {
     }
 }
 
+/// `server.shell.exited` for a process that exited and is started again, after `restart_in`; `server.shell.gave_up` for
+/// one the policy leaves stopped (it ended successfully).
+fn record_exit(spec: &ShellProcess, status: ExitStatus, decision: Decision, now: Instant) {
+    match decision.restart_in(now) {
+        Some(restart_in) => with_exit_status(
+            diag::event(
+                Severity::Warn,
+                "server.shell.exited",
+                "a shell process exited and is started again",
+            )
+            .field("role", Value::Public(&spec.name)),
+            status,
+        )
+        .field("restart_in", Value::Duration(restart_in))
+        .emit(),
+        None => with_exit_status(
+            diag::event(
+                Severity::Info,
+                "server.shell.gave_up",
+                "a shell process exited and is not started again",
+            )
+            .field("role", Value::Public(&spec.name)),
+            status,
+        )
+        .emit(),
+    }
+}
+
+/// `server.shell.start_failed`: `program` of the process was not started at `stage` for `error`, and is tried again
+/// after `restart_in`.
+fn record_start_failed(
+    spec: &ShellProcess,
+    program: &str,
+    stage: &'static str,
+    error: &str,
+    restart_in: Duration,
+) {
+    diag::event(
+        Severity::Warn,
+        "server.shell.start_failed",
+        "a shell process could not be started",
+    )
+    .field("role", Value::Public(&spec.name))
+    .field("program", Value::Path(Path::new(program)))
+    .field("stage", Value::Public(stage))
+    .field("error", Value::Public(error))
+    .field("restart_in", Value::Duration(restart_in))
+    .emit();
+}
+
 /// Spawn the process; a failed spawn counts as an exit with failure, so it is retried after the throttle, which grows.
 /// The program of a `built_in` process that [`check_built_in`] refuses is not started, and is checked again then.
 fn start(
@@ -201,14 +258,18 @@ fn start(
     if built_in {
         if let Err(reason) = check_built_in(Path::new(program)) {
             tracing::warn!(name = spec.name, %reason, "the built-in program is not started");
-            return Phase::Waiting(now + backoff.next_interval(Duration::ZERO));
+            let retry = backoff.next_interval(Duration::ZERO);
+            record_start_failed(spec, program, "program_check", &reason, retry);
+            return Phase::Waiting(now + retry);
         }
     }
     let (stream, state) = match connect(spec) {
         Ok(connection) => connection,
         Err(e) => {
             tracing::warn!(name = spec.name, error = %e, "creating the shell process's connection failed");
-            return Phase::Waiting(now + backoff.next_interval(Duration::ZERO));
+            let retry = backoff.next_interval(Duration::ZERO);
+            record_start_failed(spec, program, "connection", &e.to_string(), retry);
+            return Phase::Waiting(now + retry);
         }
     };
     let mut command = Command::new(program);
@@ -225,7 +286,9 @@ fn start(
                 tracing::warn!(name = spec.name, error = %e, "binding the shell process to its connection failed: ending it");
                 let _ = child.kill();
                 let _ = child.wait();
-                return Phase::Waiting(now + backoff.next_interval(Duration::ZERO));
+                let retry = backoff.next_interval(Duration::ZERO);
+                record_start_failed(spec, program, "bind", &e.to_string(), retry);
+                return Phase::Waiting(now + retry);
             }
             tracing::info!(name = spec.name, pid = child.id(), "shell process started");
             Phase::Running {
@@ -235,7 +298,9 @@ fn start(
         }
         Err(e) => {
             tracing::warn!(name = spec.name, program, error = %e, "starting shell process failed");
-            Phase::Waiting(now + backoff.next_interval(Duration::ZERO))
+            let retry = backoff.next_interval(Duration::ZERO);
+            record_start_failed(spec, program, "spawn", &e.to_string(), retry);
+            Phase::Waiting(now + retry)
         }
     }
 }
@@ -270,6 +335,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::logging::test_events;
     use crate::restart_policy::RESTART_THROTTLE;
     use crate::state::ClientState;
 
@@ -331,6 +397,7 @@ mod tests {
 
     #[test]
     fn a_process_that_keeps_failing_is_restarted_after_longer_and_longer_waits() {
+        test_events::memory();
         let mut s = Supervisor::new(&[spec("exit 1")], Instant::now());
         // the start times the supervisor itself recorded, which its throttle counts from: a child that runs late
         // cannot shorten them
@@ -346,6 +413,117 @@ mod tests {
         let (first, second) = (starts[1] - starts[0], starts[2] - starts[1]);
         assert!(first >= RESTART_THROTTLE, "first wait {first:?}");
         assert!(second >= 2 * RESTART_THROTTLE, "second wait {second:?}");
+        // each exit says when the process starts again: within the throttle of its start, which doubles
+        let exits = test_events::recorded("server.shell.exited");
+        assert!(exits.len() >= 2, "{exits:?}");
+        for exit in &exits {
+            assert_eq!(exit.severity, diag::Severity::Warn);
+            assert_eq!(exit.message, "a shell process exited and is started again");
+            assert_eq!(exit.fields.get("role").unwrap(), "test");
+            assert_eq!(exit.fields.get("status").unwrap(), 1);
+            assert!(exit.fields.get("signal").is_none());
+        }
+        let restart_in = |i: usize| exits[i].fields.get("restart_in").unwrap().as_u64().unwrap();
+        assert!(restart_in(0) <= 1_000, "{exits:?}");
+        assert!((1_000..=2_000).contains(&restart_in(1)), "{exits:?}");
+        assert!(test_events::recorded("server.shell.gave_up").is_empty());
+    }
+
+    #[test]
+    fn a_process_ended_by_a_signal_is_recorded_with_the_signal() {
+        test_events::memory();
+        let mut s = Supervisor::new(&[spec("kill -SEGV $$")], Instant::now());
+        poll_until(&mut s, |_| {
+            !test_events::recorded("server.shell.exited").is_empty()
+        });
+        assert!(
+            matches!(s.procs[0].phase, Phase::Waiting(_)),
+            "it waits out the throttle"
+        );
+        let exit = &test_events::recorded("server.shell.exited")[0];
+        assert_eq!(exit.fields.get("signal").unwrap(), libc::SIGSEGV);
+        assert!(exit.fields.get("status").is_none());
+    }
+
+    /// The first poll of a process named `dock` running `command`, with its connection from `connect`: the supervisor
+    /// after it and the `server.shell.start_failed` events.
+    fn start_once(
+        command: &[&str],
+        connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<BoundConnection>,
+    ) -> (Supervisor, Vec<diag::Record>) {
+        test_events::memory();
+        let spec = ShellProcess {
+            name: "dock".into(),
+            command: command.iter().map(|c| c.to_string()).collect(),
+            roles: Vec::new(),
+        };
+        let now = Instant::now();
+        let mut s = Supervisor::new(&[spec], now);
+        s.poll(now, "wayland-test", None, connect);
+        (s, test_events::recorded("server.shell.start_failed"))
+    }
+
+    fn assert_retried(s: &Supervisor, failed: &[diag::Record], stage: &str) {
+        assert!(
+            matches!(s.procs[0].phase, Phase::Waiting(_)),
+            "retried later"
+        );
+        assert_eq!(s.pids(), Vec::<u32>::new());
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        let failed = &failed[0];
+        assert_eq!(failed.severity, diag::Severity::Warn);
+        assert_eq!(failed.message, "a shell process could not be started");
+        assert_eq!(failed.fields.get("role").unwrap(), "dock");
+        assert_eq!(failed.fields.get("stage").unwrap(), stage);
+        assert_eq!(
+            failed.fields.get("restart_in").unwrap(),
+            RESTART_THROTTLE.as_millis() as u64
+        );
+    }
+
+    #[test]
+    fn a_program_that_cannot_be_run_is_recorded_and_tried_again_after_the_throttle() {
+        let mut connect = connect;
+        let (s, failed) = start_once(&["/nonexistent/cupertino-dock"], &mut connect);
+        assert_retried(&s, &failed, "spawn");
+        // a program outside the system directories is kept as a hash of its name
+        let program = failed[0].fields.get("program").unwrap().as_str().unwrap();
+        assert!(program.starts_with("…#"), "{program}");
+        assert!(failed[0].redacted.contains(&"program".to_owned()));
+        assert_eq!(
+            failed[0].fields.get("error").unwrap(),
+            "No such file or directory (os error 2)"
+        );
+    }
+
+    #[test]
+    fn a_connection_that_cannot_be_made_is_recorded_and_tried_again_after_the_throttle() {
+        let mut refuse = |_: &ShellProcess| -> std::io::Result<BoundConnection> {
+            Err(std::io::Error::from(std::io::ErrorKind::OutOfMemory))
+        };
+        let (s, failed) = start_once(&["/nonexistent/cupertino-dock"], &mut refuse);
+        assert_retried(&s, &failed, "connection");
+        assert_eq!(failed[0].fields.get("error").unwrap(), "out of memory");
+    }
+
+    #[test]
+    fn a_connection_that_cannot_be_bound_to_its_process_is_recorded_and_tried_again() {
+        // a connection made for a client in the server's own process is never bound to another
+        let mut detached = |_: &ShellProcess| -> std::io::Result<BoundConnection> {
+            UnixStream::pair().map(|(_, client)| {
+                (
+                    client,
+                    Arc::new(ClientState::detached(
+                        crate::authorization::ClientCapabilitySet::NONE,
+                    )),
+                )
+            })
+        };
+        let (s, failed) = start_once(
+            &["env", "CUPERTINO_ASSET_SEARCH_PATH=", "true"],
+            &mut detached,
+        );
+        assert_retried(&s, &failed, "bind");
     }
 
     #[test]
@@ -383,6 +561,7 @@ mod tests {
         let mut s = Supervisor::new(&[], Instant::now());
         s.add_built_ins([(BuiltIn::Portal, Some(program.clone()))], Instant::now());
         poll_until(&mut s, |s| starts() == 1 && s.next_deadline().is_some());
+        test_events::memory();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o775)).unwrap();
         let end = Instant::now() + 3 * RESTART_THROTTLE;
         let mut connect = connect;
@@ -392,6 +571,20 @@ mod tests {
         }
         assert_eq!(starts(), 1, "a group-writable program was started again");
         assert!(s.next_deadline().is_some(), "it is checked again later");
+        let refused = test_events::recorded("server.shell.start_failed");
+        assert!(!refused.is_empty());
+        assert_eq!(refused[0].fields.get("role").unwrap(), "portal");
+        assert_eq!(refused[0].fields.get("stage").unwrap(), "program_check");
+        assert!(
+            refused[0]
+                .fields
+                .get("error")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("group"),
+            "{refused:?}"
+        );
     }
 
     #[test]
@@ -416,6 +609,7 @@ mod tests {
 
     #[test]
     fn successful_process_is_started_once() {
+        test_events::memory();
         let dir =
             std::env::temp_dir().join(format!("cupertino-supervisor-ok-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -434,5 +628,12 @@ mod tests {
         }
         assert_eq!(std::fs::read_to_string(&log).unwrap(), "start\n");
         std::fs::remove_dir_all(dir).unwrap();
+        let stopped = test_events::recorded("server.shell.gave_up");
+        assert_eq!(stopped.len(), 1, "{stopped:?}");
+        assert_eq!(stopped[0].severity, diag::Severity::Info);
+        assert_eq!(stopped[0].fields.get("role").unwrap(), "test");
+        assert_eq!(stopped[0].fields.get("status").unwrap(), 0);
+        assert!(stopped[0].fields.get("restart_in").is_none());
+        assert!(test_events::recorded("server.shell.exited").is_empty());
     }
 }

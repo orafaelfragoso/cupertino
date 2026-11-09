@@ -2862,6 +2862,7 @@ fn start_server_binary(mode: &str) -> Option<(Daemon, Option<PrivateBus>)> {
     command
         .args([mode, "--size", "800x600"])
         .env("XDG_CONFIG_HOME", &config.0)
+        .env("XDG_STATE_HOME", config.0.join("state"))
         .env("DBUS_SESSION_BUS_ADDRESS", address)
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .stdout(Stdio::null())

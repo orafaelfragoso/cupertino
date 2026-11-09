@@ -5,11 +5,12 @@
 //!
 //! Each privileged global is offered only to the connections that hold its role (`can_view`), and each privileged
 //! request checks the role again in its handler, so a request on an object id the client guessed is a protocol error
-//! of its own.
+//! of its own. A refused request is also the diagnostic event `server.authorization.refused`.
 
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::compositor::ShellRoleName;
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use cupertino_protocols::server::cupertino_shell_v1::Error as ShellError;
 use smithay::desktop::{LayerMap, LayerSurface};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -240,7 +241,8 @@ pub fn require<R: Resource>(client: &Client, role: ShellRole, object: &R) -> boo
 }
 
 /// Refuse a request that needs `role`: one warning with the client, the interface and the role (never a credential),
-/// and the shell protocol's permission error on `object`.
+/// the event `server.authorization.refused` with the interface, the client's program as its `app_id` and the role, and
+/// the shell protocol's permission error on `object`. The event's rate limit bounds a client that keeps trying.
 pub fn refuse<R: Resource>(object: &R, role: ShellRole) {
     let interface = object.id().interface().name;
     tracing::warn!(
@@ -249,10 +251,35 @@ pub fn refuse<R: Resource>(object: &R, role: ShellRole) {
         ?role,
         "a request needs a role the connection does not hold"
     );
+    let program = object.client().as_ref().and_then(program_of);
+    diag::event(
+        Severity::Warn,
+        "server.authorization.refused",
+        "a request needs a role the connection does not hold",
+    )
+    .field("interface", Value::Public(interface))
+    .field(
+        "app_id",
+        Value::Public(program.as_deref().unwrap_or("unknown")),
+    )
+    .field("role_required", Value::Public(&format!("{role:?}")))
+    .emit();
     object.post_error(
         ShellError::Permission,
         format!("{interface} needs the {role:?} role, which this connection does not hold"),
     );
+}
+
+/// The name of the program behind `client` (`/proc/<pid>/exe`), which names it in a diagnostic event; `None` when its
+/// process is not known or has gone.
+fn program_of(client: &Client) -> Option<String> {
+    let process = client.get_data::<ClientState>()?.process()?;
+    let exe = std::fs::read_link(format!("/proc/{}/exe", process.pid)).ok()?;
+    // the answer names the process only while it is the one the descriptor holds
+    if process.has_exited() {
+        return None;
+    }
+    Some(exe.file_name()?.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

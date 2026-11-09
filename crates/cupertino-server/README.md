@@ -677,6 +677,38 @@ Residual case: an unsandboxed process can connect to the bus, pass the connectio
 
 The 45 s timeout, the 0.1 s pause and the interrupt panel are the agent's. The order is approximate (most recently used first). Log lines: `log out: asking the application to quit`, `log out: the application quit`, `log out: force quit`.
 
+### Diagnostic events
+
+`main` installs the process's diagnostic emitter (`cupertino-diagnostic-events`, `cupertino.diag.v1`) first, with the
+user store (`$XDG_STATE_HOME/cupertino/events/`), before the logging: the server's panic hook chains to the emitter's, so
+a panic ends the session (`session-end`, `server.log`), then is recorded, then reaches the default report. Every event
+carries `backend` (`udev`, `winit` or `headless`, set from the command line before the backend starts) and, once the
+backend has made its renderer, `renderer` (`gles`, or `software` for a card with a software renderer alone). Each event
+is recorded beside the existing log line, `session.log` line or error, which stay as they were. `cupertino diagnose
+events` reads them back.
+
+| Id | Severity | Fields | Recorded |
+|---|---|---|---|
+| `server.panic` | fatal | `panic`, `location`, `thread` | the panic hook chained in `main` (`diag::init`) |
+| `server.fatal_signal` | fatal | `signal` (`SIGABRT`, `SIGSEGV`) | `logging.rs`: the fatal signal handler writes a line made ready at start to `fatal-<boot>-<pid>.jsonl` with `open`, `write` and `close` only, before the backtrace; nothing without a store directory |
+| `server.session_end` | info for status 0, error otherwise | `status`, `error` (on an error end) | `main` after `cli::run`, and `logging::session_ends` (a panic, a lost rendering context); the first end alone |
+| `server.gpu.reset` | warn when the renderer was made again, error when the session ends | `gpu` (path), `reason`, `outcome`, `remade` | `gpu_reset::record`, beside its `session.log` line |
+| `server.renderer.software` | warn | `gpu` (path) | `software_render::record`, beside its `session.log` line |
+| `server.shell.exited` | warn | `role` (the process's name), `status` or `signal`, `restart_in` | `supervisor.rs`: a shell process exited and is started again |
+| `server.shell.gave_up` | info | `role`, `status` | `supervisor.rs`: the restart policy leaves it stopped, which it does only after a successful exit |
+| `server.shell.start_failed` | warn | `role`, `program` (path), `stage` (`program_check`, `connection`, `bind`, `spawn`), `error`, `restart_in` | `supervisor.rs`: a start that failed, tried again after the throttle |
+| `server.xwayland.start_failed` | warn | `program` (path), `error`, `restart_in` | `xwayland.rs`: `xwayland-satellite` could not be started |
+| `server.xwayland.exited` | info after a run that ended successfully, warn otherwise | `status` or `signal`, `ran`, `restart_in`, `error` (when it could not be waited for) | `xwayland.rs` |
+| `server.authorization.refused` | warn | `interface`, `app_id` (the client's program), `role_required` | `authorization::refuse`; the per-id rate limit bounds a client that keeps trying |
+| `server.lock.client_lost` | error when the session stays locked, warn when it opens again | `stage` (`locking`, `locked`), `stays_locked` | `session_lock.rs`: the lock client disconnected without unlocking |
+| `server.lock.fallback_shown` | warn | `reason` (`lock_client_lost`, `sleep_before_lock`), `outputs` | `session_lock.rs`: the server covers the outputs itself until a lock client takes the lock |
+
+**BLOCKED (B6): an installed session on hardware.** A real crash and a hardware GPU reset are recorded only in an
+installed session. To check: in a session, `kill -SEGV $(pidof cupertino-server)`; after logging in again,
+`cupertino diagnose events --since 10m` shows `server.fatal_signal` with `signal` `SIGSEGV` and `backend` `udev`. On a
+GPU that resets (or a driver that lets one be forced), the same command shows `server.gpu.reset` with its `outcome` and
+`remade`.
+
 ## Integration points
 
 Everything above is built in. The `ShellExtension` trait is gone; the shell processes take its place.

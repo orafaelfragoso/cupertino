@@ -597,21 +597,15 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             // a pixel the clip covers fully keeps its value (div255(c · 255) is c), and runs of them are passed over
             for (pixels, cover) in layer
                 .data_mut()
-                .chunks_mut(4 * 8)
-                .zip(mask.data().chunks(8))
+                .chunks_mut(4 * 16)
+                .zip(mask.data().chunks(16))
             {
-                if cover.iter().all(|&m| m == 255) {
+                if cover.iter().fold(255, |all, &m| all & m) == 255 {
                     continue;
                 }
+                // scaling by 255 and by 0 is exact, so no pixel needs a branch of its own
                 for (px, &m) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(cover) {
-                    match m {
-                        255 => {}
-                        0 => *px = [0; 4],
-                        m => {
-                            *px =
-                                effects::mul_px(u32::from_le_bytes(*px), u32::from(m)).to_le_bytes()
-                        }
-                    }
+                    *px = effects::mul_px(u32::from_le_bytes(*px), u32::from(m)).to_le_bytes();
                 }
             }
         }
@@ -1330,8 +1324,8 @@ fn source_over_part(
             return;
         };
         // most of a layer is often empty: runs of empty pixels are passed over, and nothing is scaled or laid for them
-        for (s, d) in s.chunks(4 * 8).zip(d.chunks_mut(4 * 8)) {
-            if s.iter().all(|&b| b == 0) {
+        for (s, d) in s.chunks(4 * 16).zip(d.chunks_mut(4 * 16)) {
+            if empty(s) {
                 continue;
             }
             over_run(s, d, k);
@@ -1339,18 +1333,26 @@ fn source_over_part(
     }
 }
 
-/// [`source_over_part`] of one run of pixels of `s` onto `d` at opacity `k` (0..=255).
+/// Whether every byte of `bytes` is zero, read a word at a time and without an early exit, so it vectorizes.
+#[inline]
+fn empty(bytes: &[u8]) -> bool {
+    let (words, rest) = bytes.as_chunks::<8>();
+    words.iter().fold(0, |any, w| any | u64::from_ne_bytes(*w)) == 0 && rest.iter().all(|&b| b == 0)
+}
+
+/// [`source_over_part`] of one run of pixels of `s` onto `d` at opacity `k` (0..=255), without a branch per pixel so
+/// that it vectorizes: an empty source pixel leaves `d` as it is and an opaque one replaces it (scaling by 255 and by 0
+/// is exact), the bytes the cases taken apart would give.
 fn over_run(s: &[u8], d: &mut [u8], k: u32) {
-    for (s, d) in s.as_chunks::<4>().0.iter().zip(d.as_chunks_mut::<4>().0) {
-        let s = u32::from_le_bytes(*s);
-        if s == 0 {
-            continue;
+    let pairs = s.as_chunks::<4>().0.iter().zip(d.as_chunks_mut::<4>().0);
+    if k == 255 {
+        for (s, d) in pairs {
+            *d = effects::over_px(u32::from_le_bytes(*s), u32::from_le_bytes(*d)).to_le_bytes();
         }
-        let s = if k == 255 { s } else { effects::mul_px(s, k) };
-        match s >> 24 {
-            0 if s == 0 => {}
-            255 => *d = s.to_le_bytes(),
-            _ => *d = effects::over_px(s, u32::from_le_bytes(*d)).to_le_bytes(),
+    } else {
+        for (s, d) in pairs {
+            let s = effects::mul_px(u32::from_le_bytes(*s), k);
+            *d = effects::over_px(s, u32::from_le_bytes(*d)).to_le_bytes();
         }
     }
 }

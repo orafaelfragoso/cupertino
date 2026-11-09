@@ -685,10 +685,11 @@
     </event>
 
     <event name="toggle_app_grid">
-      <description summary="the application grid action was triggered">
-        The app-grid shortcut, hot corner or gesture fired. The dock opens its application grid
-        when it is closed and closes it when it is open; the server keeps no state of the grid,
-        it only forwards the action to every dock.
+      <description summary="the application grid action was triggered (no longer sent)">
+        The server no longer sends this event: the app-grid action opens the launcher's
+        application browser, which the server asks for on the session bus. A dock that maps a
+        hot corner or gesture to that action sends it back with run_action. The event stays so
+        that existing docks keep binding; a dock that gets it may ignore it.
       </description>
     </event>
 

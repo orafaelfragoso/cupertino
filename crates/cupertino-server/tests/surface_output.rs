@@ -34,6 +34,7 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::xdg::shell::client::{
     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
 };
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 const LEFT: (i32, i32) = (1000, 700);
 const RIGHT: (i32, i32) = (1600, 1000);
@@ -70,6 +71,8 @@ struct App {
     log: Log,
     shm: wl_shm::WlShm,
     surfaces: HashMap<&'static str, Drawn>,
+    /// The outputs each surface is on, by what it heard.
+    entered: HashMap<&'static str, Vec<wl_output::WlOutput>>,
 }
 
 impl App {
@@ -129,6 +132,7 @@ macro_rules! ignore {
     )*};
 }
 ignore!(
+    zwlr_layer_shell_v1::ZwlrLayerShellV1,
     wl_compositor::WlCompositor,
     wl_shm::WlShm,
     wl_shm_pool::WlShmPool,
@@ -170,8 +174,14 @@ impl Dispatch<wl_surface::WlSurface, &'static str> for App {
                 .unwrap_or_default()
         };
         let heard = match event {
-            wl_surface::Event::Enter { output } => Heard::Enter(name(&output)),
-            wl_surface::Event::Leave { output } => Heard::Leave(name(&output)),
+            wl_surface::Event::Enter { output } => {
+                app.entered.entry(tag).or_default().push(output.clone());
+                Heard::Enter(name(&output))
+            }
+            wl_surface::Event::Leave { output } => {
+                app.entered.entry(tag).or_default().retain(|o| *o != output);
+                Heard::Leave(name(&output))
+            }
             wl_surface::Event::PreferredBufferScale { factor } => {
                 if let Some(drawn) = app.surfaces.get_mut(tag) {
                     drawn.scale = factor;
@@ -242,6 +252,8 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
 struct Client {
     log: Log,
     stop: Arc<AtomicBool>,
+    /// Layer surfaces to open: by name, with the name of the surface whose output to name (none: name no output).
+    opens: Arc<Mutex<Vec<(&'static str, Option<&'static str>)>>>,
 }
 
 impl Client {
@@ -273,6 +285,7 @@ impl Client {
                 log: log2,
                 shm: globals.bind(&qh, 1..=1, ()).unwrap(),
                 surfaces: HashMap::new(),
+                entered: HashMap::new(),
             };
             let drawn = |surface, size, ready| Drawn {
                 surface,
@@ -330,7 +343,89 @@ impl Client {
                 std::thread::sleep(Duration::from_millis(2));
             }
         });
-        Client { log, stop }
+        Client {
+            log,
+            stop,
+            opens: Default::default(),
+        }
+    }
+
+    /// A client of layer surfaces, as a shell panel is: it opens them when [`Client::open`] asks.
+    fn layers(socket: PathBuf) -> Client {
+        let log = Log::default();
+        let stop = Arc::new(AtomicBool::new(false));
+        let opens: Arc<Mutex<Vec<(&'static str, Option<&'static str>)>>> = Default::default();
+        let (log2, stop2, opens2) = (log.clone(), stop.clone(), opens.clone());
+        std::thread::spawn(move || {
+            let stream = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+            let conn = Connection::from_socket(stream).unwrap();
+            let (globals, mut queue) = registry_queue_init::<App>(&conn).unwrap();
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 6..=6, ()).unwrap();
+            let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
+                globals.bind(&qh, 1..=4, ()).unwrap();
+            let outputs: Vec<wl_output::WlOutput> = globals
+                .contents()
+                .clone_list()
+                .into_iter()
+                .filter(|g| g.interface == "wl_output")
+                .map(|g| {
+                    globals
+                        .registry()
+                        .bind(g.name, 4, &qh, Mutex::new(String::new()))
+                })
+                .collect();
+            let mut app = App {
+                log: log2,
+                shm: globals.bind(&qh, 1..=1, ()).unwrap(),
+                surfaces: HashMap::new(),
+                entered: HashMap::new(),
+            };
+            let mut layers = Vec::new();
+            while !stop2.load(Ordering::SeqCst) {
+                let wanted: Vec<_> = opens2.lock().unwrap().drain(..).collect();
+                for (tag, beside) in wanted {
+                    let output = beside.and_then(|b| app.entered.get(b)?.first().cloned());
+                    let surface = compositor.create_surface(&qh, tag);
+                    let layer = shell.get_layer_surface(
+                        &surface,
+                        output.as_ref(),
+                        zwlr_layer_shell_v1::Layer::Top,
+                        "surface-output-test".into(),
+                        &qh,
+                        tag,
+                    );
+                    layer.set_size(100, 100);
+                    layer.set_anchor(
+                        zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Right,
+                    );
+                    surface.commit();
+                    app.surfaces.insert(
+                        tag,
+                        Drawn {
+                            surface,
+                            size: (100, 100),
+                            scale: 1,
+                            ready: false,
+                            dirty: false,
+                        },
+                    );
+                    layers.push(layer);
+                }
+                if queue.roundtrip(&mut app).is_err() {
+                    break;
+                }
+                app.draw(&qh);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            drop(outputs);
+        });
+        Client { log, stop, opens }
+    }
+
+    /// Open the layer surface `tag`, on the output the surface `beside` is on, or naming no output.
+    fn open(&self, tag: &'static str, beside: Option<&'static str>) {
+        self.opens.lock().unwrap().push((tag, beside));
     }
 
     /// What `surface` heard, in order.
@@ -384,6 +479,25 @@ impl Client {
 impl Drop for Client {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, &'static str> for App {
+    fn event(
+        app: &mut Self,
+        layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        tag: &&'static str,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwlr_layer_surface_v1::Event::Configure { serial, .. } = event {
+            layer.ack_configure(serial);
+            if let Some(drawn) = app.surfaces.get_mut(tag) {
+                drawn.ready = true;
+                drawn.dirty = true;
+            }
+        }
     }
 }
 
@@ -777,4 +891,44 @@ fn a_window_dragged_across_the_seam_changes_scale_once_per_crossing() {
         left
     };
     assert_eq!(h.state.window_scale_output(window), Some(expected), "{f:?}");
+}
+
+/// Item 3, the server's side: a panel opens two layer surfaces naming no output, which go to the active output and are
+/// told it; the person moves to the other display, so it becomes the active output; a surface the panel opens again
+/// naming the output its other surface was told goes beside it, while one naming no output goes to the new active
+/// output.
+#[test]
+fn a_layer_surface_is_told_the_active_output_it_opened_on_and_one_naming_it_opens_beside_it() {
+    let Some(mut h) = Harness::new() else { return };
+    h.move_pointer(500.0, 300.0);
+    h.step();
+    assert_eq!(h.state.active_output(), Some(h.output("headless-1")));
+    let panel = Client::layers(h.socket());
+    panel.open("catcher", None);
+    panel.open("card", None);
+    h.wait("both on the active output", &panel, |_, c| {
+        c.on("catcher") == ["headless-1"] && c.on("card") == ["headless-1"]
+    });
+
+    // the pointer goes to the other display, which becomes the active output
+    h.move_pointer(1400.0, 300.0);
+    h.step();
+    assert_eq!(h.state.active_output(), Some(h.output("headless-2")));
+    panel.open("catcher again", Some("card"));
+    panel.open("elsewhere", None);
+    h.wait("the new surfaces placed", &panel, |_, c| {
+        !c.on("catcher again").is_empty() && !c.on("elsewhere").is_empty()
+    });
+    assert_eq!(panel.on("catcher again"), ["headless-1"], "beside the card");
+    assert_eq!(
+        panel.on("elsewhere"),
+        ["headless-2"],
+        "the active output changed"
+    );
+    assert_eq!(
+        panel.scale("elsewhere"),
+        2,
+        "a layer surface draws at its output's scale"
+    );
+    assert_eq!(panel.scale("catcher again"), 1);
 }

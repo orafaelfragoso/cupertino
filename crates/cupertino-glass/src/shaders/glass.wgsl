@@ -102,7 +102,8 @@ fn encode(c0: vec3<f32>) -> vec3<f32> {
   return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
 }
 
-fn saturate_linear(c: vec3<f32>, s: f32) -> vec3<f32> {
+// saturation about the Rec. 709 luma of encoded values
+fn saturate_encoded(c: vec3<f32>, s: f32) -> vec3<f32> {
   let y = dot(c, LUMA);
   return max(vec3<f32>(y) + (c - vec3<f32>(y)) * s, vec3<f32>(0.0));
 }
@@ -121,7 +122,7 @@ fn face_at(q: vec2<f32>, narrow: f32, max_luma: f32) -> vec3<f32> {
   c = mix(c, min(c, f), G.fill.x);
   c = mix(c, max(c, f), G.fill.y);
   c = mix(c, f, G.fill.z);
-  var lin = saturate_linear(decode(c), G.face.x);
+  var lin = decode(saturate_encoded(c, G.face.x));
   lin = min(lin * G.face.y, vec3<f32>(G.face.w));
   let limit = max_luma * G.face.w;
   let y = dot(lin, LUMA);
@@ -191,7 +192,7 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
     let t = clamp(-d / f.b.x, 0.0, 1.0);
     let w = f.a.w * (1.0 - t) * (1.0 - t);
     let tone = vec3<f32>(G.bleed.y) + (G.bleed.x - G.bleed.y)
-      * min(encode(saturate_linear(decode(tap(level3, uv_of(p))), G.bleed.z)), vec3<f32>(1.0));
+      * min(saturate_encoded(tap(level3, uv_of(p)), G.bleed.z), vec3<f32>(1.0));
     let b = select(max(c, tone), min(c, tone), G.bleed.w > 0.5);
     c = mix(c, b, w);
   }

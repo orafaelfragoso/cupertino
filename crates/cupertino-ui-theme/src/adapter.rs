@@ -65,6 +65,8 @@ pub(crate) const LIGHT: Palette<Source> = Palette {
         (QuaternaryLabel, Token("quaternary-label")),
         // The empty part of a slider's track: a mid grey, 3:1 or more against the window behind it.
         (SliderTrack, Rgba([128, 128, 128, 255])),
+        // A sidebar's neutral selection: black at about a tenth over the sidebar's material.
+        (SidebarSelection, Rgba([0, 0, 0, 25])),
     ],
     states: StateColors {
         emphasized_border: Rgba([0, 0, 0, 96]),
@@ -77,6 +79,8 @@ pub(crate) const LIGHT: Palette<Source> = Palette {
         disabled_selected_switch_track: Rgba([166, 198, 232, 255]),
         disabled_switch_thumb: Rgba([248, 248, 248, 255]),
         disabled_panel_track: Rgba([185, 185, 185, 255]),
+        // about half the active selection, as in the dark appearance
+        inactive_sidebar_selection: Rgba([0, 0, 0, 13]),
     },
 };
 
@@ -129,6 +133,9 @@ pub(crate) const DARK: Palette<Source> = Palette {
         (QuaternaryLabel, Token("quaternary-label")),
         // The empty part of a slider's track: a mid grey, 3:1 or more against the window and the text background.
         (SliderTrack, Rgba([128, 128, 128, 255])),
+        // A sidebar's neutral selection: white at about an eighth over the sidebar's material, which lifts each
+        // channel of the material evenly, so its tint shows through.
+        (SidebarSelection, Rgba([255, 255, 255, 34])),
     ],
     states: StateColors {
         emphasized_border: Rgba([255, 255, 255, 96]),
@@ -141,6 +148,8 @@ pub(crate) const DARK: Palette<Source> = Palette {
         disabled_selected_switch_track: Rgba([54, 82, 112, 255]),
         disabled_switch_thumb: Rgba([180, 180, 180, 255]),
         disabled_panel_track: Rgba([95, 95, 95, 255]),
+        // about half the active one
+        inactive_sidebar_selection: Rgba([255, 255, 255, 16]),
     },
 };
 

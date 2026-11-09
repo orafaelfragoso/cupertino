@@ -641,6 +641,15 @@ impl Glass {
         }
     }
 
+    /// The glass of a large floating panel with square corners, on its own, opaque: regular glass toned further
+    /// towards the middle, with a soft drop shadow the compositor draws below it.
+    pub fn large_panel() -> Self {
+        Self {
+            style: GlassStyle::LargePanel,
+            ..Self::regular()
+        }
+    }
+
     /// Corners of `radius` points.
     pub fn radius(self, radius: f64) -> Self {
         Self {

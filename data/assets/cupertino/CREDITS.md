@@ -12,4 +12,5 @@ soft bevels and directional highlights. Sky-blue folders have bold recessed mark
 one folded white page with restrained printed content; lettering is drawn as paths. Neutral ribbed bins,
 a metal display and free-standing overlay badges use the same lighting. Separate 16- and 32-pixel
 optical editions simplify content, strengthen impressions and preserve overlay contrast.
-Symbols use a 24-unit grid, rounded terminals and a 1.9-unit regular stroke.
+Symbols use a 24-unit grid, rounded terminals and a 1.9-unit regular stroke. Each `.fill` symbol is the filled
+edition of its outline for sidebar rows and tiles: the same silhouette as one solid shape, its inner marks cut out.

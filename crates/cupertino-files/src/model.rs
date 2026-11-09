@@ -723,11 +723,11 @@ mod tests {
         pump_until(&mut m, |m| m.len() == 1);
         assert_eq!(names(&m), ["c"]);
 
-        // hidden files do not appear
+        // hidden files do not appear: a visible one made after it is listed, so the hidden one's event came before
         std::fs::write(d.path().join(".x"), b"1").unwrap();
-        std::thread::sleep(Duration::from_millis(200));
-        m.poll();
-        assert_eq!(names(&m), ["c"]);
+        std::fs::write(d.path().join("d"), b"1").unwrap();
+        pump_until(&mut m, |m| m.len() == 2);
+        assert_eq!(names(&m), ["c", "d"]);
     }
 
     #[test]

@@ -6,6 +6,34 @@ pub(crate) fn div255(v: u32) -> u32 {
     (v + (v >> 8)) >> 8
 }
 
+/// [`div255`] of every channel of the RGBA pixel `px` (bytes in memory order, read little-endian) times `k` (0..=255):
+/// two channels at a time in 16-bit lanes of one word, with the same rounding, so the result is the same bytes.
+#[inline]
+pub(crate) fn mul_px(px: u32, k: u32) -> u32 {
+    const LANES: u32 = 0x00ff_00ff;
+    let rb = (px & LANES) * k + 0x0080_0080;
+    let rb = ((rb + ((rb >> 8) & LANES)) >> 8) & LANES;
+    let ga = ((px >> 8) & LANES) * k + 0x0080_0080;
+    let ga = (ga + ((ga >> 8) & LANES)) & !LANES;
+    rb | ga
+}
+
+/// Source-over of the premultiplied pixel `s` on `d` (both as [`mul_px`] reads them): `s + d · (255 − s.alpha) / 255`
+/// per channel, held at 255.
+#[inline]
+pub(crate) fn over_px(s: u32, d: u32) -> u32 {
+    const LANES: u32 = 0x00ff_00ff;
+    // a lane over 255 has its bit 8 set: fill the lane's low byte instead
+    let held = |x: u32| {
+        let over = x & 0x0100_0100;
+        (x | (over - (over >> 8))) & LANES
+    };
+    let kept = mul_px(d, 255 - (s >> 24));
+    let rb = (s & LANES) + (kept & LANES);
+    let ga = ((s >> 8) & LANES) + ((kept >> 8) & LANES);
+    held(rb) | (held(ga) << 8)
+}
+
 /// Largest box radius, in pixels, a blur may have.
 const MAX_BOX_RADIUS: usize = 1 << 12;
 
@@ -278,6 +306,37 @@ mod tests {
     use super::*;
     use cupertino_geometry::Point;
     use cupertino_theme::Color;
+
+    #[test]
+    fn the_word_wide_pixel_arithmetic_gives_the_bytes_of_the_channel_by_channel_one() {
+        // every channel value against every factor, through one channel of a pixel each time
+        for c in 0..=255u32 {
+            for k in 0..=255u32 {
+                for lane in 0..4 {
+                    let px = c << (8 * lane) | 0x5a << (8 * ((lane + 1) % 4));
+                    let got = (mul_px(px, k) >> (8 * lane)) & 0xff;
+                    assert_eq!(got, div255(c * k), "channel {lane}: {c} · {k}");
+                }
+            }
+        }
+        // source-over against the per-channel form, on a spread of pixels (premultiplied and not)
+        let mut seed = 0x2545_f491_u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        for _ in 0..200_000 {
+            let (s, d) = (next(), next());
+            let (sb, db) = (s.to_le_bytes(), d.to_le_bytes());
+            let keep = 255 - u32::from(sb[3]);
+            let want: [u8; 4] = std::array::from_fn(|i| {
+                (u32::from(sb[i]) + div255(u32::from(db[i]) * keep)).min(255) as u8
+            });
+            assert_eq!(over_px(s, d).to_le_bytes(), want, "{sb:?} over {db:?}");
+        }
+    }
 
     /// The shadows as four-channel images: the silhouette's alpha in RGBA, blurred on every channel, tinted, then laid
     /// under or over the content. The coverage path must give the same bytes.

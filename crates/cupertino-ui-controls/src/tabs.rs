@@ -133,7 +133,7 @@ impl<M: 'static> Widget<M> for TabView<M> {
 }
 
 /// A closed rounded rectangle, its corners as cubic quarter circles.
-fn rounded(rect: Rect, radius: f64) -> Vec<PathVerb> {
+pub(crate) fn rounded(rect: Rect, radius: f64) -> Vec<PathVerb> {
     // the control-point distance for a quarter circle
     let k = radius * 0.552_284_749_8;
     let (x0, y0, x1, y1) = (rect.min_x(), rect.min_y(), rect.max_x(), rect.max_y());

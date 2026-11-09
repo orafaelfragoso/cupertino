@@ -10,8 +10,9 @@ use cupertino_ui_platform::{
 use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
 use cupertino_ui_text::TextInputState;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::task::Waker;
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::task::{Wake, Waker};
+use std::time::{Duration, Instant};
 
 /// What a test sees of one frame the runtime presented. The pixels are kept so a test can read them back.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,8 +120,27 @@ fn copy_damage(buffer: &mut Vec<u8>, frame: &CpuFrame) {
     }
 }
 
+/// Whether the runtime was woken from another thread since a test last waited for it.
+#[derive(Debug, Default)]
+struct Woken {
+    woken: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Wake for Woken {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        *self.woken.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        self.changed.notify_all();
+    }
+}
+
 /// A window system with no display. Windows live in memory, every request is kept for inspection, presented
-/// frames are kept until the window is destroyed, and the only events are the ones the test enqueues.
+/// frames are kept until the window is destroyed, and the only events are the ones the test enqueues. Its waker
+/// does not dispatch anything; a test waits for it with [`HeadlessWindowSystem::wait_for_wake`].
 #[derive(Debug)]
 pub struct HeadlessWindowSystem {
     capabilities: Capabilities,
@@ -138,6 +158,7 @@ pub struct HeadlessWindowSystem {
     /// Whether each presented frame keeps a copy of all its pixels.
     keep_pixels: bool,
     pub(crate) dispatch_one: bool,
+    woken: Arc<Woken>,
 }
 
 impl Default for HeadlessWindowSystem {
@@ -162,7 +183,36 @@ impl HeadlessWindowSystem {
             accepting_frames: true,
             keep_pixels: true,
             dispatch_one: false,
+            woken: Arc::default(),
         }
+    }
+
+    /// Blocks until the runtime's waker is woken (by a task finishing on another thread), or `timeout` passes, which
+    /// only guards against a hang. A wake that came since the last wait counts, so none is lost between draining the
+    /// runtime and waiting; `true` when woken, and the wake is then used up.
+    pub fn wait_for_wake(&self, timeout: Duration) -> bool {
+        let end = Instant::now() + timeout;
+        let mut woken = self
+            .woken
+            .woken
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        while !*woken {
+            let Some(left) = end
+                .checked_duration_since(Instant::now())
+                .filter(|d| !d.is_zero())
+            else {
+                return false;
+            };
+            woken = self
+                .woken
+                .changed
+                .wait_timeout(woken, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        *woken = false;
+        true
     }
 
     fn window(&self, id: WindowId) -> Result<&HeadlessWindow, PlatformError> {
@@ -772,7 +822,7 @@ impl WindowSystem for HeadlessWindowSystem {
     }
 
     fn waker(&self) -> Waker {
-        Waker::noop().clone()
+        Waker::from(Arc::clone(&self.woken))
     }
 }
 
@@ -1070,5 +1120,27 @@ mod tests {
         assert_eq!(ws.cursor(a), Ok(Some(CursorShape::Default)));
         assert_eq!(ws.cursor(b), Ok(Some(CursorShape::Text)));
         assert_eq!(ws.text_input(a), Ok(None));
+    }
+
+    #[test]
+    fn a_wake_from_another_thread_ends_the_wait_and_none_is_lost() {
+        let system = HeadlessWindowSystem::default();
+        let waker = system.waker();
+        // a wake before the wait counts once
+        waker.wake_by_ref();
+        assert!(system.wait_for_wake(Duration::from_secs(10)));
+        assert!(
+            !system.wait_for_wake(Duration::ZERO),
+            "the wake was used up"
+        );
+        // a wake from another thread while the test waits
+        let (started, starts) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            starts.recv().unwrap();
+            waker.wake();
+        });
+        started.send(()).unwrap();
+        assert!(system.wait_for_wake(Duration::from_secs(10)));
+        thread.join().unwrap();
     }
 }

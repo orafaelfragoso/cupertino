@@ -491,6 +491,46 @@ fn the_tiles_are_one_glass_too_large_for_their_text_to_follow_the_backdrop() {
     }
 }
 
+/// The glass regions the panel last asked for.
+fn glass_regions(run: &mut Run) -> Vec<Rect> {
+    let requests = run.driver.window_system_mut().requests(run.window).unwrap();
+    requests
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            WindowRequest::Materials(regions) => Some(regions.iter().map(|r| r.rect).collect()),
+            _ => None,
+        })
+        .expect("the panel asks for glass")
+}
+
+/// Edit Controls is glass as the tiles are, in a dark and in a light session: the capsule takes its colour from what lies
+/// behind it (a light blue-grey over a light part of the wallpaper), with the tiles' rim, rather than a flat fill of its
+/// own.
+#[test]
+fn edit_controls_is_glass_as_the_tiles_are() {
+    let capsule = Rect::new(107.0, 468.0, 94.0, 24.0);
+    for light in [false, true] {
+        let mut run = Run::start(
+            tokens(Appearance::Dark, false),
+            Presentation {
+                light,
+                ..Presentation::SHOWN
+            },
+        );
+        let regions = glass_regions(&mut run);
+        assert_eq!(
+            regions.len(),
+            Module::ALL.len() + 1,
+            "a glass region per tile and Edit Controls (light {light})"
+        );
+        assert!(
+            regions.contains(&capsule),
+            "Edit Controls is glass (light {light}): {regions:?}"
+        );
+    }
+}
+
 #[test]
 fn the_opaque_panel_of_reduce_transparency_holds_edit_controls_too() {
     let (frame, _) = Run::start(tokens(Appearance::Dark, true), Presentation::SHOWN).capture();

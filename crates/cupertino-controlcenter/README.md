@@ -49,14 +49,17 @@ session each tile lays black at 0.27 over its glass, so over a white page it rea
 Over its glass each tile lays its own light: a soft white glow under its top edge fading out over 6 pt, and a fine rim
 0.75 pt wide, brightest along the top (white 0.42), faint down the sides (0.12) and at 0.6 of the top's along the bottom
 (0.30, 0.08 and 0.06 for the glow in a light session), so a tile reads as a raised piece of glass on any wallpaper. The
-solid tiles of Reduce Transparency and Increase Contrast draw none of it.
+solid tiles of Reduce Transparency and Increase Contrast draw none of it. The glass takes its colour from the wallpaper:
+its saturation works on the encoded colour (`cupertino-glass`), so over a strong blue a tile reads as a brighter, milky
+blue rather than a dull purple-grey. The Edit Controls capsule is glass as the tiles are, so over a light part of the
+wallpaper it reads as a light blue-grey under the same rim.
 With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners, 8 pt around the grid and
 the Edit Controls capsule, closing in to an open detail view as it opens. With Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of
 grey 0.341, with no glass. A
 tile the window cannot show glass under fills a dark grey instead. `view::catcher` is a transparent window with no drawing
 that takes a left or right press anywhere on it. The process's `PanelRoles` gives the panel (`view::APP_ID`) an overlay
 layer surface anchored top and right, with an exclusive zone of -1 and margins that put the window 6 pt from the right edge
-and 4 pt below the bar, so the tiles sit 14 pt from the edge and 12 pt below the bar. The bar reserves no layer zone, so
+and 12 pt below the bar, so the tiles sit 14 pt from the edge and 20 pt below the bar, 44 pt from the top of the output. The bar reserves no layer zone, so
 the top margin adds the theme's menu bar height. The catcher (`view::CATCHER_APP_ID`) gets a top layer surface just below
 it, over the whole output.
 
@@ -177,7 +180,7 @@ the menu bar.
 | Grid | two columns of 140 pt and six rows of 64 pt, 12 pt apart: 292 x 444 pt (`layout`) |
 | Tiles | Wi-Fi, Bluetooth and the microphone capsules down the left column; now playing (140 x 140) beside the first two; dock hiding and lock screen circles beside the microphone; mute and keyboard brightness circles, then the focus capsule; display, then sound across both columns (`layout::frame`) |
 | Corners | capsules and circles round, now playing and an open view 32 pt, display and sound 24 pt |
-| Window | 308 x 500 pt: the grid 8 pt in, Edit Controls (94 x 24) centred 16 pt below it; 6 pt from the right edge and 4 pt below the bar |
+| Window | 308 x 500 pt: the grid 8 pt in, Edit Controls (94 x 24) centred 16 pt below it; 6 pt from the right edge and 12 pt below the bar (the tiles 44 pt from the top) |
 | Capsule content | 36 pt badge 14 pt in; text from 56 pt; 13 pt semibold title, 11 pt state |
 | Level | 4 pt track centred 42 pt below the tile's top; display track 36 to 254 pt, sound 33 to 213 pt; 26 pt output button centred at 265 pt |
 | Media tile | 40 pt artwork 14 pt in; buttons centred at 30, 70 and 110 pt across and 111 pt down |
@@ -230,7 +233,7 @@ cargo test -p cupertino-controlcenter --features app
 | Lifecycle unit tests | Full opacity, the linear fade over 0.238 s, reopening while hiding, hiding at once from any phase, at literal instants. |
 | Backend unit tests | The dock hiding file, the microphone and the session outputs against `cupertino-pipewire`'s fake `wpctl`, the ALSA and session volume, and the stand-ins. |
 | Controller unit tests | Switches, mute, lock, Edit Controls and settings, media commands, the detail lists, a refused join, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer, a vanish that hides at once, drops a drag and reads again on reopening. |
-| `tests/panel.rs` | The panel as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`, `light-session`, `wifi-detail`: the 1x frame and the focus and accessibility tree of every control); every tile's frame; badge, opener, circle, media, output and Edit Controls presses; a disabled module; a level drag and release; Escape and a press between the tiles dismissing, or collapsing an open view; the Wi-Fi view's list, join and settings row; Tab, Space and the arrow keys across the tiles; the catcher dismissing on a left or right press only; the tiles staying one glass container too large for its text to follow the backdrop, at rest, in a light session, fading and with a view opening or open. |
+| `tests/panel.rs` | The panel as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`, `light-session`, `wifi-detail`: the 1x frame and the focus and accessibility tree of every control); every tile's frame; badge, opener, circle, media, output and Edit Controls presses; a disabled module; a level drag and release; Escape and a press between the tiles dismissing, or collapsing an open view; the Wi-Fi view's list, join and settings row; Tab, Space and the arrow keys across the tiles; the catcher dismissing on a left or right press only; the tiles staying one glass container too large for its text to follow the backdrop, at rest, in a light session, fading and with a view opening or open; Edit Controls glass as the tiles are, in a dark and a light session. The `layout` unit tests hold the tiles 44 pt from the top of the output and 14 pt from its right edge. |
 | Process unit tests (`src/app.rs`) | The windows per phase (panel over catcher when shown, the panel alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, the detail view opening, closing and reversing, a second Escape while it closes dismissing, with the focus moved at its ends only after the keyboard, Reduce Motion and the light session from the session, and the panel's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a panel that acts; the panel hears when its output goes; a toggle during the fade opens the catcher on the card's output after the active output changed. |
 | `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name; another process (a `dbus-send` the test starts, as the menu bar is to the panel) may toggle, and a connection over anonymous TCP (no process the bus can name) is refused as `AnonymousCaller`. |
 

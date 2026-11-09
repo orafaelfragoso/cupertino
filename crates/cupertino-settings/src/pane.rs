@@ -90,7 +90,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Wifi,
         "Wi-Fi",
-        "symbol.wifi",
+        "symbol.wifi.fill",
         Enclosure::Blue,
         Tier::Live,
         &["Known Networks", "Other Networks"],
@@ -99,7 +99,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Bluetooth,
         "Bluetooth",
-        "symbol.bluetooth",
+        "symbol.bluetooth.fill",
         Enclosure::Blue,
         Tier::Live,
         &["My Devices", "Nearby Devices"],
@@ -108,7 +108,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Network,
         "Network",
-        "symbol.network",
+        "symbol.network.fill",
         Enclosure::Blue,
         Tier::Live,
         &["Devices"],
@@ -117,7 +117,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Battery,
         "Battery",
-        "symbol.battery",
+        "symbol.battery.fill",
         Enclosure::Green,
         Tier::Live,
         &["Battery Level", "System Sleep"],
@@ -126,7 +126,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Accessibility,
         "Accessibility",
-        "symbol.accessibility",
+        "symbol.accessibility.fill",
         Enclosure::Blue,
         Tier::Live,
         &[
@@ -155,7 +155,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Appearance,
         "Appearance",
-        "symbol.appearance",
+        "symbol.appearance.fill",
         Enclosure::Black,
         Tier::Live,
         &["Appearance"],
@@ -164,7 +164,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::ControlPanel,
         "Control Panel",
-        "symbol.control-panel",
+        "symbol.control-panel.fill",
         Enclosure::Gray,
         Tier::Live,
         &["Clock Options"],
@@ -173,7 +173,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::DesktopDock,
         "Desktop & Dock",
-        "symbol.desktop",
+        "symbol.desktop.fill",
         Enclosure::Black,
         Tier::Live,
         &["Dock", "Hot Corners"],
@@ -189,7 +189,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Displays,
         "Displays",
-        "symbol.sun",
+        "symbol.sun.fill",
         Enclosure::Blue,
         Tier::Live,
         &["Resolution", "Brightness"],
@@ -198,7 +198,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Wallpaper,
         "Wallpaper",
-        "symbol.photo",
+        "symbol.photo.fill",
         Enclosure::Blue,
         Tier::Live,
         &["Pictures", "Folders"],
@@ -215,7 +215,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Sound,
         "Sound",
-        "symbol.speaker.high",
+        "symbol.speaker.high.fill",
         Enclosure::Pink,
         Tier::Live,
         &["Output"],
@@ -224,7 +224,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Notifications,
         "Notifications",
-        "symbol.bell",
+        "symbol.bell.fill",
         Enclosure::Red,
         Tier::File,
         &["Lock Screen", "Application Notifications"],
@@ -249,7 +249,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::LockScreen,
         "Lock Screen",
-        "symbol.lock-screen",
+        "symbol.lock-screen.fill",
         Enclosure::Black,
         Tier::File,
         &["Display Sleep", "Password"],
@@ -258,7 +258,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Privacy,
         "Privacy & Security",
-        "symbol.privacy",
+        "symbol.privacy.fill",
         Enclosure::Blue,
         Tier::File,
         &["Clipboard Access"],
@@ -274,7 +274,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Keyboard,
         "Keyboard",
-        "symbol.keyboard",
+        "symbol.keyboard.fill",
         Enclosure::Gray,
         Tier::Live,
         &["Key Repeat", "Modifier Keys", "Function Key"],
@@ -283,7 +283,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Mouse,
         "Mouse",
-        "symbol.mouse",
+        "symbol.mouse.fill",
         Enclosure::Gray,
         Tier::Live,
         &["Tracking", "Scrolling"],
@@ -301,7 +301,7 @@ pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Trackpad,
         "Trackpad",
-        "symbol.trackpad",
+        "symbol.trackpad.fill",
         Enclosure::Gray,
         Tier::Live,
         &["Tracking", "Scrolling"],
@@ -376,7 +376,11 @@ mod tests {
                 p.id
             );
             assert_eq!(PaneId::from_key(p.id.key()), Some(p.id));
-            assert!(p.symbol.starts_with("symbol."), "{}", p.symbol);
+            assert!(
+                p.symbol.starts_with("symbol.") && p.symbol.ends_with(".fill"),
+                "a tile wears a filled symbol: {}",
+                p.symbol
+            );
             assert!(!p.sections.is_empty(), "{} has a findable section", p.title);
         }
         assert_eq!(

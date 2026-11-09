@@ -57,6 +57,8 @@ const MAX_BACKDROPS_PER_CLIENT: usize = 128;
 
 /// The version of `cupertino_backdrop_v1` that has the `tone` event.
 const TONE_VERSION: u32 = 7;
+/// The version of `cupertino_backdrop_v1` that has the large panel glass style.
+const LARGE_PANEL_VERSION: u32 = 10;
 
 /// The tone a backdrop's text is drawn with, as the wire carries it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,9 +178,10 @@ struct Shape {
 
 /// Material names that draw glass rather than a recipe of the design tokens: each backdrop is a glass shape of its
 /// own, like `set_glass` with container 0.
-pub const GLASS_MATERIALS: [(&str, GlassStyle); 2] = [
+pub const GLASS_MATERIALS: [(&str, GlassStyle); 3] = [
     ("Glass", GlassStyle::Regular),
     ("ClearGlass", GlassStyle::Clear),
+    ("LargePanelGlass", GlassStyle::LargePanel),
 ];
 
 /// The glass style a material name stands for.
@@ -819,6 +822,11 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                     }
                     WEnum::Value(cupertino_backdrop_v1::GlassStyle::Clear) => {
                         Some(GlassStyle::Clear)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::LargePanel)
+                        if resource.version() >= LARGE_PANEL_VERSION =>
+                    {
+                        Some(GlassStyle::LargePanel)
                     }
                     _ => None,
                 };

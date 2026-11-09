@@ -95,8 +95,10 @@ composite then, per pixel:
 2. refraction: inside the band along the edge, the sample point moves along the outward normal by the offset times
    (1 − t)², t the depth into the band;
 3. blur levels and blur fill: the levels laid over each other widest first, then the fill darkens, lightens or covers;
-4. face colour on linear light: saturation, white gain, per-channel limit, luminance cap, then encoded black lift and fill;
-5. bleed: the widest level (made whenever a shape bleeds, even with no weight in the blend), saturated and mapped
+4. face colour: saturation about the luma of the encoded colour (so the weaker channels of a strong colour keep a milky
+   floor rather than dropping to black, as they would in linear light), then on linear light the white gain,
+   per-channel limit and luminance cap, then the encoded black lift and fill;
+5. bleed: the widest level (made whenever a shape bleeds, even with no weight in the blend), saturated (encoded) and mapped
    between black and white, lightens (dark) or darkens (light) the face in the bleed band;
 6. key and fill rim lights: a Gaussian band about the edge where light is added along the axis of the light angle,
    the highlight matrix applied to the face; a raised-cosine lobe around each end of the axis falls to nothing three

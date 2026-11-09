@@ -39,9 +39,9 @@ pub const WINDOW: Size = Size::new(
     GRID_HEIGHT + EDIT_GAP + EDIT_SIZE.height + 2.0 * INSET,
 );
 /// Distance of the window from the right edge of the output and below the menu bar; the tiles sit [`INSET`] further
-/// in.
+/// in, so under the theme's 24 pt bar the first row of tiles starts 44 pt from the top of the output.
 pub const EDGE_MARGIN: i32 = 6;
-pub const BAR_MARGIN: i32 = 4;
+pub const BAR_MARGIN: i32 = 12;
 
 /// The outline of a tile.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -177,6 +177,13 @@ mod tests {
     fn the_grid_is_two_columns_of_140_and_six_rows_of_64_twelve_apart() {
         assert_eq!((GRID_WIDTH, GRID_HEIGHT), (292.0, 444.0));
         assert_eq!(WINDOW, Size::new(308.0, 500.0));
+    }
+
+    #[test]
+    fn the_tiles_start_44_points_below_the_top_and_14_in_from_the_right() {
+        let bar = cupertino_theme::ShapeTokens::default().menu_bar_height;
+        assert_eq!(bar + f64::from(BAR_MARGIN) + INSET, 44.0);
+        assert_eq!(f64::from(EDGE_MARGIN) + INSET, 14.0);
     }
 
     #[test]

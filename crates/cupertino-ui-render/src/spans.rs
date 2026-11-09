@@ -406,9 +406,27 @@ pub(crate) fn cover(pm: &mut PixmapMut<'_>, rect: &Bounds, color: [u8; 4]) {
 pub(crate) struct Pending {
     /// Each rectangle, its colour and whether the colour replaces the pixels (`true`) or is laid over them.
     entries: Vec<(Bounds, [u8; 4], bool)>,
+    /// The pixmap is all zero where nothing has painted yet, so a pending clear to transparent is not written.
+    zero: bool,
 }
 
 impl Pending {
+    /// Nothing pending, over a pixmap that is all zero (`zero`), or holds pixels that a clear must write over.
+    pub(crate) fn over_zero(zero: bool) -> Self {
+        Self {
+            entries: Vec::new(),
+            zero,
+        }
+    }
+
+    /// Writes one pending rectangle, unless it clears pixels known to be zero already.
+    fn write(&self, pm: &mut PixmapMut<'_>, rect: &Bounds, color: [u8; 4], replaces: bool) {
+        // a clear entry covers only pixels nothing has painted (what paints there writes the entry first)
+        if !(self.zero && replaces && color == [0; 4]) {
+            write(pm, rect, color, replaces);
+        }
+    }
+
     /// Sets `rect` to `color` (the frame being cleared).
     pub(crate) fn set(&mut self, rect: Bounds, color: [u8; 4]) {
         self.add(rect, color, true);
@@ -472,13 +490,13 @@ impl Pending {
             return;
         }
         let mut kept = Vec::with_capacity(self.entries.len() + 4);
-        for (a, c, replaces) in self.entries.drain(..) {
+        for (a, c, replaces) in std::mem::take(&mut self.entries) {
             let both = a.intersect(region);
             if both.is_empty() {
                 kept.push((a, c, replaces));
                 continue;
             }
-            write(pm, &both.offset(-origin.0, -origin.1), c, replaces);
+            self.write(pm, &both.offset(-origin.0, -origin.1), c, replaces);
             kept.extend(subtract(a, &[both]).into_iter().map(|p| (p, c, replaces)));
         }
         self.entries = kept;
@@ -486,8 +504,8 @@ impl Pending {
 
     /// Writes everything pending.
     pub(crate) fn flush_all(&mut self, pm: &mut PixmapMut<'_>, origin: (i32, i32)) {
-        for (a, c, replaces) in self.entries.drain(..) {
-            write(pm, &a.offset(-origin.0, -origin.1), c, replaces);
+        for (a, c, replaces) in std::mem::take(&mut self.entries) {
+            self.write(pm, &a.offset(-origin.0, -origin.1), c, replaces);
         }
     }
 }
@@ -649,5 +667,66 @@ mod tests {
                 "the held writes differ from the direct ones"
             );
         }
+    }
+
+    /// A frame just allocated is all zero: its clear is not written, and what is laid over it gives the bytes of the
+    /// same writes over a frame that was cleared by writing.
+    #[test]
+    fn over_a_zeroed_frame_the_clear_is_skipped_and_the_pixels_are_the_same() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % n) as i32
+        };
+        let whole = b(0, 0, 24, 16);
+        for _ in 0..200 {
+            let (mut zeroed, mut written, mut direct) = (
+                Pixmap::new(24, 16).unwrap(),
+                Pixmap::new(24, 16).unwrap(),
+                Pixmap::new(24, 16).unwrap(),
+            );
+            let mut skips = Pending::over_zero(true);
+            let mut writes = Pending::over_zero(false);
+            skips.set(whole, [0; 4]);
+            writes.set(whole, [0; 4]);
+            for _ in 0..8 {
+                let (x, y) = (next(24), next(16));
+                let rect = b(x, y, x + 1 + next(12), y + 1 + next(10)).intersect(&whole);
+                let alpha = [255, 0, 1, 90, 200][next(5) as usize];
+                let color = [next(256), next(256), next(256)].map(|c| (c * alpha / 255) as u8);
+                let color = [color[0], color[1], color[2], alpha as u8];
+                if next(3) == 0 {
+                    for (pending, pixmap) in
+                        [(&mut skips, &mut zeroed), (&mut writes, &mut written)]
+                    {
+                        pending.flush(&mut pixmap.as_mut(), (0, 0), &rect);
+                        cover(&mut pixmap.as_mut(), &rect, color);
+                    }
+                } else {
+                    skips.over(&mut zeroed.as_mut(), rect, color);
+                    writes.over(&mut written.as_mut(), rect, color);
+                }
+                cover(&mut direct.as_mut(), &rect, color);
+            }
+            skips.flush_all(&mut zeroed.as_mut(), (0, 0));
+            writes.flush_all(&mut written.as_mut(), (0, 0));
+            assert!(
+                zeroed.data() == written.data(),
+                "skipping the clear changed pixels"
+            );
+            assert!(
+                zeroed.data() == direct.data(),
+                "the held writes differ from the direct ones"
+            );
+        }
+        // the clear alone writes nothing: a pixel that is not zero (which a zeroed frame never has) stays as it was
+        let mut canary = Pixmap::new(4, 4).unwrap();
+        canary.data_mut()[..4].copy_from_slice(&[9, 9, 9, 9]);
+        let mut pending = Pending::over_zero(true);
+        pending.set(b(0, 0, 4, 4), [0; 4]);
+        pending.flush_all(&mut canary.as_mut(), (0, 0));
+        assert_eq!(&canary.data()[..4], &[9, 9, 9, 9]);
     }
 }

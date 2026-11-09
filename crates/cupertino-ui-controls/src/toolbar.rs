@@ -589,15 +589,23 @@ fn pill_color(theme: &cupertino_ui_theme::ThemeTokens, chosen: bool) -> Color {
     }
 }
 
-/// A divider is drawn as strong as the disabled glyphs: the theme's separator, made a little stronger over glass.
+/// A divider of the light appearance: a share of black, so it reads as strong over the glass's light face as the
+/// disabled glyphs beside it.
+const DIVIDER_LIGHT: f32 = 0.4;
+
+/// A divider is drawn as strong as the disabled glyphs: a share of white over the dark glass, of black over the light
+/// one; with Increase Contrast the theme's separator, made a little stronger over glass.
 fn divider_color(theme: &cupertino_ui_theme::ThemeTokens, separator: Color) -> Color {
-    if theme.preferences.appearance.is_dark() {
+    let appearance = theme.preferences.appearance;
+    if appearance.is_dark() {
         Color::new(1.0, 1.0, 1.0, 0.25)
-    } else {
+    } else if appearance.is_high_contrast() {
         Color {
             a: (separator.a * 1.5).min(1.0),
             ..separator
         }
+    } else {
+        Color::new(0.0, 0.0, 0.0, DIVIDER_LIGHT)
     }
 }
 

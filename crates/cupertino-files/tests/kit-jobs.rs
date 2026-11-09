@@ -216,12 +216,12 @@ fn close(run: &mut Run, window: WindowId) {
     run.settle();
 }
 
-/// Settle until `done` holds, with or without windows.
+/// Settle until `done` holds, with or without windows, waiting for a thread to wake the runtime between two looks;
+/// the twenty seconds only guard against a hang.
 fn wait(run: &mut Run, mut done: impl FnMut(&Run) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !done(run) {
-        assert!(Instant::now() < deadline, "it never happened");
-        std::thread::sleep(Duration::from_millis(10));
+        assert!(run.wait_for_progress(deadline), "it never happened");
         run.settle();
     }
 }
@@ -238,7 +238,8 @@ fn a_copy_outlives_its_window_and_the_progress_window_and_files_exits_only_once_
     let gate = Gate::new();
     let (reached, waits) = mpsc::channel();
     let observer = Gate::observer(&gate, reached);
-    let mut run = window(Notices::start(Some(bus.bus.connect())), |start| {
+    let notices = Notices::start(Some(bus.bus.connect()));
+    let mut run = window(notices.clone(), |start| {
         start
             .with_transfer_observer(observer)
             .with_progress_delay(Duration::ZERO)
@@ -265,10 +266,8 @@ fn a_copy_outlives_its_window_and_the_progress_window_and_files_exits_only_once_
     close(&mut run, shown);
     assert!(run.windows().is_empty());
     assert!(!exited(&run), "Files stays while the copy runs");
-    assert!(
-        bus.heard.recv_timeout(Duration::from_millis(100)).is_err(),
-        "nothing is said yet"
-    );
+    notices.flush(Duration::from_secs(5));
+    assert!(bus.heard.try_recv().is_err(), "nothing is said yet");
 
     // the copy goes on to its end, once, and Files exits after saying so
     gate.release();
@@ -387,7 +386,8 @@ fn a_name_taken_gives_the_arrival_a_free_one_and_a_failure_opens_the_progress_wi
             .wait_timeout_while(open, Duration::from_secs(20), |open| !*open)
             .unwrap();
     });
-    let mut run = window(Notices::start(Some(bus.bus.connect())), |start| {
+    let notices = Notices::start(Some(bus.bus.connect()));
+    let mut run = window(notices.clone(), |start| {
         start.with_transfer_observer(observer)
     });
     let documents = run.home().join("Documents");
@@ -437,7 +437,8 @@ fn a_name_taken_gives_the_arrival_a_free_one_and_a_failure_opens_the_progress_wi
     );
     present(&mut run, shown);
     run.driver.look(shown, "files-progress-failure").unwrap();
-    assert!(bus.heard.recv_timeout(Duration::from_millis(200)).is_err());
+    notices.flush(Duration::from_secs(5));
+    assert!(bus.heard.try_recv().is_err(), "the window shows it");
 
     // its Close forgets the failure; with no browser window a failure is also posted, and opens it again
     close(&mut run, shown);

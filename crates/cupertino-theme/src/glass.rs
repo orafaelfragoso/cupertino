@@ -6,7 +6,8 @@
 //! the README of that crate describes what every value does.
 //!
 //! * [`GlassStyle::Regular`] is the legibility style for controls, bars and panels; [`GlassStyle::Clear`] lets more of
-//!   the backdrop through, for controls over media.
+//!   the backdrop through, for controls over media; [`GlassStyle::LargePanel`] is the regular glass of large floating
+//!   panels, with a stronger tone compression and a drop shadow of its own.
 //! * Size: several values follow the short side of the shape ([`GlassParams::new`]), so a small control bends and
 //!   bleeds less than a large panel.
 //! * Accessibility selects recipes of its own, it does not turn the glass off: Reduce Transparency trades refraction for
@@ -35,6 +36,10 @@ pub enum GlassStyle {
     Regular,
     /// Lets the backdrop through with little tone change, for controls over photos and video.
     Clear,
+    /// Regular glass for large floating panels (the launcher): the same optics with a stronger tone compression (a
+    /// lower white point, a lifted black and a little less saturation), so a big surface softens the scene behind
+    /// it, and a broad drop shadow of its own.
+    LargePanel,
 }
 
 /// Everything besides the shape's size that selects a recipe.
@@ -355,6 +360,44 @@ fn increased_contrast_face(dark: bool, style: GlassStyle) -> Option<GlassFace> {
     }
 }
 
+/// Face of the large panel. Dark: white behind it comes out a mid grey (about 125 of 255) and black a dark grey (about
+/// 50), while strong colours keep much of their brightness, as their luminance is under the cap; the saturation is a
+/// little under the regular glass's. Light: the same compression, gentler, so the panel reads a little dimmer than a
+/// regular light bar.
+fn large_panel_face(dark: bool) -> GlassFace {
+    let regular = regular_face(dark);
+    if dark {
+        GlassFace {
+            saturation: LARGE_PANEL_SATURATION_DARK,
+            black: LARGE_PANEL_BLACK_DARK,
+            max_luma: LARGE_PANEL_MAX_LUMA_DARK,
+            ..regular
+        }
+    } else {
+        GlassFace {
+            saturation: LARGE_PANEL_SATURATION_LIGHT,
+            black: LARGE_PANEL_BLACK_LIGHT,
+            max_luma: LARGE_PANEL_MAX_LUMA_LIGHT,
+            ..regular
+        }
+    }
+}
+
+/// The large panel's tone compression: saturation, black lift and largest face luminance (as a fraction of the
+/// face's `clamp`), dark and light.
+pub const LARGE_PANEL_SATURATION_DARK: f32 = 1.15;
+pub const LARGE_PANEL_BLACK_DARK: f32 = 0.15;
+pub const LARGE_PANEL_MAX_LUMA_DARK: f32 = 0.102;
+pub const LARGE_PANEL_SATURATION_LIGHT: f32 = 1.1;
+pub const LARGE_PANEL_BLACK_LIGHT: f32 = 0.5;
+pub const LARGE_PANEL_MAX_LUMA_LIGHT: f32 = 0.8;
+/// The large panel's drop shadow: how far below the panel it falls and its blur radius in points (its edge fades over
+/// three radii), and its black's opacity in each appearance.
+pub const LARGE_PANEL_SHADOW_OFFSET: f32 = 16.0;
+pub const LARGE_PANEL_SHADOW_BLUR: f32 = 28.0;
+pub const LARGE_PANEL_SHADOW_DARK: f32 = 0.5;
+pub const LARGE_PANEL_SHADOW_LIGHT: f32 = 0.22;
+
 /// Linear interpolation through `table` (sorted by side), flat outside it.
 fn by_side(table: &[(f32, f32)], side: f32) -> f32 {
     let (first, last) = (table[0], table[table.len() - 1]);
@@ -386,6 +429,7 @@ impl GlassParams {
         let mut p = match mode.style {
             GlassStyle::Regular => Self::regular(dark, s),
             GlassStyle::Clear => Self::clear(dark, s),
+            GlassStyle::LargePanel => Self::large_panel(dark, s),
         };
         if mode.increase_contrast {
             if let Some(face) = increased_contrast_face(dark, mode.style) {
@@ -404,7 +448,7 @@ impl GlassParams {
             p.shadow.ring_stroke = 0.0;
             p.shadow.ring_offset = 0.0;
             match mode.style {
-                GlassStyle::Regular => {
+                GlassStyle::Regular | GlassStyle::LargePanel => {
                     p.blur.radius = REDUCED_TRANSPARENCY_BLUR;
                     p.blur.level_opacity = REDUCED_TRANSPARENCY_LEVELS;
                 }
@@ -475,6 +519,28 @@ impl GlassParams {
                 ring_opacity: 0.0,
             },
         }
+    }
+
+    /// The large panel's recipe: the regular one of its size with the face compressed towards the middle (see
+    /// [`large_panel_face`]) and the panel's drop shadow shown.
+    fn large_panel(dark: bool, s: f32) -> Self {
+        let mut p = Self::regular(dark, s);
+        p.face = large_panel_face(dark);
+        p.shadow.offset = [0.0, LARGE_PANEL_SHADOW_OFFSET];
+        p.shadow.amount = 100.0;
+        p.shadow.height = LARGE_PANEL_SHADOW_BLUR;
+        p.shadow.fill = [
+            0.0,
+            0.0,
+            0.0,
+            if dark {
+                LARGE_PANEL_SHADOW_DARK
+            } else {
+                LARGE_PANEL_SHADOW_LIGHT
+            },
+        ];
+        p.shadow.opacity = 1.0;
+        p
     }
 
     fn clear(dark: bool, s: f32) -> Self {
@@ -563,7 +629,19 @@ impl GlassParams {
             0.0
         };
         // a Gaussian of radius r is read three radii out; refraction pulls in from up to its band past the edge
-        3.0 * widest.max(fill) + self.refraction.amount.abs() * REFRACTION_REACH_PER_AMOUNT
+        let read =
+            3.0 * widest.max(fill) + self.refraction.amount.abs() * REFRACTION_REACH_PER_AMOUNT;
+        read.max(self.shadow_reach())
+    }
+
+    /// How far past the shape a shown drop shadow reaches, in points: its offset and half its smooth edge of three
+    /// blur radii; 0 when it does not show.
+    pub fn shadow_reach(&self) -> f32 {
+        let s = &self.shadow;
+        if s.opacity * s.amount * s.fill[3] <= 0.0 {
+            return 0.0;
+        }
+        s.offset[0].abs().max(s.offset[1].abs()) + 1.5 * s.height
     }
 }
 
@@ -859,6 +937,81 @@ mod tests {
             },
             100.0,
         )
+    }
+
+    #[test]
+    fn a_large_panel_is_regular_glass_with_a_compressed_face_and_its_own_shadow() {
+        for dark in [true, false] {
+            let regular = with(dark, GlassStyle::Regular, false, false, false);
+            let panel = with(dark, GlassStyle::LargePanel, false, false, false);
+            // the optics are the regular glass's
+            assert_eq!(
+                (panel.blur, panel.refraction, panel.bleed, panel.highlight),
+                (
+                    regular.blur,
+                    regular.refraction,
+                    regular.bleed,
+                    regular.highlight
+                )
+            );
+            assert_eq!(
+                (panel.face.white, panel.face.clamp, panel.face.fill),
+                (regular.face.white, regular.face.clamp, regular.face.fill)
+            );
+            // a lower white point, a lifted black and a little less saturation
+            assert!(panel.face.max_luma < regular.face.max_luma, "{dark}");
+            assert!(panel.face.black > regular.face.black, "{dark}");
+            assert!(panel.face.saturation < regular.face.saturation, "{dark}");
+            // the shadow shows, below the panel; regular glass casts none at rest
+            assert_eq!(regular.shadow_reach(), 0.0);
+            assert_eq!(panel.shadow.offset, [0.0, LARGE_PANEL_SHADOW_OFFSET]);
+            assert_eq!(panel.shadow.height, LARGE_PANEL_SHADOW_BLUR);
+            let alpha = if dark {
+                LARGE_PANEL_SHADOW_DARK
+            } else {
+                LARGE_PANEL_SHADOW_LIGHT
+            };
+            assert_eq!(
+                (
+                    panel.shadow.opacity,
+                    panel.shadow.amount,
+                    panel.shadow.fill[3]
+                ),
+                (1.0, 100.0, alpha)
+            );
+            assert_eq!(panel.shadow_reach(), 16.0 + 1.5 * 28.0);
+            assert!(panel.reach() >= panel.shadow_reach());
+        }
+    }
+
+    #[test]
+    fn a_large_panel_follows_the_per_mode_recipes_of_regular_glass() {
+        for dark in [true, false] {
+            for (rt, ic, rm) in [
+                (true, false, false),
+                (false, true, false),
+                (true, true, false),
+                (false, false, true),
+            ] {
+                let regular = with(dark, GlassStyle::Regular, rt, ic, rm);
+                let panel = with(dark, GlassStyle::LargePanel, rt, ic, rm);
+                let what = format!("dark {dark}, rt {rt}, ic {ic}, rm {rm}");
+                assert_eq!(panel.blur, regular.blur, "{what}");
+                assert_eq!(panel.refraction, regular.refraction, "{what}");
+                if rt || ic {
+                    // the accessibility recipes replace the face whole, the large panel's included
+                    assert_eq!(panel.face, regular.face, "{what}");
+                } else {
+                    assert_eq!(panel.face, large_panel_face(dark), "{what}");
+                }
+                // the panel keeps its shadow; Reduce Transparency drops the ring as it does for regular glass
+                assert_eq!(panel.shadow.opacity, 1.0, "{what}");
+                assert_eq!(
+                    panel.shadow.ring_stroke, regular.shadow.ring_stroke,
+                    "{what}"
+                );
+            }
+        }
     }
 
     #[test]

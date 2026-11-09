@@ -9,8 +9,9 @@
 //! 1. **Blur.** Four levels of the backdrop blurred with `radius · 2^i` points are laid over each other, widest first,
 //!    each narrower level mixed in at its opacity; then the blur fill (the backdrop at the fill radius) is blended in
 //!    darken, lighten and normal mode at their opacities.
-//! 2. **Colour matrix.** On linear light: saturation about Rec. 709 luminance, the `white` gain, a per-channel limit at
-//!    `clamp` and a luminance limit at `max_luma · clamp` that keeps the hue; then, encoded, the `black` lift
+//! 2. **Colour matrix.** Saturation about the Rec. 709 luma of the encoded colour; then on linear light the `white`
+//!    gain, a per-channel limit at `clamp` and a luminance limit at `max_luma · clamp` that keeps the hue; then,
+//!    encoded, the `black` lift
 //!    `v + black · (1 − v)` and the fill colour over it.
 //! 3. **Inner refraction.** Inside a band `height` wide along the edge, the face is read further out along the field's
 //!    normal, by `−amount · REFRACTION_REACH_PER_AMOUNT · (1 − t)²` points where `t` runs from 0 at the edge to 1 at the
@@ -155,7 +156,10 @@ fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
 }
 
-fn saturate_linear(c: Rgb, s: f32) -> Rgb {
+/// Saturation `s` about the Rec. 709 luma of the encoded colour `c`: the colour moves away from (or towards) the grey of
+/// its luma by `s`, on encoded values, so the weaker channels of a strong colour fall off as they look to, rather than
+/// as fast as in linear light, where a small encoded value is a much smaller share of the light.
+pub fn saturate_encoded(c: Rgb, s: f32) -> Rgb {
     let y = luma(c);
     c.map(|v| (y + (v - y) * s).max(0.0))
 }
@@ -183,7 +187,7 @@ pub fn blur_fill(c: Rgb, fill: Rgb, p: &GlassParams) -> Rgb {
 /// on the shape's size).
 pub fn face_color(c: Rgb, p: &GlassParams, max_luma: f32) -> Rgb {
     let f = &p.face;
-    let lin = saturate_linear(c.map(srgb_decode), f.saturation);
+    let lin = saturate_encoded(c, f.saturation).map(srgb_decode);
     let mut lin = lin.map(|v| (v * f.white).min(f.clamp));
     let limit = max_luma * f.clamp;
     let y = luma(lin);
@@ -216,8 +220,8 @@ pub fn bleed(c: Rgb, wide: Rgb, d: f32, p: &GlassParams, amount: f32, height: f3
     }
     let t = (-d / height).clamp(0.0, 1.0);
     let w = (amount / 100.0).clamp(0.0, 1.0) * (1.0 - t) * (1.0 - t);
-    let tone = saturate_linear(wide.map(srgb_decode), b.saturation)
-        .map(|v| b.black + (b.white - b.black) * srgb_encode(v).min(1.0));
+    let tone =
+        saturate_encoded(wide, b.saturation).map(|v| b.black + (b.white - b.black) * v.min(1.0));
     let blended: Rgb = std::array::from_fn(|i| {
         if b.darken {
             c[i].min(tone[i])
@@ -714,6 +718,102 @@ mod tests {
         // black is lifted
         let black = face_color([0.0; 3], &p, p.face.max_luma);
         assert!(close(black[0], 0.08, 1e-4));
+    }
+
+    #[test]
+    fn saturation_works_on_encoded_values_about_their_luma() {
+        // greys and saturation 1 pass unchanged, and the luma of the encoded colour is kept
+        assert_eq!(saturate_encoded([0.4; 3], 1.3), [0.4; 3]);
+        let c = [0.157, 0.094, 0.655];
+        assert_eq!(saturate_encoded(c, 1.0), c);
+        let s = saturate_encoded(c, 1.3);
+        assert!(close(luma(s), luma(c), 1e-6), "{s:?}");
+        // each channel moves away from the luma by the factor
+        let y = luma(c);
+        for i in 0..3 {
+            assert!(close(s[i] - y, (c[i] - y) * 1.3, 1e-6), "{s:?}");
+        }
+        // a channel pushed below black stops there
+        assert_eq!(saturate_encoded([0.0, 0.0, 1.0], 3.0)[0], 0.0);
+    }
+
+    #[test]
+    fn dark_face_keeps_a_milky_floor_over_a_strong_blue() {
+        // a deep blue wallpaper behind a control tile (encoded 40, 24, 167 of 255)
+        let p = GlassParams::new(
+            GlassMode {
+                dark: true,
+                ..GlassMode::default()
+            },
+            64.0,
+        );
+        let face = face_color(
+            [40.0 / 255.0, 24.0 / 255.0, 167.0 / 255.0],
+            &p,
+            p.face.max_luma,
+        )
+        .map(|v| v * 255.0);
+        // about (61, 41, 220): brighter and bluer than the wallpaper, and the weak green stays well above the lift
+        // alone (0.08, 20 of 255), which is where saturating linear light would leave it
+        assert!(close(face[0], 61.0, 2.0), "{face:?}");
+        assert!(close(face[1], 41.0, 2.0), "{face:?}");
+        assert!(close(face[2], 220.0, 2.0), "{face:?}");
+        // a strong red keeps green and blue near what the backdrop had (54 and 59 of 255), not lifted black
+        let red = face_color(
+            [227.0 / 255.0, 54.0 / 255.0, 59.0 / 255.0],
+            &p,
+            p.face.max_luma,
+        );
+        assert!(red[1] > 0.18 && red[2] > 0.2, "{red:?}");
+    }
+
+    #[test]
+    fn the_large_panel_compresses_white_and_black_and_keeps_strong_colours() {
+        let face = |dark: bool, style: GlassStyle, c: [f32; 3]| {
+            let p = GlassParams::new(
+                GlassMode {
+                    dark,
+                    style,
+                    ..GlassMode::default()
+                },
+                400.0,
+            );
+            face_color(c.map(|v| v / 255.0), &p, p.face.max_luma).map(|v| v * 255.0)
+        };
+        let large = |c| face(true, GlassStyle::LargePanel, c);
+        // dark: a white page behind comes out a mid grey (about 125) and black a dark grey (about 53); regular glass
+        // of the same size keeps white much lighter (about 184) and black darker (about 36)
+        let white = large([245.0; 3]);
+        assert!(
+            close(white[0], 125.0, 3.0) && close(white[0], white[2], 0.5),
+            "{white:?}"
+        );
+        let black = large([15.0; 3]);
+        assert!(close(black[0], 53.0, 3.0), "{black:?}");
+        let regular_white = face(true, GlassStyle::Regular, [245.0; 3]);
+        assert!(regular_white[0] > 175.0, "{regular_white:?}");
+        let regular_black = face(true, GlassStyle::Regular, [15.0; 3]);
+        assert!(regular_black[0] < 40.0, "{regular_black:?}");
+        // a saturated red band keeps its colour and much of its brightness: about (205, 69, 73)
+        let red = large([229.0, 55.0, 60.0]);
+        assert!(close(red[0], 205.0, 4.0), "{red:?}");
+        assert!(
+            close(red[1], 69.0, 4.0) && close(red[2], 73.0, 4.0),
+            "{red:?}"
+        );
+        assert!(
+            red[0] > white[0] + 60.0,
+            "brighter than the grey of white: {red:?}"
+        );
+        // light: the same order, gentler; the panel stays light but dimmer than regular light glass over black
+        let light_black = face(false, GlassStyle::LargePanel, [15.0; 3]);
+        let regular_light_black = face(false, GlassStyle::Regular, [15.0; 3]);
+        assert!(light_black[0] > regular_light_black[0], "{light_black:?}");
+        let light_white = face(false, GlassStyle::LargePanel, [245.0; 3]);
+        assert!(
+            light_white[0] > 225.0 && light_white[0] < 250.0,
+            "{light_white:?}"
+        );
     }
 
     #[test]

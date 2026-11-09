@@ -215,20 +215,25 @@ pub enum GlassStyle {
     Regular,
     /// The clearer glass of controls over rich content, such as media.
     Clear,
+    /// The regular glass of a large floating panel (the launcher): its face toned further towards the middle, with a
+    /// soft drop shadow of its own below it.
+    LargePanel,
 }
 
 impl GlassStyle {
-    /// The material name that stands for this glass on its own, as the theme names it (`Glass`, `ClearGlass`).
+    /// The material name that stands for this glass on its own, as the theme names it (`Glass`, `ClearGlass`,
+    /// `LargePanelGlass`).
     pub fn material(self) -> &'static str {
         match self {
             Self::Regular => "Glass",
             Self::Clear => "ClearGlass",
+            Self::LargePanel => "LargePanelGlass",
         }
     }
 
     /// The glass a material name stands for.
     pub fn of_material(name: &str) -> Option<Self> {
-        [Self::Regular, Self::Clear]
+        [Self::Regular, Self::Clear, Self::LargePanel]
             .into_iter()
             .find(|s| s.material() == name)
     }

@@ -8,7 +8,8 @@ use cupertino_protocols::server::cupertino_shell_v1::CupertinoShellV1;
 use cupertino_protocols::server::screenshot::cupertino_screenshot_v1::CupertinoScreenshotV1;
 use cupertino_protocols::server::scroll::cupertino_scroll_v1::CupertinoScrollV1;
 use cupertino_server::menu_bar::{
-    MAX_APPLICATION_ID_BYTES, MAX_BUS_NAME_BYTES, MAX_OBJECT_PATH_BYTES, MAX_TEXT_BYTES,
+    BACKDROP_SPREAD_MAX_BANDS, MAX_APPLICATION_ID_BYTES, MAX_BUS_NAME_BYTES, MAX_OBJECT_PATH_BYTES,
+    MAX_TEXT_BYTES,
 };
 use cupertino_server::protocols::gtk_shell::gtk_shell1::GtkShell1;
 use cupertino_server::toplevel_icon::MAX_ICON_NAME;
@@ -54,6 +55,12 @@ const CAPS: &[(&str, &str, &[usize])] = &[
     ),
     ("cupertino_menu_bar_v1", "app_window", &[MAX_TEXT_BYTES]),
     ("cupertino_menu_bar_v1", "shortcut", &[MAX_CHORD_BYTES]),
+    // a 16-bit spread per band
+    (
+        "cupertino_menu_bar_v1",
+        "backdrop_spread",
+        &[BACKDROP_SPREAD_MAX_BANDS * 2],
+    ),
     (
         "cupertino_dock_v1",
         "window",

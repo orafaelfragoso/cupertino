@@ -90,7 +90,8 @@ vec3 encode(vec3 c0) {
     return mix(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, c * 12.92, vec3(lessThanEqual(c, vec3(0.0031308))));
 }
 
-vec3 saturate_linear(vec3 c, float s) {
+// saturation about the Rec. 709 luma of encoded values
+vec3 saturate_encoded(vec3 c, float s) {
     float y = dot(c, LUMA);
     return max(vec3(y) + (c - vec3(y)) * s, vec3(0.0));
 }
@@ -105,7 +106,7 @@ vec3 face_at(vec2 q, float narrow, float max_luma) {
     c = mix(c, min(c, f), G.fill.x);
     c = mix(c, max(c, f), G.fill.y);
     c = mix(c, f, G.fill.z);
-    vec3 lin = saturate_linear(decode(c), G.face.x);
+    vec3 lin = decode(saturate_encoded(c, G.face.x));
     lin = min(lin * G.face.y, vec3(G.face.w));
     float limit = max_luma * G.face.w;
     float y = dot(lin, LUMA);
@@ -175,7 +176,7 @@ void main() {
         float t = clamp(-d / fb.x, 0.0, 1.0);
         float w = fa.w * (1.0 - t) * (1.0 - t);
         vec3 tone = vec3(G.bleed.y) + (G.bleed.x - G.bleed.y)
-            * min(encode(saturate_linear(decode(texture(u_level3, uv_of(p)).rgb), G.bleed.z)), vec3(1.0));
+            * min(saturate_encoded(texture(u_level3, uv_of(p)).rgb, G.bleed.z), vec3(1.0));
         vec3 b = G.bleed.w > 0.5 ? min(c, tone) : max(c, tone);
         c = mix(c, b, w);
     }

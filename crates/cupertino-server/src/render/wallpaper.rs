@@ -147,12 +147,67 @@ pub fn colour_lightness(rgb: [f32; 3]) -> u16 {
 /// 0.07 on every backend), so it reads at most about 35 tenths darker than it looks, and only where the image is
 /// transparent.
 pub fn strip_samples(pixmap: &Pixmap, rows: u32) -> Vec<[u8; 4]> {
+    strip_of(pixmap, rows).samples
+}
+
+/// [`strip_samples`] with where each one lies across the output.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Strip {
+    pub samples: Vec<[u8; 4]>,
+    /// The image's width in pixels, and the pixels between one sample and the next, row after row.
+    width: usize,
+    step: usize,
+}
+
+/// The [`Strip`] of the top `rows` rows of `pixmap`.
+pub fn strip_of(pixmap: &Pixmap, rows: u32) -> Strip {
     let rows = rows.clamp(1, pixmap.height().max(1)) as usize;
     let width = pixmap.width() as usize;
     let (pixels, _) = pixmap.data().as_chunks::<4>();
     let strip = &pixels[..(rows * width).min(pixels.len())];
     let step = (strip.len() / 16_384).max(1);
-    strip.iter().step_by(step).copied().collect()
+    Strip {
+        samples: strip.iter().step_by(step).copied().collect(),
+        width,
+        step,
+    }
+}
+
+/// How many bands across the output [`strip_spread`] measures: a band of a 2560-pixel output is 40 pixels wide, about
+/// the width of a symbol in the bar, so an item of the bar covers one to a few.
+pub const SPREAD_BANDS: usize = 64;
+
+/// How unevenly light the wallpaper is under the menu bar, band by band from the left edge to the right
+/// ([`SPREAD_BANDS`] bands of equal width): the standard deviation of the CIE L* of the [`Strip`]'s pixels in each band,
+/// seen through the colour operations `ops` as [`strip_lightness`] sees them, in tenths (0 for an even band, 500 for
+/// one half black and half white). A band no sample falls in is 0.
+pub fn strip_spread(strip: &Strip, ops: &[Op]) -> Vec<u16> {
+    let mut bands = [(0.0_f64, 0.0_f64, 0_u32); SPREAD_BANDS];
+    if strip.width == 0 {
+        return vec![0; SPREAD_BANDS];
+    }
+    for (i, px) in strip.samples.iter().enumerate() {
+        let x = (i * strip.step) % strip.width;
+        let band = &mut bands[x * SPREAD_BANDS / strip.width];
+        let l = l_star(luminance(apply_color_ops(
+            [0, 1, 2].map(|c| f32::from(px[c]) / 255.0),
+            ops,
+        )));
+        band.0 += l;
+        band.1 += l * l;
+        band.2 += 1;
+    }
+    bands
+        .iter()
+        .map(|&(sum, squares, n)| {
+            if n == 0 {
+                return 0;
+            }
+            let mean = sum / f64::from(n);
+            let variance = (squares / f64::from(n) - mean * mean).max(0.0);
+            (variance.sqrt() * 10.0).round().clamp(0.0, 1000.0) as u16
+        })
+        .collect()
 }
 
 /// The lightness under the menu bar of the [`strip_samples`] `samples`, seen through the colour operations `ops`: the
@@ -235,8 +290,8 @@ enum Outcome {
     Loaded {
         pixmap: Pixmap,
         tint: [f32; 3],
-        /// [`strip_samples`] of the rows under the menu bar.
-        strip: Vec<[u8; 4]>,
+        /// The [`Strip`] of the rows under the menu bar.
+        strip: Strip,
         /// [`strip_lightness`] of `strip` through the request's `bar_ops`.
         bar_lightness: u16,
         bar_ops: Vec<Op>,
@@ -342,9 +397,9 @@ impl WorkerState {
             };
             match scale_cover(&source, request.dst) {
                 Ok((pixmap, tint)) => {
-                    let strip = strip_samples(&pixmap, request.strip_rows);
+                    let strip = strip_of(&pixmap, request.strip_rows);
                     return Outcome::Loaded {
-                        bar_lightness: strip_lightness(&strip, &request.bar_ops),
+                        bar_lightness: strip_lightness(&strip.samples, &request.bar_ops),
                         bar_ops: request.bar_ops.clone(),
                         strip,
                         pixmap,
@@ -449,8 +504,8 @@ struct Shown {
     buffer: MemoryRenderBuffer,
     px: (i32, i32),
     tint: [f32; 3],
-    /// [`strip_samples`] under the menu bar, measured again when the bar's colour operations change.
-    strip: Vec<[u8; 4]>,
+    /// The [`Strip`] under the menu bar, measured again when the bar's colour operations change.
+    strip: Strip,
 }
 
 /// The image wallpapers of all outputs.
@@ -467,6 +522,11 @@ pub struct Wallpapers {
     measured: Vec<(u64, u16)>,
     /// The lightness last handed out for each output, so the procedural wallpaper's is handed out once per change.
     sent: HashMap<u64, u16>,
+    /// The [`strip_spread`] under the menu bar of each output whose image was put up or measured again, until taken.
+    spread: Vec<(u64, Vec<u16>)>,
+    /// The spread last handed out for each output, so the procedural wallpaper's even one is handed out once after an
+    /// image's, whatever the lightness.
+    spread_sent: HashMap<u64, Vec<u16>>,
     /// The colour operations of the menu bar's material, which the lightness under it is measured through.
     bar_ops: Vec<Op>,
     /// The appearance and Reduce Transparency the operations are those of.
@@ -493,6 +553,8 @@ impl Wallpapers {
             tint: None,
             measured: Vec::new(),
             sent: HashMap::new(),
+            spread: Vec::new(),
+            spread_sent: HashMap::new(),
             bar_ops: Vec::new(),
             bar_material: None,
             seen: HashMap::new(),
@@ -522,10 +584,13 @@ impl Wallpapers {
         self.bar_ops = ops.to_vec();
         for (output, state) in &self.outputs {
             let Some(shown) = &state.shown else { continue };
-            let lightness = strip_lightness(&shown.strip, ops);
+            let lightness = strip_lightness(&shown.strip.samples, ops);
             if self.sent.insert(*output, lightness) != Some(lightness) {
                 self.measured.push((*output, lightness));
             }
+            let spread = strip_spread(&shown.strip, ops);
+            self.spread_sent.insert(*output, spread.clone());
+            self.spread.push((*output, spread));
         }
     }
 
@@ -581,8 +646,11 @@ impl Wallpapers {
                     let bar_lightness = if bar_ops == self.bar_ops {
                         bar_lightness
                     } else {
-                        strip_lightness(&strip, &self.bar_ops)
+                        strip_lightness(&strip.samples, &self.bar_ops)
                     };
+                    let spread = strip_spread(&strip, &self.bar_ops);
+                    self.spread_sent.insert(reply.output, spread.clone());
+                    self.spread.push((reply.output, spread));
                     let size = (pixmap.width() as i32, pixmap.height() as i32);
                     let buffer = MemoryRenderBuffer::from_slice(
                         pixmap.data(),
@@ -710,7 +778,8 @@ impl Wallpapers {
     /// The pixels the wallpaper of an output of `px` device pixels shows, or `None` for the procedural wallpaper.
     /// Until the image is in, the output keeps what it showed. The lightness of its top `strip_rows` rows, under the
     /// menu bar, is measured through the colour operations given to [`Wallpapers::set_bar_material`] once per image and
-    /// once per change of those, and handed out by [`Wallpapers::take_bar_lightness`].
+    /// once per change of those, and handed out by [`Wallpapers::take_bar_lightness`], with how unevenly light it is
+    /// across the bar by [`Wallpapers::take_bar_spread`].
     pub fn shown(
         &mut self,
         output: u64,
@@ -725,6 +794,7 @@ impl Wallpapers {
             let asked = now - *at < FORGET_SECONDS;
             if !asked {
                 self.sent.remove(output);
+                self.spread_sent.remove(output);
             }
             asked
         });
@@ -768,6 +838,19 @@ impl Wallpapers {
         if self.sent.insert(output, lightness) != Some(lightness) {
             self.measured.push((output, lightness));
         }
+        // measured from one colour, the procedural wallpaper is even under the bar: handed out when the last spread
+        // handed out was not (an image's, even one of the same lightness), checked without measuring anything
+        let even = |s: &Vec<u16>| s.len() == SPREAD_BANDS && s.iter().all(|&v| v == 0);
+        if !self.spread_sent.get(&output).is_some_and(even) {
+            self.spread_sent.insert(output, vec![0; SPREAD_BANDS]);
+            self.spread.push((output, vec![0; SPREAD_BANDS]));
+        }
+    }
+
+    /// The [`strip_spread`] under the menu bar of each output whose image was put up, or measured through new colour
+    /// operations, since the last call.
+    pub fn take_bar_spread(&mut self) -> Vec<(u64, Vec<u16>)> {
+        std::mem::take(&mut self.spread)
     }
 
     /// The lightness under the menu bar of each output whose new image was put up since the last call.
@@ -859,6 +942,41 @@ mod tests {
             )
             .unwrap();
         cupertino_glass::ops::color_ops(&recipe.backdrop.unwrap().ops)
+    }
+
+    /// A strip is even where one grey fills its band, and spread where black and white alternate: by half the range of
+    /// L* (500 tenths) for equal parts of each, wherever across the output the band lies and however many samples it has.
+    #[test]
+    fn the_spread_under_the_bar_is_the_deviation_of_l_star_band_by_band() {
+        // 2560 pixels wide, 48 rows: a band is 40 pixels; black and white one pixel apart from x 400 to 480 (bands 10, 11)
+        let (width, rows) = (2560_u32, 48_u32);
+        let mut pixmap = Pixmap::new(width, rows).unwrap();
+        let (pixels, _) = pixmap.data_mut().as_chunks_mut::<4>();
+        for (i, px) in pixels.iter_mut().enumerate() {
+            let x = i % width as usize;
+            let v = if (400..480).contains(&x) && x.is_multiple_of(2) {
+                255
+            } else if (400..480).contains(&x) {
+                0
+            } else {
+                119
+            };
+            *px = [v, v, v, 255];
+        }
+        let strip = strip_of(&pixmap, rows);
+        let spread = strip_spread(&strip, &[]);
+        assert_eq!(spread.len(), SPREAD_BANDS);
+        for (band, &s) in spread.iter().enumerate() {
+            if band == 10 || band == 11 {
+                assert!(s.abs_diff(500) <= 10, "band {band}: {s}");
+            } else {
+                assert_eq!(s, 0, "band {band} is one grey");
+            }
+        }
+        // the procedural and an even wallpaper read as even everywhere
+        let even = strip_of(&split_pixmap((64, 48), 48, 119, 119), 24);
+        assert!(strip_spread(&even, &[]).iter().all(|&s| s == 0));
+        assert_eq!(strip_spread(&Strip::default(), &[]), vec![0; SPREAD_BANDS]);
     }
 
     #[test]
@@ -996,10 +1114,32 @@ mod tests {
             assert!(wallpapers.shown(1, &none, false, (8, 8), 1, 0.0).is_none());
         }
         assert_eq!(wallpapers.take_bar_lightness(), [(1, light)]);
+        assert_eq!(wallpapers.take_bar_spread(), [(1, vec![0; SPREAD_BANDS])]);
         wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
         wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
         let dark = colour_lightness(crate::render::scene::wallpaper_tint(true));
         assert_eq!(wallpapers.take_bar_lightness(), [(1, dark)]);
+        // the even spread is handed out once, not again with the lightness
+        assert_eq!(wallpapers.take_bar_spread(), []);
+    }
+
+    /// After an image whose strip was uneven, the procedural wallpaper's even spread is handed out though its lightness
+    /// is the one handed out last, so the bar's halo does not stay as the image's.
+    #[test]
+    fn the_procedural_wallpaper_hands_out_its_even_spread_after_an_image_of_the_same_lightness() {
+        let mut wallpapers = Wallpapers::with_decoder([None, None], Arc::new(decode_file));
+        let none = WallpaperSettings::default();
+        let dark = colour_lightness(crate::render::scene::wallpaper_tint(true));
+        // as an image of the same lightness under the bar, but striped, leaves it
+        wallpapers.sent.insert(1, dark);
+        let mut busy = vec![0; SPREAD_BANDS];
+        busy[3] = 400;
+        wallpapers.spread_sent.insert(1, busy);
+        wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
+        assert_eq!(wallpapers.take_bar_lightness(), []);
+        assert_eq!(wallpapers.take_bar_spread(), [(1, vec![0; SPREAD_BANDS])]);
+        wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
+        assert_eq!(wallpapers.take_bar_spread(), []);
     }
 
     #[test]

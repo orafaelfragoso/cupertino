@@ -130,6 +130,7 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
                     .radius(radius)
                     .container(container, spacing),
             ) {
+                paint_edge(cx, rect, radius);
                 return true;
             }
             // without the desktop's glass the toolkit paints its own
@@ -144,6 +145,78 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
             false
         }
     }
+}
+
+/// The edge of a floating control's glass in the light appearance, at its sides and at its top and bottom, where
+/// the light from above falls on it: a fine dark rim on the outermost device pixel of the shape. The glass's rim
+/// light shows over a dark face; over a light face nothing would mark the edge.
+const EDGE_RIM_SIDES: f32 = 0.25;
+const EDGE_RIM_ENDS: f32 = 0.09;
+/// The rim with Increase Contrast, sides and ends.
+const EDGE_RIM_CONTRAST_SIDES: f32 = 0.5;
+const EDGE_RIM_CONTRAST_ENDS: f32 = 0.3;
+/// The faint shade a floating control casts just below itself in the light appearance, in points and as a share of
+/// black.
+const EDGE_SHADE: f32 = 0.022;
+const EDGE_SHADE_OFFSET: f64 = 4.0;
+const EDGE_SHADE_BLUR: f64 = 4.5;
+/// How far past the shape the shade may reach, in points.
+const EDGE_SHADE_REACH: f64 = EDGE_SHADE_OFFSET + 3.0 * EDGE_SHADE_BLUR;
+
+/// The rim and the shade the toolkit lays over the compositor's glass of a floating control in the light
+/// appearance ([`EDGE_RIM_SIDES`], [`EDGE_SHADE`]); the dark appearance's glass marks its own edge with its rim
+/// light. The shade is cut out of the shape, so it never dims the glass.
+fn paint_edge(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
+    let theme = &cx.env().theme;
+    if theme.preferences.appearance.is_dark() {
+        return;
+    }
+    let (sides, ends) = if theme.preferences.appearance.is_high_contrast() {
+        (EDGE_RIM_CONTRAST_SIDES, EDGE_RIM_CONTRAST_ENDS)
+    } else {
+        (EDGE_RIM_SIDES, EDGE_RIM_ENDS)
+    };
+    let scale = cx.env().scale.max(1.0);
+    let shape = Shape::RoundedRect { rect, radius };
+    let mut outside = crate::tabs::rounded(rect.inset(Insets::uniform(-EDGE_SHADE_REACH)), 0.0);
+    outside.extend(crate::tabs::rounded(rect, radius));
+    cx.push(PaintOp::PushClip(Shape::Path {
+        verbs: outside,
+        fill_rule: cupertino_ui_render::FillRule::EvenOdd,
+    }));
+    cx.push(PaintOp::PushLayer {
+        opacity: 1.0,
+        effects: vec![cupertino_ui_render::Effect::DropShadow {
+            offset: cupertino_geometry::Point::new(0.0, EDGE_SHADE_OFFSET),
+            blur: EDGE_SHADE_BLUR,
+            color: Color::new(0.0, 0.0, 0.0, EDGE_SHADE),
+        }],
+    });
+    cx.push(PaintOp::Fill {
+        shape,
+        paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, 1.0)),
+    });
+    cx.push(PaintOp::PopLayer);
+    cx.push(PaintOp::PopClip);
+    let px = 1.0 / scale;
+    let black = |a| Color::new(0.0, 0.0, 0.0, a);
+    let stop = |offset, color| cupertino_ui_render::GradientStop { offset, color };
+    cx.push(PaintOp::Stroke {
+        shape: Shape::RoundedRect {
+            rect: rect.inset(Insets::uniform(px / 2.0)),
+            radius: nested_radius(radius, px / 2.0),
+        },
+        width: px,
+        paint: Paint::Linear {
+            start: cupertino_geometry::Point::new(rect.min_x(), rect.min_y()),
+            end: cupertino_geometry::Point::new(rect.min_x(), rect.max_y()),
+            stops: vec![
+                stop(0.0, black(ends)),
+                stop(0.5, black(sides)),
+                stop(1.0, black(ends)),
+            ],
+        },
+    });
 }
 
 /// The painted glass: in the light appearance a soft shade first, then the body and its rim.

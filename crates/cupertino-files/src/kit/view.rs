@@ -60,7 +60,7 @@ const SHOWN_MARGIN: f64 = 200.0;
 const FOLDER_SYMBOL: &str = "symbol.folder";
 /// The heading of the sidebar's tags, and the symbol of each.
 const TAGS_TITLE: &str = "Tags";
-const TAG_SYMBOL: &str = "symbol.tag";
+const TAG_SYMBOL: &str = "symbol.tag.fill";
 /// The key of the field that edits an item's name in its row of window `id`; one per window, as focus goes to the
 /// first window holding the key.
 pub(super) fn name_field_key(id: u64) -> Key {
@@ -348,7 +348,7 @@ fn place_item(session: &Session, index: usize) -> SidebarItem {
     SidebarItem {
         key: place_key(session, index),
         label: place.name.clone(),
-        icon: Some(place.kind.symbol().into()),
+        icon: Some(place.kind.sidebar_symbol().into()),
         description,
         accessory: place.ejectable().then(|| SidebarAccessory {
             symbol: EJECT_SYMBOL.into(),

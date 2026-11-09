@@ -212,6 +212,47 @@ pub(crate) fn clip_bounds(shape: &Shape, node: &Transform, scale: f64) -> Bounds
     }
 }
 
+/// Whether the clip `shape` under `node` lets every pixel of `area` through whole (its mask is fully opaque there), so
+/// it cuts nothing of what is drawn in `area`. Only rectangles and rounded rectangles under a transform that only
+/// scales and moves are judged; for a rounded rectangle the area must stay clear of the corners' squares. A pixel
+/// is counted whole only one pixel inside the outline, which leaves room for the rounding of the rasteriser.
+pub(crate) fn clip_holds(shape: &Shape, node: &Transform, scale: f64, area: &Bounds) -> bool {
+    let [a, b, c, d, e, f] = node.0;
+    if b != 0.0 || c != 0.0 || a <= 0.0 || d <= 0.0 || area.is_empty() {
+        return false;
+    }
+    let (rect, radius) = match shape {
+        Shape::Rect(rect) => (rect, 0.0),
+        Shape::RoundedRect { rect, radius } => (
+            rect,
+            radius.clamp(0.0, rect.width().min(rect.height()) / 2.0),
+        ),
+        Shape::Path { .. } => return false,
+    };
+    if !(rect.width() > 0.0 && rect.height() > 0.0) {
+        return false;
+    }
+    let (sx, sy) = (a * scale, d * scale);
+    let (x0, x1) = (
+        (rect.min_x() * a + e) * scale,
+        (rect.max_x() * a + e) * scale,
+    );
+    let (y0, y1) = (
+        (rect.min_y() * d + f) * scale,
+        (rect.max_y() * d + f) * scale,
+    );
+    // the whole pixels between `lo` and `hi`, one pixel in from each
+    let inside = |lo: f64, hi: f64, from: i32, to: i32| {
+        f64::from(from) >= lo.ceil() + 1.0 && f64::from(to) <= hi.floor() - 1.0
+    };
+    let (rx, ry) = (radius * sx, radius * sy);
+    let across = inside(x0, x1, area.x0, area.x1);
+    let down = inside(y0, y1, area.y0, area.y1);
+    // the rectangle less its corners is a cross: a band the full height between the corners, or the full width
+    (across && inside(y0 + ry, y1 - ry, area.y0, area.y1))
+        || (down && inside(x0 + rx, x1 - rx, area.x0, area.x1))
+}
+
 /// The pixels a node's own operations can reach, before effects; empty for a node with no ops that paint.
 pub(crate) fn own_extent(node: &crate::PaintNode, scale: f64) -> Bounds {
     use crate::PaintOp;
@@ -253,4 +294,44 @@ pub(crate) fn own_extent(node: &crate::PaintNode, scale: f64) -> Bounds {
         }
     }
     extent.unwrap_or(none)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn px(x0: i32, y0: i32, x1: i32, y1: i32) -> Bounds {
+        Bounds { x0, y0, x1, y1 }
+    }
+
+    #[test]
+    fn a_clip_holds_an_area_inside_its_whole_pixels_and_clear_of_its_corners() {
+        let id = Transform::IDENTITY;
+        let rect = Shape::Rect(Rect::new(10.0, 10.0, 100.0, 50.0));
+        // at scale 2 the rectangle covers pixels 20..220 by 20..120; one pixel is kept in from its outline
+        assert!(clip_holds(&rect, &id, 2.0, &px(21, 21, 219, 119)));
+        assert!(!clip_holds(&rect, &id, 2.0, &px(20, 21, 219, 119)));
+        assert!(!clip_holds(&rect, &id, 2.0, &px(21, 21, 220, 119)));
+        // a rounded rectangle lets through a band between its corners, across or down, not a corner's square
+        let rounded = Shape::RoundedRect {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            radius: 20.0,
+        };
+        assert!(clip_holds(&rounded, &id, 1.0, &px(1, 22, 99, 78)));
+        assert!(clip_holds(&rounded, &id, 1.0, &px(22, 1, 78, 99)));
+        assert!(!clip_holds(&rounded, &id, 1.0, &px(1, 1, 30, 30)));
+        // a moved and scaled node is judged where it lands
+        let moved = Transform([2.0, 0.0, 0.0, 2.0, 50.0, 0.0]);
+        assert!(clip_holds(&rect, &moved, 1.0, &px(71, 21, 249, 119)));
+        assert!(!clip_holds(&rect, &moved, 1.0, &px(60, 21, 249, 119)));
+        // turned nodes, paths and empty areas are never judged held
+        let turned = Transform([0.0, 1.0, -1.0, 0.0, 0.0, 0.0]);
+        assert!(!clip_holds(&rect, &turned, 1.0, &px(21, 21, 22, 22)));
+        let path = Shape::Path {
+            verbs: Vec::new(),
+            fill_rule: crate::FillRule::NonZero,
+        };
+        assert!(!clip_holds(&path, &id, 1.0, &px(21, 21, 22, 22)));
+        assert!(!clip_holds(&rect, &id, 1.0, &px(30, 30, 30, 30)));
+    }
 }

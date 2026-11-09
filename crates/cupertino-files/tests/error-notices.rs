@@ -87,7 +87,8 @@ fn a_failure_is_one_transient_notification_from_files_with_its_text_escaped() {
          &lt;a href=\"file:///etc\"&gt;no&lt;/a&gt; application. [] \
          transient Some(true) entry Some(\"cupertino-files\") expires -1"
     );
-    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+    notices.flush(Duration::from_secs(5));
+    assert!(received.try_recv().is_err(), "one notification");
 }
 
 #[test]

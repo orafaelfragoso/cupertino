@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 15 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 12 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 19 removable media tests (a fake udisks2 on a private bus), 11 single-instance tests (a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 16 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 12 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 19 removable media tests (a fake udisks2 on a private bus), 11 single-instance tests (a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
@@ -188,7 +188,8 @@ Applications, Desktop, Documents and Downloads (the nearby-sharing item has no c
 computer (the file system root, under the pretty host name of `/etc/machine-info`, else the host name), removable media
 and Trash under Locations; and under a Tags heading, always there, each tag a listed item carries (above). Names are cut at the tail. The sidebar
 takes the toolkit's neutral look for lists of places (`SidebarLook::Neutral`): the selected row in a neutral tint with
-its label semibold, the Favorites' symbols in the accent colour and the others' in the secondary label colour; in a
+its label semibold, each row's symbol the filled edition of its place's (`PlaceKind::sidebar_symbol`, a tag's
+`symbol.tag.fill`; the path bar keeps the outlines), the Favorites' symbols in the accent colour and the others' in the secondary label colour; in a
 window that is not the one in use every symbol, the selected one too, is the secondary label colour, while an open
 context menu keeps the window in use. The places
 are live (`kit::places`): a change of the user directories or their configuration shows at once, and Trash comes with
@@ -209,15 +210,17 @@ the title keeps or the controls after the title, over 0.2 s with an ease-out, or
 **Context menus.** A secondary press on an item selects it (inside a selection it keeps the selection), on empty space
 it clears the selection; the Menu key and Shift+F10 open the menu of the selection, or of the folder without one. The
 rows are `menu_spec`'s, walked in order (`kit::context`): rows without a backend are shown disabled, the tag row is a
-Tags submenu of the seven colours (checked where every selected item has the tag), the view row is "as Icons", "as
-List", "as Columns" and Gallery, which is not built, disabled; Quick Preview opens the preview window. Toolkit menus cannot swap rows while a modifier is held, so an
-alternate that does something (Open in New Window, Move Item Here) is a row of its own after the row it belongs to.
-A row whose action has keys in the window shows them at its trailing edge, from the same table as the menu bar's items
-(`MenuAction::chord`, shown by `menu_bar::glyphs`: "⌘O", "⇧⌘N", "⌘⌫").
+Tags submenu of the seven colours (checked where every selected item has the tag), the view modes are the folder menu's
+Show As submenu (Icons, List, Columns, and Gallery, which is not built, disabled; the current one checked), the same rows
+as the toolbar's view popup (`menu_spec::view_menu`); Quick Preview opens the preview window. Toolkit menus cannot swap
+rows while a modifier is held, so an alternate that does something (Open in New Window, Move Item Here) is a row of its
+own after the row it belongs to. No row of a context menu or of the toolbar's Action and More popups shows keys: the
+keys are the menu bar's (View's ⌘1 to ⌘3 among them), so a menu is as wide as its longest label plus its insets.
 The menus track the pointer and keys as every menu does (`cupertino-ui-controls`, `cupertino-menu-model`'s
 `tracking`): the secondary press that opens the menu, dragged onto a row, chooses it on release, and a quick click
 leaves the menu open; a submenu opens after a rest on its row and stays open while the pointer heads into it (Sort By
-from the folder menu, Tags from the item menu), until the pointer rests or crawls; typed letters find a row, Return
+or Show As from the folder menu, Tags from the item menu), until the pointer rests or crawls, and Right opens the
+focused row's submenu with its first row focused; typed letters find a row, Return
 chooses it and Escape closes one level, then the menu, with the focus back where it was.
 
 **Copy and paste.** Besides dropping (below), moving or copying into a folder goes through the application's own

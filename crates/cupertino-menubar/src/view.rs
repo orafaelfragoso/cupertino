@@ -12,7 +12,7 @@ use crate::layout::{
     BarMetrics, MenuMetrics, PopupRow, Slot, SlotKey, TextMeasure, PRIVACY_DOT_PT, STATUS_ICON_PT,
 };
 use crate::popups;
-use crate::tone::{BarTone, MenuPalette, Rgba};
+use crate::tone::{BarTone, Halo, MenuPalette, Rgba};
 use cupertino_kit::core::{
     next_resource_id, AccessibleStates, AccessibleValue, Action, Change, Checked, CommandRegistry,
     Element, Environment, Event, EventCx, IconImage, Key, MeasureCx, PaintCx, Phase, Popup,
@@ -47,11 +47,6 @@ const FADED_ALPHA: f32 = 0.65;
 const DOT_ALPHA: f32 = 0.7;
 /// Opacity factor of an item symbol whose radio is off or has no link. approximate (the design does not say).
 const DIMMED_ALPHA: f32 = 0.4;
-/// The halo under the bar's text and symbols: how far it spreads in points, and its opacity under light text and
-/// under dark text.
-const HALO_BLUR: f64 = 2.5;
-const HALO_UNDER_LIGHT: f32 = 0.45;
-const HALO_UNDER_DARK: f32 = 0.6;
 /// Inset of the search field's box in its row, vertically, in points. approximate.
 const FIELD_INSET_Y: f64 = 2.0;
 /// Corner radius of the search field's box in points. approximate.
@@ -176,6 +171,12 @@ pub struct BarScene<'a> {
     pub shared: &'a Shared,
     pub font: BarFont,
     pub tone: BarTone,
+    /// Whether the bar draws its solid strip ([`crate::tone::solid_bar`] of the session's display options): then no
+    /// item draws a halo, from the same source.
+    pub solid: bool,
+    /// How unevenly light the wallpaper is under the bar, band by band across it, from the server; empty while not
+    /// known.
+    pub spread: &'a [u16],
     /// The bar's size: the output's width and the bar's height.
     pub size: Size,
 }
@@ -235,6 +236,15 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
                 metrics: controller.bar_metrics.clone(),
                 font: scene.font,
                 tone: scene.tone,
+                halo: crate::tone::halo(
+                    crate::tone::spread_under(
+                        scene.spread,
+                        scene.size.width,
+                        slot.rect.x,
+                        slot.rect.x + slot.rect.w,
+                    ),
+                    scene.solid,
+                ),
                 input,
             })
         })
@@ -740,6 +750,9 @@ struct SlotNode<M> {
     metrics: BarMetrics,
     font: BarFont,
     tone: BarTone,
+    /// The halo under the slot's text and symbols, for the wallpaper under it; `None` on a solid bar or a calm
+    /// wallpaper.
+    halo: Option<Halo>,
     input: fn(Input) -> M,
 }
 
@@ -761,6 +774,7 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
             || self.name != old.name
             || self.place != old.place
             || self.tone != old.tone
+            || self.halo != old.halo
             || self.font != old.font
             || self.metrics != old.metrics
         {
@@ -795,21 +809,29 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
             );
             fill(cx, rect, m.selection_corner_radius, palette.bar_highlight);
         }
-        // over the wallpaper as it is, the text and symbols keep a soft halo of the opposite tone, so they read where
-        // the picture under them is as light or as dark as they are; a solid bar needs none
-        let halo = !cx.env().theme.preferences.reduce_transparency;
-        if halo {
+        // over a busy wallpaper the text and symbols keep a soft halo of the opposite tone, so they read where the
+        // picture under them is as light or as dark as they are; a calm wallpaper and a solid bar need none
+        // (over measured wallpaper a dense core hugs the strokes first, and the soft halo spreads from both)
+        if let Some(halo) = self.halo {
+            let core = halo
+                .core_color(palette.text)
+                .map(|core| Effect::DropShadow {
+                    offset: Point::ZERO,
+                    blur: crate::tone::HALO_CORE_BLUR,
+                    color: color(core),
+                });
+            let soft = Effect::DropShadow {
+                offset: Point::ZERO,
+                blur: halo.blur,
+                color: color(halo.color(palette.text)),
+            };
             cx.push(PaintOp::PushLayer {
                 opacity: 1.0,
-                effects: vec![Effect::DropShadow {
-                    offset: Point::ZERO,
-                    blur: HALO_BLUR,
-                    color: color(halo_color(palette.text)),
-                }],
+                effects: core.into_iter().chain([soft]).collect(),
             });
         }
         self.paint_look(cx, &palette);
-        if halo {
+        if self.halo.is_some() {
             cx.push(PaintOp::PopLayer);
         }
     }
@@ -896,16 +918,6 @@ impl<M> SlotNode<M> {
             }
             SlotLook::Nothing => {}
         }
-    }
-}
-
-/// The halo under the bar's content of colour `text`: dark under light text, light under dark text.
-pub fn halo_color(text: Rgba) -> Rgba {
-    let light = 0.2126 * text[0] + 0.7152 * text[1] + 0.0722 * text[2] > 0.5;
-    if light {
-        [0.0, 0.0, 0.0, HALO_UNDER_LIGHT]
-    } else {
-        [1.0, 1.0, 1.0, HALO_UNDER_DARK]
     }
 }
 

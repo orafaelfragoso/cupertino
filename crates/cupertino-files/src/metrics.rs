@@ -249,10 +249,6 @@ pub mod menu {
     pub const TAG_ROW_HEIGHT: f64 = 49.0;
     pub const TAG_DOT_DIAMETER: f64 = 16.0;
     pub const TAG_DOT_TOP: f64 = 8.0;
-    pub const VIEW_ROW_HEIGHT: f64 = 32.0;
-    /// Side inset and gap of the view segments. approximate.
-    pub const VIEW_ROW_INSET: f64 = 12.0;
-    pub const VIEW_SEGMENT_GAP: f64 = 4.0;
 }
 
 /// Selection look.

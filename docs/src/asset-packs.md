@@ -77,7 +77,7 @@ Rules:
 
 ## Logical names
 
-A pack uses the logical names the shell looks up: 26 raster icon names (such as `folder.documents` and `document.pdf`), 67 `symbol.*` names, the font roles, 34 cursor names and the wallpaper. The lists are the constants `RASTER_NAMES`, `SYMBOL_NAMES` and `CURSOR_NAMES` in `cupertino-assets` (`crates/cupertino-assets/src/name.rs`). A name no code looks up may be left out.
+A pack uses the logical names the shell looks up: 26 raster icon names (such as `folder.documents` and `document.pdf`), 99 `symbol.*` names, the font roles, 34 cursor names and the wallpaper. The lists are the constants `RASTER_NAMES`, `SYMBOL_NAMES` and `CURSOR_NAMES` in `cupertino-assets` (`crates/cupertino-assets/src/name.rs`). A name no code looks up may be left out.
 
 ## Build your own pack
 

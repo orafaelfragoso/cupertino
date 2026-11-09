@@ -10,7 +10,9 @@
 //!
 //! `glass_follows_only_the_panel_s_shape_at_fractional_scales` checks that at every scale of [`SCALES`]: the arrows
 //! and hover inside a settled panel reshape no glass and repaint no whole window, and a transition reshapes it at
-//! most once a frame. `frame_cost_report` is `#[ignore]`d: it measures wall time, which depends on the machine, and
+//! most once a frame. `every_frame_of_the_panel_s_transitions_fits_the_budget_in_an_optimised_build` holds each
+//! frame of every interaction to the frame budget at 1x and 2x when the tests are built optimised (the release
+//! profile); unoptimised it measures nothing. `frame_cost_report` is `#[ignore]`d: it measures wall time, which depends on the machine, and
 //! is run by hand in the release profile (see the crate's README); the tables go to standard output and, when
 //! `CUPERTINO_REPAINT_DIR` names a folder, to `launcher-<scale>x.md` and `.csv` there.
 
@@ -740,4 +742,47 @@ fn opening_the_browser_over_200_applications_keeps_icon_decoding_off_the_frames(
         arriving.p50_ms < FRAME_BUDGET.as_secs_f64() * 1000.0,
         "frames as the icons arrive: {arriving:?}"
     );
+}
+
+/// What one frame of the panel may take at a backing scale: [`FRAME_BUDGET`] at 1x, twice that at 2x (four times
+/// the pixels, with the layout and the group composites shared).
+///
+/// [`FRAME_BUDGET`]: cupertino_ui_test::repaint::FRAME_BUDGET
+fn budget_ms(scale: f64) -> f64 {
+    cupertino_ui_test::repaint::FRAME_BUDGET.as_secs_f64() * 1000.0 * scale.max(1.0)
+}
+
+/// In an optimised build, every frame of the panel opening and closing, unfolding and folding, typing, and the Dock
+/// opening the browser over 200 applications, drawn at 1x and at 2x, fits [`budget_ms`]. Each interaction is run once:
+/// a single frame over the budget fails it, the first frame of a window that just opened (its pixels, scratch images and
+/// glyphs made for the first time) included; it is not run again, since a second run on a warmed heap would hide a
+/// first frame that grew slower. It measures wall time, which builds running beside it stretch two to six times (cores
+/// and memory shared), so it is run on an otherwise idle machine. Unoptimised builds take several times as long and
+/// measure nothing.
+#[test]
+fn every_frame_of_the_panel_s_transitions_fits_the_budget_in_an_optimised_build() {
+    if cfg!(debug_assertions) {
+        eprintln!("frame budgets are held in optimised builds only");
+        return;
+    }
+    for scale in [1.0, 2.0] {
+        let budget = budget_ms(scale);
+        let mut runs = interactions(scale, true);
+        runs.push(browser_over_many(200, scale, true).0);
+        let over: Vec<(&str, usize, f64)> = runs
+            .iter()
+            .flat_map(|run| {
+                assert!(!run.frames.is_empty(), "{} presented no frames", run.name);
+                run.frames
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| (run.name, i, f.nanos as f64 / 1e6))
+                    .filter(|&(_, _, ms)| ms >= budget)
+            })
+            .collect();
+        assert!(
+            over.is_empty(),
+            "at {scale}x, frames over {budget} ms (interaction, frame, ms): {over:?}"
+        );
+    }
 }

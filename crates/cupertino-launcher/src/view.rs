@@ -634,14 +634,18 @@ where
             .key(browse::OPTIONS_BUTTON),
         );
     }
+    let showing_browser = view.browser.filter(|_| browsing || frame.content > 0.0);
+    // over the browser the enclosure fades its two parts one by one rather than as one layer: they do not overlap,
+    // so the look is the same, and the browser's own fade then needs no layer inside another
+    let split = showing_browser.is_some();
     let query_row = Element::new(Bar {
         height: COLLAPSED_HEIGHT,
         spacing: QUERY_GAP,
+        alpha: if split { frame.alpha } else { 1.0 },
         children: row,
     })
     .key("query-row");
     let mut children = vec![query_row];
-    let showing_browser = view.browser.filter(|_| browsing || frame.content > 0.0);
     if let Some(browser) = showing_browser {
         children.push(
             browse::body(
@@ -649,6 +653,7 @@ where
                 view.app_icons,
                 view.browse_no_results_said,
                 frame.content,
+                frame.alpha,
                 view.now,
             )
             .key("browser"),
@@ -667,6 +672,7 @@ where
         rect,
         radius: frame.shape.radius * frame.scale.clamp(0.0, 1.0),
         alpha: frame.alpha,
+        split,
         content: Size::new(frame.shape.width, frame.shape.height),
         children: vec![inner.key("content")],
     })
@@ -1030,6 +1036,9 @@ struct Enclosure<M> {
     rect: Rect,
     radius: f64,
     alpha: f64,
+    /// Its parts fade themselves at `alpha` ([`Bar`] and the browser's body): the enclosure draws its own edge (and
+    /// without glass its shadow and fill) at `alpha` and lays no layer over them.
+    split: bool,
     content: Size,
     children: Vec<Element<M>>,
 }
@@ -1056,7 +1065,7 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if (self.rect, self.content) != (old.rect, old.content) {
             Change::Layout
-        } else if (self.radius, self.alpha) != (old.radius, old.alpha) {
+        } else if (self.radius, self.alpha, self.split) != (old.radius, old.alpha, old.split) {
             Change::Paint
         } else {
             Change::None
@@ -1081,42 +1090,45 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
         let radius = self.radius.min(size.height / 2.0).max(0.0);
         let theme = cx.env().theme.clone();
         let dark = theme.preferences.appearance.is_dark();
-        let glass = cx.glass(Glass::regular().radius(radius).alpha(alpha));
-        if alpha < 1.0 {
+        // the compositor draws the large panel's glass and its shadow; a window without glass draws both itself
+        let glass = cx.glass(Glass::large_panel().radius(radius).alpha(alpha));
+        // what the enclosure's own drawing is multiplied by: the fade itself when its parts fade one by one
+        let own = if self.split { alpha as f32 } else { 1.0 };
+        if alpha < 1.0 && !self.split {
             cx.set_group(alpha as f32, Vec::new());
         }
         let shape = Shape::RoundedRect { rect, radius };
-        let shadow = if dark {
-            SHADOW_ALPHA_DARK
-        } else {
-            SHADOW_ALPHA_LIGHT
-        };
-        // the shadow is cast by an opaque copy of the shape that the clip hides, so it never darkens the glass
-        let mut ring = rounded_path(rect.outset(2.0 * SHADOW_SIDE), 0.0);
-        ring.extend(rounded_path(rect, radius));
-        cx.push(PaintOp::PushClip(Shape::Path {
-            verbs: ring,
-            fill_rule: FillRule::EvenOdd,
-        }));
-        cx.push(PaintOp::PushLayer {
-            opacity: 1.0,
-            effects: vec![Effect::DropShadow {
-                offset: Point::new(0.0, SHADOW_OFFSET),
-                blur: SHADOW_BLUR,
-                color: Color::new(0.0, 0.0, 0.0, shadow),
-            }],
-        });
-        cx.push(PaintOp::Fill {
-            shape: shape.clone(),
-            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, 1.0)),
-        });
-        cx.push(PaintOp::PopLayer);
-        cx.push(PaintOp::PopClip);
         if !glass {
+            let shadow = if dark {
+                SHADOW_ALPHA_DARK
+            } else {
+                SHADOW_ALPHA_LIGHT
+            };
+            // the shadow is cast by an opaque copy of the shape that the clip hides, so it never darkens the panel
+            let mut ring = rounded_path(rect.outset(2.0 * SHADOW_SIDE), 0.0);
+            ring.extend(rounded_path(rect, radius));
+            cx.push(PaintOp::PushClip(Shape::Path {
+                verbs: ring,
+                fill_rule: FillRule::EvenOdd,
+            }));
+            cx.push(PaintOp::PushLayer {
+                opacity: own,
+                effects: vec![Effect::DropShadow {
+                    offset: Point::new(0.0, SHADOW_OFFSET),
+                    blur: SHADOW_BLUR,
+                    color: Color::new(0.0, 0.0, 0.0, shadow),
+                }],
+            });
+            cx.push(PaintOp::Fill {
+                shape: shape.clone(),
+                paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, 1.0)),
+            });
+            cx.push(PaintOp::PopLayer);
+            cx.push(PaintOp::PopClip);
             if let Some(fill) = theme.surface(Surface::Menu).fill {
                 cx.push(PaintOp::Fill {
                     shape,
-                    paint: Paint::Solid(fill),
+                    paint: Paint::Solid(Color::new(fill.r, fill.g, fill.b, fill.a * own)),
                 });
             }
         }
@@ -1131,7 +1143,7 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
                 radius: radius + EDGE_WIDTH / 2.0,
             },
             width: EDGE_WIDTH,
-            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, edge)),
+            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, edge * own)),
         });
     }
 
@@ -1471,6 +1483,8 @@ fn rounded_path(rect: Rect, radius: f64) -> Vec<PathVerb> {
 struct Bar<M> {
     height: f64,
     spacing: f64,
+    /// The opacity it is drawn at, as one layer when under 1.
+    alpha: f64,
     children: Vec<Element<M>>,
 }
 
@@ -1505,6 +1519,8 @@ impl<M: 'static> Widget<M> for Bar<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if (self.height, self.spacing) != (old.height, old.spacing) {
             Change::Layout
+        } else if self.alpha != old.alpha {
+            Change::Paint
         } else {
             Change::None
         }
@@ -1518,7 +1534,11 @@ impl<M: 'static> Widget<M> for Bar<M> {
         Propagation::Continue
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if self.alpha < 1.0 {
+            cx.set_group(self.alpha.clamp(0.0, 1.0) as f32, Vec::new());
+        }
+    }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }

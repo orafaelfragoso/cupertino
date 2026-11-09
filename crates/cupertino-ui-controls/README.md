@@ -84,10 +84,13 @@ from the application's model and reports changes as messages.
   heading and a selected list item per row. A row is keyed by its item's key, so its focus and accessible object stay
   with it while rows come and go around it. A row's accessory (an eject button) offers a click only with
   `on_accessory`; without it the accessory reads as disabled. A busy row turns an activity indicator in the accessory's
-  place, standing still under Reduce Motion. In a window that is not active the rows' icons take the secondary label
-  colour.
+  place, standing still under Reduce Motion. In a window that is not active every row's icon and label, the selected
+  row's too, takes the secondary label colour and the selection turns to the sidebar's faint neutral selection
+  (`ColorRole::SidebarSelection` resolved inactive), laid over the material so its tint shows; the headings, the
+  geometry and the text stay (`tests/sidebar.rs`).
   `Sidebar::with_look(SidebarLook::Neutral { accent })` draws a list of places instead: taller rows with larger
-  symbols, the selected row filled with a neutral tint, its label semibold and its symbol in the accent colour; the
+  symbols, the selected row filled with the sidebar's neutral selection (`ColorRole::SidebarSelection`), its label
+  semibold and its symbol in the accent colour; the
   other rows' symbols are in the accent colour in the sections `accent` marks and in the secondary label colour in the
   rest. In a window that is not active the selected row's symbol takes the secondary label colour as well, so it still
   stands out from the neutral selection. The default look (`SidebarLook::Accent`, Settings') fills the selected row
@@ -113,7 +116,9 @@ from the application's model and reports changes as messages.
   launcher capsule; it edits and reads as its field does (`tests/bare_field.rs`).
 - **Tiled sidebar.** `TileSidebar` lists a settings window's pages: rows of `TILE_SIDEBAR_ROW_HEIGHT`, a tile before
   each label, in groups set apart by space, under an optional header (a `SearchField`) that does not scroll. The
-  selected row fills with the selected control colour, its label bold. Keys, Tab stop, reporting and assistive
+  selected row fills with the selected control colour, its label bold. In a window that is not active every label, the
+  selected row's too, takes the secondary label colour and the selection turns to the sidebar's faint neutral
+  selection; the tiles keep their colours (`tests/form.rs`). Keys, Tab stop, reporting and assistive
   technology behave as `Sidebar`'s, except that a press or click on the selected row reports it again, so that a
   window showing a page below that row's page can go back to it.
 - **Positions.** A menu item says its place among the menu's items and the menu says how many it holds, separators not
@@ -206,7 +211,11 @@ t; a toolbar group is regular glass (`PaintCx::glass`) in one container
   per window (`GlassRole::container`, blending only when two controls come closer than the 8 pt gap between them),
   kept by the compositor with Reduce Transparency and Increase Contrast, over the content pane's background, which the
   compositor draws below it; where the desktop shows no glass it paints a translucent body with a one-pixel rim (and a
-  soft shade in the light appearance). The field under a resting `ToolbarSearch` button is not drawn, so the button's
+  soft shade in the light appearance). Over a light face the compositor's rim light marks no edge, so in the light
+  appearance the toolkit lays its own over the compositor's glass: a dark rim on the outermost device pixel, 25 %
+  black at the sides and 9 % at the top and bottom where the light falls (50 % and 30 % with Increase Contrast), and
+  a faint shade below, cut out of the shape so it never dims the glass. A light divider is 40 % black, as strong over
+  the glass as the disabled glyphs beside it. The field under a resting `ToolbarSearch` button is not drawn, so the button's
   glass shows what lies below the field. Moving a role to another material is its one arm in `GlassRole::material`.
   `GlassRole::floating` tells the floating controls (toolbar groups, glass buttons, a held thumb) from the content
   surfaces (the sidebar panel). Glass is never laid on glass: a node on glass the window shows

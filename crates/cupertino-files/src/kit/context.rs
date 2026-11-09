@@ -6,8 +6,9 @@
 //! * Kit's menus do not swap rows while modifiers are held, so a row's alternates that can act are rows of their own
 //!   right after it ("Move Item Here" after "Paste Item", "Open in New Window" after "Open"); the others are left
 //!   out (approximate).
-//! * The row of tag colours is a Tags submenu of the seven colours, checked when every selected item has the colour;
-//!   the row of view modes is four rows, the current one checked (approximate).
+//! * The row of tag colours is a Tags submenu of the seven colours, checked when every selected item has the colour
+//!   (approximate).
+//! * No row shows keys: the keys are the menu bar's, so a context menu is as wide as its longest label and its insets.
 
 use cupertino_kit::controls::{Menu, MenuAnchor, MenuItem as KitItem};
 use cupertino_kit::core::{
@@ -21,9 +22,8 @@ use cupertino_kit::layout::{
 use cupertino_kit::platform::{MouseButton, PointerEvent};
 
 use super::{window_key, Event as WindowEvent, Message};
-use crate::context_menu::{Command as MenuCommand, ViewSegment};
-use crate::context_menu::{ItemKind, MenuItem, TAG_ROW_ORDER, VIEW_ROW_ORDER};
-use crate::menu_bar::{self, MenuAction};
+use crate::context_menu::Command as MenuCommand;
+use crate::context_menu::{ItemKind, MenuItem, TAG_ROW_ORDER};
 
 /// An open context menu of a window.
 #[derive(Clone, Debug, PartialEq)]
@@ -57,40 +57,16 @@ fn menu_key(id: u64) -> WindowKey {
     WindowKey(Key::from(format!("browser/{id}/context-menu")))
 }
 
-/// What the view-mode row reads as rows.
-fn view_label(segment: ViewSegment) -> &'static str {
-    match segment {
-        ViewSegment::Icons => "as Icons",
-        ViewSegment::List => "as List",
-        ViewSegment::Columns => "as Columns",
-        ViewSegment::Gallery => "as Gallery",
-    }
-}
-
-/// `items` as Kit's rows of the window `id`'s menu.
+/// `items` as Kit's rows of the window `id`'s menu. A context menu shows no keys: they are the menu bar's, so every
+/// row is a plain label and the menu is as wide as its longest one.
 pub(super) fn kit_items(id: u64, items: &[MenuItem]) -> Vec<KitItem<Message>> {
-    let command = move |label: &str, enabled: bool, checked: bool, command: MenuCommand| {
-        let shortcut = command
-            .action()
-            .and_then(MenuAction::chord)
-            .map(|chord| menu_bar::glyphs(&chord));
-        let on_select = Message::Window(id, WindowEvent::MenuCommand(command));
-        match shortcut {
-            Some(shortcut) => KitItem::Shortcut {
-                label: label.into(),
-                shortcut,
-                enabled,
-                checked,
-                on_select,
-            },
-            None => KitItem::Item {
-                label: label.into(),
-                enabled,
-                checked,
-                on_select,
-            },
-        }
-    };
+    let command =
+        move |label: &str, enabled: bool, checked: bool, command: MenuCommand| KitItem::Item {
+            label: label.into(),
+            enabled,
+            checked,
+            on_select: Message::Window(id, WindowEvent::MenuCommand(command)),
+        };
     let mut out = Vec::new();
     for item in items {
         match &item.kind {
@@ -124,26 +100,6 @@ pub(super) fn kit_items(id: u64, items: &[MenuItem]) -> Vec<KitItem<Message>> {
                     })
                     .collect(),
             }),
-            ItemKind::ViewRow { current } => {
-                for segment in VIEW_ROW_ORDER {
-                    let mode = segment.mode();
-                    let row = match mode {
-                        Some(mode) => command(
-                            view_label(segment),
-                            true,
-                            mode == *current,
-                            MenuCommand::SetView(mode),
-                        ),
-                        None => KitItem::Item {
-                            label: view_label(segment).into(),
-                            enabled: false,
-                            checked: false,
-                            on_select: Message::Window(id, WindowEvent::MenuClosed),
-                        },
-                    };
-                    out.push(row);
-                }
-            }
         }
         for (_, alternate) in &item.alternates {
             // a submenu alternate ("Always Open With") would only repeat its row's choices here
@@ -218,15 +174,10 @@ impl Widget<Message> for Secondary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::window::ViewMode;
-
-    /// The view mode each row of the view row stands for.
-    fn modes() -> Vec<Option<ViewMode>> {
-        VIEW_ROW_ORDER.iter().map(|s| s.mode()).collect()
-    }
     use crate::menu_spec::{background_menu, item_menu, Background, Subject};
     use crate::sort::SortSpec;
     use crate::tags::TagColor;
+    use crate::window::ViewMode;
 
     fn labels(items: &[KitItem<Message>]) -> Vec<String> {
         items
@@ -245,18 +196,8 @@ mod tests {
                     )
                 }
                 KitItem::Shortcut {
-                    label,
-                    shortcut,
-                    enabled,
-                    checked,
-                    ..
-                } => {
-                    format!(
-                        "{label}{}{} [{shortcut}]",
-                        if *enabled { "" } else { " (off)" },
-                        if *checked { " ✓" } else { "" }
-                    )
-                }
+                    label, shortcut, ..
+                } => format!("{label} [{shortcut}]"),
                 KitItem::Submenu { label, enabled, .. } => {
                     format!("{label} ›{}", if *enabled { "" } else { " (off)" })
                 }
@@ -274,29 +215,33 @@ mod tests {
             read_only: false,
             pasteboard: 0,
         });
-        let rows = labels(&kit_items(0, &menu));
-        assert!(
-            rows.contains(&"New Folder [\u{21e7}\u{2318}N]".to_owned()),
-            "{rows:?}"
-        );
-        let views: Vec<&String> = rows.iter().filter(|r| r.starts_with("as ")).collect();
+        let kit = kit_items(0, &menu);
+        let rows = labels(&kit);
+        assert!(rows.contains(&"New Folder".to_owned()), "{rows:?}");
+        assert!(rows.contains(&"Show As ›".to_owned()), "{rows:?}");
+        let (views, on_select) = kit
+            .iter()
+            .find_map(|item| match item {
+                KitItem::Submenu { label, items, .. } if label == "Show As" => Some((
+                    labels(items),
+                    items
+                        .iter()
+                        .map(|item| match item {
+                            KitItem::Item { on_select, .. } => on_select.clone(),
+                            _ => panic!("a view is a plain row"),
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+                _ => None,
+            })
+            .expect("a Show As submenu");
+        assert_eq!(views, ["Icons", "List ✓", "Columns", "Gallery (off)"]);
         assert_eq!(
-            views,
-            [
-                "as Icons [\u{2318}1]",
-                "as List ✓ [\u{2318}2]",
-                "as Columns [\u{2318}3]",
-                "as Gallery (off)"
-            ]
-        );
-        assert_eq!(
-            modes(),
-            [
-                Some(ViewMode::Icons),
-                Some(ViewMode::List),
-                Some(ViewMode::Columns),
-                None
-            ]
+            on_select[..3],
+            [ViewMode::Icons, ViewMode::List, ViewMode::Columns].map(|mode| Message::Window(
+                0,
+                WindowEvent::MenuCommand(MenuCommand::SetView(mode))
+            ))
         );
     }
 
@@ -325,8 +270,10 @@ mod tests {
         assert!(labels(&menu).contains(&"Open With › (off)".to_owned()));
     }
 
+    /// A context menu shows no keys, not even for rows the menu bar has keys for: every row of every menu, submenus
+    /// too, is a plain label.
     #[test]
-    fn rows_the_window_has_keys_for_show_them_and_the_others_do_not() {
+    fn no_row_of_a_context_menu_shows_a_key() {
         let subject = Subject {
             count: 1,
             name: "a.txt".into(),
@@ -335,15 +282,41 @@ mod tests {
             in_trash: false,
             tags_on: Vec::new(),
         };
-        let rows = labels(&kit_items(3, &item_menu(&subject, &[])));
-        for row in [
-            "Open [\u{2318}O]",
-            "Move to Trash [\u{2318}\u{232b}]",
-            "Duplicate [\u{2318}D]",
-            "Make Alias [\u{2303}\u{2318}A]",
-            "Rename",
+        let background = Background {
+            view: ViewMode::Icons,
+            sort: SortSpec::default(),
+            in_trash: false,
+            read_only: false,
+            pasteboard: 1,
+        };
+        let several = Subject {
+            count: 3,
+            ..subject.clone()
+        };
+        fn every(items: &[KitItem<Message>], out: &mut Vec<String>) {
+            out.extend(labels(items));
+            for item in items {
+                if let KitItem::Submenu { items, .. } = item {
+                    every(items, out);
+                }
+            }
+        }
+        // rows the menu bar has keys for, each a plain label here
+        let keyed = ["Open", "Move to Trash", "Duplicate", "Make Alias"];
+        for (menu, plain) in [
+            (item_menu(&subject, &[]), &keyed[..]),
+            (item_menu(&several, &[]), &keyed[..]),
+            (
+                background_menu(&background),
+                &["New Folder", "Icons ✓", "List", "Columns"][..],
+            ),
         ] {
-            assert!(rows.contains(&row.to_owned()), "{row}: {rows:?}");
+            let mut rows = Vec::new();
+            every(&kit_items(3, &menu), &mut rows);
+            assert!(rows.iter().all(|row| !row.contains('[')), "{rows:?}");
+            for row in plain {
+                assert!(rows.contains(&row.to_string()), "{row}: {rows:?}");
+            }
         }
     }
 }

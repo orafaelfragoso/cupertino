@@ -11,7 +11,22 @@ comes out a little differently, so nothing is rasterized into an image the damag
 all of the node that shows (or, for a node of solid fills, each rectangle of its rim on its own), a group's layer and an
 operation layer all of theirs, and the damage only picks which of their pixels are laid over the frame. Only glyphs are
 blended straight into the frame, each pixel on its own. A small change under a large node that is not solid fills
-therefore rasterizes the whole node, and a frame drawn whole lays every node through a scratch image.
+therefore rasterizes the whole node, and a frame drawn whole lays every node through a scratch image. Inside a group or
+operation layer a node whose operations only draw is painted straight into the layer when no clip cuts it: a clip
+that is a rectangle or rounded rectangle under a scale and translation, and lets through, a pixel in from its edge and
+clear of its corners, everything the node can reach (`geometry::clip_holds`), cuts nothing, whatever the damage.
+
+Laying an image over another (`source_over_part`, a group's opacity, a clip mask over a group's layer) works on whole
+pixels as words, two channels to a 16-bit lane (`effects::mul_px`, `effects::over_px`, the same bytes as the channel by
+channel arithmetic, which a test checks on every value and on random pixels), skips runs of 16 empty pixels (or of
+pixels a mask covers fully) read a word at a time, and has no branch per pixel, so it vectorizes: a mostly empty layer
+the size of a 2x window, such as a panel's outline, is laid over in a fraction of a millisecond. A group whose opacity
+rounds to nothing (a panel fading in from 0) changes no pixel, so nothing of its subtree is painted.
+
+The frame's pixels are kept from one frame to the next; a frame drawn whole clears or paints over every one of them, so
+they are not cleared beforehand as well. Pixels of a new size (a window's first frame) are allocated zeroed, which the
+system gives without writing them, and the frame's clear then writes nothing, so a transparent window touches only the
+pixels it paints.
 
 A drop or inner shadow is one coverage byte a pixel until it is tinted: the layer's alpha, shifted, blurred by three box
 passes on each axis (rows in place, columns a row at a time with a running sum per column), then tinted and laid under

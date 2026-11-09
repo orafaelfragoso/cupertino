@@ -85,6 +85,8 @@ struct Model {
     /// The scene's solid strip and spread under the bar, from [`LOOK`].
     solid: bool,
     spread: Vec<u16>,
+    /// The items whose panel another process shows open on this bar, from [`PANELS`].
+    open_panels: Vec<SlotKey>,
 }
 
 /// What the next bar started shows: whether its strip is solid, the spread under it, and whether the theme's Reduce
@@ -98,6 +100,8 @@ struct Look {
 
 thread_local! {
     static LOOK: std::cell::RefCell<Look> = std::cell::RefCell::new(Look::default());
+    /// The items whose panel is open on the next bar started.
+    static PANELS: std::cell::RefCell<Vec<SlotKey>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 impl Application for Bar {
@@ -116,6 +120,7 @@ impl Application for Bar {
             effects: Vec::new(),
             solid: LOOK.with_borrow(|l| l.solid),
             spread: LOOK.with_borrow(|l| l.spread.clone()),
+            open_panels: PANELS.with_borrow(Clone::clone),
         };
         (model, Vec::new())
     }
@@ -150,6 +155,7 @@ impl Application for Bar {
                 solid: model.solid,
                 spread: &model.spread,
                 size: Size::new(bar.w, bar.h),
+                open_panels: &model.open_panels,
             },
             |input| input,
         )
@@ -547,4 +553,83 @@ fn only_the_items_over_a_busy_part_of_the_wallpaper_draw_a_halo() {
         ..Look::default()
     });
     assert!(some > 0 && some < all, "{some} of {all}");
+}
+
+/// The bar's frame and the expanded state a screen reader reads for `name`, with `open` the items whose panel another
+/// process shows open on the bar.
+fn with_panels(open: Vec<SlotKey>, name: &str) -> (Pixmap, Option<bool>) {
+    PANELS.set(open);
+    let mut run = Run::start();
+    PANELS.set(Vec::new());
+    let window = run.window("bar-1").unwrap();
+    let snapshot = run.driver.runtime().snapshot(window).unwrap();
+    let expanded = snapshot
+        .accessibility
+        .iter()
+        .find(|(_, n)| n.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("the bar has nothing named {name}"))
+        .1
+        .states
+        .expanded;
+    (run.capture("bar-1").0, expanded)
+}
+
+/// Whether two frames differ inside `inside` and nowhere else.
+fn differ_only_in(a: &Pixmap, b: &Pixmap, inside: Rect) -> (bool, bool) {
+    let (mut within, mut without) = (false, false);
+    for y in 0..a.height() {
+        for x in 0..a.width() {
+            let i = (y * a.width() + x) as usize * 4;
+            if a.data()[i..i + 4] == b.data()[i..i + 4] {
+                continue;
+            }
+            let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+            if px >= inside.x
+                && px < inside.x + inside.w
+                && py >= inside.y
+                && py < inside.y + inside.h
+            {
+                within = true;
+            } else {
+                without = true;
+            }
+        }
+    }
+    (within, without)
+}
+
+/// While the control panel or the notification centre's list is open on the bar's output, its item is drawn
+/// highlighted as an open menu's title is, and a screen reader reads it as expanded; nothing else of the bar changes.
+#[test]
+fn the_item_of_an_open_panel_is_highlighted_and_expanded() {
+    let run = Run::start();
+    let layout = run.model().controller.layout();
+    let slot = |key: &SlotKey| layout.slot(key).unwrap().rect;
+    let (panel, clock) = (slot(&SlotKey::ControlPanel), slot(&SlotKey::Clock));
+    let clock_name = run.model().controller.content().clock.clone();
+    drop(run);
+
+    let (closed, expanded) = with_panels(Vec::new(), "Control Panel");
+    assert_eq!(expanded, Some(false), "a closed panel's item is collapsed");
+    let (open, expanded) = with_panels(vec![SlotKey::ControlPanel], "Control Panel");
+    assert_eq!(expanded, Some(true), "the open panel's item is expanded");
+    assert_eq!(
+        differ_only_in(&closed, &open, panel),
+        (true, false),
+        "only the control panel's item changes"
+    );
+
+    let (_, expanded) = with_panels(Vec::new(), &clock_name);
+    assert_eq!(
+        expanded,
+        Some(false),
+        "the closed list's clock is collapsed"
+    );
+    let (open, expanded) = with_panels(vec![SlotKey::Clock], &clock_name);
+    assert_eq!(expanded, Some(true), "the open list's clock is expanded");
+    assert_eq!(
+        differ_only_in(&closed, &open, clock),
+        (true, false),
+        "only the clock changes"
+    );
 }

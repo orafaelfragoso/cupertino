@@ -37,6 +37,12 @@ all on one thread.
   until its stop, a wheel's or another source's until it pauses for `SCROLL_IDLE_NS`, the source changes or the
   pointer moves, and any of them until the pointer leaves the surface. A cancelled touch reaches every node its path
   went through, the touched one first.
+- **Scroll timing.** `Runtime::with_scroll_timing(sink)` follows every pointer scroll event to the screen: the window
+  system's timestamp, when its handlers ran, the model update and view it caused (`None` when it changed no model),
+  when the first frame after it was handed to the window system and when the compositor showed that frame
+  (`WindowEvent::Presented`; `None` for a `Discarded` one). The sink gets each `ScrollTiming` once its frame is shown
+  or dropped; `ScrollTiming::latency` gives the stages from the input. Without a sink the runtime keeps nothing; at
+  most 256 events wait at each stage.
 - **Scroll motion.** `kinetic::ScrollMotion` is a pure model of a scroll view's content over the time it is given:
   a finger's drag, the kinetic motion its lift leaves (exponential decay), the stretch past an edge (a resistance
   curve that never passes the viewport's length) and the return to the edge (a critically damped spring). Its offset

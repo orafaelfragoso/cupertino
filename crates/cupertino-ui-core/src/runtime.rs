@@ -231,6 +231,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     press: Option<Timestamp>,
     exit: bool,
     theme_for: Option<ThemeForAppearance>,
+    /// Follows each scroll event to the screen, when asked ([`Runtime::with_scroll_timing`]).
+    scroll_timing: Option<crate::scroll_timing::ScrollTimings>,
     /// What each activation token asked for and not yet given turns into.
     tokens: HashMap<ActivationRequest, TokenHandler<A::Message>>,
     /// What each step of a running drag turns into.
@@ -280,6 +282,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             press: None,
             exit: false,
             theme_for: None,
+            scroll_timing: None,
             tokens: HashMap::new(),
             drags: HashMap::new(),
             landed: HashMap::new(),
@@ -293,6 +296,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             runtime.command(command);
         }
         runtime
+    }
+
+    /// Follow every pointer scroll event to the screen and give `sink` its timing once the compositor showed the frame
+    /// that drew it, or dropped it ([`ScrollTiming`](crate::ScrollTiming)). Without it the runtime keeps no timing.
+    pub fn with_scroll_timing(mut self, sink: crate::ScrollTimingSink) -> Self {
+        self.scroll_timing = Some(crate::scroll_timing::ScrollTimings::new(sink));
+        self
     }
 
     /// Follow the session's appearance: `theme_for` makes the theme each time the window system reports it.
@@ -577,6 +587,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
 
     /// Rebuilds every window from the model and reconciles it with the tree.
     fn view(&mut self) -> Result<(), UiError> {
+        if let Some(timing) = &mut self.scroll_timing {
+            timing.updated(self.options.clock.now());
+        }
         let mut old: Vec<WindowState<A::Message>> = std::mem::take(&mut self.windows);
         let (mut popups, toplevels): (Vec<_>, Vec<_>) = A::view(&self.model)
             .into_iter()
@@ -967,8 +980,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 if let Some(root) = w.root {
                     let mut pointer = std::mem::take(&mut w.pointer);
                     let mut route = route(&mut self.tree, w, now, &mut effects);
+                    let scroll = matches!(event, PointerEvent::Scroll { .. });
                     pointer.handle(&mut route, root, &w.geometry, event, time);
                     w.pointer = pointer;
+                    if let (true, Some(timing)) = (scroll, &mut self.scroll_timing) {
+                        timing.handled(w.id, time, self.options.clock.now());
+                    }
                 }
             }
             WindowEvent::Touch(event, time) => self.touch(i, event, time, now, &mut effects),
@@ -1040,7 +1057,18 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
                 return Ok(());
             }
-            WindowEvent::Presented { .. } | WindowEvent::Discarded { .. } => return Ok(()),
+            WindowEvent::Presented { frame, time } => {
+                if let Some(timing) = &mut self.scroll_timing {
+                    timing.presented(w.id, frame, Some(time));
+                }
+                return Ok(());
+            }
+            WindowEvent::Discarded { frame } => {
+                if let Some(timing) = &mut self.scroll_timing {
+                    timing.presented(w.id, frame, None);
+                }
+                return Ok(());
+            }
             WindowEvent::GlassTone { region, tone } => {
                 let tones = &mut w.painter.tones;
                 let slot = match region {
@@ -1741,6 +1769,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.frame_ready = false;
                 w.committed = true;
                 self.system.request_frame(w.id);
+                if let Some(timing) = &mut self.scroll_timing {
+                    timing.submitted(w.id, id, self.options.clock.now());
+                }
             }
             PresentOutcome::NotReady => {
                 w.frame_ready = false;

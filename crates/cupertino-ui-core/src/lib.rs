@@ -17,6 +17,7 @@ mod pointer;
 mod route;
 mod runtime;
 mod scroll;
+mod scroll_timing;
 mod semantics;
 mod task;
 #[cfg(test)]
@@ -43,6 +44,7 @@ pub use runtime::{
     RendererFactory, Runtime, RuntimeOptions, ThemeForAppearance, WindowErrorHandler,
 };
 pub use scroll::session_scroll_bars;
+pub use scroll_timing::{ScrollLatency, ScrollTiming, ScrollTimingSink};
 pub use widget::{Change, Element, Propagation, Widget};
 
 use cupertino_geometry::{Point, Rect, Size};

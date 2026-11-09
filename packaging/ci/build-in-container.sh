@@ -234,7 +234,8 @@ cli_checks() {
     pacman -S --noconfirm --needed -q man-db bash-completion jq >/dev/null
     useradd --no-create-home --shell /usr/bin/nologin "$user"
     install -d -o "$user" -g "$user" -m 700 /tmp/u /tmp/u/runtime
-    as_user() { (cd / && exec setpriv --reuid="$user" --regid="$user" --clear-groups env -i PATH=/usr/bin HOME=/tmp/u "$@"); }
+    local run_as=(setpriv --reuid="$user" --regid="$user" --clear-groups env -i PATH=/usr/bin HOME=/tmp/u)
+    as_user() { (cd / && exec "${run_as[@]}" "$@"); }
     out=$(as_user cupertino --version)
     check "cupertino --version: $out" grep -Eq '^cupertino [0-9]+\.[0-9]+\.[0-9]+ \([0-9a-f]{12}\)$' <<<"$out"
     as_user cupertino --format json version > /tmp/u/version.json
@@ -255,27 +256,38 @@ cli_checks() {
     as_user cupertino diagnose export --output /tmp/u/export.json >/dev/null
     check 'cupertino diagnose export writes one private JSON document with its keys' sh -c \
         'test "$(stat -c %a /tmp/u/export.json)" = 600 && jq -e '"'"'.schema == "cupertino.diag.export.v1" and ((["created", "events", "report", "schema", "sources", "versions"] - keys) == [])'"'"' /tmp/u/export.json >/dev/null'
-    # desktop start runs until stopped: started in the background, stopped with SIGTERM once the compositor is ready
-    as_user XDG_RUNTIME_DIR=/tmp/u/runtime cupertino --format jsonl desktop start --backend headless --spawn true \
-        > /tmp/u/desktop.jsonl 2> /tmp/u/desktop.err &
+    # desktop start runs until stopped: started in the background, stopped with SIGTERM once the compositor is ready.
+    # The subshell is the background job itself and exec replaces it, so $! is the cupertino process: the signal reaches
+    # it and wait returns its exit status. (`as_user … &` would make $! a shell that waits for the command: SIGTERM would
+    # end that shell with status 143 and leave the command running.)
+    (cd / && exec "${run_as[@]}" XDG_RUNTIME_DIR=/tmp/u/runtime cupertino --format jsonl desktop start --backend headless \
+        --spawn true) > /tmp/u/desktop.jsonl 2> /tmp/u/desktop.err &
     local pid=$!
+    desktop_failed() {
+        echo "FAIL: $1 (exit status $status); its last records and the end of its stderr:"
+        tail -n 5 /tmp/u/desktop.jsonl
+        tail -n 20 /tmp/u/desktop.err
+        exit 1
+    }
     # grep reads a process substitution, so the test does not wait for tail, which follows the file until the command ends
     if timeout 120 grep -m1 -q '"event":"ready"' <(tail -n +1 --pid="$pid" -f /tmp/u/desktop.jsonl); then
+        check "the background job is the cupertino process: $(cat "/proc/$pid/comm")" test "$(cat "/proc/$pid/comm")" = cupertino
         kill -TERM "$pid"
         status=0
         wait "$pid" || status=$?
-        check 'cupertino desktop start --backend headless: ready, stopped by SIGTERM, exit 0' \
-            jq -se --argjson s "$status" '$s == 0 and .[-1].reason == "stopped" and (map(.event) | index("ready")) != null' /tmp/u/desktop.jsonl
-        check 'the stopped compositor left no runtime file' sh -c '! ls /tmp/u/runtime/cupertino/server-*.json 2>/dev/null' 
+        jq -se --argjson s "$status" '$s == 0 and .[-1].type == "end" and .[-1].reason == "stopped" and (map(.event) | index("ready")) != null' \
+            /tmp/u/desktop.jsonl >/dev/null || desktop_failed 'cupertino desktop start --backend headless: ready, stopped by SIGTERM, exit 0'
+        echo 'cupertino desktop start --backend headless: ready, stopped by SIGTERM, exit 0'
+        check 'the stopped compositor left no runtime file' sh -c '! ls /tmp/u/runtime/cupertino/server-*.json 2>/dev/null'
     else
         kill -TERM "$pid" 2>/dev/null || true
-        wait "$pid" || true
-        cat /tmp/u/desktop.jsonl /tmp/u/desktop.err
+        status=0
+        wait "$pid" || status=$?
         if grep -q 'no usable EGL device' /tmp/u/desktop.err; then
+            cat /tmp/u/desktop.jsonl /tmp/u/desktop.err
             echo 'BLOCKED B5: the container has no EGL device for the headless compositor; run `cupertino desktop start --backend headless --spawn true` on a machine with a GPU'
         else
-            echo 'FAIL: cupertino desktop start --backend headless did not get ready'
-            exit 1
+            desktop_failed 'cupertino desktop start --backend headless did not get ready'
         fi
     fi
     check "man -w cupertino: $(man -w cupertino)" test "$(man -w cupertino)" = /usr/share/man/man1/cupertino.1

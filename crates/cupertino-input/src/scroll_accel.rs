@@ -13,7 +13,8 @@
 //! translator turns into [`POINTS_PER_LINE`](crate::pointer::POINTS_PER_LINE) points each.
 //!
 //! [`ScrollConsume`] is the translator's coalescing of those lines:
-//! small events are held back and emitted as one in 0.1-line steps.
+//! small events are held back and emitted as one in 0.1-line steps; what an emission truncates is kept for the next
+//! one, so a slow scroll in one direction loses no distance.
 
 use crate::pointer::{AccelCurve, MIN_SPEED};
 
@@ -82,8 +83,10 @@ impl ScrollConsume {
             self.lines += lines;
             self.raw_sum += raw.abs();
             if raw != 0.0 && (raw.abs() > self.unit || self.raw_sum >= self.threshold) {
-                let emitted = (self.lines * 10.0).trunc() / 10.0;
-                self.lines = 0.0;
+                // the epsilon keeps a carried remainder from truncating a whole tenth away
+                let emitted = (self.lines * 10.0 + 1e-9_f64.copysign(self.lines)).trunc() / 10.0;
+                // the part under a tenth stays for the next emission in the same direction
+                self.lines -= emitted;
                 self.raw_sum = 0.0;
                 emitted
             } else {
@@ -403,6 +406,15 @@ mod tests {
         let out: Vec<f64> = (0..12).map(|_| c.consume(2.0, 0.0625)).collect();
         assert_eq!(out[..11], [0.0; 11]);
         assert_eq!(out[11], 0.7); // trunc(0.75 · 10) / 10
+    }
+
+    #[test]
+    fn consume_keeps_what_it_truncates_for_the_next_emission() {
+        // 24 events of 1/16 line: 1.5 lines in all, emitted as 0.7 and then the 0.05 left over plus the next 0.75
+        let mut c = ScrollConsume::new(400.0);
+        let out: Vec<f64> = (0..24).map(|_| c.consume(2.0, 0.0625)).collect();
+        assert_eq!((out[11], out[23]), (0.7, 0.8));
+        assert!((out.iter().sum::<f64>() - 1.5).abs() < 1e-9);
     }
 
     #[test]

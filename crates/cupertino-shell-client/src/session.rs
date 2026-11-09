@@ -29,6 +29,7 @@ impl SessionChange {
             AppEvent::DisplayOptions(options) => Some(SessionChange::DisplayOptions(options)),
             AppEvent::SessionLock { locked } => Some(SessionChange::Lock { locked }),
             AppEvent::ScrollCount { .. }
+            | AppEvent::ScrollBars { .. }
             | AppEvent::MenuBar { .. }
             | AppEvent::MenuReader { .. }
             | AppEvent::BackdropTone { .. } => None,

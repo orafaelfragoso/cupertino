@@ -1,0 +1,108 @@
+//! An absolute pointing device whose events enter the server through `process_input_event`, as a real device's do:
+//! each position is a share of the device's range, which the server spans over an output.
+#![allow(dead_code)]
+
+use smithay::backend::input::{
+    AbsolutePositionEvent, DeviceCapability, Event, InputBackend, InputEvent,
+    PointerMotionAbsoluteEvent, UnusedEvent,
+};
+use std::path::PathBuf;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Device;
+
+impl smithay::backend::input::Device for Device {
+    fn id(&self) -> String {
+        "absolute-pointer".to_owned()
+    }
+
+    fn name(&self) -> String {
+        "absolute pointer".to_owned()
+    }
+
+    fn has_capability(&self, capability: DeviceCapability) -> bool {
+        capability == DeviceCapability::Pointer
+    }
+
+    fn usb_id(&self) -> Option<(u32, u32)> {
+        None
+    }
+
+    fn syspath(&self) -> Option<PathBuf> {
+        None
+    }
+}
+
+#[derive(Debug)]
+pub struct Backend;
+
+impl InputBackend for Backend {
+    type Device = Device;
+    type KeyboardKeyEvent = UnusedEvent;
+    type PointerAxisEvent = UnusedEvent;
+    type PointerButtonEvent = UnusedEvent;
+    type PointerMotionEvent = UnusedEvent;
+    type PointerMotionAbsoluteEvent = Absolute;
+    type GestureSwipeBeginEvent = UnusedEvent;
+    type GestureSwipeUpdateEvent = UnusedEvent;
+    type GestureSwipeEndEvent = UnusedEvent;
+    type GesturePinchBeginEvent = UnusedEvent;
+    type GesturePinchUpdateEvent = UnusedEvent;
+    type GesturePinchEndEvent = UnusedEvent;
+    type GestureHoldBeginEvent = UnusedEvent;
+    type GestureHoldEndEvent = UnusedEvent;
+    type TouchDownEvent = UnusedEvent;
+    type TouchUpEvent = UnusedEvent;
+    type TouchMotionEvent = UnusedEvent;
+    type TouchCancelEvent = UnusedEvent;
+    type TouchFrameEvent = UnusedEvent;
+    type TabletToolAxisEvent = UnusedEvent;
+    type TabletToolProximityEvent = UnusedEvent;
+    type TabletToolTipEvent = UnusedEvent;
+    type TabletToolButtonEvent = UnusedEvent;
+    type SwitchToggleEvent = UnusedEvent;
+    type SpecialEvent = UnusedEvent;
+}
+
+/// A position as a share of the device's range, 0 to 1 along each axis.
+pub struct Absolute {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl Event<Backend> for Absolute {
+    fn time(&self) -> u64 {
+        0
+    }
+
+    fn device(&self) -> Device {
+        Device
+    }
+}
+
+impl AbsolutePositionEvent<Backend> for Absolute {
+    fn x(&self) -> f64 {
+        self.x
+    }
+
+    fn y(&self) -> f64 {
+        self.y
+    }
+
+    fn x_transformed(&self, width: i32) -> f64 {
+        self.x * f64::from(width)
+    }
+
+    fn y_transformed(&self, height: i32) -> f64 {
+        self.y * f64::from(height)
+    }
+}
+
+impl PointerMotionAbsoluteEvent<Backend> for Absolute {}
+
+/// The device's motion to `x`, `y` (shares of its range).
+pub fn motion(x: f64, y: f64) -> InputEvent<Backend> {
+    InputEvent::PointerMotionAbsolute {
+        event: Absolute { x, y },
+    }
+}

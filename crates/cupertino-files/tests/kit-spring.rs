@@ -247,6 +247,7 @@ fn wheel(run: &mut Run, at: Point, dy: f64) {
             value120: None,
             source: ScrollSource::Wheel,
             stop: false,
+            inverted: (false, false),
         },
         Timestamp(0),
     ));

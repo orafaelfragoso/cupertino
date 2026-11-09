@@ -226,7 +226,10 @@ impl Scene {
                 });
             self.device_added = true;
         }
-        self.state.process_input_event(injected::event(&event));
+        // a pointer position is a point of the first output; the device reports it within its range
+        let logical = self.state.outputs.first().map(|o| (o.rect.w, o.rect.h));
+        self.state
+            .process_input_event(injected::event(&event, logical.unwrap_or((1.0, 1.0))));
         self.pump();
     }
 
@@ -936,7 +939,8 @@ mod fake_logind {
 }
 
 /// The goldens' input device: a keyboard and an absolute pointer whose events enter the server through
-/// `process_input_event`, as a real device's do. Positions are logical pixels of the first output.
+/// `process_input_event`, as a real device's do. A golden records positions as points of the first output; the
+/// absolute pointer reports each as a share of its range, which the server spans over the output's panel pixels.
 mod injected {
     use super::{Event, Input};
     use smithay::backend::input::{
@@ -1034,6 +1038,7 @@ mod injected {
 
     pub struct Absolute {
         milliseconds: u32,
+        /// The position as a share of the device's range, 0 to 1 along each axis.
         x: f64,
         y: f64,
     }
@@ -1081,23 +1086,27 @@ mod injected {
             self.y
         }
 
-        fn x_transformed(&self, _width: i32) -> f64 {
-            self.x
+        fn x_transformed(&self, width: i32) -> f64 {
+            self.x * f64::from(width)
         }
 
-        fn y_transformed(&self, _height: i32) -> f64 {
-            self.y
+        fn y_transformed(&self, height: i32) -> f64 {
+            self.y * f64::from(height)
         }
     }
 
     impl PointerMotionAbsoluteEvent<Backend> for Absolute {}
 
-    /// The device event of `event`.
-    pub fn event(event: &Event) -> InputEvent<Backend> {
+    /// The device event of `event`, on an output `logical` points wide and tall.
+    pub fn event(event: &Event, logical: (f64, f64)) -> InputEvent<Backend> {
         let milliseconds = event.milliseconds;
         match event.input {
             Input::Pointer { x, y } => InputEvent::PointerMotionAbsolute {
-                event: Absolute { milliseconds, x, y },
+                event: Absolute {
+                    milliseconds,
+                    x: x / logical.0,
+                    y: y / logical.1,
+                },
             },
             Input::Button { code, pressed } => InputEvent::PointerButton {
                 event: Button {

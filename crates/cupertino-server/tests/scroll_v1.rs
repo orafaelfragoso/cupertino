@@ -1,7 +1,8 @@
-//! `cupertino_scroll_v1` end to end: a client binds the global for its `wl_pointer` and records the order of
-//! `wl_pointer.axis`, `scroll_count` and `wl_pointer.frame`. The compositor runs in-process on an offscreen EGL
-//! device and scrolls are injected as a touchpad or a wheel would send them. Tests skip (pass) when no EGL device is
-//! available.
+//! `cupertino_scroll_v1` and the `wl_pointer` axis events end to end: a client binds the seat at version 9 and the
+//! global for its `wl_pointer` and records the order of `wl_pointer.axis`, `scroll_count` and `wl_pointer.frame`,
+//! and separately every field of the axis events (source, high-resolution steps, physical direction, value, stop,
+//! time). The compositor runs in-process on an offscreen EGL device and scrolls are injected as a touchpad or a wheel
+//! would send them. Tests skip (pass) when no EGL device is available.
 
 mod common;
 
@@ -55,6 +56,26 @@ enum Record {
 }
 
 type Log = Arc<Mutex<Vec<Record>>>;
+
+/// Every axis event the client received, with its fields, in order.
+#[derive(Clone, Debug, PartialEq)]
+enum Detail {
+    Source(wl_pointer::AxisSource),
+    Value120(wl_pointer::Axis, i32),
+    Direction(wl_pointer::Axis, wl_pointer::AxisRelativeDirection),
+    Axis {
+        time: u32,
+        axis: wl_pointer::Axis,
+        value: f64,
+    },
+    Stop {
+        time: u32,
+        axis: wl_pointer::Axis,
+    },
+    Frame,
+}
+
+type Details = Arc<Mutex<Vec<Detail>>>;
 
 struct Harness {
     state: Cupertino,
@@ -202,6 +223,7 @@ struct ClientState {
     size: (i32, i32),
     attached: bool,
     log: Log,
+    details: Details,
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
@@ -289,14 +311,37 @@ impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        match event {
+        let detail = match event {
             wl_pointer::Event::Axis {
+                time,
                 axis: WEnum::Value(axis),
-                ..
-            } => state.log.lock().unwrap().push(Record::Axis(axis)),
-            wl_pointer::Event::Frame => state.log.lock().unwrap().push(Record::Frame),
-            _ => {}
-        }
+                value,
+            } => {
+                state.log.lock().unwrap().push(Record::Axis(axis));
+                Some(Detail::Axis { time, axis, value })
+            }
+            wl_pointer::Event::Frame => {
+                state.log.lock().unwrap().push(Record::Frame);
+                Some(Detail::Frame)
+            }
+            wl_pointer::Event::AxisSource {
+                axis_source: WEnum::Value(source),
+            } => Some(Detail::Source(source)),
+            wl_pointer::Event::AxisValue120 {
+                axis: WEnum::Value(axis),
+                value120,
+            } => Some(Detail::Value120(axis, value120)),
+            wl_pointer::Event::AxisRelativeDirection {
+                axis: WEnum::Value(axis),
+                direction: WEnum::Value(direction),
+            } => Some(Detail::Direction(axis, direction)),
+            wl_pointer::Event::AxisStop {
+                time,
+                axis: WEnum::Value(axis),
+            } => Some(Detail::Stop { time, axis }),
+            _ => None,
+        };
+        state.details.lock().unwrap().extend(detail);
     }
 }
 
@@ -324,13 +369,23 @@ impl Dispatch<CupertinoPointerScrollV1, ()> for ClientState {
 struct TestClient {
     stop: Arc<AtomicBool>,
     log: Log,
+    details: Details,
+    /// The version the server offers `wl_seat` at, once the client read the registry.
+    seat_version: Arc<Mutex<Option<u32>>>,
 }
 
 impl TestClient {
     fn spawn(socket: PathBuf) -> TestClient {
         let stop = Arc::new(AtomicBool::new(false));
         let log: Log = Arc::default();
-        let (stop2, log2) = (stop.clone(), log.clone());
+        let details: Details = Arc::default();
+        let seat_version = Arc::new(Mutex::new(None));
+        let (stop2, log2, details2, seat_version2) = (
+            stop.clone(),
+            log.clone(),
+            details.clone(),
+            seat_version.clone(),
+        );
         std::thread::spawn(move || {
             let conn = Connection::from_socket(
                 UnixStream::connect(&socket).expect("connecting to the compositor"),
@@ -341,7 +396,13 @@ impl TestClient {
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
             let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
-            let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=7, ()).unwrap();
+            *seat_version2.lock().unwrap() = globals
+                .contents()
+                .clone_list()
+                .iter()
+                .find(|g| g.interface == "wl_seat")
+                .map(|g| g.version);
+            let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=9, ()).unwrap();
             let pointer = seat.get_pointer(&qh, ());
             let scroll: CupertinoScrollV1 = globals.bind(&qh, 1..=1, ()).unwrap();
             let _scroll = scroll.get_scroll(&pointer, &qh, ());
@@ -360,6 +421,7 @@ impl TestClient {
                 size: (400, 300),
                 attached: false,
                 log: log2,
+                details: details2,
             };
             while !stop2.load(Ordering::SeqCst) {
                 if queue.roundtrip(&mut client).is_err() {
@@ -368,11 +430,21 @@ impl TestClient {
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
-        TestClient { stop, log }
+        TestClient {
+            stop,
+            log,
+            details,
+            seat_version,
+        }
     }
 
     fn log(&self) -> Vec<Record> {
         self.log.lock().unwrap().clone()
+    }
+
+    /// The axis events received since the last call.
+    fn take_details(&self) -> Vec<Detail> {
+        std::mem::take(&mut *self.details.lock().unwrap())
     }
 }
 
@@ -450,5 +522,194 @@ fn wheel_scrolls_send_no_count() {
             Record::Axis(wl_pointer::Axis::VerticalScroll),
             Record::Frame
         ]
+    );
+}
+
+/// A pointer on the content of the only window of a fresh compositor, its client's records cleared.
+fn scrolling_client() -> Option<(Harness, TestClient)> {
+    let mut h = Harness::new()?;
+    let client = TestClient::spawn(h.socket_path());
+    h.mapped();
+    let id = h.state.wm.key_window().unwrap();
+    h.point_at_content(id);
+    h.settle();
+    client.log.lock().unwrap().clear();
+    client.take_details();
+    Some((h, client))
+}
+
+fn axis(
+    device: &str,
+    source: AxisSource,
+    v120: [Option<f64>; 2],
+    amount: [Option<f64>; 2],
+    inverted: bool,
+    usec: u64,
+) -> AxisInput {
+    let direction = if inverted {
+        AxisRelativeDirection::Inverted
+    } else {
+        AxisRelativeDirection::Identical
+    };
+    AxisInput {
+        relative_direction: [direction; 2],
+        ..axis_input(device, source, amount, v120, usec)
+    }
+}
+
+/// The seat is offered at version 9; a high-resolution wheel's quarter notch reaches the client with its source, its
+/// 120ths, its physical direction, its value in points and its time in milliseconds, in one frame.
+#[test]
+fn a_wheel_frame_keeps_its_source_steps_direction_value_and_time() {
+    let Some((mut h, client)) = scrolling_client() else {
+        return;
+    };
+    assert_eq!(*client.seat_version.lock().unwrap(), Some(9));
+    let v = wl_pointer::Axis::VerticalScroll;
+    for (inverted, direction) in [
+        (false, wl_pointer::AxisRelativeDirection::Identical),
+        (true, wl_pointer::AxisRelativeDirection::Inverted),
+    ] {
+        h.state.pointer_axis(&axis(
+            WHEEL,
+            AxisSource::Wheel,
+            [None, Some(30.0)],
+            [None, None],
+            inverted,
+            2_000_500,
+        ));
+        h.settle();
+        assert_eq!(
+            client.take_details(),
+            vec![
+                Detail::Source(wl_pointer::AxisSource::Wheel),
+                Detail::Value120(v, 30),
+                Detail::Direction(v, direction),
+                Detail::Axis {
+                    time: 2_000,
+                    axis: v,
+                    value: cupertino_input::wheel_points(30.0),
+                },
+                Detail::Frame,
+            ]
+        );
+    }
+}
+
+/// A tilted wheel keeps its own source on the horizontal axis.
+#[test]
+fn a_tilted_wheel_keeps_its_source() {
+    let Some((mut h, client)) = scrolling_client() else {
+        return;
+    };
+    let x = wl_pointer::Axis::HorizontalScroll;
+    h.state.pointer_axis(&axis(
+        WHEEL,
+        AxisSource::WheelTilt,
+        [Some(120.0), None],
+        [None, None],
+        false,
+        3_000_000,
+    ));
+    h.settle();
+    assert_eq!(
+        client.take_details(),
+        vec![
+            Detail::Source(wl_pointer::AxisSource::WheelTilt),
+            Detail::Value120(x, 120),
+            Detail::Direction(x, wl_pointer::AxisRelativeDirection::Identical),
+            Detail::Axis {
+                time: 3_000,
+                axis: x,
+                value: cupertino_input::wheel_points(120.0),
+            },
+            Detail::Frame,
+        ]
+    );
+}
+
+/// A finger scroll keeps its source and physical direction and ends with a stop at its own time, which the client
+/// may start kinetic scrolling from; nothing of the server's moves the content after it.
+#[test]
+fn a_finger_scroll_ends_with_a_stop_and_nothing_after_it() {
+    let Some((mut h, client)) = scrolling_client() else {
+        return;
+    };
+    let v = wl_pointer::Axis::VerticalScroll;
+    let end = h.flick(1_000_000);
+    h.settle();
+    let details = client.take_details();
+    let frames: Vec<&[Detail]> = details
+        .split(|d| *d == Detail::Frame)
+        .filter(|f| !f.is_empty())
+        .collect();
+    let (last, moved) = frames.split_last().expect("frames");
+    assert!(!moved.is_empty(), "{details:?}");
+    for frame in moved {
+        let [Detail::Source(wl_pointer::AxisSource::Finger), Detail::Direction(axis, direction), Detail::Axis {
+            value,
+            axis: value_axis,
+            ..
+        }] = frame
+        else {
+            panic!("a finger frame: {frame:?}");
+        };
+        assert_eq!((*axis, *value_axis), (v, v));
+        assert_eq!(*direction, wl_pointer::AxisRelativeDirection::Identical);
+        assert!(*value != 0.0 && (value * 256.0).fract() == 0.0, "{value}");
+    }
+    assert_eq!(
+        *last,
+        [
+            Detail::Source(wl_pointer::AxisSource::Finger),
+            Detail::Stop {
+                time: (end / 1000) as u32,
+                axis: v,
+            },
+        ]
+    );
+    for _ in 0..20 {
+        h.step();
+    }
+    assert_eq!(client.take_details(), vec![], "no momentum from the server");
+}
+
+/// A high-resolution wheel turned one notch in 120 single steps scrolls exactly as far as one notch: the client
+/// gets what each step's fixed-point rounding left over with the next one.
+#[test]
+fn single_wheel_steps_add_up_to_a_whole_notch() {
+    let Some((mut h, client)) = scrolling_client() else {
+        return;
+    };
+    for i in 0..120 {
+        h.state.pointer_axis(&axis(
+            WHEEL,
+            AxisSource::Wheel,
+            [None, Some(1.0)],
+            [None, None],
+            false,
+            4_000_000 + i * 1_000,
+        ));
+    }
+    h.settle();
+    let details = client.take_details();
+    let total: f64 = details
+        .iter()
+        .filter_map(|d| match d {
+            Detail::Axis { value, .. } => Some(*value),
+            _ => None,
+        })
+        .sum();
+    let steps: i32 = details
+        .iter()
+        .filter_map(|d| match d {
+            Detail::Value120(_, steps) => Some(*steps),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(steps, 120);
+    assert!(
+        (total - cupertino_input::wheel_points(120.0)).abs() <= 0.5 / 256.0,
+        "{total}"
     );
 }

@@ -227,6 +227,7 @@ fn a_wheel_step_repaints_the_listing_and_nothing_outside_it() {
                 value120: None,
                 source: ScrollSource::Wheel,
                 stop: false,
+                inverted: (false, false),
             },
             Timestamp(0),
         ));
@@ -259,6 +260,7 @@ fn a_window_kept_from_damage_alone_is_the_window_drawn_whole() {
                 value120: None,
                 source: ScrollSource::Wheel,
                 stop: false,
+                inverted: (false, false),
             },
             Timestamp(0),
         ));

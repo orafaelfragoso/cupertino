@@ -604,6 +604,8 @@ pub struct Cupertino {
     pub sessions: SessionObservers,
     /// `cupertino_scroll_v1`: the scroll objects of the clients.
     pub scroll_counts: ScrollObservers,
+    /// What the axis values sent so far lost to the protocol's fixed point, carried into the next ones.
+    pub axis_carry: crate::events::AxisCarry,
     /// Reduce Motion, Reduce Transparency, Increase Contrast, the colour filter (`accessibility.conf`).
     pub accessibility: crate::accessibility::Accessibility,
     /// The window manager process's objects and the stage placements they committed.
@@ -918,6 +920,7 @@ impl Cupertino {
             docks: Docks::default(),
             sessions: SessionObservers::default(),
             scroll_counts,
+            axis_carry: crate::events::AxisCarry::default(),
             accessibility: crate::accessibility::Accessibility::default(),
             window_managers: WindowManagers::new(&cupertino_stage::StageConfig::default()),
             cascade: policy::Cascade::default(),

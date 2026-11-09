@@ -351,6 +351,8 @@ pub(crate) struct FakeSystem {
     pub(crate) destroyed: Vec<WindowId>,
     pub(crate) requests: Vec<(WindowId, WindowRequest)>,
     pub(crate) presented: Vec<(WindowId, Option<ConfigureId>)>,
+    /// The id of every frame presented, in order.
+    pub(crate) frame_ids: Vec<cupertino_ui_render::RenderFrameId>,
     pub(crate) frames_requested: usize,
     /// The next present is refused, as when no buffer is free; the window then waits like the Wayland system's does.
     pub(crate) refuse_next: bool,
@@ -482,7 +484,7 @@ impl WindowSystem for FakeSystem {
     fn present(
         &mut self,
         window: WindowId,
-        _: &CpuFrame,
+        frame: &CpuFrame,
         configure: Option<ConfigureId>,
     ) -> Result<PresentOutcome, PlatformError> {
         if std::mem::take(&mut self.refuse_next) {
@@ -490,6 +492,7 @@ impl WindowSystem for FakeSystem {
             return Ok(PresentOutcome::NotReady);
         }
         self.presented.push((window, configure));
+        self.frame_ids.push(frame.id);
         Ok(PresentOutcome::Presented)
     }
 

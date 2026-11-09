@@ -231,6 +231,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     press: Option<Timestamp>,
     exit: bool,
     theme_for: Option<ThemeForAppearance>,
+    /// Follows each scroll event to the screen, when asked ([`Runtime::with_scroll_timing`]).
+    scroll_timing: Option<crate::scroll_timing::ScrollTimings>,
     /// What each activation token asked for and not yet given turns into.
     tokens: HashMap<ActivationRequest, TokenHandler<A::Message>>,
     /// What each step of a running drag turns into.
@@ -263,6 +265,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         (model, commands): (A::Model, Vec<Command<A::Message>>),
     ) -> Self {
         let executor = Executor::new(system.waker());
+        // a runtime starts without the session's word, whatever one before it on this thread heard
+        crate::scroll::set_session_scroll_bars(None);
         let mut runtime = Self {
             model,
             tree: Tree::new(options.node_limit),
@@ -278,6 +282,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             press: None,
             exit: false,
             theme_for: None,
+            scroll_timing: None,
             tokens: HashMap::new(),
             drags: HashMap::new(),
             landed: HashMap::new(),
@@ -291,6 +296,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             runtime.command(command);
         }
         runtime
+    }
+
+    /// Follow every pointer scroll event to the screen and give `sink` its timing once the compositor showed the frame
+    /// that drew it, or dropped it ([`ScrollTiming`](crate::ScrollTiming)). Without it the runtime keeps no timing.
+    pub fn with_scroll_timing(mut self, sink: crate::ScrollTimingSink) -> Self {
+        self.scroll_timing = Some(crate::scroll_timing::ScrollTimings::new(sink));
+        self
     }
 
     /// Follow the session's appearance: `theme_for` makes the theme each time the window system reports it.
@@ -575,6 +587,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
 
     /// Rebuilds every window from the model and reconciles it with the tree.
     fn view(&mut self) -> Result<(), UiError> {
+        if let Some(timing) = &mut self.scroll_timing {
+            timing.updated(self.options.clock.now());
+        }
         let mut old: Vec<WindowState<A::Message>> = std::mem::take(&mut self.windows);
         let (mut popups, toplevels): (Vec<_>, Vec<_>) = A::view(&self.model)
             .into_iter()
@@ -884,6 +899,16 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
                 return Ok(());
             }
+            PlatformEvent::ScrollBars(bars) => {
+                // the views pick their bars as they are built: build every window again
+                if crate::scroll::set_session_scroll_bars(Some(bars)) {
+                    self.view_dirty = true;
+                    for w in &mut self.windows {
+                        w.invalidate();
+                    }
+                }
+                return Ok(());
+            }
         };
         let Some(i) = self.windows.iter().position(|w| w.id == window) else {
             return Ok(());
@@ -975,8 +1000,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 if let Some(root) = w.root {
                     let mut pointer = std::mem::take(&mut w.pointer);
                     let mut route = route(&mut self.tree, w, now, &mut effects);
+                    let scroll = matches!(event, PointerEvent::Scroll { .. });
                     pointer.handle(&mut route, root, &w.geometry, event, time);
                     w.pointer = pointer;
+                    if let (true, Some(timing)) = (scroll, &mut self.scroll_timing) {
+                        timing.handled(w.id, time, self.options.clock.now());
+                    }
                 }
             }
             WindowEvent::Touch(event, time) => self.touch(i, event, time, now, &mut effects),
@@ -1048,7 +1077,18 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
                 return Ok(());
             }
-            WindowEvent::Presented { .. } | WindowEvent::Discarded { .. } => return Ok(()),
+            WindowEvent::Presented { frame, time } => {
+                if let Some(timing) = &mut self.scroll_timing {
+                    timing.presented(w.id, frame, Some(time));
+                }
+                return Ok(());
+            }
+            WindowEvent::Discarded { frame } => {
+                if let Some(timing) = &mut self.scroll_timing {
+                    timing.presented(w.id, frame, None);
+                }
+                return Ok(());
+            }
             WindowEvent::GlassTone { region, tone } => {
                 let tones = &mut w.painter.tones;
                 let slot = match region {
@@ -1243,11 +1283,15 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             TouchEvent::Motion { id, .. } => w.touches.get(&id).cloned().unwrap_or_default(),
             TouchEvent::Up { id } => w.touches.remove(&id).unwrap_or_default(),
             TouchEvent::Cancel => {
-                let targets: Vec<NodeId> = w
-                    .touches
-                    .drain()
-                    .filter_map(|(_, p)| p.last().copied())
-                    .collect();
+                // every node a touch went through, the touched one first: a scroll view around it ends its drag too
+                let mut targets: Vec<NodeId> = Vec::new();
+                for (_, path) in w.touches.drain() {
+                    for &node in path.iter().rev() {
+                        if !targets.contains(&node) {
+                            targets.push(node);
+                        }
+                    }
+                }
                 let mut route = route(&mut self.tree, w, now, effects);
                 for node in targets {
                     route.notify(node, &Event::Cancel);
@@ -1783,6 +1827,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.frame_ready = false;
                 w.committed = true;
                 self.system.request_frame(w.id);
+                if let Some(timing) = &mut self.scroll_timing {
+                    timing.submitted(w.id, id, self.options.clock.now());
+                }
             }
             PresentOutcome::NotReady => {
                 w.frame_ready = false;

@@ -5,8 +5,10 @@
 //! and the placeholder of a missing symbol, `kit/sidebar`, a sidebar's sections running to the window's edges with
 //! its second row selected, `kit/tooltip`, a short tip, one cut with an ellipsis at the text width and a one-line label
 //! cut at its row's width. `kit/counter`, `kit/forms`, `kit/virtual-list` and `kit/editor` are the examples' windows
-//! at their own sizes, as they open (the Editor with a short document typed in). `--direction ltr|rtl` (default ltr)
-//! lays a surface out in that direction; the sheet shows both.
+//! at their own sizes, as they open (the Editor with a short document typed in). `kit/scroll` is a list in a scroll
+//! view with overlay bars at a moment of a scroll, `--phase`: `rest`, `stretch` (a touchpad finger holding the list
+//! pulled down past its start), `shown` (just after a wheel scroll), `fading` (half way through the bar's fade) or
+//! `hidden` (after it). `--direction ltr|rtl` (default ltr) lays a surface out in that direction; the sheet shows both.
 //!
 //! `kit/gallery` is every control family side by side: buttons (ordinary, default, destructive, disabled and glass),
 //! switches, check boxes, radio buttons, a segmented control, a pop-up button, a stepper, a text and a search field,
@@ -38,16 +40,16 @@ use std::sync::Arc;
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_kit::controls::{
     CalendarDate, Canvas, CheckBox, ColorWell, ComboBox, DatePicker, Icon, IconDirection,
-    PopUpButton, Progress, PullDownButton, RadioGroup, SearchField, SegmentedControl, Sidebar,
-    SidebarItem, SidebarSection, Slider, SliderStyle, Stepper, TextRole, Tooltip, TooltipState,
-    WINDOW_CONTENT_INSET,
+    PopUpButton, Progress, PullDownButton, RadioGroup, ScrollView, Scroller, SearchField,
+    SegmentedControl, Sidebar, SidebarItem, SidebarSection, Slider, SliderStyle, Stepper, TextRole,
+    Tooltip, TooltipState, WINDOW_CONTENT_INSET,
 };
 use cupertino_kit::core::{Checked, CommandRegistry, Key, PaintCx};
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{LayoutDirection, ScrollState};
 use cupertino_kit::platform::{
-    Capabilities, DecorationMode, MouseButton, PointerEvent, SystemAppearance, Timestamp,
-    WindowEvent, WindowId, WindowStates,
+    Capabilities, DecorationMode, MouseButton, PointerEvent, ScrollSource, SystemAppearance,
+    Timestamp, WindowEvent, WindowId, WindowStates,
 };
 use cupertino_kit::prelude::*;
 use cupertino_kit::render::{GradientStop, Paint, PaintOp, PixelFormat, Shape};
@@ -397,6 +399,53 @@ impl Application for Places {
     }
 }
 
+/// Thirty rows in a scroll view with overlay bars.
+struct Scrolled;
+
+impl Application for Scrolled {
+    type Model = ScrollState;
+    type Message = ScrollState;
+
+    fn init() -> (ScrollState, Vec<Command<ScrollState>>) {
+        Places::init()
+    }
+
+    fn update(scroll: &mut ScrollState, message: ScrollState) -> Vec<Command<ScrollState>> {
+        *scroll = message;
+        Vec::new()
+    }
+
+    fn view(scroll: &ScrollState) -> Vec<Window<ScrollState>> {
+        let rows = (1..=30)
+            .map(|i| {
+                Element::new(Text {
+                    content: AttributedText::plain(format!("Row {i}"), TextStyle::new(13.0)),
+                    role: TextRole::Body,
+                    wrap: false,
+                    secondary: false,
+                    selected: false,
+                })
+            })
+            .collect();
+        let mut windows = window("Scroll", Size::new(260.0, 220.0), Vec::new());
+        windows[0].content = Element::from(ScrollView {
+            content: Element::new(Stack {
+                axis: Axis::Vertical,
+                padding: Insets::uniform(12.0),
+                spacing: 6.0,
+                align: Align::Stretch,
+                children: rows,
+            }),
+            state: *scroll,
+            horizontal: false,
+            vertical: true,
+            scroller: Scroller::Overlay,
+            on_scroll: Box::new(|scroll| scroll),
+        });
+        windows
+    }
+}
+
 /// What the gallery shows: the control under the pointer, the controls' size, the compact setting and what lies
 /// under the controls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -674,6 +723,18 @@ impl Application for Gallery {
     }
 }
 
+/// A moment of a scroll the `kit/scroll` surface shows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Rest,
+    Stretch,
+    Shown,
+    Fading,
+    Hidden,
+}
+
+const MS: u64 = 1_000_000;
+
 /// The rectangle of the node with `key` in `window`, in window points.
 fn rect_of<A: Application>(
     driver: &TestDriver<A>,
@@ -739,16 +800,25 @@ fn draw<A: Application>(
     direction: LayoutDirection,
     size: Option<Size>,
 ) -> Result<Pixmap, String> {
-    draw_with::<A>(look, scale, direction, size, |_| {}, |_, _| None)
+    draw_with::<A>(
+        look,
+        scale,
+        direction,
+        size,
+        Phase::Rest,
+        |_| {},
+        |_, _| None,
+    )
 }
 
-/// [`draw`], the theme tuned by `tune`, then the pointer events `act` gives sent to the window once it rests, and
-/// the window drawn again as they leave it.
+/// [`draw`], the theme tuned by `tune`, then the scroll of `phase` and the frames up to its moment, then the
+/// pointer events `act` gives sent to the window, and the window drawn again as they leave it.
 fn draw_with<A: Application>(
     look: Look,
     scale: f32,
     direction: LayoutDirection,
     size: Option<Size>,
+    phase: Phase,
     tune: impl FnOnce(&mut ThemeTokens),
     act: impl FnOnce(&TestDriver<A>, WindowId) -> Option<Vec<PointerEvent>>,
 ) -> Result<Pixmap, String> {
@@ -798,6 +868,69 @@ fn draw_with<A: Application>(
     }
     if !rested {
         return Err("the window keeps asking for frames".into());
+    }
+    let scroll = |dy: f64, source: ScrollSource| {
+        WindowEvent::Pointer(
+            PointerEvent::Scroll {
+                position: Point::new(120.0, 100.0),
+                delta: Point::new(0.0, dy),
+                value120: None,
+                source,
+                stop: false,
+                inverted: (false, false),
+            },
+            Timestamp(0),
+        )
+    };
+    // the moment to show, after the events that lead to it
+    let (events, at): (Vec<(u64, WindowEvent)>, u64) = match phase {
+        Phase::Rest => (Vec::new(), 0),
+        Phase::Stretch => (
+            (1..=8)
+                .map(|i| (i * 10, scroll(-30.0, ScrollSource::Finger)))
+                .collect(),
+            100,
+        ),
+        Phase::Shown => (vec![(10, scroll(120.0, ScrollSource::Wheel))], 300),
+        Phase::Fading => (vec![(10, scroll(120.0, ScrollSource::Wheel))], 1_160),
+        Phase::Hidden => (vec![(10, scroll(120.0, ScrollSource::Wheel))], 1_600),
+    };
+    let mut last = 0;
+    for (ms, event) in events {
+        last = ms;
+        driver
+            .advance_to(Timestamp(ms * MS))
+            .map_err(|e| fail(&e))?;
+        driver
+            .window_system_mut()
+            .enqueue_window(window, event)
+            .map_err(|e| fail(&e))?;
+        driver.run_until_idle(turns).map_err(|e| fail(&e))?;
+        let system = driver.window_system_mut();
+        if system.frame_requested(window).map_err(|e| fail(&e))? {
+            system
+                .frame_ready(window, Timestamp(ms * MS))
+                .map_err(|e| fail(&e))?;
+            driver.run_until_idle(turns).map_err(|e| fail(&e))?;
+        }
+    }
+    if phase != Phase::Rest {
+        // frames up to the moment, one every 16 ms after the last event
+        let mut ms = last + 16;
+        while ms <= at {
+            driver
+                .advance_to(Timestamp(ms * MS))
+                .map_err(|e| fail(&e))?;
+            driver.run_until_idle(turns).map_err(|e| fail(&e))?;
+            let system = driver.window_system_mut();
+            if system.frame_requested(window).map_err(|e| fail(&e))? {
+                system
+                    .frame_ready(window, Timestamp(ms * MS))
+                    .map_err(|e| fail(&e))?;
+                driver.run_until_idle(turns).map_err(|e| fail(&e))?;
+            }
+            ms += 16;
+        }
     }
     if let Some(events) = act(&driver, window) {
         let system = driver.window_system_mut();
@@ -873,8 +1006,14 @@ struct Capture;
 
 impl App for Capture {
     const NAME: &'static str = "kit";
-    const STATE_FLAGS: &'static [&'static str] =
-        &["direction", "state", "control-size", "compact", "backdrop"];
+    const STATE_FLAGS: &'static [&'static str] = &[
+        "direction",
+        "phase",
+        "state",
+        "control-size",
+        "compact",
+        "backdrop",
+    ];
 
     fn surfaces(&self) -> Vec<String> {
         [
@@ -887,6 +1026,7 @@ impl App for Capture {
             "forms",
             "virtual-list",
             "editor",
+            "scroll",
         ]
         .map(String::from)
         .to_vec()
@@ -894,6 +1034,11 @@ impl App for Capture {
 
     fn sheet_states(&self, surface: &str) -> Vec<State> {
         let state = |key: &str, value: &str| vec![(key.to_string(), value.to_string())];
+        if surface == "scroll" {
+            return ["rest", "stretch", "shown", "fading", "hidden"]
+                .map(|p| state("phase", p))
+                .to_vec();
+        }
         if surface == "gallery" {
             return vec![
                 State::new(),
@@ -910,6 +1055,7 @@ impl App for Capture {
     fn capture(&mut self, r: &Request<'_>) -> Result<Pixmap, String> {
         let size = r.size.map(|(w, h)| Size::new(w, h));
         let mut direction = LayoutDirection::Ltr;
+        let mut phase = Phase::Rest;
         let mut gallery = GalleryOptions::default();
         for (flag, value) in r.state {
             let wrong = || {
@@ -920,6 +1066,7 @@ impl App for Capture {
                     }
                     "control-size" => "mini, small, regular, large or extra-large",
                     "compact" => "on or off",
+                    "phase" => "rest, stretch, shown, fading or hidden",
                     _ => "flat or busy",
                 };
                 Err(format!("--{flag} {value}: {choices}"))
@@ -942,6 +1089,11 @@ impl App for Capture {
                 ("compact", "off") => gallery.compact = false,
                 ("backdrop", "flat") => gallery.busy = false,
                 ("backdrop", "busy") => gallery.busy = true,
+                ("phase", "rest") => phase = Phase::Rest,
+                ("phase", "stretch") => phase = Phase::Stretch,
+                ("phase", "shown") => phase = Phase::Shown,
+                ("phase", "fading") => phase = Phase::Fading,
+                ("phase", "hidden") => phase = Phase::Hidden,
                 _ => return wrong(),
             }
         }
@@ -954,6 +1106,7 @@ impl App for Capture {
                     r.scale,
                     direction,
                     size,
+                    Phase::Rest,
                     |theme| theme.metrics = theme.metrics.at_size(gallery.size, gallery.compact),
                     |driver, window| hold(driver, window, gallery.held?),
                 )
@@ -966,6 +1119,9 @@ impl App for Capture {
                 draw::<virtual_list::VirtualList<50_000>>(r.look, r.scale, direction, size)
             }
             "editor" => draw::<SampleEditor>(r.look, r.scale, direction, size),
+            "scroll" => {
+                draw_with::<Scrolled>(r.look, r.scale, direction, size, phase, |_| {}, |_, _| None)
+            }
             _ => draw::<Icons>(r.look, r.scale, direction, size),
         }
     }

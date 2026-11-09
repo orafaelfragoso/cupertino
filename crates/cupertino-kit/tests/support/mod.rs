@@ -287,6 +287,7 @@ impl<A: Application> Run<A> {
                 value120: None,
                 source: ScrollSource::Wheel,
                 stop: false,
+                inverted: (false, false),
             },
             Timestamp(0),
         ));

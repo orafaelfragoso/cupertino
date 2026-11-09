@@ -112,6 +112,7 @@ impl PointerDevice {
         let (accel, scroll) = if touchpad {
             let pad = cupertino_input::TouchpadSettings {
                 tracking_speed: cfg.trackpad_speed,
+                acceleration: cfg.trackpad_acceleration,
                 ..cupertino_input::TouchpadSettings::default()
             };
             (
@@ -151,6 +152,11 @@ impl PointerDevice {
     /// Note that the device moved, scrolled or clicked; true the first time.
     pub fn note_use(&mut self) -> bool {
         !std::mem::replace(&mut self.used, true)
+    }
+
+    /// A mouse (not a touchpad) that has moved, scrolled or clicked.
+    pub fn is_used_mouse(&self) -> bool {
+        !self.touchpad && self.used
     }
 
     /// The `Mice` entry of this device, for a used mouse that has a key.
@@ -239,6 +245,49 @@ pub struct AxisInput {
     pub amount: [Option<f64>; 2],
     pub v120: [Option<f64>; 2],
     pub relative_direction: [AxisRelativeDirection; 2],
+}
+
+/// `wl_pointer.axis` carries a fixed-point value in 1/256 steps. A value is sent rounded to that step and what the
+/// rounding lost is added to the next value of the same axis, source and direction, so a run of small scrolls (a
+/// high-resolution wheel's fractions of a notch) adds up to the distance the device moved. A stop, another source or
+/// a reversal starts the axis over.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AxisCarry {
+    carried: [f64; 2],
+    /// Whether the last value of each axis was positive.
+    positive: [bool; 2],
+    source: Option<AxisSource>,
+}
+
+/// Steps of the protocol's fixed-point numbers per unit.
+const FIXED_STEPS: f64 = 256.0;
+
+impl AxisCarry {
+    /// The value to send on axis `i` for `value` of `source`: `value` plus what earlier values lost, rounded to the
+    /// fixed-point step.
+    pub fn send(&mut self, i: usize, source: AxisSource, value: f64) -> f64 {
+        if self.source != Some(source) {
+            *self = AxisCarry {
+                source: Some(source),
+                ..AxisCarry::default()
+            };
+        }
+        let positive = value > 0.0;
+        let carried = &mut self.carried[i];
+        if self.positive[i] != positive {
+            self.positive[i] = positive;
+            *carried = 0.0;
+        }
+        let total = value + *carried;
+        let sent = (total * FIXED_STEPS).round() / FIXED_STEPS;
+        *carried = total - sent;
+        sent
+    }
+
+    /// The axis `i` stopped: nothing carries into the next gesture.
+    pub fn stop(&mut self, i: usize) {
+        self.carried[i] = 0.0;
+    }
 }
 
 fn axis_index(axis: Axis) -> usize {
@@ -330,19 +379,19 @@ impl Cupertino {
             InputEvent::DeviceRemoved { device } => {
                 if self.pointer_devices.remove(&device.id()).is_some() {
                     self.publish_session_settings();
+                    self.sync_scroll_bars();
                 }
             }
             InputEvent::Keyboard { event } => self.on_keyboard::<B>(event),
             InputEvent::PointerMotion { event } => self.on_pointer_motion::<B>(event),
             InputEvent::PointerMotionAbsolute { event } => {
-                let Some(out) = self.outputs.first() else {
+                let Some((id, pixels)) = self.absolute_device_space() else {
                     return;
                 };
-                let size = smithay::utils::Size::<i32, Logical>::from((
-                    out.rect.w as i32,
-                    out.rect.h as i32,
-                ));
-                let pos = event.position_transformed(size) + Point::from((out.rect.x, out.rect.y));
+                let at = event.position_transformed(pixels);
+                let Some(pos) = self.output_pixels_to_global(id, (at.x, at.y)) else {
+                    return;
+                };
                 self.pointer_moved_to(pos, event.time_msec(), None);
             }
             InputEvent::PointerButton { event } => self.on_pointer_button::<B>(event),
@@ -785,6 +834,27 @@ impl Cupertino {
         })
     }
 
+    /// Where an absolute pointing device reports: the output under its pointer, and that output's mode turned as it
+    /// is shown, in panel pixels. The device's range spans those pixels, so a position maps through the output's exact
+    /// scale ([`Cupertino::output_pixels_to_global`]) and lands where drawing puts that pixel, up to the far edge.
+    fn absolute_device_space(
+        &self,
+    ) -> Option<(cupertino_wm::OutputId, smithay::utils::Size<i32, Logical>)> {
+        let id = self.pointer_output()?;
+        let geometry = self.output_geometry(id)?;
+        let turned = if geometry.rotated {
+            geometry.mode.swapped()
+        } else {
+            geometry.mode
+        };
+        // the size type of `position_transformed`; its values here are panel pixels
+        let pixels = smithay::utils::Size::<i32, Logical>::from((
+            i32::try_from(turned.width).ok()?,
+            i32::try_from(turned.height).ok()?,
+        ));
+        Some((id, pixels))
+    }
+
     /// A mouse is listed in `Mice` from its first motion, scroll or click on.
     fn pointer_device_used(&mut self, id: &str) {
         if self
@@ -793,6 +863,7 @@ impl Cupertino {
             .is_some_and(|device| !device.touchpad && device.note_use())
         {
             self.publish_session_settings();
+            self.sync_scroll_bars();
         }
     }
 
@@ -1329,6 +1400,7 @@ impl Cupertino {
             let i = axis_index(axis);
             if value != 0.0 {
                 carries_axis = true;
+                let value = self.axis_carry.send(i, input.source, value);
                 frame = frame
                     .relative_direction(axis, input.relative_direction[i])
                     .value(axis, value);
@@ -1338,6 +1410,7 @@ impl Cupertino {
             }
             if input.source == AxisSource::Finger && input.amount[i] == Some(0.0) {
                 carries_axis = true;
+                self.axis_carry.stop(i);
                 frame = frame.stop(axis);
             }
         }
@@ -1680,12 +1753,53 @@ mod tests {
         assert!(late < first, "{late} < {first}");
     }
 
+    /// Each profile is applied once, on device counts: the adaptive one grows with speed, the flat one is one gain at
+    /// every speed, and neither depends on the cursor's size, colours or shake.
+    #[test]
+    fn a_touchpad_has_an_adaptive_and_a_flat_profile_independent_of_the_cursor() {
+        let ratio = |cfg: &PointerSettings, counts: f64| {
+            let mut pad = PointerDevice::new(true, cfg);
+            pad.accelerate((counts, 0.0).into(), 0).x / counts
+        };
+        let adaptive = PointerSettings::default();
+        assert!(ratio(&adaptive, 4.0) < ratio(&adaptive, 80.0));
+        let flat = PointerSettings {
+            trackpad_acceleration: false,
+            trackpad_speed: 1.5,
+            ..adaptive.clone()
+        };
+        let (slow, fast) = (ratio(&flat, 4.0), ratio(&flat, 80.0));
+        assert!((slow - fast).abs() < 1e-12, "{slow} {fast}");
+        assert!(
+            (slow - 1.5).abs() < 1e-12,
+            "the tracking speed is the gain: {slow}"
+        );
+        let big_cursor = PointerSettings {
+            cursor_scale: 4.0,
+            cursor_colors: crate::cursor::CursorColors {
+                fill: [255, 0, 0, 255],
+                outline: [0, 0, 255, 255],
+            },
+            shake_to_locate: false,
+            ..adaptive.clone()
+        };
+        for counts in [4.0, 80.0] {
+            assert_eq!(ratio(&big_cursor, counts), ratio(&adaptive, counts));
+        }
+        let mouse = |cfg: &PointerSettings| {
+            PointerDevice::new(false, cfg)
+                .accelerate((60.0, 0.0).into(), 1_000)
+                .x
+        };
+        assert_eq!(mouse(&big_cursor), mouse(&adaptive));
+    }
+
     #[test]
     fn touchpad_finger_scrolling_is_accelerated_and_wheels_are_not() {
         let cfg = PointerSettings::default();
         // 30 counts every 8 ms on the trackpad scroll curves at the fresh 0.3125: lines from
         // `ScrollAxis` of the design tool; every event is above the consume unit (8 counts), so
-        // each is emitted at once, truncated to whole points (0.1 line)
+        // each is emitted at once, truncated to whole points (0.1 line), what it truncated going out with the next
         let lines: [f64; 5] = [
             0.6697329504898516,
             1.7655862070282453,
@@ -1694,12 +1808,15 @@ mod tests {
             2.7236750541732406,
         ];
         let mut pad = PointerDevice::new(true, &cfg);
+        let mut sum = 0.0;
         for (i, want) in lines.iter().enumerate() {
             let got = pad
                 .scroll_points(Axis::Vertical, 30.0, i as u64 * 8_000)
                 .unwrap();
+            let before = (sum * 10.0_f64).trunc();
+            sum += want;
             assert!(
-                (got - (want * 10.0).trunc()).abs() < 1e-9,
+                (got - ((sum * 10.0).trunc() - before)).abs() < 1e-9,
                 "event {i}: {got}"
             );
         }
@@ -1715,6 +1832,35 @@ mod tests {
             PointerDevice::new(false, &cfg).scroll_points(Axis::Vertical, 30.0, 0),
             None
         );
+    }
+
+    #[test]
+    fn axis_values_carry_what_the_fixed_point_rounding_lost() {
+        // a high-resolution wheel turned one notch in 120 steps of 1/120: 0.4 points each
+        let mut carry = AxisCarry::default();
+        let step = cupertino_input::wheel_points(1.0);
+        let sent: Vec<f64> = (0..120)
+            .map(|_| carry.send(1, AxisSource::Wheel, step))
+            .collect();
+        assert!(sent.iter().all(|v| (v * 256.0).fract() == 0.0), "{sent:?}");
+        let total: f64 = sent.iter().sum();
+        assert!(
+            (total - cupertino_input::wheel_points(120.0)).abs() <= 0.5 / 256.0,
+            "{total}"
+        );
+        // without the carry every step would lose the same fraction
+        let rounded = (step * 256.0).round() / 256.0 * 120.0;
+        assert!((rounded - total).abs() > 0.1, "{rounded} {total}");
+        // a reversal, another source and a stop start the axis over
+        carry.send(1, AxisSource::Wheel, 0.001);
+        assert_eq!(carry.send(1, AxisSource::Wheel, -0.0005), 0.0);
+        assert_eq!(carry.carried[1], -0.0005);
+        assert_eq!(carry.send(1, AxisSource::Wheel, -0.0005), 0.0);
+        assert_eq!(carry.carried[1], -0.001, "the same direction carries on");
+        assert_eq!(carry.send(1, AxisSource::Finger, 0.001), 0.0);
+        assert_eq!(carry.carried[1], 0.001);
+        carry.stop(1);
+        assert_eq!(carry.carried, [0.0, 0.0]);
     }
 
     #[test]

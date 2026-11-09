@@ -6,7 +6,7 @@ ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo CARGO_INCREMENTAL=0 RUSTUP_TOO
 ENV CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS
 ENV PATH=/opt/cargo/bin:$PATH
 RUN pacman -Syu --noconfirm --needed -q rustup python mesa libglvnd pam dbus xkeyboard-config \
-      shared-mime-info gcc-libs systemd adwaita-icon-theme clang libpipewire pipewire namcap \
+      shared-mime-info gcc-libs systemd adwaita-icon-theme clang libpipewire pipewire namcap git \
  && rustup toolchain install 1.99.1 --profile minimal \
  && rustup default 1.99.1 \
  && useradd -m builder \

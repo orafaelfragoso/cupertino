@@ -82,18 +82,20 @@ struct Model {
     shared: Shared,
     font: BarFont,
     effects: Vec<Effect>,
-    /// The scene's solid strip and spread under the bar, from [`LOOK`].
+    /// The scene's solid strip, spread under the bar and tone, from [`LOOK`].
     solid: bool,
     spread: Vec<u16>,
+    tone: BarTone,
 }
 
-/// What the next bar started shows: whether its strip is solid, the spread under it, and whether the theme's Reduce
-/// Transparency is on.
+/// What the next bar started shows: whether its strip is solid, the spread under it, whether the theme's Reduce
+/// Transparency is on, and the tone of its text.
 #[derive(Clone, Default)]
 struct Look {
     solid: bool,
     spread: Vec<u16>,
     theme_reduce_transparency: bool,
+    tone: BarTone,
 }
 
 thread_local! {
@@ -116,6 +118,7 @@ impl Application for Bar {
             effects: Vec::new(),
             solid: LOOK.with_borrow(|l| l.solid),
             spread: LOOK.with_borrow(|l| l.spread.clone()),
+            tone: LOOK.with_borrow(|l| l.tone),
         };
         (model, Vec::new())
     }
@@ -146,7 +149,7 @@ impl Application for Bar {
                 controller: &model.controller,
                 shared: &model.shared,
                 font: model.font,
-                tone: BarTone::Appearance,
+                tone: model.tone,
                 solid: model.solid,
                 spread: &model.spread,
                 size: Size::new(bar.w, bar.h),
@@ -500,6 +503,7 @@ fn reduce_transparency_gives_the_solid_strip_and_no_halo_from_one_source() {
         solid: solid_bar(DisplayOptions::default()),
         spread: busy.clone(),
         theme_reduce_transparency: false,
+        ..Look::default()
     });
     assert!(
         items >= 4,
@@ -510,6 +514,7 @@ fn reduce_transparency_gives_the_solid_strip_and_no_halo_from_one_source() {
             solid: solid_bar(reduced),
             spread: busy.clone(),
             theme_reduce_transparency: false,
+            ..Look::default()
         }),
         0,
         "a solid bar draws no halo"
@@ -519,6 +524,7 @@ fn reduce_transparency_gives_the_solid_strip_and_no_halo_from_one_source() {
             solid: solid_bar(DisplayOptions::default()),
             spread: busy,
             theme_reduce_transparency: true,
+            ..Look::default()
         }),
         items,
         "the theme's own option is not a second source"
@@ -547,4 +553,144 @@ fn only_the_items_over_a_busy_part_of_the_wallpaper_draw_a_halo() {
         ..Look::default()
     });
     assert!(some > 0 && some < all, "{some} of {all}");
+}
+
+/// The bar's frame at 1x for `look`, with the File menu open when `open`, and the File title's rectangle.
+fn frame(look: Look, open: bool) -> (Pixmap, Rect) {
+    LOOK.set(look);
+    let mut run = Run::start();
+    LOOK.set(Look::default());
+    if open {
+        run.open_file();
+    }
+    let file = run
+        .model()
+        .controller
+        .layout()
+        .slot(&SlotKey::Menu(ItemId(FILE)))
+        .unwrap()
+        .rect;
+    (run.capture("bar-1").0, file)
+}
+
+/// The linear luminance of the premultiplied pixel `px` laid over the opaque sRGB `backdrop`.
+fn over(px: &[u8; 4], backdrop: [u8; 3]) -> f64 {
+    let a = f64::from(px[3]) / 255.0;
+    let channel = |i: usize| {
+        let v = f64::from(px[i]) / 255.0 + f64::from(backdrop[i]) / 255.0 * (1.0 - a);
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(0) + 0.7152 * channel(1) + 0.0722 * channel(2)
+}
+
+fn contrast(a: f64, b: f64) -> f64 {
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// The text of every item over the busiest wallpaper reads against what lies right around its strokes, wherever the
+/// wallpaper is as light as light text or as dark as dark text: within a point of the strokes the halo's core makes the
+/// pixels 4.5:1 or more from the text on average, and 3:1 or more at nine in ten of them. The same bar over a calm
+/// wallpaper draws no halo, so there the wallpaper right beside the strokes is left as it is.
+#[test]
+fn over_the_busiest_wallpaper_every_item_reads_next_to_its_strokes() {
+    // light text over white and over a bright yellow, dark text over black and over a deep blue
+    for (tone, backdrop) in [
+        (BarTone::LightText, [255, 255, 255]),
+        (BarTone::LightText, [242, 202, 68]),
+        (BarTone::DarkText, [0, 0, 0]),
+        (BarTone::DarkText, [31, 69, 240]),
+    ] {
+        let look = |spread| Look {
+            spread: vec![spread; 64],
+            tone,
+            ..Look::default()
+        };
+        let (calm, _) = frame(look(0), false);
+        let (busy, _) = frame(look(1000), false);
+        let (w, h) = (calm.width() as usize, calm.height() as usize);
+        let calm_px = calm.data().as_chunks::<4>().0;
+        let busy_px = busy.data().as_chunks::<4>().0;
+        // the text's strokes, where the calm bar is (almost) opaque, and the pixels within a point of them it leaves
+        let stroke = |x: usize, y: usize| calm_px[y * w + x][3] >= 200;
+        let (mut text, mut ring) = (Vec::new(), Vec::new());
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let i = y * w + x;
+                if stroke(x, y) {
+                    text.push(over(&busy_px[i], backdrop));
+                } else if calm_px[i][3] == 0
+                    && (y - 1..=y + 1).any(|yy| (x - 1..=x + 1).any(|xx| stroke(xx, yy)))
+                {
+                    ring.push(over(&busy_px[i], backdrop));
+                    assert_eq!(
+                        over(&calm_px[i], backdrop),
+                        over(&[0, 0, 0, 0], backdrop),
+                        "{tone:?}: a calm bar leaves the wallpaper beside the strokes"
+                    );
+                }
+            }
+        }
+        assert!(
+            text.len() > 50 && ring.len() > 200,
+            "{tone:?}: {} {}",
+            text.len(),
+            ring.len()
+        );
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        let ink = mean(&text);
+        let average = contrast(ink, mean(&ring));
+        let mut each: Vec<f64> = ring.iter().map(|&l| contrast(ink, l)).collect();
+        each.sort_by(f64::total_cmp);
+        let tenth = each[each.len() / 10];
+        eprintln!(
+            "{tone:?} over {backdrop:?}: {average:.2}:1 on average, {tenth:.2}:1 at the tenth"
+        );
+        assert!(
+            average >= 4.5,
+            "{tone:?} over {backdrop:?}: {average:.2}:1 beside the strokes"
+        );
+        assert!(
+            tenth >= 3.0,
+            "{tone:?} over {backdrop:?}: {tenth:.2}:1 at the tenth of the pixels beside the strokes"
+        );
+    }
+}
+
+/// The open title's highlight shows as a shape of its own over the busiest wallpaper, even where the picture is as
+/// light as the highlight of light text (or as dark as that of dark text): at its ends, clear of the text, it differs
+/// from the wallpaper by 1.5:1 or more. Over a calm wallpaper it is the plain highlight.
+#[test]
+fn the_open_title_shows_over_the_busiest_wallpaper() {
+    for (tone, backdrop) in [
+        (BarTone::LightText, [255, 255, 255]),
+        (BarTone::DarkText, [0, 0, 0]),
+    ] {
+        let look = |spread| Look {
+            spread: vec![spread; 64],
+            tone,
+            ..Look::default()
+        };
+        let end = |pixmap: &Pixmap, file: Rect| {
+            let w = pixmap.width() as usize;
+            let px = pixmap.data().as_chunks::<4>().0;
+            // the highlight's left end, a point in from its edge, halfway down
+            let (x, y) = ((file.x + 2.0) as usize, (file.y + file.h / 2.0) as usize);
+            over(&px[y * w + x], backdrop)
+        };
+        let (busy, file) = frame(look(1000), true);
+        let (calm, _) = frame(look(0), true);
+        let wallpaper = over(&[0, 0, 0, 0], backdrop);
+        let busy = contrast(end(&busy, file), wallpaper);
+        let calm = contrast(end(&calm, file), wallpaper);
+        eprintln!("{tone:?}: the highlight's end at {busy:.2}:1 (calm {calm:.2}:1)");
+        assert!(busy >= 1.5, "{tone:?}: {busy:.2}:1");
+        assert!(
+            busy > calm,
+            "{tone:?}: the backing shows over busy wallpaper only"
+        );
+    }
 }

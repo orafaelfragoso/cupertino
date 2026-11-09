@@ -807,27 +807,29 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
                 size.width,
                 size.height - 2.0 * m.selection_inset_y,
             );
+            // over a busy wallpaper the highlight lies on a backing of the halo's tone, so it shows as a shape of its
+            // own wherever the picture under it is as light (or as dark) as the highlight is
+            if let Some(backing) = self.halo.and_then(|h| h.pill_backing(palette.text)) {
+                fill(cx, rect, m.selection_corner_radius, backing);
+            }
             fill(cx, rect, m.selection_corner_radius, palette.bar_highlight);
         }
-        // over a busy wallpaper the text and symbols keep a soft halo of the opposite tone, so they read where the
-        // picture under them is as light or as dark as they are; a calm wallpaper and a solid bar need none
-        // (over measured wallpaper a dense core hugs the strokes first, and the soft halo spreads from both)
+        // over a busy wallpaper the text and symbols keep a halo of the opposite tone, so they read where the picture
+        // under them is as light or as dark as they are; a calm wallpaper and a solid bar need none (over measured
+        // wallpaper a dense core is laid around the strokes in a few passes first, and the soft halo spreads from it)
         if let Some(halo) = self.halo {
-            let core = halo
-                .core_color(palette.text)
-                .map(|core| Effect::DropShadow {
+            let effects = halo
+                .shadows(palette.text)
+                .into_iter()
+                .map(|(blur, c)| Effect::DropShadow {
                     offset: Point::ZERO,
-                    blur: crate::tone::HALO_CORE_BLUR,
-                    color: color(core),
-                });
-            let soft = Effect::DropShadow {
-                offset: Point::ZERO,
-                blur: halo.blur,
-                color: color(halo.color(palette.text)),
-            };
+                    blur,
+                    color: color(c),
+                })
+                .collect();
             cx.push(PaintOp::PushLayer {
                 opacity: 1.0,
-                effects: core.into_iter().chain([soft]).collect(),
+                effects,
             });
         }
         self.paint_look(cx, &palette);

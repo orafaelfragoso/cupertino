@@ -699,6 +699,8 @@ fn the_open_title_shows_over_the_busiest_wallpaper() {
             "{tone:?}: the backing shows over busy wallpaper only"
         );
     }
+}
+
 /// The bar's frame and the expanded state a screen reader reads for `name`, with `open` the items whose panel another
 /// process shows open on the bar.
 fn with_panels(open: Vec<SlotKey>, name: &str) -> (Pixmap, Option<bool>) {

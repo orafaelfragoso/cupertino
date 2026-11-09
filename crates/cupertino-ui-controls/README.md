@@ -23,6 +23,12 @@ from the application's model and reports changes as messages.
   appearance every bezel and well strokes its border and every quiet fill is a little stronger. A theme without a colour for a role paints
   nothing rather than a guess. The keyboard focus
   ring is drawn only for a keyboard-visible focus, outside the chrome, without changing layout.
+- **Scroll views.** `ScrollView` moves its content with `cupertino-ui-core`'s scroll motion. A touchpad finger or a
+  touch drags it, stretches it past an edge and leaves kinetic motion at the lift (none under Reduce Motion; a stretch
+  still returns). A wheel, a tilted wheel and a continuous source step it inside the range at once, with no stretch
+  and no inertia of their own. The model's offset never leaves the range: the stretch is drawn on top of it. A gesture
+  belongs to the view its first movement can move, or for a finger to the view it pulls past an edge along an axis
+  that view scrolls; the content coasts on while the pointer goes elsewhere, and a new finger catches it where it is.
 - **Targets.** Chrome is centred in a node padded out to the theme's minimum target, so the whole padded node takes
   the press and nothing overlaps a neighbour. The layout never follows the paint: a held thumb's lens, a press or a
   focus ring draws past the chrome without moving anything.

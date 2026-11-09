@@ -1,6 +1,7 @@
 //! Procedural cursor set: simple vector cursors authored for this crate, drawn directly at the
-//! target scale with `tiny-skia` (no PDF, no third-party input). All geometry is in points on a
-//! 32 × 32 canvas; hotspots are in the same unit.
+//! target scale with `tiny-skia` (no PDF, no third-party input). All geometry is in points; each
+//! cursor has its own canvas ([`Kind::canvas`], 32 × 32 unless its role sets another) and its
+//! hotspot is in the same unit, from the canvas's top-left corner.
 //!
 //! The designs are plain: a black arrow with a white outline, linework with a white halo, a white
 //! hand with a black outline, small badges (plus, arrow, menu, question mark, spinner) at the
@@ -128,7 +129,8 @@ impl Kind {
         Kind::ALL.iter().copied().find(|k| k.name() == name)
     }
 
-    /// Hotspot in points.
+    /// Hotspot in points from the canvas's top-left corner: the arrow's tip, the I-beam's centre,
+    /// the pointing finger's tip, the middle of the hands and of the resize bars.
     pub fn hotspot(self) -> (f64, f64) {
         match self {
             Kind::Default
@@ -136,10 +138,50 @@ impl Kind {
             | Kind::Alias
             | Kind::ContextMenu
             | Kind::Help
-            | Kind::Progress => (4.0, 3.0),
-            Kind::Pointer => (14.0, 4.0),
+            | Kind::Progress => (5.0, 5.0),
+            Kind::Text => (12.0, 11.0),
+            Kind::Pointer => (12.0, 8.0),
+            Kind::Grab | Kind::Grabbing => (15.0, 16.0),
+            Kind::ColResize => (15.0, 12.0),
+            Kind::RowResize => (12.0, 14.0),
             Kind::ZoomIn | Kind::ZoomOut => (13.0, 13.0),
             _ => (16.0, 16.0),
+        }
+    }
+
+    /// Size of the image in points, transparent margin included: the arrow and its badged
+    /// variants 28 × 40, the I-beam 23 × 22, the column and row resize cursors 30 × 24 and
+    /// 24 × 28; every other cursor (hands included) 32 × 32.
+    pub fn canvas(self) -> (f64, f64) {
+        match self {
+            Kind::Default
+            | Kind::Copy
+            | Kind::Alias
+            | Kind::ContextMenu
+            | Kind::Help
+            | Kind::Progress => (28.0, 40.0),
+            Kind::Text => (23.0, 22.0),
+            Kind::ColResize => (30.0, 24.0),
+            Kind::RowResize => (24.0, 28.0),
+            _ => (CANVAS, CANVAS),
+        }
+    }
+
+    /// Where the drawing's own 32 × 32 design space sits on the canvas, in points: it moves the
+    /// shape's anchor (the arrow's tip, a hand's middle, a resize bar's middle) onto the hotspot.
+    fn offset(self) -> (f32, f32) {
+        match self {
+            Kind::Default
+            | Kind::Copy
+            | Kind::Alias
+            | Kind::ContextMenu
+            | Kind::Help
+            | Kind::Progress => (1.0, 2.0),
+            Kind::Pointer => (-2.0, 4.0),
+            Kind::Grab | Kind::Grabbing => (-1.0, 0.0),
+            Kind::ColResize => (-1.0, -4.0),
+            Kind::RowResize => (-4.0, -2.0),
+            _ => (0.0, 0.0),
         }
     }
 
@@ -287,8 +329,9 @@ fn double_arrow(len: f32, both: bool) -> Path {
     poly(&pts, true)
 }
 
+/// The badge of an arrow variant, below and right of the arrow's tail, inside its 28 × 40 canvas.
 fn badge(c: &mut Ctx, kind: Kind, frame: usize) {
-    let (cx, cy, r) = (24.5f32, 24.5f32, 6.0f32);
+    let (cx, cy, r) = (19.5f32, 28.0f32, 6.0f32);
     match kind {
         Kind::Copy => {
             c.fill(&circle(cx, cy, r + 1.0), WHITE);
@@ -425,13 +468,15 @@ fn resize_shape(kind: Kind) -> (Path, f32, bool) {
     }
 }
 
-/// Draw `kind` (animation frame `frame`) at `scale` pixels per point.
+/// Draw `kind` (animation frame `frame`) at `scale` pixels per point on its canvas.
 pub fn render(kind: Kind, scale: f32, frame: usize) -> Pixmap {
-    let px = (CANVAS as f32 * scale).round().max(1.0) as u32;
-    let mut pm = Pixmap::new(px, px).expect("non-empty canvas");
+    let (w, h) = kind.canvas();
+    let px = |points: f64| (points as f32 * scale).round().max(1.0) as u32;
+    let mut pm = Pixmap::new(px(w), px(h)).expect("non-empty canvas");
+    let (dx, dy) = kind.offset();
     let mut c = Ctx {
         pm: &mut pm,
-        ts: Transform::from_scale(scale, scale),
+        ts: Transform::from_scale(scale, scale).pre_translate(dx, dy),
     };
     match kind {
         Kind::Default => c.outlined(&[arrow_path()], BLACK, WHITE, 1.1),
@@ -443,9 +488,10 @@ pub fn render(kind: Kind, scale: f32, frame: usize) -> Pixmap {
         Kind::Grab => c.outlined(&hand_shapes(false), WHITE, BLACK, 0.9),
         Kind::Grabbing => c.outlined(&hand_shapes(true), WHITE, BLACK, 0.9),
         Kind::Text => {
-            c.halo_line((16.0, 6.5), (16.0, 25.5), 1.5);
-            c.halo_line((12.5, 5.5), (19.5, 5.5), 1.5);
-            c.halo_line((12.5, 26.5), (19.5, 26.5), 1.5);
+            // centred on the hotspot (12, 11) of the 23 × 22 canvas
+            c.halo_line((12.0, 3.5), (12.0, 18.5), 1.5);
+            c.halo_line((8.5, 2.75), (15.5, 2.75), 1.5);
+            c.halo_line((8.5, 19.25), (15.5, 19.25), 1.5);
         }
         Kind::VerticalText => {
             c.halo_line((6.5, 16.0), (25.5, 16.0), 1.5);

@@ -9,7 +9,7 @@
 //!
 //! | File | Applied at once | At the next start |
 //! |---|---|---|
-//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, key bindings, terminals | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `shell`, `screenshot` (privileged processes: read at start) |
+//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, scroll bars, key bindings, terminals | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `shell`, `screenshot` (privileged processes: read at start) |
 //! | `keyboard.conf` | every key: repeat, caps lock, filters, rewrite, accent picker, input sources and layouts (the keymap is rebuilt) | — |
 //! | `power.conf` | every key (the countdown in progress continues with the new timers) | — |
 //! | `/etc/cupertino/accessibility.conf` | its keys, for an account without an `accessibility.conf` of its own and the login screen (`crate::accessibility`) | — |
@@ -235,6 +235,10 @@ impl Cupertino {
         if changed!(corner_radius) {
             self.config.window.corner_radius = target.window.corner_radius;
         }
+        if changed!(show_scroll_bars) {
+            self.config.show_scroll_bars = target.show_scroll_bars;
+            self.sync_scroll_bars();
+        }
         if changed!(minimize_effect, closing_animation) {
             self.config.effects = target.effects;
             self.fx.cfg = target.effects;
@@ -248,6 +252,7 @@ impl Cupertino {
             mouse_speed,
             trackpad_speed,
             mouse_acceleration,
+            trackpad_acceleration,
             mouse_dpi,
             natural_scrolling,
             mouse_natural_scrolling,
@@ -256,7 +261,13 @@ impl Cupertino {
             cursor_outline,
             shake_to_locate
         ) {
-            let tracking = changed!(mouse_speed, trackpad_speed, mouse_acceleration, mouse_dpi);
+            let tracking = changed!(
+                mouse_speed,
+                trackpad_speed,
+                mouse_acceleration,
+                trackpad_acceleration,
+                mouse_dpi
+            );
             self.config.pointer = target.pointer.clone();
             if tracking {
                 for device in self.pointer_devices.values_mut() {

@@ -5,7 +5,7 @@
 use cupertino_defaults::accessibility::{
     AccessibilitySettings, ColorFilter, DisplayOption, DisplayOptions, SYSTEM_KEYS,
 };
-use cupertino_defaults::compositor::MinimizeEffectName;
+use cupertino_defaults::compositor::{MinimizeEffectName, ScrollBarsName};
 use cupertino_defaults::dock::{ActionTarget, Position, Trigger};
 use cupertino_defaults::keyboard::{FnKey, ModifierProfile};
 use cupertino_defaults::menubar::{HourCycle, ShowDate};
@@ -34,6 +34,7 @@ pub enum ControlId {
     /// A read-only row of a live reading (battery, network devices): it changes nothing.
     Reading,
     Appearance,
+    ShowScrollBars,
     DockSize,
     Magnification,
     DockPosition,
@@ -61,6 +62,7 @@ pub enum ControlId {
     MouseAcceleration,
     MouseNatural,
     TrackpadSpeed,
+    TrackpadAcceleration,
     TrackpadNatural,
     ModifierProfile,
     CapsLockDelay,
@@ -80,6 +82,8 @@ pub enum ControlId {
     /// The session's screen reader on or off (`screen_reader`, which the server runs).
     ScreenReader,
     CursorSize,
+    CursorOutline,
+    CursorFill,
     ShakeToLocate,
     StickyKeys,
     StickyKeysShortcut,
@@ -261,6 +265,13 @@ const CORNERS: [(Trigger, &str, &str); 4] = [
         "Bottom Right",
         "corner_bottom_right",
     ),
+];
+
+/// When applications show their scroll bars.
+const SCROLL_BARS: [(&str, ScrollBarsName); 3] = [
+    ("Automatically", ScrollBarsName::Automatic),
+    ("When scrolling", ScrollBarsName::WhenScrolling),
+    ("Always", ScrollBarsName::Always),
 ];
 
 /// The minimize effects offered: Warp, Scale, Funnel (enum, `plain` is not offered).
@@ -732,6 +743,37 @@ fn header(text: &str) -> Option<String> {
     Some(text.to_string())
 }
 
+/// The colours the pointer's outline and fill pop-ups offer, opaque sRGB.
+pub const POINTER_COLORS: [(&str, [u8; 4]); 8] = [
+    ("White", [255, 255, 255, 255]),
+    ("Black", [0, 0, 0, 255]),
+    ("Red", [230, 40, 40, 255]),
+    ("Orange", [245, 140, 20, 255]),
+    ("Yellow", [250, 210, 20, 255]),
+    ("Green", [40, 180, 70, 255]),
+    ("Blue", [30, 110, 235, 255]),
+    ("Purple", [150, 70, 200, 255]),
+];
+/// The pointer's outline and fill when the file sets none: a white outline around a black fill.
+const POINTER_OUTLINE: [u8; 4] = [255, 255, 255, 255];
+const POINTER_FILL: [u8; 4] = [0, 0, 0, 255];
+
+/// A pointer colour pop-up showing `stored` (else `default`): the named colours, and a colour the file holds that is
+/// none of them as one more item, kept until the user picks another.
+fn pointer_color(stored: Option<[u8; 4]>, default: [u8; 4]) -> Control {
+    let color = stored.unwrap_or(default);
+    let mut choices: Vec<String> = POINTER_COLORS.iter().map(|(n, _)| n.to_string()).collect();
+    let selected = match POINTER_COLORS.iter().position(|(_, c)| *c == color) {
+        Some(i) => i,
+        None => {
+            let [r, g, b, a] = color;
+            choices.push(format!("#{r:02x}{g:02x}{b:02x}{a:02x}"));
+            POINTER_COLORS.len()
+        }
+    };
+    Control::Popup { choices, selected }
+}
+
 fn switch(on: bool) -> Control {
     Control::Switch { on }
 }
@@ -775,15 +817,27 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
     match pane {
         PaneId::Appearance => vec![Section {
             header: None,
-            rows: vec![row(
-                ControlId::Appearance,
-                "Appearance",
-                Control::Segmented {
-                    segments: vec!["Light", "Dark"],
-                    selected: usize::from(session.dark),
-                },
-                Backend::SetAppearance,
-            )],
+            rows: vec![
+                row(
+                    ControlId::Appearance,
+                    "Appearance",
+                    Control::Segmented {
+                        segments: vec!["Light", "Dark"],
+                        selected: usize::from(session.dark),
+                    },
+                    Backend::SetAppearance,
+                ),
+                // automatically: beside the content while a mouse is connected, else over it while it scrolls
+                row(
+                    ControlId::ShowScrollBars,
+                    "Show scroll bars",
+                    popup(
+                        SCROLL_BARS.iter().map(|(l, _)| *l),
+                        index_of(&SCROLL_BARS, settings.show_scroll_bars()),
+                    ),
+                    Backend::Key(File::Compositor, "show_scroll_bars"),
+                ),
+            ],
             footer: None,
         }],
         PaneId::DesktopDock => {
@@ -1057,6 +1111,12 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                         key("trackpad_speed"),
                     ),
                     row(
+                        ControlId::TrackpadAcceleration,
+                        "Pointer acceleration",
+                        switch(settings.trackpad_acceleration()),
+                        key("trackpad_acceleration"),
+                    ),
+                    row(
                         ControlId::TrackpadNatural,
                         "Natural scrolling",
                         switch(settings.natural_scrolling()),
@@ -1159,6 +1219,18 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                                 labels: ("Normal", "Large"),
                             },
                             pointer("cursor_size"),
+                        ),
+                        row(
+                            ControlId::CursorOutline,
+                            "Pointer outline color",
+                            pointer_color(settings.compositor.cursor_outline, POINTER_OUTLINE),
+                            pointer("cursor_outline"),
+                        ),
+                        row(
+                            ControlId::CursorFill,
+                            "Pointer fill color",
+                            pointer_color(settings.compositor.cursor_fill, POINTER_FILL),
+                            pointer("cursor_fill"),
                         ),
                         row(
                             ControlId::ShakeToLocate,
@@ -2252,6 +2324,10 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             settings.compositor.minimize_effect = Some(EFFECTS[index_of(value)].1);
             store(File::Compositor)
         }
+        ControlId::ShowScrollBars => {
+            settings.compositor.show_scroll_bars = Some(SCROLL_BARS[index_of(value)].1);
+            store(File::Compositor)
+        }
         ControlId::AutoHide => {
             settings.dock.autohide = Some(bool_of(value));
             store(File::Dock)
@@ -2326,6 +2402,10 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         }
         ControlId::TrackpadSpeed => {
             settings.compositor.trackpad_speed = Some(mapping::TRACKING_STOPS[index_of(value)]);
+            store(File::Compositor)
+        }
+        ControlId::TrackpadAcceleration => {
+            settings.compositor.trackpad_acceleration = Some(bool_of(value));
             store(File::Compositor)
         }
         ControlId::MouseAcceleration => {
@@ -2437,6 +2517,19 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         }
         ControlId::ShakeToLocate => {
             settings.compositor.shake_to_locate = Some(bool_of(value));
+            store(File::Compositor)
+        }
+        ControlId::CursorOutline | ControlId::CursorFill => {
+            // the extra item of a colour the file holds is already the value
+            let Some((_, color)) = POINTER_COLORS.get(index_of(value)) else {
+                return Vec::new();
+            };
+            let slot = if id == ControlId::CursorOutline {
+                &mut settings.compositor.cursor_outline
+            } else {
+                &mut settings.compositor.cursor_fill
+            };
+            *slot = Some(*color);
             store(File::Compositor)
         }
         ControlId::DisplaySleepBattery
@@ -3133,6 +3226,10 @@ mod tests {
             Control::Switch { on: true }
         );
         assert_eq!(
+            control(PaneId::Trackpad, ControlId::TrackpadAcceleration, &s),
+            Control::Switch { on: true }
+        );
+        assert_eq!(
             control(PaneId::DesktopDock, ControlId::AutoHide, &s),
             Control::Switch { on: false }
         );
@@ -3164,6 +3261,36 @@ mod tests {
     }
 
     #[test]
+    fn show_scroll_bars_starts_automatic_and_writes_the_compositor_file() {
+        let mut s = unset();
+        let Control::Popup { choices, selected } =
+            control(PaneId::Appearance, ControlId::ShowScrollBars, &s)
+        else {
+            panic!("a popup")
+        };
+        assert_eq!(choices, ["Automatically", "When scrolling", "Always"]);
+        assert_eq!(selected, 0);
+        for (i, name) in ScrollBarsName::ALL.into_iter().enumerate() {
+            assert_eq!(
+                change(
+                    ControlId::ShowScrollBars,
+                    Value::Index(i),
+                    &mut s,
+                    &Live::default()
+                ),
+                [Effect::Store(File::Compositor)]
+            );
+            assert_eq!(s.compositor.show_scroll_bars, Some(name));
+            let Control::Popup { selected, .. } =
+                control(PaneId::Appearance, ControlId::ShowScrollBars, &s)
+            else {
+                panic!("a popup")
+            };
+            assert_eq!(selected, i);
+        }
+    }
+
+    #[test]
     fn changes_write_the_mapped_values_to_their_file() {
         let mut s = unset();
         assert_eq!(
@@ -3176,6 +3303,16 @@ mod tests {
             [Effect::Store(File::Compositor)]
         );
         assert_eq!(s.compositor.mouse_speed, Some(3.0));
+        assert_eq!(
+            change(
+                ControlId::TrackpadAcceleration,
+                Value::Bool(false),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::Store(File::Compositor)]
+        );
+        assert_eq!(s.compositor.trackpad_acceleration, Some(false));
         change(
             ControlId::DockSize,
             Value::Fraction(0.5),
@@ -3482,6 +3619,44 @@ mod tests {
             panic!("a slider")
         };
         assert_eq!(value, 1.0, "grayscale's default intensity 1.0");
+    }
+
+    #[test]
+    fn the_pointer_colours_start_white_around_black_and_keep_a_colour_of_the_file() {
+        let mut s = unset();
+        let popup = |id, s: &Settings| match control(PaneId::Accessibility, id, s) {
+            Control::Popup { choices, selected } => (choices, selected),
+            other => panic!("a pop-up, not {other:?}"),
+        };
+        let (choices, outline) = popup(ControlId::CursorOutline, &s);
+        assert_eq!((choices[outline].as_str(), choices.len()), ("White", 8));
+        let (choices, fill) = popup(ControlId::CursorFill, &s);
+        assert_eq!(choices[fill], "Black");
+        assert_eq!(
+            change(
+                ControlId::CursorFill,
+                Value::Index(6),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::Store(File::Compositor)]
+        );
+        assert_eq!(s.compositor.cursor_fill, Some([30, 110, 235, 255]));
+        assert_eq!(
+            s.compositor.cursor_outline, None,
+            "the outline is untouched"
+        );
+        s.compositor.cursor_outline = Some([1, 2, 3, 128]);
+        let (choices, outline) = popup(ControlId::CursorOutline, &s);
+        assert_eq!((choices[outline].as_str(), choices.len()), ("#01020380", 9));
+        assert!(change(
+            ControlId::CursorOutline,
+            Value::Index(8),
+            &mut s,
+            &Live::default()
+        )
+        .is_empty());
+        assert_eq!(s.compositor.cursor_outline, Some([1, 2, 3, 128]));
     }
 
     fn login_live(login: Option<LoginScreen>) -> Live {

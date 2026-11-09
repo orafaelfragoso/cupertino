@@ -9,7 +9,6 @@ description = "CupertinoKit controls: text, icons, buttons, toggles, text and se
 layer = "ui"
 
 [dependencies]
-cupertino-animation = { path = "../cupertino-animation" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-theme = { path = "../cupertino-theme" }

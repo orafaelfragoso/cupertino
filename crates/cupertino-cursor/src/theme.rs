@@ -126,6 +126,8 @@ fn find_mapping(primary: &str) -> Option<&'static Mapping> {
     names::NAMES.iter().find(|m| m.primary == primary)
 }
 
+/// The cursor `src` with its shadow, cut back to the cursor's canvas: the image keeps the role's
+/// size at every scale and the shadow falls in its transparent margin.
 fn finish_frame(
     src: Pixmap,
     shadow_params: Option<&Shadow>,
@@ -133,17 +135,24 @@ fn finish_frame(
     scale: f64,
     delay_ms: u32,
 ) -> Frame {
-    let (image, origin) = match shadow_params {
+    let image = match shadow_params {
         Some(s) => {
             let r = shadow::apply(&src, s, scale);
-            (r.image, r.origin)
+            let canvas = tiny_skia::IntRect::from_xywh(
+                r.origin.0 as i32,
+                r.origin.1 as i32,
+                src.width(),
+                src.height(),
+            )
+            .expect("a non-empty canvas");
+            r.image
+                .clone_rect(canvas)
+                .expect("the canvas lies inside the shadowed image")
         }
-        None => (src, (0, 0)),
+        None => src,
     };
-    let hx = ((hot_pt.0 * scale).round() as i64 + origin.0 as i64)
-        .clamp(0, image.width() as i64 - 1) as u32;
-    let hy = ((hot_pt.1 * scale).round() as i64 + origin.1 as i64)
-        .clamp(0, image.height() as i64 - 1) as u32;
+    let hx = ((hot_pt.0 * scale).round() as i64).clamp(0, image.width() as i64 - 1) as u32;
+    let hy = ((hot_pt.1 * scale).round() as i64).clamp(0, image.height() as i64 - 1) as u32;
     Frame {
         image,
         hotspot: (hx, hy),
@@ -391,13 +400,71 @@ mod tests {
         let mut o = quick(d.path());
         o.shadow = ShadowMode::Never;
         let without = build_cursors(&o).unwrap();
-        let w = |cs: &[Cursor]| {
+        let image = |cs: &[Cursor]| {
             cs.iter().find(|c| c.name == "default").unwrap().sizes[0].frames[0]
                 .image
-                .width()
+                .clone()
         };
-        assert!(w(&with) > w(&without), "padding for the shadow");
-        assert_eq!(w(&without), 32);
+        let (with, without) = (image(&with), image(&without));
+        assert_eq!(
+            (with.width(), with.height()),
+            (without.width(), without.height()),
+            "the shadow stays inside the canvas"
+        );
+        assert_eq!((without.width(), without.height()), (28, 40));
+        let covered = |p: &Pixmap| p.pixels().iter().filter(|p| p.alpha() > 0).count();
+        assert!(covered(&with) > covered(&without), "a shadow is drawn");
+    }
+
+    /// Each role has its own canvas and hotspot in points, and every size keeps both in proportion: at 1x, 2x and
+    /// 4x the image is the canvas times the scale and the hotspot the point times the scale, so a cursor drawn at
+    /// any of them puts its hotspot on the same logical point.
+    #[test]
+    fn each_role_has_its_canvas_and_hotspot_at_every_scale() {
+        let d = tempfile::tempdir().unwrap();
+        let mut o = quick(d.path());
+        o.sizes = vec![24, 48, 96];
+        let cursors = build_cursors(&o).unwrap();
+        for (name, canvas, hotspot) in [
+            ("default", (28, 40), (5, 5)),
+            ("copy", (28, 40), (5, 5)),
+            ("text", (23, 22), (12, 11)),
+            ("pointer", (32, 32), (12, 8)),
+            ("grab", (32, 32), (15, 16)),
+            ("grabbing", (32, 32), (15, 16)),
+            ("col-resize", (30, 24), (15, 12)),
+            ("row-resize", (24, 28), (12, 14)),
+        ] {
+            let cursor = cursors.iter().find(|c| c.name == name).unwrap();
+            for (variant, scale) in cursor.sizes.iter().zip([1, 2, 4]) {
+                let frame = &variant.frames[0];
+                assert_eq!(
+                    (frame.image.width(), frame.image.height()),
+                    (canvas.0 * scale, canvas.1 * scale),
+                    "{name} at {scale}x"
+                );
+                assert_eq!(
+                    frame.hotspot,
+                    (hotspot.0 * scale, hotspot.1 * scale),
+                    "{name} at {scale}x"
+                );
+                // the shape is on the canvas: something is drawn next to the hotspot
+                let (hx, hy) = (frame.hotspot.0 as i64, frame.hotspot.1 as i64);
+                let reach = 3 * i64::from(scale);
+                let near = (-reach..=reach).any(|dy| {
+                    (-reach..=reach).any(|dx| {
+                        frame
+                            .image
+                            .pixel((hx + dx) as u32, (hy + dy) as u32)
+                            .is_some_and(|p| p.alpha() == 255)
+                    })
+                });
+                assert!(
+                    near,
+                    "{name} at {scale}x has an opaque pixel by its hotspot"
+                );
+            }
+        }
     }
 
     #[test]

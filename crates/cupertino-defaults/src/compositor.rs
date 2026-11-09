@@ -12,8 +12,9 @@
 //! | `terminals` | program names, tried in order |
 //! | `keybindings` | object: chord → action name |
 //! | `corner_radius`, `menu_bar_height`, `hot_corner_size`, `hot_corner_dwell` | number |
-//! | `show_menu_bar`, `decorations`, `closing_animation`, `mouse_acceleration`, `natural_scrolling` (touchpads), `mouse_natural_scrolling` (wheels), `shake_to_locate` | boolean |
+//! | `show_menu_bar`, `decorations`, `closing_animation`, `mouse_acceleration`, `trackpad_acceleration`, `natural_scrolling` (touchpads), `mouse_natural_scrolling` (wheels), `shake_to_locate` | boolean |
 //! | `minimize_effect` | `warp`, `funnel`, `scale`, `plain` (also `none`) |
+//! | `show_scroll_bars` | `automatic` (beside the content while a mouse is connected, else over it while it scrolls), `when-scrolling`, `always` |
 //! | `mouse_speed`, `trackpad_speed` | tracking speed, 0 to 3 |
 //! | `mouse_dpi` | object: mouse key ([`mouse_dpi_key`]) → resolution in dots per inch, 50 to 32000 |
 //! | `cursor_size` | cursor scale |
@@ -74,6 +75,34 @@ pub enum MinimizeEffectName {
     Scale,
     /// No effect (`plain`, also written `none`).
     Plain,
+}
+
+/// When applications show their scroll bars.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScrollBarsName {
+    /// Always while a mouse is connected, else only while the content scrolls.
+    #[default]
+    Automatic,
+    /// Over the content while it scrolls, hidden after.
+    WhenScrolling,
+    /// Beside the content at all times.
+    Always,
+}
+
+impl ScrollBarsName {
+    pub const ALL: [ScrollBarsName; 3] = [
+        ScrollBarsName::Automatic,
+        ScrollBarsName::WhenScrolling,
+        ScrollBarsName::Always,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ScrollBarsName::Automatic => "automatic",
+            ScrollBarsName::WhenScrolling => "when-scrolling",
+            ScrollBarsName::Always => "always",
+        }
+    }
 }
 
 /// A role of the shell protocol a process the server starts can be given.
@@ -139,6 +168,7 @@ pub struct CompositorSettings {
     pub show_menu_bar: Option<bool>,
     pub decorations: Option<bool>,
     pub minimize_effect: Option<MinimizeEffectName>,
+    pub show_scroll_bars: Option<ScrollBarsName>,
     pub closing_animation: Option<bool>,
     pub hot_corner_size: Option<f64>,
     pub hot_corner_dwell: Option<f64>,
@@ -147,6 +177,8 @@ pub struct CompositorSettings {
     /// Resolution the user stored per mouse, by [`mouse_dpi_key`].
     pub mouse_dpi: Option<BTreeMap<String, u32>>,
     pub mouse_acceleration: Option<bool>,
+    /// Speed-dependent acceleration of touchpads; off gives a constant gain by `trackpad_speed`.
+    pub trackpad_acceleration: Option<bool>,
     pub natural_scrolling: Option<bool>,
     pub mouse_natural_scrolling: Option<bool>,
     pub cursor_size: Option<f64>,
@@ -360,6 +392,15 @@ const KEYS: &[JsonKey] = &[
             .to_string()
         )
     ),
+    json_key!(
+        show_scroll_bars,
+        |v: &Value| string(v).and_then(|s| ScrollBarsName::ALL
+            .iter()
+            .copied()
+            .find(|b| b.name() == s)
+            .ok_or_else(|| format!("unknown scroll bar setting {s:?}"))),
+        |b: &ScrollBarsName| Value::String(b.name().to_string())
+    ),
     json_key!(closing_animation, boolean, bool_value),
     json_key!(hot_corner_size, number, number_value),
     json_key!(hot_corner_dwell, number, number_value),
@@ -394,6 +435,7 @@ const KEYS: &[JsonKey] = &[
         )
     ),
     json_key!(mouse_acceleration, boolean, bool_value),
+    json_key!(trackpad_acceleration, boolean, bool_value),
     json_key!(natural_scrolling, boolean, bool_value),
     json_key!(mouse_natural_scrolling, boolean, bool_value),
     json_key!(cursor_size, number, number_value),
@@ -687,6 +729,22 @@ mod tests {
             .unwrap()
             .contains("mouse_dpi"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn show_scroll_bars_takes_its_three_names_and_refuses_others() {
+        for b in ScrollBarsName::ALL {
+            let (s, problems) = CompositorSettings::parse(
+                &format!(r#"{{"show_scroll_bars":"{}"}}"#, b.name()),
+                None,
+            );
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(s.show_scroll_bars, Some(b));
+        }
+        let (s, problems) = CompositorSettings::parse(r#"{"show_scroll_bars":"never"}"#, None);
+        assert_eq!(s.show_scroll_bars, None);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(ScrollBarsName::default(), ScrollBarsName::Automatic);
     }
 
     #[test]

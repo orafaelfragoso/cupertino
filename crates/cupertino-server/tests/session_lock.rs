@@ -717,3 +717,69 @@ fn a_configure_held_back_by_a_shrinking_frame_activates_no_window_behind_the_loc
         "the held configure activated the window behind the lock"
     );
 }
+
+/// An application is told whether to keep its scroll bars shown: by the setting, and for an automatic one while a
+/// mouse is connected. An observer below version 8 does not know the bit and is never sent it.
+#[test]
+fn an_application_learns_when_to_show_its_scroll_bars() {
+    use cupertino_defaults::compositor::ScrollBarsName;
+    const ALWAYS: u32 = 16;
+    let Some(mut h) = Harness::new() else { return };
+    let observer = Client::appearance_observer(h.socket_path(), 8);
+    let old = Client::appearance_observer(h.socket_path(), 7);
+    h.wait_until("the first options", |_| {
+        !observer.display_options().is_empty() && !old.display_options().is_empty()
+    });
+    assert_eq!(
+        observer.display_options(),
+        [0],
+        "automatic, with no mouse: over the content while it scrolls"
+    );
+
+    // a mouse that has been used
+    let mut mouse = cupertino_server::events::PointerDevice::new(false, &h.state.config.pointer);
+    assert!(mouse.note_use());
+    h.state.pointer_devices.insert("mouse".into(), mouse);
+    h.state.sync_scroll_bars();
+    h.wait_until("the mouse to count", |_| {
+        observer.display_options().len() == 2
+    });
+    assert_eq!(observer.display_options()[1], ALWAYS);
+    // a touchpad does not count
+    h.state.pointer_devices.remove("mouse");
+    let mut touchpad = cupertino_server::events::PointerDevice::new(true, &h.state.config.pointer);
+    touchpad.note_use();
+    h.state.pointer_devices.insert("touchpad".into(), touchpad);
+    h.state.sync_scroll_bars();
+    h.wait_until("the mouse to go", |_| observer.display_options().len() == 3);
+    assert_eq!(observer.display_options()[2], 0);
+
+    h.state.config.show_scroll_bars = ScrollBarsName::Always;
+    h.state.sync_scroll_bars();
+    h.wait_until("always", |_| observer.display_options().len() == 4);
+    assert_eq!(observer.display_options()[3], ALWAYS);
+    // nothing changed: nothing to tell
+    h.state.sync_scroll_bars();
+    let late = Client::appearance_observer(h.socket_path(), 8);
+    h.wait_until("the late observer", |_| !late.display_options().is_empty());
+    assert_eq!(late.display_options(), [ALWAYS]);
+    assert_eq!(observer.display_options().len(), 4);
+
+    h.state.config.show_scroll_bars = ScrollBarsName::WhenScrolling;
+    h.state.sync_scroll_bars();
+    h.wait_until("when scrolling", |_| observer.display_options().len() == 5);
+    assert_eq!(observer.display_options()[4], 0);
+
+    h.state.config.show_scroll_bars = ScrollBarsName::Always;
+    h.state.sync_scroll_bars();
+    let old_late = Client::appearance_observer(h.socket_path(), 7);
+    h.wait_until("an older observer", |_| {
+        observer.display_options().len() == 6 && !old_late.display_options().is_empty()
+    });
+    assert_eq!(old.display_options(), [0], "an older observer was told");
+    assert_eq!(
+        old_late.display_options(),
+        [0],
+        "an older observer was told"
+    );
+}

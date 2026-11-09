@@ -514,8 +514,8 @@ impl Connection {
                 .map(|g| (g.interface.as_str(), g.version))
                 .collect::<Vec<_>>(),
         )?;
-        // version 8 adds `axis_value120`
-        let seat: Option<WlSeat> = bind(&globals, &qh, 1..=8);
+        // version 8 adds `axis_value120`, version 9 `axis_relative_direction`
+        let seat: Option<WlSeat> = bind(&globals, &qh, 1..=9);
         let data_device_manager = bind(&globals, &qh, 1..=3);
         let clipboard = Clipboard::new(data_device_manager.as_ref(), seat.as_ref(), &qh);
         let text_input_manager: Option<ZwpTextInputManagerV3> = bind(&globals, &qh, 1..=1);
@@ -2587,6 +2587,16 @@ impl Dispatch<WlPointer, ()> for State {
                 state
                     .pointer_tracker
                     .axis_value120(axis == Axis::VerticalScroll, value120);
+                None
+            }
+            wl_pointer::Event::AxisRelativeDirection {
+                axis: WEnum::Value(axis),
+                direction: WEnum::Value(direction),
+            } => {
+                state.pointer_tracker.axis_relative_direction(
+                    axis == Axis::VerticalScroll,
+                    direction == wl_pointer::AxisRelativeDirection::Inverted,
+                );
                 None
             }
             wl_pointer::Event::Frame => state.pointer_tracker.frame(),

@@ -56,6 +56,10 @@ fn fixture() -> Fixture {
 
 impl Fixture {
     fn send(&mut self, event: PointerEvent) -> Vec<String> {
+        self.send_at(event, Timestamp(0))
+    }
+
+    fn send_at(&mut self, event: PointerEvent, time: Timestamp) -> Vec<String> {
         let env = env();
         let mut effects = Effects::default();
         let mut route = Route {
@@ -67,14 +71,14 @@ impl Fixture {
                 focus_visible: false,
                 capture: None,
                 window_active: true,
-                now: Timestamp(0),
+                now: time,
                 opening_press: None,
             },
             popups: &[],
             effects: &mut effects,
         };
         self.pointer
-            .handle(&mut route, self.root, &self.geometry, event, Timestamp(0));
+            .handle(&mut route, self.root, &self.geometry, event, time);
         effects
             .messages
             .into_iter()
@@ -136,4 +140,93 @@ fn leaving_the_surface_cancels_the_capture() {
         ["a:Target:leave", "a:Target:cancel"]
     );
     assert_eq!(f.pointer.capture(), None);
+}
+
+fn scroll(x: f64, source: ScrollSource, stop: bool) -> PointerEvent {
+    PointerEvent::Scroll {
+        position: Point::new(x, 10.0),
+        delta: Point::new(0.0, if stop { 0.0 } else { 5.0 }),
+        value120: None,
+        source,
+        stop,
+        inverted: (false, false),
+    }
+}
+
+fn ms(ms: u64) -> Timestamp {
+    Timestamp(ms * 1_000_000)
+}
+
+/// A finger's scroll gesture stays with the node its first event hit, even where the pointer is now over another,
+/// until its stop; the next gesture goes where the pointer is.
+#[test]
+fn a_finger_scroll_keeps_its_first_target_until_it_stops() {
+    let mut f = fixture();
+    f.send(motion(10.0));
+    assert_eq!(
+        f.send_at(scroll(10.0, ScrollSource::Finger, false), ms(1)),
+        ["a:Target:scroll"]
+    );
+    // the content moved: b is under the pointer now
+    let moved = f.send_at(scroll(60.0, ScrollSource::Finger, false), ms(900));
+    assert_eq!(
+        moved,
+        ["a:Target:leave", "b:Target:enter", "a:Target:scroll"]
+    );
+    assert_eq!(
+        f.send_at(scroll(60.0, ScrollSource::Finger, true), ms(910)),
+        ["a:Target:scroll"],
+        "the stop goes to the gesture's target"
+    );
+    assert_eq!(
+        f.send_at(scroll(60.0, ScrollSource::Finger, false), ms(920)),
+        ["b:Target:scroll"]
+    );
+}
+
+/// A wheel's gesture ends after a pause, a pointer motion or a scroll of another source.
+#[test]
+fn a_wheel_scroll_keeps_its_target_until_it_pauses_or_the_pointer_moves() {
+    let mut f = fixture();
+    f.send(motion(10.0));
+    assert_eq!(
+        f.send_at(scroll(10.0, ScrollSource::Wheel, false), ms(0)),
+        ["a:Target:scroll"]
+    );
+    f.send_at(motion(60.0), ms(1));
+    assert_eq!(
+        f.send_at(scroll(60.0, ScrollSource::Wheel, false), ms(2)),
+        ["b:Target:scroll"],
+        "the motion aimed the wheel anew"
+    );
+    // the content moved under the still pointer: within the pause the wheel stays with b
+    assert_eq!(
+        f.send_at(scroll(10.0, ScrollSource::Wheel, false), ms(100)),
+        ["b:Target:leave", "a:Target:enter", "b:Target:scroll"]
+    );
+    assert_eq!(
+        f.send_at(scroll(10.0, ScrollSource::Finger, false), ms(150)),
+        ["a:Target:scroll"],
+        "another source starts a gesture of its own"
+    );
+    assert_eq!(
+        f.send_at(scroll(60.0, ScrollSource::Wheel, false), ms(160)),
+        ["a:Target:leave", "b:Target:enter", "b:Target:scroll"]
+    );
+    // after the pause the next notch goes where the pointer is
+    f.send_at(scroll(10.0, ScrollSource::Wheel, false), ms(200));
+    assert_eq!(
+        f.send_at(scroll(10.0, ScrollSource::Wheel, false), ms(200 + 301)),
+        ["a:Target:scroll"]
+    );
+}
+
+/// Leaving the surface ends the gesture.
+#[test]
+fn leaving_the_surface_ends_the_scroll_gesture() {
+    let mut f = fixture();
+    f.send(motion(10.0));
+    f.send_at(scroll(10.0, ScrollSource::Finger, false), ms(1));
+    f.send(PointerEvent::Leave);
+    assert!(f.pointer.scroll.is_none());
 }

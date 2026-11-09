@@ -405,6 +405,7 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-apps";
   "cupertino-settings" -> "cupertino-assets";
   "cupertino-settings" -> "cupertino-defaults";
+  "cupertino-settings" -> "cupertino-displays";
   "cupertino-settings" -> "cupertino-filepicker";
   "cupertino-settings" -> "cupertino-icons";
   "cupertino-settings" -> "cupertino-kit";
@@ -434,7 +435,6 @@ digraph "layers" {
   "cupertino-ui-atspi" -> "cupertino-test-bus" [label="dev"];
   "cupertino-ui-atspi" -> "cupertino-ui-core";
   "cupertino-ui-atspi" -> "cupertino-ui-platform";
-  "cupertino-ui-controls" -> "cupertino-animation";
   "cupertino-ui-controls" -> "cupertino-geometry";
   "cupertino-ui-controls" -> "cupertino-menu-model";
   "cupertino-ui-controls" -> "cupertino-theme";

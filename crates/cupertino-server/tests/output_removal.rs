@@ -9,7 +9,7 @@ mod common;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::Client;
+use common::{Client, TOPLEVEL_BLUE};
 use cupertino_overview::OverviewMode;
 use cupertino_server::backend::headless::{self, HeadlessDisplay};
 use cupertino_server::config::Config;
@@ -195,6 +195,34 @@ impl Harness {
         let head = self.head(name);
         headless::remove_display(&mut self.state, head).unwrap();
         self.step();
+    }
+}
+
+impl Harness {
+    /// How many pixels of output `name`'s next frame, drawn as the screen shows it, have `colour` (a test buffer's
+    /// colour, as `common` writes it).
+    fn pixels_of(&mut self, name: &str, colour: [u8; 4]) -> usize {
+        let idx = self
+            .state
+            .outputs
+            .iter()
+            .position(|o| o.output.name() == name)
+            .unwrap();
+        assert_eq!(
+            self.state.power_overlay_alpha(),
+            None,
+            "nothing dims the frame"
+        );
+        let mut backend = self.state.backend.take().unwrap();
+        let image = self
+            .state
+            .draw_output_image(backend.renderer(), idx, true, false)
+            .unwrap();
+        self.state.backend = Some(backend);
+        image
+            .pixels()
+            .filter(|p| p.0[0] == colour[2] && p.0[1] == colour[1] && p.0[2] == colour[0])
+            .count()
     }
 }
 
@@ -445,6 +473,56 @@ fn new_windows_and_the_overview_open_on_the_output_the_person_works_on() {
     let (ul, ur) = (h.usable(left), h.usable(right));
     assert!(ul.right() <= ur.x + 1e-6, "{ul:?} {ur:?}");
     assert_eq!(ur.w, f64::from(RIGHT.0) / RIGHT_SCALE);
+}
+
+/// While the session is locked no frame of any display shows a window, from the first one: the display that remains
+/// when one goes, a display that comes (with a window going back to it at once) and the display left when the one with
+/// the lock surface goes. Unlocked, the same window shows.
+#[test]
+fn while_locked_no_frame_of_a_remaining_or_arriving_display_shows_a_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut clients = Vec::new();
+    let right = h.output("headless-2");
+    let w = h.map(&mut clients);
+    h.put(w, right, Rect::new(1100.0, 100.0, 400.0, 300.0));
+    assert!(
+        h.pixels_of("headless-2", TOPLEVEL_BLUE) > 10_000,
+        "the window shows"
+    );
+    let locker = Client::locker(common::session_agent(&h.state));
+    h.wait_until("the lock request", |s| s.session_lock.is_active());
+    let time = h.state.now() + 2.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
+    h.wait_until("the lock", |_| locker.locked());
+
+    h.unplug("headless-2");
+    assert_eq!(h.output_of(w), h.output("headless-1"));
+    assert_eq!(h.pixels_of("headless-1", TOPLEVEL_BLUE), 0);
+    // the display comes back and the window goes back to it before its first frame
+    headless::add_display(&mut h.state, &right_display(), Some(RIGHT_SCALE)).unwrap();
+    assert_eq!(h.output_of(w), h.output("headless-2"));
+    assert_eq!(
+        h.pixels_of("headless-2", TOPLEVEL_BLUE),
+        0,
+        "its first frame"
+    );
+    h.step();
+    assert_eq!(h.pixels_of("headless-2", TOPLEVEL_BLUE), 0);
+    // the display with the lock surface goes: the one left stays covered
+    h.unplug("headless-1");
+    assert_eq!(h.pixels_of("headless-2", TOPLEVEL_BLUE), 0);
+    h.settle();
+    assert_eq!(h.pixels_of("headless-2", TOPLEVEL_BLUE), 0);
+
+    locker.unlock();
+    h.wait_until("the unlock", |s| !s.session_lock.is_active());
+    // the person is back: the displays do not dim for the idle time the test's clock jumps covered
+    h.state.input_activity();
+    h.settle();
+    assert!(
+        h.pixels_of("headless-2", TOPLEVEL_BLUE) > 10_000,
+        "the window shows again"
+    );
 }
 
 /// The last display goes and another comes: the windows come onto it, inside its usable area. When their own display

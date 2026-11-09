@@ -151,13 +151,7 @@ fn catch_fatal_signals() {
         // Safety: the action is fully initialised, the handler has the signature handlers without SA_SIGINFO take,
         // and `previous` is valid for writing.
         unsafe {
-            let mut action: libc::sigaction = std::mem::zeroed();
-            action.sa_sigaction = fatal_signal as extern "C" fn(libc::c_int) as usize;
-            // a fault while the handler runs ends the process at once instead of running it again
-            libc::sigemptyset(&mut action.sa_mask);
-            for blocked in FATAL_SIGNALS {
-                libc::sigaddset(&mut action.sa_mask, blocked);
-            }
+            let mut action = fatal_action(fatal_signal);
             // a fault may be a stack overflow, with no stack left to handle it on
             if *signal == libc::SIGSEGV && fault_stack {
                 action.sa_flags = libc::SA_ONSTACK;
@@ -166,6 +160,21 @@ fn catch_fatal_signals() {
         }
     }
     let _ = PREVIOUS_ACTIONS.set(previous);
+}
+
+/// The action that runs `handler` for one of the [`FATAL_SIGNALS`] with all of them blocked: a fault while the handler
+/// runs ends the process at once instead of running it again.
+fn fatal_action(handler: extern "C" fn(libc::c_int)) -> libc::sigaction {
+    // Safety: a zeroed sigaction is a valid one (no flags), and its mask is initialised before it is added to.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = handler as usize;
+        libc::sigemptyset(&mut action.sa_mask);
+        for blocked in FATAL_SIGNALS {
+            libc::sigaddset(&mut action.sa_mask, blocked);
+        }
+        action
+    }
 }
 
 /// Gives the calling thread an alternate signal stack of [`SIGNAL_STACK`] bytes, in place of the standard library's
@@ -199,7 +208,7 @@ fn signal_stack() -> bool {
 /// Writes the signal to the session-end file, the log and the diagnostic store (`server.fatal_signal`), then the
 /// backtrace, and ends the process as the signal's previous action would. The reason and the event are written with no
 /// allocation and no lock first. The backtrace allocates and takes locks, which a crash inside the allocator may hold, so
-/// an alarm ends the process if it hangs.
+/// an alarm ends the process, by the same signal, if it hangs ([`limit_fatal_handler`]).
 extern "C" fn fatal_signal(signal: libc::c_int) {
     let name: &[u8] = match signal {
         libc::SIGABRT => b"SIGABRT",
@@ -242,17 +251,7 @@ extern "C" fn fatal_signal(signal: libc::c_int) {
             }
         }
     }
-    // Safety: `sigaction`, `sigprocmask` and `alarm` are async-signal-safe and take initialised values.
-    unsafe {
-        let mut default: libc::sigaction = std::mem::zeroed();
-        default.sa_sigaction = libc::SIG_DFL;
-        libc::sigaction(libc::SIGALRM, &default, std::ptr::null_mut());
-        let mut alarm: libc::sigset_t = std::mem::zeroed();
-        libc::sigemptyset(&mut alarm);
-        libc::sigaddset(&mut alarm, libc::SIGALRM);
-        libc::pthread_sigmask(libc::SIG_UNBLOCK, &alarm, std::ptr::null_mut());
-        libc::alarm(TEARDOWN_LIMIT.as_secs() as libc::c_uint);
-    }
+    limit_fatal_handler(signal);
     let trace = Backtrace::force_capture().to_string();
     write_raw(log, &[trace.as_bytes(), b"\n"]);
     // Safety: the previous action was read by `sigaction` itself; the signal stays blocked until this handler returns,
@@ -262,6 +261,48 @@ extern "C" fn fatal_signal(signal: libc::c_int) {
             libc::sigaction(signal, &previous[index], std::ptr::null_mut());
         }
         libc::raise(signal);
+    }
+}
+
+/// The fatal signal whose handler [`limit_fatal_handler`] bounds, for [`fatal_handler_hung`].
+static LIMITED_SIGNAL: AtomicI32 = AtomicI32::new(0);
+
+/// Bounds what the handler of the fatal `signal` does from here on: once [`TEARDOWN_LIMIT`] has passed, an alarm ends
+/// the process by that signal all the same. Only async-signal-safe calls.
+fn limit_fatal_handler(signal: libc::c_int) {
+    LIMITED_SIGNAL.store(signal, Ordering::SeqCst);
+    // Safety: `sigaction`, `pthread_sigmask` and `alarm` are async-signal-safe and take initialised values; the handler
+    // has the signature handlers without SA_SIGINFO take.
+    unsafe {
+        let mut hung: libc::sigaction = std::mem::zeroed();
+        hung.sa_sigaction = fatal_handler_hung as extern "C" fn(libc::c_int) as usize;
+        libc::sigemptyset(&mut hung.sa_mask);
+        libc::sigaction(libc::SIGALRM, &hung, std::ptr::null_mut());
+        let mut alarm: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut alarm);
+        libc::sigaddset(&mut alarm, libc::SIGALRM);
+        libc::pthread_sigmask(libc::SIG_UNBLOCK, &alarm, std::ptr::null_mut());
+        libc::alarm(TEARDOWN_LIMIT.as_secs() as libc::c_uint);
+    }
+}
+
+/// The alarm of [`limit_fatal_handler`]: the handler of a fatal signal hangs. Ends the process by that signal, so its
+/// status still names what ended it. The signal is blocked while its handler runs, so this thread unblocks it, and its
+/// default action replaces whatever handled it. Only async-signal-safe calls.
+extern "C" fn fatal_handler_hung(_: libc::c_int) {
+    let signal = LIMITED_SIGNAL.load(Ordering::SeqCst);
+    // Safety: `sigaction`, `pthread_sigmask`, `raise` and `_exit` are async-signal-safe and take initialised values.
+    unsafe {
+        let mut default: libc::sigaction = std::mem::zeroed();
+        default.sa_sigaction = libc::SIG_DFL;
+        libc::sigaction(signal, &default, std::ptr::null_mut());
+        let mut ending: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut ending);
+        libc::sigaddset(&mut ending, signal);
+        libc::pthread_sigmask(libc::SIG_UNBLOCK, &ending, std::ptr::null_mut());
+        libc::raise(signal);
+        // the default action of a fatal signal ends the process, so this is not reached
+        libc::_exit(128 + signal);
     }
 }
 
@@ -403,6 +444,52 @@ pub(crate) mod test_events {
 mod tests {
     use super::*;
     use std::io::Read;
+
+    /// A fatal signal handler whose work after the limit is set never ends, as a backtrace that waits for a lock the
+    /// crashed thread holds.
+    extern "C" fn hangs_once_limited(signal: libc::c_int) {
+        limit_fatal_handler(signal);
+        loop {
+            // Safety: `pause` takes nothing and is async-signal-safe.
+            unsafe { libc::pause() };
+        }
+    }
+
+    #[test]
+    fn a_fatal_signal_whose_handler_hangs_still_ends_the_process_by_that_signal() {
+        for signal in FATAL_SIGNALS {
+            // Safety: the child is a copy of this thread alone and makes only async-signal-safe calls (setrlimit,
+            // sigaction, raise, pause, _exit, and those of the functions under test) before it ends.
+            let child = unsafe { libc::fork() };
+            assert!(child >= 0, "fork failed");
+            if child == 0 {
+                // Safety: as above; the values are initialised.
+                unsafe {
+                    // the signal's default action leaves no core file
+                    let none = libc::rlimit {
+                        rlim_cur: 0,
+                        rlim_max: 0,
+                    };
+                    libc::setrlimit(libc::RLIMIT_CORE, &none);
+                    // the signal is blocked while its handler runs, as it is for the server's own handler
+                    libc::sigaction(
+                        signal,
+                        &fatal_action(hangs_once_limited),
+                        std::ptr::null_mut(),
+                    );
+                    libc::raise(signal);
+                    libc::_exit(0);
+                }
+            }
+            let mut status = 0;
+            // Safety: waits for the child made above and writes its status into a valid integer.
+            assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+            assert!(
+                libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == signal,
+                "the hung handler of signal {signal} ended with wait status {status:#x}, not by that signal"
+            );
+        }
+    }
 
     #[test]
     fn the_first_end_of_the_server_is_the_one_recorded() {

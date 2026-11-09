@@ -30,9 +30,9 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
     ConstraintAdjust, DragImage, DragProgress, DragRequest, DragToken, DropAction, DropToken,
-    GlassTone, KeyEvent, Keysym, MaterialRegion, MenuDescription, PlatformError, PlatformEvent,
-    PointerEvent, PopupEdge, PopupSpec, PresentOutcome, SystemAppearance, Timestamp, TouchEvent,
-    WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    GlassTone, KeyEvent, Keysym, MaterialRegion, MenuDescription, Mods, MouseButton, PlatformError,
+    PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome, SystemAppearance, Timestamp,
+    TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderError, RenderRequest, UiRenderer,
@@ -895,8 +895,28 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             _ => {}
         }
         let now = self.options.clock.now();
+        // the press that ends here, if it opened popups the release is not on
+        let ended_elsewhere = match event {
+            WindowEvent::Pointer(
+                PointerEvent::Button {
+                    pressed: false,
+                    button,
+                    serial,
+                    mods,
+                    ..
+                },
+                time,
+            ) => self
+                .press
+                .filter(|&start| self.windows[i].opening_press != Some(start))
+                .map(|start| (start, button, serial, mods, time)),
+            _ => None,
+        };
         if let WindowEvent::Pointer(PointerEvent::Button { pressed, .. }, _) = event {
             self.press = pressed.then_some(now);
+        }
+        if let Some((start, button, serial, mods, time)) = ended_elsewhere {
+            self.release_elsewhere(start, button, serial, mods, time, now);
         }
         let w = &mut self.windows[i];
         let mut effects = Effects::default();
@@ -1055,6 +1075,44 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
         self.apply(i, effects);
         Ok(())
+    }
+
+    /// The press that began at `start` was let go away from the popups it opened: each one's root hears of the release
+    /// at a point outside it, so a menu dragged through and let go elsewhere can close.
+    fn release_elsewhere(
+        &mut self,
+        start: Timestamp,
+        button: MouseButton,
+        serial: u32,
+        mods: Mods,
+        time: Timestamp,
+        now: Timestamp,
+    ) {
+        let opened: Vec<usize> = (0..self.windows.len())
+            .filter(|&j| {
+                let w = &self.windows[j];
+                w.popup.is_some() && w.opening_press == Some(start)
+            })
+            .collect();
+        let outside = Point::new(-f64::from(u16::MAX), -f64::from(u16::MAX));
+        let release = Event::Pointer(
+            PointerEvent::Button {
+                position: outside,
+                button,
+                pressed: false,
+                serial,
+                mods,
+            },
+            time,
+        );
+        for j in opened {
+            let mut effects = Effects::default();
+            let w = &mut self.windows[j];
+            if let Some(root) = w.root {
+                route(&mut self.tree, w, now, &mut effects).notify(root, &release);
+            }
+            self.apply(j, effects);
+        }
     }
 
     /// Repaints every node of window `i`: its active state changed, which every control may show.

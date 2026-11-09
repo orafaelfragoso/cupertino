@@ -6,8 +6,16 @@
 //! 110 points per inch, one representative mode per bucket, at most five choices. [`candidates`] is
 //! the mode list this compositor feeds it (it renders any fractional scale, so it has no installed
 //! scaled-mode table), and [`default_choice`] picks the scale a display starts at.
+//!
+//! A built-in panel offers a fixed ladder of sizes instead ([`catalogue`]): its default size, three sizes with larger
+//! text and one with more space, each drawn from a buffer of twice its points. [`geometry`] keeps the quantities of an
+//! output apart: the mode in panel pixels, the logical extent in points, the effective scale and buffer rasters.
+
+pub mod geometry;
 
 use std::ops::RangeInclusive;
+
+pub use geometry::{Extent, GeometryError, OutputGeometry};
 
 /// No mode is listed below this height in points; for a display rotated by 90 or 270 degrees the
 /// floor is this times the aspect ratio..
@@ -46,6 +54,9 @@ pub struct Panel {
     /// The display asks for precise refresh rates (override policy bit 0x01000000): modes
     /// are compared on the millihertz rate instead of whole hertz.
     pub precise_rate: bool,
+    /// The machine's own panel (a laptop's or a tablet's): it offers the built-in ladder of sizes ([`catalogue`])
+    /// instead of the scaled-mode buckets of an external display.
+    pub built_in: bool,
 }
 
 impl Panel {
@@ -66,7 +77,13 @@ impl Panel {
             vertical_dpi,
             rotated,
             precise_rate: false,
+            built_in: false,
         })
+    }
+
+    /// The same panel, marked as the machine's own.
+    pub fn built_in(self, built_in: bool) -> Panel {
+        Panel { built_in, ..self }
     }
 
     fn aspect_ratio(&self) -> f32 {
@@ -352,8 +369,26 @@ pub const SCALE_EIGHTHS: RangeInclusive<u32> = 8..=24;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Candidate {
     pub mode: Mode,
-    /// Physical pixels per logical point on the output.
+    /// Physical pixels per logical point on the output: the effective scale the output is set to.
     pub scale: f64,
+}
+
+impl Candidate {
+    /// The size the desktop looks like, in points.
+    pub fn logical(&self) -> Extent {
+        Extent::new(self.mode.width, self.mode.height)
+    }
+
+    /// Buffer pixels per point the size is drawn from: 2 for a scaled size, 1 for an unscaled one.
+    pub fn backing(&self) -> u32 {
+        self.mode.scale as u32
+    }
+
+    /// The buffer the size is drawn from: its points times its backing scale.
+    pub fn raster(&self) -> Extent {
+        let backing = self.backing();
+        Extent::new(self.mode.width * backing, self.mode.height * backing)
+    }
 }
 
 /// The sizes a display of `pixels` at `refresh_mhz` can look like, one per scale of
@@ -379,26 +414,149 @@ pub fn candidates(pixels: (u32, u32), refresh_mhz: u32) -> Vec<Candidate> {
         .collect()
 }
 
-/// The candidate a new display starts at: the anchor of its list (the size nearest 110 points per
-/// inch; that the default follows the anchor is, the design's default mode comes from
-/// the display's own data). `None` when the display has no list, because its native height is
-/// at or below the 640-point floor: it is shown unscaled.
+/// The sizes a built-in panel offers, as widths in [`BUILT_IN_DEFAULT_STEP`]ths of its default width: three with
+/// larger text, the default and one with more space.
+pub const BUILT_IN_STEPS: [u32; 5] = [1024, 1147, 1352, 1512, 1800];
+/// The step of the default size in [`BUILT_IN_STEPS`].
+pub const BUILT_IN_DEFAULT_STEP: u32 = 1512;
+/// Points per inch a built-in panel's default size aims at.
+pub const BUILT_IN_POINTS_PER_INCH: f32 = 127.0;
+/// A whole scale whose density is within this fraction of the aimed one is the default scale: the panel is then
+/// drawn without resampling.
+pub const WHOLE_SCALE_SNAP: f32 = 0.05;
+/// Buffer pixels per point of a scaled built-in size: each is drawn from a raster twice its points.
+pub const BUILT_IN_BACKING: u32 = 2;
+
+/// The "looks like" choices of a display and the one it starts at.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Catalogue {
+    /// From the largest text (fewest points) to the most space.
+    pub choices: Vec<Candidate>,
+    /// Index of the default size in `choices`.
+    pub default: Option<usize>,
+}
+
+impl Catalogue {
+    pub fn default_choice(&self) -> Option<Candidate> {
+        self.default.map(|i| self.choices[i])
+    }
+
+    /// The index of the choice an output of `logical` points shows, if it shows one.
+    pub fn position(&self, logical: Extent) -> Option<usize> {
+        self.choices.iter().position(|c| c.logical() == logical)
+    }
+}
+
+/// The lowest height a list may offer: the floor in points, times the aspect ratio for a turned panel.
+fn floor_height(panel: &Panel) -> f32 {
+    if panel.rotated {
+        MIN_HEIGHT_POINTS * panel.aspect_ratio()
+    } else {
+        MIN_HEIGHT_POINTS
+    }
+}
+
+/// The width of a built-in panel's default size: the one at [`BUILT_IN_POINTS_PER_INCH`], at a whole scale when one
+/// is within [`WHOLE_SCALE_SNAP`] of it, never wider than the panel and never below the floor.
+fn built_in_default_width(panel: &Panel, floor: f32) -> u32 {
+    let (wide, high) = (panel.pixels_wide as f32, panel.pixels_high as f32);
+    let aimed = panel.vertical_dpi / BUILT_IN_POINTS_PER_INCH;
+    let whole = aimed.round().max(1.0);
+    let scale = if aimed <= 1.0 {
+        1.0
+    } else if (aimed - whole).abs() <= WHOLE_SCALE_SNAP * whole {
+        whole
+    } else {
+        aimed
+    };
+    let width = (wide / scale).round();
+    let narrowest = (floor * wide / high).ceil();
+    width.max(narrowest).min(wide) as u32
+}
+
+/// A built-in panel's ladder: [`BUILT_IN_STEPS`] of its default width, each height following the panel's aspect
+/// ratio. Sizes below the floor are left out; a size with more space than the panel has is its own size instead,
+/// unscaled, once.
+fn built_in_catalogue(panel: &Panel, refresh_mhz: u32) -> Catalogue {
+    let empty = Catalogue {
+        choices: Vec::new(),
+        default: None,
+    };
+    let floor = floor_height(panel);
+    if panel.vertical_dpi.is_nan() || floor >= panel.pixels_high as f32 {
+        return empty;
+    }
+    let default_width = built_in_default_width(panel, floor);
+    let (wide, high) = (u64::from(panel.pixels_wide), u64::from(panel.pixels_high));
+    let mut choices = Vec::new();
+    let mut default = None;
+    for step in BUILT_IN_STEPS {
+        let width = (u64::from(default_width) * u64::from(step)
+            + u64::from(BUILT_IN_DEFAULT_STEP) / 2)
+            / u64::from(BUILT_IN_DEFAULT_STEP);
+        let width = width.min(wide);
+        let height = (width * high + wide / 2) / wide;
+        let listed = choices
+            .iter()
+            .any(|c: &Candidate| u64::from(c.mode.width) == width);
+        if width == 0 || listed || (height as f32) < floor {
+            continue;
+        }
+        let (width, height) = (width as u32, height as u32);
+        let native = width == panel.pixels_wide;
+        let backing = if native { 1 } else { BUILT_IN_BACKING };
+        if step == BUILT_IN_DEFAULT_STEP {
+            default = Some(choices.len());
+        }
+        choices.push(Candidate {
+            mode: Mode {
+                width,
+                height,
+                scale: backing as f32,
+                pixels_high: height * backing,
+                refresh_mhz,
+                native,
+            },
+            scale: f64::from(panel.pixels_wide) / f64::from(width),
+        });
+    }
+    Catalogue { choices, default }
+}
+
+/// The "looks like" choices of a display and its default size. A built-in panel offers its ladder
+/// ([`BUILT_IN_STEPS`]) around the size at [`BUILT_IN_POINTS_PER_INCH`]; an external display the buckets of
+/// [`looks_like`] among the compositor's [`candidates`], starting at the anchor.
+pub fn catalogue(panel: &Panel, refresh_mhz: u32) -> Catalogue {
+    if panel.built_in {
+        return built_in_catalogue(panel, refresh_mhz);
+    }
+    let all = candidates((panel.pixels_wide, panel.pixels_high), refresh_mhz);
+    let modes: Vec<Mode> = all.iter().map(|c| c.mode).collect();
+    let list = looks_like(panel, &modes);
+    let order = list.by_height(&modes);
+    let default = list.anchor.and_then(|a| order.iter().position(|&i| i == a));
+    Catalogue {
+        choices: order.into_iter().map(|i| all[i]).collect(),
+        default,
+    }
+}
+
+/// The candidate a new display starts at. A built-in panel starts at its default size; an external display at the
+/// anchor of its list (the size nearest 110 points per inch), even when that is not one of the listed choices.
+/// `None` when the display has no list, because its native height is at or below the 640-point floor: it is shown
+/// unscaled.
 pub fn default_choice(panel: &Panel, refresh_mhz: u32) -> Option<Candidate> {
+    if panel.built_in {
+        return built_in_catalogue(panel, refresh_mhz).default_choice();
+    }
     let all = candidates((panel.pixels_wide, panel.pixels_high), refresh_mhz);
     let modes: Vec<Mode> = all.iter().map(|c| c.mode).collect();
     looks_like(panel, &modes).anchor.map(|i| all[i])
 }
 
-/// The "looks like" choices of a display among the compositor's candidates, from the largest text
-/// to the most space.
+/// The "looks like" choices of a display, from the largest text to the most space ([`catalogue`]).
 pub fn scaled_choices(panel: &Panel, refresh_mhz: u32) -> Vec<Candidate> {
-    let all = candidates((panel.pixels_wide, panel.pixels_high), refresh_mhz);
-    let modes: Vec<Mode> = all.iter().map(|c| c.mode).collect();
-    looks_like(panel, &modes)
-        .by_height(&modes)
-        .into_iter()
-        .map(|i| all[i])
-        .collect()
+    catalogue(panel, refresh_mhz).choices
 }
 
 #[cfg(test)]
@@ -412,6 +570,7 @@ mod tests {
             vertical_dpi: dpi,
             rotated: false,
             precise_rate: false,
+            built_in: false,
         }
     }
 
@@ -581,6 +740,192 @@ mod tests {
         };
         let bucket = Bucket::fill(&p, &[wide], 0.0, 2000.0, 720.0);
         assert!(bucket.members.is_empty());
+    }
+
+    /// A 14-inch built-in panel: 3024x1964 pixels, 302x196 mm.
+    fn built_in_14() -> Panel {
+        Panel::from_physical((3024, 1964), (302, 196), false)
+            .unwrap()
+            .built_in(true)
+    }
+
+    fn sizes(choices: &[Candidate]) -> Vec<(u32, u32)> {
+        choices
+            .iter()
+            .map(|c| (c.mode.width, c.mode.height))
+            .collect()
+    }
+
+    #[test]
+    fn a_built_in_panel_offers_its_ladder_around_twice_its_pixels_per_point() {
+        let list = catalogue(&built_in_14(), 120_000);
+        assert_eq!(
+            sizes(&list.choices),
+            [
+                (1024, 665),
+                (1147, 745),
+                (1352, 878),
+                (1512, 982),
+                (1800, 1169)
+            ]
+        );
+        let default = list.default_choice().unwrap();
+        assert_eq!(
+            (default.logical(), default.scale),
+            (Extent::new(1512, 982), 2.0)
+        );
+        assert_eq!(default_choice(&built_in_14(), 120_000), Some(default));
+        let rasters: Vec<(Extent, u32)> = list
+            .choices
+            .iter()
+            .map(|c| (c.raster(), c.backing()))
+            .collect();
+        assert_eq!(
+            rasters,
+            [
+                (Extent::new(2048, 1330), 2),
+                (Extent::new(2294, 1490), 2),
+                (Extent::new(2704, 1756), 2),
+                (Extent::new(3024, 1964), 2),
+                (Extent::new(3600, 2338), 2),
+            ]
+        );
+        // every choice fills the panel: the output it sets shows exactly its points
+        for c in &list.choices {
+            let g = OutputGeometry::new(Extent::new(3024, 1964), c.scale, false).unwrap();
+            assert_eq!(g.logical, c.logical());
+        }
+        assert_eq!(list.position(Extent::new(1352, 878)), Some(2));
+        assert_eq!(list.position(Extent::new(1353, 878)), None);
+    }
+
+    #[test]
+    fn the_buckets_pick_the_same_five_from_the_panels_full_mode_table() {
+        // The panel's whole table: twelve sizes drawn from 2x buffers (two aspect ratios) and the ten unscaled ones,
+        // each at six rates. The bucket selection over it lists the ladder.
+        let scaled = [
+            (960, 600),
+            (1024, 640),
+            (1024, 665),
+            (1147, 716),
+            (1147, 745),
+            (1280, 800),
+            (1352, 845),
+            (1352, 878),
+            (1512, 945),
+            (1512, 982),
+            (1800, 1125),
+            (1800, 1169),
+        ];
+        let mut modes = Vec::new();
+        for (sizes, backing) in [(&scaled[..], 2), (&scaled[..10], 1)] {
+            for &(w, h) in sizes {
+                let (w, h) = (w * (3 - backing), h * (3 - backing));
+                for refresh_mhz in [47_950, 48_000, 50_000, 59_940, 60_000, 120_000] {
+                    modes.push(Mode {
+                        width: w,
+                        height: h,
+                        scale: backing as f32,
+                        pixels_high: h * backing,
+                        refresh_mhz,
+                        native: (w, h) == (3024, 1964),
+                    });
+                }
+            }
+        }
+        let p = built_in_14();
+        let picked: Vec<(u32, u32)> = looks_like(&p, &modes)
+            .by_height(&modes)
+            .into_iter()
+            .map(|i| (modes[i].width, modes[i].height))
+            .collect();
+        assert_eq!(picked, sizes(&catalogue(&p, 120_000).choices));
+    }
+
+    #[test]
+    fn every_built_in_panel_gets_an_ordered_ladder_with_its_default() {
+        // (pixels, vertical dpi, default size)
+        let panels = [
+            ((3456, 2234), 254.0, (1728, 1117)),
+            ((3024, 1964), 254.5, (1512, 982)),
+            ((2560, 1664), 224.0, (1451, 943)),
+            ((2560, 1600), 227.0, (1432, 895)),
+            ((3840, 2400), 283.0, (1723, 1077)),
+            ((1920, 1080), 141.0, (1729, 973)),
+            ((1366, 768), 112.0, (1366, 768)),
+            ((1280, 800), 300.0, (1024, 640)),
+        ];
+        for (pixels, dpi, wanted) in panels {
+            let p = panel(pixels, dpi).built_in(true);
+            let list = catalogue(&p, 60_000);
+            let default = list.default_choice().unwrap();
+            assert_eq!(
+                (default.mode.width, default.mode.height),
+                wanted,
+                "{pixels:?}"
+            );
+            assert!(list.choices.len() <= MAX_CHOICES && !list.choices.is_empty());
+            assert!(
+                list.choices
+                    .windows(2)
+                    .all(|w| w[0].mode.width < w[1].mode.width
+                        && w[0].mode.height < w[1].mode.height),
+                "{pixels:?}: {:?}",
+                sizes(&list.choices)
+            );
+            for c in &list.choices {
+                assert!(
+                    c.mode.height >= 640 && c.mode.width <= pixels.0,
+                    "{pixels:?}"
+                );
+                let aspect = f64::from(pixels.0) / f64::from(pixels.1);
+                assert!(
+                    (f64::from(c.mode.width) / aspect - f64::from(c.mode.height)).abs() <= 0.5,
+                    "{pixels:?}: {:?} keeps the panel's aspect ratio",
+                    c.logical()
+                );
+                assert_eq!(c.scale, f64::from(pixels.0) / f64::from(c.mode.width));
+                assert_eq!(c.backing(), if c.mode.native { 1 } else { 2 });
+                let g =
+                    OutputGeometry::new(Extent::new(pixels.0, pixels.1), c.scale, false).unwrap();
+                assert_eq!(g.logical, c.logical(), "{pixels:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_low_density_built_in_panel_offers_its_own_size_for_more_space() {
+        let list = catalogue(&panel((1920, 1080), 141.0).built_in(true), 60_000);
+        assert_eq!(
+            sizes(&list.choices),
+            [
+                (1171, 659),
+                (1312, 738),
+                (1546, 870),
+                (1729, 973),
+                (1920, 1080)
+            ]
+        );
+        let last = list.choices.last().unwrap();
+        assert_eq!(
+            (last.scale, last.backing(), last.raster()),
+            (1.0, 1, Extent::new(1920, 1080))
+        );
+    }
+
+    #[test]
+    fn a_built_in_panel_at_the_floor_has_no_list() {
+        let p = panel((1024, 640), 100.0).built_in(true);
+        assert_eq!(catalogue(&p, 60_000).choices, []);
+        assert_eq!(default_choice(&p, 60_000), None);
+    }
+
+    #[test]
+    fn an_external_display_keeps_its_buckets() {
+        let p = Panel::from_physical((3840, 2160), (597, 336), false).unwrap();
+        let list = catalogue(&p, 60_000);
+        assert_eq!(list.choices, scaled_choices(&p, 60_000));
+        assert_eq!(list.default_choice(), default_choice(&p, 60_000));
     }
 
     #[test]

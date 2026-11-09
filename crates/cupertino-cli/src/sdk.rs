@@ -8,8 +8,8 @@ use crate::{
 use serde::Serialize;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{self, Read as _};
-use std::os::unix::fs::{DirBuilderExt, FileExt, PermissionsExt};
+use std::io::{self, Read as _, Write as _};
+use std::os::unix::fs::{DirBuilderExt, FileExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -100,12 +100,14 @@ const COMMANDS: &[Command] = &[
         summary: "Writes a starter project of a CupertinoKit application in C or Rust",
         description: "Writes a new project into the directory <name> (or --dir): for --lang c a main.c, a Makefile \
                       that takes its flags from pkg-config cupertinokit, the desktop entry <name>.desktop and a \
-                      README; for --lang rust a Cargo.toml depending on the cupertino-kit crate of this release, a \
-                      src/main.rs with a window that counts, the desktop entry and a README. Files are written with \
-                      mode 0644 and directories with 0755.\n\n\
+                      README; for --lang rust a Cargo.toml depending on the cupertino-kit crate of this release (the \
+                      git tag v<version> of the Cupertino repository, or the checkout --source names), a src/main.rs \
+                      with a window that counts, the desktop entry and a README. Files are written with mode 0644 and \
+                      directories with 0755, and no file that exists is replaced.\n\n\
                       <name> is the application's id, the name of its desktop entry: letters, digits, `-` and `_`, in \
-                      elements separated by dots, none starting with a digit. Another name is invalid_usage, \
-                      invalid_name (exit 2). A directory that exists and is not empty is validation, \
+                      elements separated by dots, none starting with a digit, and not starting with `-`. Another name \
+                      is invalid_usage, invalid_name (exit 2). --source that is not a Cupertino checkout, or is given \
+                      for C, is invalid_usage, invalid_value. A directory that exists and is not empty is validation, \
                       directory_not_empty (exit 5); one that cannot be written is denied, not_writable (exit 4).",
         examples: &[
             (
@@ -116,6 +118,10 @@ const COMMANDS: &[Command] = &[
                 "cupertino sdk new --lang rust org.example.Counter --dir counter",
                 "Start a Rust project for the app id org.example.Counter in ./counter.",
             ),
+            (
+                "cupertino sdk new --lang rust demo --source ~/src/cupertino",
+                "Start a Rust project on the cupertino-kit of a checkout: offline, or before its release is tagged.",
+            ),
         ],
         stability: Stability::Preview,
         args: &[
@@ -124,6 +130,11 @@ const COMMANDS: &[Command] = &[
             Arg::option(
                 "dir",
                 "the directory to write the project into, instead of ./<name>",
+            )
+            .hint(ValueHint::Dir),
+            Arg::option(
+                "source",
+                "a Cupertino checkout to take cupertino-kit from (--lang rust), instead of the release's git tag",
             )
             .hint(ValueHint::Dir),
         ],
@@ -1066,6 +1077,10 @@ fn invalid_name(name: &str) -> Option<&'static str> {
     if name.is_empty() || name.len() > 255 {
         return Some("it must have 1 to 255 characters");
     }
+    // it names the program, a make target and a Cargo package, none of which may look like an option
+    if name.starts_with('-') {
+        return Some("it may not start with `-`");
+    }
     for element in name.split('.') {
         let Some(first) = element.chars().next() else {
             return Some("its dot-separated elements may not be empty");
@@ -1089,6 +1104,52 @@ struct Created {
     name: String,
     dir: String,
     files: Vec<CreatedFile>,
+    /// Where a Rust project takes cupertino-kit from: `{git, tag}` or `{path}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kit: Option<serde_json::Value>,
+}
+
+/// The repository whose release tags a Rust project depends on.
+const REPOSITORY: &str = "https://github.com/orafaelfragoso/cupertino";
+
+/// The checkout `--source` names, made absolute, if it holds the crates a Rust project depends on.
+fn kit_source(source: &str, cx: &Context) -> Result<String, Failure> {
+    let path = Path::new(source);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cx.current_dir()
+            .map_err(|e| {
+                Failure::new(
+                    FailureKind::Unavailable,
+                    "no_working_directory",
+                    format!("cannot read the working directory: {e}"),
+                )
+            })?
+            .join(path)
+    };
+    let not_checkout = || {
+        Failure::usage(
+            "invalid_value",
+            format!(
+                "--source {source}: not a Cupertino checkout (it needs crates/cupertino-kit and \
+                 crates/cupertino-xkbcommon)"
+            ),
+        )
+    };
+    let path = fs::canonicalize(&path).map_err(|_| not_checkout())?;
+    if !["crates/cupertino-kit", "crates/cupertino-xkbcommon"]
+        .iter()
+        .all(|c| path.join(c).join("Cargo.toml").is_file())
+    {
+        return Err(not_checkout());
+    }
+    path.to_str().map(str::to_owned).ok_or_else(|| {
+        Failure::usage(
+            "invalid_value",
+            format!("--source {source}: the path is not UTF-8, which Cargo.toml cannot hold"),
+        )
+    })
 }
 
 #[derive(Serialize)]
@@ -1172,6 +1233,16 @@ fn new(args: &Args, cx: &Context) -> Result<Reply, Failure> {
             format!("{name:?} is a name Cargo keeps for Rust itself"),
         ));
     }
+    let source = match args.value("source") {
+        Some(_) if lang != "rust" => {
+            return Err(Failure::usage(
+                "invalid_value",
+                "--source names the checkout of a Rust project's cupertino-kit; a C project uses the installed SDK",
+            ))
+        }
+        Some(source) => Some(kit_source(source, cx)?),
+        None => None,
+    };
     let dir = args.value("dir").unwrap_or(name);
     let dir = Path::new(dir);
     let shown = dir.display().to_string();
@@ -1214,11 +1285,43 @@ fn new(args: &Args, cx: &Context) -> Result<Reply, Failure> {
         "c" => (C_FILES, "c"),
         _ => (RUST_FILES, "rust"),
     };
+    let version = env!("CARGO_PKG_VERSION");
+    // a Rust project's two dependencies on the repository: the release's tag, or the checkout's crates by path
+    let (kit, kit_dependency, xkbcommon_dependency, kit_origin) = match &source {
+        None => {
+            let git = format!("{{ git = \"{REPOSITORY}\", tag = \"v{version}\" }}");
+            (
+                serde_json::json!({ "git": REPOSITORY, "tag": format!("v{version}") }),
+                git.clone(),
+                git,
+                format!("the git tag v{version} of {REPOSITORY}"),
+            )
+        }
+        Some(checkout) => {
+            // a JSON string is a TOML basic string: quotes, backslashes and controls are escaped the same way
+            let path = |krate: &str| {
+                let at = format!("{checkout}/crates/{krate}");
+                format!(
+                    "{{ path = {} }}",
+                    serde_json::to_string(&at).expect("a string serializes")
+                )
+            };
+            (
+                serde_json::json!({ "path": format!("{checkout}/crates/cupertino-kit") }),
+                path("cupertino-kit"),
+                path("cupertino-xkbcommon"),
+                format!("the checkout {checkout}"),
+            )
+        }
+    };
     let fill = |text: &str| {
-        text.replace("{{name}}", name)
+        text.replace("{{kit_dependency}}", &kit_dependency)
+            .replace("{{xkbcommon_dependency}}", &xkbcommon_dependency)
+            .replace("{{kit_origin}}", &kit_origin)
+            .replace("{{name}}", name)
             .replace("{{app_id}}", name)
             .replace("{{crate_name}}", &crate_name)
-            .replace("{{version}}", env!("CARGO_PKG_VERSION"))
+            .replace("{{version}}", version)
     };
     let mut made_dirs = make_dirs(&dir).map_err(|e| write_failure(&dir, &e))?;
     let mut written = Vec::new();
@@ -1230,12 +1333,28 @@ fn new(args: &Args, cx: &Context) -> Result<Reply, Failure> {
             if let Some(parent) = out.parent() {
                 made_dirs.extend(make_dirs(parent)?);
             }
-            fs::write(&out, fill(template))?;
+            // never replaces a file: one that appeared since the directory was found empty stops the project
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(FILE_MODE)
+                .open(&out)?;
             written.push(out.clone());
+            file.write_all(fill(template).as_bytes())?;
             fs::set_permissions(&out, fs::Permissions::from_mode(FILE_MODE))
         })();
         if let Err(e) = result {
             undo(&written, &made_dirs);
+            if e.kind() == io::ErrorKind::AlreadyExists {
+                return Err(Failure::new(
+                    FailureKind::Validation,
+                    "directory_not_empty",
+                    format!(
+                        "{} appeared while the project was written; nothing was replaced",
+                        out.display()
+                    ),
+                ));
+            }
             return Err(write_failure(&out, &e));
         }
         created.push(CreatedFile {
@@ -1243,8 +1362,14 @@ fn new(args: &Args, cx: &Context) -> Result<Reply, Failure> {
             mode: format!("{FILE_MODE:04o}"),
         });
     }
+    // the program's path from the working directory: ./ only before a relative directory
+    let program = if Path::new(&shown).is_absolute() {
+        format!("{shown}/{name}")
+    } else {
+        format!("./{shown}/{name}")
+    };
     let next = match lang {
-        "c" => format!("make -C {shown} && ./{shown}/{name}"),
+        "c" => format!("make -C {shown} && {program}"),
         _ => format!("cargo run --manifest-path {shown}/Cargo.toml"),
     };
     let mut human = format!(
@@ -1254,12 +1379,22 @@ fn new(args: &Args, cx: &Context) -> Result<Reply, Failure> {
     for f in &created {
         let _ = writeln!(human, "  {}", f.path);
     }
+    if lang == "rust" {
+        let _ = writeln!(human, "It takes cupertino-kit from {kit_origin}.");
+        if source.is_none() {
+            let _ = writeln!(
+                human,
+                "Offline, or before that tag is published, give --source with a Cupertino checkout instead."
+            );
+        }
+    }
     let _ = writeln!(human, "Build and run it: {next}");
     let data = Created {
         lang,
         name: name.to_owned(),
         dir: shown,
         files: created,
+        kit: (lang == "rust").then_some(kit),
     };
     Ok(Reply::new(&data, human))
 }

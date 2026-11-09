@@ -1,7 +1,12 @@
 # {{name}}
 
 A CupertinoKit application in Rust, started with `cupertino sdk new --lang rust {{name}}`. It depends on the
-`cupertino-kit` crate of the Cupertino release v{{version}}.
+`cupertino-kit` crate of the Cupertino release v{{version}}, taken from {{kit_origin}}.
+
+Cargo fetches a git tag when it first builds the project. If it reports that it cannot find the tag (a release that is
+not published yet) or you work offline, give both dependencies in `Cargo.toml` as `{ path = "CHECKOUT/crates/cupertino-kit" }`
+and `{ path = "CHECKOUT/crates/cupertino-xkbcommon" }`, or start the project with
+`cupertino sdk new --lang rust {{name}} --source CHECKOUT`, where CHECKOUT is a Cupertino checkout.
 
 ```sh
 cargo run

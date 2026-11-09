@@ -13,7 +13,7 @@ cupertino appearance assets check <dir>     # replaces `cupertino-assets check <
 cupertino --format json appearance assets check <dir>
 cupertino sdk info [--require] [--root <dir>] # the installed C SDK (the cupertino-kit package), part by part
 cupertino sdk check [--root <dir>]          # build and run a probe against it with /usr/bin/cc and pkg-config
-cupertino sdk new --lang c|rust <name> [--dir <dir>] # a starter project; `make -C <name>` builds the C one
+cupertino sdk new --lang c|rust <name> [--dir <dir>] [--source <checkout>] # a starter project; `make -C <name>` builds the C one
 cupertino --format jsonl help               # JSON lines: a result record and an end record
 ```
 
@@ -181,5 +181,5 @@ socket interfaces of the services; it never links compositor state.
 - Shell completions and manual pages are not generated yet; the registry already carries what they need.
 - `cupertino-assets check` has no deprecation notice yet.
 - `sdk check` compiles with the system's `cc` and checks the C ABI only. The Rust project of `sdk new` depends on the
-  release's git tag of `cupertino-kit`, so it builds once that tag is published; `ci/c-sdk.py` checks it against the
-  checkout instead.
+  release's git tag of `cupertino-kit`, so it builds once that tag is published; until then, or offline, `--source`
+  points it at a checkout's crates by path. `ci/c-sdk.py` checks both forms against this checkout.

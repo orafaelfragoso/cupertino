@@ -650,3 +650,128 @@ fn a_library_whose_offsets_overflow_is_unreadable() {
     assert_eq!(data["parts"][1]["status"], "unreadable");
     assert_eq!(data["parts"][1]["detail"], "its offsets are not valid");
 }
+
+/// The crates of a Cupertino checkout that a Rust project depends on, under `dir`.
+fn checkout(dir: &Path) {
+    for krate in ["cupertino-kit", "cupertino-xkbcommon"] {
+        write(&dir.join("crates").join(krate).join("Cargo.toml"), "");
+    }
+}
+
+#[test]
+fn new_rust_with_source_depends_on_the_checkouts_crates_by_path() {
+    let cwd = tempfile::tempdir().unwrap();
+    checkout(&cwd.path().join("src/cupertino \"x\""));
+    let out = run_in(
+        cwd.path(),
+        &[
+            "--format",
+            "json",
+            "sdk",
+            "new",
+            "--lang",
+            "rust",
+            "demo",
+            "--source",
+            "src/cupertino \"x\"",
+        ],
+    );
+    assert_eq!(out.code, 0, "{}", out.stdout);
+    let checkout = fs::canonicalize(cwd.path().join("src/cupertino \"x\"")).unwrap();
+    let checkout = checkout.to_str().unwrap();
+    let data = &json(&out)["data"];
+    assert_eq!(
+        data["kit"],
+        serde_json::json!({ "path": format!("{checkout}/crates/cupertino-kit") })
+    );
+    let manifest = fs::read_to_string(cwd.path().join("demo/Cargo.toml")).unwrap();
+    let quoted =
+        |krate: &str| serde_json::to_string(&format!("{checkout}/crates/{krate}")).unwrap();
+    assert!(manifest.contains(&format!(
+        "\ncupertino-kit = {{ path = {} }}\n",
+        quoted("cupertino-kit")
+    )));
+    assert!(manifest.contains(&format!(
+        "\n[patch.crates-io]\nxkbcommon = {{ path = {} }}\n",
+        quoted("cupertino-xkbcommon")
+    )));
+    assert!(!manifest.contains("git ="), "{manifest}");
+    // the quote in the directory's name is escaped as TOML needs
+    assert!(
+        manifest.contains("cupertino \\\"x\\\"/crates/cupertino-kit\" }"),
+        "{manifest}"
+    );
+    let readme = fs::read_to_string(cwd.path().join("demo/README.md")).unwrap();
+    assert!(readme.contains(&format!("taken from the checkout {checkout}.")));
+
+    // without --source the project names the tag, and says what to do when it cannot be fetched
+    let tagged = run_in(cwd.path(), &["sdk", "new", "--lang", "rust", "tagged"]);
+    assert_eq!(tagged.code, 0, "{}", tagged.stderr);
+    let version = env!("CARGO_PKG_VERSION");
+    assert!(tagged.stdout.contains(&format!(
+        "It takes cupertino-kit from the git tag v{version} of https://github.com/orafaelfragoso/cupertino.\n\
+         Offline, or before that tag is published, give --source with a Cupertino checkout instead.\n"
+    )));
+    let readme = fs::read_to_string(cwd.path().join("tagged/README.md")).unwrap();
+    assert!(readme.contains("--source CHECKOUT"));
+}
+
+#[test]
+fn new_refuses_a_source_that_is_no_checkout_or_for_c() {
+    let cwd = tempfile::tempdir().unwrap();
+    fs::create_dir(cwd.path().join("empty")).unwrap();
+    checkout(&cwd.path().join("cupertino"));
+    for words in [
+        &["sdk", "new", "--lang", "rust", "demo", "--source", "empty"][..],
+        &[
+            "sdk", "new", "--lang", "rust", "demo", "--source", "nowhere",
+        ],
+        &["sdk", "new", "--lang", "c", "demo", "--source", "cupertino"],
+    ] {
+        let mut line = vec!["--format", "json"];
+        line.extend_from_slice(words);
+        let out = run_in(cwd.path(), &line);
+        assert_eq!(out.code, 2, "{words:?}");
+        assert_eq!(json(&out)["error"]["code"], "invalid_value", "{words:?}");
+    }
+    assert!(!cwd.path().join("demo").exists());
+}
+
+#[test]
+fn new_refuses_a_name_that_looks_like_an_option() {
+    let cwd = tempfile::tempdir().unwrap();
+    let out = run_in(
+        cwd.path(),
+        &["--format", "json", "sdk", "new", "--lang", "c", "--", "-rf"],
+    );
+    assert_eq!(out.code, 2);
+    assert_eq!(json(&out)["error"]["code"], "invalid_name");
+    assert_eq!(fs::read_dir(cwd.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn new_into_an_absolute_directory_names_the_program_by_that_path() {
+    let cwd = tempfile::tempdir().unwrap();
+    let dir = cwd.path().join("abs");
+    let out = run_in(
+        cwd.path(),
+        &[
+            "sdk",
+            "new",
+            "--lang",
+            "c",
+            "demo",
+            "--dir",
+            dir.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let shown = dir.display();
+    assert!(
+        out.stdout.ends_with(&format!(
+            "Build and run it: make -C {shown} && {shown}/demo\n"
+        )),
+        "{}",
+        out.stdout
+    );
+}

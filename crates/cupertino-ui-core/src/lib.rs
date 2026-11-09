@@ -38,6 +38,7 @@ pub use drop_target::{
 };
 pub use icons::{next_resource_id, IconImage, Icons, PlaceholderIcons};
 pub use paint::MAX_MATERIALS;
+pub use pointer::SCROLL_IDLE_NS;
 pub use runtime::{
     RendererFactory, Runtime, RuntimeOptions, ThemeForAppearance, WindowErrorHandler,
 };

@@ -532,7 +532,7 @@ fn edit_controls_is_the_neutral_control_fill_without_glass_in_a_dark_session() {
         },
     );
     assert!(
-        glass_regions(&mut light).iter().any(|r| *r == capsule),
+        glass_regions(&mut light).contains(&capsule),
         "a light session's Edit Controls is glass"
     );
 }

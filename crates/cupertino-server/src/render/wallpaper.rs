@@ -941,7 +941,7 @@ mod tests {
         let (pixels, _) = pixmap.data_mut().as_chunks_mut::<4>();
         for (i, px) in pixels.iter_mut().enumerate() {
             let x = i % width as usize;
-            let v = if (400..480).contains(&x) && x % 2 == 0 {
+            let v = if (400..480).contains(&x) && x.is_multiple_of(2) {
                 255
             } else if (400..480).contains(&x) {
                 0

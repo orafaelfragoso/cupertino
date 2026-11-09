@@ -11,6 +11,9 @@ cupertino help [<command>]                  # the help of the commands under <co
 cupertino --version
 cupertino appearance assets check <dir>     # replaces `cupertino-assets check <dir>`
 cupertino --format json appearance assets check <dir>
+cupertino sdk info [--require] [--root <dir>] # the installed C SDK (the cupertino-kit package), part by part
+cupertino sdk check [--root <dir>]          # build and run a probe against it with /usr/bin/cc and pkg-config
+cupertino sdk new --lang c|rust <name> [--dir <dir>] # a starter project; `make -C <name>` builds the C one
 cupertino --format jsonl help               # JSON lines: a result record and an end record
 ```
 
@@ -98,7 +101,8 @@ The help JSON (`cupertino --format json help`) lists, per command, `path`, `summ
 ## Design
 
 `src/lib.rs` holds the registry types and the runner; `src/stream.rs` the output writer, the stream rules and the stop
-flag; each group is a module (`src/appearance.rs`). The crate docs of `stream` state the rules for stream commands.
+flag; each group is a module (`src/appearance.rs`, `src/sdk.rs`). The files `sdk new` writes and the probe `sdk check`
+compiles are in `templates/`, built into the binary. The crate docs of `stream` state the rules for stream commands.
 
 ### The registry
 
@@ -162,7 +166,8 @@ later word a positional argument. A single option given twice is `repeated_optio
 
 `tests/cli.rs` covers the envelope, usage errors, the parser and the help; `tests/stream.rs` every record type, `seq`,
 the place of `end`, a closed output at every boundary, a full disk and stops from another thread; `tests/stream-process.rs`
-a real pipe closed early and real SIGINT and SIGTERM; `tests/registry.rs` the registry rules.
+a real pipe closed early and real SIGINT and SIGTERM; `tests/registry.rs` the registry rules. `tests/sdk.rs` runs the `sdk` commands against a temporary
+root with a fake SDK, compiler and pkg-config; `ci/c-sdk.py` runs them against a real one, built into a staging root.
 
 The command is an unprivileged client: a group calls libraries of the `foundation` to `tools` layers or the D-Bus and
 socket interfaces of the services; it never links compositor state.
@@ -175,3 +180,6 @@ socket interfaces of the services; it never links compositor state.
   compositor, data and ABI versions follow with `cupertino version`.
 - Shell completions and manual pages are not generated yet; the registry already carries what they need.
 - `cupertino-assets check` has no deprecation notice yet.
+- `sdk check` compiles with the system's `cc` and checks the C ABI only. The Rust project of `sdk new` depends on the
+  release's git tag of `cupertino-kit`, so it builds once that tag is published; `ci/c-sdk.py` checks it against the
+  checkout instead.

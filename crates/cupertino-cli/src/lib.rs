@@ -16,6 +16,7 @@
 //! [`FailureKind`]. The rules for streams (records, a closed output, signals) are in [`stream`].
 
 mod appearance;
+mod sdk;
 pub mod stream;
 
 pub use stream::{Closed, Sink, StopFlag};
@@ -36,7 +37,7 @@ pub const SCHEMA: &str = "cupertino.cli.v1";
 pub const STREAM_SCHEMA: &str = "cupertino.cli.stream.v1";
 
 /// The command groups. A group's name is the first word of its commands' paths, and each name appears once.
-pub const REGISTRY: &[Group] = &[appearance::GROUP];
+pub const REGISTRY: &[Group] = &[appearance::GROUP, sdk::GROUP];
 
 /// Group names kept for commands of a later release. `cupertino <name>` answers `unsupported`/`not_in_this_release`
 /// (exit 8) instead of `unknown_command`, and no group of this release may use them.

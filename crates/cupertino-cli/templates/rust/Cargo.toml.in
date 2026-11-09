@@ -1,0 +1,16 @@
+[package]
+name = "{{crate_name}}"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+cupertino-kit = { git = "https://github.com/orafaelfragoso/cupertino", tag = "v{{version}}" }
+
+# CupertinoKit's keyboard handling uses the pure-Rust xkbcommon crate of the same release in place of the C binding.
+[patch.crates-io]
+xkbcommon = { git = "https://github.com/orafaelfragoso/cupertino", tag = "v{{version}}" }
+
+# The toolkit draws on the CPU, so its crates are optimized even in a debug build of the application.
+[profile.dev.package."*"]
+opt-level = 3

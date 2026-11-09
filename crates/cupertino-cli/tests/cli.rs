@@ -145,13 +145,26 @@ fn the_json_help_lists_the_command_tree_under_the_topic() {
         ]
     }]);
     for args in [
-        &["--format", "json", "help"][..],
-        &["--format", "json", "help", "appearance", "assets"],
+        &["--format", "json", "help", "appearance", "assets"][..],
         &["--format", "json", "appearance", "--help"],
     ] {
         let out = cupertino(args);
         assert_eq!((out.code, &json(&out)["data"]), (0, &tree), "{args:?}");
     }
+    // the whole tree: every command of the registry, in registry order, this one first
+    let all = cupertino(&["--format", "json", "help"]);
+    let entries = json(&all)["data"].as_array().unwrap().clone();
+    assert_eq!(entries[0], tree[0]);
+    let paths: Vec<&str> = entries
+        .iter()
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
+    let registry: Vec<String> = cupertino_cli::REGISTRY
+        .iter()
+        .flat_map(cupertino_cli::Group::commands)
+        .map(|c| c.name())
+        .collect();
+    assert_eq!(paths, registry);
     let unknown = cupertino(&["help", "packages"]);
     assert_eq!(
         (unknown.code, unknown.stderr.as_str()),
@@ -514,10 +527,11 @@ mod contracts {
     //! What `cupertino.cli.v1` and `cupertino.cli.stream.v1` promise: their shapes only grow, and every exit code is
     //! either reachable or documented as reserved.
 
-    use cupertino_cli::{FailureKind, Output, StopFlag, BUILTINS, REGISTRY};
+    use cupertino_cli::{Context, FailureKind, Output, Runner, StopFlag, BUILTINS, REGISTRY};
     use serde_json::Value;
     use std::collections::BTreeSet;
     use std::io::{self, Write};
+    use std::os::unix::fs::PermissionsExt;
 
     fn run(words: &[&str]) -> Output {
         let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
@@ -641,7 +655,33 @@ mod contracts {
         );
         reachable.insert(full);
         reachable.insert(run(&["system"]).code);
-        assert_eq!(reachable, BTreeSet::from([0, 2, 5, 6, 8]));
+        let dir = tempfile::tempdir().unwrap();
+        let isolated = |words: &[&str], context: Context| {
+            let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            Runner::new(REGISTRY)
+                .context(context)
+                .run(&words, "r1")
+                .code
+        };
+        // unavailable: a machine without the C SDK
+        reachable.insert(isolated(
+            &["sdk", "info", "--require"],
+            Context::isolated(dir.path()),
+        ));
+        // denied: a project in a directory the caller cannot write (root writes anywhere, so it shows nothing)
+        if unsafe { libc::geteuid() } != 0 {
+            let locked = dir.path().join("locked");
+            std::fs::create_dir(&locked).unwrap();
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+            reachable.insert(isolated(
+                &["sdk", "new", "--lang", "c", "demo", "--dir", "locked/demo"],
+                Context::isolated(dir.path()),
+            ));
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        } else {
+            reachable.insert(4);
+        }
+        assert_eq!(reachable, BTreeSet::from([0, 2, 3, 4, 5, 6, 8]));
 
         let page = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),

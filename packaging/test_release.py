@@ -1,6 +1,8 @@
 """Tests of the application files and the release tags of the runtime package: `python3 -I packaging/test_release.py`."""
 import configparser
+import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -270,8 +272,10 @@ class PackageReuseTest(unittest.TestCase):
         self.output = self.root / 'iso-input'
         self.runtime = self.packages / 'cupertino-0.1.0-1-x86_64.pkg.tar.zst'
         self.data = self.packages / 'cupertino-data-0.1.0-1-any.pkg.tar.zst'
+        self.sdk = self.packages / 'cupertino-kit-0.1.0-1-x86_64.pkg.tar.zst'
         self.runtime.write_bytes(b'verified runtime')
         self.data.write_bytes(b'verified data')
+        self.sdk.write_bytes(b'verified sdk')
         patch = mock.patch.object(release, 'git', return_value='a' * 40)
         patch.start()
         self.addCleanup(patch.stop)
@@ -281,7 +285,7 @@ class PackageReuseTest(unittest.TestCase):
     def test_iso_receives_exact_verified_package_bytes_and_provenance(self):
         release.cmd_verify_packages(self.args)
         self.assertEqual({p.name for p in self.output.iterdir()},
-                         {self.runtime.name, self.data.name, 'packages.json'})
+                         {self.runtime.name, self.data.name, self.sdk.name, 'packages.json'})
         self.assertEqual((self.output / self.runtime.name).read_bytes(), self.runtime.read_bytes())
 
     def test_another_commit_or_release_is_rejected_before_copying(self):
@@ -299,9 +303,14 @@ class PackageReuseTest(unittest.TestCase):
             release.cmd_verify_packages(self.args)
         release.cmd_record_packages(self.args)
         (self.packages / 'unrelated.pkg.tar.zst').write_bytes(b'extra')
-        with self.assertRaisesRegex(SystemExit, 'expected one runtime and one data'):
+        with self.assertRaisesRegex(SystemExit, 'expected one runtime, one data and one SDK'):
             release.cmd_verify_packages(self.args)
         self.assertFalse(self.output.exists())
+
+    def test_a_missing_sdk_package_is_rejected(self):
+        self.sdk.unlink()
+        with self.assertRaisesRegex(SystemExit, 'expected one runtime, one data and one SDK'):
+            release.cmd_verify_packages(self.args)
 
     def test_links_and_path_traversal_in_provenance_are_rejected(self):
         self.runtime.unlink()
@@ -344,7 +353,8 @@ class SourceSnapshotTest(unittest.TestCase):
             self.assertTrue(archive.is_file())
             release.cmd_pkgbuild(Namespace(commit=captured, tag='v0.1.0-rc1', archive=archive, output=out / 'PKGBUILD'))
             self.assertIn('pkgver=0.1.0rc1\n', (out / 'PKGBUILD').read_text())
-            for name in ('cupertino-0.1.0-1-x86_64.pkg.tar.zst', 'cupertino-data-0.1.0-1-any.pkg.tar.zst'):
+            for name in ('cupertino-0.1.0-1-x86_64.pkg.tar.zst', 'cupertino-data-0.1.0-1-any.pkg.tar.zst',
+                         'cupertino-kit-0.1.0-1-x86_64.pkg.tar.zst'):
                 (out / name).write_bytes(b'from captured source')
             args = Namespace(commit=captured, tag=None, directory=out, copy_to=root / 'iso')
             release.cmd_record_packages(args)
@@ -457,6 +467,308 @@ class LicenceTest(unittest.TestCase):
         for package in release.MANIFESTS:
             self.assertEqual(
                 release.missing_licenses(release.shipped_licenses(package), release.declared_licenses(package)), [])
+
+    def test_the_sdk_ships_the_licences_of_its_library_closure_only(self):
+        """The library links the toolkit (MPL-2.0), the font it embeds (OFL-1.1) and the keymap engine (MIT): none of
+        the GPL runtime."""
+        self.assertEqual(release.shipped_licenses('sdk'), {'MPL-2.0', 'MIT', 'OFL-1.1'})
+        self.assertEqual(set(release.declared_licenses('sdk')), {'packaging/arch/cupertino-git/PKGBUILD cupertino-kit-git',
+                                                                 'packaging/arch/cupertino/PKGBUILD cupertino-kit'})
+        self.assertEqual(release.sdk_text_problems(), [])
+
+    def test_the_licence_closure_covers_the_binaries_and_the_library(self):
+        self.assertEqual(release.closure_roots(), set(release.BINARIES) | {'cupertino-ui-abi'})
+        names = {p['name'] for p in release.linked_packages(release.closure_roots('sdk'))}
+        self.assertIn('cupertino-ui-abi', names)
+        self.assertNotIn('cupertino-server', names)
+        crates = set(release.third_party_crates())
+        self.assertLessEqual({f'{p["name"]} {p["version"]}' for p in release.linked_packages(release.closure_roots('sdk'))
+                              if p['source']}, crates)
+
+    def test_an_sdk_licence_without_its_text_is_reported(self):
+        texts = tuple(t for t in release.SDK_LICENSE_TEXTS if t[0] != 'OFL.txt')
+        with mock.patch.object(release, 'SDK_LICENSE_TEXTS', texts):
+            self.assertEqual(release.sdk_text_problems(),
+                             ['the SDK ships cupertino-assets (OFL-1.1) without the text of OFL-1.1'])
+        texts = tuple(t for t in release.SDK_LICENSE_TEXTS if t[0] != 'libxkbcommon')
+        with mock.patch.object(release, 'SDK_LICENSE_TEXTS', texts):
+            self.assertEqual(release.sdk_text_problems(), ['the SDK ships xkbcommon-rs without its licence file LICENSE'])
+
+    def test_a_recipe_without_the_sdk_package_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(release, 'ROOT', Path(tmp)):
+            recipe = Path(tmp, 'packaging/arch/cupertino/PKGBUILD')
+            recipe.parent.mkdir(parents=True)
+            recipe.write_text("license=('GPL-3.0-or-later')\npackage_cupertino() {\n  true\n}\n")
+            declared = release.declared_licenses('sdk')
+        self.assertEqual(declared, {'packaging/arch/cupertino/PKGBUILD cupertino-kit': set()})
+        self.assertEqual(release.missing_licenses({'MPL-2.0'}, declared),
+                         ['packaging/arch/cupertino/PKGBUILD cupertino-kit lacks MPL-2.0'])
+
+
+HEADER = '#define CUPERTINOKIT_ABI_MAJOR 1\n\n#define CUPERTINOKIT_ABI_MINOR 3\n'
+
+
+def tar_zst(path, members):
+    """Writes a .pkg.tar.zst of (name, bytes or Link target, mode) members, as makepkg lists them (./name)."""
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode='w') as tar:
+        for name, body, mode in members:
+            info = tarfile.TarInfo('./' + name)
+            info.mode = mode
+            if isinstance(body, release.Link):
+                info.type, info.linkname = tarfile.SYMTYPE, str(body)
+                tar.addfile(info)
+            elif body is None:
+                info.type = tarfile.LNKTYPE
+                info.linkname = './usr/lib/other'
+                tar.addfile(info)
+            else:
+                info.size = len(body)
+                tar.addfile(info, io.BytesIO(body))
+    subprocess.run(['zstd', '-q', '-f', '-o', str(path)], input=raw.getvalue(), check=True)
+
+
+class SdkManifestTest(unittest.TestCase):
+    def test_the_abi_version_comes_from_the_header(self):
+        self.assertEqual(release.abi_version(HEADER), (1, 3))
+        self.assertEqual(release.abi_version(), (1, int(re.search(
+            r'CUPERTINOKIT_ABI_MINOR (\d+)', (release.ROOT / release.ABI_HEADER).read_text())[1])))
+        with self.assertRaisesRegex(SystemExit, 'defines no CUPERTINOKIT_ABI_MAJOR'):
+            release.abi_version('#define CUPERTINOKIT_ABI_MAJOR 1\n')
+
+    def test_the_library_its_soname_links_header_and_pc_file_follow_the_abi_version(self):
+        with mock.patch.object(release, 'abi_version', return_value=(1, 3)):
+            manifest = {rel: (src, mode) for rel, src, mode, _c in release.sdk()}
+        self.assertEqual(manifest['usr/lib/libcupertinokit.so.1.3.0'], ('libcupertinokit.so', 0o755))
+        self.assertIsInstance(manifest['usr/lib/libcupertinokit.so.1.3.0'][0], release.Built)
+        self.assertEqual(manifest['usr/lib/libcupertinokit.so.1'], ('libcupertinokit.so.1.3.0', 0o777))
+        self.assertEqual(manifest['usr/lib/libcupertinokit.so'], ('libcupertinokit.so.1', 0o777))
+        self.assertIsInstance(manifest['usr/lib/libcupertinokit.so'][0], release.Link)
+        self.assertEqual(manifest['usr/include/cupertinokit-1/cupertinokit.h'], (release.ABI_HEADER, 0o644))
+        self.assertIsInstance(manifest['usr/lib/pkgconfig/cupertinokit.pc'][0], release.PkgConfig)
+        self.assertIsInstance(manifest['usr/share/cupertino-kit/build-info.json'][0], release.BuildRecord)
+        self.assertEqual({rel for rel in manifest if rel.startswith('usr/share/licenses/')},
+                         {f'usr/share/licenses/cupertino-kit/{n}' for n in
+                          ('MPL-2.0', 'MIT', 'libxkbcommon', 'OFL.txt', 'THIRD-PARTY-LICENSES')})
+        self.assertEqual(len(manifest), 11, 'nothing else ships')
+
+    def test_the_pc_file_names_the_abi_version_and_the_installed_paths(self):
+        with mock.patch.object(release, 'abi_version', return_value=(1, 3)):
+            text = release.pkg_config_text((release.ROOT / release.ABI_DIR / 'cupertinokit.pc.in').read_text())
+        fields = dict(re.findall(r'^(\w+)[:=] ?(.*)$', text, re.M))
+        self.assertEqual(fields['prefix'], '/usr')
+        self.assertEqual(fields['libdir'], '${prefix}/lib')
+        self.assertEqual(fields['includedir'], '${prefix}/include/cupertinokit-1')
+        self.assertEqual(fields['Name'], 'cupertinokit')
+        self.assertEqual(fields['Version'], '1.3.0')
+        self.assertEqual(fields['Cflags'], '-I${includedir}')
+        self.assertEqual(fields['Libs'], '-L${libdir} -lcupertinokit')
+        self.assertNotIn('Requires', fields, 'the library needs no other pkg-config package')
+        with self.assertRaisesRegex(SystemExit, 'placeholder other than @VERSION@'):
+            release.pkg_config_text('Version: @VERSION@\nprefix=@PREFIX@\n')
+
+    def test_install_makes_relative_links_and_writes_the_generated_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bindir, dest = Path(tmp, 'bin'), Path(tmp, 'root')
+            bindir.mkdir()
+            (bindir / 'libcupertinokit.so').write_bytes(b'\x7fELF library')
+            release.cmd_install(Namespace(package='sdk', destdir=str(dest), bindir=str(bindir)))
+            # a second install over the first replaces the links
+            release.cmd_install(Namespace(package='sdk', destdir=str(dest), bindir=str(bindir)))
+            major, minor = release.abi_version()
+            lib = dest / 'usr/lib'
+            self.assertEqual(os.readlink(lib / f'libcupertinokit.so.{major}'), f'libcupertinokit.so.{major}.{minor}.0')
+            self.assertEqual(os.readlink(lib / 'libcupertinokit.so'), f'libcupertinokit.so.{major}')
+            self.assertEqual((lib / 'libcupertinokit.so').read_bytes(), b'\x7fELF library')
+            self.assertEqual((lib / f'libcupertinokit.so.{major}.{minor}.0').stat().st_mode & 0o777, 0o755)
+            header = dest / f'usr/include/cupertinokit-{major}/cupertinokit.h'
+            self.assertEqual(header.read_bytes(), (release.ROOT / release.ABI_HEADER).read_bytes())
+            self.assertEqual(header.stat().st_mode & 0o777, 0o644)
+            self.assertIn(f'Version: {major}.{minor}.0\n', (lib / 'pkgconfig/cupertinokit.pc').read_text())
+            record = json.loads((dest / 'usr/share/cupertino-kit/build-info.json').read_text())
+            self.assertEqual(set(record), release.RECORD_FIELDS)
+            self.assertEqual((record['package'], record['version']), ('cupertino-kit', release.version('cupertino-server')))
+
+    def test_install_without_the_built_library_fails(self):
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(SystemExit, 'missing source .*libcupertinokit.so '):
+            release.cmd_install(Namespace(package='sdk', destdir=str(Path(tmp, 'root')), bindir=tmp))
+
+
+class LinkEntryTest(unittest.TestCase):
+    """A package may hold the manifest's links with their targets; any other link or special file is refused."""
+    LINKS = {'usr/lib/libcupertinokit.so.1': 'libcupertinokit.so.1.0.0'}
+
+    def read(self, members):
+        with tempfile.TemporaryDirectory() as tmp:
+            tar_zst(Path(tmp, 'p.pkg.tar.zst'), members)
+            return release.entries(Path(tmp, 'p.pkg.tar.zst'), self.LINKS)
+
+    @unittest.skipUnless(shutil.which('zstd'), 'needs zstd')
+    def test_a_manifest_link_with_its_target_is_listed(self):
+        found = self.read([('usr/lib/libcupertinokit.so.1', release.Link('libcupertinokit.so.1.0.0'), 0o777),
+                           ('usr/lib/libcupertinokit.so.1.0.0', b'lib', 0o755)])
+        self.assertEqual(found['usr/lib/libcupertinokit.so.1'], (0o777, b''))
+        self.assertEqual(found['usr/lib/libcupertinokit.so.1.0.0'], (0o755, b'lib'))
+
+    @unittest.skipUnless(shutil.which('zstd'), 'needs zstd')
+    def test_a_link_to_another_target_is_refused(self):
+        with self.assertRaisesRegex(SystemExit, 'link usr/lib/libcupertinokit.so.1 points to /usr/lib/evil.so, '
+                                                'the manifest says libcupertinokit.so.1.0.0'):
+            self.read([('usr/lib/libcupertinokit.so.1', release.Link('/usr/lib/evil.so'), 0o777)])
+
+    @unittest.skipUnless(shutil.which('zstd'), 'needs zstd')
+    def test_a_link_the_manifest_does_not_name_is_refused(self):
+        with self.assertRaisesRegex(SystemExit, r'unexpected non-regular entry usr/lib/extra.so \(a link to x\)'):
+            self.read([('usr/lib/extra.so', release.Link('x'), 0o777)])
+        with self.assertRaisesRegex(SystemExit, 'unexpected non-regular entry usr/lib/hard'):
+            self.read([('usr/lib/hard', None, 0o644)])
+
+
+SYMBOLS = (release.ROOT / release.ABI_SYMBOLS).read_text().split()
+CC_REQUIRED = os.environ.get('CUPERTINO_CC_REQUIRED') == '1'
+HAVE_TOOLS = all(shutil.which(t) for t in ('cc', 'readelf', 'zstd'))
+
+
+class ReadelfTest(unittest.TestCase):
+    """The ELF rules on readelf's own output, without a compiler."""
+    GOOD = """
+Dynamic section at offset 0x1000 contains 3 entries:
+  Tag        Type                         Name/Value
+ 0x000000000000000e (SONAME)             Library soname: [libcupertinokit.so.1]
+ 0x000000006ffffffb (FLAGS_1)            Flags: NOW NODELETE
+
+Symbol table '.dynsym' contains 4 entries:
+   Num:    Value          Size Type    Bind   Vis      Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND
+     1: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND memcpy@GLIBC_2.14 (3)
+     2: 0000000000001000    11 FUNC    GLOBAL DEFAULT    9 ck_one
+     3: 0000000000001010    11 FUNC    GLOBAL DEFAULT [VARIANT_PCS]    9 ck_two
+"""
+
+    def test_the_exports_soname_and_flags_pass(self):
+        self.assertEqual(release.readelf_problems(self.GOOD, ['ck_one', 'ck_two'], 'libcupertinokit.so.1'), [])
+
+    def test_each_rule_names_what_breaks_it(self):
+        self.assertEqual(release.readelf_problems(self.GOOD, ['ck_one', 'ck_three'], 'libcupertinokit.so.2'), [
+            f'exports ck_two, which {release.ABI_SYMBOLS} does not list',
+            'does not export ck_three',
+            'soname libcupertinokit.so.1, not libcupertinokit.so.2'])
+        bad = self.GOOD.replace('NOW NODELETE', 'NOW') + ' 0x000000006ffffffc (VERDEF)             0x1234\n'
+        self.assertEqual(release.readelf_problems(bad.replace('ck_two', 'ck_two@@CK_1'), ['ck_one', 'ck_two'],
+                                                  'libcupertinokit.so.1'), [
+            'defines symbol versions; ABI 1 has none', 'is not linked with -z nodelete (no NODELETE in FLAGS_1)'])
+
+
+@unittest.skipUnless(HAVE_TOOLS or CC_REQUIRED, 'needs cc, readelf and zstd (CUPERTINO_CC_REQUIRED=1 makes it fail)')
+class SdkVerifyTest(unittest.TestCase):
+    """`verify --package sdk` on a package built as makepkg would, around a library compiled here with cc."""
+
+    def setUp(self):
+        self.assertTrue(HAVE_TOOLS, 'cc, readelf and zstd are required')
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+
+    def library(self, symbols=SYMBOLS, flags=('-Wl,-soname,libcupertinokit.so.1', '-Wl,-z,nodelete'), script=None):
+        source = self.tmp / 'lib.c'
+        source.write_text(''.join(f'int {s}(void) {{ return 0; }}\n' for s in symbols))
+        out = self.tmp / 'bin/libcupertinokit.so'
+        out.parent.mkdir(exist_ok=True)
+        extra = []
+        if script:
+            (self.tmp / 'lib.map').write_text(script)
+            extra = [f'-Wl,--version-script={self.tmp / "lib.map"}']
+        subprocess.run(['cc', '-shared', '-fPIC', '-o', str(out), str(source), *flags, *extra], check=True)
+
+    def package(self, change=None):
+        """The package of the library built last, with `change(root)` applied to the installed tree."""
+        root = self.tmp / 'root'
+        shutil.rmtree(root, ignore_errors=True)
+        release.cmd_install(Namespace(package='sdk', destdir=str(root), bindir=str(self.tmp / 'bin')))
+        if change:
+            change(root)
+        members = []
+        for path in sorted(root.rglob('*')):
+            rel = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                members.append((rel, release.Link(os.readlink(path)), 0o777))
+            elif path.is_file():
+                members.append((rel, path.read_bytes(), path.stat().st_mode & 0o7777))
+        members.append(('.PKGINFO', b'pkgname = cupertino-kit\n', 0o644))
+        artifact = self.tmp / 'cupertino-kit-0.1.0-1-x86_64.pkg.tar.zst'
+        tar_zst(artifact, members)
+        return artifact
+
+    def verify(self, artifact):
+        release.cmd_verify(Namespace(package='sdk', artifact=str(artifact)))
+
+    def problems(self, artifact):
+        with self.assertRaises(SystemExit) as failed:
+            self.verify(artifact)
+        return str(failed.exception)
+
+    def test_a_package_as_install_makes_it_passes(self):
+        self.library()
+        with mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+            self.verify(self.package())
+        self.assertRegex(out.getvalue(), r'cupertino-kit-0.1.0-1-x86_64.pkg.tar.zst: 11 manifest files, .*: ok')
+
+    def test_an_extra_export_fails(self):
+        self.library(SYMBOLS + ['ck_extra'])
+        self.assertIn(f'libcupertinokit.so.1.0.0: exports ck_extra, which {release.ABI_SYMBOLS} does not list',
+                      self.problems(self.package()))
+
+    def test_a_missing_export_fails(self):
+        self.library(SYMBOLS[1:])
+        self.assertIn(f'does not export {SYMBOLS[0]}', self.problems(self.package()))
+
+    def test_a_library_without_nodelete_fails(self):
+        self.library(flags=('-Wl,-soname,libcupertinokit.so.1',))
+        self.assertIn('is not linked with -z nodelete', self.problems(self.package()))
+
+    def test_another_soname_fails(self):
+        self.library(flags=('-Wl,-soname,libcupertinokit.so', '-Wl,-z,nodelete'))
+        self.assertIn('soname libcupertinokit.so, not libcupertinokit.so.1', self.problems(self.package()))
+
+    def test_symbol_versions_fail(self):
+        self.library(script='CK_1 { global: ck_*; local: *; };\n')
+        self.assertIn('defines symbol versions', self.problems(self.package()))
+
+    def test_a_header_changed_by_one_byte_fails(self):
+        self.library()
+
+        def tamper(root):
+            header = next(root.glob('usr/include/cupertinokit-*/cupertinokit.h'))
+            body = bytearray(header.read_bytes())
+            body[-2] ^= 1
+            header.write_bytes(bytes(body))
+        self.assertIn(f'cupertinokit.h: differs from {release.ABI_HEADER}', self.problems(self.package(tamper)))
+
+    def test_a_changed_pc_file_or_build_record_fails(self):
+        self.library()
+
+        def tamper(root):
+            pc = root / 'usr/lib/pkgconfig/cupertinokit.pc'
+            pc.write_text(pc.read_text().replace('Version: ', 'Version: 9'))
+            (root / 'usr/share/cupertino-kit/build-info.json').write_text('{"package": "cupertino"}')
+        problems = self.problems(self.package(tamper))
+        self.assertIn('/usr/lib/pkgconfig/cupertinokit.pc: differs from what', problems)
+        self.assertIn('/usr/share/cupertino-kit/build-info.json: not the build record of cupertino-kit', problems)
+
+    def test_a_missing_or_wrong_link_fails(self):
+        self.library()
+        self.assertIn('missing file /usr/lib/libcupertinokit.so\n',
+                      self.problems(self.package(lambda root: (root / 'usr/lib/libcupertinokit.so').unlink())) + '\n')
+
+        def retarget(root):
+            (root / 'usr/lib/libcupertinokit.so').unlink()
+            (root / 'usr/lib/libcupertinokit.so').symlink_to('/usr/lib/libc.so.6')
+        self.assertIn('link usr/lib/libcupertinokit.so points to /usr/lib/libc.so.6', self.problems(self.package(retarget)))
+
+    def test_an_extra_file_fails(self):
+        self.library()
+        self.assertIn('unexpected file /usr/lib/libcupertinokit.a',
+                      self.problems(self.package(lambda root: (root / 'usr/lib/libcupertinokit.a').write_bytes(b'!<arch>'))))
 
 
 def git_pkgver(describe):

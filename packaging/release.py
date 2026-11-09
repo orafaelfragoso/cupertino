@@ -2,28 +2,35 @@
 """Cupertino release tool: the one installation manifest behind the Arch packages.
 
 Usage:
-  release.py install [--format arch] --package {runtime,data} --destdir DIR [--bindir DIR]
-  release.py verify [--format arch] --package {runtime,data} ARTIFACT
+  release.py install [--format arch] --package {runtime,data,sdk} --destdir DIR [--bindir DIR]
+  release.py verify [--format arch] --package {runtime,data,sdk} ARTIFACT
   release.py check-metadata
   release.py third-party
   release.py source --output DIR
   release.py verify-tag TAG
   release.py pkgbuild ARCHIVE OUTPUT
 
-install         copies exactly the manifest's files into DIR with explicit modes (Arch package(), portable tarballs).
-verify          lists a built package (.pkg.tar.zst) and fails unless its files and modes equal the manifest plus
+install         copies exactly the manifest's files into DIR with explicit modes (Arch package(), portable tarballs),
+                makes its relative symbolic links (the library's soname links) and writes the files it generates (the
+                pkg-config file, the SDK's build record).
+verify          lists a built package (.pkg.tar.zst) and fails unless its files, links and modes equal the manifest plus
                 pacman's own metadata files. It also rejects setuid/setgid bits, wallpapers whose hash differs
-                from packaging/data/wallpapers.json and executables that hold a home-directory or checkout path.
+                from packaging/data/wallpapers.json and executables that hold a home-directory or checkout path. For the
+                SDK it reads the library with readelf: its exports must equal the ABI's symbol list, with no version
+                definitions, the soname libcupertinokit.so.<major> and NODELETE; the header and every other copied file
+                must equal the checkout's.
 check-metadata  fails when THIRD-PARTY-LICENSES is stale, a shipped licence text is missing or a PKGBUILD licence list
                 misses a licence the package ships.
 third-party     regenerates packaging/licenses/THIRD-PARTY-LICENSES with cargo-about (0.9.3, on PATH or $CARGO_ABOUT): the
-                licence texts and NOTICE files of every registry crate in the normal and build closure of the shipped binaries.
+                licence texts and NOTICE files of every registry crate in the normal and build closure of the shipped
+                binaries and libraries.
 source          writes cupertino-<version>-source.tar.xz from the committed HEAD (git archive: file times are the
                 commit time, no untracked files).
 verify-tag      fails unless TAG is v<version>, points at HEAD, and HEAD is reachable from origin/main.
 pkgbuild        writes the stable Arch PKGBUILD with ARCHIVE's sha256 (the release's source archive).
 
-The runtime version is cupertino-server's, the data version cupertino-assets'. Nothing here reads outside the checkout.
+The runtime version is cupertino-server's, the data version cupertino-assets'; the SDK package (cupertino-kit) shares
+the runtime's, and its library is named by the C ABI version of its header. Nothing here reads outside the checkout.
 """
 import argparse
 import os
@@ -37,6 +44,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import tomllib
 import json
 import textwrap
@@ -62,10 +70,22 @@ PAM_SERVICES = ('cupertino-login', 'cupertino-session', 'cupertino-greeter', 'cu
 UNITS = ('cupertino-login', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd')
 THEME_FILES = ('tokens.json', 'materials.json', 'animations.json')
 WALLPAPERS = json.loads((ROOT / 'packaging/data/wallpapers.json').read_text())['files']
+# The workspace crates whose shared libraries ship (the SDK), beside BINARIES: the other roots of the licence closure.
+LIBRARIES = ('cupertino-ui-abi',)
+# CupertinoKit's C ABI: the header names its version, the symbol list its exports.
+ABI_DIR = 'crates/cupertino-ui-abi'
+ABI_HEADER = f'{ABI_DIR}/abi/cupertinokit.h'
+ABI_SYMBOLS = f'{ABI_DIR}/abi/symbols-1.txt'
+# The file cargo builds the library as, in --bindir.
+ABI_ARTIFACT = 'libcupertinokit.so'
 # Licence texts of the crates linked into the binaries, beside the GPL text.
 LICENSE_TEXTS = (('MPL-2.0', 'crates/cupertino-geometry/LICENSE'), ('MIT', 'crates/cupertino-xkbcommon/LICENSE'),
                  ('libxkbcommon', 'third-party/xkbcommon-rs/LICENSE'), ('smithay', 'third-party/smithay/LICENSE.txt'),
                  ('OFL.txt', 'crates/cupertino-assets/fonts/OFL.txt'))
+# Licence texts of the crates linked into the SDK's library, by the SPDX identifier their crates declare (OFL.txt for
+# OFL-1.1) or, for a path crate with a licence file and no identifier, by that file.
+SDK_LICENSE_TEXTS = (('MPL-2.0', f'{ABI_DIR}/LICENSE'), ('MIT', 'crates/cupertino-xkbcommon/LICENSE'),
+                     ('libxkbcommon', 'third-party/xkbcommon-rs/LICENSE'), ('OFL.txt', 'crates/cupertino-assets/fonts/OFL.txt'))
 # Registry crates that carry licensed input without a licence file: the build script of smithay compiles bindings
 # generated from these files, whose leading comment holds the Khronos licence and copyright notice.
 EMBEDDED_NOTICES = {'khronos_api': ('api_egl/api/egl.xml', 'api/xml/gl.xml')}
@@ -153,7 +173,61 @@ def data():
     return files
 
 
-MANIFESTS = {'runtime': runtime, 'data': data}
+class Link(str):
+    """A symbolic link: the string is its target, relative to the link's directory."""
+
+
+class Built(str):
+    """A file of --bindir with this name, installed under another one."""
+
+
+class PkgConfig(str):
+    """A pkg-config template of the checkout, installed with its @VERSION@ filled in."""
+
+
+class BuildRecord(str):
+    """A source `install` writes itself: the build record of the package it names."""
+
+
+def abi_version(header=None):
+    """(major, minor) of the C ABI, from CUPERTINOKIT_ABI_MAJOR and CUPERTINOKIT_ABI_MINOR in the header's text."""
+    text = (ROOT / ABI_HEADER).read_text() if header is None else header
+    found = [re.search(rf'^#define CUPERTINOKIT_ABI_{part} (\d+)$', text, re.M) for part in ('MAJOR', 'MINOR')]
+    if not all(found):
+        fail(f'{ABI_HEADER} defines no CUPERTINOKIT_ABI_MAJOR and CUPERTINOKIT_ABI_MINOR')
+    return int(found[0][1]), int(found[1][1])
+
+
+def soname():
+    return f'libcupertinokit.so.{abi_version()[0]}'
+
+
+def pkg_config_text(template):
+    """The pkg-config file of a template: Version is the ABI's, <major>.<minor>.0, as the library's file name."""
+    major, minor = abi_version()
+    text = template.replace('@VERSION@', f'{major}.{minor}.0')
+    if '@' in text:
+        fail(f'{ABI_DIR}/cupertinokit.pc.in holds a placeholder other than @VERSION@')
+    return text
+
+
+def sdk(gendir=None):
+    """`cupertino-kit`: CupertinoKit's C library with its soname links, header, pkg-config file and build record. The
+    library is libcupertinokit.so.<major>.<minor>.0, which libcupertinokit.so.<major> (the soname) and the link-time
+    name libcupertinokit.so point to; the header lives in an include directory of its major version."""
+    major, minor = abi_version()
+    real, lic = f'libcupertinokit.so.{major}.{minor}.0', 'usr/share/licenses/cupertino-kit'
+    return [(f'usr/lib/{real}', Built(ABI_ARTIFACT), 0o755, False),
+            (f'usr/lib/{soname()}', Link(real), 0o777, False),
+            (f'usr/lib/{ABI_ARTIFACT}', Link(soname()), 0o777, False),
+            (f'usr/include/cupertinokit-{major}/cupertinokit.h', ABI_HEADER, 0o644, False),
+            ('usr/lib/pkgconfig/cupertinokit.pc', PkgConfig(f'{ABI_DIR}/cupertinokit.pc.in'), 0o644, False),
+            ('usr/share/cupertino-kit/build-info.json', BuildRecord('cupertino-kit'), 0o644, False),
+            *((f'{lic}/{n}', src, 0o644, False) for n, src in SDK_LICENSE_TEXTS),
+            (f'{lic}/THIRD-PARTY-LICENSES', THIRD_PARTY, 0o644, False)]
+
+
+MANIFESTS = {'runtime': runtime, 'data': data, 'sdk': sdk}
 # Files makepkg adds itself; anything else that is not in the manifest fails verification.
 EXTRA = {'.PKGINFO', '.BUILDINFO', '.MTREE'}
 
@@ -166,40 +240,166 @@ def version(crate):
     return tomllib.loads((ROOT / 'crates' / crate / 'Cargo.toml').read_text())['package']['version']
 
 
+# The version each package's build record names: the runtime is versioned as the server, the data as the assets, and
+# the SDK, a split package of the runtime's recipe, as the runtime.
+RECORD_CRATES = {'cupertino': 'cupertino-server', 'cupertino-data': 'cupertino-assets', 'cupertino-kit': 'cupertino-server'}
+COMMIT_VARIABLE, ARCHIVE_COMMIT = 'CUPERTINO_BUILD_COMMIT', 'data/build-commit'
+RECORD_FIELDS = {'package', 'version', 'commit', 'source_date_epoch'}
+
+
+def full_commit(text):
+    """A full commit hash in lower case (40 or 64 hexadecimal digits), else None."""
+    text = (text or '').strip()
+    return text.lower() if len(text) in (40, 64) and re.fullmatch(r'[0-9a-fA-F]+', text) else None
+
+
+def build_commit(root=ROOT, environ=os.environ):
+    """The commit the sources come from, in the order the build-info crate uses: CUPERTINO_BUILD_COMMIT (which must
+    be a full hash), the data/build-commit a source archive carries, the HEAD of a checkout, else None."""
+    if COMMIT_VARIABLE in environ:
+        commit = full_commit(environ[COMMIT_VARIABLE])
+        if commit is None:
+            fail(f'{COMMIT_VARIABLE} is {environ[COMMIT_VARIABLE]!r}, not a full commit hash')
+        return commit
+    archive = root / ARCHIVE_COMMIT
+    commit = full_commit(archive.read_text()) if archive.is_file() else None
+    if commit is None and (root / '.git').exists():
+        head = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], capture_output=True, text=True)
+        commit = full_commit(head.stdout) if head.returncode == 0 else None
+    return commit
+
+
+def build_record(package, root=ROOT, environ=os.environ):
+    """The text of a package's build record: {package, version, commit, source_date_epoch}."""
+    epoch = environ.get('SOURCE_DATE_EPOCH', '').strip()
+    record = {'package': package, 'version': version(RECORD_CRATES[package]), 'commit': build_commit(root, environ),
+              'source_date_epoch': int(epoch) if epoch.isdigit() else None}
+    return json.dumps(record, indent=2) + '\n'
+
+
 def cmd_install(args):
     dest, bindir = Path(args.destdir), Path(args.bindir)
     for rel, src, mode, _conf in MANIFESTS[args.package]():
-        source = bindir / Path(rel).name if src is None else ROOT / src
-        if not source.is_file():
-            fail(f'missing source {source} for /{rel}')
         out = dest / rel
         out.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, out)
+        if isinstance(src, Link):
+            if out.is_symlink() or out.exists():
+                out.unlink()
+            out.symlink_to(src)
+            continue
+        if isinstance(src, BuildRecord):
+            out.write_text(build_record(src))
+            out.chmod(mode)
+            continue
+        if src is None or isinstance(src, Built):
+            source = bindir / (src or Path(rel).name)
+        else:
+            source = ROOT / src
+        if not source.is_file():
+            fail(f'missing source {source} for /{rel}')
+        if isinstance(src, PkgConfig):
+            out.write_text(pkg_config_text(source.read_text()))
+        else:
+            shutil.copyfile(source, out)
         out.chmod(mode)
 
 
-def tar_entries(raw):
-    """{path: (mode, bytes)} of the regular files in a tar stream; links are refused, directories skipped."""
-    found = {}
+def tar_entries(raw, links=None):
+    """{path: (mode, bytes)} of the regular files in a tar stream, directories skipped. A symbolic link is accepted
+    only when `links` ({path: target}) names it with that target, and is listed with empty bytes; any other link or
+    non-regular entry is refused."""
+    found, links = {}, links or {}
     with tarfile.open(fileobj=io.BytesIO(raw)) as t:
         for m in t.getmembers():
             name = m.name.removeprefix('./')
             if m.isdir() or not name:
                 continue
+            if m.issym() and name in links:
+                if m.linkname != links[name]:
+                    fail(f'link {name} points to {m.linkname}, the manifest says {links[name]}')
+                found[name] = (m.mode, b'')
+                continue
             if not m.isfile():
-                fail(f'unexpected non-regular entry {name}')
+                fail(f'unexpected non-regular entry {name}' + (f' (a link to {m.linkname})' if m.issym() else ''))
             found[name] = (m.mode, t.extractfile(m).read())
     return found
 
 
-def entries(path):
-    """{path: (mode, bytes)} of the files in a .pkg.tar.zst."""
-    return tar_entries(subprocess.run(['zstd', '-dcq', str(path)], capture_output=True, check=True).stdout)
+def entries(path, links=None):
+    """{path: (mode, bytes)} of the files and the manifest's links in a .pkg.tar.zst."""
+    return tar_entries(subprocess.run(['zstd', '-dcq', str(path)], capture_output=True, check=True).stdout, links)
+
+
+def readelf_problems(output, symbols, want_soname):
+    """What is wrong with a library whose `readelf --dyn-syms -W -d` output this is: global defined symbols other
+    than `symbols`, version definitions, another soname, no NODELETE."""
+    exported, problems = set(), []
+    for line in output.splitlines():
+        # Num: Value Size Type Bind Vis [other flags] Ndx Name, where a name may carry @VERSION or @@VERSION and an
+        # undefined one the version's index, `(3)`
+        parts = line.split()
+        if len(parts) < 7 or not re.fullmatch(r'\d+:', parts[0]):
+            continue
+        at = 6
+        while at < len(parts) and parts[at].startswith('['):
+            at += next((i for i, p in enumerate(parts[at:], 1) if p.endswith(']')), len(parts))
+        if at + 1 < len(parts) and parts[4] in ('GLOBAL', 'WEAK') and parts[at] != 'UND' \
+                and parts[3] not in ('SECTION', 'FILE'):
+            exported.add(parts[at + 1].split('@')[0])
+    if extra := sorted(exported - set(symbols)):
+        problems.append(f'exports {", ".join(extra)}, which {ABI_SYMBOLS} does not list')
+    if missing := sorted(set(symbols) - exported):
+        problems.append(f'does not export {", ".join(missing)}')
+    if re.search(r'\((VERDEF|VERDEFNUM)\)', output):
+        problems.append('defines symbol versions; ABI 1 has none')
+    name = re.search(r'\(SONAME\)\s+Library soname: \[(.*)\]', output)
+    if not name or name[1] != want_soname:
+        problems.append(f'soname {name[1] if name else "(none)"}, not {want_soname}')
+    flags = re.search(r'\(FLAGS_1\)\s+Flags: (.*)', output)
+    if not flags or 'NODELETE' not in flags[1].split():
+        problems.append('is not linked with -z nodelete (no NODELETE in FLAGS_1)')
+    return problems
+
+
+def sdk_problems(found, manifest):
+    """The SDK checks of a package's files: the library as readelf reads it, and every file copied or generated from the
+    checkout byte-equal to what `install` writes."""
+    problems = []
+    for rel, src, _mode, _conf in manifest:
+        if rel not in found or isinstance(src, Link):
+            continue
+        body = found[rel][1]
+        if isinstance(src, Built):
+            with tempfile.NamedTemporaryFile(suffix='.so') as library:
+                library.write(body)
+                library.flush()
+                readelf = subprocess.run(['readelf', '--dyn-syms', '-W', '-d', library.name], capture_output=True,
+                                         text=True)
+            if readelf.returncode:
+                problems.append(f'/{rel}: readelf cannot read it: {readelf.stderr.strip()}')
+                continue
+            symbols = (ROOT / ABI_SYMBOLS).read_text().split()
+            problems += [f'/{rel}: {p}' for p in readelf_problems(readelf.stdout, symbols, soname())]
+        elif isinstance(src, PkgConfig):
+            if body.decode(errors='replace') != pkg_config_text((ROOT / src).read_text()):
+                problems.append(f'/{rel}: differs from what {src} gives for ABI {".".join(map(str, abi_version()))}')
+        elif isinstance(src, BuildRecord):
+            try:
+                record = json.loads(body)
+            except ValueError:
+                record = None
+            if not isinstance(record, dict) or set(record) != RECORD_FIELDS or record['package'] != src:
+                problems.append(f'/{rel}: not the build record of {src}')
+        elif src is not None and body != (ROOT / src).read_bytes():
+            problems.append(f'/{rel}: differs from {src}')
+    return problems
 
 
 def cmd_verify(args):
-    found = entries(Path(args.artifact).resolve())
-    expected = {rel: mode for rel, _src, mode, _c in MANIFESTS[args.package]()}
+    manifest = MANIFESTS[args.package]()
+    links = {rel: src for rel, src, _m, _c in manifest if isinstance(src, Link)}
+    found = entries(Path(args.artifact).resolve(), links)
+    expected = {rel: mode for rel, _src, mode, _c in manifest}
     problems = [f'unexpected file /{r}' for r in sorted(set(found) - set(expected) - EXTRA)]
     problems += [f'missing file /{r}' for r in sorted(set(expected) - set(found))]
     hashes = {f'usr/share/cupertino/assets/wallpapers/{w["file"]}': w['sha256'] for w in WALLPAPERS}
@@ -208,7 +408,8 @@ def cmd_verify(args):
     for rel, (mode, body) in sorted(found.items()):
         if mode & (stat.S_ISUID | stat.S_ISGID):
             problems.append(f'setuid/setgid bit on /{rel}')
-        if rel in expected and stat.S_IMODE(mode) != expected[rel]:
+        # a link's own mode means nothing on Linux; its target was checked when the package was read
+        if rel in expected and rel not in links and stat.S_IMODE(mode) != expected[rel]:
             problems.append(f'/{rel}: mode {stat.S_IMODE(mode):o}, manifest {expected[rel]:o}')
         if rel in hashes and hashlib.sha256(body).hexdigest() != hashes[rel]:
             problems.append(f'/{rel}: sha256 differs from wallpapers.json')
@@ -216,6 +417,8 @@ def cmd_verify(args):
             hit = leak.search(body)
             if hit:
                 problems.append(f'/{rel}: holds the build or home path {body[hit.start():hit.start() + 60]!r}')
+    if args.package == 'sdk':
+        problems += sdk_problems(found, manifest)
     if problems:
         fail(f'{args.artifact}:\n  ' + '\n  '.join(problems))
     size = sum(len(b) for _m, b in found.values())
@@ -223,23 +426,42 @@ def cmd_verify(args):
           f'{Path(args.artifact).stat().st_size} bytes packed: ok')
 
 
-def linked_packages():
-    """cargo metadata packages in the normal and build dependency closure of BINARIES on Linux (generators run at build time compile their output
-    into the binaries), as the packages build it
+def closure_roots(package=None):
+    """The workspace crates whose closure a package links: the shipped binaries (runtime), the shipped libraries (sdk),
+    or both (THIRD-PARTY-LICENSES, which the runtime and the SDK carry)."""
+    binaries, libraries = set(BINARIES), set(LIBRARIES)
+    return {'runtime': binaries, 'sdk': libraries}.get(package, binaries | libraries)
+
+
+_GRAPH = {}
+
+
+def dependency_graph():
+    """(cargo tree text, cargo metadata) of the workspace as the packages build it, read once."""
+    if not _GRAPH:
+        base = ['--offline', '--locked', '--all-features', '--target', 'x86_64-unknown-linux-gnu']
+        _GRAPH['tree'] = subprocess.run(
+            ['cargo', 'tree', '--workspace', '-e', 'normal,build', '--no-dedupe', '--prefix', 'depth', *base],
+            cwd=ROOT, capture_output=True, text=True, check=True).stdout
+        _GRAPH['meta'] = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', *base[:3]], cwd=ROOT,
+                                                   capture_output=True, text=True, check=True).stdout)
+    return _GRAPH['tree'], _GRAPH['meta']
+
+
+def linked_packages(roots=None):
+    """cargo metadata packages in the normal and build dependency closure of `roots` (closure_roots() by default) on
+    Linux (generators run at build time compile their output into the binaries), as the packages build it
     (`--workspace --all-features`): the workspace and path crates (`source` None) and the registry crates."""
-    base = ['--offline', '--locked', '--all-features', '--target', 'x86_64-unknown-linux-gnu']
-    tree = subprocess.run(['cargo', 'tree', '--workspace', '-e', 'normal,build', '--no-dedupe', '--prefix', 'depth', *base],
-                          cwd=ROOT, capture_output=True, text=True, check=True).stdout
+    roots = closure_roots() if roots is None else set(roots)
+    tree, meta = dependency_graph()
     linked, root = set(), None
     for line in tree.splitlines():
         m = re.match(r'(\d+)(\S+) v(\S+)', line)
         if m:
             if m[1] == '0':
                 root = m[2]
-            if root in BINARIES:
+            if root in roots:
                 linked.add((m[2], m[3]))
-    meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', *base[:3]], cwd=ROOT,
-                                     capture_output=True, text=True, check=True).stdout)
     return sorted((p for p in meta['packages'] if (p['name'], p['version']) in linked), key=lambda p: p['id'])
 
 
@@ -278,10 +500,11 @@ def embedded_notices(package):
     return found
 
 
-def notice_licenses():
-    """{SPDX identifier: [crate directories]} named by `SPDX-License-Identifier:` lines of the embedded notices."""
+def notice_licenses(roots=None):
+    """{SPDX identifier: [crate directories]} named by `SPDX-License-Identifier:` lines of the embedded notices in the
+    closure of `roots`."""
     found = {}
-    for p in linked_packages():
+    for p in linked_packages(roots):
         if p['source']:
             for _name, body in embedded_notices(p):
                 for expr in re.findall(r'SPDX-License-Identifier:[ \t]*([^\n]+)', body):
@@ -305,22 +528,31 @@ def third_party_crates():
 
 def shipped_licenses(package):
     """SPDX identifiers the package ships: those of the workspace crates in the normal and build dependency closure of its
-    binaries (they are linked statically), plus the licences named by the embedded protocol notices (runtime) or the pack's own (data)."""
+    binaries (runtime) or its library (sdk), which are linked statically, plus the licences named by the embedded
+    protocol notices there; or the pack's own (data)."""
     if package == 'data':
         return set(DATA_LICENSES)
-    found = set()
-    for p in linked_packages():
+    roots, found = closure_roots(package), set()
+    for p in linked_packages(roots):
         if p['source'] is None:
             found |= set(re.findall(r'[\w.+-]+', re.sub(r'\b(AND|OR|WITH)\b', ' ', p['license'] or '')))
-    return found | set(notice_licenses())
+    return found | set(notice_licenses(roots))
 
 
 def declared_licenses(package):
-    """{place: SPDX identifiers} the package's licence lists in the PKGBUILDs."""
+    """{place: SPDX identifiers} the package's licence lists in the PKGBUILDs: the recipe's own list for the runtime,
+    the license=() of package_cupertino-data() and of package_cupertino-kit() (or package_cupertino-kit-git()). A recipe
+    without the SDK's function is reported, since both recipes build it."""
     found = {}
     for pkgbuild in sorted(ROOT.glob('packaging/arch/*/PKGBUILD')):
         text = pkgbuild.read_text()
         data_block = re.search(r'^package_cupertino-data\(\).*?^\}', text, re.M | re.S)
+        if package == 'sdk':
+            kit = re.search(r'^package_(cupertino-kit(?:-git)?)\(\).*?^\}', text, re.M | re.S)
+            listed = kit and re.search(r'^\s+license=\(([^)]*)\)', kit[0], re.M)
+            found[f'{pkgbuild.relative_to(ROOT)} {kit[1] if kit else "cupertino-kit"}'] = \
+                set(re.findall(r"'([^']+)'", listed[1])) if listed else set()
+            continue
         if package == 'data':
             if data_block:
                 found[f'{pkgbuild.relative_to(ROOT)} cupertino-data'] = set(re.findall(r"'([^']+)'", re.search(r'license=\(([^)]*)\)', data_block[0])[1]))
@@ -328,6 +560,25 @@ def declared_licenses(package):
             head = text[:data_block.start()] if data_block else text
             found[f'{pkgbuild.relative_to(ROOT)}'] = set(re.findall(r"'([^']+)'", re.search(r'^license=\(([^)]*)\)', head, re.M)[1]))
     return found
+
+
+def sdk_text_problems():
+    """Licences of the SDK's closure without their text in the package: an SPDX identifier of a workspace crate needs the
+    text of that name (OFL.txt for OFL-1.1), and a path crate with only a licence file needs that file."""
+    names = {n: src for n, src in SDK_LICENSE_TEXTS}
+    problems = [f'SDK licence text {src} for /usr/share/licenses/cupertino-kit/{n} does not exist'
+                for n, src in SDK_LICENSE_TEXTS if not (ROOT / src).is_file()]
+    for p in linked_packages(closure_roots('sdk')):
+        if p['source'] is not None:
+            continue
+        for ident in re.findall(r'[\w.+-]+', re.sub(r'\b(AND|OR|WITH)\b', ' ', p['license'] or '')):
+            if {'OFL-1.1': 'OFL.txt'}.get(ident, ident) not in names:
+                problems.append(f'the SDK ships {p["name"]} ({ident}) without the text of {ident}')
+        if not p['license'] and p.get('license_file'):
+            file = (Path(p['manifest_path']).parent / p['license_file']).resolve()
+            if file not in {(ROOT / src).resolve() for src in names.values()}:
+                problems.append(f'the SDK ships {p["name"]} without its licence file {p["license_file"]}')
+    return problems
 
 
 def missing_licenses(shipped, declared):
@@ -417,6 +668,7 @@ def cmd_check_metadata(_args):
                 for n, src in LICENSE_TEXTS if not (ROOT / src).is_file()]
     for package in MANIFESTS:
         problems += [f'{package} licence: {m}' for m in missing_licenses(shipped_licenses(package), declared_licenses(package))]
+    problems += sdk_text_problems()
     if problems:
         fail('package metadata is incomplete:\n  ' + '\n  '.join(problems))
     print('package licence lists and third-party notices are complete')
@@ -493,12 +745,14 @@ def cmd_verify_tag(args):
 
 
 def package_files(directory, pkgver):
-    """Exactly the verified Arch runtime and data packages; never copy unrelated release inputs into an ISO."""
+    """Exactly the verified Arch runtime, data and SDK packages; never copy unrelated release inputs into an ISO."""
     found = sorted(directory.glob('*.pkg.tar.zst'))
     patterns = (rf'cupertino-{re.escape(pkgver)}-\d+-x86_64\.pkg\.tar\.zst',
-                rf'cupertino-data-{re.escape(pkgver)}-\d+-any\.pkg\.tar\.zst')
-    if len(found) != 2 or any(sum(bool(re.fullmatch(pattern, p.name)) for p in found) != 1 for pattern in patterns):
-        fail(f'{directory}: expected one runtime and one data package for {pkgver}')
+                rf'cupertino-data-{re.escape(pkgver)}-\d+-any\.pkg\.tar\.zst',
+                rf'cupertino-kit-{re.escape(pkgver)}-\d+-x86_64\.pkg\.tar\.zst')
+    if len(found) != len(patterns) or \
+            any(sum(bool(re.fullmatch(pattern, p.name)) for p in found) != 1 for pattern in patterns):
+        fail(f'{directory}: expected one runtime, one data and one SDK package for {pkgver}')
     if any(p.is_symlink() or not p.is_file() for p in found):
         fail(f'{directory}: package inputs must be regular files')
     return found

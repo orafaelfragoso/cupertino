@@ -827,7 +827,9 @@ fn an_application_learns_to_keep_its_text_caret_from_blinking() {
     assert_eq!(late.display_options(), [REDUCE_MOTION | STEADY]);
 
     h.state.set_accessibility(AccessibilitySettings::default());
-    h.wait_until("all off", |_| observer.display_options().len() == 4);
+    h.wait_until("all off", |_| {
+        observer.display_options().len() == 4 && old.display_options().len() == 3
+    });
     assert_eq!(observer.display_options()[3], 0);
     assert_eq!(old.display_options(), [0, REDUCE_MOTION, 0]);
 }

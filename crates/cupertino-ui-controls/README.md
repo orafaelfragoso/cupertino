@@ -98,9 +98,9 @@ from the application's model and reports changes as messages.
   stop that opens a page: a tile, the label and a trailing chevron; a click, Return, Space or assistive technology's
   Click sends `on_open`, and without it the row reads as disabled. `FormHeader` is the card at the top of a page, its
   large tile over a bold title and a centred description, read as the title described by the description.
-  `FormBackground` fills its room with the colour behind the groups: the compositor draws it
-  (`Surface::TextBackground`) where the desktop can, below the window's glass, so a toolbar's capsules over a form
-  show, and it paints it where the desktop cannot. A `TextField`'s chrome is a recessed well: darker than what it
+  `FormBackground` fills its room with the colour behind the groups, the window background (the groups keep their own
+  fill): the compositor draws it (`Surface::WindowBackground`) where the desktop can, below the window's glass, so a
+  toolbar's capsules over a form show, and it paints it where the desktop cannot. A `TextField`'s chrome is a recessed well: darker than what it
   sits on in the dark appearance (black at 25 %), the text background in the light one, with a faint edge (the
   theme's stronger border under Increase Contrast). `SearchField` is a `TextField` with a magnifying glass
   about 12.5 pt across, 10.5 pt from its leading edge, and its text 29.5 pt in; on the window's content it is a text field's recessed well, on a

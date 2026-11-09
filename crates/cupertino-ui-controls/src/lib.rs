@@ -1189,7 +1189,7 @@ pub struct FormHeader {
     pub description: String,
 }
 
-/// `content` on the colour behind a form's groups (the text background), filling the room it is given. No node of its
+/// `content` on the colour behind a form's groups (the window background), filling the room it is given. No node of its
 /// own to assistive technology. Build its element with `Element::from`.
 pub struct FormBackground<M> {
     pub content: Element<M>,

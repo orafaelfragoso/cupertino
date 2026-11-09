@@ -746,6 +746,11 @@ struct Background<M> {
     content: Vec<Element<M>>,
 }
 
+/// The surface a form's pane asks the compositor to draw behind it, where it can.
+pub(crate) const FORM_SURFACE: Surface = Surface::WindowBackground;
+/// The colour a form's pane fills itself with where the compositor draws nothing behind it.
+pub(crate) const FORM_ROLE: ColorRole = ColorRole::WindowBackground;
+
 impl<M: 'static> From<FormBackground<M>> for Element<M> {
     fn from(background: FormBackground<M>) -> Self {
         Element::new(Background {
@@ -787,14 +792,17 @@ impl<M: 'static> Widget<M> for Background<M> {
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         // where the desktop can, the compositor draws the colour, under the window's glass: a toolbar's capsules over
         // the form then show, which an opaque fill of the window's own would cover
-        if cx.material(Surface::TextBackground, 0.0, 1.0) {
+        // the pane is the window's own background: the groups on it keep their own fill
+        if cx.material(FORM_SURFACE, 0.0, 1.0) {
             return;
         }
         let theme = cx.env().theme.clone();
         let size = cx.size();
-        let color = theme
-            .colors
-            .get(ColorRole::TextBackground, StateVariant::NORMAL);
+        let state = StateVariant {
+            window_active: cx.window_active(),
+            ..StateVariant::NORMAL
+        };
+        let color = theme.colors.get(FORM_ROLE, state);
         if let Some(color) = color {
             cx.push(PaintOp::Fill {
                 shape: Shape::Rect(Rect::new(0.0, 0.0, size.width, size.height)),

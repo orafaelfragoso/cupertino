@@ -121,10 +121,10 @@ impl Surfaces {
     }
 }
 
-/// Gives the windows their layer surfaces, none of them on an output, so the server puts them on the output under the
-/// pointer: the panel on the overlay layer, anchored to the top only (so centred horizontally) at one fifth of the
-/// output's height, with the keyboard; the catcher over the whole output on the top layer, below the panel; the
-/// hidden window a point that takes no input.
+/// Gives the windows their layer surfaces, none of them on an output, so the server puts them on its active output (the
+/// one the person works on): the panel on the overlay layer, anchored to the top only (so centred horizontally) at one
+/// fifth of the output's height, with the keyboard; the catcher over the whole output on the top layer, below the
+/// panel; the hidden window a point that takes no input.
 struct LauncherRoles {
     shell: LayerShell,
     surfaces: Rc<RefCell<Surfaces>>,

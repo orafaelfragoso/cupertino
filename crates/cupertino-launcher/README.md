@@ -38,7 +38,7 @@ fill and the high-contrast colours.
 ## How it works
 
 **Windows.** The process is one Kit application with three windows, each on a layer surface (namespace `cupertino-launcher`)
-that `LauncherRoles` gives it, none of them on an output, so the server puts them on the output under the pointer:
+that `LauncherRoles` gives it, none of them on an output, so the server puts them on its active output, the one the person works on:
 
 * the panel: overlay layer, anchored to the top only (so centred horizontally), the panel's top edge at one fifth of the output's
   height, with exclusive keyboard interactivity. The enclosure (the panel's shape: `view::compact_shape`, `view::search_shape`,

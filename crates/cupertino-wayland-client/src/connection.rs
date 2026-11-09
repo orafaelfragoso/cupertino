@@ -1081,12 +1081,7 @@ impl Connection {
             s.themed_cursor.stop();
             return Ok(());
         }
-        let scale = s
-            .pointer_tracker
-            .focus()
-            .and_then(|id| s.surfaces.iter().find(|surf| surf.id == id))
-            .and_then(|surf| surf.scale.ceil().integer())
-            .map_or(1, i32::unsigned_abs);
+        let scale = s.cursor_scale();
         s.themed_cursor.show(&qh, pointer, serial, shape, scale)?;
         self.flush()
     }
@@ -1382,7 +1377,7 @@ impl Connection {
         self.state.repeat_keys(Instant::now());
         self.animate_cursor()?;
         self.state.pump_reads();
-        self.state.update_scales();
+        self.update_scales()?;
         if self.state.events.is_empty() && self.state.fault.is_none() && !woken {
             // a key repeat, the next image of an animated cursor or a clipboard read giving up earlier than the
             // caller's timeout ends the wait first
@@ -1401,12 +1396,23 @@ impl Connection {
             self.state.repeat_keys(Instant::now());
             self.animate_cursor()?;
             self.state.pump_reads();
-            self.state.update_scales();
+            self.update_scales()?;
         }
         match self.state.fault.take() {
             Some(e) => Err(e),
             None => Ok(std::mem::take(&mut self.state.events)),
         }
+    }
+
+    /// Update the scales of the surfaces; a drawn cursor follows the scale of the surface it is over.
+    fn update_scales(&mut self) -> Result<(), Error> {
+        self.state.update_scales();
+        let qh = self.queue.handle();
+        let scale = self.state.cursor_scale();
+        if self.state.themed_cursor.rescale(&qh, scale)? {
+            self.flush()?;
+        }
+        Ok(())
     }
 
     fn animate_cursor(&mut self) -> Result<(), Error> {
@@ -1820,6 +1826,15 @@ impl State {
             xdg,
             info: OutputBuilder::new(id),
         });
+    }
+
+    /// The whole scale a drawn cursor is made for: the next whole scale of the surface under the pointer, else 1.
+    fn cursor_scale(&self) -> u32 {
+        self.pointer_tracker
+            .focus()
+            .and_then(|id| self.surfaces.iter().find(|surf| surf.id == id))
+            .and_then(|surf| surf.scale.ceil().integer())
+            .map_or(1, i32::unsigned_abs)
     }
 
     /// Report surfaces whose scale changed since they were last drawn.

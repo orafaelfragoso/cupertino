@@ -4208,6 +4208,26 @@ fn without_cursor_shapes_the_cursor_is_drawn_from_the_theme_at_the_pointers_scal
     wait_for(&mut conn, &mut stash, |e| {
         matches!(e, Event::ScaleChanged { .. }).then_some(())
     });
+    // the cursor showing is drawn again for the new scale without being set again
+    let redrawn = std::iter::repeat_with(|| next_seen(&seen))
+        .find_map(|s| match s {
+            Seen::Commit { size, scale, .. } => Some((size, scale)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(redrawn, ((32, 32), 2));
+    let shown = next_seen(&seen);
+    assert!(
+        matches!(
+            shown,
+            Seen::Cursor {
+                hotspot: (0, 1),
+                surface: true,
+                ..
+            }
+        ),
+        "the hotspot in points: {shown:?}"
+    );
     assert_eq!(
         cursor(&mut conn, CursorShape::Text),
         (((48, 48), 2), (4, 8))

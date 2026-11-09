@@ -108,6 +108,39 @@ mod tests {
     }
 
     #[test]
+    fn buffers_at_the_desktop_scales_cover_their_points_within_half_a_pixel() {
+        // 1, 1.25, 1.5, 1.75, 2 and a scale that is not a whole number of 120ths (2.953125 arrives as 354/120)
+        for (n, logical) in [
+            (120, 1512),
+            (150, 1512),
+            (180, 1511),
+            (210, 1023),
+            (240, 982),
+            (354, 1024),
+        ] {
+            let scale = s(n);
+            let pixels = scale.to_physical(logical).unwrap();
+            let exact = f64::from(logical) * scale.factor();
+            assert!(
+                (f64::from(pixels) - exact).abs() <= 0.5,
+                "{n}: {pixels} for {exact}"
+            );
+            assert_eq!(scale.ceil().integer().unwrap(), n.div_ceil(120) as i32);
+        }
+        assert_eq!(
+            s(354).to_physical(1024),
+            Some(3021),
+            "the 120ths rounding, not the panel's 3024"
+        );
+        assert_eq!(Scale::from_120ths(0), None);
+        assert_eq!(
+            s(150).to_physical(0),
+            Some(0),
+            "an empty side stays empty for the layout to refuse"
+        );
+    }
+
+    #[test]
     fn fractional_beats_preferred_beats_the_largest_entered_output() {
         let mut sources = ScaleSources {
             entered: vec![s(120), s(240)],

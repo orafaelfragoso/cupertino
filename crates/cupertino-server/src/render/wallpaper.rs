@@ -524,6 +524,9 @@ pub struct Wallpapers {
     sent: HashMap<u64, u16>,
     /// The [`strip_spread`] under the menu bar of each output whose image was put up or measured again, until taken.
     spread: Vec<(u64, Vec<u16>)>,
+    /// The spread last handed out for each output, so the procedural wallpaper's even one is handed out once after an
+    /// image's, whatever the lightness.
+    spread_sent: HashMap<u64, Vec<u16>>,
     /// The colour operations of the menu bar's material, which the lightness under it is measured through.
     bar_ops: Vec<Op>,
     /// The appearance and Reduce Transparency the operations are those of.
@@ -551,6 +554,7 @@ impl Wallpapers {
             measured: Vec::new(),
             sent: HashMap::new(),
             spread: Vec::new(),
+            spread_sent: HashMap::new(),
             bar_ops: Vec::new(),
             bar_material: None,
             seen: HashMap::new(),
@@ -584,7 +588,9 @@ impl Wallpapers {
             if self.sent.insert(*output, lightness) != Some(lightness) {
                 self.measured.push((*output, lightness));
             }
-            self.spread.push((*output, strip_spread(&shown.strip, ops)));
+            let spread = strip_spread(&shown.strip, ops);
+            self.spread_sent.insert(*output, spread.clone());
+            self.spread.push((*output, spread));
         }
     }
 
@@ -642,8 +648,9 @@ impl Wallpapers {
                     } else {
                         strip_lightness(&strip.samples, &self.bar_ops)
                     };
-                    self.spread
-                        .push((reply.output, strip_spread(&strip, &self.bar_ops)));
+                    let spread = strip_spread(&strip, &self.bar_ops);
+                    self.spread_sent.insert(reply.output, spread.clone());
+                    self.spread.push((reply.output, spread));
                     let size = (pixmap.width() as i32, pixmap.height() as i32);
                     let buffer = MemoryRenderBuffer::from_slice(
                         pixmap.data(),
@@ -787,6 +794,7 @@ impl Wallpapers {
             let asked = now - *at < FORGET_SECONDS;
             if !asked {
                 self.sent.remove(output);
+                self.spread_sent.remove(output);
             }
             asked
         });
@@ -829,7 +837,12 @@ impl Wallpapers {
         let lightness = colour_lightness(apply_color_ops(tint, &self.bar_ops));
         if self.sent.insert(output, lightness) != Some(lightness) {
             self.measured.push((output, lightness));
-            // measured from one colour, the procedural wallpaper is even under the bar
+        }
+        // measured from one colour, the procedural wallpaper is even under the bar: handed out when the last spread
+        // handed out was not (an image's, even one of the same lightness), checked without measuring anything
+        let even = |s: &Vec<u16>| s.len() == SPREAD_BANDS && s.iter().all(|&v| v == 0);
+        if !self.spread_sent.get(&output).is_some_and(even) {
+            self.spread_sent.insert(output, vec![0; SPREAD_BANDS]);
             self.spread.push((output, vec![0; SPREAD_BANDS]));
         }
     }
@@ -1101,10 +1114,32 @@ mod tests {
             assert!(wallpapers.shown(1, &none, false, (8, 8), 1, 0.0).is_none());
         }
         assert_eq!(wallpapers.take_bar_lightness(), [(1, light)]);
+        assert_eq!(wallpapers.take_bar_spread(), [(1, vec![0; SPREAD_BANDS])]);
         wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
         wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
         let dark = colour_lightness(crate::render::scene::wallpaper_tint(true));
         assert_eq!(wallpapers.take_bar_lightness(), [(1, dark)]);
+        // the even spread is handed out once, not again with the lightness
+        assert_eq!(wallpapers.take_bar_spread(), []);
+    }
+
+    /// After an image whose strip was uneven, the procedural wallpaper's even spread is handed out though its lightness
+    /// is the one handed out last, so the bar's halo does not stay as the image's.
+    #[test]
+    fn the_procedural_wallpaper_hands_out_its_even_spread_after_an_image_of_the_same_lightness() {
+        let mut wallpapers = Wallpapers::with_decoder([None, None], Arc::new(decode_file));
+        let none = WallpaperSettings::default();
+        let dark = colour_lightness(crate::render::scene::wallpaper_tint(true));
+        // as an image of the same lightness under the bar, but striped, leaves it
+        wallpapers.sent.insert(1, dark);
+        let mut busy = vec![0; SPREAD_BANDS];
+        busy[3] = 400;
+        wallpapers.spread_sent.insert(1, busy);
+        wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
+        assert_eq!(wallpapers.take_bar_lightness(), []);
+        assert_eq!(wallpapers.take_bar_spread(), [(1, vec![0; SPREAD_BANDS])]);
+        wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
+        assert_eq!(wallpapers.take_bar_spread(), []);
     }
 
     #[test]

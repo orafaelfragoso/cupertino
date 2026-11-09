@@ -103,7 +103,11 @@ only once the query has stood 0.5 s (`kit::STATUS_SETTLE`, the providers' deadli
 pending then time out first, so a search that answers in time says nothing before its results, typing says nothing between
 keys, and one status is said per settled query at most, by a live region of its own (`StatusAnnouncer`; a failure
 assertively, the rest politely). The same status is never said twice for the same query while the panel is open, even when
-the query is edited away and typed again (the last 32 are remembered). Space on a file
+the query is edited away and typed again (the last 32 are remembered). The browser's "No Results" follows the same rule:
+its selection announcer says it only once the filter (query and category) has stood 0.5 s with nothing to show
+(`Message::BrowseSettled`), at most once per settled filter, and never again for the same filter while the panel is open.
+A provider still pending when the query settles has passed its deadline, and its late answer is dropped, so what is said
+then is that some results could not be searched, which is what the row shows too. Space on a file
 result enlarges its preview (Escape returns to the list); a preview that has not arrived 1.5 s later (`kit::PREVIEW_TIMEOUT`)
 says there is none, and one that arrives late still shows.
 

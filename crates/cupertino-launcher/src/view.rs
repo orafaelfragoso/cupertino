@@ -472,6 +472,9 @@ pub struct PanelView<'a> {
     pub browser: Option<&'a Browser>,
     /// Images of the applications' icons by desktop id.
     pub app_icons: &'a HashMap<String, Vec<ImageSource>>,
+    /// The browser says "No Results" aloud: its filter settled with nothing to show
+    /// ([`crate::kit::Model::browse_no_results_said`]).
+    pub browse_no_results_said: bool,
     /// The monotonic clock, for the browser's scroll indicator.
     pub now: f64,
 }
@@ -640,8 +643,16 @@ where
     let mut children = vec![query_row];
     let showing_browser = view.browser.filter(|_| browsing || frame.content > 0.0);
     if let Some(browser) = showing_browser {
-        children
-            .push(browse::body(browser, view.app_icons, frame.content, view.now).key("browser"));
+        children.push(
+            browse::body(
+                browser,
+                view.app_icons,
+                view.browse_no_results_said,
+                frame.content,
+                view.now,
+            )
+            .key("browser"),
+        );
     } else {
         children.extend(search_body(view));
     }

@@ -4,7 +4,7 @@
 //! searching it, the layer surface's size, timers, icons and what the preview shows of a file) goes through [`Host`],
 //! so the model runs headless in tests.
 
-use crate::browse::{self, App, Arrangement, BrowseLayout, Browser, Zone};
+use crate::browse::{self, App, Arrangement, BrowseLayout, Browser, Category, Zone};
 use crate::engine::{
     self, ActionKind, Activation, ItemAction, Launcher, LauncherConfig, ResultItem,
 };
@@ -196,6 +196,9 @@ pub enum Message {
     /// The query of this change ([`Model::query_change`]) has stood for [`STATUS_SETTLE`]: what the panel says of it
     /// may be said aloud.
     Settled(u64),
+    /// The browser's filter (its query and category) of this change ([`Model::browse_change`]) has stood for
+    /// [`STATUS_SETTLE`]: "No Results" may be said aloud.
+    BrowseSettled(u64),
     /// The output the panel is on is this large, in points.
     Output(Size),
     /// The session's Reduce Motion option.
@@ -255,6 +258,15 @@ pub struct Model {
     /// The queries and statuses said aloud since the panel opened, the latest [`MAX_SAID`]: the same status is not said
     /// again for the same query, even after it was edited away and typed again.
     said_before: Vec<(String, Status)>,
+    /// The browser's filter last seen: its query and category.
+    browse_filter: Option<(String, Option<Category>)>,
+    /// How many times the browser's filter changed: its "No Results" belongs to one change.
+    browse_change: u64,
+    /// The browser's filter change "No Results" was said aloud for, once it stood for [`STATUS_SETTLE`].
+    browse_said: Option<u64>,
+    /// The browser's filters "No Results" was said for since the panel opened, the latest [`MAX_SAID`]: not said again
+    /// for the same filter.
+    browse_said_before: Vec<(String, Option<Category>)>,
     /// The panel window's size as last given.
     extent: Size,
     /// Launches waiting for their activation token.
@@ -299,6 +311,10 @@ impl Model {
             query_change: 0,
             said: None,
             said_before: Vec::new(),
+            browse_filter: None,
+            browse_change: 0,
+            browse_said: None,
+            browse_said_before: Vec::new(),
             extent: view::window_extent(view::compact_shape()),
             pending: HashMap::new(),
             opening: HashMap::new(),
@@ -461,6 +477,9 @@ impl Model {
         self.searched = None;
         self.said = None;
         self.said_before.clear();
+        self.browse_filter = None;
+        self.browse_said = None;
+        self.browse_said_before.clear();
         self.preview = PreviewState::None;
         self.previewed = None;
         self.motion.hide(browse, now.mono);
@@ -561,6 +580,56 @@ impl Model {
         self.query_change
     }
 
+    /// A browser whose filter (query or category) changed waits [`STATUS_SETTLE`] before "No Results" may be said of it.
+    fn watch_browse_filter(&mut self) -> Vec<Command<Message>> {
+        let Some(b) = self
+            .browser
+            .as_ref()
+            .filter(|_| self.nav.view == View::Browse)
+        else {
+            return Vec::new();
+        };
+        let filter = (b.query().to_owned(), b.category());
+        if self.browse_filter.as_ref() == Some(&filter) {
+            return Vec::new();
+        }
+        self.browse_filter = Some(filter);
+        self.browse_change += 1;
+        self.host
+            .after(STATUS_SETTLE, Message::BrowseSettled(self.browse_change))
+    }
+
+    /// The browser's filter of change `change` has stood for [`STATUS_SETTLE`]: say "No Results" when nothing shows,
+    /// once, and never again for the same filter while the panel is open.
+    fn settle_browse(&mut self, change: u64) {
+        if change != self.browse_change || self.browse_said == Some(change) {
+            return;
+        }
+        let Some(filter) = self.browse_filter.clone() else {
+            return;
+        };
+        let empty = self.browser.as_ref().is_some_and(|b| b.item_count() == 0);
+        if empty && !self.browse_said_before.contains(&filter) {
+            self.browse_said = Some(change);
+            if self.browse_said_before.len() == MAX_SAID {
+                self.browse_said_before.remove(0);
+            }
+            self.browse_said_before.push(filter);
+        }
+    }
+
+    /// Whether the browser says "No Results" aloud now: its filter stood for [`STATUS_SETTLE`] with nothing to show,
+    /// and it was not said for that filter before.
+    pub fn browse_no_results_said(&self) -> bool {
+        self.browse_said == Some(self.browse_change)
+            && self.browser.as_ref().is_some_and(|b| b.item_count() == 0)
+    }
+
+    /// How many times the browser's filter changed ([`Message::BrowseSettled`]).
+    pub fn browse_change(&self) -> u64 {
+        self.browse_change
+    }
+
     /// After every change: the providers, the shown icons, the selected result's preview, the window's size and the
     /// keyboard's place.
     fn changed(&mut self) -> Vec<Command<Message>> {
@@ -613,6 +682,7 @@ impl Model {
             }
             commands.extend(self.ask_preview());
         }
+        commands.extend(self.watch_browse_filter());
         commands.extend(self.load_app_icons());
         let now = self.now().mono;
         let target = self.target_shape();
@@ -1184,6 +1254,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             model.settle(change);
             Vec::new()
         }
+        Message::BrowseSettled(change) => {
+            model.settle_browse(change);
+            Vec::new()
+        }
         Message::Output(size) => {
             model.output = Some(size);
             let height = model.browse_height();
@@ -1239,6 +1313,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         preview_unavailable: model.preview == PreviewState::Unavailable,
         browser,
         app_icons: &model.app_icons,
+        browse_no_results_said: model.browse_no_results_said(),
         now: model.now().mono,
     };
     let mut windows = vec![view::panel_window(&panel)];

@@ -176,9 +176,11 @@ fn leaf_measure(rect: &Rect) -> Measured {
 }
 
 /// The browser's part of the panel, below the header row, laid out from the panel's top-left corner less the header.
+/// `no_results_said`: with nothing to show, "No Results" is said aloud (the filter settled; once per filter).
 pub fn body<M>(
     browser: &Browser,
     icons: &HashMap<String, Vec<ImageSource>>,
+    no_results_said: bool,
     alpha: f64,
     now: f64,
 ) -> Element<M>
@@ -287,9 +289,11 @@ where
             .key("scroller"),
         );
     }
-    // what the keys are on, read out as it changes
+    // what the keys are on, read out as it changes; "No Results" only once the filter settled, so typing says nothing
+    // between keys
     let announced = match browser.zone() {
-        Zone::Content if browser.item_count() == 0 => NO_RESULTS.to_owned(),
+        Zone::Content if browser.item_count() == 0 && no_results_said => NO_RESULTS.to_owned(),
+        Zone::Content if browser.item_count() == 0 => String::new(),
         Zone::Content => browser
             .selected_app()
             .map(|a| a.name.clone())

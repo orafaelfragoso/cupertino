@@ -1419,6 +1419,12 @@ impl Run {
         self.deliver(Message::Settled(change));
     }
 
+    /// The browser's filter has stood for its settling time: the timer the host would have fired.
+    fn settle_browse(&mut self) {
+        let change = self.model().browse_change();
+        self.deliver(Message::BrowseSettled(change));
+    }
+
     /// What a screen reader said since the last call, oldest first.
     fn said(&self) -> Vec<String> {
         self.reader
@@ -1514,6 +1520,12 @@ fn typing_filters_the_applications_and_escape_folds_the_browser_before_it_closes
     assert!(!names.contains(&"GIMP".to_owned()), "{names:?}");
     run.type_text("zzz");
     assert!(run.names(Role::Button).is_empty());
+    assert!(
+        !run.announced().contains(&"No Results".to_owned()),
+        "not while typing: {:?}",
+        run.announced()
+    );
+    run.settle_browse();
     assert!(
         run.announced().contains(&"No Results".to_owned()),
         "{:?}",
@@ -2043,6 +2055,50 @@ fn a_typing_trace_says_at_most_one_status_per_settled_query() {
     run.settle_query();
     assert!(!run.names(Role::ListItem).is_empty(), "results show");
     assert_eq!(run.said(), Vec::<String>::new());
+}
+
+/// The browser's "No Results" follows the search's rule: nothing between keys, said once the filter stood for its
+/// settling time, at most once per settled filter, never again for the same filter, and a timer of an earlier filter
+/// says nothing.
+#[test]
+fn a_typing_trace_in_the_browser_says_no_results_at_most_once_per_settled_filter() {
+    let mut run = Run::new();
+    run.browse_from_hidden();
+    run.said();
+    for c in ["z", "z", "z"] {
+        let before = run.model().browse_change();
+        run.type_text(c);
+        assert!(run.names(Role::Button).is_empty(), "nothing matches");
+        // the timer of the previous filter fires late: it is not this filter's
+        run.deliver(Message::BrowseSettled(before));
+    }
+    assert_eq!(run.said(), Vec::<String>::new(), "nothing between keys");
+    run.settle_browse();
+    run.settle_browse();
+    assert_eq!(run.said(), [NO_RESULTS], "once, for the settled filter");
+    // a key that still finds nothing is a new filter: said once it settles
+    run.type_text("q");
+    assert_eq!(run.said(), Vec::<String>::new());
+    run.settle_browse();
+    assert_eq!(run.said(), [NO_RESULTS]);
+    // the same filter typed again says nothing new
+    run.key("Backspace", BACKSPACE_CODE, BACKSPACE);
+    run.settle_browse();
+    assert_eq!(run.said(), Vec::<String>::new(), "\"zzz\" said it already");
+    run.type_text("q");
+    run.settle_browse();
+    assert_eq!(run.said(), Vec::<String>::new(), "\"zzzq\" said it already");
+    // applications show again: no "No Results"
+    for _ in 0..4 {
+        run.key("Backspace", BACKSPACE_CODE, BACKSPACE);
+    }
+    run.type_text("fire");
+    run.settle_browse();
+    assert!(run.names(Role::Button).contains(&"Firefox".to_owned()));
+    assert!(
+        !run.said().contains(&NO_RESULTS.to_owned()),
+        "results say no status"
+    );
 }
 
 #[test]

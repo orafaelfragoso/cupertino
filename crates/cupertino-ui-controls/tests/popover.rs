@@ -295,6 +295,7 @@ fn content_taller_than_its_bound_scrolls_inside_the_padding() {
         value120: None,
         source: ScrollSource::Wheel,
         stop: false,
+        inverted: (false, false),
     });
     assert_eq!(h.model().scroll.offset.y, 30.0);
     let thumb = h
@@ -327,6 +328,7 @@ fn content_taller_than_its_bound_scrolls_inside_the_padding() {
         value120: None,
         source: ScrollSource::Wheel,
         stop: false,
+        inverted: (false, false),
     });
     assert_eq!(
         h.model().scroll.offset.y,

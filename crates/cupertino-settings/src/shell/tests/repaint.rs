@@ -224,6 +224,7 @@ fn interactions(scale: f64) -> Vec<(&'static str, Vec<FrameSample>)> {
             value120: None,
             source: ScrollSource::Wheel,
             stop: false,
+            inverted: (false, false),
         };
         small_meter.step(&mut small, |s, _| pointer(s, small_window, event));
     }

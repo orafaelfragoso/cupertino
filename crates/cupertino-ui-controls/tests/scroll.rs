@@ -210,6 +210,7 @@ fn wheel(h: &mut Harness<Scrolled>, at: Point, dy: f64, source: ScrollSource, st
         value120: None,
         source,
         stop,
+        inverted: (false, false),
     });
 }
 
@@ -439,6 +440,7 @@ fn a_touchpad_flick_coasts_after_the_lift_unless_motion_is_reduced() {
                         value120: None,
                         source: ScrollSource::Finger,
                         stop: true,
+                        inverted: (false, false),
                     },
                     Timestamp(0),
                 ),

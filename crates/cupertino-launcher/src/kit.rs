@@ -184,7 +184,7 @@ pub struct Model {
     pending: HashMap<u64, CommandSpec>,
     next_launch: u64,
     /// The animation frame that counts; an older one is ignored when it arrives.
-    frame: u64,
+    pub(crate) frame: u64,
     /// The hidden window's generation: each one is a new window, so one the server closed is not kept.
     pub hidden: u64,
     preview: PreviewState,
@@ -503,10 +503,18 @@ impl Model {
         if self.settled {
             self.motion.reshape(target, now);
             self.motion.settle(now);
-        } else if self.nav.view == View::Search
-            && self.motion.frame(now).header == crate::motion::Header::Search
-        {
-            self.motion.reshape(target, now);
+        } else {
+            // a change within the view shown (results, the output's size) reshapes it; a fold or unfold under way
+            // keeps its course
+            let header = self.motion.frame(now).header;
+            let settled_in = match self.nav.view {
+                View::Search => header == crate::motion::Header::Search,
+                View::Browse => header == crate::motion::Header::Browse,
+                View::Hidden => false,
+            };
+            if settled_in {
+                self.motion.reshape(target, now);
+            }
         }
         commands.extend(self.resize());
         commands
@@ -516,14 +524,17 @@ impl Model {
     fn resize(&mut self) -> Vec<Command<Message>> {
         let now = self.now().mono;
         let target = self.motion.target();
-        let shown = self.motion.frame(now).shape;
-        let mut needed = view::window_extent(target.union(shown));
-        if self.motion.animating(now) {
-            needed = Size::new(
-                needed.width.max(self.extent.width),
-                needed.height.max(self.extent.height),
-            );
-        }
+        // settled, the window is the target's (what the motion presents may be a hair off it); while the shape
+        // changes, it holds both and never shrinks
+        let needed = if self.motion.animating(now) {
+            let both = view::window_extent(target.union(self.motion.frame(now).shape));
+            Size::new(
+                both.width.max(self.extent.width),
+                both.height.max(self.extent.height),
+            )
+        } else {
+            view::window_extent(target)
+        };
         if needed != self.extent {
             self.extent = needed;
             self.host.resize(needed);

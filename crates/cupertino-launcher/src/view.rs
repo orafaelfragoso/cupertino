@@ -380,11 +380,13 @@ pub fn browse_shape(height: f64) -> PanelShape {
     PanelShape::new(BrowseLayout::WIDTH, height, BrowseLayout::RADIUS)
 }
 
-/// The panel's window for `shape`: the shape and the room around it for its shadow.
+/// The panel's window for `shape`: the shape and the room around it for its shadow, in whole points (what an animation
+/// leaves a hair past a whole point does not round up).
 pub fn window_extent(shape: PanelShape) -> Size {
+    let whole = |v: f64| ((v * 1000.0).round() / 1000.0).ceil();
     Size::new(
-        (shape.width + 2.0 * SHADOW_SIDE).ceil(),
-        (shape.height + SHADOW_TOP + SHADOW_BOTTOM).ceil(),
+        whole(shape.width + 2.0 * SHADOW_SIDE),
+        whole(shape.height + SHADOW_TOP + SHADOW_BOTTOM),
     )
 }
 

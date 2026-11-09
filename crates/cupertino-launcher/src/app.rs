@@ -791,6 +791,19 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         None
     };
     let (sender, signals) = async_channel::unbounded();
+    // the first output's size guesses the browser's height until the catcher is configured on the output the server
+    // picked
+    if let Some(g) = system
+        .connection()
+        .outputs()
+        .into_iter()
+        .find_map(|o| o.geometry)
+    {
+        let _ = sender.try_send(Signal::Output(Size::new(
+            f64::from(g.width),
+            f64::from(g.height),
+        )));
+    }
     let toggles = sender.clone();
     let _control = control::serve(zbus::connection::Builder::session()?, move |call| {
         let _ = toggles.send_blocking(match call {

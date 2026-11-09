@@ -28,10 +28,11 @@ use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_theme::Theme;
 use cupertino_ui_test::{AssistiveTechnology, Inspector, ManualClock, TestDriver};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::num::NonZeroU32;
+use std::rc::Rc;
 use std::sync::Arc;
 
 const OUTPUT: Size = Size {
@@ -1558,4 +1559,78 @@ fn reduce_motion_puts_the_panel_where_it_heads_at_once() {
     let frame = motion.frame(0.0);
     assert_eq!(frame.scale, 1.0);
     assert_eq!(frame.shape, browse_shape(BrowseLayout::HEIGHT));
+}
+
+/// A host whose clock the test moves, and which records the window's size.
+struct MovingHost(Rc<Cell<f64>>, Rc<Cell<Size>>);
+
+impl Host for MovingHost {
+    fn run(&mut self, _: CommandSpec, _: Option<String>) {}
+    fn open(&mut self, _: &str) {}
+    fn index(&mut self, _: FileSearchConfig) -> Vec<Command<Message>> {
+        Vec::new()
+    }
+    fn resize(&mut self, size: Size) {
+        self.1.set(size);
+    }
+    fn frame(&mut self, _: u64) -> Vec<Command<Message>> {
+        Vec::new()
+    }
+    fn icon(&mut self, _: &ResultItem) -> Vec<ImageSource> {
+        Vec::new()
+    }
+    fn preview(&mut self, _: &ResultItem) -> Vec<Command<Message>> {
+        Vec::new()
+    }
+    fn now(&self) -> Now {
+        Now {
+            mono: self.0.get(),
+            unix: 1_000_000.0,
+        }
+    }
+}
+
+/// The browser opens, takes the output's height once it is known, folds into the search field and settles in a
+/// window exactly the search field's, frame by frame on a clock that moves.
+#[test]
+fn on_a_moving_clock_the_window_follows_the_browser_and_settles_at_the_search_field() {
+    let clock = Rc::new(Cell::new(0.0));
+    let size = Rc::new(Cell::new(Size::ZERO));
+    let mut model = Model::new(
+        test_launcher(),
+        Box::new(MovingHost(clock.clone(), size.clone())),
+    );
+    let run_for = |model: &mut Model, seconds: f64| {
+        for _ in 0..(seconds / 0.016) as usize {
+            clock.set(clock.get() + 0.016);
+            let frame = model.frame;
+            kit::update(model, Message::Frame(frame));
+        }
+    };
+    kit::update(&mut model, Message::Browse);
+    run_for(&mut model, 1.0);
+    assert_eq!(
+        size.get(),
+        window_extent(browse_shape(BrowseLayout::HEIGHT))
+    );
+    // on a short output the browser leaves room at its foot
+    kit::update(&mut model, Message::Output(Size::new(1000.0, 700.0)));
+    run_for(&mut model, 1.0);
+    let short = BrowseLayout::height_on(700.0, 140.0, kit::BROWSE_BOTTOM_ROOM);
+    assert!(short < BrowseLayout::HEIGHT);
+    assert_eq!(size.get(), window_extent(browse_shape(short)));
+    kit::update(
+        &mut model,
+        Message::Input(Input::Key(PanelKey::Escape, PanelMods::NONE)),
+    );
+    assert_eq!(model.nav.view, View::Search);
+    // while the shape contracts the window still holds it
+    assert_eq!(size.get(), window_extent(browse_shape(short)));
+    run_for(&mut model, 1.0);
+    assert!(!model.motion.animating(clock.get()));
+    assert_eq!(
+        size.get(),
+        window_extent(compact_shape()),
+        "exactly the search field's window, not a point more"
+    );
 }

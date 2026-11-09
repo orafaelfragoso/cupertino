@@ -1,14 +1,21 @@
 //! The window control buttons the server draws (close, minimize, zoom), published to assistive technology over AT-SPI.
 //!
 //! The client of a window publishes its own content; the buttons on the title bar are the server's, so the server
-//! publishes them: each window with server-drawn buttons is a top-level object of the server's own, named by the
-//! window's title, holding three push buttons with their names, their bounds and whether they are enabled. An enabled
-//! button offers its press; a disabled one is reported disabled and offers nothing. A press asked by an assistive
-//! technology comes back to the event loop and does what a click does ([`crate::state::Cupertino::press_window_button`]).
+//! publishes them: each window with server-drawn buttons is a top-level object of the server's own, named for the
+//! window's controls ("Notes window controls", [`controls_name`]) so it is not taken for the client's own window of the
+//! same title, holding three push buttons with their names, their bounds and whether they are enabled. An enabled
+//! button offers its press; a disabled one is reported disabled and offers nothing. The buttons have no long press nor
+//! menu for the pointer either, so the press is the only action. A press asked by an assistive technology comes back
+//! to the event loop and does what a click does ([`Cupertino::press_published_button`]): only on a button published
+//! enabled, of a window published now, while the session is unlocked.
+//!
+//! A full-screen window's buttons are published while its title bar shows, revealed with the menu bar over it, and
+//! withdrawn when it hides again.
 //!
 //! [`ButtonAccessibility`] keeps what is published and sends only what changed to its [`ButtonSink`]; the sink of a
-//! session is [`AtspiSink`], one AccessKit Unix adapter per window. Nothing is sent while the session is locked: the
-//! windows are hidden then, and so are their buttons.
+//! session is [`AtspiSink`], one AccessKit Unix adapter per window. The buttons are computed again only when something
+//! may have changed them (a model command, a redraw, the lock, or an animation running), not at every pass of the loop.
+//! Nothing is sent while the session is locked: the windows are hidden then, and so are their buttons.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -34,6 +41,16 @@ pub fn button_name(kind: ButtonKind) -> &'static str {
     }
 }
 
+/// The name of a window's object: its controls, named for the window, so the client's own window of the same title is
+/// told apart from it.
+pub fn controls_name(title: &str) -> String {
+    if title.trim().is_empty() {
+        "Window controls".to_owned()
+    } else {
+        format!("{title} window controls")
+    }
+}
+
 /// One window control button as published.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ButtonAccess {
@@ -47,9 +64,10 @@ pub struct ButtonAccess {
 /// The buttons of one window, as published.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowButtons {
-    /// The window's title, which names its object.
+    /// The window's title, which names its object ([`controls_name`]).
     pub title: String,
-    /// The window's frame (title bar included) in global logical points.
+    /// Where the buttons' bounds are measured from, in global logical points: the window's frame (title bar included),
+    /// or the title bar revealed over a full-screen window.
     pub frame: Rect,
     /// Close, minimize and zoom, in that order.
     pub buttons: [ButtonAccess; 3],
@@ -76,7 +94,7 @@ impl WindowButtons {
     /// The whole tree of the window: its own node with the three buttons in reading order.
     pub fn tree(&self) -> TreeUpdate {
         let mut root = Node::new(Role::Window);
-        root.set_label(self.title.clone());
+        root.set_label(controls_name(&self.title));
         root.set_bounds(accesskit::Rect::new(
             0.0,
             0.0,
@@ -137,6 +155,14 @@ pub trait ButtonSink {
 pub struct ButtonAccessibility {
     sink: Option<Box<dyn ButtonSink>>,
     published: HashMap<WindowId, WindowButtons>,
+    /// Something may have changed the buttons since they were last computed ([`Self::invalidate`]).
+    stale: bool,
+    /// The loop was animating at the last [`Self::due`]: one more computation follows the end of an animation.
+    animating: bool,
+    /// The session was locked at the last [`Self::due`].
+    locked: bool,
+    /// How many times the buttons were computed (tests).
+    computed: u64,
 }
 
 impl ButtonAccessibility {
@@ -149,6 +175,28 @@ impl ButtonAccessibility {
     pub fn set_sink(&mut self, sink: Box<dyn ButtonSink>) {
         self.published.clear();
         self.sink = Some(sink);
+        self.stale = true;
+    }
+
+    /// Something that may change the buttons happened (a model command, a redraw): compute them at the next sync.
+    pub fn invalidate(&mut self) {
+        self.stale = true;
+    }
+
+    /// Whether the buttons must be computed again: they are published, and something changed since the last sync, the
+    /// lock changed, or an animation runs now or ran at the last check (a state an animation ends in, such as leaving
+    /// full screen, is caught the pass after).
+    pub fn due(&mut self, animating: bool, locked: bool) -> bool {
+        let due = self.sink.is_some()
+            && (self.stale || animating || self.animating || locked != self.locked);
+        self.animating = animating;
+        self.locked = locked;
+        due
+    }
+
+    /// How many times the buttons were computed since the server started.
+    pub fn computed(&self) -> u64 {
+        self.computed
     }
 
     /// What is published now.
@@ -161,6 +209,8 @@ impl ButtonAccessibility {
         let Some(sink) = self.sink.as_mut() else {
             return;
         };
+        self.stale = false;
+        self.computed += 1;
         self.published.retain(|id, _| {
             let keep = now.contains_key(id);
             if !keep {
@@ -273,7 +323,7 @@ impl Cupertino {
         let (presses, received) = channel::channel::<(WindowId, ButtonKind)>();
         let inserted = self.loop_handle.insert_source(received, |event, _, state| {
             if let channel::Event::Msg((window, kind)) = event {
-                state.press_window_button(window, kind);
+                state.press_published_button(window, kind);
             }
         });
         if let Err(e) = inserted {
@@ -291,19 +341,40 @@ impl Cupertino {
             }))));
     }
 
-    /// The buttons of every window whose buttons the server draws and shows: a mapped window with server-side
-    /// decorations, neither full screen nor minimized (nor on its way there or out), while the session is unlocked.
+    /// Press button `kind` of `window` as an assistive technology asked: only a button published enabled, of a window
+    /// whose buttons are published now, while the session is unlocked; then it does what a click does
+    /// ([`Cupertino::press_window_button`], which checks the button again).
+    pub fn press_published_button(&mut self, window: WindowId, kind: ButtonKind) {
+        let published = self
+            .button_access
+            .published()
+            .get(&window)
+            .is_some_and(|b| b.buttons[kind.index()].enabled);
+        if published && !self.session_lock.is_active() {
+            self.press_window_button(window, kind);
+        }
+    }
+
+    /// The buttons of every window whose buttons the server draws and shows, while the session is unlocked: a mapped
+    /// window with server-side decorations, neither full screen nor minimized (nor on its way there or out); and a
+    /// full-screen window while its title bar shows, revealed with the menu bar.
     pub fn window_buttons(&self) -> HashMap<WindowId, WindowButtons> {
         use cupertino_wm::LifecycleState::*;
         if self.session_lock.is_active() || !self.config.window.decorations {
             return HashMap::new();
         }
+        let now = self.now();
         self.windows
             .iter()
-            .filter(|e| e.mapped && e.server_side && !e.fullscreen)
-            .filter(|e| e.insets().top > 0.0 || e.titlebar.client_drawn())
+            .filter(|e| e.mapped)
             .filter_map(|e| {
                 let w = self.wm.window(e.id)?;
+                if e.fullscreen {
+                    return self.revealed_buttons(e, w, now);
+                }
+                if !e.server_side || !(e.insets().top > 0.0 || e.titlebar.client_drawn()) {
+                    return None;
+                }
                 if matches!(
                     w.state(),
                     Created
@@ -338,9 +409,48 @@ impl Cupertino {
             .collect()
     }
 
+    /// The buttons of full-screen window `e` while its title bar shows, revealed with the menu bar over it, as the scene
+    /// draws them: close and zoom (which leaves full screen) enabled, minimize disabled.
+    fn revealed_buttons(
+        &self,
+        e: &crate::state::WindowEntry,
+        w: &cupertino_wm::Window,
+        now: f64,
+    ) -> Option<(WindowId, WindowButtons)> {
+        use crate::state::WindowEntry;
+        if w.state() != cupertino_wm::LifecycleState::FullScreen {
+            return None;
+        }
+        let strip = e.revealed_titlebar(&self.menu_bars, &self.decor, true, w.output, now)?;
+        let layout = self
+            .decor
+            .for_style(WindowEntry::REVEALED_TITLEBAR)
+            .layout(Size::new(strip.w, strip.h));
+        let enabled = button_enabled(false, true);
+        Some((
+            e.id,
+            WindowButtons {
+                title: w.title.clone(),
+                frame: Rect::new(strip.x, strip.y, strip.w, strip.h),
+                buttons: ButtonKind::ALL.map(|kind| ButtonAccess {
+                    kind,
+                    enabled: enabled[kind.index()],
+                    bounds: layout.button(kind).art,
+                }),
+            },
+        ))
+    }
+
     /// Bring what assistive technology reads of the window buttons up to date; nothing when they are not published.
     pub(crate) fn sync_button_access(&mut self) {
-        if self.button_access.enabled() {
+        if !self.button_access.enabled() {
+            return;
+        }
+        let animating = self.animating();
+        if self
+            .button_access
+            .due(animating, self.session_lock.is_active())
+        {
             let now = self.window_buttons();
             self.button_access.sync(now);
         }
@@ -385,7 +495,11 @@ mod tests {
         let tree = buttons(false, true).tree();
         let root = node(&tree, ROOT);
         assert_eq!(root.role(), Role::Window);
-        assert_eq!(root.label(), Some("Notes"), "named by the window's title");
+        assert_eq!(
+            root.label(),
+            Some("Notes window controls"),
+            "named for the window, apart from the client's own window of that title"
+        );
         assert_eq!(root.children(), &[NodeId(2), NodeId(3), NodeId(4)]);
         assert_eq!(tree.tree.as_ref().map(|t| t.root), Some(ROOT));
         let seen: Vec<_> = root
@@ -394,6 +508,15 @@ mod tests {
             .map(|id| {
                 let n = node(&tree, *id);
                 assert_eq!(n.role(), Role::Button);
+                // the buttons have no long press nor menu for the pointer, so a press is all they offer
+                for other in [
+                    Action::ShowContextMenu,
+                    Action::Expand,
+                    Action::Focus,
+                    Action::Increment,
+                ] {
+                    assert!(!n.supports_action(other), "{other:?}");
+                }
                 (
                     n.label().unwrap().to_owned(),
                     n.is_disabled(),
@@ -415,6 +538,35 @@ mod tests {
             (9.0, 9.0, 23.0, 23.0),
             "frame-local"
         );
+    }
+
+    #[test]
+    fn an_untitled_window_still_names_its_controls() {
+        assert_eq!(controls_name("Notes"), "Notes window controls");
+        assert_eq!(controls_name(""), "Window controls");
+        assert_eq!(controls_name("  "), "Window controls");
+    }
+
+    #[test]
+    fn the_buttons_are_computed_again_only_after_a_change_the_lock_or_an_animation() {
+        let mut access = ButtonAccessibility::default();
+        assert!(!access.due(true, false), "nothing without a sink");
+        access.set_sink(Box::new(Log::default()));
+        assert!(access.due(false, false), "the first sync");
+        access.sync(HashMap::new());
+        assert!(!access.due(false, false), "idle");
+        assert!(!access.due(false, false), "still idle");
+        access.invalidate();
+        assert!(access.due(false, false), "a change");
+        access.sync(HashMap::new());
+        assert!(!access.due(false, false));
+        assert!(access.due(false, true), "the lock");
+        assert!(!access.due(false, true), "locked still");
+        assert!(access.due(false, false), "unlocked");
+        assert!(access.due(true, false), "an animation");
+        assert!(access.due(true, false), "still animating");
+        assert!(access.due(false, false), "the pass after it ended");
+        assert!(!access.due(false, false), "then idle");
     }
 
     #[test]

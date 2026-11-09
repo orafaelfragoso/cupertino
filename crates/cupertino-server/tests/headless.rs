@@ -1612,9 +1612,10 @@ impl PublishedButtons {
     }
 }
 
-/// The window buttons the server draws are published to assistive technology: a window object named by its title with
-/// close, minimize and zoom as push buttons that report a disabled button as disabled, and a press asked of them does
-/// what a click does. A minimized window's buttons are withdrawn.
+/// The window buttons the server draws are published to assistive technology: a window object named for the window's
+/// controls with close, minimize and zoom as push buttons that report a disabled button as disabled, and a press asked
+/// of them does what a click does. They are computed again only after a change, not at every pass of the loop. A
+/// minimized window's buttons are withdrawn, and every window's while the session is locked, when no press is taken.
 #[test]
 fn the_window_buttons_reach_assistive_technology_with_their_names_and_states() {
     use cupertino_decorations::ButtonKind;
@@ -1635,6 +1636,29 @@ fn the_window_buttons_reach_assistive_technology_with_their_names_and_states() {
     assert_eq!(
         published.buttons(id),
         Some(vec![enabled("Close"), enabled("Minimize"), enabled("Zoom")])
+    );
+    let label = {
+        let trees = published.0.lock().unwrap();
+        let tree = &trees[&id.0];
+        let root = tree.tree.as_ref().unwrap().root;
+        let node = &tree.nodes.iter().find(|(n, _)| *n == root).unwrap().1;
+        node.label().unwrap_or_default().to_owned()
+    };
+    assert!(
+        label.ends_with("window controls"),
+        "named apart from the client's own window: {label:?}"
+    );
+    // nothing changes: the passes of the loop compute nothing
+    h.advance(1.0);
+    let computed = h.state.button_access.computed();
+    for _ in 0..20 {
+        h.state.tick();
+        h.step();
+    }
+    assert_eq!(
+        h.state.button_access.computed(),
+        computed,
+        "idle passes compute no buttons"
     );
     let window = &h.state.button_access.published()[&id];
     assert_eq!(
@@ -1665,8 +1689,9 @@ fn the_window_buttons_reach_assistive_technology_with_their_names_and_states() {
         ]),
         "disabled is reported"
     );
+    h.state.press_published_button(id, ButtonKind::Minimize);
+    h.state.press_published_button(id, ButtonKind::Zoom);
     h.state.press_window_button(id, ButtonKind::Minimize);
-    h.state.press_window_button(id, ButtonKind::Zoom);
     h.advance(1.0);
     assert_eq!(
         h.state.wm.window(id).unwrap().state(),
@@ -1685,10 +1710,37 @@ fn the_window_buttons_reach_assistive_technology_with_their_names_and_states() {
         None,
         "a minimized window's buttons are withdrawn"
     );
+    h.state.press_published_button(id, ButtonKind::Zoom);
+    h.advance(1.0);
+    assert_eq!(
+        h.state.wm.window(id).unwrap().state(),
+        LifecycleState::Minimized,
+        "no press reaches a window whose buttons are not published"
+    );
     h.state.command(Command::Restore { window: id });
     h.advance(2.0);
     assert!(published.buttons(id).is_some(), "restored");
-    h.state.press_window_button(id, ButtonKind::Close);
+
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked", |_| locker.locked());
+    h.step();
+    assert!(
+        published.0.lock().unwrap().is_empty(),
+        "nothing is published while the session is locked"
+    );
+    h.state.press_published_button(id, ButtonKind::Close);
+    for _ in 0..10 {
+        h.step();
+    }
+    assert!(!client.closed(), "no press is taken while locked");
+    locker.unlock();
+    h.wait_until("the session to be unlocked", |s| {
+        !s.session_lock.is_active()
+    });
+    h.step();
+    assert!(published.buttons(id).is_some(), "published again unlocked");
+
+    h.state.press_published_button(id, ButtonKind::Close);
     h.wait_until("the client to see close", |_| client.closed());
 }
 

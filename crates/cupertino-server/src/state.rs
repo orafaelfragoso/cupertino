@@ -991,6 +991,8 @@ impl Cupertino {
     }
 
     pub fn request_redraw(&mut self) {
+        // what shows changed, perhaps the window buttons too
+        self.button_access.invalidate();
         for o in &mut self.outputs {
             o.scheduler.damage();
         }
@@ -2003,6 +2005,8 @@ impl Cupertino {
     // ---- model effects ---------------------------------------------------------------------
 
     pub fn command(&mut self, cmd: Command) {
+        // the model may change a window's buttons: its title, its state, what it can do
+        self.button_access.invalidate();
         let now = self.now();
         // a minimize without a target (key binding, action) flies into the dock's slot
         let cmd = match cmd {

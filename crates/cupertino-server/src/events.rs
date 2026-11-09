@@ -1236,6 +1236,8 @@ impl Cupertino {
                 self.decor.pressed = Some((id, kind));
                 self.request_redraw();
             }
+            // a disabled button on the title bar revealed over a full-screen window is as the rest of that bar: nothing
+            Hit::Button(_) if self.entry(id).is_some_and(|e| e.fullscreen) => {}
             // a disabled button is no control: the press is the title bar's, which moves the window past the drag
             // threshold, and fires nothing
             Hit::Button(_) | Hit::Titlebar => {
@@ -1297,8 +1299,11 @@ impl Cupertino {
         id: WindowId,
         kind: cupertino_decorations::ButtonKind,
     ) -> bool {
+        // a full-screen window does not minimize: its revealed title bar draws minimize disabled
+        let fullscreen = self.entry(id).is_some_and(|e| e.fullscreen);
         self.wm.window(id).is_some_and(|w| {
-            crate::decor::button_enabled(w.can_minimize(), w.can_zoom())[kind.index()]
+            crate::decor::button_enabled(w.can_minimize() && !fullscreen, w.can_zoom())
+                [kind.index()]
         })
     }
 

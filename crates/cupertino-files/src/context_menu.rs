@@ -111,10 +111,6 @@ pub enum ItemKind {
     TagRow {
         on: Vec<TagColor>,
     },
-    /// The row of the four view modes, the current one marked.
-    ViewRow {
-        current: ViewMode,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -197,34 +193,6 @@ pub const TAG_ROW_ORDER: [TagColor; 7] = [
     TagColor::Purple,
     TagColor::Gray,
 ];
-
-/// The view modes in the order of the view row.
-pub const VIEW_ROW_ORDER: [ViewSegment; 4] = [
-    ViewSegment::Icons,
-    ViewSegment::List,
-    ViewSegment::Columns,
-    ViewSegment::Gallery,
-];
-
-/// A choice of the view row; Gallery has no view behind it in this window.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ViewSegment {
-    Icons,
-    List,
-    Columns,
-    Gallery,
-}
-
-impl ViewSegment {
-    pub fn mode(self) -> Option<ViewMode> {
-        match self {
-            ViewSegment::Icons => Some(ViewMode::Icons),
-            ViewSegment::List => Some(ViewMode::List),
-            ViewSegment::Columns => Some(ViewMode::Columns),
-            ViewSegment::Gallery => None,
-        }
-    }
-}
 
 /// An application that can open the selection.
 #[derive(Clone, Debug, PartialEq, Eq)]

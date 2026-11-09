@@ -91,12 +91,66 @@ fn a_secondary_click_on_empty_space_clears_the_selection_and_offers_the_folder()
     assert!(run.selected_rows().is_empty());
     let rows = run.menu_rows();
     assert!(enabled(&rows, "New Folder"), "{rows:?}");
-    assert!(enabled(&rows, "as Icons"));
-    assert!(enabled(&rows, "as Columns"));
-    assert!(!enabled(&rows, "as Gallery"));
+    // the view modes are a submenu, not rows of their own
+    assert!(enabled(&rows, "Show As"), "{rows:?}");
+    for view in ["Icons", "List", "Columns", "Gallery"] {
+        assert!(!labels(&rows).contains(&view), "{view}: {rows:?}");
+    }
     assert!(!labels(&rows).contains(&"Move to Trash"));
+    run.close_menu();
+}
 
-    run.choose("as Icons");
+#[test]
+fn the_keyboard_opens_show_as_and_chooses_a_view_in_it() {
+    let mut run = run();
+    let main = run.window;
+    let at = empty_space(&run);
+    run.press_at(at, MouseButton::Right);
+    let menu = level(&run, 0).expect("open");
+    run.window = menu;
+    run.driver
+        .window_system_mut()
+        .configure(menu, None, WindowStates::default())
+        .unwrap();
+    run.settle();
+    run.frames(1100, 100);
+    // "sh" reaches Show As before Show View Options
+    for c in "sh".chars() {
+        run.key(c as u32, Some(c));
+    }
+    assert_eq!(focused_row(&run, 0).as_deref(), Some("Show As"));
+    run.key(RIGHT, None);
+    let submenu = level(&run, 1).expect("the views' submenu");
+    run.window = submenu;
+    run.driver
+        .window_system_mut()
+        .configure(submenu, None, WindowStates::default())
+        .unwrap();
+    run.settle();
+    let views = rows_of(&run, 1);
+    assert_eq!(
+        views,
+        [
+            ("Icons".to_owned(), true),
+            ("List".to_owned(), true),
+            ("Columns".to_owned(), true),
+            ("Gallery".to_owned(), false)
+        ]
+    );
+    assert_eq!(
+        focused_row(&run, 1).as_deref(),
+        Some("Icons"),
+        "Right focuses the first row"
+    );
+    run.key('c' as u32, Some('c'));
+    assert_eq!(focused_row(&run, 1).as_deref(), Some("Columns"));
+    // the typed letters are forgotten after a pause
+    run.frames(1100, 100);
+    run.key('i' as u32, Some('i'));
+    assert_eq!(focused_row(&run, 1).as_deref(), Some("Icons"));
+    press(&mut run, RETURN);
+    run.window = main;
+    assert!(level(&run, 0).is_none(), "choosing closed the menu");
     run.wait_until(|run| run.icons().len() == 3);
 }
 
@@ -542,6 +596,18 @@ fn row(run: &mut Run, depth: usize, label: &str) -> Rect {
 
 fn middle(r: Rect, along: f64) -> Point {
     Point::new(r.min_x() + r.width() * along, r.min_y() + r.height() / 2.0)
+}
+
+/// The rows of the menu window `depth`, each with whether it is enabled.
+fn rows_of(run: &Run, depth: usize) -> Vec<(String, bool)> {
+    let id = level(run, depth).expect("the menu is open");
+    let snapshot = run.driver.runtime().snapshot(id).unwrap();
+    snapshot
+        .accessibility
+        .iter()
+        .filter(|(_, node)| node.role == Role::MenuItem)
+        .filter_map(|(_, node)| Some((node.name.clone()?, !node.states.disabled)))
+        .collect()
 }
 
 /// The focused row of the menu window `depth`.

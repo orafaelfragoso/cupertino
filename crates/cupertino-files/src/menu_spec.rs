@@ -319,15 +319,9 @@ pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
             .with_alternate(Mods::CTRL, MenuItem::unavailable("Get Summary Info")),
     );
     rows.push(MenuItem::separator());
-    // the view modes, then how the view groups and orders the items (Use Groups, Group By, Sort By, Clean Up By), then
-    // Show View Options
-    rows.push(MenuItem {
-        label: "As Icons".into(),
-        kind: ItemKind::ViewRow { current: ctx.view },
-        enabled: true,
-        checked: false,
-        alternates: Vec::new(),
-    });
+    // the view modes in a submenu of their own (their keys are the menu bar's View menu's), then how the view groups
+    // and orders the items (Use Groups, Group By, Sort By, Clean Up By), then Show View Options
+    rows.push(MenuItem::submenu(SHOW_AS, view_menu(ctx.view), true));
     rows.push(MenuItem::unavailable("Use Groups"));
     rows.push(MenuItem::submenu("Group By", group_menu(), false));
     rows.push(MenuItem::submenu("Sort By", sort_menu(ctx.sort), true));
@@ -336,8 +330,11 @@ pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
     condense(rows)
 }
 
-/// The toolbar's view-mode popup: the four view modes with the current one checked; Gallery is disabled until the
-/// window has that view.
+/// The folder menu's submenu of the view modes ([`view_menu`]).
+pub const SHOW_AS: &str = "Show As";
+
+/// The toolbar's view-mode popup, and the folder menu's [`SHOW_AS`] submenu: the four view modes with the current one
+/// checked; Gallery is disabled until the window has that view.
 pub fn view_menu(current: ViewMode) -> Vec<MenuItem> {
     vec![
         MenuItem::command("Icons", Command::SetView(ViewMode::Icons), true)
@@ -538,7 +535,7 @@ mod tests {
                 "-",
                 "Get Info",
                 "-",
-                "As Icons",
+                "Show As",
                 "Use Groups",
                 "Group By",
                 "Sort By",
@@ -577,6 +574,13 @@ mod tests {
             ItemKind::Command(Command::SortBy(SortKey::Kind, true))
         );
         assert!(!sort[7].enabled, "no date added in the listing");
+        let ItemKind::Submenu(views) = &items[5].kind else {
+            panic!("Show As is a submenu")
+        };
+        assert_eq!(views, &view_menu(ViewMode::Icons));
+        assert_eq!(labels(views), ["Icons", "List", "Columns", "Gallery"]);
+        assert!(views[0].checked && !views[1].checked);
+        assert!(!views[3].enabled, "no gallery view yet");
     }
 
     #[test]

@@ -1058,6 +1058,8 @@ impl Cupertino {
             tracing::info!(output = id.0, "the overview's output went away");
             self.shell.overview = None;
         }
+        // told before the global goes, so a client hears `leave` for an output it can still name
+        self.leave_departing_output(idx);
         let entry = self.outputs.remove(idx);
         self.release_output_layers(&entry.output);
         let now = self.now();

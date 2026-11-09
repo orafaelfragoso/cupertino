@@ -261,6 +261,37 @@ impl Cupertino {
         }
     }
 
+    /// The output at `idx` is going: every surface on it is told it left, while the client can still name the output,
+    /// before its global is taken away. The windows' surfaces, with their subsurfaces and popups, and the output's layer
+    /// surfaces and lock surface, with theirs. A surface that was not on it hears nothing.
+    pub(crate) fn leave_departing_output(&self, idx: usize) {
+        let o = &self.outputs[idx];
+        let leave = |surface: &WlSurface| {
+            with_surface_tree_downward(
+                surface,
+                (),
+                |_, _, _| TraversalAction::DoChildren(()),
+                |surface, _, _| o.output.leave(surface),
+                |_, _, _| true,
+            )
+        };
+        for entry in &self.windows {
+            entry
+                .window
+                .with_surfaces(|surface, _| o.output.leave(surface));
+        }
+        for layer in smithay::desktop::layer_map_for_output(&o.output).layers() {
+            leave(layer.wl_surface());
+            for (popup, _) in smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface())
+            {
+                leave(popup.wl_surface());
+            }
+        }
+        if let Some(surface) = o.lock.wl_surface() {
+            leave(surface);
+        }
+    }
+
     /// A surface committed: a subsurface or popup that is new to its window, layer or lock surface, or a window not
     /// placed yet, learns where it is. A window that is not placed yet is on no output and draws at the scale its window
     /// will open at ([`Cupertino::surface_scale`]).

@@ -48,7 +48,12 @@ enum Heard {
     Enter(String),
     Leave(String),
     Scale(i32),
+    /// The global of the output went (`wl_registry.global_remove`), heard by the registry.
+    Removed(String),
 }
+
+/// What the registry heard is logged under this name.
+const REGISTRY: &str = "registry";
 
 /// The client's surfaces by name: the window, its subsurface and its popup.
 const WINDOW: &str = "window";
@@ -77,6 +82,8 @@ struct App {
     surfaces: HashMap<&'static str, Drawn>,
     /// The outputs each surface is on, by what it heard.
     entered: HashMap<&'static str, Vec<wl_output::WlOutput>>,
+    /// The outputs bound, by the name of their global.
+    outputs: Vec<(u32, wl_output::WlOutput)>,
 }
 
 impl App {
@@ -118,13 +125,27 @@ fn buffer(shm: &wl_shm::WlShm, size: (i32, i32), qh: &QueueHandle<App>) -> wl_bu
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for App {
     fn event(
-        _: &mut Self,
+        app: &mut Self,
         _: &wl_registry::WlRegistry,
-        _: wl_registry::Event,
+        event: wl_registry::Event,
         _: &GlobalListContents,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let wl_registry::Event::GlobalRemove { name } = event {
+            if let Some((_, output)) = app.outputs.iter().find(|(n, _)| *n == name) {
+                let output = output
+                    .data::<Mutex<String>>()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .clone();
+                app.log
+                    .lock()
+                    .unwrap()
+                    .push((REGISTRY, Heard::Removed(output)));
+            }
+        }
     }
 }
 
@@ -274,15 +295,16 @@ impl Client {
             let subcompositor: wl_subcompositor::WlSubcompositor =
                 globals.bind(&qh, 1..=1, ()).unwrap();
             let base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
-            let outputs: Vec<wl_output::WlOutput> = globals
+            let outputs: Vec<(u32, wl_output::WlOutput)> = globals
                 .contents()
                 .clone_list()
                 .into_iter()
                 .filter(|g| g.interface == "wl_output")
                 .map(|g| {
-                    globals
+                    let output = globals
                         .registry()
-                        .bind(g.name, 4, &qh, Mutex::new(String::new()))
+                        .bind(g.name, 4, &qh, Mutex::new(String::new()));
+                    (g.name, output)
                 })
                 .collect();
             let mut app = App {
@@ -290,6 +312,7 @@ impl Client {
                 shm: globals.bind(&qh, 1..=1, ()).unwrap(),
                 surfaces: HashMap::new(),
                 entered: HashMap::new(),
+                outputs,
             };
             let drawn = |surface, size, ready| Drawn {
                 surface,
@@ -336,9 +359,7 @@ impl Client {
             app.surfaces
                 .insert(POPUP, drawn(popup.clone(), (120, 80), false));
 
-            let _keep = (
-                outputs, toplevel, subsurface, xdg_popup, popup_xdg, window_xdg,
-            );
+            let _keep = (toplevel, subsurface, xdg_popup, popup_xdg, window_xdg);
             while !stop2.load(Ordering::SeqCst) {
                 if queue.roundtrip(&mut app).is_err() {
                     break;
@@ -368,15 +389,16 @@ impl Client {
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 6..=6, ()).unwrap();
             let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
-            let outputs: Vec<wl_output::WlOutput> = globals
+            let outputs: Vec<(u32, wl_output::WlOutput)> = globals
                 .contents()
                 .clone_list()
                 .into_iter()
                 .filter(|g| g.interface == "wl_output")
                 .map(|g| {
-                    globals
+                    let output = globals
                         .registry()
-                        .bind(g.name, 4, &qh, Mutex::new(String::new()))
+                        .bind(g.name, 4, &qh, Mutex::new(String::new()));
+                    (g.name, output)
                 })
                 .collect();
             let mut app = App {
@@ -384,6 +406,7 @@ impl Client {
                 shm: globals.bind(&qh, 1..=1, ()).unwrap(),
                 surfaces: HashMap::new(),
                 entered: HashMap::new(),
+                outputs,
             };
             let mut layers = Vec::new();
             while !stop2.load(Ordering::SeqCst) {
@@ -422,7 +445,6 @@ impl Client {
                 app.draw(&qh);
                 std::thread::sleep(Duration::from_millis(2));
             }
-            drop(outputs);
         });
         Client { log, stop, opens }
     }
@@ -748,11 +770,21 @@ fn a_window_is_told_the_outputs_it_is_on_and_their_scale_as_it_moves_and_as_they
             .iter()
             .all(|t| c.on(t) == ["headless-1"] && c.scale(t) == 1)
     });
+    h.wait("the global of the display to go", &client, |_, c| {
+        c.heard(REGISTRY) == [Heard::Removed("headless-2".into())]
+    });
+    let log = client.log.lock().unwrap().clone();
+    let removed = log
+        .iter()
+        .position(|(_, e)| *e == Heard::Removed("headless-2".into()))
+        .unwrap();
     for t in [WINDOW, SUBSURFACE, POPUP] {
-        let heard = client.heard(t);
+        let leave = log
+            .iter()
+            .position(|(s, e)| *s == t && *e == Heard::Leave("headless-2".into()));
         assert!(
-            heard.contains(&Heard::Leave("headless-2".into())),
-            "{t}: the display that went is left: {heard:?}"
+            leave.is_some_and(|l| l < removed),
+            "{t}: the display that went is left while its global is there: {log:?}"
         );
         assert_eq!(client.scales(t), [2, 1], "{t}");
     }
@@ -935,4 +967,19 @@ fn a_layer_surface_is_told_the_active_output_it_opened_on_and_one_naming_it_open
         "a layer surface draws at its output's scale"
     );
     assert_eq!(panel.scale("catcher again"), 1);
+
+    // the display of the surface opened elsewhere goes: the surface is told it left it before the display's global goes
+    let head = h.head("headless-2");
+    headless::remove_display(&mut h.state, head).unwrap();
+    h.wait("the global of the display to go", &panel, |_, c| {
+        c.heard(REGISTRY) == [Heard::Removed("headless-2".into())]
+    });
+    let log = panel.log.lock().unwrap().clone();
+    let at = |surface: &str, e: Heard| log.iter().position(|(s, h)| *s == surface && *h == e);
+    let removed = at(REGISTRY, Heard::Removed("headless-2".into())).unwrap();
+    assert!(
+        at("elsewhere", Heard::Leave("headless-2".into())).is_some_and(|l| l < removed),
+        "{log:?}"
+    );
+    assert_eq!(panel.on("catcher again"), ["headless-1"]);
 }

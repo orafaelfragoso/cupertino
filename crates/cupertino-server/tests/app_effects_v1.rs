@@ -832,6 +832,7 @@ fn gaussian(img: &image::RgbaImage, sigma: f32) -> Vec<[f32; 3]> {
 fn glass_pass_over_sharp_content_reads_the_backdrop_where_the_model_does() {
     use cupertino_glass::glass::{Container, GlassShape};
     use cupertino_theme::{Appearance, GlassMode};
+    use smithay::backend::renderer::utils::with_renderer_surface_state;
     use smithay::desktop::layer_map_for_output;
     use smithay::input::pointer::CursorImageStatus;
 
@@ -860,9 +861,16 @@ fn glass_pass_over_sharp_content_reads_the_backdrop_where_the_model_does() {
         h.state.cursor_status = CursorImageStatus::Hidden;
         let _content = TestClient::spawn_with(h.socket_path(), content);
         let _panel = with_panel.then(|| TestClient::spawn_with(h.socket_path(), panel));
-        h.wait_until("the surfaces", |s| {
-            let n = layer_map_for_output(&s.outputs[0].output).layers().count();
-            n == 1 + usize::from(with_panel)
+        // a layer is mapped by its first commit, before its buffer: wait for every buffer, or a loaded machine shoots
+        // the desktop before the content is drawn
+        h.wait_until("the surfaces with their buffers", |s| {
+            let map = layer_map_for_output(&s.outputs[0].output);
+            let layers: Vec<_> = map.layers().collect();
+            layers.len() == 1 + usize::from(with_panel)
+                && layers.iter().all(|l| {
+                    with_renderer_surface_state(l.wl_surface(), |st| st.buffer().is_some())
+                        .unwrap_or(false)
+                })
         });
         if with_panel {
             h.wait_until("the glass backdrop", |s| {

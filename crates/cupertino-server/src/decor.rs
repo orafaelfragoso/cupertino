@@ -356,6 +356,7 @@ impl Decor {
                 state.active as u64,
                 state.group_hovered as u64,
                 pressed,
+                state.enabled[1] as u64,
                 state.enabled[2] as u64,
                 appearance,
                 input.style as u64,
@@ -692,6 +693,55 @@ mod tests {
         assert_eq!(d.cached_windows(), 1);
         d.end_frame();
         assert_eq!(d.cached_windows(), 0, "unused windows are dropped");
+    }
+
+    #[test]
+    fn every_change_the_rasters_depend_on_renders_them_again() {
+        let mut d = decor(Appearance::Light);
+        let mut renders = d.renders;
+        let mut changed = |d: &mut Decor, input: &DecorInput<'_>, what: &str| {
+            let b = d.buffers(input);
+            let rendered = d.renders - renders;
+            renders = d.renders;
+            assert!(rendered > 0, "{what} renders again");
+            b
+        };
+        changed(&mut d, &input(1, 400.0), "the first frame");
+        for scale in [1.25, 1.5, 1.75, 2.0, 1.0] {
+            let b = changed(
+                &mut d,
+                &DecorInput {
+                    scale,
+                    ..input(1, 400.0)
+                },
+                "a scale",
+            );
+            let px = |pt: f64| (pt * scale).round() as i32;
+            assert_eq!(b.titlebar_px, (px(400.0), px(32.0)), "{scale}");
+            assert_eq!(b.rim_px, (px(400.0), px(328.0)), "{scale}");
+        }
+        let unchanged = d.renders;
+        d.buffers(&input(1, 400.0));
+        assert_eq!(d.renders, unchanged, "the same state reuses its rasters");
+        changed(
+            &mut d,
+            &DecorInput {
+                can_minimize: false,
+                ..input(1, 400.0)
+            },
+            "a disabled minimize button",
+        );
+        changed(
+            &mut d,
+            &DecorInput {
+                can_zoom: false,
+                ..input(1, 400.0)
+            },
+            "a disabled zoom button",
+        );
+        d.set_appearance(Appearance::Dark);
+        assert_eq!(d.cached_windows(), 0, "a new appearance drops every raster");
+        changed(&mut d, &input(1, 400.0), "the dark appearance");
     }
 
     #[test]

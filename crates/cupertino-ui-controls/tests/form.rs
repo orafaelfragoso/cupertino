@@ -5,9 +5,9 @@ mod support;
 
 use cupertino_geometry::{Insets, Point, Size};
 use cupertino_ui_controls::{
-    FormGroup, FormHeader, FormRow, IconTile, NavigationRow, PopUpButton, SearchField, Stack, Text,
-    TextChange, TextField, TextRole, TileColor, TileSidebar, TileSidebarItem, Toggle,
-    FORM_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT, TILE_SIDEBAR_ROW_HEIGHT,
+    FormBackground, FormGroup, FormHeader, FormRow, IconTile, NavigationRow, PopUpButton,
+    SearchField, Stack, Text, TextChange, TextField, TextRole, TileColor, TileSidebar,
+    TileSidebarItem, Toggle, FORM_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT, TILE_SIDEBAR_ROW_HEIGHT,
 };
 use cupertino_ui_core::{
     AccessibilityNode, Action, Application, Command, Element, Key, NodeId, Role, Window,
@@ -195,10 +195,12 @@ impl Application for Settings {
                         })
                         .key("closed"),
                     ],
-                }),
+                })
+                .key("group"),
             ],
         })
         .fill();
+        let page = Element::from(FormBackground { content: page }).key("pane");
         window(Element::new(Stack {
             axis: Axis::Horizontal,
             padding: Insets::ZERO,
@@ -496,4 +498,79 @@ fn the_header_card_reads_its_title_described_by_its_description() {
     );
     let r = h.rect("header");
     assert!(r.height() > 48.0 + 2.0 * 13.0, "{r:?}");
+}
+
+#[test]
+fn a_forms_pane_is_the_window_background_and_its_groups_keep_their_own_fill() {
+    let window_background = color(
+        ColorRole::WindowBackground,
+        InteractionVariant::Normal,
+        false,
+    );
+    let text_background = color(ColorRole::TextBackground, InteractionVariant::Normal, false);
+    assert_ne!(window_background, text_background);
+
+    // painted by the pane where the desktop draws no material
+    let h = harness();
+    let pane = h.rect("pane");
+    let fills: Vec<_> = h
+        .ops("pane")
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::Rect(rect),
+                paint: Paint::Solid(c),
+            } => Some((rect, c)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        fills,
+        [(
+            cupertino_geometry::Rect::new(0.0, 0.0, pane.width(), pane.height()),
+            window_background
+        )],
+        "the window background over the pane"
+    );
+    // the groups on it keep their fill, which is not the pane's
+    let group: Vec<_> = h
+        .ops("group")
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Fill { paint, .. } => Some(paint),
+            _ => None,
+        })
+        .collect();
+    assert!(!group.is_empty(), "the group fills its rows' room");
+    assert!(group
+        .iter()
+        .all(|p| *p != Paint::Solid(window_background) && *p != Paint::Solid(text_background)));
+
+    // drawn by the compositor, as the window background, where it can
+    let mut h = Harness::<Settings>::with_effects(support::theme());
+    h.resize(Size::new(640.0, 480.0));
+    assert!(
+        h.ops("pane").is_empty(),
+        "the compositor draws it: {:?}",
+        h.ops("pane")
+    );
+    let regions =
+        h.rt.window_system()
+            .requests(h.window)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|r| match r {
+                cupertino_ui_platform::WindowRequest::Materials(regions) => Some(regions.clone()),
+                _ => None,
+            })
+            .expect("the window asks for materials");
+    let pane = h.rect("pane");
+    assert!(
+        regions
+            .iter()
+            .any(|r| r.material == "WindowBackground" && r.rect == pane),
+        "{regions:?}"
+    );
+    assert!(!regions.iter().any(|r| r.material == "TextBackground"));
 }

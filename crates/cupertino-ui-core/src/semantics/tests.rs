@@ -141,11 +141,12 @@ fn build_for(tree: &Tree<M>, root: NodeId) -> SemanticsPass {
                     target: Rect::new(0.0, 0.0, 10.0, 10.0),
                     clip: None,
                     own_clip: None,
+                    raised: Default::default(),
                 },
             )
         })
         .collect();
-    build(tree, root, &geometry, None, LayoutDirection::Ltr)
+    build(tree, root, &geometry, None, LayoutDirection::Ltr, &[])
 }
 
 #[test]
@@ -674,12 +675,20 @@ fn a_node_holding_the_focus_says_it_can_take_focus() {
                     target: Rect::new(0.0, 0.0, 10.0, 10.0),
                     clip: None,
                     own_clip: None,
+                    raised: Default::default(),
                 },
             )
         })
         .collect();
-    let unfocused = build(&tree, root, &geometry, None, LayoutDirection::Ltr);
-    let focused = build(&tree, root, &geometry, Some(alert), LayoutDirection::Ltr);
+    let unfocused = build(&tree, root, &geometry, None, LayoutDirection::Ltr, &[]);
+    let focused = build(
+        &tree,
+        root,
+        &geometry,
+        Some(alert),
+        LayoutDirection::Ltr,
+        &[],
+    );
     let states = |pass: &SemanticsPass| {
         let s = pass.nodes[&alert].states;
         (s.focusable, s.focused)
@@ -708,11 +717,12 @@ fn a_focus_on_a_node_without_a_role_is_told_on_its_nearest_ancestor_in_the_tree(
                     target: Rect::new(0.0, 0.0, 10.0, 10.0),
                     clip: None,
                     own_clip: None,
+                    raised: Default::default(),
                 },
             )
         })
         .collect();
-    let at = |focus| build(&tree, root, &geometry, focus, LayoutDirection::Ltr);
+    let at = |focus| build(&tree, root, &geometry, focus, LayoutDirection::Ltr, &[]);
     let focused = |pass: &SemanticsPass| {
         let mut on: Vec<NodeId> = pass
             .nodes

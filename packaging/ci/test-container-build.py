@@ -90,23 +90,27 @@ elif args[0] == 'create':
 elif args[0] == 'start':
     container = args[-1]
     created = json.loads((state / container).read_text())
-    install = not any(':/src' in argument for argument in created)
-    if os.environ.get('TEST_HOLD') == ('test' if install else 'build'):
+    kind = created[created.index('--name') + 1].rsplit('-', 1)[1]
+    install = kind == 'test'
+    if os.environ.get('TEST_HOLD') == kind:
         Path(os.environ['TEST_ROOT'], 'started').write_text(container)
         while (state / container).exists():
             time.sleep(0.01)
     if install and os.environ.get('TEST_INSTALL_FAIL'):
         raise SystemExit(19)
-    if not install and os.environ.get('TEST_COMPILE_FAIL'):
+    if kind == 'build' and os.environ.get('TEST_COMPILE_FAIL'):
         raise SystemExit(31)
+    if kind == 'inspect' and os.environ.get('TEST_INSPECT_FAIL'):
+        raise SystemExit(37)
 elif args[:2] == ['rm', '--force']:
     if os.environ.get('TEST_REMOVE_FAIL'):
         print('cannot remove owned container', file=sys.stderr)
         raise SystemExit(23)
     (state / args[-1]).unlink()
 elif args[0] == 'run':
-    assert args[-6:-3] == ['chown', '-R', str(os.getuid()) + ':' + str(os.getgid())]
-    assert args[-3:] == ['/dist', '/src', '/cargo-home']
+    owned = args[args.index('chown'):]
+    assert owned[:3] == ['chown', '-R', str(os.getuid()) + ':' + str(os.getgid())], args
+    assert owned[3:] in (['/dist', '/src', '/cargo-home'], ['/dist', '/src', '/cargo-home', '/cache']), args
 else:
     raise AssertionError(args)
 ''')
@@ -114,8 +118,12 @@ else:
         self.log = self.root / 'docker.jsonl'
         self.cache = self.root / 'cache'
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
-                        TEST_ROOT=str(self.root), TEST_LOG=str(self.log),
-                        CUPERTINO_BUILD_CACHE_DIR=str(self.cache), CUPERTINO_BUILD_LOCK_FD='test-lease')
+                        TEST_ROOT=str(self.root), TEST_LOG=str(self.log), HOME=str(self.root / 'home'),
+                        CUPERTINO_BUILD_CACHE_DIR=str(self.cache), CUPERTINO_BUILD_LOCK_FD='test-lease',
+                        CUPERTINO_CONTAINER_CACHE='')
+        for name in ('CARGO_BUILD_JOBS', 'CUPERTINO_BUILD_LOCK_HOLD', 'GITHUB_ACTIONS', 'CUPERTINO_PACKAGE_SCCACHE_SIZE'):
+            self.env.pop(name, None)
+        self.processors = str(len(os.sched_getaffinity(0)))
 
     def command(self, distro, mode):
         return ['bash', str(SCRIPT), distro, str(self.root / 'dist'), *mode]
@@ -146,24 +154,33 @@ else:
         self.assertIn('type=local,src=' + str(current), builds[1])
         creates = [command for command in commands if command[0] == 'create']
         build_run = creates[0]
-        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/arch/targets' / ('a' * 64)) + ',dst=/src/target', build_run)
+        self.assertFalse(any(argument.endswith('dst=/src/target') for argument in build_run))
         self.assertEqual(build_run[-4], 'sha256:' + 'a' * 64)
         self.assertIn('export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target', build_run[-1])
-        self.assertIn(' /dist /src /cargo-home\' EXIT', build_run[-1])
-        self.assertIn('CARGO_BUILD_JOBS=4', build_run)
+        self.assertIn('\nmkdir /src/target\n', build_run[-1])
+        self.assertIn(' /dist /src /cargo-home${SCCACHE_DIR:+ /cache}\' EXIT', build_run[-1])
+        self.assertIn('trap \'if [ -n "${SCCACHE_DIR:-}" ]; then su builder -c "sccache --stop-server" || true; fi; chown',
+                      build_run[-1])
+        self.assertIn('CARGO_BUILD_JOBS=' + self.processors, build_run)
         self.assertIn('CARGO_HOME=/cargo-home', build_run)
         cargo_home = self.root / 'target/package-build/arch/cargo-home'
         self.assertIn('type=bind,src=' + str(cargo_home) + ',dst=/cargo-home', build_run)
         self.assertTrue(cargo_home.is_dir())
         self.assertFalse(any(argument.startswith('PATH=') for argument in build_run))
-        self.assertIn('CARGO_BUILD_JOBS=4', builds[0])
+        self.assertIn('CARGO_BUILD_JOBS=' + self.processors, builds[0])
         self.assertFalse(list((self.root / 'containers').iterdir()))
-        install_run = creates[1]
+        inspect_run = creates[1]
+        self.assertIn('namcap arch-build/PKGBUILD', inspect_run[-1])
+        self.assertNotIn('makepkg --noconfirm\'', inspect_run[-1])
+        self.assertNotIn('namcap', build_run[-1])
+        self.assertEqual(inspect_run[inspect_run.index('--network') + 1], 'none')
+        self.assertFalse(any('/cargo-home' in argument for argument in inspect_run[:-1]))
+        install_run = creates[2]
         self.assertIn('docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1', install_run)
         self.assertFalse(any('cupertino-package-builder:' in argument for argument in install_run))
         self.assertFalse(any(command[0] == 'run' for command in commands))
 
-    def test_changed_image_gets_a_private_compiled_target_and_keeps_downloads(self):
+    def test_every_build_compiles_in_a_fresh_target_and_keeps_only_downloads(self):
         first_id, second_id = 'sha256:' + 'a' * 64, 'sha256:' + 'b' * 64
         first = self.run_build([], {'TEST_IMAGE_ID': first_id}, 'arch')
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -175,15 +192,16 @@ else:
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(source.read_text(), 'downloaded once')
         self.assertEqual(source.stat().st_mtime_ns, stamp)
-        builds = [command for command in self.commands() if command[0] == 'create'
-                  and any(argument.endswith(',dst=/src/target') for argument in command)]
+        builds = [command for command in self.commands() if command[0] == 'create' and command[-1].startswith('set')
+                  and 'makepkg --noconfirm\'' in command[-1]]
         self.assertEqual(len(builds), 2)
         for command, image_id in zip(builds, (first_id, second_id), strict=True):
-            target = self.root / 'target/package-build/arch/targets' / image_id.removeprefix('sha256:')
-            self.assertTrue(target.is_dir())
-            self.assertIn('type=bind,src=' + str(target) + ',dst=/src/target', command)
             self.assertIn('type=bind,src=' + str(cargo_home) + ',dst=/cargo-home', command)
+            self.assertFalse(any(argument.endswith('dst=/src/target') or 'dst=/cache' in argument for argument in command))
+            self.assertNotIn('-v', [argument for argument in command if argument.endswith(':/src/target')])
             self.assertEqual(command[-4], image_id)
+        self.assertFalse((self.root / 'target/package-build/arch/targets').exists())
+        self.assertFalse(list((self.root / 'target').glob('container-build.*')))
 
     def test_invalid_image_identity_cannot_create_a_target_or_container(self):
         result = self.run_build([], {'TEST_IMAGE_ID': 'sha256:../../escape'}, 'arch')
@@ -201,7 +219,7 @@ else:
         self.assertEqual(current.resolve(), old)
         self.assertEqual(list((self.cache / 'arch').glob('generation.*')), [old])
         self.assertEqual(sum(command[:2] == ['buildx', 'build'] for command in self.commands()), 2)
-        self.assertEqual(sum(command[0] == 'create' for command in self.commands()), 2)
+        self.assertEqual(sum(command[0] == 'create' for command in self.commands()), 3)
 
     def test_incomplete_export_is_not_published(self):
         self.assertEqual(self.run_build([], {}, 'arch').returncode, 0)
@@ -223,8 +241,18 @@ else:
         repairs = [command for command in self.commands() if command[0] == 'run']
         self.assertEqual(len(repairs), 1)
         self.assertIn(str(self.root / 'dist') + ':/dist', repairs[0])
-        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/arch/targets' / ('a' * 64)) + ',dst=/src/target', repairs[0])
+        self.assertTrue(any(argument.endswith(':/src') for argument in repairs[0]))
         self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/arch/cargo-home') + ',dst=/cargo-home', repairs[0])
+        self.assertFalse(any(command[0] == 'create' and '-inspect' in ' '.join(command) for command in self.commands()))
+
+    def test_failed_inspection_repairs_ownership_and_records_nothing(self):
+        result = self.run_build([], {'TEST_INSPECT_FAIL': '1'}, 'arch')
+        self.assertEqual(result.returncode, 37, result.stderr)
+        commands = self.commands()
+        self.assertEqual(len([command for command in commands if command[0] == 'run']), 1)
+        self.assertFalse(any(command[0] == 'release' and command[1] == 'record-packages' for command in commands))
+        self.assertFalse(any(command[0] == 'create' and '-test' in command[command.index('--name') + 1]
+                             for command in commands if command[0] == 'create'))
 
     def test_test_only_needs_no_image_build_or_cargo_target(self):
         result = self.run_build(['--test-only'], {}, 'arch')
@@ -243,8 +271,9 @@ else:
                          + 'raise SystemExit(42)\n')
         result = self.run_build(['--test-only'], {'CUPERTINO_BUILD_LOCK_FD': ''}, 'arch')
         self.assertEqual(result.returncode, 42, result.stderr)
-        self.assertEqual(self.commands(), [['guard', 'locked', '--', 'bash', 'packaging/ci/build-in-container.sh',
-                                           'arch', str(self.root / 'dist'), '--test-only']])
+        self.assertEqual(self.commands(), [['guard', 'locked', '--hold', 'none', '--', 'bash',
+                                           'packaging/ci/build-in-container.sh', 'arch', str(self.root / 'dist'),
+                                           '--test-only']])
         self.assertFalse((self.root / 'target').exists())
         self.assertFalse((self.root / 'containers').exists())
 
@@ -269,7 +298,7 @@ else:
         last_start = max(index for index, command in enumerate(commands) if command[0] == 'start')
         self.assertGreater(commands.index(record), last_start)
         created = next(command for command in commands if command[0] == 'create')
-        self.assertIn('chown builder /cargo-home', created[-1])
+        self.assertIn('chown -R builder /src/arch-build /src/target /cargo-home', created[-1])
         self.assertIn('CARGO_HOME=/cargo-home', created)
 
     def test_arch_source_and_provenance_stay_on_captured_commit_when_head_changes(self):
@@ -292,6 +321,77 @@ else:
         result = self.run_build([], {'TEST_INSTALL_FAIL': '1', 'TEST_REMOVE_FAIL': '1'}, 'arch')
         self.assertEqual(result.returncode, 19)
         self.assertIn('cannot remove owned container', result.stderr)
+
+    def guard(self):
+        """A stand-in ci/worktree-build.py that records each phase's hold and then runs the phase."""
+        guard = self.root / 'ci/worktree-build.py'
+        guard.parent.mkdir(exist_ok=True)
+        guard.write_text('import json, os, sys\n'
+                         'with open(os.environ["TEST_LOG"], "a") as log:\n'
+                         '    log.write(json.dumps(["guard", *sys.argv[1:4]]) + "\\n")\n'
+                         'assert sys.argv[1:3] == ["locked", "--hold"] and sys.argv[4] == "--", sys.argv\n'
+                         'os.execvp(sys.argv[5], sys.argv[5:])\n')
+
+    def test_only_the_compile_holds_every_slot_and_the_image_build_one(self):
+        self.guard()
+        for mode in ([], ['--upgrade']):
+            with self.subTest(mode=mode):
+                self.log.unlink(missing_ok=True)
+                result = self.run_build(mode, {'CUPERTINO_BUILD_LOCK_HOLD': 'none'}, 'arch')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                sequence = []
+                for command in self.commands():
+                    if command[0] == 'guard':
+                        sequence.append('hold ' + command[3])
+                    elif command[0] in ('start', 'create') or command[:2] == ['buildx', 'build']:
+                        name = command[command.index('--name') + 1].rsplit('-', 1)[1] if command[0] == 'create' else ''
+                        sequence.append(command[0] if command[0] != 'buildx' else 'image') if not name else \
+                            sequence.append('create ' + name)
+                self.assertEqual(sequence, ['hold one', 'image', 'create build', 'hold every', 'start',
+                                            'create inspect', 'start', 'create test', 'start'])
+
+    def test_a_caller_holding_every_slot_runs_each_phase_without_asking_again(self):
+        self.guard()
+        result = self.run_build([], {'CUPERTINO_BUILD_LOCK_HOLD': 'every'}, 'arch')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(command[0] == 'guard' for command in self.commands()))
+
+    def test_the_compile_cache_mounts_sccache_and_shared_downloads_into_the_compile_only(self):
+        cache = self.root / 'container-cache'
+        result = self.run_build([], {'CUPERTINO_CONTAINER_CACHE': str(cache)}, 'arch')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        creates = {command[command.index('--name') + 1].rsplit('-', 1)[1]: command
+                   for command in self.commands() if command[0] == 'create'}
+        build = creates['build']
+        self.assertIn('type=bind,src=' + str(cache / 'package/sccache') + ',dst=/cache/sccache', build)
+        self.assertIn('type=bind,src=' + str(cache / 'package/cargo-home') + ',dst=/cargo-home', build)
+        self.assertIn('if [ -d /cache/sccache ]; then\n    export RUSTC_WRAPPER=/usr/bin/sccache SCCACHE_DIR=/cache/sccache '
+                      'SCCACHE_CACHE_SIZE=12G', build[-1])
+        self.assertIn("su builder -c 'cd /src/arch-build && makepkg --noconfirm'", build[-1])
+        for kind in ('inspect', 'test'):
+            self.assertFalse(any('/cache' in argument or '/cargo-home' in argument for argument in creates[kind][:-1]), kind)
+        self.assertFalse((self.root / 'target/package-build').exists())
+        failed = self.run_build([], {'CUPERTINO_CONTAINER_CACHE': str(cache), 'TEST_COMPILE_FAIL': '1',
+                                     'CUPERTINO_PACKAGE_SCCACHE_SIZE': '3G'}, 'arch')
+        self.assertEqual(failed.returncode, 31, failed.stderr)
+        repair = next(command for command in self.commands() if command[0] == 'run')
+        self.assertIn('type=bind,src=' + str(cache / 'package/sccache') + ',dst=/cache/sccache', repair)
+        self.assertEqual(repair[-4:], ['/dist', '/src', '/cargo-home', '/cache'])
+        self.assertIn('SCCACHE_CACHE_SIZE=3G', [command for command in self.commands() if command[0] == 'create'][-1][-1])
+
+    def test_the_compile_cache_defaults_to_the_user_cache_and_is_off_on_github_actions(self):
+        environment = {name: value for name, value in self.env.items() if name != 'CUPERTINO_CONTAINER_CACHE'}
+        default = self.root / 'home/.cache/cupertino-build/containers/package'
+        for github, expected in (('true', False), ('', True)):
+            with self.subTest(github=github):
+                self.log.unlink(missing_ok=True)
+                result = subprocess.run(self.command('arch', []), env=dict(environment, GITHUB_ACTIONS=github),
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                build = next(command for command in self.commands() if command[0] == 'create')
+                self.assertEqual(any(argument.endswith('dst=/cache/sccache') for argument in build), expected)
+                self.assertEqual('type=bind,src=' + str(default / 'cargo-home') + ',dst=/cargo-home' in build, expected)
+                self.assertEqual((default / 'sccache').is_dir(), expected)
 
     def interrupt_container(self, hold, interruption, expected):
         containers = self.root / 'containers'
@@ -320,7 +420,7 @@ else:
         started = [command[-1] for command in commands if command[0] == 'start']
         self.assertEqual(removed, started)
         repairs = [command for command in commands if command[0] == 'run']
-        if hold == 'build':
+        if hold in ('build', 'inspect'):
             self.assertEqual(len(repairs), 1)
             repair = repairs[0]
             self.assertEqual(repair[1:5], ['--rm', '--network', 'none', '-v'])
@@ -334,6 +434,9 @@ else:
 
     def test_termination_removes_only_owned_build_container(self):
         self.interrupt_container('build', signal.SIGTERM, 143)
+
+    def test_termination_during_inspection_removes_its_container_and_repairs_ownership(self):
+        self.interrupt_container('inspect', signal.SIGTERM, 143)
 
     def test_interrupt_removes_owned_build_and_test_containers(self):
         self.interrupt_container('test', signal.SIGINT, 130)

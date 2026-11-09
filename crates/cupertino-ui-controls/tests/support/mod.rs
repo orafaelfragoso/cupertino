@@ -97,6 +97,7 @@ fn placeholder_icons() -> Arc<dyn Icons> {
 thread_local! {
     /// Whether the next harness's desktop has effects.
     static EFFECTS: Cell<bool> = const { Cell::new(false) };
+    static LAYER: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Every role gets its own grey per state, 13 apart: `base + 1` hover, `+ 2` pressed, `+ 3` disabled, `+ 8` selected.
@@ -329,6 +330,15 @@ impl<A: Application> Harness<A> {
         harness
     }
 
+    /// [`with_effects`](Self::with_effects) on a desktop that also shows a window's raised nodes in a layer over its
+    /// content.
+    pub fn with_layer(theme: ThemeTokens) -> Self {
+        LAYER.with(|e| e.set(true));
+        let harness = Self::with_effects(theme);
+        LAYER.with(|e| e.set(false));
+        harness
+    }
+
     /// A harness whose window draws with `theme` instead of the fixture theme.
     pub fn with_theme(theme: ThemeTokens) -> Self {
         Self::build(LayoutDirection::Ltr, theme, placeholder_icons(), false)
@@ -377,6 +387,7 @@ impl<A: Application> Harness<A> {
         let system = if EFFECTS.with(Cell::get) {
             HeadlessWindowSystem::new(Capabilities {
                 app_effects: true,
+                raised_layer: LAYER.with(Cell::get),
                 ..Capabilities::default()
             })
         } else {

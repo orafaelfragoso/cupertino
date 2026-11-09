@@ -1,11 +1,11 @@
 use cupertino_geometry::Point;
 use cupertino_geometry::Size;
 use cupertino_ui_platform::{
-    ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Configure,
-    ConfigureId, CursorShape, DragRequest, DragToken, DropAction, DropAnswer, DropEvent, DropToken,
-    MenuDescription, Mods, PlatformError, PlatformEvent, PointerEvent, PopupSpec, PresentOutcome,
-    Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowStates, WindowSystem,
-    WmCapabilities,
+    ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
+    Configure, ConfigureId, CursorShape, DragRequest, DragToken, DropAction, DropAnswer, DropEvent,
+    DropToken, MenuDescription, Mods, PlatformError, PlatformEvent, PointerEvent, PopupSpec,
+    PresentOutcome, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowStates,
+    WindowSystem, WmCapabilities,
 };
 use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -28,6 +28,14 @@ pub struct PresentedFrame {
     pub shown: bool,
 }
 
+/// What a test sees of one time the runtime showed a window as one colour, without a frame
+/// ([`WindowSystem::present_solid`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SolidPresent {
+    pub color: Color,
+    pub acknowledged: Option<ConfigureId>,
+}
+
 #[derive(Debug)]
 struct HeadlessWindow {
     spec: WindowSpec,
@@ -40,12 +48,28 @@ struct HeadlessWindow {
     frame_requested: bool,
     unacknowledged: Vec<ConfigureId>,
     frames: Vec<PresentedFrame>,
+    solids: Vec<SolidPresent>,
     /// The window's pixels, kept up to date with each frame's damage while presented frames keep no pixels.
     buffer: Vec<u8>,
     /// Its configures say it is activated while it has the keyboard ([`HeadlessWindowSystem::activate_by_keyboard`]).
     by_keyboard: bool,
     /// The last focus event queued for it said it has the keyboard.
     keyboard: bool,
+    /// Every raised layer presented over it, in order; `None` hid the layer.
+    layers: Vec<Option<PresentedLayer>>,
+}
+
+/// A raised layer as the window system received it ([`WindowSystem::present_layer`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentedLayer {
+    /// Its height in points, from the window's top edge.
+    pub height: u32,
+    pub width: u32,
+    /// Its height in pixels.
+    pub pixel_height: u32,
+    pub stride: u32,
+    pub pixels: Vec<u8>,
+    pub damage: Vec<cupertino_ui_render::PixelRect>,
 }
 
 /// A drag the runtime started, as the window system received it.
@@ -105,6 +129,21 @@ fn copy_damage(buffer: &mut Vec<u8>, frame: &CpuFrame) {
     }
 }
 
+/// Settles configure `id`, when given, and every older one; one not waiting is an error.
+fn acknowledge(w: &mut HeadlessWindow, id: Option<ConfigureId>) -> Result<(), PlatformError> {
+    if let Some(id) = id {
+        let Some(at) = w.unacknowledged.iter().position(|c| *c == id) else {
+            return Err(PlatformError::Protocol(format!(
+                "configure {} is not waiting for an acknowledgement",
+                id.0
+            )));
+        };
+        // Acknowledging a configure also settles every older one.
+        w.unacknowledged.drain(..=at);
+    }
+    Ok(())
+}
+
 /// Whether the runtime was woken from another thread since a test last waited for it.
 #[derive(Debug, Default)]
 struct Woken {
@@ -142,6 +181,8 @@ pub struct HeadlessWindowSystem {
     accepting_frames: bool,
     /// Whether each presented frame keeps a copy of all its pixels.
     keep_pixels: bool,
+    /// Whether a window can be shown as one colour without a frame.
+    solid_colors: bool,
     pub(crate) dispatch_one: bool,
     woken: Arc<Woken>,
 }
@@ -167,6 +208,7 @@ impl HeadlessWindowSystem {
             drop_reads: HashSet::new(),
             accepting_frames: true,
             keep_pixels: true,
+            solid_colors: true,
             dispatch_one: false,
             woken: Arc::default(),
         }
@@ -227,9 +269,11 @@ impl HeadlessWindowSystem {
                 frame_requested: false,
                 unacknowledged: Vec::new(),
                 frames: Vec::new(),
+                solids: Vec::new(),
                 buffer: Vec::new(),
                 by_keyboard: false,
                 keyboard: false,
+                layers: Vec::new(),
             },
         );
         id
@@ -350,6 +394,12 @@ impl HeadlessWindowSystem {
         self.keep_pixels = keep;
     }
 
+    /// While false, [`present_solid`](WindowSystem::present_solid) is refused, as on a compositor without one-pixel
+    /// buffers, and the runtime draws such a window instead. True at first.
+    pub fn set_solid_colors(&mut self, solid: bool) {
+        self.solid_colors = solid;
+    }
+
     pub fn windows(&self) -> Vec<WindowId> {
         self.windows.keys().copied().collect()
     }
@@ -401,8 +451,45 @@ impl HeadlessWindowSystem {
         Ok(&self.window(window)?.unacknowledged)
     }
 
+    /// Every raised layer presented over `window`, in order; `None` hid it. Only with
+    /// [`Capabilities::raised_layer`].
+    pub fn layers(&self, window: WindowId) -> Result<&[Option<PresentedLayer>], PlatformError> {
+        Ok(&self.window(window)?.layers)
+    }
+
+    /// The pixels of `window`'s last frame with its raised layer drawn over them, as a compositor shows them (without
+    /// the materials between the two, which only a compositor draws). `None` before a frame that keeps its pixels.
+    pub fn composited(&self, window: WindowId) -> Result<Option<Vec<u8>>, PlatformError> {
+        let w = self.window(window)?;
+        let Some(frame) = w.frames.last().filter(|f| !f.pixels.is_empty()) else {
+            return Ok(None);
+        };
+        let mut out = frame.pixels.clone();
+        if let Some(Some(layer)) = w.layers.last() {
+            let row = (frame.width.min(layer.width) * 4) as usize;
+            let main_stride = out.len() / frame.height.max(1) as usize;
+            for y in 0..layer.pixel_height.min(frame.height) as usize {
+                let src = &layer.pixels[y * layer.stride as usize..][..row];
+                let dst = &mut out[y * main_stride..][..row];
+                for (d, s) in dst.chunks_mut(4).zip(src.chunks(4)) {
+                    // premultiplied: the layer over the content
+                    let a = u32::from(s[3]);
+                    for c in 0..4 {
+                        d[c] = (u32::from(s[c]) + u32::from(d[c]) * (255 - a) / 255).min(255) as u8;
+                    }
+                }
+            }
+        }
+        Ok(Some(out))
+    }
+
     pub fn frames(&self, window: WindowId) -> Result<&[PresentedFrame], PlatformError> {
         Ok(&self.window(window)?.frames)
+    }
+
+    /// Each time the window was shown as one colour without a frame, oldest first.
+    pub fn solids(&self, window: WindowId) -> Result<&[SolidPresent], PlatformError> {
+        Ok(&self.window(window)?.solids)
     }
 
     pub fn clipboard(&self, kind: ClipboardKind) -> Option<&ClipboardData> {
@@ -705,16 +792,7 @@ impl WindowSystem for HeadlessWindowSystem {
         if !accepting {
             return Ok(PresentOutcome::NotReady);
         }
-        if let Some(id) = configure {
-            let Some(at) = w.unacknowledged.iter().position(|c| *c == id) else {
-                return Err(PlatformError::Protocol(format!(
-                    "configure {} is not waiting for an acknowledgement",
-                    id.0
-                )));
-            };
-            // Acknowledging a configure also settles every older one.
-            w.unacknowledged.drain(..=at);
-        }
+        acknowledge(w, configure)?;
         let pixels = if keep {
             frame.pixels.clone()
         } else {
@@ -730,6 +808,54 @@ impl WindowSystem for HeadlessWindowSystem {
             damage: frame.damage.clone(),
             acknowledged: configure,
             shown: false,
+        });
+        Ok(PresentOutcome::Presented)
+    }
+
+    fn present_layer(
+        &mut self,
+        window: WindowId,
+        layer: Option<cupertino_ui_platform::RaisedLayer<'_>>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        if layer.is_some() && !self.capabilities.raised_layer {
+            return Err(PlatformError::Unsupported);
+        }
+        let accepting = self.accepting_frames;
+        let w = self.window_mut(window)?;
+        if !accepting {
+            return Ok(PresentOutcome::NotReady);
+        }
+        w.layers.push(layer.map(|l| PresentedLayer {
+            height: l.height,
+            width: l.frame.width,
+            pixel_height: l.frame.height,
+            stride: l.frame.stride,
+            pixels: l.frame.pixels.clone(),
+            damage: l.frame.damage.clone(),
+        }));
+        Ok(PresentOutcome::Presented)
+    }
+
+    /// Kept as a [`SolidPresent`] while [`set_solid_colors`](Self::set_solid_colors) allows it, and paced like
+    /// [`present`](WindowSystem::present).
+    fn present_solid(
+        &mut self,
+        window: WindowId,
+        color: Color,
+        configure: Option<ConfigureId>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        let (solid, accepting) = (self.solid_colors, self.accepting_frames);
+        let w = self.window_mut(window)?;
+        if !solid {
+            return Err(PlatformError::Unsupported);
+        }
+        if !accepting {
+            return Ok(PresentOutcome::NotReady);
+        }
+        acknowledge(w, configure)?;
+        w.solids.push(SolidPresent {
+            color,
+            acknowledged: configure,
         });
         Ok(PresentOutcome::Presented)
     }
@@ -854,6 +980,39 @@ mod tests {
             ws.frames(window).unwrap()[0].pixels,
             [1, 2, 3, 4, 5, 6, 7, 8]
         );
+    }
+
+    #[test]
+    fn a_window_shown_as_one_colour_keeps_no_frame_and_acknowledges_like_a_frame() {
+        let mut ws = HeadlessWindowSystem::default();
+        let window = ws.create_window(&spec()).unwrap();
+        let configure = ws.configure(window, None, WindowStates::default()).unwrap();
+        let clear = Color::new(0.0, 0.0, 0.0, 0.0);
+        assert_eq!(
+            ws.present_solid(window, clear, Some(configure)),
+            Ok(PresentOutcome::Presented)
+        );
+        assert_eq!(ws.unacknowledged(window).unwrap(), &[]);
+        assert_eq!(
+            ws.solids(window).unwrap(),
+            [SolidPresent {
+                color: clear,
+                acknowledged: Some(configure)
+            }]
+        );
+        assert!(ws.frames(window).unwrap().is_empty());
+
+        ws.set_accepting_frames(false);
+        assert_eq!(
+            ws.present_solid(window, clear, None),
+            Ok(PresentOutcome::NotReady)
+        );
+        ws.set_solid_colors(false);
+        assert_eq!(
+            ws.present_solid(window, clear, None),
+            Err(PlatformError::Unsupported)
+        );
+        assert_eq!(ws.solids(window).unwrap().len(), 1);
     }
 
     #[test]

@@ -101,9 +101,9 @@ from the application's model and reports changes as messages.
   stop that opens a page: a tile, the label and a trailing chevron; a click, Return, Space or assistive technology's
   Click sends `on_open`, and without it the row reads as disabled. `FormHeader` is the card at the top of a page, its
   large tile over a bold title and a centred description, read as the title described by the description.
-  `FormBackground` fills its room with the colour behind the groups: the compositor draws it
-  (`Surface::TextBackground`) where the desktop can, below the window's glass, so a toolbar's capsules over a form
-  show, and it paints it where the desktop cannot. A `TextField`'s chrome is a recessed well: darker than what it
+  `FormBackground` fills its room with the colour behind the groups, the window background (the groups keep their own
+  fill): the compositor draws it (`Surface::WindowBackground`) where the desktop can, below the window's glass, so a
+  toolbar's capsules over a form show, and it paints it where the desktop cannot. A `TextField`'s chrome is a recessed well: darker than what it
   sits on in the dark appearance (black at 25 %), the text background in the light one, with a faint edge (the
   theme's stronger border under Increase Contrast). `SearchField` is a `TextField` with a magnifying glass
   about 12.5 pt across, 10.5 pt from its leading edge, and its text 29.5 pt in; on the window's content it is a text field's recessed well, on a
@@ -200,9 +200,17 @@ from the application's model and reports changes as messages.
   forward buttons in such a group. With `under_toolbar` its page fills the whole pane and the row lies over it (the
   row takes the pointer first); the page lays out below the row with `unobscured_insets(mode)`, the top the window's
   chrome covers (52 pt for the unified and sidebar modes, 40 pt compact, none for a title bar above the content), so a
-  `ScrollView` whose content starts that far down scrolls behind the row. The compositor draws a window's glass and
-  materials below everything the window paints, so opaque content scrolled under the row covers the row's glass:
-  Files and Settings keep the page below the row. Glyphs recede to the secondary label colour in an inactive window and to the
+  `ScrollView` whose content starts that far down scrolls behind the row. The row is a raised node
+  (`Widget::raised`): where the window system has a raised layer it draws over the page with its glass between the two,
+  so the page shows through the glass and never covers it, and a scroll view under it draws the scroll edge over
+  what it covers (`scroll_edge`): a soft veil of the window background, 90 % over the top 30 % of the band and easing
+  out (smoothstep) to nothing at its bottom, or, with Reduce Transparency and in high contrast, the band filled with
+  the window background and a separator along its bottom. Its bar, paging and focus scrolling keep below the row.
+  Without a layer the row draws in place, the page is clipped below it and there is no edge. A `TableView` with
+  `header_top` puts its header that far down, raised with the row, and starts its rows below both; the rows scroll
+  under the two, and since the header's titles are text outside glass the band under them is always the solid one,
+  the header drawing its line. `ListView::under_element(inset, lead)` starts a list's rows `lead` points down so they
+  scroll under the row. Files and Settings fill their panes this way. Glyphs recede to the secondary label colour in an inactive window and to the
   disabled colour when disabled. Besides symbols a toolbar item may draw a glyph of its own (`ToolbarGlyph`): the
   back and forward chevrons, `More`'s three dots and `Tag`, a tag outline pointing up and to the trailing side with its
   hole by the point, mirrored right to left.

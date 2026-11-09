@@ -970,6 +970,14 @@ fn a_screen_reader_s_click_on_a_result_launches_it_and_closes_the_panel() {
 fn a_press_outside_the_panel_closes_it() {
     let mut run = Run::new();
     let catcher = run.window("catcher").unwrap();
+    // the catcher over the output is one transparent colour, shown without a frame of the output's size, and all of
+    // it takes the pointer
+    let system = run.driver.runtime().window_system();
+    assert!(system.frames(catcher).unwrap().is_empty());
+    let solids = system.solids(catcher).unwrap();
+    assert_eq!(solids.len(), 1);
+    assert_eq!(solids[0].color.a, 0.0);
+    assert_eq!(system.spec(catcher).unwrap().input_region, None);
     run.click(catcher, Point::new(10.0, 650.0));
     assert!(!run.model().panel.is_visible());
     assert!(run.hidden().is_some());

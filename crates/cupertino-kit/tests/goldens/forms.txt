@@ -48,7 +48,7 @@ semantics
   NodeId(7v1) role=Switch name=Some("Remember me") description=None value=Toggle(True) states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[117.16552734375,110.51953125 54x24] actions=[Click] relations=[] children=[]
 display
   paint 4294967296 parent=None revision=1 bounds=[0,0 280x180] hit=[0,0 280x180] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 280.0, height: 180.0 } }), paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 280.0, height: 180.0 } }), paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
   paint 4294967297 parent=Some(4294967296) revision=2 bounds=[8,13.625 252x30] hit=[20,20 240x14.51953125] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 20.0]
     Glyphs origin=0,11.625 font=FontId(0) size=12 count=7 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
   paint 4294967298 parent=Some(4294967296) revision=3 bounds=[7,43.69953125 253x96.54900390625] hit=[20,46.51953125 240x88] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 46.51953125]

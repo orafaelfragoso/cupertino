@@ -17,6 +17,10 @@ the choice, the reads and how the drop was finished; the driver records drop rea
 or an exhausted turn budget. Each queued platform event gets one runtime turn, so Tab changes focus before the next
 key is recorded even at the same timestamp. Explicit frame callbacks and tasks remain under the fixture's control.
 
+A window shown as one colour (`WindowSystem::present_solid`) makes no frame: `HeadlessWindowSystem::solids(window)`
+lists each such present (`SolidPresent`: the colour and the configure it acknowledged), and `set_solid_colors(false)`
+makes the system refuse them, as a compositor without one-pixel buffers does, so the runtime draws the window instead.
+
 Recording reads protection from core's current focus, including focusable nodes without an accessibility role.
 Start clipboard reads through `TestDriver::read_clipboard(window, kind, mime)`: the driver keeps the requesting focus's
 protection by token until the reply arrives. A protected request stays redacted after Tab moves focus elsewhere;
@@ -88,6 +92,10 @@ each frame's damage is copied, into one buffer per window, as a client copies a 
 timing run does not count a whole-window copy that only a test makes. The Files and Settings repaint reports use both
 (see their READMEs). Wall time depends on the machine: a test that pins what a frame repaints reads the damage of
 `HeadlessWindowSystem::frames`.
+
+A `HeadlessWindowSystem::new` with `Capabilities::raised_layer` takes raised layers: `layers(window)` lists every raised
+layer presented (`None` where it was hidden) and `composited(window)` gives the last frame's pixels with the layer
+drawn over them, as a compositor shows them without the materials between the two.
 
 The runtime's waker does not dispatch anything in a headless window system, so `run_until_idle` never blocks.
 `HeadlessWindowSystem::wait_for_wake(timeout)` blocks until a task finishing on another thread (a listing, a

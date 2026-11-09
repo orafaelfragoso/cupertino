@@ -381,6 +381,26 @@ pub(crate) struct FakeSystem {
     pub(crate) popups: bool,
     /// Every popup opened: its id, its parent and where it was placed.
     pub(crate) popups_created: Vec<(WindowId, WindowId, PopupSpec)>,
+    /// Shows raised layers ([`WindowSystem::present_layer`]).
+    pub(crate) layers: bool,
+    /// Every raised layer presented, in order: the window, and the layer's height in points, frame size and damage,
+    /// or `None` for one hidden.
+    pub(crate) layer_presents: Vec<(WindowId, Option<LayerPresent>)>,
+    /// The next layer present is refused, as when no buffer is free.
+    pub(crate) refuse_next_layer: bool,
+    /// Shows a window as one colour without a frame; without it every solid present is refused.
+    pub(crate) solid: bool,
+    /// Every solid present: the window, its colour and the configure it acknowledged.
+    pub(crate) solids: Vec<(WindowId, cupertino_ui_theme::Color, Option<ConfigureId>)>,
+}
+
+/// A raised layer as [`FakeSystem`] saw it presented.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LayerPresent {
+    pub(crate) height: u32,
+    pub(crate) size: (u32, u32),
+    pub(crate) damage: Vec<cupertino_ui_render::PixelRect>,
+    pub(crate) pixels: Vec<u8>,
 }
 
 impl FakeSystem {
@@ -406,6 +426,7 @@ impl WindowSystem for FakeSystem {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             app_effects: self.effects,
+            raised_layer: self.layers,
             ..Capabilities::default()
         }
     }
@@ -512,6 +533,47 @@ impl WindowSystem for FakeSystem {
         }
         self.presented.push((window, configure));
         self.frame_ids.push(frame.id);
+        Ok(PresentOutcome::Presented)
+    }
+
+    fn present_layer(
+        &mut self,
+        window: WindowId,
+        layer: Option<cupertino_ui_platform::RaisedLayer<'_>>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        if layer.is_some() && !self.layers {
+            return Err(PlatformError::Unsupported);
+        }
+        if std::mem::take(&mut self.refuse_next_layer) {
+            self.stalled = Some(window);
+            return Ok(PresentOutcome::NotReady);
+        }
+        self.layer_presents.push((
+            window,
+            layer.map(|l| LayerPresent {
+                height: l.height,
+                size: (l.frame.width, l.frame.height),
+                damage: l.frame.damage.clone(),
+                pixels: l.frame.pixels.clone(),
+            }),
+        ));
+        Ok(PresentOutcome::Presented)
+    }
+
+    fn present_solid(
+        &mut self,
+        window: WindowId,
+        color: cupertino_ui_theme::Color,
+        configure: Option<ConfigureId>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        if !self.solid {
+            return Err(PlatformError::Unsupported);
+        }
+        if std::mem::take(&mut self.refuse_next) {
+            self.stalled = Some(window);
+            return Ok(PresentOutcome::NotReady);
+        }
+        self.solids.push((window, color, configure));
         Ok(PresentOutcome::Presented)
     }
 

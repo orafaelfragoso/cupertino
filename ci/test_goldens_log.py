@@ -142,9 +142,11 @@ class RealLogTest(unittest.TestCase):
 class UpdateStatusTest(unittest.TestCase):
     """`ci/goldens.sh --update` with a fake docker that prints a complete update log and exits with a given status."""
 
-    def run_update(self, status: int, definition: str | None, image_ids: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+    def run_update(self, status: int, definition: str | None, image_ids: tuple[str, ...],
+                   container_cache: str = "", github: str = "") -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(dir=Path.home()) as scratch:
             root = Path(scratch)
+            container_cache = container_cache.replace("{root}", str(root))
             bin_dir = root / "bin"
             bin_dir.mkdir()
             update_log = root / "update.log"
@@ -172,24 +174,44 @@ class UpdateStatusTest(unittest.TestCase):
                        CUPERTINO_BUILD_LOCK_FD="test-lease")
             env.pop("CUPERTINO_GOLDENS_CACHE", None)
             env.pop("CUPERTINO_GOLDENS_IMAGE", None)
+            env.pop("CUPERTINO_GOLDENS_SCCACHE_SIZE", None)
+            env["HOME"] = str(root / "home")
+            env["GITHUB_ACTIONS"] = github
+            if container_cache == "default":
+                env.pop("CUPERTINO_CONTAINER_CACHE", None)
+                shared = root / "home/.cache/cupertino-build/containers/goldens"
+            else:
+                env["CUPERTINO_CONTAINER_CACHE"] = container_cache
+                shared = Path(container_cache) / "goldens" if container_cache else None
+            if github == "true":
+                shared = None
             if definition is not None:
                 env["CUPERTINO_GOLDENS_IMAGE"] = "prebuilt"
             cache = root / "target/package-build/goldens"
+            downloads = shared / "cargo" if shared else cache / "cargo"
             compiled_mounts = []
-            cached_source = cache / "cargo/cached-source"
+            cached_source = downloads / "cached-source"
             cached_stamp = None
             for image_id in image_ids:
                 arguments.unlink(missing_ok=True)
                 removed.unlink(missing_ok=True)
                 env["TEST_IMAGE_ID"] = image_id
                 result = subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
-                self.assertTrue((cache / "cargo").is_dir())
+                self.assertTrue(downloads.is_dir())
                 if arguments.exists():
                     command = arguments.read_text().splitlines()
                     target = cache / "targets" / image_id.removeprefix("sha256:")
                     self.assertTrue(target.is_dir())
                     self.assertIn("CARGO_BUILD_JOBS=4", command)
-                    self.assertIn(f"{cache}/cargo:/cache/cargo", command)
+                    self.assertIn(f"{downloads}:/cache/cargo", command)
+                    if shared:
+                        self.assertIn(f"{shared}/sccache:/cache/sccache", command)
+                        for setting in ("RUSTC_WRAPPER=/usr/bin/sccache", "SCCACHE_DIR=/cache/sccache",
+                                        "SCCACHE_CACHE_SIZE=6G", "SCCACHE_IDLE_TIMEOUT=0"):
+                            self.assertIn(setting, command)
+                        self.assertFalse((cache / "cargo").exists())
+                    else:
+                        self.assertFalse(any("sccache" in argument for argument in command))
                     compiled = f"{target}:/cache/target"
                     self.assertIn(compiled, command)
                     compiled_mounts.append(compiled)
@@ -229,6 +251,15 @@ class UpdateStatusTest(unittest.TestCase):
         ids = ("sha256:" + "a" * 64, "sha256:" + "b" * 64)
         result = self.run_update(101, None, ids)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_compile_cache_shares_sccache_and_downloads_but_keeps_the_target_per_worktree(self):
+        ids = ("sha256:" + "a" * 64, "sha256:" + "b" * 64)
+        for container_cache in ("{root}/container-cache", "default"):
+            with self.subTest(container_cache=container_cache):
+                self.assertEqual(self.run_update(101, None, ids, container_cache).returncode, 0)
+
+    def test_compile_cache_is_off_on_github_actions_unless_named(self):
+        self.assertEqual(self.run_update(101, None, ("sha256:" + "a" * 64,), "default", "true").returncode, 0)
 
     def test_invalid_image_identity_is_refused_before_using_it_as_a_path(self):
         result = self.run_update(101, None, ("sha256:../../escape",))
@@ -273,7 +304,7 @@ class UpdateStatusTest(unittest.TestCase):
                               + ' while not removed.exists(): time.sleep(0.01)\n')
             docker.chmod(0o755)
             env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", CUPERTINO_GOLDENS_IMAGE="prebuilt",
-                       CUPERTINO_BUILD_LOCK_FD="test-lease")
+                       CUPERTINO_BUILD_LOCK_FD="test-lease", HOME=str(root / "home"), CUPERTINO_CONTAINER_CACHE="")
             env.pop("CUPERTINO_GOLDENS_CACHE", None)
             process = subprocess.Popen(["bash", str(root / "ci/goldens.sh")], env=env,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)

@@ -1,6 +1,7 @@
 mod support;
 
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_ui_controls::scroll_edge::{soft_edge_stops, SOFT_EDGE_STOPS};
 use cupertino_ui_controls::{
     unobscured_insets, Navigation, NavigationStack, ScrollView, Scroller, Spacer, Stack,
     TextChange, TextField,
@@ -14,9 +15,13 @@ use cupertino_ui_layout::{
     SizeSpec,
 };
 use cupertino_ui_platform::{DecorationMode, Mods, PointerEvent, ScrollSource};
-use cupertino_ui_render::{PaintOp, PathVerb, Shape};
+use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_text::ContentPurpose;
+use cupertino_ui_theme::Color;
+use cupertino_ui_theme::{ColorRole, InteractionVariant};
 use support::{window, Harness, SPACE, TAB};
+
+const PAGE_DOWN: u32 = 0xff56;
 
 const ESCAPE: u32 = 0xff1b;
 const BRACKET_LEFT: u32 = 0x5b;
@@ -281,7 +286,14 @@ impl<M: 'static> Widget<M> for Row {
         Propagation::Continue
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    /// Black, so a test can tell the rows from the window background behind them.
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        cx.push(PaintOp::Fill {
+            shape: Shape::Rect(Rect::new(0.0, 0.0, size.width, size.height)),
+            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, 1.0)),
+        });
+    }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
@@ -403,4 +415,285 @@ fn button_named<A: Application>(h: &Harness<A>, name: &str) -> Rect {
         .expect("the button")
         .1
         .bounds
+}
+
+fn scrolled_by(h: &mut Harness<Behind>, dy: f64) {
+    h.pointer(PointerEvent::Scroll {
+        position: Point::new(300.0, 200.0),
+        delta: Point::new(0.0, dy),
+        value120: None,
+        source: ScrollSource::Wheel,
+        stop: false,
+        inverted: (false, false),
+    });
+}
+
+/// The rectangle fills of the window's content, in window coordinates and paint order.
+fn fills(h: &Harness<Behind>) -> Vec<(Rect, Paint)> {
+    let mut out = Vec::new();
+    for node in h.snapshot().display_list.nodes {
+        let [.., x, y] = node.transform.0;
+        for op in node.ops {
+            if let PaintOp::Fill {
+                shape: Shape::Rect(rect),
+                paint,
+            } = op
+            {
+                out.push((rect.translate(x, y), paint));
+            }
+        }
+    }
+    out
+}
+
+/// The grey level of the window's last frame, with its raised layer over it, at `(x, y)` (one byte of four: the
+/// fixture's colours are greys).
+fn level(h: &Harness<Behind>, x: usize, y: usize) -> u8 {
+    let system = h.rt.window_system();
+    let width = system.frames(h.window).unwrap().last().unwrap().width as usize;
+    let pixels = system.composited(h.window).unwrap().expect("a frame");
+    pixels[(y * width + x) * 4 + 1]
+}
+
+fn window_background() -> Color {
+    support::color(
+        ColorRole::WindowBackground,
+        InteractionVariant::Normal,
+        false,
+    )
+}
+
+#[test]
+fn over_a_raised_layer_the_page_shows_under_the_row_through_a_soft_edge() {
+    let mut h = Harness::<Behind>::with_layer(support::theme());
+    h.resize(Size::new(600.0, 300.0));
+    scrolled_by(&mut h, 30.0);
+    let layers = h.rt.window_system().layers(h.window).unwrap();
+    assert!(
+        // the shade under the row's glass reaches a few points past it
+        matches!(layers.last(), Some(Some(layer)) if (52..=64).contains(&layer.height)),
+        "the row draws in a layer down to its bottom and its shade: {:?}",
+        layers
+            .iter()
+            .map(|l| l.as_ref().map(|l| l.height))
+            .collect::<Vec<_>>()
+    );
+
+    // the edge veils the band the row covers, after the rows: over them
+    let fills = fills(&h);
+    let (at, edge) = fills
+        .iter()
+        .enumerate()
+        .find_map(|(i, (rect, paint))| match paint {
+            Paint::Linear { stops, .. } if stops.len() == SOFT_EDGE_STOPS => {
+                Some((i, (rect, stops)))
+            }
+            _ => None,
+        })
+        .expect("a soft edge");
+    assert_eq!(*edge.0, Rect::new(0.0, 0.0, 600.0, 52.0));
+    let background = window_background();
+    assert_eq!(*edge.1, soft_edge_stops(background));
+    let last_row = fills
+        .iter()
+        .rposition(|(_, p)| *p == Paint::Solid(Color::new(0.0, 0.0, 0.0, 1.0)))
+        .unwrap();
+    assert!(at > last_row, "the edge draws over the rows");
+
+    // the rows show under the row's band, more the further down it: veiled at its top, plain below it
+    let bg = (background.g * 255.0).round() as u8;
+    let top = level(&h, 300, 2);
+    let low = level(&h, 300, 48);
+    assert!(top > 200 && top <= bg, "veiled at the top: {top}");
+    assert!(low < 40, "showing through near the bottom: {low}");
+    assert_eq!(level(&h, 300, 60), 0, "plain below the band");
+    let mut last = top;
+    for y in 2..52 {
+        let l = level(&h, 300, y);
+        assert!(l <= last.saturating_add(1), "at {y}: {l} after {last}");
+        last = l.min(last);
+    }
+
+    // scrolling draws the page again and leaves the row's layer as it was
+    let (frames, layers) = {
+        let system = h.rt.window_system();
+        (
+            system.frames(h.window).unwrap().len(),
+            system.layers(h.window).unwrap().len(),
+        )
+    };
+    scrolled_by(&mut h, 10.0);
+    let system = h.rt.window_system();
+    assert!(system.frames(h.window).unwrap().len() > frames);
+    assert_eq!(
+        system.layers(h.window).unwrap().len(),
+        layers,
+        "the layer is not drawn again"
+    );
+}
+
+#[test]
+fn an_inactive_window_keeps_its_soft_edge_in_its_inactive_background() {
+    let mut h = Harness::<Behind>::with_layer(support::theme());
+    h.resize(Size::new(600.0, 300.0));
+    scrolled_by(&mut h, 30.0);
+    h.send(cupertino_ui_platform::WindowEvent::Focus(false));
+    let inactive = support::theme().colors.get(
+        ColorRole::WindowBackground,
+        cupertino_ui_theme::StateVariant {
+            window_active: false,
+            ..cupertino_ui_theme::StateVariant::NORMAL
+        },
+    );
+    let edge = fills(&h)
+        .into_iter()
+        .find_map(|(rect, paint)| match paint {
+            Paint::Linear { stops, .. } if stops.len() == SOFT_EDGE_STOPS => Some((rect, stops)),
+            _ => None,
+        })
+        .expect("a soft edge in an inactive window");
+    assert_eq!(edge.0, Rect::new(0.0, 0.0, 600.0, 52.0));
+    assert_eq!(
+        edge.1,
+        soft_edge_stops(inactive.expect("a window background"))
+    );
+}
+
+#[test]
+fn reduce_transparency_sets_the_row_on_a_solid_band() {
+    let mut rt = support::theme();
+    rt.preferences.reduce_transparency = true;
+    let background = window_background();
+    let bg = (background.g * 255.0).round() as u8;
+    let separator = support::color(ColorRole::Separator, InteractionVariant::Normal, false);
+    let sep = (separator.g * 255.0).round() as u8;
+    let mut h = Harness::<Behind>::with_layer(rt);
+    h.resize(Size::new(600.0, 300.0));
+    scrolled_by(&mut h, 30.0);
+    let fills = fills(&h);
+    assert!(
+        fills
+            .iter()
+            .any(|(rect, paint)| *rect == Rect::new(0.0, 0.0, 600.0, 52.0)
+                && *paint == Paint::Solid(background)),
+        "the band is filled"
+    );
+    assert!(!fills
+        .iter()
+        .any(|(_, p)| matches!(p, Paint::Linear { stops, .. } if stops.len() == SOFT_EDGE_STOPS)));
+    for y in [2, 30, 50] {
+        assert_eq!(level(&h, 300, y), bg, "solid at {y}");
+    }
+    assert_eq!(level(&h, 300, 51), sep, "a separator along its bottom");
+    assert_eq!(level(&h, 300, 60), 0);
+}
+
+#[test]
+fn without_a_layer_nothing_scrolls_under_the_row_and_its_glass_stays_under_the_window() {
+    let mut h = Harness::<Behind>::with_effects(support::theme());
+    h.resize(Size::new(600.0, 300.0));
+    scrolled_by(&mut h, 30.0);
+    assert_eq!(h.model().0.offset.y, 30.0);
+    assert!(
+        !fills(&h)
+            .iter()
+            .any(|(_, p)| matches!(p, Paint::Linear { .. })),
+        "no edge: nothing passes under the row"
+    );
+    // the rows are cut at the row's bottom edge
+    let row0 = h.rect("row0");
+    assert_eq!(
+        row0.min_y(),
+        22.0,
+        "the first row lies partly behind the row"
+    );
+    let id = cupertino_ui_render::PaintNodeId::from(h.rt.find(h.window, &"row0".into()).unwrap());
+    let drawn = h
+        .snapshot()
+        .display_list
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id)
+        .unwrap();
+    // the bounds take in the anti-aliased edge of the clip
+    assert!(
+        drawn.bounds.min_y() >= 51.0,
+        "drawn only below the row: {:?}",
+        drawn.bounds
+    );
+    assert_eq!(
+        level(&h, 300, 40),
+        level(&h, 300, 2),
+        "none of it shows in the row"
+    );
+    assert_eq!(level(&h, 300, 60), 0);
+    let system = h.rt.window_system();
+    assert!(system.layers(h.window).unwrap().is_empty(), "no layer");
+    // the back button's glass is asked for as before, under the window
+    let regions = system
+        .requests(h.window)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            cupertino_ui_platform::WindowRequest::Materials(regions) => Some(regions.clone()),
+            _ => None,
+        })
+        .expect("the window asks for materials");
+    assert!(
+        regions
+            .iter()
+            .any(|r| r.glass.is_some() && !r.raised && r.rect.max_y() <= 52.0),
+        "{regions:?}"
+    );
+}
+
+#[test]
+fn the_scroll_bar_paging_and_the_focus_ring_keep_below_the_row() {
+    let mut h = Harness::<Behind>::with_layer(support::theme());
+    h.resize(Size::new(600.0, 300.0));
+    // past the back button, the view takes the focus: nothing in it is a Tab stop
+    h.tap(TAB);
+    h.tap(TAB);
+    assert!(h.focused("list") || h.snapshot().focus.is_some());
+    h.tap(PAGE_DOWN);
+    assert_eq!(
+        h.model().0.offset.y,
+        300.0 - 52.0 - 40.0,
+        "a page is what shows below the row, less a line"
+    );
+
+    // the thumb of the overlay bar, shown by the paging, lies in the part the row leaves
+    let thumb = support::color(ColorRole::ScrollerThumb, InteractionVariant::Normal, false);
+    let thumbs: Vec<Rect> = fills(&h)
+        .into_iter()
+        .chain(rounded(&h))
+        .filter_map(|(rect, paint)| match paint {
+            Paint::Solid(c) if c.r == thumb.r && c.a > 0.0 => Some(rect),
+            _ => None,
+        })
+        .collect();
+    assert!(!thumbs.is_empty(), "the bar shows");
+    for t in thumbs {
+        assert!(t.min_y() >= 52.0, "the thumb {t:?} is below the row");
+        assert!(t.max_y() <= 300.0);
+    }
+}
+
+/// The rounded-rectangle fills of the window's content, as their bounds in window coordinates.
+fn rounded(h: &Harness<Behind>) -> Vec<(Rect, Paint)> {
+    let mut out = Vec::new();
+    for node in h.snapshot().display_list.nodes {
+        let [.., x, y] = node.transform.0;
+        for op in node.ops {
+            if let PaintOp::Fill {
+                shape: Shape::RoundedRect { rect, .. },
+                paint,
+            } = op
+            {
+                out.push((rect.translate(x, y), paint));
+            }
+        }
+    }
+    out
 }

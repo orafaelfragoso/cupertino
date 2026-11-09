@@ -17,7 +17,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
 
 use super::clip::{ClipElement, ClipShape};
-use super::compose::{logical_rect, FrameResources};
+use super::compose::{logical_rect, FrameResources, TreeSlice};
 use super::material::glass::GlassElement;
 use super::material::{MaterialElement, MaterialMask, SharedMaterial};
 use super::mesh::{MeshElement, SharedMesh};
@@ -47,6 +47,7 @@ pub fn lower(
     assert_eq!(resources.frame, frame.id, "resources of another frame");
     let FrameResources {
         surfaces,
+        slices,
         images,
         recipes,
         glass,
@@ -67,7 +68,8 @@ pub fn lower(
                     .filter(|_| id.0.generation == frame.id.0);
                 match surface {
                     Some(surface) => {
-                        surface_tree(ctx, surface, *role, item, viewport, &mut elements)
+                        let only = slices.get(id.0.slot as usize).cloned().flatten();
+                        surface_tree(ctx, surface, only, *role, item, viewport, &mut elements)
                     }
                     None => {
                         debug_assert!(false, "surface handle {id:?} does not belong to the frame");
@@ -346,20 +348,28 @@ fn physical(point: OutputPoint, scale: f64) -> Point<i32, Physical> {
     Point::<f64, Logical>::from((point.0.x, point.0.y)).to_physical_precise_round(scale)
 }
 
+/// The elements of the tree of `surface`, front to back; with `only`, those of the slice's surfaces alone.
 fn surface_elements(
     ctx: &mut Lowering<'_>,
     surface: &WlSurface,
+    only: Option<&TreeSlice>,
     origin: Point<i32, Physical>,
     scale: Scale<f64>,
     alpha: f32,
     kind: Kind,
 ) -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
-    render_elements_from_surface_tree(ctx.renderer, surface, origin, scale, alpha, kind)
+    let mut els: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+        render_elements_from_surface_tree(ctx.renderer, surface, origin, scale, alpha, kind);
+    if let Some(only) = only {
+        els.retain(|e| only.ids.contains(e.id()));
+    }
+    els
 }
 
 fn surface_tree(
     ctx: &mut Lowering<'_>,
     surface: &WlSurface,
+    only: Option<TreeSlice>,
     role: SurfaceRole,
     item: &SceneItem,
     viewport: (i32, i32),
@@ -371,13 +381,22 @@ fn surface_tree(
     let scale = Scale::from(ctx.scale);
     match role {
         SurfaceRole::Standalone => {
-            let els = surface_elements(ctx, surface, origin, scale, alpha, Kind::Unspecified);
+            let els = surface_elements(
+                ctx,
+                surface,
+                only.as_ref(),
+                origin,
+                scale,
+                alpha,
+                Kind::Unspecified,
+            );
             out.extend(els.into_iter().map(CupertinoElement::from));
         }
         SurfaceRole::Cursor => {
             let els = surface_elements(
                 ctx,
                 surface,
+                only.as_ref(),
                 origin,
                 scale * place.scale_x,
                 alpha,
@@ -386,7 +405,15 @@ fn surface_tree(
             out.extend(els.into_iter().map(CupertinoElement::from));
         }
         SurfaceRole::WindowContent | SurfaceRole::Popup => {
-            let els = surface_elements(ctx, surface, origin, scale, alpha, Kind::Unspecified);
+            let els = surface_elements(
+                ctx,
+                surface,
+                only.as_ref(),
+                origin,
+                scale,
+                alpha,
+                Kind::Unspecified,
+            );
             let pivot = physical(place.pivot, ctx.scale);
             let rescale = Scale::from((place.scale_x, place.scale_y));
             let shape = match role {

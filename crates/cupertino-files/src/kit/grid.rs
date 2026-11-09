@@ -143,6 +143,9 @@ pub(super) struct IconGrid {
     pub selection: Selection,
     /// The rubber band being drawn, in the grid.
     pub band: Option<Rect>,
+    /// How far down the scroll view's content the grid starts: the part of the view the toolbar row covers at rest,
+    /// which the grid scrolls under.
+    pub lead: f64,
     /// What sits under item `index`'s icon, given as `(index, selected)`: its [`name`], or the field it is renamed in.
     pub name: Box<dyn Fn(usize, bool) -> Element<Message>>,
 }
@@ -210,16 +213,19 @@ impl IconGrid {
         })
     }
 
-    /// Rows of cells a page moves by: those the viewport shows.
+    /// Rows of cells a page moves by: those the viewport shows below the toolbar row.
     fn page_rows(&self) -> usize {
         let pitch = self.layout.cell.h + self.layout.spacing.1;
-        (self.scroll.viewport.height / pitch).floor().max(1.0) as usize
+        ((self.scroll.viewport.height - self.lead) / pitch)
+            .floor()
+            .max(1.0) as usize
     }
 
     /// The cells to build, in order: those near the viewport and the keyboard's.
     fn built(&self) -> Vec<usize> {
-        let top = self.scroll.offset.y - OVERSCAN;
-        let bottom = self.scroll.offset.y + self.scroll.viewport.height + OVERSCAN;
+        // in the grid, which starts `lead` down the content: what shows under the toolbar row too
+        let top = self.scroll.offset.y - self.lead - OVERSCAN;
+        let bottom = self.scroll.offset.y - self.lead + self.scroll.viewport.height + OVERSCAN;
         let at = self.at();
         self.layout
             .cells
@@ -261,7 +267,7 @@ impl IconGrid {
         cell.label_frame.contains(at)
     }
 
-    /// The part of the grid the scroll view shows, in the window.
+    /// The part of the grid the scroll view shows below the toolbar row, in the window.
     fn shown(&self, cx: &EventCx<'_, Message>) -> Option<Rect> {
         let bounds = cx.bounds()?;
         let viewport = self.scroll.viewport;
@@ -269,7 +275,7 @@ impl IconGrid {
             bounds.min_x(),
             bounds.min_y() + self.scroll.offset.y,
             viewport.width.max(bounds.size.width),
-            viewport.height,
+            (viewport.height - self.lead).max(0.0),
         ))
     }
 
@@ -472,7 +478,12 @@ impl Widget<Message> for IconGrid {
         LayoutSpec {
             width: SizeSpec::Fill,
             // as tall as the view at least, so a press under the last row starts a band
-            height: SizeSpec::Fixed(self.layout.content.h.max(self.scroll.viewport.height)),
+            height: SizeSpec::Fixed(
+                self.layout
+                    .content
+                    .h
+                    .max(self.scroll.viewport.height - self.lead),
+            ),
             ..LayoutSpec::new(ContainerKind::Absolute)
         }
     }

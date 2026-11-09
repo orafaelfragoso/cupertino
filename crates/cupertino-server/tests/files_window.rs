@@ -24,8 +24,6 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shm::with_buffer_contents;
 
 const OUTPUT: (i32, i32) = (1400, 900);
-/// The restart throttle of the supervisor.
-const THROTTLE: Duration = Duration::from_secs(1);
 /// Evdev codes plus the xkb offset of 8.
 const SUPER: u32 = 125 + 8;
 const UP: u32 = 103 + 8;
@@ -85,12 +83,14 @@ impl Server {
         panic!("timed out waiting for {what}");
     }
 
-    /// Step the server for `time`.
-    fn run_for(&mut self, time: Duration) {
-        let end = Instant::now() + time;
-        while Instant::now() < end {
-            self.step();
-        }
+    /// [`common::ping_barrier`] on the file manager: it has handled what it was sent, and the server has what it did
+    /// with it, the frames it drew included.
+    fn settle(&mut self) {
+        let client = self.state.windows[0].toplevel.client();
+        let event_loop = &mut self.event_loop;
+        common::ping_barrier(&mut self.state, &client, |state| {
+            headless::step(state, event_loop, Duration::from_millis(5)).unwrap();
+        });
     }
 
     fn key(&mut self, code: u32, pressed: bool) {
@@ -247,9 +247,19 @@ fn the_file_manager_window_maps_lists_refreshes_navigates_and_closes() {
     assert_eq!(shown.title, "home");
     assert_eq!(shown.size, (920, 436));
 
-    // a file created in the folder appears without any input: the window draws a different frame
-    server.run_for(Duration::from_secs(1));
-    let before = window(&server.state).unwrap().pixels;
+    // a file created in the folder appears without any input: the window draws a different frame, once it has drawn
+    // the folder as it is, a frame that a barrier on the client leaves as it was
+    let end = Instant::now() + common::HANG_GUARD;
+    let mut before = window(&server.state).unwrap().pixels;
+    loop {
+        server.settle();
+        let now = window(&server.state).unwrap().pixels;
+        if now == before {
+            break;
+        }
+        assert!(Instant::now() < end, "the window never stopped drawing");
+        before = now;
+    }
     std::fs::write(home.join("added.txt"), b"x").unwrap();
     server.wait_until("the window to draw the new file", |s| {
         window(s).is_some_and(|w| w.pixels != before)
@@ -295,14 +305,23 @@ fn the_file_manager_window_maps_lists_refreshes_navigates_and_closes() {
 
     // the close shortcut asks the window to close; the process exits with success, so the supervisor does not
     // start it again after its throttle (a failure would bring the window back)
+    let pid = server.state.supervisor.pid_of("cupertino-files");
+    assert!(pid.is_some());
     server.key(SUPER, true);
     server.key(W, true);
     server.key(W, false);
     server.key(SUPER, false);
     server.wait_until("the window to go away", |s| s.windows.is_empty());
-    server.run_for(THROTTLE * 2);
-    assert!(
-        server.state.windows.is_empty(),
-        "the file manager was started again: it did not exit with success"
+    server.wait_until("the supervisor to see the process exit", |s| {
+        s.supervisor.pid_of("cupertino-files") != pid
+    });
+    assert_eq!(
+        (
+            server.state.supervisor.pid_of("cupertino-files"),
+            server.state.supervisor.next_deadline()
+        ),
+        (None, None),
+        "the file manager was started again or waits to be: it did not exit with success"
     );
+    assert!(server.state.windows.is_empty());
 }

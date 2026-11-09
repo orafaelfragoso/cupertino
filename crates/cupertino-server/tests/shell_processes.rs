@@ -100,6 +100,14 @@ impl Server {
         .unwrap();
     }
 
+    /// [`common::ping_barrier`] on `client`: it has handled what it was sent, and the server has what it did with it.
+    fn settle_on(&mut self, client: &smithay::wayland::shell::xdg::ShellClient) {
+        let event_loop = &mut self.event_loop;
+        common::ping_barrier(&mut self.state, client, |state| {
+            headless::step(state, event_loop, Duration::from_millis(5)).unwrap();
+        });
+    }
+
     /// Step the server until `cond` holds; panics after [`common::HANG_GUARD`].
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
         let end = Instant::now() + common::HANG_GUARD;
@@ -254,6 +262,60 @@ fn a_process_that_exits_successfully_is_not_restarted() {
     // the failing process cycling once proves a full throttle period passed since the first start of both
     server.wait_for_lines(&failing, 2);
     assert_eq!(read_lines(&done), vec!["run"]);
+}
+
+/// The process of the Wayland client `client`, as the server identified it.
+fn pid_of_client(client: &smithay::reexports::wayland_server::Client) -> Option<u32> {
+    let data = client.get_data::<cupertino_server::state::ClientState>()?;
+    Some(data.process()?.pid)
+}
+
+/// Whether the process `pid` has a Wayland connection the server keeps.
+fn connected(state: &Cupertino, pid: u32) -> bool {
+    let mut ids = Vec::new();
+    state
+        .display_handle
+        .backend_handle()
+        .with_all_clients(|id| ids.push(id));
+    ids.into_iter().any(|id| {
+        state
+            .display_handle
+            .backend_handle()
+            .get_client_data(id)
+            .ok()
+            .and_then(|data| {
+                let client = data.downcast_ref::<cupertino_server::state::ClientState>()?;
+                Some(client.process()?.pid)
+            })
+            == Some(pid)
+    })
+}
+
+/// The layer surfaces of the process `pid`, those on an output that went included until the process destroys them.
+fn layer_surfaces_of(state: &Cupertino, pid: u32) -> usize {
+    use smithay::reexports::wayland_server::Resource;
+    state
+        .layer_shell_state
+        .layer_surfaces()
+        .filter(|l| {
+            l.wl_surface()
+                .client()
+                .is_some_and(|c| pid_of_client(&c) == Some(pid))
+        })
+        .count()
+}
+
+/// The xdg-shell client of the first popup of the layer surface with `namespace`, to ping.
+fn popup_client(
+    state: &Cupertino,
+    namespace: &str,
+) -> Option<smithay::wayland::shell::xdg::ShellClient> {
+    let map = layer_map_for_output(&state.outputs.first()?.output);
+    let layer = map.layers().find(|l| l.namespace() == namespace)?;
+    PopupManager::popups_for_surface(layer.wl_surface()).find_map(|(popup, _)| match popup {
+        PopupKind::Xdg(p) => Some(p.client()),
+        _ => None,
+    })
 }
 
 /// The capabilities of the connection the server made for the process `pid`.
@@ -799,10 +861,11 @@ fn the_notification_centre_with_a_long_history_keeps_its_connection() {
     server.wait_until("the centre to draw its cards", |s| {
         centre_backdrop_heights(s).is_some_and(|h| !h.is_empty())
     });
-    let settle = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < settle {
-        server.step();
-    }
+    // the commit that drew the cards was handled: a request the server refuses ends the connection as it is handled
+    assert!(
+        connected(&server.state, pid),
+        "the notifications process lost its connection"
+    );
     assert_eq!(
         server.state.supervisor.pid_of("cupertino-notifications"),
         Some(pid),
@@ -1151,6 +1214,7 @@ fn a_click_on_empty_bar_space_closes_the_menu_and_the_keyboard_goes_back_to_the_
         open(s) && s.popup_grab.is_some() && !window_has_keyboard(s)
     });
     let system = popup_location(&server.state, "cupertino-menubar").unwrap();
+    let menubar = popup_client(&server.state, "cupertino-menubar").unwrap();
     eprintln!(
         "trace: click on the system menu at (20, 12): menu open at {system:?}, keyboard on {}",
         focus(&server.state)
@@ -1165,10 +1229,8 @@ fn a_click_on_empty_bar_space_closes_the_menu_and_the_keyboard_goes_back_to_the_
         focus(&server.state),
         server.state.wm.key_window()
     );
-    let end = Instant::now() + Duration::from_millis(500);
-    while Instant::now() < end {
-        server.step();
-    }
+    // the menu bar handled the click, and what it did about it is on the server
+    server.settle_on(&menubar);
     assert!(!open(&server.state), "the click opened no other menu");
     assert_eq!(server.state.wm.key_window(), Some(window));
     assert_eq!(
@@ -1280,11 +1342,13 @@ fn the_menu_bar_process_outlives_an_unplugged_display() {
             })
     });
     let pid = server.state.supervisor.pid_of("cupertino-menubar");
+    let bars = layer_surfaces_of(&server.state, pid.unwrap());
     headless::remove_display(&mut server.state, head).unwrap();
-    let end = Instant::now() + THROTTLE * 2;
-    while Instant::now() < end {
-        server.step();
-    }
+    // the process heard that the bar of the display that went is closed, and destroyed it
+    server.wait_until("the menu bar to destroy the closed bar", |s| {
+        layer_surfaces_of(s, pid.unwrap()) == bars - 1
+    });
+    assert!(connected(&server.state, pid.unwrap()));
     assert_eq!(server.state.supervisor.pid_of("cupertino-menubar"), pid);
     assert!(committed_buffer(&server.state, "cupertino-menubar").is_some());
 }
@@ -1539,11 +1603,12 @@ fn the_control_panel_goes_with_its_output_and_opens_again_on_the_remaining_or_re
     eprintln!(
         "trace: output 0 unplugged: card and catcher destroyed, no exclusive layer, no popup grab, keyboard on the window"
     );
-    server.run_for(Duration::from_millis(500));
+    // the panel destroyed its surfaces when it heard they were closed: it has handled the unplug
     assert!(
         panel_surfaces(&server.state).is_empty(),
         "nothing reopens by itself"
     );
+    assert!(connected(&server.state, pid));
     assert_eq!(
         server.state.supervisor.pid_of(PANEL),
         Some(pid),
@@ -1592,8 +1657,10 @@ fn the_control_panel_goes_with_its_output_and_opens_again_on_the_remaining_or_re
             "no panel surface"
         }
     );
+    // the panel answered the toggle: it has handled it
     server.toggle_panel(&bus);
-    server.run_for(Duration::from_millis(500));
+    assert!(panel_surfaces(&server.state).is_empty());
+    assert!(connected(&server.state, pid));
     assert_eq!(
         server.state.supervisor.pid_of(PANEL),
         Some(pid),
@@ -2349,17 +2416,11 @@ fn the_screenshot_options_menu_opens_above_the_toolbar_on_its_output() {
     server.wait_until("the toolbar to take the keyboard", |s| {
         s.seat.get_keyboard().unwrap().current_focus().is_some()
     });
-    // the process hears the pointer enter, then the press and the release, each before the next
-    let settle = |server: &mut Server| {
-        let until = Instant::now() + Duration::from_millis(300);
-        server.wait_until("the process to keep up", |_| Instant::now() >= until);
-    };
+    // the process hears the pointer enter, then the press and the release, in that order on its connection
     server.state.pointer_moved_to(options.into(), 10, None);
-    settle(&mut server);
     server
         .state
         .pointer_button(BTN_LEFT, ButtonState::Pressed, 20);
-    settle(&mut server);
     server
         .state
         .pointer_button(BTN_LEFT, ButtonState::Released, 30);

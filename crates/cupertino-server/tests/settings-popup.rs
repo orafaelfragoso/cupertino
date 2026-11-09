@@ -121,10 +121,10 @@ impl Harness {
             home,
         };
         h.wait_until("the pane's window", |s| title(s) == pane_title);
-        h.run_for(Duration::from_millis(250));
+        h.settle();
         h.click(row);
         h.wait_until("the row's page", |s| title(s) == page_title);
-        h.run_for(Duration::from_millis(250));
+        h.settle();
         h.click(button);
         h.wait_until("one drawn choice popup", |s| {
             popup_count(s) == 1 && popup_drawn(s)
@@ -162,11 +162,26 @@ impl Harness {
         );
     }
 
-    fn run_for(&mut self, duration: Duration) {
-        let end = Instant::now() + duration;
-        while Instant::now() < end {
-            self.step();
-        }
+    /// [`common::ping_barrier`] on Settings: it has handled what it was sent, and the server has what it did with it,
+    /// the frames it drew included.
+    fn settle(&mut self) {
+        let client = self
+            .state
+            .windows
+            .iter()
+            .find(|w| w.mapped)
+            .unwrap()
+            .toplevel
+            .client();
+        let (event_loop, app, bus) = (&mut self.event_loop, &mut self.app, &mut self.bus);
+        common::ping_barrier(&mut self.state, &client, |state| {
+            headless::step(state, event_loop, Duration::from_millis(5)).unwrap();
+            assert!(
+                app.0.try_wait().unwrap().is_none(),
+                "Settings exited unexpectedly"
+            );
+            assert!(!bus.has_exited(), "private bus exited unexpectedly");
+        });
     }
 
     /// Steps until the open menu is gone: the client closes it on its own time, which a loaded machine stretches.
@@ -214,7 +229,7 @@ impl Harness {
         );
         self.wait_until("Appearance pane", |s| title(s) == "Appearance");
         self.wait_until("pane redraw", |s| !window_pixels(s).is_empty());
-        self.run_for(Duration::from_millis(250));
+        self.settle();
         assert!(
             handoff.0.wait().unwrap().success(),
             "ShowPane handoff failed"
@@ -294,7 +309,7 @@ fn outside_click_dismisses_without_activating_the_underlying_pane() {
     h.click(APPEARANCE_ROW);
     h.wait_for_menu_to_close();
     // a press that was forwarded to the pane would switch it on the client's time, after the menu is gone
-    h.run_for(Duration::from_millis(500));
+    h.settle();
     assert_eq!(
         (popup_count(&h.state), title(&h.state)),
         (0, "Display".into()),
@@ -424,7 +439,7 @@ fn pane_after(keys: &[u32]) -> Vec<u8> {
     }
     h.wait_for_menu_to_close();
     // a key that reached the pane would act on the client's time, after the menu is gone
-    h.run_for(Duration::from_millis(500));
+    h.settle();
     assert_eq!(
         (popup_count(&h.state), title(&h.state)),
         (0, "Display".into()),

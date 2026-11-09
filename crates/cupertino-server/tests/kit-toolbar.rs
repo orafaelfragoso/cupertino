@@ -102,7 +102,7 @@ impl Harness {
             time: 1_000,
         };
         h.wait_until("the Settings window", |s| title(s) == "Accessibility");
-        h.run_for(Duration::from_millis(250));
+        h.settle();
         h.title_bar = frame(&h.state).3 - CONTENT_HEIGHT;
         Some(h)
     }
@@ -135,11 +135,25 @@ impl Harness {
         );
     }
 
-    fn run_for(&mut self, duration: Duration) {
-        let end = Instant::now() + duration;
-        while Instant::now() < end {
-            self.step();
-        }
+    /// [`common::ping_barrier`] on Settings: it has handled what it was sent, and the server has what it did with it.
+    fn settle(&mut self) {
+        let client = self
+            .state
+            .windows
+            .iter()
+            .find(|w| w.mapped)
+            .unwrap()
+            .toplevel
+            .client();
+        let (event_loop, app, bus) = (&mut self.event_loop, &mut self.app, &mut self.bus);
+        common::ping_barrier(&mut self.state, &client, |state| {
+            headless::step(state, event_loop, Duration::from_millis(5)).unwrap();
+            assert!(
+                app.0.try_wait().unwrap().is_none(),
+                "Settings exited unexpectedly"
+            );
+            assert!(!bus.has_exited(), "private bus exited unexpectedly");
+        });
     }
 
     /// The screen point of a point in the window's content, at any size.
@@ -165,20 +179,20 @@ impl Harness {
         self.step();
     }
 
-    /// Presses at `content`, travels [`DRAG`] in steps with the button held, giving the client time to answer each
-    /// step, and releases.
+    /// Presses at `content`, travels [`DRAG`] in steps with the button held, the client answering each step before
+    /// the next, and releases; returns once the server has what the client did with the release.
     fn drag(&mut self, content: (f64, f64)) {
         let start = self.screen(content);
         self.move_to(start);
         self.button(true);
-        self.run_for(Duration::from_millis(50));
+        self.settle();
         for i in 1..=DRAG_STEPS {
             let f = f64::from(i) / f64::from(DRAG_STEPS);
             self.move_to((start.0 + DRAG.0 * f, start.1 + DRAG.1 * f));
-            self.run_for(Duration::from_millis(30));
+            self.settle();
         }
         self.button(false);
-        self.run_for(Duration::from_millis(100));
+        self.settle();
     }
 
     fn click(&mut self, content: (f64, f64)) {
@@ -251,7 +265,7 @@ fn a_drag_on_the_toolbar_moves_the_kit_window_and_one_on_the_search_field_or_the
     // Back is enabled once a page has been left
     h.click(DISPLAY_ROW);
     h.wait_until("the Display page", |s| title(s) == "Display");
-    h.run_for(Duration::from_millis(250));
+    h.settle();
     let before = frame(&h.state);
     h.drag(BACK_BUTTON);
     assert_eq!(frame(&h.state), before, "the Back button took the drag");
@@ -286,7 +300,7 @@ fn a_double_click_on_the_toolbar_zooms_the_kit_window_and_another_restores_it() 
         s.wm.window(id).unwrap().state() == LifecycleState::Zoomed
     });
     // the client hears it is maximized before the next double click asks for the other state
-    h.run_for(Duration::from_millis(500));
+    h.settle();
     assert_eq!(h.state(), LifecycleState::Zoomed);
     h.double_click(TOOLBAR_GAP);
     h.wait_until("the window to restore", |s| frame(s) == before);

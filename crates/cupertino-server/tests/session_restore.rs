@@ -19,9 +19,6 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 
 const OUTPUT: (i32, i32) = (800, 600);
-/// How long the test keeps the server running after the login process finished starting, so that a second start of an
-/// application would have shown in the marker file.
-const QUIET: Duration = Duration::from_secs(1);
 
 struct Server {
     state: Cupertino,
@@ -65,13 +62,6 @@ impl Server {
         let end = Instant::now() + common::HANG_GUARD;
         while !condition() {
             assert!(Instant::now() < end, "timed out waiting for {what}");
-            self.step();
-        }
-    }
-
-    fn run_for(&mut self, time: Duration) {
-        let end = Instant::now() + time;
-        while Instant::now() < end {
             self.step();
         }
     }
@@ -156,6 +146,19 @@ impl Fixture {
         self.path("state/cupertino/restore")
     }
 
+    /// Whether a stand-in program is still running. The login process logs what it started only once each start
+    /// returned, so after that log line a program that is no longer running has written its name to the marker.
+    fn programs_running(&self) -> bool {
+        let bin = self.path("bin").display().to_string();
+        std::fs::read_dir("/proc").unwrap().flatten().any(|entry| {
+            std::fs::read(entry.path().join("cmdline")).is_ok_and(|cmdline| {
+                cmdline
+                    .split(|b| *b == 0)
+                    .any(|arg| arg.starts_with(bin.as_bytes()))
+            })
+        })
+    }
+
     fn started(&self) -> Vec<String> {
         let mut lines: Vec<String> = std::fs::read_to_string(self.marker())
             .unwrap_or_default()
@@ -236,7 +239,9 @@ fn the_saved_applications_start_once_at_the_next_login_and_never_again() {
         text.contains("application reopened: org.example.Restored.desktop")
             && text.contains("application not reopened: org.example.Removed.desktop")
     });
-    server.run_for(QUIET);
+    server.wait_until("the started programs to finish", || {
+        !fixture.programs_running()
+    });
     assert_eq!(
         fixture.started(),
         ["both-as-login-item", "restored"],
@@ -282,7 +287,9 @@ fn the_saved_applications_start_once_at_the_next_login_and_never_again() {
     server.wait_until("the restarted login process to look at the list", || {
         log_text(&log).contains("applications not reopened: the list was saved in this session")
     });
-    server.run_for(QUIET);
+    server.wait_until("the started programs to finish", || {
+        !fixture.programs_running()
+    });
     assert_eq!(
         fixture.started(),
         ["both-as-login-item", "restored"],

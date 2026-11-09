@@ -21,20 +21,31 @@ fn empty_pack() -> tempfile::TempDir {
     d
 }
 
+/// The data names the commit the command was built from beside its version (`null` when the build did not know it),
+/// so a bug report says which build it came from; a field added after `cli`, as v1 allows.
 #[test]
 fn the_version_in_json_is_one_envelope_line_in_field_order() {
     let out = cupertino(&["--format", "json", "--version"]);
+    let commit = match cupertino_build_info::COMMIT {
+        Some(commit) => format!("\"{commit}\""),
+        None => "null".to_owned(),
+    };
     assert_eq!(
         out,
         Output {
             code: 0,
             stdout: format!(
                 "{{\"schema\":\"cupertino.cli.v1\",\"command\":\"version\",\"request_id\":\"r1\",\"ok\":true,\
-                 \"data\":{{\"cli\":\"{}\"}}}}\n",
+                 \"data\":{{\"cli\":\"{}\",\"commit\":{commit}}}}}\n",
                 env!("CARGO_PKG_VERSION")
             ),
             stderr: String::new(),
         }
+    );
+    let human = cupertino(&["--version"]);
+    assert_eq!(
+        human.stdout,
+        format!("{}\n", cupertino_build_info::component!("cupertino"))
     );
 }
 
@@ -145,13 +156,26 @@ fn the_json_help_lists_the_command_tree_under_the_topic() {
         ]
     }]);
     for args in [
-        &["--format", "json", "help"][..],
-        &["--format", "json", "help", "appearance", "assets"],
+        &["--format", "json", "help", "appearance", "assets"][..],
         &["--format", "json", "appearance", "--help"],
     ] {
         let out = cupertino(args);
         assert_eq!((out.code, &json(&out)["data"]), (0, &tree), "{args:?}");
     }
+    // the whole tree: every command of the registry, in registry order, this one first
+    let all = cupertino(&["--format", "json", "help"]);
+    let entries = json(&all)["data"].as_array().unwrap().clone();
+    assert_eq!(entries[0], tree[0]);
+    let paths: Vec<&str> = entries
+        .iter()
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
+    let registry: Vec<String> = cupertino_cli::REGISTRY
+        .iter()
+        .flat_map(cupertino_cli::Group::commands)
+        .map(|c| c.name())
+        .collect();
+    assert_eq!(paths, registry);
     let unknown = cupertino(&["help", "packages"]);
     assert_eq!(
         (unknown.code, unknown.stderr.as_str()),
@@ -514,7 +538,7 @@ mod contracts {
     //! What `cupertino.cli.v1` and `cupertino.cli.stream.v1` promise: their shapes only grow, and every exit code is
     //! either reachable or documented as reserved.
 
-    use cupertino_cli::{FailureKind, Output, StopFlag, BUILTINS, REGISTRY};
+    use cupertino_cli::{Context, FailureKind, Output, Runner, StopFlag, BUILTINS, REGISTRY};
     use serde_json::Value;
     use std::collections::BTreeSet;
     use std::io::{self, Write};
@@ -545,7 +569,7 @@ mod contracts {
         let ok: Value =
             serde_json::from_str(&run(&["--format", "json", "--version"]).stdout).unwrap();
         assert_has(&ok, &["schema", "command", "request_id", "ok", "data"]);
-        assert_has(&ok["data"], &["cli"]);
+        assert_has(&ok["data"], &["cli", "commit"]);
         let failed: Value =
             serde_json::from_str(&run(&["--format", "json", "nothing"]).stdout).unwrap();
         assert_has(&failed, &["schema", "command", "request_id", "ok", "error"]);
@@ -596,6 +620,52 @@ mod contracts {
         assert_has(&end["error"], &["kind", "code", "message"]);
     }
 
+    fn fails_with_data(
+        _: &cupertino_cli::Args,
+        _: &Context,
+    ) -> Result<cupertino_cli::Reply, cupertino_cli::Failure> {
+        Err(
+            cupertino_cli::Failure::new(FailureKind::Validation, "probe_failed", "it failed")
+                .with_data(&serde_json::json!({"found": 2})),
+        )
+    }
+
+    const WITH_DATA: &[cupertino_cli::Group] = &[cupertino_cli::Group {
+        name: "probe",
+        summary: "A test group",
+        description: "A test group.",
+        commands: &[&[cupertino_cli::Command {
+            path: &["probe"],
+            summary: "Fails with what it found",
+            description: "Fails with what it found.",
+            examples: &[("cupertino probe", "Fail.")],
+            stability: cupertino_cli::Stability::Preview,
+            args: &[],
+            run: cupertino_cli::Run::Once(fails_with_data),
+        }]],
+    }];
+
+    /// A failure may carry `data` beside its `error`: an added field, so the v1 failure shape keeps all it had.
+    #[test]
+    fn a_failure_with_data_keeps_the_v1_failure_shape() {
+        let words: Vec<String> = ["--format", "json", "probe"]
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        let out = Runner::new(WITH_DATA)
+            .context(Context::isolated("/fixture"))
+            .run(&words, "r1");
+        assert_eq!(out.code, 5);
+        let v: Value = serde_json::from_str(&out.stdout).unwrap();
+        assert_has(
+            &v,
+            &["schema", "command", "request_id", "ok", "error", "data"],
+        );
+        assert_has(&v["error"], &["kind", "code", "message"]);
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["data"]["found"], 2);
+    }
+
     #[test]
     fn the_kind_names_are_the_ones_the_json_forms_print() {
         let mut codes = Vec::new();
@@ -641,7 +711,25 @@ mod contracts {
         );
         reachable.insert(full);
         reachable.insert(run(&["system"]).code);
-        assert_eq!(reachable, BTreeSet::from([0, 2, 5, 6, 8]));
+        // unavailable: a checkout that is not there
+        let dir = tempfile::tempdir().unwrap();
+        let isolated = |words: &[&str], context: Context| {
+            let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            Runner::new(REGISTRY)
+                .context(context)
+                .run(&words, "r1")
+                .code
+        };
+        reachable.insert(isolated(
+            &["dev", "layers", "--root", "/nonexistent"],
+            Context::isolated(dir.path()),
+        ));
+        // denied: the tty backend inside a graphical session
+        reachable.insert(isolated(
+            &["desktop", "start", "--backend", "tty"],
+            Context::isolated(dir.path()).with_var("XDG_SESSION_TYPE", "wayland"),
+        ));
+        assert_eq!(reachable, BTreeSet::from([0, 2, 3, 4, 5, 6, 8]));
 
         let page = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),

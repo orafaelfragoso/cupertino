@@ -33,6 +33,7 @@ use rustix::fs::{memfd_create, MemfdFlags};
 use tiny_skia::Pixmap;
 use wayland_client::globals::{registry_queue_init, GlobalList, GlobalListContents};
 use wayland_client::protocol::wl_buffer::WlBuffer;
+use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::WlDataDeviceManager;
 use wayland_client::protocol::wl_data_offer::WlDataOffer;
@@ -190,10 +191,13 @@ struct State {
     clipboard_cancelled: bool,
     /// A write to a pasting client that failed; the paste is lost, the offer stays.
     clipboard_error: Option<String>,
+    /// The server answered the sync of [`Capturer::roundtrip`].
+    synced: bool,
 }
 
 /// The capture queue and its state.
 pub struct Capturer {
+    conn: Connection,
     globals: GlobalList,
     queue: EventQueue<State>,
     state: State,
@@ -246,14 +250,26 @@ impl Capturer {
             clipboard: None,
             clipboard_cancelled: false,
             clipboard_error: None,
+            synced: false,
         };
         let mut capturer = Self {
+            conn: conn.clone(),
             globals,
             queue,
             state,
         };
-        capturer.queue.roundtrip(&mut capturer.state)?;
+        capturer.roundtrip()?;
         Ok(capturer)
+    }
+
+    /// Send the queued requests and dispatch what the server sent until it answered them.
+    fn roundtrip(&mut self) -> Result<()> {
+        self.state.synced = false;
+        self.conn.display().sync(&self.queue.handle(), ());
+        while !self.state.synced {
+            self.block(None, None)?;
+        }
+        Ok(())
     }
 
     /// The thread's loop: carry out the jobs, report the windows and serve the clipboard, until the application goes.
@@ -325,13 +341,19 @@ impl Capturer {
                 }
                 _ => None,
             };
-            self.block(woken, timeout)?;
+            self.block(Some(woken), timeout)?;
         }
     }
 
-    /// Wait for the connection or the application, at most `timeout`, and read what arrived, with the toolkit's loop
-    /// as the other reader.
-    fn block(&mut self, woken: &UnixStream, timeout: Option<Duration>) -> Result<()> {
+    /// Wait for the connection or, with `woken`, the application, at most `timeout`, and read and dispatch what
+    /// arrived, with the toolkit's loop as the other reader.
+    ///
+    /// The read is prepared before the requests go out, and what waits in this queue is dispatched after it is
+    /// prepared: the toolkit's loop may have read events for this queue since the last dispatch (answers to requests
+    /// just sent among them), but once the read is prepared it reads no more without this thread. A wait that found
+    /// events does not block. `EventQueue::blocking_dispatch` and `roundtrip` send before they prepare, so the
+    /// toolkit's loop could take the answer in between and leave this thread polling a socket that stays quiet.
+    fn block(&mut self, woken: Option<&UnixStream>, timeout: Option<Duration>) -> Result<()> {
         let guard = loop {
             match self.queue.prepare_read() {
                 Some(guard) => break guard,
@@ -340,6 +362,10 @@ impl Capturer {
                 }
             }
         };
+        let timeout = match self.queue.dispatch_pending(&mut self.state)? {
+            0 => timeout,
+            _ => Some(Duration::ZERO),
+        };
         self.queue.flush()?;
         let timespec = timeout.map(|d| Timespec {
             tv_sec: d.as_secs() as i64,
@@ -347,10 +373,8 @@ impl Capturer {
         });
         let (connection_ready, wake_ready) = {
             let fd = guard.connection_fd();
-            let mut fds = [
-                PollFd::new(&fd, PollFlags::IN),
-                PollFd::new(woken, PollFlags::IN),
-            ];
+            let mut fds = vec![PollFd::new(&fd, PollFlags::IN)];
+            fds.extend(woken.map(|w| PollFd::new(w, PollFlags::IN)));
             match poll(&mut fds, timespec.as_ref()) {
                 Ok(_) | Err(rustix::io::Errno::INTR) => {}
                 Err(e) => return Err(std::io::Error::from(e).into()),
@@ -359,7 +383,8 @@ impl Capturer {
                 fds[0]
                     .revents()
                     .intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR),
-                fds[1].revents().contains(PollFlags::IN),
+                fds.get(1)
+                    .is_some_and(|w| w.revents().contains(PollFlags::IN)),
             )
         };
         if connection_ready {
@@ -373,7 +398,7 @@ impl Capturer {
         } else {
             drop(guard);
         }
-        if wake_ready {
+        if let Some(woken) = woken.filter(|_| wake_ready) {
             let mut buf = [0; 64];
             while matches!((&*woken).read(&mut buf), Ok(n) if n > 0) {}
         }
@@ -477,7 +502,7 @@ impl Capturer {
         };
         let session = self.state.copy.create_session(source, options, &qh, ());
         while !self.state.constraints.done && !self.state.constraints.stopped {
-            self.queue.blocking_dispatch(&mut self.state)?;
+            self.block(None, None)?;
         }
         if self.state.constraints.stopped {
             session.destroy();
@@ -533,7 +558,7 @@ impl Capturer {
             if let Some(end) = self.state.frame.take() {
                 break end;
             }
-            self.queue.blocking_dispatch(&mut self.state)?;
+            self.block(None, None)?;
         };
         frame.destroy();
         session.destroy();
@@ -561,8 +586,7 @@ impl Capturer {
             .get_data_device(&self.state.seat, &qh, ());
         device.set_selection(Some(&source), serial);
         self.state.clipboard = Some(png);
-        self.queue.roundtrip(&mut self.state)?;
-        Ok(())
+        self.roundtrip()
     }
 }
 
@@ -583,6 +607,21 @@ delegate_noop!(State: ignore WlShm);
 delegate_noop!(State: WlShmPool);
 delegate_noop!(State: ignore WlBuffer);
 delegate_noop!(State: ignore WlOutput);
+
+impl Dispatch<WlCallback, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlCallback,
+        event: wl_callback::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            state.synced = true;
+        }
+    }
+}
 
 impl Dispatch<WlSeat, ()> for State {
     /// The keyboard is bound once the seat has one: its enters bring the serial the clipboard offer needs.

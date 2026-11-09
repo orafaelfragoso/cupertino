@@ -6,6 +6,11 @@ const USAGE: &str =
     "usage: cupertino-diagnose [--json] [--area gpu|session|portals|services|crash|logs]...
 Checks this machine and session for what Cupertino needs. Exits 0 once the checks ran, whatever they found.";
 
+/// Printed on stderr before a text report: `cupertino diagnose` replaces this command. The `--json` output stays as it
+/// is until the command is removed.
+const DEPRECATED: &str =
+    "cupertino-diagnose: use `cupertino diagnose`; this command will be removed in a later release";
+
 fn main() -> ExitCode {
     let mut json = false;
     let mut areas = Vec::new();
@@ -29,6 +34,7 @@ fn main() -> ExitCode {
         let text = serde_json::to_string_pretty(&report).expect("a report is strings and numbers");
         println!("{text}");
     } else {
+        eprintln!("{DEPRECATED}");
         print!("{report}");
     }
     ExitCode::SUCCESS

@@ -233,3 +233,20 @@ fn each_broken_rule_is_reported() {
     )];
     assert_eq!(check_registry(FINE), Vec::<String>::new());
 }
+
+/// The page of the command names every command of the registry, so a new one cannot ship undocumented.
+#[test]
+fn the_command_page_names_every_command() {
+    let page = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/src/cupertino-command.md"
+    ))
+    .unwrap();
+    for c in REGISTRY.iter().flat_map(Group::commands) {
+        assert!(
+            page.contains(&format!("| `{}", c.name())),
+            "docs/src/cupertino-command.md has no row for `{}` in its command table",
+            c.name()
+        );
+    }
+}

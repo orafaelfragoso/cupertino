@@ -180,7 +180,7 @@ namcap arch-build/PKGBUILD arch-build/*.pkg.tar.zst | tee /dist/namcap.log
 publish() {
     mkdir -p "\$1"
     cp arch-build/*.pkg.tar.zst arch-build/PKGBUILD "\$1/"
-    python3 packaging/release.py verify --format arch --package runtime "\$1"/cupertino-0*.pkg.tar.zst
+    python3 packaging/release.py verify --format arch --package runtime --bindir /src/target/release "\$1"/cupertino-0*.pkg.tar.zst
     python3 packaging/release.py verify --format arch --package data "\$1"/cupertino-data-*.pkg.tar.zst
     for p in "\$1"/*.pkg.tar.zst; do pacman -Qip "\$p" > "\$p.info"; pacman -Qlp "\$p" > "\$p.contents"; done
 }
@@ -212,7 +212,7 @@ for u in cupertino-login cupertino-netd cupertino-btd cupertino-powerd; do
     echo "$u.service: $state"
     [ "$state" = disabled ] || [ "$state" = static ]
 done
-for b in /usr/bin/cupertino-*; do
+for b in /usr/bin/cupertino /usr/bin/cupertino-*; do
     [ "$b" = /usr/bin/cupertino-session ] && continue
     if ldd "$b" | grep -q 'not found'; then ldd "$b"; exit 1; fi
 done
@@ -225,6 +225,62 @@ done
 echo 'no packaged shell process reads the test clock'
 /usr/bin/cupertino-server --help >/dev/null
 echo 'cupertino-server --help: ok'
+# The cupertino command as installed: run from /, as a user without a session, with nothing of the build's environment.
+cli_checks() {
+    local user=cupertino-cli-test out recorded pkgver status
+    pacman -S --noconfirm --needed -q man-db bash-completion jq >/dev/null
+    useradd --no-create-home --shell /usr/bin/nologin "$user"
+    install -d -o "$user" -g "$user" -m 700 /tmp/u /tmp/u/runtime
+    as_user() { (cd / && exec setpriv --reuid="$user" --regid="$user" --clear-groups env -i PATH=/usr/bin HOME=/tmp/u "$@"); }
+    out=$(as_user cupertino --version)
+    check "cupertino --version: $out" grep -Eq '^cupertino [0-9]+\.[0-9]+\.[0-9]+ \([0-9a-f]{12}\)$' <<<"$out"
+    as_user cupertino --format json version > /tmp/u/version.json
+    for part in runtime-package:cupertino data-package:cupertino-data; do
+        recorded=$(jq -er --arg n "${part%%:*}" '.data.components[] | select(.name == $n and .status == "ok") | .version' /tmp/u/version.json)
+        pkgver=$(pacman -Q "${part#*:}" | cut -d' ' -f2)
+        pkgver=${pkgver%-*}
+        check "${part%%:*} $recorded is ${part#*:} $pkgver" test "$recorded" = "${pkgver%%rc*}"
+    done
+    check 'the runtime package records the commit cupertino was built from' \
+        jq -e '[.data.components[] | select(.name == "cli" or .name == "runtime-package") | .commit] | .[0] == .[1] and (.[0] | test("^[0-9a-f]{40}$"))' /tmp/u/version.json
+    as_user cupertino help > /tmp/u/help.txt
+    check 'cupertino help lists desktop start' grep -q '^  desktop start' /tmp/u/help.txt
+    status=0
+    as_user cupertino --format jsonl diagnose > /tmp/u/diagnose.jsonl || status=$?
+    check "cupertino --format jsonl diagnose: exit $status, end last" \
+        jq -se --argjson s "$status" '$s == 0 and .[-1].type == "end" and .[-1].ok and ([.[] | select(.type == "end")] | length) == 1' /tmp/u/diagnose.jsonl
+    # desktop start runs until stopped: started in the background, stopped with SIGTERM once the compositor is ready
+    as_user XDG_RUNTIME_DIR=/tmp/u/runtime cupertino --format jsonl desktop start --backend headless --spawn true \
+        > /tmp/u/desktop.jsonl 2> /tmp/u/desktop.err &
+    local pid=$!
+    # grep reads a process substitution, so the test does not wait for tail, which follows the file until the command ends
+    if timeout 120 grep -m1 -q '"event":"ready"' <(tail -n +1 --pid="$pid" -f /tmp/u/desktop.jsonl); then
+        kill -TERM "$pid"
+        status=0
+        wait "$pid" || status=$?
+        check 'cupertino desktop start --backend headless: ready, stopped by SIGTERM, exit 0' \
+            jq -se --argjson s "$status" '$s == 0 and .[-1].reason == "stopped" and (map(.event) | index("ready")) != null' /tmp/u/desktop.jsonl
+        check 'the stopped compositor left no runtime file' sh -c '! ls /tmp/u/runtime/cupertino/server-*.json 2>/dev/null' 
+    else
+        kill -TERM "$pid" 2>/dev/null || true
+        wait "$pid" || true
+        cat /tmp/u/desktop.jsonl /tmp/u/desktop.err
+        if grep -q 'no usable EGL device' /tmp/u/desktop.err; then
+            echo 'BLOCKED B5: the container has no EGL device for the headless compositor; run `cupertino desktop start --backend headless --spawn true` on a machine with a GPU'
+        else
+            echo 'FAIL: cupertino desktop start --backend headless did not get ready'
+            exit 1
+        fi
+    fi
+    check "man -w cupertino: $(man -w cupertino)" test "$(man -w cupertino)" = /usr/share/man/man1/cupertino.1
+    check 'man -l renders cupertino.1' sh -c 'man -l /usr/share/man/man1/cupertino.1 2>/dev/null | head -5 | grep -q cupertino'
+    for page in /usr/share/man/man1/cupertino-*.1; do man -l "$page" >/dev/null 2>&1 || { echo "FAIL: man -l $page"; exit 1; }; done
+    out=$(as_user bash -ic 'for f in _comp_load __load_completion _completion_loader; do
+        declare -F "$f" >/dev/null && { "$f" cupertino; break; }; done; complete -p cupertino' 2>/dev/null)
+    check "bash completes cupertino: $out" test "$out" = 'complete -F _cupertino cupertino'
+    userdel "$user"
+}
+cli_checks
 test -f /usr/share/cupertino/theme/tokens.json && test -f /usr/share/cupertino/assets/manifest.json
 echo '# local edit' >> /etc/cupertino/login.conf
 reinstall
@@ -271,7 +327,7 @@ changed=$(altered)
 echo 'package verification clean'
 files | while read -r f; do [ -z "$f" ] || [ -e "$f" ] || [ -L "$f" ] || { echo "missing: $f"; exit 1; }; done
 echo 'every packaged path present'
-for b in /usr/bin/cupertino-*; do
+for b in /usr/bin/cupertino /usr/bin/cupertino-*; do
     [ "$b" = /usr/bin/cupertino-session ] && continue
     if ldd "$b" | grep -q 'not found'; then ldd "$b"; exit 1; fi
 done

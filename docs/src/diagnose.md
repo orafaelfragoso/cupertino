@@ -2,15 +2,20 @@
 
 `cupertino-diagnose` checks this machine and the session it runs in for what Cupertino needs: the GPU and its driver, the session, the desktop portal, the services, how the last sessions ended, and where the logs are. It changes nothing and opens no device. It reads sysfs, installed files, the session's logs and the states of systemd units. It runs as your user, from the session or from a text console; the checks that need a session are skipped outside one.
 
-This page describes the command as it is on `main` today. The `cupertino` command, with its registry and `--format` option, has [its own page](cupertino-command.md). It does not have a `diagnose` subcommand yet, so `cupertino-diagnose` stays the way to run these checks.
+This page describes the checks as they are on `main` today. They run as `cupertino diagnose`, a command of [the cupertino command](cupertino-command.md), and as `cupertino-diagnose`, the program it replaces. `cupertino-diagnose` still works; in the text form it prints one line on standard error naming `cupertino diagnose`, and its `--json` output is unchanged. It will be removed in a later release.
 
 ## Usage
 
 ```sh
-cupertino-diagnose                       # every check, as text
-cupertino-diagnose --json                # the same as JSON
-cupertino-diagnose --area gpu --area crash
+cupertino diagnose                                   # every check, as text
+cupertino --format json diagnose                     # the report as one JSON envelope; data is the report below
+cupertino --format jsonl diagnose                    # each check as a JSON line, then the counts of each status
+cupertino diagnose --area gpu --area crash
+cupertino diagnose --strict                          # exit 5 when a check fails
+cupertino-diagnose --json                            # the program it replaces: the report alone
 ```
+
+`cupertino diagnose` takes `--area` as below and `--strict`; its exit codes are those of [the cupertino command](cupertino-command.md#exit-codes): 0 once the checks ran, 2 for a wrong argument, 5 with `--strict` when a check fails. The rest of this page describes `cupertino-diagnose`, whose report is the same.
 
 | Flag | Meaning |
 |---|---|

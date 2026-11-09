@@ -88,7 +88,10 @@ names no protocol beyond the standard ones.
   before the surface, and a popup attached elsewhere outlives its parent, a protocol error.
 - Objects the extension's requests name: `Connection::{wl_surface, wl_output, seat}`. `Connection::roundtrip`
   dispatches the answers to requests sent so far, for state an extension reads at setup; the transport's own events
-  stay for the next wait.
+  stay for the next wait. It and every wait prepare the read and then dispatch what is queued before they poll, so a
+  second thread reading the same connection for a queue of its own (`cupertino-screenshot`'s capture thread) cannot
+  take an answer and leave the wait polling a quiet socket; `tests/protocol-flow.rs` runs 2000 roundtrips beside such
+  a reader.
 
 ## Example
 

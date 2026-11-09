@@ -128,7 +128,9 @@ serves pastes until another selection replaces it.
 
 **Threads.** The Kit loop runs the windows. A capture thread owns a second event queue on the same connection: the
 capture globals, the window feed, the clipboard source and a keyboard that counts enters. Both read the connection as
-two libwayland readers do. The roles hand a capture to the thread once the last overlay or toolbar surface is
+two libwayland readers do: every wait of the thread (its loop, a capture, a frame, a roundtrip) prepares its read,
+then dispatches what the other reader already put in its queue, and only then sends and polls, so an answer the Kit
+loop read for it is never left waiting. The roles hand a capture to the thread once the last overlay or toolbar surface is
 destroyed, so the destroy requests reach the server first.
 
 ## Settings

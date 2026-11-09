@@ -5391,6 +5391,76 @@ fn a_drag_that_replaces_another_frees_the_old_icon() {
     seen_matching(&seen, |s| matches!(s, Seen::IconBufferDestroyed));
 }
 
+/// A roundtrip ends while another thread of the process reads the connection for an event queue of its own, as a
+/// process's capture thread does next to the toolkit's loop: that thread may read the answer to the sync, and the
+/// roundtrip then finds it in its queue instead of waiting for the socket to bring more.
+#[test]
+fn roundtrips_end_while_another_thread_reads_the_connection() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Other;
+    const ROUNDTRIPS: usize = 2000;
+    let (client, server) = UnixStream::pair().unwrap();
+    let (_control, _seen) = spawn_compositor(server, Globals::core());
+    let socket = client.try_clone().unwrap();
+    let wl = wayland_client::Connection::from_socket(client).unwrap();
+    let mut conn = Connection::from_wayland(wl.clone()).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let reader = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut queue = wl.new_event_queue::<Other>();
+            while !stop.load(Ordering::SeqCst) {
+                let Some(guard) = queue.prepare_read() else {
+                    queue.dispatch_pending(&mut Other).unwrap();
+                    continue;
+                };
+                let _ = queue.flush();
+                let ready = {
+                    let fd = guard.connection_fd();
+                    let mut fds = [rustix::event::PollFd::new(
+                        &fd,
+                        rustix::event::PollFlags::IN,
+                    )];
+                    let tick = rustix::event::Timespec {
+                        tv_sec: 0,
+                        tv_nsec: 1_000_000,
+                    };
+                    rustix::event::poll(&mut fds, Some(&tick)).unwrap_or(0) > 0
+                };
+                if ready {
+                    let _ = guard.read();
+                } else {
+                    drop(guard);
+                }
+                queue.dispatch_pending(&mut Other).unwrap();
+            }
+        })
+    };
+    // a roundtrip left waiting is ended by shutting the socket down, so the test fails instead of hanging
+    let done = Arc::new(AtomicBool::new(false));
+    let watchdog = {
+        let done = Arc::clone(&done);
+        std::thread::spawn(move || {
+            let end = Instant::now() + Duration::from_secs(30);
+            while !done.load(Ordering::SeqCst) && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !done.load(Ordering::SeqCst) {
+                let _ = socket.shutdown(std::net::Shutdown::Both);
+            }
+        })
+    };
+    for i in 0..ROUNDTRIPS {
+        if let Err(e) = conn.roundtrip() {
+            panic!("roundtrip {i} of {ROUNDTRIPS} never got its answer: {e}");
+        }
+    }
+    done.store(true, Ordering::SeqCst);
+    stop.store(true, Ordering::SeqCst);
+    reader.join().unwrap();
+    watchdog.join().unwrap();
+}
+
 /// A window's subsurface is synchronized, so what it shows changes with the window's commit; it takes no input, draws
 /// its buffers at the window's scale though it entered no output itself, asks for no frame callback of its own (the
 /// window's stands for both), answers no configure, never takes the one-colour path, is hidden by a commit with no

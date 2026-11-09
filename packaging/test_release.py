@@ -459,6 +459,167 @@ class LicenceTest(unittest.TestCase):
                 release.missing_licenses(release.shipped_licenses(package), release.declared_licenses(package)), [])
 
 
+COMMIT = '0123456789abcdef0123456789abcdef01234567'
+# A stand-in for the built cupertino: writes two pages (the group list is the command's) and each shell's script.
+FAKE_CLI = """#!/bin/sh
+case "$1 $2" in
+  'dev manual') mkdir -p "$3"; printf '.TH CUPERTINO 1 1970-01-01 x\\n' > "$3/cupertino.1"
+                printf '.TH CUPERTINO-DEV 1 1970-01-01 x\\n' > "$3/cupertino-dev.1" ;;
+  completions*) printf '# %s completion\\n' "$2" ;;
+  *) exit 2 ;;
+esac
+"""
+
+
+def gendir(root, pages=('cupertino.1', 'cupertino-dev.1', 'cupertino-desktop.1')):
+    """A --gendir as build() leaves it: man/<pages>, completions/<shell> and MANIFEST."""
+    root = Path(root)
+    (root / 'man').mkdir(parents=True)
+    (root / 'completions').mkdir()
+    for page in pages:
+        (root / 'man' / page).write_text(f'.TH {page} 1 2026-11-09 x\n')
+    for shell, _dest in release.COMPLETIONS:
+        (root / 'completions' / shell).write_text(f'# {shell}\n')
+    release.write_gen_manifest(root)
+    return root
+
+
+class GeneratedFilesTest(unittest.TestCase):
+    def test_the_runtime_lists_the_pages_found_in_gendir_and_the_completions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            files = release.runtime(gendir(tmp))
+        generated = {rel: (src, mode) for rel, src, mode, _c in files if isinstance(src, release.Generated)}
+        self.assertEqual(generated, {
+            'usr/share/man/man1/cupertino.1': ('man/cupertino.1', 0o644),
+            'usr/share/man/man1/cupertino-desktop.1': ('man/cupertino-desktop.1', 0o644),
+            'usr/share/man/man1/cupertino-dev.1': ('man/cupertino-dev.1', 0o644),
+            'usr/share/bash-completion/completions/cupertino': ('completions/bash', 0o644),
+            'usr/share/zsh/site-functions/_cupertino': ('completions/zsh', 0o644),
+            'usr/share/fish/vendor_completions.d/cupertino.fish': ('completions/fish', 0o644)})
+        self.assertIn(('usr/bin/cupertino', None, 0o755, False), release.runtime())
+        self.assertFalse([f for f in release.runtime() if isinstance(f[1], release.Generated)], 'none without gendir')
+
+    def test_a_gendir_without_the_main_page_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(SystemExit, 'has no cupertino.1'):
+            release.runtime(gendir(tmp, pages=('cupertino-dev.1',)))
+
+    def test_install_copies_the_generated_files_and_writes_the_build_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bindir = tmp / 'bin'
+            bindir.mkdir()
+            for b in release.BINARIES:
+                (bindir / b).write_text(b)
+            gen = gendir(tmp / 'gen')
+            env = {'CUPERTINO_BUILD_COMMIT': COMMIT.upper(), 'SOURCE_DATE_EPOCH': '1700000000'}
+            with mock.patch.dict(release.os.environ, env):
+                release.cmd_install(Namespace(package='runtime', destdir=tmp / 'pkg', bindir=bindir, gendir=gen))
+                release.cmd_install(Namespace(package='data', destdir=tmp / 'data', bindir=bindir, gendir=None))
+            page = tmp / 'pkg/usr/share/man/man1/cupertino-dev.1'
+            self.assertEqual(page.read_text(), '.TH cupertino-dev.1 1 2026-11-09 x\n')
+            self.assertEqual(page.stat().st_mode & 0o777, 0o644)
+            self.assertEqual((tmp / 'pkg/usr/share/zsh/site-functions/_cupertino').read_text(), '# zsh\n')
+            self.assertEqual((tmp / 'pkg/usr/bin/cupertino').read_text(), 'cupertino')
+            record = json.loads((tmp / 'pkg/usr/share/cupertino/build-info.json').read_text())
+            self.assertEqual(record, {'package': 'cupertino', 'version': release.version('cupertino-server'),
+                                      'commit': COMMIT, 'source_date_epoch': 1700000000})
+            data = json.loads((tmp / 'data/usr/share/cupertino/assets/build-info.json').read_text())
+            self.assertEqual((data['package'], data['version'], data['commit']),
+                             ('cupertino-data', release.version('cupertino-assets'), COMMIT))
+            with self.assertRaisesRegex(SystemExit, 'needs --gendir'):
+                release.cmd_install(Namespace(package='runtime', destdir=tmp / 'x', bindir=bindir, gendir=None))
+
+    def test_the_commit_comes_from_the_variable_the_archive_or_the_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'data').mkdir()
+            (root / 'data/build-commit').write_text('$Format:%H$\n')
+            self.assertIsNone(release.build_commit(root, {}), 'no archive commit and no checkout')
+            (root / 'data/build-commit').write_text(COMMIT + '\n')
+            self.assertEqual(release.build_commit(root, {}), COMMIT)
+            self.assertEqual(release.build_commit(root, {'CUPERTINO_BUILD_COMMIT': 'f' * 64}), 'f' * 64)
+            with self.assertRaisesRegex(SystemExit, 'not a full commit hash'):
+                release.build_commit(root, {'CUPERTINO_BUILD_COMMIT': 'abc123'})
+        self.assertEqual(release.build_commit(release.ROOT, {}), release.git('rev-parse', 'HEAD'), 'the checkout')
+
+    def package(self, gen, tamper=lambda files: None):
+        """{path: (mode, bytes)} of a runtime package built from the manifest with gendir `gen`."""
+        found = {}
+        for rel, src, mode, _c in release.runtime(gen):
+            if isinstance(src, release.BuildRecord):
+                body = release.build_record(src, environ={'CUPERTINO_BUILD_COMMIT': COMMIT}).encode()
+            elif isinstance(src, release.Generated):
+                body = (gen / src).read_bytes()
+            else:
+                body = b'content'
+            found[rel] = (0o100000 | mode, body)
+        tamper(found)
+        return found
+
+    def verify(self, found, **kw):
+        args = Namespace(package='runtime', artifact='cupertino-0.1.0-1-x86_64.pkg.tar.zst', bindir=None, gendir=None)
+        vars(args).update(kw)
+        with mock.patch.object(release, 'entries', return_value=found), \
+                mock.patch.object(release.Path, 'stat', return_value=mock.Mock(st_size=1)):
+            release.cmd_verify(args)
+
+    def test_verify_takes_the_pages_from_the_manifest_and_finds_a_build_path_in_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = gendir(tmp)
+            self.verify(self.package(gen), gendir=gen)
+
+            def leak(files):
+                files['usr/share/man/man1/cupertino-dev.1'] = (0o100644, b'.TH X 1 d\nsee /home/builder/src/x\n')
+            with self.assertRaisesRegex(SystemExit, r'cupertino-dev.1: holds the build or home path'):
+                self.verify(self.package(gen, leak), gendir=gen)
+
+            def missing(files):
+                del files['usr/share/man/man1/cupertino-desktop.1']
+                files['usr/share/zsh/site-functions/_cupertino'] = (0o100755, b'# zsh\n')
+            with self.assertRaises(SystemExit) as failed:
+                self.verify(self.package(gen, missing), gendir=gen)
+            self.assertIn('missing file /usr/share/man/man1/cupertino-desktop.1', str(failed.exception))
+            self.assertIn('/usr/share/zsh/site-functions/_cupertino: mode 755, manifest 644', str(failed.exception))
+            with self.assertRaisesRegex(SystemExit, 'needs --bindir'):
+                self.verify(self.package(gen))
+
+    def test_verify_with_the_built_command_compares_what_it_generates_but_the_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / 'bin').mkdir()
+            cli = tmp / 'bin/cupertino'
+            cli.write_text(FAKE_CLI)
+            cli.chmod(0o755)
+            built = tmp / 'built'
+            release.generate(cli, built)
+            self.assertEqual((built / 'MANIFEST').read_text().split(),
+                             ['completions/bash', 'completions/fish', 'completions/zsh', 'man/cupertino-dev.1',
+                              'man/cupertino.1'])
+
+            def dated(files):
+                rel = 'usr/share/man/man1/cupertino.1'
+                files[rel] = (files[rel][0], files[rel][1].replace(b'1970-01-01', b'2026-11-09'))
+            self.verify(self.package(built, dated), bindir=tmp / 'bin')
+
+            def changed(files):
+                files['usr/share/fish/vendor_completions.d/cupertino.fish'] = (0o100644, b'# another\n')
+            with self.assertRaisesRegex(SystemExit, 'cupertino.fish: differs from what the built cupertino generates'):
+                self.verify(self.package(built, changed), bindir=tmp / 'bin')
+
+    def test_the_cli_crate_is_a_root_of_the_licence_closure(self):
+        self.assertIn('cupertino-cli', release.binary_crates())
+        self.assertIn('cupertino-cli', {p['name'] for p in release.linked_packages()})
+
+    def test_both_recipes_generate_the_files_and_install_them(self):
+        for recipe in ('cupertino', 'cupertino-git'):
+            text = (release.ROOT / 'packaging/arch' / recipe / 'PKGBUILD').read_text()
+            with self.subTest(recipe):
+                self.assertIn('"$cli" dev manual "$gen/man"', text)
+                self.assertIn('"$cli" completions "$shell" > "$gen/completions/$shell"', text)
+                self.assertIn('--gendir "$srcdir/gen"', text)
+                self.assertIn("'!zipman'", text, 'the pages ship as the manifest names them')
+
+
 def git_pkgver(describe):
     """What pkgver() of the -git recipe makes of a `git describe --long` line."""
     script = re.search(r"git describe .*\| (sed .+)$", GIT_RECIPE.read_text(), re.M)[1]

@@ -1,13 +1,18 @@
 # cupertino-diagnostics
 
 Typed diagnostics of a Cupertino installation and the session it runs in, as text for a person or JSON for a script.
-`cupertino-diagnose` is its command. Layer: `tools`.
+`cupertino diagnose` (crate `cupertino-cli`) runs it; `cupertino-diagnose` is the program it replaces. Layer: `tools`.
 
 ```
-cupertino-diagnose                       # every check, as text
-cupertino-diagnose --json                # the same as JSON
+cupertino diagnose                       # every check, as text
+cupertino --format json diagnose         # the report below as the envelope's data
+cupertino-diagnose --json                # the report alone, as before
 cupertino-diagnose --area gpu --area crash
 ```
+
+`cupertino-diagnose` still works. In the text form it first prints one line on stderr,
+``cupertino-diagnose: use `cupertino diagnose`; this command will be removed in a later release``; its `--json`
+output is unchanged, with nothing on stderr. It will be removed in a later release.
 
 It exits 0 once the checks ran, whatever they found: a script reads each check's `status` from `--json`. A wrong
 argument exits 2, as `invalid_usage` does in the `cupertino` command's exit codes; it never exits 1. Nothing is changed
@@ -72,3 +77,6 @@ machine.
 ```
 cargo test -p cupertino-diagnostics
 ```
+
+`tests/exit-codes.rs` runs the program: its exit codes, the notice on stderr in the text form, and a `--json` stdout
+that is the report alone with nothing on stderr.

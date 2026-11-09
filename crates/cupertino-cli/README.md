@@ -8,11 +8,30 @@ command tree, the dispatch, and the shell completions and manual pages all come 
 ```sh
 cupertino                                   # the help
 cupertino help [<command>]                  # the help of the commands under <command>; a whole command adds its description and examples
-cupertino --version
+cupertino --version                         # this command's version and commit
+cupertino version                           # every part: packages, compositor, C ABI, theme, assets, schemas, OS, kernel
+cupertino diagnose [--area <area>]... [--strict]   # replaces `cupertino-diagnose`
+cupertino desktop start --backend nested|headless|tty [--size WxH] [--scale S] [--spawn <command line>]...
 cupertino appearance assets check <dir>     # replaces `cupertino-assets check <dir>`
-cupertino --format json appearance assets check <dir>
-cupertino --format jsonl help               # JSON lines: a result record and an end record
+cupertino completions bash|zsh|fish         # the completion script of a shell
+cupertino dev layers [--root <dir>] [--graph]      # preview: the layer and licence checks of a checkout
+cupertino dev manual <dir>                  # preview: write the manual pages into <dir>
+cupertino --format jsonl diagnose           # JSON lines: a check event per check, the counts, an end record
 ```
+
+`desktop start` runs `$CUPERTINO_SERVER` when it is set (for development), else the `cupertino-server` beside the
+`cupertino` binary, else `/usr/bin/cupertino-server`; `PATH` is never searched. It passes `--ready-fd <n>` and reports
+`ready` when the compositor writes `WAYLAND_DISPLAY=<name>` there. The compositor's stdout goes to this command's stderr,
+so stdout carries the command's own output alone; it runs in its own process group and gets SIGTERM if this command
+dies, even by SIGKILL. It inherits the standard streams and the ready pipe alone: every other descriptor the command
+had (a build tool's lock, a terminal multiplexer's pipe) is close-on-exec in the child, for `cupertino-session` too.
+`--backend tty` checks it is on a text console outside a graphical session, then `exec`s `cupertino-session`
+(beside the binary, else `/usr/bin`).
+
+The packages install the command with `/usr/share/bash-completion/completions/cupertino`,
+`/usr/share/zsh/site-functions/_cupertino`, `/usr/share/fish/vendor_completions.d/cupertino.fish` and the pages
+`cupertino.1` and `cupertino-<group>.1`, all generated at build time by `cupertino completions` and
+`cupertino dev manual`.
 
 ## Output
 
@@ -22,7 +41,7 @@ cupertino --format jsonl help               # JSON lines: a result record and an
 - `json`: one `cupertino.cli.v1` envelope line on stdout, on success and on failure:
 
   ```json
-  {"schema":"cupertino.cli.v1","command":"version","request_id":"1f3a-…","ok":true,"data":{"cli":"0.1.0"}}
+  {"schema":"cupertino.cli.v1","command":"version","request_id":"1f3a-…","ok":true,"data":{"cli":"0.1.0","commit":"4089d615…"}}
   {"schema":"cupertino.cli.v1","command":"appearance","request_id":"1f3b-…","ok":false,"error":{"kind":"invalid_usage","code":"missing_subcommand","message":"…"}}
   ```
 
@@ -37,7 +56,7 @@ cupertino --format jsonl help               # JSON lines: a result record and an
   | `end` | `ok`, `exit_code`, `error` when `ok` is false, `reason: "stopped"` when a stop ended a follow stream |
 
   ```json
-  {"schema":"cupertino.cli.stream.v1","command":"version","request_id":"1f3c-…","seq":0,"type":"result","data":{"cli":"0.1.0"}}
+  {"schema":"cupertino.cli.stream.v1","command":"version","request_id":"1f3c-…","seq":0,"type":"result","data":{"cli":"0.1.0","commit":"4089d615…"}}
   {"schema":"cupertino.cli.stream.v1","command":"version","request_id":"1f3c-…","seq":1,"type":"end","ok":true,"exit_code":0}
   ```
 
@@ -48,6 +67,9 @@ In `json` and `jsonl` nothing goes to stderr. A stream command in `json` form gi
 is its final object plus `events` (`[{event, data}]`) and `warnings` (`[{kind, code, message}]`); a report stream
 (`Sink::json_result_only`) keeps its own data, with `warnings` only when there are some.
 
+A failure may carry `data` beside `error` in the `json` envelope (`Failure::with_data`): `dev layers` puts its counts
+and `problems` there.
+
 `request_id` is the process id and the time, in hex. `code` is a stable snake_case identifier within its `kind`;
 `message` is for people and may change.
 
@@ -55,15 +77,15 @@ is its final object plus `events` (`[{event, data}]`) and `warnings` (`[{kind, c
 |---|---|
 | 0 | (success; also a closed stdout, and a follow stream stopped by a signal) |
 | 2 | `invalid_usage` |
-| 3 | `unavailable`: the backend or service is not running or cannot be reached (reserved) |
-| 4 | `denied` (reserved) |
-| 5 | `validation` |
-| 6 | `temporary`: also `output_failed` (stdout cannot be written) and `interrupted` (a finite stream stopped) |
+| 3 | `unavailable`: `no_checkout`, `no_cargo`, `no_host_display`, `no_runtime_dir`, `server_not_installed`, `server_failed`, `not_a_vt`, `session_not_installed`, `session_failed` |
+| 4 | `denied`: `inside_graphical_session` |
+| 5 | `validation`: `pack_unreadable`, `manifest_invalid`, `font_invalid`, `checks_failed`, `layer_violations`, `metadata_failed` |
+| 6 | `temporary`: also `output_failed` (stdout cannot be written), `interrupted` (a finite stream stopped), `write_failed` |
 | 7 | `transaction_failed` (reserved) |
 | 8 | `unsupported`: also `not_in_this_release` for the reserved groups `system` and `ai` |
 
-Codes 3, 4 and 7 are reserved: no command of this release ends with them yet. `tests/cli.rs` runs a command line for
-each code that is reachable and checks that `docs/src/cupertino-command.md` marks the others reserved.
+Code 7 is reserved: no command of this release ends with it yet. `tests/cli.rs` runs a command line for each code
+that is reachable and checks that `docs/src/cupertino-command.md` marks the others reserved.
 
 **A closed output.** When the reader of stdout goes away (`EPIPE`, as in `cupertino … | head -1`), the command stops,
 exits 0 and writes nothing to stderr. Any other write error (`ENOSPC`, `EIO`) exits 6 with one stderr line,
@@ -98,7 +120,12 @@ The help JSON (`cupertino --format json help`) lists, per command, `path`, `summ
 ## Design
 
 `src/lib.rs` holds the registry types and the runner; `src/stream.rs` the output writer, the stream rules and the stop
-flag; each group is a module (`src/appearance.rs`). The crate docs of `stream` state the rules for stream commands.
+flag; each group is a module (`appearance`, `diagnose`, `desktop`, `version`, `completions`, `dev`). `src/manual.rs`
+and `src/completions.rs` generate the manual pages and the completion scripts from a registry, `GLOBAL_OPTIONS`,
+`BUILTINS` and `FailureKind::ALL`, so a new command or option needs no edit there. The completions take an option's
+value after the option or in the same word (`--area=gpu`; bash splits such a word at the `=`, and the script joins it
+again), and skip the global options by their table wherever they stand. The crate docs of `stream` state
+the rules for stream commands.
 
 ### The registry
 
@@ -147,10 +174,13 @@ later word a positional argument. A single option given twice is `repeated_optio
   timeout) and check `stop_requested()` between them. On a stop, a follow stream returns `Ok`, and a finite one
   returns `Err(Failure::interrupted())` unless it finished its work.
 - A `Failure` has a `kind` (`FailureKind`, which gives the exit code), a stable snake_case `code` and a `message`;
-  `Failure::usage(code, message)` makes an `invalid_usage` one.
+  `Failure::usage(code, message)` makes an `invalid_usage` one, and `.with_data(&data)` adds the `data` the `json`
+  envelope carries beside the error.
 - `Context` is what a command may read of the machine: `root()` and `path("/usr/share/…")` (files of the running
-  system, under `/` for the real command), `var(name)`, `current_dir()`, and `provided::<T>()`, a value a test hands in
-  by type with `Context::provide(&value)` (fixture `Sources`, a fake clock). `Context::system()` is the real machine;
+  system, under `/` for the real command), `var(name)` and `vars()`, `current_dir()`, `command(program)` (a process
+  with the context's environment and working directory: the process's for the real command, the context's variables
+  alone otherwise), `registry()` (the runner's, for the completions and pages), and `provided::<T>()`, a value a test
+  hands in by type with `Context::provide(&value)` (fixture `Sources`, a layer `Policy`, a `StopGrace`). `Context::system()` is the real machine;
   `Context::isolated(root)` has no variables and works in `root`, so a test never reads the real `HOME`, `/usr` or
   session.
 - `Runner::new(registry).context(cx).stop(&flag)` runs command lines: `run_to(args, request_id, out, err) -> u8`
@@ -162,16 +192,17 @@ later word a positional argument. A single option given twice is `repeated_optio
 
 `tests/cli.rs` covers the envelope, usage errors, the parser and the help; `tests/stream.rs` every record type, `seq`,
 the place of `end`, a closed output at every boundary, a full disk and stops from another thread; `tests/stream-process.rs`
-a real pipe closed early and real SIGINT and SIGTERM; `tests/registry.rs` the registry rules.
+a real pipe closed early and real SIGINT and SIGTERM; `tests/registry.rs` the registry rules and that the command page
+names every command. Per group: `tests/diagnose.rs` (fixture `Sources`), `tests/desktop.rs` (a stand-in compositor that
+answers on `--ready-fd`, stops, the kill after the grace, every error code, the installed binary under SIGTERM),
+`tests/version.rs` (a fixture root with each part present, missing and unreadable), `tests/dev.rs` (fixture checkouts),
+`tests/completions.rs` (bash, zsh and fish run the scripts; a missing shell skips unless `CUPERTINO_SHELLS_REQUIRED=1`)
+and `tests/manual.rs` (the pages, and `mandoc -T lint` unless it is missing and `CUPERTINO_MANDOC_REQUIRED` is not 1).
+`cupertino-server/tests/desktop-start.rs` runs `desktop start` on the real headless compositor.
 
 The command is an unprivileged client: a group calls libraries of the `foundation` to `tools` layers or the D-Bus and
 socket interfaces of the services; it never links compositor state.
 
 ## Open issues
 
-- `cupertino diagnose`, `cupertino dev layers` and `cupertino desktop start --backend nested|tty|headless` are not
-  wired yet; `cupertino-diagnose`, `cupertino-layers` and `cupertino-server` stay the entry points until then.
-- `cupertino --version` prints only the CLI version; the commit (from `cupertino-build-info`), the OS image,
-  compositor, data and ABI versions follow with `cupertino version`.
-- Shell completions and manual pages are not generated yet; the registry already carries what they need.
-- `cupertino-assets check` has no deprecation notice yet.
+None.

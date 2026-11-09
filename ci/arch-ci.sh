@@ -33,7 +33,8 @@ packages() {
             ;;
         test)
             packages build
-            printf '%s\n' pipewire gnome-keyring libsecret
+            # The shells and mandoc check the completions and manual pages of `cupertino`.
+            printf '%s\n' pipewire gnome-keyring libsecret bash-completion zsh fish mandoc
             ;;
         weston)
             packages test

@@ -351,6 +351,8 @@ jobs:
           CUPERTINO_DBUS_REQUIRED: "1"
           CUPERTINO_XKB_DATA_REQUIRED: "1"
           CUPERTINO_KEYRING_REQUIRED: "1"
+          CUPERTINO_SHELLS_REQUIRED: "1"
+          CUPERTINO_MANDOC_REQUIRED: "1"
         run: python3 -I ci/affected.py run tests
       - name: Doctests
         run: python3 -I ci/affected.py run doctests

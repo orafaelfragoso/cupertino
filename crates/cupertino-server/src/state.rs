@@ -2157,7 +2157,6 @@ impl Cupertino {
                         let surface = window
                             .and_then(|w| self.entry(w))
                             .map(|e| e.surface().clone());
-                        self.end_popup_grab_for_focus(surface.as_ref());
                         self.set_keyboard_focus(surface);
                     }
                     // focus moved elsewhere: the accent popup loses its reason to stay open
@@ -2260,7 +2259,8 @@ impl Cupertino {
     }
 
     /// Give the keyboard to `surface`. While the session is locked only a lock surface gets it, and while the
-    /// authentication prompt is shown only the prompt.
+    /// authentication prompt is shown only the prompt. A popup grab whose chain `surface` is outside of ends first, its
+    /// menus dismissed ([`Cupertino::end_popup_grab_for_focus`]).
     pub fn set_keyboard_focus(&mut self, surface: Option<WlSurface>) {
         let allowed = if self.session_lock.is_active() {
             surface.as_ref().is_some_and(|s| self.is_lock_surface(s))
@@ -2273,6 +2273,7 @@ impl Cupertino {
         if !allowed {
             return;
         }
+        self.end_popup_grab_for_focus(surface.as_ref());
         let keyboard = self.seat.get_keyboard().unwrap();
         keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
     }
@@ -2312,9 +2313,6 @@ impl Cupertino {
         let holds = self.exclusive_layer.as_ref() == Some(surface);
         if exclusive && !holds {
             self.exclusive_layer = Some(surface.clone());
-            if prompt {
-                self.end_popup_grab_for_focus(Some(surface));
-            }
             self.set_keyboard_focus(Some(surface.clone()));
         } else if !exclusive && holds {
             self.exclusive_layer = None;

@@ -47,7 +47,7 @@ impl Cupertino {
     }
 
     /// The surface whose popups hold the grab, while the grab is active.
-    pub(crate) fn popup_grab_root(&self) -> Option<&WlSurface> {
+    pub fn popup_grab_root(&self) -> Option<&WlSurface> {
         self.popup_grab
             .as_ref()
             .filter(|active| !active.grab.has_ended())
@@ -97,18 +97,23 @@ impl Cupertino {
         true
     }
 
-    /// The keyboard is about to go to `surface`: a popup grab of another toplevel ends first, as a press elsewhere would end
-    /// it, so that the menu does not stay open without its keys.
-    pub fn end_popup_grab_for_focus(&mut self, surface: Option<&WlSurface>) {
+    /// The keyboard is about to go to `surface` ([`Cupertino::set_keyboard_focus`], the one path every move of the
+    /// keyboard takes): when that is outside the chain of the popup grab (another window, a layer surface such as the
+    /// launcher, Control Center or the authentication prompt, a lock surface, or none), the grab ends first and its
+    /// popups are dismissed, as a press elsewhere would end it, so a menu never stays open without its keys. The
+    /// keyboard goes straight to `surface`, never back to the grab's toplevel first. The toplevel itself and the popups
+    /// of its chain keep the grab.
+    pub(crate) fn end_popup_grab_for_focus(&mut self, surface: Option<&WlSurface>) {
         let Some(root) = self.live_popup_grab().map(|active| active.root.clone()) else {
             return;
         };
-        if surface == Some(&root) {
+        if surface.is_some_and(|s| s == &root || self.in_popup_chain(s, &root)) {
             return;
         }
-        self.end_popup_grab(
+        self.release_popup_grab(
             SERIAL_COUNTER.next_serial(),
             std::time::Duration::from(self.clock.now()).as_millis() as u32,
+            surface.cloned(),
         );
     }
 

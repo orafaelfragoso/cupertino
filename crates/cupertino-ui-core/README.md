@@ -36,7 +36,11 @@ all on one thread.
   losing the focus cancels it with `Event::Cancel`. A scroll gesture keeps the path its first event hit: a finger's
   until its stop, a wheel's or another source's until it pauses for `SCROLL_IDLE_NS`, the source changes or the
   pointer moves, and any of them until the pointer leaves the surface. A cancelled touch reaches every node its path
-  went through, the touched one first.
+  went through, the touched one first. A button let go anywhere but in a popup its press opened (on the opener, in
+  the opener's window, in another window) also reaches the root of every popup that press opened, nested ones
+  included, as a release at a point outside it, so a menu dragged through and let go elsewhere can close; one let go
+  in such a popup goes only where it lands, and popups the press did not open hear nothing of it. The unit tests open
+  popups through the fake window system and let go at each of those places.
 - **Scroll timing.** `Runtime::with_scroll_timing(sink)` follows every pointer scroll event to the screen: the window
   system's timestamp, when its handlers ran, the model update and view it caused (`None` when it changed no model),
   when the first frame after it was handed to the window system and when the compositor showed that frame

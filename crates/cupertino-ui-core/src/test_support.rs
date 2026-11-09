@@ -377,12 +377,21 @@ pub(crate) struct FakeSystem {
     pub(crate) drop_reads: Vec<(DropToken, String)>,
     /// How each drop ended, in order.
     pub(crate) drops_finished: Vec<(DropToken, Option<DropAction>)>,
+    /// Opens popups; without it every popup is refused.
+    pub(crate) popups: bool,
+    /// Every popup opened: its id, its parent and where it was placed.
+    pub(crate) popups_created: Vec<(WindowId, WindowId, PopupSpec)>,
 }
 
 impl FakeSystem {
     pub(crate) fn send(&mut self, window: WindowId, event: WindowEvent) {
         self.queue
             .push_back(PlatformEvent::Window { window, event });
+    }
+
+    /// An id no window or popup has had.
+    fn next_id(&self) -> WindowId {
+        WindowId((self.created.len() + self.popups_created.len()) as u32 + 1)
     }
 
     /// A buffer comes free: a stalled window gets a frame only if the runtime asked for one while it waited.
@@ -402,13 +411,22 @@ impl WindowSystem for FakeSystem {
     }
 
     fn create_window(&mut self, spec: &WindowSpec) -> Result<WindowId, PlatformError> {
-        let id = WindowId(self.created.len() as u32 + 1);
+        let id = self.next_id();
         self.created.push((id, spec.clone()));
         Ok(id)
     }
 
-    fn create_popup(&mut self, _: WindowId, _: &PopupSpec) -> Result<WindowId, PlatformError> {
-        Err(PlatformError::Unsupported)
+    fn create_popup(
+        &mut self,
+        parent: WindowId,
+        spec: &PopupSpec,
+    ) -> Result<WindowId, PlatformError> {
+        if !self.popups {
+            return Err(PlatformError::Unsupported);
+        }
+        let id = self.next_id();
+        self.popups_created.push((id, parent, spec.clone()));
+        Ok(id)
     }
 
     fn destroy(&mut self, window: WindowId) {

@@ -16,7 +16,9 @@ name = "cupertino-diagnose"
 path = "src/bin/cupertino-diagnose.rs"
 
 [dependencies]
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-devices = { path = "../cupertino-devices" }
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

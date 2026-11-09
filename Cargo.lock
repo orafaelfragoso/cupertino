@@ -995,6 +995,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "cupertino-bluetooth",
+ "cupertino-diagnostic-events",
  "cupertino-seat",
  "cupertino-test-bus",
  "rustix 1.1.6",
@@ -1024,6 +1025,7 @@ name = "cupertino-cli"
 version = "0.1.0"
 dependencies = [
  "cupertino-assets",
+ "cupertino-diagnostic-events",
  "libc",
  "serde",
  "serde_json",
@@ -1039,6 +1041,7 @@ dependencies = [
  "cupertino-alsa",
  "cupertino-assets",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-kit",
  "cupertino-modifiers",
@@ -1097,10 +1100,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-diagnostic-events"
+version = "0.1.0"
+dependencies = [
+ "cupertino-build-info",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "cupertino-diagnostics"
 version = "0.1.0"
 dependencies = [
  "cupertino-devices",
+ "cupertino-diagnostic-events",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
@@ -1120,6 +1136,7 @@ dependencies = [
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-kit",
@@ -1170,6 +1187,7 @@ dependencies = [
  "cupertino-assets",
  "cupertino-capture",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-kit",
  "cupertino-menu-model",
  "cupertino-modifiers",
@@ -1296,6 +1314,7 @@ dependencies = [
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-icons",
  "cupertino-kit",
  "cupertino-modifiers",
@@ -1333,6 +1352,7 @@ dependencies = [
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-kit",
  "cupertino-login-ipc",
@@ -1380,6 +1400,7 @@ dependencies = [
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-files",
  "cupertino-glass",
  "cupertino-icons",
@@ -1416,6 +1437,7 @@ name = "cupertino-netd"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "cupertino-diagnostic-events",
  "cupertino-netlink",
  "cupertino-peer",
  "cupertino-seat",
@@ -1443,6 +1465,7 @@ dependencies = [
  "cupertino-animation",
  "cupertino-assets",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-kit",
  "cupertino-modifiers",
@@ -1469,6 +1492,7 @@ dependencies = [
  "async-io",
  "cupertino-alsa",
  "cupertino-assets",
+ "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-kit",
  "cupertino-modifiers",
@@ -1521,6 +1545,7 @@ dependencies = [
  "async-channel",
  "cupertino-assets",
  "cupertino-decorations",
+ "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-peer",
@@ -1549,6 +1574,7 @@ dependencies = [
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-filepicker",
  "cupertino-geometry",
  "cupertino-icons",
@@ -1578,6 +1604,7 @@ name = "cupertino-powerd"
 version = "0.1.0"
 dependencies = [
  "cupertino-devices",
+ "cupertino-diagnostic-events",
  "cupertino-evdev",
  "cupertino-seat",
  "cupertino-test-bus",
@@ -1645,6 +1672,7 @@ dependencies = [
  "cupertino-animation",
  "cupertino-assets",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-kit",
  "cupertino-modifiers",
@@ -1691,6 +1719,7 @@ dependencies = [
  "cupertino-decorations",
  "cupertino-defaults",
  "cupertino-devices",
+ "cupertino-diagnostic-events",
  "cupertino-displays",
  "cupertino-effects",
  "cupertino-evdev",
@@ -1740,6 +1769,7 @@ name = "cupertino-sessiond"
 version = "0.1.0"
 dependencies = [
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-login-ipc",
  "cupertino-peer",
  "cupertino-seat",
@@ -1763,6 +1793,7 @@ dependencies = [
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-displays",
  "cupertino-filepicker",
  "cupertino-icons",
@@ -2042,6 +2073,7 @@ name = "cupertino-windowmanager"
 version = "0.1.0"
 dependencies = [
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-protocols",
  "cupertino-stage",
  "cupertino-wm",

@@ -14,6 +14,7 @@ default = []
 app = ["dep:pam-client2", "dep:zbus", "dep:cupertino-seat", "dep:cupertino-peer"]
 
 [dependencies]
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-login-ipc = { path = "../cupertino-login-ipc" }
 cupertino-peer = { path = "../cupertino-peer", optional = true }

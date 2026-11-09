@@ -301,6 +301,19 @@ fn a_part_that_cannot_be_parsed_is_unreadable() {
     );
 }
 
+/// A record is read from a file: a commit that is not a hash is shown as it is, and the table never fails on it.
+#[test]
+fn a_record_whose_commit_is_not_a_hash_still_prints() {
+    let m = Machine::new();
+    m.file(
+        "usr/share/cupertino/build-info.json",
+        r#"{"package": "cupertino", "version": "0.1.0-1", "commit": "ééééééééééééééé"}"#,
+    );
+    let out = m.run(m.context(), &["version"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stdout.contains("éééééééééééé"), "{}", out.stdout);
+}
+
 #[test]
 fn tokens_without_a_version_are_named_by_their_digest() {
     let m = Machine::new();

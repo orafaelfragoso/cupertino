@@ -184,8 +184,13 @@ fn version(_: &Args, cx: &Context) -> Result<Reply, Failure> {
     Ok(Reply::new(&Versions { components }, human))
 }
 
+/// The first digits of a commit as people quote it; a record's commit is read from a file, so it is cut at a character,
+/// whatever it holds.
 fn short(commit: &str) -> &str {
-    &commit[..commit.len().min(cupertino_build_info::SHORT_COMMIT_DIGITS)]
+    commit
+        .char_indices()
+        .nth(cupertino_build_info::SHORT_COMMIT_DIGITS)
+        .map_or(commit, |(end, _)| &commit[..end])
 }
 
 /// A file of the running system, by absolute path: its text, or the entry saying why there is none.

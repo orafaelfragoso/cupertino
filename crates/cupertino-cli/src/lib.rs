@@ -329,6 +329,9 @@ pub struct Failure {
     /// A stable snake_case identifier of the failure within its kind.
     pub code: &'static str,
     pub message: String,
+    /// What the command found that explains the failure, for the JSON envelope's `data` beside its `error`.
+    #[serde(skip)]
+    data: Option<Box<RawValue>>,
 }
 
 impl Failure {
@@ -337,7 +340,16 @@ impl Failure {
             kind,
             code,
             message: message.into(),
+            data: None,
         }
+    }
+
+    /// Adds what the command found to the failure: the JSON envelope of a failure prints it as `data` beside `error`
+    /// (the problems a check found, for example). The other forms do not print it; a stream reports them as events.
+    pub fn with_data(mut self, data: &impl Serialize) -> Self {
+        self.data =
+            Some(serde_json::value::to_raw_value(data).expect("failure data serializes to JSON"));
+        self
     }
 
     /// An `invalid_usage` failure.
@@ -449,6 +461,7 @@ pub struct Context<'a> {
     vars: Vars,
     current_dir: Option<PathBuf>,
     provided: Vec<&'a dyn Any>,
+    registry: &'a [Group],
 }
 
 enum Vars {
@@ -464,6 +477,7 @@ impl<'a> Context<'a> {
             vars: Vars::Process,
             current_dir: None,
             provided: Vec::new(),
+            registry: REGISTRY,
         }
     }
 
@@ -475,6 +489,7 @@ impl<'a> Context<'a> {
             root,
             vars: Vars::Fixed(BTreeMap::new()),
             provided: Vec::new(),
+            registry: REGISTRY,
         }
     }
 
@@ -520,6 +535,33 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Every variable: the process environment for [`Context::system`], the ones set with [`Context::with_var`]
+    /// otherwise.
+    pub fn vars(&self) -> Vec<(OsString, OsString)> {
+        match &self.vars {
+            Vars::Process => std::env::vars_os().collect(),
+            Vars::Fixed(vars) => vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        }
+    }
+
+    /// A program to start with this context's environment and working directory: on [`Context::system`] it inherits
+    /// the process's, otherwise it gets the context's variables alone.
+    pub fn command(&self, program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+        let mut command = std::process::Command::new(program);
+        if let Vars::Fixed(vars) = &self.vars {
+            command.env_clear().envs(vars);
+        }
+        if let Some(dir) = &self.current_dir {
+            command.current_dir(dir);
+        }
+        command
+    }
+
+    /// The registry the runner dispatches on, which the completions and the manual pages are generated from.
+    pub fn registry(&self) -> &[Group] {
+        self.registry
+    }
+
     pub fn current_dir(&self) -> io::Result<PathBuf> {
         match &self.current_dir {
             Some(dir) => Ok(dir.clone()),
@@ -548,15 +590,19 @@ static NEVER_STOPPED: StopFlag = StopFlag::new();
 impl<'a> Runner<'a> {
     /// A runner of `registry` on [`Context::system`] whose streams are never asked to stop.
     pub fn new(registry: &'a [Group]) -> Self {
+        let mut context = Context::system();
+        context.registry = registry;
         Self {
             registry,
-            context: Context::system(),
+            context,
             stop: &NEVER_STOPPED,
         }
     }
 
+    /// The context the commands read the machine through; its [`Context::registry`] becomes this runner's.
     pub fn context(mut self, context: Context<'a>) -> Self {
         self.context = context;
+        self.context.registry = self.registry;
         self
     }
 
@@ -791,6 +837,8 @@ enum Dispatched {
 #[derive(Serialize)]
 struct Version {
     cli: &'static str,
+    /// The full hash of the commit the command was built from, or `null` when the build did not know it.
+    commit: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -1019,9 +1067,14 @@ fn take(args: &mut Args, arg: &'static Arg, value: &str) -> Result<(), Failure> 
     Ok(())
 }
 
+/// `cupertino 0.1.0 (0123456789ab)`, without the parenthesis when the commit is unknown.
 fn version() -> Reply {
-    let cli = env!("CARGO_PKG_VERSION");
-    Reply::new(&Version { cli }, format!("cupertino {cli}\n"))
+    let component = cupertino_build_info::component!("cupertino");
+    let data = Version {
+        cli: component.version,
+        commit: cupertino_build_info::COMMIT,
+    };
+    Reply::new(&data, format!("{component}\n"))
 }
 
 /// The registry rules every [`REGISTRY`] (and every test registry) keeps; one line per broken rule, empty when it keeps

@@ -22,7 +22,8 @@
 //!   `cupertino: <message>`. Nothing else is printed.
 //! - `json`: one envelope at the end. A stream command's `data` is its final data object with two fields added:
 //!   `events` (`[{event, data}]`, in order) and `warnings` (`[{kind, code, message}]`). A failed stream gives the error
-//!   envelope, without the events. A follow stream in this form holds its events until it stops. A command whose final
+//!   envelope, without the events, with the failure's own `data` beside `error` when it has some
+//!   ([`crate::Failure::with_data`]). A follow stream in this form holds its events until it stops. A command whose final
 //!   data already holds what its events said (a report) calls [`Sink::json_result_only`]: its `data` is then that data
 //!   alone, with `warnings` added only when there are some.
 //!
@@ -437,7 +438,7 @@ impl<'w> Lines<'w> {
                 Some(collected.as_ref())
             }
             Ok(reply) => Some(reply.data.as_ref()),
-            Err(_) => None,
+            Err(failure) => failure.data.as_deref(),
         };
         let envelope = Envelope {
             schema: SCHEMA,

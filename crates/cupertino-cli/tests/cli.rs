@@ -21,20 +21,31 @@ fn empty_pack() -> tempfile::TempDir {
     d
 }
 
+/// The data names the commit the command was built from beside its version (`null` when the build did not know it),
+/// so a bug report says which build it came from; a field added after `cli`, as v1 allows.
 #[test]
 fn the_version_in_json_is_one_envelope_line_in_field_order() {
     let out = cupertino(&["--format", "json", "--version"]);
+    let commit = match cupertino_build_info::COMMIT {
+        Some(commit) => format!("\"{commit}\""),
+        None => "null".to_owned(),
+    };
     assert_eq!(
         out,
         Output {
             code: 0,
             stdout: format!(
                 "{{\"schema\":\"cupertino.cli.v1\",\"command\":\"version\",\"request_id\":\"r1\",\"ok\":true,\
-                 \"data\":{{\"cli\":\"{}\"}}}}\n",
+                 \"data\":{{\"cli\":\"{}\",\"commit\":{commit}}}}}\n",
                 env!("CARGO_PKG_VERSION")
             ),
             stderr: String::new(),
         }
+    );
+    let human = cupertino(&["--version"]);
+    assert_eq!(
+        human.stdout,
+        format!("{}\n", cupertino_build_info::component!("cupertino"))
     );
 }
 
@@ -545,7 +556,7 @@ mod contracts {
         let ok: Value =
             serde_json::from_str(&run(&["--format", "json", "--version"]).stdout).unwrap();
         assert_has(&ok, &["schema", "command", "request_id", "ok", "data"]);
-        assert_has(&ok["data"], &["cli"]);
+        assert_has(&ok["data"], &["cli", "commit"]);
         let failed: Value =
             serde_json::from_str(&run(&["--format", "json", "nothing"]).stdout).unwrap();
         assert_has(&failed, &["schema", "command", "request_id", "ok", "error"]);

@@ -130,6 +130,7 @@ digraph "layers" {
   "cupertino-btd" -> "cupertino-test-bus" [label="dev"];
   "cupertino-capture" -> "cupertino-assets";
   "cupertino-cli" -> "cupertino-assets";
+  "cupertino-cli" -> "cupertino-build-info";
   "cupertino-controlcenter" -> "cupertino-alsa";
   "cupertino-controlcenter" -> "cupertino-assets" [label="dev"];
   "cupertino-controlcenter" -> "cupertino-defaults";

@@ -436,6 +436,22 @@ fn each_control_takes_its_size_from_the_table_at_every_size_normal_and_compact()
                 "the pop-up button is {} high, {case}",
                 popup.height
             );
+            let stepper = control_geometry(ControlFamily::Stepper, size, compact);
+            let stepper = (stepper.width.unwrap(), stepper.height);
+            assert!(
+                fill_sizes(&h.ops("stepper"))
+                    .iter()
+                    .any(|&s| near(s, stepper)),
+                "the stepper is {stepper:?}, {case}"
+            );
+            let segments = control_geometry(ControlFamily::Segmented, size, compact);
+            assert!(
+                fill_sizes(&h.ops("segments"))
+                    .iter()
+                    .any(|s| (s.1 - segments.height).abs() < 1e-6),
+                "the segmented control is {} high, {case}",
+                segments.height
+            );
         }
     }
 }

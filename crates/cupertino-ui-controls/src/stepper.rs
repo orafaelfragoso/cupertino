@@ -1,7 +1,6 @@
 use crate::look::{self, paint_focus_ring};
 use crate::Stepper;
 use cupertino_geometry::{Insets, Point, Rect, Size};
-use cupertino_theme::metrics::{control_metric, Control};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
     Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
@@ -9,7 +8,7 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
-use cupertino_ui_theme::{Color, ColorRole};
+use cupertino_ui_theme::{Color, ColorRole, ControlFamily, ThemeTokens};
 
 const HOME: Keysym = Keysym(0xff50);
 const UP: Keysym = Keysym(0xff52);
@@ -40,17 +39,19 @@ pub struct StepperState {
     pressed: Option<Half>,
 }
 
-/// The chrome: the regular image's size, centred in the node.
-fn chrome(size: Size) -> Rect {
-    let (width, height) = control_metric(Control::Stepper)
-        .image_regular
-        .unwrap_or_default();
-    Rect::new(
+/// The chrome: the control size table's stepper at the theme's size, centred in the node, and its corner radius,
+/// never past half its width.
+fn chrome(size: Size, theme: &ThemeTokens) -> (Rect, f64) {
+    let geometry = look::geometry(theme, ControlFamily::Stepper);
+    let height = geometry.height;
+    let width = geometry.width.unwrap_or(height);
+    let rect = Rect::new(
         (size.width - width) / 2.0,
         (size.height - height) / 2.0,
         width,
         height,
-    )
+    );
+    (rect, geometry.corners.radius(height).min(width / 2.0))
 }
 
 fn half_rect(chrome: Rect, half: Half) -> Rect {
@@ -139,9 +140,9 @@ impl<M: 'static> Widget<M> for Stepper<M> {
         }
     }
 
-    fn measure(&self, _: &StepperState, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &StepperState, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         Measured {
-            size: chrome(Size::ZERO).size,
+            size: chrome(Size::ZERO, &cx.env().theme).0.size,
             baseline: None,
         }
     }
@@ -252,8 +253,7 @@ impl<M: 'static> Widget<M> for Stepper<M> {
             window_active: cx.window_active(),
             ..ControlState::default()
         };
-        let chrome = chrome(cx.size());
-        let radius = theme.metrics.button_radius;
+        let (chrome, radius) = chrome(cx.size(), &theme);
         // an ordinary button's quiet bezel, split by a faint line between its halves
         let bezel = look::quiet(&theme, look::BEZEL, &base);
         look::fill(cx, chrome, radius, Some(bezel));

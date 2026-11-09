@@ -88,7 +88,7 @@ fn the_keys_step_page_and_jump_to_the_limits_and_never_pass_them() {
 fn the_upper_half_steps_up_the_lower_down_and_the_arrow_at_a_limit_is_disabled() {
     let mut h = Harness::<Count>::new();
     let r = h.rect("stepper");
-    assert_eq!(r, Rect::new(0.0, 0.0, 19.0, 28.0),);
+    assert_eq!(r, Rect::new(0.0, 0.0, 20.0, 24.0), "the regular stepper");
     let (x, middle) = (r.min_x() + r.width() / 2.0, r.min_y() + r.height() / 2.0);
     h.click(Point::new(x, middle - 7.0));
     assert_eq!(*h.model(), 6.0);

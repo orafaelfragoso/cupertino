@@ -644,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn fill_colour_comes_from_the_palette_and_depends_on_activity() {
+    fn fill_colour_comes_from_the_palette_and_stays_when_the_window_is_not_active() {
         let mut d = decorations(TitlebarStyle::Standard, Appearance::Light);
         let active = d.render_titlebar(800.0, 1.0, &DecorationState::default());
         let inactive = d.render_titlebar(
@@ -665,7 +665,11 @@ mod tests {
             d.config.palette.titlebar_inactive,
             0.01
         ));
-        assert_ne!(rgba(&active, 400, 14), rgba(&inactive, 400, 14));
+        assert_eq!(
+            rgba(&active, 400, 14),
+            rgba(&inactive, 400, 14),
+            "an inactive window's title bar is the active one's"
+        );
         let mut dark = decorations(TitlebarStyle::Standard, Appearance::Dark);
         let da = dark.render_titlebar(800.0, 1.0, &DecorationState::default());
         assert!(near(

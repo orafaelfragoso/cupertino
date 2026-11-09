@@ -71,13 +71,14 @@ impl Palette {
     /// Palette without specification files; equal to [`Palette::from_theme`] (tested).
     pub fn builtin(dark: bool) -> Self {
         if dark {
-            let titlebar_inactive = gray(0.078);
+            // an inactive window's title bar is the active one's: only its title and buttons change
+            let titlebar_inactive = gray(0.149);
             Self {
                 dark,
                 titlebar_active: gray(0.149),
                 titlebar_inactive,
                 unified_active: gray(0.169),
-                unified_inactive: gray(0.157),
+                unified_inactive: gray(0.169),
                 separator: rgba8([0x1A, 0x1A, 0x1A, 255]),
                 title_active: rgba8([255, 255, 255, 216]),
                 title_inactive: rgba8([255, 255, 255, 140]),
@@ -92,13 +93,13 @@ impl Palette {
                 window_background: rgba8([31, 32, 37, 255]),
             }
         } else {
-            let titlebar_inactive = gray(0.925);
+            let titlebar_inactive = gray(1.0);
             Self {
                 dark,
                 titlebar_active: gray(1.0),
                 titlebar_inactive,
                 unified_active: gray(0.957),
-                unified_inactive: gray(0.941),
+                unified_inactive: gray(0.957),
                 separator: rgba8([0xE6, 0xE6, 0xE6, 255]),
                 title_active: rgba8([0, 0, 0, 216]),
                 title_inactive: rgba8([0, 0, 0, 127]),
@@ -234,6 +235,19 @@ mod tests {
                 a.button_inactive,
                 b.button_inactive
             );
+        }
+    }
+
+    /// An inactive window's title bars are the active one's, in every appearance: only the title and the buttons
+    /// change, so the window does not darken when another takes the focus.
+    #[test]
+    fn an_inactive_title_bar_is_the_active_one() {
+        let theme = Theme::load().unwrap();
+        for appearance in Appearance::ALL {
+            let p = Palette::from_theme(&theme, appearance);
+            assert_eq!(p.titlebar_inactive, p.titlebar_active, "{appearance:?}");
+            assert_eq!(p.unified_inactive, p.unified_active, "{appearance:?}");
+            assert_ne!(p.title_inactive, p.title_active, "{appearance:?}");
         }
     }
 

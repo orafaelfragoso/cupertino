@@ -69,13 +69,15 @@ are no exception (above).
 ## Theme tokens
 
 `ThemeTokens::cupertino(theme, preferences)` is the Cupertino theme: the colours above for the preferred appearance;
-button and field heights (20 pt) and the switch (38 × 22 pt) from the regular control metrics table of `cupertino-theme`
-(not from the theme data); body (13 pt) and caption (11 pt) sizes and the font family from the theme's type scale; the
-reduce-motion preference. With reduced transparency, light and dark take the opaque neutral colours, which also raise
-text, borders and the focus ring to their contrast ratios; high contrast is opaque already. Approximate: button inset 10
-pt and radius 5 pt, field inset 6 pt and radius 5 pt, switch thumb 18 pt with a 2 pt inset, 24 × 24 pt minimum target,
-section 12 pt and title 15 pt semibold, a 2 pt focus ring 2 pt outside the chrome with 3 pt added radius, and 500 ms
-caret phases.
+the regular, non-compact row of `cupertino-theme`'s control size table (`ControlMetrics::regular`: buttons and fields
+24 pt with a 6 pt corner, button inset 13.5 pt, field inset 6 pt, the switch 54 × 24 pt with a 20 pt thumb 2 pt in);
+body (13 pt) and caption (11 pt) sizes and the font family from the theme's type scale; the reduce-motion preference.
+`ControlMetrics::at_size(size, compact)` gives the metrics at another size and setting, keeping the minimum target, and
+`ControlMetrics::geometry(family)` the geometry of any family at the metrics' size. With reduced transparency, light and
+dark take the opaque neutral colours, which also raise text, borders and the focus ring to their contrast ratios; high
+contrast is opaque already. Approximate: 24 × 24 pt minimum target, section 12 pt and title 15 pt semibold, a 2 pt
+focus ring 2 pt outside the chrome with 3 pt added radius, and 500 ms caret phases. The accent and the selection are
+a softer, less saturated blue than the system blue.
 
 `ThemeTokens::neutral(preferences)` is the theme without theme data: the neutral colours on the same metrics, body 13 pt
 and caption 11 pt (the theme data's sizes), and no font family, so the application's UI font draws the text.

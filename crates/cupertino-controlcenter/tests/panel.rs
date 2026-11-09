@@ -491,6 +491,52 @@ fn the_tiles_are_one_glass_too_large_for_their_text_to_follow_the_backdrop() {
     }
 }
 
+/// The glass regions the panel last asked for.
+fn glass_regions(run: &mut Run) -> Vec<Rect> {
+    let requests = run.driver.window_system_mut().requests(run.window).unwrap();
+    requests
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            WindowRequest::Materials(regions) => Some(regions.iter().map(|r| r.rect).collect()),
+            _ => None,
+        })
+        .expect("the panel asks for glass")
+}
+
+/// Edit Controls is a neutral control, not a tile: in a dark session the theme's control fill (white at 63/255) with
+/// no glass under it, so the wallpaper does not tint it; in a light session, where the panel's white text needs the
+/// tiles' darkened glass, it is drawn as they are.
+#[test]
+fn edit_controls_is_the_neutral_control_fill_without_glass_in_a_dark_session() {
+    let capsule = Rect::new(107.0, 468.0, 94.0, 24.0);
+    let mut dark = Run::start(tokens(Appearance::Dark, false), Presentation::SHOWN);
+    let regions = glass_regions(&mut dark);
+    assert_eq!(regions.len(), Module::ALL.len(), "a glass region per tile");
+    assert!(
+        regions.iter().all(|r| !r.intersects(&capsule)),
+        "no glass under Edit Controls: {regions:?}"
+    );
+    let (frame, _) = dark.capture();
+    // inside the capsule's round end, clear of its label
+    let fill = frame.pixel(113, 480).unwrap();
+    assert!(
+        fill.alpha().abs_diff(63) <= 2 && fill.red() == fill.alpha() && fill.blue() == fill.alpha(),
+        "white at 63/255: {fill:?}"
+    );
+    let mut light = Run::start(
+        tokens(Appearance::Dark, false),
+        Presentation {
+            light: true,
+            ..Presentation::SHOWN
+        },
+    );
+    assert!(
+        glass_regions(&mut light).iter().any(|r| *r == capsule),
+        "a light session's Edit Controls is glass"
+    );
+}
+
 #[test]
 fn the_opaque_panel_of_reduce_transparency_holds_edit_controls_too() {
     let (frame, _) = Run::start(tokens(Appearance::Dark, true), Presentation::SHOWN).capture();

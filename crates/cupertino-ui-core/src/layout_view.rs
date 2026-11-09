@@ -3,7 +3,7 @@
 
 use crate::cx::MeasureCx;
 use crate::paint::unobscured;
-use crate::route::{Geometry, Placement};
+use crate::route::{Geometry, Placement, Raised};
 use crate::tree::Tree;
 use crate::{Environment, NodeId};
 use cupertino_geometry::{Point, Rect, Size};
@@ -103,6 +103,7 @@ pub(crate) fn placements<M: 'static>(
                 target: grown(rect, least),
                 clip,
                 own_clip,
+                raised: if raised { Raised::In } else { Raised::No },
             },
         );
         let inner = match own_clip {
@@ -136,6 +137,27 @@ pub(crate) fn placements<M: 'static>(
                 }
             }
             stack.extend(n.children.iter().map(|&c| (c, origin, inner, raised)));
+        }
+    }
+    // the nodes above a raised one, which hit-testing goes through to reach it first
+    let roots: Vec<NodeId> = geometry
+        .iter()
+        .filter(|(id, p)| {
+            p.raised == Raised::In
+                && tree.get(**id).and_then(|n| n.parent).is_none_or(|parent| {
+                    geometry.get(&parent).is_none_or(|p| p.raised != Raised::In)
+                })
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    for id in roots {
+        let mut up = tree.get(id).and_then(|n| n.parent);
+        while let Some(parent) = up {
+            match geometry.get_mut(&parent) {
+                Some(p) if p.raised == Raised::No => p.raised = Raised::Holds,
+                _ => break,
+            }
+            up = tree.get(parent).and_then(|n| n.parent);
         }
     }
     geometry

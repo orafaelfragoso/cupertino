@@ -97,6 +97,7 @@ fn place(geometry: &mut Geometry, id: NodeId, rect: Rect, clip: Option<Rect>) {
             target: rect,
             clip,
             own_clip: None,
+            raised: Default::default(),
         },
     );
 }
@@ -155,6 +156,7 @@ fn a_press_beside_a_control_reaches_the_nearest_target_and_the_topmost_on_a_tie(
                 target: rect.outset(6.0),
                 clip: None,
                 own_clip: None,
+                raised: Default::default(),
             },
         );
     }
@@ -193,6 +195,7 @@ fn a_rect_that_holds_the_point_beats_a_target_that_reaches_it() {
             target: rect.outset(6.0),
             clip: None,
             own_clip: None,
+            raised: Default::default(),
         },
     );
 
@@ -208,6 +211,7 @@ fn a_node_is_hit_only_inside_its_target_and_every_clip_above_it() {
         target: Rect::new(0.0, -2.0, 100.0, 24.0),
         clip: Some(Rect::new(0.0, 0.0, 50.0, 50.0)),
         own_clip: None,
+        raised: Default::default(),
     };
     assert!(placement.hit(Point::new(10.0, 10.0)));
     assert!(placement.hit(Point::new(10.0, 21.0)), "inside the target");
@@ -340,4 +344,57 @@ proptest! {
             if end.is_some() { Propagation::Stop } else { Propagation::Continue }
         );
     }
+}
+
+#[test]
+fn a_raised_node_takes_a_point_over_the_siblings_after_it() {
+    let mut tree = Tree::<M>::new(10);
+    let view = Element::new(group(vec![
+        Element::new(group(vec![Element::new(leaf("header"))])),
+        Element::new(leaf("rows")),
+    ]));
+    let root = tree.reconcile(None, view).unwrap();
+    let [holder, rows] = tree.get(root).unwrap().children[..] else {
+        unreachable!()
+    };
+    let header = tree.get(holder).unwrap().children[0];
+    let mut geometry = Geometry::new();
+    place(&mut geometry, root, Rect::new(0.0, 0.0, 100.0, 100.0), None);
+    place(
+        &mut geometry,
+        holder,
+        Rect::new(0.0, 0.0, 100.0, 30.0),
+        None,
+    );
+    place(
+        &mut geometry,
+        header,
+        Rect::new(0.0, 0.0, 100.0, 30.0),
+        None,
+    );
+    place(&mut geometry, rows, Rect::new(0.0, 0.0, 100.0, 100.0), None);
+    let hit = |geometry: &Geometry, y| hit_test(&tree, root, geometry, Point::new(50.0, y));
+    assert_eq!(
+        hit(&geometry, 10.0),
+        Some(vec![root, rows]),
+        "the later sibling"
+    );
+
+    for (id, raised) in [
+        (root, Raised::Holds),
+        (holder, Raised::Holds),
+        (header, Raised::In),
+    ] {
+        geometry.get_mut(&id).unwrap().raised = raised;
+    }
+    assert_eq!(
+        hit(&geometry, 10.0),
+        Some(vec![root, holder, header]),
+        "the raised header, over the rows after it"
+    );
+    assert_eq!(
+        hit(&geometry, 50.0),
+        Some(vec![root, rows]),
+        "below it, the rows"
+    );
 }

@@ -508,7 +508,7 @@ impl Painter {
         let mut blank = Vec::new();
         let window = geometry.get(&root).map(|p| p.rect);
         let mut pending: Vec<Pending> = Vec::new();
-        // whether each node of the list draws in the raised layer
+        // whether each node of the list is raised: in the raised layer where there is one, else over the rest
         let mut layered: Vec<bool> = Vec::new();
         let flush = |pending: &mut Vec<Pending>,
                      until: Option<NodeId>,
@@ -801,7 +801,7 @@ impl Painter {
                 ops: on_pixels(&painted.ops, &painted.pixels, origin, input.env.scale),
             });
             clips.push(placement.clip);
-            layered.push(raised && input.layer);
+            layered.push(raised);
             seen.insert(id);
             if painted.overlay {
                 overlaid.insert(id);
@@ -845,7 +845,7 @@ impl Painter {
                         owner: id,
                         node: overlay,
                         clip: placement.clip,
-                        layered: raised && input.layer,
+                        layered: raised,
                     });
                 }
             }
@@ -860,7 +860,27 @@ impl Painter {
         );
         self.nodes.retain(|id, _| seen.contains(id));
         self.overlays.retain(|id, _| overlaid.contains(id));
-        let layer = layered.iter().any(|&l| l).then(|| {
+        let any_raised = layered.iter().any(|&l| l);
+        if any_raised && !input.layer {
+            // in place, the raised subtrees draw after the rest of the window, over it
+            let mut main = (Vec::new(), Vec::new(), Vec::new());
+            let mut over = (Vec::new(), Vec::new(), Vec::new());
+            for ((node, clip), (blank, raised)) in std::mem::take(&mut list.nodes)
+                .into_iter()
+                .zip(std::mem::take(&mut clips))
+                .zip(std::mem::take(&mut blank).into_iter().zip(&layered))
+            {
+                let to = if *raised { &mut over } else { &mut main };
+                to.0.push(node);
+                to.1.push(clip);
+                to.2.push(blank);
+            }
+            main.0.append(&mut over.0);
+            main.1.append(&mut over.1);
+            main.2.append(&mut over.2);
+            (list.nodes, clips, blank) = main;
+        }
+        let layer = (any_raised && input.layer).then(|| {
             // the raised subtrees move to a list of their own; a subtree's root keeps the clip of its ancestors
             let mut main = (DisplayList::default(), Vec::new(), Vec::new());
             let mut raised = (DisplayList::default(), Vec::new(), Vec::new());

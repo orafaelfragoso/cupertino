@@ -1,7 +1,6 @@
 //! How a control's state picks its colours, its label's type, and the keyboard focus ring drawn around its chrome.
 
 use cupertino_geometry::{Point, Rect};
-use cupertino_theme::metrics::{alignment_height, Control};
 use cupertino_ui_core::{ControlState, Environment, PaintCx};
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
@@ -9,8 +8,8 @@ use cupertino_ui_text::{
     AttributedText, Direction, FontWeight, Paragraph, ParagraphLayout, ParagraphStyle, TextStyle,
 };
 use cupertino_ui_theme::{
-    Color, ColorRole, ControlFamily, ControlGeometry, ControlSize, FocusRing, InteractionVariant,
-    StateVariant, ThemeTokens,
+    Color, ColorRole, ControlFamily, ControlGeometry, FocusRing, InteractionVariant, StateVariant,
+    ThemeTokens,
 };
 
 /// Disabled overrides everything; pressed overrides hover. Keyboard focus is drawn as a ring, not a colour.
@@ -94,13 +93,6 @@ pub(crate) fn faded(color: Option<Color>, share: f32) -> Option<Color> {
 /// The geometry of `family` at the theme's control size.
 pub(crate) fn geometry(theme: &ThemeTokens, family: ControlFamily) -> ControlGeometry {
     theme.metrics.geometry(family)
-}
-
-/// The height of `control` at the theme's control size, else at the regular size.
-pub(crate) fn metric(control: Control, theme: &ThemeTokens) -> f64 {
-    alignment_height(control, theme.metrics.size)
-        .or_else(|| alignment_height(control, ControlSize::Regular))
-        .unwrap_or_default()
 }
 
 /// The ring's stroke: centred `outset + width / 2` outside the chrome, with the chrome's radius plus the theme's

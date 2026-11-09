@@ -6,10 +6,10 @@
 //! panel of a full-height-sidebar window). The compact 40 pt row is the exception: its group starts 12 pt from the
 //! leading edge and 13 pt below the top, centred vertically only. A right-to-left window mirrors the group to the
 //! trailing edge ([`DecorationMetrics::direction`]). Every style has the 16 pt window corner radius. The rim width of
-//! one device pixel and the live-resize zones are as designed. The small button size class (9 pt) comes from the
-//! control table; the title metrics and the glyph proportions are approximate, labelled, and configurable.
+//! one device pixel and the live-resize zones are as designed. The buttons of the smaller size classes are 9 pt discs;
+//! the title metrics and the glyph proportions are approximate, labelled, and configurable.
 
-use cupertino_theme::metrics::{alignment_height, Control, ControlSize};
+use cupertino_theme::metrics::ControlSize;
 
 /// The window style: where the title bar is and who draws it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -54,6 +54,8 @@ impl TitlebarStyle {
 
 /// Diameter of a window control button, regular size.
 pub const WINDOW_BUTTON_DIAMETER: f64 = 14.0;
+/// Diameter of a window control button at the small and smaller size classes, and at any other than regular.
+pub const WINDOW_BUTTON_DIAMETER_SMALL: f64 = 9.0;
 /// Distance between the centres of neighbouring window control buttons.
 pub const WINDOW_BUTTON_PITCH: f64 = 23.0;
 /// Height of a titled window's title bar.
@@ -166,7 +168,7 @@ impl DecorationMetrics {
     pub fn for_button_size(size: ControlSize) -> Self {
         let d = match size {
             ControlSize::Regular => WINDOW_BUTTON_DIAMETER,
-            _ => alignment_height(Control::WindowControlButton, size).unwrap_or(9.0),
+            _ => WINDOW_BUTTON_DIAMETER_SMALL,
         };
         // the first button's centre is as far from the leading edge as from the top: half the row
         let leading = |row: f64| row / 2.0 - WINDOW_BUTTON_DIAMETER / 2.0;

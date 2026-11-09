@@ -3677,4 +3677,551 @@ mod popup_release {
             "heard: {heard:?}"
         );
     }
+
+    /// The same menus followed by a finger. Every event of a finger goes to the window it went down in; a menu opened
+    /// while it is held hears it move and lift at its own point, at its root.
+    mod touch {
+        use super::*;
+        use cupertino_ui_platform::TouchEvent;
+
+        /// What a finger did, as a word.
+        fn what(event: &TouchEvent) -> &'static str {
+            match event {
+                TouchEvent::Down { .. } => "down",
+                TouchEvent::Motion { .. } => "motion",
+                TouchEvent::Up { .. } => "up",
+                TouchEvent::Cancel => "cancel",
+            }
+        }
+
+        /// A node that tells each touch event it hears and each cancel: the phase and, for a menu (one with
+        /// children), whether the point is inside it and the press that opened its popup. A menu moved over at its
+        /// `more` column tells that too.
+        struct Finger {
+            label: &'static str,
+            /// A menu, which holds items, rather than an item.
+            menu: bool,
+            children: Vec<Element<String>>,
+        }
+
+        fn finger(label: &'static str, children: Vec<Element<String>>) -> Element<String> {
+            Element::new(Finger {
+                label,
+                menu: !children.is_empty(),
+                children,
+            })
+        }
+
+        impl Widget<String> for Finger {
+            type State = (Option<Point>, bool);
+
+            fn layout(&self) -> LayoutSpec {
+                if !self.menu {
+                    spec(ContainerKind::Leaf)
+                } else {
+                    spec(ContainerKind::Stack {
+                        axis: Axis::Horizontal,
+                        spacing: GAP,
+                        align: Align::Start,
+                        justify: Justify::Start,
+                    })
+                }
+            }
+
+            fn take_children(&mut self) -> Vec<Element<String>> {
+                std::mem::take(&mut self.children)
+            }
+
+            fn state(&self) -> (Option<Point>, bool) {
+                (None, false)
+            }
+
+            fn update(&self, _: &Self, _: &mut (Option<Point>, bool)) -> Change {
+                Change::None
+            }
+
+            fn measure(
+                &self,
+                _: &(Option<Point>, bool),
+                _: Constraints,
+                _: &mut MeasureCx<'_>,
+            ) -> Measured {
+                // a menu is as large as its items, an item 10 points square
+                let side = if self.menu { 0.0 } else { 10.0 };
+                Measured {
+                    size: Size::new(side, side),
+                    baseline: None,
+                }
+            }
+
+            fn event(
+                &self,
+                state: &mut (Option<Point>, bool),
+                event: &Event,
+                cx: &mut EventCx<'_, String>,
+            ) -> Propagation {
+                let touch = match event {
+                    Event::Touch(touch, _) => *touch,
+                    Event::Cancel => {
+                        cx.emit(format!("{}:{:?}:cancel", self.label, cx.phase()));
+                        return Propagation::Continue;
+                    }
+                    _ => return Propagation::Continue,
+                };
+                if let TouchEvent::Down { position, .. } | TouchEvent::Motion { position, .. } =
+                    touch
+                {
+                    state.0 = Some(position);
+                }
+                let mut message = format!("{}:{:?}:{}", self.label, cx.phase(), what(&touch));
+                if self.menu {
+                    let inside = state
+                        .0
+                        .is_some_and(|p| cx.bounds().is_some_and(|b| b.contains(p)));
+                    let place = if inside { "inside" } else { "outside" };
+                    let opened = cx.opening_press().map(|t| t.0);
+                    message = format!("{message} {place}, opened by {opened:?}");
+                    if let (TouchEvent::Motion { position, .. }, false) = (touch, state.1) {
+                        if inside && position.x >= MORE.x - 5.0 && position.x < MORE.x + 5.0 {
+                            state.1 = true;
+                            cx.emit("more".to_owned());
+                        }
+                    }
+                }
+                cx.emit(message);
+                Propagation::Continue
+            }
+
+            fn paint(&self, _: &(Option<Point>, bool), _: &mut PaintCx<'_>) {}
+
+            fn semantics(&self, _: &(Option<Point>, bool), _: &mut SemanticsCx<'_>) {}
+        }
+
+        struct Touched;
+
+        impl Application for Touched {
+            type Model = Shown;
+            type Message = String;
+
+            fn init() -> (Shown, Vec<Command<String>>) {
+                (Shown::default(), Vec::new())
+            }
+
+            fn update(model: &mut Shown, message: String) -> Vec<Command<String>> {
+                match message.as_str() {
+                    "opener:Target:down" => model.menu = true,
+                    "more" => model.submenu = true,
+                    _ => {}
+                }
+                model.heard.push(message);
+                Vec::new()
+            }
+
+            fn view(model: &Shown) -> Vec<Window<String>> {
+                let mut windows = vec![
+                    toplevel(
+                        "main",
+                        Element::new(row(vec![
+                            finger("opener", Vec::new()).key("opener"),
+                            finger("other", Vec::new()),
+                        ])),
+                    ),
+                    toplevel(
+                        "second",
+                        Element::new(row(vec![finger("elsewhere", Vec::new())])),
+                    ),
+                ];
+                if model.menu {
+                    windows.push(popup(
+                        "menu",
+                        "main",
+                        MENU_AT,
+                        finger(
+                            "menu",
+                            vec![finger("item", Vec::new()), finger("more", Vec::new())],
+                        ),
+                    ));
+                }
+                if model.submenu {
+                    windows.push(popup(
+                        "submenu",
+                        "menu",
+                        SUBMENU_AT,
+                        finger("submenu", vec![finger("deep", Vec::new())]),
+                    ));
+                }
+                windows
+            }
+        }
+
+        /// Where the compositor places the menu in the main window and the submenu in the menu.
+        const MENU_AT: Point = Point::new(0.0, 10.0);
+        const SUBMENU_AT: Point = Point::new(30.0, 0.0);
+
+        /// `p` in the menu, in the main window.
+        fn in_menu(p: Point) -> Point {
+            Point::new(p.x + MENU_AT.x, p.y + MENU_AT.y)
+        }
+
+        /// `p` in the submenu, in the main window.
+        fn in_submenu(p: Point) -> Point {
+            in_menu(Point::new(p.x + SUBMENU_AT.x, p.y + SUBMENU_AT.y))
+        }
+
+        /// The first finger.
+        const ONE: i32 = 1;
+
+        struct Hand {
+            rt: Runtime<Touched, FakeSystem>,
+            clock: Arc<FakeClock>,
+            configures: u32,
+        }
+
+        impl Hand {
+            /// The two windows shown, nothing open.
+            fn new() -> Self {
+                let clock = Arc::new(FakeClock::default());
+                let mut options = options(&Rc::default());
+                options.clock = clock.clone();
+                let mut system = FakeSystem::default();
+                system.popups = true;
+                let mut rt = Runtime::new(system, options);
+                rt.step(steps()).unwrap();
+                let mut hand = Self {
+                    rt,
+                    clock,
+                    configures: 0,
+                };
+                hand.show("main", Size::new(200.0, 100.0), None);
+                hand.show("second", Size::new(200.0, 100.0), None);
+                hand
+            }
+
+            fn id(&self, key: &str) -> WindowId {
+                self.rt
+                    .windows()
+                    .into_iter()
+                    .find(|(k, _)| *k == WindowKey(key.to_owned().into()))
+                    .unwrap_or_else(|| panic!("no window {key}"))
+                    .1
+            }
+
+            /// Window `key` is configured, a popup placed at `at` in its parent first.
+            fn show(&mut self, key: &str, size: Size, at: Option<Point>) {
+                let id = self.id(key);
+                if let Some(at) = at {
+                    self.rt.window_system_mut().send(
+                        id,
+                        WindowEvent::PopupPlaced(Rect::from_origin_size(at, size)),
+                    );
+                }
+                self.configures += 1;
+                configure_at(&mut self.rt, id, self.configures, size);
+            }
+
+            fn at(&mut self, time: u64) {
+                self.clock.0.store(time, Ordering::SeqCst);
+            }
+
+            /// What was heard of `event` sent to window `key`.
+            fn send(&mut self, key: &str, event: TouchEvent) -> Vec<String> {
+                let before = self.rt.model().heard.len();
+                let id = self.id(key);
+                self.rt
+                    .window_system_mut()
+                    .send(id, WindowEvent::Touch(event, Timestamp(self.clock.now().0)));
+                self.rt.step(steps()).unwrap();
+                self.rt.model().heard[before..].to_vec()
+            }
+
+            fn down(&mut self, key: &str, id: i32, position: Point) -> Vec<String> {
+                self.send(key, TouchEvent::Down { id, position })
+            }
+
+            fn slide(&mut self, key: &str, id: i32, position: Point) -> Vec<String> {
+                self.send(key, TouchEvent::Motion { id, position })
+            }
+
+            /// The first finger put down on the opener at `PRESSED` and held: the menu opens and is shown. What the
+            /// opener heard.
+            fn hold_opener(&mut self) -> Vec<String> {
+                self.at(PRESSED);
+                let heard = self.down("main", ONE, OPENER);
+                assert!(self.rt.model().menu, "the finger opens the menu");
+                self.show("menu", Size::new(100.0, 40.0), Some(MENU_AT));
+                heard
+            }
+
+            /// The finger, still held, slides over the menu's `more`: the submenu opens and is shown.
+            fn open_submenu(&mut self) {
+                self.slide("main", ONE, in_menu(MORE));
+                assert!(
+                    self.rt.model().submenu,
+                    "sliding over more opens the submenu"
+                );
+                self.show("submenu", Size::new(100.0, 40.0), Some(SUBMENU_AT));
+            }
+
+            /// The first finger lifted some time after it went down; what was heard of it.
+            fn lift(&mut self) -> Vec<String> {
+                self.at(PRESSED + 500);
+                self.send("main", TouchEvent::Up { id: ONE })
+            }
+        }
+
+        /// What `menu` heard of a lift or a cancel.
+        fn ended<'a>(heard: &'a [String], menu: &str) -> Vec<&'a str> {
+            let prefix = format!("{menu}:");
+            heard
+                .iter()
+                .filter(|m| m.starts_with(&prefix) && (m.contains(":up") || m.contains(":cancel")))
+                .map(String::as_str)
+                .collect()
+        }
+
+        #[test]
+        fn a_finger_from_the_opener_slid_off_the_menu_and_lifted_tells_the_menu_of_a_lift_outside_it(
+        ) {
+            let mut hand = Hand::new();
+            hand.hold_opener();
+            let over = hand.slide("main", ONE, in_menu(ITEM));
+            assert!(
+                over.iter()
+                    .any(|m| m == "menu:Target:motion inside, opened by Some(1000)"),
+                "the menu hears the finger move over it: {over:?}"
+            );
+            hand.slide("main", ONE, BACKGROUND);
+            let heard = hand.lift();
+            assert_eq!(
+                ended(&heard, "menu"),
+                ["menu:Target:up outside, opened by Some(1000)"],
+                "heard: {heard:?}"
+            );
+        }
+
+        #[test]
+        fn a_tap_on_the_opener_tells_the_menu_of_a_lift_outside_it_and_the_opener_lets_go_first() {
+            let mut hand = Hand::new();
+            let opened = hand.hold_opener();
+            assert!(
+                opened.iter().any(|m| m == "opener:Target:cancel"),
+                "the opener lets go of the finger as the menu takes it: {opened:?}"
+            );
+            let heard = hand.lift();
+            assert_eq!(
+                ended(&heard, "menu"),
+                ["menu:Target:up outside, opened by Some(1000)"],
+                "heard: {heard:?}"
+            );
+            assert!(
+                heard.iter().any(|m| m == "opener:Target:up"),
+                "the lift goes where it lands too, to an opener already let go of: {heard:?}"
+            );
+        }
+
+        #[test]
+        fn a_finger_slid_beyond_its_window_and_lifted_tells_the_menu_of_a_lift_outside_it() {
+            let mut hand = Hand::new();
+            hand.hold_opener();
+            hand.slide("main", ONE, Point::new(-40.0, 300.0));
+            let heard = hand.lift();
+            assert_eq!(
+                ended(&heard, "menu"),
+                ["menu:Target:up outside, opened by Some(1000)"],
+                "heard: {heard:?}"
+            );
+            assert!(
+                !heard.iter().any(|m| m.starts_with("elsewhere:")),
+                "another window hears nothing: {heard:?}"
+            );
+        }
+
+        #[test]
+        fn a_lift_on_a_gap_between_items_reaches_the_menu_inside_it_with_the_finger_that_opened_it()
+        {
+            let mut hand = Hand::new();
+            hand.hold_opener();
+            hand.slide("main", ONE, in_menu(BETWEEN));
+            let heard = hand.lift();
+            assert_eq!(
+                ended(&heard, "menu"),
+                ["menu:Target:up inside, opened by Some(1000)"],
+                "the menu itself is lifted on, once: {heard:?}"
+            );
+            assert!(
+                !heard.iter().any(|m| m.starts_with("other:")),
+                "heard: {heard:?}"
+            );
+        }
+
+        #[test]
+        fn a_lift_on_an_item_reaches_the_menu_inside_it() {
+            let mut hand = Hand::new();
+            hand.hold_opener();
+            hand.slide("main", ONE, in_menu(ITEM));
+            let heard = hand.lift();
+            assert_eq!(
+                ended(&heard, "menu"),
+                ["menu:Target:up inside, opened by Some(1000)"],
+                "heard: {heard:?}"
+            );
+            assert!(
+                !heard
+                    .iter()
+                    .any(|m| m.starts_with("opener:") && m.contains(":up")),
+                "the opener under the finger's first point does not hear it lift: {heard:?}"
+            );
+        }
+
+        #[test]
+        fn nested_menus_opened_by_one_finger_each_hear_a_lift_outside_them_all() {
+            let mut hand = Hand::new();
+            hand.hold_opener();
+            hand.open_submenu();
+            hand.slide("main", ONE, BACKGROUND);
+            let heard = hand.lift();
+            assert_eq!(
+                ended(&heard, "menu"),
+                ["menu:Target:up outside, opened by Some(1000)"],
+                "heard: {heard:?}"
+            );
+            assert_eq!(
+                ended(&heard, "submenu"),
+                ["submenu:Target:up outside, opened by Some(1000)"],
+                "heard: {heard:?}"
+            );
+        }
+
+        #[test]
+        fn a_lift_in_a_submenu_tells_the_menu_nothing() {
+            let mut hand = Hand::new();
+            hand.hold_opener();
+            hand.open_submenu();
+            let over = hand.slide("main", ONE, in_submenu(DEEP));
+            assert!(
+                over.iter()
+                    .any(|m| m == "submenu:Target:motion inside, opened by Some(1000)"),
+                "the submenu hears the finger at its own point: {over:?}"
+            );
+            let heard = hand.lift();
+            assert_eq!(
+                ended(&heard, "submenu"),
+                ["submenu:Target:up inside, opened by Some(1000)"],
+                "heard: {heard:?}"
+            );
+            assert_eq!(
+                ended(&heard, "menu"),
+                Vec::<&str>::new(),
+                "heard: {heard:?}"
+            );
+        }
+
+        #[test]
+        fn a_lift_on_a_gap_of_the_parent_menu_tells_the_submenu_nothing() {
+            let mut hand = Hand::new();
+            hand.hold_opener();
+            hand.open_submenu();
+            hand.slide("main", ONE, in_menu(BETWEEN));
+            let heard = hand.lift();
+            assert_eq!(
+                ended(&heard, "menu"),
+                ["menu:Target:up inside, opened by Some(1000)"],
+                "heard: {heard:?}"
+            );
+            assert_eq!(
+                ended(&heard, "submenu"),
+                Vec::<&str>::new(),
+                "heard: {heard:?}"
+            );
+        }
+
+        /// A menu and its submenu opened by a finger lifted on the menu's gap, so they stay open: a later finger is
+        /// theirs only where it goes down, and each still knows the finger that opened it.
+        #[test]
+        fn a_later_finger_lifted_elsewhere_tells_menus_it_did_not_open_nothing() {
+            let mut hand = Hand::new();
+            hand.hold_opener();
+            hand.open_submenu();
+            hand.slide("main", ONE, in_menu(BETWEEN));
+            hand.lift();
+
+            // a second finger, put down on the menu: its every event goes to the menu's window
+            hand.at(3_000);
+            let down = hand.down("menu", 2, ITEM);
+            assert!(down.iter().any(|m| m == "item:Target:down"), "{down:?}");
+            hand.slide("menu", 2, Point::new(150.0, 80.0));
+            hand.at(3_500);
+            let heard = hand.send("menu", TouchEvent::Up { id: 2 });
+            assert_eq!(
+                ended(&heard, "submenu"),
+                Vec::<&str>::new(),
+                "the submenu the first finger opened hears nothing: {heard:?}"
+            );
+            assert_eq!(
+                ended(&heard, "menu"),
+                [
+                    "menu:Capture:up outside, opened by Some(1000)",
+                    "menu:Bubble:up outside, opened by Some(1000)"
+                ],
+                "the menu hears it lift as the window it went down in, around the item: {heard:?}"
+            );
+
+            hand.at(4_000);
+            hand.down("submenu", 3, DEEP);
+            let heard = hand.send("submenu", TouchEvent::Up { id: 3 });
+            assert_eq!(
+                ended(&heard, "submenu"),
+                [
+                    "submenu:Capture:up inside, opened by Some(1000)",
+                    "submenu:Bubble:up inside, opened by Some(1000)"
+                ],
+                "heard: {heard:?}"
+            );
+            assert_eq!(
+                ended(&heard, "menu"),
+                Vec::<&str>::new(),
+                "heard: {heard:?}"
+            );
+        }
+
+        #[test]
+        fn a_second_finger_put_down_on_a_menu_the_first_holds_goes_nowhere() {
+            let mut hand = Hand::new();
+            hand.hold_opener();
+            let heard = hand.down("menu", 2, ITEM);
+            assert_eq!(heard, Vec::<String>::new(), "nothing hears it go down");
+            let heard = hand.send("menu", TouchEvent::Up { id: 2 });
+            assert_eq!(heard, Vec::<String>::new(), "nor lift");
+            hand.slide("main", ONE, in_menu(ITEM));
+            let heard = hand.lift();
+            assert_eq!(
+                ended(&heard, "menu"),
+                ["menu:Target:up inside, opened by Some(1000)"],
+                "the first finger still lifts on the menu: {heard:?}"
+            );
+        }
+
+        #[test]
+        fn a_cancelled_touch_ends_it_in_every_menu_it_opened_and_a_later_lift_is_not_forwarded() {
+            let mut hand = Hand::new();
+            hand.hold_opener();
+            hand.open_submenu();
+            let heard = hand.send("main", TouchEvent::Cancel);
+            assert_eq!(
+                ended(&heard, "menu"),
+                ["menu:Target:cancel inside, opened by Some(1000)"],
+                "heard: {heard:?}"
+            );
+            assert_eq!(
+                ended(&heard, "submenu"),
+                ["submenu:Target:cancel outside, opened by Some(1000)"],
+                "heard: {heard:?}"
+            );
+            let heard = hand.lift();
+            assert!(
+                ended(&heard, "menu").is_empty() && ended(&heard, "submenu").is_empty(),
+                "a finger cancelled is no longer followed: {heard:?}"
+            );
+        }
+    }
 }

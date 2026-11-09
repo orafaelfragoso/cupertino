@@ -43,8 +43,8 @@ Windows and popups map one to one onto the transport's toplevels and popups; des
 Configures, close, popup dismissal, scale, pointer, keys, keyboard focus and the input method arrive as `WindowEvent`s
 of the window whose surface they name. A popup's configure comes after a `WindowEvent::PopupPlaced` with the rectangle
 the compositor placed it at in its parent, after any flip or slide. Key modifiers are logical (`Mods`), through the `Profile` the window system was
-made with. Input times are the compositor's milliseconds mapped onto the window system's clock (nanoseconds since it
-was made): the first one, and any that would land in the future or more than a second in the past, anchors the mapping
+made with. Input times are the compositor's milliseconds mapped onto the window system's clock (`CLOCK_MONOTONIC` nanoseconds, the clock the runtime reads, so an event's time compares with its
+now): the first one, and any that would land in the future or more than a second in the past, anchors the mapping
 at the time it was read, and the ones after keep the compositor's spacing. A button's serial is the transport's latest
 input serial.
 

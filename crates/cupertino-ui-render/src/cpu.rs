@@ -165,6 +165,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
                 hidden,
                 holes: Vec::new(),
                 covering: Vec::new(),
+                missing: Vec::new(),
                 frame: true,
             };
             for &root in &tree.roots {
@@ -257,6 +258,8 @@ struct Target<'a, 'b> {
     /// them (by operation index, in `covering`) and the clips leave them out of the pixmap (see `holed`).
     holes: Vec<Bounds>,
     covering: Vec<bool>,
+    /// Glyph runs, by operation index, whose rasters miss the pixels `limit` needs: they are not drawn.
+    missing: Vec<bool>,
     /// The frame itself, whose span writes wait in the painter's `pending` until something else paints there.
     frame: bool,
 }
@@ -286,9 +289,6 @@ struct Tree<'n> {
     nodes: &'n [PaintNode],
     /// Each node's own extent in window pixels.
     extents: Vec<Bounds>,
-    /// How far, in pixels, the effects in each node's subtree (its group's, its layers' and its descendants') reach past
-    /// what they are computed from, along the deepest chain of them.
-    reach: Vec<i32>,
     children: Vec<Vec<usize>>,
     roots: Vec<usize>,
     parent: Vec<Option<usize>>,
@@ -331,25 +331,12 @@ impl<'n> Tree<'n> {
             stack.push((i, true));
             stack.extend(children[i].iter().rev().map(|&c| (c, false)));
         }
-        // children come after their parent, so walking backwards finishes each node's children first
-        let mut reach = vec![0; nodes.len()];
-        for i in (0..nodes.len()).rev() {
-            let below = children[i].iter().map(|&c| reach[c]).max().unwrap_or(0);
-            let group = nodes[i]
-                .group
-                .as_ref()
-                .map_or(0, |g| effects::support(&g.effects, scale));
-            reach[i] = node_support(&nodes[i], scale)
-                .max(below)
-                .saturating_add(group);
-        }
         Tree {
             nodes,
             extents: nodes
                 .iter()
                 .map(|n| geometry::own_extent(n, scale))
                 .collect(),
-            reach,
             children,
             roots,
             parent,
@@ -419,7 +406,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             let Some(area) = self.own_area(tree, i, &chain, whole, d) else {
                 return false;
             };
-            if self.direct(tree, i, &chain, whole, d) {
+            if self.direct(tree, i, &chain, true) {
                 return false;
             }
             self.solid(node, &chain, &area)
@@ -497,35 +484,23 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         (!area.is_empty()).then_some(area)
     }
 
-    /// Whether a node's operations are painted straight into the target: nothing clips or cuts them and they only draw.
-    fn direct(
-        &self,
-        tree: &Tree<'_>,
-        i: usize,
-        chain: &[&PaintNode],
-        rect: &Bounds,
-        limit: &Bounds,
-    ) -> bool {
+    /// Whether a node's operations are painted straight into `t`: no clip cuts them and they only draw. Into the
+    /// frame, only glyphs are: each of their pixels is blended on its own and the damage only picks which, while a fill
+    /// cut by the damage would be rasterized with its paths cut there, and differ from the frame drawn whole.
+    fn direct(&self, tree: &Tree<'_>, i: usize, chain: &[&PaintNode], frame: bool) -> bool {
         let node = &tree.nodes[i];
-        let reach = tree.extents[i]
-            .outset(node_support(node, self.scale))
-            .intersect(rect);
-        // a clip that lets all the node can reach through whole cuts nothing of it
+        let reach = tree.extents[i].outset(node_support(node, self.scale));
+        // a clip that lets through, in whole pixels, all the node can reach cuts nothing of it, whatever the damage
         chain.iter().all(|owner| {
             owner
                 .clip
                 .as_ref()
                 .is_none_or(|clip| geometry::clip_holds(clip, &owner.transform, self.scale, &reach))
-        }) && reach.intersect(limit) == reach
-            && node.ops.iter().all(|op| {
-                matches!(
-                    op,
-                    PaintOp::Fill { .. }
-                        | PaintOp::Stroke { .. }
-                        | PaintOp::Glyphs { .. }
-                        | PaintOp::Image { .. }
-                )
-            })
+        }) && node.ops.iter().all(|op| match op {
+            PaintOp::Glyphs { .. } => true,
+            PaintOp::Fill { .. } | PaintOp::Stroke { .. } | PaintOp::Image { .. } => !frame,
+            _ => false,
+        })
     }
 
     fn subtree<'n>(
@@ -587,12 +562,10 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         chain: &[&'n PaintNode],
     ) -> Result<(), RenderError> {
         let node = &tree.nodes[i];
-        // a descendant's blur or shadow near the needed pixels is computed from pixels past them, which the layer holds
-        let halo = tree.reach[i];
-        let area = Bounds::of_rect(&node.bounds, self.scale)
-            .intersect(&t.limit.outset(halo))
-            .intersect(&t.rect);
-        if area.is_empty() {
+        // the whole group, whatever the damage: its descendants are rasterized into the same pixels and its blurs and
+        // shadows read the same ones in every frame
+        let area = Bounds::of_rect(&node.bounds, self.scale).intersect(&t.rect);
+        if area.is_empty() || area.intersect(&t.limit).is_empty() {
             return Ok(());
         }
         self.stats.groups_painted += 1;
@@ -608,6 +581,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 hidden: None,
                 holes: Vec::new(),
                 covering: Vec::new(),
+                missing: Vec::new(),
                 frame: false,
             };
             self.own(&mut inner, tree, i, &[])?;
@@ -658,47 +632,61 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
     ) -> Result<(), RenderError> {
         let node = &tree.nodes[i];
         let extent = tree.extents[i];
-        let Some(area) = self.own_area(tree, i, chain, &t.rect, &t.limit) else {
+        if self.own_area(tree, i, chain, &t.rect, &t.limit).is_none() {
+            return Ok(());
+        }
+        // the pixels the node is painted into are the same whatever the damage, so its paths are rasterized the same
+        // way and cut in the same places in every frame; the damage only picks which of them are kept
+        let Some(area) = self.own_area(tree, i, chain, &t.rect, &t.rect) else {
             return Ok(());
         };
         self.stats.nodes_painted += 1;
         let halo = node_support(node, self.scale);
         let reach = Reach { extent, halo };
-        if self.direct(tree, i, chain, &t.rect, &t.limit) {
+        if self.direct(tree, i, chain, t.frame) {
+            let needed = extent.outset(halo).intersect(&t.rect).intersect(&t.limit);
             if t.frame {
-                let reach = extent.outset(halo).intersect(&t.rect).intersect(&t.limit);
-                self.pending.flush(t.pixmap, t.origin, &reach);
+                self.pending.flush(t.pixmap, t.origin, &needed);
             }
             let mut inner = Target {
                 pixmap: &mut *t.pixmap,
                 origin: t.origin,
                 rect: t.rect,
-                limit: extent.outset(halo).intersect(&t.rect),
+                limit: needed,
                 clips: Vec::new(),
                 hidden: None,
                 holes: Vec::new(),
                 covering: Vec::new(),
+                missing: Vec::new(),
                 frame: false,
             };
             let mut pos = 0;
             return self.run(&mut inner, node, reach, &mut pos);
         }
-        let solid = if self.fast {
-            self.solid(node, chain, &area)
-        } else {
-            None
-        };
-        let Some(solid) = solid else {
+        // a node of solid fills is painted in the same rectangles on both paths, so they give the same bytes: the
+        // pixels its fills cover fully, which the span path writes as rows, and the rest
+        let Some(solid) = self.solid(node, chain, &area) else {
             return self.through_scratch(t, node, chain, reach, &area, None);
         };
-        // the rim: what the fills reach outside the pixels they cover fully, through the scratch image with those
-        // pixels left out of it
-        let rim = spans::subtract(solid.reach, &solid.core);
-        if !rim.is_empty() {
-            self.through_scratch(t, node, chain, reach, &area, Some((&solid, &rim)))?;
+        // the rim: what the fills reach outside the pixels they cover fully, with those pixels left out of them. Each
+        // of its rectangles is rasterized into a scratch image of its own, the same in every frame, and only when the
+        // damage needs some of it
+        for piece in spans::subtract(solid.reach, &solid.core) {
+            if piece.intersect(&t.limit).is_empty() {
+                continue;
+            }
+            let rim = [piece];
+            self.through_scratch(t, node, chain, reach, &piece, Some((&solid, &rim)))?;
         }
         for core in &solid.core {
             let shown = core.intersect(&t.limit);
+            if shown.is_empty() {
+                continue;
+            }
+            if !self.fast {
+                self.through_scratch(t, node, chain, reach, core, None)?;
+                continue;
+            }
             self.stats
                 .spans
                 .add(u64::from(shown.width()) * u64::from(shown.height()) * 4);
@@ -730,6 +718,15 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             || (Vec::new(), Vec::new()),
             |(solid, _)| (solid.core.clone(), solid.covering.clone()),
         );
+        // a rim's rectangle needs only the glyphs whose rasters reach it
+        let needed = area.intersect(&t.limit);
+        let missing = cut.map_or_else(Vec::new, |(solid, _)| {
+            solid
+                .glyphs
+                .iter()
+                .map(|g| g.is_some_and(|g| g.intersect(&needed).is_empty()))
+                .collect()
+        });
         let mut scratch = self.scratch(area)?;
         {
             let mut pm = scratch.as_mut();
@@ -737,11 +734,13 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 pixmap: &mut pm,
                 origin: (area.x0, area.y0),
                 rect: *area,
-                limit: *area,
+                // only the pixels kept are needed: glyphs are blended there alone, which changes no other pixel
+                limit: area.intersect(&t.limit),
                 clips: self.chain_mask(chain, area, &holes)?.into_iter().collect(),
                 hidden: None,
                 holes,
                 covering,
+                missing,
                 frame: false,
             };
             let mut pos = 0;
@@ -883,7 +882,9 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                     self.stroke(t, node, shape, *width, paint)
                 }
                 PaintOp::Glyphs { origin, run, color } => {
-                    self.glyph_run(t, node, origin, run, *color)?
+                    if !t.missing.get(*pos - 1).copied().unwrap_or(false) {
+                        self.glyph_run(t, node, origin, run, *color)?
+                    }
                 }
                 PaintOp::Image {
                     image,
@@ -1106,12 +1107,9 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         opacity: f32,
         effects: &[crate::Effect],
     ) -> Result<(), RenderError> {
-        let area = reach
-            .extent
-            .outset(reach.halo)
-            .intersect(&t.limit.outset(reach.halo))
-            .intersect(&t.rect);
-        if area.is_empty() {
+        // the layer's whole reach, whatever the damage, as for a group
+        let area = reach.extent.outset(reach.halo).intersect(&t.rect);
+        if area.is_empty() || area.intersect(&t.limit.outset(reach.halo)).is_empty() {
             skip_layer(node, pos);
             return Ok(());
         }
@@ -1133,6 +1131,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 hidden: None,
                 holes: Vec::new(),
                 covering: Vec::new(),
+                missing: Vec::new(),
                 frame: false,
             };
             self.run(&mut inner, node, reach, pos)?;
@@ -2158,6 +2157,127 @@ mod tests {
                 stats.node_composite.bytes,
                 general.node_composite.bytes
             );
+        }
+    }
+
+    /// Draws `list`, changed frame by frame, over the frame before with damage that covers the change and more
+    /// rectangles of any size and offset, and checks each frame byte for byte against the full frame of the same list,
+    /// with every pixel that changed inside the damage the frame reports. Both renderers take the same paths (`fast`
+    /// or not), so only the damage differs.
+    fn incremental_matches_full(seed: u64, scale: f64, mut list: DisplayList, fast: bool) {
+        let none = resources();
+        let config = CpuConfig {
+            max_pixels: 1 << 22,
+            glyph_cache_bytes: 1 << 16,
+            image_cache_bytes: 1 << 16,
+            font_smoothing: true,
+        };
+        let make = || {
+            let r = CpuRenderer::new(config, NoGlyphs);
+            if fast {
+                r
+            } else {
+                r.without_fast_paths()
+            }
+        };
+        let (mut step, mut whole) = (make(), make());
+        let mut draw = Draw(seed ^ 0xd1a7);
+        let (width, height) = (
+            (SCENE.0 * scale).ceil() as u32,
+            (SCENE.1 * scale).ceil() as u32,
+        );
+        let pixels = (width * height) as usize;
+        let render = |r: &mut CpuRenderer<NoGlyphs>, list: &DisplayList, damage: &DamageRegion| {
+            let request = RenderRequest {
+                list,
+                resources: &none,
+                scale,
+                width,
+                height,
+                damage,
+            };
+            let id = r.render(&request).unwrap();
+            r.frame(id).unwrap().clone()
+        };
+        let at = |p: usize| (p as u32 % width, p as u32 / width);
+        let mut before = render(&mut step, &list, &DamageRegion::Full);
+        for frame in 1..10 {
+            // every other frame changes one node's colours; the others repaint what did not change
+            if frame % 2 == 0 {
+                let i = 1 + draw.pick(list.nodes.len() as u32 - 1) as usize;
+                for op in &mut list.nodes[i].ops {
+                    if let PaintOp::Fill { paint, .. } = op {
+                        *paint = Paint::Solid(draw.color());
+                    }
+                }
+            }
+            let full = render(&mut whole, &list, &DamageRegion::Full);
+            // the pixels the change moved, and rectangles of any size and offset besides, in points
+            let moved = (0..pixels)
+                .filter(|&p| full.pixels[4 * p..4 * p + 4] != before.pixels[4 * p..4 * p + 4])
+                .map(at)
+                .fold(None, |b: Option<(u32, u32, u32, u32)>, (x, y)| {
+                    Some(b.map_or((x, y, x, y), |(x0, y0, x1, y1)| {
+                        (x0.min(x), y0.min(y), x1.max(x), y1.max(y))
+                    }))
+                });
+            let g = [0, 1, 2, 4, 8][draw.pick(5) as usize];
+            let mut rects: Vec<Rect> = (0..1 + draw.pick(4))
+                .map(|_| {
+                    let r = draw.rect(SCENE.0, SCENE.1, g);
+                    match draw.pick(3) {
+                        // a caret's or an underline's worth
+                        0 => Rect::new(r.min_x(), r.min_y(), r.width() / 12.0, r.height() / 12.0),
+                        1 => Rect::new(r.min_x(), r.min_y(), r.width() / 3.0, r.height() / 3.0),
+                        _ => r,
+                    }
+                })
+                .collect();
+            if let Some((x0, y0, x1, y1)) = moved {
+                rects.push(Rect::from_ltrb(
+                    f64::from(x0) / scale,
+                    f64::from(y0) / scale,
+                    f64::from(x1 + 1) / scale,
+                    f64::from(y1 + 1) / scale,
+                ));
+            }
+            let damage = DamageRegion::Rects(rects);
+            let after = render(&mut step, &list, &damage);
+            if let Some(p) = (0..pixels)
+                .find(|&p| after.pixels[4 * p..4 * p + 4] != full.pixels[4 * p..4 * p + 4])
+            {
+                panic!(
+                    "seed {seed}, scale {scale}, fast {fast}, frame {frame}: pixel {:?} is {:?} drawn over the frame \
+                     before under {damage:?} and {:?} drawn whole",
+                    at(p),
+                    &after.pixels[4 * p..4 * p + 4],
+                    &full.pixels[4 * p..4 * p + 4],
+                );
+            }
+            for p in 0..pixels {
+                let (x, y) = at(p);
+                let reported = after
+                    .damage
+                    .iter()
+                    .any(|d| x >= d.x && x < d.x + d.width && y >= d.y && y < d.y + d.height);
+                assert!(
+                    reported || after.pixels[4 * p..4 * p + 4] == before.pixels[4 * p..4 * p + 4],
+                    "seed {seed}, scale {scale}, frame {frame}: pixel ({x}, {y}) changed outside the damage reported"
+                );
+            }
+            before = after;
+        }
+    }
+
+    #[test]
+    fn a_frame_drawn_over_the_last_has_the_bytes_of_one_drawn_whole() {
+        for seed in 0..24 {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                for fast in [true, false] {
+                    incremental_matches_full(seed, scale, scene(seed), fast);
+                    incremental_matches_full(seed, scale, harsh(seed), fast);
+                }
+            }
         }
     }
 

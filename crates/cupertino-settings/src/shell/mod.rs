@@ -21,6 +21,7 @@ use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowRequest};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::ContentPurpose;
+use cupertino_kit::theme::ControlSize;
 use cupertino_menu_model::ActionName;
 
 use crate::controls::Value;
@@ -504,6 +505,8 @@ impl Shell {
                 selection: None,
                 initial: false,
             },
+            // the sidebar's search is the large size
+            size: Some(ControlSize::Large),
         })
         .key("search");
         // the sidebar window keeps the room for the window control buttons above it

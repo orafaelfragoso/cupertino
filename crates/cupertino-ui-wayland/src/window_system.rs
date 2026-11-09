@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Wake, Waker};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use cupertino_geometry::{Rect, Size};
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
@@ -253,8 +253,6 @@ pub struct WaylandWindowSystem {
     profile: Profile,
     windows: Vec<Window>,
     next_window: u32,
-    /// What the window system's clock counts from.
-    epoch: Instant,
     input_times: InputTimeline,
     selection: Option<ClipboardOffer>,
     next_clipboard: u64,
@@ -380,7 +378,6 @@ impl WaylandWindowSystem {
             profile,
             windows: Vec::new(),
             next_window: 0,
-            epoch: Instant::now(),
             input_times: InputTimeline::default(),
             selection: None,
             next_clipboard: 0,
@@ -445,8 +442,15 @@ impl WaylandWindowSystem {
             .map(|w| w.surface)
     }
 
+    /// The window system's clock: the system's monotonic clock, the one the runtime reads, so an event's time (an
+    /// input's, a frame's, a presentation's) compares with the runtime's now.
     fn now(&self) -> Timestamp {
-        Timestamp(self.epoch.elapsed().as_nanos() as u64)
+        let t = rustix::time::clock_gettime(ClockId::Monotonic);
+        Timestamp(
+            (t.tv_sec as u64)
+                .saturating_mul(1_000_000_000)
+                .saturating_add(t.tv_nsec as u64),
+        )
     }
 
     fn window(&self, id: WindowId) -> Result<&Window, PlatformError> {

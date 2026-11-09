@@ -7,7 +7,8 @@ use crate::{BareField, SearchField, SecureField, TextChange, TextField};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
-    Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics, Widget,
+    Event, EventCx, MeasureCx, OverlayCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics,
+    Widget,
 };
 use cupertino_ui_layout::{
     Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
@@ -19,8 +20,10 @@ use cupertino_ui_text::{
     ParagraphLayout, Response, SecureBuffer, Selection, TextBuffer, TextFieldKeys,
     TextInputSession, TextPosition, CARET_WIDTH, SURROUNDING_MAX_BYTES,
 };
-use cupertino_ui_theme::{Color, ColorRole, ThemeTokens};
-use std::cell::Cell;
+use cupertino_ui_theme::{
+    control_geometry, Color, ColorRole, ControlFamily, ControlSize, ThemeTokens,
+};
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::time::Duration;
 
@@ -49,66 +52,107 @@ pub(crate) fn device_thickness(points: f64, scale: f64) -> f64 {
     (points * scale).round().max(1.0) / scale
 }
 
-/// `at` (points from the node's origin) on the nearest device pixel edge at `scale`.
-pub(crate) fn snap(at: f64, scale: f64) -> f64 {
-    if scale.is_finite() && scale > 0.0 {
-        (at * scale).round() / scale
-    } else {
-        at
+/// The bar a caret `caret` (a layout's caret rectangle, in node points) draws as at `scale`: [`CARET_WIDTH`] in whole
+/// device pixels (at least one). The overlay that draws it puts its edges on the window's device pixel edges.
+pub(crate) fn caret_bar(caret: Rect, scale: f64) -> Rect {
+    Rect::new(
+        caret.min_x(),
+        caret.min_y(),
+        device_thickness(CARET_WIDTH, scale),
+        caret.height(),
+    )
+}
+
+/// What a field or an editor draws over its paint ([`Widget::overlay`]), as its last paint placed it in its own
+/// coordinates: the caret and the composition's underlines. The overlay puts them on whole device pixels of the
+/// window wherever the field lies, and a blink draws only the overlay again.
+#[derive(Debug, Default)]
+pub(crate) struct Marks {
+    /// The caret and its colour, while it can show: the field has the keyboard in an active window, nothing is
+    /// selected and the input method shows its cursor. The blink decides when it does.
+    caret: Cell<Option<(Rect, Color)>>,
+    /// The composition's underlines and their colour.
+    underlines: RefCell<Vec<(Rect, Color)>>,
+    /// What they are clipped to, the field's interior; none for an editor, whose scroll view clips it.
+    clip: Cell<Option<Rect>>,
+}
+
+impl Marks {
+    /// Forgets the last paint's marks, before a paint places them again.
+    pub(crate) fn clear(&self) {
+        self.caret.set(None);
+        self.underlines.borrow_mut().clear();
+        self.clip.set(None);
+    }
+
+    pub(crate) fn caret(&self, bar: Rect, color: Option<Color>) {
+        self.caret.set(color.map(|color| (bar, color)));
+    }
+
+    fn underline(&self, rect: Rect, color: Option<Color>) {
+        if let Some(color) = color {
+            self.underlines.borrow_mut().push((rect, color));
+        }
+    }
+
+    fn clip(&self, rect: Rect) {
+        self.clip.set(Some(rect));
+    }
+
+    /// Asks for the overlay when there is something to draw in it.
+    pub(crate) fn finish(&self, cx: &mut PaintCx<'_>) {
+        if self.caret.get().is_some() || !self.underlines.borrow().is_empty() {
+            cx.overlay();
+        }
+    }
+
+    /// Draws the underlines, and the caret in the on phase of `blink`.
+    pub(crate) fn draw(&self, blink: &Blink, cx: &mut OverlayCx<'_>) {
+        if let Some(clip) = self.clip.get() {
+            cx.clip(clip);
+        }
+        for &(rect, color) in self.underlines.borrow().iter() {
+            cx.fill_pixels(rect, color);
+        }
+        if let Some((bar, color)) = self.caret.get() {
+            if blink.on(cx.env(), cx.now()) {
+                cx.fill_pixels(bar, color);
+            }
+        }
     }
 }
 
-/// The bar a caret `caret` (a layout's caret rectangle, in node points) draws as at `scale`: [`CARET_WIDTH`] in whole
-/// device pixels (at least one), its left edge, top and bottom on device pixel edges, so it stays sharp at every scale
-/// where the node lies on whole pixels.
-pub(crate) fn caret_bar(caret: Rect, scale: f64) -> Rect {
-    let width = device_thickness(CARET_WIDTH, scale);
-    let top = snap(caret.min_y(), scale);
-    let bottom = snap(caret.max_y(), scale).max(top + device_thickness(0.0, scale));
-    Rect::new(snap(caret.min_x(), scale), top, width, bottom - top)
-}
-
-/// A selection rectangle with its left and right edges on device pixel edges, so it meets the caret and its neighbours
-/// without a blended column.
-pub(crate) fn selection_bar(rect: Rect, scale: f64) -> Rect {
-    let (left, right) = (snap(rect.min_x(), scale), snap(rect.max_x(), scale));
-    Rect::new(left, rect.min_y(), (right - left).max(0.0), rect.height())
-}
-
 /// The composition's underline under `composition` (bytes of `layout`'s text) on each line it covers,
-/// [`COMPOSITION_DROP`] below the baseline, and a heavier one under `clause`, the part the input method is converting.
-/// The layout's origin is at `origin`, in node points.
-pub(crate) fn paint_composition(
-    cx: &mut PaintCx<'_>,
+/// [`COMPOSITION_DROP`] below the baseline, and a heavier one under `clause`, the part the input method is converting,
+/// as marks for the overlay. The layout's origin is at `origin`, in node points.
+pub(crate) fn mark_composition(
+    marks: &Marks,
+    scale: f64,
     layout: &ParagraphLayout,
     origin: Point,
     composition: Range<usize>,
     clause: Option<Range<usize>>,
     color: Option<Color>,
 ) {
-    let scale = cx.env().scale;
-    let underline = |cx: &mut PaintCx<'_>, range: Range<usize>, points: f64| {
+    let underline = |range: Range<usize>, points: f64| {
         for rect in layout.selection_rects(range) {
             let Some(line) = layout.lines().iter().find(|l| l.rect.y() == rect.y()) else {
                 continue;
             };
-            let bar = selection_bar(rect.translate(origin.x, 0.0), scale);
-            let top = snap(origin.y + line.baseline + COMPOSITION_DROP, scale);
-            fill_rect(
-                cx,
+            marks.underline(
                 Rect::new(
-                    bar.min_x(),
-                    top,
-                    bar.width(),
+                    origin.x + rect.min_x(),
+                    origin.y + line.baseline + COMPOSITION_DROP,
+                    rect.width(),
                     device_thickness(points, scale),
                 ),
                 color,
             );
         }
     };
-    underline(cx, composition, COMPOSITION_LINE);
+    underline(composition, COMPOSITION_LINE);
     if let Some(clause) = clause.filter(|c| !c.is_empty()) {
-        underline(cx, clause, CLAUSE_LINE);
+        underline(clause, CLAUSE_LINE);
     }
 }
 
@@ -159,13 +203,16 @@ pub(crate) fn position(byte: usize) -> TextPosition {
     }
 }
 
-/// A search field's height, the magnifying glass's size and its leading edge, the text's leading edge, and its fill
-/// and rim: white at these opacities in a dark appearance, the fill white and the rim black in a light one.
-const SEARCH_HEIGHT: f64 = 28.0;
-const SEARCH_GLYPH: f64 = 12.5;
-const SEARCH_GLYPH_X: f64 = 9.5;
-const SEARCH_TEXT_X: f64 = 28.0;
-const SEARCH_FILL_DARK: f32 = 0.2;
+/// A search field's magnifying glass: the size of the symbol's box (its strokes span about 12.5 points of it, from
+/// about 10.5 points in) and the box's leading edge, and the text's leading edge. Its height is the size table's for
+/// a search field ([`ControlFamily::SearchField`]): 24 points at the regular size, 28 at the large size a sidebar's
+/// search uses.
+const SEARCH_GLYPH: f64 = 16.0;
+const SEARCH_GLYPH_X: f64 = 8.25;
+const SEARCH_TEXT_X: f64 = 29.5;
+/// A search field's capsule on a material: its fill and rim, white at these opacities in a dark appearance, the fill
+/// white and the rim black in a light one. On the window's content it is a text field's recessed well instead.
+const SEARCH_FILL_DARK: f32 = 0.23;
 const SEARCH_RIM_DARK: f32 = 0.12;
 const SEARCH_FILL_LIGHT: f32 = 0.45;
 const SEARCH_RIM_LIGHT: f32 = 0.09;
@@ -181,8 +228,8 @@ const WELL_EDGE_LIGHT: f32 = 0.08;
 pub(crate) enum FieldLook {
     #[default]
     Plain,
-    /// A capsule with a magnifying glass before the text: a [`SearchField`].
-    Search,
+    /// A capsule with a magnifying glass before the text: a [`SearchField`], at its own control size or the window's.
+    Search(Option<ControlSize>),
     /// No chrome, the text at this many points: a [`BareField`].
     Bare(u16),
 }
@@ -194,7 +241,15 @@ impl FieldLook {
     fn height(self, theme: &ThemeTokens) -> f64 {
         match self {
             FieldLook::Plain => theme.metrics.field_height,
-            FieldLook::Search => SEARCH_HEIGHT,
+            FieldLook::Search(size) => {
+                let metrics = &theme.metrics;
+                control_geometry(
+                    ControlFamily::SearchField,
+                    size.unwrap_or(metrics.size),
+                    metrics.compact,
+                )
+                .height
+            }
             FieldLook::Bare(size) => (f64::from(size) * BARE_LINE_SHARE).ceil(),
         }
     }
@@ -202,7 +257,7 @@ impl FieldLook {
     /// The size of the field's text: the body type's, or a bare field's own.
     fn text_size(self, theme: &ThemeTokens) -> f32 {
         match self {
-            FieldLook::Plain | FieldLook::Search => theme.type_scale.body.size,
+            FieldLook::Plain | FieldLook::Search(_) => theme.type_scale.body.size,
             FieldLook::Bare(size) => f32::from(size),
         }
     }
@@ -244,7 +299,7 @@ fn interior(size: Size, theme: &ThemeTokens, look: FieldLook, direction: LayoutD
     let inset = theme.metrics.field_inset;
     let (start, end) = match look {
         FieldLook::Plain => (inset, inset),
-        FieldLook::Search => (SEARCH_TEXT_X, inset),
+        FieldLook::Search(_) => (SEARCH_TEXT_X, inset),
         FieldLook::Bare(_) => (0.0, 0.0),
     };
     let (left, right) = match direction {
@@ -325,13 +380,12 @@ struct Shown<'a> {
     composition: Option<Range<usize>>,
     /// The clause of the composition the input method is converting, drawn with a heavier underline.
     clause: Option<Range<usize>>,
-    /// The caret is in the on phase of its blink.
-    caret_on: bool,
 }
 
-/// Paints a field's text, or its placeholder while empty, with the selection and caret while focused and the
-/// composition's underline, all clipped to the interior. Scrolls so the caret stays inside while focused, and to the
-/// text's start otherwise.
+/// Paints a field's text, or its placeholder while empty, with the selection while focused, all clipped to the
+/// interior, and places the caret and the composition's underline as `marks` for the overlay. Scrolls so the caret
+/// stays inside while focused, and to the text's start otherwise.
+#[allow(clippy::too_many_arguments)]
 fn paint_text(
     cx: &mut PaintCx<'_>,
     look: &ControlState,
@@ -339,8 +393,10 @@ fn paint_text(
     shown: &Shown<'_>,
     placeholder: &str,
     scroll: &Cell<f64>,
+    marks: &Marks,
     field: FieldLook,
 ) {
+    marks.clear();
     let env = cx.env().clone();
     let size = cx.size();
     let area = interior(size, &env.theme, field, env.direction);
@@ -368,14 +424,12 @@ fn paint_text(
         field_top(&layout, chrome, &env, field),
     );
     let color = |role| look::color(&env.theme, role, look);
-    cx.push(PaintOp::PushClip(Shape::Rect(area)));
-    if focused && !shown.selection.is_empty() {
+    cx.clip_pixels(area);
+    if let Some(selected) =
+        color(ColorRole::SelectedTextBackground).filter(|_| focused && !shown.selection.is_empty())
+    {
         for rect in layout.selection_rects(shown.selection.clone()) {
-            fill_rect(
-                cx,
-                selection_bar(rect.translate(origin.x, origin.y), env.scale),
-                color(ColorRole::SelectedTextBackground),
-            );
+            cx.fill_pixels(rect.translate(origin.x, origin.y), selected);
         }
     }
     if shown.text.is_empty() {
@@ -388,16 +442,19 @@ fn paint_text(
             // field's
             let role = match field {
                 FieldLook::Plain => ColorRole::PlaceholderText,
-                FieldLook::Search | FieldLook::Bare(_) => ColorRole::SecondaryText,
+                FieldLook::Search(_) | FieldLook::Bare(_) => ColorRole::SecondaryText,
             };
             look::glyphs(cx, &placeholder, at, color(role));
         }
     } else {
         look::glyphs(cx, &layout, origin, color(ColorRole::Text));
     }
+    cx.push(PaintOp::PopClip);
+    marks.clip(area);
     if let Some(range) = &shown.composition {
-        paint_composition(
-            cx,
+        mark_composition(
+            marks,
+            env.scale,
             &layout,
             origin,
             range.clone(),
@@ -405,19 +462,13 @@ fn paint_text(
             color(ColorRole::Text),
         );
     }
-    if focused
-        && look.window_active
-        && shown.selection.is_empty()
-        && shown.caret_drawn
-        && shown.caret_on
-    {
-        fill_rect(
-            cx,
+    if focused && look.window_active && shown.selection.is_empty() && shown.caret_drawn {
+        marks.caret(
             caret_bar(caret.translate(origin.x, origin.y), env.scale),
             color(ColorRole::Text),
         );
     }
-    cx.push(PaintOp::PopClip);
+    marks.finish(cx);
 }
 
 /// After this long without an edit, move, click or focus, the caret stops blinking and stays on, so an idle window
@@ -485,8 +536,9 @@ impl Blink {
             self.arm(selecting, cx);
             cx.request_paint();
         } else if let Event::Wake(_) = event {
+            // the blink changes only the overlay
             self.arm(selecting, cx);
-            cx.request_paint();
+            cx.request_overlay();
         }
     }
 }
@@ -509,7 +561,7 @@ fn paint_chrome(cx: &mut PaintCx<'_>, state: &ControlState, field: FieldLook) {
     let theme = cx.env().theme.clone();
     let rect = chrome(cx.size(), &theme, field);
     match field {
-        FieldLook::Search => {
+        FieldLook::Search(_) => {
             paint_search_chrome(cx, rect, state);
             return;
         }
@@ -554,30 +606,23 @@ pub(crate) fn well(theme: &ThemeTokens, state: &ControlState) -> (Option<Color>,
     (fill, edge)
 }
 
-/// A search field's capsule, its rim and its magnifying glass at the reading direction's start.
+/// A search field's capsule and its magnifying glass at the reading direction's start. On a material (a sidebar) the
+/// capsule is a light fill with a rim; on the window's content it is a text field's recessed well with round ends.
 fn paint_search_chrome(cx: &mut PaintCx<'_>, rect: Rect, state: &ControlState) {
     let theme = cx.env().theme.clone();
     let radius = rect.height() / 2.0;
-    let white = cupertino_ui_theme::Color::new(1.0, 1.0, 1.0, 1.0);
-    let black = cupertino_ui_theme::Color::new(0.0, 0.0, 0.0, 1.0);
-    let (fill, rim) = if theme.preferences.appearance.is_dark() {
-        (
-            white.with_alpha(SEARCH_FILL_DARK),
-            white.with_alpha(SEARCH_RIM_DARK),
-        )
+    let (fill, rim) = if cx.on_material() {
+        search_capsule(&theme, state)
     } else {
-        (
-            white.with_alpha(SEARCH_FILL_LIGHT),
-            black.with_alpha(SEARCH_RIM_LIGHT),
-        )
+        well(&theme, state)
     };
-    look::fill(cx, rect, radius, Some(fill));
+    look::fill(cx, rect, radius, fill);
     look::stroke(
         cx,
         rect.inset(cupertino_geometry::Insets::uniform(0.5)),
         radius - 0.5,
         1.0,
-        Some(rim),
+        rim,
     );
     let glyph = match cx.env().direction {
         LayoutDirection::Ltr => SEARCH_GLYPH_X,
@@ -600,6 +645,31 @@ fn paint_search_chrome(cx: &mut PaintCx<'_>, rect: Rect, state: &ControlState) {
         );
     }
     paint_focus_ring(cx, rect, radius);
+}
+
+/// A search field's capsule on a material: a light fill and its rim. Under increased contrast the rim is the theme's
+/// stronger field border.
+fn search_capsule(theme: &ThemeTokens, state: &ControlState) -> (Option<Color>, Option<Color>) {
+    let appearance = theme.preferences.appearance;
+    let white = Color::new(1.0, 1.0, 1.0, 1.0);
+    let black = Color::new(0.0, 0.0, 0.0, 1.0);
+    let (fill, rim) = if appearance.is_dark() {
+        (
+            white.with_alpha(SEARCH_FILL_DARK),
+            white.with_alpha(SEARCH_RIM_DARK),
+        )
+    } else {
+        (
+            white.with_alpha(SEARCH_FILL_LIGHT),
+            black.with_alpha(SEARCH_RIM_LIGHT),
+        )
+    };
+    let rim = if appearance.is_high_contrast() {
+        look::color(theme, ColorRole::TextFieldBorder, state)
+    } else {
+        Some(rim)
+    };
+    (Some(fill), rim)
 }
 
 pub(crate) fn control_state(enabled: bool, hovered: bool, cx: &PaintCx<'_>) -> ControlState {
@@ -662,6 +732,8 @@ pub struct FieldState {
     /// Set by paint, where the field's width is known, and read by hit testing.
     scroll: Cell<f64>,
     blink: Blink,
+    /// The caret and underlines the last paint placed, for the overlay.
+    marks: Marks,
     look: FieldLook,
     /// Where the pointer is while a press drags, in window coordinates, so the selection scrolls on past the edge.
     drag_point: Option<Point>,
@@ -1012,6 +1084,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             hovered: false,
             scroll: Cell::new(0.0),
             blink: Blink::default(),
+            marks: Marks::default(),
             look: FieldLook::Plain,
             drag_point: None,
             reset_input: false,
@@ -1071,7 +1144,6 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             selection: state.buffer.selection(),
             composition: state.buffer.composition(),
             clause: state.buffer.composition_cursor(),
-            caret_on: state.blink.on(cx.env(), cx.now()),
         };
         paint_text(
             cx,
@@ -1080,8 +1152,13 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             &shown,
             &self.placeholder,
             &state.scroll,
+            &state.marks,
             state.look,
         );
+    }
+
+    fn overlay(&self, state: &FieldState, cx: &mut OverlayCx<'_>) {
+        state.marks.draw(&state.blink, cx);
     }
 
     fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {
@@ -1122,6 +1199,8 @@ pub struct SecureState {
     hovered: bool,
     scroll: Cell<f64>,
     blink: Blink,
+    /// The caret the last paint placed, for the overlay.
+    marks: Marks,
     /// The bullet a held press started from, while it drags.
     drag: Option<usize>,
     /// When and at which bullet the last press went down, for a double click.
@@ -1370,6 +1449,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             hovered: false,
             scroll: Cell::new(0.0),
             blink: Blink::default(),
+            marks: Marks::default(),
             drag: None,
             last_press: None,
         }
@@ -1431,7 +1511,6 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             selection: selection.start * width..selection.end * width,
             composition: None,
             clause: None,
-            caret_on: state.blink.on(cx.env(), cx.now()),
         };
         paint_text(
             cx,
@@ -1440,8 +1519,13 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             &shown,
             &self.placeholder,
             &state.scroll,
+            &state.marks,
             FieldLook::Plain,
         );
+    }
+
+    fn overlay(&self, state: &SecureState, cx: &mut OverlayCx<'_>) {
+        state.marks.draw(&state.blink, cx);
     }
 
     fn semantics(&self, _: &SecureState, cx: &mut SemanticsCx<'_>) {
@@ -1472,13 +1556,18 @@ impl<M: Clone + 'static> Widget<M> for SearchField<M> {
 
     fn state(&self) -> FieldState {
         FieldState {
-            look: FieldLook::Search,
+            look: FieldLook::Search(self.size),
             ..self.field.state()
         }
     }
 
     fn update(&self, old: &Self, state: &mut FieldState) -> Change {
-        self.field.update(&old.field, state)
+        let change = self.field.update(&old.field, state);
+        if self.size != old.size {
+            state.look = FieldLook::Search(self.size);
+            return Change::Layout;
+        }
+        change
     }
 
     fn measure(
@@ -1487,7 +1576,7 @@ impl<M: Clone + 'static> Widget<M> for SearchField<M> {
         constraints: Constraints,
         cx: &mut MeasureCx<'_>,
     ) -> Measured {
-        measure(constraints, cx, FieldLook::Search)
+        measure(constraints, cx, FieldLook::Search(self.size))
     }
 
     fn target(&self, state: &FieldState, env: &Environment) -> Size {
@@ -1500,6 +1589,10 @@ impl<M: Clone + 'static> Widget<M> for SearchField<M> {
 
     fn paint(&self, state: &FieldState, cx: &mut PaintCx<'_>) {
         self.field.paint(state, cx)
+    }
+
+    fn overlay(&self, state: &FieldState, cx: &mut OverlayCx<'_>) {
+        self.field.overlay(state, cx)
     }
 
     fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {
@@ -1551,6 +1644,10 @@ impl<M: Clone + 'static> Widget<M> for BareField<M> {
 
     fn paint(&self, state: &FieldState, cx: &mut PaintCx<'_>) {
         self.field.paint(state, cx)
+    }
+
+    fn overlay(&self, state: &FieldState, cx: &mut OverlayCx<'_>) {
+        self.field.overlay(state, cx)
     }
 
     fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {

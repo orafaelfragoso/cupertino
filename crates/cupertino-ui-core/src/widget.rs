@@ -1,4 +1,4 @@
-use crate::cx::{EventCx, MeasureCx, PaintCx, SemanticsCx};
+use crate::cx::{EventCx, MeasureCx, OverlayCx, PaintCx, SemanticsCx};
 use crate::{Environment, Event, Key};
 use cupertino_geometry::{Point, Size};
 use cupertino_ui_layout::{Constraints, Flex, GridSpan, LayoutSpec, Measured, SizeSpec};
@@ -58,6 +58,10 @@ pub trait Widget<M>: 'static {
     fn target(&self, _state: &Self::State, _env: &Environment) -> Size {
         Size::ZERO
     }
+    /// Draws over everything the node painted, on every frame while its last paint asked for it
+    /// ([`PaintCx::overlay`]), without painting the node again: a caret that blinks. Placed on whole device pixels of
+    /// the window ([`OverlayCx`]).
+    fn overlay(&self, _state: &Self::State, _cx: &mut OverlayCx<'_>) {}
 }
 
 /// An immutable description of one widget and its children.
@@ -154,6 +158,7 @@ pub(crate) trait AnyWidget<M> {
     fn scroll_offset(&self, state: &dyn Any) -> Point;
     fn hit(&self, state: &dyn Any, point: Point) -> bool;
     fn target(&self, state: &dyn Any, env: &Environment) -> Size;
+    fn overlay(&self, state: &dyn Any, cx: &mut OverlayCx<'_>);
 }
 
 const STATE: &str = "a node's state is the one its widget type created";
@@ -222,5 +227,9 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn target(&self, state: &dyn Any, env: &Environment) -> Size {
         Widget::target(self, state.downcast_ref().expect(STATE), env)
+    }
+
+    fn overlay(&self, state: &dyn Any, cx: &mut OverlayCx<'_>) {
+        Widget::overlay(self, state.downcast_ref().expect(STATE), cx)
     }
 }

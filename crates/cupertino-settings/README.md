@@ -3,7 +3,8 @@
 The settings application of the Cupertino desktop. The library holds the pane table, the sidebar order, the navigation
 history, the search, the panes and their controls; the `cupertino-settings` process (feature `app`) draws one window with
 CupertinoKit (`shell`) in the full-height-sidebar style (Kit's `SidebarWindow`): the sidebar, with the window control
-buttons at its top and below them a search field over rows of coloured tiles, beside the page under a floating toolbar
+buttons at its top and below them a search field (the large control size, 28 pt, a light capsule on the sidebar's
+material) over rows of coloured tiles, beside the page under a floating toolbar
 of back and forward buttons. A page's title shares the toolbar row, after the buttons; only a pane that gathers
 sub-pages (Accessibility, Privacy & Security) opens instead with a header card (its tile, title and a one-line
 description) and no title in the toolbar. Its sections are rounded groups of full-width rows; some sections are pages of

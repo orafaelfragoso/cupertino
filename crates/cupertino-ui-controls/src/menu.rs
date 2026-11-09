@@ -18,6 +18,7 @@ use crate::{
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_menu_model::tracking::{
     Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY,
+    TRACKING_INTERVAL,
 };
 use cupertino_theme::ControlFamily;
 use cupertino_typeahead::TypeAhead;
@@ -31,7 +32,7 @@ use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
 };
 use cupertino_ui_platform::{
-    DecorationMode, Keysym, Mods, MouseButton, PointerEvent, Timestamp, WindowSpec,
+    DecorationMode, Keysym, Mods, MouseButton, PointerEvent, Timestamp, TouchEvent, WindowSpec,
 };
 use cupertino_ui_render::{Paint, PaintOp, Sampling, Shape};
 use cupertino_ui_theme::{Color, ColorRole, StateVariant, Surface};
@@ -515,6 +516,9 @@ struct PanelState {
     opened: Option<Timestamp>,
     /// A press that went down on this panel.
     press: Option<Tracking>,
+    /// The touch the panel follows, as the pointer, and where it last was: one put down on it, or the one that opened
+    /// the menu, which it hears move on from the opener. Another finger meanwhile is not followed.
+    touch: Option<(i32, Point)>,
     /// The pointer came onto a row that can be chosen, other than the one it was on as the menu opened.
     reached: bool,
     pointer: Option<Point>,
@@ -813,6 +817,36 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
             }
             Event::Wake(now) if cx.node() == cx.target() => {
                 self.woke(state, now, cx);
+                return Propagation::Stop;
+            }
+            // a finger is the pointer while it is down: put down on a row it presses it, moved it points, lifted it
+            // lets go where it last was
+            Event::Touch(TouchEvent::Down { id, position }, _) if mine => {
+                if state.touch.is_none() {
+                    state.touch = Some((id, position));
+                    self.button(state, position, true, cx);
+                }
+                return Propagation::Stop;
+            }
+            Event::Touch(TouchEvent::Motion { id, position }, _) if mine => {
+                // a touch not seen going down is the one that opened the menu, coming on from its opener
+                if state.touch.is_none_or(|(followed, _)| followed == id) {
+                    state.touch = Some((id, position));
+                    self.pointed(state, position, cx);
+                }
+                return Propagation::Stop;
+            }
+            Event::Touch(TouchEvent::Up { id }, _) if mine => {
+                if let Some((_, at)) = state.touch.filter(|(followed, _)| *followed == id) {
+                    state.touch = None;
+                    self.button(state, at, false, cx);
+                }
+                return Propagation::Stop;
+            }
+            // the touch was taken away: its press ends with nothing chosen, and the menu stays as it is
+            Event::Touch(TouchEvent::Cancel, _) | Event::Cancel if state.touch.is_some() => {
+                state.touch = None;
+                state.press = None;
                 return Propagation::Stop;
             }
             _ => {}
@@ -1271,8 +1305,22 @@ impl<M: 'static> Widget<M> for Separator {
     }
 }
 
+/// How long a finger rests on a context menu's region before its menu opens there, in seconds: a finger has no
+/// secondary button. As long as a press is held before a menu tracks it as held.
+const TOUCH_HOLD: f64 = TRACKING_INTERVAL;
+
+/// How far, in points, a resting finger may stray before it is a drag or a scroll rather than a hold.
+const TOUCH_SLOP: f64 = 8.0;
+
+/// A context menu's region: the finger resting on it, if one is, with where it went down and when its rest opens the
+/// menu. Opaque.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ContextMenuState {
+    hold: Option<(i32, Point, Timestamp)>,
+}
+
 impl<M: Clone + 'static> Widget<M> for ContextMenu<M> {
-    type State = ();
+    type State = ContextMenuState;
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec::new(ContainerKind::Stack {
@@ -1296,23 +1344,62 @@ impl<M: Clone + 'static> Widget<M> for ContextMenu<M> {
         )]
     }
 
-    fn state(&self) {}
+    fn state(&self) -> ContextMenuState {
+        ContextMenuState::default()
+    }
 
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
+    fn update(&self, _: &Self, _: &mut ContextMenuState) -> Change {
         Change::None
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &ContextMenuState, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
             size: Size::ZERO,
             baseline: None,
         }
     }
 
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+    fn event(
+        &self,
+        state: &mut ContextMenuState,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
         let Some(on_open) = &self.on_open else {
             return Propagation::Continue;
         };
+        // a finger that rests on the region opens the menu where it went down, and the menu follows it from there; it
+        // is watched on its way in, so the content under it still takes it as a press
+        match *event {
+            Event::Touch(TouchEvent::Down { id, position }, _)
+                if cx.phase() == Phase::Capture && state.hold.is_none() =>
+            {
+                let at = after(cx.now(), TOUCH_HOLD);
+                state.hold = Some((id, position, at));
+                cx.wake_at(at);
+            }
+            Event::Touch(TouchEvent::Motion { id, position }, _)
+                if cx.phase() == Phase::Capture =>
+            {
+                if let Some((_, from, _)) = state.hold.filter(|(held, ..)| *held == id) {
+                    if (position.x - from.x).hypot(position.y - from.y) > TOUCH_SLOP {
+                        state.hold = None;
+                    }
+                }
+            }
+            Event::Touch(TouchEvent::Up { id }, _) if cx.phase() == Phase::Capture => {
+                state.hold = state.hold.filter(|(held, ..)| *held != id);
+            }
+            Event::Touch(TouchEvent::Cancel, _) | Event::Cancel => state.hold = None,
+            Event::Wake(now) if cx.node() == cx.target() => {
+                if let Some((_, at, _)) = state.hold.filter(|(.., due)| *due <= now) {
+                    state.hold = None;
+                    cx.emit(on_open(at));
+                    return Propagation::Stop;
+                }
+            }
+            _ => {}
+        }
         if cx.phase() == Phase::Capture {
             return Propagation::Continue;
         }
@@ -1347,9 +1434,9 @@ impl<M: Clone + 'static> Widget<M> for ContextMenu<M> {
         }
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    fn paint(&self, _: &ContextMenuState, _: &mut PaintCx<'_>) {}
 
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+    fn semantics(&self, _: &ContextMenuState, _: &mut SemanticsCx<'_>) {}
 }
 
 impl<M: Clone + 'static> PopUpButton<M> {
@@ -1468,8 +1555,8 @@ fn menu_button_measure(env: &Environment, labels: &[String]) -> Measured {
     }
 }
 
-/// A pop-up or pull-down button's events: its menu opens on a press, so the pointer can drag to a row and let go
-/// there, and on Space, Return, Up or Down.
+/// A pop-up or pull-down button's events: its menu opens on a press or a finger put down, so the pointer or the finger
+/// can drag to a row and let go there, and on Space, Return, Up or Down.
 fn menu_button_event<M: Clone + 'static>(
     press: &mut Press,
     event: &Event,
@@ -1491,25 +1578,15 @@ fn menu_button_event<M: Clone + 'static>(
         }
     }
     // the menu opens on the press, so the pointer can drag to an option and let go there
-    let pressed = cx.phase() != Phase::Capture
-        && matches!(
-            event,
-            Event::Pointer(
-                PointerEvent::Button {
-                    button: MouseButton::Left,
-                    pressed: true,
-                    ..
-                },
-                _,
-            )
-        );
+    let pressed = cx.phase() != Phase::Capture && opens_on_press(event, press);
     if pressed {
         cx.emit(on_open.clone());
     }
     match press.event(event, true, Keys::SpaceAndReturn, cx) {
         Outcome::Ignored if pressed => Propagation::Stop,
         Outcome::Ignored => Propagation::Continue,
-        Outcome::Changed | Outcome::Activated(ActivationSource::Pointer) => {
+        Outcome::Changed
+        | Outcome::Activated(ActivationSource::Pointer | ActivationSource::Touch) => {
             cx.request_paint();
             Propagation::Stop
         }
@@ -1518,6 +1595,23 @@ fn menu_button_event<M: Clone + 'static>(
             cx.emit(on_open.clone());
             Propagation::Stop
         }
+    }
+}
+
+/// Whether `event` is a press that opens a pop-up or pull-down button's menu, or a combo box's: the primary button
+/// going down, or a finger put down while no other holds the control (`press`, before it hears the event).
+pub(crate) fn opens_on_press(event: &Event, press: &Press) -> bool {
+    match event {
+        Event::Pointer(
+            PointerEvent::Button {
+                button: MouseButton::Left,
+                pressed: true,
+                ..
+            },
+            _,
+        ) => true,
+        Event::Touch(TouchEvent::Down { .. }, _) => !press.armed(),
+        _ => false,
     }
 }
 

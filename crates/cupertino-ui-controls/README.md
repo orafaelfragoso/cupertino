@@ -25,7 +25,9 @@ from the application's model and reports changes as messages.
   ring is drawn only for a keyboard-visible focus, outside the chrome, without changing layout.
 - **Scroll views.** `ScrollView` moves its content with `cupertino-ui-core`'s scroll motion. A touchpad finger or a
   touch drags it, stretches it past an edge and leaves kinetic motion at the lift (none under Reduce Motion; a stretch
-  still returns). A wheel, a tilted wheel and a continuous source step it inside the range at once, with no stretch
+  still returns). Each movement counts at the time its event happened, not when it is handled, so movements
+  delivered together keep their spacing and the lift's speed is measured as the finger moved; an event without a time
+  of its own counts as now. A wheel, a tilted wheel and a continuous source step it inside the range at once, with no stretch
   and no inertia of their own. The model's offset never leaves the range: the stretch is drawn on top of it. A gesture
   belongs to the view its first movement can move, or for a finger to the view it pulls past an edge along an axis
   that view scrolls; the content coasts on while the pointer goes elsewhere, and a new finger catches it where it is.
@@ -36,7 +38,9 @@ from the application's model and reports changes as messages.
   size table (`control_geometry`) at the theme's `ControlMetrics::size` and `compact` setting: mini, small, regular,
   large and extra large. `ControlMetrics::at_size` gives the metrics at another size. At the regular size a button,
   a pop-up button, a field and a segmented control are 24 pt tall, a check box 16 pt square and a switch 54 × 24 pt
-  with a 32 × 20 pt capsule thumb (38 × 20 pt in the compact setting).
+  with a 32 × 20 pt capsule thumb (38 × 20 pt in the compact setting). A tab view's segments are a segmented
+  control's height and a disclosure button is the table's `ControlFamily::Disclosure` square (20 pt at regular);
+  no control reads another table of sizes.
 - **Held thumbs.** While a switch is held or dragged its thumb becomes a lens about 1.6 times its width, and a dragged
   slider's knob one about 1.33 times its size: a capsule (a rounded rectangle for the knob) with a soft shade, a
   translucent body through which the track shows shrunk about the lens's centre, a light band along its top and
@@ -56,9 +60,13 @@ from the application's model and reports changes as messages.
   as typed (committed and reported) and reset the input method. The composition draws a thin underline at the same
   distance below the baseline at every scale, the clause the input method is converting a heavier one and no caret,
   and otherwise a caret inside the composition where the input method puts it. The input method learns the committed
-  text around the caret and the caret's rectangle. The caret is a whole number of device pixels wide with its edges
-  on device pixels of the field (crisp at 1x and 2x, and at 1.5x where the field sits on whole pixels), and selection
-  bars snap the same way. It blinks in `caret_phase_ms` phases and stays on with Reduce Motion or a phase of 0 (a
+  text around the caret and the caret's rectangle. The caret and the composition's underlines are the field's overlay
+  (`Widget::overlay`): drawn over its paint with every edge on a device pixel of the window wherever the field lies,
+  so they are crisp at every scale, fractional ones included, and the caret a whole number of device pixels wide. The
+  selection lies under the text on whole device pixels of the window too (`PaintCx::fill_pixels`), as does the
+  field's interior clip, so its edges meet the caret and the field without a blended row or column
+  (`tests/caret-overlay.rs`). The caret blinks in `caret_phase_ms` phases, each blink
+  drawing only the overlay again, no node, and stays on with Reduce Motion or a phase of 0 (a
   session that asks for a steady caret). Shift-click and shift-drag extend the selection; a drag held past the field's
   edge (an editor's top or bottom) keeps scrolling and selecting every 50 ms by the distance past the edge until the
   text ends; the caret scrolls into view after every edit and move.
@@ -94,8 +102,13 @@ from the application's model and reports changes as messages.
   (`Surface::TextBackground`) where the desktop can, below the window's glass, so a toolbar's capsules over a form
   show, and it paints it where the desktop cannot. A `TextField`'s chrome is a recessed well: darker than what it
   sits on in the dark appearance (black at 25 %), the text background in the light one, with a faint edge (the
-  theme's stronger border under Increase Contrast). `SearchField` is a `TextField` drawn as a capsule
-  with a magnifying glass; it edits and reads as its field does. `BareField` is a `TextField` with no chrome, its
+  theme's stronger border under Increase Contrast). `SearchField` is a `TextField` with a magnifying glass
+  about 12.5 pt across, 10.5 pt from its leading edge, and its text 29.5 pt in; on the window's content it is a text field's recessed well, on a
+  material (`PaintCx::on_material`: a sidebar, a popover, glass) a light capsule (white at 23 % in the dark
+  appearance, 45 % in the light one, with a faint rim; the theme's border under Increase Contrast). It edits and reads
+  as its field does. Its height is the size table's for a search field at its `size`, the window's when `None`
+  (24 pt at the regular size), 28 pt at `ControlSize::Large`, the size a sidebar's header uses
+  (`tests/search-field.rs`). The other fields (plain, secure, combo box, date picker) keep their well on a material. `BareField` is a `TextField` with no chrome, its
   text and placeholder at its own size (whole points), for a field standing on a surface drawn around it such as a
   launcher capsule; it edits and reads as its field does (`tests/bare_field.rs`).
 - **Tiled sidebar.** `TileSidebar` lists a settings window's pages: rows of `TILE_SIDEBAR_ROW_HEIGHT`, a tile before
@@ -214,7 +227,11 @@ t; a toolbar group is regular glass (`PaintCx::glass`) in one container
   hears of anything only for a menu no held press opened. A press dragged over the menus and let go away from all of
   them chooses nothing and closes them; one that never came over them leaves them open. Escape closes them at once,
   mid-drag too, and a pop-up button keeps its value. None of this waits on how a menu appears: it tracks alike with
-  Reduce Motion (`tests/menu-tracking.rs`).
+  Reduce Motion (`tests/menu-tracking.rs`). A finger does the same: put down on a `PopUpButton` it opens the menu,
+  slid onto an item and lifted it chooses it, tapped it leaves the menu open, and a later tap on an item chooses. A
+  finger that rests 0.5 s within 8 pt of where it went down on a `ContextMenu`'s region opens its menu there, and the
+  content under it is not clicked. A second finger chooses nothing while the first holds the menu, and a cancelled
+  touch chooses nothing and leaves the menu open (`tests/menu-touch.rs`).
   `MenuItem::Shortcut` is an item that shows the keys that choose it ("⇧⌘N") at its trailing edge in the secondary
   label colour (the row's colour when it is highlighted or disabled), which assistive technology reads as its
   description; the application binds the keys itself.

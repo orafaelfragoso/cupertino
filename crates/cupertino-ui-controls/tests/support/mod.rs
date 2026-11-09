@@ -5,16 +5,16 @@
 
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_core::{
-    AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Action, ActionRequest,
-    Application, CommandRegistry, Element, Environment, FrameSnapshot, Icons, Key, NodeId,
-    PlaceholderIcons, Runtime, RuntimeOptions, Window, WindowBackground, WindowKey,
+    overlay_id, AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Action,
+    ActionRequest, Application, CommandRegistry, Element, Environment, FrameSnapshot, Icons, Key,
+    NodeId, PlaceholderIcons, Runtime, RuntimeOptions, Window, WindowBackground, WindowKey,
 };
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{
     Capabilities, DecorationMode, KeyEvent, Keysym, Mods, MouseButton, PlatformEvent, PointerEvent,
     Timestamp, TouchEvent, WindowEvent, WindowId, WindowSpec, WindowStates,
 };
-use cupertino_ui_render::{CpuConfig, CpuRenderer, PaintNodeId, PaintOp};
+use cupertino_ui_render::{CpuConfig, CpuRenderer, PaintNodeId, PaintOp, Shape};
 use cupertino_ui_test::{HeadlessWindowSystem, ManualClock};
 use cupertino_ui_text::{
     AttributedText, FontIndex, FontStyle, FontWeight, GlyphKey, GlyphRasterizer, ParagraphStyle,
@@ -547,16 +547,27 @@ impl<A: Application> Harness<A> {
         Point::new(r.min_x() + r.width() / 2.0, r.min_y() + r.height() / 2.0)
     }
 
-    /// The operations the node painted, in its own coordinates.
+    /// The operations the node painted, in its own coordinates, then the fills its overlay draws (a caret, an
+    /// underline), moved into them.
     pub fn ops(&self, key: &'static str) -> Vec<PaintOp> {
-        let id = PaintNodeId::from(self.rt.find(self.window, &Key::from(key)).unwrap());
-        self.snapshot()
-            .display_list
-            .nodes
-            .into_iter()
-            .find(|n| n.id == id)
-            .unwrap()
-            .ops
+        let node = self.rt.find(self.window, &Key::from(key)).unwrap();
+        let (id, over) = (PaintNodeId::from(node), overlay_id(node));
+        let origin = self.rect(key).origin;
+        let nodes = self.snapshot().display_list.nodes;
+        let mut ops = nodes.iter().find(|n| n.id == id).unwrap().ops.clone();
+        if let Some(overlay) = nodes.iter().find(|n| n.id == over) {
+            ops.extend(overlay.ops.iter().filter_map(|op| match op {
+                PaintOp::Fill {
+                    shape: Shape::Rect(rect),
+                    paint,
+                } => Some(PaintOp::Fill {
+                    shape: Shape::Rect(rect.translate(-origin.x, -origin.y)),
+                    paint: paint.clone(),
+                }),
+                _ => None,
+            }));
+        }
+        ops
     }
 
     pub fn accessible(&self, key: &'static str) -> AccessibilityNode {

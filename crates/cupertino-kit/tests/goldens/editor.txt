@@ -80,6 +80,6 @@ display
   paint 4294967298 parent=Some(4294967297) revision=50 bounds=[-1,-0.90625 481x320.90625] hit=[0,0 480x320] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
     Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 320.0 } }), paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
     Glyphs origin=6,18.59375 font=FontId(0) size=13 count=5 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
-    Fill { shape: Rect(Rect { origin: Point { x: 6.0, y: 21.7294921875 }, size: Size { width: 34.0, height: 15.7294921875 } }), paint: Solid(Color { r: 0.72156864, g: 0.8156863, b: 0.9882353, a: 1.0 }) }
+    Fill { shape: Rect(Rect { origin: Point { x: 6.0, y: 22.0 }, size: Size { width: 34.0, height: 15.0 } }), paint: Solid(Color { r: 0.72156864, g: 0.8156863, b: 0.9882353, a: 1.0 }) }
     Glyphs origin=6,34.3232421875 font=FontId(0) size=13 count=5 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
   paint 4294967299 parent=Some(4294967296) revision=4 bounds=[463,0 17x320] hit=[463,0 17x320] clip=None transform=[1.0, 0.0, 0.0, 1.0, 463.0, 0.0]

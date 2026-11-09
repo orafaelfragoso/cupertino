@@ -10,7 +10,6 @@ use cupertino_ui_core::{
     PaintCx, Phase, Propagation, Role, SemanticsCx, Widget, WindowKey,
 };
 use cupertino_ui_layout::{Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured};
-use cupertino_ui_platform::{MouseButton, PointerEvent};
 use cupertino_ui_render::{Paint, PaintOp};
 use cupertino_ui_theme::{ColorRole, ControlFamily};
 
@@ -194,25 +193,18 @@ impl<M: Clone + 'static> Widget<M> for Disclosure<M> {
         let Some(on_open) = self.on_open.as_ref().filter(|_| self.enabled) else {
             return Propagation::Continue;
         };
-        let pressed = cx.phase() != Phase::Capture
-            && matches!(
-                event,
-                Event::Pointer(
-                    PointerEvent::Button {
-                        button: MouseButton::Left,
-                        pressed: true,
-                        ..
-                    },
-                    _,
-                )
-            );
+        let pressed = cx.phase() != Phase::Capture && crate::menu::opens_on_press(event, press);
         if pressed {
             cx.emit(on_open.clone());
         }
         match press.event(event, true, Keys::SpaceAndReturn, cx) {
             Outcome::Ignored if pressed => Propagation::Stop,
             Outcome::Ignored => Propagation::Continue,
-            Outcome::Changed | Outcome::Activated(cupertino_ui_core::ActivationSource::Pointer) => {
+            Outcome::Changed
+            | Outcome::Activated(
+                cupertino_ui_core::ActivationSource::Pointer
+                | cupertino_ui_core::ActivationSource::Touch,
+            ) => {
                 cx.request_paint();
                 Propagation::Stop
             }

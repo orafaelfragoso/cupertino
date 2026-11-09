@@ -658,6 +658,7 @@ impl Application for Gallery {
                 Element::new(field("Name", "Your name", "")).width(FIELD_WIDTH),
                 Element::new(SearchField {
                     field: field("Search", "Search", ""),
+                    size: None,
                 })
                 .width(FIELD_WIDTH),
             ]),

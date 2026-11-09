@@ -55,7 +55,6 @@ use cupertino_kit::text::{
     TextStyle, TextSystem, Wrap,
 };
 use cupertino_kit::theme::{Color, ColorRole, StateVariant, Surface, ThemeTokens, TypeRole};
-use cupertino_theme::metrics::{alignment_height, Control};
 
 use crate::center::{
     BannerMeasure, ClearScope, NotificationCenter, StackLayout, SwipeConfig, SwipeOutcome,
@@ -334,16 +333,12 @@ impl CardMetrics {
         width - LEADING - ICON_SIZE - ICON_GAP - TRAILING
     }
 
-    /// The side of a disclosure button, which Kit takes from the theme's control size.
+    /// The side of a disclosure button, which Kit takes from the size table at the theme's control size.
     pub fn disclosure_side(&self) -> f64 {
-        alignment_height(Control::DisclosureButton, self.theme.metrics.size)
-            .or_else(|| {
-                alignment_height(
-                    Control::DisclosureButton,
-                    cupertino_kit::theme::ControlSize::Regular,
-                )
-            })
-            .unwrap_or_default()
+        self.theme
+            .metrics
+            .geometry(cupertino_kit::theme::ControlFamily::Disclosure)
+            .height
     }
 
     /// `content` in `role`'s size, and its weight where a run keeps the regular one, as Kit's text sets it.

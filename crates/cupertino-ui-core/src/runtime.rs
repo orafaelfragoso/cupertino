@@ -194,6 +194,8 @@ struct WindowState<M> {
     popup: Option<PopupState<M>>,
     /// When the pointer press that opened this popup went down, if a button was held as it opened.
     opening_press: Option<Timestamp>,
+    /// The touch that opened this popup, if one was held as it opened: its id and when it went down.
+    opening_touch: Option<(i32, Timestamp)>,
     /// Where the compositor last placed each open popup of this window, in its coordinates; a popup asked to move is
     /// not here until it is placed anew.
     popups: Vec<(WindowKey, Rect)>,
@@ -209,6 +211,18 @@ struct PopupState<M> {
     on_dismiss: M,
     /// Where the popup was last placed, so it moves only when its anchor or size changes.
     placed: PopupSpec,
+}
+
+/// The touch held down first ([`Runtime`]'s `touch`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HeldTouch {
+    /// The window it went down in, which hears all of it.
+    window: WindowId,
+    id: i32,
+    /// When it went down, on the runtime's clock.
+    start: Timestamp,
+    /// Where it is, in that window's coordinates.
+    at: Point,
 }
 
 /// Runs an application on a window system.
@@ -229,6 +243,11 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     /// When the pointer button held down went down, on the runtime's clock, until it comes up: a popup opened meanwhile
     /// was opened by that press.
     press: Option<Timestamp>,
+    /// The touch held down first, until it lifts or is cancelled: a popup opened meanwhile was opened by it. Another
+    /// finger put down meanwhile opens nothing.
+    touch: Option<HeldTouch>,
+    /// A popup opened while that touch was held, since the view was last built.
+    touch_opened: bool,
     exit: bool,
     theme_for: Option<ThemeForAppearance>,
     /// Follows each scroll event to the screen, when asked ([`Runtime::with_scroll_timing`]).
@@ -280,6 +299,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             awaiting_layout: Vec::new(),
             keyboard: false,
             press: None,
+            touch: None,
+            touch_opened: false,
             exit: false,
             theme_for: None,
             scroll_timing: None,
@@ -681,6 +702,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 self.windows.push(w);
             }
         }
+        if std::mem::take(&mut self.touch_opened) {
+            self.touch_taken();
+        }
         // popups go before their parents, the latest first, as the protocol destroys them
         old.reverse();
         old.sort_by_key(|w| w.popup.is_none());
@@ -780,6 +804,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             failed: None,
             popup: None,
             opening_press: None,
+            opening_touch: None,
             popups: Vec::new(),
             drop: None,
         }
@@ -849,6 +874,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let mut w = self.new_window(key, id, spec);
         w.focus = Focus::shown(self.keyboard);
         w.opening_press = self.press;
+        w.opening_touch = self.touch.map(|t| (t.id, t.start));
+        self.touch_opened |= w.opening_touch.is_some();
         w.env = env;
         w.size = size;
         w.popup = Some(PopupState {
@@ -1272,12 +1299,55 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         now: Timestamp,
         effects: &mut Effects<A::Message>,
     ) {
+        let window = self.windows[i].id;
+        // the first finger down is the one a popup opened meanwhile follows; one whose window or path went away while
+        // it was held no longer counts
+        let gone = self.touch.is_some_and(|t| {
+            !self
+                .windows
+                .iter()
+                .any(|w| w.id == t.window && w.touches.contains_key(&t.id))
+        });
+        if gone {
+            self.touch = None;
+        }
+        let held = self.touch.filter(|t| {
+            t.window == window
+                && match event {
+                    TouchEvent::Motion { id, .. } | TouchEvent::Up { id } => id == t.id,
+                    TouchEvent::Cancel => true,
+                    TouchEvent::Down { .. } => false,
+                }
+        });
+        if let (Some(t), TouchEvent::Motion { position, .. }) = (self.touch.as_mut(), event) {
+            if held.is_some() {
+                t.at = position;
+            }
+        }
+        // the popups the held touch opened, each with its top-left corner in this window
+        let opened: Vec<(usize, Point)> = held.map_or_else(Vec::new, |t| self.opened_by(i, t));
+        if matches!(event, TouchEvent::Up { .. } | TouchEvent::Cancel) && held.is_some() {
+            self.touch = None;
+        }
         let w = &mut self.windows[i];
         let Some(root) = w.root else { return };
+        // a popup follows the touch that opened it while it is held: another finger put down on it goes nowhere
+        let following = self
+            .touch
+            .is_some_and(|t| w.opening_touch == Some((t.id, t.start)));
         let path = match event {
+            TouchEvent::Down { .. } if following => return,
             TouchEvent::Down { id, position } => {
                 let path = hit_test(&self.tree, root, &w.geometry, position).unwrap_or_default();
                 w.touches.insert(id, path.clone());
+                if self.touch.is_none() {
+                    self.touch = Some(HeldTouch {
+                        window,
+                        id,
+                        start: now,
+                        at: position,
+                    });
+                }
                 path
             }
             TouchEvent::Motion { id, .. } => w.touches.get(&id).cloned().unwrap_or_default(),
@@ -1296,10 +1366,141 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 for node in targets {
                     route.notify(node, &Event::Cancel);
                 }
+                // the popups it opened end its interaction too, with nothing chosen
+                for (j, _) in opened {
+                    self.tell_popup(j, &Event::Touch(TouchEvent::Cancel, time), now);
+                }
                 return;
             }
         };
-        route(&mut self.tree, w, now, effects).dispatch(&path, &Event::Touch(event, time));
+        let Some(t) = held else {
+            route(&mut self.tree, w, now, effects).dispatch(&path, &Event::Touch(event, time));
+            return;
+        };
+        let size = |runtime: &Self, j: usize| runtime.windows[j].size;
+        let over = opened
+            .iter()
+            .rev()
+            .find(|&&(j, origin)| {
+                Rect::new(
+                    origin.x,
+                    origin.y,
+                    size(self, j).width,
+                    size(self, j).height,
+                )
+                .contains(t.at)
+            })
+            .copied();
+        match (event, over) {
+            // lifted over a popup it opened, the touch is that popup's, as a press let go there: what it went through
+            // here lets go of it without acting
+            (TouchEvent::Up { id }, Some((j, origin))) => {
+                let w = &mut self.windows[i];
+                let mut route = route(&mut self.tree, w, now, effects);
+                for &node in path.iter().rev() {
+                    route.notify(node, &Event::Cancel);
+                }
+                // where it lifts, which the popup has not heard of when the touch never moved over it
+                let at = Point::new(t.at.x - origin.x, t.at.y - origin.y);
+                let moved = TouchEvent::Motion { id, position: at };
+                self.tell_popup(j, &Event::Touch(moved, time), now);
+                self.tell_popup(j, &Event::Touch(TouchEvent::Up { id }, time), now);
+            }
+            // lifted anywhere else, it goes where it lifts, and every popup it opened hears it lift at that point,
+            // outside it, so a menu dragged through and let go elsewhere can close
+            (TouchEvent::Up { id }, None) => {
+                let w = &mut self.windows[i];
+                route(&mut self.tree, w, now, effects).dispatch(&path, &Event::Touch(event, time));
+                for (j, origin) in opened {
+                    let at = Point::new(t.at.x - origin.x, t.at.y - origin.y);
+                    let moved = TouchEvent::Motion { id, position: at };
+                    self.tell_popup(j, &Event::Touch(moved, time), now);
+                    self.tell_popup(j, &Event::Touch(TouchEvent::Up { id }, time), now);
+                }
+            }
+            // it moves over the popups it opened as well as here, at each one's own point
+            (TouchEvent::Motion { id, position }, _) => {
+                let w = &mut self.windows[i];
+                route(&mut self.tree, w, now, effects).dispatch(&path, &Event::Touch(event, time));
+                for (j, origin) in opened {
+                    let at = Point::new(position.x - origin.x, position.y - origin.y);
+                    let moved = TouchEvent::Motion { id, position: at };
+                    self.tell_popup(j, &Event::Touch(moved, time), now);
+                }
+            }
+            _ => {
+                let w = &mut self.windows[i];
+                route(&mut self.tree, w, now, effects).dispatch(&path, &Event::Touch(event, time));
+            }
+        }
+    }
+
+    /// The held touch opened a popup: in a window that is not a popup, what it went through lets go of it without
+    /// acting, as the popup follows it from now on, so a button it rests on is not clicked as it lifts and a scroll view
+    /// does not scroll under the menu. In a menu it went down in, the menu goes on following it.
+    fn touch_taken(&mut self) {
+        let Some(t) = self.touch else { return };
+        let Some(k) = self.windows.iter().position(|w| w.id == t.window) else {
+            return;
+        };
+        let now = self.options.clock.now();
+        let mut effects = Effects::default();
+        let w = &mut self.windows[k];
+        if w.popup.is_some() {
+            return;
+        }
+        let path = w.touches.get(&t.id).cloned().unwrap_or_default();
+        let mut route = route(&mut self.tree, w, now, &mut effects);
+        for &node in path.iter().rev() {
+            route.notify(node, &Event::Cancel);
+        }
+        self.apply(k, effects);
+    }
+
+    /// The popups the touch `t`, held in window `i`, opened, each with its top-left corner in that window, the ones
+    /// opened first first. A popup not placed yet, or not under that window, is not among them.
+    fn opened_by(&self, i: usize, t: HeldTouch) -> Vec<(usize, Point)> {
+        (0..self.windows.len())
+            .filter(|&j| {
+                let w = &self.windows[j];
+                w.popup.is_some() && w.opening_touch == Some((t.id, t.start))
+            })
+            .filter_map(|j| self.origin_in(j, i).map(|origin| (j, origin)))
+            .collect()
+    }
+
+    /// Where the compositor placed popup `j`'s top-left corner, in the coordinates of window `i` it opens from,
+    /// directly or through other popups.
+    fn origin_in(&self, j: usize, i: usize) -> Option<Point> {
+        let mut at = Point::new(0.0, 0.0);
+        let mut k = j;
+        // each popup opens after its parent, so the chain is never longer than the windows open
+        for _ in 0..=self.windows.len() {
+            if k == i {
+                return Some(at);
+            }
+            let w = &self.windows[k];
+            let parent = &w.popup.as_ref()?.parent;
+            let p = self.windows.iter().position(|o| &o.key == parent)?;
+            let placed = self.windows[p]
+                .popups
+                .iter()
+                .find(|(key, _)| *key == w.key)?
+                .1;
+            at = Point::new(at.x + placed.min_x(), at.y + placed.min_y());
+            k = p;
+        }
+        None
+    }
+
+    /// Popup `j`'s root hears `event`, as a popup a press opened hears of its release elsewhere.
+    fn tell_popup(&mut self, j: usize, event: &Event, now: Timestamp) {
+        let mut effects = Effects::default();
+        let w = &mut self.windows[j];
+        if let Some(root) = w.root {
+            route(&mut self.tree, w, now, &mut effects).notify(root, event);
+        }
+        self.apply(j, effects);
     }
 
     /// Carries out what handlers asked for while one event was routed.
@@ -1362,6 +1563,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             let _ = self.system.request(w.id, request);
         }
         w.wakes.extend(effects.wakes);
+        // the overlays draw again over the paint the window keeps
+        w.dirty |= effects.overlay;
         if let Some((node, rect)) = effects.reveal {
             w.reveal = Some((node, Some(rect)));
             w.repaint();
@@ -2232,7 +2435,7 @@ fn route<'a, M: 'static>(
             capture: w.pointer.capture(),
             window_active: w.active,
             now,
-            opening_press: w.opening_press,
+            opening_press: w.opening_press.or(w.opening_touch.map(|(_, start)| start)),
         },
         popups: &w.popups,
         effects,

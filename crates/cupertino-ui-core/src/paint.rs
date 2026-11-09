@@ -3,7 +3,7 @@
 //! clips along the parent chain. Bounds cover what the node and its whole subtree draw, in window coordinates. A
 //! node repaints only when it changed or its size did, and keeps its paint revision otherwise.
 
-use crate::cx::PaintCx;
+use crate::cx::{OverlayCx, PaintCx};
 use crate::route::Geometry;
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
@@ -38,6 +38,15 @@ struct Painted {
     material: Option<NodeMaterial>,
     /// The glass the node painted on ([`Foreground`]).
     foreground: Foreground,
+    /// The node draws an overlay on every frame ([`PaintCx::overlay`]).
+    overlay: bool,
+    /// The node lay on a material when it painted ([`PaintCx::on_material`]).
+    on_material: bool,
+    /// The node asked for glass or a translucent surface's material, which its subtree lies on.
+    lays_material: bool,
+    /// The ops snapped to the window's device pixels where a frame draws the node ([`PaintCx::fill_pixels`]), by
+    /// index.
+    pixels: Vec<usize>,
 }
 
 /// The glass a node paints on, which picks the colours of its text and symbols: the tone of the glass it lies on, if
@@ -133,6 +142,54 @@ const CLIP_EDGE: f64 = 1.0;
 /// Everything `ops` may touch, in their own coordinates: strokes reach half their width outside the shape, effects
 /// reach as far as their blur and offset, and a glyph is taken to fill its em square around the pen with room for
 /// ascenders, descenders and overhang.
+/// `ops` of a node at `origin` in the window, with those at `pixels` on the window's device pixels at `scale`: a fill
+/// at the nearest pixel edges, a clip widened to the pixels it touches. Each stays on the pixels its rect touches but a
+/// fill narrower than a pixel, which grows to one ([`pixel_extent`]).
+fn on_pixels(ops: &[PaintOp], pixels: &[usize], origin: Point, scale: f64) -> Vec<PaintOp> {
+    let mut ops = ops.to_vec();
+    let snap = |rect: Rect, to: fn(Rect, f64) -> Rect| {
+        to(rect.translate(origin.x, origin.y), scale).translate(-origin.x, -origin.y)
+    };
+    for &i in pixels {
+        match ops.get_mut(i) {
+            Some(PaintOp::Fill {
+                shape: Shape::Rect(rect),
+                ..
+            }) => *rect = snap(*rect, crate::cx::pixel_fill),
+            Some(PaintOp::PushClip(Shape::Rect(rect))) => {
+                *rect = snap(*rect, crate::cx::pixel_clip)
+            }
+            _ => {}
+        }
+    }
+    ops
+}
+
+/// The extent of `ops`, those at `pixels` to be put on device pixels at `scale` ([`on_pixels`]): a fill there reaches
+/// at least one device pixel each way, which is as far as it can grow.
+fn pixel_extent(ops: &[PaintOp], pixels: &[usize], scale: f64) -> Option<Rect> {
+    if pixels.is_empty() {
+        return extent(ops);
+    }
+    let pixel = 1.0 / crate::cx::usable_scale(scale);
+    let mut ops = ops.to_vec();
+    for &i in pixels {
+        if let Some(PaintOp::Fill {
+            shape: Shape::Rect(rect),
+            ..
+        }) = ops.get_mut(i)
+        {
+            *rect = Rect::new(
+                rect.min_x(),
+                rect.min_y(),
+                rect.width().max(pixel),
+                rect.height().max(pixel),
+            );
+        }
+    }
+    extent(&ops)
+}
+
 pub(crate) fn extent(ops: &[PaintOp]) -> Option<Rect> {
     // Each open layer collects its content's extent; its effects widen it when it closes.
     let mut layers: Vec<(Vec<Effect>, Option<Rect>)> = vec![(Vec::new(), None)];
@@ -235,6 +292,37 @@ pub(crate) struct Painter {
     pub(crate) tones: GlassTones,
     /// The environments of text on glass of each tone, made from `painted_in`.
     glass_envs: Option<[Environment; 3]>,
+    /// What each node's overlay drew last, and the revision it drew with, while the node asks for one: a caret that
+    /// shows again where it showed before is the same paint.
+    overlays: HashMap<NodeId, (Vec<PaintOp>, PaintRevision)>,
+    overlay_revision: u64,
+}
+
+/// The paint node of `node`'s overlay ([`Widget::overlay`](crate::Widget::overlay)): it comes after the node's
+/// subtree, as the node's last child, with its operations in window coordinates. Its id is apart from every node's.
+pub fn overlay_id(node: NodeId) -> PaintNodeId {
+    // a node's own id has a non-zero generation in its upper half; an overlay's has none
+    PaintNodeId(u64::from(node.index()))
+}
+
+/// An overlay waiting for the end of its node's subtree.
+struct Pending {
+    owner: NodeId,
+    node: PaintNode,
+    /// The clip of the node's ancestors.
+    clip: Option<Rect>,
+}
+
+/// Whether `ancestor` is `id` or holds it.
+fn within<M: 'static>(tree: &Tree<M>, ancestor: NodeId, id: NodeId) -> bool {
+    let mut at = Some(id);
+    while let Some(node) = at {
+        if node == ancestor {
+            return true;
+        }
+        at = tree.get(node).and_then(|n| n.parent);
+    }
+    false
 }
 
 /// Whether paint made in `a` is paint made in `b`: the same theme, text system, icons and scale, the same direction.
@@ -333,10 +421,34 @@ impl Painter {
         let mut materials = Vec::new();
         let mut blank = Vec::new();
         let window = geometry.get(&root).map(|p| p.rect);
+        let mut pending: Vec<Pending> = Vec::new();
+        let flush = |pending: &mut Vec<Pending>,
+                     until: Option<NodeId>,
+                     list: &mut DisplayList,
+                     clips: &mut Vec<Option<Rect>>,
+                     blank: &mut Vec<bool>| {
+            while let Some(top) = pending.last() {
+                if until.is_some_and(|id| within(tree, top.owner, id)) {
+                    break;
+                }
+                let done = pending.pop().expect("checked above");
+                list.nodes.push(done.node);
+                clips.push(done.clip);
+                blank.push(false);
+            }
+        };
+        let mut overlaid = HashSet::new();
+        // whether each node's children lie on a material, from the window's background down
+        let mut material_below: HashMap<NodeId, bool> = HashMap::new();
+        let window_material = matches!(
+            input.background,
+            WindowBackground::Surface { surface, .. } if crate::cx::translucent(surface)
+        );
         for id in tree.preorder(root) {
             let (Some(node), Some(placement)) = (tree.get(id), geometry.get(&id)) else {
                 continue;
             };
+            flush(&mut pending, Some(id), &mut list, &mut clips, &mut blank);
             let size = placement.rect.size;
             let focused = input.focus == Some(id);
             let background = (id == root
@@ -382,6 +494,11 @@ impl Painter {
                 on: inherited,
                 own: self.tones.region(materials.len()),
             };
+            let on_material = inherited.is_some()
+                || match node.parent {
+                    Some(parent) => material_below.get(&parent).copied().unwrap_or(false),
+                    None => window_material,
+                };
             let fresh = self.nodes.get(&id).is_some_and(|p| {
                 p.source == source
                     && p.background == background
@@ -389,6 +506,7 @@ impl Painter {
                     && p.visible.is_none_or(|v| v == visible)
                     && p.materials.is_none_or(|m| m == can_show)
                     && p.foreground.on == foreground.on
+                    && p.on_material == on_material
                     && (p.materials.is_none() || p.foreground.own == foreground.own)
             });
             if !fresh {
@@ -442,6 +560,9 @@ impl Painter {
                 let mut reads_visible = false;
                 let mut material = None;
                 let mut asked_material = false;
+                let mut overlay = false;
+                let mut lays_material = false;
+                let mut pixels = Vec::new();
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
@@ -468,6 +589,10 @@ impl Painter {
                         materials: can_show,
                         material: &mut material,
                         asked_material: &mut asked_material,
+                        overlay: &mut overlay,
+                        on_material,
+                        lays_material: &mut lays_material,
+                        pixels: &mut pixels,
                     },
                 );
                 if animate {
@@ -481,7 +606,7 @@ impl Painter {
                         background,
                         size,
                         revision: PaintRevision(self.revision),
-                        extent: extent(&ops),
+                        extent: pixel_extent(&ops, &pixels, input.env.scale),
                         ops,
                         group,
                         images,
@@ -489,10 +614,15 @@ impl Painter {
                         materials: asked_material.then_some(can_show),
                         material,
                         foreground,
+                        overlay,
+                        on_material,
+                        lays_material,
+                        pixels,
                     },
                 );
             }
             let painted = &self.nodes[&id];
+            material_below.insert(id, on_material || painted.lays_material);
             on_glass.insert(
                 id,
                 match (painted.material, inherited) {
@@ -549,12 +679,40 @@ impl Painter {
                     })
                     .unwrap_or(Rect::new(origin.x, origin.y, 0.0, 0.0)),
                 group: painted.group.clone(),
-                ops: painted.ops.clone(),
+                ops: on_pixels(&painted.ops, &painted.pixels, origin, input.env.scale),
             });
             clips.push(placement.clip);
             seen.insert(id);
+            if painted.overlay {
+                overlaid.insert(id);
+                let mut fills = Vec::new();
+                let mut clip = None;
+                node.widget.overlay(
+                    &*node.state,
+                    &mut OverlayCx {
+                        size,
+                        env: match inherited {
+                            Some(tone) => &glass_envs[tone_index(tone)],
+                            None => input.env,
+                        },
+                        now: input.now,
+                        origin,
+                        ops: &mut fills,
+                        clip: &mut clip,
+                    },
+                );
+                if let Some(overlay) = self.overlay(id, fills, clip, placement.clip) {
+                    pending.push(Pending {
+                        owner: id,
+                        node: overlay,
+                        clip: placement.clip,
+                    });
+                }
+            }
         }
+        flush(&mut pending, None, &mut list, &mut clips, &mut blank);
         self.nodes.retain(|id, _| seen.contains(id));
+        self.overlays.retain(|id, _| overlaid.contains(id));
         let mut own: Vec<Rect> = list.nodes.iter().map(|n| n.bounds).collect();
         // Children come after their parent, so walking backwards widens each parent by its finished children.
         let index: HashMap<PaintNodeId, usize> = list
@@ -603,6 +761,48 @@ impl Painter {
             resources,
             materials,
         }
+    }
+}
+
+impl Painter {
+    /// The paint node of `owner`'s overlay drawing `fills` (window coordinates) inside `clip` and the clip of the
+    /// owner's ancestors, `around`; none when it draws nothing. Its revision changes only when what it draws does.
+    fn overlay(
+        &mut self,
+        owner: NodeId,
+        fills: Vec<PaintOp>,
+        clip: Option<Rect>,
+        around: Option<Rect>,
+    ) -> Option<PaintNode> {
+        let reach = extent(&fills)?;
+        let reach = [clip, around.map(|c| c.outset(CLIP_EDGE))]
+            .into_iter()
+            .flatten()
+            .try_fold(reach, |reach, clip| reach.intersection(&clip))?;
+        let mut ops = Vec::with_capacity(fills.len() + 2);
+        ops.extend(clip.map(|c| PaintOp::PushClip(Shape::Rect(c))));
+        ops.extend(fills);
+        ops.extend(clip.map(|_| PaintOp::PopClip));
+        let revision = match self.overlays.get(&owner) {
+            Some((drawn, revision)) if *drawn == ops => *revision,
+            // counted apart from the nodes' revisions, which an overlay leaves as they were
+            _ => {
+                self.overlay_revision += 1;
+                PaintRevision(self.overlay_revision)
+            }
+        };
+        self.overlays.insert(owner, (ops.clone(), revision));
+        Some(PaintNode {
+            id: overlay_id(owner),
+            parent: Some(owner.into()),
+            revision,
+            transform: Transform::IDENTITY,
+            clip: None,
+            bounds: reach,
+            hit: Rect::new(reach.min_x(), reach.min_y(), 0.0, 0.0),
+            group: None,
+            ops,
+        })
     }
 }
 

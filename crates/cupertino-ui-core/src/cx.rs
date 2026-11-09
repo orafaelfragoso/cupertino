@@ -77,6 +77,8 @@ pub(crate) struct Effects<M> {
     pub(crate) window: Vec<WindowGesture>,
     /// A part of a node, in its coordinates, for its scroll containers to show.
     pub(crate) reveal: Option<(NodeId, Rect)>,
+    /// The window's overlays draw again on the next frame ([`EventCx::request_overlay`]).
+    pub(crate) overlay: bool,
 }
 
 impl<M> Default for Effects<M> {
@@ -94,6 +96,7 @@ impl<M> Default for Effects<M> {
             clipboard: None,
             window: Vec::new(),
             reveal: None,
+            overlay: false,
         }
     }
 }
@@ -117,6 +120,7 @@ impl<M> Effects<M> {
         }
         self.window.extend(other.window);
         self.reveal = other.reveal.or(self.reveal);
+        self.overlay |= other.overlay;
     }
 }
 
@@ -177,9 +181,21 @@ impl<M> EventCx<'_, M> {
         self.status.now
     }
 
-    /// When the pointer press that opened this popup went down, on the clock of [`now`](Self::now): a popup opened
-    /// while a button was held, such as a menu opened by a press, times press-and-hold from it rather than from the
-    /// first event it hears. `None` in a toplevel and in a popup no press opened.
+    /// When an input event carrying `at` happened, on the clock of [`now`](Self::now): its own time, so events
+    /// delivered together keep the spacing they happened with, as a speed measured from them needs. An event without
+    /// a time of its own (`at` zero, as one a program makes up) or with one later than now happened now.
+    pub fn input_time(&self, at: Timestamp) -> Timestamp {
+        let now = self.status.now;
+        if at.0 == 0 || at > now {
+            now
+        } else {
+            at
+        }
+    }
+
+    /// When the pointer press or the touch that opened this popup went down, on the clock of [`now`](Self::now): a
+    /// popup opened while a button or a finger was held, such as a menu opened by a press, times press-and-hold from it
+    /// rather than from the first event it hears. `None` in a toplevel and in a popup no press or touch opened.
     pub fn opening_press(&self) -> Option<Timestamp> {
         self.status.opening_press
     }
@@ -243,6 +259,12 @@ impl<M> EventCx<'_, M> {
 
     pub fn request_layout(&mut self) {
         self.effects.changes.push((self.node, Change::Layout));
+    }
+
+    /// Draws the window's overlays ([`Widget::overlay`](crate::Widget::overlay)) again on the next frame without
+    /// painting any node: what changes only there, such as a caret's blink.
+    pub fn request_overlay(&mut self) {
+        self.effects.overlay = true;
     }
 
     /// `None` hides the pointer.
@@ -321,6 +343,14 @@ pub struct PaintCx<'a> {
     pub(crate) material: &'a mut Option<NodeMaterial>,
     /// The node called [`PaintCx::material`].
     pub(crate) asked_material: &'a mut bool,
+    /// The node called [`PaintCx::overlay`].
+    pub(crate) overlay: &'a mut bool,
+    /// The node lies on a material ([`PaintCx::on_material`]).
+    pub(crate) on_material: bool,
+    /// The node asked for glass or a translucent surface's material under itself, which its subtree lies on.
+    pub(crate) lays_material: &'a mut bool,
+    /// The ops [`PaintCx::fill_pixels`] and [`PaintCx::clip_pixels`] pushed, by index.
+    pub(crate) pixels: &'a mut Vec<usize>,
 }
 
 impl PaintCx<'_> {
@@ -356,6 +386,18 @@ impl PaintCx<'_> {
         self.on_glass
     }
 
+    /// Whether the node lies on a material rather than on the window's plain content: glass ([`on_glass`]), the
+    /// material of a surface that shows what is behind the window (a sidebar, a popover) an ancestor asked for, or such
+    /// a window background. It holds whether the window shows the material or paints the surface's opaque fill in its
+    /// place (without the desktop's effects, with Reduce Transparency), so a control keeps one look in one place. The
+    /// window's and a form's own backgrounds drawn by the compositor are not materials here: what lies on them is the
+    /// window's content. A control drawn one way on content and another on a material (a search field) reads it.
+    ///
+    /// [`on_glass`]: Self::on_glass
+    pub fn on_material(&self) -> bool {
+        self.on_material
+    }
+
     /// Whether the window system shows the material of the window's
     /// [`WindowBackground::Surface`](crate::WindowBackground) and draws its edge. Without it the window paints the
     /// surface's opaque fill instead, and a panel draws its own edge over it.
@@ -383,6 +425,32 @@ impl PaintCx<'_> {
     /// moves by itself from its first paint, as an indeterminate progress bar does.
     pub fn request_animation_frame(&mut self) {
         *self.animate = true;
+    }
+
+    /// Draws this node's overlay ([`Widget::overlay`](crate::Widget::overlay)) on every frame until the node paints
+    /// again without asking.
+    pub fn overlay(&mut self) {
+        *self.overlay = true;
+    }
+
+    /// Fills `rect` (node coordinates) with `color`, each edge on the nearest device pixel edge of the window wherever
+    /// a frame draws the node, at least one device pixel each way, so no pixel at its edge blends with what lies under
+    /// it: for a mark that meets the caret or text, such as a selection.
+    pub fn fill_pixels(&mut self, rect: Rect, color: cupertino_ui_theme::Color) {
+        self.pixels.push(self.ops.len());
+        self.ops.push(PaintOp::Fill {
+            shape: cupertino_ui_render::Shape::Rect(rect),
+            paint: cupertino_ui_render::Paint::Solid(color),
+        });
+    }
+
+    /// Clips what the node paints next, until a `PaintOp::PopClip`, to `rect` (node coordinates) widened to the device
+    /// pixels of the window it touches wherever a frame draws the node, so a [`fill_pixels`](Self::fill_pixels) at its
+    /// edge stays whole.
+    pub fn clip_pixels(&mut self, rect: Rect) {
+        self.pixels.push(self.ops.len());
+        self.ops
+            .push(PaintOp::PushClip(cupertino_ui_render::Shape::Rect(rect)));
     }
 
     /// Draws all of `image` into `dst` (node coordinates). `id` names these pixels for good: new pixels take a new id
@@ -417,6 +485,7 @@ impl PaintCx<'_> {
     /// the window paints, so a node over other content of its window paints its own fill instead.
     pub fn material(&mut self, surface: Surface, radius: f64, alpha: f64) -> bool {
         *self.asked_material = true;
+        *self.lays_material |= translucent(surface);
         let name = self.env.theme.surface(surface).material;
         *self.material = name.filter(|_| self.materials).map(|name| NodeMaterial {
             name,
@@ -465,6 +534,7 @@ impl PaintCx<'_> {
     /// colours after this call. [`PaintCx::material`] with a glass surface does the same.
     pub fn glass(&mut self, glass: Glass) -> bool {
         *self.asked_material = true;
+        *self.lays_material = true;
         let finite = |v: f64, otherwise: f64| if v.is_finite() { v } else { otherwise };
         let (name, style) = (glass.style.material(), glass.style);
         *self.material = self.materials.then(|| NodeMaterial {
@@ -484,6 +554,12 @@ impl PaintCx<'_> {
         self.take_foreground();
         self.material.is_some()
     }
+}
+
+/// Whether `surface`'s material shows what lies behind the window, so what lies on it lies on a material
+/// ([`PaintCx::on_material`]); the window's and a form's own backgrounds are the window's content.
+pub(crate) fn translucent(surface: Surface) -> bool {
+    !matches!(surface, Surface::WindowBackground | Surface::TextBackground)
 }
 
 /// The glass style a material name of the theme stands for.
@@ -781,4 +857,83 @@ impl SemanticsCx<'_> {
     pub fn bounds(&mut self, bounds: Rect) {
         self.semantics.bounds = Some(bounds);
     }
+}
+
+/// What a node draws over everything it painted, on every frame it asked for ([`PaintCx::overlay`]), without painting
+/// again: a text caret, which blinks and must sit on whole device pixels of the window wherever the node lies. Rects
+/// are in the node's coordinates; the window places them on device pixel edges after layout, so the node's paint never
+/// depends on where it lies.
+pub struct OverlayCx<'a> {
+    pub(crate) size: Size,
+    pub(crate) env: &'a Environment,
+    pub(crate) now: Timestamp,
+    /// The node's top-left corner in the window.
+    pub(crate) origin: Point,
+    pub(crate) ops: &'a mut Vec<PaintOp>,
+    /// What the overlay is clipped to, in window coordinates.
+    pub(crate) clip: &'a mut Option<Rect>,
+}
+
+impl OverlayCx<'_> {
+    /// The node's size.
+    pub fn size(&self) -> Size {
+        self.size
+    }
+
+    pub fn env(&self) -> &Environment {
+        self.env
+    }
+
+    pub fn now(&self) -> Timestamp {
+        self.now
+    }
+
+    /// Fills `rect` with `color`, each edge moved to the nearest device pixel edge of the window and the rect at least
+    /// one device pixel each way, so every pixel is covered whole or not at all.
+    pub fn fill_pixels(&mut self, rect: Rect, color: cupertino_ui_theme::Color) {
+        let at = rect.translate(self.origin.x, self.origin.y);
+        self.ops.push(PaintOp::Fill {
+            shape: cupertino_ui_render::Shape::Rect(pixel_fill(at, self.env.scale)),
+            paint: cupertino_ui_render::Paint::Solid(color),
+        });
+    }
+
+    /// Clips the whole overlay to `rect`, widened to the device pixels it touches so a fill at its edge stays whole;
+    /// the clips around the node apply as well.
+    pub fn clip(&mut self, rect: Rect) {
+        let at = rect.translate(self.origin.x, self.origin.y);
+        *self.clip = Some(pixel_clip(at, self.env.scale));
+    }
+}
+
+/// Physical pixels per point, a usable number.
+pub(crate) fn usable_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
+/// `rect` (window points) with each edge on the nearest device pixel edge at `scale`, at least one device pixel each
+/// way, so every pixel is covered whole or not at all.
+pub(crate) fn pixel_fill(rect: Rect, scale: f64) -> Rect {
+    let scale = usable_scale(scale);
+    // in device pixels, so the size is a whole number of them exactly
+    let pixel = |v: f64| (v * scale).round();
+    let (left, top) = (pixel(rect.min_x()), pixel(rect.min_y()));
+    let width = (pixel(rect.max_x()) - left).max(1.0);
+    let height = (pixel(rect.max_y()) - top).max(1.0);
+    Rect::new(left / scale, top / scale, width / scale, height / scale)
+}
+
+/// `rect` (window points) widened to the device pixels at `scale` it touches.
+pub(crate) fn pixel_clip(rect: Rect, scale: f64) -> Rect {
+    let scale = usable_scale(scale);
+    Rect::from_ltrb(
+        (rect.min_x() * scale).floor() / scale,
+        (rect.min_y() * scale).floor() / scale,
+        (rect.max_x() * scale).ceil() / scale,
+        (rect.max_y() * scale).ceil() / scale,
+    )
 }

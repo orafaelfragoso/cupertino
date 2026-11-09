@@ -1420,6 +1420,7 @@ fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_
                 container: 0,
                 spacing: 0.0,
             }),
+            raised: false,
         }],
         "the popover's material under the banner's card and nowhere else in its strip"
     );

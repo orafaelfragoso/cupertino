@@ -45,10 +45,15 @@ pub enum Capability {
     TextInput,
     /// `wp_presentation`: when each presented frame reached the screen ([`crate::Event::Presented`]).
     Presentation,
+    /// `wl_subcompositor`: surfaces drawn as part of another one ([`crate::Connection::subsurface`]).
+    Subsurface,
+    /// `wp_single_pixel_buffer_manager_v1` together with `wp_viewporter`: a surface of one colour shown without drawing
+    /// a buffer of its size ([`crate::Connection::present_solid`]).
+    SolidColor,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 9] = [
+    pub const ALL: [Capability; 11] = [
         Capability::Seat,
         Capability::Clipboard,
         Capability::FractionalScale,
@@ -58,6 +63,8 @@ impl Capability {
         Capability::OutputLayout,
         Capability::TextInput,
         Capability::Presentation,
+        Capability::Subsurface,
+        Capability::SolidColor,
     ];
 
     /// The globals that must all be advertised for the capability.
@@ -72,6 +79,8 @@ impl Capability {
             Capability::OutputLayout => &["zxdg_output_manager_v1"],
             Capability::TextInput => &["zwp_text_input_manager_v3", "wl_seat"],
             Capability::Presentation => &["wp_presentation"],
+            Capability::Subsurface => &["wl_subcompositor"],
+            Capability::SolidColor => &["wp_single_pixel_buffer_manager_v1", "wp_viewporter"],
         }
     }
 
@@ -217,9 +226,16 @@ mod tests {
             set.iter().collect::<Vec<_>>(),
             [Capability::Seat, Capability::ServerDecoration]
         );
+        globals.push(("wp_single_pixel_buffer_manager_v1", 1));
+        let set = CapabilitySet::from_globals(globals.iter().copied()).unwrap();
+        assert!(
+            !set.contains(Capability::SolidColor),
+            "a solid colour needs the viewporter to stretch its pixel"
+        );
         globals.push(("wp_viewporter", 1));
         let set = CapabilitySet::from_globals(globals.iter().copied()).unwrap();
         assert!(set.contains(Capability::FractionalScale));
+        assert!(set.contains(Capability::SolidColor));
         assert!(matches!(
             set.require(Capability::Clipboard),
             Err(Error::Unsupported(Capability::Clipboard))

@@ -48,7 +48,8 @@ pub fn window<M: Clone + 'static>(
         },
         shortcuts: CommandRegistry::new(),
         on_close: Some(input(Input::Closed(key(output)))),
-        background: WindowBackground::None,
+        // shown without a frame of the output's width: it draws nothing
+        background: WindowBackground::INPUT_ONLY,
         content: Element::new(Root {
             role: Role::Group,
             name: TITLE.to_owned(),

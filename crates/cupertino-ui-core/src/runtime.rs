@@ -8,7 +8,7 @@ use crate::cx::{Effects, Status, WindowGesture};
 use crate::damage::DamageTracker;
 use crate::focus::{Focus, FocusChange};
 use crate::layout_view::{placements, TreeView};
-use crate::paint::{same_environment, PaintInput, Painter};
+use crate::paint::{raised_nodes, same_environment, PaintInput, Painter};
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
 use crate::scroll::{geometry_events, reveal_events};
@@ -31,14 +31,15 @@ use cupertino_ui_platform::{
     ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
     ConstraintAdjust, DragImage, DragProgress, DragRequest, DragToken, DropAction, DropToken,
     GlassTone, KeyEvent, Keysym, MaterialRegion, MenuDescription, Mods, MouseButton, PlatformError,
-    PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome, SystemAppearance, Timestamp,
-    TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome, RaisedLayer,
+    SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
+    WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderError, RenderRequest, UiRenderer,
 };
 use cupertino_ui_text::TextSystem;
-use cupertino_ui_theme::ThemeTokens;
+use cupertino_ui_theme::{Color, ThemeTokens};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -98,12 +99,29 @@ impl<M> WindowState<M> {
         self.laid_out = None;
     }
 
+    /// The next frame repaints the whole window, its raised layer too.
+    fn invalidate_damage(&mut self) {
+        self.damage.invalidate();
+        self.layer.damage.invalidate();
+    }
+
     /// Something in the window changed how it paints but no node's size or place: paint it again, and build its
     /// semantics and geometry again from the layout it has.
     fn repaint(&mut self) {
         self.dirty = true;
         self.prepared = false;
     }
+}
+
+/// A window's raised layer ([`RaisedLayer`]): what it last showed and how to draw the next.
+#[derive(Default)]
+struct LayerState {
+    damage: DamageTracker,
+    /// Made on the first frame that shows a layer.
+    renderer: Option<Box<dyn UiRenderer<Frame = CpuFrame>>>,
+    list: DisplayList,
+    /// The height in whole points of the layer the window system shows, while it shows one.
+    shown: Option<u32>,
 }
 
 struct WindowState<M> {
@@ -119,6 +137,11 @@ struct WindowState<M> {
     materials: Vec<MaterialRegion>,
     /// The window system refused materials under nodes: the nodes paint their fills.
     materials_refused: bool,
+    /// The size and colour the window system shows the window in, with no frame, while its background is
+    /// [`WindowBackground::Solid`]; `None` once a frame is shown, or before anything is.
+    solid_shown: Option<(Size, Color)>,
+    /// The window system cannot show a colour without a frame: a solid window is drawn.
+    solid_refused: bool,
     /// The menus the window system was last asked to publish.
     menus: Option<MenuDescription>,
     on_menu: Option<Box<dyn Fn(ActionName) -> M>>,
@@ -185,6 +208,10 @@ struct WindowState<M> {
     measured_in: Option<Environment>,
     painter: Painter,
     damage: DamageTracker,
+    /// The raised nodes ([`Widget::raised`]) of the last layout with their rects, in window coordinates.
+    raised: Vec<(NodeId, Rect)>,
+    /// The raised layer the window system shows over the window's content.
+    layer: LayerState,
     display_list: DisplayList,
     /// The images the display list draws.
     resources: PaintResources,
@@ -347,7 +374,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.env.theme = Arc::clone(&theme);
             sync_backdrop(&mut self.system, w);
             w.invalidate();
-            w.damage.invalidate();
+            w.invalidate_damage();
         }
         self.options.theme = theme;
     }
@@ -668,7 +695,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             };
             w.shortcuts = shortcuts;
             w.on_close = on_close;
-            w.background = background;
+            set_background(&mut w, background);
             sync_backdrop(&mut self.system, &mut w);
             sync_menus(&mut self.system, &mut w, menus);
             w.root = Some(self.tree.reconcile(w.root, content)?);
@@ -696,7 +723,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             if let Some(mut w) = self.popup(key, spec, popup, content, &mut old)? {
                 w.shortcuts = shortcuts;
                 w.on_close = on_close;
-                w.background = background;
+                set_background(&mut w, background);
                 sync_backdrop(&mut self.system, &mut w);
                 w.invalidate();
                 self.windows.push(w);
@@ -752,6 +779,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             backdrop: None,
             materials: Vec::new(),
             materials_refused: false,
+            solid_shown: None,
+            solid_refused: false,
             menus: None,
             on_menu: None,
             root: None,
@@ -798,6 +827,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             measured_in: None,
             painter: Painter::default(),
             damage: DamageTracker::default(),
+            raised: Vec::new(),
+            layer: LayerState::default(),
             display_list: DisplayList::default(),
             resources: PaintResources::default(),
             renderer: (self.options.renderers)(),
@@ -983,7 +1014,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.keyboard_in_popup &= c.states.activated;
                 w.frame_ready = true;
                 w.invalidate();
-                w.damage.invalidate();
+                w.invalidate_damage();
                 if w.active != c.states.activated {
                     w.active = c.states.activated;
                     if let Some(node) = w.focus.node() {
@@ -1006,7 +1037,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 if scale.is_finite() && scale > 0.0 && scale != w.env.scale {
                     w.env.scale = scale;
                     w.invalidate();
-                    w.damage.invalidate();
+                    w.invalidate_damage();
                 }
                 return Ok(());
             }
@@ -1186,7 +1217,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     fn invalidate_window(&mut self, i: usize) {
         let w = &mut self.windows[i];
         w.invalidate();
-        w.damage.invalidate();
+        w.invalidate_damage();
     }
 
     /// Window `i` gained or lost the keyboard: a popup that gains it keeps the window its chain opens from drawn as
@@ -1728,7 +1759,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     let w = &mut self.windows[i];
                     w.invalidate();
                     w.dirty = false;
-                    w.damage.invalidate();
+                    w.invalidate_damage();
                     if w.failed.as_ref() != Some(&error) {
                         if let Some(report) = &mut self.options.on_window_error {
                             report(w.id, &error);
@@ -1858,7 +1889,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
             };
             // scroll offsets and hit targets are the nodes' own state, so the placements are made again
-            w.geometry = placements(&self.tree, root, &result, &w.env);
+            w.geometry = placements(&self.tree, root, &result, &w.env, &[]);
+            w.raised = raised_nodes(&self.tree, root, &w.geometry);
+            // raised nodes that draw in place leave what scrolls under them out: it would cover the glass under them
+            if !w.raised.is_empty() && !self.system.capabilities().raised_layer {
+                w.geometry = placements(&self.tree, root, &result, &w.env, &w.raised);
+            }
             w.laid_out = Some(result);
 
             let semantics = build(
@@ -1867,6 +1903,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 &w.geometry,
                 w.focus.node(),
                 w.env.direction,
+                &w.raised,
             );
             w.focusable = semantics.focusable;
             w.roving_groups = semantics.roving_groups;
@@ -1904,6 +1941,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     &w.geometry,
                     w.focus.node(),
                     w.env.direction,
+                    &w.raised,
                 );
                 (pass.nodes, pass.focus)
             } else {
@@ -1939,6 +1977,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 scroll.extend(reveal_events(
                     &self.tree,
                     &w.geometry,
+                    &w.raised,
                     w.env.direction,
                     target,
                     part,
@@ -1967,7 +2006,58 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if !(w.configured && w.frame_ready) {
             return Ok(());
         }
-        let effects = self.system.capabilities().app_effects;
+        if let (WindowBackground::Solid(color), false) = (w.background, w.solid_refused) {
+            w.dirty = false;
+            w.held_paints = 0;
+            // the compositor still shows this colour at this size, and no configure waits for an answer
+            if w.ack.is_none() && w.solid_shown == Some((w.size, color)) {
+                return Ok(());
+            }
+            // the content paints nothing, so the glass it laid under itself goes with the colour's commit; drawn
+            // again, the window asks for it anew
+            if !w.materials.is_empty() {
+                let _ = self
+                    .system
+                    .request(w.id, WindowRequest::Materials(Vec::new()));
+                w.materials.clear();
+                w.painter.tones.regions.clear();
+            }
+            // and the raised layer goes with it, its subsurface hidden with the colour's commit
+            if w.layer.shown.is_some() {
+                self.system
+                    .present_layer(w.id, None)
+                    .map_err(UiError::Platform)?;
+                w.layer.shown = None;
+                w.layer.damage.invalidate();
+            }
+            match self.system.present_solid(w.id, color, w.ack) {
+                Ok(PresentOutcome::Presented) => {
+                    w.failed = None;
+                    w.solid_shown = Some((w.size, color));
+                    w.ack = None;
+                    w.frame_ready = false;
+                    w.committed = true;
+                    self.system.request_frame(w.id);
+                    return Ok(());
+                }
+                Ok(PresentOutcome::NotReady) => {
+                    w.failed = None;
+                    w.frame_ready = false;
+                    w.dirty = true;
+                    self.system.request_frame(w.id);
+                    return Ok(());
+                }
+                // drawn instead, filled with the colour, from now on
+                Err(PlatformError::Unsupported) => {
+                    w.solid_refused = true;
+                    w.invalidate_damage();
+                }
+                Err(e) => return Err(UiError::Platform(e)),
+            }
+        }
+        let capabilities = self.system.capabilities();
+        let effects = capabilities.app_effects;
+        let layered = capabilities.raised_layer;
         let paint = |w: &mut WindowState<A::Message>, tree: &Tree<A::Message>| {
             w.painter.paint(
                 tree,
@@ -1982,6 +2072,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     backdrop: w.backdrop.is_some(),
                     materials: effects && !w.materials_refused,
                     now,
+                    raised: &w.raised,
+                    layer: layered,
                 },
             )
         };
@@ -1999,26 +2091,86 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             // regions past the new count lose their backdrops; one made again later starts unmeasured
             let kept = w.materials.len();
             w.painter.tones.regions.truncate(kept);
-            w.damage.invalidate();
+            w.invalidate_damage();
+        }
+        // the layer's height in whole points, from the window's top edge, as far down as its nodes draw
+        let layer_height = painting
+            .layer
+            .as_ref()
+            .map(|l| (l.bottom.min(w.size.height).ceil().max(1.0)) as u32);
+        if layer_height != w.layer.shown {
+            w.layer.damage.invalidate();
         }
         let damage = w.damage.damage(&painting);
+        let layer_damage = painting
+            .layer
+            .as_ref()
+            .map(|l| w.layer.damage.damage_of(&l.list, &l.own, &l.blank));
         w.animate.extend(painting.animating);
         w.display_list = painting.list;
         w.resources = painting.resources;
         w.dirty = false;
         w.held_paints = 0;
+        let layer_changed = layer_height != w.layer.shown
+            || layer_damage
+                .as_ref()
+                .is_some_and(|d| !matches!(d, DamageRegion::Rects(r) if r.is_empty()))
+            || (painting.layer.is_some() && w.layer.damage.repainted());
         // a frame that repainted nothing sends nothing; one that repainted no pixel commits with no damage
-        if matches!(&damage, DamageRegion::Rects(r) if r.is_empty()) && !w.damage.repainted() {
+        if matches!(&damage, DamageRegion::Rects(r) if r.is_empty())
+            && !w.damage.repainted()
+            && !layer_changed
+        {
             return Ok(());
         }
         let scale = w.env.scale;
+        let width = physical(w.size.width, scale);
+        // the layer first: it shows with the content's commit
+        if layer_changed {
+            let shown = match (painting.layer, layer_height, layer_damage) {
+                (Some(layer), Some(height), Some(damage)) => {
+                    w.layer.list = layer.list;
+                    let renderer = w
+                        .layer
+                        .renderer
+                        .get_or_insert_with(&mut self.options.renderers);
+                    let id = renderer
+                        .render(&RenderRequest {
+                            list: &w.layer.list,
+                            resources: &w.resources,
+                            scale,
+                            width,
+                            height: physical(f64::from(height), scale),
+                            damage: &damage,
+                        })
+                        .map_err(UiError::Render)?;
+                    let frame = renderer.frame(id).map_err(UiError::Render)?;
+                    self.system
+                        .present_layer(w.id, Some(RaisedLayer { frame, height }))
+                        .map_err(UiError::Platform)?
+                }
+                _ => self
+                    .system
+                    .present_layer(w.id, None)
+                    .map_err(UiError::Platform)?,
+            };
+            if shown == PresentOutcome::NotReady {
+                w.frame_ready = false;
+                w.dirty = true;
+                w.invalidate_damage();
+                w.layer.shown = None;
+                self.system.request_frame(w.id);
+                return Ok(());
+            }
+            w.layer.shown = layer_height;
+        }
         let id = w
             .renderer
             .render(&RenderRequest {
                 list: &w.display_list,
                 resources: &w.resources,
                 scale,
-                width: physical(w.size.width, scale),
+                width,
                 height: physical(w.size.height, scale),
                 damage: &damage,
             })
@@ -2042,7 +2194,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             PresentOutcome::NotReady => {
                 w.frame_ready = false;
                 w.dirty = true;
-                w.damage.invalidate();
+                w.invalidate_damage();
                 self.system.request_frame(w.id);
             }
         }
@@ -2293,7 +2445,7 @@ fn drag_image<M: 'static>(
         },
     )
     .map_err(UiError::Layout)?;
-    let geometry = placements(&tree, root, &result, &env);
+    let geometry = placements(&tree, root, &result, &env, &[]);
     let painting = Painter::default().paint(
         &tree,
         root,
@@ -2308,6 +2460,8 @@ fn drag_image<M: 'static>(
             // nothing draws a compositor material under a drag icon, so material nodes paint their own fill
             materials: false,
             now,
+            raised: &[],
+            layer: false,
         },
     );
     let mut renderer = (options.renderers)();
@@ -2442,6 +2596,19 @@ fn route<'a, M: 'static>(
     }
 }
 
+/// Gives `w` the background `background`. A window that leaves a solid colour shown without a frame draws its next
+/// frame whole, and one that turns solid shows its colour with its next frame.
+fn set_background<M>(w: &mut WindowState<M>, background: WindowBackground) {
+    let solid = |b: WindowBackground| matches!(b, WindowBackground::Solid(_));
+    if w.background != background
+        && (solid(w.background) || solid(background))
+        && w.solid_shown.take().is_some()
+    {
+        w.damage.invalidate();
+    }
+    w.background = background;
+}
+
 /// Asks the window system for the material `w`'s background wants, or for none, when that changed. A platform that
 /// refuses leaves the window on its opaque fill.
 fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
@@ -2480,7 +2647,7 @@ fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
     // the material is shaped with the next present, which a change that paints nothing new (new corners on a material
     // the compositor draws) must still bring
     w.invalidate();
-    w.damage.invalidate();
+    w.invalidate_damage();
 }
 
 /// Asks the window system to publish `menus`, or to withdraw them, when they changed.

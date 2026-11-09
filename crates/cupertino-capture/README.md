@@ -32,6 +32,7 @@ alone does not show the surfaces as they look.
 | `kit/controls` (the row 167a controls sheet), `kit/icons` (with the chevrons along the reading direction and a missing symbol's placeholder) | `--direction ltr\|rtl` |
 | `kit/gallery` (every control family; its sheet shows each state) | `--state rest\|held-button\|held-switch\|held-slider\|held-segment\|disabled`, `--control-size mini\|small\|regular\|large\|extra-large`, `--compact on\|off`, `--backdrop flat\|busy`, `--direction ltr\|rtl` |
 | `kit/scroll` (an overlay scroll view: at rest, pulled past its top edge, its bar shown, fading and hidden after a wheel step) | `--direction ltr\|rtl`, `--phase rest\|stretch\|shown\|fading\|hidden` |
+| `kit/under-toolbar` (a page that scrolls under a toolbar row drawn in a layer over it, set off by the scroll edge: at rest, just after a wheel step and after the bar has faded) | `--direction ltr\|rtl`, `--phase rest\|shown\|hidden` |
 | `overview/all` (the server headless with test windows, `ci/capture-overview.sh`; no `--sheet`) | `--windows N` (1 to 6, default 2) |
 
 The sidebar material is the server's, so a flat fill of the window background stands in for it. The home folder and

@@ -24,6 +24,8 @@ use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_shm::WlShm;
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
+use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
+use wayland_client::protocol::wl_subsurface::WlSubsurface;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::protocol::wl_touch::{self, WlTouch};
 use wayland_client::{
@@ -38,6 +40,7 @@ use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1:
     self, WpFractionalScaleV1,
 };
 use wayland_protocols::wp::presentation_time::client::wp_presentation::WpPresentation;
+use wayland_protocols::wp::single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1;
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
 use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
@@ -355,6 +358,15 @@ enum Role {
         /// The size of the latest [`State::configure_external`]; a 0 dimension is left to the client.
         size: (u32, u32),
     },
+    /// Part of `parent`, drawn at its scale; its state applies with the parent's commit.
+    Subsurface {
+        subsurface: WlSubsurface,
+        parent: SurfaceId,
+        /// The logical size its buffers are drawn at, from [`Connection::place_subsurface`].
+        size: (u32, u32),
+        /// Its position in the parent's coordinates, as last sent.
+        position: (i32, i32),
+    },
 }
 
 /// The role an extension gives a surface of [`Connection::external_surface`] through a protocol of its own, such as
@@ -388,6 +400,9 @@ struct Surface {
     viewport: Option<WpViewport>,
     /// The viewport shows a crop of the buffer: the last frame was magnified ([`BufferLease::set_zoom`]).
     zoomed: bool,
+    /// The one-pixel buffer of the colour the surface last showed all over ([`Connection::present_solid`]), with that
+    /// colour as the protocol takes it (premultiplied, each component scaled to the whole `u32` range).
+    solid: Option<(WlBuffer, [u32; 4])>,
     fractional: Option<WpFractionalScaleV1>,
     fractional_scale: Option<Scale>,
     preferred_scale: Option<Scale>,
@@ -406,10 +421,15 @@ pub struct State {
     compositor: WlCompositor,
     shm: WlShm,
     wm_base: XdgWmBase,
+    subcompositor: Option<WlSubcompositor>,
     seat: Option<WlSeat>,
     decoration_manager: Option<ZxdgDecorationManagerV1>,
     importer: Option<ZxdgImporterV2>,
     scaling: Option<(WpFractionalScaleManagerV1, WpViewporter)>,
+    /// The viewporter on its own, which also stretches a solid colour's pixel where the compositor has no fractional
+    /// scaling.
+    viewporter: Option<WpViewporter>,
+    single_pixel: Option<WpSinglePixelBufferManagerV1>,
     activation: Option<XdgActivationV1>,
     cursor_shape: Option<WpCursorShapeManagerV1>,
     themed_cursor: ThemedCursor,
@@ -523,6 +543,8 @@ impl Connection {
         // version 6 adds `preferred_buffer_scale`
         let compositor: WlCompositor = required(bind(&globals, &qh, 4..=6), "wl_compositor")?;
         let shm: WlShm = required(bind(&globals, &qh, 1..=1), "wl_shm")?;
+        let fractional: Option<WpFractionalScaleManagerV1> = bind(&globals, &qh, 1..=1);
+        let viewporter: Option<WpViewporter> = bind(&globals, &qh, 1..=1);
         let mut state = State {
             capabilities,
             themed_cursor: ThemedCursor::new(compositor.clone(), shm.clone()),
@@ -530,10 +552,13 @@ impl Connection {
             shm,
             // version 4 adds `configure_bounds`, version 6 the suspended state
             wm_base: required(bind(&globals, &qh, 1..=6), "xdg_wm_base")?,
+            subcompositor: bind(&globals, &qh, 1..=1),
             seat,
             decoration_manager: bind(&globals, &qh, 1..=1),
             importer: bind(&globals, &qh, 1..=1),
-            scaling: bind(&globals, &qh, 1..=1).zip(bind(&globals, &qh, 1..=1)),
+            scaling: fractional.zip(viewporter.clone()),
+            viewporter,
+            single_pixel: bind(&globals, &qh, 1..=1),
             activation: bind(&globals, &qh, 1..=1),
             cursor_shape: bind(&globals, &qh, 1..=1),
             // version 2 allows a refresh rate picked for a variable one
@@ -679,6 +704,9 @@ impl Connection {
         let parent_xdg = match &s.surface(parent)?.role {
             Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => Some(xdg.clone()),
             Role::External { .. } => None,
+            Role::Subsurface { .. } => {
+                return Err(Error::Protocol("a subsurface takes no popups"));
+            }
         };
         let positioner = positioner(&s.wm_base, &qh, placement, s.surface(parent)?.serials)?;
         let grab_serial = if placement.grab {
@@ -756,7 +784,11 @@ impl Connection {
             .surfaces
             .iter()
             .filter_map(|s| match s.role {
-                Role::Popup { parent, .. } if parent == surface => Some(s.id),
+                Role::Popup { parent, .. } | Role::Subsurface { parent, .. }
+                    if parent == surface =>
+                {
+                    Some(s.id)
+                }
                 _ => None,
             })
             .collect();
@@ -793,6 +825,7 @@ impl Connection {
                 xdg.destroy();
             }
             Role::External { role, .. } => role.destroy(),
+            Role::Subsurface { subsurface, .. } => subsurface.destroy(),
         }
         if let Some(v) = &s.viewport {
             v.destroy();
@@ -801,6 +834,9 @@ impl Connection {
             f.destroy();
         }
         s.wl.destroy();
+        if let Some((buffer, _)) = &s.solid {
+            buffer.destroy();
+        }
         self.state.pointer_tracker.forget(surface);
         self.state.touch_tracker.forget(surface);
         self.state.text_input.forget(surface);
@@ -1290,6 +1326,84 @@ impl Connection {
         id
     }
 
+    /// Create a surface drawn as part of `parent` (a window, popup or external surface), above it, at its top left
+    /// corner until [`Connection::place_subsurface`] moves it. It is synchronized: what it presents shows with the
+    /// parent's next commit, so the two always change together. It takes no input (its input region is empty), so
+    /// the pointer and touches over it reach the parent below, and it is drawn at the parent's scale; it gets no
+    /// frame callbacks of its own. It shows nothing until it has a size and presents a buffer, and
+    /// [`Connection::unmap_subsurface`] hides it again with the parent's next commit. Needs
+    /// [`Capability::Subsurface`].
+    pub fn subsurface(&mut self, parent: SurfaceId) -> Result<SurfaceId, Error> {
+        let qh = self.queue.handle();
+        let s = &mut self.state;
+        let subcompositor = s
+            .subcompositor
+            .clone()
+            .ok_or(Error::Unsupported(Capability::Subsurface))?;
+        let parent_wl = s.surface(parent)?.wl.clone();
+        let id = s.next_id();
+        let wl = s.compositor.create_surface(&qh, id);
+        let subsurface = subcompositor.get_subsurface(&wl, &parent_wl, &qh, ());
+        subsurface.set_sync();
+        let region = s.compositor.create_region(&qh, ());
+        wl.set_input_region(Some(&region));
+        region.destroy();
+        s.add_surface(
+            id,
+            wl,
+            Role::Subsurface {
+                subsurface,
+                parent,
+                size: (0, 0),
+                position: (0, 0),
+            },
+            &qh,
+        );
+        Ok(id)
+    }
+
+    /// Move `surface`, a subsurface, to `position` in its parent's logical coordinates (with the parent's next commit)
+    /// and draw its next buffers `size` logical points large.
+    pub fn place_subsurface(
+        &mut self,
+        surface: SurfaceId,
+        position: (i32, i32),
+        size: (u32, u32),
+    ) -> Result<(), Error> {
+        let surf = self.state.surface_mut(surface)?;
+        let Role::Subsurface {
+            subsurface,
+            size: current,
+            position: at,
+            ..
+        } = &mut surf.role
+        else {
+            return Err(Error::Protocol(
+                "place_subsurface on a surface that is not a subsurface",
+            ));
+        };
+        if *at != position {
+            subsurface.set_position(position.0, position.1);
+            *at = position;
+        }
+        *current = size;
+        Ok(())
+    }
+
+    /// Hide `surface`, a subsurface, with its parent's next commit; presenting a buffer shows it again.
+    pub fn unmap_subsurface(&mut self, surface: SurfaceId) -> Result<(), Error> {
+        let surf = self.state.surface_mut(surface)?;
+        if !matches!(surf.role, Role::Subsurface { .. }) {
+            return Err(Error::Protocol(
+                "unmap_subsurface on a surface that is not a subsurface",
+            ));
+        }
+        surf.wl.attach(None, 0, 0);
+        surf.wl.commit();
+        // the buffers it showed are the compositor's until it releases them; what they hold is still known
+        self.flush()
+    }
+
     /// Send the queued requests and dispatch every event the compositor sent in answer, keeping the events for the
     /// next [`Connection::wait`]; for extensions that read state at setup.
     pub fn roundtrip(&mut self) -> Result<(), Error> {
@@ -1323,19 +1437,18 @@ impl Connection {
         let qh = self.queue.handle();
         let s = &mut self.state;
         let shm = s.shm.clone();
-        let surf = s.surface_mut(surface)?;
-        let serial = surf.serials.latest().ok_or(Error::NotConfigured)?;
-        let logical = match &surf.role {
-            Role::Toplevel { current, .. } => current.and_then(|c| c.size).unwrap_or(preferred),
-            Role::Popup { current, .. } => current
-                .map(|c| (c.width, c.height))
-                .ok_or(Error::NotConfigured)?,
-            Role::External { size: (w, h), .. } => (
-                if *w == 0 { preferred.0 } else { *w },
-                if *h == 0 { preferred.1 } else { *h },
-            ),
+        // a subsurface is drawn at its parent's scale and answers no configure
+        let parent_scale = match &s.surface(surface)?.role {
+            Role::Subsurface { parent, .. } => Some(s.surface(*parent)?.scale),
+            _ => None,
         };
-        let scale = surf.scale;
+        let surf = s.surface_mut(surface)?;
+        let serial = match surf.role {
+            Role::Subsurface { .. } => 0,
+            _ => surf.serials.latest().ok_or(Error::NotConfigured)?,
+        };
+        let logical = logical_size(&surf.role, preferred)?;
+        let scale = parent_scale.unwrap_or(surf.scale);
         let layout = scale
             .to_physical(logical.0)
             .zip(scale.to_physical(logical.1))
@@ -1364,6 +1477,78 @@ impl Connection {
             scale,
             zoom: 1.0,
         })
+    }
+
+    /// Show `surface` as one colour all over without drawing a buffer of its size: one pixel of `rgba` (straight, not
+    /// premultiplied, sRGB components from 0 to 1; a transparent one for a surface that only takes input), which the
+    /// compositor stretches over the surface's logical size: the configured one, or `preferred` (points) where the
+    /// compositor leaves it to the client. Like a present it acknowledges the latest configure and asks for a frame
+    /// callback; a pixel of the colour shown last is attached again rather than made anew. The surface's input region,
+    /// outputs and scale are untouched, and a new scale needs no new present, the pixel being stretched in points. A
+    /// buffer leased afterwards is drawn whole ([`BufferLease::missed`] is `None`). [`Error::Unsupported`] when the
+    /// compositor lacks [`Capability::SolidColor`]: draw the colour into a leased buffer instead.
+    pub fn present_solid(
+        &mut self,
+        surface: SurfaceId,
+        preferred: (u32, u32),
+        rgba: [f32; 4],
+    ) -> Result<(), Error> {
+        let qh = self.queue.handle();
+        let s = &mut self.state;
+        let (Some(pixels), Some(viewporter)) = (s.single_pixel.clone(), s.viewporter.clone())
+        else {
+            return Err(Error::Unsupported(Capability::SolidColor));
+        };
+        let surf = s.surface_mut(surface)?;
+        // a subsurface is drawn into buffers at its parent's scale, with the parent's commit; it has no one-colour path
+        if matches!(surf.role, Role::Subsurface { .. }) {
+            return Err(Error::Protocol("present_solid on a subsurface"));
+        }
+        surf.serials.latest().ok_or(Error::NotConfigured)?;
+        let logical = logical_size(&surf.role, preferred)?;
+        if logical.0 == 0 || logical.1 == 0 {
+            return Err(Error::InvalidScale);
+        }
+        if let Some(serial) = surf.serials.present()? {
+            match &surf.role {
+                Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => xdg.ack_configure(serial),
+                Role::External { role, .. } => role.ack_configure(serial),
+                Role::Subsurface { .. } => unreachable!("refused above"),
+            }
+        }
+        let color = single_pixel(rgba);
+        let replaced = match &surf.solid {
+            Some((_, shown)) if *shown == color => None,
+            _ => {
+                let [r, g, b, a] = color;
+                let buffer = pixels.create_u32_rgba_buffer(r, g, b, a, &qh, ());
+                surf.solid.replace((buffer, color)).map(|(old, _)| old)
+            }
+        };
+        let (buffer, _) = surf.solid.as_ref().expect("made above");
+        surf.wl.attach(Some(buffer), 0, 0);
+        let wl = &surf.wl;
+        let viewport = surf
+            .viewport
+            .get_or_insert_with(|| viewporter.get_viewport(wl, &qh, ()));
+        if surf.zoomed {
+            viewport.set_source(-1.0, -1.0, -1.0, -1.0);
+            surf.zoomed = false;
+        }
+        viewport.set_destination(clamp_i32(logical.0), clamp_i32(logical.1));
+        surf.wl.set_buffer_scale(1);
+        surf.wl.damage_buffer(0, 0, 1, 1);
+        // the slots no longer hold what is shown
+        for slot in &mut surf.slots {
+            slot.missed.forget();
+        }
+        surf.wl.frame(&qh, surface);
+        surf.wl.commit();
+        // the pixel it replaced is no longer attached
+        if let Some(old) = replaced {
+            old.destroy();
+        }
+        self.flush()
     }
 
     /// Wait for events, at most `timeout` (`None` waits until one arrives or a [`Waker`] wakes the loop). It returns
@@ -1579,10 +1764,16 @@ impl BufferLease<'_> {
         let qh = self.connection.queue.handle();
         let presentation = self.connection.state.presentation.clone();
         let surf = self.connection.state.surface_mut(self.surface)?;
-        if let Some(serial) = surf.serials.present()? {
-            match &surf.role {
-                Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => xdg.ack_configure(serial),
-                Role::External { role, .. } => role.ack_configure(serial),
+        let subsurface = matches!(surf.role, Role::Subsurface { .. });
+        if !subsurface {
+            if let Some(serial) = surf.serials.present()? {
+                match &surf.role {
+                    Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => {
+                        xdg.ack_configure(serial)
+                    }
+                    Role::External { role, .. } => role.ack_configure(serial),
+                    Role::Subsurface { .. } => {}
+                }
             }
         }
         let layout = surf.slots[self.slot].layout;
@@ -1626,9 +1817,12 @@ impl BufferLease<'_> {
                 }
             }
         }
-        surf.wl.frame(&qh, self.surface);
-        if let Some(presentation) = presentation {
-            presentation.feedback(&surf.wl, &qh, self.surface);
+        // a subsurface shows with its parent's commit, whose frame callback and feedback stand for both
+        if !subsurface {
+            surf.wl.frame(&qh, self.surface);
+            if let Some(presentation) = presentation {
+                presentation.feedback(&surf.wl, &qh, self.surface);
+            }
         }
         surf.wl.commit();
         self.connection.flush()
@@ -1686,6 +1880,36 @@ fn decoration_mode(decorations: Decorations) -> zxdg_toplevel_decoration_v1::Mod
         Decorations::Server => zxdg_toplevel_decoration_v1::Mode::ServerSide,
         Decorations::Client => zxdg_toplevel_decoration_v1::Mode::ClientSide,
     }
+}
+
+/// The logical size a frame of a surface with `role` takes: the configured one, or `preferred` (points) where the
+/// compositor leaves it to the client.
+fn logical_size(role: &Role, preferred: (u32, u32)) -> Result<(u32, u32), Error> {
+    Ok(match role {
+        Role::Toplevel { current, .. } => current.and_then(|c| c.size).unwrap_or(preferred),
+        Role::Popup { current, .. } => current
+            .map(|c| (c.width, c.height))
+            .ok_or(Error::NotConfigured)?,
+        Role::External { size: (w, h), .. } => (
+            if *w == 0 { preferred.0 } else { *w },
+            if *h == 0 { preferred.1 } else { *h },
+        ),
+        Role::Subsurface { size, .. } if size.0 > 0 && size.1 > 0 => *size,
+        Role::Subsurface { .. } => return Err(Error::NotConfigured),
+    })
+}
+
+/// `rgba` (straight sRGB components from 0 to 1) as a one-pixel buffer takes it: premultiplied by its alpha, each
+/// component scaled to the whole `u32` range.
+fn single_pixel(rgba: [f32; 4]) -> [u32; 4] {
+    let alpha = f64::from(rgba[3]).clamp(0.0, 1.0);
+    let wide = |c: f64| (c.clamp(0.0, 1.0) * f64::from(u32::MAX)).round() as u32;
+    [
+        wide(f64::from(rgba[0]) * alpha),
+        wide(f64::from(rgba[1]) * alpha),
+        wide(f64::from(rgba[2]) * alpha),
+        wide(alpha),
+    ]
 }
 
 fn clamp_i32(v: u32) -> i32 {
@@ -1758,7 +1982,12 @@ impl State {
             ),
             None => (None, None),
         };
-        if !matches!(&role, Role::External { role, .. } if !role.initial_commit()) {
+        let configured = match &role {
+            Role::External { role, .. } => role.initial_commit(),
+            Role::Subsurface { .. } => false,
+            Role::Toplevel { .. } | Role::Popup { .. } => true,
+        };
+        if configured {
             // the initial commit without a buffer asks for the first configure
             wl.commit();
         }
@@ -1768,6 +1997,7 @@ impl State {
             role,
             viewport,
             zoomed: false,
+            solid: None,
             fractional,
             fractional_scale: None,
             preferred_scale: None,
@@ -1800,7 +2030,7 @@ impl State {
     fn toplevel(&self, window: Toplevel) -> Result<&XdgToplevel, Error> {
         match &self.surface(window.0)?.role {
             Role::Toplevel { toplevel, .. } => Ok(toplevel),
-            Role::Popup { .. } | Role::External { .. } => {
+            Role::Popup { .. } | Role::External { .. } | Role::Subsurface { .. } => {
                 unreachable!("a Toplevel handle names a toplevel")
             }
         }
@@ -1852,6 +2082,11 @@ impl State {
                     .collect(),
             };
             let scale = sources.resolve(fractional);
+            // a subsurface is drawn at its parent's scale: the parent's change is the one reported
+            if matches!(surf.role, Role::Subsurface { .. }) {
+                surf.scale = scale;
+                continue;
+            }
             if scale != surf.scale {
                 surf.scale = scale;
                 self.events.push(Event::ScaleChanged {
@@ -1905,12 +2140,15 @@ impl State {
 
 delegate_noop!(State: WlCompositor);
 delegate_noop!(State: WlRegion);
+delegate_noop!(State: WlSubcompositor);
+delegate_noop!(State: WlSubsurface);
 delegate_noop!(State: ignore WlShm);
 delegate_noop!(State: ignore WlShmPool);
 delegate_noop!(State: XdgPositioner);
 delegate_noop!(State: WpFractionalScaleManagerV1);
 delegate_noop!(State: WpViewporter);
 delegate_noop!(State: WpViewport);
+delegate_noop!(State: WpSinglePixelBufferManagerV1);
 delegate_noop!(State: ZxdgDecorationManagerV1);
 delegate_noop!(State: ZxdgImporterV2);
 delegate_noop!(State: XdgActivationV1);
@@ -2214,7 +2452,7 @@ impl Dispatch<XdgSurface, SurfaceId> for State {
                     configure,
                 }
             }
-            Role::External { .. } => {
+            Role::External { .. } | Role::Subsurface { .. } => {
                 return state.fail(Error::Protocol(
                     "an xdg_surface configure for a surface with an external role",
                 ))
@@ -2809,5 +3047,23 @@ mod tests {
         waker.wake();
         drop(wake);
         waker.wake();
+    }
+
+    #[test]
+    fn a_solid_colour_is_sent_premultiplied_over_the_whole_u32_range() {
+        assert_eq!(single_pixel([0.0; 4]), [0; 4], "transparent");
+        assert_eq!(
+            single_pixel([1.0, 0.0, 0.0, 1.0]),
+            [u32::MAX, 0, 0, u32::MAX]
+        );
+        let half = single_pixel([1.0, 0.5, 0.0, 0.5]);
+        assert_eq!(half[3], u32::MAX / 2 + 1, "alpha rounds to the nearest");
+        assert_eq!(half[0], half[3], "red is premultiplied by the alpha");
+        assert_eq!(half[1], u32::MAX / 4 + 1);
+        assert_eq!(
+            single_pixel([2.0, -1.0, 0.0, 3.0]),
+            [u32::MAX, 0, 0, u32::MAX],
+            "components outside 0 to 1 are clamped"
+        );
     }
 }

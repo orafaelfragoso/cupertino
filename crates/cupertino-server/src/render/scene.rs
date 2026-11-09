@@ -29,7 +29,7 @@ use smithay::wayland::shell::wlr_layer::{Anchor, Layer};
 use super::compose::SnapshotKeep;
 use super::compose::{
     corner_style, image_piece, item, output_rect, Composed, Composition, Material, MeshPiece,
-    Picture, Piece, Tree,
+    Picture, Piece, Tree, TreeSlice,
 };
 use super::gles::{Gles, GlesCompletion, GlesResources, GlesTarget};
 use super::lower::id_hash;
@@ -42,7 +42,9 @@ use super::motion::{
 use super::programs::Programs;
 use super::shader_rect::{to_physical_rect, ElementCache, Sig};
 use super::{CupertinoElement, SceneLayer};
-use crate::app_effects_v1::{surface_backdrops, BackdropArea};
+use crate::app_effects_v1::{
+    raised_parts, subsurface_backdrops, surface_backdrops, BackdropArea, TreePart,
+};
 use crate::config::Config;
 use crate::cursor::CursorFrame;
 use crate::decor::{Decor, DecorInput};
@@ -644,7 +646,17 @@ fn standalone(
     origin: Point<i32, Physical>,
     opacity: f32,
 ) -> Piece {
-    Piece::Tree(Box::new(Tree {
+    Piece::Tree(Box::new(standalone_tree(surface, kind, origin, opacity)))
+}
+
+/// The tree [`standalone`] draws.
+fn standalone_tree(
+    surface: &WlSurface,
+    kind: SceneKind,
+    origin: Point<i32, Physical>,
+    opacity: f32,
+) -> Tree {
+    Tree {
         surface: surface.clone(),
         kind,
         role: SurfaceRole::Standalone,
@@ -653,7 +665,72 @@ fn standalone(
         scale: (1.0, 1.0),
         opacity,
         clip: Clip::None,
-    }))
+        only: None,
+    }
+}
+
+/// The pieces of `tree`, front to back, with the backdrops its subsurfaces draw ([`raised_parts`]) between its slices:
+/// each directly below the slice that holds the subsurface's subtree. `origin` is where the tree's origin lies
+/// (output-local points, before a window's rescale); `backdrops` makes the pieces of one subsurface's backdrops, placed
+/// from it, given the subsurface's rectangle there, and the glass among them reads and draws only inside that
+/// rectangle as it is drawn ([`GlassContainer::bounded`]). A tree whose subsurfaces draw no backdrops is one piece.
+fn tree_pieces(
+    p: &mut SceneParams<'_>,
+    tree: Tree,
+    origin: Point<f64, Logical>,
+    mut backdrops: impl FnMut(
+        &mut SceneParams<'_>,
+        Vec<BackdropArea>,
+        smithay::utils::Rectangle<f64, Logical>,
+    ) -> Vec<Piece>,
+) -> Vec<Piece> {
+    let Some(parts) = raised_parts(&tree.surface) else {
+        return vec![Piece::Tree(Box::new(tree))];
+    };
+    let mut out = Vec::with_capacity(parts.len());
+    for part in parts {
+        match part {
+            TreePart::Surfaces(surfaces) => {
+                use smithay::reexports::wayland_server::Resource;
+                let index = surfaces[0].id().protocol_id() as u64;
+                let ids = surfaces
+                    .iter()
+                    .map(smithay::backend::renderer::element::Id::from_wayland_resource)
+                    .collect();
+                out.push(Piece::Tree(Box::new(Tree {
+                    surface: tree.surface.clone(),
+                    only: Some(TreeSlice { ids, index }),
+                    ..tree
+                })));
+            }
+            TreePart::Backdrops { surface, rect } => {
+                let at = origin + rect.loc;
+                let areas = subsurface_backdrops(&surface, at);
+                if areas.is_empty() {
+                    continue;
+                }
+                out.extend(backdrops(
+                    p,
+                    areas,
+                    smithay::utils::Rectangle::new(at, rect.size),
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// `pieces` with their glass reading and drawing only inside `bound` (output-local points).
+fn bounded_glass(
+    mut pieces: Vec<Piece>,
+    bound: smithay::utils::Rectangle<f64, Logical>,
+) -> Vec<Piece> {
+    for piece in &mut pieces {
+        if let Piece::Glass(g) = piece {
+            g.glass = Rc::new((*g.glass).clone().bounded(bound));
+        }
+    }
+    pieces
 }
 
 /// The wallpaper of the output: the image of the user or of the asset pack, else the procedural one.
@@ -879,7 +956,11 @@ fn window_popup_elements(
     for (popup, popup_offset) in PopupManager::popups_for_surface(&surface) {
         let offset: Point<i32, Physical> =
             (geo.loc + popup_offset - popup.geometry().loc).to_physical_precise_round(scale);
-        out.push(Piece::Tree(Box::new(Tree {
+        let popup_origin = Point::<f64, Logical>::from((
+            visual_local.loc.x + ins.left + f64::from(popup_offset.x - popup.geometry().loc.x),
+            visual_local.loc.y + ins.top + f64::from(popup_offset.y - popup.geometry().loc.y),
+        ));
+        let tree = Tree {
             surface: popup.wl_surface().clone(),
             kind: SceneKind::PopupContent,
             role: SurfaceRole::Popup,
@@ -888,12 +969,18 @@ fn window_popup_elements(
             scale: (plan.scale_x, plan.scale_y),
             opacity: alpha,
             clip: Clip::None,
-        })));
+            only: None,
+        };
+        // the backdrops of the popup's subsurfaces lie between its slices, moved and scaled with the window
+        out.extend(tree_pieces(p, tree, popup_origin, |p, areas, bound| {
+            let areas = rescaled_backdrops(areas, visual_local.loc, plan);
+            let bound = rescaled_rect(bound, visual_local.loc, plan);
+            bounded_glass(
+                backdrop_elements(p, &areas, alpha, WindowState::Active),
+                bound,
+            )
+        }));
         // the popup's own backdrop (a menu's material) lies directly below it, above the window
-        let popup_origin = Point::<f64, Logical>::from((
-            visual_local.loc.x + ins.left + f64::from(popup_offset.x - popup.geometry().loc.x),
-            visual_local.loc.y + ins.top + f64::from(popup_offset.y - popup.geometry().loc.y),
-        ));
         let backdrops = rescaled_backdrops(
             surface_backdrops(popup.wl_surface(), popup_origin),
             visual_local.loc,
@@ -945,7 +1032,45 @@ fn window_elements(
     } else {
         Clip::Rect(output_rect(visual_local))
     };
-    out.push(Piece::Tree(Box::new(Tree {
+    // backdrops follow the window's rescale about its visual origin
+    let origin_local = Point::<f64, Logical>::from((
+        visual_local.loc.x + ins.left - f64::from(geo.loc.x),
+        visual_local.loc.y + ins.top - f64::from(geo.loc.y),
+    ));
+    let state = if active {
+        WindowState::Active
+    } else {
+        WindowState::Inactive
+    };
+    // glass in a window reads the window: inside its corners, where nothing of what is around it shows
+    let corner = if styled { radius } else { 0.0 };
+    let within = inset_rect(visual_local, corner * CORNER_CLEARANCE + 1.0);
+    let window_backdrops = |p: &mut SceneParams<'_>, areas: Vec<BackdropArea>| {
+        let areas = rescaled_backdrops(areas, visual_local.loc, plan);
+        let areas = if plan.exact {
+            areas
+        } else {
+            cropped_backdrops(areas, visual_local)
+        };
+        let mut pieces = backdrop_elements(p, &areas, alpha, state);
+        for piece in &mut pieces {
+            if let Piece::Glass(g) = piece {
+                g.glass = Rc::new((*g.glass).clone().within(within));
+            }
+        }
+        // a square backdrop follows the window's rounded corners where it reaches them, as the content does
+        if matches!(clip, Clip::Rounded { .. }) {
+            for piece in &mut pieces {
+                if let Piece::Material(m) = piece {
+                    if m.radius <= 0.0 {
+                        m.clip = clip;
+                    }
+                }
+            }
+        }
+        pieces
+    };
+    let tree = Tree {
         surface: surface.clone(),
         kind: SceneKind::WindowContent,
         role: SurfaceRole::WindowContent,
@@ -954,46 +1079,14 @@ fn window_elements(
         scale: (plan.scale_x, plan.scale_y),
         opacity: alpha,
         clip,
-    })));
-    // backdrops follow the window's rescale about its visual origin
-    let origin_local = Point::<f64, Logical>::from((
-        visual_local.loc.x + ins.left - f64::from(geo.loc.x),
-        visual_local.loc.y + ins.top - f64::from(geo.loc.y),
-    ));
-    let backdrops = rescaled_backdrops(
-        surface_backdrops(&surface, origin_local),
-        visual_local.loc,
-        plan,
-    );
-    let backdrops = if plan.exact {
-        backdrops
-    } else {
-        cropped_backdrops(backdrops, visual_local)
+        only: None,
     };
-    // a square backdrop follows the window's rounded corners where it reaches them, as the content does
-    let state = if active {
-        WindowState::Active
-    } else {
-        WindowState::Inactive
-    };
-    let mut backdrops = backdrop_elements(p, &backdrops, alpha, state);
-    // glass in a window reads the window: inside its corners, where nothing of what is around it shows
-    let corner = if styled { radius } else { 0.0 };
-    let within = inset_rect(visual_local, corner * CORNER_CLEARANCE + 1.0);
-    for piece in &mut backdrops {
-        if let Piece::Glass(g) = piece {
-            g.glass = Rc::new((*g.glass).clone().within(within));
-        }
-    }
-    if matches!(clip, Clip::Rounded { .. }) {
-        for piece in &mut backdrops {
-            if let Piece::Material(m) = piece {
-                if m.radius <= 0.0 {
-                    m.clip = clip;
-                }
-            }
-        }
-    }
+    // the backdrops of its subsurfaces lie between the slices of the content, each reading the window below it
+    out.extend(tree_pieces(p, tree, origin_local, |p, areas, bound| {
+        let bound = rescaled_rect(bound, visual_local.loc, plan);
+        bounded_glass(window_backdrops(p, areas), bound)
+    }));
+    let backdrops = window_backdrops(p, surface_backdrops(&surface, origin_local));
     out.extend(backdrops);
     if shadow && styled {
         // the fine outline just outside the frame, over the shadow, fading with it (none on a full-screen window);
@@ -1049,6 +1142,23 @@ fn rescaled_backdrops(
             b
         })
         .collect()
+}
+
+/// `rect` moved and scaled with the window's plan about its visual origin, as [`rescaled_backdrops`] moves backdrops.
+fn rescaled_rect(
+    rect: smithay::utils::Rectangle<f64, Logical>,
+    visual_origin: Point<f64, Logical>,
+    plan: &WindowPlan,
+) -> smithay::utils::Rectangle<f64, Logical> {
+    let at = visual_origin
+        + Point::from((
+            (rect.loc.x - visual_origin.x) * plan.scale_x,
+            (rect.loc.y - visual_origin.y) * plan.scale_y,
+        ));
+    smithay::utils::Rectangle::new(
+        at,
+        (rect.size.w * plan.scale_x, rect.size.h * plan.scale_y).into(),
+    )
 }
 
 /// Backdrops of a window cropped to `visual` with the window's content: their right and bottom edges stop at its edges.
@@ -1603,12 +1713,18 @@ fn layer_elements(
         let mut own = Vec::new();
         for (popup, popup_offset) in PopupManager::popups_for_surface(surface.wl_surface()) {
             let popup_origin = origin + (popup_offset - popup.geometry().loc).to_f64();
-            own.push(standalone(
+            let tree = standalone_tree(
                 popup.wl_surface(),
                 SceneKind::LayerContent,
                 popup_origin.to_physical_precise_round(scale),
                 opacity,
-            ));
+            );
+            own.extend(tree_pieces(p, tree, popup_origin, |p, areas, bound| {
+                bounded_glass(
+                    backdrop_elements(p, &areas, opacity, WindowState::Active),
+                    bound,
+                )
+            }));
             let backdrops = surface_backdrops(popup.wl_surface(), popup_origin);
             own.extend(popup_backdrop_elements(p, &backdrops, opacity));
         }
@@ -1617,12 +1733,13 @@ fn layer_elements(
         } else {
             popups.append(&mut own);
         }
-        out.push(standalone(
-            surface.wl_surface(),
-            SceneKind::LayerContent,
-            loc,
-            opacity,
-        ));
+        let tree = standalone_tree(surface.wl_surface(), SceneKind::LayerContent, loc, opacity);
+        out.extend(tree_pieces(p, tree, origin, |p, areas, bound| {
+            bounded_glass(
+                backdrop_elements(p, &areas, opacity, WindowState::Active),
+                bound,
+            )
+        }));
         let backdrops = surface_backdrops(surface.wl_surface(), origin);
         if look.is_some() {
             out.extend(bar_backdrop_elements(p, &backdrops, opacity, captures));
@@ -2179,6 +2296,7 @@ fn cursor(p: &mut SceneParams<'_>, stack: &mut Composition) {
                     scale: (grow, grow),
                     opacity: 1.0,
                     clip: Clip::None,
+                    only: None,
                 })),
             );
         }

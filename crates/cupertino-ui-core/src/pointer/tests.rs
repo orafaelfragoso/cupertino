@@ -43,6 +43,7 @@ fn fixture() -> Fixture {
                 target: rect,
                 clip: None,
                 own_clip: None,
+                raised: Default::default(),
             },
         );
     }

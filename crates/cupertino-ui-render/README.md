@@ -2,7 +2,7 @@
 
 CupertinoKit rendering: the `DisplayList` of paint nodes core builds for each window (paths, gradients, images, glyph
 runs, clipped and isolated layers, materials already resolved to plain paint), `PaintResources`, `DamageRegion`, and
-the `UiRenderer` trait whose CPU frame (`CpuFrame`, premultiplied RGBA) the window system presents. MPL-2.0. `CpuRenderer` is the CPU backend (tiny-skia, private): it validates a request before touching the image it keeps, repaints
+the theme's `Color` it paints with (re-exported for the window-system interface), the `UiRenderer` trait whose CPU frame (`CpuFrame`, premultiplied RGBA) the window system presents. MPL-2.0. `CpuRenderer` is the CPU backend (tiny-skia, private): it validates a request before touching the image it keeps, repaints
 only the damage, executes clips, group opacity, blur and shadows on isolated
 layers, and caches rasterized glyphs and decoded images under explicit byte budgets. A frame drawn over the last one
 has the bytes of the same list drawn whole, which a test checks on random lists, changes and damage at scales 1, 1.25,

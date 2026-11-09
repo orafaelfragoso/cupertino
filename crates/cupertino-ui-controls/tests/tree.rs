@@ -166,6 +166,7 @@ impl Application for Folders {
                     on_select: Some(Box::new(Message::Select)),
                     on_activate: None,
                     on_row_key: None,
+                    header_top: 0.0,
                 },
                 item,
                 key: None,

@@ -74,6 +74,39 @@ fn byte(c: Rgba) -> [u8; 4] {
     c.map(|v| (v * 255.0).round() as u8)
 }
 
+/// The scrim fades in over 200 ms, easing out, from nothing to its colour's own alpha, each frame of the fade more
+/// opaque than the one before; under Reduce Motion it shows its whole alpha from the first frame. What reaches the
+/// screen is the colour at that opacity, the same whether it is one stretched pixel or a filled frame.
+#[test]
+fn the_scrim_fades_in_to_its_colour_s_alpha_easing_out_and_at_once_under_reduce_motion() {
+    let palette = Palette::from_tokens(&tokens(), Appearance::Dark).unwrap();
+    let full = palette.scrim[3];
+    let alpha = |ms: u64, reduce: bool| {
+        scrim_color(&palette, scrim_opacity(Duration::from_millis(ms), reduce))[3]
+    };
+    assert_eq!(alpha(0, false), 0.0, "nothing at the start");
+    // ease-out: 1 - (1 - t)^3
+    for (ms, opacity) in [(50, 0.578125), (100, 0.875), (150, 0.984375)] {
+        assert!(
+            (f64::from(alpha(ms, false)) - f64::from(full) * opacity).abs() < 1e-6,
+            "{ms} ms in: {opacity} of the scrim's alpha"
+        );
+    }
+    let frames: Vec<f32> = (0..13).map(|i| alpha(i * 16, false)).collect();
+    assert!(
+        frames.windows(2).all(|w| w[0] < w[1]),
+        "each frame darker: {frames:?}"
+    );
+    for ms in [200, 216, 5_000] {
+        assert_eq!(alpha(ms, false), full, "settled at {ms} ms");
+    }
+    for ms in [0, 16, 200] {
+        assert_eq!(alpha(ms, true), full, "no fade under Reduce Motion");
+    }
+    let shown = scrim_color(&palette, 1.0);
+    assert_eq!(shown, palette.scrim, "settled, it is the scrim's colour");
+}
+
 #[test]
 fn every_appearance_has_the_prompts_colours_and_the_scrim_darkens_more_in_dark_and_high_contrast() {
     let tokens = tokens();
@@ -91,6 +124,12 @@ fn every_appearance_has_the_prompts_colours_and_the_scrim_darkens_more_in_dark_a
     let palette = Palette::from_tokens(&tokens, Appearance::Light).unwrap();
     draw_scrim(&mut pm, &palette, 0.5);
     assert_eq!(pm.pixel(2, 2).unwrap().alpha(), 58);
+    let shown = scrim_color(&palette, 0.5);
+    assert_eq!(
+        (shown[..3].to_vec(), shown[3]),
+        (palette.scrim[..3].to_vec(), palette.scrim[3] * 0.5),
+        "the colour shown without a frame is the one drawn"
+    );
 }
 
 #[test]

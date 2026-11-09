@@ -10,8 +10,9 @@
 //! panel's output gets the state at once. `switcher_select` is the pointer's pick and
 //! `switcher_activate` / `switcher_cancel` its release on the panel; a press anywhere else is the
 //! server's ([`SWITCHER_NAMESPACE`]). Refused activations reach every dock as `attention`. The
-//! application grid is the dock's alone: the server forwards the app-grid action
-//! ([`Docks::toggle_app_grid`]) and keeps no state of it. The overview is shared: the server owns
+//! app-grid action opens the launcher's application browser, which the server asks for on the
+//! session bus (`Cupertino::toggle_applications`); a hot corner or gesture the dock maps to it
+//! comes back as that action. Docks are no longer sent `toggle_app_grid`. The overview is shared: the server owns
 //! the session (`shell.rs`: transition, frames, Escape, click and workspace-switch fallbacks) and
 //! tells the dock of its output the window set, the workspaces and the layout area
 //! ([`Cupertino::send_overview_to_docks`]); the dock lays the windows out (`overview_frame`), draws
@@ -198,15 +199,6 @@ impl Docks {
         self.switcher = None;
         for dock in &self.docks {
             dock.resource.switcher_closed(u32::from(committed));
-            dock.resource.done();
-        }
-    }
-
-    /// Tell every dock the app-grid action fired (shortcut, hot corner or gesture): the dock opens
-    /// its application grid, or closes it when it is open.
-    pub fn toggle_app_grid(&self) {
-        for dock in &self.docks {
-            dock.resource.toggle_app_grid();
             dock.resource.done();
         }
     }

@@ -1,7 +1,8 @@
 //! Glue between the launcher's Kit application ([`cupertino_launcher::kit`]) and the session: the windows get their
-//! layer surfaces from [`LauncherRoles`], `Toggle` arrives from the bus as a message, and [`AppHost`] starts what the
-//! panel activates, builds the file index on a thread, resizes the panel's surface, loads the results' icons and reads
-//! what the preview shows of the selected file on a thread.
+//! layer surfaces from [`LauncherRoles`], `Toggle` and `ToggleApplications` arrive from the bus as messages (and the
+//! output's size and the Reduce Motion option from the server), and [`AppHost`] starts what the panel activates,
+//! builds the file index on a thread, searches it on another, resizes the panel's surface, loads the results' and the
+//! applications' icons, reads what the preview shows of the selected file on a thread, and keeps the deadlines.
 
 use cupertino_apps::{MimeDatabase, XdgDirs};
 use cupertino_assets::Assets;
@@ -13,17 +14,19 @@ use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::WindowSpec;
 use cupertino_kit::render::{ImageResource, PixelFormat};
-use cupertino_launcher::control;
+use cupertino_launcher::browse::{App as BrowserApp, BrowseLayout};
+use cupertino_launcher::control::{self, Call};
 use cupertino_launcher::engine::{Action, ItemKind, ResultItem};
 use cupertino_launcher::exec::CommandSpec;
 use cupertino_launcher::files::{FileIndex, FileSearchConfig};
-use cupertino_launcher::kit::{self, Host, Message, Model};
+use cupertino_launcher::kit::{self, Host, Message, Model, SearchRequest};
 use cupertino_launcher::panel::Now;
 use cupertino_launcher::preview::{self, LatestOnly, Preview, PreviewBody, TEXT_SNIFF};
+use cupertino_launcher::providers::{Provider, Reply, Update};
 use cupertino_launcher::view::{
-    window_size, APP_ID, CATCHER_APP_ID, DOCUMENT_ICON, FOLDER_ICON, GENERIC_APPLICATION_ICON,
-    HIDDEN_APP_ID, ICON_SIZE, PREVIEW_ICON_SIZE, PREVIEW_IMAGE, PREVIEW_TEXT_LINES, SEARCH_SYMBOL,
-    SHADOW_TOP, TOP_FRACTION,
+    APP_ID, CATCHER_APP_ID, DOCUMENT_ICON, FOLDER_ICON, GENERIC_APPLICATION_ICON, HIDDEN_APP_ID,
+    ICON_SIZE, PREVIEW_ICON_SIZE, PREVIEW_IMAGE, PREVIEW_TEXT_LINES, SEARCH_SYMBOL, SHADOW_TOP,
+    TOP_FRACTION,
 };
 use cupertino_launcher::{Launcher, LauncherConfig};
 use cupertino_modifiers::Profile;
@@ -55,6 +58,13 @@ const FRAME: Duration = Duration::from_micros(16_667);
 
 /// Device pixels the results' icons are loaded at: their size at scales 1 to 3, so they stay sharp on every output.
 const ICON_PX: [u32; 3] = [ICON_SIZE as u32, ICON_SIZE as u32 * 2, ICON_SIZE as u32 * 3];
+/// Device pixels the browser's icons are loaded at: the list's and the grid's sizes at scales 1 and 2, the grid's at 3.
+const BROWSE_ICON_PX: [u32; 4] = [
+    BrowseLayout::LIST_ICON as u32,
+    BrowseLayout::ICON as u32,
+    BrowseLayout::ICON as u32 * 2,
+    BrowseLayout::ICON as u32 * 3,
+];
 /// Device pixels the preview's application icon is loaded at.
 const PREVIEW_ICON_PX: [u32; 3] = [
     PREVIEW_ICON_SIZE as u32,
@@ -111,10 +121,10 @@ impl Surfaces {
     }
 }
 
-/// Gives the windows their layer surfaces, none of them on an output, so the server puts them on the output under the
-/// pointer: the panel on the overlay layer, anchored to the top only (so centred horizontally) at one fifth of the
-/// output's height, with the keyboard; the catcher over the whole output on the top layer, below the panel; the
-/// hidden window a point that takes no input.
+/// Gives the windows their layer surfaces, none of them on an output, so the server puts them on its active output (the
+/// one the person works on): the panel on the overlay layer, anchored to the top only (so centred horizontally) at one
+/// fifth of the output's height, with the keyboard; the catcher over the whole output on the top layer, below the
+/// panel; the hidden window a point that takes no input.
 struct LauncherRoles {
     shell: LayerShell,
     surfaces: Rc<RefCell<Surfaces>>,
@@ -127,8 +137,14 @@ struct LauncherRoles {
 enum Signal {
     /// `org.cupertino.Launcher1.Toggle`.
     Toggle,
+    /// `org.cupertino.Launcher1.ToggleApplications`.
+    Applications,
     /// The session was locked.
     Locked,
+    /// The output the launcher is on is this large (the catcher covers it).
+    Output(Size),
+    /// The session's Reduce Motion option.
+    ReduceMotion(bool),
 }
 
 /// The top margin of the panel's window on an output `height` points tall: the panel at [`TOP_FRACTION`] of the
@@ -222,10 +238,20 @@ impl SurfaceRoles for LauncherRoles {
     }
 
     fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
-        if let Some(AppEvent::SessionLock { locked: true }) = event.downcast_ref::<AppEvent>() {
-            // not a role event: the window system still tells the accessibility adapter
-            let _ = self.signals.try_send(Signal::Locked);
-            return None;
+        match event.downcast_ref::<AppEvent>() {
+            Some(AppEvent::SessionLock { locked: true }) => {
+                // not a role event: the window system still tells the accessibility adapter
+                let _ = self.signals.try_send(Signal::Locked);
+                return None;
+            }
+            Some(AppEvent::DisplayOptions(options)) => {
+                // the window system takes them too, for the theme
+                let _ = self
+                    .signals
+                    .try_send(Signal::ReduceMotion(options.reduce_motion));
+                return None;
+            }
+            _ => {}
         }
         let surfaces = &mut *self.surfaces.borrow_mut();
         match *event.downcast_ref::<ShellEvent>()? {
@@ -243,6 +269,10 @@ impl SurfaceRoles for LauncherRoles {
                     .as_ref()
                     .is_some_and(|c| c.surface() == surface)
                 {
+                    let _ = self.signals.try_send(Signal::Output(Size::new(
+                        f64::from(size.0),
+                        f64::from(size.1),
+                    )));
                     let margin = top_margin(f64::from(size.1));
                     if let Some(panel) = &surfaces.panel {
                         if margin != surfaces.panel_margin {
@@ -326,6 +356,15 @@ struct AppHost {
     files: Option<FileIcons>,
     /// Reads what the preview shows of a file, the newest asked for only; started at the first preview of a file.
     previews: Option<LatestOnly<PreviewRead>>,
+    /// Searches the file index, the newest query only; started at the first search.
+    searches: Option<LatestOnly<FileSearch>>,
+}
+
+/// A file search the search thread is asked for, and where its answer goes. A search replaced by a newer one before
+/// it started drops `reply`, which answers the loop with a stale failure.
+struct FileSearch {
+    request: SearchRequest,
+    reply: async_channel::Sender<Update>,
 }
 
 /// A file the preview reader is asked about, and where its answer goes.
@@ -485,9 +524,8 @@ impl Host for AppHost {
         }))]
     }
 
-    fn resize(&mut self, height: f64) {
+    fn resize(&mut self, size: Size) {
         if let Some(panel) = self.surfaces.borrow_mut().panel.as_mut() {
-            let size = window_size(height);
             panel.set_placement(
                 Anchor::Top,
                 (size.width.ceil() as u32, size.height.ceil() as u32),
@@ -607,6 +645,68 @@ impl Host for AppHost {
         }
     }
 
+    fn app_icon(&mut self, app: &BrowserApp) -> Vec<ImageSource> {
+        let own: Vec<ImageSource> = app
+            .icon
+            .as_deref()
+            .map(|name| {
+                BROWSE_ICON_PX
+                    .iter()
+                    .filter_map(|&px| self.themes.load(name, px))
+                    .map(|pixmap| image(pixmap.width(), pixmap.height(), pixmap.data()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !own.is_empty() {
+            return own;
+        }
+        BROWSE_ICON_PX
+            .iter()
+            .map(|&px| {
+                let pixmap = self.system.raster(GENERIC_APPLICATION_ICON, px);
+                image(pixmap.width(), pixmap.height(), pixmap.data())
+            })
+            .collect()
+    }
+
+    fn search(&mut self, request: SearchRequest) -> Vec<Command<Message>> {
+        if self.searches.is_none() {
+            self.searches = LatestOnly::new("launcher-search", |job: FileSearch| {
+                if job.request.cancel.is_cancelled() {
+                    return;
+                }
+                let update = job.request.run();
+                if !job.request.cancel.is_cancelled() {
+                    let _ = job.reply.send_blocking(update);
+                }
+            })
+            .map_err(|e| eprintln!("cupertino-launcher: no search thread: {e}"))
+            .ok();
+        }
+        let generation = request.generation;
+        let (reply, answer) = async_channel::bounded(1);
+        match &self.searches {
+            Some(searches) => searches.submit(FileSearch { request, reply }),
+            // no thread: the search says it failed rather than nothing found
+            None => drop(reply),
+        }
+        vec![Command::Perform(Box::pin(async move {
+            Message::Provided(answer.recv().await.unwrap_or(Update {
+                generation,
+                provider: Provider::Files,
+                reply: Reply::Failed("the search did not finish".to_owned()),
+            }))
+        }))]
+    }
+
+    fn after(&mut self, seconds: f64, message: Message) -> Vec<Command<Message>> {
+        let wait = Duration::from_secs_f64(seconds.clamp(0.0, 60.0));
+        vec![Command::Perform(Box::pin(async move {
+            async_io::Timer::after(wait).await;
+            message
+        }))]
+    }
+
     fn now(&self) -> Now {
         Now {
             mono: self.start.elapsed().as_secs_f64(),
@@ -629,7 +729,10 @@ fn listen(signals: &async_channel::Receiver<Signal>) -> Command<Message> {
             .await
             .map_or(Message::Unheard, |signal| match signal {
                 Signal::Toggle => Message::Toggle,
+                Signal::Applications => Message::Browse,
                 Signal::Locked => Message::Locked,
+                Signal::Output(size) => Message::Output(size),
+                Signal::ReduceMotion(on) => Message::ReduceMotion(on),
             })
     }))
 }
@@ -645,7 +748,14 @@ impl Application for App {
     }
 
     fn update(app: &mut App, message: Message) -> Vec<Command<Message>> {
-        let signalled = matches!(message, Message::Toggle | Message::Locked);
+        let signalled = matches!(
+            message,
+            Message::Toggle
+                | Message::Browse
+                | Message::Locked
+                | Message::Output(_)
+                | Message::ReduceMotion(_)
+        );
         let mut commands = kit::update(&mut app.model, message);
         if signalled {
             commands.push(listen(&app.signals));
@@ -681,9 +791,25 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         None
     };
     let (sender, signals) = async_channel::unbounded();
+    // the first output's size guesses the browser's height until the catcher is configured on the output the server
+    // picked
+    if let Some(g) = system
+        .connection()
+        .outputs()
+        .into_iter()
+        .find_map(|o| o.geometry)
+    {
+        let _ = sender.try_send(Signal::Output(Size::new(
+            f64::from(g.width),
+            f64::from(g.height),
+        )));
+    }
     let toggles = sender.clone();
-    let _control = control::serve(zbus::connection::Builder::session()?, move || {
-        let _ = toggles.send_blocking(Signal::Toggle);
+    let _control = control::serve(zbus::connection::Builder::session()?, move |call| {
+        let _ = toggles.send_blocking(match call {
+            Call::Toggle => Signal::Toggle,
+            Call::Applications => Signal::Applications,
+        });
     })
     .map_err(|e| match e {
         zbus::Error::NameTaken => "another launcher owns org.cupertino.Launcher1".into(),
@@ -707,6 +833,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         ),
         files: None,
         previews: None,
+        searches: None,
     };
     let mut model = Model::new(Launcher::from_system(config), Box::new(host));
     model.files = files;

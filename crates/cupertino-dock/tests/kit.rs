@@ -18,8 +18,7 @@ use cupertino_dock::kit::{
 use cupertino_dock::overview_ui::{Mode, Workspace};
 use cupertino_dock::session::Session;
 use cupertino_dock::view::{
-    IconSet, BAR_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, GRID_APP_ID, OVERVIEW_APP_ID,
-    SWITCHER_APP_ID,
+    IconSet, BAR_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, OVERVIEW_APP_ID, SWITCHER_APP_ID,
 };
 use cupertino_dock::{Dock, DockConfig};
 use cupertino_kit::controls::ImageSource;
@@ -32,7 +31,7 @@ use cupertino_kit::platform::{
     Capabilities, KeyEvent, Keysym, MaterialRegion, Mods, MouseButton, PointerEvent, Timestamp,
     WindowEvent, WindowId, WindowRequest, WindowStates,
 };
-use cupertino_kit::render::{CpuConfig, CpuRenderer, Effect, ImageResource, PaintOp, PixelFormat};
+use cupertino_kit::render::{CpuConfig, CpuRenderer, ImageResource, PixelFormat};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_theme::Theme;
@@ -474,12 +473,6 @@ impl Run {
         self.settle();
     }
 
-    /// Hand the model `message` and run until it is idle, drawing no frame: one pass of the model.
-    fn message_unframed(&mut self, message: Message) {
-        self.send.try_send(message).unwrap();
-        self.driver.run_until_idle(budget()).unwrap();
-    }
-
     /// Move the host's clock on by `seconds` and wake the model.
     fn advance(&mut self, seconds: f64) {
         let generation = {
@@ -595,28 +588,6 @@ impl Run {
                     Timestamp(0),
                 ),
             );
-        }
-    }
-
-    /// Type `text` into `window`, one key per character.
-    fn type_text(&mut self, window: WindowId, text: &str) {
-        for c in text.chars() {
-            for pressed in [true, false] {
-                self.send_to(
-                    window,
-                    WindowEvent::Key(
-                        KeyEvent {
-                            code: 1,
-                            keysym: Keysym(u32::from(c)),
-                            text: pressed.then_some(c),
-                            pressed,
-                            repeat: false,
-                            mods: Mods::NONE,
-                        },
-                        Timestamp(0),
-                    ),
-                );
-            }
         }
     }
 
@@ -802,10 +773,10 @@ fn the_focus_dock_shortcut_gives_the_bar_the_keyboard_and_escape_gives_it_back()
     );
 }
 
-/// The grid and the Force Quit dialog hold the keyboard while they are up: a Focus Dock meanwhile is dropped, so the
-/// bar does not take the keyboard from the dialog, nor from the window the grid launched when it closes.
+/// The Force Quit dialog holds the keyboard while it is up: a Focus Dock meanwhile is dropped, so the bar does not take
+/// the keyboard from the dialog.
 #[test]
-fn the_focus_dock_shortcut_is_dropped_while_the_grid_or_the_dialog_has_the_keyboard() {
+fn the_focus_dock_shortcut_is_dropped_while_the_dialog_has_the_keyboard() {
     let mut run = Run::start();
     let bar_took = |run: &Run| {
         run.record
@@ -814,25 +785,6 @@ fn the_focus_dock_shortcut_is_dropped_while_the_grid_or_the_dialog_has_the_keybo
             .iter()
             .any(|&(part, on)| part == Part::Bar(1) && on)
     };
-    run.message(Message::Dock {
-        output: 1,
-        events: vec![DockEvent::ToggleAppGrid],
-    });
-    let grid = run.window(&format!("{GRID_APP_ID}@1")).expect("the grid");
-    run.message(Message::Sized(Sized::Grid, 1280.0, 800.0));
-    run.advance(1.0);
-    run.message(Message::Dock {
-        output: 1,
-        events: vec![DockEvent::Engage],
-    });
-    run.send_to(grid, WindowEvent::Focus(true));
-    // with nothing typed, the first Escape folds the grid into its capsule and the next dismisses it
-    run.key(grid, ESCAPE);
-    run.key(grid, ESCAPE);
-    run.advance(1.0);
-    assert!(run.window(&format!("{GRID_APP_ID}@1")).is_none());
-    assert!(!bar_took(&run), "{:?}", run.record.borrow().keyboard);
-
     run.message(Message::Dock {
         output: 1,
         events: vec![DockEvent::ForceQuitDialog],
@@ -943,6 +895,44 @@ fn resting_the_pointer_on_another_displays_edge_moves_the_dock_there() {
     assert!(
         run.window(&format!("{EDGE_APP_ID}@1")).is_some(),
         "the first output now has the strip"
+    );
+}
+
+/// The app-grid action (by default the pinch, or a hot corner mapped to it) opens the launcher's application browser:
+/// the dock asks the server for the action on the role of the output it fired on, and opens no window of its own. A
+/// `toggle_app_grid` from an older server opens nothing either.
+#[test]
+fn the_app_grid_trigger_asks_the_server_for_the_launcher_s_browser() {
+    let mut run = Run::start();
+    let windows = run.driver.runtime().windows().len();
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Trigger(Trigger::Pinch)],
+    });
+    assert_eq!(
+        run.requests()
+            .iter()
+            .filter(|r| **r == (1, Request::RunAction(kit::APP_GRID_ACTION.to_owned())))
+            .count(),
+        1,
+        "{:?}",
+        run.requests()
+    );
+    assert_eq!(kit::APP_GRID_ACTION, "app-grid", "the server's action name");
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::ToggleAppGrid],
+    });
+    run.advance(1.0);
+    assert_eq!(
+        run.driver.runtime().windows().len(),
+        windows,
+        "the dock opens no window for it"
+    );
+    assert!(
+        run.record.borrow().keyboard.is_empty(),
+        "nor takes the keyboard: {:?}",
+        run.record.borrow().keyboard
     );
 }
 
@@ -1171,63 +1161,8 @@ fn locking_the_session_closes_the_menu_and_the_dialog_and_hides_the_strips() {
     );
 }
 
-#[test]
-fn the_application_grid_takes_the_keyboard_filters_as_one_types_and_launches_with_return() {
-    let mut run = Run::start();
-    run.message(Message::Dock {
-        output: 1,
-        events: vec![DockEvent::ToggleAppGrid],
-    });
-    let grid = run
-        .window(&format!("{GRID_APP_ID}@1"))
-        .expect("the grid opened on the dock's output");
-    run.message(Message::Sized(Sized::Grid, 1280.0, 800.0));
-    run.advance(1.0);
-    assert_eq!(
-        run.record.borrow().keyboard.last().copied(),
-        Some((Part::Grid, true))
-    );
-    let names: Vec<String> = run
-        .nodes(grid)
-        .into_iter()
-        .filter(|n| n.0 == Role::Button)
-        .map(|n| n.1)
-        .collect();
-    assert!(
-        names.contains(&"Editor".to_owned()) && names.contains(&"Terminal".to_owned()),
-        "every application is a named item: {names:?}"
-    );
-    run.send_to(grid, WindowEvent::Focus(true));
-    run.type_text(grid, "edi");
-    run.key(grid, RETURN);
-    let spawned = run.record.borrow().spawned.clone();
-    assert_eq!(spawned.len(), 1, "{spawned:?}");
-    assert_eq!(spawned[0].0, ["editor"]);
-    assert!(spawned[0].1.is_some(), "with an activation token");
-    assert_eq!(
-        run.record.borrow().keyboard.last().copied(),
-        Some((Part::Grid, false)),
-        "the grid closes and gives the keyboard back"
-    );
-}
-
 fn kit_rect(r: WmRect) -> Rect {
     Rect::new(r.x, r.y, r.w, r.h)
-}
-
-/// Open the grid on the main display at its size, and give it the keyboard.
-fn open_grid(run: &mut Run) -> WindowId {
-    run.message(Message::Dock {
-        output: 1,
-        events: vec![DockEvent::ToggleAppGrid],
-    });
-    let grid = run
-        .window(&format!("{GRID_APP_ID}@1"))
-        .expect("the grid opened on the dock's output");
-    run.message(Message::Sized(Sized::Grid, 1280.0, 800.0));
-    run.advance(1.0);
-    run.send_to(grid, WindowEvent::Focus(true));
-    grid
 }
 
 /// The names of the nodes of `role` in `window`, in order.
@@ -1237,302 +1172,6 @@ fn named(run: &Run, window: WindowId, role: Role) -> Vec<String> {
         .filter(|n| n.0 == role)
         .map(|n| n.1)
         .collect()
-}
-
-/// The grid is a panel inside the output, not the whole of it: its search field on top, the pills of the categories
-/// its applications are in, the recently used applications in a row of their own above a separator, then every
-/// application by name. The first Escape folds the panel into its search capsule, without the pills and the rows, and
-/// the next dismisses the grid.
-#[test]
-fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_two_escapes_close_it() {
-    let mut run = Run::start();
-    run.record.borrow_mut().recent = vec![format!("{TERMINAL}.desktop")];
-    let grid = open_grid(&mut run);
-    // the harness gives the grid's layer 1280 × 800 points; the bar's room lies outside it, and the panel is centred
-    // on the output that makes
-    let bar = run.record.borrow().placements.last().copied().unwrap();
-    let layout = cupertino_dock::app_grid::GridLayout::on_output(
-        1280.0,
-        800.0,
-        cupertino_dock::app_grid::Outside::dock(bar.orientation, bar.bar_depth),
-    );
-    assert!((layout.panel.cy() - (800.0 + bar.bar_depth) / 2.0).abs() <= 0.5);
-    let search = run.bounds(grid, Role::TextInput, "Applications");
-    assert_eq!(
-        search,
-        kit_rect(layout.search),
-        "the search field heads the panel"
-    );
-    assert!(
-        layout.panel.w < 1280.0 && layout.panel.h < 800.0 - 24.0,
-        "{:?}",
-        layout.panel
-    );
-    assert_eq!(
-        named(&run, grid, Role::CheckBox),
-        ["Development", "Utilities", "System"],
-        "a pill for each category an application is in, in their order"
-    );
-    assert_eq!(
-        named(&run, grid, Role::Button),
-        ["Terminal", "Editor", "Terminal"],
-        "the recent row, then every application by name"
-    );
-    let separator = run
-        .nodes(grid)
-        .into_iter()
-        .find(|n| n.0 == Role::Separator)
-        .expect("a separator under the recent row");
-    let terminal_rows: Vec<f64> = run
-        .nodes(grid)
-        .into_iter()
-        .filter(|n| n.0 == Role::Button)
-        .map(|n| n.3.y())
-        .collect();
-    assert!(terminal_rows[0] < separator.3.y() && separator.3.y() < terminal_rows[1]);
-    // the recents row is a group of its own, so the terminal it repeats from the list is told apart
-    let snapshot = run.driver.runtime().snapshot(grid).unwrap();
-    let nodes = &snapshot.accessibility;
-    let recents = nodes
-        .iter()
-        .find(|(_, n)| {
-            n.role == Role::Group && n.name.as_deref() == Some(cupertino_dock::view::grid::RECENTS)
-        })
-        .expect("a group for the recent row");
-    let in_recents: Vec<String> = recents
-        .1
-        .children
-        .iter()
-        .filter_map(|id| nodes.iter().find(|(i, _)| i == id))
-        .map(|(_, n)| n.name.clone().unwrap_or_default())
-        .collect();
-    assert_eq!(in_recents, ["Terminal"]);
-    assert_eq!(run.focused(grid).as_deref(), Some("Applications"));
-
-    assert_eq!(
-        run.record.borrow().keyboard.last().copied(),
-        Some((Part::Grid, true))
-    );
-    run.key(grid, ESCAPE);
-    run.advance(1.0);
-    assert!(
-        run.window(&format!("{GRID_APP_ID}@1")).is_some(),
-        "the first Escape keeps the grid up"
-    );
-    assert!(named(&run, grid, Role::CheckBox).is_empty(), "no pills");
-    assert!(named(&run, grid, Role::Button).is_empty(), "no rows");
-    let capsule = run.bounds(grid, Role::TextInput, "Applications");
-    assert_eq!(capsule, kit_rect(layout.capsule), "the search capsule");
-    assert_eq!(
-        run.record.borrow().keyboard.last().copied(),
-        Some((Part::Grid, true)),
-        "the capsule keeps the keyboard"
-    );
-    run.key(grid, ESCAPE);
-    run.advance(1.0);
-    assert!(run.window(&format!("{GRID_APP_ID}@1")).is_none());
-    assert_eq!(
-        run.record.borrow().keyboard.last().copied(),
-        Some((Part::Grid, false))
-    );
-}
-
-/// Typing searches at once; with a query typed, the first Escape clears it and leaves the grid open on every
-/// application, the next folds it into its capsule and the one after closes it. An application that runs is brought
-/// forward rather than started again.
-#[test]
-fn typing_searches_at_once_and_an_application_that_runs_comes_forward() {
-    let mut run = Run::start();
-    let grid = open_grid(&mut run);
-    run.type_text(grid, "term");
-    assert_eq!(named(&run, grid, Role::Button), ["Terminal"]);
-    run.key(grid, ESCAPE);
-    assert!(
-        run.window(&format!("{GRID_APP_ID}@1")).is_some(),
-        "the first Escape clears the query"
-    );
-    let mut every = named(&run, grid, Role::Button);
-    every.sort();
-    every.dedup();
-    assert_eq!(every, ["Editor", "Terminal"], "every application again");
-    assert!(!named(&run, grid, Role::CheckBox).is_empty());
-    run.key(grid, ESCAPE);
-    run.advance(1.0);
-    assert!(
-        run.window(&format!("{GRID_APP_ID}@1")).is_some(),
-        "the next folds the panel"
-    );
-    run.key(grid, ESCAPE);
-    run.advance(1.0);
-    assert!(
-        run.window(&format!("{GRID_APP_ID}@1")).is_none(),
-        "the one after closes"
-    );
-    let grid = open_grid(&mut run);
-    run.type_text(grid, "term");
-    run.key(grid, RETURN);
-    assert!(
-        run.requests()
-            .contains(&(1, Request::ActivateApp(TERMINAL.to_owned()))),
-        "{:?}",
-        run.requests()
-    );
-    assert!(run.record.borrow().spawned.is_empty());
-}
-
-/// Tab moves the keys between the pills and the applications; Return on a pill filters by its category, and the arrows
-/// then pick among what is left.
-#[test]
-fn tab_moves_between_the_pills_and_the_grid_and_a_pill_filters() {
-    let mut run = Run::start();
-    let grid = open_grid(&mut run);
-    run.key(grid, TAB);
-    assert_eq!(
-        run.focused(grid).as_deref(),
-        Some("Development"),
-        "the first pill has the keys"
-    );
-    run.key(grid, RIGHT);
-    assert_eq!(run.focused(grid).as_deref(), Some("Utilities"));
-    run.key(grid, LEFT);
-    run.key(grid, RETURN);
-    assert_eq!(named(&run, grid, Role::Button), ["Editor"]);
-    run.key(grid, TAB);
-    run.key(grid, RETURN);
-    let spawned = run.record.borrow().spawned.clone();
-    assert_eq!(spawned.len(), 1, "{spawned:?}");
-    assert_eq!(spawned[0].0, ["editor"]);
-    let token = spawned[0].1.as_deref().expect("an activation token");
-    assert!(token.starts_with("headless-activation-"), "{token}");
-
-    // the arrows move through the rows; the selection follows the keys
-    run.advance(1.0);
-    let grid = open_grid(&mut run);
-    run.key(grid, RIGHT);
-    assert_eq!(
-        run.focused(grid).as_deref(),
-        Some("Editor"),
-        "the first arrow selects"
-    );
-    run.key(grid, RIGHT);
-    assert_eq!(run.focused(grid).as_deref(), Some("Terminal"));
-    run.key(grid, RETURN);
-    assert!(run
-        .requests()
-        .contains(&(1, Request::ActivateApp(TERMINAL.to_owned()))));
-}
-
-/// The dock stays where it is, shown, beside the open grid: an auto-hidden bar comes out while the grid is open (its
-/// magnification while held out is tested on the model, `tests/dock.rs`).
-#[test]
-fn the_dock_stays_shown_beside_the_open_grid() {
-    let mut run = Run::start();
-    let editor_y = |run: &mut Run| {
-        let bar = run.bar();
-        run.bounds(bar, Role::Button, "Editor").y()
-    };
-    let shown = editor_y(&mut run);
-    run.message(Message::Dock {
-        output: 1,
-        events: vec![DockEvent::ToggleAutoHide],
-    });
-    for _ in 0..4 {
-        run.advance(0.5);
-    }
-    assert!(editor_y(&mut run) > shown, "the bar hid");
-    let placement = run.record.borrow().placements.last().copied().unwrap();
-    assert_eq!(placement.exclusive_zone, 0);
-    assert!(
-        placement.bar_depth > 0.0,
-        "the grid keeps clear of the bar it does not reserve room for"
-    );
-    let _grid = open_grid(&mut run);
-    for _ in 0..4 {
-        run.advance(0.5);
-    }
-    assert_eq!(
-        editor_y(&mut run),
-        shown,
-        "the bar is shown beside the grid"
-    );
-}
-
-/// Opening the grid waits for none of its icons beyond a row: the panel comes at once with every application of its
-/// rows named and a placeholder where an icon is still loading, and the icons of the rows shown fill in over the frames
-/// that follow, before those of the rows out of sight.
-#[test]
-fn the_grid_opens_without_waiting_for_its_icons_and_fills_them_in_over_its_frames() {
-    let more = (0..60)
-        .map(|i| {
-            entry_with(
-                &format!("org.example.App{i:02}"),
-                &format!("App {i:02}"),
-                "",
-            )
-        })
-        .collect();
-    let mut run = Run::on_desktop(tokens(false), ActionMap::default(), true, more);
-    let grid_loads = |run: &Run| -> Vec<String> {
-        run.record
-            .borrow()
-            .icon_loads
-            .iter()
-            .filter(|(_, side)| *side == cupertino_dock::app_grid::GridLayout::ICON)
-            .filter_map(|(key, _)| match key {
-                IconKey::Named(name) => Some(name.clone()),
-                _ => None,
-            })
-            .collect()
-    };
-    run.message(Message::Dock {
-        output: 1,
-        events: vec![DockEvent::ToggleAppGrid],
-    });
-    let grid = run
-        .window(&format!("{GRID_APP_ID}@1"))
-        .expect("the grid opened");
-    run.message_unframed(Message::Sized(Sized::Grid, 1280.0, 800.0));
-    let first = grid_loads(&run);
-    assert!(
-        !first.is_empty() && first.len() <= kit::GRID_ICONS_PER_PASS,
-        "a row of icons at most before the panel shows: {first:?}"
-    );
-    let shown = named(&run, grid, Role::Button);
-    assert!(
-        shown.len() > first.len(),
-        "the panel names every application of its rows meanwhile: {shown:?}"
-    );
-
-    // the frames that follow load the rest of the rows shown, and then those near them
-    run.settle();
-    for _ in 0..4 {
-        run.advance(1.0 / 60.0);
-    }
-    let loads = grid_loads(&run);
-    let names = |run: &Run| -> Vec<String> {
-        named(run, grid, Role::Button)
-            .into_iter()
-            .map(|n| match n.as_str() {
-                "Editor" => EDITOR.to_owned(),
-                "Terminal" => TERMINAL.to_owned(),
-                other => format!("org.example.App{}", other.trim_start_matches("App ")),
-            })
-            .collect()
-    };
-    let visible = names(&run);
-    assert!(
-        visible.iter().all(|key| loads.contains(key)),
-        "every icon shown is loaded: {visible:?} of {loads:?}"
-    );
-    assert!(
-        loads[..visible.len()]
-            .iter()
-            .all(|key| visible.contains(key)),
-        "the rows shown came first: {loads:?}"
-    );
-    assert!(loads.len() > visible.len(), "then the rows near them");
-    let unique: std::collections::BTreeSet<&String> = loads.iter().collect();
-    assert_eq!(unique.len(), loads.len(), "each icon loaded once");
 }
 
 // ---- residency --------------------------------------------------------------------------------------------------
@@ -1653,7 +1292,7 @@ fn a_resident_application_without_the_bus_is_started_again_once() {
     assert!(spawned[1].1.is_some(), "with an activation token");
 }
 
-/// A launch asked for again before its window came starts nothing more: from the bar or from the grid.
+/// A launch asked for again before its window came starts nothing more.
 #[test]
 fn a_launch_is_not_asked_for_twice() {
     let mut run = Run::start();
@@ -1662,9 +1301,6 @@ fn a_launch_is_not_asked_for_twice() {
     run.click(bar, editor);
     run.advance(0.5);
     run.click(bar, editor);
-    let grid = open_grid(&mut run);
-    run.type_text(grid, "edi");
-    run.key(grid, RETURN);
     assert_eq!(run.record.borrow().spawned.len(), 1);
     run.message(Message::Dock {
         output: 1,
@@ -1866,13 +1502,12 @@ fn an_exit_after_a_window_showed_keeps_the_running_application_activated() {
 }
 
 /// With a host that loads in the background, the bar loads only its resting side on the spot: the magnified side
-/// of its icons and every icon of the grid are asked for in the background, each once, so opening the grid loads
-/// nothing on the spot. An icon the background leaves out (an application with only a window's icon) loads on the
-/// spot when the rest arrive.
+/// of its icons is asked for in the background, each once. An icon the background leaves out (an application with
+/// only a window's icon) loads on the spot when the rest arrive.
 #[test]
-fn icons_load_in_the_background_so_the_first_magnification_and_grid_wait_for_none() {
+fn icons_load_in_the_background_so_the_first_magnification_waits_for_none() {
     BACKGROUND.set(Some(Vec::new()));
-    let mut run = Run::start();
+    let run = Run::start();
     let large = DockConfig::default().large_size;
     let tile = DockConfig::default().tile_size;
     let preloads = run.record.borrow().preloads.clone();
@@ -1884,10 +1519,6 @@ fn icons_load_in_the_background_so_the_first_magnification_and_grid_wait_for_non
             "{app} magnified"
         );
     }
-    let grid_side = cupertino_dock::app_grid::GridLayout::ICON;
-    assert!(asked
-        .iter()
-        .any(|(k, side)| matches!(k, IconKey::Named(_)) && *side == grid_side));
     let mut unique = asked.clone();
     unique.dedup();
     assert_eq!(unique.len(), asked.len(), "each icon is asked for once");
@@ -1895,12 +1526,6 @@ fn icons_load_in_the_background_so_the_first_magnification_and_grid_wait_for_non
     assert!(
         loads.iter().all(|(_, side)| *side == tile),
         "only the resting side on the spot: {loads:?}"
-    );
-    open_grid(&mut run);
-    let loads = run.record.borrow().icon_loads.clone();
-    assert!(
-        loads.iter().all(|(_, side)| *side != grid_side),
-        "the grid's icons were loaded already: {loads:?}"
     );
 }
 
@@ -3060,155 +2685,6 @@ fn look_captures() {
         });
         for _ in 0..12 {
             run.advance(0.1);
-        }
-
-        run.record.borrow_mut().recent = vec![TERMINAL.to_owned(), EDITOR.to_owned()];
-        let grid = open_grid(&mut run);
-        run.driver
-            .look_into(&dir, grid, "dock-grid", scale, &looks)
-            .unwrap();
-        run.type_text(grid, "term");
-        run.driver
-            .look_into(&dir, grid, "dock-grid-search", scale, &looks)
-            .unwrap();
-        run.key(grid, ESCAPE);
-        run.key(grid, ESCAPE);
-        run.advance(1.0);
-    }
-}
-
-/// How many layers of the grid's last frame cast a drop shadow.
-fn grid_shadows(run: &Run, grid: WindowId) -> usize {
-    run.driver
-        .runtime()
-        .snapshot(grid)
-        .unwrap()
-        .display_list
-        .nodes
-        .iter()
-        .flat_map(|n| &n.ops)
-        .filter(|op| {
-            matches!(op, PaintOp::PushLayer { effects, .. }
-                if effects.iter().any(|e| matches!(e, Effect::DropShadow { .. })))
-        })
-        .count()
-}
-
-/// The entry starts from nothing on the pass the grid is sized: that frame shows nothing, so it costs no shadow, the
-/// blur of the whole panel that is the dearest part of a frame at a high scale. The frames of the entry that show the
-/// panel cast it.
-#[test]
-fn the_grids_first_frame_from_nothing_casts_no_shadow_and_the_entry_casts_it() {
-    let mut run = Run::start();
-    run.message(Message::Dock {
-        output: 1,
-        events: vec![DockEvent::ToggleAppGrid],
-    });
-    let grid = run
-        .window(&format!("{GRID_APP_ID}@1"))
-        .expect("the grid opened");
-    run.driver
-        .window_system_mut()
-        .enqueue_window(grid, WindowEvent::Scale(2.0))
-        .unwrap();
-    run.message(Message::Sized(Sized::Grid, 1280.0, 800.0));
-    assert!(
-        !named(&run, grid, Role::Button).is_empty(),
-        "the panel and its applications are there"
-    );
-    assert_eq!(
-        grid_shadows(&run, grid),
-        0,
-        "no shadow before the panel shows"
-    );
-    run.advance(cupertino_dock::app_grid::SHOW_DURATION / 2.0);
-    assert_eq!(grid_shadows(&run, grid), 1, "the entry's frames cast it");
-    run.advance(cupertino_dock::app_grid::SHOW_DURATION);
-    assert_eq!(grid_shadows(&run, grid), 1, "and so does the panel at rest");
-}
-
-/// The grid's window at `scale` on the main display, its entry over, with the pixels of its last frame: whether the
-/// desktop draws the material (`app_effects`) or the panel paints its fill.
-fn grid_frame(scale: f64, app_effects: bool) -> (u32, u32, Vec<u8>) {
-    let mut run = Run::on(tokens(false), ActionMap::default(), app_effects);
-    run.driver.window_system_mut().set_keep_pixels(true);
-    run.message(Message::Dock {
-        output: 1,
-        events: vec![DockEvent::ToggleAppGrid],
-    });
-    let grid = run
-        .window(&format!("{GRID_APP_ID}@1"))
-        .expect("the grid opened");
-    run.driver
-        .window_system_mut()
-        .enqueue_window(grid, WindowEvent::Scale(scale))
-        .unwrap();
-    run.message(Message::Sized(Sized::Grid, 1280.0, 800.0));
-    for _ in 0..4 {
-        run.advance(cupertino_dock::app_grid::SHOW_DURATION);
-    }
-    let frames = run.driver.window_system_mut().frames(grid).unwrap();
-    let last = frames.last().expect("the grid presented a frame");
-    (last.width, last.height, last.pixels.clone())
-}
-
-/// At 1.5 and 2 the grid draws its content at the output's pixels: the application icons inside the panel, the panel's
-/// fill where the desktop has no material for it, and its shadow below the panel either way.
-#[test]
-fn at_a_high_scale_the_grid_draws_its_icons_and_its_panels_shadow() {
-    let bar = {
-        let run = Run::start();
-        let placement = run.record.borrow().placements.last().copied().unwrap();
-        placement
-    };
-    let layout = cupertino_dock::app_grid::GridLayout::on_output(
-        1280.0,
-        800.0,
-        cupertino_dock::app_grid::Outside::dock(bar.orientation, bar.bar_depth),
-    );
-    let panel = kit_rect(layout.panel);
-    for scale in [1.5, 2.0] {
-        for app_effects in [true, false] {
-            let (w, h, pixels) = grid_frame(scale, app_effects);
-            let at = |x: f64, y: f64| -> [u8; 4] {
-                let (px, py) = ((x * scale) as usize, (y * scale) as usize);
-                let i = (py * w as usize + px) * 4;
-                [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
-            };
-            assert_eq!(
-                (w, h),
-                ((1280.0 * scale) as u32, (800.0 * scale) as u32),
-                "the frame has the output's pixels at {scale}"
-            );
-            let icon = [40, 90, 200, 255];
-            let icons = pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .enumerate()
-                .filter(|(i, px)| {
-                    let (x, y) = (
-                        (i % w as usize) as f64 / scale,
-                        (i / w as usize) as f64 / scale,
-                    );
-                    **px == icon && panel.contains(Point::new(x, y))
-                })
-                .count();
-            assert!(
-                icons as f64 > 2.0 * (32.0 * scale).powi(2),
-                "the icons are drawn inside the panel at {scale}, material {app_effects}: {icons} pixels"
-            );
-            let shadow = at(panel.center().x, panel.max_y() + 12.0)[3];
-            assert!(
-                shadow > 0,
-                "the shadow shows below the panel at {scale}, material {app_effects}"
-            );
-            let inside = at(panel.x() + 4.0, panel.center().y)[3];
-            if app_effects {
-                assert_eq!(inside, 0, "the material shows through the panel at {scale}");
-            } else {
-                assert_eq!(inside, 255, "the panel paints its fill at {scale}");
-            }
         }
     }
 }

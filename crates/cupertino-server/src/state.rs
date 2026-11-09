@@ -2441,7 +2441,7 @@ impl Cupertino {
                     self.fx.toggle_show_desktop(now);
                     self.request_redraw();
                 }
-                ShellOp::ToggleAppGrid => self.docks.toggle_app_grid(),
+                ShellOp::ToggleAppGrid => self.toggle_applications(),
                 ShellOp::OpenForceQuit => self.docks.force_quit_dialog(),
                 ShellOp::ToggleLauncher => self.toggle_launcher(),
                 ShellOp::ToggleNotificationCenter => self.toggle_notification_center(),

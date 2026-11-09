@@ -1,7 +1,7 @@
-//! The dock's windows as CupertinoKit draws them: the bar, the tile held by the pointer, the context menus, the
-//! application grid, the Force Quit dialog and the edge strips that move the dock to another display; the switcher's
+//! The dock's windows as CupertinoKit draws them: the bar, the tile held by the pointer, the context menus, the Force
+//! Quit dialog and the edge strips that move the dock to another display; the switcher's
 //! panel and the overview's chrome are [`crate::switcher_kit`] and [`crate::overview_kit`]. Each window is a pure
-//! function of what [`crate::kit::Model`] holds; the geometry is the model's (`Dock::layout`, `GridLayout`,
+//! function of what [`crate::kit::Model`] holds; the geometry is the model's (`Dock::layout`,
 //! `force_quit::Layout`), so a node is placed where the model put it and reports the pointer and the keys back as an
 //! [`Input`].
 
@@ -9,7 +9,6 @@ pub mod bar;
 pub mod drag;
 pub mod edge;
 pub mod force_quit;
-pub mod grid;
 pub mod label;
 pub mod menu;
 pub(crate) mod paint;
@@ -27,7 +26,6 @@ use crate::switcher_kit::SwitcherInput;
 /// the surface roles give each its layer surface by them. The context menus are popups of the bar.
 pub const BAR_APP_ID: &str = "cupertino-dock";
 pub const DRAG_APP_ID: &str = "cupertino-dock-drag";
-pub const GRID_APP_ID: &str = "cupertino-dock-app-grid";
 pub const FORCE_QUIT_APP_ID: &str = "cupertino-force-quit";
 pub const EDGE_APP_ID: &str = "cupertino-dock-edge";
 pub const SWITCHER_APP_ID: &str = crate::switcher_kit::APP_ID;
@@ -76,14 +74,6 @@ pub enum Input {
     MenuItem(usize),
     /// The context menu closed: an item was chosen, Escape, or a press outside it.
     MenuClosed,
-    Grid(Pointer),
-    GridKey(KeyEvent),
-    /// The grid lost the keyboard.
-    GridLeft,
-    /// Assistive technology's click on the grid's item at this index (`AppGrid::item`).
-    GridItem(usize),
-    /// Assistive technology's click on the grid's pill for this category.
-    GridPill(crate::app_grid::Pill),
     ForceQuit(Pointer),
     ForceQuitKey(KeyEvent),
     /// Assistive technology's click on a row or a button of the dialog.

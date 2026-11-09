@@ -1,5 +1,5 @@
 //! The session bus worker against a private bus (`dbus-daemon --session`): the notification centre and
-//! launcher toggles, the overlay's media keys, the lock request and the power key's press and release reach their processes. Skipped when `dbus-daemon` is not installed.
+//! launcher toggles (its search and its application browser), the overlay's media keys, the lock request and the power key's press and release reach their processes. Skipped when `dbus-daemon` is not installed.
 #![cfg(feature = "dbus")]
 
 use std::sync::{Arc, Mutex};
@@ -20,12 +20,17 @@ impl FakeCentre {
     }
 }
 
-struct FakeLauncher(Arc<Mutex<u32>>);
+/// Counts the search toggles and the application browser's apart.
+struct FakeLauncher(Arc<Mutex<u32>>, Arc<Mutex<u32>>);
 
 #[zbus::interface(name = "org.cupertino.Launcher1")]
 impl FakeLauncher {
     fn toggle(&self) {
         *self.0.lock().unwrap() += 1;
+    }
+
+    fn toggle_applications(&self) {
+        *self.1.lock().unwrap() += 1;
     }
 }
 
@@ -68,6 +73,7 @@ fn each_toggle_calls_its_own_process() {
     };
     block_on(async {
         let (centre_toggles, launcher_toggles) = (Arc::new(Mutex::new(0)), Arc::new(Mutex::new(0)));
+        let browser_toggles = Arc::new(Mutex::new(0));
         let _centre = connection::Builder::address(bus.address.as_str())
             .expect("address")
             .name("org.cupertino.NotificationCenter1")
@@ -86,7 +92,7 @@ fn each_toggle_calls_its_own_process() {
             .expect("name")
             .serve_at(
                 "/org/cupertino/Launcher1",
-                FakeLauncher(launcher_toggles.clone()),
+                FakeLauncher(launcher_toggles.clone(), browser_toggles.clone()),
             )
             .expect("object")
             .build()
@@ -119,6 +125,21 @@ fn each_toggle_calls_its_own_process() {
             (
                 *centre_toggles.lock().unwrap(),
                 *launcher_toggles.lock().unwrap()
+            ),
+            (1, 1)
+        );
+        // the app-grid action: the launcher's application browser
+        handle.send(Request::Toggle(Toggle::Applications));
+        for _ in 0..200 {
+            if *browser_toggles.lock().unwrap() > 0 {
+                break;
+            }
+            async_io::Timer::after(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            (
+                *launcher_toggles.lock().unwrap(),
+                *browser_toggles.lock().unwrap()
             ),
             (1, 1)
         );

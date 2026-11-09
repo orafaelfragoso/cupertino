@@ -119,7 +119,7 @@ impl Trigger {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActionTarget {
     None,
-    /// The dock's own application grid.
+    /// The application browser (the launcher's: the dock asks the server for its `app-grid` action).
     AppGrid,
     /// A command line, run detached.
     Exec(String),

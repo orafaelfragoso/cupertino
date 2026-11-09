@@ -2,27 +2,38 @@
 //! show the sectioned results beside a preview of the selected one and its actions), the transparent catcher that
 //! takes a press outside the panel, and the empty window the process keeps mapped while the panel is hidden.
 //!
-//! The panel's window is larger than the panel by room for its shadow on every side; only the panel takes input.
+//! The panel is one enclosure for searching and for browsing the applications ([`browse`]): the same query row heads
+//! both, and the enclosure changes shape between them as [`crate::motion`] presents it. The panel's window is larger
+//! than the shape it heads for by room for its shadow on every side, and while the shape changes it holds both the old
+//! and the new one; only the enclosure as it is drawn takes input.
 //!
 //! The panel's keys never reach the field: [`PanelRoot`] takes them in the capture phase and sends them to the model
-//! as [`Input::Key`], so the panel's keyboard table ([`crate::panel`]) holds whatever the field would do with the key.
-//! Every other key goes on to Kit's [`TextField`], which reports the edited query as [`Input::Query`].
+//! as [`Input::Key`], so the panel's keyboard table ([`crate::panel`], and the browser's in [`crate::browse`]) holds
+//! whatever the field would do with the key; which keys those are follows [`KeyMode`]. Every other key goes on to
+//! Kit's [`TextField`], which reports the edited query as [`Input::Query`].
 
+pub mod browse;
+
+use crate::browse::{Arrangement, BrowseLayout, Browser, Category};
 use crate::engine::{ItemAction, ItemKind, ResultItem};
+use crate::motion::{Frame, Header, Shape as PanelShape};
+use crate::nav::Nested;
 use crate::panel::{takes_key, Focus, Key as PanelKey, Mods as PanelMods, Panel};
 use crate::preview::{Preview, PreviewBody};
+use crate::providers::Status;
 use cupertino_kit::controls::{
-    BareField, Icon, IconDirection, Image, ImageFit, ImageSource, Separator, Stack, Text,
-    TextChange, TextField, TextRole,
+    BareField, Icon, IconDirection, Image, ImageFit, ImageSource, Stack, Text, TextChange,
+    TextField, TextRole,
 };
 use cupertino_kit::core::{
     AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event, EventCx, Glass,
-    Key, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget, Window,
+    Key, Live, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget, Window,
     WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
-    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, Overflow,
+    SizeSpec,
 };
 use cupertino_kit::platform::{
     DecorationMode, KeyEvent, Mods, MouseButton, PointerEvent, WindowSpec,
@@ -82,6 +93,17 @@ pub const MAX_ROWS: usize = 9;
 pub const TOP_FRACTION: f64 = 0.2;
 /// The query field's placeholder and accessible name.
 pub const PLACEHOLDER: &str = "Search";
+/// The query row's placeholder while browsing the applications.
+pub const BROWSE_PLACEHOLDER: &str = browse::TITLE;
+/// The browsing query row's symbol.
+pub const BROWSE_SYMBOL: &str = "symbol.applications";
+/// The row that says why nothing shows: its height, and what it says.
+pub const STATUS_HEIGHT: f64 = 64.0;
+pub const SEARCHING: &str = "Searching";
+pub const NO_RESULTS: &str = "No Results";
+pub const INCOMPLETE: &str = "Some results could not be searched";
+/// The preview a result opens over the list: what it says when the host gave nothing in time.
+pub const PREVIEW_UNAVAILABLE: &str = "No preview";
 /// The panel's shadow: its blur, how far below the panel it falls and its opacity in each appearance.
 pub const SHADOW_BLUR: f64 = 40.0;
 pub const SHADOW_OFFSET: f64 = 16.0;
@@ -96,6 +118,11 @@ pub const SHADOW_BOTTOM: f64 = 1.5 * SHADOW_BLUR + SHADOW_OFFSET;
 pub const EDGE_WIDTH: f64 = 0.5;
 pub const EDGE_ALPHA_DARK: f32 = 0.55;
 pub const EDGE_ALPHA_LIGHT: f32 = 0.12;
+/// A separator line over the panel's glass: white at this opacity in the dark appearance, black at this one in the
+/// light appearance, so it reads as a faint line on any backdrop. Off the glass (the panel's opaque fill) and with
+/// Increase Contrast it takes the theme's separator colour.
+pub const GLASS_SEPARATOR_DARK: f32 = 0.175;
+pub const GLASS_SEPARATOR_LIGHT: f32 = 0.1;
 /// The preview pane: its padding, the largest picture or icon it shows, the text excerpt's size and lines, and the
 /// action buttons' height and gap.
 pub const PREVIEW_PADDING: f64 = 16.0;
@@ -158,6 +185,61 @@ pub enum Input {
     RunAction(usize, usize),
     /// A press outside the panel, or the panel's window lost the keyboard.
     Dismiss,
+    /// The pointer moved onto the application at this index of the browser.
+    BrowseHover(usize),
+    /// The application at this index was pressed, or activated by assistive technology.
+    BrowseActivate(usize),
+    /// A category filter was pressed.
+    BrowseCategory(Category),
+    /// The wheel over the browser, by this many points down.
+    BrowseScroll(f64),
+    /// The view options button was pressed.
+    ViewOptions,
+    /// A view option was chosen.
+    Arrange(Arrangement),
+    /// The enlarged preview's close was pressed.
+    ClosePreview,
+}
+
+/// Which keys the panel takes from the query field now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyMode {
+    /// Searching, the keys in the field or the result list.
+    Search(Focus),
+    /// Browsing: the arrows that move along the query (Left, Right, Home, End) and Space stay the field's until an
+    /// application, a filter or the options button is `selecting`.
+    Browse { selecting: bool },
+    /// The view options menu: it takes every key.
+    Menu,
+    /// The enlarged preview, opened from the list.
+    Preview,
+}
+
+impl KeyMode {
+    /// Whether the panel takes `key` with `mods`, before the field sees it.
+    pub fn takes(self, key: PanelKey, mods: PanelMods) -> bool {
+        // the applications, from wherever the keys are
+        if mods.only_primary() && key == PanelKey::Char('1') {
+            return true;
+        }
+        match self {
+            KeyMode::Search(focus) => takes_key(key, mods, focus),
+            KeyMode::Preview => takes_key(key, mods, Focus::List),
+            KeyMode::Menu => true,
+            KeyMode::Browse { selecting } => match key {
+                PanelKey::Escape
+                | PanelKey::Enter
+                | PanelKey::Up
+                | PanelKey::Down
+                | PanelKey::PageUp
+                | PanelKey::PageDown
+                | PanelKey::Tab => true,
+                PanelKey::Left | PanelKey::Right | PanelKey::Home | PanelKey::End => selecting,
+                PanelKey::Char(' ') => selecting && !mods.ctrl && !mods.alt && !mods.primary,
+                _ => false,
+            },
+        }
+    }
 }
 
 /// The panel key and modifiers of a key press, or `None` for a release and for keys the panel has no name for
@@ -275,17 +357,59 @@ pub fn panel_height(panel: &Panel) -> f64 {
     (COLLAPSED_HEIGHT + 1.0 + 2.0 * LIST_PADDING + list).max(MIN_EXPANDED_HEIGHT)
 }
 
-/// The panel's window for a panel `height` points tall: the panel and the room around it for its shadow.
-pub fn window_size(height: f64) -> Size {
+/// A settled panel's width and height are whole multiples of this many points, so the glass under it ends on whole
+/// device pixels at every quarter-step backing scale (1.25, 1.5, 1.75 and 2) and its edges stay sharp.
+pub const SHAPE_GRID: f64 = 4.0;
+
+/// `length` rounded up to [`SHAPE_GRID`].
+pub fn on_shape_grid(length: f64) -> f64 {
+    (length / SHAPE_GRID).ceil() * SHAPE_GRID
+}
+
+/// The search field alone.
+pub fn compact_shape() -> PanelShape {
+    PanelShape::new(WIDTH, COLLAPSED_HEIGHT, CORNER_RADIUS)
+}
+
+/// The searching panel's shape: the query row and what shows below it (the results, the enlarged preview, or the row
+/// saying why nothing shows).
+pub fn search_shape(panel: &Panel, status: &Status, nested: Option<Nested>) -> PanelShape {
+    let height = if nested == Some(Nested::Preview) && panel.selected_item().is_some() {
+        panel_height(panel).max(MIN_EXPANDED_HEIGHT)
+    } else if visible_rows(panel).is_empty() {
+        match status {
+            Status::Searching | Status::NoResults | Status::Failed(_) => {
+                COLLAPSED_HEIGHT + 1.0 + STATUS_HEIGHT
+            }
+            Status::Idle | Status::Results => COLLAPSED_HEIGHT,
+        }
+    } else {
+        panel_height(panel)
+    };
+    PanelShape::new(WIDTH, on_shape_grid(height), CORNER_RADIUS)
+}
+
+/// The browsing panel's shape, `height` points tall.
+pub fn browse_shape(height: f64) -> PanelShape {
+    PanelShape::new(BrowseLayout::WIDTH, height, BrowseLayout::RADIUS)
+}
+
+/// The panel's window for `shape`: the shape and the room around it for its shadow, in whole points (what an animation
+/// leaves a hair past a whole point does not round up).
+pub fn window_extent(shape: PanelShape) -> Size {
+    let whole = |v: f64| ((v * 1000.0).round() / 1000.0).ceil();
     Size::new(
-        WIDTH + 2.0 * SHADOW_SIDE,
-        height + SHADOW_TOP + SHADOW_BOTTOM,
+        whole(shape.width + 2.0 * SHADOW_SIDE),
+        whole(shape.height + SHADOW_TOP + SHADOW_BOTTOM),
     )
 }
 
-/// Where the panel lies in its window, `height` points tall.
-pub fn panel_rect(height: f64) -> Rect {
-    Rect::new(SHADOW_SIDE, SHADOW_TOP, WIDTH, height)
+/// Where the enclosure lies in a window `extent` large as `frame` presents it: horizontally centred, its top edge
+/// below the shadow's room, scaled about its top centre.
+pub fn enclosure_rect(extent: Size, frame: &Frame) -> Rect {
+    let scale = frame.scale.clamp(0.0, 1.0);
+    let (w, h) = (frame.shape.width * scale, frame.shape.height * scale);
+    Rect::new((extent.width - w) / 2.0, SHADOW_TOP, w, h)
 }
 
 /// Where the panel goes on an output `output` points large: horizontally centred, its top edge at [`TOP_FRACTION`]
@@ -316,14 +440,34 @@ pub struct PanelView<'a> {
     pub panel: &'a Panel,
     /// The revision of the query the model last took from the field.
     pub revision: u64,
-    /// The appear animation, 0 (hidden) to 1.
-    pub alpha: f64,
+    /// How the enclosure is presented now.
+    pub frame: Frame,
+    /// The window's size.
+    pub extent: Size,
+    /// Whether the panel is open (not closing): only then does it take input.
+    pub open: bool,
+    /// Which keys the panel takes from the field.
+    pub keys: KeyMode,
+    /// What is open over the view.
+    pub nested: Option<Nested>,
+    /// Why nothing shows, when nothing does.
+    pub status: Status,
     /// Images of the results' icons by [`ResultItem::id`]; a result without one shows its kind's symbol.
     pub icons: &'a HashMap<String, Vec<ImageSource>>,
     /// The selected result's actions, its own activation first.
     pub actions: &'a [ItemAction],
     /// What the host found out about the selected result, once it has.
     pub preview: Option<&'a Preview>,
+    /// The host gave nothing for the selected result in time.
+    pub preview_unavailable: bool,
+    /// The application browser, while it shows (browsing, or still fading out of a fold).
+    pub browser: Option<&'a Browser>,
+    /// Images of the applications' icons by desktop id.
+    pub app_icons: &'a HashMap<String, Vec<ImageSource>>,
+    /// The view option highlighted while the view options are open.
+    pub option: Arrangement,
+    /// The monotonic clock, for the browser's scroll indicator.
+    pub now: f64,
 }
 
 fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
@@ -349,32 +493,22 @@ fn empty<M: 'static>() -> Element<M> {
     })
 }
 
-/// The panel's window: transparent, the panel inside it at [`panel_rect`], which alone takes input.
+/// The panel's window: transparent, [`PanelView::extent`] large, the enclosure inside it at [`enclosure_rect`], which
+/// alone takes input while the panel is open (none while it closes).
 pub fn panel_window<M>(view: &PanelView<'_>) -> Window<M>
 where
     M: From<Input> + Clone + 'static,
 {
-    let height = panel_height(view.panel);
-    let mut spec = window_spec("Launcher", APP_ID, window_size(height));
-    spec.input_region = Some(vec![panel_rect(height)]);
+    let rect = enclosure_rect(view.extent, &view.frame);
+    let mut spec = window_spec("Launcher", APP_ID, view.extent);
+    spec.input_region = Some(if view.open { vec![rect] } else { Vec::new() });
     Window {
         key: WindowKey(Key::from("panel")),
         spec,
         shortcuts: CommandRegistry::new(),
         on_close: Some(M::from(Input::Dismiss)),
         background: WindowBackground::None,
-        content: Element::new(Stack {
-            axis: Axis::Vertical,
-            padding: Insets {
-                top: SHADOW_TOP,
-                left: SHADOW_SIDE,
-                bottom: SHADOW_BOTTOM,
-                right: SHADOW_SIDE,
-            },
-            spacing: 0.0,
-            align: Align::Stretch,
-            children: vec![panel_content(view).key("panel")],
-        }),
+        content: Element::new(Plain::absolute(vec![panel_content(view).key("panel")])),
         popup: None,
         menus: None,
     }
@@ -413,16 +547,31 @@ pub fn hidden_window<M: Clone + 'static>(generation: u64, on_close: M) -> Window
     }
 }
 
-/// The query row, then below a separator the results beside the selected one's preview.
+/// The enclosure: the query row, then below a separator the results beside the selected one's preview (or the
+/// enlarged preview, or why nothing shows), or the application browser. Its content keeps the shape the enclosure
+/// heads for while the enclosure scales, cut at the enclosure's edge.
 pub fn panel_content<M>(view: &PanelView<'_>) -> Element<M>
 where
     M: From<Input> + Clone + 'static,
 {
     let panel = view.panel;
+    let frame = &view.frame;
+    let rect = enclosure_rect(view.extent, frame);
+    let browsing = frame.header == Header::Browse;
     let field = Element::new(BareField {
         field: TextField {
-            label: PLACEHOLDER.to_owned(),
-            placeholder: PLACEHOLDER.to_owned(),
+            label: if browsing {
+                BROWSE_PLACEHOLDER
+            } else {
+                PLACEHOLDER
+            }
+            .to_owned(),
+            placeholder: if browsing {
+                BROWSE_PLACEHOLDER
+            } else {
+                PLACEHOLDER
+            }
+            .to_owned(),
             value: panel.query().to_owned(),
             revision: view.revision,
             purpose: ContentPurpose::Normal,
@@ -436,45 +585,133 @@ where
     })
     .key("query")
     .fill();
+    let mut row = vec![
+        Element::new(Icon {
+            name: if browsing {
+                BROWSE_SYMBOL
+            } else {
+                SEARCH_SYMBOL
+            }
+            .to_owned(),
+            size: SEARCH_ICON_SIZE,
+            direction: IconDirection::Fixed,
+            label: None,
+            tint: Some(ColorRole::SecondaryText),
+        })
+        .key(if browsing {
+            "browse-symbol"
+        } else {
+            "search-symbol"
+        }),
+        field,
+    ];
+    if let Some(browser) = view.browser.filter(|_| browsing) {
+        row.push(
+            Element::new(browse::OptionsButton {
+                focus: browser.zone() == crate::browse::Zone::Options
+                    && view.nested != Some(Nested::ViewOptions),
+                expanded: view.nested == Some(Nested::ViewOptions),
+            })
+            .key("view-options-button"),
+        );
+    }
     let query_row = Element::new(Bar {
         height: COLLAPSED_HEIGHT,
         spacing: QUERY_GAP,
-        children: vec![
-            Element::new(Icon {
-                name: SEARCH_SYMBOL.to_owned(),
-                size: SEARCH_ICON_SIZE,
-                direction: IconDirection::Fixed,
-                label: None,
-                tint: Some(ColorRole::SecondaryText),
-            }),
-            field,
-        ],
+        children: row,
     })
     .key("query-row");
     let mut children = vec![query_row];
-    let rows = visible_rows(panel);
-    if !rows.is_empty() {
+    let showing_browser = view.browser.filter(|_| browsing || frame.content > 0.0);
+    if let Some(browser) = showing_browser {
+        let menu = (view.nested == Some(Nested::ViewOptions)).then_some(view.option);
         children.push(
-            Element::new(Separator {
-                axis: Axis::Horizontal,
-            })
-            .key("separator"),
+            browse::body(browser, view.app_icons, frame.content, menu, view.now).key("browser"),
         );
-        let body = vec![
-            results(view, &rows).key("results"),
-            Element::new(Separator {
-                axis: Axis::Vertical,
-            })
-            .key("divider"),
-            preview_pane(view).key("preview"),
-        ];
-        children.push(Element::new(Plain::row(body, Align::Stretch)).key("body"));
+    } else {
+        children.extend(search_body(view));
     }
-    Element::new(PanelRoot {
-        focus: panel.focus(),
-        alpha: view.alpha,
+    let inner = Element::new(PanelRoot {
+        keys: view.keys,
+        alpha: frame.alpha,
+        size: Size::new(frame.shape.width, frame.shape.height),
+        offset: ((rect.width() - frame.shape.width) / 2.0).min(0.0),
         children,
+    });
+    Element::new(Enclosure {
+        rect,
+        radius: frame.shape.radius * frame.scale.clamp(0.0, 1.0),
+        alpha: frame.alpha,
+        content: Size::new(frame.shape.width, frame.shape.height),
+        children: vec![inner.key("content")],
     })
+}
+
+/// What the searching panel shows below its query row: the results beside the selected one's preview, the enlarged
+/// preview over them, or the row saying why nothing shows.
+fn search_body<M>(view: &PanelView<'_>) -> Vec<Element<M>>
+where
+    M: From<Input> + Clone + 'static,
+{
+    let panel = view.panel;
+    let rows = visible_rows(panel);
+    let separator = || {
+        Element::new(Hairline {
+            axis: Axis::Horizontal,
+        })
+        .key("separator")
+    };
+    if view.nested == Some(Nested::Preview) && panel.selected_item().is_some() {
+        return vec![separator(), enlarged_preview(view).key("enlarged-preview")];
+    }
+    if rows.is_empty() {
+        let said = match &view.status {
+            Status::Searching => SEARCHING,
+            Status::NoResults => NO_RESULTS,
+            Status::Failed(_) => INCOMPLETE,
+            Status::Idle | Status::Results => return Vec::new(),
+        };
+        return vec![
+            separator(),
+            Element::new(StatusRow {
+                text: said,
+                failed: matches!(view.status, Status::Failed(_)),
+            })
+            .key("status"),
+        ];
+    }
+    let body = vec![
+        results(view, &rows).key("results"),
+        Element::new(Hairline {
+            axis: Axis::Vertical,
+        })
+        .key("divider"),
+        preview_pane(view).key("preview"),
+    ];
+    vec![
+        separator(),
+        Element::new(Plain::row(body, Align::Stretch)).key("body"),
+    ]
+}
+
+/// The selected result's preview over the whole body: its picture as large as it can be shown, its name and what is
+/// known of it, and its actions; or that the host gave nothing in time.
+fn enlarged_preview<M>(view: &PanelView<'_>) -> Element<M>
+where
+    M: From<Input> + Clone + 'static,
+{
+    let mut children = vec![preview_pane(view).key("pane")];
+    if view.preview_unavailable {
+        children.insert(
+            0,
+            Element::new(StatusRow {
+                text: PREVIEW_UNAVAILABLE,
+                failed: false,
+            })
+            .key("unavailable"),
+        );
+    }
+    Element::new(Plain::sheet(children))
 }
 
 /// The shown rows: a list of the sections, each a group named by its heading over its results.
@@ -753,21 +990,27 @@ fn column(insets: Insets) -> LayoutSpec {
     }
 }
 
-/// The panel's content: takes the panel's keys before the query field does, fades its children with the appear
-/// animation, and closes the panel when its window loses the keyboard.
-struct PanelRoot<M> {
-    focus: Focus,
+/// The enclosure as it is drawn: the panel's glass (or the panel material's fill without it), its shadow outside its
+/// shape and its thin dark edge, at the presented opacity and scale; its content, laid out at the unscaled shape and
+/// centred, is cut at its edge.
+struct Enclosure<M> {
+    rect: Rect,
+    radius: f64,
     alpha: f64,
+    content: Size,
     children: Vec<Element<M>>,
 }
 
-impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
+impl<M: 'static> Widget<M> for Enclosure<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
-            height: SizeSpec::Fill,
-            ..column(Insets::default())
+            width: SizeSpec::Fixed(self.rect.width().max(0.0)),
+            height: SizeSpec::Fixed(self.rect.height().max(0.0)),
+            position: self.rect.origin,
+            overflow: Overflow::Clip,
+            ..LayoutSpec::new(ContainerKind::Absolute)
         }
     }
 
@@ -778,7 +1021,9 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.alpha != old.alpha {
+        if (self.rect, self.content) != (old.rect, old.content) {
+            Change::Layout
+        } else if (self.radius, self.alpha) != (old.radius, old.alpha) {
             Change::Paint
         } else {
             Change::None
@@ -786,36 +1031,21 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        no_measure()
-    }
-
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        match event {
-            Event::Key(key, _) if cx.phase() == Phase::Capture || cx.node() == cx.target() => {
-                match panel_key(key) {
-                    Some((k, mods)) if takes_key(k, mods, self.focus) => {
-                        cx.emit(M::from(Input::Key(k, mods)));
-                        Propagation::Stop
-                    }
-                    _ => Propagation::Continue,
-                }
-            }
-            // another window took the keyboard
-            Event::FocusWithin { gained: false, .. } if !cx.window_active() => {
-                cx.emit(M::from(Input::Dismiss));
-                Propagation::Continue
-            }
-            _ => Propagation::Continue,
+        Measured {
+            size: self.rect.size,
+            baseline: None,
         }
     }
 
-    /// The panel's glass (or the panel material's fill without it), its shadow outside its shape, and its thin dark
-    /// edge, all at the appear animation's alpha.
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let alpha = self.alpha.clamp(0.0, 1.0);
         let size = cx.size();
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
-        let radius = CORNER_RADIUS.min(size.height / 2.0);
+        let radius = self.radius.min(size.height / 2.0).max(0.0);
         let theme = cx.env().theme.clone();
         let dark = theme.preferences.appearance.is_dark();
         let glass = cx.glass(Glass::regular().radius(radius).alpha(alpha));
@@ -873,6 +1103,233 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The panel's content: takes the panel's keys before the query field does (which keys follows its [`KeyMode`]), and
+/// closes the panel when its window loses the keyboard.
+struct PanelRoot<M> {
+    keys: KeyMode,
+    alpha: f64,
+    size: Size,
+    /// Where it lies in the enclosure: centred across it.
+    offset: f64,
+    children: Vec<Element<M>>,
+}
+
+impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.size.width.max(0.0)),
+            height: SizeSpec::Fixed(self.size.height.max(0.0)),
+            position: Point::new(self.offset, 0.0),
+            ..column(Insets::default())
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if (self.size, self.offset) != (old.size, old.offset) {
+            Change::Layout
+        } else if (self.alpha, self.keys) != (old.alpha, old.keys) {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        match event {
+            Event::Key(key, _) if cx.phase() == Phase::Capture || cx.node() == cx.target() => {
+                match panel_key(key) {
+                    Some((k, mods)) if self.keys.takes(k, mods) => {
+                        cx.emit(M::from(Input::Key(k, mods)));
+                        Propagation::Stop
+                    }
+                    _ => Propagation::Continue,
+                }
+            }
+            // another window took the keyboard
+            Event::FocusWithin { gained: false, .. } if !cx.window_active() => {
+                cx.emit(M::from(Input::Dismiss));
+                Propagation::Continue
+            }
+            _ => Propagation::Continue,
+        }
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The colour of a separator line where `cx` paints: translucent over the panel's glass, the theme's separator over
+/// the opaque fill and with Increase Contrast.
+pub(crate) fn separator_color(cx: &PaintCx<'_>) -> Option<Color> {
+    let theme = &cx.env().theme;
+    let appearance = theme.preferences.appearance;
+    if cx.on_glass() && !appearance.is_high_contrast() {
+        Some(if appearance.is_dark() {
+            Color::new(1.0, 1.0, 1.0, GLASS_SEPARATOR_DARK)
+        } else {
+            Color::new(0.0, 0.0, 0.0, GLASS_SEPARATOR_LIGHT)
+        })
+    } else {
+        theme.colors.get(ColorRole::Separator, StateVariant::NORMAL)
+    }
+}
+
+/// A hairline across the panel along `axis`, in [`separator_color`]: under the query row and between the results and
+/// the preview.
+struct Hairline {
+    axis: Axis,
+}
+
+impl<M: 'static> Widget<M> for Hairline {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        let (width, height) = match self.axis {
+            Axis::Horizontal => (SizeSpec::Fill, SizeSpec::Fixed(1.0)),
+            Axis::Vertical => (SizeSpec::Fixed(1.0), SizeSpec::Fill),
+        };
+        LayoutSpec {
+            width,
+            height,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.axis != old.axis {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        if let Some(color) = separator_color(cx) {
+            cx.push(PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, size.width, size.height)),
+                paint: Paint::Solid(color),
+            });
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// Why nothing shows, centred in its row and read out as it changes: still searching, nothing found, or that a source
+/// failed (so what shows may be incomplete).
+struct StatusRow {
+    text: &'static str,
+    failed: bool,
+}
+
+impl<M: 'static> Widget<M> for StatusRow {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fixed(STATUS_HEIGHT),
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if (self.text, self.failed) != (old.text, old.failed) {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, STATUS_HEIGHT),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        let theme = &cx.env().theme;
+        let color = theme
+            .colors
+            .get(ColorRole::SecondaryText, StateVariant::NORMAL)
+            .unwrap_or(Color::new(0.0, 0.0, 0.0, 0.5));
+        let style = TextStyle {
+            weight: FontWeight(500),
+            ..TextStyle::new(15.0)
+        };
+        let paragraph = ParagraphStyle {
+            wrap: Wrap::None,
+            max_lines: Some(1),
+            ellipsis: true,
+            align: TextAlign::Center,
+            ..ParagraphStyle::default()
+        };
+        let Ok(text) = cx
+            .env()
+            .text
+            .paragraph(&AttributedText::plain(self.text, style), &paragraph)
+        else {
+            return;
+        };
+        let layout = text.layout(Some((size.width - 2.0 * SIDE_PADDING).max(0.0) as f32));
+        let h = layout.size().height;
+        glyphs(
+            cx,
+            &layout,
+            Point::new(SIDE_PADDING, (size.height - h) / 2.0),
+            color,
+        );
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::StaticText);
+        cx.name(self.text.to_owned());
+        cx.live(if self.failed {
+            Live::Assertive
+        } else {
+            Live::Polite
+        });
+    }
 }
 
 /// `rect` with its corners rounded by `radius`, as a path of four quarter circles.
@@ -1325,6 +1782,27 @@ impl<M: 'static> Plain<M> {
         detail
     }
 
+    /// Its children placed where they say, over the whole window.
+    fn absolute(children: Vec<Element<M>>) -> Self {
+        Self {
+            layout: LayoutSpec {
+                width: SizeSpec::Fill,
+                height: SizeSpec::Fill,
+                ..LayoutSpec::new(ContainerKind::Absolute)
+            },
+            group: None,
+            children,
+        }
+    }
+
+    /// Its children one above the other, taking the room left below the query row.
+    fn sheet(children: Vec<Element<M>>) -> Self {
+        let mut sheet = Self::stack(Axis::Vertical, 0.0, Align::Stretch, children);
+        sheet.layout.width = SizeSpec::Fill;
+        sheet.layout.height = SizeSpec::Fill;
+        sheet
+    }
+
     /// Takes the room its column leaves.
     fn spacer() -> Self {
         let mut spacer = Self::stack(Axis::Vertical, 0.0, Align::Start, Vec::new());
@@ -1521,7 +1999,7 @@ impl<M: 'static> Widget<M> for Label {
 }
 
 /// Draw `layout` with its top-left corner at `origin`.
-fn glyphs(cx: &mut PaintCx<'_>, layout: &ParagraphLayout, origin: Point, color: Color) {
+pub(crate) fn glyphs(cx: &mut PaintCx<'_>, layout: &ParagraphLayout, origin: Point, color: Color) {
     for line in layout.lines() {
         for run in &line.runs {
             cx.push(PaintOp::Glyphs {

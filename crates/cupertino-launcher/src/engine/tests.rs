@@ -24,6 +24,7 @@ pub fn app(id: &str, name: &str, generic: &str, exec: &str) -> DesktopEntry {
 fn entries() -> Vec<DesktopEntry> {
     let mut browser = app("browser", "Firefox", "Web Browser", "firefox %u");
     browser.keywords = vec!["internet".into(), "www".into()];
+    browser.categories = vec!["Network".into(), "WebBrowser".into()];
     browser.actions = vec![
         DesktopAction {
             id: "new-window".into(),
@@ -47,9 +48,14 @@ fn entries() -> Vec<DesktopEntry> {
         "gnome-calculator",
     );
     calc.comment = "Perform arithmetic and scientific calculations".into();
+    calc.categories = vec!["Utility".into()];
+    let mut gimp = app("gimp", "GIMP", "Image Editor", "gimp-2.10 %U");
+    gimp.categories = vec!["Graphics".into()];
+    let mut code = app("code", "Visual Studio Code", "Text Editor", "code %F");
+    code.categories = vec!["Development".into(), "IDE".into()];
     vec![
         browser,
-        app("code", "Visual Studio Code", "Text Editor", "code %F"),
+        code,
         app(
             "writer",
             "LibreOffice Writer",
@@ -65,7 +71,7 @@ fn entries() -> Vec<DesktopEntry> {
         app("files", "Files", "File Manager", "nautilus %U"),
         htop,
         calc,
-        app("gimp", "GIMP", "Image Editor", "gimp-2.10 %U"),
+        gimp,
         app("firewall", "Firewall Configuration", "", "firewall-config"),
     ]
 }

@@ -17,12 +17,12 @@ A crash in a shell process never takes the desktop down.
 | Process | Owns |
 |---|---|
 | `cupertino-server` | compositing, window policy, input routing, cursor, materials (backdrop rendering), the menu bar layer and its auto-hide, window snapping, supervision of the shell processes |
-| `cupertino-dock` | the bar, application switcher, overview, app grid, workspaces, hot corners, trackpad gestures |
+| `cupertino-dock` | the bar, application switcher, overview, workspaces, hot corners, trackpad gestures |
 | `cupertino-menubar` | status items and application menus (DBusMenu, StatusNotifierItem, GMenuModel) |
 | `cupertino-controlcenter` | the control panel and its modules |
 | `cupertino-osd` | volume, brightness and keyboard-backlight overlays |
 | `cupertino-notifications` | banners, the notification list, `org.freedesktop.Notifications` |
-| `cupertino-launcher` | the search and launch panel |
+| `cupertino-launcher` | the search and launch panel, and the application browser |
 | `cupertino-windowmanager` | the stage and tiling policy (off by default) |
 | `cupertino-login` | the login screen, the lock screen (`ext-session-lock`) and the session agent |
 | `cupertino-sessiond` | the root-owned half of login: the login screen's socket, PAM in a worker per attempt, logind sessions and virtual terminals, fast user switching, power, auto login |

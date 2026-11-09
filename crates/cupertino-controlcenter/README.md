@@ -46,6 +46,10 @@ ends, the media tile and an open detail view with 32 pt corners, the display and
 join one glass container with an 8 pt blend, less than the 12 pt between them, so tiles at rest stay apart and a growing
 detail view blends where it passes them. The glass alpha follows the fade; the content fades as one layer. In a light
 session each tile lays black at 0.27 over its glass, so over a white page it reads as a mid-light grey under its white text.
+Over its glass each tile lays its own light: a soft white glow under its top edge fading out over 6 pt, and a fine rim
+0.75 pt wide, brightest along the top (white 0.42), faint down the sides (0.12) and at 0.6 of the top's along the bottom
+(0.30, 0.08 and 0.06 for the glow in a light session), so a tile reads as a raised piece of glass on any wallpaper. The
+solid tiles of Reduce Transparency and Increase Contrast draw none of it.
 With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners, 8 pt around the grid and
 the Edit Controls capsule, closing in to an open detail view as it opens. With Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of
 grey 0.341, with no glass. A
@@ -90,9 +94,8 @@ opens, from the menu bar, a shortcut or a hot corner. It asks for it again when 
 during the fade shows the panel again. It asks for none from the start of the fade. Another exclusive surface (the launcher)
 that takes the keyboard from the shown panel dismisses the panel. On `locked` a shown panel starts closing too.
 
-**Outputs.** The panel opens on the first output the server describes, chosen each time it opens with no surface left,
-and the panel and the catcher stay on that output while either exists (a toggle during the fade reopens on the panel's
-output). When that output goes (a display unplugged), the panel is **dismissed**, not moved: the server closes its
+**Outputs.** The panel and the catcher name no output: the server opens both on its active output, the one the person
+works on (where the pointer last moved or the keyboard last went; the menu bar clicked is on it). When that output goes (a display unplugged), the panel is **dismissed**, not moved: the server closes its
 surfaces, or the output leaves the list the process sees (`Request::OutputGone`), and either hides the panel at once,
 without the fade, dropping a drag in progress (`Controller::vanish`). The server takes back the panel's keyboard for the
 key window. The next toggle opens the panel on an output that exists. The process does not need an output to start or to
@@ -224,7 +227,7 @@ cargo test -p cupertino-controlcenter --features app
 | Backend unit tests | The dock hiding file, the microphone and the session outputs against `cupertino-pipewire`'s fake `wpctl`, the ALSA and session volume, and the stand-ins. |
 | Controller unit tests | Switches, mute, lock, Edit Controls and settings, media commands, the detail lists, a refused join, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer, a vanish that hides at once, drops a drag and reads again on reopening. |
 | `tests/panel.rs` | The panel as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`, `light-session`, `wifi-detail`: the 1x frame and the focus and accessibility tree of every control); every tile's frame; badge, opener, circle, media, output and Edit Controls presses; a disabled module; a level drag and release; Escape and a press between the tiles dismissing, or collapsing an open view; the Wi-Fi view's list, join and settings row; Tab, Space and the arrow keys across the tiles; the catcher dismissing on a left or right press only; the tiles staying one glass container too large for its text to follow the backdrop, at rest, in a light session, fading and with a view opening or open. |
-| Process unit tests (`src/app.rs`) | The windows per phase (panel over catcher when shown, the panel alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, the detail view opening, closing and reversing, a second Escape while it closes dismissing, with the focus moved at its ends only after the keyboard, Reduce Motion and the light session from the session, and the panel's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a panel that acts; the opening output is the first described one and the panel hears when its output goes. |
+| Process unit tests (`src/app.rs`) | The windows per phase (panel over catcher when shown, the panel alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, the detail view opening, closing and reversing, a second Escape while it closes dismissing, with the focus moved at its ends only after the keyboard, Reduce Motion and the light session from the session, and the panel's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a panel that acts; the panel hears when its output goes. |
 | `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name; another process (a `dbus-send` the test starts, as the menu bar is to the panel) may toggle, and a connection over anonymous TCP (no process the bus can name) is refused as `AnonymousCaller`. |
 
 `cupertino-server`'s `tests/shell_processes.rs` runs the process with `--fake-backends` through output removal: open on an

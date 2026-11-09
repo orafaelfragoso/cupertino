@@ -411,6 +411,8 @@ pub struct OutputEntry {
     pub global: Option<GlobalId>,
     pub lock: crate::session_lock::OutputLock,
     pub scheduler: crate::schedule::FrameScheduler,
+    /// The identity of the display it shows (`crate::displays::Head::key`), once its head has it.
+    pub identity: Option<String>,
 }
 
 /// What the pointer is over inside the window stack.
@@ -604,6 +606,8 @@ pub struct Cupertino {
     pub sessions: SessionObservers,
     /// `cupertino_scroll_v1`: the scroll objects of the clients.
     pub scroll_counts: ScrollObservers,
+    /// What the axis values sent so far lost to the protocol's fixed point, carried into the next ones.
+    pub axis_carry: crate::events::AxisCarry,
     /// Reduce Motion, Reduce Transparency, Increase Contrast, the colour filter (`accessibility.conf`).
     pub accessibility: crate::accessibility::Accessibility,
     /// The window manager process's objects and the stage placements they committed.
@@ -644,6 +648,11 @@ pub struct Cupertino {
     pub next_output: u64,
     pub screenshot_requests: Vec<std::path::PathBuf>,
     pub exit_after_screenshot: bool,
+    /// Each screenshot is written for every output: the first output's at the path asked for, every other one's beside
+    /// it with the output's name added (`--extra-output` runs).
+    pub screenshot_each_output: bool,
+    /// The screenshots of [`Cupertino::screenshot_each_output`] still to write, by output.
+    pub output_screenshots: Vec<(OutputId, std::path::PathBuf)>,
     /// Replaces the clock for the model and animations (deterministic tests, frame stepping).
     pub fixed_time: Option<f64>,
     /// Model time runs at this multiple of the wall clock (slow motion for inspection, 1.0 = real
@@ -918,6 +927,7 @@ impl Cupertino {
             docks: Docks::default(),
             sessions: SessionObservers::default(),
             scroll_counts,
+            axis_carry: crate::events::AxisCarry::default(),
             accessibility: crate::accessibility::Accessibility::default(),
             window_managers: WindowManagers::new(&cupertino_stage::StageConfig::default()),
             cascade: policy::Cascade::default(),
@@ -945,6 +955,8 @@ impl Cupertino {
             next_output: 1,
             screenshot_requests: Vec::new(),
             exit_after_screenshot: false,
+            screenshot_each_output: false,
+            output_screenshots: Vec::new(),
             fixed_time: None,
             time_scale: 1.0,
             time_origin: policy::clock_seconds(std::time::Duration::from(
@@ -1006,6 +1018,7 @@ impl Cupertino {
             global: Some(global),
             lock: Default::default(),
             scheduler: Default::default(),
+            identity: None,
         });
         let now = self.now();
         self.menu_bars.set.add_output(id, rect, now);
@@ -1024,11 +1037,24 @@ impl Cupertino {
     }
 
     /// Remove an output (hot-unplug): its windows move to the first remaining output and its layer surfaces let go of
-    /// the input ([`Cupertino::release_output_layers`]).
+    /// the input ([`Cupertino::release_output_layers`]). What needs the person stays reachable
+    /// (`crate::displays::recovery`): a menu of a window on it closes, an overview on it ends, the pointer comes onto a
+    /// remaining output and a locked session's keyboard onto a remaining lock surface.
     pub fn remove_output(&mut self, id: OutputId) {
         let Some(idx) = self.outputs.iter().position(|o| o.id == id) else {
             return;
         };
+        if let Some(identity) = self.outputs[idx].identity.clone() {
+            let from = self.outputs[idx].rect;
+            self.note_departures(id, &identity, from);
+        }
+        self.end_popup_grab_on(id);
+        self.output_screenshots.retain(|(o, _)| *o != id);
+        // the overview of this output has nothing left to show on; one open elsewhere takes the windows that arrive
+        if self.shell.overview.as_ref().is_some_and(|o| o.output == id) {
+            tracing::info!(output = id.0, "the overview's output went away");
+            self.shell.overview = None;
+        }
         let entry = self.outputs.remove(idx);
         self.release_output_layers(&entry.output);
         let now = self.now();
@@ -1043,6 +1069,10 @@ impl Cupertino {
         let now = self.now();
         let fx = self.wm.handle(Command::RemoveOutput { output: id }, now);
         self.apply_effects(fx);
+        self.note_placements();
+        self.bring_pointer_onto_outputs();
+        self.refocus_lock_keyboard();
+        self.refresh_window_scales();
         self.request_redraw();
     }
 
@@ -1396,11 +1426,9 @@ impl Cupertino {
             .toplevel
             .parent()
             .and_then(|p| self.window_id_for_surface(&p));
-        let output = self
-            .output_at(self.pointer.current_location())
-            .map(|o| o.id)
-            .or_else(|| self.outputs.first().map(|o| o.id));
-        let Some(output) = output else { return };
+        let Some(output) = self.active_output() else {
+            return;
+        };
         let (screen, usable) = self
             .wm
             .output(output)
@@ -2085,6 +2113,7 @@ impl Cupertino {
 
     pub fn apply_effects(&mut self, effects: Vec<Effect>) {
         let mut redraw = false;
+        let mut placed = Vec::new();
         for fx in effects {
             redraw = true;
             match fx {
@@ -2114,6 +2143,8 @@ impl Cupertino {
                         }
                     }
                 }
+                // a window that moved onto another output draws at that output's scale
+                Effect::Place { window, .. } => placed.push(window),
                 Effect::RequestClose { window } => {
                     if let Some(e) = self.entry(window) {
                         e.close();
@@ -2134,6 +2165,7 @@ impl Cupertino {
                     self.refresh_activation();
                     if let Some(window) = window {
                         self.recheck_menu_owners(window);
+                        self.follow_focus_to_output(window);
                     }
                 }
                 Effect::WindowDestroyed { window } => {
@@ -2169,12 +2201,14 @@ impl Cupertino {
                 | Effect::AppRegistered { .. }
                 | Effect::WindowStateChanged { .. }
                 | Effect::Attention { .. }
-                | Effect::Place { .. }
                 | Effect::Raise { .. }
                 | Effect::SetVisible { .. }
                 | Effect::StartAnimation { .. }
                 | Effect::SnapPreview { .. } => {}
             }
+        }
+        if self.outputs.len() > 1 {
+            self.refresh_scales_of(&placed);
         }
         if redraw {
             self.request_redraw();
@@ -2345,10 +2379,7 @@ impl Cupertino {
     // ---- actions ---------------------------------------------------------------------------
 
     pub fn action_context(&self) -> ActionContext {
-        let output = self
-            .output_at(self.pointer.current_location())
-            .map(|o| o.id)
-            .or_else(|| self.outputs.first().map(|o| o.id));
+        let output = self.active_output();
         let (workspaces, current) = output
             .map(|o| {
                 let list: Vec<_> = self.wm.workspaces(o).iter().map(|w| w.id).collect();
@@ -2539,7 +2570,7 @@ impl Cupertino {
         )
     }
 
-    /// Preferred fractional scale for surfaces (the primary output's scale).
+    /// The primary output's scale. A surface is told its own output's (`Cupertino::surface_scale`).
     pub fn preferred_scale(&self) -> f64 {
         self.outputs.first().map_or(1.0, |o| o.scale)
     }

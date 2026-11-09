@@ -9,7 +9,9 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::authorization::ShellRole;
 use crate::input::{Action, KeyBindings};
-use cupertino_defaults::compositor::{AppearanceName, CompositorSettings, MinimizeEffectName};
+use cupertino_defaults::compositor::{
+    AppearanceName, CompositorSettings, MinimizeEffectName, ScrollBarsName,
+};
 use cupertino_theme::Appearance;
 
 /// Environment variable naming the configuration file.
@@ -383,6 +385,8 @@ pub struct Config {
     pub pointer: PointerSettings,
     /// Dim, display sleep, the password delay and system sleep (`power.conf`).
     pub power: cupertino_defaults::power::PowerSettings,
+    /// When applications show their scroll bars (`show_scroll_bars`); automatic by default.
+    pub show_scroll_bars: ScrollBarsName,
 }
 
 /// The wallpaper images of the user (`wallpaper`, `wallpaper_dark` in the JSON file); a pack's wallpaper and then the
@@ -420,6 +424,8 @@ pub struct PointerSettings {
     /// Speed-dependent mouse acceleration (default on); off gives a constant gain by `mouse_speed`, per
     /// count of a 1000 dpi mouse and scaled by the real resolution (a negative speed passes counts through).
     pub mouse_acceleration: bool,
+    /// Speed-dependent touchpad acceleration (default on); off gives a constant gain by `trackpad_speed`.
+    pub trackpad_acceleration: bool,
     /// On touchpads, content follows the fingers (default on).
     pub natural_scrolling: bool,
     /// On mouse wheels, content follows the wheel (default off: a wheel scrolls the view, as it does on every other
@@ -460,6 +466,9 @@ impl PointerSettings {
         if let Some(b) = f.mouse_acceleration {
             self.mouse_acceleration = b;
         }
+        if let Some(b) = f.trackpad_acceleration {
+            self.trackpad_acceleration = b;
+        }
         if let Some(b) = f.natural_scrolling {
             self.natural_scrolling = b;
         }
@@ -490,6 +499,7 @@ impl Default for PointerSettings {
             trackpad_speed: speed,
             mouse_dpi: std::collections::BTreeMap::new(),
             mouse_acceleration: cupertino_input::DEFAULT_ACCELERATION,
+            trackpad_acceleration: cupertino_input::DEFAULT_ACCELERATION,
             natural_scrolling: true,
             mouse_natural_scrolling: false,
             cursor_scale: cupertino_input::CURSOR_SCALE_MIN,
@@ -523,6 +533,7 @@ impl Default for Config {
             pointer: PointerSettings::default(),
             power: cupertino_defaults::power::PowerSettings::default(),
             wallpaper: WallpaperSettings::default(),
+            show_scroll_bars: ScrollBarsName::Automatic,
         }
     }
 }
@@ -768,6 +779,9 @@ impl Config {
         }
         if let Some(b) = f.closing_animation {
             self.effects.closing = b;
+        }
+        if let Some(b) = f.show_scroll_bars {
+            self.show_scroll_bars = b;
         }
         if let Some(e) = f.minimize_effect {
             self.effects.minimize = match e {
@@ -1028,6 +1042,12 @@ mod tests {
         );
         assert!(!c.window.decorations && !c.effects.closing);
         assert!(!apply(&mut c, r#"{"minimize_effect":"nope"}"#).is_empty());
+        assert_eq!(c.show_scroll_bars, ScrollBarsName::Automatic);
+        assert_eq!(
+            apply(&mut c, r#"{"show_scroll_bars":"always"}"#),
+            Vec::<String>::new()
+        );
+        assert_eq!(c.show_scroll_bars, ScrollBarsName::Always);
         assert_eq!(c.hot_corners.dwell, 0.0, " default");
         assert!(
             cupertino_input::Corner::ALL
@@ -1043,7 +1063,7 @@ mod tests {
         assert_eq!(
             apply(
                 &mut c,
-                r#"{"mouse_speed":0.6875,"trackpad_speed":3,"mouse_acceleration":false,"natural_scrolling":false,"mouse_natural_scrolling":true}"#
+                r#"{"mouse_speed":0.6875,"trackpad_speed":3,"mouse_acceleration":false,"trackpad_acceleration":false,"natural_scrolling":false,"mouse_natural_scrolling":true}"#
             ),
             Vec::<String>::new()
         );
@@ -1053,6 +1073,7 @@ mod tests {
                 mouse_speed: 0.6875,
                 trackpad_speed: 3.0,
                 mouse_acceleration: false,
+                trackpad_acceleration: false,
                 natural_scrolling: false,
                 mouse_natural_scrolling: true,
                 ..PointerSettings::default()

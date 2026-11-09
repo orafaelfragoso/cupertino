@@ -7,6 +7,8 @@
 //! * [`Appearance`] selects one of four catalogs (light/dark, normal/high contrast).
 //! * [`tokens::DesignTokens`]: semantic colours (sRGB `f32` + alpha) by name.
 //! * [`metrics`]: control alignment heights per size class and shape tokens, as data.
+//! * [`control_sizes`]: each control family's height, fixed width, corners and label room at the five control sizes,
+//!   with the normal and the compact metrics.
 //! * [`typography::Typography`]: substitute font family, size presets, the tracking table with
 //!   linear interpolation and line metrics.
 //! * [`animation::AnimationPresets`]: springs, timing functions, momentum and rubber-band settings
@@ -20,6 +22,7 @@
 pub mod animation;
 pub mod appearance;
 pub mod color;
+pub mod control_sizes;
 pub mod error;
 pub mod evidence;
 pub mod glass;
@@ -33,6 +36,7 @@ pub mod window_shadow;
 pub use animation::{AnimationPresets, Easing};
 pub use appearance::Appearance;
 pub use color::{AccentColor, Color, SemanticColor};
+pub use control_sizes::{control_geometry, ControlFamily, ControlGeometry, Corners};
 pub use error::{Error, Result};
 pub use evidence::Evidence;
 pub use glass::{GlassMode, GlassParams, GlassStyle};

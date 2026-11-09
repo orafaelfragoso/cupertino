@@ -5,6 +5,7 @@
 
 mod common;
 
+use common::absolute;
 use common::desktop::Desktop;
 use cupertino_displays::geometry::{raster, scale_in_120ths};
 use cupertino_displays::Extent;
@@ -161,4 +162,47 @@ fn a_scale_that_leaves_no_logical_size_is_refused_and_changes_nothing() {
         d.pump();
         assert_eq!(d.state.output_geometry(output), Some(before), "{scale}");
     }
+}
+
+/// An absolute pointer reports a share of its range; the server spans it over the panel pixels of the output under
+/// the pointer and maps them through the output's exact scale, as drawing does, not its rounded logical extent.
+#[test]
+fn an_absolute_pointer_lands_where_the_output_draws_that_pixel() {
+    let mut d = Desktop::sized(PANEL, 2.0);
+    // 3024 / 1.7 = 1778.8: the logical extent is rounded, the drawing scale is not
+    set_scale(&mut d, 1.7);
+    let rect = d.state.outputs[0].rect;
+    assert_ne!(rect.w, f64::from(PANEL.0) / 1.7);
+    d.state.process_input_event(absolute::motion(0.999, 0.5));
+    let at = d.state.pointer.current_location();
+    let expected = (
+        rect.x + 0.999 * f64::from(PANEL.0) / 1.7,
+        rect.y + 0.5 * f64::from(PANEL.1) / 1.7,
+    );
+    assert!(
+        (at.x - expected.0).abs() < 1e-9 && (at.y - expected.1).abs() < 1e-9,
+        "{at:?} for {expected:?}"
+    );
+}
+
+/// With two displays, the device spans the one its pointer is on, not the first.
+#[test]
+fn an_absolute_pointer_spans_the_output_under_it() {
+    let display = |name: &str| cupertino_server::backend::headless::HeadlessDisplay {
+        name: name.into(),
+        size: (1000, 700),
+        physical_mm: (0, 0),
+    };
+    let mut d = Desktop::with_displays(&[display("headless-1"), display("headless-2")], 1.0);
+    let second = d.state.outputs[1].rect;
+    let centre = |r: cupertino_wm::Rect| (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    let (x, y) = centre(second);
+    d.state.pointer_moved_to((x, y).into(), 0, None);
+    d.state.process_input_event(absolute::motion(0.25, 0.25));
+    let at = d.state.pointer.current_location();
+    assert_eq!(
+        (at.x, at.y),
+        (second.x + 250.0, second.y + 175.0),
+        "a quarter of the second output"
+    );
 }

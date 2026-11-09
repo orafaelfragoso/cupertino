@@ -82,6 +82,9 @@ pub enum PointerEvent {
         value120: Option<(i32, i32)>,
         /// The finger left the touchpad (or a continuous scroll ended): kinetic scrolling may start from here.
         stop: bool,
+        /// Per axis `(x, y)`: the physical motion ran against the delta (natural scrolling), from
+        /// `axis_relative_direction` (`wl_pointer` version 9); false when the compositor does not say.
+        inverted: (bool, bool),
     },
 }
 
@@ -201,6 +204,7 @@ struct Scroll {
     source: Option<AxisSource>,
     value120: Option<(i32, i32)>,
     stop: bool,
+    inverted: (bool, bool),
 }
 
 impl PointerTracker {
@@ -269,6 +273,12 @@ impl PointerTracker {
         *axis = axis.saturating_add(value120);
     }
 
+    /// The physical direction of one axis of the pending scroll: `inverted` when it runs against the delta.
+    pub(crate) fn axis_relative_direction(&mut self, vertical: bool, inverted: bool) {
+        let (x, y) = &mut self.scroll.get_or_insert_default().inverted;
+        *if vertical { y } else { x } = inverted;
+    }
+
     pub(crate) fn axis_stop(&mut self) {
         self.scroll.get_or_insert_default().stop = true;
     }
@@ -280,6 +290,7 @@ impl PointerTracker {
             source,
             value120,
             stop,
+            inverted,
         } = self.scroll.take()?;
         self.focus.map(|s| {
             (
@@ -291,6 +302,7 @@ impl PointerTracker {
                     source,
                     value120,
                     stop,
+                    inverted,
                 },
             )
         })
@@ -715,6 +727,7 @@ mod tests {
                     source: None,
                     value120: None,
                     stop: false,
+                    inverted: (false, false),
                 }
             ))
         );
@@ -763,9 +776,28 @@ mod tests {
                     source: Some(AxisSource::Finger),
                     value120: None,
                     stop: true,
+                    inverted: (false, false),
                 }
             ))
         );
+    }
+
+    #[test]
+    fn a_frame_carries_the_physical_direction_of_each_axis() {
+        let mut t = PointerTracker::default();
+        t.enter(SurfaceId(1), Point::ZERO);
+        t.axis_source(AxisSource::Finger);
+        t.axis_relative_direction(true, true);
+        t.axis(true, -3.25);
+        let Some((_, PointerEvent::Scroll { dy, inverted, .. })) = t.frame() else {
+            panic!("a scroll");
+        };
+        assert_eq!((dy, inverted), (-3.25, (false, true)));
+        t.axis(false, 1.0);
+        let Some((_, PointerEvent::Scroll { inverted, .. })) = t.frame() else {
+            panic!("a scroll");
+        };
+        assert_eq!(inverted, (false, false), "each frame starts identical");
     }
 
     #[test]

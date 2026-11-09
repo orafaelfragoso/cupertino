@@ -150,6 +150,7 @@ fn options() -> RuntimeOptions {
             colors: ColorTokens::default(),
             metrics: ControlMetrics {
                 size: ControlSize::Regular,
+                compact: false,
                 button_height: 20.0,
                 button_inset: 10.0,
                 button_radius: 5.0,

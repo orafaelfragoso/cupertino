@@ -53,6 +53,14 @@ pub struct Cli {
     /// Connector name of the headless output (default `headless-1`); `eDP-1` stands for the machine's own panel.
     #[arg(long)]
     pub connector: Option<String>,
+    /// Headless: plug in one more offscreen display right of the others, `NAME:WIDTHxHEIGHT[@SCALE]` (pixels; scale 1
+    /// without one); repeatable. With more than one display each screenshot is written for every display: the first
+    /// one's at the path given, every other one's beside it with its name added (`shot-headless-2.png`).
+    #[arg(long = "extra-output", value_name = "NAME:WxH[@SCALE]", value_parser = parse_extra_output, requires = "headless")]
+    pub extra_outputs: Vec<(String, (u32, u32), f64)>,
+    /// Headless: unplug the display with this connector name at a time, `SECONDS:NAME`; repeatable.
+    #[arg(long = "unplug", value_name = "SECONDS:NAME", value_parser = parse_timed_text, requires = "headless")]
+    pub unplugs: Vec<(f64, String)>,
     /// Appearance: light or dark.
     #[arg(long)]
     pub appearance: Option<String>,
@@ -150,6 +158,24 @@ pub fn parse_size(s: &str) -> Result<(u32, u32), String> {
         return Err("size must be positive".into());
     }
     Ok((w, h))
+}
+
+/// `NAME:WIDTHxHEIGHT[@SCALE]` of `--extra-output`.
+pub fn parse_extra_output(s: &str) -> Result<(String, (u32, u32), f64), String> {
+    let (name, rest) = s
+        .split_once(':')
+        .ok_or("expected NAME:WIDTHxHEIGHT[@SCALE]")?;
+    if name.is_empty() {
+        return Err("the display needs a name".into());
+    }
+    let (size, scale) = match rest.split_once('@') {
+        Some((size, scale)) => (size, scale.parse::<f64>().map_err(|e| e.to_string())?),
+        None => (rest, 1.0),
+    };
+    if !(scale.is_finite() && scale > 0.0) {
+        return Err("the scale must be above zero".into());
+    }
+    Ok((name.to_owned(), parse_size(size)?, scale))
 }
 
 pub fn parse_timed_shot(s: &str) -> Result<(f64, PathBuf), String> {
@@ -375,6 +401,24 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
                 smithay::backend::input::ButtonState::Released,
                 0,
             );
+        })?;
+    }
+    for (t, name) in cli.unplugs.iter().cloned() {
+        schedule(event_loop, t, move |state| {
+            let head = state
+                .displays
+                .heads
+                .iter()
+                .find(|h| h.info.connector == name)
+                .map(|h| h.id);
+            match head {
+                Some(head) => {
+                    if let Err(e) = crate::backend::headless::remove_display(state, head) {
+                        tracing::warn!(error = %format!("{e:#}"), %name, "unplugging the display failed");
+                    }
+                }
+                None => tracing::warn!(%name, "no display to unplug"),
+            }
         })?;
     }
     for (t, path) in cli.shots.iter().cloned() {
@@ -711,6 +755,15 @@ pub fn run(cli: Cli) -> Result<()> {
                 None => Some(cli.scale.unwrap_or(1.0)),
             };
             crate::backend::headless::init_displays(&mut state, &[display], scale)?;
+            for (name, (w, h), scale) in &cli.extra_outputs {
+                let extra = crate::backend::headless::HeadlessDisplay {
+                    name: name.clone(),
+                    size: (*w as i32, *h as i32),
+                    physical_mm: (0, 0),
+                };
+                crate::backend::headless::add_display(&mut state, &extra, Some(*scale))?;
+            }
+            state.screenshot_each_output = !cli.extra_outputs.is_empty();
             export_socket(&state);
             let recorder = cli
                 .record

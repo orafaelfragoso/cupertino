@@ -42,6 +42,9 @@ pub enum AppEvent {
     Appearance { dark: bool },
     /// The session's display options; also sent once when the observer is created.
     DisplayOptions(DisplayOptions),
+    /// Whether scroll views keep tracks beside their content that stay shown (`always`) or show thin bars over it
+    /// while it scrolls; sent after every [`AppEvent::DisplayOptions`] of an appearance observer from version 8.
+    ScrollBars { always: bool },
     /// Whether the session is locked; also sent once when the observer is created, from version 5. While it is, the
     /// application announces nothing to assistive technology.
     SessionLock { locked: bool },
@@ -72,7 +75,7 @@ pub struct AppEffects(CupertinoAppEffectsV1);
 impl AppEffects {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<AppEffects> {
-        conn.bind_extension(1..=7, Quiet).map(AppEffects)
+        conn.bind_extension(1..=8, Quiet).map(AppEffects)
     }
 
     /// Observe the session's appearance and display options: [`AppEvent::Appearance`] and
@@ -182,6 +185,8 @@ const STYLES_VERSION: u32 = 6;
 const DISABLED_CONTROLS_VERSION: u32 = 4;
 /// The version whose appearance observer tells `session_lock`.
 const SESSION_LOCK_VERSION: u32 = 5;
+/// The version whose display options say whether scroll bars stay shown.
+const SCROLL_BARS_VERSION: u32 = 8;
 
 /// How the server decorates an application window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -308,7 +313,7 @@ impl Dispatch<CupertinoAppMenuV1, MenuSurface> for State {
 impl Dispatch<CupertinoAppearanceV1, Quiet> for State {
     fn event(
         state: &mut State,
-        _: &CupertinoAppearanceV1,
+        observer: &CupertinoAppearanceV1,
         event: cupertino_appearance_v1::Event,
         _: &Quiet,
         _: &WlConnection,
@@ -318,7 +323,15 @@ impl Dispatch<CupertinoAppearanceV1, Quiet> for State {
             cupertino_appearance_v1::Event::Appearance { dark } => report_appearance(state, dark),
             cupertino_appearance_v1::Event::DisplayOptions { options } => {
                 match options.into_result() {
-                    Ok(bits) => report_display_options(state, bits.bits()),
+                    Ok(bits) => {
+                        report_display_options(state, bits.bits());
+                        // an older server does not know the setting: the views keep their own bars
+                        if observer.version() >= SCROLL_BARS_VERSION {
+                            state.emit(AppEvent::ScrollBars {
+                                always: bits.contains(DisplayOption::AlwaysShowScrollBars),
+                            });
+                        }
+                    }
                     Err(_) => state.fail(Error::Protocol("display options with reserved bits")),
                 }
             }

@@ -378,6 +378,7 @@ fn a_page_under_the_toolbar_lays_out_below_the_row_and_scrolls_behind_it() {
         value120: None,
         source: ScrollSource::Wheel,
         stop: false,
+        inverted: (false, false),
     });
     assert_eq!(h.model().0.offset.y, 30.0);
     let row = h.rect("row0");

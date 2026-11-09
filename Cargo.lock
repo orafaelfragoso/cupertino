@@ -1867,7 +1867,6 @@ dependencies = [
 name = "cupertino-ui-controls"
 version = "0.1.0"
 dependencies = [
- "cupertino-animation",
  "cupertino-geometry",
  "cupertino-menu-model",
  "cupertino-theme",

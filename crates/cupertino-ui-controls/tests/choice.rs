@@ -232,3 +232,68 @@ fn an_arrow_in_a_group_of_one_emits_nothing() {
     h.tap(RIGHT);
     assert_eq!(*h.model(), 0);
 }
+
+#[test]
+fn dragging_across_segments_keeps_the_choice_marked_until_the_release_chooses() {
+    use cupertino_ui_platform::PointerEvent;
+    let mut h = Harness::<Choices>::new();
+    let first = item(&h, "view", 0).bounds;
+    let last = item(&h, "view", 2).bounds;
+    h.pointer(PointerEvent::Motion {
+        position: first.center(),
+    });
+    h.button(first.center(), true);
+    h.pointer(PointerEvent::Motion {
+        position: item(&h, "view", 1).bounds.center(),
+    });
+    h.pointer(PointerEvent::Motion {
+        position: last.center(),
+    });
+    assert_eq!(h.model().view, Some(0), "nothing is chosen during the drag");
+    assert_eq!(
+        item(&h, "view", 0).value,
+        Some(AccessibleValue::Toggle(Checked::True)),
+        "the original choice stays marked"
+    );
+    h.button(last.center(), false);
+    assert_eq!(
+        h.model().view,
+        Some(2),
+        "the release chooses the segment it ends over"
+    );
+
+    // let go past the control's end, the drag chooses nothing
+    let chosen = item(&h, "view", 2).bounds;
+    h.pointer(PointerEvent::Motion {
+        position: chosen.center(),
+    });
+    h.button(chosen.center(), true);
+    let beyond = cupertino_geometry::Point::new(chosen.max_x() + 200.0, chosen.center().y);
+    h.pointer(PointerEvent::Motion { position: beyond });
+    h.button(beyond, false);
+    assert_eq!(h.model().view, Some(2));
+    // and let go below it, too
+    h.button(first.center(), true);
+    let below = cupertino_geometry::Point::new(first.center().x, first.max_y() + 40.0);
+    h.pointer(PointerEvent::Motion { position: below });
+    h.button(below, false);
+    assert_eq!(h.model().view, Some(2));
+}
+
+#[test]
+fn a_segment_under_the_pointer_is_found_along_the_row_in_either_direction() {
+    use cupertino_geometry::Rect;
+    let second = Rect::new(100.0, 0.0, 50.0, 24.0);
+    let at = |x, rtl| cupertino_ui_controls::segment_at(x, second, 1, 3, 50.0, rtl);
+    assert_eq!(at(125.0, false), Some(1));
+    assert_eq!(at(175.0, false), Some(2));
+    assert_eq!(at(60.0, false), Some(0));
+    assert_eq!(at(210.0, false), None, "past the last segment");
+    assert_eq!(at(40.0, false), None, "before the first");
+    assert_eq!(
+        at(175.0, true),
+        Some(0),
+        "right to left, the first is on the right"
+    );
+    assert_eq!(at(60.0, true), Some(2));
+}

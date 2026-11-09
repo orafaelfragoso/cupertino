@@ -4,8 +4,9 @@
 
 use crate::look::{self, paint_focus_ring};
 use crate::{Handler, ScrollView, Scroller};
-use cupertino_animation::{KineticScroller, ScrollConfig};
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_ui_core::kinetic::ScrollMotion;
+use cupertino_ui_core::session_scroll_bars;
 use cupertino_ui_core::{
     AccessibleValue, Change, ControlState, Element, Event, EventCx, MeasureCx, PaintCx, Phase,
     Propagation, Role, SemanticsCx, Widget,
@@ -15,7 +16,7 @@ use cupertino_ui_layout::{
     Overflow, ScrollState, SizeSpec,
 };
 use cupertino_ui_platform::{
-    Keysym, Mods, MouseButton, PointerEvent, ScrollSource, Timestamp, TouchEvent,
+    Keysym, Mods, MouseButton, PointerEvent, ScrollBars, ScrollSource, Timestamp, TouchEvent,
 };
 use cupertino_ui_theme::ColorRole;
 use std::cell::Cell;
@@ -35,12 +36,20 @@ const SPACE: Keysym = Keysym(0x20);
 const LINE: f64 = 40.0;
 /// A wheel burst ends after this long without an event.
 const WHEEL_IDLE_NS: u64 = 300_000_000;
-const THUMB: f64 = 12.0;
+/// A scroll bar's frame across its axis, in either style: the strip an overlay bar takes the pointer in and the
+/// gutter an always-shown track takes from the content.
+const BAR: f64 = 17.0;
+/// An overlay thumb's width: thinner than the strip it is grabbed in.
+const OVERLAY_THUMB: f64 = 6.0;
+/// Between an overlay thumb and the outer edge of its strip.
+const OVERLAY_EDGE: f64 = 3.0;
+/// An always-shown track's thumb, centred in the track.
+const TRACK_THUMB: f64 = 11.0;
 const THUMB_MIN: f64 = 24.0;
-/// Between an overlay thumb and the view's edges.
+/// Between an overlay thumb and the ends of its strip.
 const INSET: f64 = 2.0;
-/// An always-visible scroll bar's track.
-const TRACK: f64 = 15.0;
+/// An overlay bar stays shown this long after the content last moved or the pointer last left or let go of it, then
+/// fades for [`FADE_NS`].
 const SHOWN_NS: u64 = 1_000_000_000;
 const FADE_NS: u64 = 300_000_000;
 
@@ -64,6 +73,15 @@ impl<M: 'static> From<ScrollView<M>> for Element<M> {
     }
 }
 
+/// The bars a view shows: the session's style when it said one, else the view's own.
+fn style(own: Scroller) -> Scroller {
+    match session_scroll_bars() {
+        Some(ScrollBars::Always) => Scroller::Always,
+        Some(ScrollBars::WhenScrolling) => Scroller::Overlay,
+        None => own,
+    }
+}
+
 /// A viewport around `content` with its scroll bars; ListView builds on it too.
 pub(crate) fn frame<M: 'static>(
     content: Element<M>,
@@ -84,6 +102,7 @@ pub(crate) fn tracked<M: 'static>(
     on_scroll: ScrollHandler<M>,
     enabled: bool,
 ) -> Element<M> {
+    let scroller = style(scroller);
     let viewport = Element::new(Viewport {
         content: Some(content),
         state,
@@ -247,12 +266,14 @@ struct Viewport<M> {
 pub struct ViewportState {
     /// The offset last sent, ahead of the model until the next view.
     offset: Point,
+    /// How far the content is drawn past its edges, on top of the model's offset.
+    stretch: Point,
     /// Whether this view owns the gesture in progress, from its first event.
     latch: Option<bool>,
     /// When the wheel burst in progress ends.
     wheel_until: Option<Timestamp>,
-    /// Finger and touch drags: one scroller per axis, x then y, coasting after the lift.
-    kinetic: Option<[KineticScroller; 2]>,
+    /// The content's motion while a finger or touch drags it, it coasts or a stretch returns.
+    motion: Option<ScrollMotion>,
     touch: Option<(i32, Point)>,
 }
 
@@ -285,62 +306,80 @@ impl<M: 'static> Viewport<M> {
         }
     }
 
-    /// Whether moving by `delta` along the scrolled axes changes the offset at all.
-    fn can_move(&self, state: &ViewportState, delta: Point) -> bool {
-        let max = self.state.max_offset();
-        let room = |on: bool, d: f64, at: f64, max: f64| {
-            on && ((d > 0.0 && at < max) || (d < 0.0 && at > 0.0))
-        };
-        room(self.horizontal, delta.x, state.offset.x, max.x)
-            || room(self.vertical, delta.y, state.offset.y, max.y)
+    /// Draws the content without a stretch, as after a key or a reveal: any motion stops.
+    fn settle(&self, state: &mut ViewportState, cx: &mut EventCx<'_, M>) {
+        state.motion = None;
+        if state.stretch != Point::ZERO {
+            state.stretch = Point::ZERO;
+            cx.request_layout();
+        }
     }
 
-    fn kinetic(&self, state: &ViewportState, now: f64) -> [KineticScroller; 2] {
-        let max = self.state.max_offset();
-        let axis = |len: f64, max: f64, at: f64| {
-            let mut k = KineticScroller::new(
-                ScrollConfig {
-                    dimension: len,
-                    ..ScrollConfig::default()
-                },
-                0.0,
-                max,
-                at,
-            );
-            k.begin_drag(now);
-            k
-        };
-        [
-            axis(self.state.viewport.width, max.x, state.offset.x),
-            axis(self.state.viewport.height, max.y, state.offset.y),
-        ]
+    /// Content at rest at `offset`.
+    fn at_rest(&self, offset: Point) -> ScrollMotion {
+        ScrollMotion::new(
+            offset,
+            self.state.max_offset(),
+            self.state.viewport,
+            (self.horizontal, self.vertical),
+        )
     }
 
-    fn drag(&self, state: &mut ViewportState, delta: Point, now: f64, cx: &mut EventCx<'_, M>) {
-        let kinetic = match state.kinetic.take() {
-            Some(k) => k,
-            None => self.kinetic(state, now),
+    /// The motion in progress, or content at rest at the offset last sent.
+    fn motion<'s>(&self, state: &'s mut ViewportState) -> &'s mut ScrollMotion {
+        let at = state.offset;
+        state.motion.get_or_insert_with(|| self.at_rest(at))
+    }
+
+    /// Sends the motion's offset at `now` and draws its stretch; the motion ends once it is at rest.
+    fn show(&self, state: &mut ViewportState, now: f64, cx: &mut EventCx<'_, M>) {
+        let Some(motion) = &state.motion else {
+            return;
         };
-        let mut kinetic = kinetic;
-        kinetic[0].drag(delta.x, now);
-        kinetic[1].drag(delta.y, now);
-        let offset = Point::new(kinetic[0].position(now), kinetic[1].position(now));
-        state.kinetic = Some(kinetic);
+        let (offset, stretch) = (motion.offset(now), motion.stretch(now));
+        let animating = motion.is_animating(now);
+        let dragging = motion.is_dragging();
         self.scroll_to(state, offset, cx);
+        if stretch != state.stretch {
+            state.stretch = stretch;
+            cx.request_layout();
+        }
+        if animating {
+            cx.request_animation_frame();
+        } else if !dragging {
+            state.motion = None;
+        }
     }
 
-    /// The fingers lifted: the content coasts on animation frames, or stops at once under Reduce Motion.
+    /// Whether a gesture whose first movement is `delta` is this view's: it moves the content, or, for a finger,
+    /// it pulls along an axis this view scrolls past an edge, which stretches it.
+    fn claims(&self, state: &mut ViewportState, delta: Point, finger: bool, now: f64) -> bool {
+        let moves = match &state.motion {
+            Some(motion) => motion.can_move(delta, now),
+            None => self.at_rest(state.offset).can_move(delta, now),
+        };
+        if moves {
+            return true;
+        }
+        let max = self.state.max_offset();
+        finger
+            && if delta.y.abs() >= delta.x.abs() {
+                self.vertical && max.y > 0.0
+            } else {
+                self.horizontal && max.x > 0.0
+            }
+    }
+
+    /// The fingers lifted: the content coasts on animation frames, without kinetic motion under Reduce Motion, and
+    /// a stretch returns to its edge.
     fn lift(&self, state: &mut ViewportState, now: f64, cx: &mut EventCx<'_, M>) {
-        match &mut state.kinetic {
-            Some(kinetic) if !cx.env().theme.motion.reduce => {
-                kinetic[0].end_drag(now);
-                kinetic[1].end_drag(now);
-                cx.request_animation_frame();
-            }
-            _ => {
-                state.kinetic = None;
-                state.latch = None;
-            }
+        let inertia = !cx.env().theme.motion.reduce;
+        if let Some(motion) = &mut state.motion {
+            motion.release(now, inertia);
+        }
+        self.show(state, now, cx);
+        if state.motion.is_none() {
+            state.latch = None;
         }
     }
 
@@ -354,6 +393,7 @@ impl<M: 'static> Viewport<M> {
         cx: &mut EventCx<'_, M>,
     ) -> Propagation {
         let now = cx.now();
+        let t = seconds(now);
         let direction = cx.env().direction;
         let delta = match (delta, value120) {
             (d, Some((x, y))) if d == Point::ZERO => {
@@ -362,48 +402,47 @@ impl<M: 'static> Viewport<M> {
             (d, _) => d,
         };
         let delta = Point::new(self.along_x(direction, delta.x), delta.y);
-        if source == ScrollSource::Wheel && state.wheel_until.is_some_and(|until| now >= until) {
+        let wheel = matches!(source, ScrollSource::Wheel | ScrollSource::WheelTilt);
+        let finger = source == ScrollSource::Finger;
+        if wheel && state.wheel_until.is_some_and(|until| now >= until) {
             state.latch = None;
         }
         let mine = match state.latch {
             Some(mine) => mine,
-            // a gesture's owner is the first view its first movement can move
+            // a gesture's owner is the first view its first movement can move, or for a finger stretch
             None if delta == Point::ZERO => return Propagation::Continue,
             None => {
-                let mine = self.can_move(state, delta);
+                let mine = self.claims(state, delta, finger, t);
                 state.latch = Some(mine);
                 mine
             }
         };
-        match source {
-            ScrollSource::Wheel => {
-                let until = Timestamp(now.0 + WHEEL_IDLE_NS);
-                state.wheel_until = Some(until);
-                cx.wake_at(until);
+        if wheel {
+            let until = Timestamp(now.0 + WHEEL_IDLE_NS);
+            state.wheel_until = Some(until);
+            cx.wake_at(until);
+        } else if stop {
+            if mine && finger {
+                self.lift(state, t, cx);
+            } else {
+                state.latch = None;
             }
-            ScrollSource::Finger | ScrollSource::Continuous if stop => {
-                if mine {
-                    self.lift(state, seconds(now), cx);
-                } else {
-                    state.latch = None;
-                }
-                return if mine {
-                    Propagation::Stop
-                } else {
-                    Propagation::Continue
-                };
-            }
-            ScrollSource::Finger | ScrollSource::Continuous => {}
+            return if mine {
+                Propagation::Stop
+            } else {
+                Propagation::Continue
+            };
         }
         if !mine {
             return Propagation::Continue;
         }
-        if source == ScrollSource::Wheel {
-            let offset = Point::new(state.offset.x + delta.x, state.offset.y + delta.y);
-            self.scroll_to(state, offset, cx);
+        if finger {
+            self.motion(state).drag(delta, t);
         } else {
-            self.drag(state, delta, seconds(now), cx);
+            // a wheel's or a continuous source's movement is complete as it arrives: no stretch and no inertia
+            self.motion(state).step(delta, t);
         }
+        self.show(state, t, cx);
         Propagation::Stop
     }
 
@@ -438,6 +477,7 @@ impl<M: 'static> Viewport<M> {
             END => self.state.max_offset(),
             _ => return false,
         };
+        self.settle(state, cx);
         self.scroll_to(state, offset, cx);
         true
     }
@@ -503,6 +543,7 @@ impl<M: 'static> Widget<M> for Viewport<M> {
             return Propagation::Continue;
         }
         let now = cx.now();
+        let t = seconds(now);
         match *event {
             Event::ScrollGeometry { viewport, content } => {
                 let next = ScrollState {
@@ -511,12 +552,18 @@ impl<M: 'static> Widget<M> for Viewport<M> {
                     content,
                 }
                 .clamped();
+                if let Some(motion) = &mut state.motion {
+                    motion.set_bounds(next.max_offset(), viewport, t);
+                }
                 if next != self.state {
                     state.offset = next.offset;
                     cx.emit((self.on_scroll)(next));
                 }
             }
-            Event::Reveal(offset) => self.scroll_to(state, offset, cx),
+            Event::Reveal(offset) => {
+                self.settle(state, cx);
+                self.scroll_to(state, offset, cx);
+            }
             Event::Pointer(
                 PointerEvent::Scroll {
                     delta,
@@ -534,23 +581,17 @@ impl<M: 'static> Widget<M> for Viewport<M> {
                 }
             }
             Event::AnimationFrame(_) => {
-                let Some(kinetic) = &state.kinetic else {
+                if state.motion.is_none() {
                     return Propagation::Continue;
-                };
-                let t = seconds(now);
-                let offset = Point::new(kinetic[0].position(t), kinetic[1].position(t));
-                let moving = kinetic.iter().any(|k| k.is_animating(t));
-                self.scroll_to(state, offset, cx);
-                if moving {
-                    cx.request_animation_frame();
-                } else {
-                    state.kinetic = None;
+                }
+                self.show(state, t, cx);
+                // the gesture this view owned ends with its motion
+                if state.motion.is_none() && state.wheel_until.is_none() && state.touch.is_none() {
                     state.latch = None;
                 }
             }
             Event::Touch(TouchEvent::Down { id, position }, _) if state.touch.is_none() => {
                 state.touch = Some((id, position));
-                state.kinetic = Some(self.kinetic(state, seconds(now)));
                 state.latch = Some(true);
             }
             Event::Touch(TouchEvent::Motion { id, position }, _) => {
@@ -563,16 +604,21 @@ impl<M: 'static> Widget<M> for Viewport<M> {
                     last.y - position.y,
                 );
                 state.touch = Some((touch, position));
-                self.drag(state, delta, seconds(now), cx);
+                self.motion(state).drag(delta, t);
+                self.show(state, t, cx);
             }
             Event::Touch(TouchEvent::Up { id }, _) if state.touch.is_some_and(|(t, _)| t == id) => {
                 state.touch = None;
-                self.lift(state, seconds(now), cx);
+                self.lift(state, t, cx);
             }
             Event::Touch(TouchEvent::Cancel, _) | Event::Cancel => {
                 state.touch = None;
-                state.kinetic = None;
                 state.latch = None;
+                // the drag stops where it is; a stretch still returns
+                if let Some(motion) = &mut state.motion {
+                    motion.cancel(t);
+                }
+                self.show(state, t, cx);
             }
             Event::Key(key, _) if key.pressed => {
                 if !self.key(state, key.keysym, key.mods, cx) {
@@ -599,8 +645,12 @@ impl<M: 'static> Widget<M> for Viewport<M> {
         }
     }
 
-    fn scroll_offset(&self, _: &ViewportState) -> Point {
-        self.state.offset
+    /// The model's offset with the stretch drawn past an edge.
+    fn scroll_offset(&self, state: &ViewportState) -> Point {
+        Point::new(
+            self.state.offset.x + state.stretch.x,
+            self.state.offset.y + state.stretch.y,
+        )
     }
 }
 
@@ -622,6 +672,8 @@ pub struct BarState {
     shown_from: Cell<Option<Timestamp>>,
     /// Where on the thumb a drag holds it, along the bar.
     grab: Option<f64>,
+    /// The pointer is on the shown thumb: an overlay bar stays shown.
+    hover: bool,
     /// The bar's size and direction at its last paint, for hit-testing.
     painted: Cell<Option<(Size, bool)>>,
 }
@@ -670,10 +722,24 @@ impl<M: 'static> Bar<M> {
         Some((start + (track - len) * (offset / max).clamp(0.0, 1.0), len))
     }
 
+    /// Whether the content passes the viewport along the bar's axis.
+    fn scrolls(&self) -> bool {
+        let (viewport, content, _) = self.lengths();
+        content > viewport && viewport > 0.0
+    }
+
+    /// The frame across the axis; an always-shown track that has nothing to scroll gives its gutter back.
     fn thickness(&self) -> f64 {
         match self.scroller {
-            Scroller::Overlay => THUMB + 2.0 * INSET,
-            Scroller::Always => TRACK,
+            Scroller::Always if !self.scrolls() => 0.0,
+            _ => BAR,
+        }
+    }
+
+    fn thumb_width(&self) -> f64 {
+        match self.scroller {
+            Scroller::Overlay => OVERLAY_THUMB,
+            Scroller::Always => TRACK_THUMB,
         }
     }
 
@@ -696,27 +762,68 @@ impl<M: 'static> Bar<M> {
         }
     }
 
-    /// The thumb's rect in the bar, with a horizontal bar's start on the right in right-to-left.
+    /// The thumb as drawn, with a horizontal bar's start on the right in right-to-left: centred in an always-shown
+    /// track, near the outer edge of an overlay strip (the trailing edge of a vertical bar, the bottom of a horizontal
+    /// one).
     fn thumb_rect(&self, size: Size, rtl: bool) -> Option<Rect> {
         let strip = self.strip(size, rtl);
         let (start, len) = self.thumb(size)?;
-        let thickness = match self.axis {
-            Axis::Horizontal => strip.height(),
-            Axis::Vertical => strip.width(),
+        // from the strip's low edge across it, of `thickness`, with the outer edge at its high end or not
+        let across = |low: f64, thickness: f64, outer_high: bool| {
+            let width = self.thumb_width().min(thickness);
+            let edge = OVERLAY_EDGE.min(thickness - width);
+            let at = match (self.scroller, outer_high) {
+                (Scroller::Always, _) => (thickness - width) / 2.0,
+                (Scroller::Overlay, true) => thickness - edge - width,
+                (Scroller::Overlay, false) => edge,
+            };
+            (low + at, width)
         };
-        let across = (thickness - THUMB) / 2.0;
-        let (x, y) = (strip.min_x(), strip.min_y());
         Some(match self.axis {
-            Axis::Vertical => Rect::new(x + across, start, THUMB, len),
-            Axis::Horizontal if rtl => Rect::new(size.width - start - len, y + across, len, THUMB),
-            Axis::Horizontal => Rect::new(start, y + across, len, THUMB),
+            Axis::Vertical => {
+                let (x, width) = across(strip.min_x(), strip.width(), !rtl);
+                Rect::new(x, start, width, len)
+            }
+            Axis::Horizontal => {
+                let (y, width) = across(strip.min_y(), strip.height(), true);
+                let x = if rtl { size.width - start - len } else { start };
+                Rect::new(x, y, len, width)
+            }
         })
+    }
+
+    /// Where the thumb takes the pointer: its length along the bar and the whole strip across, wider than drawn.
+    fn target_rect(&self, size: Size, rtl: bool) -> Option<Rect> {
+        let strip = self.strip(size, rtl);
+        let thumb = self.thumb_rect(size, rtl)?;
+        Some(match self.axis {
+            Axis::Vertical => {
+                Rect::new(strip.min_x(), thumb.min_y(), strip.width(), thumb.height())
+            }
+            Axis::Horizontal => {
+                Rect::new(thumb.min_x(), strip.min_y(), thumb.width(), strip.height())
+            }
+        })
+    }
+
+    /// The pointer left the thumb or let go of it: an overlay bar shown meanwhile stays a while longer, then fades.
+    fn release_hold(&self, state: &BarState, cx: &mut EventCx<'_, M>) {
+        if state.shown_from.get().is_some() {
+            let now = cx.now();
+            state.shown_from.set(Some(now));
+            cx.wake_at(Timestamp(now.0 + SHOWN_NS));
+            cx.request_paint();
+        }
     }
 
     fn shown(&self, state: &BarState, now: Timestamp, reduce: bool) -> Shown {
         let Some(from) = state.shown_from.get() else {
             return Shown::Hidden;
         };
+        // held by the pointer on it or dragging it
+        if state.hover || state.grab.is_some() {
+            return Shown::Until(Timestamp(now.0 + SHOWN_NS));
+        }
         let until = from.0 + SHOWN_NS;
         if now.0 < until {
             Shown::Until(Timestamp(until))
@@ -783,7 +890,11 @@ impl<M: 'static> Widget<M> for Bar<M> {
         if self.state.offset != old.state.offset {
             state.moved.set(true);
         }
-        if self.fit != old.fit {
+        // an always-shown track that starts or stops having something to scroll takes or gives back its gutter
+        if self.fit != old.fit
+            || self.scroller != old.scroller
+            || (self.scroller == Scroller::Always && self.scrolls() != old.scrolls())
+        {
             Change::Layout
         } else if self.state != old.state
             || self.scroller != old.scroller
@@ -837,7 +948,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
                 _,
             ) => {
                 let local = local(position);
-                let Some(thumb) = self.thumb_rect(size, rtl) else {
+                let Some(thumb) = self.target_rect(size, rtl) else {
                     return Propagation::Continue;
                 };
                 if thumb.contains(local) {
@@ -883,8 +994,24 @@ impl<M: 'static> Widget<M> for Bar<M> {
             ) if state.grab.is_some() => {
                 state.grab = None;
                 cx.release_pointer();
+                if !state.hover {
+                    self.release_hold(state, cx);
+                }
             }
-            Event::Cancel => state.grab = None,
+            Event::Pointer(PointerEvent::Enter { .. }, _) if cx.node() == cx.target() => {
+                state.hover = true;
+            }
+            Event::Pointer(PointerEvent::Leave, _) if cx.node() == cx.target() => {
+                state.hover = false;
+                if state.grab.is_none() {
+                    self.release_hold(state, cx);
+                }
+            }
+            Event::Cancel => {
+                state.grab = None;
+                state.hover = false;
+                self.release_hold(state, cx);
+            }
             _ => return Propagation::Continue,
         }
         Propagation::Stop
@@ -901,6 +1028,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
             ..ControlState::default()
         };
         let alpha = match self.scroller {
+            Scroller::Always if !self.scrolls() => return,
             Scroller::Always => {
                 look::fill(
                     cx,
@@ -934,11 +1062,12 @@ impl<M: 'static> Widget<M> for Bar<M> {
         };
         let color = look::color(&theme, ColorRole::ScrollerThumb, &normal)
             .map(|c| c.with_alpha(c.a * alpha));
-        look::fill(cx, thumb, THUMB / 2.0, color);
+        let radius = thumb.width().min(thumb.height()) / 2.0;
+        look::fill(cx, thumb, radius, color);
     }
 
     fn semantics(&self, _: &BarState, cx: &mut SemanticsCx<'_>) {
-        if self.scroller == Scroller::Always {
+        if self.scroller == Scroller::Always && self.scrolls() {
             let (viewport, content, offset) = self.lengths();
             cx.role(Role::ScrollBar);
             cx.value(AccessibleValue::Number {
@@ -960,7 +1089,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
             Scroller::Overlay => {
                 state.shown_from.get().is_some()
                     && state.painted.get().is_some_and(|(size, rtl)| {
-                        self.thumb_rect(size, rtl)
+                        self.target_rect(size, rtl)
                             .is_some_and(|t| t.contains(point))
                     })
             }

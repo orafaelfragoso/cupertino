@@ -449,11 +449,16 @@ pub enum MouseButton {
     Other(u32),
 }
 
+/// What produced a scroll. Only [`ScrollSource::Finger`] scrolls end with a stop that kinetic scrolling may start
+/// from; a wheel's steps are complete movements and get no inertia of their own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScrollSource {
     Wheel,
     Finger,
+    /// Continuous movement without a finger on a surface (a pointing stick, button scrolling).
     Continuous,
+    /// A wheel pushed sideways: horizontal steps.
+    WheelTilt,
 }
 
 /// Pointer input in the window's logical coordinates.
@@ -483,6 +488,9 @@ pub enum PointerEvent {
         source: ScrollSource,
         /// The fingers left the surface: kinetic scrolling may start.
         stop: bool,
+        /// Per axis `(x, y)`: the physical motion ran against `delta` (natural scrolling is on). Content follows
+        /// `delta`; a value control that should follow the hand can undo the inversion.
+        inverted: (bool, bool),
     },
 }
 
@@ -584,6 +592,18 @@ pub enum PlatformEvent {
     /// Whether the session is locked, once when the window system learns it and on every change; a window system that
     /// can't tell sends false once.
     SessionLock(bool),
+    /// How the session wants scroll views to show their bars, once when the window system learns it and on every
+    /// change; a window system that can't tell never sends it, and each view keeps its own style.
+    ScrollBars(ScrollBars),
+}
+
+/// How the session wants scroll views to show their bars.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScrollBars {
+    /// Thin bars over the content, shown while it scrolls.
+    WhenScrolling,
+    /// Tracks beside the content that stay shown.
+    Always,
 }
 
 /// The session's appearance and the display options that change how windows draw.

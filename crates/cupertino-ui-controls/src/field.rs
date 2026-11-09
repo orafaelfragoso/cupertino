@@ -19,7 +19,7 @@ use cupertino_ui_text::{
     ParagraphLayout, Response, SecureBuffer, Selection, Surrounding, TextBuffer, TextFieldKeys,
     TextInputSession, TextPosition, CARET_WIDTH, SURROUNDING_MAX_BYTES,
 };
-use cupertino_ui_theme::{ColorRole, ThemeTokens};
+use cupertino_ui_theme::{Color, ColorRole, ThemeTokens};
 use std::cell::Cell;
 use std::ops::Range;
 use std::time::Duration;
@@ -67,6 +67,12 @@ const SEARCH_FILL_DARK: f32 = 0.2;
 const SEARCH_RIM_DARK: f32 = 0.12;
 const SEARCH_FILL_LIGHT: f32 = 0.45;
 const SEARCH_RIM_LIGHT: f32 = 0.09;
+
+/// A text field's well in a dark appearance, black at this opacity over what it sits on, and its edge: white at this
+/// opacity in a dark appearance, black at this one in a light one.
+const WELL_DARK: f32 = 0.25;
+const WELL_EDGE_DARK: f32 = 0.05;
+const WELL_EDGE_LIGHT: f32 = 0.08;
 
 /// How a text field draws its chrome.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -400,20 +406,40 @@ fn paint_chrome(cx: &mut PaintCx<'_>, state: &ControlState, field: FieldLook) {
         FieldLook::Plain => {}
     }
     let radius = theme.metrics.field_radius;
-    look::fill(
-        cx,
-        rect,
-        radius,
-        look::color(&theme, ColorRole::TextBackground, state),
-    );
+    let (fill, edge) = well(&theme, state);
+    look::fill(cx, rect, radius, fill);
     look::stroke(
         cx,
         rect.inset(cupertino_geometry::Insets::uniform(0.5)),
         radius - 0.5,
         1.0,
-        look::color(&theme, ColorRole::TextFieldBorder, state),
+        edge,
     );
     paint_focus_ring(cx, rect, radius);
+}
+
+/// A field's recessed well: darker than what it sits on in a dark appearance, the text background in a light one,
+/// with a faint edge; the theme's stronger border under increased contrast. Disabled, the dark well is fainter.
+pub(crate) fn well(theme: &ThemeTokens, state: &ControlState) -> (Option<Color>, Option<Color>) {
+    let appearance = theme.preferences.appearance;
+    let fill = if appearance.is_dark() {
+        let share = if state.enabled {
+            WELL_DARK
+        } else {
+            WELL_DARK / 2.0
+        };
+        Some(Color::new(0.0, 0.0, 0.0, share))
+    } else {
+        look::color(theme, ColorRole::TextBackground, state)
+    };
+    let edge = if appearance.is_high_contrast() {
+        look::color(theme, ColorRole::TextFieldBorder, state)
+    } else if appearance.is_dark() {
+        Some(Color::new(1.0, 1.0, 1.0, WELL_EDGE_DARK))
+    } else {
+        Some(Color::new(0.0, 0.0, 0.0, WELL_EDGE_LIGHT))
+    };
+    (fill, edge)
 }
 
 /// A search field's capsule, its rim and its magnifying glass at the reading direction's start.

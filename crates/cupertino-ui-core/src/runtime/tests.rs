@@ -3044,3 +3044,67 @@ fn a_moved_focus_keeps_the_ring_as_it_showed() {
     assert_eq!(focused(&rt), Some(3));
     assert!(!rt.windows[0].focus.visible(), "no ring after a click");
 }
+
+/// With a sink, a scroll event is followed from its timestamp through its handlers, the model update, the frame that
+/// drew it and the compositor showing it; without one nothing is kept.
+#[test]
+fn a_scroll_is_timed_from_its_input_to_the_frame_the_compositor_showed() {
+    use crate::ScrollTiming;
+    let clock = Arc::new(FakeClock::default());
+    let damage = Rc::default();
+    let mut options = options(&damage);
+    options.clock = clock.clone();
+    let seen: Rc<RefCell<Vec<ScrollTiming>>> = Rc::default();
+    let sink = Rc::clone(&seen);
+    let mut rt = Rt::new(FakeSystem::default(), options)
+        .with_scroll_timing(Box::new(move |t| sink.borrow_mut().push(t)));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure(&mut rt, window, 1);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+
+    // the event at 100, handled at 150 with a click that changes the model in the same step
+    clock.0.store(150, Ordering::SeqCst);
+    rt.window_system_mut().send(
+        window,
+        WindowEvent::Pointer(
+            PointerEvent::Scroll {
+                position: Point::new(5.0, 5.0),
+                delta: Point::new(0.0, 10.0),
+                value120: None,
+                source: cupertino_ui_platform::ScrollSource::Finger,
+                stop: false,
+                inverted: (false, false),
+            },
+            Timestamp(100),
+        ),
+    );
+    click(&mut rt, window, 5.0);
+    assert_eq!(rt.model().count, 1);
+    // the click changes only the title, which draws nothing: the next configure draws the frame
+    configure(&mut rt, window, 2);
+    let frame = *rt.window_system().frame_ids.last().unwrap();
+    assert_eq!(rt.window_system().frame_ids.len(), 2);
+    assert!(seen.borrow().is_empty(), "not shown yet");
+
+    rt.window_system_mut().send(
+        window,
+        WindowEvent::Presented {
+            frame,
+            time: Timestamp(400),
+        },
+    );
+    rt.step(steps()).unwrap();
+    let timing = seen.borrow()[0];
+    assert_eq!(seen.borrow().len(), 1);
+    assert_eq!(
+        (timing.window, timing.input, timing.handled, timing.updated),
+        (window, Timestamp(100), Timestamp(150), Some(Timestamp(150)))
+    );
+    assert_eq!(timing.submitted, Timestamp(150));
+    assert_eq!(timing.presented, Some(Timestamp(400)));
+    let latency = timing.latency();
+    assert_eq!((latency.handled, latency.presented), (50, Some(300)));
+}

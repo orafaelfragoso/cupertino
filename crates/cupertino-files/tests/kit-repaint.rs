@@ -230,6 +230,7 @@ fn interactions(scale: f64) -> Vec<(&'static str, Vec<FrameSample>)> {
             value120: None,
             source: ScrollSource::Wheel,
             stop: false,
+            inverted: (false, false),
         };
         meter.step(&mut run.driver, |s, _| pointer(s, window, event));
     }

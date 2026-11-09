@@ -1,6 +1,7 @@
 Cupertino default asset pack (cupertino-data)
 
 manifest.json, icon-map.toml: GPL-3.0-or-later (the Cupertino licence).
+cupertino/: original first-party icons, GPL-3.0-or-later; see cupertino/CREDITS.md and cupertino/LICENSE.
 fonts/InterVariable-subset.ttf: Inter, a subset; SIL Open Font License 1.1 (OFL-1.1), see OFL.txt.
 wallpapers/*.jpg: six photographs from Unsplash, Unsplash License (LicenseRef-Unsplash), see
   Unsplash.txt; photographers and sources in wallpapers/credits.txt.

@@ -40,7 +40,7 @@ Work is grouped in seven phases. Assessed on 2026-11-04 against merged commit `0
 
 The live ISO and TTY backend have VM evidence. The full hardware matrix and installed-system acceptance remain open. The [book](docs/src/roadmap.md) has the roadmap, and [Install from a USB stick](docs/src/install-usb.md) the steps.
 
-Cupertino serves Wayland clients. X11 programs run through [`xwayland-satellite`](https://github.com/Supreeeme/xwayland-satellite) when it is installed, started at the first X11 program. Fedora pulls it in as a recommended dependency; Arch lists it as optional (install it with pacman); Debian does not package it, so the Debian package recommends only Xwayland, and X11 programs stay off until you install `xwayland-satellite` yourself.
+Cupertino serves Wayland clients. X11 programs run through [`xwayland-satellite`](https://github.com/Supreeeme/xwayland-satellite) when it is installed, started at the first X11 program. The live image ships it with Xwayland; the `cupertino` package lists both as optional (`sudo pacman -S xwayland-satellite xorg-xwayland`); without `xwayland-satellite`, X11 programs stay off.
 
 ## Try it in one minute
 
@@ -96,7 +96,7 @@ The crates are layered (`foundation`, `models`, `platform`, `render`, `core`, `s
 
 Fonts, icons, cursors and wallpapers are not hard-coded. The shell loads them from an **asset pack**: a directory (`CUPERTINO_ASSET_DIR`) with a manifest, and falls back to the default pack for anything the pack does not provide. You can swap the whole look, or one part of it, without rebuilding.
 
-The default pack uses the Inter font, Cupertino's built-in cursors, the icon theme of the host system through the freedesktop icon specification, and wallpapers picked for this project. The pack format and the steps to build your own are in [Asset packs](docs/src/asset-packs.md). Packs are data: they are never part of the source tree.
+The default pack uses the Inter font, Cupertino's built-in cursors, Cupertino's original icons (`data/assets/cupertino`, `GPL-3.0-or-later`; the host system's freedesktop icon theme covers the rest), and wallpapers picked for this project. The pack format and the steps to build your own are in [Asset packs](docs/src/asset-packs.md). Packs are data: apart from that first-party icon pack, they are not part of the source tree.
 
 ## Licence
 

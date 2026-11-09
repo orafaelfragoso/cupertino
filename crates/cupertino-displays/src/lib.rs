@@ -11,6 +11,7 @@
 //! text and one with more space, each drawn from a buffer of twice its points. [`geometry`] keeps the quantities of an
 //! output apart: the mode in panel pixels, the logical extent in points, the effective scale and buffer rasters.
 
+pub mod arrangement;
 pub mod geometry;
 
 use std::ops::RangeInclusive;

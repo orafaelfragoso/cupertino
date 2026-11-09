@@ -455,14 +455,24 @@ impl Cupertino {
         }
         self.process_captures(renderer, idx);
         self.send_backdrop_tones(renderer);
-        if self.screenshot_requests.is_empty() {
+        let paths = if self.screenshot_each_output {
+            self.split_screenshots();
+            let id = self.outputs[idx].id;
+            let (mine, rest) = std::mem::take(&mut self.output_screenshots)
+                .into_iter()
+                .partition(|(o, _)| *o == id);
+            self.output_screenshots = rest;
+            mine.into_iter().map(|(_, p)| p).collect()
+        } else {
+            std::mem::take(&mut self.screenshot_requests)
+        };
+        if paths.is_empty() {
             return;
         }
-        let paths = std::mem::take(&mut self.screenshot_requests);
         match self.draw_output_image(renderer, idx, true, true) {
             Ok(img) => {
                 for p in paths {
-                    if self.exit_after_screenshot {
+                    if self.exit_after_screenshot && self.output_screenshots.is_empty() {
                         self.running = false;
                         self.loop_signal.stop();
                     }
@@ -473,6 +483,29 @@ impl Cupertino {
                 }
             }
             Err(e) => tracing::error!(error = %e, "screenshot render failed"),
+        }
+    }
+
+    /// Turn each screenshot asked for into one for every output: the first output's at the path, every other one's
+    /// beside it with the output's name added before the extension.
+    fn split_screenshots(&mut self) {
+        for path in std::mem::take(&mut self.screenshot_requests) {
+            for (i, o) in self.outputs.iter().enumerate() {
+                let named = if i == 0 {
+                    path.clone()
+                } else {
+                    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+                    let ext = path
+                        .extension()
+                        .map(|e| format!(".{}", e.to_string_lossy()));
+                    path.with_file_name(format!(
+                        "{stem}-{}{}",
+                        o.output.name(),
+                        ext.unwrap_or_default()
+                    ))
+                };
+                self.output_screenshots.push((o.id, named));
+            }
         }
     }
 

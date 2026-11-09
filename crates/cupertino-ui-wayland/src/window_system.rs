@@ -20,7 +20,8 @@ use cupertino_ui_platform::{
     ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
     DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent, Keysym,
     MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
-    SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    ScrollBars, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec,
+    WindowSystem,
 };
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -892,6 +893,13 @@ impl WaylandWindowSystem {
                     match extension.downcast_ref::<AppEvent>() {
                         Some(AppEvent::SessionLock { locked }) => {
                             out.push(PlatformEvent::SessionLock(*locked));
+                        }
+                        Some(AppEvent::ScrollBars { always }) => {
+                            out.push(PlatformEvent::ScrollBars(if *always {
+                                ScrollBars::Always
+                            } else {
+                                ScrollBars::WhenScrolling
+                            }));
                         }
                         Some(event) if apply_appearance(&mut self.appearance, event) => {
                             out.push(PlatformEvent::Appearance(self.appearance));

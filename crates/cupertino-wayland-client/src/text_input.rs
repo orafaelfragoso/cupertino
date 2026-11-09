@@ -104,6 +104,9 @@ pub struct TextInputState {
     /// Around the cursor, in surface-local logical points (rounded outwards), so candidates appear beside it; `None`
     /// when unknown.
     pub cursor_rect: Option<Rect>,
+    /// The field dropped, or kept as typed, a composition the input method still holds: the state is sent after
+    /// enabling afresh, which resets the input method. Sent once; the state is kept without it.
+    pub reset: bool,
 }
 
 impl Default for TextInputState {
@@ -114,6 +117,7 @@ impl Default for TextInputState {
             hint: ContentHint::None,
             purpose: ContentPurpose::Normal,
             cursor_rect: None,
+            reset: false,
         }
     }
 }
@@ -243,7 +247,7 @@ impl TextInput {
             .map(|(_, state)| state);
         match (&self.sent, wanted) {
             (None, None) => return,
-            (Some(sent), Some(wanted)) if sent == wanted => return,
+            (Some(sent), Some(wanted)) if sent == wanted && !wanted.reset => return,
             (Some(_), None) => object.disable(),
             (sent, Some(wanted)) => {
                 // a value once sent can only be withdrawn by enabling afresh
@@ -251,7 +255,7 @@ impl TextInput {
                     s.surrounding.is_some() && wanted.surrounding.is_none()
                         || s.cursor_rect.is_some() && wanted.cursor_rect.is_none()
                 });
-                if sent.is_none() || withdrawn {
+                if sent.is_none() || withdrawn || wanted.reset {
                     object.enable();
                 }
                 if let Some(s) = &wanted.surrounding {
@@ -267,7 +271,18 @@ impl TextInput {
         }
         object.commit();
         self.commits = self.commits.wrapping_add(1);
-        self.sent = wanted.cloned();
+        let sent = wanted.cloned().map(|state| TextInputState {
+            reset: false,
+            ..state
+        });
+        // a reset is sent once: what stays wanted is the state itself
+        if let Some((_, wanted)) = self
+            .focus
+            .and_then(|f| self.wanted.iter_mut().find(|(s, _)| *s == f))
+        {
+            wanted.reset = false;
+        }
+        self.sent = sent;
     }
 }
 

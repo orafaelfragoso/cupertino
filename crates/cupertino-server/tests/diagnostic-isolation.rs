@@ -273,7 +273,7 @@ fn named(text: &str, sinks: &BTreeMap<String, Sink>) -> BTreeSet<Sink> {
 /// its line number and what it starts. `test_binary` is what this crate's test binary records into, when a test starts
 /// it again.
 ///
-/// - A spawn's text runs from `Command::new(` (or `Process::new(`) to its first `.spawn()`, `.output()` or `.status()`,
+/// - A spawn's text runs from `Command::new(`, or `Process::new(`, to its first `.spawn()`, `.output()` or `.status()`,
 ///   or to the end of the item it is in (a helper that returns the command). Its program needs what the binaries its
 ///   text names need; a program given by a constant (`const BINARY: &str = env!("CARGO_BIN_EXE_…")`) is looked up. A
 ///   literal program, the test binary and a fixture need nothing more; any other program (a path built at run time)

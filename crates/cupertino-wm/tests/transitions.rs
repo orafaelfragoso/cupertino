@@ -437,3 +437,35 @@ fn a_drag_cancelled_after_its_output_goes_leaves_the_window_reachable() {
         "{g:?}"
     );
 }
+
+/// The last output goes and a different one comes: the windows left without an output come onto it inside its usable
+/// area, a full-screen one as a normal window.
+#[test]
+fn windows_left_without_an_output_come_onto_the_next_one() {
+    let mut h = H::new();
+    let a = h.map_at("a", Rect::new(1500.0, 700.0, 600.0, 400.0));
+    let f = h.map_at("b", Rect::new(100.0, 100.0, 600.0, 400.0));
+    h.cmd(Command::FocusWindow { window: f });
+    fullscreen(&mut h, f, Requester::User);
+    h.settle();
+    h.cmd(Command::RemoveOutput { output: OUT });
+    h.settle();
+    let next = OutputId(7);
+    let usable = Rect::new(0.0, 24.0, 1280.0, 776.0);
+    h.cmd(Command::AddOutput {
+        output: next,
+        rect: Rect::new(0.0, 0.0, 1280.0, 800.0),
+        usable,
+    });
+    h.settle();
+    for w in [a, f] {
+        assert_eq!(h.wm.window(w).unwrap().output, next, "{w:?}");
+        let g = h.wm.window(w).unwrap().geometry();
+        assert!(
+            g.x >= usable.x && g.right() <= usable.right() && g.y >= usable.y,
+            "{w:?} at {g:?}"
+        );
+        assert!(h.wm.visible_windows(next).contains(&w), "{w:?}");
+    }
+    assert_eq!(h.state(f), LifecycleState::Normal);
+}

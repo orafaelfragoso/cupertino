@@ -206,7 +206,7 @@ impl Wm {
                 output,
                 rect,
                 usable,
-            } => self.add_output(output, rect, usable, o),
+            } => self.add_output(output, rect, usable, now, o),
             Command::RemoveOutput { output } => self.remove_output(output, now, o),
             Command::MoveWindowToOutput {
                 window,
@@ -378,7 +378,14 @@ impl Wm {
         out
     }
 
-    fn add_output(&mut self, id: OutputId, rect: Rect, usable: Rect, out: &mut Vec<Effect>) {
+    fn add_output(
+        &mut self,
+        id: OutputId,
+        rect: Rect,
+        usable: Rect,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         if self.outputs.iter().any(|o| o.id == id) {
             return;
         }
@@ -389,6 +396,19 @@ impl Wm {
             dock_zone: None,
         });
         self.create_output_workspaces(id, out);
+        // windows left without an output when the last one went come onto this one, so they are reachable again
+        let ws = self.workspaces[&id].current;
+        let mut orphans: Vec<WindowId> = self
+            .windows
+            .values()
+            .filter(|w| !self.outputs.iter().any(|o| o.id == w.output))
+            .map(|w| w.id)
+            .collect();
+        orphans.sort();
+        for wid in orphans {
+            let normal = self.windows[&wid].lifecycle.normal_frame();
+            self.transfer_to_output(wid, id, ws, normal, now, out);
+        }
     }
 
     /// Refit the windows of an output whose rectangle changed.
@@ -548,7 +568,8 @@ impl Wm {
         });
     }
 
-    /// [`Command::MoveWindowToOutput`]: a full-screen window, a sticky one and one already on `output` stay.
+    /// [`Command::MoveWindowToOutput`]: a full-screen window and a sticky one stay; one already on `output` takes the
+    /// frame in its own workspace.
     fn move_window_to_output(
         &mut self,
         wid: WindowId,
@@ -557,15 +578,20 @@ impl Wm {
         now: f64,
         out: &mut Vec<Effect>,
     ) {
-        let Some(ws) = self.workspaces.get(&output).map(|o| o.current) else {
+        let Some(current) = self.workspaces.get(&output).map(|o| o.current) else {
             return;
         };
         let Some(w) = self.windows.get(&wid) else {
             return;
         };
-        if w.output == output || w.sticky || w.lifecycle.state().is_fullscreen() {
+        if w.sticky || w.lifecycle.state().is_fullscreen() {
             return;
         }
+        let ws = if w.output == output {
+            w.workspace
+        } else {
+            current
+        };
         self.transfer_to_output(wid, output, ws, frame, now, out);
         if self.focus.key_window == Some(wid) && !self.focusable(wid) {
             self.release_focus(wid, now, out);

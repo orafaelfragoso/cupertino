@@ -5,6 +5,9 @@
 //! comes onto the nearest remaining output (a drag goes on with it), a menu or popup of a window that was on the output
 //! closes, an overview open on it ends, and while the session is locked the keyboard goes to a remaining lock surface.
 //!
+//! When the last output goes, its windows have nowhere to go: they wait, and the next display that comes takes them
+//! (`cupertino_wm`), its own or another, so nothing is left where no display shows it.
+//!
 //! Restore policy: each window that moved is remembered with the identity of its display (`Head::key`: connector, make,
 //! model and serial) and its frame there. When a display with that identity comes back, a window the person has left
 //! where it was put (same output, same normal frame) goes back to it, at the same distance from its top-left corner
@@ -54,7 +57,8 @@ impl Cupertino {
         }));
     }
 
-    /// The windows of a display that went are on a remaining output now: remember where they were put.
+    /// The windows of a display that went are on a remaining output now: remember where they were put. A window with no
+    /// output left to go to waits, unplaced, for the next display (`cupertino_wm` puts it there).
     pub(crate) fn note_placements(&mut self) {
         for i in 0..self.displays.departed.len() {
             if self.displays.departed[i].placed.is_some() {
@@ -64,10 +68,14 @@ impl Cupertino {
             let placed = self
                 .wm
                 .window(window)
+                .filter(|w| self.wm.output(w.output).is_some())
                 .map(|w| (w.output, w.lifecycle.normal_frame()));
             self.displays.departed[i].placed = placed;
         }
-        self.displays.departed.retain(|d| d.placed.is_some());
+        let wm = &self.wm;
+        self.displays
+            .departed
+            .retain(|d| d.placed.is_some() || wm.window(d.window).is_some());
     }
 
     /// A display with `identity` came back as `output`: the windows that left it and were not moved since go back.
@@ -79,13 +87,26 @@ impl Cupertino {
             .into_iter()
             .partition(|d| d.identity == identity);
         self.displays.departed = kept;
+        // a window that had no display to go to came onto this one as it arrived: that is where it was put, so it
+        // goes back to its own display when that one comes
+        for d in &mut self.displays.departed {
+            if d.placed.is_none() {
+                d.placed = self
+                    .wm
+                    .window(d.window)
+                    .filter(|w| w.output == output)
+                    .map(|w| (w.output, w.lifecycle.normal_frame()));
+            }
+        }
         for d in back {
             let Some(w) = self.wm.window(d.window) else {
                 continue;
             };
-            let untouched = d
-                .placed
-                .is_some_and(|(o, frame)| w.output == o && w.lifecycle.normal_frame() == frame);
+            // unplaced: it waited for a display and this one took it as it arrived
+            let untouched = match d.placed {
+                Some((o, frame)) => w.output == o && w.lifecycle.normal_frame() == frame,
+                None => w.output == output,
+            };
             if w.state().is_dead() || !untouched {
                 continue;
             }

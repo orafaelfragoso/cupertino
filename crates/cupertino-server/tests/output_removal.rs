@@ -446,3 +446,80 @@ fn new_windows_and_the_overview_open_on_the_output_the_person_works_on() {
     assert!(ul.right() <= ur.x + 1e-6, "{ul:?} {ur:?}");
     assert_eq!(ur.w, f64::from(RIGHT.0) / RIGHT_SCALE);
 }
+
+/// The last display goes and another comes: the windows come onto it, inside its usable area. When their own display
+/// comes back as well, they go back to it.
+#[test]
+fn windows_left_when_the_last_display_goes_come_onto_the_next_one_and_back_to_their_own() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut clients = Vec::new();
+    let right = h.output("headless-2");
+    let w = h.map(&mut clients);
+    let at = Rect::new(1100.0, 100.0, 400.0, 300.0);
+    h.put(w, right, at);
+    let from = h.state.output_entry(right).unwrap().rect;
+    h.unplug("headless-1");
+    h.unplug("headless-2");
+    assert!(h.state.outputs.is_empty());
+
+    let other = HeadlessDisplay {
+        name: "headless-3".into(),
+        size: (1280, 800),
+        physical_mm: (0, 0),
+    };
+    headless::add_display(&mut h.state, &other, Some(1.0)).unwrap();
+    h.settle();
+    let third = h.output("headless-3");
+    assert_eq!(h.output_of(w), third, "the next display takes it");
+    assert!(inside(h.frame(w), h.usable(third)), "{:?}", h.frame(w));
+    assert!(h.state.wm.visible_windows(third).contains(&w));
+    assert_eq!(h.told_scale(w), Some(1.0));
+
+    headless::add_display(&mut h.state, &right_display(), Some(RIGHT_SCALE)).unwrap();
+    h.settle();
+    let right = h.output("headless-2");
+    let back = h.state.output_entry(right).unwrap().rect;
+    assert_eq!(h.output_of(w), right, "it goes back to its own display");
+    assert_eq!(
+        h.frame(w),
+        Rect::new(
+            back.x + (at.x - from.x),
+            back.y + (at.y - from.y),
+            at.w,
+            at.h
+        )
+    );
+    assert_eq!(h.told_scale(w), Some(RIGHT_SCALE));
+    assert!(h.state.displays.departed.is_empty());
+}
+
+/// The last display goes and comes back: its windows come back to the same place on it.
+#[test]
+fn windows_of_the_last_display_come_back_to_it_when_it_returns() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut clients = Vec::new();
+    let right = h.output("headless-2");
+    let w = h.map(&mut clients);
+    let at = Rect::new(1100.0, 100.0, 400.0, 300.0);
+    h.put(w, right, at);
+    let from = h.state.output_entry(right).unwrap().rect;
+    h.unplug("headless-1");
+    h.unplug("headless-2");
+    // it comes back alone, so at another place in the global space
+    headless::add_display(&mut h.state, &right_display(), Some(RIGHT_SCALE)).unwrap();
+    h.settle();
+    let right = h.output("headless-2");
+    let rect = h.state.output_entry(right).unwrap().rect;
+    assert_eq!(h.output_of(w), right);
+    assert_eq!(
+        h.frame(w),
+        Rect::new(
+            rect.x + (at.x - from.x),
+            rect.y + (at.y - from.y),
+            at.w,
+            at.h
+        ),
+        "the display is at {rect:?}"
+    );
+    assert!(h.state.displays.departed.is_empty());
+}

@@ -114,7 +114,7 @@ pub enum Command {
     },
     /// Put a window on another output, in that output's current workspace, with its normal frame at `frame` fitted
     /// into the output's usable area; its zoomed and tiled frames are fitted there too. A full-screen or sticky window
-    /// and a window already on `output` stay where they are.
+    /// stays where it is; a window already on `output` takes the frame in its own workspace.
     MoveWindowToOutput {
         window: WindowId,
         output: OutputId,

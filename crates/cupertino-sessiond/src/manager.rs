@@ -1265,9 +1265,7 @@ impl Manager {
         terminal: Option<File>,
     ) -> Result<u64> {
         let (ours, theirs) = UnixStream::pair()?;
-        let child = Command::new(std::env::current_exe()?)
-            .arg("worker")
-            .env_clear()
+        let child = worker_command(std::env::current_exe()?, |k| std::env::var_os(k))
             .stdin(Stdio::from(OwnedFd::from(theirs)))
             .spawn()
             .map_err(|e| format!("starting a worker: {e}"))?;
@@ -1980,6 +1978,17 @@ fn greeter_exited(status: Option<ExitStatus>, ended: usize, giving_up: bool) {
         .emit();
 }
 
+/// `cupertino-sessiond worker` (`exe`) with an empty environment, but for the journal socket the manager's events go
+/// to when it names one (`CUPERTINO_DIAG_JOURNAL_SOCKET`, set only by tests): the worker's events go to the same journal.
+fn worker_command(exe: PathBuf, var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Command {
+    let mut command = Command::new(exe);
+    command.arg("worker").env_clear();
+    if let Some(socket) = var(diag::journal::SOCKET_ENV).filter(|s| !s.is_empty()) {
+        command.env(diag::journal::SOCKET_ENV, socket);
+    }
+    command
+}
+
 /// Records that logind failed to carry out `action` for a reason other than an inhibitor: `power.suspend.failed` for
 /// sleep, `login.power.failed` for a restart or a shut down. `error` is logind's answer.
 fn power_failed(action: PowerAction, error: &str) {
@@ -2257,6 +2266,38 @@ mod tests {
         assert!(workers[0].child.try_wait().unwrap().is_none());
         workers[0].child.kill().unwrap();
         workers[0].child.wait().unwrap();
+    }
+
+    /// A worker starts with nothing of the manager's environment but the journal socket of a test, so a test's worker
+    /// never writes to the system journal.
+    #[test]
+    fn a_worker_gets_an_empty_environment_but_the_tests_journal_socket() {
+        let envs = |command: &Command| -> Vec<(String, Option<String>)> {
+            command
+                .get_envs()
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.map(|v| v.to_string_lossy().into_owned()),
+                    )
+                })
+                .collect()
+        };
+        let exe = PathBuf::from("/usr/lib/cupertino/cupertino-sessiond");
+        let plain = worker_command(exe.clone(), |_| None);
+        assert_eq!(plain.get_program(), exe.as_os_str());
+        assert_eq!(plain.get_args().collect::<Vec<_>>(), ["worker"]);
+        assert!(envs(&plain).is_empty());
+        let test = worker_command(exe, |k| {
+            (k == diag::journal::SOCKET_ENV || k == "HOME").then(|| "/tmp/journal".into())
+        });
+        assert_eq!(
+            envs(&test),
+            [(
+                diag::journal::SOCKET_ENV.to_owned(),
+                Some("/tmp/journal".to_owned())
+            )]
+        );
     }
 
     /// A sleep logind fails is `power.suspend.failed`; a restart or shut down it fails is `login.power.failed`.

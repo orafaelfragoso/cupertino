@@ -35,6 +35,9 @@ const SHADOW_OFFSET: f64 = 8.0;
 const SHADOW_BLUR: f64 = 24.0;
 const SHADOW_ALPHA: f32 = 0.28;
 const SHADOW_REACH: f64 = 3.0 * SHADOW_BLUR + SHADOW_OFFSET;
+/// Below this opacity the panel changes no pixel by a whole level, so it paints no shadow: the shadow is a blur of the
+/// panel's whole size, the dearest part of a frame, and the entry's first frame starts from nothing.
+const INVISIBLE_ALPHA: f64 = 0.5 / 255.0;
 /// The panel's outline: the separator colour at this share, one point wide.
 const OUTLINE_SHARE: f32 = 0.6;
 /// A pill that is off: the label colour at this share; the scroll indicator's thumb the same way.
@@ -365,7 +368,15 @@ impl<M: Clone + 'static> Widget<M> for PanelNode {
             blur: SHADOW_BLUR,
             color: Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA),
         };
-        if cx.material(Surface::AppGrid, radius, self.alpha) {
+        let material = cx.material(Surface::AppGrid, radius, self.alpha);
+        if self.alpha < INVISIBLE_ALPHA {
+            if !material {
+                cx.push(PaintOp::Fill {
+                    shape: shape.clone(),
+                    paint: Paint::Solid(fill),
+                });
+            }
+        } else if material {
             // the compositor draws the material under the panel: the shadow is drawn only outside it, from an opaque
             // copy of its shape the clip hides
             let mut ring = rounded_path(rect.outset(SHADOW_REACH), 0.0);

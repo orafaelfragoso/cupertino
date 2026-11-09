@@ -7,7 +7,7 @@ use crate::command::{Activation, AnimationKind, Command, Effect, MapParams, Requ
 use crate::config::WmConfig;
 use crate::focus::FocusState;
 use crate::geometry::Rect;
-use crate::ids::{AppId, OutputId, WindowId};
+use crate::ids::{AppId, OutputId, WindowId, WorkspaceId};
 use crate::interaction::Interaction;
 use crate::kind;
 use crate::lifecycle::{Lifecycle, LifecycleState, Presentation, Resting};
@@ -208,6 +208,11 @@ impl Wm {
                 usable,
             } => self.add_output(output, rect, usable, o),
             Command::RemoveOutput { output } => self.remove_output(output, now, o),
+            Command::MoveWindowToOutput {
+                window,
+                output,
+                frame,
+            } => self.move_window_to_output(window, output, frame, now, o),
             Command::SetUsableArea { output, usable } => {
                 if let Some(op) = self.outputs.iter_mut().find(|p| p.id == output) {
                     op.usable = usable;
@@ -453,36 +458,84 @@ impl Wm {
             .map(|w| w.id)
             .collect();
         ids.sort();
-        let margin = self.cfg.snap.tiled_margin;
         for wid in ids {
-            let w = self.windows.get_mut(&wid).unwrap();
-            w.output = dest.id;
-            w.workspace = dest_ws;
-            // every frame the window can go back to moves with it: the normal frame, and the zoomed, tiled and
-            // full-screen ones fitted to the remaining output
-            let normal = w.lifecycle.normal_frame().clamp_into(&dest.usable);
-            let zoom = best_fit(&self.cfg.zoom, dest.usable, normal, &w.hints());
-            let tile = match w.lifecycle.resting() {
-                Resting::Tiled(kind) => tile_rect(kind, dest.usable, margin),
-                _ => normal,
-            };
-            let changed = w.lifecycle.move_to_output(normal, zoom, tile, dest.rect);
-            // its full-screen workspace went with the output: it leaves full screen on the remaining one rather than
-            // take that output's screen over
-            if w.lifecycle.state().is_fullscreen() && w.lifecycle.exit_fullscreen(now) {
-                self.emit_layout(wid, AnimationKind::ExitFullScreen, out);
-                continue;
+            let normal = self.windows[&wid].lifecycle.normal_frame();
+            self.transfer_to_output(wid, dest.id, dest_ws, normal, now, out);
+        }
+        // a window being dragged keeps following the pointer, which the server brings onto a remaining output
+        if let Interaction::Moving(m) = &mut self.interaction {
+            if m.output == id {
+                m.output = dest.id;
             }
-            if !w.lifecycle.state().is_visible() {
-                continue;
-            }
-            if let Some(c) = self.configure_effect(wid, false).filter(|_| changed) {
-                out.push(c);
-            }
-            out.push(Effect::Place {
-                window: wid,
-                rect: self.windows[&wid].geometry(),
-            });
+        }
+    }
+
+    /// Put window `wid` on output `dest`, in its workspace `ws`, with its normal frame at `normal` fitted into the
+    /// output's usable area. Every frame the window can go back to moves with it: the zoomed, tiled and full-screen
+    /// ones are fitted to `dest`. A full-screen window leaves full screen there, since its full-screen workspace stays
+    /// with (or went with) the output it was on.
+    fn transfer_to_output(
+        &mut self,
+        wid: WindowId,
+        dest: OutputId,
+        ws: WorkspaceId,
+        normal: Rect,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(o) = self.output(dest).copied() else {
+            return;
+        };
+        let margin = self.cfg.snap.tiled_margin;
+        let Some(w) = self.windows.get_mut(&wid) else {
+            return;
+        };
+        w.output = dest;
+        w.workspace = ws;
+        let normal = normal.clamp_into(&o.usable);
+        let zoom = best_fit(&self.cfg.zoom, o.usable, normal, &w.hints());
+        let tile = match w.lifecycle.resting() {
+            Resting::Tiled(kind) => tile_rect(kind, o.usable, margin),
+            _ => normal,
+        };
+        let changed = w.lifecycle.move_to_output(normal, zoom, tile, o.rect);
+        if w.lifecycle.state().is_fullscreen() && w.lifecycle.exit_fullscreen(now) {
+            self.emit_layout(wid, AnimationKind::ExitFullScreen, out);
+            return;
+        }
+        if !w.lifecycle.state().is_visible() {
+            return;
+        }
+        if let Some(c) = self.configure_effect(wid, false).filter(|_| changed) {
+            out.push(c);
+        }
+        out.push(Effect::Place {
+            window: wid,
+            rect: self.windows[&wid].geometry(),
+        });
+    }
+
+    /// [`Command::MoveWindowToOutput`]: a full-screen window, a sticky one and one already on `output` stay.
+    fn move_window_to_output(
+        &mut self,
+        wid: WindowId,
+        output: OutputId,
+        frame: Rect,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(ws) = self.workspaces.get(&output).map(|o| o.current) else {
+            return;
+        };
+        let Some(w) = self.windows.get(&wid) else {
+            return;
+        };
+        if w.output == output || w.sticky || w.lifecycle.state().is_fullscreen() {
+            return;
+        }
+        self.transfer_to_output(wid, output, ws, frame, now, out);
+        if self.focus.key_window == Some(wid) && !self.focusable(wid) {
+            self.release_focus(wid, now, out);
         }
     }
 

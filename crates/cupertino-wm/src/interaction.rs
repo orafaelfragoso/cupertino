@@ -55,7 +55,7 @@ pub(crate) struct MoveState {
     start_pointer: Point,
     start_frame: Rect,
     pulled_out: bool,
-    output: OutputId,
+    pub(crate) output: OutputId,
     snap: Option<SnapCandidate>,
     preview: Option<Preview>,
     edge: Option<EdgeDwell>,

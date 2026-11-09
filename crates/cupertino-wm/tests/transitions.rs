@@ -263,3 +263,96 @@ fn windows_of_a_removed_output_keep_their_restore_frames_on_the_remaining_one() 
     h.settle();
     at_rest(&h, f, LifecycleState::Normal, before);
 }
+
+/// The output a window is being dragged on goes away mid-drag: the window comes onto the remaining output inside its
+/// usable area, the drag goes on there with the pointer, and the window rests on that output when it ends.
+#[test]
+fn a_window_dragged_on_an_output_that_goes_away_keeps_following_the_pointer() {
+    let mut h = H::new();
+    let out2 = OutputId(2);
+    h.cmd(Command::AddOutput {
+        output: out2,
+        rect: Rect::new(1920.0, 0.0, 1280.0, 800.0),
+        usable: Rect::new(1920.0, 24.0, 1280.0, 776.0),
+    });
+    let w = h.map_at("a", Rect::new(2000.0, 100.0, 600.0, 400.0));
+    h.cmd(Command::MoveWindowToWorkspace {
+        window: w,
+        workspace: h.wm.current_workspace(out2).unwrap(),
+    });
+    h.cmd(Command::BeginMove {
+        window: w,
+        pointer: Point::new(2100.0, 110.0),
+    });
+    h.cmd(motion(2300.0, 300.0));
+    assert_eq!(h.wm.window(w).unwrap().output, out2);
+
+    h.cmd(Command::RemoveOutput { output: out2 });
+    assert!(h.wm.is_interacting(), "the drag goes on");
+    let g = h.wm.window(w).unwrap().lifecycle.normal_frame();
+    assert!(
+        g.x >= USABLE.x && g.right() <= USABLE.right() && g.y >= USABLE.y,
+        "{g:?}"
+    );
+    assert_eq!(h.wm.window(w).unwrap().output, OUT);
+    // the server brings the pointer onto the remaining output; the window follows it there
+    h.cmd(motion(1800.0, 300.0));
+    h.cmd(motion(1500.0, 320.0));
+    h.cmd(Command::PointerRelease);
+    h.settle();
+    let g = h.wm.window(w).unwrap().geometry();
+    assert!(USABLE.contains(g.origin()), "{g:?}");
+    assert!(h.wm.visible_windows(OUT).contains(&w));
+}
+
+/// A window put back on an output that came back takes the frame it is given there, fitted to the output's usable area;
+/// a zoomed one is zoomed to the new output, and a full-screen one stays where it is.
+#[test]
+fn a_window_moved_to_an_output_takes_its_frame_there_fitted_and_keeps_its_layout() {
+    let mut h = H::new();
+    let a = h.map_at("a", Rect::new(100.0, 100.0, 600.0, 400.0));
+    let z = h.map_at("b", Rect::new(200.0, 100.0, 600.0, 400.0));
+    let f = h.map_at("c", Rect::new(300.0, 100.0, 600.0, 400.0));
+    h.cmd(Command::ToggleZoom { window: z });
+    h.cmd(Command::FocusWindow { window: f });
+    fullscreen(&mut h, f, Requester::User);
+    h.settle();
+    let out2 = OutputId(2);
+    let usable2 = Rect::new(1920.0, 24.0, 1280.0, 776.0);
+    h.cmd(Command::AddOutput {
+        output: out2,
+        rect: Rect::new(1920.0, 0.0, 1280.0, 800.0),
+        usable: usable2,
+    });
+    for (w, x) in [(a, 2000.0), (z, 2100.0), (f, 2200.0)] {
+        h.cmd(Command::MoveWindowToOutput {
+            window: w,
+            output: out2,
+            frame: Rect::new(x, 100.0, 600.0, 400.0),
+        });
+    }
+    h.settle();
+    assert_eq!(h.wm.window(a).unwrap().output, out2);
+    assert_eq!(h.frame(a), Rect::new(2000.0, 100.0, 600.0, 400.0));
+    assert_eq!(h.state(z), LifecycleState::Zoomed);
+    assert_eq!(h.wm.window(z).unwrap().output, out2);
+    let g = h.frame(z);
+    assert!(
+        g.x >= usable2.x && g.right() <= usable2.right() + 1e-9,
+        "{g:?}"
+    );
+    assert_eq!(h.wm.window(f).unwrap().output, OUT, "full screen stays");
+    assert_eq!(h.state(f), LifecycleState::FullScreen);
+    // a frame larger than the output is fitted into it
+    h.cmd(Command::MoveWindowToOutput {
+        window: a,
+        output: OUT,
+        frame: Rect::new(5000.0, -300.0, 600.0, 400.0),
+    });
+    h.settle();
+    let g = h.frame(a);
+    assert!(
+        USABLE.contains(g.origin()) && g.right() <= USABLE.right() + 1e-9,
+        "{g:?}"
+    );
+}

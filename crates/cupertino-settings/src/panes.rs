@@ -1448,17 +1448,17 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
     }
 }
 
-/// The label of a "looks like" choice: its size in points, with the default, the one with the largest text and the one
-/// with the most space named.
+/// The label of a "looks like" choice: its size in points, with the default, the one with the biggest text and the one
+/// with the most room named.
 pub fn display_size_label(list: &cupertino_displays::Catalogue, index: usize) -> String {
     let c = &list.choices[index];
     let size = about::mode_text((c.mode.width, c.mode.height));
     let note = if list.default == Some(index) {
         Some("Default")
     } else if index == 0 {
-        Some("Larger Text")
+        Some("Bigger")
     } else if index + 1 == list.choices.len() {
-        Some("More Space")
+        Some("More Room")
     } else {
         None
     };
@@ -1468,7 +1468,7 @@ pub fn display_size_label(list: &cupertino_displays::Catalogue, index: usize) ->
     }
 }
 
-/// The "looks like" choices of display `index` of `Live::displays`, from the largest text to the most space, the one
+/// The "looks like" choices of display `index` of `Live::displays`, from the biggest text to the most room, the one
 /// it shows selected. A size that is none of them (a scale set elsewhere) is an extra item at the end. `None` when the
 /// display has no choices (its physical size is unknown, or it is too small to scale).
 fn display_size_row(index: usize, monitor: &crate::live::Monitor) -> Option<Row> {
@@ -1492,7 +1492,7 @@ fn display_size_row(index: usize, monitor: &crate::live::Monitor) -> Option<Row>
     };
     Some(row(
         ControlId::DisplaySize(index),
-        "Looks Like",
+        "Desktop Size",
         Control::Popup { choices, selected },
         Backend::Service("zwlr_output_manager_v1"),
     ))
@@ -2813,19 +2813,19 @@ mod tests {
     }
 
     #[test]
-    fn a_built_in_panel_offers_its_sizes_from_larger_text_to_more_space() {
+    fn a_built_in_panel_offers_its_sizes_from_bigger_text_to_more_room() {
         let row = size_row(&displays(vec![built_in_panel((1512, 982))])).expect("the size row");
-        assert_eq!(row.label, "Looks Like");
+        assert_eq!(row.label, "Desktop Size");
         let nb = '\u{202f}';
         assert_eq!(
             row.control,
             Control::Popup {
                 choices: vec![
-                    format!("1024{nb}×{nb}665 (Larger Text)"),
+                    format!("1024{nb}×{nb}665 (Bigger)"),
                     format!("1147{nb}×{nb}745"),
                     format!("1352{nb}×{nb}878"),
                     format!("1512{nb}×{nb}982 (Default)"),
-                    format!("1800{nb}×{nb}1169 (More Space)"),
+                    format!("1800{nb}×{nb}1169 (More Room)"),
                 ],
                 selected: 3,
             }
@@ -2844,7 +2844,10 @@ mod tests {
         .into_iter()
         .map(|r| r.label)
         .collect();
-        assert_eq!(rows, ["Looks Like", "Resolution", "Refresh Rate", "Scale"]);
+        assert_eq!(
+            rows,
+            ["Desktop Size", "Resolution", "Refresh Rate", "Scale"]
+        );
     }
 
     #[test]

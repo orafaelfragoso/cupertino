@@ -329,6 +329,9 @@ pub struct Failure {
     /// A stable snake_case identifier of the failure within its kind.
     pub code: &'static str,
     pub message: String,
+    /// What the command found that explains the failure, for the JSON envelope's `data` beside its `error`.
+    #[serde(skip)]
+    data: Option<Box<RawValue>>,
 }
 
 impl Failure {
@@ -337,7 +340,16 @@ impl Failure {
             kind,
             code,
             message: message.into(),
+            data: None,
         }
+    }
+
+    /// Adds what the command found to the failure: the JSON envelope of a failure prints it as `data` beside `error`
+    /// (the problems a check found, for example). The other forms do not print it; a stream reports them as events.
+    pub fn with_data(mut self, data: &impl Serialize) -> Self {
+        self.data =
+            Some(serde_json::value::to_raw_value(data).expect("failure data serializes to JSON"));
+        self
     }
 
     /// An `invalid_usage` failure.

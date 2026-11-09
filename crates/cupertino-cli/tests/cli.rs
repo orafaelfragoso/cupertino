@@ -538,7 +538,7 @@ mod contracts {
     //! What `cupertino.cli.v1` and `cupertino.cli.stream.v1` promise: their shapes only grow, and every exit code is
     //! either reachable or documented as reserved.
 
-    use cupertino_cli::{FailureKind, Output, StopFlag, BUILTINS, REGISTRY};
+    use cupertino_cli::{Context, FailureKind, Output, Runner, StopFlag, BUILTINS, REGISTRY};
     use serde_json::Value;
     use std::collections::BTreeSet;
     use std::io::{self, Write};
@@ -665,7 +665,25 @@ mod contracts {
         );
         reachable.insert(full);
         reachable.insert(run(&["system"]).code);
-        assert_eq!(reachable, BTreeSet::from([0, 2, 5, 6, 8]));
+        // unavailable: a checkout that is not there
+        let dir = tempfile::tempdir().unwrap();
+        let isolated = |words: &[&str], context: Context| {
+            let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            Runner::new(REGISTRY)
+                .context(context)
+                .run(&words, "r1")
+                .code
+        };
+        reachable.insert(isolated(
+            &["dev", "layers", "--root", "/nonexistent"],
+            Context::isolated(dir.path()),
+        ));
+        // denied: the tty backend inside a graphical session
+        reachable.insert(isolated(
+            &["desktop", "start", "--backend", "tty"],
+            Context::isolated(dir.path()).with_var("XDG_SESSION_TYPE", "wayland"),
+        ));
+        assert_eq!(reachable, BTreeSet::from([0, 2, 3, 4, 5, 6, 8]));
 
         let page = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),

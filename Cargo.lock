@@ -1736,6 +1736,7 @@ dependencies = [
  "cupertino-peer",
  "cupertino-seat",
  "cupertino-test-bus",
+ "cupertino-test-pam",
  "libc",
  "pam-client2",
  "rustix 1.1.6",

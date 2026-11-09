@@ -54,6 +54,28 @@ fn name(s: &str) -> IconName {
     IconName::new(s).unwrap()
 }
 
+#[test]
+fn the_original_pack_explicitly_provides_every_contract_icon() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/assets/cupertino");
+    let assets = Assets::open(&root).expect("the original pack has no problems");
+    for n in RASTER_NAMES {
+        assert!(
+            sources(&assets, n, 32)
+                .iter()
+                .any(|s| matches!(s, IconSource::Raster(_) | IconSource::Svg(_))),
+            "{n}"
+        );
+    }
+    for n in SYMBOL_NAMES {
+        assert!(
+            sources(&assets, n, 24)
+                .iter()
+                .any(|s| matches!(s, IconSource::Symbol(_))),
+            "{n}"
+        );
+    }
+}
+
 fn sources(a: &Assets, n: &str, px: u32) -> Vec<IconSource> {
     // the packs' own sources: the built-in host-theme names that end every list have an empty pack path
     a.icon_sources(&name(n), px)
@@ -248,6 +270,7 @@ fn the_search_path_is_the_variable_then_the_user_then_the_system_pack() {
         [
             PathBuf::from("/packs/dev"),
             "/data/cupertino/assets".into(),
+            PathBuf::from(SYSTEM_PACK).join("cupertino"),
             SYSTEM_PACK.into()
         ]
     );
@@ -258,12 +281,16 @@ fn the_search_path_is_the_variable_then_the_user_then_the_system_pack() {
         ])),
         [
             PathBuf::from("/home/u/.local/share/cupertino/assets"),
+            PathBuf::from(SYSTEM_PACK).join("cupertino"),
             SYSTEM_PACK.into()
         ]
     );
     assert_eq!(
         search_path_from(environment(&[])),
-        [PathBuf::from(SYSTEM_PACK)]
+        [
+            PathBuf::from(SYSTEM_PACK).join("cupertino"),
+            PathBuf::from(SYSTEM_PACK)
+        ]
     );
 }
 

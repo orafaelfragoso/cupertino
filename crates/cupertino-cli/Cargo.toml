@@ -19,6 +19,7 @@ path = "src/bin/cupertino.rs"
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-build-info = { path = "../cupertino-build-info" }
 cupertino-diagnostics = { path = "../cupertino-diagnostics" }
+cupertino-layers = { path = "../cupertino-layers" }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }

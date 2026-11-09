@@ -17,7 +17,9 @@
 
 mod appearance;
 mod desktop;
+mod dev;
 mod diagnose;
+pub mod manual;
 pub mod stream;
 mod version;
 
@@ -44,6 +46,7 @@ pub const REGISTRY: &[Group] = &[
     appearance::GROUP,
     diagnose::GROUP,
     desktop::GROUP,
+    dev::GROUP,
     version::GROUP,
 ];
 

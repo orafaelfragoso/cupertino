@@ -132,6 +132,7 @@ digraph "layers" {
   "cupertino-cli" -> "cupertino-assets";
   "cupertino-cli" -> "cupertino-build-info";
   "cupertino-cli" -> "cupertino-diagnostics";
+  "cupertino-cli" -> "cupertino-layers";
   "cupertino-controlcenter" -> "cupertino-alsa";
   "cupertino-controlcenter" -> "cupertino-assets" [label="dev"];
   "cupertino-controlcenter" -> "cupertino-defaults";

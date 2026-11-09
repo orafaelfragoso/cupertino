@@ -427,6 +427,18 @@ pub const WHOLE_SCALE_SNAP: f32 = 0.05;
 /// Buffer pixels per point of a scaled built-in size: each is drawn from a raster twice its points.
 pub const BUILT_IN_BACKING: u32 = 2;
 
+/// Connector kinds of the machine's own panel: embedded DisplayPort, LVDS and DSI.
+pub const BUILT_IN_CONNECTORS: [&str; 3] = ["eDP", "LVDS", "DSI"];
+
+/// Whether the connector named `connector` (`eDP-1`, `DP-2`) drives the machine's own panel.
+pub fn is_built_in(connector: &str) -> bool {
+    BUILT_IN_CONNECTORS.iter().any(|kind| {
+        connector
+            .strip_prefix(kind)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
+    })
+}
+
 /// The "looks like" choices of a display and the one it starts at.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Catalogue {
@@ -926,6 +938,16 @@ mod tests {
         let list = catalogue(&p, 60_000);
         assert_eq!(list.choices, scaled_choices(&p, 60_000));
         assert_eq!(list.default_choice(), default_choice(&p, 60_000));
+    }
+
+    #[test]
+    fn the_machines_own_panel_is_told_by_its_connector() {
+        for name in ["eDP-1", "eDP", "LVDS-1", "DSI-2"] {
+            assert!(is_built_in(name), "{name}");
+        }
+        for name in ["DP-1", "HDMI-A-1", "headless-1", "winit", "eDPX-1", "VGA-1"] {
+            assert!(!is_built_in(name), "{name}");
+        }
     }
 
     #[test]

@@ -220,17 +220,46 @@ impl Displays {
     }
 }
 
-/// The scale a display without stored settings starts at: the anchor of its "looks like" list
-/// (`cupertino_displays::default_choice`), or 1 when its physical size is unknown or its height is
-/// at or below the list's floor.
-pub fn default_scale(mode: HeadMode, physical_mm: (i32, i32)) -> f64 {
+/// The display model's panel for a head showing `mode`: `None` when its physical size is unknown.
+pub fn panel_of(
+    mode: HeadMode,
+    physical_mm: (i32, i32),
+    built_in: bool,
+) -> Option<cupertino_displays::Panel> {
     let pixels = (mode.width.max(0) as u32, mode.height.max(0) as u32);
     let mm = (physical_mm.0.max(0) as u32, physical_mm.1.max(0) as u32);
-    cupertino_displays::Panel::from_physical(pixels, mm, false)
+    cupertino_displays::Panel::from_physical(pixels, mm, false).map(|p| p.built_in(built_in))
+}
+
+/// The scale a display without stored settings starts at: the default of its "looks like" list
+/// (`cupertino_displays::default_choice`: a built-in panel's default size, an external display's anchor), or 1 when
+/// its physical size is unknown or its height is at or below the list's floor.
+pub fn default_scale(mode: HeadMode, physical_mm: (i32, i32), built_in: bool) -> f64 {
+    panel_of(mode, physical_mm, built_in)
         .and_then(|panel| {
             cupertino_displays::default_choice(&panel, mode.refresh_mhz.max(0) as u32)
         })
         .map_or(1.0, |choice| choice.scale)
+}
+
+/// Output configurations carry a scale in 256ths of a pixel per point: a requested scale within half of that step of
+/// one of the display's "looks like" choices at `mode` is that choice's exact scale, so the output keeps exactly the
+/// choice's points.
+pub fn exact_choice_scale(head: &Head, mode: HeadMode, scale: f64) -> f64 {
+    const HALF_FIXED_STEP: f64 = 0.5 / 256.0;
+    panel_of(
+        mode,
+        head.info.physical_mm,
+        cupertino_displays::is_built_in(&head.info.connector),
+    )
+    .map(|panel| cupertino_displays::catalogue(&panel, mode.refresh_mhz.max(0) as u32))
+    .and_then(|list| {
+        list.choices
+            .iter()
+            .map(|c| c.scale)
+            .find(|exact| (exact - scale).abs() <= HALF_FIXED_STEP)
+    })
+    .unwrap_or(scale)
 }
 
 fn stored_transform(t: Transform) -> StoredTransform {
@@ -395,7 +424,11 @@ impl Cupertino {
                 enabled: true,
                 mode: preferred,
                 position: (self.displays.right_edge(id), 0),
-                scale: default_scale(preferred, info.physical_mm),
+                scale: default_scale(
+                    preferred,
+                    info.physical_mm,
+                    cupertino_displays::is_built_in(&info.connector),
+                ),
                 transform: Transform::Normal,
             },
         };
@@ -908,39 +941,46 @@ mod tests {
 
     #[test]
     fn a_new_display_starts_at_its_default_scale() {
+        let mode = |width, height| HeadMode {
+            width,
+            height,
+            refresh_mhz: 60_000,
+        };
         // 27-inch 4K: looks like 2560x1440; 24-inch 1080p: unscaled; no physical size: unscaled.
+        assert_eq!(default_scale(mode(3840, 2160), (597, 336), false), 1.5);
+        assert_eq!(default_scale(mode(1920, 1080), (527, 296), false), 1.0);
+        assert_eq!(default_scale(mode(3840, 2160), (0, 0), false), 1.0);
+        // a 14-inch built-in panel starts at twice its pixels per point: 1512x982 points
+        assert_eq!(default_scale(mode(3024, 1964), (302, 196), true), 2.0);
+        assert_eq!(default_scale(mode(3024, 1964), (0, 0), true), 1.0);
+    }
+
+    #[test]
+    fn a_scale_in_256ths_near_a_choice_is_the_choices_exact_scale() {
+        let mut built_in = head(HeadCaps {
+            can_disable: false,
+            custom_modes: false,
+            transforms: false,
+        });
+        built_in.info.connector = "eDP-1".into();
+        built_in.info.physical_mm = (302, 196);
+        let mode = HeadMode {
+            width: 3024,
+            height: 1964,
+            refresh_mhz: 120_000,
+        };
+        let fixed = |s: f64| (s * 256.0).round() / 256.0;
+        for width in [1024, 1147, 1352, 1512, 1800] {
+            let exact = 3024.0 / f64::from(width);
+            let scale = exact_choice_scale(&built_in, mode, fixed(exact));
+            assert_eq!(scale, exact, "{width}");
+            let rect = output_rect(mode.output_mode(), scale, Transform::Normal, (0, 0));
+            assert_eq!(rect.w, f64::from(width));
+        }
         assert_eq!(
-            default_scale(
-                HeadMode {
-                    width: 3840,
-                    height: 2160,
-                    refresh_mhz: 60_000
-                },
-                (597, 336)
-            ),
-            1.5
-        );
-        assert_eq!(
-            default_scale(
-                HeadMode {
-                    width: 1920,
-                    height: 1080,
-                    refresh_mhz: 60_000
-                },
-                (527, 296)
-            ),
-            1.0
-        );
-        assert_eq!(
-            default_scale(
-                HeadMode {
-                    width: 3840,
-                    height: 2160,
-                    refresh_mhz: 60_000
-                },
-                (0, 0)
-            ),
-            1.0
+            exact_choice_scale(&built_in, mode, 1.5),
+            1.5,
+            "not near a choice"
         );
     }
 

@@ -46,7 +46,8 @@ impl CursorColors {
     };
 }
 
-type BufferKey = (&'static str, u32);
+/// A cursor's name and the index of its image in the theme's list: each animation frame has a buffer of its own.
+type BufferKey = (&'static str, usize);
 type CursorBuffer = (Point<i32, Physical>, MemoryRenderBuffer);
 
 /// The cursors the server draws, read from the XCursor theme of the asset directory only (no host theme).
@@ -230,11 +231,12 @@ impl CursorLoader {
     /// largest, so the renderer scales down where it can.
     pub fn frame(&mut self, icon: CursorIcon, pixels: u32, time: Duration) -> CursorFrame {
         let name = icon.name();
-        let img = {
+        let (index, img) = {
             let imgs = self.images(icon);
-            pick_frame(imgs, pixels, time.as_millis() as u32)
+            let index = pick_frame(imgs, pixels, time.as_millis() as u32);
+            (index, imgs[index].clone())
         };
-        let key = (name, img.width ^ (img.delay << 16) ^ (img.xhot << 24));
+        let key = (name, index);
         let entry = self.buffers.entry(key).or_insert_with(|| {
             let buf = MemoryRenderBuffer::from_slice(
                 &img.pixels_rgba,
@@ -257,7 +259,7 @@ impl CursorLoader {
 
 /// The image for `size`: the smallest nominal size at least `size`, else the largest; then the
 /// animation frame of that size at `millis`.
-fn pick_frame(images: &[Image], size: u32, millis: u32) -> Image {
+fn pick_frame(images: &[Image], size: u32, millis: u32) -> usize {
     let largest = images
         .iter()
         .map(|i| i.size)
@@ -269,19 +271,21 @@ fn pick_frame(images: &[Image], size: u32, millis: u32) -> Image {
         .filter(|s| *s >= size)
         .min()
         .unwrap_or(largest);
-    let same: Vec<&Image> = images.iter().filter(|i| i.size == nominal).collect();
-    let total: u32 = same.iter().map(|i| i.delay).sum();
+    let same: Vec<usize> = (0..images.len())
+        .filter(|&i| images[i].size == nominal)
+        .collect();
+    let total: u32 = same.iter().map(|&i| images[i].delay).sum();
     if total == 0 {
-        return same[0].clone();
+        return same[0];
     }
     let mut m = millis % total;
-    for i in &same {
-        if m < i.delay {
-            return (*i).clone();
+    for &i in &same {
+        if m < images[i].delay {
+            return i;
         }
-        m -= i.delay;
+        m -= images[i].delay;
     }
-    same[0].clone()
+    same[0]
 }
 
 /// Shake to locate: the detector and the timer that runs its evaluations while the cursor is grown.
@@ -384,22 +388,22 @@ mod tests {
     #[test]
     fn frame_selection_follows_delay() {
         let imgs = vec![image(24, 100, 1), image(24, 100, 2)];
-        assert_eq!(pick_frame(&imgs, 24, 50).pixels_rgba[0], 1);
-        assert_eq!(pick_frame(&imgs, 24, 150).pixels_rgba[0], 2);
-        assert_eq!(pick_frame(&imgs, 24, 250).pixels_rgba[0], 1);
+        let pick = |millis| &imgs[pick_frame(&imgs, 24, millis)];
+        assert_eq!(pick(50).pixels_rgba[0], 1);
+        assert_eq!(pick(150).pixels_rgba[0], 2);
+        assert_eq!(pick(250).pixels_rgba[0], 1);
+        // frames of one size, delay and hotspot are told apart, so each keeps a buffer of its own
+        assert_ne!(pick_frame(&imgs, 24, 50), pick_frame(&imgs, 24, 150));
     }
 
     #[test]
     fn the_smallest_image_at_least_the_size_is_picked() {
         let imgs = vec![image(24, 0, 1), image(48, 0, 2), image(64, 0, 3)];
-        assert_eq!(pick_frame(&imgs, 24, 0).size, 24);
+        let size = |pixels| imgs[pick_frame(&imgs, pixels, 0)].size;
+        assert_eq!(size(24), 24);
+        assert_eq!(size(30), 48, "scaled down from 48 rather than up from 24");
         assert_eq!(
-            pick_frame(&imgs, 30, 0).size,
-            48,
-            "scaled down from 48 rather than up from 24"
-        );
-        assert_eq!(
-            pick_frame(&imgs, 120, 0).size,
+            size(120),
             64,
             "past the largest image the largest is scaled up"
         );

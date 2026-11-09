@@ -33,9 +33,20 @@ with open(os.environ['TEST_LOG'], 'a') as log:
     log.write(json.dumps({'command': sys.argv, 'env': {name: os.environ.get(name) for name in
               ('RUSTFLAGS', 'CARGO_INCREMENTAL', 'CARGO_PROFILE_RELEASE_DEBUG', 'CUPERTINO_THEME_DIR', 'CUPERTINO_SPEC_DIR')}}) + '\n')
 '''
-                    for command in ('cargo', 'python3'):
+                    # the workspace build leaves a stand-in cupertino, which build() runs for the pages and completions
+                    stand_in = logger + r'''
+if sys.argv[1:2] == ['build'] and '--bins' in sys.argv:
+    release = os.path.join(os.environ.get('CARGO_TARGET_DIR') or 'target', 'release')
+    os.makedirs(release, exist_ok=True)
+    cli = os.path.join(release, 'cupertino')
+    with open(cli, 'w') as f:
+        f.write('#!/bin/sh\ncase "$1" in\n  dev) mkdir -p "$3" && echo page > "$3/cupertino.1" ;;\n'
+                '  completions) echo "# $2" ;;\n  *) exit 2 ;;\nesac\n')
+    os.chmod(cli, 0o700)
+'''
+                    for command, text in (('cargo', stand_in), ('python3', logger)):
                         stub = commands / command
-                        stub.write_text(logger)
+                        stub.write_text(text)
                         stub.chmod(0o700)
                     bus = commands / 'dbus-run-session'
                     bus.write_text('#!/bin/sh\n[ "$1" = -- ] || exit 2\nshift\nexec "$@"\n')
@@ -70,6 +81,10 @@ check
                     result = subprocess.run(['bash', '-c', shell, 'bash', str(HERE / recipe / 'PKGBUILD'), str(source)],
                                             env=env, text=True, capture_output=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
+                    # what the built cupertino wrote, for package_cupertino()'s --gendir
+                    self.assertEqual((source / 'gen/MANIFEST').read_text(),
+                                     'completions/bash\ncompletions/fish\ncompletions/zsh\nman/cupertino.1\n')
+                    self.assertEqual((source / 'gen/completions/zsh').read_text(), '# zsh\n')
                     records = [json.loads(line) for line in log.read_text().splitlines()]
                     # each pass: the workspace's binaries, the SDK's library, the tests and the doctests
                     self.assertEqual(len(records), 8)

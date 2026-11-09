@@ -509,3 +509,165 @@ mod parsing {
         );
     }
 }
+
+mod contracts {
+    //! What `cupertino.cli.v1` and `cupertino.cli.stream.v1` promise: their shapes only grow, and every exit code is
+    //! either reachable or documented as reserved.
+
+    use cupertino_cli::{FailureKind, Output, StopFlag, BUILTINS, REGISTRY};
+    use serde_json::Value;
+    use std::collections::BTreeSet;
+    use std::io::{self, Write};
+
+    fn run(words: &[&str]) -> Output {
+        let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+        cupertino_cli::run(&words, "r1")
+    }
+
+    fn keys(v: &Value) -> BTreeSet<&str> {
+        v.as_object()
+            .unwrap_or_else(|| panic!("an object: {v}"))
+            .keys()
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// The fields each shape has today. A new field is added here; a field that disappears or is renamed fails the
+    /// test, because it would break readers of v1 (raise the schema to v2 instead).
+    fn assert_has(v: &Value, fields: &[&str]) {
+        let have = keys(v);
+        let missing: Vec<&&str> = fields.iter().filter(|f| !have.contains(**f)).collect();
+        assert!(missing.is_empty(), "v1 lost {missing:?}: {v}");
+    }
+
+    #[test]
+    fn the_v1_shapes_keep_every_field_they_had() {
+        let ok: Value =
+            serde_json::from_str(&run(&["--format", "json", "--version"]).stdout).unwrap();
+        assert_has(&ok, &["schema", "command", "request_id", "ok", "data"]);
+        assert_has(&ok["data"], &["cli"]);
+        let failed: Value =
+            serde_json::from_str(&run(&["--format", "json", "nothing"]).stdout).unwrap();
+        assert_has(&failed, &["schema", "command", "request_id", "ok", "error"]);
+        assert_has(&failed["error"], &["kind", "code", "message"]);
+
+        let help: Value = serde_json::from_str(&run(&["--format", "json", "help"]).stdout).unwrap();
+        for entry in help["data"].as_array().unwrap() {
+            assert_has(
+                entry,
+                &[
+                    "path",
+                    "summary",
+                    "args",
+                    "stability",
+                    "streams",
+                    "description",
+                    "examples",
+                ],
+            );
+            assert!(
+                ["stable", "preview", "deprecated"].contains(&entry["stability"].as_str().unwrap()),
+                "{entry}"
+            );
+            if entry["stability"] == "deprecated" {
+                assert_has(entry, &["replacement"]);
+            }
+            for arg in entry["args"].as_array().unwrap() {
+                assert_has(arg, &["name", "help", "kind", "values", "repeat", "hint"]);
+            }
+            for example in entry["examples"].as_array().unwrap() {
+                assert_has(example, &["command", "description"]);
+            }
+        }
+
+        let lines = run(&["--format", "jsonl", "--version"]).stdout;
+        let records: Vec<Value> = lines
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        for record in &records {
+            assert_has(record, &["schema", "command", "request_id", "seq", "type"]);
+        }
+        assert_has(&records[0], &["data"]);
+        assert_has(&records[1], &["ok", "exit_code"]);
+        let failed = run(&["--format", "jsonl", "nothing"]).stdout;
+        let end: Value = serde_json::from_str(failed.trim_end()).unwrap();
+        assert_has(&end, &["ok", "exit_code", "error"]);
+        assert_has(&end["error"], &["kind", "code", "message"]);
+    }
+
+    #[test]
+    fn the_kind_names_are_the_ones_the_json_forms_print() {
+        let mut codes = Vec::new();
+        for kind in FailureKind::ALL {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.name());
+            assert!(!kind.meaning().is_empty());
+            codes.push(kind.exit_code());
+        }
+        assert_eq!(codes, [2, 3, 4, 5, 6, 7, 8], "one kind per code, in order");
+        assert!(REGISTRY
+            .iter()
+            .all(|g| BUILTINS.iter().all(|b| b.name != g.name)));
+    }
+
+    /// A stdout whose disk is full.
+    struct Full;
+
+    impl Write for Full {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from_raw_os_error(libc::ENOSPC))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Each code a command line of this release can end with, shown by one; the others must be documented as reserved.
+    #[test]
+    fn every_exit_code_is_reachable_or_documented_as_reserved() {
+        let missing = tempfile::tempdir().unwrap();
+        let missing = missing.path().join("no-pack");
+        let mut reachable = BTreeSet::new();
+        reachable.insert(run(&["help"]).code);
+        reachable.insert(run(&["nothing"]).code);
+        reachable.insert(run(&["appearance", "assets", "check", missing.to_str().unwrap()]).code);
+        let full = cupertino_cli::run_to(
+            &["help".into()],
+            "r1",
+            &mut Full,
+            &mut Vec::new(),
+            &StopFlag::new(),
+        );
+        reachable.insert(full);
+        reachable.insert(run(&["system"]).code);
+        assert_eq!(reachable, BTreeSet::from([0, 2, 5, 6, 8]));
+
+        let page = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/src/cupertino-command.md"
+        ))
+        .unwrap();
+        for kind in FailureKind::ALL {
+            let row = format!("| {} | `{}` |", kind.exit_code(), kind.name());
+            let line = page
+                .lines()
+                .find(|l| l.starts_with(&row))
+                .unwrap_or_else(|| panic!("the exit code table has no row {row}"));
+            let reserved = !reachable.contains(&kind.exit_code());
+            assert_eq!(line.ends_with(" Reserved. |"), reserved, "{line}");
+        }
+        let reserved: Vec<String> = FailureKind::ALL
+            .iter()
+            .map(|k| k.exit_code())
+            .filter(|c| !reachable.contains(c))
+            .map(|c| c.to_string())
+            .collect();
+        let sentence = match reserved.as_slice() {
+            [] => String::new(),
+            [one] => format!("Code {one} is reserved"),
+            [rest @ .., last] => format!("Codes {} and {last} are reserved", rest.join(", ")),
+        };
+        assert!(page.contains(&sentence), "the page says `{sentence}`");
+    }
+}

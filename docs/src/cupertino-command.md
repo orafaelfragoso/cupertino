@@ -64,16 +64,16 @@ While a streaming command runs, `Ctrl-C` (SIGINT) and SIGTERM ask it to stop, an
 
 | Code | `error.kind` | Meaning |
 |---|---|---|
-| 0 | | Success. |
-| 2 | `invalid_usage` | The command line was wrong. |
-| 3 | `unavailable` | The backend or service the command needs is not running or cannot be reached. |
-| 4 | `denied` | |
-| 5 | `validation` | For example a pack that cannot be read (`pack_unreadable`, `manifest_invalid`, `font_invalid`). |
-| 6 | `temporary` | Output that cannot be written (`output_failed`), or a streaming command stopped before it finished (`interrupted`). |
-| 7 | `transaction_failed` | A system or package transaction failed. |
-| 8 | `unsupported` | A command group kept for a later release: `system` and `ai` answer `not_in_this_release`. |
+| 0 | | Success; also a closed standard output, and a command that runs until stopped when a stop ends it. |
+| 2 | `invalid_usage` | The command line is not valid: an unknown command or option, or a missing or wrong value. |
+| 3 | `unavailable` | The backend or service the command needs is not running or cannot be reached. Reserved. |
+| 4 | `denied` | The caller is not allowed to do this. Reserved. |
+| 5 | `validation` | What the command checked or read is not valid, for example a pack that cannot be read (`pack_unreadable`, `manifest_invalid`, `font_invalid`). |
+| 6 | `temporary` | A problem that may pass: output that cannot be written (`output_failed`), or a streaming command stopped before it finished (`interrupted`). |
+| 7 | `transaction_failed` | A system or package transaction failed. Reserved. |
+| 8 | `unsupported` | This release or this system does not do what was asked: the command groups kept for a later release, `system` and `ai`, answer `not_in_this_release`. |
 
-Only `appearance assets check` exists, so today a command line can end with 0, 2, 5, 6 (output that cannot be written) or 8 (`cupertino system`, `cupertino ai`). The other codes are defined for the commands to come.
+Only `appearance assets check` exists, so today a command line can end with 0, 2, 5, 6 (output that cannot be written) or 8 (`cupertino system`, `cupertino ai`). Codes 3, 4 and 7 are reserved: they keep their meaning for the commands to come, and no command of this release ends with them.
 
 ## Compatibility
 

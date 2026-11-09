@@ -55,12 +55,15 @@ is its final object plus `events` (`[{event, data}]`) and `warnings` (`[{kind, c
 |---|---|
 | 0 | (success; also a closed stdout, and a follow stream stopped by a signal) |
 | 2 | `invalid_usage` |
-| 3 | `unavailable`: the backend or service is not running or cannot be reached |
-| 4 | `denied` |
+| 3 | `unavailable`: the backend or service is not running or cannot be reached (reserved) |
+| 4 | `denied` (reserved) |
 | 5 | `validation` |
 | 6 | `temporary`: also `output_failed` (stdout cannot be written) and `interrupted` (a finite stream stopped) |
-| 7 | `transaction_failed` |
+| 7 | `transaction_failed` (reserved) |
 | 8 | `unsupported`: also `not_in_this_release` for the reserved groups `system` and `ai` |
+
+Codes 3, 4 and 7 are reserved: no command of this release ends with them yet. `tests/cli.rs` runs a command line for
+each code that is reachable and checks that `docs/src/cupertino-command.md` marks the others reserved.
 
 **A closed output.** When the reader of stdout goes away (`EPIPE`, as in `cupertino … | head -1`), the command stops,
 exits 0 and writes nothing to stderr. Any other write error (`ENOSPC`, `EIO`) exits 6 with one stderr line,
@@ -110,7 +113,10 @@ flag; each group is a module (`src/appearance.rs`). The crate docs of `stream` s
   enforces as `invalid_usage`/`invalid_value`), `.repeat()` (an option given several times, or a last positional
   argument taking every remaining word; `Args::values(name)` gives them all) and `.hint(ValueHint::…)` (`None`, `File`,
   `Dir`, `Command`: a program name, `Shell`: a whole command line).
-- `GLOBAL_OPTIONS` holds `--format` (with its values), `--help` and `--version`; `RESERVED` the reserved group names.
+- `GLOBAL_OPTIONS` holds `--format` (with its values), `--help` and `--version`; `BUILTINS` the commands the runner
+  answers itself (`help`), whose names no group may take; `RESERVED` the reserved group names.
+- `FailureKind::ALL` lists the kinds in exit code order, each with `name()` (the JSON `kind`), `meaning()` and
+  `exit_code()`, so the exit status tables are generated too.
 - `check_registry(&[Group])` returns the broken registry rules, one line each: unique group names and command paths,
   paths under their group, a summary, description and example on every command, every `dev` command a preview,
   unique argument names that differ from the global ones, well-formed value lists, a repeatable positional argument

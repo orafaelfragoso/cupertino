@@ -80,6 +80,22 @@ impl Group {
     }
 }
 
+/// The commands the runner answers itself, without a [`Group`]: their names are taken, and the completions and manual
+/// pages list them with the registry's commands.
+pub const BUILTINS: &[Builtin] = &[Builtin {
+    name: "help",
+    usage: "help [<command>]",
+    summary: "Prints the help of the commands whose path starts with the given words, or of every command",
+}];
+
+/// A command the runner answers itself.
+pub struct Builtin {
+    pub name: &'static str,
+    /// `help [<command>]`, without the program name; `<command>` is one or more words of a command path.
+    pub usage: &'static str,
+    pub summary: &'static str,
+}
+
 /// A group name kept for a later release.
 pub struct Reserved {
     pub name: &'static str,
@@ -354,6 +370,49 @@ pub enum FailureKind {
 }
 
 impl FailureKind {
+    /// Every kind, in the order of its exit code, for the exit status tables of the help and the manual pages.
+    pub const ALL: [Self; 7] = [
+        Self::InvalidUsage,
+        Self::Unavailable,
+        Self::Denied,
+        Self::Validation,
+        Self::Temporary,
+        Self::TransactionFailed,
+        Self::Unsupported,
+    ];
+
+    /// The `kind` of the JSON forms: `invalid_usage`, `unavailable`…
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::InvalidUsage => "invalid_usage",
+            Self::Unavailable => "unavailable",
+            Self::Denied => "denied",
+            Self::Validation => "validation",
+            Self::Temporary => "temporary",
+            Self::TransactionFailed => "transaction_failed",
+            Self::Unsupported => "unsupported",
+        }
+    }
+
+    /// One sentence on what the kind means, for the exit status tables.
+    pub fn meaning(self) -> &'static str {
+        match self {
+            Self::InvalidUsage => {
+                "The command line is not valid: an unknown command or option, or a missing or wrong value."
+            }
+            Self::Unavailable => {
+                "The backend or service the command needs is not running or cannot be reached."
+            }
+            Self::Denied => "The caller is not allowed to do this.",
+            Self::Validation => "What the command checked or read is not valid.",
+            Self::Temporary => {
+                "A problem that may pass: the output cannot be written, or a stop came before the command finished."
+            }
+            Self::TransactionFailed => "A system or package transaction failed.",
+            Self::Unsupported => "This release or this system does not do what was asked.",
+        }
+    }
+
     pub fn exit_code(self) -> u8 {
         match self {
             Self::InvalidUsage => 2,
@@ -668,8 +727,9 @@ impl<'a> Runner<'a> {
         }
         let mut human = format!(
             "usage: cupertino [{}] <command> [<arguments>]\n       \
-             cupertino help [<command>]\n       cupertino --version\n\ncommands:\n",
-            GLOBAL_OPTIONS[0].spelling()
+             cupertino {}\n       cupertino --version\n\ncommands:\n",
+            GLOBAL_OPTIONS[0].spelling(),
+            BUILTINS[0].usage,
         );
         for c in &matching {
             let _ = write!(human, "  {}", c.usage());
@@ -966,7 +1026,7 @@ fn version() -> Reply {
 
 /// The registry rules every [`REGISTRY`] (and every test registry) keeps; one line per broken rule, empty when it keeps
 /// them all:
-/// - a group has a name, a summary and a description; names are unique and not [`RESERVED`];
+/// - a group has a name, a summary and a description; names are unique, not [`RESERVED`] and not a [`BUILTINS`] name;
 /// - a command's first word is its group's name; paths are unique; a command whose path begins another's takes no
 ///   positional argument, so the longer path is never read as an argument;
 /// - a command has a summary, a description and at least one example, each a `cupertino` line naming the command;
@@ -992,6 +1052,11 @@ pub fn check_registry(registry: &[Group]) -> Vec<String> {
         names.push(g);
         if RESERVED.iter().any(|r| r.name == g) {
             problems.push(format!("group `{g}` is reserved for a later release"));
+        }
+        if BUILTINS.iter().any(|b| b.name == g) {
+            problems.push(format!(
+                "group `{g}` has the name of a command the runner answers itself"
+            ));
         }
         for c in group.commands() {
             let name = c.name();

@@ -95,6 +95,16 @@ fn each_broken_rule_is_reported() {
         ),
         (
             &[group(
+                "help",
+                &[&[Command {
+                    examples: &[("cupertino help", "x")],
+                    ..command(&["help"], &[])
+                }]],
+            )],
+            "a command the runner answers itself",
+        ),
+        (
+            &[group(
                 "x",
                 &[&[Command {
                     examples: &[("cupertino y", "x")],

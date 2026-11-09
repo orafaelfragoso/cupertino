@@ -8,8 +8,8 @@ Contents: [Run it](#run-it), [Run on hardware](#run-on-hardware), [Command line]
 
 ## Run it
 
-Headless `scripts/capture.sh` and `scripts/session.sh` use the original checkout icon pack by default.
-An explicit `CUPERTINO_ASSET_DIR` overrides it; an empty value selects the built-in fallback.
+Headless `scripts/capture.sh` and `scripts/session.sh` search your user pack (when there is one), then the
+original checkout icon pack. An explicit `CUPERTINO_ASSET_DIR` replaces both; an empty value selects the built-in fallback.
 For nested development runs, set `CUPERTINO_ASSET_DIR="$PWD/data/assets/cupertino"`.
 
 ```bash

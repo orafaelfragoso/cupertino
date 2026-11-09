@@ -108,7 +108,8 @@ all on one thread.
 - **Windows of one colour.** A window whose background is `WindowBackground::Solid(color)` draws nothing: its view
   is laid out for focus, accessibility and hit testing, but no display list is rendered, and core asks the window
   system to show the colour (`WindowSystem::present_solid`), which the compositor stretches from a single pixel. It is
-  shown again only for a configure, a new size or another colour. `WindowBackground::INPUT_ONLY` is the transparent
+  shown again only for a configure, a new size or another colour. Glass its content had laid under itself goes with
+  the colour, and is asked for again when the window is drawn. `WindowBackground::INPUT_ONLY` is the transparent
   one, for windows that only take input (outside-click catchers, edge strips). A window system that refuses it gets a
   drawn frame filled with the colour from then on, as a window of any other background would.
 - **Window materials.** A window whose background is `WindowBackground::Surface` asks the window system for the

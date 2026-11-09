@@ -1981,6 +1981,15 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             if w.ack.is_none() && w.solid_shown == Some((w.size, color)) {
                 return Ok(());
             }
+            // the content paints nothing, so the glass it laid under itself goes with the colour's commit; drawn
+            // again, the window asks for it anew
+            if !w.materials.is_empty() {
+                let _ = self
+                    .system
+                    .request(w.id, WindowRequest::Materials(Vec::new()));
+                w.materials.clear();
+                w.painter.tones.regions.clear();
+            }
             match self.system.present_solid(w.id, color, w.ack) {
                 Ok(PresentOutcome::Presented) => {
                     w.failed = None;

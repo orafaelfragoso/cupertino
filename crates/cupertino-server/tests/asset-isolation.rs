@@ -169,7 +169,10 @@ fn is_literal(item: &str) -> bool {
         .iter()
         .find_map(|suffix| item.strip_suffix(suffix))
         .unwrap_or(item);
-    item.len() >= 2 && item.starts_with('"') && item.ends_with('"') && !item[1..item.len() - 1].contains('"')
+    item.len() >= 2
+        && item.starts_with('"')
+        && item.ends_with('"')
+        && !item[1..item.len() - 1].contains('"')
 }
 
 /// The part of a production source file that only tests compile: from its first `#[cfg(test)]` module on; all of a
@@ -277,12 +280,19 @@ fn the_source_check_finds_a_spawn_without_the_variable() {
         unset_spawns(script),
         [(2, "command: vec![...]".to_string())]
     );
-    let tool = "fn f(s: &mut S) {\n    s.screenshot_command = vec![binary.display().to_string()];\n}\n";
+    let tool =
+        "fn f(s: &mut S) {\n    s.screenshot_command = vec![binary.display().to_string()];\n}\n";
     assert_eq!(unset_spawns(tool).len(), 1);
     let fixed = "fn f() -> P {\n    P { command: vec![\"sleep\".into(), \"30\".into()] }\n}\n";
-    assert!(unset_spawns(fixed).is_empty(), "a command of literals starts no workspace binary");
+    assert!(
+        unset_spawns(fixed).is_empty(),
+        "a command of literals starts no workspace binary"
+    );
     let data = "fn f() { let v = vec![a(), b()]; }";
-    assert!(unset_spawns(data).is_empty(), "a vector that is no command is not checked");
+    assert!(
+        unset_spawns(data).is_empty(),
+        "a vector that is no command is not checked"
+    );
     // only what tests compile of a production file is checked
     let production = "fn run() { Command::new(program()).spawn(); }\n#[cfg(test)]\nmod tests {\n    fn t() { Command::new(std::env::current_exe().unwrap()).status(); }\n}\n";
     let (skipped, part) = test_part(Path::new("lib.rs"), production).unwrap();

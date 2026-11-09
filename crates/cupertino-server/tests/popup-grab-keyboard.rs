@@ -886,8 +886,7 @@ fn point_on(s: &Cupertino, surface: &ServerSurface) -> Option<(f64, f64)> {
     for y in (0..700).step_by(4) {
         for x in (0..1000).step_by(4) {
             let at = (f64::from(x) + 0.5, f64::from(y) + 0.5);
-            if s
-                .surface_under(at.into())
+            if s.surface_under(at.into())
                 .is_some_and(|(under, _)| &under == surface)
             {
                 return Some(at);
@@ -902,7 +901,9 @@ fn point_on(s: &Cupertino, surface: &ServerSurface) -> Option<(f64, f64)> {
 fn submenu_open(panel: &'static Panel) -> (Desktop, PanelClient, ServerSurface, ServerSurface) {
     let (mut d, client) = menu_open(panel);
     let menu = keyboard_focus(&d.state).expect("the menu has the keyboard");
-    wait_until(&mut d, "the menu's buffer", |s| point_on(s, &menu).is_some());
+    wait_until(&mut d, "the menu's buffer", |s| {
+        point_on(s, &menu).is_some()
+    });
     let at = point_on(&d.state, &menu).unwrap();
     click(&mut d, at);
     wait_until(&mut d, "the submenu to open with a grab", |s| {
@@ -923,7 +924,11 @@ fn sync(d: &mut Desktop, client: &PanelClient) {
 /// the keys, and neither is told it is done.
 fn nested_focus_keeps_the_chain(panel: &'static Panel) {
     let (mut d, client, menu, submenu) = submenu_open(panel);
-    let root = d.state.popup_grab_root().cloned().expect("the grab's owner");
+    let root = d
+        .state
+        .popup_grab_root()
+        .cloned()
+        .expect("the grab's owner");
     for target in [menu, root.clone(), submenu.clone()] {
         d.state.set_keyboard_focus(Some(target));
         assert_eq!(d.state.popup_grab_root(), Some(&root), "the grab goes on");

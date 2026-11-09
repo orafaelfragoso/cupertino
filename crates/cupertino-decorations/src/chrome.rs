@@ -100,11 +100,12 @@ pub enum Direction {
 }
 
 impl Direction {
-    /// The direction of a locale name (`ar_EG.UTF-8`, `he`, `fa-IR`): right to left for the languages written that way.
+    /// The direction of a locale name (`ar_EG.UTF-8`, `he`, `fa-IR`), or of the first of a colon-separated list of them
+    /// (`ar:en`): right to left for the languages written that way.
     pub fn of_locale(locale: &str) -> Self {
         const RTL: [&str; 9] = ["ar", "he", "iw", "fa", "ur", "ps", "sd", "yi", "dv"];
         let language = locale
-            .split(['_', '-', '.', '@'])
+            .split([':', '_', '-', '.', '@'])
             .next()
             .unwrap_or_default()
             .to_ascii_lowercase();
@@ -881,6 +882,8 @@ mod tests {
         assert_eq!(Direction::of_locale("en_US.UTF-8"), Direction::LeftToRight);
         assert_eq!(Direction::of_locale("C"), Direction::LeftToRight);
         assert_eq!(Direction::of_locale(""), Direction::LeftToRight);
+        assert_eq!(Direction::of_locale("ar:en_US"), Direction::RightToLeft);
+        assert_eq!(Direction::of_locale("en_US:ar"), Direction::LeftToRight);
     }
 
     #[test]

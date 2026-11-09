@@ -251,9 +251,9 @@ impl BrowseLayout {
     /// A grid row: its height, the icon's top in it and size, the label's centre line, size and weight, and its inset
     /// from its cell's sides.
     pub const ROW_HEIGHT: f64 = 102.0;
-    pub const ICON_TOP: f64 = 18.0;
+    pub const ICON_TOP: f64 = 10.0;
     pub const ICON: f64 = 60.0;
-    pub const LABEL_CY: f64 = 96.0;
+    pub const LABEL_CY: f64 = 84.0;
     pub const LABEL_FONT_PT: f64 = 13.0;
     pub const LABEL_WEIGHT: u16 = 400;
     pub const LABEL_INSET: f64 = 6.0;

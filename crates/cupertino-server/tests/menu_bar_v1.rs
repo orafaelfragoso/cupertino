@@ -2585,7 +2585,7 @@ impl Foreign {
         });
         let unique = loop {
             let line = lines
-                .recv_timeout(Duration::from_secs(10))
+                .recv_timeout(common::HANG_GUARD)
                 .expect("the foreign process is ready");
             if let Some(unique) = line.strip_prefix("ready ") {
                 break unique.to_owned();
@@ -2598,19 +2598,33 @@ impl Foreign {
         }
     }
 
-    /// The method calls made on the foreign connection that it reported within `wait`.
-    fn calls_within(&self, wait: Duration) -> Vec<String> {
-        let end = Instant::now() + wait;
+    /// The method calls the foreign connection reported before the ping `own` sends it now. A call the server made
+    /// was on the bus before the server concluded what it waited on, so before this ping: these are the calls made so
+    /// far.
+    fn calls_before_ping(&self, own: &zbus::blocking::Connection) -> Vec<String> {
+        let ping = zbus::message::Message::method_call("/", "Ping")
+            .unwrap()
+            .destination(self.unique.as_str())
+            .unwrap()
+            .interface("org.freedesktop.DBus.Peer")
+            .unwrap()
+            .build(&())
+            .unwrap();
+        own.send(&ping).unwrap();
         let mut calls = Vec::new();
-        while let Ok(line) = self
-            .lines
-            .recv_timeout(end.saturating_duration_since(Instant::now()))
-        {
-            if line.starts_with("call ") {
-                calls.push(line);
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(common::HANG_GUARD)
+                .expect("the foreign process reports the ping");
+            if !line.starts_with("call ") {
+                continue;
             }
+            if line.contains("Ping") {
+                return calls;
+            }
+            calls.push(line);
         }
-        calls
     }
 }
 
@@ -2753,22 +2767,8 @@ fn a_bus_name_of_another_process_gives_no_menus_and_is_never_called() {
         "{:?}",
         bar.groups()
     );
-    assert_eq!(
-        foreign.calls_within(Duration::from_millis(300)),
-        Vec::<String>::new()
-    );
-
-    // the foreign process does report a call made on its name
-    let ping = zbus::message::Message::method_call("/", "Ping")
-        .unwrap()
-        .destination(foreign.unique.as_str())
-        .unwrap()
-        .interface("org.freedesktop.DBus.Peer")
-        .unwrap()
-        .build(&())
-        .unwrap();
-    own.send(&ping).unwrap();
-    assert_eq!(foreign.calls_within(Duration::from_secs(2)).len(), 1);
+    // the foreign process reports a call made on its name, the ping, and no other came before it
+    assert_eq!(foreign.calls_before_ping(&own), Vec::<String>::new());
 }
 
 /// A well-known name is resolved to its owner's unique name, which is checked, and the bar is sent the unique name.
@@ -2981,7 +2981,7 @@ fn the_result_of_an_announcement_superseded_while_it_was_checked_is_dropped() {
 #[test]
 fn a_kit_window_announcing_a_bus_name_of_another_process_gets_no_menus() {
     let Some(mut h) = Harness::new() else { return };
-    let Some((bus, _own)) = menu_bus(&mut h) else {
+    let Some((bus, own)) = menu_bus(&mut h) else {
         return;
     };
     let foreign = Foreign::start(&bus);
@@ -3015,10 +3015,7 @@ fn a_kit_window_announcing_a_bus_name_of_another_process_gets_no_menus() {
         "{:?}",
         bar.groups()
     );
-    assert_eq!(
-        foreign.calls_within(Duration::from_millis(300)),
-        Vec::<String>::new()
-    );
+    assert_eq!(foreign.calls_before_ping(&own), Vec::<String>::new());
 }
 
 /// A client announcing the menus of 100 surfaces at once has at most its own limit of checks on the worker, and a

@@ -581,11 +581,12 @@ fn a_lock_request_reaches_the_lock_screen_while_a_squatter_owns_the_login_name()
     assert_eq!(other.told().len(), 3);
     assert!(h.state.running, "the session goes on");
 
-    // the bus path would have been tried by now
-    let end = Instant::now() + Duration::from_millis(500);
-    while Instant::now() < end {
-        h.wait_until("a step", |_| true);
-    }
+    // the private connection took both: nothing went to the bus at all
+    assert_eq!(
+        h.state.dbus.as_ref().unwrap().shell_calls(),
+        (0, 0),
+        "a request went the bus way"
+    );
     assert_eq!(
         *received.lock().unwrap(),
         0,
@@ -599,10 +600,10 @@ fn a_lock_request_reaches_the_lock_screen_while_a_squatter_owns_the_login_name()
     h.state.sessions = Default::default();
     h.state.lock_session_now();
     h.state.log_out_session();
-    let end = Instant::now() + Duration::from_millis(500);
-    while Instant::now() < end {
-        h.wait_until("a step", |_| true);
-    }
+    // the bus worker is done with both: each call was made or refused
+    h.wait_until("the bus worker to be done with both requests", |s| {
+        s.dbus.as_ref().unwrap().shell_calls() == (2, 2)
+    });
     assert_eq!(
         *received.lock().unwrap(),
         0,

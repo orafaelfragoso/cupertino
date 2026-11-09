@@ -80,7 +80,7 @@ impl Desktop {
         let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap())
             .join(self.state.socket_name.as_ref().unwrap());
         self.clients.push(super::Client::toplevel(socket));
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + super::HANG_GUARD;
         while self.state.wm.windows().count() != expected {
             self.pump();
             assert!(Instant::now() < deadline, "the test client did not map");
@@ -100,7 +100,7 @@ impl Desktop {
     /// Lock the session with a client that covers the output.
     pub fn lock(&mut self) -> super::Client {
         let locker = super::Client::locker(super::session_agent(&self.state));
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + super::HANG_GUARD;
         while !locker.locked() {
             self.pump();
             assert!(Instant::now() < deadline, "the session did not lock");

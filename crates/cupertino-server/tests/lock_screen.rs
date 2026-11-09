@@ -29,7 +29,6 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Display;
 
 const OUTPUT: (i32, i32) = (800, 600);
-const TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the test lets input settle before it reads what the application got.
 const QUIET: Duration = Duration::from_millis(300);
 const APP_ID: &str = "org.example.underneath";
@@ -83,7 +82,7 @@ impl Server {
     }
 
     fn wait_until(&mut self, what: &str, mut condition: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while !condition(&self.state) {
             assert!(
                 Instant::now() < end,

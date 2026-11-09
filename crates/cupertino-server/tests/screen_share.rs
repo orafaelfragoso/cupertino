@@ -84,7 +84,7 @@ impl Server {
 
     /// Step the server until `cond` gives a value; panics after [`TIMEOUT`].
     fn wait_for<T>(&mut self, what: &str, mut cond: impl FnMut(&mut Cupertino) -> Option<T>) -> T {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if let Some(value) = cond(&mut self.state) {

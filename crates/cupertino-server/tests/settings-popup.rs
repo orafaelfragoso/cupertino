@@ -24,7 +24,6 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shm::with_buffer_contents;
 
-const TIMEOUT: Duration = Duration::from_secs(10);
 /// The window's content height; a title bar the server drew would sit above it in the frame.
 const CONTENT_HEIGHT: f64 = 625.0;
 // Centres in the 739 × 625 content: the Accessibility pane's Display row and the Colour filter button on the page it
@@ -149,7 +148,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, condition: impl Fn(&Cupertino) -> bool) {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if condition(&self.state) {

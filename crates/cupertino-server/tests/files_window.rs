@@ -24,7 +24,6 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shm::with_buffer_contents;
 
 const OUTPUT: (i32, i32) = (1400, 900);
-const TIMEOUT: Duration = Duration::from_secs(20);
 /// The restart throttle of the supervisor.
 const THROTTLE: Duration = Duration::from_secs(1);
 /// Evdev codes plus the xkb offset of 8.
@@ -74,9 +73,9 @@ impl Server {
         .unwrap();
     }
 
-    /// Step the server until `cond` holds; panics after [`TIMEOUT`].
+    /// Step the server until `cond` holds; panics after [`common::HANG_GUARD`].
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&self.state) {

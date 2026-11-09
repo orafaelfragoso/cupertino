@@ -129,7 +129,7 @@ impl Harness {
 
     /// Handle the clients' requests without the model tick, which is where a pending edit is sent.
     fn dispatch_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.event_loop
                 .dispatch(Some(Duration::from_millis(5)), &mut self.state)
@@ -143,7 +143,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&self.state) {
@@ -163,7 +163,7 @@ impl Harness {
 
     /// Step until the bar client has seen `count` groups.
     fn wait_for_groups(&mut self, bar: &BarClient, count: usize) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if bar.groups().len() >= count {

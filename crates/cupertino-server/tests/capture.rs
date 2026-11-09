@@ -594,14 +594,14 @@ impl Harness {
         PathBuf::from(dir).join(self.state.socket_name.as_ref().unwrap())
     }
 
-    /// Step the server and the clients until `cond` holds on the server; panics after ten seconds.
+    /// Step the server and the clients until `cond` holds on the server; panics after [`common::HANG_GUARD`].
     fn clients_until(
         &mut self,
         clients: &mut [&mut dyn Pump],
         what: &str,
         mut cond: impl FnMut(&Cupertino) -> bool,
     ) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             for c in clients.iter_mut() {
                 c.pump();
@@ -617,14 +617,14 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
-    /// Step the server and one client until `cond` holds on the client's state; panics after ten seconds.
+    /// Step the server and one client until `cond` holds on the client's state; panics after [`common::HANG_GUARD`].
     fn pump_until<S>(
         &mut self,
         client: &mut TestClient<S>,
         what: &str,
         mut cond: impl FnMut(&S) -> bool,
     ) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             client.pump();
             self.step();

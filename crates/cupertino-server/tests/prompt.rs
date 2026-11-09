@@ -4,7 +4,7 @@
 mod common;
 
 use std::os::unix::net::UnixStream;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use common::desktop::Desktop;
 use common::Client;
@@ -20,7 +20,7 @@ use smithay::wayland::shell::wlr_layer::Layer;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::KeyboardInteractivity;
 
 fn wait_until(d: &mut Desktop, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while !cond(&d.state) {
         assert!(Instant::now() < end, "timed out waiting for {what}");
         d.pump();

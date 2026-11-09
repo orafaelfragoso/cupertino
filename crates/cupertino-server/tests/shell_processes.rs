@@ -103,7 +103,7 @@ impl Server {
 
     /// Step the server until `cond` holds; panics after [`TIMEOUT`].
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&self.state) {
@@ -115,7 +115,7 @@ impl Server {
 
     /// Step the server until the file has `count` lines and return them; panics after [`TIMEOUT`].
     fn wait_for_lines(&mut self, file: &Path, count: usize) -> Vec<String> {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             let lines = read_lines(file);

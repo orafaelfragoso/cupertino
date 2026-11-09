@@ -57,6 +57,11 @@ pub mod overlays;
 pub mod shell;
 pub mod spawn;
 
+/// How long a test waits for what it waits on before it calls it a hang. The waits are for events (a frame
+/// presented, a state the server reached), never for time to pass, so the limit only ends a test that would otherwise
+/// hang, and it is generous enough that a loaded machine never reaches it.
+pub const HANG_GUARD: Duration = Duration::from_secs(60);
+
 pub const TOPLEVEL_BLUE: [u8; 4] = [255, 0, 0, 255];
 pub const LOCK_GREEN: [u8; 4] = [0, 255, 0, 255];
 
@@ -72,7 +77,7 @@ pub fn set_time(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cuper
 /// The same clock barrier for clients whose queues the test must dispatch itself.
 pub fn set_time_with(state: &mut Cupertino, time: f64, mut dispatch: impl FnMut(&mut Cupertino)) {
     state.fixed_time = Some(state.now());
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + HANG_GUARD;
     loop {
         dispatch(state);
         if !state.hung.awaiting_pong() {

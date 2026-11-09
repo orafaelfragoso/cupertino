@@ -103,7 +103,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&self.state) {
@@ -115,7 +115,7 @@ impl Harness {
 
     /// Step until the dock client has seen `count` groups.
     fn wait_for_groups(&mut self, dock: &DockClient, count: usize) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if dock.groups().len() >= count {

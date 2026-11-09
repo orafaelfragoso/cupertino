@@ -25,7 +25,6 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 
 const OUTPUT: (i32, i32) = (640, 400);
-const TIMEOUT: Duration = Duration::from_secs(30);
 /// Evdev code of Return plus the xkb offset of 8.
 const RETURN: u32 = 28 + 8;
 const BACKEND: &str = "org.freedesktop.impl.portal.desktop.cupertino";
@@ -75,9 +74,9 @@ impl Server {
         .unwrap();
     }
 
-    /// Step the server until `cond` gives a value; panics after [`TIMEOUT`].
+    /// Step the server until `cond` gives a value; panics after [`common::HANG_GUARD`].
     fn wait_for<T>(&mut self, what: &str, mut cond: impl FnMut(&mut Cupertino) -> Option<T>) -> T {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if let Some(value) = cond(&mut self.state) {

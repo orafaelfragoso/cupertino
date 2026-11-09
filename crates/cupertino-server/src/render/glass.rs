@@ -1005,6 +1005,12 @@ impl MaterialGl {
         (std::mem::take(&mut self.glass.readings), pending)
     }
 
+    /// Whether readbacks of faces are still in flight; the next frames poll them. A test that reads the tones waits for
+    /// none before it does, so every face read back by then was measured.
+    pub fn tone_reads_in_flight(&self) -> bool {
+        !self.glass.reads.is_empty()
+    }
+
     /// Note glass backdrops drawn too large to follow what lies behind them, while a frame is built.
     pub fn note_unadapted(&mut self, serials: impl IntoIterator<Item = u64>) {
         self.glass.unadapted.extend(serials);

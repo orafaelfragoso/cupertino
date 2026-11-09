@@ -123,7 +123,7 @@ impl Scene {
     }
 
     fn wait_until(&mut self, what: &str, mut condition: impl FnMut(&Scene) -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + common::HANG_GUARD;
         while !condition(self) {
             self.pump();
             assert!(Instant::now() < deadline, "timed out waiting for {what}");

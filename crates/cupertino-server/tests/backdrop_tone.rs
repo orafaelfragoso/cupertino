@@ -1,19 +1,23 @@
 //! The tone of a glass backdrop end to end: the compositor runs in-process on an offscreen EGL device, a client puts a
 //! small and a large glass backdrop over a wall it paints, and the test watches the `tone` events the client receives
 //! as the wall turns from black to white. Over walls of saturated colours, labels the client draws on the glass in the
-//! colours the tones pick are measured against the glass face around them in a capture of the output. Tests skip
-//! (pass) when no EGL device is available.
+//! colours the tones pick are measured against the glass face around them in a capture of the output. The tests wait on
+//! events, not on time: a change the client makes counts once the server presented it, measured the faces it read back
+//! and the client received what the server sent since ([`settle`]). Tests skip (pass) when no EGL device is available.
 
 mod common;
 
+use std::cell::Cell;
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, SendError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use common::HANG_GUARD;
 
 use cupertino_glass::glass::face_color;
 use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
@@ -34,7 +38,7 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
@@ -99,7 +103,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&self.state) {
@@ -107,6 +111,15 @@ impl Harness {
             }
         }
         panic!("timed out waiting for {what}");
+    }
+
+    /// Whether the glass still has readbacks of faces in flight.
+    fn tone_reads_in_flight(&self) -> bool {
+        self.state
+            .render
+            .as_ref()
+            .and_then(|r| r.material.as_ref())
+            .is_some_and(|m| m.borrow().tone_reads_in_flight())
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -147,6 +160,15 @@ struct Client {
     small: CupertinoBackdropV1,
     large: CupertinoBackdropV1,
     heard: Heard,
+    progress: Arc<Progress>,
+}
+
+/// What a client has done of what the test asked: commits the server presented (their frame callbacks came) and
+/// roundtrips finished after a [`Ask::Sync`].
+#[derive(Default)]
+struct Progress {
+    shown: AtomicUsize,
+    synced: AtomicUsize,
 }
 
 fn shm_buffer(
@@ -220,6 +242,12 @@ impl Client {
         self.wall.commit();
     }
 
+    /// A commit the test asked for, which counts as shown once the server presented it.
+    fn commit_asked(&self, surface: &wl_surface::WlSurface, qh: &QueueHandle<Client>) {
+        surface.frame(qh, ());
+        surface.commit();
+    }
+
     fn show_panel(&self, qh: &QueueHandle<Client>) {
         let buffer = shm_buffer(&self.shm, qh, PANEL, None);
         self.panel.attach(Some(&buffer), 0, 0);
@@ -231,26 +259,63 @@ impl Client {
         self.panel.commit();
     }
 
+    /// The wall turns `rgb`, as the test asked.
+    fn repaint_wall(&self, qh: &QueueHandle<Client>, rgb: [u8; 3]) {
+        let buffer = shm_buffer(&self.shm, qh, OUTPUT, Some(rgb));
+        self.wall.attach(Some(&buffer), 0, 0);
+        self.wall.damage_buffer(0, 0, OUTPUT.0, OUTPUT.1);
+        self.commit_asked(&self.wall, qh);
+    }
+
     /// The small control's backdrop becomes the material `name`, which is not glass.
-    fn plain_small(&self, name: &str) {
+    fn plain_small(&self, qh: &QueueHandle<Client>, name: &str) {
         self.small.set_material(name.to_string());
-        self.panel.commit();
+        self.commit_asked(&self.panel, qh);
     }
 
     fn draw_labels(&self, qh: &QueueHandle<Client>, labels: &Labels) {
         let buffer = labels_buffer(&self.shm, qh, labels);
         self.panel.attach(Some(&buffer), 0, 0);
         self.panel.damage_buffer(0, 0, PANEL.0, PANEL.1);
-        self.panel.commit();
+        self.commit_asked(&self.panel, qh);
     }
 }
 
 /// What the test asks of the client: a wall of one colour, labels on the glass, or a material other than glass under
-/// the small control.
+/// the small control, each one commit; or a roundtrip, after which the client has received every event the server
+/// sent before it.
 enum Ask {
     Wall([u8; 3]),
     Labels(Labels),
     Plain(&'static str),
+    Sync,
+}
+
+impl From<[u8; 3]> for Ask {
+    fn from(rgb: [u8; 3]) -> Ask {
+        Ask::Wall(rgb)
+    }
+}
+
+/// The test's end of a client: it sends the asks and counts the commits and roundtrips it asked for, to compare with
+/// the client's [`Progress`].
+struct Asker {
+    asks: Sender<Ask>,
+    commits: Cell<usize>,
+    syncs: Cell<usize>,
+    progress: Arc<Progress>,
+}
+
+impl Asker {
+    fn send(&self, ask: impl Into<Ask>) -> Result<(), SendError<Ask>> {
+        let ask = ask.into();
+        let counter = match ask {
+            Ask::Sync => &self.syncs,
+            _ => &self.commits,
+        };
+        counter.set(counter.get() + 1);
+        self.asks.send(ask)
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Client {
@@ -272,6 +337,21 @@ macro_rules! ignore_events {
         }
     )*};
 }
+impl Dispatch<wl_callback::WlCallback, ()> for Client {
+    fn event(
+        state: &mut Self,
+        _: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            state.progress.shown.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
 ignore_events!(
     wl_compositor::WlCompositor,
     wl_shm::WlShm,
@@ -323,22 +403,20 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, bool> for Client {
 
 /// A client on `cupertino_app_effects_v1` of `version`: a black wall on the background layer and the glass panel over
 /// it. Each colour sent repaints the wall; the tones it hears are pushed to `heard`.
-fn spawn(socket: PathBuf, version: u32, heard: Heard) -> Sender<[u8; 3]> {
-    let asks = spawn_asking(socket, version, heard);
-    let (tx, rx): (Sender<[u8; 3]>, Receiver<[u8; 3]>) = channel();
-    std::thread::spawn(move || {
-        while let Ok(rgb) = rx.recv() {
-            if asks.send(Ask::Wall(rgb)).is_err() {
-                return;
-            }
-        }
-    });
-    tx
+fn spawn(socket: PathBuf, version: u32, heard: Heard) -> Asker {
+    spawn_asking(socket, version, heard)
 }
 
-/// [`spawn`], which also draws labels on the glass when asked.
-fn spawn_asking(socket: PathBuf, version: u32, heard: Heard) -> Sender<Ask> {
+/// [`spawn`], which also draws labels on the glass and changes the small control's material when asked.
+fn spawn_asking(socket: PathBuf, version: u32, heard: Heard) -> Asker {
     let (tx, rx): (Sender<Ask>, Receiver<Ask>) = channel();
+    let progress = Arc::new(Progress::default());
+    let asker = Asker {
+        asks: tx,
+        commits: Cell::new(0),
+        syncs: Cell::new(0),
+        progress: progress.clone(),
+    };
     std::thread::spawn(move || {
         let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
         let conn = Connection::from_socket(stream).unwrap();
@@ -384,22 +462,26 @@ fn spawn_asking(socket: PathBuf, version: u32, heard: Heard) -> Sender<Ask> {
             small,
             large,
             heard,
+            progress,
         };
         loop {
+            let mut syncs = 0;
             while let Ok(ask) = rx.try_recv() {
                 match ask {
-                    Ask::Wall(rgb) => client.paint_wall(&qh, rgb),
+                    Ask::Wall(rgb) => client.repaint_wall(&qh, rgb),
                     Ask::Labels(labels) => client.draw_labels(&qh, &labels),
-                    Ask::Plain(name) => client.plain_small(name),
+                    Ask::Plain(name) => client.plain_small(&qh, name),
+                    Ask::Sync => syncs += 1,
                 }
             }
             if queue.roundtrip(&mut client).is_err() {
                 panic!("the client failed: {:?}", conn.protocol_error());
             }
+            client.progress.synced.fetch_add(syncs, Ordering::SeqCst);
             std::thread::sleep(Duration::from_millis(5));
         }
     });
-    tx
+    asker
 }
 
 fn heard_of(heard: &Heard, which: Which) -> Vec<Tone> {
@@ -412,11 +494,27 @@ fn heard_of(heard: &Heard, which: Which) -> Vec<Tone> {
         .collect()
 }
 
-/// Let frames go by, so that an event the server would send arrives.
-fn settle(h: &mut Harness) {
-    for _ in 0..40 {
+/// Wait until what the test asked of `client` had its effect, so that an event the server would send for it has
+/// arrived: every commit asked was presented (its frame callback came), every face the glass read back by then was
+/// measured, and a roundtrip after that finished, so the client received the tones those faces led to.
+fn settle(h: &mut Harness, client: &Asker) {
+    let (commits, progress) = (client.commits.get(), client.progress.clone());
+    h.wait_until("the asked commits presented", move |_| {
+        progress.shown.load(Ordering::SeqCst) >= commits
+    });
+    let end = Instant::now() + HANG_GUARD;
+    while h.tone_reads_in_flight() {
+        assert!(
+            Instant::now() < end,
+            "timed out waiting for the faces read back"
+        );
         h.step();
     }
+    client.send(Ask::Sync).unwrap();
+    let (syncs, progress) = (client.syncs.get(), client.progress.clone());
+    h.wait_until("the client's roundtrip", move |_| {
+        progress.synced.load(Ordering::SeqCst) >= syncs
+    });
 }
 
 #[test]
@@ -440,7 +538,7 @@ fn a_small_dark_glass_control_is_told_its_face_turned_light_and_a_large_panel_is
         small(&seen) == [Tone::Dark, Tone::Light]
     });
     // nothing changes: no more events, however many frames go by
-    settle(&mut h);
+    settle(&mut h, &wall);
     assert_eq!(small(&heard), [Tone::Dark, Tone::Light]);
     // the large panel keeps the appearance and is told nothing
     assert!(heard_of(&heard, Which::Large).is_empty());
@@ -476,7 +574,7 @@ fn a_small_control_that_stops_being_glass_goes_back_to_the_appearance_once() {
         small(&seen) == [Tone::Dark, Tone::Light, Tone::Appearance]
     });
     client.send(Ask::Wall([0, 0, 0])).unwrap();
-    settle(&mut h);
+    settle(&mut h, &client);
     assert_eq!(small(&heard), [Tone::Dark, Tone::Light, Tone::Appearance]);
 }
 
@@ -493,9 +591,9 @@ fn light_glass_keeps_a_light_face_over_black_and_white() {
         heard_of(&seen, Which::Small) == [Tone::Light]
     });
     wall.send([255, 255, 255]).unwrap();
-    settle(&mut h);
+    settle(&mut h, &wall);
     wall.send([0, 0, 0]).unwrap();
-    settle(&mut h);
+    settle(&mut h, &wall);
     assert_eq!(heard_of(&heard, Which::Small), [Tone::Light]);
     assert!(heard_of(&heard, Which::Large).is_empty());
 }
@@ -510,13 +608,9 @@ fn a_version_6_client_hears_no_tone() {
     h.wait_until("the glass backdrops", |s| {
         layer_backdrops(&s.outputs[0].output).len() == 2
     });
-    for _ in 0..20 {
-        h.step();
-    }
+    settle(&mut h, &wall);
     wall.send([255, 255, 255]).unwrap();
-    for _ in 0..60 {
-        h.step();
-    }
+    settle(&mut h, &wall);
     assert!(heard.lock().unwrap().is_empty());
 }
 
@@ -608,7 +702,7 @@ fn labels_on_glass_over_a_busy_wallpaper_reach_the_contrast_the_rule_allows() {
         });
         for wall in BUSY {
             client.send(Ask::Wall(wall)).unwrap();
-            settle(&mut h);
+            settle(&mut h, &client);
             let tone = measured_tone(&heard);
             let large = foreground_rgb(dark, None);
             let small = foreground_rgb(dark, tone);
@@ -618,7 +712,7 @@ fn labels_on_glass_over_a_busy_wallpaper_reach_the_contrast_the_rule_allows() {
                 [large[0], large[1], large[2], VIBRANT_PLACEHOLDER],
             ];
             client.send(Ask::Labels(labels)).unwrap();
-            settle(&mut h);
+            settle(&mut h, &client);
             let shot = h.screenshot();
             let what =
                 format!("{appearance:?} increase contrast {increase_contrast}, wall {wall:?}");

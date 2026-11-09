@@ -78,7 +78,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&mut Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&mut self.state) {
@@ -569,7 +569,7 @@ impl Drop for Field {
 }
 
 fn wait_im(h: &mut Harness, im: &InputMethod, what: &str, cond: impl Fn(&[ImSeen]) -> bool) {
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while Instant::now() < end {
         h.step();
         if cond(&im.seen()) {
@@ -583,7 +583,7 @@ fn wait_im(h: &mut Harness, im: &InputMethod, what: &str, cond: impl Fn(&[ImSeen
 }
 
 fn wait_field(h: &mut Harness, field: &Field, what: &str, cond: impl Fn(&[TiSeen]) -> bool) {
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while Instant::now() < end {
         h.step();
         if cond(&field.seen()) {

@@ -77,7 +77,7 @@ impl Harness {
 
     /// Run the compositor until `received` delivers.
     fn wait_for<T>(&mut self, what: &str, received: &mpsc::Receiver<T>) -> T {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             headless::step(
                 &mut self.state,

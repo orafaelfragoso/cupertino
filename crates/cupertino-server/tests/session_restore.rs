@@ -19,7 +19,6 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 
 const OUTPUT: (i32, i32) = (800, 600);
-const TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the test keeps the server running after the login process finished starting, so that a second start of an
 /// application would have shown in the marker file.
 const QUIET: Duration = Duration::from_secs(1);
@@ -63,7 +62,7 @@ impl Server {
     }
 
     fn wait_until(&mut self, what: &str, mut condition: impl FnMut() -> bool) {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while !condition() {
             assert!(Instant::now() < end, "timed out waiting for {what}");
             self.step();
@@ -302,7 +301,7 @@ fn wait_for_no_owner(address: &str, name: &str) {
         .unwrap()
         .build()
         .unwrap();
-    let end = Instant::now() + TIMEOUT;
+    let end = Instant::now() + common::HANG_GUARD;
     loop {
         let owned: bool = connection
             .call_method(

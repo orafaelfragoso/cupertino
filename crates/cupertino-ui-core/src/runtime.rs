@@ -1185,11 +1185,15 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             TouchEvent::Motion { id, .. } => w.touches.get(&id).cloned().unwrap_or_default(),
             TouchEvent::Up { id } => w.touches.remove(&id).unwrap_or_default(),
             TouchEvent::Cancel => {
-                let targets: Vec<NodeId> = w
-                    .touches
-                    .drain()
-                    .filter_map(|(_, p)| p.last().copied())
-                    .collect();
+                // every node a touch went through, the touched one first: a scroll view around it ends its drag too
+                let mut targets: Vec<NodeId> = Vec::new();
+                for (_, path) in w.touches.drain() {
+                    for &node in path.iter().rev() {
+                        if !targets.contains(&node) {
+                            targets.push(node);
+                        }
+                    }
+                }
                 let mut route = route(&mut self.tree, w, now, effects);
                 for node in targets {
                     route.notify(node, &Event::Cancel);

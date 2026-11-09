@@ -33,7 +33,16 @@ all on one thread.
 - **Events.** An event goes down the target's path (capture), reaches the target and goes back up (bubble); a handler
   can stop it. Hit-testing takes the topmost node and respects every clip. Hover enter and leave reach each node the
   pointer crosses. A captured pointer goes to its node alone until it is released; leaving the surface or the window
-  losing the focus cancels it with `Event::Cancel`.
+  losing the focus cancels it with `Event::Cancel`. A scroll gesture keeps the path its first event hit: a finger's
+  until its stop, a wheel's or another source's until it pauses for `SCROLL_IDLE_NS`, the source changes or the
+  pointer moves, and any of them until the pointer leaves the surface. A cancelled touch reaches every node its path
+  went through, the touched one first.
+- **Scroll motion.** `kinetic::ScrollMotion` is a pure model of a scroll view's content over the time it is given:
+  a finger's drag, the kinetic motion its lift leaves (exponential decay), the stretch past an edge (a resistance
+  curve that never passes the viewport's length) and the return to the edge (a critically damped spring). Its offset
+  stays inside the range; the stretch and the velocity are separate. A wheel, a key or a continuous source steps it
+  without stretch or inertia, so each input path has one owner of kinetic motion. A drag moves only the axis its first
+  movement moved most unless the policy is `AxisPolicy::Free`.
 - **Keys and focus.** Keys go to the focused node's path, then to the window's shortcuts, then Tab and Shift+Tab move
   the focus in reading order. A shortcut registered with `CommandRegistry::with_fresh` fires only on a fresh press:
   the repeats of a held key pass it by, so a key held since before a window opened cannot answer it. A focus scope (dialog, popover, menu) keeps Tab inside itself and gives the focus back

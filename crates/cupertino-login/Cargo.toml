@@ -47,6 +47,7 @@ zeroize = "1"
 [dev-dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
+cupertino-test-pam = { path = "../cupertino-test-pam" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-atspi = { path = "../cupertino-ui-atspi" }
 cupertino-ui-test = { path = "../cupertino-ui-test" }
@@ -60,4 +61,8 @@ required-features = ["app"]
 
 [[test]]
 name = "harden"
+required-features = ["app"]
+
+[[test]]
+name = "pam"
 required-features = ["app"]

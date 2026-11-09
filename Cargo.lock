@@ -1333,6 +1333,7 @@ dependencies = [
  "cupertino-seat",
  "cupertino-shell-client",
  "cupertino-test-bus",
+ "cupertino-test-pam",
  "cupertino-theme",
  "cupertino-ui-atspi",
  "cupertino-ui-test",

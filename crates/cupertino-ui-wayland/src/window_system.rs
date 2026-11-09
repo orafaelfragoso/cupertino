@@ -249,7 +249,8 @@ pub struct WaylandWindowSystem {
     role_configures: u32,
 }
 
-/// Take the session's appearance or display options from `event` into `appearance`; false for any other event.
+/// Take the session's appearance or display options from `event` into `appearance`; false for any other event, and
+/// for a steady caret that did not change (it follows every display options event).
 fn apply_appearance(appearance: &mut SystemAppearance, event: &AppEvent) -> bool {
     match event {
         AppEvent::Appearance { dark } => appearance.dark = *dark,
@@ -257,6 +258,9 @@ fn apply_appearance(appearance: &mut SystemAppearance, event: &AppEvent) -> bool
             appearance.increase_contrast = options.increase_contrast;
             appearance.reduce_transparency = options.reduce_transparency;
             appearance.reduce_motion = options.reduce_motion;
+        }
+        AppEvent::SteadyCaret { on } => {
+            return std::mem::replace(&mut appearance.steady_caret, *on) != *on;
         }
         _ => return false,
     }
@@ -1620,8 +1624,18 @@ mod tests {
                 increase_contrast: true,
                 reduce_transparency: true,
                 reduce_motion: true,
+                steady_caret: false,
             }
         );
+        assert!(
+            !apply_appearance(&mut appearance, &AppEvent::SteadyCaret { on: false }),
+            "the caret was already blinking"
+        );
+        assert!(apply_appearance(
+            &mut appearance,
+            &AppEvent::SteadyCaret { on: true }
+        ));
+        assert!(appearance.steady_caret);
         assert!(apply_appearance(
             &mut appearance,
             &AppEvent::Appearance { dark: false }

@@ -215,3 +215,21 @@ fn a_fatal_signal_writes_a_line_made_ready_before() {
     file.write_all(&buf[..len]).unwrap();
     // without a store directory there is nothing to make ready
 }
+
+#[test]
+fn a_process_that_records_nothing_leaves_no_store_behind() {
+    if !support::is_child() {
+        let state = tempfile::tempdir().unwrap();
+        let out = support::child(
+            "a_process_that_records_nothing_leaves_no_store_behind",
+            state.path(),
+            &[],
+        );
+        assert!(out.status.success(), "{}", support::stderr(&out));
+        assert!(!state.path().join("cupertino").exists());
+        return;
+    }
+    diag::init(diag::component!(), "test", diag::Sink::UserStore);
+    diag::set_context("backend", Value::Public("udev"));
+    diag::flush();
+}

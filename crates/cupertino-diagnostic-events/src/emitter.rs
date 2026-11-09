@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use cupertino_build_info::Component;
 
-use crate::event::{self, Event, Origin, Record, Severity, Value};
+use crate::event::{self, AddressKind, Event, Identity, Origin, Record, Severity, Value};
 use crate::journal::{self, Journal};
 use crate::rate::RateLimiter;
 use crate::redact::{Policy, Salt};
@@ -87,8 +87,8 @@ struct State {
     ring_bytes: usize,
     rate: RateLimiter,
     counts: HashMap<String, u64>,
-    /// Fields every later event carries, already reduced: key, value, rewritten.
-    context: Vec<(&'static str, serde_json::Value, bool)>,
+    /// Fields every later event carries, reduced when an event is built.
+    context: Vec<(&'static str, Owned)>,
     /// Events written to the ring alone since the store last worked, and the last reason.
     memory_only: u64,
     down: Option<Unavailable>,
@@ -105,7 +105,8 @@ pub struct Emitter {
     boot_id: Option<String>,
     session: Option<String>,
     pid: u32,
-    policy: Policy,
+    /// Made with the store's salt by the first event.
+    policy: OnceLock<Policy>,
     limits: Limits,
     state: Mutex<State>,
     flusher: OnceLock<Option<std::thread::Thread>>,
@@ -157,21 +158,18 @@ impl Emitter {
 
     fn new(component: Component, area: &'static str, sink: Sink, limits: Limits) -> Emitter {
         let var = |k: &str| std::env::var_os(k);
-        let (out, salt) = match sink {
-            Sink::UserStore | Sink::Store(_) => {
-                let dir = match sink {
-                    Sink::Store(dir) => Some(dir),
-                    _ => store::user_dir(var),
-                };
-                let store = dir.as_deref().and_then(|d| Store::open(d, limits).ok());
-                let salt = store
-                    .as_ref()
-                    .and_then(|s| s.salt().ok())
-                    .unwrap_or_else(Salt::random);
-                (Out::Store { dir, store }, salt)
-            }
-            Sink::Journal => (Out::Journal(Journal::system()), service_salt(var)),
-            Sink::Memory => (Out::Memory, Salt::random()),
+        // the store is opened, and its directory made, by the first event: a process that records none leaves nothing
+        let out = match sink {
+            Sink::UserStore => Out::Store {
+                dir: store::user_dir(var),
+                store: None,
+            },
+            Sink::Store(dir) => Out::Store {
+                dir: Some(dir),
+                store: None,
+            },
+            Sink::Journal => Out::Journal(Journal::system()),
+            Sink::Memory => Out::Memory,
         };
         Emitter {
             component: component.name,
@@ -183,7 +181,7 @@ impl Emitter {
                 .ok()
                 .filter(|s| !s.is_empty()),
             pid: std::process::id(),
-            policy: Policy::of_process(salt),
+            policy: OnceLock::new(),
             limits,
             state: Mutex::new(State {
                 out,
@@ -204,8 +202,37 @@ impl Emitter {
         self.component
     }
 
+    /// The redaction policy, with the salt of the store (made, with the store, on first use).
     pub fn policy(&self) -> &Policy {
-        &self.policy
+        if let Some(policy) = self.policy.get() {
+            return policy;
+        }
+        let mut state = self.lock();
+        self.policy_in(&mut state)
+    }
+
+    /// The policy, made on first use while the state is held: the store's salt, opening the store; a service's salt; or
+    /// one for the process alone.
+    fn policy_in(&self, state: &mut State) -> &Policy {
+        self.policy.get_or_init(|| {
+            let salt = match &mut state.out {
+                Out::Store {
+                    dir: Some(dir),
+                    store,
+                } => {
+                    if store.is_none() {
+                        *store = Store::open(dir, self.limits).ok();
+                    }
+                    store
+                        .as_ref()
+                        .and_then(|s| s.salt().ok())
+                        .unwrap_or_else(Salt::random)
+                }
+                Out::Store { dir: None, .. } | Out::Memory => Salt::random(),
+                Out::Journal(_) => service_salt(|k| std::env::var_os(k)),
+            };
+            Policy::of_process(salt)
+        })
     }
 
     /// The id of this process's panic event.
@@ -226,10 +253,9 @@ impl Emitter {
     /// Adds a field every later event of the process carries (the server's `backend` and `renderer`); a later call
     /// for the same key replaces it.
     pub fn set_context(&self, key: &'static str, value: Value<'_>) {
-        let reduced = self.policy.value(&value);
         let mut state = self.lock();
-        state.context.retain(|(k, _, _)| *k != key);
-        state.context.push((key, reduced.value, reduced.rewritten));
+        state.context.retain(|(k, _)| *k != key);
+        state.context.push((key, Owned::of(&value)));
     }
 
     /// Writes the summaries of every rate-limit window still open: at the end of the process, or before it may end.
@@ -279,7 +305,7 @@ impl Emitter {
             *c += 1;
             *c
         };
-        let record = self.build(event, count, &state.context, source);
+        let record = self.build(&mut state, event, count, source);
         let mut out = state.rate.due(now);
         out.extend(state.rate.offer(record, now));
         for record in out {
@@ -294,9 +320,9 @@ impl Emitter {
 
     fn build(
         &self,
+        state: &mut State,
         event: &Event<'_>,
         count: u64,
-        context: &[(&'static str, serde_json::Value, bool)],
         source: Option<String>,
     ) -> Record {
         let origin = Origin {
@@ -308,15 +334,17 @@ impl Emitter {
             commit: cupertino_build_info::COMMIT.map(str::to_owned),
             pid: self.pid,
         };
-        let mut record = event.to_record(&self.policy, &origin, count);
-        for (key, value, rewritten) in context {
+        let policy = self.policy_in(state);
+        let mut record = event.to_record(policy, &origin, count);
+        for (key, value) in &state.context {
             if event.fields.iter().any(|(k, _)| k == key) {
                 continue;
             }
-            if *rewritten {
+            let reduced = policy.value(&value.value());
+            if reduced.rewritten {
                 record.redacted.push((*key).to_owned());
             }
-            record.fields.0.push(((*key).to_owned(), value.clone()));
+            record.fields.0.push(((*key).to_owned(), reduced.value));
         }
         if let Some(source) = source {
             record.source = source;
@@ -399,7 +427,7 @@ impl Emitter {
         )
         .field("reason", Value::Public(reason.code()))
         .field("kept_in_memory", Value::Count(kept));
-        let mut record = self.build(&event, count, &[], None);
+        let mut record = self.build(state, &event, count, None);
         let line = record.fit(self.limits.event_bytes);
         push_ring(state, &line);
         if let Out::Store {
@@ -467,11 +495,11 @@ impl Emitter {
         };
         let path = dir.join(format!("fatal-{boot}-{}.jsonl", self.pid));
         let path = CString::new(path.as_os_str().as_bytes()).ok()?;
-        let context = self.lock().context.clone();
+        let mut state = self.lock();
         let mut lines = Vec::new();
         for value in values {
             let event = event::event(Severity::Fatal, id, message).field(key, Value::Public(value));
-            let mut record = self.build(&event, 1, &context, None);
+            let mut record = self.build(&mut state, &event, 1, None);
             record.time = time::format(SystemTime::UNIX_EPOCH);
             let line = record.fit(self.limits.event_bytes.min(FATAL_LINE));
             let at = line.find("\"time\":\"")? + "\"time\":\"".len();
@@ -510,6 +538,53 @@ impl FatalRecord {
             out[*at..at + time::LEN].copy_from_slice(&stamp);
         }
         len
+    }
+}
+
+/// A context field's value, kept until an event is built.
+#[derive(Clone, Debug)]
+enum Owned {
+    Public(String),
+    Count(u64),
+    Int(i64),
+    Duration(Duration),
+    Bool(bool),
+    Path(PathBuf),
+    UserText(String),
+    Secret(String),
+    Address(AddressKind, String),
+    Identifier(Identity, String),
+}
+
+impl Owned {
+    fn of(value: &Value<'_>) -> Owned {
+        match *value {
+            Value::Public(s) => Owned::Public(s.to_owned()),
+            Value::Count(n) => Owned::Count(n),
+            Value::Int(n) => Owned::Int(n),
+            Value::Duration(d) => Owned::Duration(d),
+            Value::Bool(b) => Owned::Bool(b),
+            Value::Path(p) => Owned::Path(p.to_owned()),
+            Value::UserText(s) => Owned::UserText(s.to_owned()),
+            Value::Secret(s) => Owned::Secret(s.to_owned()),
+            Value::Address(kind, s) => Owned::Address(kind, s.to_owned()),
+            Value::Identifier(who, s) => Owned::Identifier(who, s.to_owned()),
+        }
+    }
+
+    fn value(&self) -> Value<'_> {
+        match self {
+            Owned::Public(s) => Value::Public(s),
+            Owned::Count(n) => Value::Count(*n),
+            Owned::Int(n) => Value::Int(*n),
+            Owned::Duration(d) => Value::Duration(*d),
+            Owned::Bool(b) => Value::Bool(*b),
+            Owned::Path(p) => Value::Path(p),
+            Owned::UserText(s) => Value::UserText(s),
+            Owned::Secret(s) => Value::Secret(s),
+            Owned::Address(kind, s) => Value::Address(*kind, s),
+            Owned::Identifier(who, s) => Value::Identifier(*who, s),
+        }
     }
 }
 

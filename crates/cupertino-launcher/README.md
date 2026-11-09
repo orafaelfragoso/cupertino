@@ -2,8 +2,9 @@
 
 The launcher ("search panel") of the Cupertino desktop. It stands in for the design's launcher. It does desktop
 entry indexing, tiered fuzzy matching with persisted frecency, a calculator and unit conversions (its own parser, no network), a
-bounded file search, sectioned results beside a preview of the selected one with its actions, and keyboard navigation, and draws
-its panel with CupertinoKit.
+bounded file search, sectioned results beside a preview of the selected one with its actions, and keyboard navigation. In the same
+panel it shows the application browser: every application, filtered by category and the query, as a grid or a list, which the Dock
+opens. It draws its panel with CupertinoKit.
 
 The crate has no Smithay dependency. The engine and the panel state are separate from the window, so a host can run queries on
 any thread. The `cupertino-launcher` process is the host for the desktop: a CupertinoKit application whose windows sit on layer
@@ -40,12 +41,16 @@ fill and the high-contrast colours.
 that `LauncherRoles` gives it, none of them on an output, so the server puts them on the output under the pointer:
 
 * the panel: overlay layer, anchored to the top only (so centred horizontally), the panel's top edge at one fifth of the output's
-  height, with exclusive keyboard interactivity. The window is the panel (`view::panel_height` tall) plus room for its shadow on
-  every side (`view::window_size`); its input region is the panel alone (`view::panel_rect`), so a press beside the panel reaches
-  the catcher. When its rows change height the model asks the host to resize the surface (`LayerSurface::set_placement`), and the
-  server's configure gives Kit the new size. The window is transparent: the panel is regular glass (`PaintCx::glass`) with the
-  panel's corner radius, a soft shadow drawn only outside its shape and a thin dark edge; without the desktop's effects it paints
-  `Surface::Menu`'s fill instead. The glass, the shadow and the content fade in together with the appear spring;
+  height, with exclusive keyboard interactivity. The enclosure (the panel's shape: `view::compact_shape`, `view::search_shape`,
+  `view::browse_shape`) sits in a window with room for its shadow on every side (`view::window_extent`). While the shape moves,
+  the window holds both the shape presented and the one it heads for, and once it settles the window is exactly the target's, so
+  it never cuts the enclosure off mid-way nor keeps room it no longer needs. Its input region is the enclosure alone
+  (`view::enclosure_rect`) while the panel is open and nothing while it closes, so a press beside the panel reaches the catcher.
+  When the shape changes the model asks the host to resize the surface (`LayerSurface::set_placement`), and the server's
+  configure gives Kit the new size. A settled shape's width and height are multiples of 4 pt (`view::SHAPE_GRID`), so the glass
+  ends on whole device pixels at 1, 1.25, 1.5, 1.75 and 2. The window is transparent: the enclosure is regular glass
+  (`PaintCx::glass`) with the panel's corner radius, a soft shadow drawn only outside its shape and a thin dark edge; without
+  the desktop's effects it paints `Surface::Menu`'s fill instead;
 * the catcher: top layer, over the whole output, below the panel; a press on it closes the panel;
 * while the panel is hidden, one transparent point that takes no input, so the process always has a mapped surface.
 
@@ -55,6 +60,40 @@ window the server closes (its output went away) closes the panel; a hidden windo
 margin is first guessed from the first output's height, since the output the server picks is not known before the configure; the
 catcher's configure gives the height of the output both were put on, and `LauncherRoles` corrects the margin
 (`LayerSurface::set_margin`) when it differs, before the panel's first frame commits it.
+
+**Navigation.** `nav` holds which view is up (hidden, search or the browser), the nested state over it (the enlarged preview,
+the view options menu) and where the keyboard is. Escape steps back one level at a time: a nested state closes and the keyboard
+goes back to what opened it; in search the keyboard leaves the result list for the field; a typed query is cleared; in the browser
+a category filter is cleared; the browser folds into the search field; the search field closes. The browser toggles: its shortcut
+(Primary+1) or the Dock's request opens it from hidden, unfolds it from the search field (the query carries over) and closes it
+while it is up. A dismissal closes whatever is up, nested states included.
+
+**Application browser.** Under the field, which filters it, sit a row of category filters (each application in the first
+category its desktop entry's `Categories` maps to, `browse::Category::of`, or Other) and the applications in 7 columns: a row of
+the recently used ones (from the launch history), a separator, then every application by name. View Options at the header's end
+switches between the grid and a list, which the process remembers while it runs. The keyboard stays in the field: the arrows,
+Page Up/Down, Home and End move the selection, Return opens it, Tab and Shift+Tab move between the applications, the filters and
+View Options, and the selection is spoken through a polite live region. The content scrolls under a scroll indicator that shows
+while it moves (`browse::SCROLLER_LINGER`, `SCROLLER_FADE`). A filter starts the selection and the scroll over; clearing it puts
+back the scroll the unfiltered view had. The browser reopens at the top with nothing selected. It is 844 × 576 pt, and on a short
+output it leaves 96 pt free below (`kit::BROWSE_BOTTOM_ROOM`, at least 300 pt tall). Icons load 14 per pass at 32, 60, 120 and
+180 px, the generic application icon standing in for a missing one. It launches with an activation token like a search result.
+
+**Motion.** `motion` presents the panel at a time passed in: its shape, opacity, scale about its top centre, the browser
+content's opacity and which header shows. Opening fades and grows the enclosure in from 0.96 over 0.18 s (the browser's content
+following 0.08 s later over 0.10 s); unfolding opens the shape along a critically damped spring (0.24 s response) with the
+content fading in 0.06 s later over 0.12 s; folding fades the content out over 0.05 s, then contracts the shape along the spring;
+closing fades the browser out over 0.2 s (0.1 s for the search field). A transition under way turns from where it is with its
+velocity. Only the enclosure's rect scales; the content keeps its layout and is centred in it. Once the spring is past its
+settling time, or within 1/64 pt of its target for a frame, the target itself is presented, so a later repaint never reshapes the
+glass. Reduce Motion puts every shape where it heads at once and keeps only the fades.
+
+**Slow results.** The file search runs off the loop (`Host::search`). Each query starts a new generation (`providers::Tracker`)
+whose cancel token the worker checks; a reply for an older generation is dropped, and a provider that has not answered within
+0.5 s times out. With no result to show the panel says why in a status row: still searching, no results, or that some results
+could not be searched (a failure or a timeout, announced assertively), never an empty answer for a failure. Space on a file
+result enlarges its preview (Escape returns to the list); a preview that has not arrived 1.5 s later (`kit::PREVIEW_TIMEOUT`)
+says there is none, and one that arrives late still shows.
 
 **Input and dismissal.** The query is Kit's `BareField`, a text field without chrome set at 26 pt, which has the keyboard while
 the panel is open. The panel's own keys never
@@ -97,7 +136,8 @@ failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`). 
 
 | Method | Effect |
 |---|---|
-| `Toggle | Shows the panel or hides it. The server calls it for `Super+Space`. Only the server (the process's parent) and the launcher itself may: any other caller is refused with `org.cupertino.Error.UntrustedCaller` (`AnonymousCaller`, `FlatpakCaller`, `SnapCaller`), `cupertino_peer::check_call`. |
+| `Toggle` | Shows the search field or hides whatever is up. The server calls it for `Super+Space`. Only the server (the process's parent) and the launcher itself may: any other caller is refused with `org.cupertino.Error.UntrustedCaller` (`AnonymousCaller`, `FlatpakCaller`, `SnapCaller`), `cupertino_peer::check_call`. |
+| `ToggleApplications` | Opens the application browser, unfolds the search field into it, or closes it. The server calls it for the Dock's app-grid action; the same callers are allowed. |
 
 A call from a shell (`gdbus call ... --method org.cupertino.Launcher1.Toggle`) is refused for that reason; press
 `Super+Space`, or pass `--key 2:Super+space` to a scripted server (`cupertino-server/scripts/capture-overlays.sh`).
@@ -131,7 +171,10 @@ calculator and conversion rows have no icon. Missing assets are reported once at
 | Conversions | length, mass, US customary volume, area, time (a Julian year), data (decimal and binary), speed, temperature, angle; no currencies; 6 significant digits |
 | Section limits for hosts | 3 rows per section, 5 sections before "show more", 3 suggestions |
 | Category defaults | `engine::DEFAULT_CATEGORY_ORDER` (enablement list; runtime order is relevance driven) |
-| Show/hide animation | none found; the spring is kept as an authored fade |
+| Motion | open 0.18 s from 0.96 scale; content 0.08 s later over 0.10 s; shape spring 0.24 s, critically damped; unfolding content 0.06 s later over 0.12 s; fold fade 0.05 s; close 0.2 s (search 0.1 s); Reduce Motion: fades only |
+| Shape grid | settled widths and heights on multiples of 4 pt |
+| Browser | 844 × 576 pt, 24 pt corners, 7 columns of 102 pt rows (60 pt icons, 13 pt labels), 44 pt list rows (32 pt icons), 26 pt category filters, 96 pt kept free below on a short output |
+| Deadlines | file search 0.5 s, enlarged preview 1.5 s |
 | Row height 40, header 32, calculator row 64 | authored |
 
 ## Modules
@@ -147,8 +190,12 @@ calculator and conversion rows have no icon. Missing assets are reported once at
 | `preview` | what the preview shows of a file: its type in words, size, change date, folder, text excerpt; the newest-only reader thread |
 | `files` | bounded breadth-first walker, ignore rules, in-memory name index and search |
 | `engine` | `Launcher`: providers → `Results { sections }`; `actions` of a result; `activate` and `activate_action` → `Activation` |
-| `panel` | `Panel`: query editing, selection, scrolling, appear animation (spring); `takes_key` |
-| `view` | the panel, catcher and hidden windows on CupertinoKit, panel metrics, `panel_key` |
+| `panel` | `Panel`: query editing, selection, scrolling; `takes_key` |
+| `nav` | `Nav`: the view, the nested state and the keyboard's place; what Escape, the toggles and a dismissal do |
+| `browse` | `Browser`: the application browser's model, categories, grid and list geometry, keyboard, scrolling and selection |
+| `motion` | `Motion`: the opening, unfolding, folding and closing transitions, sampled at a time passed in |
+| `providers` | `Tracker`: generations, cancel tokens, deadlines and the status of results that arrive late |
+| `view` | the panel, catcher and hidden windows on CupertinoKit, panel metrics, `panel_key`; `view::browse` the browser's nodes |
 | `kit` | `Model`, `Message`, `update` and `view`: the launcher as a Kit application, the session behind the `Host` trait |
 
 ## Integration API
@@ -212,6 +259,15 @@ written atomically; a missing, corrupt or foreign-version file starts empty. Bou
 and 500 queries. The README of the compositor integration should call `save_if_dirty` on a timer or
 at shutdown.
 
+## Decisions
+
+* The launcher's browser is the desktop's only application browser: the Dock's app-grid action opens it (`ToggleApplications`)
+  and the Dock's own grid is gone.
+* Escape clears a category filter before it folds the browser; the arrangement is remembered while the process runs; the browser
+  reopens at the top with nothing selected; applications whose entry maps to no category are under Other.
+* The keyboard stays in the query field while browsing, and the selection is spoken through a live region.
+* A preview that arrives after its deadline still shows.
+
 ## Open issues
 
 The keypad navigation keys without Num Lock are not mapped, and the field edits with Kit's standard chords rather than the user's
@@ -225,12 +281,15 @@ cargo run -p cupertino-launcher --release --example search -- [--files] <query>
 cargo test  -p cupertino-launcher --features app
 CUPERTINO_UPDATE_GOLDENS=1 cargo test -p cupertino-launcher view::   # re-record the fixtures, then fails
 cargo bench -p cupertino-launcher
+CUPERTINO_REPAINT_DIR=out cargo test -p cupertino-launcher --release frames::frame_cost_report -- --ignored --nocapture
 ```
 
 | Item | Proves or shows |
 |---|---|
-| `tests/control.rs` | The `Toggle` interface against a private `dbus-daemon`, that a second launcher cannot take the name, and that another process (a `dbus-send` the test starts) is refused as `UntrustedCaller`. |
-| `cupertino-server/tests/shell_processes.rs` | The real process (`--no-files`) connects to the real server, maps its hidden window at start and keeps running. |
-| `src/view/tests.rs` | The windows run headless on Kit's test driver: the search field, the results list and keyboard navigation against the Inspector goldens in `tests/goldens/` and the screen-reader readings in `tests/fixtures/screen-reader/`; launching, the clipboard, hover, click and dismissal; the preview arriving (and a stale one dropped), Reveal in Files, choosing an action with the arrows, a conversion. |
+| `tests/control.rs` | The `Toggle` and `ToggleApplications` methods against a private `dbus-daemon`, that a second launcher cannot take the name, and that another process (a `dbus-send` the test starts) is refused as `UntrustedCaller`. |
+| `cupertino-server/tests/shell_processes.rs` | The real process (`--no-files`) connects to the real server, maps its hidden window at start and keeps running; the Dock's app-grid action opens the browser, and Escape folds it into the search field and then closes it. |
+| `src/view/tests.rs` | The windows run headless on Kit's test driver: the search field, the results list and keyboard navigation against the Inspector goldens in `tests/goldens/` and the screen-reader readings in `tests/fixtures/screen-reader/`; launching, the clipboard, hover, click and dismissal; the preview arriving (and a stale one dropped), Reveal in Files, choosing an action with the arrows, a conversion; the browser opened by the Dock's request, the arrows, typing and category filters, the list arrangement (goldens `browser-grid` and `browser-list`), the shortcut that unfolds the search field, a late file search dropped and one past its deadline, the enlarged preview and its timeout, Reduce Motion, and the window following the browser on a moving clock. |
+| `src/view/tests/frames.rs` | On a clock that moves a 60 Hz frame at a time: at 1.25, 1.5 and 1.75, the arrows and the pointer in the browser reshape no glass and repaint no whole window, and a transition reshapes it at most once a frame; at 1 to 2, a settled panel's glass ends on whole device pixels. `frame_cost_report` (ignored) times each interaction's frames with the CPU renderer and counts its whole repaints and glass changes. |
+| `src/nav.rs`, `src/browse/tests.rs`, `src/motion.rs`, `src/providers.rs` | The navigation table (Escape order, toggles, dismissal), the browser's model (categories, grid and list keys, Tab zones, scroll kept across a filter, selection kept by application, 5 000 applications), the transitions and their interruption, generations, cancellation and deadlines. |
 | `cargo test` | Matching, ranking, frecency, calculator (division by zero, huge numbers, invalid input), conversions, preview words and dates, file search, panel state and action traversal, that `takes_key` agrees with `handle_key`, and the `app` process code. |
 | `cargo bench` | Scores 5 000 synthetic applications: about 1–3 ms per query in a release build (14 ms to build the index), calculator 0.6 µs. |

@@ -23,6 +23,8 @@ pub mod mapping;
 pub mod menu_bar;
 #[cfg(feature = "app")]
 pub mod nm;
+#[cfg(feature = "app")]
+pub mod output_config;
 pub mod pages;
 pub mod pane;
 pub mod panes;

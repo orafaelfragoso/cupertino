@@ -242,6 +242,24 @@ A log line never holds what the screen sent. Decoding errors are logged by class
 a typed name not at all (`attempt for a typed name`: people type passwords there), and `ChannelError` / `FrameError` /
 `DecodeError` carry no message content. PAM modules log account names themselves.
 
+## Diagnostic events
+
+The manager and every worker record versioned diagnostic events to the system journal (`CUPERTINO_DIAG_SCHEMA=1`,
+`SYSLOG_IDENTIFIER=cupertino-sessiond`), each beside the log line it already writes; `main` installs the recorder first,
+before either process hardens itself. No event names the account: a login is never a field, and PAM's conversation is
+not recorded at all.
+
+| Event | Severity | Fields | Where |
+|---|---|---|---|
+| `login.auth.failed` | warn | `service` (the PAM service), `stage` (`authenticate`, `account`), `error` (PAM's code, such as `AUTH_ERR`), `outcome` (`denied`, `locked`, `expired`, `refused`, `internal`), `failures` (refusals in a row, this one included; the manager counts them and hands the count on in `Begin`) | the worker, when PAM refuses |
+| `login.session.start_failed` | error | `stage` (`account`, `terminal`, `worker`, `console`), `service`, `error` | the manager before the worker runs, and the worker until the session's leader runs |
+| `login.greeter.exited` | warn | `status` or `signal` (the login screen's worker; `adopted` for a login screen of an earlier run), `ended_in_window` (ends within 30 s), `restarting` | each end of the login screen; after the fifth in 30 s it is not started again |
+| `login.exit_error` | error | `error` | the manager ends with an error, or the arguments are wrong |
+| `login.panic` | fatal | `panic`, `location` | any panic of the manager or a worker |
+
+`journalctl CUPERTINO_DIAG_SCHEMA=1 SYSLOG_IDENTIFIER=cupertino-sessiond` lists them, and so does
+`cupertino diagnose events --component cupertino-sessiond`.
+
 ## Secret Service
 
 Applications keep passwords and tokens (a browser's saved passwords, a mail account, an AI provider's key) in the

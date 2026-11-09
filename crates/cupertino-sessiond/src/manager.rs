@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::login::{default_admin_groups, LoginConfig, Problem, DEFAULT_ADMIN_GROUPS};
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use cupertino_login_ipc::message::{MAX_EVENT_FRAME, MAX_REQUEST_FRAME, SOCKET_PATH};
 use cupertino_login_ipc::{
     encode, encode_secret, is_login_name, Account, Event, Outcome, PowerAction, PowerRefusal,
@@ -71,6 +72,7 @@ pub fn run() -> ExitCode {
         Ok(never) => match never {},
         Err(e) => {
             eprintln!("cupertino-sessiond: {e}");
+            diag::exit_error(&e);
             ExitCode::FAILURE
         }
     }
@@ -398,6 +400,8 @@ struct Manager {
     admin_groups: Vec<String>,
     /// The worker that runs the auto login, until it starts the session or ends.
     auto_login_worker: Option<u64>,
+    /// Attempts refused in a row since the last accepted one, for the journal.
+    refusals: u64,
     /// The attempt that is open.
     attempt: Option<Attempt>,
     /// The switch of the console that is under way.
@@ -507,6 +511,7 @@ impl Manager {
             auto_login,
             admin_groups,
             auto_login_worker: None,
+            refusals: 0,
             attempt: None,
             switch: None,
             attempts: RateLimit::new(ATTEMPTS_PER_WINDOW, ATTEMPT_WINDOW),
@@ -905,6 +910,7 @@ impl Manager {
         let uid = users::by_name(&login)
             .map_err(|e| {
                 eprintln!("cupertino-sessiond: {e}");
+                session_start_failed("account", &e.to_string());
                 Outcome::Internal
             })?
             .map(|account| account.uid);
@@ -919,10 +925,12 @@ impl Manager {
                 Ok(Some((vt, terminal))) => (Mode::Open, vt, Some(terminal)),
                 Ok(None) => {
                     eprintln!("cupertino-sessiond: no virtual terminal is free for a session");
+                    session_start_failed("terminal", "no virtual terminal is free");
                     return Err(Outcome::Busy);
                 }
                 Err(e) => {
                     eprintln!("cupertino-sessiond: allocating a virtual terminal: {e}");
+                    session_start_failed("terminal", &e.to_string());
                     return Err(Outcome::Internal);
                 }
             }
@@ -938,11 +946,13 @@ impl Manager {
             environment: Vec::new(),
             path: self.session_path.clone(),
             screen_reader: false,
+            failures: self.refusals,
         };
         let worker = self
             .spawn_worker(Role::Session, &begin, terminal)
             .map_err(|e| {
                 eprintln!("cupertino-sessiond: {e}");
+                session_start_failed("worker", &e.to_string());
                 Outcome::Internal
             })?;
         self.attempt = Some(Attempt {
@@ -1187,6 +1197,7 @@ impl Manager {
             environment: Vec::new(),
             path: self.session_path.clone(),
             screen_reader: false,
+            failures: 0,
         };
         let worker = self
             .spawn_worker(Role::Session, &begin, Some(terminal))
@@ -1209,6 +1220,7 @@ impl Manager {
             environment: vec![format!("{SOCKET_VARIABLE}={SOCKET_PATH}")],
             path: self.session_path.clone(),
             screen_reader: screen_reader_at_login(Path::new(system_accessibility::MACHINE_DIR)),
+            failures: 0,
         };
         self.spawn_worker(Role::Greeter, &begin, None).map(drop)
     }
@@ -1355,10 +1367,12 @@ impl Manager {
         };
         attempt.decision = Some(outcome);
         if outcome != Outcome::Accepted {
+            self.refusals = self.refusals.saturating_add(1);
             self.attempt = None;
             self.send(&Event::Result { outcome });
             return;
         }
+        self.refusals = 0;
         if let Some(action) = attempt.power {
             // the administrator proved her password: the worker ends, and the action is the manager's to carry out
             self.attempt = None;
@@ -1512,6 +1526,7 @@ impl Manager {
             }
             Err(e) => {
                 eprintln!("cupertino-sessiond: {e}");
+                session_start_failed("console", &e.to_string());
                 self.send(&Event::Reset);
             }
         }
@@ -1560,6 +1575,7 @@ impl Manager {
                 .is_some_and(|attempt| attempt.worker.is_none())
             {
                 self.attempt = None;
+                self.refusals = self.refusals.saturating_add(1);
                 self.send(&Event::Result {
                     outcome: Outcome::Denied,
                 });
@@ -1636,7 +1652,7 @@ impl Manager {
             self.auto_login_worker = None;
         }
         match worker.role {
-            Role::Greeter => self.greeter_ended(),
+            Role::Greeter => self.greeter_ended(Some(status)),
             Role::Session => {
                 if self
                     .attempt
@@ -1661,20 +1677,15 @@ impl Manager {
         }
     }
 
-    /// The login screen's worker ended: start it again after a second, unless it keeps failing.
-    fn greeter_ended(&mut self) -> Result<()> {
+    /// The login screen's session ended, with its worker's `status` (none for a login screen of an earlier run, whose end
+    /// logind alone reports): start it again after a second, unless it keeps failing.
+    fn greeter_ended(&mut self, status: Option<ExitStatus>) -> Result<()> {
         self.greeter_session = None;
         self.greeter_leader = None;
         let now = Instant::now();
-        self.greeter_failures.push_back(now);
-        while self
-            .greeter_failures
-            .front()
-            .is_some_and(|&at| now.duration_since(at) > GREETER_FAILURE_WINDOW)
-        {
-            self.greeter_failures.pop_front();
-        }
-        if self.greeter_failures.len() >= GREETER_FAILURES {
+        let giving_up = greeter_gives_up(&mut self.greeter_failures, now);
+        greeter_exited(status, self.greeter_failures.len(), giving_up);
+        if giving_up {
             eprintln!("cupertino-sessiond: the login screen's session ended {GREETER_FAILURES} times within {} s; not starting it again", GREETER_FAILURE_WINDOW.as_secs());
             self.try_auto_login();
         } else {
@@ -1799,6 +1810,7 @@ impl Manager {
                 return PowerRefusal::Inhibited;
             }
             eprintln!("cupertino-sessiond: {e}");
+            power_failed(action, &e.to_string());
             PowerRefusal::Failed
         })
     }
@@ -1856,7 +1868,7 @@ impl Manager {
         // the end of an adopted login screen is told by logind alone (a worker of this run reports the end of its own)
         if self.greeter_adopted && self.greeter_session.as_deref() == Some(id) {
             self.greeter_adopted = false;
-            return self.greeter_ended();
+            return self.greeter_ended(None);
         }
         let Some(index) = self.sessions.iter().position(|session| session.id == id) else {
             return Ok(());
@@ -1928,6 +1940,86 @@ impl Manager {
 
 /// Whether the login screen is on the console: its session is the seat's active one. An unknown active session (logind did
 /// not answer) or an unknown login screen session counts as hidden.
+/// Counts an end of the login screen's session at `now` among `ends`, the ends within [`GREETER_FAILURE_WINDOW`];
+/// whether the session is not started again.
+fn greeter_gives_up(ends: &mut VecDeque<Instant>, now: Instant) -> bool {
+    ends.push_back(now);
+    while ends
+        .front()
+        .is_some_and(|&at| now.duration_since(at) > GREETER_FAILURE_WINDOW)
+    {
+        ends.pop_front();
+    }
+    ends.len() >= GREETER_FAILURES
+}
+
+/// Records `login.greeter.exited`: the login screen's session ended, with its worker's `status` (its exit code, or the
+/// signal that ended it; none for a login screen adopted from an earlier run), the `ended` time within
+/// [`GREETER_FAILURE_WINDOW`], and whether it is started again.
+fn greeter_exited(status: Option<ExitStatus>, ended: usize, giving_up: bool) {
+    use std::os::unix::process::ExitStatusExt;
+    let mut event = diag::event(
+        Severity::Warn,
+        "login.greeter.exited",
+        "the login screen's session ended",
+    );
+    match status {
+        Some(status) => {
+            if let Some(code) = status.code() {
+                event = event.field("status", Value::Int(i64::from(code)));
+            }
+            if let Some(signal) = status.signal() {
+                event = event.field("signal", Value::Int(i64::from(signal)));
+            }
+        }
+        None => event = event.field("adopted", Value::Bool(true)),
+    }
+    event
+        .field("ended_in_window", Value::Count(ended as u64))
+        .field("restarting", Value::Bool(!giving_up))
+        .emit();
+}
+
+/// Records that logind failed to carry out `action` for a reason other than an inhibitor: `power.suspend.failed` for
+/// sleep, `login.power.failed` for a restart or a shut down. `error` is logind's answer.
+fn power_failed(action: PowerAction, error: &str) {
+    let event = match action {
+        PowerAction::Sleep => diag::event(
+            Severity::Error,
+            "power.suspend.failed",
+            "the computer could not be put to sleep",
+        ),
+        PowerAction::Restart | PowerAction::ShutDown => diag::event(
+            Severity::Error,
+            "login.power.failed",
+            "the computer could not be restarted or shut down",
+        ),
+    };
+    let name = match action {
+        PowerAction::Sleep => "sleep",
+        PowerAction::Restart => "restart",
+        PowerAction::ShutDown => "shut_down",
+    };
+    event
+        .field("action", Value::Public(name))
+        .field("error", Value::Public(error))
+        .emit();
+}
+
+/// Records `login.session.start_failed`: the manager could not start a session at `stage` (`account`, `terminal`,
+/// `worker`, `console`). `error` names steps and errors, never the account.
+fn session_start_failed(stage: &'static str, error: &str) {
+    diag::event(
+        Severity::Error,
+        "login.session.start_failed",
+        "a session could not be started",
+    )
+    .field("stage", Value::Public(stage))
+    .field("service", Value::Public(SESSION_SERVICE))
+    .field("error", Value::Public(error))
+    .emit();
+}
+
 fn greeter_shown(active: Option<&str>, greeter: Option<&str>) -> bool {
     active.is_some() && active == greeter
 }
@@ -2165,5 +2257,103 @@ mod tests {
         assert!(workers[0].child.try_wait().unwrap().is_none());
         workers[0].child.kill().unwrap();
         workers[0].child.wait().unwrap();
+    }
+
+    /// A sleep logind fails is `power.suspend.failed`; a restart or shut down it fails is `login.power.failed`.
+    #[test]
+    fn a_power_action_logind_fails_is_recorded_with_its_action_and_error() {
+        diag::init(diag::component!(), "login", diag::Sink::Memory);
+        let before = diag::recent().len();
+        let refused =
+            "putting the computer to sleep: org.freedesktop.DBus.Error.AccessDenied: denied";
+        power_failed(PowerAction::Sleep, refused);
+        power_failed(PowerAction::Restart, "restarting the computer: timed out");
+        power_failed(
+            PowerAction::ShutDown,
+            "shutting the computer down: timed out",
+        );
+        let records: Vec<diag::Record> = diag::recent()[before..]
+            .iter()
+            .map(|line| diag::Record::parse(line).unwrap())
+            .collect();
+        let seen: Vec<(&str, Option<&str>)> = records
+            .iter()
+            .map(|r| {
+                (
+                    r.id.as_str(),
+                    r.fields.get("action").and_then(|a| a.as_str()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("power.suspend.failed", Some("sleep")),
+                ("login.power.failed", Some("restart")),
+                ("login.power.failed", Some("shut_down")),
+            ]
+        );
+        assert!(records.iter().all(|r| r.severity == Severity::Error));
+        assert_eq!(records[0].fields.get("error").unwrap(), refused);
+    }
+
+    /// The login screen is started again until it ends [`GREETER_FAILURES`] times within [`GREETER_FAILURE_WINDOW`];
+    /// each end is recorded with its status and whether it is started again.
+    #[test]
+    fn each_end_of_the_login_screen_is_recorded_with_its_status_and_whether_it_restarts() {
+        use std::os::unix::process::ExitStatusExt;
+        diag::init(diag::component!(), "login", diag::Sink::Memory);
+        let before = diag::recent().len();
+        let start = Instant::now();
+        let mut ends = VecDeque::new();
+        // four ends within the window: started again each time
+        for i in 0..GREETER_FAILURES as u64 - 1 {
+            let now = start + Duration::from_secs(i);
+            let giving_up = greeter_gives_up(&mut ends, now);
+            assert!(!giving_up);
+            greeter_exited(Some(ExitStatus::from_raw(1 << 8)), ends.len(), giving_up);
+        }
+        // the fifth, killed by SIGSEGV: not started again
+        let fifth = start + Duration::from_secs(GREETER_FAILURES as u64 - 1);
+        let giving_up = greeter_gives_up(&mut ends, fifth);
+        assert!(giving_up);
+        greeter_exited(
+            Some(ExitStatus::from_raw(libc::SIGSEGV)),
+            ends.len(),
+            giving_up,
+        );
+        // after the window the count starts again; a login screen of an earlier run has no status
+        let later = fifth + GREETER_FAILURE_WINDOW + Duration::from_secs(1);
+        let giving_up = greeter_gives_up(&mut ends, later);
+        assert!(!giving_up);
+        assert_eq!(ends.len(), 1);
+        greeter_exited(None, ends.len(), giving_up);
+
+        let records: Vec<diag::Record> = diag::recent()[before..]
+            .iter()
+            .map(|line| diag::Record::parse(line).unwrap())
+            .collect();
+        assert_eq!(records.len(), GREETER_FAILURES + 1);
+        for record in &records {
+            assert_eq!(record.id, "login.greeter.exited");
+            assert_eq!(record.severity, Severity::Warn);
+        }
+        let first = &records[0].fields;
+        assert_eq!(first.get("status").unwrap(), 1);
+        assert!(first.get("signal").is_none());
+        assert_eq!(first.get("ended_in_window").unwrap(), 1);
+        assert_eq!(first.get("restarting").unwrap(), true);
+        let fifth = &records[GREETER_FAILURES - 1].fields;
+        assert!(fifth.get("status").is_none());
+        assert_eq!(fifth.get("signal").unwrap(), i64::from(libc::SIGSEGV));
+        assert_eq!(
+            fifth.get("ended_in_window").unwrap(),
+            GREETER_FAILURES as u64
+        );
+        assert_eq!(fifth.get("restarting").unwrap(), false);
+        let adopted = &records[GREETER_FAILURES].fields;
+        assert_eq!(adopted.get("adopted").unwrap(), true);
+        assert_eq!(adopted.get("ended_in_window").unwrap(), 1);
+        assert_eq!(adopted.get("restarting").unwrap(), true);
     }
 }

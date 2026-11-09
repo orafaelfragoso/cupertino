@@ -138,8 +138,10 @@ fn files_binary() -> PathBuf {
 /// take its launch.
 fn files_process(home: &Path, data_dirs: &Path, bus: &PrivateBus) -> ShellProcess {
     let env = |name: &str, value: &Path| format!("{name}={}", value.display());
+    // the test's diagnostic journal; the store is the one under `home` below
     let command = vec![
         "env".into(),
+        common::events::isolated()[1].clone(),
         "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
         env("HOME", home),

@@ -20,6 +20,8 @@ fn start(
         .env("XDG_DATA_HOME", data)
         .env("XDG_DATA_DIRS", data)
         .env("HOME", data)
+        // the exit it records goes to a store of the test's own
+        .env("XDG_STATE_HOME", data.join("state"))
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("CUPERTINO_ASSET_DIR")
         .env(

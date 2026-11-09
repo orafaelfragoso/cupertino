@@ -52,7 +52,12 @@ diag::event(Severity::Warn, "dock.icon.load_failed", "an icon could not be loade
 
 Two variables are for tests only:
 - `CUPERTINO_DIAG_JOURNAL_SOCKET` names another journal socket: a test binds a `UnixDatagram` in a temporary directory
-  and reads the datagrams.
+  and reads the datagrams. `cupertino-sessiond` passes it on to the workers it starts with an otherwise empty
+  environment, so their events reach the same socket.
+
+A test never writes to the user's store or the system journal: every process a test starts that may record events gets
+`XDG_STATE_HOME` and `CUPERTINO_DIAG_JOURNAL_SOCKET` of the test's own (as its sink needs), which
+`crates/cupertino-server/tests/diagnostic-isolation.rs` checks across the workspace's tests.
 - `CUPERTINO_DIAG_TEST_PANIC=<area>` makes the process whose `init` names that area panic right after it, so a test
   drives the panic path of a real binary.
 

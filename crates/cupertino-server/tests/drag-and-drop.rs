@@ -1013,8 +1013,10 @@ fn files_process(
     let binary = common::fixtures::artifact("cupertino-files", "bin", "cupertino-files");
     ShellProcess {
         name: "cupertino-files".into(),
+        // the test's diagnostic journal; the store is the one under `home` below
         command: vec![
             "env".into(),
+            common::events::isolated()[1].clone(),
             "CUPERTINO_ASSET_SEARCH_PATH=".into(),
             format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
             env("HOME", home),

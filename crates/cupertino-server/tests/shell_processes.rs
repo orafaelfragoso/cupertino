@@ -167,20 +167,23 @@ impl Drop for TempDir {
     }
 }
 
-/// A stand-in process: `script` runs under `sh` with the log file as `$1`, with the empty asset search path, as a script
-/// may start a binary of the workspace.
+/// A stand-in process: `script` runs under `sh` with the log file as `$1`, with the empty asset search path and the
+/// test's diagnostic store and journal, as a script may start a binary of the workspace.
 fn stand_in(name: &str, script: &str, log: &Path) -> ShellProcess {
     ShellProcess {
         name: name.into(),
-        command: vec![
-            "env".into(),
-            "CUPERTINO_ASSET_SEARCH_PATH=".into(),
-            "sh".into(),
-            "-c".into(),
-            script.into(),
-            "sh".into(),
-            log.display().to_string(),
-        ],
+        command: [
+            vec!["env".into(), "CUPERTINO_ASSET_SEARCH_PATH=".into()],
+            common::events::isolated().to_vec(),
+            vec![
+                "sh".into(),
+                "-c".into(),
+                script.into(),
+                "sh".into(),
+                log.display().to_string(),
+            ],
+        ]
+        .concat(),
         roles: roles_of(name),
     }
 }
@@ -446,11 +449,10 @@ fn real_process(binary: &str, bus: &PrivateBus) -> ShellProcess {
     ShellProcess {
         name: binary.into(),
         command: [
-            vec!["env".into()],
+            vec!["env".into(), "CUPERTINO_ASSET_SEARCH_PATH=".into()],
             common::events::isolated().to_vec(),
             vec![
                 format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
-                "CUPERTINO_ASSET_SEARCH_PATH=".into(),
                 path.display().to_string(),
             ],
         ]

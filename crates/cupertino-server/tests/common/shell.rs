@@ -60,11 +60,14 @@ pub const TEST_CLOCK: &str = "1798796460";
 pub fn process(binary: &str, bus_address: &str, args: &[&str]) -> ShellProcess {
     let mut command = vec![
         "env".to_string(),
-        format!("DBUS_SESSION_BUS_ADDRESS={bus_address}"),
         "CUPERTINO_ASSET_SEARCH_PATH=".to_string(),
+    ];
+    command.extend(super::events::isolated());
+    command.extend([
+        format!("DBUS_SESSION_BUS_ADDRESS={bus_address}"),
         format!("CUPERTINO_TEST_CLOCK={TEST_CLOCK}"),
         bin_dir().join(binary).display().to_string(),
-    ];
+    ]);
     command.extend(args.iter().map(|a| (*a).to_string()));
     ShellProcess {
         name: binary.into(),

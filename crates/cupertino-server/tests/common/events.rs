@@ -36,7 +36,8 @@ pub fn stored(dir: &Path, id: &str) -> Vec<Record> {
 /// Where the processes a test starts record their diagnostic events, so none reaches the user's store or the system
 /// journal: `XDG_STATE_HOME` and the journal socket (`CUPERTINO_DIAG_JOURNAL_SOCKET`) of the test, as `KEY=value` for an
 /// `env` command line. The store is shared by the test processes under the target's temporary directory (it bounds
-/// itself and takes many writers); the journal is a socket this process binds once and keeps, which no one reads.
+/// itself and takes many writers); the journal is a socket this process binds once, which no one reads and which goes
+/// when the process exits ([`super::spawn::diagnostic_journal`]).
 pub fn isolated() -> [String; 2] {
     let (state, journal) = isolation();
     [
@@ -55,19 +56,8 @@ pub fn isolated_vars() -> [(&'static str, &'static Path); 2] {
 }
 
 fn isolation() -> (&'static Path, &'static Path) {
-    use std::os::unix::net::UnixDatagram;
-    use std::path::PathBuf;
-    use std::sync::OnceLock;
-    static PATHS: OnceLock<(PathBuf, PathBuf, UnixDatagram)> = OnceLock::new();
-    let (state, journal, _) = PATHS.get_or_init(|| {
-        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("diagnostic-events");
-        let state = dir.join("state");
-        std::fs::create_dir_all(&state).unwrap();
-        let journal = dir.join(format!("journal-{}", std::process::id()));
-        // a socket of an earlier process with the same id
-        let _ = std::fs::remove_file(&journal);
-        let socket = UnixDatagram::bind(&journal).unwrap();
-        (state, journal, socket)
-    });
-    (state, journal)
+    (
+        super::spawn::diagnostic_state(),
+        super::spawn::diagnostic_journal(),
+    )
 }

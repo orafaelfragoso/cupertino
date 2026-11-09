@@ -25,7 +25,11 @@ pub fn child(name: &str, state: &Path, envs: &[(&str, &str)]) -> Output {
         .env("XDG_STATE_HOME", state)
         .env("HOME", state.join("home"))
         .env_remove("XDG_SESSION_ID")
-        .env_remove(cupertino_diagnostic_events::journal::SOCKET_ENV);
+        // no journal unless the test names one: a socket that is not there
+        .env(
+            cupertino_diagnostic_events::journal::SOCKET_ENV,
+            state.join("no-journal"),
+        );
     for (k, v) in envs {
         command.env(k, v);
     }

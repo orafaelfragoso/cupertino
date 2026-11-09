@@ -82,6 +82,22 @@ struct Model {
     shared: Shared,
     font: BarFont,
     effects: Vec<Effect>,
+    /// The scene's solid strip and spread under the bar, from [`LOOK`].
+    solid: bool,
+    spread: Vec<u16>,
+}
+
+/// What the next bar started shows: whether its strip is solid, the spread under it, and whether the theme's Reduce
+/// Transparency is on.
+#[derive(Clone, Default)]
+struct Look {
+    solid: bool,
+    spread: Vec<u16>,
+    theme_reduce_transparency: bool,
+}
+
+thread_local! {
+    static LOOK: std::cell::RefCell<Look> = std::cell::RefCell::new(Look::default());
 }
 
 impl Application for Bar {
@@ -98,6 +114,8 @@ impl Application for Bar {
             shared: Shared::default(),
             font,
             effects: Vec::new(),
+            solid: LOOK.with_borrow(|l| l.solid),
+            spread: LOOK.with_borrow(|l| l.spread.clone()),
         };
         (model, Vec::new())
     }
@@ -129,6 +147,8 @@ impl Application for Bar {
                 shared: &model.shared,
                 font: model.font,
                 tone: BarTone::Appearance,
+                solid: model.solid,
+                spread: &model.spread,
                 size: Size::new(bar.w, bar.h),
             },
             |input| input,
@@ -153,7 +173,7 @@ impl Run {
     fn start_with(reader: Option<&AssistiveTechnology>) -> Self {
         let preferences = ThemePreferences {
             appearance: Appearance::Light,
-            reduce_transparency: false,
+            reduce_transparency: LOOK.with_borrow(|l| l.theme_reduce_transparency),
             reduce_motion: false,
         };
         let tokens = ThemeTokens::cupertino(&theme(), preferences).unwrap();
@@ -445,4 +465,86 @@ fn a_screen_reader_opens_a_menu_by_its_title_and_chooses_a_row() {
         run.model().effects
     );
     assert_eq!(run.window("menu-1-0"), None, "choosing closes the menu");
+}
+
+/// How many of the bar's items draw a halo under their text and symbols, for `look`.
+fn halos(look: Look) -> usize {
+    LOOK.set(look);
+    let run = Run::start();
+    LOOK.set(Look::default());
+    let window = run.window("bar-1").unwrap();
+    let snapshot = run.driver.runtime().snapshot(window).unwrap();
+    Inspector::default()
+        .dump(&snapshot)
+        .lines()
+        .filter(|l| l.contains("DropShadow"))
+        .count()
+}
+
+/// The session's Reduce Transparency is the one source of both the bar's solid strip and its items' halos: the strip
+/// shows exactly when it is on (`tone::solid_bar`), and a bar drawn with it draws no halo over the busiest wallpaper,
+/// even with the theme's own Reduce Transparency off; with the session's off, the theme's does not take the halos
+/// away.
+#[test]
+fn reduce_transparency_gives_the_solid_strip_and_no_halo_from_one_source() {
+    use cupertino_defaults::accessibility::DisplayOptions;
+    use cupertino_menubar::tone::solid_bar;
+    let busy = vec![1000; 64];
+    let reduced = DisplayOptions {
+        reduce_transparency: true,
+        ..DisplayOptions::default()
+    };
+    assert!(solid_bar(reduced), "the strip shows");
+    assert!(!solid_bar(DisplayOptions::default()), "the strip is hidden");
+    let items = halos(Look {
+        solid: solid_bar(DisplayOptions::default()),
+        spread: busy.clone(),
+        theme_reduce_transparency: false,
+    });
+    assert!(
+        items >= 4,
+        "each item over a busy wallpaper has a halo: {items}"
+    );
+    assert_eq!(
+        halos(Look {
+            solid: solid_bar(reduced),
+            spread: busy.clone(),
+            theme_reduce_transparency: false,
+        }),
+        0,
+        "a solid bar draws no halo"
+    );
+    assert_eq!(
+        halos(Look {
+            solid: solid_bar(DisplayOptions::default()),
+            spread: busy,
+            theme_reduce_transparency: true,
+        }),
+        items,
+        "the theme's own option is not a second source"
+    );
+}
+
+/// Over a calm wallpaper no item draws a halo; over a wallpaper busy under one part of the bar only, only the items
+/// over that part do; with no measure every item keeps the halo it drew before the spread was measured.
+#[test]
+fn only_the_items_over_a_busy_part_of_the_wallpaper_draw_a_halo() {
+    let all = halos(Look::default());
+    assert!(all >= 4, "with no measure every item has a halo: {all}");
+    assert_eq!(
+        halos(Look {
+            spread: vec![30; 64],
+            ..Look::default()
+        }),
+        0,
+        "calm"
+    );
+    // busy under the left eighth of the bar only, where the application's menus are
+    let mut left = vec![0; 64];
+    left[..8].fill(400);
+    let some = halos(Look {
+        spread: left,
+        ..Look::default()
+    });
+    assert!(some > 0 && some < all, "{some} of {all}");
 }

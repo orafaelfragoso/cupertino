@@ -329,6 +329,7 @@ mod tests {
                 screen_capture: None,
                 session_agent: None,
                 backdrop_lightness: None,
+                backdrop_spread: None,
                 windows: None,
                 shortcuts: None,
             };
@@ -928,6 +929,7 @@ mod tests {
                 screen_capture: None,
                 session_agent: None,
                 backdrop_lightness: None,
+                backdrop_spread: None,
                 windows: None,
                 shortcuts: None,
             },

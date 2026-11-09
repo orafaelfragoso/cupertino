@@ -663,6 +663,15 @@ impl Dispatch<CupertinoShellV1, ()> for Mock {
                     bar.backdrop_luminance(620);
                     bar.done();
                 }
+                if bar.version() >= 21 {
+                    bar.backdrop_spread(
+                        [0_u16, 300, 45]
+                            .iter()
+                            .flat_map(|b| b.to_le_bytes())
+                            .collect(),
+                    );
+                    bar.done();
+                }
                 state.menu_bar = Some(bar);
             }
             cupertino_shell_v1::Request::GetDock { id, surface, .. } => {
@@ -1307,6 +1316,7 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
             screen_capture: None,
             session_agent: None,
             backdrop_lightness: None,
+            backdrop_spread: None,
             windows: None,
             shortcuts: None,
         }
@@ -1356,6 +1366,21 @@ fn a_version_14_server_tells_the_bar_the_backdrop_lightness() {
         _ => None,
     });
     assert_eq!(lightness, 620);
+}
+
+#[test]
+fn a_version_21_server_tells_the_bar_the_backdrop_spread_band_by_band() {
+    let (mut conn, _control, _committed, _seen, layer, mut stash) = connected_layer_surface_at(21);
+    let shell = Shell::bind(&mut conn).unwrap();
+    let _bar = shell.menu_bar(&conn, layer, conn.outputs()[0].id).unwrap();
+    flush(&mut conn, &mut stash);
+    let spread = wait_for(&mut conn, &mut stash, |e| match shell_event(e) {
+        Some(ShellEvent::MenuBar { surface, update }) if *surface == layer => {
+            update.backdrop_spread.clone()
+        }
+        _ => None,
+    });
+    assert_eq!(spread, [0, 300, 45]);
 }
 
 #[test]

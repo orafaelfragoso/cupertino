@@ -163,6 +163,9 @@ impl Cupertino {
             }
             self.set_backdrop_lightness(id, Some(lightness));
         }
+        for (output, spread) in self.overlays.wallpaper.take_bar_spread() {
+            self.set_backdrop_spread(cupertino_wm::OutputId(output), Some(spread));
+        }
         Some(result)
     }
 

@@ -323,6 +323,8 @@ struct Bar {
     shortcuts_sent: Option<Shortcuts>,
     /// The backdrop lightness last sent (version 14); `None` until the first one.
     backdrop_sent: Option<u16>,
+    /// The backdrop spread last sent (version 21); `None` until the first one.
+    spread_sent: Option<Vec<u16>>,
 }
 
 /// Where the bar of a surface is drawn: offset from its layout position and opacity.
@@ -357,6 +359,9 @@ const READER_RETRY_MAX: Duration = Duration::from_secs(30);
 pub const BACKDROP_LIGHTNESS_MAX: u16 = 1000;
 /// How far the backdrop lightness moves, in thousandths, before a bar is told again: more than this.
 pub const BACKDROP_LIGHTNESS_STEP: u16 = 10;
+/// The version of `cupertino_menu_bar_v1` that adds `backdrop_spread`, and the most bands it carries.
+pub const BACKDROP_SPREAD_VERSION: u32 = 21;
+pub const BACKDROP_SPREAD_MAX_BANDS: usize = 256;
 
 /// The `menu_bar` value of a menu object of `version`: 1 while a bar runs, and from version 3 only while the reader is
 /// verified too, so a window hides its own menus only while the bar can read them.
@@ -494,6 +499,9 @@ pub struct MenuBars {
     bars: Vec<Bar>,
     /// The lightness of the wallpaper under the bar of each output whose wallpaper the server has measured.
     backdrops: HashMap<OutputId, u16>,
+    /// How unevenly light the wallpaper is under the bar of each output whose wallpaper the server has measured, band
+    /// by band across the output.
+    spreads: HashMap<OutputId, Vec<u16>>,
     /// Addresses announced by windows, by window id and kind.
     addresses: HashMap<(u64, MenuKind), MenuAddress>,
     /// Addresses announced before the window mapped.
@@ -530,6 +538,7 @@ impl MenuBars {
             }),
             bars: Vec::new(),
             backdrops: HashMap::new(),
+            spreads: HashMap::new(),
             addresses: HashMap::new(),
             pending: Vec::new(),
             announced: HashMap::new(),
@@ -625,6 +634,7 @@ impl MenuBars {
         self.set.remove_output(output, now);
         self.bars.retain(|b| b.output != output);
         self.backdrops.remove(&output);
+        self.spreads.remove(&output);
     }
 
     /// Announce (or withdraw with `None`) the address of kind `kind` of window `key`.
@@ -795,6 +805,7 @@ impl Cupertino {
             agent_sent: None,
             shortcuts_sent: None,
             backdrop_sent: None,
+            spread_sent: None,
         });
         self.refresh_usable_area(out);
         self.refresh_menu_bars();
@@ -802,6 +813,7 @@ impl Cupertino {
         self.refresh_session_agent();
         self.refresh_menu_bar_shortcuts();
         self.refresh_backdrop_lightness();
+        self.refresh_backdrop_spread();
         self.refresh_gtk_capabilities();
         self.refresh_app_menus();
         if self.menu_bars.bars.len() == 1 {
@@ -1165,6 +1177,55 @@ impl Cupertino {
             bar.resource.backdrop_luminance(u32::from(lightness));
             bar.resource.done();
             bar.backdrop_sent = Some(lightness);
+        }
+    }
+
+    /// How unevenly light the wallpaper is under the bar of `output`, band by band across it (each band's value clamped
+    /// to [`BACKDROP_LIGHTNESS_MAX`]). An equal profile does nothing. `None` forgets the output's measure when the
+    /// output goes and sends nothing.
+    pub fn set_backdrop_spread(&mut self, output: OutputId, spread: Option<Vec<u16>>) {
+        let Some(spread) = spread else {
+            self.menu_bars.spreads.remove(&output);
+            return;
+        };
+        let spread: Vec<u16> = spread
+            .into_iter()
+            .take(BACKDROP_SPREAD_MAX_BANDS)
+            .map(|s| s.min(BACKDROP_LIGHTNESS_MAX))
+            .collect();
+        if self.menu_bars.spreads.get(&output) != Some(&spread) {
+            self.menu_bars.spreads.insert(output, spread);
+            self.refresh_backdrop_spread();
+        }
+    }
+
+    /// Tell the bars of version 21 or later how unevenly light the wallpaper is under them, each one the first time
+    /// and when a band moved by more than [`BACKDROP_LIGHTNESS_STEP`] since.
+    fn refresh_backdrop_spread(&mut self) {
+        let spreads = &self.menu_bars.spreads;
+        for bar in self
+            .menu_bars
+            .bars
+            .iter_mut()
+            .filter(|b| b.resource.version() >= BACKDROP_SPREAD_VERSION)
+        {
+            let Some(spread) = spreads.get(&bar.output) else {
+                continue;
+            };
+            let close = bar.spread_sent.as_ref().is_some_and(|sent| {
+                sent.len() == spread.len()
+                    && sent
+                        .iter()
+                        .zip(spread)
+                        .all(|(a, b)| a.abs_diff(*b) <= BACKDROP_LIGHTNESS_STEP)
+            });
+            if close {
+                continue;
+            }
+            let bytes = spread.iter().flat_map(|s| s.to_le_bytes()).collect();
+            bar.resource.backdrop_spread(bytes);
+            bar.resource.done();
+            bar.spread_sent = Some(spread.clone());
         }
     }
 

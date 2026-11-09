@@ -62,6 +62,81 @@ pub fn solid_bar(display: DisplayOptions) -> bool {
     display.reduce_transparency
 }
 
+/// How unevenly light the wallpaper may be under an item of the bar (the standard deviation of its CIE L*, in tenths,
+/// as the server measures it) for the item to draw no halo: a calm wallpaper, where the text reads on its own.
+pub const CALM_SPREAD: u16 = 60;
+/// The spread from which an item's halo is at its strongest: stripes, foliage, text in the picture.
+pub const BUSY_SPREAD: u16 = 250;
+/// The halo's strength while the spread under the bar is not known (a server older than shell version 21, or before
+/// its first measure): the halo every item drew before the spread was measured, black at 0.45 under light text and
+/// white at 0.6 under dark text, 2.5 points wide.
+pub const UNKNOWN_SPREAD_STRENGTH: f32 = 0.8;
+/// The halo at full strength: its opacity under light text and under dark text, and how far it spreads in points,
+/// from [`HALO_BLUR_CALM`] at the first trace of it.
+pub const HALO_UNDER_LIGHT: f32 = 0.5625;
+pub const HALO_UNDER_DARK: f32 = 0.75;
+pub const HALO_BLUR_CALM: f64 = 0.5;
+pub const HALO_BLUR_BUSY: f64 = 3.0;
+
+/// The soft halo of the opposite tone an item of the bar draws under its text and symbols, so they read over a busy
+/// wallpaper.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Halo {
+    /// From 0 (none) to 1 (full): the share of [`HALO_UNDER_LIGHT`] or [`HALO_UNDER_DARK`] the halo is drawn at.
+    pub strength: f32,
+    /// How far it spreads, in points.
+    pub blur: f64,
+}
+
+impl Halo {
+    /// The halo's colour under text of colour `text`: dark at its strength's share of [`HALO_UNDER_LIGHT`] under light
+    /// text, light at its share of [`HALO_UNDER_DARK`] under dark text.
+    pub fn color(self, text: Rgba) -> Rgba {
+        let light = 0.2126 * text[0] + 0.7152 * text[1] + 0.0722 * text[2] > 0.5;
+        if light {
+            [0.0, 0.0, 0.0, HALO_UNDER_LIGHT * self.strength]
+        } else {
+            [1.0, 1.0, 1.0, HALO_UNDER_DARK * self.strength]
+        }
+    }
+}
+
+/// The halo of an item over wallpaper whose spread under it is `spread` (the most of the bands it covers; `None`
+/// while unknown), on a bar that is `solid` or not ([`solid_bar`] of the session's display options). A solid bar
+/// draws none, and neither does an item over a calm part of the wallpaper (at most [`CALM_SPREAD`]): the halo is
+/// invisible there. Past that its strength and its blur grow smoothly with the spread, to full at [`BUSY_SPREAD`].
+pub fn halo(spread: Option<u16>, solid: bool) -> Option<Halo> {
+    if solid {
+        return None;
+    }
+    let strength = match spread {
+        None => UNKNOWN_SPREAD_STRENGTH,
+        Some(spread) => {
+            let t = (f32::from(spread.saturating_sub(CALM_SPREAD))
+                / f32::from(BUSY_SPREAD - CALM_SPREAD))
+            .clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        }
+    };
+    (strength > 0.0).then(|| Halo {
+        strength,
+        blur: HALO_BLUR_CALM + (HALO_BLUR_BUSY - HALO_BLUR_CALM) * f64::from(strength),
+    })
+}
+
+/// The spread under an item of the bar from `left` to `right` points, on a bar `width` points wide whose wallpaper
+/// spreads by `bands` from its left edge to its right: the most of the bands the item covers, or `None` while
+/// nothing was measured.
+pub fn spread_under(bands: &[u16], width: f64, left: f64, right: f64) -> Option<u16> {
+    if bands.is_empty() || !(width > 0.0) {
+        return None;
+    }
+    let n = bands.len();
+    let band = |x: f64| ((x / width * n as f64).floor().max(0.0) as usize).min(n - 1);
+    let (first, last) = (band(left), band(right.max(left)));
+    bands[first..=last].iter().copied().max()
+}
+
 /// The text of a bar's strip: the appearance's, or dark or light for the wallpaper under the bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BarTone {
@@ -201,6 +276,67 @@ mod tests {
         );
         let light = MenuPalette::new(false);
         assert_eq!(BarTone::Appearance.palette(light), light);
+    }
+
+    /// The halo's strength runs from none over a calm wallpaper to full over a busy one, smoothly and never
+    /// falling, with its blur growing alongside; a solid bar has none whatever the wallpaper; with no measure the bar
+    /// keeps about the halo it used to draw.
+    #[test]
+    fn the_halo_grows_with_the_spread_from_none_over_calm_wallpaper_to_full_over_busy() {
+        for spread in [0, 10, 30, CALM_SPREAD] {
+            assert_eq!(halo(Some(spread), false), None, "calm at {spread}");
+        }
+        let full = halo(Some(BUSY_SPREAD), false).unwrap();
+        assert_eq!(full.strength, 1.0);
+        assert_eq!(full.blur, HALO_BLUR_BUSY);
+        assert_eq!(halo(Some(1000), false), Some(full));
+        let mid = halo(Some((CALM_SPREAD + BUSY_SPREAD) / 2), false).unwrap();
+        assert!((mid.strength - 0.5).abs() < 0.02, "{mid:?}");
+        assert!((mid.blur - (HALO_BLUR_CALM + HALO_BLUR_BUSY) / 2.0).abs() < 0.05);
+        let mut last = Halo {
+            strength: 0.0,
+            blur: HALO_BLUR_CALM,
+        };
+        for spread in CALM_SPREAD + 1..=BUSY_SPREAD {
+            let h = halo(Some(spread), false).unwrap();
+            assert!(
+                h.strength > last.strength && h.blur > last.blur,
+                "at {spread}"
+            );
+            assert!(h.strength - last.strength < 0.02, "smooth at {spread}");
+            last = h;
+        }
+        // just past calm the halo is still too faint to see: under 2 % of its full opacity
+        let faint = halo(Some(CALM_SPREAD + 10), false).unwrap();
+        assert!(faint.color([1.0; 4])[3] < 0.02 * HALO_UNDER_DARK);
+        for spread in [None, Some(0), Some(BUSY_SPREAD), Some(1000)] {
+            assert_eq!(halo(spread, true), None, "a solid bar at {spread:?}");
+        }
+        let unknown = halo(None, false).unwrap();
+        assert_eq!(unknown.strength, UNKNOWN_SPREAD_STRENGTH);
+        assert!((unknown.blur - 2.5).abs() < 1e-6);
+        assert!((unknown.color([0.97, 0.97, 0.98, 0.95])[3] - 0.45).abs() < 1e-6);
+        assert!((unknown.color([0.05, 0.05, 0.06, 0.92])[3] - 0.6).abs() < 1e-6);
+        // light text gets a dark halo, dark text a light one
+        assert_eq!(
+            full.color([0.97, 0.97, 0.98, 0.95]),
+            [0.0, 0.0, 0.0, HALO_UNDER_LIGHT]
+        );
+        assert_eq!(
+            full.color([0.05, 0.05, 0.06, 0.92]),
+            [1.0, 1.0, 1.0, HALO_UNDER_DARK]
+        );
+    }
+
+    #[test]
+    fn an_item_takes_the_most_spread_of_the_bands_it_covers() {
+        let bands = [0, 10, 300, 20];
+        // a bar 400 points wide: each band is 100 points
+        assert_eq!(spread_under(&bands, 400.0, 10.0, 90.0), Some(0));
+        assert_eq!(spread_under(&bands, 400.0, 150.0, 250.0), Some(300));
+        assert_eq!(spread_under(&bands, 400.0, 380.0, 420.0), Some(20));
+        assert_eq!(spread_under(&bands, 400.0, -5.0, 0.0), Some(0));
+        assert_eq!(spread_under(&[], 400.0, 10.0, 90.0), None);
     }
 
     #[test]

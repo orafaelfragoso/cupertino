@@ -10,7 +10,7 @@
 //!
 //! `kit/gallery` is every control family side by side: buttons (ordinary, default, destructive, disabled and glass),
 //! switches, check boxes, radio buttons, a segmented control, a pop-up button, a stepper, a text and a search field,
-//! sliders and progress. `--state rest|held-button|held-switch|held-slider|held-segment|disabled` holds the pointer
+//! a pull-down button, a combo box, a date picker, a colour well, sliders and progress. `--state rest|held-button|held-switch|held-slider|held-segment|disabled` holds the pointer
 //! down on one control (the switch dragged a little, the segmented control dragged from its first segment onto its
 //! last) or disables them all; `--control-size mini|small|regular|large|extra-large` and `--compact on|off` size
 //! them; `--backdrop flat|busy` draws them over the window's background or over hard-edged colour bands. Its sheet
@@ -37,9 +37,10 @@ use std::sync::Arc;
 
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_kit::controls::{
-    Canvas, CheckBox, Icon, IconDirection, PopUpButton, Progress, RadioGroup, SearchField,
-    SegmentedControl, Sidebar, SidebarItem, SidebarSection, Slider, SliderStyle, Stepper, TextRole,
-    Tooltip, TooltipState, WINDOW_CONTENT_INSET,
+    CalendarDate, Canvas, CheckBox, ColorWell, ComboBox, DatePicker, Icon, IconDirection,
+    PopUpButton, Progress, PullDownButton, RadioGroup, SearchField, SegmentedControl, Sidebar,
+    SidebarItem, SidebarSection, Slider, SliderStyle, Stepper, TextRole, Tooltip, TooltipState,
+    WINDOW_CONTENT_INSET,
 };
 use cupertino_kit::core::{Checked, CommandRegistry, Key, PaintCx};
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
@@ -611,6 +612,39 @@ impl Application for Gallery {
                 })
                 .width(FIELD_WIDTH),
             ]),
+            row(vec![
+                Element::new(PullDownButton {
+                    label: "Actions".into(),
+                    actions: vec!["Duplicate".into(), "Rename".into()],
+                    open: false,
+                    enabled,
+                    on_open: Some(()),
+                }),
+                Element::from(ComboBox {
+                    field: field("Choice", "", "Alpha"),
+                    options: vec!["Alpha".into(), "Beta".into()],
+                    open: false,
+                    on_open: Some(()),
+                    text_size: 13.0,
+                })
+                .width(FIELD_WIDTH),
+                Element::new(DatePicker {
+                    label: "Date".into(),
+                    date: CalendarDate {
+                        year: 2026,
+                        month: 7,
+                        day: 11,
+                    },
+                    enabled,
+                    on_change: Some(Box::new(|_| ())),
+                }),
+                Element::new(ColorWell {
+                    label: "Colour".into(),
+                    color: Color::from_rgba8([72, 196, 214, 255]),
+                    enabled,
+                    on_open: Some(()),
+                }),
+            ]),
             slider("Volume", 0.4, 0).key("slider"),
             slider("Ticks", 0.7, 5),
             Element::new(Progress {
@@ -618,7 +652,7 @@ impl Application for Gallery {
                 value: Some(0.6),
             }),
         ];
-        let mut windows = window("Gallery", Size::new(640.0, 300.0), Vec::new());
+        let mut windows = window("Gallery", Size::new(640.0, 340.0), Vec::new());
         let content = Element::new(Stack {
             axis: Axis::Vertical,
             padding: WINDOW_CONTENT_INSET,

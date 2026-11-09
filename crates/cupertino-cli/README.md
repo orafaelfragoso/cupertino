@@ -183,3 +183,6 @@ socket interfaces of the services; it never links compositor state.
 - `sdk check` compiles with the system's `cc` and checks the C ABI only. The Rust project of `sdk new` depends on the
   release's git tag of `cupertino-kit`, so it builds once that tag is published; until then, or offline, `--source`
   points it at a checkout's crates by path. `ci/c-sdk.py` checks both forms against this checkout.
+- OWNER DECISION: `sdk new` refuses a `--dir` (or `./<name>`) that is a symbolic link, even one to an empty directory,
+  as `validation`/`not_a_directory`. It writes only into a real directory it has found empty or makes itself, so a
+  link never redirects the project elsewhere; give the link's target as `--dir` instead.

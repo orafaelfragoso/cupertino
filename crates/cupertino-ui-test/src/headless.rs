@@ -208,8 +208,8 @@ impl HeadlessWindowSystem {
 
     /// Makes `window` a surface whose role's configure has no activated state, such as a desktop shell's layer
     /// surface: from now its configures say it is activated while it has the keyboard, between a queued
-    /// `WindowEvent::Focus(true)` and `Focus(false)`, whatever states the test passes, as the Wayland window system
-    /// reports such a window.
+    /// `WindowEvent::Focus(true)` and `Focus(false)`, whatever states the test passes. It models how the Wayland
+    /// window system reports such a window, except that a popup of the window holding the keyboard does not count.
     pub fn activate_by_keyboard(&mut self, window: WindowId) -> Result<(), PlatformError> {
         self.window_mut(window)?.by_keyboard = true;
         Ok(())

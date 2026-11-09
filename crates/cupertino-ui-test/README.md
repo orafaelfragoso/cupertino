@@ -29,9 +29,11 @@ not application paste delivery.
 `SecureInputs` fixtures. Advance the driver to each recorded time and enqueue each event. Recreate compositor
 lifecycle state through the headless helpers (for example, `configure` registers an acknowledgement before queuing
 the configure event; after `activate_by_keyboard(window)` a window's configures say it is activated while the last
-focus event queued for it gave it the keyboard, whatever states the test passes, as a layer surface's do), and repeat clipboard requests through the driver before delivering their replies. Raw event
-injection alone does not recreate outstanding configure or clipboard requests. Snapshots and presented frames are
-available through the runtime and window system; the inspector formats the same snapshots.
+focus event queued for that window gave it the keyboard, whatever states the test passes, a model of how a layer
+surface is reported that does not count its popups' keyboard), and repeat clipboard requests through the driver
+before delivering their replies. Raw event injection alone does not recreate outstanding configure or clipboard
+requests. Snapshots and presented frames are available through the runtime and window system; the inspector formats
+the same snapshots.
 
 ## Accessibility audit
 

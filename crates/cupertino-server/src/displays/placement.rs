@@ -81,13 +81,13 @@ impl Cupertino {
         self.refresh_scales_of(&ids);
     }
 
-    /// Tell `windows` the scale of the output each is on now; nothing is sent to a window whose scale did not change.
+    /// Tell `windows` the scale of the output each is on now, with their subsurfaces and popups; nothing is sent to a
+    /// surface whose scale did not change.
     pub(crate) fn refresh_scales_of(&self, windows: &[WindowId]) {
-        use smithay::wayland::compositor::with_states;
         use smithay::wayland::fractional_scale::with_fractional_scale;
         for w in self.windows.iter().filter(|w| windows.contains(&w.id)) {
             let scale = self.window_scale(w.id);
-            with_states(w.surface(), |states| {
+            w.window.with_surfaces(|_, states| {
                 with_fractional_scale(states, |fs| fs.set_preferred_scale(scale))
             });
         }

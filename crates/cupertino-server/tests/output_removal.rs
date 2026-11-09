@@ -523,3 +523,38 @@ fn windows_of_the_last_display_come_back_to_it_when_it_returns() {
     );
     assert!(h.state.displays.departed.is_empty());
 }
+
+/// A window's subsurfaces are told the scale of the output the window is on, and change with it.
+#[test]
+fn a_subsurface_draws_at_the_scale_of_its_windows_output() {
+    use smithay::wayland::compositor::get_children;
+    let Some(mut h) = Harness::new() else { return };
+    let before: Vec<WindowId> = h.state.wm.windows().map(|w| w.id).collect();
+    let _client = Client::constraining_under_subsurface(h.socket_path(), "covered");
+    let mut new = None;
+    h.wait_until("the toplevel to be mapped", |s| {
+        new =
+            s.wm.windows()
+                .map(|w| w.id)
+                .find(|w| !before.contains(w) && s.entry(*w).is_some_and(|e| e.mapped));
+        new.is_some()
+    });
+    h.settle();
+    let w = new.unwrap();
+    let surface = h.state.entry(w).unwrap().surface().clone();
+    let child = get_children(&surface)
+        .into_iter()
+        .next()
+        .expect("a subsurface");
+    let told = |surface| {
+        with_states(surface, |states| {
+            with_fractional_scale(states, |fs| fs.preferred_scale())
+        })
+    };
+    let right = h.output("headless-2");
+    h.put(w, right, Rect::new(1100.0, 100.0, 400.0, 300.0));
+    assert_eq!(told(&surface), Some(RIGHT_SCALE));
+    assert_eq!(told(&child), Some(RIGHT_SCALE));
+    h.unplug("headless-2");
+    assert_eq!(told(&child), Some(1.0));
+}

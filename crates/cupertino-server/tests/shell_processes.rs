@@ -1455,16 +1455,33 @@ fn toggle_panel(bus: &PrivateBus) -> Receiver<()> {
 }
 
 impl Server {
+    /// `Toggle`, answered. The panel answers once it has queued the call and carries it out afterwards, so the caller
+    /// waits for what the toggle leads to.
     fn toggle_panel(&mut self, bus: &PrivateBus) {
         let answer = toggle_panel(bus);
         self.wait_until("Toggle to be answered", |_| answer.try_recv().is_ok());
     }
 
-    fn run_for(&mut self, duration: Duration) {
-        let end = Instant::now() + duration;
-        while Instant::now() < end {
-            self.step();
-        }
+    /// `Toggle` while the server has no output, carried out by the panel (the process `pid`, with no surface left): the
+    /// panel opens its surfaces, the server closes them at once for want of an output, and the panel, hidden again,
+    /// destroys them. Only then does the next toggle open the panel instead of dismissing it. The surfaces are watched
+    /// from before the call, as the panel may be done before its answer is seen. The creation cannot be missed between
+    /// server steps: the client can destroy the surfaces only after the server flushes their close events at the end
+    /// of the step that received their creation.
+    fn toggle_panel_with_no_output(&mut self, bus: &PrivateBus, pid: u32) {
+        assert!(self.state.outputs.is_empty());
+        assert_eq!(layer_surfaces_of(&self.state, pid), 0);
+        let answer = toggle_panel(bus);
+        let (mut answered, mut opened) = (false, false);
+        self.wait_until(
+            "the panel to open on no output and take its surfaces back",
+            |s| {
+                answered |= answer.try_recv().is_ok();
+                let open = layer_surfaces_of(s, pid);
+                opened |= open > 0;
+                answered && opened && open == 0
+            },
+        );
     }
 
     fn keyboard_focus(
@@ -1529,24 +1546,46 @@ fn interact_with_card(server: &mut Server, card: &PanelSurface, sound_x: i32) {
     /// start 8 points in from the window's corner).
     const BLUETOOTH: (i32, i32) = (40, 116);
     let sound_track = (sound_x, 430);
-    /// Long enough for the card to draw the frames of a click.
-    const SETTLE: Duration = Duration::from_millis(300);
-    /// The panel reads its backends again every second while it is open.
-    const REFRESH: Duration = Duration::from_millis(1500);
+    use smithay::reexports::wayland_server::Resource;
+    /// Observe the selected state through the controller's one-second backend refresh. An unchanged reading produces
+    /// no new Wayland frame, so time is the subject of this check: keep dispatching and checking the exact card and
+    /// its pixels for this interval after its input frames settle, rather than sleeping until a frame is assumed ready.
+    const BACKEND_REFRESH: Duration = Duration::from_millis(1500);
     let at = |(x, y): (i32, i32)| card.rect.loc + Point::from((x, y));
-    let bytes = || surface_bytes(&card.surface).unwrap();
-    for (what, point) in [("switch", BLUETOOTH), ("slider", sound_track)] {
-        let before = bytes();
-        server.click_at(at(point));
-        server.wait_until("the card to draw the new state", |_| {
-            surface_bytes(&card.surface).is_some_and(|b| b != before)
-        });
-        server.run_for(SETTLE);
-        let after = bytes();
-        assert!(after != before, "the {what} drew a new state");
-        server.run_for(REFRESH);
+    let frame = || {
         assert!(
-            bytes() == after,
+            card.surface.is_alive(),
+            "the card was destroyed while its controls were being exercised"
+        );
+        surface_bytes(&card.surface)
+    };
+    for (what, point) in [("switch", BLUETOOTH), ("slider", sound_track)] {
+        let before = frame().expect("the open card has a committed frame");
+        server.click_at(at(point));
+        let mut after = before.clone();
+        server.wait_until("the card to draw the new state", |_| {
+            if let Some(bytes) = frame() {
+                after = bytes;
+            }
+            after != before
+        });
+        let mut changed = Instant::now();
+        server.wait_until(
+            "the selected state to persist through a backend refresh",
+            |_| {
+                let Some(bytes) = frame() else {
+                    return false;
+                };
+                if bytes != after {
+                    after = bytes;
+                    changed = Instant::now();
+                    return false;
+                }
+                changed.elapsed() >= BACKEND_REFRESH
+            },
+        );
+        assert!(
+            after != before,
             "the backend kept the {what}'s new state through the refresh"
         );
     }
@@ -1668,9 +1707,9 @@ fn the_control_panel_goes_with_its_output_and_opens_again_on_the_remaining_or_re
             "no panel surface"
         }
     );
-    // the panel answered the toggle: it has handled it
-    server.toggle_panel(&bus);
-    assert!(panel_surfaces(&server.state).is_empty());
+    // the panel has carried the toggle out, not only answered it: one still queued when the display below is plugged
+    // in would open the panel there, and the toggle after it would dismiss it
+    server.toggle_panel_with_no_output(&bus, pid);
     assert!(connected(&server.state, pid));
     assert_eq!(
         server.state.supervisor.pid_of(PANEL),

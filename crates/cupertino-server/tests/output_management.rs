@@ -369,6 +369,8 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, ()> for ClientState {
 struct HeadChange {
     position: Option<(i32, i32)>,
     scale: Option<f64>,
+    /// A mode by its pixel size and refresh rate in mHz.
+    custom_mode: Option<(i32, i32, i32)>,
 }
 
 type Command = Box<dyn FnOnce(&mut ClientState, &QueueHandle<ClientState>) + Send>;
@@ -450,6 +452,9 @@ impl Client {
                             if let Some(scale) = change.scale {
                                 config_head.set_scale(scale);
                             }
+                            if let Some((w, h, refresh)) = change.custom_mode {
+                                config_head.set_custom_mode(w, h, refresh);
+                            }
                         }
                     }
                 }
@@ -530,10 +535,12 @@ fn both_heads_are_listed_and_can_be_rearranged() {
     let left = HeadChange {
         position: Some((RIGHT.0, 0)),
         scale: Some(2.0),
+        custom_mode: None,
     };
     let right = HeadChange {
         position: Some((0, 0)),
         scale: None,
+        custom_mode: None,
     };
     client.configure(
         serial,
@@ -593,6 +600,7 @@ fn a_built_in_panel_starts_at_its_default_size_and_takes_each_choice_exactly() {
         let change = HeadChange {
             position: None,
             scale: Some(3024.0 / f64::from(width)),
+            custom_mode: None,
         };
         client.configure(serial, vec![("eDP-1", Some(change))], false);
         h.wait_until(&client, "the new size", |state, seen| {
@@ -678,8 +686,9 @@ fn a_configuration_made_before_a_change_is_cancelled() {
     h.wait_until(&client, "both heads", |_, seen| listed(seen));
     let stale = client.serial();
     let moved = HeadChange {
-        position: Some((0, RIGHT.1)),
+        position: Some((0, LEFT.1)),
         scale: None,
+        custom_mode: None,
     };
     client.configure(
         stale,
@@ -706,7 +715,7 @@ fn a_configuration_made_before_a_change_is_cancelled() {
     assert_eq!(client.results(), ["succeeded", "cancelled"]);
     assert_eq!(
         h.output_rect("headless-2"),
-        Some((0.0, RIGHT.1 as f64, RIGHT.0 as f64, RIGHT.1 as f64)),
+        Some((0.0, LEFT.1 as f64, RIGHT.0 as f64, RIGHT.1 as f64)),
         "the cancelled configuration changed nothing"
     );
 }
@@ -783,6 +792,7 @@ fn a_display_plugged_in_gets_its_stored_arrangement_back() {
     let moved = HeadChange {
         position: Some((LEFT.0 + RIGHT.0, 0)),
         scale: Some(1.0),
+        custom_mode: None,
     };
     let unchanged = Some(HeadChange::default());
     client.configure(
@@ -1080,5 +1090,121 @@ fn a_busy_display_is_not_tried_in_other_modes() {
     assert_eq!(
         (head.output, head.state.mode),
         (None, mode(640, 480, 60_000))
+    );
+}
+
+/// A configuration that moves one display and gives the other a mode it cannot show fails as a whole: the first display
+/// keeps its scale and place, the second its mode, the refused mode is not offered afterwards and nothing is stored.
+#[test]
+fn a_configuration_that_fails_part_way_keeps_the_last_valid_arrangement() {
+    let Some(mut h) = Harness::new() else { return };
+    let path = std::env::temp_dir().join(format!(
+        "cupertino-test-{}-failed-displays.conf",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    h.state.displays.use_store(path.clone()).unwrap();
+    let client = Client::connect(h.socket_path());
+    h.wait_until(&client, "both heads", |_, seen| listed(seen));
+    let (left, right) = (h.output_rect("headless-1"), h.output_rect("headless-2"));
+    refuse(
+        &mut h.state,
+        ErrorKind::InvalidInput,
+        &[mode(640, 480, 60_000)],
+    );
+    let scaled = HeadChange {
+        scale: Some(2.0),
+        ..HeadChange::default()
+    };
+    let refused = HeadChange {
+        custom_mode: Some((640, 480, 60_000)),
+        ..HeadChange::default()
+    };
+    client.configure(
+        client.serial(),
+        vec![("headless-1", Some(scaled)), ("headless-2", Some(refused))],
+        false,
+    );
+    h.wait_until(&client, "the answer", |_, seen| !seen.results.is_empty());
+    assert_eq!(client.results(), ["failed"]);
+    assert_eq!(h.output_rect("headless-1"), left, "the scale was undone");
+    assert_eq!(h.output_rect("headless-2"), right);
+    let head = |h: &Harness, name: &str| {
+        h.state
+            .displays
+            .heads
+            .iter()
+            .find(|d| d.info.connector == name)
+            .map(|d| (d.state, d.info.modes.clone()))
+            .unwrap()
+    };
+    let (one, _) = head(&h, "headless-1");
+    assert_eq!(one.scale, 1.0);
+    let (two, offered) = head(&h, "headless-2");
+    assert_eq!((two.mode.width, two.mode.height), RIGHT);
+    assert!(
+        !offered.contains(&mode(640, 480, 60_000)),
+        "the refused mode is not offered: {offered:?}"
+    );
+    assert!(!path.exists(), "a failed configuration is not stored");
+    // the same configuration without the refused mode applies
+    client.configure(
+        client.serial(),
+        vec![
+            ("headless-1", Some(scaled)),
+            ("headless-2", Some(HeadChange::default())),
+        ],
+        false,
+    );
+    h.wait_until(&client, "the second answer", |_, seen| {
+        seen.results.len() == 2
+    });
+    assert_eq!(client.results(), ["failed", "succeeded"]);
+    assert_eq!(head(&h, "headless-1").0.scale, 2.0);
+    let _ = std::fs::remove_file(path);
+}
+
+/// Displays that would cover the same points are refused as a whole, tested or applied, and nothing moves.
+#[test]
+fn overlapping_displays_are_refused_and_nothing_moves() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = Client::connect(h.socket_path());
+    h.wait_until(&client, "both heads", |_, seen| listed(seen));
+    let right = h.output_rect("headless-2");
+    let over = HeadChange {
+        position: Some((LEFT.0 / 2, 0)),
+        ..HeadChange::default()
+    };
+    let unchanged = Some(HeadChange::default());
+    client.configure(
+        client.serial(),
+        vec![("headless-1", unchanged), ("headless-2", Some(over))],
+        true,
+    );
+    client.configure(
+        client.serial(),
+        vec![("headless-1", unchanged), ("headless-2", Some(over))],
+        false,
+    );
+    h.wait_until(&client, "both answers", |_, seen| seen.results.len() == 2);
+    assert_eq!(client.results(), ["failed", "failed"]);
+    assert_eq!(h.output_rect("headless-2"), right);
+    // touching along an edge is an arrangement
+    let below = HeadChange {
+        position: Some((0, LEFT.1)),
+        ..HeadChange::default()
+    };
+    client.configure(
+        client.serial(),
+        vec![("headless-1", unchanged), ("headless-2", Some(below))],
+        false,
+    );
+    h.wait_until(&client, "the third answer", |_, seen| {
+        seen.results.len() == 3
+    });
+    assert_eq!(client.results(), ["failed", "failed", "succeeded"]);
+    assert_eq!(
+        h.output_rect("headless-2"),
+        Some((0.0, LEFT.1 as f64, RIGHT.0 as f64, RIGHT.1 as f64))
     );
 }

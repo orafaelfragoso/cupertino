@@ -485,3 +485,53 @@ fn a_window_that_takes_the_focus_ends_the_popup_grab_of_another_application() {
     );
     assert!(h.state.popup_grab.is_none());
 }
+
+/// The display a window shows a menu on goes away: the menu is dismissed and its grab ends, and the window comes onto
+/// the remaining display without it.
+#[test]
+fn a_display_that_goes_dismisses_the_menus_of_its_windows() {
+    let Some(mut h) = Harness::new() else { return };
+    let second = headless::HeadlessDisplay {
+        name: "headless-2".into(),
+        size: (800, 600),
+        physical_mm: (0, 0),
+    };
+    let head = headless::add_display(&mut h.state, &second, Some(1.0)).unwrap();
+    let client = TestClient::spawn(h.socket_path());
+    h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
+    h.state.tick();
+    let id = h.state.windows.iter().find(|w| w.mapped).unwrap().id;
+    let out2 = h
+        .state
+        .outputs
+        .iter()
+        .find(|o| o.output.name() == "headless-2")
+        .unwrap()
+        .id;
+    h.state.command(cupertino_wm::Command::MoveWindowToOutput {
+        window: id,
+        output: out2,
+        frame: cupertino_wm::Rect::new(1100.0, 100.0, 400.0, 300.0),
+    });
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
+    h.state.tick();
+    let frame = h.state.wm.window(id).unwrap().geometry();
+    h.run_for(Duration::from_millis(100));
+    h.click((frame.x + 300.0, frame.y + 220.0));
+    h.wait_until("a drawn popup", |s| {
+        client.log.lock().unwrap().popup_ready && s.popup_grab.is_some()
+    });
+
+    headless::remove_display(&mut h.state, head).unwrap();
+    h.run_for(Duration::from_millis(200));
+    assert!(
+        client.log.lock().unwrap().popup_done,
+        "the menu was dismissed"
+    );
+    assert!(h.state.popup_grab.is_none());
+    let left = h.state.outputs[0].id;
+    assert_eq!(h.state.wm.window(id).unwrap().output, left);
+}

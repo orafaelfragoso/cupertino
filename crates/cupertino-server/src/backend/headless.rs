@@ -162,10 +162,25 @@ pub fn add_display_with_modes(
     more: &[HeadMode],
     scale: Option<f64>,
 ) -> Result<HeadId> {
+    add_display_at(state, display, DEFAULT_REFRESH_MHZ, more, scale)
+}
+
+/// The refresh rate of an offscreen display's own mode unless one is given, in mHz.
+pub const DEFAULT_REFRESH_MHZ: i32 = 60_000;
+
+/// [`add_display_with_modes`] for a display whose own mode refreshes at `refresh_mhz`: its frames are paced, and their
+/// presentation reported, at that rate.
+pub fn add_display_at(
+    state: &mut Cupertino,
+    display: &HeadlessDisplay,
+    refresh_mhz: i32,
+    more: &[HeadMode],
+    scale: Option<f64>,
+) -> Result<HeadId> {
     let mut modes = vec![HeadMode {
         width: display.size.0,
         height: display.size.1,
-        refresh_mhz: 60_000,
+        refresh_mhz,
     }];
     modes.extend_from_slice(more);
     let info = HeadInfo {
@@ -270,6 +285,10 @@ pub(crate) fn head_op(
             state.drop_head_output(head);
         }
         HeadOp::SetMode(mode) => {
+            if let Some((_, kind)) = h.refused.iter().find(|(m, _)| *m == mode) {
+                return Err(anyhow::Error::new(std::io::Error::from(*kind))
+                    .context(format!("the display cannot show {mode:?}")));
+            }
             let texture = target_texture(&mut h.renderer, mode)?;
             h.targets
                 .iter_mut()
@@ -325,7 +344,8 @@ pub fn render(state: &mut Cupertino) {
             }
             state.process_screenshots(&mut h.renderer, idx);
             let time = Duration::from(state.clock.now());
-            state.post_repaint(idx, time, Some(Duration::from_micros(16_667)), true);
+            let refresh = state.refresh_of(idx);
+            state.post_repaint(idx, time, Some(refresh), true);
         }
     }
     state.backend = Some(backend);

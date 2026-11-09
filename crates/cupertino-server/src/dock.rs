@@ -4,7 +4,7 @@
 //! windows exist, takes its activation and restore requests, and reads the slot a minimizing window
 //! flies to from the committed `set_minimize_target`. The surface's geometry is the dock's rectangle.
 //! The application switcher's panel is the dock's too: the server keeps the keys and the choice
-//! (`input.rs`, `cupertino-wm`) and tells one dock the panel's output (the one under the pointer
+//! (`input.rs`, `cupertino-wm`) and tells one dock the panel's output (the active output
 //! when the switch opened), the list and the selection ([`Cupertino::switcher_changed`]), then
 //! every dock that it ended ([`Docks::switcher_closed`]); a dock that binds mid-switch on the
 //! panel's output gets the state at once. `switcher_select` is the pointer's pick and
@@ -446,15 +446,12 @@ impl Cupertino {
     }
 
     /// The switcher opened or its selection moved: the panel's dock gets the whole list again. The
-    /// panel stays on the output under the pointer when the switch opened.
+    /// panel stays on the active output of when the switch opened (`crate::displays::placement`).
     pub fn switcher_changed(&mut self, apps: Vec<String>, selected: usize) {
         let output = match self.docks.switcher_output() {
             Some(output) => output,
-            None => match self
-                .output_at(self.pointer.current_location())
-                .or_else(|| self.outputs.first())
-            {
-                Some(o) => o.id,
+            None => match self.active_output() {
+                Some(o) => o,
                 // no output, no panel: the switch runs on the keys alone
                 None => return,
             },
@@ -558,7 +555,7 @@ impl Cupertino {
         })
     }
 
-    /// The Focus Dock shortcut: the dock of the output under the pointer takes the keyboard on its first tile, asking for
+    /// The Focus Dock shortcut: the dock of the active output takes the keyboard on its first tile, asking for
     /// exclusive keyboard interactivity. Nothing is sent while the session is locked or a lock is pending.
     pub fn focus_dock(&mut self) {
         if self.session_lock.is_active() {
@@ -566,9 +563,7 @@ impl Cupertino {
         }
         // a dock a press released takes the keyboard again when engaged again
         self.released_layer = None;
-        let output = self
-            .output_at(self.pointer.current_location())
-            .map(|o| o.id);
+        let output = self.active_output();
         self.docks.engage(output);
     }
 

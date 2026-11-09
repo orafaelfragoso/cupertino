@@ -488,7 +488,7 @@ delegate_primary_selection!(Cupertino);
 
 impl FractionalScaleHandler for Cupertino {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
-        let scale = self.preferred_scale();
+        let scale = self.surface_scale(&surface);
         with_states(&surface, |states| {
             with_fractional_scale(states, |fs| fs.set_preferred_scale(scale));
         });
@@ -1056,11 +1056,12 @@ impl WlrLayerShellHandler for Cupertino {
         _layer: Layer,
         namespace: String,
     ) {
-        // a surface without an output goes to the one under the pointer (the active output)
+        // a surface without an output goes to the active output (`displays::placement`)
         let output = match output {
             Some(wl) => Output::from_resource(&wl),
             None => self
-                .output_at(self.pointer.current_location())
+                .active_output()
+                .and_then(|id| self.output_entry(id))
                 .map(|o| o.output.clone()),
         };
         let Some(output) = output else {

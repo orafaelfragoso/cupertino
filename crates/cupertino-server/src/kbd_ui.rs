@@ -656,7 +656,11 @@ impl Cupertino {
         {
             Some(g) => GRect::new(g.cx(), g.cy(), 2.0, 20.0),
             None => {
-                let o = self.outputs.first().map(|o| o.rect).unwrap_or_default();
+                let o = self
+                    .active_output()
+                    .and_then(|id| self.output_entry(id))
+                    .map(|o| o.rect)
+                    .unwrap_or_default();
                 GRect::new(o.x + o.w / 2.0, o.y + o.h / 2.0, 2.0, 20.0)
             }
         }

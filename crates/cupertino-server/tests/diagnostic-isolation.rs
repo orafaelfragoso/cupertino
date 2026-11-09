@@ -374,10 +374,11 @@ fn every_test_spawn_in_the_workspace_keeps_its_diagnostic_events_to_the_test() {
         rust_files(&krate.join("src"), &mut sources);
     }
     assert!(tests.len() > 100, "the scan finds the test sources");
-    // this check and the asset one hold example sources, not spawns
+    // this check and the asset and PAM ones hold example sources, not spawns
     let checks = [
         Path::new(file!()).file_name().unwrap(),
         std::ffi::OsStr::new("asset-isolation.rs"),
+        std::ffi::OsStr::new("pam-isolation.rs"),
     ];
     let mut checked: Vec<(PathBuf, usize, String)> = tests
         .into_iter()

@@ -3,7 +3,8 @@
 #![cfg(feature = "app")]
 
 use cupertino_menubar::extras::{
-    BatteryState, BluetoothDevice, ExtraAction, Extras, FocusLifetime, SessionAction, WifiNetwork,
+    BatteryState, BluetoothDevice, ExtraAction, Extras, FocusLifetime, OpenPanels, SessionAction,
+    WifiNetwork,
 };
 use cupertino_menubar::extras_bus::{ExtrasBus, SessionAgent};
 use std::collections::HashMap;
@@ -195,6 +196,16 @@ impl FakeCentre {
     #[zbus(property)]
     fn focus_lifetimes(&self) -> Vec<(String, String)> {
         vec![("one-hour".into(), "For 1 hour".into())]
+    }
+
+    #[zbus(property)]
+    fn centre_shown(&self) -> bool {
+        false
+    }
+
+    #[zbus(property)]
+    fn centre_output(&self) -> String {
+        String::new()
     }
 }
 
@@ -397,4 +408,176 @@ fn the_extras_follow_the_services_and_act_on_them() {
     let gone = next(&events);
     assert_eq!(gone.bluetooth, None);
     assert!(gone.wifi.is_some());
+}
+
+/// Stands in for the control panel's process (`Shown`, `Output`) or the notification centre's list (`CentreShown`,
+/// `CentreOutput`): whether it is open and the connector name of its output.
+#[derive(Clone, Default)]
+struct Presence(Arc<Mutex<(bool, String)>>);
+
+impl Presence {
+    fn set(&self, shown: bool, output: &str) {
+        *self.0.lock().unwrap() = (shown, output.to_owned());
+    }
+}
+
+struct FakePanel(Presence);
+
+#[zbus::interface(name = "org.cupertino.ControlPanel1")]
+impl FakePanel {
+    #[zbus(property)]
+    fn shown(&self) -> bool {
+        self.0 .0.lock().unwrap().0
+    }
+
+    #[zbus(property)]
+    fn output(&self) -> String {
+        self.0 .0.lock().unwrap().1.clone()
+    }
+}
+
+struct FakeList(Presence);
+
+#[zbus::interface(name = "org.cupertino.NotificationCenter1")]
+impl FakeList {
+    #[zbus(property)]
+    fn centre_shown(&self) -> bool {
+        self.0 .0.lock().unwrap().0
+    }
+
+    #[zbus(property)]
+    fn centre_output(&self) -> String {
+        self.0 .0.lock().unwrap().1.clone()
+    }
+}
+
+/// The next report whose panels are `panels`, skipping the reports before it.
+fn until_panels(events: &mpsc::Receiver<Extras>, panels: OpenPanels) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut last = None;
+    while std::time::Instant::now() < deadline {
+        match events.recv_timeout(Duration::from_millis(100)) {
+            Ok(extras) if extras.panels == panels => return,
+            Ok(extras) => last = Some(extras.panels),
+            Err(_) => {}
+        }
+    }
+    panic!("the panels never read {panels:?}; last {last:?}");
+}
+
+/// The extras follow whether the control panel and the notification centre's list are open, and on which output, as
+/// their processes announce it; a process that goes away takes its panel with it.
+#[test]
+fn the_open_panels_follow_their_processes() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let (panel, list) = (Presence::default(), Presence::default());
+    let panel_process = zbus::block_on(bus.connect_async());
+    let list_process = zbus::block_on(bus.connect_async());
+    block_on(async {
+        panel_process
+            .object_server()
+            .at("/org/cupertino/ControlPanel1", FakePanel(panel.clone()))
+            .await
+            .unwrap();
+        panel_process
+            .request_name("org.cupertino.ControlPanel1")
+            .await
+            .unwrap();
+        list_process
+            .object_server()
+            .at("/org/cupertino/NotificationCenter1", FakeList(list.clone()))
+            .await
+            .unwrap();
+        list_process
+            .request_name("org.cupertino.NotificationCenter1")
+            .await
+            .unwrap();
+    });
+    let announce_panel = |shown: bool, output: &str| {
+        panel.set(shown, output);
+        block_on(async {
+            let iface = panel_process
+                .object_server()
+                .interface::<_, FakePanel>("/org/cupertino/ControlPanel1")
+                .await
+                .unwrap();
+            let fake = iface.get().await;
+            fake.shown_changed(iface.signal_emitter()).await.unwrap();
+            fake.output_changed(iface.signal_emitter()).await.unwrap();
+        });
+    };
+    let announce_list = |shown: bool, output: &str| {
+        list.set(shown, output);
+        block_on(async {
+            let iface = list_process
+                .object_server()
+                .interface::<_, FakeList>("/org/cupertino/NotificationCenter1")
+                .await
+                .unwrap();
+            let fake = iface.get().await;
+            fake.centre_shown_changed(iface.signal_emitter())
+                .await
+                .unwrap();
+            fake.centre_output_changed(iface.signal_emitter())
+                .await
+                .unwrap();
+        });
+    };
+
+    let system = zbus::block_on(bus.connect_async());
+    let (_extras, events) = ExtrasBus::with_system(
+        zbus::block_on(bus.connect_async()),
+        std::future::ready(Ok(system)),
+        || {},
+    );
+    until_panels(&events, OpenPanels::default());
+
+    announce_panel(true, "");
+    until_panels(
+        &events,
+        OpenPanels {
+            control_panel: Some(String::new()),
+            centre: None,
+        },
+    );
+    announce_panel(true, "DP-1");
+    until_panels(
+        &events,
+        OpenPanels {
+            control_panel: Some("DP-1".into()),
+            centre: None,
+        },
+    );
+    // the panel is dismissed (Escape, a click outside, the keyboard going elsewhere): the list opens on another output
+    announce_panel(false, "");
+    announce_list(true, "HDMI-A-1");
+    until_panels(
+        &events,
+        OpenPanels {
+            control_panel: None,
+            centre: Some("HDMI-A-1".into()),
+        },
+    );
+    announce_panel(true, "DP-1");
+    until_panels(
+        &events,
+        OpenPanels {
+            control_panel: Some("DP-1".into()),
+            centre: Some("HDMI-A-1".into()),
+        },
+    );
+    // the panel's process ends while it is open: its name goes, and the panel with it
+    drop(panel_process);
+    until_panels(
+        &events,
+        OpenPanels {
+            control_panel: None,
+            centre: Some("HDMI-A-1".into()),
+        },
+    );
+    drop(list_process);
+    until_panels(&events, OpenPanels::default());
 }

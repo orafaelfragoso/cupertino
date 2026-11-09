@@ -334,7 +334,7 @@ pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
 pub const SHOW_AS: &str = "Show As";
 
 /// The toolbar's view-mode popup, and the folder menu's [`SHOW_AS`] submenu: the four view modes with the current one
-/// checked; Gallery is disabled until the window has that view.
+/// checked.
 pub fn view_menu(current: ViewMode) -> Vec<MenuItem> {
     vec![
         MenuItem::command("Icons", Command::SetView(ViewMode::Icons), true)
@@ -343,7 +343,8 @@ pub fn view_menu(current: ViewMode) -> Vec<MenuItem> {
             .checked(current == ViewMode::List),
         MenuItem::command("Columns", Command::SetView(ViewMode::Columns), true)
             .checked(current == ViewMode::Columns),
-        MenuItem::unavailable("Gallery"),
+        MenuItem::command("Gallery", Command::SetView(ViewMode::Gallery), true)
+            .checked(current == ViewMode::Gallery),
     ]
 }
 
@@ -580,7 +581,7 @@ mod tests {
         assert_eq!(views, &view_menu(ViewMode::Icons));
         assert_eq!(labels(views), ["Icons", "List", "Columns", "Gallery"]);
         assert!(views[0].checked && !views[1].checked);
-        assert!(!views[3].enabled, "no gallery view yet");
+        assert!(views[3].enabled && !views[3].checked);
     }
 
     #[test]
@@ -651,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn the_view_popup_checks_the_mode_and_disables_the_gallery() {
+    fn the_view_popup_offers_every_mode_and_checks_the_current_one() {
         let items = view_menu(ViewMode::List);
         assert_eq!(labels(&items), ["Icons", "List", "Columns", "Gallery"]);
         assert_eq!(
@@ -659,7 +660,7 @@ mod tests {
                 .iter()
                 .map(|i| (i.enabled, i.checked))
                 .collect::<Vec<_>>(),
-            [(true, false), (true, true), (true, false), (false, false)]
+            [(true, false), (true, true), (true, false), (true, false)]
         );
         assert_eq!(
             items[0].kind,

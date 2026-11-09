@@ -418,7 +418,7 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
             "      RadioButton \"Icons\" off focusable",
             "      RadioButton \"List\" on focusable selected",
             "      RadioButton \"Columns\" off focusable",
-            "      RadioButton \"Gallery\" off disabled",
+            "      RadioButton \"Gallery\" off focusable",
             "    PopUpButton \"View\" focusable collapsed",
             "    Button \"Share\" disabled",
             "    PopUpButton \"Tags\" focusable collapsed",
@@ -1150,7 +1150,7 @@ fn the_toolbars_view_tags_and_action_buttons_open_their_menus_below_them() {
         [("Icons".to_owned(), true), ("List".to_owned(), true)]
     );
     assert!(rows.contains(&("Columns".to_owned(), true)));
-    assert!(rows.contains(&("Gallery".to_owned(), false)));
+    assert!(rows.contains(&("Gallery".to_owned(), true)));
     run.choose("Icons");
     assert_eq!(run.rows(), Vec::<String>::new(), "shown as icons");
     run.click_named(Role::PopUpButton, "View");

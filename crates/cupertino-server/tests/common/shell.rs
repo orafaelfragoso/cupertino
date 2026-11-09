@@ -56,7 +56,9 @@ pub const TEST_CLOCK: &str = "1798796460";
 
 /// The shell binary `binary` on the private bus with the built-in assets, no host application data, the fixed
 /// [`TEST_CLOCK`], and `args`. The calling worker's `HOME`, `XDG_*`, `LANG` and `TZ` are already the isolated ones; `env`
-/// passes the bus, the empty asset search path and the clock on.
+/// passes the bus, the empty asset search path, the clock and the test PAM shim on: the shim starts every PAM
+/// transaction from a private policy (the lock screen's, here) and refuses every connection to the journal and the real
+/// buses ([`cupertino_test_pam`]).
 pub fn process(binary: &str, bus_address: &str, args: &[&str]) -> ShellProcess {
     let mut command = vec![
         "env".to_string(),
@@ -66,8 +68,9 @@ pub fn process(binary: &str, bus_address: &str, args: &[&str]) -> ShellProcess {
     command.extend([
         format!("DBUS_SESSION_BUS_ADDRESS={bus_address}"),
         format!("CUPERTINO_TEST_CLOCK={TEST_CLOCK}"),
-        bin_dir().join(binary).display().to_string(),
     ]);
+    command.extend(cupertino_test_pam::shared().env_words());
+    command.push(bin_dir().join(binary).display().to_string());
     command.extend(args.iter().map(|a| (*a).to_string()));
     ShellProcess {
         name: binary.into(),

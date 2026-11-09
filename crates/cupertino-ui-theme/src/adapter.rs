@@ -67,6 +67,11 @@ pub(crate) const LIGHT: Palette<Source> = Palette {
         (SliderTrack, Rgba([128, 128, 128, 255])),
         // A sidebar's neutral selection: black at about a tenth over the sidebar's material.
         (SidebarSelection, Rgba([0, 0, 0, 25])),
+        (TertiaryText, Token("tertiary-label")),
+        // black at 40 %: a sidebar's labels and symbols in a window that is not active
+        (InactiveSidebarText, Rgba([0, 0, 0, 102])),
+        // black at 3 % over the white window background
+        (InactiveTitlebar, Rgba([247, 247, 247, 255])),
     ],
     states: StateColors {
         emphasized_border: Rgba([0, 0, 0, 96]),
@@ -136,6 +141,12 @@ pub(crate) const DARK: Palette<Source> = Palette {
         // A sidebar's neutral selection: white at about an eighth over the sidebar's material, which lifts each
         // channel of the material evenly, so its tint shows through.
         (SidebarSelection, Rgba([255, 255, 255, 34])),
+        (TertiaryText, Token("tertiary-label")),
+        // white at 35 %: a sidebar's labels and symbols in a window that is not active, as grey over the tinted material
+        // as the secondary label reads there
+        (InactiveSidebarText, Rgba([255, 255, 255, 89])),
+        // white at 3 % over the dark window background
+        (InactiveTitlebar, Rgba([38, 39, 44, 255])),
     ],
     states: StateColors {
         emphasized_border: Rgba([255, 255, 255, 96]),

@@ -235,13 +235,16 @@ mod tests {
                 _ => None,
             })
             .expect("a Show As submenu");
-        assert_eq!(views, ["Icons", "List ✓", "Columns", "Gallery (off)"]);
+        assert_eq!(views, ["Icons", "List ✓", "Columns", "Gallery"]);
         assert_eq!(
-            on_select[..3],
-            [ViewMode::Icons, ViewMode::List, ViewMode::Columns].map(|mode| Message::Window(
-                0,
-                WindowEvent::MenuCommand(MenuCommand::SetView(mode))
-            ))
+            on_select,
+            [
+                ViewMode::Icons,
+                ViewMode::List,
+                ViewMode::Columns,
+                ViewMode::Gallery
+            ]
+            .map(|mode| Message::Window(0, WindowEvent::MenuCommand(MenuCommand::SetView(mode))))
         );
     }
 

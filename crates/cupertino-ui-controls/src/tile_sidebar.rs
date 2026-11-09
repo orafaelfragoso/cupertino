@@ -376,11 +376,11 @@ impl<M: 'static> Widget<M> for TileRow<M> {
         );
         paint_tile(cx, &tile, area);
         // the label at full strength: the sidebar's labels stand out more than the window's text; in a window that is
-        // not active every label, the selected row's too, is the secondary label colour (the tiles keep their colours)
+        // not active every label, the selected row's too, is the inactive sidebar text (the tiles keep their colours)
         let color = if !active {
             theme
                 .colors
-                .get(ColorRole::SecondaryText, StateVariant::NORMAL)
+                .get(ColorRole::InactiveSidebarText, StateVariant::NORMAL)
         } else if self.selected {
             look::color(&theme, ColorRole::ControlText, &state)
         } else {

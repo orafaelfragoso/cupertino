@@ -167,8 +167,9 @@ fn an_inactive_windows_symbols_are_grey_and_the_selected_one_still_shows() {
             // the row's own fill, past its label and clear of any accessory
             let fill = pixel(&mut run, Point::new(row.max_x() - 12.0, row.center().y));
             let farthest = pixels.iter().map(|p| distance(p, &fill)).max().unwrap();
+            // it recedes with the labels, yet stays plainly visible on the row
             assert!(
-                farthest > 80,
+                farthest > 60,
                 "{appearance:?}: the symbol of {name} stands out from its row ({farthest} from {fill:?})"
             );
         }

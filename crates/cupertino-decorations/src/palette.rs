@@ -4,12 +4,13 @@
 //! * titlebar fills: opaque titlebar material recipes of the specification (the
 //!   choice of the opaque variant is), `Titlebar-Opaque` for standard and
 //!   `SeamlessWindowTitlebar-Opaque` for unified titlebars;
-//! * title text: the window frame text colour (active) and the secondary label colour (inactive,
-//!   approximate);
+//! * title text: the window frame text colour (active) and the tertiary label colour (inactive), so the title of a
+//!   window that is not active recedes as its toolbar's does;
 //! * rim: the window rim colour token and its 2× variant;
 //! * button fills: the system red/yellow/green colours (approximate mapping; the design
-//!   colours of the buttons are not part of the catalogs), inactive and disabled buttons use
-//!   the system fill colour composited on the titlebar (approximate);
+//!   colours of the buttons are not part of the catalogs); inactive and disabled buttons are one translucent disc,
+//!   white at 17 % (dark) or black at 10 % (light), laid over whatever the window draws under them, so a tinted
+//!   sidebar shows through them; Increase Contrast deepens them to 30 % and 18 %;
 //! * glyph colour: black at 55 % (approximate, authored);
 //! * separator: the grid colour (approximate).
 //!
@@ -52,6 +53,15 @@ fn rgba8(c: [u8; 4]) -> Rgba {
     ]
 }
 
+/// A window button of a window that is not active, or a disabled one: white at 17 % in the dark appearance, laid over
+/// what is under it, so the sidebar's tint shows through.
+pub const INACTIVE_BUTTON_DARK: Rgba = [1.0, 1.0, 1.0, 0.17];
+/// The same in the light appearance: black at 10 %.
+pub const INACTIVE_BUTTON_LIGHT: Rgba = [0.0, 0.0, 0.0, 0.1];
+/// With Increase Contrast: deeper, white at 30 % and black at 18 %.
+pub const INACTIVE_BUTTON_DARK_HIGH_CONTRAST: Rgba = [1.0, 1.0, 1.0, 0.3];
+pub const INACTIVE_BUTTON_LIGHT_HIGH_CONTRAST: Rgba = [0.0, 0.0, 0.0, 0.18];
+
 fn gray(v: f32) -> Rgba {
     [v, v, v, 1.0]
 }
@@ -81,11 +91,11 @@ impl Palette {
                 unified_inactive: gray(0.169),
                 separator: rgba8([0x1A, 0x1A, 0x1A, 255]),
                 title_active: rgba8([255, 255, 255, 216]),
-                title_inactive: rgba8([255, 255, 255, 140]),
+                title_inactive: rgba8([255, 255, 255, 63]),
                 close: rgba8([0xFF, 0x45, 0x3A, 255]),
                 minimize: rgba8([0xFF, 0xD6, 0x0A, 255]),
                 zoom: rgba8([50, 215, 75, 255]),
-                button_inactive: over(rgba8([255, 255, 255, 25]), titlebar_inactive),
+                button_inactive: INACTIVE_BUTTON_DARK,
                 glyph: [0.0, 0.0, 0.0, 0.55],
                 rim_1x: rgba8([0, 0, 0, 89]),
                 rim_2x: rgba8([0, 0, 0, 89]),
@@ -102,11 +112,11 @@ impl Palette {
                 unified_inactive: gray(0.957),
                 separator: rgba8([0xE6, 0xE6, 0xE6, 255]),
                 title_active: rgba8([0, 0, 0, 216]),
-                title_inactive: rgba8([0, 0, 0, 127]),
+                title_inactive: rgba8([0, 0, 0, 66]),
                 close: rgba8([0xFF, 0x3B, 0x30, 255]),
                 minimize: rgba8([0xFF, 0xCC, 0x00, 255]),
                 zoom: rgba8([40, 205, 65, 255]),
-                button_inactive: over(rgba8([0, 0, 0, 25]), titlebar_inactive),
+                button_inactive: INACTIVE_BUTTON_LIGHT,
                 glyph: [0.0, 0.0, 0.0, 0.55],
                 rim_1x: rgba8([255, 255, 255, 89]),
                 rim_2x: rgba8([255, 255, 255, 153]),
@@ -144,15 +154,19 @@ impl Palette {
         }
         p.separator = sem(SemanticColor::Grid).unwrap_or(p.separator);
         p.title_active = sem(SemanticColor::WindowFrameText).unwrap_or(p.title_active);
-        p.title_inactive = sem(SemanticColor::SecondaryLabel).unwrap_or(p.title_inactive);
+        p.title_inactive = sem(SemanticColor::TertiaryLabel).unwrap_or(p.title_inactive);
         p.close = sem(SemanticColor::SystemRed).unwrap_or(p.close);
         p.minimize = sem(SemanticColor::SystemYellow).unwrap_or(p.minimize);
         p.zoom = sem(SemanticColor::SystemGreen).unwrap_or(p.zoom);
         p.rim_1x = sem(SemanticColor::WindowRim).unwrap_or(p.rim_1x);
         p.rim_2x = sem(SemanticColor::WindowRim2x).unwrap_or(p.rim_2x);
         p.window_background = sem(SemanticColor::WindowBackground).unwrap_or(p.window_background);
-        if let Some(f) = sem(SemanticColor::SystemFill) {
-            p.button_inactive = over(f, p.titlebar_inactive);
+        if appearance.is_high_contrast() {
+            p.button_inactive = if appearance.is_dark() {
+                INACTIVE_BUTTON_DARK_HIGH_CONTRAST
+            } else {
+                INACTIVE_BUTTON_LIGHT_HIGH_CONTRAST
+            };
         }
         p
     }

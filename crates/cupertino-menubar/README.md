@@ -95,7 +95,9 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   blur, and only its text and symbols follow what is behind them (*Backdrop* below). Increase Contrast keeps it
   see-through. Under Reduce Transparency it is a solid strip: the bar's `MenuBar` backdrop, which the server draws with
   the material's opaque recipe (grey 0.1255 dark, 0.8549 light), covers the bar then and has no area otherwise
-  (`tone::solid_bar`). Each open menu level is an `xdg_popup` with a `Menu` backdrop. The process keeps its palette under
+  (`tone::solid_bar`). Each open menu level is an `xdg_popup` with a `Menu` backdrop. Its disabled rows, their submenu
+  arrows and checkmarks recede to the menu text at 0.26; with Increase Contrast they stay readable at 0.53 and the
+  separators strengthen to 0.47 (`MenuPalette::high_contrast`). The process keeps its palette under
   the display options (no recorded contrast palette for the menu bar text and status items).
 - **Menus.** The server's `cupertino_menu_bar_v1` feed names the active application and how its window exports menus:
   DBusMenu or GMenuModel. A window without menus gets the synthetic menus, whose actions go back as `window_command` /
@@ -197,6 +199,16 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
     it). There is no input method in the bar.
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
   every change. The solid strip follows it in the server. On `locked` the bars close every open menu and title focus.
+- **Open panels.** An item is drawn highlighted, as an open menu's title is, while what it opened is open: an
+  application or status menu (the controller's open title), the control panel (`org.cupertino.ControlPanel1`'s `Shown`)
+  and the notification centre's list behind the clock (`CentreShown`). The panels belong to other processes, so the
+  extras task reads those properties with the others and follows their `PropertiesChanged` and their names' owners
+  (`extras::OpenPanels`); whatever closes a panel (Escape, a click outside, a second click, another item or panel taking
+  the keyboard, the lock, its output going) clears its highlight, and a panel's process that ends takes it along. The
+  highlight shows on the bar of the panel's output only, named by `Output` / `CentreOutput` (`wl_output.name`); while a
+  panel does not know its output yet it shows only where there is one bar. Both items read as expanded to assistive
+  technology while their panel is open. The highlight is the same fill in every mode and tone, Reduce Transparency and
+  Increase Contrast included.
 - **Backdrop.** From shell version 14 the server sends each bar the lightness of its output's wallpaper under the strip
   (`backdrop_luminance`, CIE L*/100 in thousandths), and each bar picks its own tone (`tone::BarTone`): dark text at
   550 and above, light text at 450 and below, the last tone held in between. The first value, and the first after the
@@ -214,10 +226,16 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   the standard deviation of L*, from the same samples as the lightness); each slot takes the most of the bands it
   covers (`tone::spread_under`) and its halo follows it: none at all up to `CALM_SPREAD` (6 L*), so over a calm
   wallpaper nothing shows, then growing smoothly to full at `BUSY_SPREAD` (25 L*), black at 0.5625 under light text and
-  white at 0.75 under dark text, its blur from 0.5 to 3 pt, over a dense core that hugs the strokes first (black 0.5,
-  white 0.6, 0.75 pt, at the same share of full), so a thin glyph keeps a solid edge where stripes cross it. Before the
-  first spread, and from an older server, every slot draws the halo at 0.8 of full without the core (black 0.45, white
-  0.6, 2.5 pt), as all slots did before. The session's Reduce
+  white at 0.75 under dark text, its blur from 0.5 to 3 pt, over a dense core that hugs the strokes first (black 0.8,
+  white 0.85, 1 pt, at the same share of full). The core is laid three times (`HALO_CORE_PASSES`), each pass under the
+  strokes and the passes before it, so it grows about a point past even a hairline stroke at close to its full opacity
+  rather than thinning out as one blur of a thin stroke does: within a point of the strokes the wallpaper reads 4.5:1 or
+  more from the text on average, even where it is as light as light text or as dark as dark text (white, a bright
+  yellow, black, a deep blue), where one pass at the earlier core gave about 1.2:1 over white (`Halo::shadows`). Over
+  measured wallpaper the open title's highlight lies on a backing of the halo's tone (black 0.4 under light text, white
+  0.5 under dark, at the core's share; `Halo::pill_backing`), so it shows as a shape of its own over a busy picture.
+  Before the first spread, and from an older server, every slot draws the halo at 0.8 of full without the core (black
+  0.45, white 0.6, 2.5 pt) and the highlight has no backing, as all slots did before. The session's Reduce
   Transparency is the one source of both the solid strip and the halo (`tone::solid_bar`, `BarScene::solid`): a solid
   bar draws no halo, whatever the theme's own option says. A bar redraws when its tone or a slot's halo changes.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and
@@ -269,8 +287,8 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
 
 | Name | Role |
 |---|---|
-| `org.cupertino.NotificationCenter1` | Session bus. `ToggleCentre` on a click on the clock. Do-not-disturb state and `FocusLifetimes` for the Focus item. |
-| `org.cupertino.ControlPanel1` | Session bus. `Toggle` on a click on the control panel slot. |
+| `org.cupertino.NotificationCenter1` | Session bus. `ToggleCentre` on a click on the clock. Do-not-disturb state and `FocusLifetimes` for the Focus item. `CentreShown` and `CentreOutput` for the clock's highlight. |
+| `org.cupertino.ControlPanel1` | Session bus. `Toggle` on a click on the control panel slot. `Shown` and `Output` for its highlight. |
 | `org.kde.StatusNotifierWatcher` | Owned by the process, which is the status item host. |
 | `com.canonical.AppMenu.Registrar` | Owned by the process while it shows a bar and no other process owns the name; released with the last bar. Registers nothing. Qt, KDE Frameworks, Chromium and LibreOffice export their menus and hide their in-window menu bar only while the name has an owner. |
 | `org.cupertino.Network1` | System bus. `Devices`, `WirelessEnabled`, `GetNetworks`, `Connect`. |
@@ -310,8 +328,8 @@ cargo clippy -p cupertino-menubar --all-targets
 |---|---|
 | `tests/controller.rs` | The controller's pointer and key behaviour; among it, a press on empty bar space closes a sticky or press-drag menu, is consumed and chooses nothing on the press or the release; pointer paths for a drag onto a row, a quick click and a hold on the title, a diagonal into a submenu across other rows, a rest and a slow path that give the submenu up, and type-ahead with Return and Escape. |
 | `tests/dbus_integration.rs` | Fake DBusMenu, StatusNotifier and GMenuModel peers work against the clients and services, on a private bus from `cupertino-test-bus` (a `dbus-daemon` child that dies with its test). It skips with a message when `dbus-daemon` is not installed. |
-| `src/tone.rs` tests | Outside the band every tone the bar can hold is the text colour that reads better, at 4.5:1 or more away from the band; the text is light over a dark blue wallpaper and dark over a pale one; only Reduce Transparency makes the bar solid and keeps the appearance's text, Increase Contrast leaves it adapting. The halo's strength is none up to the calm spread (and under 2 % of full just past it), grows smoothly and never falls to full at the busy spread, its blur and its core growing with it; a solid bar has none; with no measure it is the halo slots drew before, without a core; a slot takes the most spread of the bands it covers. |
+| `src/tone.rs` tests | Outside the band every tone the bar can hold is the text colour that reads better, at 4.5:1 or more away from the band; the text is light over a dark blue wallpaper and dark over a pale one; only Reduce Transparency makes the bar solid and keeps the appearance's text, Increase Contrast leaves it adapting. The halo's strength is none up to the calm spread (and under 2 % of full just past it), grows smoothly and never falls to full at the busy spread, its blur and its core growing with it; a solid bar has none; with no measure it is the halo slots drew before, without a core; a slot takes the most spread of the bands it covers. Over measured wallpaper the halo is drawn as the core's passes, then the soft halo, and the open title's backing follows the core in the halo's tone; with no measure it is the soft halo alone and no backing. |
 | `tests/app-menus.rs` (feature `app`) | The menus Files and Settings publish with `cupertino-ui-menus`, read by the bar's worker over a private bus, open from their title and choose an item: the application hears that item's action. It builds the menus from `cupertino_files::menu_bar` and `cupertino_settings::menu_bar` themselves, so it needs these two apps-layer crates as dev-dependencies, which are the layer graph's dev-only exceptions for this crate. |
-| `tests/bar-view.rs` (feature `app`) | The bar, the bar with the File menu open, and the open menu as CupertinoKit draws them match the goldens in `tests/goldens`: the frame at 1x (x86_64 only, within 2/255 a channel) and its focus and accessibility tree. A press on a title opens its menu as a popup of the bar, and a click on a row chooses the row's item; a screen reader does both through the titles' and rows' Click action. Every settled frame passes `cupertino-ui-test`'s accessibility audit: each menu title and row says its place and its bar or menu its count (separators and the Help search field not counted). The session's Reduce Transparency gives the solid strip and no halo over the busiest wallpaper, the theme's own option taking none away; over a calm wallpaper no slot draws a halo, and over one busy under the bar's left eighth only the slots there do. |
+| `tests/bar-view.rs` (feature `app`) | The bar, the bar with the File menu open, and the open menu as CupertinoKit draws them match the goldens in `tests/goldens`: the frame at 1x (x86_64 only, within 2/255 a channel) and its focus and accessibility tree. A press on a title opens its menu as a popup of the bar, and a click on a row chooses the row's item; a screen reader does both through the titles' and rows' Click action. Every settled frame passes `cupertino-ui-test`'s accessibility audit: each menu title and row says its place and its bar or menu its count (separators and the Help search field not counted). The session's Reduce Transparency gives the solid strip and no halo over the busiest wallpaper, the theme's own option taking none away; over a calm wallpaper no slot draws a halo, and over one busy under the bar's left eighth only the slots there do. Over the busiest wallpaper, light text over white and a bright yellow and dark text over black and a deep blue, the pixels within a point of the strokes read 4.5:1 or more from the text on average and 3:1 or more at nine in ten of them, while a calm bar leaves them as the wallpaper is; the open title's highlight stands 1.5:1 or more from such a wallpaper at its ends, where over a calm one it is the plain highlight. While the control panel or the notification centre's list is open on the bar, its item alone is drawn highlighted and reads as expanded. |
 | `src/extras_bus.rs` tests | 10 000 refreshes in a burst wait as one; a queue filled with actions stays at its bound, a refresh then is not needed, the newest session agent is kept, and a task that is gone is reported. |
-| `tests/extras_bus.rs` (feature `app`) | Stand-ins for the network, power, Bluetooth and notification services, served on one bus used as both system and session bus. Checks what the extras read, that joining an open network calls `Connect` without a passphrase and is read back, and that a service leaving the bus hides its item. |
+| `tests/extras_bus.rs` (feature `app`) | Stand-ins for the network, power, Bluetooth and notification services, served on one bus used as both system and session bus. Checks what the extras read, that joining an open network calls `Connect` without a passphrase and is read back, and that a service leaving the bus hides its item. Stand-ins for the control panel and the notification centre's list announce opening, their output and closing, and the panels read follow them; a process leaving the bus closes its panel. |

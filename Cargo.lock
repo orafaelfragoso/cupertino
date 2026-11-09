@@ -1365,6 +1365,7 @@ dependencies = [
  "cupertino-seat",
  "cupertino-shell-client",
  "cupertino-test-bus",
+ "cupertino-test-pam",
  "cupertino-theme",
  "cupertino-ui-atspi",
  "cupertino-ui-test",
@@ -1743,6 +1744,7 @@ dependencies = [
  "cupertino-seat",
  "cupertino-stage",
  "cupertino-test-bus",
+ "cupertino-test-pam",
  "cupertino-theme",
  "cupertino-wm",
  "image",
@@ -1779,6 +1781,7 @@ dependencies = [
  "cupertino-peer",
  "cupertino-seat",
  "cupertino-test-bus",
+ "cupertino-test-pam",
  "libc",
  "pam-client2",
  "rustix 1.1.6",
@@ -1852,6 +1855,21 @@ dependencies = [
  "libc",
  "tempfile",
  "zbus",
+]
+
+[[package]]
+name = "cupertino-test-pam"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+]
+
+[[package]]
+name = "cupertino-test-pam-shim"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

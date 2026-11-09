@@ -10,13 +10,18 @@ pub type Rgba = [f32; 4];
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MenuPalette {
     pub text: Rgba,
+    /// What a disabled row's text, mark and arrow keep of the text's opacity: a quarter of full strength in all, half
+    /// with Increase Contrast ([`MenuPalette::high_contrast`]).
     pub disabled_alpha: f32,
     /// Fill behind the open title in the bar.
     pub bar_highlight: Rgba,
     /// Fill of the highlighted popup row and the text on it.
     pub row_highlight: Rgba,
     pub row_highlight_text: Rgba,
+    /// The search field's box, and the line between groups of rows unless Increase Contrast strengthens it.
     pub separator: Rgba,
+    /// The line between groups of rows.
+    pub rule: Rgba,
     /// The screen capture indicator: indigo, (99, 97, 241) dark and (84, 82, 204) light.
     pub screen_capture: Rgba,
 }
@@ -26,26 +31,48 @@ impl MenuPalette {
         if dark {
             Self {
                 text: [0.97, 0.97, 0.98, 0.95],
-                disabled_alpha: 0.4,
+                disabled_alpha: DISABLED_ALPHA,
                 bar_highlight: [1.0, 1.0, 1.0, 0.2],
                 row_highlight: [0.04, 0.45, 1.0, 1.0],
                 row_highlight_text: [1.0, 1.0, 1.0, 1.0],
                 separator: [1.0, 1.0, 1.0, 0.16],
+                rule: [1.0, 1.0, 1.0, 0.16],
                 screen_capture: [99.0 / 255.0, 97.0 / 255.0, 241.0 / 255.0, 1.0],
             }
         } else {
             Self {
                 text: [0.05, 0.05, 0.06, 0.92],
-                disabled_alpha: 0.4,
+                disabled_alpha: DISABLED_ALPHA,
                 bar_highlight: [0.0, 0.0, 0.0, 0.13],
                 row_highlight: [0.04, 0.45, 1.0, 1.0],
                 row_highlight_text: [1.0, 1.0, 1.0, 1.0],
                 separator: [0.0, 0.0, 0.0, 0.13],
+                rule: [0.0, 0.0, 0.0, 0.13],
                 screen_capture: [84.0 / 255.0, 82.0 / 255.0, 204.0 / 255.0, 1.0],
             }
         }
     }
+
+    /// The palette with Increase Contrast: disabled rows keep half the text's strength, readable yet apart from the
+    /// enabled ones, and the lines between groups of rows are stronger.
+    pub fn high_contrast(self) -> Self {
+        let mut rule = self.rule;
+        rule[3] = HIGH_CONTRAST_RULE_ALPHA;
+        Self {
+            disabled_alpha: HIGH_CONTRAST_DISABLED_ALPHA,
+            rule,
+            ..self
+        }
+    }
 }
+
+/// A disabled popup row's share of the text's opacity: with the text at 92–95 %, its text, mark and arrow end at about
+/// a quarter, the disabled text of the rest of the desktop.
+pub const DISABLED_ALPHA: f32 = 0.26;
+/// The same with Increase Contrast: about half.
+pub const HIGH_CONTRAST_DISABLED_ALPHA: f32 = 0.53;
+/// The line between groups of rows with Increase Contrast.
+pub const HIGH_CONTRAST_RULE_ALPHA: f32 = 0.47;
 
 /// Lightness of the wallpaper under the bar (CIE L*/100 in thousandths) at and above which the bar's text is dark.
 /// approximate.
@@ -79,9 +106,17 @@ pub const HALO_BLUR_CALM: f64 = 0.5;
 pub const HALO_BLUR_BUSY: f64 = 3.0;
 /// The halo's dense core over measured wallpaper, hugging the strokes under the soft halo so a thin glyph keeps a
 /// solid edge over stripes: its opacity at full strength under light and under dark text, and its blur in points.
-pub const HALO_CORE_UNDER_LIGHT: f32 = 0.5;
-pub const HALO_CORE_UNDER_DARK: f32 = 0.6;
-pub const HALO_CORE_BLUR: f64 = 0.75;
+/// It is laid [`HALO_CORE_PASSES`] times, each pass under the strokes and the passes before it, so it grows past a
+/// thin stroke at close to its full opacity instead of thinning out as one blur of a hairline does: about a point
+/// around every stroke reads at 4.5:1 or more against the text even over white (or black) wallpaper.
+pub const HALO_CORE_UNDER_LIGHT: f32 = 0.8;
+pub const HALO_CORE_UNDER_DARK: f32 = 0.85;
+pub const HALO_CORE_BLUR: f64 = 1.0;
+pub const HALO_CORE_PASSES: usize = 3;
+/// Under the highlight of the open title over measured wallpaper, a backing of the halo's tone at this opacity at full
+/// strength, under light and under dark text, so the highlight shows as a shape of its own over a busy picture.
+pub const HALO_PILL_UNDER_LIGHT: f32 = 0.4;
+pub const HALO_PILL_UNDER_DARK: f32 = 0.5;
 
 /// The soft halo of the opposite tone an item of the bar draws under its text and symbols, so they read over a busy
 /// wallpaper.
@@ -115,6 +150,28 @@ impl Halo {
                 [0.0, 0.0, 0.0, HALO_CORE_UNDER_LIGHT * self.core]
             } else {
                 [1.0, 1.0, 1.0, HALO_CORE_UNDER_DARK * self.core]
+            }
+        })
+    }
+
+    /// The shadows the halo is drawn as under text of colour `text`, each `(blur in points, colour)` and each laid
+    /// under the content and the ones before it: the core's passes, then the soft halo.
+    pub fn shadows(self, text: Rgba) -> Vec<(f64, Rgba)> {
+        let core = self.core_color(text).map(|c| (HALO_CORE_BLUR, c));
+        std::iter::repeat_n(core, HALO_CORE_PASSES)
+            .flatten()
+            .chain([(self.blur, self.color(text))])
+            .collect()
+    }
+
+    /// The backing under the open title's highlight with text of colour `text`: the halo's tone at its core's share of
+    /// [`HALO_PILL_UNDER_LIGHT`] or [`HALO_PILL_UNDER_DARK`]; `None` without a core (no measure yet).
+    pub fn pill_backing(self, text: Rgba) -> Option<Rgba> {
+        (self.core > 0.0).then(|| {
+            if light(text) {
+                [0.0, 0.0, 0.0, HALO_PILL_UNDER_LIGHT * self.core]
+            } else {
+                [1.0, 1.0, 1.0, HALO_PILL_UNDER_DARK * self.core]
             }
         })
     }
@@ -372,6 +429,44 @@ mod tests {
         const { assert!(HALO_CORE_BLUR < HALO_BLUR_BUSY) };
     }
 
+    /// Over measured wallpaper the halo is drawn as its core's passes, each the core's colour at its blur, then the soft
+    /// halo; with no measure it is the soft halo alone, as before the spread was measured. The open title's backing
+    /// follows the core in the halo's tone, and there is none with no measure.
+    #[test]
+    fn the_halo_is_drawn_as_the_core_s_passes_then_the_soft_halo() {
+        let (light_text, dark_text) = ([0.97, 0.97, 0.98, 0.95], [0.05, 0.05, 0.06, 0.92]);
+        let full = halo(Some(BUSY_SPREAD), false).unwrap();
+        for text in [light_text, dark_text] {
+            let shadows = full.shadows(text);
+            assert_eq!(shadows.len(), HALO_CORE_PASSES + 1);
+            for &(blur, color) in &shadows[..HALO_CORE_PASSES] {
+                assert_eq!((blur, Some(color)), (HALO_CORE_BLUR, full.core_color(text)));
+            }
+            assert_eq!(
+                shadows[HALO_CORE_PASSES],
+                (HALO_BLUR_BUSY, full.color(text))
+            );
+        }
+        const { assert!(HALO_CORE_PASSES >= 2) };
+        assert_eq!(
+            full.pill_backing(light_text),
+            Some([0.0, 0.0, 0.0, HALO_PILL_UNDER_LIGHT])
+        );
+        assert_eq!(
+            full.pill_backing(dark_text),
+            Some([1.0, 1.0, 1.0, HALO_PILL_UNDER_DARK])
+        );
+        let mid = halo(Some((CALM_SPREAD + BUSY_SPREAD) / 2), false).unwrap();
+        let backing = mid.pill_backing(light_text).unwrap()[3];
+        assert!((backing - HALO_PILL_UNDER_LIGHT * mid.core).abs() < 1e-6);
+        let unknown = halo(None, false).unwrap();
+        assert_eq!(
+            unknown.shadows(light_text),
+            vec![(unknown.blur, unknown.color(light_text))]
+        );
+        assert_eq!(unknown.pill_backing(light_text), None);
+    }
+
     #[test]
     fn an_item_takes_the_most_spread_of_the_bands_it_covers() {
         let bands = [0, 10, 300, 20];
@@ -381,6 +476,26 @@ mod tests {
         assert_eq!(spread_under(&bands, 400.0, 380.0, 420.0), Some(20));
         assert_eq!(spread_under(&bands, 400.0, -5.0, 0.0), Some(0));
         assert_eq!(spread_under(&[], 400.0, 10.0, 90.0), None);
+    }
+
+    /// A disabled popup row (its text, mark and arrow) shows about a quarter of the text's strength, as disabled text
+    /// does elsewhere, and about half with Increase Contrast; both stay well apart from the enabled rows, and Increase
+    /// Contrast strengthens the lines between groups.
+    #[test]
+    fn disabled_rows_recede_and_high_contrast_keeps_them_readable() {
+        for dark in [false, true] {
+            let normal = MenuPalette::new(dark);
+            let contrast = normal.high_contrast();
+            let shown = |p: MenuPalette| p.text[3] * p.disabled_alpha;
+            assert!((shown(normal) - 0.25).abs() < 0.02, "dark {dark}");
+            assert!((shown(contrast) - 0.5).abs() < 0.02, "dark {dark}");
+            assert!(contrast.rule[3] > normal.rule[3] * 2.0, "dark {dark}");
+            assert_eq!(
+                contrast.separator, normal.separator,
+                "the field's box stays"
+            );
+            assert_eq!(contrast.text, normal.text);
+        }
     }
 
     #[test]

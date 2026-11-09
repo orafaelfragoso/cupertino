@@ -179,6 +179,9 @@ pub struct BarScene<'a> {
     pub spread: &'a [u16],
     /// The bar's size: the output's width and the bar's height.
     pub size: Size,
+    /// The items whose panel, shown by another process, is open on this bar's output
+    /// ([`crate::extras::OpenPanels::open_on`]): drawn highlighted as an open menu's title is.
+    pub open_panels: &'a [SlotKey],
 }
 
 /// The bar's window and one popup per open menu level.
@@ -212,7 +215,6 @@ fn spec(app_id: String, size: Size) -> WindowSpec {
 fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Window<M> {
     let controller = scene.controller;
     let highlight = controller.highlighted_slot();
-    let open = controller.open_slot();
     let mut places = 0;
     let children: Vec<_> = controller
         .layout()
@@ -229,8 +231,8 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
                 bar: scene.bar,
                 slot: slot.clone(),
                 look: slot_look(slot, scene),
-                highlighted: highlight == Some(&slot.key),
-                expanded: has_menu(&slot.key, scene).then(|| open == Some(&slot.key)),
+                highlighted: highlight == Some(&slot.key) || scene.open_panels.contains(&slot.key),
+                expanded: expanded(&slot.key, scene),
                 role,
                 name,
                 metrics: controller.bar_metrics.clone(),
@@ -267,6 +269,14 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
         }),
         popup: None,
         menus: None,
+    }
+}
+
+/// Whether the slot's menu or panel is open, for a slot that opens one: its menu, or the panel of another process.
+fn expanded(key: &SlotKey, scene: &BarScene<'_>) -> Option<bool> {
+    match key {
+        SlotKey::ControlPanel | SlotKey::Clock => Some(scene.open_panels.contains(key)),
+        _ => has_menu(key, scene).then(|| scene.controller.open_slot() == Some(key)),
     }
 }
 
@@ -465,6 +475,16 @@ struct Field {
 }
 
 /// Whether the session's appearance is dark, which picks the palette of the menus and of a bar without its own tone.
+/// The colours of a popup's rows: the appearance's, strengthened with Increase Contrast.
+fn popup_palette(env: &Environment) -> MenuPalette {
+    let palette = MenuPalette::new(dark(env));
+    if env.theme.preferences.appearance.is_high_contrast() {
+        palette.high_contrast()
+    } else {
+        palette
+    }
+}
+
 fn dark(env: &Environment) -> bool {
     matches!(
         env.theme.preferences.appearance,
@@ -807,27 +827,29 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
                 size.width,
                 size.height - 2.0 * m.selection_inset_y,
             );
+            // over a busy wallpaper the highlight lies on a backing of the halo's tone, so it shows as a shape of its
+            // own wherever the picture under it is as light (or as dark) as the highlight is
+            if let Some(backing) = self.halo.and_then(|h| h.pill_backing(palette.text)) {
+                fill(cx, rect, m.selection_corner_radius, backing);
+            }
             fill(cx, rect, m.selection_corner_radius, palette.bar_highlight);
         }
-        // over a busy wallpaper the text and symbols keep a soft halo of the opposite tone, so they read where the
-        // picture under them is as light or as dark as they are; a calm wallpaper and a solid bar need none
-        // (over measured wallpaper a dense core hugs the strokes first, and the soft halo spreads from both)
+        // over a busy wallpaper the text and symbols keep a halo of the opposite tone, so they read where the picture
+        // under them is as light or as dark as they are; a calm wallpaper and a solid bar need none (over measured
+        // wallpaper a dense core is laid around the strokes in a few passes first, and the soft halo spreads from it)
         if let Some(halo) = self.halo {
-            let core = halo
-                .core_color(palette.text)
-                .map(|core| Effect::DropShadow {
+            let effects = halo
+                .shadows(palette.text)
+                .into_iter()
+                .map(|(blur, c)| Effect::DropShadow {
                     offset: Point::ZERO,
-                    blur: crate::tone::HALO_CORE_BLUR,
-                    color: color(core),
-                });
-            let soft = Effect::DropShadow {
-                offset: Point::ZERO,
-                blur: halo.blur,
-                color: color(halo.color(palette.text)),
-            };
+                    blur,
+                    color: color(c),
+                })
+                .collect();
             cx.push(PaintOp::PushLayer {
                 opacity: 1.0,
-                effects: core.into_iter().chain([soft]).collect(),
+                effects,
             });
         }
         self.paint_look(cx, &palette);
@@ -1078,7 +1100,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let palette = MenuPalette::new(dark(cx.env()));
+        let palette = popup_palette(cx.env());
         let size = cx.size();
         let m = &self.metrics;
         let item = &self.row.item;
@@ -1100,7 +1122,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 size.width - 2.0 * m.padding_x,
                 line,
             );
-            fill(cx, rect, 0.0, palette.separator);
+            fill(cx, rect, 0.0, palette.rule);
             return;
         }
         if self.hot {

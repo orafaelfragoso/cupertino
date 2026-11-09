@@ -101,6 +101,8 @@ struct Surfaces {
     /// Every output the connection lists, as of the last batch the window system read: the model hears of a change
     /// only after the events of that batch, a bar's close among them.
     outputs: Vec<OutputId>,
+    /// The connector name of each output that has one (`wl_output.name`), as of the same batch.
+    names: HashMap<OutputId, String>,
 }
 
 impl Surfaces {
@@ -290,7 +292,14 @@ impl SurfaceRoles for BarRoles {
     }
 
     fn outputs_changed(&mut self, conn: &Connection) {
-        self.surfaces.borrow_mut().outputs = conn.outputs().into_iter().map(|o| o.id).collect();
+        let outputs = conn.outputs();
+        let mut surfaces = self.surfaces.borrow_mut();
+        surfaces.names = outputs
+            .iter()
+            .filter_map(|o| Some((o.id, o.name.clone()?)))
+            .collect();
+        surfaces.outputs = outputs.into_iter().map(|o| o.id).collect();
+        drop(surfaces);
         self.send(ShellMessage::Outputs(described_outputs(conn)));
     }
 }
@@ -495,6 +504,11 @@ pub fn run() -> Result<std::convert::Infallible> {
     let surfaces = Rc::new(RefCell::new(Surfaces {
         bars: Vec::new(),
         outputs: conn.outputs().into_iter().map(|o| o.id).collect(),
+        names: conn
+            .outputs()
+            .into_iter()
+            .filter_map(|o| Some((o.id, o.name?)))
+            .collect(),
     }));
     let (shell_events, shell_messages) = async_channel::unbounded();
     let system = system.with_roles(BarRoles {
@@ -1318,9 +1332,20 @@ impl Application for App {
     }
 
     fn view(app: &App) -> Vec<Window<Message>> {
+        let surfaces = app.surfaces.borrow();
         app.bars
             .iter()
             .flat_map(|bar| {
+                let output = surfaces.names.get(&bar.output).map(String::as_str);
+                let open_panels: Vec<SlotKey> = [SlotKey::ControlPanel, SlotKey::Clock]
+                    .into_iter()
+                    .filter(|slot| {
+                        app.shared
+                            .extras
+                            .panels
+                            .open_on(slot, output, app.bars.len())
+                    })
+                    .collect();
                 view::windows(
                     &BarScene {
                         bar: bar.id,
@@ -1331,6 +1356,7 @@ impl Application for App {
                         solid: cupertino_menubar::tone::solid_bar(app.display),
                         spread: &bar.backdrop_spread,
                         size: Size::new(f64::from(bar.width), app.height),
+                        open_panels: &open_panels,
                     },
                     Message::Input,
                 )

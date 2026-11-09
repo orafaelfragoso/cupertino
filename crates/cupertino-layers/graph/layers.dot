@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 81 crates, 403 internal dependencies
-// per layer: foundation 20, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
+// 83 crates, 406 internal dependencies
+// per layer: foundation 22, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
@@ -10,7 +10,7 @@
 digraph "layers" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (20)";
+    label="foundation (22)";
     "cupertino-animation";
     "cupertino-apps";
     "cupertino-assets";
@@ -27,6 +27,8 @@ digraph "layers" {
     "cupertino-menu-model";
     "cupertino-modifiers";
     "cupertino-test-bus";
+    "cupertino-test-pam";
+    "cupertino-test-pam-shim";
     "cupertino-theme";
     "cupertino-thumbnails";
     "cupertino-typeahead";
@@ -260,6 +262,7 @@ digraph "layers" {
   "cupertino-login" -> "cupertino-seat";
   "cupertino-login" -> "cupertino-shell-client";
   "cupertino-login" -> "cupertino-test-bus" [label="dev"];
+  "cupertino-login" -> "cupertino-test-pam" [label="dev"];
   "cupertino-login" -> "cupertino-theme" [label="dev"];
   "cupertino-login" -> "cupertino-ui-atspi" [label="dev"];
   "cupertino-login" -> "cupertino-ui-test" [label="dev"];
@@ -418,6 +421,7 @@ digraph "layers" {
   "cupertino-server" -> "cupertino-seat";
   "cupertino-server" -> "cupertino-stage";
   "cupertino-server" -> "cupertino-test-bus" [label="dev"];
+  "cupertino-server" -> "cupertino-test-pam" [label="dev"];
   "cupertino-server" -> "cupertino-theme";
   "cupertino-server" -> "cupertino-wm";
   "cupertino-sessiond" -> "cupertino-defaults";
@@ -426,6 +430,7 @@ digraph "layers" {
   "cupertino-sessiond" -> "cupertino-peer";
   "cupertino-sessiond" -> "cupertino-seat";
   "cupertino-sessiond" -> "cupertino-test-bus" [label="dev"];
+  "cupertino-sessiond" -> "cupertino-test-pam" [label="dev"];
   "cupertino-settings" -> "cupertino-alsa" [color=orange, style=dashed];
   "cupertino-settings" -> "cupertino-apps";
   "cupertino-settings" -> "cupertino-assets";

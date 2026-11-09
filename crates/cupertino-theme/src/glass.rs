@@ -36,9 +36,9 @@ pub enum GlassStyle {
     Regular,
     /// Lets the backdrop through with little tone change, for controls over photos and video.
     Clear,
-    /// Regular glass for large floating panels (the launcher): the same optics with a stronger tone compression (a
-    /// lower white point, a lifted black and a little less saturation), so a big surface softens the scene behind
-    /// it, and a broad drop shadow of its own.
+    /// Regular glass for large floating panels (the launcher): the same optics with a blur twice as wide and a stronger
+    /// tone compression (a lower white point, a lifted black and a little less saturation), so a big surface softens
+    /// the scene behind it, and a broad drop shadow of its own.
     LargePanel,
 }
 
@@ -384,13 +384,19 @@ fn large_panel_face(dark: bool) -> GlassFace {
 }
 
 /// The large panel's tone compression: saturation, black lift and largest face luminance (as a fraction of the
-/// face's `clamp`), dark and light.
+/// face's `clamp`), dark and light. In both the white point sits well below the face's own, so a bright spot in the
+/// scene (a sunlit sky, a white page, the light centre of a picture) comes through as a light patch near the panel's
+/// tint rather than a glare: white comes out near 125 dark and near 228 light.
 pub const LARGE_PANEL_SATURATION_DARK: f32 = 1.15;
 pub const LARGE_PANEL_BLACK_DARK: f32 = 0.15;
 pub const LARGE_PANEL_MAX_LUMA_DARK: f32 = 0.102;
 pub const LARGE_PANEL_SATURATION_LIGHT: f32 = 1.1;
 pub const LARGE_PANEL_BLACK_LIGHT: f32 = 0.5;
-pub const LARGE_PANEL_MAX_LUMA_LIGHT: f32 = 0.8;
+pub const LARGE_PANEL_MAX_LUMA_LIGHT: f32 = 0.5;
+/// How much wider the large panel blurs than regular glass: its blur levels and its blur fill (10 and 16 points
+/// rather than 5 and 8), so stripes, text and bright spots in the scene behind a launcher-sized sheet melt into broad
+/// fields of colour instead of showing through as ripples.
+pub const LARGE_PANEL_BLUR_SCALE: f32 = 2.0;
 /// The large panel's drop shadow: how far below the panel it falls and its blur radius in points (its edge fades over
 /// three radii), and its black's opacity in each appearance.
 pub const LARGE_PANEL_SHADOW_OFFSET: f32 = 16.0;
@@ -449,6 +455,8 @@ impl GlassParams {
             p.shadow.ring_offset = 0.0;
             match mode.style {
                 GlassStyle::Regular | GlassStyle::LargePanel => {
+                    // the large panel's wider blur gives way to regular glass's whole blur recipe
+                    p.blur = Self::regular(dark, s).blur;
                     p.blur.radius = REDUCED_TRANSPARENCY_BLUR;
                     p.blur.level_opacity = REDUCED_TRANSPARENCY_LEVELS;
                 }
@@ -525,6 +533,8 @@ impl GlassParams {
     /// [`large_panel_face`]) and the panel's drop shadow shown.
     fn large_panel(dark: bool, s: f32) -> Self {
         let mut p = Self::regular(dark, s);
+        p.blur.radius *= LARGE_PANEL_BLUR_SCALE;
+        p.blur.fill_radius *= LARGE_PANEL_BLUR_SCALE;
         p.face = large_panel_face(dark);
         p.shadow.offset = [0.0, LARGE_PANEL_SHADOW_OFFSET];
         p.shadow.amount = 100.0;
@@ -944,14 +954,28 @@ mod tests {
         for dark in [true, false] {
             let regular = with(dark, GlassStyle::Regular, false, false, false);
             let panel = with(dark, GlassStyle::LargePanel, false, false, false);
-            // the optics are the regular glass's
+            // the optics are the regular glass's, with the blur twice as wide
             assert_eq!(
-                (panel.blur, panel.refraction, panel.bleed, panel.highlight),
+                (panel.refraction, panel.bleed, panel.highlight),
+                (regular.refraction, regular.bleed, regular.highlight)
+            );
+            assert_eq!(
+                (panel.blur.radius, panel.blur.fill_radius),
+                (10.0, 16.0),
+                "{dark}"
+            );
+            assert_eq!(
                 (
-                    regular.blur,
-                    regular.refraction,
-                    regular.bleed,
-                    regular.highlight
+                    panel.blur.level_opacity,
+                    panel.blur.fill_darken,
+                    panel.blur.fill_normal,
+                    panel.blur.fill_lighten
+                ),
+                (
+                    regular.blur.level_opacity,
+                    regular.blur.fill_darken,
+                    regular.blur.fill_normal,
+                    regular.blur.fill_lighten
                 )
             );
             assert_eq!(
@@ -996,7 +1020,21 @@ mod tests {
                 let regular = with(dark, GlassStyle::Regular, rt, ic, rm);
                 let panel = with(dark, GlassStyle::LargePanel, rt, ic, rm);
                 let what = format!("dark {dark}, rt {rt}, ic {ic}, rm {rm}");
-                assert_eq!(panel.blur, regular.blur, "{what}");
+                if rt {
+                    // Reduce Transparency's wide blur is the same for both
+                    assert_eq!(panel.blur, regular.blur, "{what}");
+                } else {
+                    // otherwise the panel keeps its blur twice as wide, Reduce Motion's floor included
+                    assert_eq!(
+                        panel.blur.radius,
+                        regular.blur.radius.max(5.0 * LARGE_PANEL_BLUR_SCALE),
+                        "{what}"
+                    );
+                    assert_eq!(
+                        panel.blur.level_opacity, regular.blur.level_opacity,
+                        "{what}"
+                    );
+                }
                 assert_eq!(panel.refraction, regular.refraction, "{what}");
                 if rt || ic {
                     // the accessibility recipes replace the face whole, the large panel's included

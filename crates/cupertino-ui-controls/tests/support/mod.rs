@@ -170,6 +170,19 @@ pub fn theme() -> ThemeTokens {
             entries.push(((SidebarSelection, inactive), gray(16)));
         }
     }
+    // the receding colours of a window that is not active, apart from every grey above
+    entries.push((
+        (InactiveSidebarText, state(Normal, false)),
+        Color::from_rgba8([90, 20, 20, 255]),
+    ));
+    entries.push((
+        (TertiaryText, state(Normal, false)),
+        Color::from_rgba8([20, 90, 20, 255]),
+    ));
+    entries.push((
+        (InactiveTitlebar, state(Normal, false)),
+        Color::from_rgba8([20, 20, 90, 255]),
+    ));
     ThemeTokens {
         preferences: ThemePreferences {
             appearance: Appearance::Light,

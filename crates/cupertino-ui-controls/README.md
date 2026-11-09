@@ -85,15 +85,14 @@ from the application's model and reports changes as messages.
   with it while rows come and go around it. A row's accessory (an eject button) offers a click only with
   `on_accessory`; without it the accessory reads as disabled. A busy row turns an activity indicator in the accessory's
   place, standing still under Reduce Motion. In a window that is not active every row's icon and label, the selected
-  row's too, takes the secondary label colour and the selection turns to the sidebar's faint neutral selection
-  (`ColorRole::SidebarSelection` resolved inactive), laid over the material so its tint shows; the headings, the
-  geometry and the text stay (`tests/sidebar.rs`).
+  row's too, and the headings and accessories take the inactive sidebar text colour (`ColorRole::InactiveSidebarText`)
+  and the selection turns to the sidebar's faint neutral selection (`ColorRole::SidebarSelection` resolved inactive),
+  laid over the material so its tint shows; the geometry and the text stay (`tests/sidebar.rs`).
   `Sidebar::with_look(SidebarLook::Neutral { accent })` draws a list of places instead: taller rows with larger
   symbols, the selected row filled with the sidebar's neutral selection (`ColorRole::SidebarSelection`), its label
   semibold and its symbol in the accent colour; the
   other rows' symbols are in the accent colour in the sections `accent` marks and in the secondary label colour in the
-  rest. In a window that is not active the selected row's symbol takes the secondary label colour as well, so it still
-  stands out from the neutral selection. The default look (`SidebarLook::Accent`, Settings') fills the selected row
+  rest. In a window that is not active every symbol, the selected row's too, takes the inactive sidebar text colour. The default look (`SidebarLook::Accent`, Settings') fills the selected row
   with the accent.
 - **Settings form.** `FormGroup` sets rows on a rounded fill with a hairline between each, inset from both edges;
   `FormRow` is a row of it, at least `FORM_ROW_HEIGHT` tall (`FORM_TILE_ROW_HEIGHT` with an `IconTile`, a white
@@ -117,7 +116,7 @@ from the application's model and reports changes as messages.
 - **Tiled sidebar.** `TileSidebar` lists a settings window's pages: rows of `TILE_SIDEBAR_ROW_HEIGHT`, a tile before
   each label, in groups set apart by space, under an optional header (a `SearchField`) that does not scroll. The
   selected row fills with the selected control colour, its label bold. In a window that is not active every label, the
-  selected row's too, takes the secondary label colour and the selection turns to the sidebar's faint neutral
+  selected row's too, takes the inactive sidebar text colour and the selection turns to the sidebar's faint neutral
   selection; the tiles keep their colours (`tests/form.rs`). Keys, Tab stop, reporting and assistive
   technology behave as `Sidebar`'s, except that a press or click on the selected row reports it again, so that a
   window showing a page below that row's page can go back to it.
@@ -205,12 +204,14 @@ from the application's model and reports changes as messages.
   so the page shows through the glass and never covers it, and a scroll view under it draws the scroll edge over
   what it covers (`scroll_edge`): a soft veil of the window background, 90 % over the top 30 % of the band and easing
   out (smoothstep) to nothing at its bottom, or, with Reduce Transparency and in high contrast, the band filled with
-  the window background and a separator along its bottom. Its bar, paging and focus scrolling keep below the row.
+  the window background and a separator along its bottom. In a window that is not active the band is the inactive
+  title bar colour (`ColorRole::InactiveTitlebar`), solid with a hard edge and no veil, with the separator under it
+  where the active band has one. Its bar, paging and focus scrolling keep below the row.
   Without a layer the row draws in place, the page is clipped below it and there is no edge. A `TableView` with
   `header_top` puts its header that far down, raised with the row, and starts its rows below both; the rows scroll
   under the two, and since the header's titles are text outside glass the band under them is always the solid one,
   the header drawing its line. `ListView::under_element(inset, lead)` starts a list's rows `lead` points down so they
-  scroll under the row. Files and Settings fill their panes this way. Glyphs recede to the secondary label colour in an inactive window and to the
+  scroll under the row. Files and Settings fill their panes this way. Glyphs and the title recede to the tertiary label colour (`ColorRole::TertiaryText`) in an inactive window and to the
   disabled colour when disabled. Besides symbols a toolbar item may draw a glyph of its own (`ToolbarGlyph`): the
   back and forward chevrons, `More`'s three dots and `Tag`, a tag outline pointing up and to the trailing side with its
   hole by the point, mirrored right to left.

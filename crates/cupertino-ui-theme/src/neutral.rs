@@ -25,7 +25,9 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         (ControlText, gray(36)),
         (DisabledControlFill, gray(242)),
         (DisabledControlBorder, gray(212)),
-        (DisabledControlText, gray(104)),
+        // the Cupertino disabled text, black at a quarter over the window: it recedes from the enabled text as it does
+        // over the theme's own surfaces
+        (DisabledControlText, gray(192)),
         (DefaultButtonFill, [0, 105, 230, 255]),
         (DefaultButtonText, WHITE),
         (DestructiveFill, [215, 45, 38, 255]),
@@ -56,6 +58,9 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         (QuaternaryLabel, gray(230)),
         (SliderTrack, gray(128)),
         (SidebarSelection, gray(230)),
+        (TertiaryText, gray(105)),
+        (InactiveSidebarText, gray(105)),
+        (InactiveTitlebar, gray(247)),
     ],
     states: StateColors {
         emphasized_border: gray(100),
@@ -86,7 +91,8 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         (ControlText, WHITE),
         (DisabledControlFill, gray(62)),
         (DisabledControlBorder, gray(86)),
-        (DisabledControlText, gray(170)),
+        // the Cupertino disabled text, white at a quarter over the window
+        (DisabledControlText, [86, 87, 91, 255]),
         (DefaultButtonFill, [0, 105, 230, 255]),
         (DefaultButtonText, WHITE),
         (DestructiveFill, [200, 40, 32, 255]),
@@ -118,6 +124,9 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         (QuaternaryLabel, [53, 54, 58, 255]),
         (SliderTrack, gray(128)),
         (SidebarSelection, [61, 62, 66, 255]),
+        (TertiaryText, gray(163)),
+        (InactiveSidebarText, gray(163)),
+        (InactiveTitlebar, [38, 39, 44, 255]),
     ],
     states: StateColors {
         emphasized_border: gray(159),
@@ -138,7 +147,8 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
 /// they are drawn on; a hovered or pressed border turns black.
 pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
     normal: [
-        (WindowBackground, gray(246)),
+        // the window keeps the default white: Increase Contrast strengthens borders and text, not the background
+        (WindowBackground, WHITE),
         (Text, BLACK),
         (SecondaryText, gray(60)),
         (PlaceholderText, gray(107)),
@@ -179,6 +189,9 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
         (QuaternaryLabel, gray(160)),
         (SliderTrack, gray(118)),
         (SidebarSelection, gray(160)),
+        (TertiaryText, gray(60)),
+        (InactiveSidebarText, gray(60)),
+        (InactiveTitlebar, gray(247)),
     ],
     states: StateColors {
         emphasized_border: BLACK,
@@ -199,7 +212,8 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
 /// the off and the on track, and a hovered or pressed border turns white.
 pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
     normal: [
-        (WindowBackground, gray(50)),
+        // the default dark window, a shade lighter, under wells a shade darker than the default ones
+        (WindowBackground, [33, 34, 39, 255]),
         (Text, WHITE),
         (SecondaryText, gray(210)),
         (PlaceholderText, gray(170)),
@@ -208,14 +222,15 @@ pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
         (ControlText, WHITE),
         (DisabledControlFill, gray(62)),
         (DisabledControlBorder, gray(140)),
-        (DisabledControlText, gray(170)),
+        // white at half over the window: readable, and clearly apart from the enabled white
+        (DisabledControlText, gray(150)),
         (DefaultButtonFill, [23, 116, 218, 255]),
         (DefaultButtonText, WHITE),
         (DestructiveFill, [190, 30, 30, 255]),
         (DestructiveText, WHITE),
         (SwitchTrack, gray(150)),
         (SwitchThumb, gray(24)),
-        (TextBackground, gray(32)),
+        (TextBackground, gray(23)),
         (TextFieldBorder, gray(160)),
         (SelectedTextBackground, [26, 74, 140, 255]),
         (SelectedText, WHITE),
@@ -239,6 +254,9 @@ pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
         (QuaternaryLabel, gray(111)),
         (SliderTrack, gray(150)),
         (SidebarSelection, gray(111)),
+        (TertiaryText, gray(210)),
+        (InactiveSidebarText, gray(210)),
+        (InactiveTitlebar, [40, 41, 46, 255]),
     ],
     states: StateColors {
         emphasized_border: WHITE,
@@ -310,6 +328,10 @@ mod tests {
         const TEXT: f32 = 4.5;
         const BOUNDARY: f32 = 3.0;
         const INACTIVE_SELECTION_TEXT: f32 = 4.0;
+        // disabled text recedes: it is exempt from the text ratio, yet still shows on what it is drawn on, and with
+        // Increase Contrast stays readable
+        const DISABLED_TEXT: f32 = 1.4;
+        const HIGH_CONTRAST_DISABLED_TEXT: f32 = 3.0;
         let text_pairs = [
             (Text, WindowBackground),
             (Text, TextBackground),
@@ -323,6 +345,7 @@ mod tests {
             (SecondarySelectedControlText, SecondarySelectedControlFill),
             (Header, WindowBackground),
             (ToolTipText, ToolTip),
+            (TertiaryText, InactiveTitlebar),
         ];
         // a link has no disabled look
         let link_pairs = [(Link, WindowBackground), (Link, TextBackground)];
@@ -358,17 +381,35 @@ mod tests {
                         "{appearance:?} {state:?} {fg:?} on {bg:?}: {ratio:.2} < {min}"
                     );
                 };
+                let disabled_text = if appearance.is_high_contrast() {
+                    HIGH_CONTRAST_DISABLED_TEXT
+                } else {
+                    DISABLED_TEXT
+                };
                 for pair in text_pairs {
-                    check(pair, TEXT);
+                    // a disabled control's text takes the disabled text colour
+                    let shown_disabled = disabled
+                        && matches!(
+                            pair.0,
+                            Text | SecondaryText
+                                | PlaceholderText
+                                | ControlText
+                                | DefaultButtonText
+                                | DestructiveText
+                        );
+                    check(pair, if shown_disabled { disabled_text } else { TEXT });
                 }
-                // a sidebar's selected row: its label is the text colour in an active window, the secondary label
-                // colour in one that is not, which reads on the faint inactive selection about as it does on the
+                // a sidebar's selected row: its label is the text colour in an active window, the inactive sidebar
+                // text in one that is not, which reads on the faint inactive selection about as it does on the
                 // opaque sidebar around it (the selection being a little darker than the sidebar)
                 if !disabled {
                     if state.window_active {
                         check((Text, SidebarSelection), TEXT);
                     } else {
-                        check((SecondaryText, SidebarSelection), INACTIVE_SELECTION_TEXT);
+                        check(
+                            (InactiveSidebarText, SidebarSelection),
+                            INACTIVE_SELECTION_TEXT,
+                        );
                     }
                 }
                 for pair in link_pairs.into_iter().chain(thumb_pairs) {
@@ -399,6 +440,25 @@ mod tests {
         assert!(disabled >= 4.5, "{disabled:.2} on the disabled fill");
         let apart = contrast(normal(DisabledControlText), normal(ControlText));
         assert!(apart >= 3.5, "{apart:.2} from enabled text");
+    }
+
+    /// Disabled text, a menu's disabled rows with their marks and arrows among them, stands clearly apart from the
+    /// enabled text in every built-in palette, the opaque ones of Reduce Transparency and high contrast included.
+    #[test]
+    fn disabled_text_stands_apart_from_enabled_text_in_every_palette() {
+        use ColorRole::*;
+        const APART: f32 = 2.5;
+        for appearance in Appearance::ALL {
+            let colors = ColorTokens::neutral(appearance);
+            let normal = |role| colors.get(role, StateVariant::NORMAL).unwrap();
+            for enabled in [Text, ControlText] {
+                let apart = contrast(normal(DisabledControlText), normal(enabled));
+                assert!(
+                    apart >= APART,
+                    "{appearance:?}: disabled text {apart:.2} from {enabled:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -435,13 +495,14 @@ mod tests {
                 ControlText,
                 ControlBorder,
                 TextFieldBorder,
-                DisabledControlText,
                 DefaultButtonFill,
                 SelectedControlFill,
                 DestructiveFill,
                 KeyboardFocusIndicator,
                 Link,
                 PageDot,
+                TertiaryText,
+                InactiveSidebarText,
             ];
             for (role, c) in cupertino.normal {
                 if raised_for_contrast.contains(&role) || role == DialogScrim {

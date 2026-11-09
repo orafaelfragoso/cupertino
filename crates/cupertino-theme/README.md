@@ -37,6 +37,9 @@ let recipe = theme.recipe(Appearance::Light, "Sidebar", &MaterialOptions::defaul
 colour catalogs are partial, so missing names fall back to the matching normal-contrast appearance.
 `light-high-contrast` has its own `window-rim` and `window-rim-2x`, [0,0,0,127] like `dark-high-contrast`'s
 (approximated), so its rims are dark strokes instead of the light appearance's white one.
+The high-contrast backgrounds keep the normal ones: the light window stays white, the dark window is [33,34,39] (a
+shade above the normal one) and the dark control and text backgrounds are 23; none is lighter than its normal token
+in light or darker in dark beyond that, and none is more transparent (tested).
 `Appearance::of_session(dark, increase_contrast) is the appearance a shell process draws with, from the session's dark
 flag and its Increase Contrast option.
 
@@ -48,7 +51,8 @@ flag and its Increase Contrast option.
 - **Inactive windows.** The materials of a window's own body (`KEPT_WHEN_INACTIVE`: `Sidebar`, `InlineSidebar`,
   `Titlebar`, `SeamlessWindowTitlebar`, `Header`) draw their own inactive variant in an inactive window: an opaque base
   laid with the desktop tint and no backdrop, so the sidebar keeps the wallpaper's tint whatever lies behind the window
-  and reads the same over a busy or a dark scene. Their `-Opaque` variants (Reduce Transparency) are drawn the same in
+  and reads the same over a busy or a dark scene. The dark sidebar's base is grey 0.13 with the tint at 0.145, so a
+  blue wallpaper leaves it a dark navy; the light one is grey 0.9412 with the tint at 0.075. Their `-Opaque` variants (Reduce Transparency) are drawn the same in
   an inactive window as in an active one, in every appearance and interaction, since the data's inactive opaque
   variants are darker than the window. What else an inactive window changes is its labels, its selection and its
   window buttons, through their own roles. Other materials (menus, selections, sheets) keep their inactive variants,
@@ -90,12 +94,15 @@ flag and its Increase Contrast option.
   reduced-transparency optics with the increased-contrast colours; Reduce Motion drops the refraction band and widens the
   narrowest blur. `GLASS_BACKDROP_SCALE` (0.5) is the scale the backdrop is read at. Content on glass is coloured by a
   4×5 matrix per appearance; `adapts_foreground` tells which controls (shorter side under 64 pt) take it. The large
-  panel (`GlassStyle::LargePanel`) is regular glass with its tones pressed together, so a launcher-sized sheet reads as
-  one calm surface over any wallpaper: in the dark appearance a luminance cap of 0.102, a black lift of 0.15 and a
-  saturation of 1.15 (white comes out near 125, black near 53, a strong red keeps its colour), in the light one a cap
-  of 0.8, a lift of 0.5 and 1.1; and a drop shadow of its own (28 pt blur, 16 pt below, black at 0.5 dark or 0.22
+  panel (`GlassStyle::LargePanel`) is regular glass with a blur twice as wide (`LARGE_PANEL_BLUR_SCALE`: levels from 10
+  pt, the blur fill 16 pt) and its tones pressed together, so a launcher-sized sheet reads as one calm surface over any
+  wallpaper, stripes and text in the scene melting into broad fields of colour: in the dark appearance a luminance cap
+  of 0.102, a black lift of 0.15 and a saturation of 1.15 (white comes out near 125, black near 53, a strong red keeps
+  its colour), in the light one a cap of 0.5, a lift of 0.5 and 1.1 (white near 228, so a bright spot in the scene is a
+  light patch rather than a glare, while the panel over a calm pastel wallpaper stays within a few levels of regular
+  light glass); and a drop shadow of its own (28 pt blur, 16 pt below, black at 0.5 dark or 0.22
   light), drawn by the compositor outside the shape. With Reduce Transparency or Increase Contrast it takes regular
-  glass's recipes. `GlassParams::shadow_reach` is how far the shadow reaches past the shape.
+  glass's colours; Reduce Transparency also takes regular glass's whole blur. `GlassParams::shadow_reach` is how far the shadow reaches past the shape.
 - **Display filter steps.** `ColorOp::{LinearMatrix, Invert, Contrast}` feed `cupertino-glass::display_filter`. No catalog
   recipe uses them.
 

@@ -3,9 +3,11 @@
 //! application gets no key, no pointer motion and no button; and a return from another console (the session made active
 //! again) leaves the session locked, the lock surface with the keyboard and the application still without input; and a
 //! login process killed while locked leaves the session locked, without input to the application, until the restarted one
-//! takes the lock. The
+//! takes the lock; the right password typed on the lock screen unlocks the session and gives the application its
+//! input back, while a wrong password, or the right one for an account the stack refuses, keeps it locked. The
 //! login process finds its session through a stand-in logind on a private system bus and serves its interface on a
-//! private session bus; every directory it reads is a fixture's. Tests skip (pass) when no EGL device is available.
+//! private session bus; every directory it reads is a fixture's, and its PAM transactions start from a private policy
+//! (`cupertino-test-pam`), never from the machine's. Tests skip (pass) when no EGL device is available.
 
 mod common;
 
@@ -22,6 +24,7 @@ use cupertino_server::cli::start_shell_supervision;
 use cupertino_server::config::{Config, ShellProcess};
 use cupertino_server::events::BTN_LEFT;
 use cupertino_server::Cupertino;
+use cupertino_test_pam::{Code, Pam, Script};
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
@@ -35,6 +38,8 @@ const WAKE_QUIET: Duration = Duration::from_millis(300);
 const APP_ID: &str = "org.example.underneath";
 /// Evdev codes the tests type: the letters of a password and Return.
 const TYPED: [u32; 4] = [35, 18, 38, 28];
+/// The password [`TYPED`] submits.
+const TYPED_PASSWORD: &str = "hel";
 
 struct Server {
     state: Cupertino,
@@ -205,10 +210,12 @@ impl Fixture {
     }
 
     /// The real login process on the session bus `bus`, finding its session through the stand-in logind on `system`,
-    /// with every XDG directory in the fixture and its standard error in [`Fixture::log`].
-    fn login_process(&self, bus: &str, system: &str) -> ShellProcess {
+    /// with every XDG directory in the fixture, its PAM transactions under `pam` and its standard error in
+    /// [`Fixture::log`].
+    fn login_process(&self, bus: &str, system: &str, pam: &Pam) -> ShellProcess {
         let mut login = common::shell::process("cupertino-login", bus, &[]);
         let program = login.command.pop().unwrap();
+        login.command.extend(pam.env_words());
         login.command.extend([
             format!("DBUS_SYSTEM_BUS_ADDRESS={system}"),
             format!("XDG_SESSION_ID={}", fake_logind::SESSION_ID),
@@ -245,15 +252,24 @@ struct Session {
         cupertino_test_bus::PrivateBus,
         cupertino_test_bus::PrivateBus,
     ),
+    /// The lock screen's PAM policy; dropped last, it checks the login process reached nothing of the machine's.
+    pam: Pam,
 }
 
 impl Session {
+    /// A session whose lock screen accepts another password than [`TYPED_PASSWORD`]: what the tests type while locked
+    /// never opens it.
     fn start() -> Option<Session> {
+        Session::start_with(&Script::default())
+    }
+
+    fn start_with(script: &Script) -> Option<Session> {
+        let pam = Pam::new(script);
         let bus = common::shell::private_bus();
         let system = common::shell::private_bus();
         let logind = fake_logind::serve(&system.address);
         let fixture = Fixture::new();
-        let login = fixture.login_process(&bus.address, &system.address);
+        let login = fixture.login_process(&bus.address, &system.address, &pam);
         let mut server = Server::start(login, fixture.log())?;
         let held = Arc::clone(&logind.held);
         server.wait_until("the login process to take its sleep inhibitor", |_| {
@@ -264,7 +280,24 @@ impl Session {
             logind,
             fixture,
             _buses: (bus, system),
+            pam,
         })
+    }
+
+    /// Lock the session, wait for the lock screen over `center`, then type [`TYPED`] on it (and move and click there);
+    /// returns once the login process said `outcome`.
+    fn lock_and_type(&mut self, application: &Client, center: (f64, f64), outcome: &str) {
+        self.server.state.lock_session_now();
+        self.server.wait_until("the lock screen to be up", |state| {
+            lock_screen_up(state, center)
+        });
+        self.heard_locked();
+        self.server.input(application, center);
+        let log = self.fixture.log();
+        self.server
+            .wait_until(&format!("the login process to say {outcome:?}"), |_| {
+                log_text(&log).contains(outcome)
+            });
     }
 
     fn log(&self) -> String {
@@ -462,6 +495,93 @@ fn a_login_process_killed_while_locked_leaves_the_session_locked_until_its_succe
     assert_eq!(exited.len(), 1, "{exited:?}");
     assert_eq!(exited[0].fields.get("signal").unwrap(), libc::SIGKILL);
     assert!(exited[0].fields.get("restart_in").is_some());
+}
+
+#[test]
+fn the_right_password_unlocks_the_session_and_the_application_gets_its_input_back() {
+    let Some(mut session) = Session::start_with(&Script {
+        password: Some(TYPED_PASSWORD.into()),
+        ..Script::default()
+    }) else {
+        return;
+    };
+    let (application, center) = session.server.application();
+    session.lock_and_type(&application, center, "cupertino-login: unlocked");
+    session
+        .server
+        .wait_until("the session to be unlocked", |state| {
+            !state.session_lock.is_active()
+        });
+    assert_eq!(
+        session.pam.steps(),
+        ["authenticate -> success", "account -> success"]
+    );
+    assert!(
+        session.pam.calls()[0].contains(" service=cupertino-login ")
+            && session.pam.calls()[0].contains(" answer=right "),
+        "{:?}",
+        session.pam.calls()
+    );
+    // the application has the keyboard and the pointer again
+    session.server.sync(&application);
+    let before = got(&application);
+    session.server.input(&application, center);
+    let after = got(&application);
+    assert!(
+        after.0 > before.0 && after.1 > before.1 && after.2 > before.2,
+        "the application got no input after the unlock: {before:?} then {after:?}"
+    );
+}
+
+#[test]
+fn a_wrong_password_keeps_the_session_locked() {
+    let Some(mut session) = Session::start_with(&Script {
+        password: Some("not what is typed".into()),
+        ..Script::default()
+    }) else {
+        return;
+    };
+    let (application, center) = session.server.application();
+    session.lock_and_type(
+        &application,
+        center,
+        "cupertino-login: authentication failed",
+    );
+    session.server.run_for(WAKE_QUIET);
+    assert!(
+        lock_screen_up(&session.server.state, center),
+        "a wrong password opened the session:\n{}",
+        session.log()
+    );
+    assert_eq!(session.pam.steps(), ["authenticate -> auth_err"]);
+    assert!(!session.log().contains("cupertino-login: unlocked"));
+}
+
+#[test]
+fn the_right_password_of_an_account_the_stack_refuses_keeps_the_session_locked() {
+    let Some(mut session) = Session::start_with(&Script {
+        password: Some(TYPED_PASSWORD.into()),
+        account: Some(Code::AcctExpired),
+        ..Script::default()
+    }) else {
+        return;
+    };
+    let (application, center) = session.server.application();
+    session.lock_and_type(
+        &application,
+        center,
+        "cupertino-login: authentication error: account not available",
+    );
+    session.server.run_for(WAKE_QUIET);
+    assert!(
+        lock_screen_up(&session.server.state, center),
+        "an expired account opened the session:\n{}",
+        session.log()
+    );
+    assert_eq!(
+        session.pam.steps(),
+        ["authenticate -> success", "account -> acct_expired"]
+    );
 }
 
 /// A stand-in for logind for the login process: session [`SESSION_ID`] is active on `seat0`, every power action is

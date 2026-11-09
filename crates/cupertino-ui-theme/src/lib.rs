@@ -81,10 +81,18 @@ pub enum ColorRole {
     /// in an active window; every sidebar draws it, fainter, for its selected row in a window that is not active
     /// (resolved with `window_active` false).
     SidebarSelection,
+    /// The faintest text: a window's title and its toolbar's symbols while the window is not active.
+    TertiaryText,
+    /// A sidebar's labels and symbols while its window is not active: dimmer than the secondary label, so the sidebar
+    /// recedes behind its tinted material.
+    InactiveSidebarText,
+    /// The toolbar row of a window that is not active: an opaque band a little lighter (dark) or darker (light) than
+    /// the window background, laid over the top of the content under the row.
+    InactiveTitlebar,
 }
 
 impl ColorRole {
-    pub const ALL: [ColorRole; 40] = {
+    pub const ALL: [ColorRole; 43] = {
         use ColorRole::*;
         [
             WindowBackground,
@@ -127,6 +135,9 @@ impl ColorRole {
             QuaternaryLabel,
             SliderTrack,
             SidebarSelection,
+            TertiaryText,
+            InactiveSidebarText,
+            InactiveTitlebar,
         ]
     };
 }

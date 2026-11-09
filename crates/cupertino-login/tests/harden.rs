@@ -5,6 +5,8 @@ use std::os::unix::net::UnixListener;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use cupertino_test_pam::{Pam, PamIsolated, Script};
+
 struct Process(Child);
 
 impl Drop for Process {
@@ -28,8 +30,12 @@ fn the_greeter_is_undumpable_and_has_no_core_file() {
     let manager = UnixListener::bind(dir.path().join("greeter.sock")).unwrap();
     let compositor = dir.path().join("wayland-0");
     let _compositor = UnixListener::bind(&compositor).unwrap();
+    // the login screen starts no PAM transaction itself (its manager does); the shim keeps it off the machine's
+    // journal and buses all the same
+    let pam = Pam::new(&Script::default());
     let process = Process(
         Command::new(env!("CARGO_BIN_EXE_cupertino-login"))
+            .pam_isolated(&pam)
             .arg("--greeter")
             .env("CUPERTINO_LOGIN_SOCK", dir.path().join("greeter.sock"))
             .env("XDG_STATE_HOME", dir.path().join("state"))

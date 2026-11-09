@@ -28,9 +28,14 @@ zeroize = "1"
 
 [dev-dependencies]
 cupertino-test-bus = { path = "../cupertino-test-bus" }
+cupertino-test-pam = { path = "../cupertino-test-pam" }
 tempfile = "3"
 
 [[bin]]
 name = "cupertino-sessiond"
 path = "src/main.rs"
+required-features = ["app"]
+
+[[test]]
+name = "worker"
 required-features = ["app"]

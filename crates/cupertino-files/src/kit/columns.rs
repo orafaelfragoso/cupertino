@@ -605,8 +605,8 @@ fn name_text(name: String, selected: bool) -> Element<Message> {
     })
 }
 
-/// The preview column of the selected file `entry`.
-fn preview_pane(
+/// The preview column of the selected file `entry`, which the gallery shows beside its pictures too.
+pub(super) fn preview_pane(
     session: &Session,
     id: u64,
     win: &BrowserWindow,

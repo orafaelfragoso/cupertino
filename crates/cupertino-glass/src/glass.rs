@@ -809,11 +809,91 @@ mod tests {
         let light_black = face(false, GlassStyle::LargePanel, [15.0; 3]);
         let regular_light_black = face(false, GlassStyle::Regular, [15.0; 3]);
         assert!(light_black[0] > regular_light_black[0], "{light_black:?}");
+        // a white page (or the bright centre of a picture) stays a light patch near the panel's tint, about 228,
+        // rather than the glare regular light glass gives it
         let light_white = face(false, GlassStyle::LargePanel, [245.0; 3]);
         assert!(
-            light_white[0] > 225.0 && light_white[0] < 250.0,
+            light_white[0] > 222.0 && light_white[0] < 234.0,
             "{light_white:?}"
         );
+        let regular_light_white = face(false, GlassStyle::Regular, [245.0; 3]);
+        assert!(
+            regular_light_white[0] > light_white[0] + 10.0,
+            "{regular_light_white:?}"
+        );
+    }
+
+    /// The blurred backdrop `x` points along a backdrop that is `source(t)` at `t` points, through `p`: each blur level
+    /// and the blur fill as a Gaussian of its radius, laid over each other as the shader does.
+    fn blurred(p: &GlassParams, source: &impl Fn(f32) -> Rgb, x: f32) -> Rgb {
+        let gauss = |sigma: f32| -> Rgb {
+            let (step, mut sum, mut acc) = (0.125f32, 0.0f32, [0.0f32; 3]);
+            let reach = (4.0 * sigma / step).ceil() as i32;
+            for i in -reach..=reach {
+                let t = i as f32 * step;
+                let w = (-0.5 * (t / sigma).powi(2)).exp();
+                let c = source(x - t);
+                sum += w;
+                for k in 0..3 {
+                    acc[k] += w * c[k];
+                }
+            }
+            acc.map(|v| v / sum)
+        };
+        let levels = p.level_radii().map(gauss);
+        let c = blend_levels(levels, p.blur.level_opacity);
+        blur_fill(c, gauss(p.blur.fill_radius), p)
+    }
+
+    /// The face's luminance (0–255) at `x` of [`blurred`], toned as the shader does.
+    fn through(p: &GlassParams, source: &impl Fn(f32) -> Rgb, x: f32) -> f32 {
+        luma(face_color(blurred(p, source, x), p, p.face.max_luma)) * 255.0
+    }
+
+    /// The large panel blurs twice as wide as regular glass of its size: a step from white to black behind it is
+    /// blurred over about twice the distance (10 % to 90 % of the way), and a hairline bright stripe over black, like the
+    /// lines of a busy picture, comes through much fainter, so fine detail melts into the colour around it instead of
+    /// rippling through.
+    #[test]
+    fn the_large_panel_blurs_twice_as_wide_as_regular_glass() {
+        for dark in [true, false] {
+            let p = |style| {
+                GlassParams::new(
+                    GlassMode {
+                        dark,
+                        style,
+                        ..GlassMode::default()
+                    },
+                    400.0,
+                )
+            };
+            let (regular, large) = (p(GlassStyle::Regular), p(GlassStyle::LargePanel));
+            let step = |t: f32| if t < 0.0 { [0.96; 3] } else { [0.06; 3] };
+            // the distance over which the blurred step goes from 10 % to 90 % of its way, in points
+            let width = |g: &GlassParams| {
+                let xs: Vec<f32> = (-400..=400).map(|i| i as f32 * 0.25).collect();
+                let ys: Vec<f32> = xs.iter().map(|&x| luma(blurred(g, &step, x))).collect();
+                let (hi, lo) = (ys[0], ys[ys.len() - 1]);
+                let at = |f: f32| {
+                    let level = hi - (hi - lo) * f;
+                    xs[ys.iter().position(|&y| y <= level).unwrap()]
+                };
+                at(0.9) - at(0.1)
+            };
+            let (w_regular, w_large) = (width(&regular), width(&large));
+            assert!(
+                w_large > 1.6 * w_regular && w_large < 2.4 * w_regular,
+                "dark {dark}: {w_regular} pt and {w_large} pt"
+            );
+            // a bright stripe 6 points wide over black: how far its peak stands above the black around it
+            let stripe = |t: f32| if t.abs() < 3.0 { [0.96; 3] } else { [0.06; 3] };
+            let ripple = |g: &GlassParams| through(g, &stripe, 0.0) - through(g, &stripe, 200.0);
+            let (r_regular, r_large) = (ripple(&regular), ripple(&large));
+            assert!(
+                r_large < 0.6 * r_regular,
+                "dark {dark}: ripple {r_regular} and {r_large}"
+            );
+        }
     }
 
     #[test]

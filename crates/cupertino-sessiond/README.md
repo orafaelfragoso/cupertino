@@ -396,3 +396,16 @@ database parsers, the picture read (missing file, symlink, directory, foreign ow
 the test's user that sees only its environment, descriptors 0 to 2 and its 0700 directories, and whose `setsid` daemon ends with it;
 `manager`: only the leader's descendants may connect) and the bus interface on a private `dbus-daemon` (skipped when the binary is missing; `SwitchToLoginWindow` and the unicast `Unlock` included). The manager and
 the worker run as root in the QEMU harness (`11-login-session`, `12-greeter-picker`, `14-greeter-filters`, `28`, `30-two-sessions`, `31-login-crash`, `32-auto-login`).
+
+`tests/worker.rs` runs the worker as the manager starts it (`cupertino-sessiond worker`, an empty environment, a socketpair as
+standard input) under a private PAM policy (`cupertino-test-pam`): no transaction reaches `/etc/pam.d`, the machine's accounts,
+the journal or the buses, and the policy's account is the test's own user under a name of its own, so the leader runs without
+root. It covers the hidden prompt relayed and answered; an accepted account's credentials, session and credentials again
+around the leader, then the session closed and the credentials deleted, all on the session's terminal; the leader's
+environment (the PAM environment, the login variables and the configured extra, nothing of the worker's own); the login
+screen's class and screen reader socket; a user with a session already only checked; a wrong password and an unknown account
+both `Denied`; too many tries, an expired account or password, a refused account, an account the check does not know, a stack
+that fails to run and insufficient credentials each with its outcome; a lock-out message before the prompt relayed and
+`Locked`; the account check's message relayed; a cancelled prompt and a yes/no question denied, a prompt with echo relayed; a
+manager gone during the prompt; credentials or a session the stack refuses, or no login session registered, ending the worker
+with nothing left established; and a session that fails to close reported.

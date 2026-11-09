@@ -44,6 +44,9 @@ struct Painted {
     on_material: bool,
     /// The node asked for glass or a translucent surface's material, which its subtree lies on.
     lays_material: bool,
+    /// The ops snapped to the window's device pixels where a frame draws the node ([`PaintCx::fill_pixels`]), by
+    /// index.
+    pixels: Vec<usize>,
 }
 
 /// The glass a node paints on, which picks the colours of its text and symbols: the tone of the glass it lies on, if
@@ -139,6 +142,54 @@ const CLIP_EDGE: f64 = 1.0;
 /// Everything `ops` may touch, in their own coordinates: strokes reach half their width outside the shape, effects
 /// reach as far as their blur and offset, and a glyph is taken to fill its em square around the pen with room for
 /// ascenders, descenders and overhang.
+/// `ops` of a node at `origin` in the window, with those at `pixels` on the window's device pixels at `scale`: a fill
+/// at the nearest pixel edges, a clip widened to the pixels it touches. Each stays on the pixels its rect touches but a
+/// fill narrower than a pixel, which grows to one ([`pixel_extent`]).
+fn on_pixels(ops: &[PaintOp], pixels: &[usize], origin: Point, scale: f64) -> Vec<PaintOp> {
+    let mut ops = ops.to_vec();
+    let snap = |rect: Rect, to: fn(Rect, f64) -> Rect| {
+        to(rect.translate(origin.x, origin.y), scale).translate(-origin.x, -origin.y)
+    };
+    for &i in pixels {
+        match ops.get_mut(i) {
+            Some(PaintOp::Fill {
+                shape: Shape::Rect(rect),
+                ..
+            }) => *rect = snap(*rect, crate::cx::pixel_fill),
+            Some(PaintOp::PushClip(Shape::Rect(rect))) => {
+                *rect = snap(*rect, crate::cx::pixel_clip)
+            }
+            _ => {}
+        }
+    }
+    ops
+}
+
+/// The extent of `ops`, those at `pixels` to be put on device pixels at `scale` ([`on_pixels`]): a fill there reaches
+/// at least one device pixel each way, which is as far as it can grow.
+fn pixel_extent(ops: &[PaintOp], pixels: &[usize], scale: f64) -> Option<Rect> {
+    if pixels.is_empty() {
+        return extent(ops);
+    }
+    let pixel = 1.0 / crate::cx::usable_scale(scale);
+    let mut ops = ops.to_vec();
+    for &i in pixels {
+        if let Some(PaintOp::Fill {
+            shape: Shape::Rect(rect),
+            ..
+        }) = ops.get_mut(i)
+        {
+            *rect = Rect::new(
+                rect.min_x(),
+                rect.min_y(),
+                rect.width().max(pixel),
+                rect.height().max(pixel),
+            );
+        }
+    }
+    extent(&ops)
+}
+
 pub(crate) fn extent(ops: &[PaintOp]) -> Option<Rect> {
     // Each open layer collects its content's extent; its effects widen it when it closes.
     let mut layers: Vec<(Vec<Effect>, Option<Rect>)> = vec![(Vec::new(), None)];
@@ -511,6 +562,7 @@ impl Painter {
                 let mut asked_material = false;
                 let mut overlay = false;
                 let mut lays_material = false;
+                let mut pixels = Vec::new();
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
@@ -540,6 +592,7 @@ impl Painter {
                         overlay: &mut overlay,
                         on_material,
                         lays_material: &mut lays_material,
+                        pixels: &mut pixels,
                     },
                 );
                 if animate {
@@ -553,7 +606,7 @@ impl Painter {
                         background,
                         size,
                         revision: PaintRevision(self.revision),
-                        extent: extent(&ops),
+                        extent: pixel_extent(&ops, &pixels, input.env.scale),
                         ops,
                         group,
                         images,
@@ -564,6 +617,7 @@ impl Painter {
                         overlay,
                         on_material,
                         lays_material,
+                        pixels,
                     },
                 );
             }
@@ -625,7 +679,7 @@ impl Painter {
                     })
                     .unwrap_or(Rect::new(origin.x, origin.y, 0.0, 0.0)),
                 group: painted.group.clone(),
-                ops: painted.ops.clone(),
+                ops: on_pixels(&painted.ops, &painted.pixels, origin, input.env.scale),
             });
             clips.push(placement.clip);
             seen.insert(id);

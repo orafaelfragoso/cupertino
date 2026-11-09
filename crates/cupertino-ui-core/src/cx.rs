@@ -349,6 +349,8 @@ pub struct PaintCx<'a> {
     pub(crate) on_material: bool,
     /// The node asked for glass or a translucent surface's material under itself, which its subtree lies on.
     pub(crate) lays_material: &'a mut bool,
+    /// The ops [`PaintCx::fill_pixels`] and [`PaintCx::clip_pixels`] pushed, by index.
+    pub(crate) pixels: &'a mut Vec<usize>,
 }
 
 impl PaintCx<'_> {
@@ -429,6 +431,26 @@ impl PaintCx<'_> {
     /// again without asking.
     pub fn overlay(&mut self) {
         *self.overlay = true;
+    }
+
+    /// Fills `rect` (node coordinates) with `color`, each edge on the nearest device pixel edge of the window wherever
+    /// a frame draws the node, at least one device pixel each way, so no pixel at its edge blends with what lies under
+    /// it: for a mark that meets the caret or text, such as a selection.
+    pub fn fill_pixels(&mut self, rect: Rect, color: cupertino_ui_theme::Color) {
+        self.pixels.push(self.ops.len());
+        self.ops.push(PaintOp::Fill {
+            shape: cupertino_ui_render::Shape::Rect(rect),
+            paint: cupertino_ui_render::Paint::Solid(color),
+        });
+    }
+
+    /// Clips what the node paints next, until a `PaintOp::PopClip`, to `rect` (node coordinates) widened to the device
+    /// pixels of the window it touches wherever a frame draws the node, so a [`fill_pixels`](Self::fill_pixels) at its
+    /// edge stays whole.
+    pub fn clip_pixels(&mut self, rect: Rect) {
+        self.pixels.push(self.ops.len());
+        self.ops
+            .push(PaintOp::PushClip(cupertino_ui_render::Shape::Rect(rect)));
     }
 
     /// Draws all of `image` into `dst` (node coordinates). `id` names these pixels for good: new pixels take a new id
@@ -857,33 +879,12 @@ impl OverlayCx<'_> {
         self.now
     }
 
-    /// Physical pixels per point, at least a usable one.
-    fn scale(&self) -> f64 {
-        let scale = self.env.scale;
-        if scale.is_finite() && scale > 0.0 {
-            scale
-        } else {
-            1.0
-        }
-    }
-
     /// Fills `rect` with `color`, each edge moved to the nearest device pixel edge of the window and the rect at least
     /// one device pixel each way, so every pixel is covered whole or not at all.
     pub fn fill_pixels(&mut self, rect: Rect, color: cupertino_ui_theme::Color) {
-        let scale = self.scale();
         let at = rect.translate(self.origin.x, self.origin.y);
-        // in device pixels, so the size is a whole number of them exactly
-        let pixel = |v: f64| (v * scale).round();
-        let (left, top) = (pixel(at.min_x()), pixel(at.min_y()));
-        let width = (pixel(at.max_x()) - left).max(1.0);
-        let height = (pixel(at.max_y()) - top).max(1.0);
         self.ops.push(PaintOp::Fill {
-            shape: cupertino_ui_render::Shape::Rect(Rect::new(
-                left / scale,
-                top / scale,
-                width / scale,
-                height / scale,
-            )),
+            shape: cupertino_ui_render::Shape::Rect(pixel_fill(at, self.env.scale)),
             paint: cupertino_ui_render::Paint::Solid(color),
         });
     }
@@ -891,13 +892,39 @@ impl OverlayCx<'_> {
     /// Clips the whole overlay to `rect`, widened to the device pixels it touches so a fill at its edge stays whole;
     /// the clips around the node apply as well.
     pub fn clip(&mut self, rect: Rect) {
-        let scale = self.scale();
         let at = rect.translate(self.origin.x, self.origin.y);
-        *self.clip = Some(Rect::from_ltrb(
-            (at.min_x() * scale).floor() / scale,
-            (at.min_y() * scale).floor() / scale,
-            (at.max_x() * scale).ceil() / scale,
-            (at.max_y() * scale).ceil() / scale,
-        ));
+        *self.clip = Some(pixel_clip(at, self.env.scale));
     }
+}
+
+/// Physical pixels per point, a usable number.
+pub(crate) fn usable_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
+/// `rect` (window points) with each edge on the nearest device pixel edge at `scale`, at least one device pixel each
+/// way, so every pixel is covered whole or not at all.
+pub(crate) fn pixel_fill(rect: Rect, scale: f64) -> Rect {
+    let scale = usable_scale(scale);
+    // in device pixels, so the size is a whole number of them exactly
+    let pixel = |v: f64| (v * scale).round();
+    let (left, top) = (pixel(rect.min_x()), pixel(rect.min_y()));
+    let width = (pixel(rect.max_x()) - left).max(1.0);
+    let height = (pixel(rect.max_y()) - top).max(1.0);
+    Rect::new(left / scale, top / scale, width / scale, height / scale)
+}
+
+/// `rect` (window points) widened to the device pixels at `scale` it touches.
+pub(crate) fn pixel_clip(rect: Rect, scale: f64) -> Rect {
+    let scale = usable_scale(scale);
+    Rect::from_ltrb(
+        (rect.min_x() * scale).floor() / scale,
+        (rect.min_y() * scale).floor() / scale,
+        (rect.max_x() * scale).ceil() / scale,
+        (rect.max_y() * scale).ceil() / scale,
+    )
 }

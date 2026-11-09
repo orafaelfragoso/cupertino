@@ -52,15 +52,6 @@ pub(crate) fn device_thickness(points: f64, scale: f64) -> f64 {
     (points * scale).round().max(1.0) / scale
 }
 
-/// `at` (points from the node's origin) on the nearest device pixel edge at `scale`.
-pub(crate) fn snap(at: f64, scale: f64) -> f64 {
-    if scale.is_finite() && scale > 0.0 {
-        (at * scale).round() / scale
-    } else {
-        at
-    }
-}
-
 /// The bar a caret `caret` (a layout's caret rectangle, in node points) draws as at `scale`: [`CARET_WIDTH`] in whole
 /// device pixels (at least one). The overlay that draws it puts its edges on the window's device pixel edges.
 pub(crate) fn caret_bar(caret: Rect, scale: f64) -> Rect {
@@ -129,13 +120,6 @@ impl Marks {
             }
         }
     }
-}
-
-/// A selection rectangle with its left and right edges on device pixel edges, so it meets the caret and its neighbours
-/// without a blended column.
-pub(crate) fn selection_bar(rect: Rect, scale: f64) -> Rect {
-    let (left, right) = (snap(rect.min_x(), scale), snap(rect.max_x(), scale));
-    Rect::new(left, rect.min_y(), (right - left).max(0.0), rect.height())
 }
 
 /// The composition's underline under `composition` (bytes of `layout`'s text) on each line it covers,
@@ -440,14 +424,12 @@ fn paint_text(
         field_top(&layout, chrome, &env, field),
     );
     let color = |role| look::color(&env.theme, role, look);
-    cx.push(PaintOp::PushClip(Shape::Rect(area)));
-    if focused && !shown.selection.is_empty() {
+    cx.clip_pixels(area);
+    if let Some(selected) =
+        color(ColorRole::SelectedTextBackground).filter(|_| focused && !shown.selection.is_empty())
+    {
         for rect in layout.selection_rects(shown.selection.clone()) {
-            fill_rect(
-                cx,
-                selection_bar(rect.translate(origin.x, origin.y), env.scale),
-                color(ColorRole::SelectedTextBackground),
-            );
+            cx.fill_pixels(rect.translate(origin.x, origin.y), selected);
         }
     }
     if shown.text.is_empty() {

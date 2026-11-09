@@ -60,8 +60,10 @@ from the application's model and reports changes as messages.
   and otherwise a caret inside the composition where the input method puts it. The input method learns the committed
   text around the caret and the caret's rectangle. The caret and the composition's underlines are the field's overlay
   (`Widget::overlay`): drawn over its paint with every edge on a device pixel of the window wherever the field lies,
-  so they are crisp at every scale, fractional ones included, and the caret a whole number of device pixels wide; the
-  selection bars' sides snap to device pixels of the field. The caret blinks in `caret_phase_ms` phases, each blink
+  so they are crisp at every scale, fractional ones included, and the caret a whole number of device pixels wide. The
+  selection lies under the text on whole device pixels of the window too (`PaintCx::fill_pixels`), as does the
+  field's interior clip, so its edges meet the caret and the field without a blended row or column
+  (`tests/caret-overlay.rs`). The caret blinks in `caret_phase_ms` phases, each blink
   drawing only the overlay again, no node, and stays on with Reduce Motion or a phase of 0 (a
   session that asks for a steady caret). Shift-click and shift-drag extend the selection; a drag held past the field's
   edge (an editor's top or bottom) keeps scrolling and selecting every 50 ms by the distance past the edge until the

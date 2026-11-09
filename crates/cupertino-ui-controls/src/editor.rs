@@ -769,15 +769,12 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
                 let end = range.end.min(span.end);
                 (start < end).then(|| start - laid.start..(end - laid.start).min(laid.len))
             };
-            if focused {
-                if let Some(range) = part(&selection) {
-                    for rect in laid.layout.selection_rects(range) {
-                        field::fill_rect(
-                            cx,
-                            field::selection_bar(rect.translate(origin.x, origin.y), env.scale),
-                            color(ColorRole::SelectedTextBackground),
-                        );
-                    }
+            if let Some((range, selected)) = part(&selection)
+                .zip(color(ColorRole::SelectedTextBackground))
+                .filter(|_| focused)
+            {
+                for rect in laid.layout.selection_rects(range) {
+                    cx.fill_pixels(rect.translate(origin.x, origin.y), selected);
                 }
             }
             look::glyphs(cx, &laid.layout, origin, color(ColorRole::Text));

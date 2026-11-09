@@ -1337,3 +1337,148 @@ fn a_node_lies_on_a_material_under_glass_a_translucent_surface_or_such_a_window_
         assert!(!on(Beneath::Nothing, surface(Surface::WindowBackground)));
     }
 }
+
+/// Paints a clip and a fill on the window's device pixels, and a plain fill.
+struct OnPixels(Rc<Cell<u32>>);
+
+impl Widget<M> for OnPixels {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        self.0.set(self.0.get() + 1);
+        cx.clip_pixels(Rect::new(0.3, 0.3, 20.0, 9.1));
+        cx.fill_pixels(
+            Rect::new(1.2, 2.7, 10.1, 0.2),
+            Color::new(0.0, 0.0, 0.0, 1.0),
+        );
+        cx.push(PaintOp::PopClip);
+        cx.push(PaintOp::Fill {
+            shape: Shape::Rect(Rect::new(1.2, 2.7, 10.1, 0.2)),
+            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, 1.0)),
+        });
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+#[test]
+fn what_a_node_puts_on_device_pixels_lands_on_them_wherever_a_frame_draws_it() {
+    let paints = Rc::new(Cell::new(0));
+    let mut tree = Tree::<M>::new(4);
+    let root = tree
+        .reconcile(None, Element::new(OnPixels(Rc::clone(&paints))))
+        .unwrap();
+    let mut env = env();
+    env.scale = 1.5;
+    let mut painter = Painter::default();
+    let mut revision = None;
+    for origin in [
+        Point::new(10.1, 20.35),
+        Point::new(10.4, 20.0),
+        Point::new(3.7, 0.9),
+    ] {
+        let rect = Rect::new(origin.x, origin.y, 40.0, 20.0);
+        let geometry = Geometry::from([(
+            root,
+            Placement {
+                rect,
+                target: rect,
+                clip: None,
+                own_clip: None,
+            },
+        )]);
+        let painting = painter.paint(
+            &tree,
+            root,
+            &geometry,
+            &PaintInput {
+                env: &env,
+                focus: None,
+                focus_visible: false,
+                window_active: true,
+                background: WindowBackground::None,
+                backdrop: false,
+                materials: false,
+                now: Timestamp(0),
+            },
+        );
+        let node = &painting.list.nodes[0];
+        assert_eq!(
+            *revision.get_or_insert(node.revision),
+            node.revision,
+            "moving keeps the paint"
+        );
+        let in_pixels = |r: &Rect| {
+            let r = r.translate(origin.x, origin.y);
+            [r.min_x(), r.min_y(), r.max_x(), r.max_y()].map(|v| v * 1.5)
+        };
+        let whole = |v: f64| (v - v.round()).abs() < 1e-9;
+        let [PaintOp::PushClip(Shape::Rect(clip)), PaintOp::Fill {
+            shape: Shape::Rect(fill),
+            ..
+        }, PaintOp::PopClip, PaintOp::Fill {
+            shape: Shape::Rect(plain),
+            ..
+        }] = &node.ops[..]
+        else {
+            panic!("the ops as painted: {:?}", node.ops);
+        };
+        let at = format!("at {origin:?}");
+        assert!(in_pixels(clip).iter().all(|&v| whole(v)), "the clip {at}");
+        assert!(in_pixels(fill).iter().all(|&v| whole(v)), "the fill {at}");
+        // the clip widens to the pixels it touches; the fill moves to the nearest edges, a pixel high at least
+        let [l, t, r, b] = in_pixels(&Rect::new(0.3, 0.3, 20.0, 9.1));
+        assert_eq!(
+            in_pixels(clip).map(f64::round),
+            [l.floor(), t.floor(), r.ceil(), b.ceil()],
+            "{at}"
+        );
+        let [l, t, r, _] = in_pixels(&Rect::new(1.2, 2.7, 10.1, 0.2));
+        assert_eq!(
+            in_pixels(fill).map(f64::round),
+            [l.round(), t.round(), r.round(), t.round() + 1.0],
+            "{at}"
+        );
+        assert_eq!(
+            *plain,
+            Rect::new(1.2, 2.7, 10.1, 0.2),
+            "a plain fill stays as painted {at}"
+        );
+        // the pixels the node's bounds touch hold the fill grown to a pixel high
+        let [l, t, r, b] = in_pixels(fill).map(f64::round);
+        let bounds = node.bounds;
+        let [bl, bt, br, bb] = [
+            bounds.min_x(),
+            bounds.min_y(),
+            bounds.max_x(),
+            bounds.max_y(),
+        ]
+        .map(|v| v * 1.5);
+        assert!(
+            bl.floor() <= l && bt.floor() <= t && br.ceil() >= r && bb.ceil() >= b,
+            "{at}: {bounds:?} holds {fill:?}"
+        );
+    }
+    assert_eq!(paints.get(), 1);
+}

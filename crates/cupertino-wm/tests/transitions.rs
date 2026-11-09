@@ -356,3 +356,84 @@ fn a_window_moved_to_an_output_takes_its_frame_there_fitted_and_keeps_its_layout
         "{g:?}"
     );
 }
+
+/// The output a window is being resized on goes away mid-resize: the resize ends with the frame the window was given on
+/// the remaining output, so the pointer coming onto that output does not pull its edges back towards the one that went.
+#[test]
+fn a_resize_on_an_output_that_goes_away_ends_with_the_window_on_the_remaining_one() {
+    let mut h = H::new();
+    let out2 = OutputId(2);
+    h.cmd(Command::AddOutput {
+        output: out2,
+        rect: Rect::new(1920.0, 0.0, 1280.0, 800.0),
+        usable: Rect::new(1920.0, 24.0, 1280.0, 776.0),
+    });
+    let w = h.map_at("a", Rect::new(2000.0, 100.0, 600.0, 400.0));
+    h.cmd(Command::MoveWindowToWorkspace {
+        window: w,
+        workspace: h.wm.current_workspace(out2).unwrap(),
+    });
+    let right_edge = Edges {
+        right: true,
+        ..Edges::NONE
+    };
+    h.cmd(Command::BeginResize {
+        window: w,
+        edges: right_edge,
+        pointer: Point::new(2600.0, 300.0),
+    });
+    h.cmd(motion(2700.0, 300.0));
+    assert!(h.wm.is_interacting());
+
+    let fx = h.cmd(Command::RemoveOutput { output: out2 });
+    assert!(!h.wm.is_interacting(), "the resize ended");
+    assert!(
+        fx.iter().any(|e| matches!(
+            e,
+            Effect::Configure { window, states, .. } if *window == w && !states.resizing
+        )),
+        "the client hears the resize ended: {fx:?}"
+    );
+    let placed = h.wm.window(w).unwrap().lifecycle.normal_frame();
+    assert!(
+        placed.x >= USABLE.x && placed.right() <= USABLE.right() && placed.y >= USABLE.y,
+        "{placed:?}"
+    );
+    // the server brings the pointer onto the remaining output, then the button comes up
+    h.cmd(motion(1919.0, 300.0));
+    h.cmd(Command::PointerRelease);
+    h.settle();
+    assert_eq!(h.wm.window(w).unwrap().lifecycle.normal_frame(), placed);
+    assert_eq!(h.wm.window(w).unwrap().output, OUT);
+}
+
+/// A drag cancelled after its output went leaves the window on the remaining output, not where the drag started on the
+/// output that went.
+#[test]
+fn a_drag_cancelled_after_its_output_goes_leaves_the_window_reachable() {
+    let mut h = H::new();
+    let out2 = OutputId(2);
+    h.cmd(Command::AddOutput {
+        output: out2,
+        rect: Rect::new(1920.0, 0.0, 1280.0, 800.0),
+        usable: Rect::new(1920.0, 24.0, 1280.0, 776.0),
+    });
+    let w = h.map_at("a", Rect::new(2000.0, 100.0, 600.0, 400.0));
+    h.cmd(Command::MoveWindowToWorkspace {
+        window: w,
+        workspace: h.wm.current_workspace(out2).unwrap(),
+    });
+    h.cmd(Command::BeginMove {
+        window: w,
+        pointer: Point::new(2100.0, 110.0),
+    });
+    h.cmd(motion(2300.0, 300.0));
+    h.cmd(Command::RemoveOutput { output: out2 });
+    h.cmd(Command::CancelInteraction);
+    h.settle();
+    let g = h.wm.window(w).unwrap().geometry();
+    assert!(
+        g.x >= USABLE.x && g.right() <= USABLE.right() && g.y >= USABLE.y,
+        "{g:?}"
+    );
+}

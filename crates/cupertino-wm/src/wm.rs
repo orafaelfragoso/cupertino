@@ -458,15 +458,48 @@ impl Wm {
             .map(|w| w.id)
             .collect();
         ids.sort();
-        for wid in ids {
+        for &wid in &ids {
             let normal = self.windows[&wid].lifecycle.normal_frame();
             self.transfer_to_output(wid, dest.id, dest_ws, normal, now, out);
         }
-        // a window being dragged keeps following the pointer, which the server brings onto a remaining output
-        if let Interaction::Moving(m) = &mut self.interaction {
-            if m.output == id {
-                m.output = dest.id;
+        self.interaction_left_output(id, dest.id, &ids, out);
+    }
+
+    /// Output `gone` went and its windows, `moved`, are on `dest` now. A window being dragged keeps following the
+    /// pointer, which the server brings onto a remaining output; a cancelled drag puts it back where it is now rather
+    /// than where it started on the output that went. A resize ends with the frame the window was given on `dest`: its
+    /// edges were measured from a frame and a pointer on the output that went.
+    fn interaction_left_output(
+        &mut self,
+        gone: OutputId,
+        dest: OutputId,
+        moved: &[WindowId],
+        out: &mut Vec<Effect>,
+    ) {
+        match &self.interaction {
+            Interaction::Moving(m) => {
+                let frame = moved
+                    .contains(&m.window)
+                    .then(|| self.windows.get(&m.window))
+                    .flatten()
+                    .map(|w| w.lifecycle.normal_frame());
+                if let Interaction::Moving(m) = &mut self.interaction {
+                    if m.output == gone {
+                        m.output = dest;
+                    }
+                    if let Some(frame) = frame {
+                        m.start_frame = frame;
+                    }
+                }
             }
+            Interaction::Resizing(r) if moved.contains(&r.window) => {
+                let window = r.window;
+                self.interaction = Interaction::Idle;
+                if let Some(c) = self.configure_effect(window, false) {
+                    out.push(c);
+                }
+            }
+            _ => {}
         }
     }
 

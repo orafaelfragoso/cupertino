@@ -114,7 +114,9 @@ cargo run -p cupertino-assets -- check <dir>
 It prints the problems of the pack, then per logical name what provides it (the pack's source or the built-in fallback)
 and the list of names that fall back. It exits 1 only when the manifest cannot be read, is not valid JSON or has an
 unsupported version, never because assets are missing. `PackReport` is that report; `cupertino appearance assets check
-<dir>` (crate `cupertino-cli`) prints the same text, or the report as JSON with `--format json`.
+<dir>` (crate `cupertino-cli`) prints the same text, or the report as JSON with `--format json`, and replaces it:
+`cupertino-assets check` first prints one line on stderr naming it, and will be removed in a later release
+(`tests/deprecation.rs`).
 
 ## Open issues
 

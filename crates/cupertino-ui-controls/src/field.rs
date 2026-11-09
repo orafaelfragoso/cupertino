@@ -20,7 +20,9 @@ use cupertino_ui_text::{
     ParagraphLayout, Response, SecureBuffer, Selection, TextBuffer, TextFieldKeys,
     TextInputSession, TextPosition, CARET_WIDTH, SURROUNDING_MAX_BYTES,
 };
-use cupertino_ui_theme::{Color, ColorRole, ThemeTokens};
+use cupertino_ui_theme::{
+    control_geometry, Color, ColorRole, ControlFamily, ControlSize, ThemeTokens,
+};
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::time::Duration;
@@ -217,13 +219,15 @@ pub(crate) fn position(byte: usize) -> TextPosition {
     }
 }
 
-/// A search field's height, the magnifying glass's size and its leading edge, the text's leading edge, and its fill
-/// and rim: white at these opacities in a dark appearance, the fill white and the rim black in a light one.
-const SEARCH_HEIGHT: f64 = 28.0;
-const SEARCH_GLYPH: f64 = 12.5;
-const SEARCH_GLYPH_X: f64 = 9.5;
-const SEARCH_TEXT_X: f64 = 28.0;
-const SEARCH_FILL_DARK: f32 = 0.2;
+/// A search field's magnifying glass: its size and its leading edge, and the text's leading edge. Its height is the
+/// size table's for a search field ([`ControlFamily::SearchField`]): 24 points at the regular size, 28 at the large
+/// size a sidebar's search uses.
+const SEARCH_GLYPH: f64 = 13.0;
+const SEARCH_GLYPH_X: f64 = 10.0;
+const SEARCH_TEXT_X: f64 = 27.0;
+/// A search field's capsule on a material: its fill and rim, white at these opacities in a dark appearance, the fill
+/// white and the rim black in a light one. On the window's content it is a text field's recessed well instead.
+const SEARCH_FILL_DARK: f32 = 0.23;
 const SEARCH_RIM_DARK: f32 = 0.12;
 const SEARCH_FILL_LIGHT: f32 = 0.45;
 const SEARCH_RIM_LIGHT: f32 = 0.09;
@@ -239,8 +243,8 @@ const WELL_EDGE_LIGHT: f32 = 0.08;
 pub(crate) enum FieldLook {
     #[default]
     Plain,
-    /// A capsule with a magnifying glass before the text: a [`SearchField`].
-    Search,
+    /// A capsule with a magnifying glass before the text: a [`SearchField`], at its own control size or the window's.
+    Search(Option<ControlSize>),
     /// No chrome, the text at this many points: a [`BareField`].
     Bare(u16),
 }
@@ -252,7 +256,15 @@ impl FieldLook {
     fn height(self, theme: &ThemeTokens) -> f64 {
         match self {
             FieldLook::Plain => theme.metrics.field_height,
-            FieldLook::Search => SEARCH_HEIGHT,
+            FieldLook::Search(size) => {
+                let metrics = &theme.metrics;
+                control_geometry(
+                    ControlFamily::SearchField,
+                    size.unwrap_or(metrics.size),
+                    metrics.compact,
+                )
+                .height
+            }
             FieldLook::Bare(size) => (f64::from(size) * BARE_LINE_SHARE).ceil(),
         }
     }
@@ -260,7 +272,7 @@ impl FieldLook {
     /// The size of the field's text: the body type's, or a bare field's own.
     fn text_size(self, theme: &ThemeTokens) -> f32 {
         match self {
-            FieldLook::Plain | FieldLook::Search => theme.type_scale.body.size,
+            FieldLook::Plain | FieldLook::Search(_) => theme.type_scale.body.size,
             FieldLook::Bare(size) => f32::from(size),
         }
     }
@@ -302,7 +314,7 @@ fn interior(size: Size, theme: &ThemeTokens, look: FieldLook, direction: LayoutD
     let inset = theme.metrics.field_inset;
     let (start, end) = match look {
         FieldLook::Plain => (inset, inset),
-        FieldLook::Search => (SEARCH_TEXT_X, inset),
+        FieldLook::Search(_) => (SEARCH_TEXT_X, inset),
         FieldLook::Bare(_) => (0.0, 0.0),
     };
     let (left, right) = match direction {
@@ -447,7 +459,7 @@ fn paint_text(
             // field's
             let role = match field {
                 FieldLook::Plain => ColorRole::PlaceholderText,
-                FieldLook::Search | FieldLook::Bare(_) => ColorRole::SecondaryText,
+                FieldLook::Search(_) | FieldLook::Bare(_) => ColorRole::SecondaryText,
             };
             look::glyphs(cx, &placeholder, at, color(role));
         }
@@ -566,7 +578,7 @@ fn paint_chrome(cx: &mut PaintCx<'_>, state: &ControlState, field: FieldLook) {
     let theme = cx.env().theme.clone();
     let rect = chrome(cx.size(), &theme, field);
     match field {
-        FieldLook::Search => {
+        FieldLook::Search(_) => {
             paint_search_chrome(cx, rect, state);
             return;
         }
@@ -611,30 +623,23 @@ pub(crate) fn well(theme: &ThemeTokens, state: &ControlState) -> (Option<Color>,
     (fill, edge)
 }
 
-/// A search field's capsule, its rim and its magnifying glass at the reading direction's start.
+/// A search field's capsule and its magnifying glass at the reading direction's start. On a material (a sidebar) the
+/// capsule is a light fill with a rim; on the window's content it is a text field's recessed well with round ends.
 fn paint_search_chrome(cx: &mut PaintCx<'_>, rect: Rect, state: &ControlState) {
     let theme = cx.env().theme.clone();
     let radius = rect.height() / 2.0;
-    let white = cupertino_ui_theme::Color::new(1.0, 1.0, 1.0, 1.0);
-    let black = cupertino_ui_theme::Color::new(0.0, 0.0, 0.0, 1.0);
-    let (fill, rim) = if theme.preferences.appearance.is_dark() {
-        (
-            white.with_alpha(SEARCH_FILL_DARK),
-            white.with_alpha(SEARCH_RIM_DARK),
-        )
+    let (fill, rim) = if cx.on_material() {
+        search_capsule(&theme, state)
     } else {
-        (
-            white.with_alpha(SEARCH_FILL_LIGHT),
-            black.with_alpha(SEARCH_RIM_LIGHT),
-        )
+        well(&theme, state)
     };
-    look::fill(cx, rect, radius, Some(fill));
+    look::fill(cx, rect, radius, fill);
     look::stroke(
         cx,
         rect.inset(cupertino_geometry::Insets::uniform(0.5)),
         radius - 0.5,
         1.0,
-        Some(rim),
+        rim,
     );
     let glyph = match cx.env().direction {
         LayoutDirection::Ltr => SEARCH_GLYPH_X,
@@ -657,6 +662,31 @@ fn paint_search_chrome(cx: &mut PaintCx<'_>, rect: Rect, state: &ControlState) {
         );
     }
     paint_focus_ring(cx, rect, radius);
+}
+
+/// A search field's capsule on a material: a light fill and its rim. Under increased contrast the rim is the theme's
+/// stronger field border.
+fn search_capsule(theme: &ThemeTokens, state: &ControlState) -> (Option<Color>, Option<Color>) {
+    let appearance = theme.preferences.appearance;
+    let white = Color::new(1.0, 1.0, 1.0, 1.0);
+    let black = Color::new(0.0, 0.0, 0.0, 1.0);
+    let (fill, rim) = if appearance.is_dark() {
+        (
+            white.with_alpha(SEARCH_FILL_DARK),
+            white.with_alpha(SEARCH_RIM_DARK),
+        )
+    } else {
+        (
+            white.with_alpha(SEARCH_FILL_LIGHT),
+            black.with_alpha(SEARCH_RIM_LIGHT),
+        )
+    };
+    let rim = if appearance.is_high_contrast() {
+        look::color(theme, ColorRole::TextFieldBorder, state)
+    } else {
+        Some(rim)
+    };
+    (Some(fill), rim)
 }
 
 pub(crate) fn control_state(enabled: bool, hovered: bool, cx: &PaintCx<'_>) -> ControlState {
@@ -1543,13 +1573,18 @@ impl<M: Clone + 'static> Widget<M> for SearchField<M> {
 
     fn state(&self) -> FieldState {
         FieldState {
-            look: FieldLook::Search,
+            look: FieldLook::Search(self.size),
             ..self.field.state()
         }
     }
 
     fn update(&self, old: &Self, state: &mut FieldState) -> Change {
-        self.field.update(&old.field, state)
+        let change = self.field.update(&old.field, state);
+        if self.size != old.size {
+            state.look = FieldLook::Search(self.size);
+            return Change::Layout;
+        }
+        change
     }
 
     fn measure(
@@ -1558,7 +1593,7 @@ impl<M: Clone + 'static> Widget<M> for SearchField<M> {
         constraints: Constraints,
         cx: &mut MeasureCx<'_>,
     ) -> Measured {
-        measure(constraints, cx, FieldLook::Search)
+        measure(constraints, cx, FieldLook::Search(self.size))
     }
 
     fn target(&self, state: &FieldState, env: &Environment) -> Size {

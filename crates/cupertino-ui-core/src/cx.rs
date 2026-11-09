@@ -345,6 +345,10 @@ pub struct PaintCx<'a> {
     pub(crate) asked_material: &'a mut bool,
     /// The node called [`PaintCx::overlay`].
     pub(crate) overlay: &'a mut bool,
+    /// The node lies on a material ([`PaintCx::on_material`]).
+    pub(crate) on_material: bool,
+    /// The node asked for glass or a translucent surface's material under itself, which its subtree lies on.
+    pub(crate) lays_material: &'a mut bool,
 }
 
 impl PaintCx<'_> {
@@ -378,6 +382,18 @@ impl PaintCx<'_> {
     /// glass is never laid on glass.
     pub fn on_glass(&self) -> bool {
         self.on_glass
+    }
+
+    /// Whether the node lies on a material rather than on the window's plain content: glass ([`on_glass`]), the
+    /// material of a surface that shows what is behind the window (a sidebar, a popover) an ancestor asked for, or such
+    /// a window background. It holds whether the window shows the material or paints the surface's opaque fill in its
+    /// place (without the desktop's effects, with Reduce Transparency), so a control keeps one look in one place. The
+    /// window's and a form's own backgrounds drawn by the compositor are not materials here: what lies on them is the
+    /// window's content. A control drawn one way on content and another on a material (a search field) reads it.
+    ///
+    /// [`on_glass`]: Self::on_glass
+    pub fn on_material(&self) -> bool {
+        self.on_material
     }
 
     /// Whether the window system shows the material of the window's
@@ -447,6 +463,7 @@ impl PaintCx<'_> {
     /// the window paints, so a node over other content of its window paints its own fill instead.
     pub fn material(&mut self, surface: Surface, radius: f64, alpha: f64) -> bool {
         *self.asked_material = true;
+        *self.lays_material |= translucent(surface);
         let name = self.env.theme.surface(surface).material;
         *self.material = name.filter(|_| self.materials).map(|name| NodeMaterial {
             name,
@@ -495,6 +512,7 @@ impl PaintCx<'_> {
     /// colours after this call. [`PaintCx::material`] with a glass surface does the same.
     pub fn glass(&mut self, glass: Glass) -> bool {
         *self.asked_material = true;
+        *self.lays_material = true;
         let finite = |v: f64, otherwise: f64| if v.is_finite() { v } else { otherwise };
         let (name, style) = (glass.style.material(), glass.style);
         *self.material = self.materials.then(|| NodeMaterial {
@@ -514,6 +532,12 @@ impl PaintCx<'_> {
         self.take_foreground();
         self.material.is_some()
     }
+}
+
+/// Whether `surface`'s material shows what lies behind the window, so what lies on it lies on a material
+/// ([`PaintCx::on_material`]); the window's and a form's own backgrounds are the window's content.
+pub(crate) fn translucent(surface: Surface) -> bool {
+    !matches!(surface, Surface::WindowBackground | Surface::TextBackground)
 }
 
 /// The glass style a material name of the theme stands for.

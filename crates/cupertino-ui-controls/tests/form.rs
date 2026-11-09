@@ -15,7 +15,7 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{Align, Axis, ScrollState};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, ContentPurpose, TextStyle};
-use cupertino_ui_theme::{ColorRole, InteractionVariant};
+use cupertino_ui_theme::{ColorRole, ControlSize, InteractionVariant};
 use support::{color, window, Harness, RETURN, SPACE, TAB};
 
 const UP: u32 = 0xff52;
@@ -119,6 +119,7 @@ impl Application for Settings {
                 selection: None,
                 initial: false,
             },
+            size: Some(ControlSize::Large),
         })
         .key("search");
         let sidebar = Element::from(TileSidebar {

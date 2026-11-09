@@ -1162,3 +1162,178 @@ fn text_on_a_window_of_glass_takes_the_windows_tone() {
     // without the material the window paints its own fill, and its labels keep the theme's colours
     assert_eq!(paint(&mut painter, false), label);
 }
+
+/// What a node under [`Under`] asks for beneath itself.
+#[derive(Clone, Copy)]
+enum Beneath {
+    Nothing,
+    Surface(cupertino_ui_theme::Surface),
+    Glass,
+}
+
+/// A box that asks for a material or glass under itself, around one child.
+struct Asking {
+    beneath: Beneath,
+    children: Vec<Element<M>>,
+}
+
+impl Widget<M> for Asking {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        match self.beneath {
+            Beneath::Nothing => {}
+            Beneath::Surface(surface) => {
+                cx.material(surface, 0.0, 1.0);
+            }
+            Beneath::Glass => {
+                cx.glass(crate::Glass::regular());
+            }
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// Records whether it lay on a material when it painted.
+struct MaterialProbe(Rc<Cell<Option<bool>>>);
+
+impl Widget<M> for MaterialProbe {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        self.0.set(Some(cx.on_material()));
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// Whether a probe under a box asking for `beneath`, in a window with `background`, lies on a material, with the
+/// window's materials shown or not.
+fn probed(beneath: Beneath, background: WindowBackground, shown: bool) -> bool {
+    let seen = Rc::new(Cell::new(None));
+    let mut tree = Tree::<M>::new(4);
+    let root = tree
+        .reconcile(
+            None,
+            Element::new(Asking {
+                beneath,
+                children: vec![Element::new(MaterialProbe(Rc::clone(&seen)))],
+            }),
+        )
+        .unwrap();
+    let probe = tree.get(root).unwrap().children[0];
+    let rect = Rect::new(0.0, 0.0, 100.0, 40.0);
+    let geometry = Geometry::from([root, probe].map(|id| {
+        (
+            id,
+            Placement {
+                rect,
+                target: rect,
+                clip: None,
+                own_clip: None,
+            },
+        )
+    }));
+    Painter::default().paint(
+        &tree,
+        root,
+        &geometry,
+        &PaintInput {
+            env: &env(),
+            focus: None,
+            focus_visible: false,
+            window_active: true,
+            background,
+            backdrop: shown,
+            materials: shown,
+            now: Timestamp(0),
+        },
+    );
+    seen.get().expect("the probe painted")
+}
+
+#[test]
+fn a_node_lies_on_a_material_under_glass_a_translucent_surface_or_such_a_window_background() {
+    use cupertino_ui_theme::Surface;
+    let surface = |surface| WindowBackground::Surface {
+        surface,
+        radius: 0.0,
+        alpha: 1.0,
+    };
+    for shown in [false, true] {
+        let on = |beneath, background| probed(beneath, background, shown);
+        assert!(!on(Beneath::Nothing, WindowBackground::Theme), "content");
+        assert!(!on(Beneath::Nothing, WindowBackground::None));
+        assert!(
+            on(Beneath::Surface(Surface::Sidebar), WindowBackground::Theme),
+            "a sidebar"
+        );
+        assert!(on(
+            Beneath::Surface(Surface::Popover),
+            WindowBackground::Theme
+        ));
+        assert!(on(Beneath::Glass, WindowBackground::Theme), "glass");
+        assert!(
+            on(Beneath::Nothing, surface(Surface::Sidebar)),
+            "a sidebar window"
+        );
+        assert!(on(Beneath::Nothing, surface(Surface::Menu)));
+        // the window's and a form's own backgrounds drawn by the compositor are its content
+        assert!(!on(
+            Beneath::Surface(Surface::WindowBackground),
+            WindowBackground::Theme
+        ));
+        assert!(!on(
+            Beneath::Surface(Surface::TextBackground),
+            WindowBackground::Theme
+        ));
+        assert!(!on(Beneath::Nothing, surface(Surface::WindowBackground)));
+    }
+}

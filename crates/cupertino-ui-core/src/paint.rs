@@ -40,6 +40,10 @@ struct Painted {
     foreground: Foreground,
     /// The node draws an overlay on every frame ([`PaintCx::overlay`]).
     overlay: bool,
+    /// The node lay on a material when it painted ([`PaintCx::on_material`]).
+    on_material: bool,
+    /// The node asked for glass or a translucent surface's material, which its subtree lies on.
+    lays_material: bool,
 }
 
 /// The glass a node paints on, which picks the colours of its text and symbols: the tone of the glass it lies on, if
@@ -383,6 +387,12 @@ impl Painter {
             }
         };
         let mut overlaid = HashSet::new();
+        // whether each node's children lie on a material, from the window's background down
+        let mut material_below: HashMap<NodeId, bool> = HashMap::new();
+        let window_material = matches!(
+            input.background,
+            WindowBackground::Surface { surface, .. } if crate::cx::translucent(surface)
+        );
         for id in tree.preorder(root) {
             let (Some(node), Some(placement)) = (tree.get(id), geometry.get(&id)) else {
                 continue;
@@ -433,6 +443,11 @@ impl Painter {
                 on: inherited,
                 own: self.tones.region(materials.len()),
             };
+            let on_material = inherited.is_some()
+                || match node.parent {
+                    Some(parent) => material_below.get(&parent).copied().unwrap_or(false),
+                    None => window_material,
+                };
             let fresh = self.nodes.get(&id).is_some_and(|p| {
                 p.source == source
                     && p.background == background
@@ -440,6 +455,7 @@ impl Painter {
                     && p.visible.is_none_or(|v| v == visible)
                     && p.materials.is_none_or(|m| m == can_show)
                     && p.foreground.on == foreground.on
+                    && p.on_material == on_material
                     && (p.materials.is_none() || p.foreground.own == foreground.own)
             });
             if !fresh {
@@ -494,6 +510,7 @@ impl Painter {
                 let mut material = None;
                 let mut asked_material = false;
                 let mut overlay = false;
+                let mut lays_material = false;
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
@@ -521,6 +538,8 @@ impl Painter {
                         material: &mut material,
                         asked_material: &mut asked_material,
                         overlay: &mut overlay,
+                        on_material,
+                        lays_material: &mut lays_material,
                     },
                 );
                 if animate {
@@ -543,10 +562,13 @@ impl Painter {
                         material,
                         foreground,
                         overlay,
+                        on_material,
+                        lays_material,
                     },
                 );
             }
             let painted = &self.nodes[&id];
+            material_below.insert(id, on_material || painted.lays_material);
             on_glass.insert(
                 id,
                 match (painted.material, inherited) {

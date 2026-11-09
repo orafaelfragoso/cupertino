@@ -81,7 +81,7 @@ use cupertino_ui_layout::{Align, Axis, ScrollState, Track};
 use cupertino_ui_platform::{KeyEvent, WindowSpec};
 use cupertino_ui_render::{ImageResource, ResourceId};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
-use cupertino_ui_theme::ColorRole;
+use cupertino_ui_theme::{ColorRole, ControlSize};
 use std::ops::Range;
 
 /// The space a form-style window (a form, a dialog) leaves between its edges and its content, for a [`Stack`]'s
@@ -1194,10 +1194,14 @@ pub struct FormBackground<M> {
     pub content: Element<M>,
 }
 
-/// A [`TextField`] drawn as a search field: a capsule with a magnifying glass before the text. It behaves, edits and
-/// reads to assistive technology as its field does.
+/// A [`TextField`] drawn as a search field: a capsule with a magnifying glass before the text, a light one on a
+/// material (a sidebar) and a recessed well on the window's content. It behaves, edits and reads to assistive
+/// technology as its field does.
 pub struct SearchField<M> {
     pub field: TextField<M>,
+    /// Its control size, which sets its height from the size table (24 points at the regular size, 28 at the large);
+    /// `None` takes the window's.
+    pub size: Option<ControlSize>,
 }
 
 /// A [`TextField`] without chrome, its text set at `size` points (whole points, 1 to 200): for a field that stands on a

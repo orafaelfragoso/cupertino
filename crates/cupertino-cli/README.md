@@ -45,7 +45,8 @@ cupertino --format jsonl help               # JSON lines: a result record and an
   command starts prints `end` alone; a failed command prints its events and then `end` with the error, no `result`.
 
 In `json` and `jsonl` nothing goes to stderr. A stream command in `json` form gives one envelope at the end whose `data`
-is its final object plus `events` (`[{event, data}]`) and `warnings` (`[{kind, code, message}]`).
+is its final object plus `events` (`[{event, data}]`) and `warnings` (`[{kind, code, message}]`); a report stream
+(`Sink::json_result_only`) keeps its own data, with `warnings` only when there are some.
 
 `request_id` is the process id and the time, in hex. `code` is a stable snake_case identifier within its `kind`;
 `message` is for people and may change.
@@ -130,6 +131,8 @@ later word a positional argument. A single option given twice is `repeated_optio
   - `event(name, &data, human_line)` reports an event (an empty human line prints nothing in human form);
   - `warn(failure)` reports a problem it continues past;
   - `follow()` declares a stream that runs until stopped;
+  - `json_result_only()` declares a command whose final data already holds what its events said (a report): in
+    `json` form its `data` is then that data alone, with `warnings` added only when there are some;
   - `stop_requested()` says whether SIGINT, SIGTERM or the caller asked it to stop;
   - `format()` says which form is printed.
 

@@ -22,7 +22,9 @@
 //!   `cupertino: <message>`. Nothing else is printed.
 //! - `json`: one envelope at the end. A stream command's `data` is its final data object with two fields added:
 //!   `events` (`[{event, data}]`, in order) and `warnings` (`[{kind, code, message}]`). A failed stream gives the error
-//!   envelope, without the events. A follow stream in this form holds its events until it stops.
+//!   envelope, without the events. A follow stream in this form holds its events until it stops. A command whose final
+//!   data already holds what its events said (a report) calls [`Sink::json_result_only`]: its `data` is then that data
+//!   alone, with `warnings` added only when there are some.
 //!
 //! In `json` and `jsonl` nothing goes to stderr.
 //!
@@ -52,6 +54,7 @@
 use crate::{Failure, FailureKind, Format, Reply, SCHEMA, STREAM_SCHEMA};
 use serde::Serialize;
 use serde_json::value::RawValue;
+use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -183,6 +186,8 @@ pub(crate) struct Lines<'w> {
     state: State,
     /// A stream in JSON form: the envelope collects the events and warnings.
     collect: bool,
+    /// [`Sink::json_result_only`]: the envelope collects the warnings alone, and adds them only when there are some.
+    result_only: bool,
     events: Vec<Collected>,
     warnings: Vec<Failure>,
 }
@@ -279,6 +284,7 @@ impl<'w> Lines<'w> {
             seq: 0,
             state: State::Open,
             collect: false,
+            result_only: false,
             events: Vec::new(),
             warnings: Vec::new(),
         }
@@ -327,6 +333,7 @@ impl<'w> Lines<'w> {
             Format::Human if human.is_empty() => self.alive(),
             Format::Human if human.ends_with('\n') => self.write(human.as_bytes()),
             Format::Human => self.write(format!("{human}\n").as_bytes()),
+            Format::Json if self.result_only => self.alive(),
             Format::Json => {
                 self.events.push(Collected {
                     event: name.into(),
@@ -415,8 +422,18 @@ impl<'w> Lines<'w> {
     fn envelope(&mut self, result: &Result<Reply, Failure>) -> Result<(), Closed> {
         let collected;
         let data = match result {
-            Ok(reply) if self.collect => {
-                collected = with_events(&reply.data, &self.events, &self.warnings);
+            Ok(reply) if self.result_only && !self.warnings.is_empty() => {
+                collected = with_fields(&reply.data, &[("warnings", json(&self.warnings))]);
+                Some(collected.as_ref())
+            }
+            Ok(reply) if self.collect && !self.result_only => {
+                collected = with_fields(
+                    &reply.data,
+                    &[
+                        ("events", json(&self.events)),
+                        ("warnings", json(&self.warnings)),
+                    ],
+                );
                 Some(collected.as_ref())
             }
             Ok(reply) => Some(reply.data.as_ref()),
@@ -436,23 +453,29 @@ impl<'w> Lines<'w> {
     }
 }
 
-/// A stream's final data object with `events` and `warnings` added after its own fields. Data that is not an object,
-/// which the stream rules do not allow, is kept under `result`.
-fn with_events(data: &RawValue, events: &[Collected], warnings: &[Failure]) -> Box<RawValue> {
-    let events = serde_json::to_string(events).expect("events serialize");
-    let warnings = serde_json::to_string(warnings).expect("warnings serialize");
+fn json(records: &impl Serialize) -> String {
+    serde_json::to_string(records).expect("collected records serialize")
+}
+
+/// A stream's final data object with `fields` (name and JSON text) added after its own. Data that is not an object, which the stream rules
+/// do not allow, is kept under `result`.
+fn with_fields(data: &RawValue, fields: &[(&str, String)]) -> Box<RawValue> {
+    let mut added = String::new();
+    for (name, value) in fields {
+        let _ = write!(added, ",\"{name}\":{value}");
+    }
     let text = data.get();
     debug_assert!(
         text.starts_with('{'),
         "a stream command's data is a JSON object: {text}"
     );
     let merged = match text.strip_suffix('}') {
-        Some(fields) if text.starts_with('{') => {
-            let fields = fields.trim_end();
-            let comma = if fields == "{" { "" } else { "," };
-            format!("{fields}{comma}\"events\":{events},\"warnings\":{warnings}}}")
+        Some(own) if text.starts_with('{') => {
+            let own = own.trim_end();
+            let added = if own == "{" { &added[1..] } else { &added };
+            format!("{own}{added}}}")
         }
-        _ => format!("{{\"result\":{text},\"events\":{events},\"warnings\":{warnings}}}"),
+        _ => format!("{{\"result\":{text}{added}}}"),
     };
     RawValue::from_string(merged).expect("the merged data is JSON")
 }
@@ -502,6 +525,13 @@ impl<'w> Sink<'w> {
     /// Declares a stream that runs until it is stopped; a stop then ends it with exit 0 and `reason: "stopped"`.
     pub fn follow(&mut self) {
         self.follow = true;
+    }
+
+    /// Declares a command whose final data already holds what its events reported, such as a report whose JSON form is
+    /// fixed: in the `json` form the envelope's `data` is that data alone. The events are not collected, and
+    /// `warnings` is added only when [`Sink::warn`] reported some. The other forms are unchanged.
+    pub fn json_result_only(&mut self) {
+        self.lines.result_only = true;
     }
 
     /// Whether SIGINT, SIGTERM or the caller asked the stream to stop.

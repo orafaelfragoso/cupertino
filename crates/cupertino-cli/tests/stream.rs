@@ -17,6 +17,8 @@ const COMMANDS: &[Command] = &[
     command(&["t", "finished"], Run::Stream(finished)),
     command(&["t", "flood"], Run::Stream(flood)),
     command(&["t", "scalar"], Run::Stream(scalar)),
+    command(&["t", "report"], Run::Stream(report)),
+    command(&["t", "warned"], Run::Stream(warned)),
     Command {
         stability: Stability::Deprecated {
             replacement: "cupertino t once",
@@ -101,6 +103,26 @@ fn flood(_: &Args, _: &Context, sink: &mut Sink) -> Result<Reply, Failure> {
 
 fn scalar(_: &Args, _: &Context, _: &mut Sink) -> Result<Reply, Failure> {
     Ok(Reply::new(&json!({}), ""))
+}
+
+/// A report: its final data holds what its events said.
+fn report(_: &Args, _: &Context, sink: &mut Sink) -> Result<Reply, Failure> {
+    sink.json_result_only();
+    sink.event("check", &json!({"id": "a"}), "a: pass")?;
+    Ok(Reply::new(
+        &json!({"schema": 1, "checks": ["a"]}),
+        "report\n",
+    ))
+}
+
+fn warned(a: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure> {
+    sink.json_result_only();
+    sink.warn(Failure::new(
+        FailureKind::Unavailable,
+        "partial",
+        "one area was skipped",
+    ))?;
+    report(a, cx, sink)
 }
 
 fn args(words: &[&str]) -> Vec<String> {
@@ -530,4 +552,30 @@ fn the_version_and_the_help_in_json_lines_are_a_result_and_an_end() {
     let help = records(&help, "help");
     assert_eq!(kinds(&help), ["result", "end"]);
     assert_eq!(help[0]["data"][0]["path"], "appearance assets check");
+}
+
+#[test]
+fn a_report_stream_keeps_its_own_data_in_json_form_and_streams_in_the_others() {
+    let json_form = run(&["--format", "json", "t", "report"]);
+    assert_eq!(
+        json_form.stdout,
+        "{\"schema\":\"cupertino.cli.v1\",\"command\":\"t report\",\"request_id\":\"r1\",\"ok\":true,\
+         \"data\":{\"checks\":[\"a\"],\"schema\":1}}\n"
+    );
+    let warned = run(&["--format", "json", "t", "warned"]);
+    let v: Value = serde_json::from_str(&warned.stdout).unwrap();
+    assert_eq!(
+        v["data"],
+        json!({"schema": 1, "checks": ["a"], "warnings": [
+            {"kind": "unavailable", "code": "partial", "message": "one area was skipped"}
+        ]}),
+        "a warning is never dropped"
+    );
+    let lines = run(&["--format", "jsonl", "t", "report"]);
+    assert_eq!(
+        kinds(&records(&lines, "t report")),
+        ["event", "result", "end"]
+    );
+    let human = run(&["t", "report"]);
+    assert_eq!(human.stdout, "a: pass\nreport\n");
 }

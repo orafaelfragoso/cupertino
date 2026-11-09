@@ -310,3 +310,151 @@ fn desktop_start_runs_the_headless_server_until_it_is_stopped() {
         "the command removes the runtime file of the server it stopped"
     );
 }
+
+/// The headless server on a ready pipe, with `--run-for` long enough to be ended by the test, and no core dump.
+fn start_announced(dirs: &Dirs) -> (Child, mpsc::Receiver<String>) {
+    use std::os::unix::process::CommandExt;
+    let (read, write) = inherited_pipe();
+    let fd = std::os::fd::AsRawFd::as_raw_fd(&write);
+    let mut command = dirs.command(env!("CARGO_BIN_EXE_cupertino-server"));
+    command
+        .args([
+            "--headless",
+            "--size",
+            "64x48",
+            "--run-for",
+            "120",
+            "--ready-fd",
+            &fd.to_string(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: setrlimit is async-signal-safe; an abort then leaves no core file.
+    unsafe {
+        command.pre_exec(|| {
+            let none = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            libc::setrlimit(libc::RLIMIT_CORE, &none);
+            Ok(())
+        });
+    }
+    let child = command.spawn().unwrap();
+    drop(write);
+    (child, lines(std::fs::File::from(read)))
+}
+
+/// The process `pid`, not a child of the test, has ended: a pidfd of it becomes readable. Bounded by [`HANG_GUARD`].
+fn ended(pid: u32) -> bool {
+    // SAFETY: pidfd_open takes a pid and flags and returns a new descriptor or -1.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
+    if fd < 0 {
+        // already gone
+        return true;
+    }
+    // SAFETY: a non-negative result is a new descriptor owned here.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+    let mut poll = libc::pollfd {
+        fd: std::os::fd::AsRawFd::as_raw_fd(&fd),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one valid pollfd.
+    unsafe { libc::poll(&mut poll, 1, HANG_GUARD.as_millis() as libc::c_int) == 1 }
+}
+
+#[test]
+fn a_server_ended_by_a_signal_removes_its_runtime_file_and_still_ends_by_that_signal() {
+    use std::os::unix::process::ExitStatusExt;
+    for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP, libc::SIGABRT] {
+        let dirs = Dirs::new();
+        let (child, announced) = start_announced(&dirs);
+        let Ok(line) = announced.recv_timeout(HANG_GUARD) else {
+            let status = exit_of(child);
+            if dirs.no_device("") {
+                return;
+            }
+            panic!(
+                "no announcement; the server exited {status}: {}",
+                dirs.log()
+            );
+        };
+        let display = line.strip_prefix("WAYLAND_DISPLAY=").unwrap().to_owned();
+        let file = dirs
+            .path("runtime/cupertino")
+            .join(format!("server-{display}.json"));
+        assert!(file.exists(), "{signal}: written once ready");
+        // SAFETY: a signal to the child, which is not reaped yet.
+        assert_eq!(unsafe { libc::kill(child.id() as libc::pid_t, signal) }, 0);
+        let status = exit_of(child);
+        assert_eq!(
+            status.signal(),
+            Some(signal),
+            "it still ends by the signal: {status}"
+        );
+        assert!(!file.exists(), "signal {signal} removed the runtime file");
+    }
+}
+
+#[test]
+fn a_killed_desktop_start_ends_its_server_which_removes_its_runtime_file() {
+    let dirs = Dirs::new();
+    let mut child = dirs
+        .command(common::fixtures::artifact(
+            "cupertino-cli",
+            "bin",
+            "cupertino",
+        ))
+        .args([
+            "--format",
+            "jsonl",
+            "desktop",
+            "start",
+            "--backend",
+            "headless",
+            "--size",
+            "64x48",
+        ])
+        .env("CUPERTINO_SERVER", env!("CARGO_BIN_EXE_cupertino-server"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = lines(child.stdout.take().unwrap());
+    let stderr = lines(child.stderr.take().unwrap());
+    let mut ready = None;
+    while let Ok(line) = stdout.recv_timeout(HANG_GUARD) {
+        let record: Value = serde_json::from_str(&line).unwrap();
+        if record["event"] == "ready" {
+            ready = Some(record);
+            break;
+        }
+    }
+    let Some(ready) = ready else {
+        let status = exit_of(child);
+        let said: Vec<String> = stderr.iter().collect();
+        if dirs.no_device(&said.join("\n")) {
+            return;
+        }
+        panic!("{status}: never ready\n{}", dirs.log());
+    };
+    let display = ready["data"]["wayland_display"].as_str().unwrap();
+    let file = dirs
+        .path("runtime/cupertino")
+        .join(format!("server-{display}.json"));
+    let info: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    let server = u32::try_from(info["pid"].as_u64().unwrap()).unwrap();
+    // nothing of the command runs after SIGKILL: the server hears of it through its parent-death signal
+    // SAFETY: a signal to the child, which is not reaped yet.
+    assert_eq!(
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGKILL) },
+        0
+    );
+    let _ = exit_of(child);
+    assert!(ended(server), "the server {server} ended with the command");
+    assert!(
+        !file.exists(),
+        "the server ended by SIGTERM removed its runtime file"
+    );
+}

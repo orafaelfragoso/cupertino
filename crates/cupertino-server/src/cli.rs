@@ -656,6 +656,10 @@ pub fn run(cli: Cli) -> Result<()> {
         std::env::var_os("XDG_SESSION_CLASS").as_deref(),
     );
     let screen_reader = crate::screen_reader::take(login_screen && crate::screen_reader::harden());
+    // the ready descriptor is for the program that started the server alone, never for one the server starts
+    if let Some(fd) = cli.ready_fd {
+        crate::runtime_info::keep_from_children(fd);
+    }
     if cli.check_hardware {
         #[cfg(feature = "udev")]
         return check_hardware();
@@ -677,7 +681,6 @@ pub fn run(cli: Cli) -> Result<()> {
         &assets,
     )?;
     state.login_screen = login_screen;
-    // before anything starts a child, which would inherit the ready descriptor
     let _runtime_file = announce_start(&cli, mode, &state)?;
     if let Some(f) = cli.time_scale.filter(|f| *f > 0.0) {
         state.time_scale = f;
@@ -959,8 +962,8 @@ pub fn publish_session(state: &Cupertino) {
 }
 
 /// The runtime file of this server, when `XDG_RUNTIME_DIR` is set (removed when the returned file drops, at the end of
-/// [`run`]), then the readiness line on `--ready-fd`. A runtime file that cannot be written is logged; a ready descriptor
-/// that is not open ends the start.
+/// [`run`], or when a signal ends the server), then the readiness line on `--ready-fd`. A runtime file that cannot be
+/// written is logged; a ready descriptor that is not open ends the start.
 fn announce_start(
     cli: &Cli,
     mode: Mode,
@@ -983,6 +986,9 @@ fn announce_start(
                 .inspect_err(|e| tracing::warn!(error = %e, "cannot write the runtime file"))
                 .ok()
         });
+    if let Some(file) = &file {
+        file.remove_on_ending_signals();
+    }
     if let Some(fd) = cli.ready_fd {
         runtime_info::announce(fd, display).context("announcing the socket on --ready-fd")?;
     }

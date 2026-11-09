@@ -248,6 +248,9 @@ impl BrowseLayout {
     pub const FILTER_CHAR_EM: f64 = 0.58;
     /// The scrolled area's top.
     pub const CONTENT_TOP: f64 = 104.0;
+    /// Room under the scrolled content's last row, also kept under a row the keys scroll into view: the side inset,
+    /// so a selection never runs into the panel's bottom edge.
+    pub const CONTENT_BOTTOM: f64 = Self::INSET;
     /// A grid row: its height, the icon's top in it and size, the label's centre line, size and weight, and its inset
     /// from its cell's sides.
     pub const ROW_HEIGHT: f64 = 102.0;
@@ -701,10 +704,10 @@ impl Browser {
             .then(|| self.recent_rows() as f64 * self.row_height() + BrowseLayout::SEPARATOR_LINE)
     }
 
-    /// How tall the scrolled content is.
+    /// How tall the scrolled content is, with the room under its last row.
     pub fn content_height(&self) -> f64 {
         let rows = self.results.len().div_ceil(self.columns()) as f64;
-        self.list_top() + rows * self.row_height()
+        self.list_top() + rows * self.row_height() + BrowseLayout::CONTENT_BOTTOM
     }
 
     pub fn max_scroll(&self) -> f64 {
@@ -853,11 +856,11 @@ impl Browser {
         self.query.is_empty() && self.category.is_none()
     }
 
-    /// Scroll so the row of item `index` shows whole.
+    /// Scroll so the row of item `index` shows whole, above the room kept at the scrolled area's bottom.
     fn reveal(&mut self, index: usize) {
         let y = self.row_y(index);
         let h = self.row_height();
-        let view = self.layout.content.height();
+        let view = self.layout.content.height() - BrowseLayout::CONTENT_BOTTOM;
         let scroll = if y < self.scroll {
             y
         } else if y + h > self.scroll + view {

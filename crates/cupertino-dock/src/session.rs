@@ -258,9 +258,14 @@ impl Session {
             .or_else(|| self.resident_app_id(&tile.key))
     }
 
-    /// The server started a program of this application: its tile bounces until a window appears.
+    /// The server started a program of this application: its tile bounces until a window appears. An application
+    /// that already shows a window does not bounce: it is brought forward rather than started (the launcher asks for
+    /// its token before it knows), and no first window would come to end the bounce.
     pub fn launching(&mut self, app_id: &str, now: f64) {
         let key = self.key_of(app_id);
+        if self.windows.values().any(|w| w.key == key) {
+            return;
+        }
         self.dock.app_launching(&key, now);
     }
 

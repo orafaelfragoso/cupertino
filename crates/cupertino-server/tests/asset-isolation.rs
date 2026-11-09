@@ -179,6 +179,10 @@ fn the_source_check_finds_a_spawn_without_the_variable() {
     let helper = "fn f() -> Command {\n    let mut c = Process::new(bin());\n    c.env(\"CUPERTINO_ASSET_SEARCH_PATH\", \"\");\n    c\n}\n";
     assert!(unset_spawns(helper).is_empty());
     let late = "fn f() {\n    Command::new(bin()).status();\n    x.env(\"CUPERTINO_ASSET_SEARCH_PATH\", \"\");\n}\n";
-    assert_eq!(unset_spawns(late).len(), 1, "set after the start is too late");
+    assert_eq!(
+        unset_spawns(late).len(),
+        1,
+        "set after the start is too late"
+    );
     assert!(unset_spawns("fn f() { Command::new(\"sleep\").spawn(); }").is_empty());
 }

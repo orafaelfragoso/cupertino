@@ -11,6 +11,7 @@
 
 use crate::fallback::Chords;
 use crate::item::{plain_text, ItemId, MenuItem, Toggle};
+use crate::layout::SlotKey;
 use crate::recent::{RecentItems, RECENT_LIMIT};
 
 /// Security name of a network that needs no passphrase in `org.cupertino.Network1.GetNetworks`.
@@ -139,6 +140,34 @@ pub struct Extras {
     /// Whether Lock Screen works without the agent's entries: the server named a login process (its lock screen locks
     /// whoever owns the agent's bus name). It names none while no login process runs, and the lock then does nothing.
     pub lock_without_agent: bool,
+    /// The panels of other processes that the bar's items open, while they are open.
+    pub panels: OpenPanels,
+}
+
+/// The panels other processes show for the bar's items: the control panel and the notification centre's list. Each is
+/// `Some` while it is open, with the connector name of the output it is on (`wl_output.name`), empty while the panel
+/// does not know it yet. A panel whose process is not running is not open.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenPanels {
+    pub control_panel: Option<String>,
+    pub centre: Option<String>,
+}
+
+impl OpenPanels {
+    /// Whether the panel the item `slot` opens is open on the bar of the output named `output`, one of `bars` bars: on
+    /// the bar of the panel's output, or, while the panel does not know its output yet, on the only bar there is.
+    pub fn open_on(&self, slot: &SlotKey, output: Option<&str>, bars: usize) -> bool {
+        let panel = match slot {
+            SlotKey::ControlPanel => &self.control_panel,
+            SlotKey::Clock => &self.centre,
+            _ => return false,
+        };
+        match panel.as_deref() {
+            None => false,
+            Some("") => bars == 1,
+            Some(on) => output == Some(on),
+        }
+    }
 }
 
 /// What a menu row does.
@@ -767,6 +796,27 @@ fn focus_menu(menu: &mut ExtraMenu, focus: &FocusState) {
 #[cfg(test)]
 mod tests {
 
+    /// A panel's item is highlighted on the bar of the panel's output only; a panel that does not know its output yet
+    /// highlights the item when there is one bar, and on no bar of several; a closed panel nowhere.
+    #[test]
+    fn an_open_panel_is_open_on_the_bar_of_its_output() {
+        let panels = OpenPanels {
+            control_panel: Some("DP-1".into()),
+            centre: Some(String::new()),
+        };
+        assert!(panels.open_on(&SlotKey::ControlPanel, Some("DP-1"), 2));
+        assert!(!panels.open_on(&SlotKey::ControlPanel, Some("HDMI-A-1"), 2));
+        assert!(!panels.open_on(&SlotKey::ControlPanel, None, 1));
+        assert!(panels.open_on(&SlotKey::Clock, Some("DP-1"), 1));
+        assert!(panels.open_on(&SlotKey::Clock, None, 1));
+        assert!(!panels.open_on(&SlotKey::Clock, Some("DP-1"), 2));
+        assert!(!panels.open_on(&SlotKey::AppMenu, Some("DP-1"), 1));
+        assert!(!panels.open_on(&SlotKey::Status("a".into()), Some("DP-1"), 1));
+        let closed = OpenPanels::default();
+        assert!(!closed.open_on(&SlotKey::ControlPanel, Some("DP-1"), 1));
+        assert!(!closed.open_on(&SlotKey::Clock, None, 1));
+    }
+
     #[test]
     fn only_an_agent_that_goes_away_closes_the_system_menu() {
         let with = Extras {
@@ -958,6 +1008,7 @@ mod tests {
             }),
             session: None,
             lock_without_agent: false,
+            panels: OpenPanels::default(),
         };
         for kind in ExtraKind::ORDER {
             let glyph = extras.glyph(kind).expect("every item is shown");

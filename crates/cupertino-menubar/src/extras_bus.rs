@@ -1,6 +1,8 @@
 //! The services behind the bar's own status items: `org.cupertino.Network1` (`cupertino-netd`), the UPower display
 //! device and manager (`cupertino-powerd`), `org.cupertino.Bluetooth1` (`cupertino-btd`) on the system bus, and the
-//! do-not-disturb state of `org.cupertino.NotificationCenter1` (`cupertino-notifications`) on the session bus.
+//! do-not-disturb state of `org.cupertino.NotificationCenter1` (`cupertino-notifications`) on the session bus. It also
+//! reads whether the control panel (`org.cupertino.ControlPanel1`, `cupertino-controlcenter`) and the notification
+//! centre's list are open and on which output, so the bar highlights the item that opened them.
 //!
 //! One task reads every service into an [`Extras`] and sends it to the process whenever it differs from the last one
 //! sent. It reads again after any signal on the services' objects (property changes, the network list, devices), when a
@@ -17,7 +19,7 @@
 
 use crate::extras::{
     BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, FocusLifetime, FocusState,
-    SessionCaps, SessionState, WifiNetwork, WifiState,
+    OpenPanels, SessionCaps, SessionState, WifiNetwork, WifiState,
 };
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -45,6 +47,8 @@ const UPOWER_DISPLAY_DEVICE_PATH: &str = "/org/freedesktop/UPower/devices/Displa
 const UPOWER_DEVICE_INTERFACE: &str = "org.freedesktop.UPower.Device";
 const CENTRE_NAME: &str = "org.cupertino.NotificationCenter1";
 const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
+const PANEL_NAME: &str = "org.cupertino.ControlPanel1";
+const PANEL_PATH: &str = "/org/cupertino/ControlPanel1";
 
 /// `org.freedesktop.UPower.Device.State` of a charging battery.
 const UPOWER_STATE_CHARGING: u32 = 1;
@@ -207,6 +211,30 @@ impl Reasons {
             }
         }
     }
+
+    /// As [`Reasons::note`], for whether a panel is open: one that cannot be read is taken as closed.
+    fn note_panel(
+        &mut self,
+        what: &'static str,
+        result: zbus::Result<Option<String>>,
+    ) -> Option<String> {
+        match result {
+            Ok(value) => {
+                self.0.remove(what);
+                value
+            }
+            Err(e) => {
+                let reason = e.to_string();
+                if self.0.get(what) != Some(&reason) {
+                    eprintln!(
+                        "cupertino-menubar: cannot tell whether the {what} is open: {reason}"
+                    );
+                    self.0.insert(what, reason);
+                }
+                None
+            }
+        }
+    }
 }
 
 async fn run(
@@ -237,6 +265,7 @@ async fn run(
         }
     }
     follow(&session, CENTRE_NAME, CENTRE_PATH, &queue).await;
+    follow(&session, PANEL_NAME, PANEL_PATH, &queue).await;
     follow(&session, LOGIN_NAME, LOGIN_PATH, &queue).await;
 
     let mut reasons = Reasons::default();
@@ -370,6 +399,27 @@ async fn read_all(
         );
     }
     extras.focus = reasons.note("Focus", absent_if_not_running(read_focus(session).await));
+    extras.panels = OpenPanels {
+        control_panel: reasons.note_panel(
+            "control panel",
+            absent_if_not_running(
+                read_panel(session, PANEL_NAME, PANEL_PATH, "Shown", "Output").await,
+            ),
+        ),
+        centre: reasons.note_panel(
+            "notification centre",
+            absent_if_not_running(
+                read_panel(
+                    session,
+                    CENTRE_NAME,
+                    CENTRE_PATH,
+                    "CentreShown",
+                    "CentreOutput",
+                )
+                .await,
+            ),
+        ),
+    };
     extras.session = reasons.note(
         "system menu",
         absent_if_not_running(read_session(session, agent, previous).await),
@@ -539,6 +589,22 @@ async fn read_focus(conn: &Connection) -> zbus::Result<Option<FocusState>> {
             .map(|(id, title)| FocusLifetime { id, title })
             .collect(),
     }))
+}
+
+/// The output a panel is open on (its connector name, empty while the panel does not know it), read from its
+/// `shown` and `output` properties; `None` while it is closed.
+async fn read_panel(
+    conn: &Connection,
+    name: &'static str,
+    path: &'static str,
+    shown: &'static str,
+    output: &'static str,
+) -> zbus::Result<Option<String>> {
+    let panel = proxy(conn, name, path, name).await?;
+    if !panel.get_property::<bool>(shown).await? {
+        return Ok(None);
+    }
+    Ok(Some(panel.get_property::<String>(output).await?))
 }
 
 async fn act(

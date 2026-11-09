@@ -179,6 +179,9 @@ pub struct BarScene<'a> {
     pub spread: &'a [u16],
     /// The bar's size: the output's width and the bar's height.
     pub size: Size,
+    /// The items whose panel, shown by another process, is open on this bar's output
+    /// ([`crate::extras::OpenPanels::open_on`]): drawn highlighted as an open menu's title is.
+    pub open_panels: &'a [SlotKey],
 }
 
 /// The bar's window and one popup per open menu level.
@@ -212,7 +215,6 @@ fn spec(app_id: String, size: Size) -> WindowSpec {
 fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Window<M> {
     let controller = scene.controller;
     let highlight = controller.highlighted_slot();
-    let open = controller.open_slot();
     let mut places = 0;
     let children: Vec<_> = controller
         .layout()
@@ -229,8 +231,8 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
                 bar: scene.bar,
                 slot: slot.clone(),
                 look: slot_look(slot, scene),
-                highlighted: highlight == Some(&slot.key),
-                expanded: has_menu(&slot.key, scene).then(|| open == Some(&slot.key)),
+                highlighted: highlight == Some(&slot.key) || scene.open_panels.contains(&slot.key),
+                expanded: expanded(&slot.key, scene),
                 role,
                 name,
                 metrics: controller.bar_metrics.clone(),
@@ -267,6 +269,14 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
         }),
         popup: None,
         menus: None,
+    }
+}
+
+/// Whether the slot's menu or panel is open, for a slot that opens one: its menu, or the panel of another process.
+fn expanded(key: &SlotKey, scene: &BarScene<'_>) -> Option<bool> {
+    match key {
+        SlotKey::ControlPanel | SlotKey::Clock => Some(scene.open_panels.contains(key)),
+        _ => has_menu(key, scene).then(|| scene.controller.open_slot() == Some(key)),
     }
 }
 

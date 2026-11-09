@@ -375,10 +375,11 @@ fn tab_goes_from_the_sidebar_to_the_toolbar_the_items_and_the_path_bar_and_aroun
     let segments = path_segments(&run);
     let mut expected: Vec<String> = [
         "ListItem \"Documents\"",
-        // the view modes the window can show, then the menus
+        // the view modes, then the menus
         "RadioButton \"Icons\" off",
         "RadioButton \"List\" on",
         "RadioButton \"Columns\" off",
+        "RadioButton \"Gallery\" off",
         "PopUpButton \"View\"",
         "PopUpButton \"Tags\"",
         "PopUpButton \"Action\"",
@@ -867,8 +868,8 @@ fn the_focus_ring_shows_on_the_toolbar_the_path_bar_and_a_selected_row_with_incr
         let (mut run, _) = start(appearance);
         run.menu("toggle-path-bar");
         let segments = path_segments(&run);
-        // the sidebar, the three view modes, then the View menu
-        for _ in 0..5 {
+        // the sidebar, the four view modes, then the View menu
+        for _ in 0..6 {
             run.key(TAB, None);
         }
         assert_eq!(focused(&run), "PopUpButton \"View\"");

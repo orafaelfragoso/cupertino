@@ -84,7 +84,7 @@ environment at startup, so no program it starts inherits it, and raises its own 
 The window is in the full-height-sidebar style (Kit's `SidebarWindow`, `DecorationMode::Sidebar`): the sidebar of places
 from the window's top edge to its bottom edge, the window control buttons in its top, then a navigation stack whose
 floating toolbar holds the back / forward group, the folder's name (Kit's `ToolbarTitle`, cut with an ellipsis; in the column view the folder selected in the last column, as the window's title is), the
-view-mode choice (icons, list and columns, and gallery disabled), the View menu button, the group of share (disabled),
+view-mode choice (icons, list, columns and gallery), the View menu button, the group of share (disabled),
 Tags (its own drawn tag, as a host symbol theme may have none) and Action (each opens below its button: the view modes, the tags popover of the selection (below), else a menu of
 the tags unavailable, the selection's context menu or the folder's) and the search field, which rests as a round button, over the folder in the icon view (`kit::grid`, laid out by `layout::icon` from a 10 pt leading and 8 pt
 top inset; a name is centred and wraps to two lines, a longer one keeping its first line and cut in the middle of the
@@ -93,10 +93,10 @@ Size, Kind, each cut with an ellipsis in its cell; a type the kind table does no
 subtype (`mime::kind_description`), in capitals only when it is an abbreviation of up to four letters and digits, else
 in words with the first capitalised and, in a subtype of several words, each of up to three kept as an abbreviation
 ("MS WMV movie"); a header click sorts, again reverses; a folder's disclosure triangle, Left and Right open and close
-it in place) or the column view (below). Every view fills the pane and scrolls under the toolbar row, starting below
+it in place), the column view or the gallery (below). Every view fills the pane and scrolls under the toolbar row, starting below
 it (Kit's `NavigationStack` with `under_toolbar`): icons pass under the row's glass behind the scroll edge, the list
 view's column header sits just below the row and its rows scroll under both on a solid band, and the column view's
-columns scroll under the row while its preview pane starts below it. The row stays first for the keyboard and
+columns scroll under the row while its preview pane starts below it, as the gallery does. The row stays first for the keyboard and
 assistive technology. With the tab bar shown the page sits below the row and the bar. The toolbar and the top of the sidebar are the window's drag region (Kit's `NavigationStack` and
 `SidebarWindow`): a drag where no control lies moves the window and a double click there zooms it; back / forward, the
 toolbar's buttons and the search field keep their
@@ -126,6 +126,16 @@ the window's view state once it is let go (`window_prefs`, `column_width`). A ro
 column's sides, as the grey highlight of a folder of the chain does, and a click on another column moves the keyboard
 there without a focus ring. Each column is a list named for its folder, and the preview a
 group named "Preview of <name>".
+
+**Gallery** (`kit::gallery`, Primary+4). The item shown is drawn as large as the pane allows (a picture's thumbnail,
+else its icon) with its name under it, over a strip of every item's 64 pt picture in one row that scrolls sideways
+(`layout::icon::strip`, worked by `kit::grid` in its strip mode), and the preview pane of the item at the trailing side,
+250 pt wide, as in the column view. The item shown is the selection's cursor, else the first item selected, else the
+folder's first; switching to the gallery with nothing selected selects the first item. Left and Right move along the
+strip (Shift extends), Home and End go to its ends, Page Up and Page Down by the pictures in view, typed letters select
+by name, Return and a double click open, and rename edits the name under the large picture. A press between the
+pictures keeps the selection. The strip reads as the list of the folder's items, the large picture as an image named
+for its item, and the preview as the group "Preview of <name>".
 
 **Preview window** (`preview`, `kit::peek`). Space on the items, or File › Quick Preview (Primary+Y), opens the
 selection in a floating window of its own: a toolbar with a close and a full screen button, the item's name and, with
@@ -215,11 +225,11 @@ the title keeps or the controls after the title, over 0.2 s with an ease-out, or
 it clears the selection; the Menu key and Shift+F10 open the menu of the selection, or of the folder without one. The
 rows are `menu_spec`'s, walked in order (`kit::context`): rows without a backend are shown disabled, the tag row is a
 Tags submenu of the seven colours (checked where every selected item has the tag), the view modes are the folder menu's
-Show As submenu (Icons, List, Columns, and Gallery, which is not built, disabled; the current one checked), the same rows
+Show As submenu (Icons, List, Columns and Gallery, the current one checked), the same rows
 as the toolbar's view popup (`menu_spec::view_menu`); Quick Preview opens the preview window. Toolkit menus cannot swap
 rows while a modifier is held, so an alternate that does something (Open in New Window, Move Item Here) is a row of its
 own after the row it belongs to. No row of a context menu or of the toolbar's Action and More popups shows keys: the
-keys are the menu bar's (View's ⌘1 to ⌘3 among them), so a menu is as wide as its longest label plus its insets.
+keys are the menu bar's (View's ⌘1 to ⌘4 among them), so a menu is as wide as its longest label plus its insets.
 The menus track the pointer and keys as every menu does (`cupertino-ui-controls`, `cupertino-menu-model`'s
 `tracking`): the secondary press that opens the menu, dragged onto a row, chooses it on release, and a quick click
 leaves the menu open; a submenu opens after a rest on its row and stays open while the pointer heads into it (Sort By
@@ -332,7 +342,7 @@ free space, the default applications) stay on stderr. The wording is approximate
 
 **Accessibility** (`tests/kit-accessibility.rs`). Every control reads its role, name and state and does its default
 action when assistive technology asks: the places and their eject buttons, back and forward, the view modes (radio buttons, the
-shown one on), the View, Tags and Action pop-up buttons (each says whether its menu is open), share (disabled), the search field, the path bar's folders, the icon view's cells, the column view's lists and preview, the tab bar's tabs, the tags popover's rows (check boxes), the preview window's toolbar, the list's rows (selected, open or
+shown one on), the View, Tags and Action pop-up buttons (each says whether its menu is open), share (disabled), the search field, the path bar's folders, the icon view's cells, the column view's lists and preview, the gallery's strip and large picture, the tab bar's tabs, the tags popover's rows (check boxes), the preview window's toolbar, the list's rows (selected, open or
 closed, with their level and position; Click selects a row alone, Expand and Collapse open and close a folder), the
 column headers (sorted up or down), the transfer row and its Stop button, the progress window's rows and Stop buttons, the name editor and the context menu. Icons
 are decorative, an item reads by its name and never by its path, and the rubber band is not read. Tab goes from the
@@ -396,7 +406,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | double click, Return, Primary+Down, Primary+O | open: a folder in this window, files with their default application (`mimeapps.list`, read at each open; `Terminal=true` applications under `--terminal PROGRAM` as `PROGRAM -e`), each launch with an activation token naming the application |
 | Primary+[ / Primary+] or the toolbar arrows | back / forward |
 | Primary+Up | enclosing folder, with the folder just left selected |
-| Primary+1 / Primary+2 / Primary+3 | icon / list / column view |
+| Primary+1 / Primary+2 / Primary+3 / Primary+4 | icon / list / column view / gallery |
 | Right / Left in the column view | into the selected folder / back to the column before |
 | Space, Primary+Y; arrows, Space, Escape in the preview window | open the preview window; go through the items, close it |
 | Primary+T, Primary+W, Shift+Primary+W; Ctrl+Tab / Shift+Ctrl+Tab | new tab, close the tab shown, close the window; the next / previous tab |
@@ -450,7 +460,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name`, `finished` (an operation that ended unseen) → `Notice`; `Notices::{start, post, flush}`; `shown`, `escape`, `explained` (an error as a sentence for a window) |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `list` (the list view's presses and band), `band` (the rubber band), `clicks` (double-click and click-to-rename), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons, thumbnails and previews), `columns` (the column view), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover) |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `list` (the list view's presses and band), `band` (the rubber band), `clicks` (double-click and click-to-rename), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons, thumbnails and previews), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover) |
 | `thumbnail_service` | thumbnails of the items in view | `ThumbnailService::{new, want, forget, get, queued, memory}`, `Stamp`, `has_thumbnail`, `MEMORY_BUDGET`, `WORKERS` |
 | `instance` (feature `app`) | one process per session | `Service::serve` (the name and `org.freedesktop.Application`; `take` the waiting `Call`s), `serve_or_forward` → `Launch::{Serve, Forwarded}`, `Target::{of_argument, of_uri, uri, folder}`, `Request`, `Action`, `take_activation_token`, `FORWARD_TIMEOUT`, `BUS_NAME`, `OBJECT_PATH` |
 | `main` (feature `app`) | the binary | arguments, the hand-over to a running Files, the session's places, types, associations and buses, then `kit::run` |
@@ -464,6 +474,7 @@ Values live in `metrics.rs`.
 | Icon view | 64 pt icons (16–512), grid spacing 54 (1–100), 12 pt text (10–16), label below; cell = icon + 12.5 % padding, label width interpolated by the spacing, 1–2 lines |
 | List view | 16 pt icons (16–32), 13 pt text, row = max(icon, font line) + 4 with no intercell spacing, a 20 pt pitch, 15 pt indentation; kinds are the design's type descriptions, capitalised |
 | Column view | 245 pt columns (100–1000), 22 pt rows, a 240 pt preview column (the 312 pt template width is not used) |
+| Gallery | 64 pt pictures in the strip, each with its 12.5 % padding, 6 pt apart and 8 pt from the strip's top and bottom; a 250 pt preview pane |
 | Chrome | sidebar 223 pt default, 128 pt minimum, rows 24/28/32 pt; unified toolbar 52 pt; status bar 20 pt, path bar 28 pt; search field 112 pt at rest |
 | Timing | sidebar toggle 0.3 s, slow motion ×10; type-select reset after max(2 s, 2 × key-repeat delay); search field 0.2 s; progress window after 1 s (approximate) |
 | Selection look | icon bubble: the icon enlarged by its longest side / 16, that radius, quaternary label fill, white 50 % border of min(2, trunc(padding)), the same in an inactive window; the label pill is the accent (grey when inactive) |
@@ -479,9 +490,9 @@ Values live in `metrics.rs`.
   desktop, cloud, discs, packages, servers, sidebar) are left out. Enabled: Open, Open in New Window, Open With, Show
   Original, Put Back, Move to Trash, Rename (one item), Duplicate (`name copy`), Make Alias (a symbolic link
   `name alias`), Copy, Paste Item, Move Item Here, New Folder, New Folder with Selection, the tags, Sort By (the choice in
-  use is checked), Quick Preview and the three usable view modes. Disabled: Delete Immediately…, Get Info, Show
+  use is checked), Quick Preview and the four view modes. Disabled: Delete Immediately…, Get Info, Show
   Inspector, Compress, Slideshow, Copy as Pathname, Paste Item Exactly, Share, Quick Actions, Empty Trash, Other…, Duplicate Exactly,
-  Use Groups, the Group By choices, Snap to Grid, Date Added, Clean Up By, Show View Options and the Gallery view.
+  Use Groups, the Group By choices, Snap to Grid, Date Added, Clean Up By and Show View Options.
 * A rename that changes the extension is not confirmed (the design asks; there is no dialog here). The name editor and
   the new folder's default name numbering are approximate.
 * The collation fold table, date bucket boundaries, thumbnail-size choice and disclosure width are approximate and

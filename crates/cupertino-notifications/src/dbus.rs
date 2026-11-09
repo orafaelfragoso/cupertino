@@ -85,6 +85,18 @@ pub struct Shared {
     lock_announced: Mutex<Vec<LockItem>>,
     /// The sandboxed process that sent each notification a sandboxed application sent; no entry for the others.
     origins: Mutex<HashMap<u32, Identified>>,
+    /// Whether the centre's list is open and on which output, as `CentreShown` and `CentreOutput` say.
+    centre: Mutex<CentrePresence>,
+}
+
+/// Whether the centre's list is open, as `org.cupertino.NotificationCenter1` says.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CentrePresence {
+    /// The list is open.
+    pub shown: bool,
+    /// The connector name of the output the open list is on (`wl_output.name`); empty while it is closed or before
+    /// its surface is told its output.
+    pub output: String,
 }
 
 impl Shared {
@@ -94,6 +106,10 @@ impl Shared {
 
     fn origins(&self) -> MutexGuard<'_, HashMap<u32, Identified>> {
         self.origins.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn centre(&self) -> MutexGuard<'_, CentrePresence> {
+        self.centre.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -430,6 +446,18 @@ impl CentreControl {
         self.shared.lock().dnd_active(now)
     }
 
+    /// Whether the centre's list is open, so the menu bar highlights the clock that opens it.
+    #[zbus(property)]
+    fn centre_shown(&self) -> bool {
+        self.shared.centre().shown
+    }
+
+    /// The connector name of the output the open list is on; empty while it is closed or not yet known.
+    #[zbus(property)]
+    fn centre_output(&self) -> String {
+        self.shared.centre().output.clone()
+    }
+
     /// What the lock screen shows while the session is locked, newest first: id, application, title and body of each
     /// notification that arrived since the lock from an application allowed on the lock screen. The title is
     /// "Notification" and the body empty unless the application's previews are always shown, so nothing else of a
@@ -507,6 +535,7 @@ impl Server {
             dnd_announced: AtomicBool::new(false),
             lock_announced: Mutex::new(Vec::new()),
             origins: Mutex::new(HashMap::new()),
+            centre: Mutex::new(CentrePresence::default()),
         });
         let builder = match &opts.address {
             Some(a) => zbus::blocking::connection::Builder::address(a.as_str())?,
@@ -549,6 +578,14 @@ impl Server {
         )?;
         self.centre_served.store(true, Ordering::SeqCst);
         self.conn.request_name(CENTRE_BUS_NAME)
+    }
+
+    /// What tells the bus whether the centre's list is open; it may be used from another place than the server.
+    pub fn centre_publisher(&self) -> CentrePublisher {
+        CentrePublisher {
+            conn: self.conn.clone(),
+            shared: self.shared.clone(),
+        }
     }
 
     /// Lock the model. Keep the guard short: bus calls wait on it.
@@ -612,6 +649,43 @@ impl Server {
             .interface::<_, Interface>(OBJECT_PATH)?;
         zbus::block_on(emit_events(iface.signal_emitter(), events))?;
         Ok(n)
+    }
+}
+
+/// Tells the bus whether the centre's list is open and on which output (`CentreShown`, `CentreOutput`).
+pub struct CentrePublisher {
+    conn: zbus::blocking::Connection,
+    shared: Arc<Shared>,
+}
+
+impl CentrePublisher {
+    /// Make the properties say `presence` and announce those that changed with `PropertiesChanged`; nothing is sent
+    /// when nothing changed, or before [`Server::serve_centre_control`] exported the interface.
+    pub fn publish(&self, presence: CentrePresence) -> zbus::Result<()> {
+        let (shown, output) = {
+            let mut now = self.shared.centre();
+            let changed = (now.shown != presence.shown, now.output != presence.output);
+            *now = presence;
+            changed
+        };
+        if !shown && !output {
+            return Ok(());
+        }
+        let Ok(iface) = self
+            .conn
+            .object_server()
+            .interface::<_, CentreControl>(CENTRE_OBJECT_PATH)
+        else {
+            return Ok(());
+        };
+        let control = iface.get();
+        if shown {
+            zbus::block_on(control.centre_shown_changed(iface.signal_emitter()))?;
+        }
+        if output {
+            zbus::block_on(control.centre_output_changed(iface.signal_emitter()))?;
+        }
+        Ok(())
     }
 }
 
@@ -705,6 +779,7 @@ mod tests {
             dnd_announced: AtomicBool::new(false),
             lock_announced: Mutex::new(Vec::new()),
             origins: Mutex::new(HashMap::new()),
+            centre: Mutex::new(CentrePresence::default()),
         });
         let toggled = Arc::new(AtomicBool::new(false));
         let control = CentreControl {

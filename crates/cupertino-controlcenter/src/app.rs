@@ -229,6 +229,8 @@ struct PanelRoles {
     card: Option<LayerSurface>,
     catcher: Option<LayerSurface>,
     keyboard: CardKeyboard,
+    /// The bus interface, whose properties say whether the panel is shown and on which output; `None` serves nothing.
+    control: Option<control::Served>,
 }
 
 /// The output the panel's two surfaces share. A panel that opens with no surface open names no output, so the server
@@ -263,6 +265,18 @@ impl<O: Copy> SharedOutput<O> {
         if self.output.is_none() {
             self.output = open.iter().find_map(|on| on.first().copied());
         }
+    }
+}
+
+/// What the bus interface says of the panel: shown while the catcher is open (it opens with the panel and goes when
+/// the fade starts, whatever dismissed it), on the output of the given connector name once its surfaces were told it.
+fn presence(catcher_open: bool, output: Option<String>) -> control::Presence {
+    if !catcher_open {
+        return control::Presence::default();
+    }
+    control::Presence {
+        shown: true,
+        output: output.unwrap_or_default(),
     }
 }
 
@@ -417,6 +431,24 @@ impl SurfaceRoles for PanelRoles {
             if self.card.is_some() || self.catcher.is_some() {
                 let _ = self.requests.send_blocking(Request::OutputGone);
             }
+        }
+    }
+
+    /// Tell the bus whether the panel is shown and on which output, when that changed.
+    fn prepare(&mut self, conn: &mut Connection) {
+        let Some(control) = &self.control else {
+            return;
+        };
+        let open = self.open_outputs(conn);
+        self.output.learn(&open);
+        let output = self.output.output.and_then(|id| {
+            conn.outputs()
+                .into_iter()
+                .find(|o| o.id == id)
+                .and_then(|o| o.name)
+        });
+        if let Err(e) = control.publish(presence(self.catcher.is_some(), output)) {
+            eprintln!("cupertino-controlcenter: cannot announce whether the panel is shown: {e}");
         }
     }
 
@@ -730,7 +762,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let (sender, requests) = async_channel::unbounded();
     let bus = sender.clone();
     // the bus thread only queues; the application's loop carries the toggles out, so the effects never block the bus
-    let _control = control::serve(zbus::connection::Builder::session()?, move || {
+    let control = control::serve(zbus::connection::Builder::session()?, move || {
         let _ = bus.send_blocking(Request::Toggle);
     })
     .map_err(|e| match e {
@@ -745,6 +777,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         card: None,
         catcher: None,
         keyboard: CardKeyboard::default(),
+        control: Some(control),
     });
     cupertino_kit::app::run_on_with_appearance::<Panel>(
         system,
@@ -758,6 +791,23 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 mod tests {
     use super::*;
     use cupertino_controlcenter::model::{Detail, Module};
+
+    /// The bus says the panel is shown exactly while its catcher is open, with its output's name once known; a
+    /// fading or hidden panel is not shown and names no output.
+    #[test]
+    fn the_panel_is_shown_while_its_catcher_is_open() {
+        let shown = |output: &str| control::Presence {
+            shown: true,
+            output: output.into(),
+        };
+        assert_eq!(presence(true, Some("DP-1".into())), shown("DP-1"));
+        assert_eq!(presence(true, None), shown(""));
+        assert_eq!(
+            presence(false, Some("DP-1".into())),
+            control::Presence::default()
+        );
+        assert_eq!(presence(false, None), control::Presence::default());
+    }
 
     fn panel() -> Panel {
         let options = Options {

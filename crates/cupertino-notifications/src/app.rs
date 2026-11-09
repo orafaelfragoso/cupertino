@@ -7,7 +7,7 @@ use cupertino_defaults::watch::ConfigWatcher;
 use cupertino_kit::core::{Application, Command, Key, RuntimeOptions, Window};
 use cupertino_kit::platform::WindowSpec;
 use cupertino_modifiers::Profile;
-use cupertino_notifications::dbus::{Server, ServerOptions};
+use cupertino_notifications::dbus::{CentrePresence, CentrePublisher, Server, ServerOptions};
 use cupertino_notifications::view::{
     self, banner_key, centre_key, CardMetrics, Fold, HostAction, Input, Ui, CENTRE_TITLE,
     SHADOW_MARGIN,
@@ -101,6 +101,22 @@ struct NotificationRoles {
     layout: StackLayout,
     layers: HashMap<SurfaceId, LayerSurface>,
     notes: async_channel::Sender<Note>,
+    /// The surface of the centre's list while it is open.
+    centre: Option<SurfaceId>,
+    /// Tells the bus whether the list is open and on which output.
+    publisher: CentrePublisher,
+}
+
+/// What the bus says of the centre's list: open while its surface exists, on the output of the given connector name
+/// once the surface was told it.
+fn centre_presence(open: bool, output: Option<String>) -> CentrePresence {
+    if !open {
+        return CentrePresence::default();
+    }
+    CentrePresence {
+        shown: true,
+        output: output.unwrap_or_default(),
+    }
 }
 
 impl NotificationRoles {
@@ -158,6 +174,9 @@ impl SurfaceRoles for NotificationRoles {
         };
         let surface = layer.surface();
         self.layers.insert(surface, layer);
+        if spec.title == CENTRE_TITLE {
+            self.centre = Some(surface);
+        }
         Some(Ok(surface))
     }
 
@@ -193,6 +212,21 @@ impl SurfaceRoles for NotificationRoles {
 
     fn destroyed(&mut self, surface: SurfaceId) {
         self.layers.remove(&surface);
+        if self.centre == Some(surface) {
+            self.centre = None;
+        }
+    }
+
+    /// Tell the bus whether the centre's list is open and on which output, when that changed.
+    fn prepare(&mut self, conn: &mut Connection) {
+        let output = self.centre.and_then(|surface| {
+            let on = conn.surface_outputs(surface).ok()?.into_iter().next()?;
+            conn.outputs().into_iter().find(|o| o.id == on)?.name
+        });
+        let presence = centre_presence(self.centre.is_some(), output);
+        if let Err(e) = self.publisher.publish(presence) {
+            eprintln!("cupertino-notifications: cannot announce whether the centre is open: {e}");
+        }
     }
 }
 
@@ -521,11 +555,14 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let layout = start.0.server.center().config.layout.clone();
     // the roles send on the bus thread's channel
     let sender = start.0.sender.clone();
+    let publisher = start.0.server.centre_publisher();
     let system = system.with_roles(NotificationRoles {
         shell,
         layout,
         layers: HashMap::new(),
         notes: sender,
+        centre: None,
+        publisher,
     });
     cupertino_kit::app::run_on_with::<Notifications>(system, move |options| {
         let (mut model, commands) = start;
@@ -538,6 +575,29 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bus says the list is open exactly while its surface exists, with its output's name once known.
+    #[test]
+    fn the_centre_is_shown_while_its_surface_exists() {
+        assert_eq!(
+            centre_presence(true, Some("DP-1".into())),
+            CentrePresence {
+                shown: true,
+                output: "DP-1".into()
+            }
+        );
+        assert_eq!(
+            centre_presence(true, None),
+            CentrePresence {
+                shown: true,
+                output: String::new()
+            }
+        );
+        assert_eq!(
+            centre_presence(false, Some("DP-1".into())),
+            CentrePresence::default()
+        );
+    }
 
     #[test]
     fn a_name_that_is_taken_is_no_failure_of_this_process() {

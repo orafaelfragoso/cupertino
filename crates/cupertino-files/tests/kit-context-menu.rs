@@ -134,7 +134,7 @@ fn the_keyboard_opens_show_as_and_chooses_a_view_in_it() {
             ("Icons".to_owned(), true),
             ("List".to_owned(), true),
             ("Columns".to_owned(), true),
-            ("Gallery".to_owned(), false)
+            ("Gallery".to_owned(), true)
         ]
     );
     assert_eq!(
@@ -148,10 +148,16 @@ fn the_keyboard_opens_show_as_and_chooses_a_view_in_it() {
     run.frames(1100, 100);
     run.key('i' as u32, Some('i'));
     assert_eq!(focused_row(&run, 1).as_deref(), Some("Icons"));
+    run.frames(1100, 100);
+    run.key('g' as u32, Some('g'));
+    assert_eq!(focused_row(&run, 1).as_deref(), Some("Gallery"));
     press(&mut run, RETURN);
     run.window = main;
     assert!(level(&run, 0).is_none(), "choosing closed the menu");
+    // the strip of every item, the first selected and shown large
     run.wait_until(|run| run.icons().len() == 3);
+    assert_eq!(run.selected_icons().len(), 1);
+    assert!(run.named(Role::Image).contains(&run.selected_icons()[0]));
 }
 
 #[test]

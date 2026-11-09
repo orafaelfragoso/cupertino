@@ -346,7 +346,7 @@ fn row(row: &Row, names: &Names, open: Option<ControlId>) -> Element<Message> {
 }
 
 /// A section title, bold, over its group.
-fn section_title(title: &str) -> Element<Message> {
+fn section_title(title: &str, top: f64) -> Element<Message> {
     let style = TextStyle {
         weight: FontWeight(SECTION_TITLE_WEIGHT),
         ..TextStyle::new(13.0)
@@ -361,7 +361,7 @@ fn section_title(title: &str) -> Element<Message> {
     Element::new(Stack {
         axis: Axis::Vertical,
         padding: Insets {
-            top: SECTION_TITLE_TOP,
+            top,
             left: SECTION_TITLE_INSET,
             bottom: SECTION_GAP,
             right: SECTION_TITLE_INSET,
@@ -372,11 +372,18 @@ fn section_title(title: &str) -> Element<Message> {
     })
 }
 
-/// A section: its title, its rows in a group, and its footer.
-fn section(section: &Section, names: &Names, open: Option<ControlId>) -> Vec<Element<Message>> {
+/// A section: its title, its rows in a group, and its footer. A title at the top of the page (`at_top`) has no space
+/// above it beyond the page's own inset, as a header card or a group there has none.
+fn section(
+    section: &Section,
+    names: &Names,
+    open: Option<ControlId>,
+    at_top: bool,
+) -> Vec<Element<Message>> {
     let mut out = Vec::new();
     if let Some(header) = section.header.as_deref().filter(|h| !h.is_empty()) {
-        out.push(section_title(header));
+        let top = if at_top { 0.0 } else { SECTION_TITLE_TOP };
+        out.push(section_title(header, top));
     }
     if !section.rows.is_empty() {
         out.push(Element::from(FormGroup {
@@ -434,10 +441,11 @@ pub fn page(
     open: Option<ControlId>,
 ) -> Element<Message> {
     let names = control_names(sections);
+    let at_top = header.is_none();
     let mut children: Vec<Element<Message>> = header.into_iter().collect();
     for (i, block) in blocks.iter().enumerate() {
         let parts = match block {
-            Block::Section(s) => section(s, &names, open),
+            Block::Section(s) => section(s, &names, open, at_top && i == 0),
             Block::Links(subs) => vec![links(subs)],
         };
         // each block is keyed by its place, so its rows keep their state while other blocks come and go

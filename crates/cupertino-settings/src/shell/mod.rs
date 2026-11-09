@@ -1,5 +1,5 @@
 //! The Settings window on CupertinoKit: the full-height sidebar of panes with the search field at its top, beside the
-//! page under a floating back and forward toolbar; the page's header card and sections as Kit controls, its sheets as
+//! page under a floating back and forward toolbar with the page's title; a hub pane's header card and the sections as Kit controls, its sheets as
 //! dialogs and its menus on the desktop's menu bar. What the window shows and does lives in [`state`]; this module only
 //! shows it.
 
@@ -519,16 +519,17 @@ impl Shell {
         .key("sidebar")
     }
 
-    /// A sub-page's title after the back and forward buttons; a pane's own page shows its title on its header card.
+    /// The page's title after the back and forward buttons, sharing the toolbar row; none for a pane whose page shows
+    /// its title on its header card ([`pages::has_header_card`]).
     fn toolbar(&self) -> Vec<Element<Message>> {
         let page = self.state.history.current();
-        match page.sub {
-            Some(sub) => vec![Element::new(ToolbarTitle {
-                text: sub.title().into(),
-            })
-            .key("title")],
-            None => Vec::new(),
+        if page.sub.is_none() && pages::has_header_card(page.pane) {
+            return Vec::new();
         }
+        vec![Element::new(ToolbarTitle {
+            text: page.title(self.state.live.has_battery()).into(),
+        })
+        .key("title")]
     }
 
     fn content(&self) -> Element<Message> {
@@ -536,7 +537,7 @@ impl Shell {
             let page = self.state.history.current();
             let sections = self.state.sections();
             let has_battery = self.state.live.has_battery();
-            let header = page.sub.is_none().then(|| {
+            let header = (page.sub.is_none() && pages::has_header_card(page.pane)).then(|| {
                 form::header(
                     page.pane,
                     page.pane.title(has_battery),
@@ -804,6 +805,68 @@ mod tests {
                 "{name} {button:?} in {:?}",
                 capsule.rect
             );
+        }
+    }
+
+    /// A pane's title shares the toolbar row after the back and forward buttons, with no header card; a pane that
+    /// gathers sub-pages opens with its header card instead and no title in the toolbar.
+    #[test]
+    fn a_page_shows_its_title_in_the_toolbar_row_unless_it_has_a_header_card() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        for (pane, title, card) in [
+            (PaneId::Appearance, "Appearance", false),
+            (PaneId::DesktopDock, "Desktop & Dock", false),
+            (PaneId::Accessibility, "Accessibility", true),
+            (PaneId::Privacy, "Privacy & Security", true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+            let (driver, window) = start_state(dir.path(), pane, services, |_| {});
+            let snapshot = driver.runtime().snapshot(window).unwrap();
+            let bounds = |name: &str, role: Option<Role>| {
+                snapshot
+                    .accessibility
+                    .iter()
+                    .filter(|(_, n)| {
+                        n.name.as_deref() == Some(name) && role.is_none_or(|r| n.role == r)
+                    })
+                    .map(|(_, n)| n.bounds)
+                    .collect::<Vec<_>>()
+            };
+            let forward = bounds("Forward", Some(Role::Button))[0];
+            let titles = bounds(title, Some(Role::StaticText));
+            let in_row: Vec<_> = titles
+                .iter()
+                .filter(|b| {
+                    b.min_x() > forward.max_x() && (b.center().y - forward.center().y).abs() < 2.0
+                })
+                .collect();
+            // the card reads the title with the pane's description; nothing else does
+            let description: Vec<_> = snapshot
+                .accessibility
+                .iter()
+                .filter(|(_, n)| n.description.as_deref() == Some(pages::description(pane, None)))
+                .collect();
+            if card {
+                assert!(
+                    in_row.is_empty(),
+                    "{pane:?}: no title in the toolbar row: {titles:?}"
+                );
+                assert_eq!(description.len(), 1, "{pane:?}: its header card");
+            } else {
+                assert_eq!(
+                    in_row.len(),
+                    1,
+                    "{pane:?}: the title after the buttons: {titles:?}"
+                );
+                assert!(description.is_empty(), "{pane:?}: no header card");
+            }
+            // the first section's title starts at the page's inset below the row, as a card would
+            if pane == PaneId::DesktopDock {
+                let dock = bounds("Dock", Some(Role::StaticText))[0];
+                let top = cupertino_kit::controls::TOOLBAR_ROW + PAGE_INSET.top;
+                assert!((dock.min_y() - top).abs() < 1.0, "{dock:?}, not at {top}");
+            }
         }
     }
 

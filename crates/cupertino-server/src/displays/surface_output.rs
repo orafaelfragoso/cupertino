@@ -9,6 +9,15 @@
 //! output that goes is left by every surface that was on it. A layer surface is on its own output, and so are its
 //! subsurfaces and popups; a lock surface is on the output it covers.
 //!
+//! **The pointer's surfaces and the input method's popup.** A client's cursor surface, while it is the cursor shown, and
+//! a drag icon are drawn on every output they overlap, so they are on each of them, and draw at the scale of the output
+//! under the pointer (worked out at every tick, told only when it changes). An input method's popup is on the outputs
+//! the text cursor of the text input overlaps, at the scale of the one it overlaps most (the key window's when the
+//! text cursor is not known). The server does not draw that popup (it draws the accent picker itself): the popup is
+//! told where the text it belongs to is, so it would draw at the right scale. A cursor surface that stops being shown
+//! (the client set another, a server cursor shows instead, the pointer left it), a drag icon whose drag ended and a
+//! popup that was dismissed are told they left every output.
+//!
 //! **Scale.** Each window draws at the scale of one output, its *scale output*: the output its frame overlaps the
 //! most. Near a seam the choice holds still: another output takes over only once its overlap is larger than the
 //! current one's by [`SCALE_SWITCH_MARGIN`] of the window's area, or the window leaves the current output, or a move
@@ -24,8 +33,11 @@
 use std::collections::HashMap;
 
 use cupertino_wm::{OutputId, Rect, WindowId};
+use smithay::desktop::utils::bbox_from_surface_tree;
+use smithay::input::pointer::CursorImageSurfaceData;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::Resource;
 use smithay::utils::Transform;
 use smithay::wayland::compositor::{
     get_parent, send_surface_state, with_states, with_surface_tree_downward, SurfaceData,
@@ -33,6 +45,7 @@ use smithay::wayland::compositor::{
 };
 use smithay::wayland::fractional_scale::with_fractional_scale;
 
+use crate::frame::CursorChoice;
 use crate::state::Cupertino;
 
 /// The share of a window's area by which another output's overlap must exceed the current scale output's before the
@@ -128,12 +141,24 @@ struct Inputs {
 /// An output as the placements were worked out against it: its id, rectangle, scale and transform.
 type OutputFacts = (OutputId, Rect, f64, Transform);
 
+/// A surface on screen that is not a window's, a layer surface's or a lock surface's (the cursor, a drag icon, an input
+/// method's popup), with its subsurfaces, as last told.
+#[derive(Clone, Debug, PartialEq)]
+struct Loose {
+    surface: WlSurface,
+    entered: Vec<Output>,
+    scale: f64,
+    transform: Transform,
+}
+
 /// The outputs and scale of each mapped window, as last told to its surfaces.
 #[derive(Debug, Default)]
 pub struct SurfaceOutputs {
     windows: HashMap<WindowId, (Placement, Inputs)>,
     /// The outputs the placements were worked out against.
     outputs: Vec<OutputFacts>,
+    /// The cursor, a drag icon and an input method's popup, while shown.
+    loose: Vec<Loose>,
 }
 
 impl SurfaceOutputs {
@@ -339,6 +364,137 @@ impl Cupertino {
         if let Some(surface) = o.lock.wl_surface() {
             leave(surface);
         }
+        for l in &self.surface_outputs.loose {
+            if l.surface.is_alive() {
+                leave(&l.surface);
+            }
+        }
+    }
+
+    /// The cursor, a drag icon and an input method's popup shown now, each with the area it covers in the global space
+    /// (`None`: not known) and the output whose scale it draws at.
+    fn loose_now(&self) -> Vec<(WlSurface, Option<Rect>, Option<OutputId>)> {
+        let mut now = Vec::new();
+        let pointer = self.pointer.current_location();
+        let pointer_output = self.pointer_output_idx().map(|i| self.outputs[i].id);
+        // the area of a surface tree drawn with its origin at `origin`, `grow` times its size
+        let area = |surface: &WlSurface, origin: (f64, f64), grow: f64| {
+            let bbox = bbox_from_surface_tree(surface, (0, 0));
+            (bbox.size.w > 0 && bbox.size.h > 0).then(|| {
+                Rect::new(
+                    origin.0 + f64::from(bbox.loc.x) * grow,
+                    origin.1 + f64::from(bbox.loc.y) * grow,
+                    f64::from(bbox.size.w) * grow,
+                    f64::from(bbox.size.h) * grow,
+                )
+            })
+        };
+        // a surface that has drawn nothing yet is where the pointer is
+        let or_pointer = |r: Option<Rect>| r.or(Some(Rect::new(pointer.x, pointer.y, 1.0, 1.0)));
+        if let CursorChoice::Surface(surface) = self.cursor_choice() {
+            let hotspot = with_states(&surface, |s| {
+                s.data_map
+                    .get::<CursorImageSurfaceData>()
+                    .map(|d| d.lock().unwrap().hotspot)
+                    .unwrap_or_default()
+            });
+            let grow = self.shake_multiplier();
+            let origin = (
+                pointer.x - f64::from(hotspot.x) * grow,
+                pointer.y - f64::from(hotspot.y) * grow,
+            );
+            let r = or_pointer(area(&surface, origin, grow));
+            now.push((surface, r, pointer_output));
+        }
+        if let Some((surface, offset)) = &self.drag_icon {
+            let origin = (
+                pointer.x + f64::from(offset.x),
+                pointer.y + f64::from(offset.y),
+            );
+            let r = or_pointer(area(surface, origin, 1.0));
+            now.push((surface.clone(), r, pointer_output));
+        }
+        if let Some(popup) = &self.input_popup {
+            let key = self.wm.key_window();
+            let text = self
+                .text_cursor_global()
+                .map(|r| Rect::new(r.x(), r.y(), r.width(), r.height()));
+            let outputs: Vec<(OutputId, Rect)> =
+                self.outputs.iter().map(|o| (o.id, o.rect)).collect();
+            let scale_output = text
+                .and_then(|r| scale_output(None, r, &outputs, false))
+                .or_else(|| key.and_then(|k| self.window_scale_output(k)));
+            let r = text.or_else(|| key.and_then(|k| self.wm.window(k)).map(|w| w.geometry()));
+            now.push((popup.wl_surface().clone(), r, scale_output));
+        }
+        now.retain(|(s, _, _)| s.is_alive());
+        now
+    }
+
+    /// Tell the cursor, a drag icon and an input method's popup where they are, and a surface that stopped being one
+    /// of them that it left every output (see the module documentation). Runs at every tick: nothing is sent to a
+    /// surface whose outputs and scale did not change, and nothing is worked out while there is none.
+    pub fn refresh_loose_surface_outputs(&mut self) {
+        let shown = matches!(
+            self.cursor_status,
+            smithay::input::pointer::CursorImageStatus::Surface(_)
+        ) || self.drag_icon.is_some()
+            || self.input_popup.is_some();
+        if !shown && self.surface_outputs.loose.is_empty() {
+            return;
+        }
+        let outputs: Vec<(OutputId, Rect)> = self.outputs.iter().map(|o| (o.id, o.rect)).collect();
+        let mut now = Vec::new();
+        for (surface, area, scale_output) in self.loose_now() {
+            let entered = area
+                .map(|r| overlapping(r, &outputs))
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|id| self.output_entry(id).map(|o| o.output.clone()))
+                .collect();
+            let (scale, transform) = match scale_output.and_then(|o| self.output_entry(o)) {
+                Some(o) => (o.scale, o.output.current_transform()),
+                None => (self.output_scale(None), Transform::Normal),
+            };
+            now.push(Loose {
+                surface,
+                entered,
+                scale,
+                transform,
+            });
+        }
+        let before = std::mem::take(&mut self.surface_outputs.loose);
+        for l in &now {
+            let was = before.iter().find(|b| b.surface == l.surface);
+            if was == Some(l) {
+                continue;
+            }
+            let left: Vec<&Output> = was
+                .into_iter()
+                .flat_map(|b| b.entered.iter())
+                .chain(self.outputs.iter().map(|o| &o.output))
+                .filter(|o| !l.entered.contains(o))
+                .collect();
+            tell_tree(&l.surface, &l.entered, &left, l.scale, l.transform);
+        }
+        // no longer shown: on no output
+        for b in &before {
+            if b.surface.is_alive() && !now.iter().any(|l| l.surface == b.surface) {
+                let left: Vec<&Output> = b.entered.iter().collect();
+                with_surface_tree_downward(
+                    &b.surface,
+                    (),
+                    |_, _, _| TraversalAction::DoChildren(()),
+                    |surface, _, _| {
+                        for o in &left {
+                            o.leave(surface);
+                        }
+                    },
+                    |_, _, _| true,
+                );
+            }
+        }
+        self.surface_outputs.loose = now;
     }
 
     /// A surface committed: a subsurface or popup that is new to its window, layer or lock surface, or a window not
@@ -384,6 +540,18 @@ impl Cupertino {
                 entered: p.entered.clone(),
                 scale: p.scale,
                 transform: p.transform,
+            });
+        }
+        if let Some(l) = self
+            .surface_outputs
+            .loose
+            .iter()
+            .find(|l| l.surface == *root)
+        {
+            return Some(RootPlacement {
+                entered: l.entered.clone(),
+                scale: l.scale,
+                transform: l.transform,
             });
         }
         let o = self.outputs.iter().find(|o| {

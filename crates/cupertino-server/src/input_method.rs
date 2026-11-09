@@ -374,14 +374,23 @@ impl Cupertino {
 impl InputMethodHandler for Cupertino {
     fn new_popup(&mut self, surface: PopupSurface) {
         self.text_cursor = Some(surface.text_input_rectangle());
+        self.input_popup = Some(surface);
     }
 
-    fn dismiss_popup(&mut self, _surface: PopupSurface) {
+    fn dismiss_popup(&mut self, surface: PopupSurface) {
         self.text_cursor = None;
+        if self
+            .input_popup
+            .as_ref()
+            .is_some_and(|p| p.wl_surface() == surface.wl_surface())
+        {
+            self.input_popup = None;
+        }
     }
 
     fn popup_repositioned(&mut self, surface: PopupSurface) {
         self.text_cursor = Some(surface.text_input_rectangle());
+        self.input_popup = Some(surface);
     }
 
     fn parent_geometry(&self, _parent: &WlSurface) -> Rectangle<i32, Logical> {

@@ -18,19 +18,22 @@ use cupertino_server::backend::headless::{self, HeadlessDisplay};
 use cupertino_server::config::Config;
 use cupertino_server::displays::surface_output::SCALE_SWITCH_MARGIN;
 use cupertino_server::displays::HeadId;
+use cupertino_server::events::BTN_LEFT;
 use cupertino_server::state::PointerMode;
 use cupertino_server::Cupertino;
 use cupertino_wm::{Command, OutputId, Point as MPoint, Rect, WindowId};
+use smithay::backend::input::ButtonState;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::compositor::{with_states, SurfaceAttributes};
 use smithay::wayland::fractional_scale::with_fractional_scale;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_subcompositor,
-    wl_subsurface, wl_surface,
+    wl_buffer, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer,
+    wl_data_source, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_subcompositor, wl_subsurface, wl_surface,
 };
-use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+use wayland_client::{event_created_child, Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols::xdg::shell::client::{
     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
 };
@@ -59,6 +62,35 @@ const REGISTRY: &str = "registry";
 const WINDOW: &str = "window";
 const SUBSURFACE: &str = "subsurface";
 const POPUP: &str = "popup";
+/// The cursor surface the pointer client sets, its drag icon and the second window of the client of two windows.
+const CURSOR: &str = "cursor";
+const ICON: &str = "icon";
+const SECOND: &str = "second window";
+/// The cursor surface's size in points and its hotspot.
+const CURSOR_SIZE: (i32, i32) = (24, 24);
+const HOTSPOT: (i32, i32) = (4, 4);
+/// The drag icon's size in points.
+const ICON_SIZE: (i32, i32) = (32, 32);
+
+/// What a test client shows besides its window.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    /// A subsurface and a popup of the window.
+    Popups,
+    /// A cursor surface set on every pointer enter, and a drag with an icon started on the first button press.
+    Pointer,
+    /// A second window, as one connection shows many X11 windows.
+    TwoWindows,
+}
+
+/// The pointer client's objects for the cursor and the drag.
+struct PointerParts {
+    compositor: wl_compositor::WlCompositor,
+    manager: wl_data_device_manager::WlDataDeviceManager,
+    device: wl_data_device::WlDataDevice,
+    cursor: wl_surface::WlSurface,
+    dragging: bool,
+}
 
 type Log = Arc<Mutex<Vec<(&'static str, Heard)>>>;
 
@@ -84,6 +116,7 @@ struct App {
     entered: HashMap<&'static str, Vec<wl_output::WlOutput>>,
     /// The outputs bound, by the name of their global.
     outputs: Vec<(u32, wl_output::WlOutput)>,
+    pointer: Option<PointerParts>,
 }
 
 impl App {
@@ -165,8 +198,75 @@ ignore!(
     wl_subcompositor::WlSubcompositor,
     wl_subsurface::WlSubsurface,
     xdg_positioner::XdgPositioner,
-    xdg_popup::XdgPopup
+    xdg_popup::XdgPopup,
+    wl_seat::WlSeat,
+    wl_data_device_manager::WlDataDeviceManager,
+    wl_data_source::WlDataSource,
+    wl_data_offer::WlDataOffer
 );
+
+impl Dispatch<wl_data_device::WlDataDevice, ()> for App {
+    fn event(
+        _: &mut Self,
+        _: &wl_data_device::WlDataDevice,
+        _: wl_data_device::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+
+    event_created_child!(App, wl_data_device::WlDataDevice, [
+        wl_data_device::EVT_DATA_OFFER_OPCODE => (wl_data_offer::WlDataOffer, ()),
+    ]);
+}
+
+/// The pointer client sets its cursor surface on every enter and starts a drag with its icon on its first press.
+impl Dispatch<wl_pointer::WlPointer, ()> for App {
+    fn event(
+        app: &mut Self,
+        pointer: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        let Some(parts) = app.pointer.as_mut() else {
+            return;
+        };
+        match event {
+            wl_pointer::Event::Enter { serial, .. } => {
+                pointer.set_cursor(serial, Some(&parts.cursor), HOTSPOT.0, HOTSPOT.1);
+            }
+            wl_pointer::Event::Button {
+                serial,
+                state: WEnum::Value(wl_pointer::ButtonState::Pressed),
+                ..
+            } if !parts.dragging => {
+                parts.dragging = true;
+                let source = parts.manager.create_data_source(qh, ());
+                source.offer("text/plain".into());
+                source.set_actions(wl_data_device_manager::DndAction::Copy);
+                let icon = parts.compositor.create_surface(qh, ICON);
+                let window = app.surfaces[WINDOW].surface.clone();
+                parts
+                    .device
+                    .start_drag(Some(&source), &window, Some(&icon), serial);
+                app.surfaces.insert(
+                    ICON,
+                    Drawn {
+                        surface: icon,
+                        size: ICON_SIZE,
+                        scale: 1,
+                        ready: true,
+                        dirty: true,
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+}
 
 /// An output's name, from its `name` event.
 impl Dispatch<wl_output::WlOutput, Mutex<String>> for App {
@@ -254,17 +354,17 @@ impl Dispatch<xdg_surface::XdgSurface, &'static str> for App {
     }
 }
 
-impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
+impl Dispatch<xdg_toplevel::XdgToplevel, &'static str> for App {
     fn event(
         app: &mut Self,
         _: &xdg_toplevel::XdgToplevel,
         event: xdg_toplevel::Event,
-        _: &(),
+        tag: &&'static str,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
         if let xdg_toplevel::Event::Configure { width, height, .. } = event {
-            if let Some(drawn) = app.surfaces.get_mut(WINDOW) {
+            if let Some(drawn) = app.surfaces.get_mut(tag) {
                 if width > 0 && height > 0 {
                     drawn.size = (width, height);
                 }
@@ -273,7 +373,7 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
     }
 }
 
-/// A client with a window, a subsurface of it and a popup of it, on a thread of its own; dropping it disconnects it.
+/// A client with a window and what its [`Kind`] adds, on a thread of its own; dropping it disconnects it.
 struct Client {
     log: Log,
     stop: Arc<AtomicBool>,
@@ -282,7 +382,12 @@ struct Client {
 }
 
 impl Client {
+    /// A client with a window, a subsurface of it and a popup of it.
     fn new(socket: PathBuf) -> Client {
+        Client::spawn(socket, Kind::Popups)
+    }
+
+    fn spawn(socket: PathBuf, kind: Kind) -> Client {
         let log = Log::default();
         let stop = Arc::new(AtomicBool::new(false));
         let (log2, stop2) = (log.clone(), stop.clone());
@@ -313,6 +418,7 @@ impl Client {
                 surfaces: HashMap::new(),
                 entered: HashMap::new(),
                 outputs,
+                pointer: None,
             };
             let drawn = |surface, size, ready| Drawn {
                 surface,
@@ -325,7 +431,7 @@ impl Client {
             // the window, drawn once configured
             let window = compositor.create_surface(&qh, WINDOW);
             let window_xdg = base.get_xdg_surface(&window, &qh, WINDOW);
-            let toplevel = window_xdg.get_toplevel(&qh, ());
+            let toplevel = window_xdg.get_toplevel(&qh, WINDOW);
             toplevel.set_app_id("org.example.surface-output".into());
             window.commit();
             app.surfaces
@@ -335,6 +441,51 @@ impl Client {
             }
             app.draw(&qh);
             queue.roundtrip(&mut app).unwrap();
+            let mut keep: Vec<Box<dyn std::any::Any + Send>> = vec![Box::new(window_xdg.clone())];
+            keep.push(Box::new(toplevel));
+            match kind {
+                Kind::Popups => {}
+                Kind::Pointer => {
+                    let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=7, ()).unwrap();
+                    let _pointer = seat.get_pointer(&qh, ());
+                    let manager: wl_data_device_manager::WlDataDeviceManager =
+                        globals.bind(&qh, 3..=3, ()).unwrap();
+                    let device = manager.get_data_device(&seat, &qh, ());
+                    let cursor = compositor.create_surface(&qh, CURSOR);
+                    app.surfaces
+                        .insert(CURSOR, drawn(cursor.clone(), CURSOR_SIZE, true));
+                    app.draw(&qh);
+                    app.pointer = Some(PointerParts {
+                        compositor: compositor.clone(),
+                        manager,
+                        device,
+                        cursor,
+                        dragging: false,
+                    });
+                    keep.push(Box::new(seat));
+                }
+                Kind::TwoWindows => {
+                    let second = compositor.create_surface(&qh, SECOND);
+                    let second_xdg = base.get_xdg_surface(&second, &qh, SECOND);
+                    let second_toplevel = second_xdg.get_toplevel(&qh, SECOND);
+                    second_toplevel.set_app_id("org.example.surface-output".into());
+                    second.commit();
+                    app.surfaces
+                        .insert(SECOND, drawn(second.clone(), (400, 300), false));
+                    keep.push(Box::new(second_xdg));
+                    keep.push(Box::new(second_toplevel));
+                }
+            }
+            if kind != Kind::Popups {
+                while !stop2.load(Ordering::SeqCst) {
+                    if queue.roundtrip(&mut app).is_err() {
+                        break;
+                    }
+                    app.draw(&qh);
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                return;
+            }
 
             // a subsurface in its top left corner, drawn at once; it shows with the window's next commit
             let sub = compositor.create_surface(&qh, SUBSURFACE);
@@ -359,7 +510,7 @@ impl Client {
             app.surfaces
                 .insert(POPUP, drawn(popup.clone(), (120, 80), false));
 
-            let _keep = (toplevel, subsurface, xdg_popup, popup_xdg, window_xdg);
+            let _keep = (keep, subsurface, xdg_popup, popup_xdg);
             while !stop2.load(Ordering::SeqCst) {
                 if queue.roundtrip(&mut app).is_err() {
                     break;
@@ -407,6 +558,7 @@ impl Client {
                 surfaces: HashMap::new(),
                 entered: HashMap::new(),
                 outputs,
+                pointer: None,
             };
             let mut layers = Vec::new();
             while !stop2.load(Ordering::SeqCst) {
@@ -475,6 +627,13 @@ impl Client {
                 _ => {}
             }
         }
+        on
+    }
+
+    /// The outputs `surface` is on now, by name.
+    fn on_sorted(&self, surface: &str) -> Vec<String> {
+        let mut on = self.on(surface);
+        on.sort();
         on
     }
 
@@ -639,6 +798,16 @@ impl Harness {
         self.settle();
         let window = self.state.windows[0].id;
         (client, window)
+    }
+
+    /// Map a client of `kind` and wait until its first window is on a display.
+    fn map_kind(&mut self, kind: Kind) -> Client {
+        let client = Client::spawn(self.socket(), kind);
+        self.wait("the window on a display", &client, |s, c| {
+            s.windows.iter().any(|e| e.mapped) && !c.on(WINDOW).is_empty()
+        });
+        self.settle();
+        client
     }
 
     fn put(&mut self, window: WindowId, output: &str, frame: Rect) {
@@ -982,4 +1151,85 @@ fn a_layer_surface_is_told_the_active_output_it_opened_on_and_one_naming_it_open
         "{log:?}"
     );
     assert_eq!(panel.on("catcher again"), ["headless-1"]);
+}
+
+/// The client's cursor surface is on every display its image overlaps and draws at the scale of the display under the
+/// pointer; once the pointer leaves the client, so that its cursor is no longer shown, the surface is on none.
+#[test]
+fn a_cursor_surface_is_on_the_displays_it_overlaps_at_the_scale_under_the_pointer() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = h.map_kind(Kind::Pointer);
+    let window = h.state.windows[0].id;
+    h.put(window, "headless-2", Rect::new(1100.0, 100.0, 400.0, 300.0));
+    h.move_pointer(1300.0, 250.0);
+    h.wait("the cursor on the second display", &client, |_, c| {
+        c.on(CURSOR) == ["headless-2"] && c.scale(CURSOR) == 2
+    });
+    // a window across the seam takes input on the display the window model has it on, the first
+    h.put(window, "headless-1", Rect::new(300.0, 100.0, 400.0, 300.0));
+    h.drag(window, (500.0, 110.0), (950.0, 110.0));
+    let frame = h.frame(window);
+    assert!(frame.x < 980.0 && frame.right() > 1000.0, "{frame:?}");
+    // the image, from 4 points left of the pointer, reaches over the seam: on both, at the scale under the pointer
+    h.move_pointer(995.0, 250.0);
+    h.wait("the cursor on both displays", &client, |_, c| {
+        c.on_sorted(CURSOR) == ["headless-1", "headless-2"] && c.scale(CURSOR) == 1
+    });
+    // over the desktop the server's cursor shows: the client's surface is on no display
+    h.move_pointer(300.0, 600.0);
+    h.wait("the cursor on no display", &client, |_, c| {
+        c.on(CURSOR).is_empty()
+    });
+}
+
+/// A drag icon is on every display it overlaps while the drag runs, at the scale under the pointer, and on none once
+/// the drag ended.
+#[test]
+fn a_drag_icon_is_on_the_displays_it_overlaps_while_the_drag_runs() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = h.map_kind(Kind::Pointer);
+    let window = h.state.windows[0].id;
+    h.put(window, "headless-1", Rect::new(300.0, 100.0, 400.0, 300.0));
+    h.move_pointer(500.0, 250.0);
+    h.step();
+    h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
+    h.wait("the icon on the first display", &client, |s, c| {
+        s.drag_icon.is_some() && c.on(ICON) == ["headless-1"]
+    });
+    // the icon hangs from the pointer, 32 points wide: over the seam it is on both
+    h.move_pointer(990.0, 250.0);
+    h.wait("the icon on both displays", &client, |_, c| {
+        c.on_sorted(ICON) == ["headless-1", "headless-2"] && c.scale(ICON) == 1
+    });
+    h.move_pointer(1300.0, 250.0);
+    h.wait("the icon on the second display", &client, |_, c| {
+        c.on(ICON) == ["headless-2"] && c.scale(ICON) == 2
+    });
+    h.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    h.wait("the icon on no display", &client, |s, c| {
+        s.drag_icon.is_none() && c.on(ICON).is_empty()
+    });
+}
+
+/// One connection that shows several windows, as the X11 bridge shows every X11 window: each window is told its own
+/// display and scale.
+#[test]
+fn each_window_of_one_client_is_told_its_own_display() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = Client::spawn(h.socket(), Kind::TwoWindows);
+    h.wait("both windows on a display", &client, |s, c| {
+        s.windows.iter().filter(|e| e.mapped).count() == 2
+            && !c.on(WINDOW).is_empty()
+            && !c.on(SECOND).is_empty()
+    });
+    h.settle();
+    let (first, second) = (h.state.windows[0].id, h.state.windows[1].id);
+    h.put(first, "headless-1", Rect::new(100.0, 100.0, 400.0, 300.0));
+    h.put(second, "headless-2", Rect::new(1100.0, 100.0, 400.0, 300.0));
+    h.wait("each on its display", &client, |_, c| {
+        c.on(WINDOW) == ["headless-1"]
+            && c.scale(WINDOW) == 1
+            && c.on(SECOND) == ["headless-2"]
+            && c.scale(SECOND) == 2
+    });
 }

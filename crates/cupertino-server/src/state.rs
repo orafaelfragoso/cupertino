@@ -589,6 +589,9 @@ pub struct Cupertino {
     pub input_method: Option<crate::input_method::ImBridge>,
     /// Text cursor rectangle of the focused application (surface-local), from its text input.
     pub text_cursor: Option<Rectangle<i32, Logical>>,
+    /// The input method's popup surface, while it has one: it is told the output of the text cursor
+    /// (`displays::surface_output`).
+    pub input_popup: Option<smithay::wayland::input_method::PopupSurface>,
     /// Time (ms) of the held-back caps-lock press.
     pub caps_press_time: u32,
     pub gestures: cupertino_input::GestureRecognizer,
@@ -914,6 +917,7 @@ impl Cupertino {
             input_method_state,
             input_method: None,
             text_cursor: None,
+            input_popup: None,
             caps_press_time: 0,
             gestures: cupertino_input::GestureRecognizer::new(
                 cupertino_input::GestureConfig::default(),
@@ -2043,6 +2047,8 @@ impl Cupertino {
         self.send_deferred_configures(now);
         // a drag that ended elsewhere than at a button (the session locked, the source went away)
         self.drag_ended();
+        // the cursor, a drag icon and an input method's popup follow the pointer and the text cursor
+        self.refresh_loose_surface_outputs();
         if self.fx.tick(now) {
             // an effect that ended leaves the screen; its last frame may still show it
             self.request_redraw();

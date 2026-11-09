@@ -35,6 +35,8 @@ pub enum ViewMode {
     List,
     /// The chain of folders side by side ([`crate::columns`]).
     Columns,
+    /// A large preview of one item over a row of every item's picture.
+    Gallery,
 }
 
 /// The folders the path bar shows for `dir`, outermost first, with their names. The chain starts at the file system

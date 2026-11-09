@@ -76,11 +76,11 @@ pub(super) enum Step {
     PageDown,
 }
 
-/// The item `step` moves the keyboard to from item `from` of a non-empty `layout`, `rows` rows making a page. A move
-/// past the edge stays.
-pub(super) fn target(layout: &IconLayout, from: usize, step: Step, rows: usize) -> usize {
+/// The item `step` moves the keyboard to from item `from` of a non-empty `layout`, `page` items making a page (one at
+/// least). A move past the edge stays.
+pub(super) fn target(layout: &IconLayout, from: usize, step: Step, page: usize) -> usize {
     let last = layout.cells.len().saturating_sub(1);
-    let page = rows.max(1) * layout.columns;
+    let page = page.max(1);
     match step {
         Step::Toward(direction) => layout.neighbour(from, direction).unwrap_or(from),
         Step::Home => 0,
@@ -148,6 +148,9 @@ pub(super) struct IconGrid {
     pub lead: f64,
     /// What sits under item `index`'s icon, given as `(index, selected)`: its [`name`], or the field it is renamed in.
     pub name: Box<dyn Fn(usize, bool) -> Element<Message>>,
+    /// One row scrolled sideways ([`crate::layout::icon::strip`]), as wide as its cells and as tall as the view: a page
+    /// is the pictures in view, and a press between them draws no band.
+    pub strip: bool,
 }
 
 /// The node state of the grid: what was typed to select, and when that search ends; the press that may become a drag,
@@ -206,33 +209,57 @@ impl IconGrid {
     /// The item the keyboard is on: the selection's cursor, else the first item in view.
     fn at(&self) -> Option<usize> {
         self.cursor().or_else(|| {
-            let top = self.scroll.offset.y;
             let cells = &self.layout.cells;
-            let first = cells.iter().position(|c| c.frame.y + c.frame.h > top);
+            let first = match self.strip {
+                true => cells
+                    .iter()
+                    .position(|c| c.frame.x + c.frame.w > self.scroll.offset.x),
+                false => cells
+                    .iter()
+                    .position(|c| c.frame.y + c.frame.h > self.scroll.offset.y),
+            };
             first.or(cells.len().checked_sub(1))
         })
     }
 
-    /// Rows of cells a page moves by: those the viewport shows below the toolbar row.
-    fn page_rows(&self) -> usize {
-        let pitch = self.layout.cell.h + self.layout.spacing.1;
-        ((self.scroll.viewport.height - self.lead) / pitch)
-            .floor()
-            .max(1.0) as usize
+    /// Items a page moves by: the rows the viewport shows below the toolbar row, or the pictures a strip shows.
+    fn page(&self) -> usize {
+        let (room, pitch, per) = match self.strip {
+            true => (
+                self.scroll.viewport.width,
+                self.layout.cell.w + self.layout.spacing.0,
+                1,
+            ),
+            false => (
+                self.scroll.viewport.height - self.lead,
+                self.layout.cell.h + self.layout.spacing.1,
+                self.layout.columns,
+            ),
+        };
+        (room / pitch).floor().max(1.0) as usize * per
     }
 
     /// The cells to build, in order: those near the viewport and the keyboard's.
     fn built(&self) -> Vec<usize> {
-        // in the grid, which starts `lead` down the content: what shows under the toolbar row too
-        let top = self.scroll.offset.y - self.lead - OVERSCAN;
-        let bottom = self.scroll.offset.y - self.lead + self.scroll.viewport.height + OVERSCAN;
         let at = self.at();
+        let near: Box<dyn Fn(&crate::layout::icon::IconCell) -> bool> = match self.strip {
+            true => {
+                let left = self.scroll.offset.x - OVERSCAN;
+                let right = self.scroll.offset.x + self.scroll.viewport.width + OVERSCAN;
+                Box::new(move |c| c.frame.x + c.frame.w >= left && c.frame.x <= right)
+            }
+            false => {
+                // in the grid, which starts `lead` down the content: what shows under the toolbar row too
+                let top = self.scroll.offset.y - self.lead - OVERSCAN;
+                let bottom =
+                    self.scroll.offset.y - self.lead + self.scroll.viewport.height + OVERSCAN;
+                Box::new(move |c| c.frame.y + c.frame.h >= top && c.frame.y <= bottom)
+            }
+        };
         self.layout
             .cells
             .iter()
-            .filter(|c| {
-                (c.frame.y + c.frame.h >= top && c.frame.y <= bottom) || Some(c.index) == at
-            })
+            .filter(|c| near(c) || Some(c.index) == at)
             .map(|c| c.index)
             .collect()
     }
@@ -387,7 +414,7 @@ impl IconGrid {
             _ => return Propagation::Continue,
         };
         let to = match self.cursor() {
-            Some(c) => target(&self.layout, c, step, self.page_rows()),
+            Some(c) => target(&self.layout, c, step, self.page()),
             None => at,
         };
         self.move_to(to, mods.contains(Mods::SHIFT), cx);
@@ -475,6 +502,13 @@ impl Widget<Message> for IconGrid {
     type State = TypeSelect;
 
     fn layout(&self) -> LayoutSpec {
+        if self.strip {
+            return LayoutSpec {
+                width: SizeSpec::Fixed(self.layout.content.w.max(self.scroll.viewport.width)),
+                height: SizeSpec::Fixed(self.layout.content.h),
+                ..LayoutSpec::new(ContainerKind::Absolute)
+            };
+        }
         LayoutSpec {
             width: SizeSpec::Fill,
             // as tall as the view at least, so a press under the last row starts a band
@@ -598,6 +632,10 @@ impl Widget<Message> for IconGrid {
                 let index = self.index_at(position, cx);
                 let Some(pressed) = index else {
                     state.clicks.press_empty();
+                    if self.strip {
+                        // between a strip's pictures: the item shown stays
+                        return Propagation::Stop;
+                    }
                     if !mods.contains(Mods::SHIFT) && !mods.contains(Mods::PRIMARY) {
                         next = Selection::new([], None, None);
                     }
@@ -1292,14 +1330,15 @@ mod tests {
         let g = grid();
         assert_eq!(target(&g, 6, Step::Home, 1), 0);
         assert_eq!(target(&g, 1, Step::End, 1), 9);
-        assert_eq!(target(&g, 1, Step::PageDown, 2), 9);
-        assert_eq!(target(&g, 1, Step::PageDown, 1), 5);
-        assert_eq!(target(&g, 9, Step::PageUp, 1), 5);
-        assert_eq!(target(&g, 6, Step::PageUp, 2), 0);
+        // a page of two rows, then one, of four items
+        assert_eq!(target(&g, 1, Step::PageDown, 8), 9);
+        assert_eq!(target(&g, 1, Step::PageDown, 4), 5);
+        assert_eq!(target(&g, 9, Step::PageUp, 4), 5);
+        assert_eq!(target(&g, 6, Step::PageUp, 8), 0);
         assert_eq!(
             target(&g, 6, Step::PageUp, 0),
-            2,
-            "a page is at least a row"
+            5,
+            "a page is at least an item"
         );
     }
 }

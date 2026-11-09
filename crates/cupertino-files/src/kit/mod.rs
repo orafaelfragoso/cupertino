@@ -9,6 +9,7 @@ mod columns;
 mod context;
 mod dragged;
 mod drops;
+mod gallery;
 mod grid;
 mod item_icons;
 mod jobs;
@@ -1554,6 +1555,12 @@ impl Model {
                 *window.list_presses.borrow_mut() = Default::default();
                 window.view = view;
                 window.scroll.offset = cupertino_kit::geometry::Point::ZERO;
+                // the gallery shows an item: the first, when none is selected
+                if view == ViewMode::Gallery && window.browser.selection().is_empty() {
+                    if let Some(first) = gallery::item(window) {
+                        window.browser.select([first], Some(first), Some(first));
+                    }
+                }
             }
             MenuAction::View(_) => {}
             MenuAction::Peek => window.toggle_peek(),
@@ -1974,19 +1981,26 @@ impl BrowserWindow {
         self.texts.follow(&previewed, &self.wake);
     }
 
-    /// The items previewed: the preview column's file and the preview window's item, and the side of their pictures
-    /// in points.
+    /// The items previewed: the preview column's file, the gallery's item and the preview window's item, and the side
+    /// of their pictures in points.
     fn previewed(&self) -> (impl Iterator<Item = &crate::Entry>, f64) {
         let entries = self.browser.entries();
         let column = (self.view == ViewMode::Columns)
             .then(|| self.columns.chain(&self.browser).preview)
             .flatten()
             .and_then(|i| entries.get(i));
+        let gallery = (self.view == ViewMode::Gallery)
+            .then(|| gallery::item(self))
+            .flatten()
+            .and_then(|i| entries.get(i));
         let window = self
             .peek
             .as_ref()
             .and_then(|look| entries.iter().find(|e| e.path == look.browse.current()));
-        (column.into_iter().chain(window), peek::PICTURE)
+        (
+            column.into_iter().chain(gallery).chain(window),
+            peek::PICTURE,
+        )
     }
 
     /// Whether the tab bar shows: with more than one tab, or when View › Show Tab Bar asked for it.
@@ -2541,7 +2555,7 @@ impl BrowserWindow {
             return Vec::new();
         };
         let key = match self.view {
-            ViewMode::Icons => view::item_key(id, index),
+            ViewMode::Icons | ViewMode::Gallery => view::item_key(id, index),
             _ => view::row_key(id, path),
         };
         vec![Command::Perform(Box::pin(async move {

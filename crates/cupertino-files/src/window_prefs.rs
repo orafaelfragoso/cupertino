@@ -47,6 +47,7 @@ fn view_name(view: ViewMode) -> &'static str {
         ViewMode::Icons => "icons",
         ViewMode::List => "list",
         ViewMode::Columns => "columns",
+        ViewMode::Gallery => "gallery",
     }
 }
 
@@ -64,6 +65,7 @@ impl WindowPrefs {
                 Some("list") => ViewMode::List,
                 Some("icons") => ViewMode::Icons,
                 Some("columns") => ViewMode::Columns,
+                Some("gallery") => ViewMode::Gallery,
                 _ => defaults.view,
             },
             path_bar: flag("path-bar", defaults.path_bar),
@@ -134,8 +136,13 @@ mod tests {
             column_width: 300.0,
         };
         assert_eq!(WindowPrefs::parse(&prefs.text()), prefs);
+        let gallery = WindowPrefs {
+            view: ViewMode::Gallery,
+            ..prefs
+        };
+        assert_eq!(WindowPrefs::parse(&gallery.text()), gallery);
         assert_eq!(
-            WindowPrefs::parse(r#"{"view": "gallery", "path-bar": "yes", "status-bar": true}"#),
+            WindowPrefs::parse(r#"{"view": "cover", "path-bar": "yes", "status-bar": true}"#),
             WindowPrefs {
                 view: ViewMode::Icons,
                 path_bar: false,

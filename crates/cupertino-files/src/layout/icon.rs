@@ -296,6 +296,43 @@ pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) 
     }
 }
 
+/// Room between two pictures of a strip, and at its leading and trailing ends.
+pub const STRIP_SPACING: f64 = 6.0;
+/// Room above and below the pictures of a strip.
+pub const STRIP_INSET: f64 = 8.0;
+
+/// One row of `count` pictures `p.icon_size` square without names, from the leading edge: the strip under a gallery's
+/// preview. Each cell is the icon with its padding.
+pub fn strip(p: &IconParams, count: usize) -> IconLayout {
+    let p = IconParams {
+        title_enabled: false,
+        subtitle_enabled: false,
+        ..*p
+    };
+    let cell = ideal_cell_size(&p);
+    let cells = (0..count)
+        .map(|index| {
+            let x = STRIP_SPACING + index as f64 * (cell.w + STRIP_SPACING);
+            let frame = Rect::new(x, STRIP_INSET, cell.w, cell.h);
+            let mut parts = cell_parts(&p, index, frame, cell);
+            // no name: an empty label under the picture, which nothing hits
+            parts.label_frame = Rect::new(frame.x, frame.bottom(), 0.0, 0.0);
+            parts
+        })
+        .collect();
+    IconLayout {
+        cell,
+        spacing: (STRIP_SPACING, 0.0),
+        columns: count.max(1),
+        cells,
+        headers: Vec::new(),
+        content: Size {
+            w: STRIP_SPACING + count as f64 * (cell.w + STRIP_SPACING),
+            h: cell.h + 2.0 * STRIP_INSET,
+        },
+    }
+}
+
 /// Icon and label rectangles inside a cell.
 pub fn cell_parts(p: &IconParams, index: usize, frame: Rect, cell: Size) -> IconCell {
     let b = p.icon_box();
@@ -625,5 +662,28 @@ mod tests {
         assert_eq!(inter_item_spacing(64.0, true), (2.0, 4.0));
         assert_eq!(inter_item_spacing(64.0, false), (4.0, 4.0));
         assert_eq!(inter_item_spacing(16.0, false), (2.0, 2.0));
+    }
+
+    #[test]
+    fn a_strip_is_one_row_of_pictures_without_names() {
+        let p = params(64, 54, true);
+        let s = strip(&p, 3);
+        // the icon with its padding, square
+        assert_eq!((s.cell.w, s.cell.h), (72.0, 72.0));
+        assert_eq!(s.cells.len(), 3);
+        assert!(s.cells.iter().all(|c| c.frame.y == STRIP_INSET));
+        assert_eq!(s.cells[1].frame.x - s.cells[0].frame.right(), STRIP_SPACING);
+        assert_eq!(s.content.w, s.cells[2].frame.right() + STRIP_SPACING);
+        assert_eq!(s.content.h, 72.0 + 2.0 * STRIP_INSET);
+        // a press under a picture is on nothing; on it, on its item
+        let under = Point {
+            x: s.cells[1].frame.center().x,
+            y: s.cells[1].frame.bottom() + 1.0,
+        };
+        assert_eq!(s.hit(under), None);
+        assert_eq!(s.hit(s.cells[1].icon_frame.center()), Some(1));
+        assert_eq!(s.neighbour(1, Direction::Right), Some(2));
+        assert_eq!(s.neighbour(1, Direction::Down), None);
+        assert_eq!(strip(&p, 0).cells.len(), 0);
     }
 }

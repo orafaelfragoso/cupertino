@@ -27,6 +27,7 @@ use super::announce::Announcer;
 use super::columns;
 use super::context::Secondary;
 use super::drops;
+use super::gallery;
 use super::grid::{self, IconGrid, Item};
 use super::jobs::Job;
 use super::list::{self, Gestures, RowCell};
@@ -417,6 +418,8 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
         (ViewMode::Icons, true) => no_results(icons(session, id, win), under_row(win)),
         (ViewMode::Columns, false) => columns::view(session, id, win),
         (ViewMode::Columns, true) => no_results(columns::view(session, id, win), under_row(win)),
+        (ViewMode::Gallery, false) => gallery::view(session, id, win),
+        (ViewMode::Gallery, true) => no_results(gallery::view(session, id, win), under_row(win)),
     };
     // Space on the items opens their preview
     let peek = !disabled_peek(session, win);
@@ -587,12 +590,19 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
                 menu(MenuAction::View(ViewMode::Columns)),
                 None,
             ),
-            item(None, "symbol.gallery", "Gallery", None, None),
+            item(
+                None,
+                "symbol.gallery",
+                "Gallery",
+                menu(MenuAction::View(ViewMode::Gallery)),
+                None,
+            ),
         ],
         selected: Some(match win.view {
             ViewMode::Icons => 0,
             ViewMode::List => 1,
             ViewMode::Columns => 2,
+            ViewMode::Gallery => 3,
         }),
         dividers: true,
     };
@@ -892,6 +902,7 @@ pub(super) fn shown(win: &BrowserWindow) -> (Vec<usize>, f64) {
                 .shown(&win.browser, SHOWN_MARGIN, under_row(win)),
             ROW_ICON,
         ),
+        ViewMode::Gallery => gallery::shown(win, SHOWN_MARGIN),
         ViewMode::Icons => {
             let (params, layout) = icon_layout(win);
             let shown = layout
@@ -958,6 +969,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 None => grid::name(names[index].name.clone(), text_size, selected, Some(lines)),
             },
         ),
+        strip: false,
     });
     // the grid starts below the toolbar row, and scrolls under it
     let content = Element::new(Stack {

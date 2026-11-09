@@ -9,8 +9,9 @@ It builds cupertino-ui-abi's library and the cupertino command with the dev prof
 (CARGO_TARGET_DIR or ./target) unless --no-build, and installs the SDK with `packaging/release.py install --package sdk`.
 pkg-config reads the root as a sysroot (PKG_CONFIG_SYSROOT_DIR and PKG_CONFIG_LIBDIR) and programs load the library
 from it (LD_LIBRARY_PATH); no flag of a compile line may name the checkout. The Rust project of `sdk new` is checked
-with `cargo check --offline` against this checkout's cupertino-kit instead of the release tag it names; --no-cargo writes
-it and prints that command instead of running it."""
+with `cargo check --offline` against this checkout's cupertino-kit instead of the release tag it names, and the one
+`sdk new --source` writes for this checkout must resolve offline (`cargo metadata`); --no-cargo writes them and prints
+those commands instead of running them."""
 import argparse
 import json
 import os
@@ -168,12 +169,23 @@ def check_sdk(root, work, cupertino, cargo=True):
     manifest.write_text(rust_manifest(manifest.read_text(), cli_version()))
     shutil.copyfile(ROOT / 'Cargo.lock', projects / 'counter/Cargo.lock')
     command = ['cargo', 'check', '--offline', '--manifest-path', manifest]
+    # --source writes the path dependencies itself: the project resolves offline with nothing rewritten
+    run([cupertino, 'sdk', 'new', '--lang', 'rust', 'org.example.Local', '--dir', 'local', '--source', ROOT],
+        cwd=projects, env=env)
+    local = projects / 'local/Cargo.toml'
+    shutil.copyfile(ROOT / 'Cargo.lock', projects / 'local/Cargo.lock')
+    resolve = ['cargo', 'metadata', '--offline', '--format-version', '1', '--manifest-path', local]
     if not cargo:
-        print('not run: ' + shlex.join(str(c) for c in command), flush=True)
+        for line in (command, resolve):
+            print('not run: ' + shlex.join(str(c) for c in line), flush=True)
         return
     # the checkout's target directory already holds the build scripts and macros cupertino-kit needs
     run(command, env=dict(os.environ, CARGO_TARGET_DIR=str(target_dir())), timeout=3600)
     print('ok: the Rust project of cupertino sdk new builds against this cupertino-kit', flush=True)
+    kits = [p['manifest_path'] for p in json.loads(run(resolve, timeout=600).stdout)['packages']
+            if p['name'] == 'cupertino-kit']
+    same('cupertino sdk new --lang rust --source: the project resolves offline on the checkout\'s cupertino-kit', kits,
+         [str(KIT / 'Cargo.toml')])
 
 
 def main(argv=None):

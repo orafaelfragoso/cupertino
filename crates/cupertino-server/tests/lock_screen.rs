@@ -270,6 +270,16 @@ impl Session {
     fn log(&self) -> String {
         log_text(&self.fixture.log())
     }
+
+    /// Runs the server until the login process says it heard the session is locked; it says so from its own process
+    /// once the server's answer arrives, which can be after the lock screen is up.
+    fn heard_locked(&mut self) {
+        let log = self.fixture.log();
+        self.server
+            .wait_until("the login process to hear the session is locked", |_| {
+                log_text(&log).contains("cupertino-login: locked")
+            });
+    }
 }
 
 #[test]
@@ -307,7 +317,7 @@ fn the_login_process_locks_before_the_system_sleeps_and_only_then_lets_it() {
         .wait_until("the lock screen to cover the application", |state| {
             lock_screen_up(state, center)
         });
-    assert!(session.log().contains("cupertino-login: locked"));
+    session.heard_locked();
 
     // the system woke up: still locked, and the delay is not taken again before the person unlocks
     session.logind.prepare_for_sleep(false);
@@ -366,11 +376,7 @@ fn while_locked_an_application_gets_no_input_and_a_return_from_another_console_k
         before,
         "the application got input after the return from another console"
     );
-    assert!(
-        session.log().contains("cupertino-login: locked"),
-        "{}",
-        session.log()
-    );
+    session.heard_locked();
 }
 
 #[test]

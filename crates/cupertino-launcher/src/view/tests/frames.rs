@@ -691,8 +691,8 @@ fn browser_over_many(apps: usize, scale: f64, draw: bool) -> (Measured, usize) {
 /// The Dock opens the browser over 200 applications: every icon near the view is loaded and decoded off the loop, at
 /// most [`kit::MAX_APP_ICON_LOADS`] waiting at once, though each costs [`ICON_DECODE`] to decode (a pass decoded on the
 /// loop would overrun several frames). What the loop spends asking for them is a small part of one frame budget, and
-/// the frames that show them arriving stay within it. The window's first frame, which lays out the browser whole, is
-/// not held to the budget here: this profile is unoptimised; `frame_cost_report` measures it in release.
+/// the frames that show them arriving stay within it. The window's first frame, which lays out the browser whole, is held
+/// to the budget in an optimised build only (about 4 ms there at 1x); unoptimised it takes several times that.
 #[test]
 fn opening_the_browser_over_200_applications_keeps_icon_decoding_off_the_frames() {
     use cupertino_ui_test::repaint::FRAME_BUDGET;
@@ -723,6 +723,14 @@ fn opening_the_browser_over_200_applications_keeps_icon_decoding_off_the_frames(
         "asking for {nearby} icons took the loop {} us",
         LOOP_ICON_NANOS.get() / 1000
     );
+    let first_ms = run.frames[0].nanos as f64 / 1e6;
+    eprintln!("first frame: {first_ms:.2} ms");
+    if !cfg!(debug_assertions) {
+        assert!(
+            first_ms < FRAME_BUDGET.as_secs_f64() * 1000.0,
+            "the first frame lays out 200 applications in {first_ms:.2} ms"
+        );
+    }
     let arriving = Summary::of(&run.frames[1..]);
     assert!(
         arriving.frames >= nearby / kit::MAX_APP_ICON_LOADS,

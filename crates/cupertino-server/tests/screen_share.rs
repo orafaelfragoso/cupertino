@@ -26,7 +26,6 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 
 const OUTPUT: (i32, i32) = (640, 400);
-const TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the test lets the chooser stand before it types: longer than the portal's half-second arming delay, during
 /// which the chooser shares nothing.
 const ARMED: Duration = Duration::from_millis(700);
@@ -82,7 +81,7 @@ impl Server {
         .unwrap();
     }
 
-    /// Step the server until `cond` gives a value; panics after [`TIMEOUT`].
+    /// Step the server until `cond` gives a value; panics after [`common::HANG_GUARD`].
     fn wait_for<T>(&mut self, what: &str, mut cond: impl FnMut(&mut Cupertino) -> Option<T>) -> T {
         let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
@@ -144,7 +143,7 @@ fn the_portal_shares_the_chosen_display_as_a_stream_of_its_frames() {
     let Some(bus) = PrivateBus::start() else {
         return missing_tool("dbus-daemon");
     };
-    let Some(pipewire) = Daemon::start(TIMEOUT) else {
+    let Some(pipewire) = Daemon::start(common::HANG_GUARD) else {
         eprintln!("SKIPPED: pipewire is not installed or did not start");
         return;
     };

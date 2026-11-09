@@ -471,7 +471,7 @@ fn the_setters_are_served_on_the_session_bus() {
         }
         (before, auto, bad, appearance, accessibility)
     });
-    first_read.recv_timeout(Duration::from_secs(10)).unwrap();
+    first_read.recv_timeout(common::HANG_GUARD).unwrap();
     cupertino_server::quit::start_session_service_on(&mut h.state, Some(bus.address.clone()));
     while !client.is_finished() {
         h.step();

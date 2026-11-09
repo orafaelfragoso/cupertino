@@ -93,6 +93,9 @@ the `Dock` body in the colour of the wallpaper under it, and the window's opaque
 material. The stack panels take the same surface. Giving the bar another material is that one line. The application
 grid's panel lies on the `AppGrid` surface, whose recipe keeps its blur with Reduce Transparency and Increase Contrast
 and changes its colours.
+The panel casts a soft shadow below it (`SHADOW_OFFSET`, `SHADOW_BLUR`, `SHADOW_ALPHA` in `src/view/grid.rs`). While
+the panel is too faint to change a pixel, as on the entry's first frame, it casts none: the shadow is a blur of the whole
+panel, the costliest part of a frame at a high scale, and that frame shows nothing.
 
 The bar is a Kit window (`src/view/bar.rs`) on a layer surface of the dock's display. The surface is at the bottom, left or
 right per `Orientation`, full width or height along its edge so magnification and bounces have room. It has the

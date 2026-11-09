@@ -215,14 +215,13 @@ impl CardKeyboard {
 /// a hidden panel takes no input. Hears the session lock, the card losing the keyboard and the panel's output going
 /// away for the application.
 ///
-/// The output is chosen when the panel opens with no surface left (the first output the server describes, see
-/// [`opening_output`]) and kept while the card or the catcher exists, so the two stay together and a toggle during
-/// the fade reopens on the card's output. When that output goes, the panel is dismissed at once (it does not move to
-/// another output); the next toggle opens it on an output that exists.
+/// The surfaces name no output: the server opens them on its active output (the one the person works on, where the
+/// menu bar was clicked), both in the same pass. When that output goes the server closes them, which dismisses the
+/// panel at once (it does not move to another output); the next toggle opens it on an output that exists.
 struct PanelRoles {
     shell: LayerShell,
-    /// The output of the panel's surfaces; `None` while it has none, or with no output to choose (the server then
-    /// closes what opens).
+    /// The output the panel's surfaces are asked for; `None` lets the server choose (its active output, or it closes
+    /// what opens when it has no output).
     output: Option<OutputId>,
     /// The menu bar's height, in whole points.
     menu_bar: i32,
@@ -285,7 +284,7 @@ impl SurfaceRoles for PanelRoles {
         spec: &WindowSpec,
     ) -> Option<std::result::Result<SurfaceId, WaylandError>> {
         if self.card.is_none() && self.catcher.is_none() {
-            self.output = opening_output(&described(conn));
+            self.output = None;
         }
         let config = self.config(spec)?;
         let layer = match self.shell.layer_surface(conn, &config) {
@@ -670,15 +669,6 @@ fn described(conn: &Connection) -> Vec<(OutputId, bool)> {
         .collect()
 }
 
-/// The output a panel that has no surface opens on: the first one the server has described. `None` without one; the
-/// server then puts the surfaces on its active output, or closes them when it has no output at all.
-fn opening_output<O: Copy>(outputs: &[(O, bool)]) -> Option<O> {
-    outputs
-        .iter()
-        .find(|(_, described)| *described)
-        .map(|(id, _)| *id)
-}
-
 /// Whether the panel's `output` is no longer among the server's `outputs`.
 fn output_gone<O: PartialEq>(output: Option<O>, outputs: &[(O, bool)]) -> bool {
     output.is_some_and(|output| !outputs.iter().any(|(id, _)| *id == output))
@@ -1029,11 +1019,8 @@ mod tests {
     }
 
     #[test]
-    fn the_panel_opens_on_the_first_described_output_and_hears_when_its_output_goes() {
+    fn the_panel_hears_when_its_output_goes() {
         let (a, b) = (4_u32, 7_u32);
-        assert_eq!(opening_output::<u32>(&[]), None);
-        assert_eq!(opening_output(&[(a, false), (b, true)]), Some(b));
-        assert_eq!(opening_output(&[(a, true), (b, true)]), Some(a));
         assert!(!output_gone::<u32>(None, &[]), "no output, nothing to lose");
         assert!(!output_gone(Some(a), &[(a, true), (b, true)]));
         assert!(

@@ -23,8 +23,8 @@ use cupertino_dock::kit::{
 use cupertino_dock::overview_ui::{Mode, Workspace};
 use cupertino_dock::session::Session;
 use cupertino_dock::view::{
-    edge, IconSet, BAR_APP_ID, DRAG_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, GRID_APP_ID,
-    OVERVIEW_APP_ID, SWITCHER_APP_ID,
+    edge, IconSet, BAR_APP_ID, DRAG_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, OVERVIEW_APP_ID,
+    SWITCHER_APP_ID,
 };
 use cupertino_dock::Dock;
 use cupertino_kit::controls::ImageSource;
@@ -84,7 +84,6 @@ enum Kind {
     Bar,
     Edge,
     Drag,
-    Grid,
     ForceQuit,
     Switcher,
     Overview,
@@ -98,7 +97,6 @@ impl Kind {
             BAR_APP_ID => Kind::Bar,
             EDGE_APP_ID => Kind::Edge,
             DRAG_APP_ID => Kind::Drag,
-            GRID_APP_ID => Kind::Grid,
             FORCE_QUIT_APP_ID => Kind::ForceQuit,
             SWITCHER_APP_ID => Kind::Switcher,
             OVERVIEW_APP_ID => Kind::Overview,
@@ -167,22 +165,6 @@ struct DockRoles {
     messages: async_channel::Sender<Message>,
 }
 
-/// The grid's margin on the dock's edge: the exclusive zone keeps it clear of a bar that reserves room, but under
-/// auto-hide the bar reserves none, so the margin leaves it uncovered and magnifying beside the open grid.
-fn grid_margin(placement: Option<Placement>) -> Margin {
-    let Some(p) = placement.filter(|p| p.exclusive_zone <= 0) else {
-        return Margin::default();
-    };
-    let depth = p.bar_depth.ceil() as i32;
-    let mut margin = Margin::default();
-    match p.orientation {
-        Orientation::Bottom => margin.bottom = depth,
-        Orientation::Left => margin.left = depth,
-        Orientation::Right => margin.right = depth,
-    }
-    margin
-}
-
 impl DockRoles {
     fn send(&self, message: Message) {
         // the receiver is gone only while the process exits
@@ -225,15 +207,6 @@ impl DockRoles {
                 -1,
                 KeyboardInteractivity::None,
             ),
-            // the server fills the output within the exclusive zones, and the margin keeps an auto-hidden bar clear
-            // (`grid_margin`), so the dock bar stays visible; the panel is centred below the menu bar's strip
-            Kind::Grid => (
-                Layer::Overlay,
-                ALL_EDGES,
-                (0, 0),
-                0,
-                KeyboardInteractivity::Exclusive,
-            ),
             // no anchor: the server centres the surface on the output, ignoring the zones
             Kind::ForceQuit => (
                 Layer::Overlay,
@@ -265,7 +238,6 @@ impl DockRoles {
                 Kind::Bar => BAR_APP_ID,
                 Kind::Edge => EDGE_APP_ID,
                 Kind::Drag => DRAG_APP_ID,
-                Kind::Grid => GRID_APP_ID,
                 Kind::ForceQuit => FORCE_QUIT_APP_ID,
                 Kind::Switcher => SWITCHER_APP_ID,
                 Kind::Overview => OVERVIEW_APP_ID,
@@ -275,11 +247,7 @@ impl DockRoles {
             layer,
             anchor,
             size,
-            margin: if kind == Kind::Grid {
-                grid_margin(placement)
-            } else {
-                Margin::default()
-            },
+            margin: Margin::default(),
             exclusive_zone,
             keyboard,
         }
@@ -474,7 +442,6 @@ impl SurfaceRoles for DockRoles {
                 };
                 let sized = match s.kind {
                     Kind::Bar => Some(Sized::Bar(s.output)),
-                    Kind::Grid => Some(Sized::Grid),
                     _ => None,
                 };
                 drop(surfaces);
@@ -650,9 +617,6 @@ impl Host for AppHost {
         for s in surfaces.all.iter_mut().filter(|s| s.kind == Kind::Edge) {
             s.layer.set_placement(anchor, size);
         }
-        if let Some(s) = surfaces.of_kind(Kind::Grid) {
-            s.layer.set_margin(grid_margin(Some(placement)));
-        }
     }
 
     fn keyboard(&mut self, part: Part, on: bool) {
@@ -666,7 +630,6 @@ impl Host for AppHost {
             |kind: Kind, output: u32| move |s: &&mut Surface| s.kind == kind && s.output == output;
         let surface = match part {
             Part::Bar(output) => surfaces.all.iter_mut().find(of(Kind::Bar, output)),
-            Part::Grid => surfaces.of_kind(Kind::Grid),
             Part::Overview(output) => surfaces.all.iter_mut().find(of(Kind::Overview, output)),
         };
         if let Some(s) = surface {

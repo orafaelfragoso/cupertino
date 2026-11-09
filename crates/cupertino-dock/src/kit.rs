@@ -1,15 +1,18 @@
 //! The dock as a CupertinoKit application: the model around [`Session`] and the surfaces that come and go (the context
-//! menu, the held tile, the application grid, the Force Quit dialog, and on every output the switcher's panel
+//! menu, the held tile, the Force Quit dialog, and on every output the switcher's panel
 //! ([`SwitcherSurface`]) and the overview's chrome ([`OverviewSurface`])), what each message does to it, and its
 //! windows ([`view`]). Every window is drawn by CupertinoKit. What needs the session (the dock role's requests, the
 //! layer surfaces' placement and keyboard, starting programs, the pins file and the icons) goes through [`Host`], so
 //! the model runs headless in tests.
 //!
-//! What moves by itself (a bounce, the magnification, auto-hide, the removal puff, the grid, the switcher's fade, the
+//! What moves by itself (a bounce, the magnification, auto-hide, the removal puff, the switcher's fade, the
 //! overview's reflow and highlight) advances with the frames the compositor gives the window it is on: that window's
 //! root sends [`Input::Frame`] at each one while it moves. A wake every [`FRAME_FALLBACK`] seconds keeps an animation
 //! going on a window the compositor gives no frames (covered, or not shown yet); what is due at a set time (the
-//! switcher's delay, a held press, the edge dwell, the grid's wheel) is a timer.
+//! switcher's delay, a held press, the edge dwell) is a timer.
+//!
+//! The app-grid action (a hot corner or gesture mapped to it) opens the launcher's application browser: the dock
+//! sends it to the server as `run_action("app-grid")`, which asks the launcher.
 //!
 //! The dock is on one output at a time: the first output when it starts (the main display), and the first remaining
 //! one when its output goes away. Every other output has an edge strip along the dock's edge; the pointer resting
@@ -26,7 +29,6 @@ use cupertino_kit::platform::{KeyEvent, Keysym, Mods};
 use cupertino_wm::geometry::{Point, Rect};
 
 use crate::actions::{ActionMap, ActionTarget, Trigger};
-use crate::app_grid::{self, AppGrid, GridLayout, Outcome};
 use crate::conf::{dock_config, FILE_MANAGER};
 use crate::config::Orientation;
 use crate::desktop::DesktopIndex;
@@ -66,13 +68,8 @@ pub const TOKEN_TIMEOUT: f64 = 2.0;
 /// How much a bouncing tile dims at the top of a hop under Reduce Motion, where it stays in place.
 pub const REDUCED_BOUNCE_DIM: f64 = 0.5;
 
-/// How many of the application grid's icons load in one pass of the model, at most: the panel shows at once, with a
-/// placeholder for each icon still loading, and the icons fill in over the frames after, the rows shown first.
-pub const GRID_ICONS_PER_PASS: usize = app_grid::COLUMNS;
-
-/// How long one pass may spend loading the grid's icons before it leaves the rest for the next frame (after at least
-/// one icon), so loading never holds up the frames of the bar or of the grid's entry.
-pub const GRID_ICON_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
+/// The server action a hot corner or gesture mapped to the application browser asks for: the launcher answers it.
+pub const APP_GRID_ACTION: &str = "app-grid";
 
 /// Side of an icon in the Force Quit dialog's rows and in its question, in points.
 const FORCE_QUIT_ROW_ICON: f64 = 16.0;
@@ -228,8 +225,7 @@ pub struct Placement {
     /// Depth of the surface in points: room for the magnified tiles and the bounces.
     pub extent: f64,
     pub exclusive_zone: i32,
-    /// Depth of the bar itself in points, whether or not it reserves room: the grid keeps clear of it while
-    /// auto-hide leaves no exclusive zone.
+    /// Depth of the bar itself in points, whether or not it reserves room.
     pub bar_depth: f64,
 }
 
@@ -238,7 +234,6 @@ pub struct Placement {
 pub enum Part {
     /// The bar on the output with this key, while it is engaged.
     Bar(u32),
-    Grid,
     /// The overview's chrome on the output with this key, while the overview is open.
     Overview(u32),
 }
@@ -247,7 +242,6 @@ pub enum Part {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sized {
     Bar(u32),
-    Grid,
 }
 
 /// An icon the model shows.
@@ -256,7 +250,7 @@ pub enum IconKey {
     /// The application of the tile or window with this key: its desktop entry's icon, the one its window set, else
     /// the generic application icon.
     App(String),
-    /// A theme icon by name (the application grid's), else the generic application icon.
+    /// A theme icon by name (a folder's), else the generic application icon.
     Named(String),
     /// The trash, empty or full.
     Trash(bool),
@@ -300,7 +294,7 @@ pub trait Host {
         let _ = folder;
         Box::pin(std::future::ready(Vec::new()))
     }
-    /// The desktop file IDs of the recently used applications, the most recent first: the grid's first row.
+    /// The desktop file IDs of the recently used applications, the most recent first: the bar's recents section.
     fn recent_apps(&mut self) -> Vec<String> {
         Vec::new()
     }
@@ -448,17 +442,6 @@ struct ForceQuit {
     hover_button: Option<Button>,
 }
 
-struct Grid {
-    output: u32,
-    grid: AppGrid,
-    /// The compositor sized the surface.
-    sized: bool,
-    /// The entry animation started: on the pass after the surface was sized.
-    entered: bool,
-    /// Icons of the rows shown or near them are still to load ([`GRID_ICONS_PER_PASS`]): the grid asks for frames.
-    icons_pending: bool,
-}
-
 /// The window-manager surfaces of one output.
 #[derive(Default)]
 struct WmSurfaces {
@@ -508,7 +491,6 @@ pub struct Model {
     /// The applications that stopped answering (their ids), as the server last said.
     unresponsive: HashSet<String>,
     force_quit: Option<ForceQuit>,
-    grid: Option<Grid>,
     /// The switcher's panel and the overview's chrome of every output, by output key.
     wm: BTreeMap<u32, WmSurfaces>,
     pending: HashMap<u64, Pending>,
@@ -525,8 +507,6 @@ pub struct Model {
     background_icons: Option<bool>,
     /// The icons asked for in the background and not arrived yet, by key and side in whole points.
     requested: HashSet<(IconKey, u32)>,
-    /// The grid's icons were asked for in the background.
-    grid_preloaded: bool,
     /// What the bar's recents were last worked out from: the application tiles and the applications that quit. The
     /// launcher's history is read again when it changes.
     recents_basis: Option<Vec<String>>,
@@ -582,7 +562,6 @@ impl Model {
             tile_order: Vec::new(),
             unresponsive: HashSet::new(),
             force_quit: None,
-            grid: None,
             wm: BTreeMap::new(),
             pending: HashMap::new(),
             next_launch: 0,
@@ -592,7 +571,6 @@ impl Model {
             icons: HashMap::new(),
             background_icons: None,
             requested: HashSet::new(),
-            grid_preloaded: false,
             recents_basis: None,
             names: HashMap::new(),
             trash_checked: None,
@@ -729,7 +707,8 @@ impl Model {
                 }
                 DockEvent::Launching(app_id) => self.session.launching(&app_id, now),
                 DockEvent::ToggleAutoHide => self.session.dock.toggle_autohide(now),
-                DockEvent::ToggleAppGrid => self.toggle_grid(),
+                // an older server's forward of the app-grid action, which the launcher now answers
+                DockEvent::ToggleAppGrid => {}
                 DockEvent::Switcher {
                     output,
                     apps,
@@ -1307,9 +1286,6 @@ impl Model {
         self.engaged = false;
         self.edge = None;
         self.session.dock.cancel_drag();
-        if self.grid.as_ref().is_some_and(|g| g.output != output) {
-            self.grid = None;
-        }
     }
 
     fn outputs_changed(&mut self, outputs: Vec<OutputInfo>) {
@@ -1323,13 +1299,6 @@ impl Model {
             },
         }
         let there = |o: u32, outputs: &[OutputInfo]| outputs.iter().any(|i| i.key == o);
-        if self
-            .grid
-            .as_ref()
-            .is_some_and(|g| !there(g.output, &self.outputs))
-        {
-            self.grid = None;
-        }
         if self
             .force_quit
             .as_ref()
@@ -1361,8 +1330,6 @@ impl Model {
             self.menu = None;
             self.press = None;
             self.engaged = false;
-        } else if key == view::grid::key() {
-            self.grid = None;
         } else if key == view::force_quit::key() {
             self.force_quit = None;
         }
@@ -1530,135 +1497,6 @@ impl Model {
         self.force_quit_outcome(outcome);
     }
 
-    // ---- the application grid ------------------------------------------------------------------------------
-
-    /// The app-grid action: open the grid, or start closing it when it is open; nothing during its exit.
-    fn toggle_grid(&mut self) {
-        match &self.grid {
-            Some(grid) if grid.grid.is_closing() => {}
-            Some(_) => self.close_grid(),
-            None => self.open_grid(),
-        }
-    }
-
-    fn open_grid(&mut self) {
-        if self.locked {
-            return;
-        }
-        let Some(output) = self.output else {
-            return;
-        };
-        let recent = self.host.recent_apps();
-        let mut grid = AppGrid::from_desktop(self.session.desktop(), &recent, self.now());
-        grid.set_reduce_motion(self.reduce_motion);
-        self.grid = Some(Grid {
-            output,
-            grid,
-            sized: false,
-            entered: false,
-            icons_pending: false,
-        });
-    }
-
-    /// Start the grid's exit animation; the keyboard goes back at once.
-    fn close_grid(&mut self) {
-        let now = self.now();
-        if let Some(grid) = self.grid.as_mut().filter(|g| !g.grid.is_closing()) {
-            grid.grid.close(now);
-        }
-    }
-
-    /// What a key or click on the grid asked for: an application opens as its tile would open it (its windows come
-    /// forward, its resident process is asked for one, or it starts with a token) and the grid closes.
-    fn grid_outcome(&mut self, outcome: Option<Outcome>) -> Vec<Command<Message>> {
-        match outcome {
-            Some(Outcome::Launch(key)) => {
-                self.close_grid();
-                self.open_app(key)
-            }
-            Some(Outcome::Close) => {
-                self.close_grid();
-                Vec::new()
-            }
-            None => Vec::new(),
-        }
-    }
-
-    fn grid_pointer(&mut self, pointer: Pointer) -> Vec<Command<Message>> {
-        let now = self.now();
-        let Some(grid) = self.grid.as_mut().filter(|g| !g.grid.is_closing()) else {
-            return Vec::new();
-        };
-        match pointer {
-            Pointer::Press(p, _) => {
-                let outcome = grid.grid.click(Point::new(p.x, p.y));
-                self.grid_outcome(outcome)
-            }
-            Pointer::Scroll(_, delta) => {
-                grid.grid.scroll_by(delta.y, now);
-                Vec::new()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn grid_key(&mut self, key: KeyEvent) -> Vec<Command<Message>> {
-        if !key.pressed {
-            return Vec::new();
-        }
-        let now = self.now();
-        let Some(grid) = self.grid.as_mut().filter(|g| !g.grid.is_closing()) else {
-            return Vec::new();
-        };
-        let named = match key.keysym {
-            ESCAPE => Some(app_grid::Key::Escape),
-            RETURN | KP_ENTER => Some(app_grid::Key::Return),
-            BACKSPACE => Some(app_grid::Key::Backspace),
-            LEFT => Some(app_grid::Key::Left),
-            RIGHT => Some(app_grid::Key::Right),
-            UP => Some(app_grid::Key::Up),
-            DOWN => Some(app_grid::Key::Down),
-            HOME => Some(app_grid::Key::Home),
-            END => Some(app_grid::Key::End),
-            PAGE_UP => Some(app_grid::Key::PageUp),
-            PAGE_DOWN => Some(app_grid::Key::PageDown),
-            TAB if key.mods.contains(Mods::SHIFT) => Some(app_grid::Key::BackTab),
-            TAB => Some(app_grid::Key::Tab),
-            LEFT_TAB => Some(app_grid::Key::BackTab),
-            _ => None,
-        };
-        let command = key.mods.contains(Mods::CTRL)
-            || key.mods.contains(Mods::ALT)
-            || key.mods.contains(Mods::PRIMARY);
-        let mapped = named.or_else(|| {
-            (!command)
-                .then_some(key.text)
-                .flatten()
-                .filter(|c| !c.is_control())
-                .map(app_grid::Key::Char)
-        });
-        match mapped {
-            Some(k) => {
-                let outcome = grid.grid.key(k, now);
-                self.grid_outcome(outcome)
-            }
-            None => Vec::new(),
-        }
-    }
-
-    fn grid_item(&mut self, index: usize) -> Vec<Command<Message>> {
-        let key = self
-            .grid
-            .as_ref()
-            .filter(|g| !g.grid.is_closing())
-            .and_then(|g| g.grid.item(index))
-            .map(|app| app.key.clone());
-        match key {
-            Some(key) => self.grid_outcome(Some(Outcome::Launch(key))),
-            None => Vec::new(),
-        }
-    }
-
     // ---- the application switcher --------------------------------------------------------------------------
 
     /// The server's list and selection for the panel on `output`: a step of the switch on screen moves the selection,
@@ -1814,7 +1652,10 @@ impl Model {
     fn run_trigger(&mut self, output: u32, trigger: Trigger) -> Vec<Command<Message>> {
         match self.actions.get(trigger).clone() {
             ActionTarget::None => {}
-            ActionTarget::AppGrid => self.toggle_grid(),
+            // the launcher's application browser, which the server asks for
+            ActionTarget::AppGrid => self
+                .host
+                .request(output, Request::RunAction(APP_GRID_ACTION.to_owned())),
             ActionTarget::Exec(command) => self.host.shell(&command),
             ActionTarget::Server(name) => self.host.request(output, Request::RunAction(name)),
         }
@@ -1906,8 +1747,7 @@ impl Model {
     }
 
     /// Ask the host to load in the background what is drawn later: the bar's icons at their magnified side, as tiles
-    /// come, and, once, every icon of the grid, so neither the first magnification nor the grid's first show waits
-    /// for them. Each icon at each side is asked for once.
+    /// come, so the first magnification does not wait for them. Each icon at each side is asked for once.
     fn preload(&mut self) -> Vec<Command<Message>> {
         if self.background_icons == Some(false) {
             return Vec::new();
@@ -1923,14 +1763,6 @@ impl Model {
             .filter_map(|t| self.tile_icon(t.id))
             .map(|key| (key, large))
             .collect();
-        if !std::mem::replace(&mut self.grid_preloaded, true) {
-            let desktop = self.session.desktop();
-            wanted.extend(
-                AppGrid::from_desktop(desktop, &[], 0.0)
-                    .items()
-                    .map(|app| (IconKey::Named(app.icon.clone()), GridLayout::ICON)),
-            );
-        }
         let px = |side: f64| side.ceil().max(1.0) as u32;
         wanted.retain(|(key, side)| {
             !self
@@ -1988,48 +1820,6 @@ impl Model {
         })
     }
 
-    /// Load the icons of the grid's rows shown, then of a screenful either way, at the grid's icon size: at most
-    /// [`GRID_ICONS_PER_PASS`] and about [`GRID_ICON_BUDGET`] of them a pass, so opening the grid waits for none of
-    /// them. While some are left the grid asks for frames, and each frame loads more.
-    fn prefill_grid(&mut self) {
-        let Some(open) = &self.grid else {
-            return;
-        };
-        let mut order: Vec<usize> = open.grid.visible().into_iter().map(|p| p.index).collect();
-        for index in open.grid.nearby() {
-            if !order.contains(&index) {
-                order.push(index);
-            }
-        }
-        let names: Vec<String> = order
-            .into_iter()
-            .filter_map(|i| open.grid.item(i))
-            .map(|app| app.icon.clone())
-            .collect();
-        let side = GridLayout::ICON;
-        let px = side.ceil().max(1.0) as u32;
-        let started = std::time::Instant::now();
-        let mut loaded = 0;
-        let mut pending = false;
-        for name in names {
-            let key = IconKey::Named(name);
-            if self.icons.get(&key).is_some_and(|k| k.contains_key(&px)) {
-                continue;
-            }
-            if loaded == GRID_ICONS_PER_PASS
-                || (loaded > 0 && started.elapsed() >= GRID_ICON_BUDGET)
-            {
-                pending = true;
-                break;
-            }
-            self.icon_set(&key, &[side]);
-            loaded += 1;
-        }
-        if let Some(open) = self.grid.as_mut() {
-            open.icons_pending = pending;
-        }
-    }
-
     /// Load what the next view draws, and the names it shows, so the view only reads.
     fn prefill(&mut self) {
         let tiles: Vec<(TileId, TileKind, String)> = self
@@ -2079,7 +1869,6 @@ impl Model {
                 self.icon_set(&key, &[StackLayout::ICON]);
             }
         }
-        self.prefill_grid();
     }
 
     /// The bar's keyboard focus follows the model: Focus Dock focuses the first tile, with its ring; a focused tile
@@ -2121,18 +1910,13 @@ impl Model {
     /// Advance the animations, carry out what is due and tell the host what changed; then schedule the next wake.
     fn changed(&mut self) -> Vec<Command<Message>> {
         let now = self.now();
-        // the locked session, the grid, the overview and the Force Quit dialog hold the keyboard while they are up: a
-        // Focus Dock meanwhile is dropped, not kept for when they go
-        let grid_open = self.grid.as_ref().is_some_and(|g| !g.grid.is_closing());
-        if self.locked
-            || self.force_quit.is_some()
-            || grid_open
-            || self.overview_keyboard().is_some()
-        {
+        // the locked session, the overview and the Force Quit dialog hold the keyboard while they are up: a Focus Dock
+        // meanwhile is dropped, not kept for when they go
+        if self.locked || self.force_quit.is_some() || self.overview_keyboard().is_some() {
             self.engaged = false;
         }
-        // an auto-hidden bar shows while it has the keyboard, and beside the open grid
-        self.session.dock.keep_shown = self.engaged || grid_open || self.stack.is_some();
+        // an auto-hidden bar shows while it has the keyboard
+        self.session.dock.keep_shown = self.engaged || self.stack.is_some();
         if let Some(screen) = self.screen() {
             self.session.dock.pointer_moved(self.pointer, screen, now);
         }
@@ -2153,12 +1937,6 @@ impl Model {
         {
             self.press = None;
             self.open_menu(id);
-        }
-        if let Some(grid) = self.grid.as_mut() {
-            grid.grid.tick(now);
-            if grid.grid.is_gone(now) {
-                self.grid = None;
-            }
         }
         for surfaces in self.wm.values_mut() {
             surfaces.switcher.tick(now);
@@ -2189,12 +1967,6 @@ impl Model {
         self.tell_host();
         commands.extend(self.preload());
         self.prefill();
-        // the grid's entry starts on the pass its surface was sized, with its first icons; the rest fill in over the
-        // frames of the entry
-        if let Some(grid) = self.grid.as_mut().filter(|g| g.sized && !g.entered) {
-            grid.entered = true;
-            grid.grid.restart_entry(self.host.now());
-        }
         commands.extend(self.focus_commands());
         commands.extend(self.schedule(now));
         commands
@@ -2248,8 +2020,6 @@ impl Model {
         }
         let keyboard = if let Some(output) = self.overview_keyboard() {
             Some(Part::Overview(output))
-        } else if self.grid.as_ref().is_some_and(|g| !g.grid.is_closing()) {
-            Some(Part::Grid)
         } else if self.engaged {
             self.output.map(Part::Bar)
         } else {
@@ -2287,12 +2057,7 @@ impl Model {
 
     /// Whether anything moves on its own now.
     fn animating(&self, now: f64) -> bool {
-        self.bar_moving(now)
-            || self
-                .grid
-                .as_ref()
-                .is_some_and(|g| g.grid.animating(now) || g.icons_pending)
-            || self.wm.values().any(|s| Self::wm_moving(s, now))
+        self.bar_moving(now) || self.wm.values().any(|s| Self::wm_moving(s, now))
     }
 
     /// While something moves its window's frames drive it, with a fallback wake; otherwise one wake at the next thing
@@ -2337,20 +2102,13 @@ impl Model {
 /// The trash, which opens in the session's file manager, or else with the session's default handler.
 const TRASH_URI: &str = "trash:///";
 
-const LEFT: Keysym = Keysym(0xff51);
 const UP: Keysym = Keysym(0xff52);
-const RIGHT: Keysym = Keysym(0xff53);
 const DOWN: Keysym = Keysym(0xff54);
 const HOME: Keysym = Keysym(0xff50);
 const END: Keysym = Keysym(0xff57);
-const PAGE_UP: Keysym = Keysym(0xff55);
-const PAGE_DOWN: Keysym = Keysym(0xff56);
 const ESCAPE: Keysym = Keysym(0xff1b);
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
-const BACKSPACE: Keysym = Keysym(0xff08);
-const TAB: Keysym = Keysym(0xff09);
-const LEFT_TAB: Keysym = Keysym(0xfe20);
 
 impl Model {
     /// What assistive technology calls the tile with `id`.
@@ -2408,21 +2166,17 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         Message::ReduceMotion(on) => {
             model.reduce_motion = on;
             model.session.dock.set_reduce_motion(on);
-            if let Some(grid) = model.grid.as_mut() {
-                grid.grid.set_reduce_motion(on);
-            }
             for surfaces in model.wm.values_mut() {
                 surfaces.overview.set_reduce_motion(on);
             }
             Vec::new()
         }
-        // the lock screen covers everything: the grid, the dialog and a menu go at once, without animation; the
+        // the lock screen covers everything: the dialog and a menu go at once, without animation; the
         // overview's chrome waits for the server's `overview_closed`
         Message::Locked(locked) => {
             model.locked = locked;
             if locked {
                 model.force_quit = None;
-                model.grid = None;
                 model.menu = None;
                 model.stack = None;
                 model.press = None;
@@ -2439,18 +2193,6 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         Message::Sized(Sized::Bar(output), w, h) => {
             if Some(output) == model.output {
                 model.bar_size = Some((w, h));
-            }
-            Vec::new()
-        }
-        Message::Sized(Sized::Grid, w, h) => {
-            // the grid's layer leaves out the bar's room; the panel is centred on the whole output
-            let outside = model
-                .placement()
-                .map(|p| app_grid::Outside::dock(p.orientation, p.bar_depth))
-                .unwrap_or_default();
-            if let Some(grid) = model.grid.as_mut() {
-                grid.sized = true;
-                grid.grid.set_size(w, h, outside);
             }
             Vec::new()
         }
@@ -2541,19 +2283,6 @@ fn input_message(model: &mut Model, input: Input) -> Vec<Command<Message>> {
             Vec::new()
         }
         Input::LabelGone => Vec::new(),
-        Input::Grid(pointer) => model.grid_pointer(pointer),
-        Input::GridKey(key) => model.grid_key(key),
-        Input::GridLeft => {
-            model.close_grid();
-            Vec::new()
-        }
-        Input::GridItem(i) => model.grid_item(i),
-        Input::GridPill(pill) => {
-            if let Some(grid) = model.grid.as_mut().filter(|g| !g.grid.is_closing()) {
-                grid.grid.toggle_pill(pill);
-            }
-            Vec::new()
-        }
         Input::ForceQuit(pointer) => {
             model.force_quit_pointer(pointer);
             Vec::new()
@@ -2812,29 +2541,6 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                     message,
                 ));
             }
-        }
-    }
-    if let Some(grid) = &model.grid {
-        if let Some(out) = model.output_info(grid.output) {
-            let lookup = |name: &str| -> IconSet {
-                model
-                    .icons
-                    .get(&IconKey::Named(name.to_owned()))
-                    .into_iter()
-                    .flat_map(|sizes| sizes.values().flatten().cloned())
-                    .collect()
-            };
-            windows.push(view::grid::window(
-                view::grid::GridView {
-                    output: grid.output,
-                    grid: &grid.grid,
-                    now,
-                    icons: &lookup,
-                    size: Size::new(out.width, out.height),
-                    ticking: grid.grid.animating(now) || grid.icons_pending,
-                },
-                message,
-            ));
         }
     }
     if let Some(open) = &model.force_quit {

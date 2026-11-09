@@ -1,6 +1,6 @@
 //! Dock model: tiles, layout, magnification, bounce animations, hit-testing, minimize targets,
 //! drag-reorder and auto-hide, the window feed that drives the tiles ([`session`]), the
-//! application switcher's panel ([`switcher`]), the application grid ([`app_grid`]), the overview's
+//! application switcher's panel ([`switcher`]), the overview's
 //! chrome and layout ([`overview_ui`]), the context menus ([`menu`]), the hot-corner and gesture
 //! actions ([`actions`]), the press and removal effect around a tile drag ([`tile_drag`]), the settings file ([`conf`]) and desktop entries ([`desktop`]). Pure logic
 //! (no compositor dependency). The dock as a CupertinoKit application is [`kit`] with its windows ([`view`],
@@ -14,7 +14,6 @@
 pub mod actions;
 #[cfg(feature = "app")]
 pub mod activate;
-pub mod app_grid;
 pub mod autohide;
 pub mod bounce;
 pub mod conf;

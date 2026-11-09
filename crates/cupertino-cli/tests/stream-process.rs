@@ -2,8 +2,12 @@
 //! and the `stream_probe` example both run through `cupertino_cli::main_with`.
 
 #[allow(dead_code)]
-#[path = "../../../ci/test-fixtures.rs"]
-mod fixtures;
+mod fixtures {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../ci/test-fixtures.rs"
+    ));
+}
 
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};

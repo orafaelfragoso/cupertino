@@ -23,8 +23,9 @@ empty value counts as not set.
 `build.rs` takes the first source that knows the commit (`build/commit.rs`; `tests/commit-source.rs` runs the order on
 temporary trees):
 
-1. `CUPERTINO_BUILD_COMMIT` from the environment. The package build sets it. It must be a full hash, 40 hexadecimal
-   digits (or 64 for a SHA-256 repository); any other value fails the build, because it was set on purpose.
+1. `CUPERTINO_BUILD_COMMIT` from the environment, for a build that knows its commit otherwise. It must be a full
+   hash, 40 hexadecimal digits (or 64 for a repository with sha256 object names); any other value fails the build,
+   because it was set on purpose.
 2. The tracked file `data/build-commit`. In the repository it holds `$Format:%H$`, and `.gitattributes` marks it
    `export-subst`, so `git archive` (and `packaging/release.py source`) writes the archived commit into it. A file with
    any other text is skipped with a Cargo warning.
@@ -35,7 +36,8 @@ The script reruns only when `CUPERTINO_BUILD_COMMIT`, `data/build-commit` or the
 checkout does not rerun it, so it does not rebuild every binary that links this crate, and a shared build directory
 stays reusable across commits. In a development build `COMMIT_SOURCE` is then `Checkout` and the value can be older
 than the checkout's `HEAD`; `cargo clean -p cupertino-build-info` or `CUPERTINO_BUILD_COMMIT` gives the exact one.
-Package builds start from a fresh source tree and get the exact commit.
+Package builds start from a fresh source tree, the release archive (stable recipe) or a clone (development
+recipe), and get the exact commit.
 
 The commit does not affect reproducibility: it is a fixed input of a given source tree, like the sources themselves.
 Two builds of the same archive or the same checkout `HEAD` embed the same value; nothing else here reads the build

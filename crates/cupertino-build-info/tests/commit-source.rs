@@ -66,7 +66,7 @@ fn a_variable_that_is_not_a_full_hash_fails_the_build() {
             .unwrap()
             .commit,
         Some(sha256),
-        "a SHA-256 repository's hash is full too"
+        "a hash of a repository with sha256 object names is full too"
     );
 }
 

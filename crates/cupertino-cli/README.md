@@ -91,7 +91,7 @@ The help JSON (`cupertino --format json help`) lists, per command, `path`, `summ
 ## Design
 
 `src/lib.rs` holds the registry types and the runner; `src/stream.rs` the output writer, the stream rules and the stop
-flag; each group is a module (`src/appearance.rs`). The crate docs of `stream` are the reference for stream commands.
+flag; each group is a module (`src/appearance.rs`). The crate docs of `stream` state the rules for stream commands.
 
 ### The registry
 

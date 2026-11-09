@@ -42,7 +42,7 @@ pub struct Found {
     pub warnings: Vec<String>,
 }
 
-/// A full commit hash: 40 hexadecimal digits (SHA-1), or 64 for a repository using SHA-256. Upper case is accepted and
+/// A full commit hash: 40 hexadecimal digits, or 64 for a repository with sha256 object names. Upper case is accepted and
 /// lowered.
 pub fn valid(text: &str) -> Option<String> {
     let text = text.trim();

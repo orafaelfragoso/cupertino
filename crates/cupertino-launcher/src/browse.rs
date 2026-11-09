@@ -413,6 +413,8 @@ pub enum Key {
 pub enum Outcome {
     /// Open the application with this desktop file ID; the launcher closes.
     Launch(String),
+    /// Open the view options (grid or list).
+    ViewOptions,
 }
 
 /// Where the keys go besides the query field.
@@ -423,6 +425,8 @@ pub enum Zone {
     Content,
     /// The category filters.
     Categories,
+    /// The view options button at the header's end.
+    Options,
 }
 
 /// One application placed in the scrolled content.
@@ -959,7 +963,7 @@ impl Browser {
 
     /// The keys go to the content or the filters.
     pub fn set_zone(&mut self, zone: Zone) {
-        self.zone = if self.categories.is_empty() {
+        self.zone = if zone == Zone::Categories && self.categories.is_empty() {
             Zone::Content
         } else {
             zone
@@ -993,11 +997,15 @@ impl Browser {
         self.clock = now;
         match key {
             Key::Tab | Key::BackTab => {
-                let zone = match self.zone {
-                    Zone::Content => Zone::Categories,
-                    Zone::Categories => Zone::Content,
-                };
-                self.set_zone(zone);
+                // the applications, the filters, then the view options, round and round
+                let order = [Zone::Content, Zone::Categories, Zone::Options];
+                let at = order.iter().position(|&z| z == self.zone).unwrap_or(0);
+                let step = if key == Key::Tab { 1 } else { order.len() - 1 };
+                let mut next = order[(at + step) % order.len()];
+                if next == Zone::Categories && self.categories.is_empty() {
+                    next = order[(at + 2 * step) % order.len()];
+                }
+                self.set_zone(next);
                 return None;
             }
             _ => {}
@@ -1005,6 +1013,18 @@ impl Browser {
         match self.zone {
             Zone::Categories => self.category_key(key),
             Zone::Content => self.content_key(key),
+            Zone::Options => match key {
+                Key::Return | Key::Space => Some(Outcome::ViewOptions),
+                Key::Down => {
+                    self.set_zone(Zone::Content);
+                    None
+                }
+                Key::Left if !self.categories.is_empty() => {
+                    self.set_zone(Zone::Categories);
+                    None
+                }
+                _ => None,
+            },
         }
     }
 

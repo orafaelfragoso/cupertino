@@ -1,0 +1,33 @@
+> Escape
+  closed
+> Right
+  browse query="" zone=Content selected=None category=None Grid nested=None
+> Down
+  browse query="" zone=Content selected=Some("Calculator") category=None Grid nested=None
+> Right
+  browse query="" zone=Content selected=Some("Files") category=None Grid nested=None
+> Down
+  browse query="" zone=Content selected=Some("Visual Studio Code") category=None Grid nested=None
+> Left
+  browse query="" zone=Content selected=Some("Terminal") category=None Grid nested=None
+
+focus: TextInput "Applications" value="" [focused] actions=[Focus, SetValue, SetSelection]
+Window
+  TextInput "Applications" value="" [focused] actions=[Focus, SetValue, SetSelection]
+  PopUpButton "View Options" actions=[ShowMenu]
+  CheckBox "Development" value=Toggle(False) actions=[Click]
+  CheckBox "Creativity" value=Toggle(False) actions=[Click]
+  CheckBox "Internet" value=Toggle(False) actions=[Click]
+  CheckBox "Utilities" value=Toggle(False) actions=[Click]
+  CheckBox "Other" value=Toggle(False) actions=[Click]
+  Group "Applications"
+    Button "Calculator" item=1 actions=[Click]
+    Button "Files" item=2 actions=[Click]
+    Button "Firefox" item=3 actions=[Click]
+    Button "Firewall Configuration" item=4 actions=[Click]
+    Button "GIMP" item=5 actions=[Click]
+    Button "Htop" item=6 actions=[Click]
+    Button "LibreOffice Writer" item=7 actions=[Click]
+    Button "Terminal" item=8 [selected] actions=[Click]
+    Button "Visual Studio Code" item=9 actions=[Click]
+  StaticText "Terminal"

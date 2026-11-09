@@ -1,0 +1,33 @@
+> Escape
+  closed
+> Tab
+  browse query="" zone=Categories selected=None category=None Grid nested=None
+> Tab
+  browse query="" zone=Options selected=Some("Calculator") category=None Grid nested=None
+> Return
+  browse query="" zone=Options selected=Some("Calculator") category=None Grid nested=Some(ViewOptions)
+> Down
+  browse query="" zone=Options selected=Some("Calculator") category=None Grid nested=Some(ViewOptions)
+> Return
+  browse query="" zone=Options selected=Some("Calculator") category=None List nested=None
+
+focus: TextInput "Applications" value="" [focused] actions=[Focus, SetValue, SetSelection]
+Window
+  TextInput "Applications" value="" [focused] actions=[Focus, SetValue, SetSelection]
+  PopUpButton "View Options" [selected] actions=[ShowMenu]
+  CheckBox "Development" value=Toggle(False) actions=[Click]
+  CheckBox "Creativity" value=Toggle(False) actions=[Click]
+  CheckBox "Internet" value=Toggle(False) actions=[Click]
+  CheckBox "Utilities" value=Toggle(False) actions=[Click]
+  CheckBox "Other" value=Toggle(False) actions=[Click]
+  List "Applications" items=9
+    ListItem "Calculator", "Utilities" item=1 actions=[Click]
+    ListItem "Files", "Other" item=2 actions=[Click]
+    ListItem "Firefox", "Internet" item=3 actions=[Click]
+    ListItem "Firewall Configuration", "Other" item=4 actions=[Click]
+    ListItem "GIMP", "Creativity" item=5 actions=[Click]
+    ListItem "Htop", "Other" item=6 actions=[Click]
+    ListItem "LibreOffice Writer", "Other" item=7 actions=[Click]
+    ListItem "Terminal", "Other" item=8 actions=[Click]
+    ListItem "Visual Studio Code", "Development" item=9 actions=[Click]
+  StaticText "View Options"

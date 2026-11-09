@@ -124,6 +124,91 @@ pub fn text_excerpt(bytes: &[u8], lines: usize) -> Option<String> {
     Some(excerpt.join("\n"))
 }
 
+/// The most details the pane lists, and the longest text of a label, a value, the type or the excerpt it takes.
+pub const MAX_DETAILS: usize = 8;
+pub const MAX_LABEL_CHARS: usize = 64;
+pub const MAX_VALUE_CHARS: usize = 256;
+pub const MAX_EXCERPT_CHARS: usize = 4 * TEXT_SNIFF;
+/// The largest rendition a preview picture may have, in pixels on a side, and its most renditions.
+pub const MAX_IMAGE_EDGE: u32 = 2048;
+pub const MAX_RENDITIONS: usize = 4;
+
+/// `text` without control characters (but newlines when `lines`), cut to `limit` characters.
+fn clean(text: &str, limit: usize, lines: bool) -> String {
+    text.chars()
+        .filter(|&c| !c.is_control() || (lines && c == '\n'))
+        .take(limit)
+        .collect()
+}
+
+/// Whether `source` holds the pixels it says it has and is no larger than a preview needs.
+fn sound(source: &ImageSource) -> bool {
+    let image = &source.image;
+    let (w, h, stride) = (image.width, image.height, image.stride);
+    w > 0
+        && h > 0
+        && w <= MAX_IMAGE_EDGE
+        && h <= MAX_IMAGE_EDGE
+        && u64::from(stride) >= u64::from(w) * 4
+        && (image.pixels.len() as u64) >= u64::from(stride) * u64::from(h)
+}
+
+/// `preview` as the pane can show it. What a host hands over is never trusted to be well formed: at most
+/// [`MAX_DETAILS`] details, every text cut to its limit with control characters dropped, renditions that do not hold
+/// their pixels or exceed [`MAX_IMAGE_EDGE`] dropped, a picture left with none (or with a size that is not a finite
+/// positive one) shown as the icon, and the picture's size fitted to the pane.
+pub fn bounded(preview: Preview, limit: Size) -> Preview {
+    let keep = |sources: Vec<ImageSource>| -> Vec<ImageSource> {
+        sources
+            .into_iter()
+            .filter(sound)
+            .take(MAX_RENDITIONS)
+            .collect()
+    };
+    let body = match preview.body {
+        PreviewBody::Image { sources, size } => {
+            let sources = keep(sources);
+            let finite = size.width.is_finite()
+                && size.height.is_finite()
+                && size.width > 0.0
+                && size.height > 0.0;
+            if sources.is_empty() || !finite {
+                PreviewBody::Icon
+            } else {
+                PreviewBody::Image {
+                    sources,
+                    size: fit(size, limit),
+                }
+            }
+        }
+        PreviewBody::Text(text) => {
+            let text = clean(&text, MAX_EXCERPT_CHARS, true);
+            if text.trim().is_empty() {
+                PreviewBody::Icon
+            } else {
+                PreviewBody::Text(text)
+            }
+        }
+        PreviewBody::Icon => PreviewBody::Icon,
+    };
+    Preview {
+        body,
+        icon: keep(preview.icon),
+        kind: clean(&preview.kind, MAX_LABEL_CHARS, false),
+        details: preview
+            .details
+            .into_iter()
+            .take(MAX_DETAILS)
+            .map(|(label, value)| {
+                (
+                    clean(&label, MAX_LABEL_CHARS, false),
+                    clean(&value, MAX_VALUE_CHARS, false),
+                )
+            })
+            .collect(),
+    }
+}
+
 /// The folder holding `path`, with the home folder written as `~`.
 pub fn location(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
     let Some(parent) = path.parent() else {
@@ -265,6 +350,92 @@ impl<J: Send + 'static> Drop for LatestOnly<J> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source(width: u32, height: u32, pixels: usize) -> ImageSource {
+        use cupertino_kit::render::{ImageResource, PixelFormat};
+        ImageSource {
+            id: cupertino_kit::core::next_resource_id(),
+            image: ImageResource {
+                revision: 1,
+                width,
+                height,
+                stride: width * 4,
+                format: PixelFormat::Rgba8Premultiplied,
+                pixels: vec![0u8; pixels].into(),
+            },
+        }
+    }
+
+    #[test]
+    fn an_oversized_or_corrupt_preview_is_cut_down_to_what_the_pane_shows() {
+        let limit = Size::new(300.0, 136.0);
+        let hostile = Preview {
+            body: PreviewBody::Image {
+                // a rendition that says it is larger than its pixels, one past the edge limit, one sound
+                sources: vec![
+                    source(64, 64, 10),
+                    source(MAX_IMAGE_EDGE + 1, 4, (MAX_IMAGE_EDGE as usize + 1) * 16),
+                    source(8, 8, 256),
+                ],
+                size: Size::new(6000.0, 1000.0),
+            },
+            icon: vec![source(4, 4, 3)],
+            kind: format!("bad\u{7}{}", "k".repeat(500)),
+            details: (0..100)
+                .map(|i| (format!("label{i}\u{1b}[31m"), "v".repeat(10_000)))
+                .collect(),
+        };
+        let p = bounded(hostile, limit);
+        match &p.body {
+            PreviewBody::Image { sources, size } => {
+                assert_eq!(sources.len(), 1, "only the sound rendition is kept");
+                assert!(size.width <= limit.width && size.height <= limit.height);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(p.icon.is_empty(), "an icon without its pixels is dropped");
+        assert_eq!(p.kind.chars().count(), MAX_LABEL_CHARS);
+        assert!(!p.kind.contains('\u{7}'));
+        assert_eq!(p.details.len(), MAX_DETAILS);
+        assert!(p
+            .details
+            .iter()
+            .all(|(l, v)| !l.contains('\u{1b}') && v.chars().count() == MAX_VALUE_CHARS));
+    }
+
+    #[test]
+    fn a_picture_without_usable_renditions_or_size_shows_the_icon_and_text_keeps_its_lines() {
+        let limit = Size::new(300.0, 136.0);
+        let picture = |sources, size| Preview {
+            body: PreviewBody::Image { sources, size },
+            icon: Vec::new(),
+            kind: String::new(),
+            details: Vec::new(),
+        };
+        let p = bounded(picture(vec![source(0, 0, 0)], Size::new(10.0, 10.0)), limit);
+        assert_eq!(p.body, PreviewBody::Icon);
+        let p = bounded(
+            picture(vec![source(2, 2, 16)], Size::new(f64::NAN, 1.0)),
+            limit,
+        );
+        assert_eq!(p.body, PreviewBody::Icon);
+        let text = Preview {
+            body: PreviewBody::Text(format!("one\ntwo\u{0}\n{}", "x".repeat(MAX_EXCERPT_CHARS))),
+            ..picture(Vec::new(), Size::ZERO)
+        };
+        match bounded(text, limit).body {
+            PreviewBody::Text(t) => {
+                assert!(t.starts_with("one\ntwo\n"));
+                assert_eq!(t.chars().count(), MAX_EXCERPT_CHARS);
+            }
+            other => panic!("{other:?}"),
+        }
+        let blank = Preview {
+            body: PreviewBody::Text("\n\u{1}\n".into()),
+            ..picture(Vec::new(), Size::ZERO)
+        };
+        assert_eq!(bounded(blank, limit).body, PreviewBody::Icon);
+    }
     use std::path::Path;
     use std::sync::mpsc;
     use std::time::Duration;

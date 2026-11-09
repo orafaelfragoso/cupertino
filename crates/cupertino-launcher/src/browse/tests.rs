@@ -340,3 +340,27 @@ fn the_panel_shrinks_on_a_short_output_and_keeps_its_least_height() {
     assert!(b.scroll() <= b.max_scroll());
     assert_eq!(b.layout().content.max_y(), 464.0);
 }
+
+#[test]
+fn tab_walks_the_applications_the_filters_and_the_view_options() {
+    let mut b = sample();
+    assert_eq!(b.zone(), Zone::Content);
+    b.key(Key::Tab, 0.0);
+    assert_eq!(b.zone(), Zone::Categories);
+    b.key(Key::Tab, 0.0);
+    assert_eq!(b.zone(), Zone::Options);
+    assert_eq!(b.key(Key::Return, 0.0), Some(Outcome::ViewOptions));
+    b.key(Key::Tab, 0.0);
+    assert_eq!(b.zone(), Zone::Content);
+    assert_eq!(
+        b.selected(),
+        Some(0),
+        "coming back to the applications selects the first"
+    );
+    b.key(Key::BackTab, 0.0);
+    assert_eq!(b.zone(), Zone::Options);
+    // without filters, Tab skips their row
+    let mut bare = Browser::new(Vec::new(), &[], BrowseLayout::HEIGHT);
+    bare.key(Key::Tab, 0.0);
+    assert_eq!(bare.zone(), Zone::Options);
+}

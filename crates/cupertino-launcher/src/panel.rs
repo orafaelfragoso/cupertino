@@ -381,14 +381,35 @@ impl Panel {
         self.requery(launcher, now.unix);
     }
 
-    /// Re-run the current query, keeping the selection index where possible (for results that
-    /// arrive late, for example when the file index finishes).
+    /// Re-run the current query, keeping the selected result (for results that arrive late, for example when the
+    /// file index finishes).
     pub fn refresh(&mut self, launcher: &Launcher, now: Now) {
-        let keep = self.selected;
-        self.results = launcher.query(self.field.text(), now.unix);
-        self.selected = keep.min(self.results.len().saturating_sub(1));
-        self.action = 0;
+        self.set_results(launcher.query(self.field.text(), now.unix));
+    }
+
+    /// Show `results` for the current query (a slower provider answered): the selected result stays selected wherever
+    /// it moved, with its chosen action; when it is gone, the selection stays at its place in the list.
+    pub fn set_results(&mut self, results: Results) {
+        let keep = self.selected_item().map(|item| item.id.clone());
+        let at = self.selected;
+        self.results = results;
+        match keep.and_then(|id| self.results.iter().position(|item| item.id == id)) {
+            Some(index) => self.selected = index,
+            None => {
+                self.selected = at.min(self.results.len().saturating_sub(1));
+                self.action = 0;
+            }
+        }
         self.clamp_scroll();
+    }
+
+    /// Put `text` in the query field without searching (the application browser filters by it instead).
+    pub fn set_text_quiet(&mut self, text: &str) {
+        self.field.set_text(text);
+        self.results = Results::default();
+        self.selected = 0;
+        self.action = 0;
+        self.scroll_row = 0;
     }
 
     fn requery(&mut self, launcher: &Launcher, unix: f64) {

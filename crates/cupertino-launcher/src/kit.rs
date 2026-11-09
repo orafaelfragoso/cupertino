@@ -1,21 +1,67 @@
-//! The launcher as a CupertinoKit application: the model around [`Panel`] and [`Launcher`], what each message does
-//! to it, and its windows. What needs the session (starting commands, opening paths, building the file index, the
-//! layer surface's size, the appear animation's timer, what the preview shows of a file) goes through [`Host`], so the
-//! model runs headless in tests.
+//! The launcher as a CupertinoKit application: the model around the navigation state ([`Nav`]), the search panel
+//! ([`Panel`]), the application browser ([`Browser`]) and the panel's presentation ([`Motion`]), what each message does
+//! to them, and the windows. What needs the session (starting commands, opening paths, building the file index and
+//! searching it, the layer surface's size, timers, icons and what the preview shows of a file) goes through [`Host`],
+//! so the model runs headless in tests.
 
-use crate::engine::{ActionKind, Activation, ItemAction, Launcher, ResultItem};
+use crate::browse::{self, App, Arrangement, BrowseLayout, Browser, Zone};
+use crate::engine::{
+    self, ActionKind, Activation, ItemAction, Launcher, LauncherConfig, ResultItem,
+};
 use crate::exec::CommandSpec;
 use crate::files::{FileIndex, FileSearchConfig};
-use crate::panel::{Now, Panel, PanelCommand, PanelEvent};
-use crate::preview::Preview;
-use crate::view::{self, Input, PanelView, MAX_ROWS};
+use crate::motion::{Frame, Motion, Shape};
+use crate::nav::{Focus as NavFocus, Intent, Nav, Nested, Step, View};
+use crate::panel::{
+    Focus, Key as PanelKey, Mods as PanelMods, Now, Panel, PanelCommand, PanelEvent,
+};
+use crate::preview::{self, Preview};
+use crate::providers::{Cancel, Generation, Provider, Reply, Status, Tracker, Update};
+use crate::view::{self, Input, KeyMode, PanelView, MAX_ROWS};
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{Command, Key, Window, WindowKey};
+use cupertino_kit::geometry::Size;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The most result icons kept; past it the cache starts again.
 const MAX_ICONS: usize = 512;
+/// How long the preview of a result may take before the pane says it is unavailable, in seconds.
+pub const PREVIEW_TIMEOUT: f64 = 1.5;
+/// Room kept free below the browser on a short output (the dock's), in points.
+pub const BROWSE_BOTTOM_ROOM: f64 = 96.0;
+/// Application icons the browser loads in one pass; the rest come on the next passes.
+pub const BROWSE_ICONS_PER_PASS: usize = 14;
+
+/// A file search for the host to run off the loop: [`engine::file_sections`] over `index`, answered as
+/// [`Message::Provided`] with `generation`, given up once `cancel` is cancelled.
+#[derive(Clone, Debug)]
+pub struct SearchRequest {
+    pub generation: Generation,
+    pub text: String,
+    pub index: Arc<FileIndex>,
+    pub config: LauncherConfig,
+    pub cancel: Cancel,
+    pub unix: f64,
+}
+
+impl SearchRequest {
+    /// Run the search here and now: what a host does on its worker.
+    pub fn run(&self) -> Update {
+        let sections = engine::file_sections(
+            &self.index,
+            &self.text,
+            self.unix,
+            &self.config,
+            Some(&self.cancel),
+        );
+        Update {
+            generation: self.generation,
+            provider: Provider::Files,
+            reply: Reply::Sections(sections),
+        }
+    }
+}
 
 /// What the model needs the session for.
 pub trait Host {
@@ -25,15 +71,30 @@ pub trait Host {
     fn open(&mut self, target: &str);
     /// Build the file index of `config` off the loop; the commands deliver it as [`Message::Indexed`].
     fn index(&mut self, config: FileSearchConfig) -> Vec<Command<Message>>;
-    /// The shown panel is now `height` points tall.
-    fn resize(&mut self, height: f64);
-    /// The next frame of the appear animation, as [`Message::Frame`] with `frame`.
+    /// The panel's window is now `size` points large.
+    fn resize(&mut self, size: Size);
+    /// The next animation frame, as [`Message::Frame`] with `frame`.
     fn frame(&mut self, frame: u64) -> Vec<Command<Message>>;
     /// The renditions of `item`'s icon, one per output scale it is loaded at; none to show its kind's symbol.
     fn icon(&mut self, item: &ResultItem) -> Vec<ImageSource>;
+    /// The renditions of an application's icon at the browser's sizes; none draws a placeholder.
+    fn app_icon(&mut self, _app: &App) -> Vec<ImageSource> {
+        Vec::new()
+    }
     /// Find out what the preview shows of `item`, the selected result, off the loop; the commands deliver it as
     /// [`Message::Previewed`]. None when the preview shows only the result itself.
     fn preview(&mut self, item: &ResultItem) -> Vec<Command<Message>>;
+    /// Run a file search; the commands deliver its [`Update`] as [`Message::Provided`]. The default runs it at once.
+    fn search(&mut self, request: SearchRequest) -> Vec<Command<Message>> {
+        let update = request.run();
+        vec![Command::Perform(Box::pin(async move {
+            Message::Provided(update)
+        }))]
+    }
+    /// Deliver `message` after `seconds` (a deadline). The default never does: the model then waits for the answer.
+    fn after(&mut self, _seconds: f64, _message: Message) -> Vec<Command<Message>> {
+        Vec::new()
+    }
     /// Both clocks now.
     fn now(&self) -> Now;
 }
@@ -41,24 +102,37 @@ pub trait Host {
 #[derive(Clone, Debug)]
 pub enum Message {
     Input(Input),
-    /// `org.cupertino.Launcher1.Toggle`.
+    /// `org.cupertino.Launcher1.Toggle`: the search field opens, or whatever is up closes.
     Toggle,
+    /// `org.cupertino.Launcher1.ToggleApplications` (the dock's app-browser request): the browser opens, the search
+    /// field unfolds into it, or the browser closes.
+    Browse,
     /// The file index finished building.
     Indexed(Arc<FileIndex>),
     /// The activation token of the launch waiting as `launch` arrived (`None` when there is none).
     Launch(u64, Option<String>),
-    /// A frame of the appear animation.
+    /// An animation frame.
     Frame(u64),
     /// The file index could not be built.
     IndexFailed,
     /// Nothing will send [`Message::Toggle`] any more: the process ends.
     Unheard,
-    /// The session was locked: a shown panel closes, and the launch history is written.
+    /// The session was locked: what is shown goes at once, and the launch history is written.
     Locked,
     /// The server closed the hidden window (its output went away): a new one is opened, on an output still there.
     Remap,
     /// What the preview shows of the result with this id.
     Previewed(String, Arc<Preview>),
+    /// The preview of the result with this id is overdue.
+    PreviewOverdue(String),
+    /// A slow provider answered.
+    Provided(Update),
+    /// The slow providers of this generation are overdue.
+    Overdue(Generation),
+    /// The output the panel is on is this large, in points.
+    Output(Size),
+    /// The session's Reduce Motion option.
+    ReduceMotion(bool),
 }
 
 impl From<Input> for Message {
@@ -67,21 +141,45 @@ impl From<Input> for Message {
     }
 }
 
+/// Where the preview of the selected result is.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum PreviewState {
+    /// Nothing asked (no selection, or the result shows itself).
+    #[default]
+    None,
+    /// Asked for the result with this id; not arrived yet.
+    Waiting(String),
+    Ready(Arc<Preview>),
+    /// It did not arrive in time.
+    Unavailable,
+}
+
 pub struct Model {
     pub launcher: Launcher,
     pub panel: Panel,
+    pub nav: Nav,
+    /// The application browser, from its first opening on.
+    pub browser: Option<Browser>,
+    pub motion: Motion,
     /// The query's revision the model last took from the field.
     pub revision: u64,
     /// Images of the shown results' icons by result id.
     pub icons: HashMap<String, Vec<ImageSource>>,
+    /// Images of the browser's applications by desktop ID.
+    pub app_icons: HashMap<String, Vec<ImageSource>>,
     /// Where the file index is built from; `None` without file results.
     pub files: Option<FileSearchConfig>,
-    /// Put the appear animation at its end at once (the server's settled test clock).
+    /// Put every transition at its end at once (the server's settled test clock).
     pub settled: bool,
     host: Box<dyn Host>,
     indexing: bool,
-    /// The height the shown panel was last given.
-    height: f64,
+    /// The file index, searched as a provider.
+    file_index: Option<Arc<FileIndex>>,
+    tracker: Tracker,
+    /// The query the providers were last asked about.
+    searched: Option<String>,
+    /// The panel window's size as last given.
+    extent: Size,
     /// Launches waiting for their activation token.
     pending: HashMap<u64, CommandSpec>,
     next_launch: u64,
@@ -89,9 +187,15 @@ pub struct Model {
     frame: u64,
     /// The hidden window's generation: each one is a new window, so one the server closed is not kept.
     pub hidden: u64,
-    /// The id of the result the preview was last asked for, and what arrived for it.
-    previewing: Option<String>,
-    preview: Option<Arc<Preview>>,
+    preview: PreviewState,
+    /// The id of the result the preview was last asked for.
+    previewed: Option<String>,
+    /// The browser's arrangement, kept from one opening to the next.
+    arrangement: Arrangement,
+    /// The output's size, once known.
+    output: Option<Size>,
+    /// The view options' highlighted choice while they are open.
+    pub option: Arrangement,
 }
 
 impl Model {
@@ -101,19 +205,29 @@ impl Model {
         Self {
             launcher,
             panel,
+            nav: Nav::HIDDEN,
+            browser: None,
+            motion: Motion::new(view::compact_shape()),
             revision: 0,
             icons: HashMap::new(),
+            app_icons: HashMap::new(),
             files: None,
             settled: false,
             host,
             indexing: false,
-            height: view::COLLAPSED_HEIGHT,
+            file_index: None,
+            tracker: Tracker::new(),
+            searched: None,
+            extent: view::window_extent(view::compact_shape()),
             pending: HashMap::new(),
             next_launch: 0,
             frame: 0,
             hidden: 0,
-            previewing: None,
-            preview: None,
+            preview: PreviewState::None,
+            previewed: None,
+            arrangement: Arrangement::Grid,
+            output: None,
+            option: Arrangement::Grid,
         }
     }
 
@@ -121,40 +235,158 @@ impl Model {
         self.host.now()
     }
 
-    /// The appear animation's alpha now.
-    pub fn alpha(&self) -> f64 {
-        if !self.panel.is_visible() {
-            return 0.0;
-        }
-        self.panel.progress(self.now().mono).clamp(0.0, 1.0)
+    /// What is presented now.
+    pub fn presented(&self) -> Frame {
+        self.motion.frame(self.now().mono)
     }
 
-    /// Open with an empty query on the output under the pointer; the file index starts on the first show.
-    fn show(&mut self) -> Vec<Command<Message>> {
+    /// Whether the panel's window is up: open, or still fading out.
+    pub fn presenting(&self) -> bool {
+        self.nav.is_visible() || !self.motion.gone(self.now().mono)
+    }
+
+    /// The enclosure's opacity now.
+    pub fn alpha(&self) -> f64 {
+        self.presented().alpha
+    }
+
+    /// What the panel says when no result shows.
+    pub fn status(&self) -> Status {
+        self.tracker.status(
+            !self.panel.query().trim().is_empty(),
+            self.panel.results().len(),
+        )
+    }
+
+    /// The browser's height on the output known.
+    fn browse_height(&self) -> f64 {
+        match self.output {
+            Some(output) => BrowseLayout::height_on(
+                output.height,
+                (output.height * view::TOP_FRACTION).round(),
+                BROWSE_BOTTOM_ROOM,
+            ),
+            None => BrowseLayout::HEIGHT,
+        }
+    }
+
+    /// The shape the current view heads for.
+    fn target_shape(&self) -> Shape {
+        match self.nav.view {
+            View::Browse => view::browse_shape(self.browse_height()),
+            _ => view::search_shape(&self.panel, &self.status(), self.nav.nested),
+        }
+    }
+
+    /// Open the browser (afresh) with the launcher's applications and recents, in the remembered arrangement.
+    fn open_browser(&mut self) {
         let now = self.now();
-        self.panel.show(&self.launcher, now);
+        let recent = self.launcher.recent_apps(browse::COLUMNS, now.unix);
+        let mut browser =
+            Browser::from_entries(self.launcher.entries(), &recent, self.browse_height());
+        browser.set_arrangement(self.arrangement);
+        browser.set_query(self.panel.query());
+        self.browser = Some(browser);
+    }
+
+    /// Carry out a navigation step.
+    fn step(&mut self, step: Step) -> Vec<Command<Message>> {
+        let now = self.now();
         let mut commands = Vec::new();
+        match step {
+            Step::Stay | Step::Noted => {}
+            Step::Show(view) => {
+                self.panel.show(&self.launcher, now);
+                self.panel.settle_appear();
+                self.searched = None;
+                let browse = view == View::Browse;
+                if browse {
+                    self.panel.set_text_quiet("");
+                    self.open_browser();
+                }
+                self.motion.show(self.target_shape(), browse, now.mono);
+                if let (Some(config), false, None) = (&self.files, self.indexing, &self.file_index)
+                {
+                    self.indexing = true;
+                    let config = config.clone();
+                    commands.extend(self.host.index(config));
+                }
+            }
+            Step::Hide => self.hide(false),
+            Step::Fold => {
+                self.panel.set_query("", &self.launcher, now);
+                self.searched = None;
+                self.motion.fold(self.target_shape(), now.mono);
+            }
+            Step::Unfold => {
+                let query = self.panel.query().to_owned();
+                self.panel.set_text_quiet(&query);
+                self.tracker.cancel();
+                self.preview = PreviewState::None;
+                let height = self.browse_height();
+                match self.browser.as_mut() {
+                    Some(browser) => {
+                        browser.set_height(height);
+                        browser.set_query(&query);
+                        browser.deselect();
+                    }
+                    None => self.open_browser(),
+                }
+                self.motion.unfold(self.target_shape(), now.mono);
+            }
+            Step::Leave(_, _) => {}
+            Step::Enter(Nested::ViewOptions) => {
+                self.option = self.arrangement;
+            }
+            Step::Enter(_) => {}
+            Step::FocusField => self.panel.focus_field(),
+            Step::ClearQuery => {
+                match self.nav.view {
+                    View::Browse => {
+                        self.panel.set_text_quiet("");
+                        if let Some(b) = self.browser.as_mut() {
+                            b.set_query("");
+                        }
+                    }
+                    _ => self.panel.set_query("", &self.launcher, now),
+                }
+                // the field shows the cleared query
+                self.revision += 1;
+            }
+            Step::ClearCategory => {
+                if let Some(b) = self.browser.as_mut() {
+                    b.set_category(None);
+                }
+            }
+        }
         if self.settled {
-            self.panel.settle_appear();
-        } else {
-            commands.extend(self.animate());
+            self.motion.settle(now.mono);
         }
-        if let (Some(config), false, None) =
-            (&self.files, self.indexing, self.launcher.file_index())
-        {
-            self.indexing = true;
-            let config = config.clone();
-            commands.extend(self.host.index(config));
-        }
+        commands.extend(self.animate());
         commands
     }
 
-    /// Close; the launch history is written.
-    fn hide(&mut self) {
+    fn intent(&mut self, intent: Intent) -> Vec<Command<Message>> {
+        let step = self.nav.apply(intent);
+        self.step(step)
+    }
+
+    /// Close: the window fades out (at once when `now_gone`, for a session lock); the launch history is written.
+    fn hide(&mut self, now_gone: bool) {
         let now = self.now();
+        let browse = self.presented().header == crate::motion::Header::Browse;
+        if self.nav.is_visible() {
+            self.nav = Nav::HIDDEN;
+        }
         self.panel.hide(now.mono);
-        self.previewing = None;
-        self.preview = None;
+        self.tracker.cancel();
+        self.searched = None;
+        self.preview = PreviewState::None;
+        self.previewed = None;
+        self.motion.hide(browse, now.mono);
+        if now_gone || self.settled {
+            self.motion.settle(now.mono);
+        }
         if let Err(e) = self.launcher.frecency.save_if_dirty() {
             eprintln!("cupertino-launcher: launch history not saved: {e}");
         }
@@ -162,7 +394,9 @@ impl Model {
 
     fn animate(&mut self) -> Vec<Command<Message>> {
         self.frame += 1;
-        if self.panel.is_visible() && self.panel.is_animating(self.now().mono) {
+        let now = self.now().mono;
+        let scrolling = self.browser.as_ref().is_some_and(|b| b.animating(now));
+        if self.motion.animating(now) || (self.nav.view == View::Browse && scrolling) {
             self.host.frame(self.frame)
         } else {
             Vec::new()
@@ -171,46 +405,185 @@ impl Model {
 
     /// What the preview shows of the selected result, once it has arrived.
     pub fn preview(&self) -> Option<&Preview> {
-        self.preview.as_deref()
+        match &self.preview {
+            PreviewState::Ready(p) => Some(p),
+            _ => None,
+        }
     }
 
-    /// After every change: the shown results' icons, the selected one's preview, and the panel's height.
-    fn changed(&mut self) -> Vec<Command<Message>> {
-        if !self.panel.is_visible() {
+    pub fn preview_state(&self) -> &PreviewState {
+        &self.preview
+    }
+
+    /// The query changed in search: ask the slow providers about it, cancelling what they still do for the old one.
+    fn search(&mut self) -> Vec<Command<Message>> {
+        let text = self.panel.query().to_owned();
+        if self.searched.as_deref() == Some(text.as_str()) {
             return Vec::new();
+        }
+        self.searched = Some(text.clone());
+        let now = self.now();
+        let index = self.file_index.clone().filter(|_| !text.trim().is_empty());
+        let Some(index) = index else {
+            self.tracker.begin(&[], now.mono);
+            return Vec::new();
+        };
+        let generation = self.tracker.begin(&[Provider::Files], now.mono);
+        let request = SearchRequest {
+            generation,
+            text,
+            index,
+            config: self.launcher.config.clone(),
+            cancel: self.tracker.token(),
+            unix: now.unix,
+        };
+        let mut commands = self.host.search(request);
+        commands.extend(
+            self.host
+                .after(crate::providers::DEADLINE, Message::Overdue(generation)),
+        );
+        commands
+    }
+
+    /// After every change: the providers, the shown icons, the selected result's preview, the window's size and the
+    /// keyboard's place.
+    fn changed(&mut self) -> Vec<Command<Message>> {
+        let mut commands = Vec::new();
+        if !self.nav.is_visible() {
+            return commands;
+        }
+        if self.nav.view == View::Search {
+            commands.extend(self.search());
+            let focus = match self.panel.focus() {
+                Focus::Field => NavFocus::Field,
+                Focus::List => NavFocus::Content,
+            };
+            self.nav
+                .apply(Intent::Query(!self.panel.query().is_empty()));
+            self.nav.apply(Intent::Focus(focus));
+        }
+        if let Some(b) = self
+            .browser
+            .as_ref()
+            .filter(|_| self.nav.view == View::Browse)
+        {
+            let focus = match b.zone() {
+                Zone::Categories | Zone::Options => NavFocus::Categories,
+                Zone::Content if b.selected().is_some() => NavFocus::Content,
+                Zone::Content => NavFocus::Field,
+            };
+            let (query, category) = (!b.query().is_empty(), b.category().is_some());
+            self.nav.apply(Intent::Query(query));
+            self.nav.apply(Intent::Category(category));
+            self.nav.apply(Intent::Focus(focus));
         }
         if self.icons.len() > MAX_ICONS {
             self.icons.clear();
         }
-        for row in view::visible_rows(&self.panel) {
-            let view::Row::Item { flat, .. } = row else {
-                continue;
-            };
-            let Some(item) = self.panel.results().get(flat) else {
-                continue;
-            };
-            if !self.icons.contains_key(&item.id) {
-                let sources = self.host.icon(item);
-                if !sources.is_empty() {
-                    self.icons.insert(item.id.clone(), sources);
+        if self.nav.view == View::Search {
+            for row in view::visible_rows(&self.panel) {
+                let view::Row::Item { flat, .. } = row else {
+                    continue;
+                };
+                let Some(item) = self.panel.results().get(flat) else {
+                    continue;
+                };
+                if !self.icons.contains_key(&item.id) {
+                    let sources = self.host.icon(item);
+                    if !sources.is_empty() {
+                        self.icons.insert(item.id.clone(), sources);
+                    }
                 }
             }
+            commands.extend(self.ask_preview());
         }
-        let mut commands = Vec::new();
+        commands.extend(self.load_app_icons());
+        let now = self.now().mono;
+        let target = self.target_shape();
+        if self.settled {
+            self.motion.reshape(target, now);
+            self.motion.settle(now);
+        } else if self.nav.view == View::Search
+            && self.motion.frame(now).header == crate::motion::Header::Search
+        {
+            self.motion.reshape(target, now);
+        }
+        commands.extend(self.resize());
+        commands
+    }
+
+    /// The window holds the shape presented and the one it heads for; it shrinks once the shape settled.
+    fn resize(&mut self) -> Vec<Command<Message>> {
+        let now = self.now().mono;
+        let target = self.motion.target();
+        let shown = self.motion.frame(now).shape;
+        let mut needed = view::window_extent(target.union(shown));
+        if self.motion.animating(now) {
+            needed = Size::new(
+                needed.width.max(self.extent.width),
+                needed.height.max(self.extent.height),
+            );
+        }
+        if needed != self.extent {
+            self.extent = needed;
+            self.host.resize(needed);
+        }
+        Vec::new()
+    }
+
+    /// The window's size as last given.
+    pub fn extent(&self) -> Size {
+        self.extent
+    }
+
+    /// The selected result's preview: asked once per selection, with a deadline.
+    fn ask_preview(&mut self) -> Vec<Command<Message>> {
         let selected = self.panel.selected_item().cloned();
-        if selected.as_ref().map(|item| &item.id) != self.previewing.as_ref() {
-            self.previewing = selected.as_ref().map(|item| item.id.clone());
-            self.preview = None;
-            if let Some(item) = &selected {
-                commands = self.host.preview(item);
-            }
+        if selected.as_ref().map(|item| &item.id) == self.previewed.as_ref() {
+            return Vec::new();
         }
-        let height = view::panel_height(&self.panel);
-        if height != self.height {
-            self.height = height;
-            self.host.resize(height);
+        self.previewed = selected.as_ref().map(|item| item.id.clone());
+        self.preview = PreviewState::None;
+        let Some(item) = selected else {
+            return Vec::new();
+        };
+        let mut commands = self.host.preview(&item);
+        if !commands.is_empty() {
+            self.preview = PreviewState::Waiting(item.id.clone());
+            commands.extend(
+                self.host
+                    .after(PREVIEW_TIMEOUT, Message::PreviewOverdue(item.id.clone())),
+            );
         }
         commands
+    }
+
+    /// Load the icons of the browser's applications near the view, a few at a time; more frames while some are left.
+    fn load_app_icons(&mut self) -> Vec<Command<Message>> {
+        let Some(browser) = self
+            .browser
+            .as_ref()
+            .filter(|_| self.nav.view == View::Browse)
+        else {
+            return Vec::new();
+        };
+        let wanted: Vec<App> = browser
+            .nearby()
+            .into_iter()
+            .filter_map(|i| browser.item(i))
+            .filter(|a| !self.app_icons.contains_key(&a.id))
+            .cloned()
+            .collect();
+        for app in wanted.iter().take(BROWSE_ICONS_PER_PASS) {
+            let sources = self.host.app_icon(app);
+            self.app_icons.insert(app.id.clone(), sources);
+        }
+        if wanted.len() > BROWSE_ICONS_PER_PASS {
+            self.frame += 1;
+            self.host.frame(self.frame)
+        } else {
+            Vec::new()
+        }
     }
 
     /// Carry out what the panel asked for.
@@ -218,7 +591,7 @@ impl Model {
         match outcome {
             PanelEvent::None | PanelEvent::Changed | PanelEvent::Edit => Vec::new(),
             PanelEvent::Close => {
-                self.hide();
+                self.hide(false);
                 Vec::new()
             }
             PanelEvent::Activate(activation) => self.activated(activation),
@@ -247,8 +620,20 @@ impl Model {
                 Vec::new()
             }
         };
-        self.hide();
+        self.hide(false);
         commands
+    }
+
+    /// Open the browser's application `id` as the search would.
+    fn launch_app(&mut self, id: &str) -> Vec<Command<Message>> {
+        let now = self.now();
+        match self.launcher.app_result(id) {
+            Some(item) => {
+                let activation = self.launcher.activate(&item, "", now.unix);
+                self.activated(activation)
+            }
+            None => Vec::new(),
+        }
     }
 
     /// Shortcut commands of the panel that need the host.
@@ -274,7 +659,7 @@ impl Model {
                 match (&self.launcher.config.web_search_url, self.panel.query()) {
                     (Some(url), query) if !query.is_empty() => {
                         let target = url.replace("{}", &percent_encode(query));
-                        self.hide();
+                        self.hide(false);
                         self.host.open(&target);
                     }
                     _ => eprintln!(
@@ -282,12 +667,215 @@ impl Model {
                     ),
                 }
             }
-            // the preview pane always shows the selected result
-            PanelCommand::Preview => {}
+            // Space or Primary+Y: the selected result's preview, enlarged; again to go back
+            PanelCommand::Preview => {
+                if self.nav.nested == Some(Nested::Preview) {
+                    return self.intent(Intent::Done);
+                }
+                if self.panel.selected_item().is_some() {
+                    self.panel_focus_list();
+                    return self.intent(Intent::Open(Nested::Preview));
+                }
+            }
             other => eprintln!("cupertino-launcher: {other:?} is not provided"),
         }
         Vec::new()
     }
+
+    /// The keyboard is in the result list (a preview opens over it).
+    fn panel_focus_list(&mut self) {
+        self.nav.apply(Intent::Focus(NavFocus::Content));
+    }
+
+    /// How the panel's keys are split between the panel and the query field now.
+    pub fn key_mode(&self) -> KeyMode {
+        match (self.nav.view, self.nav.nested) {
+            (_, Some(Nested::ViewOptions)) => KeyMode::Menu,
+            (_, Some(Nested::Preview)) => KeyMode::Preview,
+            (View::Browse, _) => KeyMode::Browse {
+                selecting: self
+                    .browser
+                    .as_ref()
+                    .is_some_and(|b| b.zone() != Zone::Content || b.selected().is_some()),
+            },
+            _ => KeyMode::Search(self.panel.focus()),
+        }
+    }
+
+    /// A key of the panel.
+    fn key(&mut self, key: PanelKey, mods: PanelMods) -> Vec<Command<Message>> {
+        let now = self.now();
+        if mods.only_primary() && key == PanelKey::Char('1') {
+            return self.intent(Intent::Browse);
+        }
+        match self.nav.nested {
+            Some(Nested::ViewOptions) => return self.menu_key(key),
+            Some(Nested::Preview) => match key {
+                PanelKey::Escape | PanelKey::Char(' ') => return self.intent(Intent::Escape),
+                _ => {}
+            },
+            _ => {}
+        }
+        if key == PanelKey::Escape {
+            return self.intent(Intent::Escape);
+        }
+        if self.nav.view == View::Browse {
+            return self.browse_key(key, mods);
+        }
+        let outcome = self.panel.handle_key(key, mods, &mut self.launcher, now);
+        let mut commands = self.outcome(outcome);
+        // a shortcut that closes the panel (settings, help)
+        if !self.panel.is_visible() && self.nav.is_visible() {
+            self.hide(false);
+        }
+        if self.nav.nested == Some(Nested::Preview) && self.panel.selected_item().is_none() {
+            commands.extend(self.intent(Intent::Done));
+        }
+        commands
+    }
+
+    fn browse_key(&mut self, key: PanelKey, mods: PanelMods) -> Vec<Command<Message>> {
+        let now = self.now().mono;
+        let key = match (key, mods.shift) {
+            (PanelKey::Left, _) => browse::Key::Left,
+            (PanelKey::Right, _) => browse::Key::Right,
+            (PanelKey::Up, _) => browse::Key::Up,
+            (PanelKey::Down, _) => browse::Key::Down,
+            (PanelKey::Home, _) => browse::Key::Home,
+            (PanelKey::End, _) => browse::Key::End,
+            (PanelKey::PageUp, _) => browse::Key::PageUp,
+            (PanelKey::PageDown, _) => browse::Key::PageDown,
+            (PanelKey::Enter, _) => browse::Key::Return,
+            (PanelKey::Char(' '), _) => browse::Key::Space,
+            (PanelKey::Tab, false) => browse::Key::Tab,
+            (PanelKey::Tab, true) => browse::Key::BackTab,
+            _ => return Vec::new(),
+        };
+        let Some(browser) = self.browser.as_mut() else {
+            return Vec::new();
+        };
+        match browser.key(key, now) {
+            Some(browse::Outcome::Launch(id)) => self.launch_app(&id),
+            Some(browse::Outcome::ViewOptions) => self.intent(Intent::Open(Nested::ViewOptions)),
+            None => Vec::new(),
+        }
+    }
+
+    /// The view options' keys: Up and Down choose, Return or Space applies, everything else waits.
+    fn menu_key(&mut self, key: PanelKey) -> Vec<Command<Message>> {
+        match key {
+            PanelKey::Escape => self.intent(Intent::Escape),
+            PanelKey::Up => {
+                self.option = Arrangement::Grid;
+                Vec::new()
+            }
+            PanelKey::Down => {
+                self.option = Arrangement::List;
+                Vec::new()
+            }
+            PanelKey::Enter | PanelKey::Char(' ') => self.arrange(self.option),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Lay the browser out as `arrangement`; the view options close.
+    fn arrange(&mut self, arrangement: Arrangement) -> Vec<Command<Message>> {
+        self.arrangement = arrangement;
+        if let Some(b) = self.browser.as_mut() {
+            b.set_arrangement(arrangement);
+        }
+        if self.nav.nested == Some(Nested::ViewOptions) {
+            self.intent(Intent::Done)
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn input(&mut self, input: Input) -> Vec<Command<Message>> {
+        let now = self.now();
+        match input {
+            Input::Key(key, mods) => self.key(key, mods),
+            Input::Query(change) => {
+                self.revision = change.revision;
+                if self.nav.nested == Some(Nested::Preview) && change.text != self.panel.query() {
+                    self.nav.apply(Intent::Done);
+                }
+                if self.nav.view == View::Browse {
+                    self.panel.set_text_quiet(&change.text);
+                    if let Some(b) = self.browser.as_mut() {
+                        b.set_query(&change.text);
+                    }
+                } else {
+                    self.panel
+                        .edit(&self.launcher, now, |field| field.set_text(&change.text));
+                }
+                Vec::new()
+            }
+            Input::Hover(flat) => {
+                self.panel.set_selected(flat);
+                Vec::new()
+            }
+            Input::Activate(flat) => {
+                let outcome = self.panel.activate_index(flat, &mut self.launcher, now);
+                self.outcome(outcome)
+            }
+            Input::RunAction(flat, index) => {
+                let outcome = self
+                    .panel
+                    .activate_action(flat, index, &mut self.launcher, now);
+                self.outcome(outcome)
+            }
+            Input::Dismiss => self.intent(Intent::Dismiss),
+            Input::BrowseHover(index) => {
+                if let Some(b) = self.browser.as_mut() {
+                    b.hover(index);
+                }
+                Vec::new()
+            }
+            Input::BrowseActivate(index) => {
+                let id = self
+                    .browser
+                    .as_ref()
+                    .and_then(|b| b.item(index))
+                    .map(|a| a.id.clone());
+                match id {
+                    Some(id) => self.launch_app(&id),
+                    None => Vec::new(),
+                }
+            }
+            Input::BrowseCategory(category) => {
+                if let Some(b) = self.browser.as_mut() {
+                    b.set_zone(Zone::Categories);
+                    b.toggle_category(category);
+                }
+                Vec::new()
+            }
+            Input::BrowseScroll(dy) => {
+                if let Some(b) = self.browser.as_mut() {
+                    b.scroll_by(dy, now.mono);
+                }
+                self.animate()
+            }
+            Input::ViewOptions => {
+                if self.nav.nested == Some(Nested::ViewOptions) {
+                    self.intent(Intent::Done)
+                } else {
+                    if let Some(b) = self.browser.as_mut() {
+                        b.set_zone(Zone::Options);
+                    }
+                    self.nav.apply(Intent::Focus(NavFocus::Categories));
+                    self.intent(Intent::Open(Nested::ViewOptions))
+                }
+            }
+            Input::Arrange(arrangement) => self.arrange(arrangement),
+            Input::ClosePreview => self.intent(Intent::Done),
+        }
+    }
+}
+
+/// `preview` as the pane can show it ([`preview::bounded`] with the pane's picture limit).
+pub fn bounded(preview: Preview) -> Preview {
+    preview::bounded(preview, view::PREVIEW_IMAGE)
 }
 
 /// Percent-encode `text` for a URL query.
@@ -305,46 +893,16 @@ pub fn percent_encode(text: &str) -> String {
 
 pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
     let now = model.now();
-    let commands = match message {
-        Message::Toggle if model.panel.is_visible() => {
-            model.hide();
-            Vec::new()
-        }
-        Message::Toggle => model.show(),
-        Message::Input(_) if !model.panel.is_visible() => Vec::new(),
-        Message::Input(Input::Key(key, mods)) => {
-            let outcome = model.panel.handle_key(key, mods, &mut model.launcher, now);
-            model.outcome(outcome)
-        }
-        Message::Input(Input::Query(change)) => {
-            model.revision = change.revision;
-            model
-                .panel
-                .edit(&model.launcher, now, |field| field.set_text(&change.text));
-            Vec::new()
-        }
-        Message::Input(Input::Hover(flat)) => {
-            model.panel.set_selected(flat);
-            Vec::new()
-        }
-        Message::Input(Input::Activate(flat)) => {
-            let outcome = model.panel.activate_index(flat, &mut model.launcher, now);
-            model.outcome(outcome)
-        }
-        Message::Input(Input::RunAction(flat, index)) => {
-            let outcome = model
-                .panel
-                .activate_action(flat, index, &mut model.launcher, now);
-            model.outcome(outcome)
-        }
-        Message::Input(Input::Dismiss) => {
-            model.hide();
-            Vec::new()
-        }
+    let mut commands = match message {
+        Message::Toggle => model.intent(Intent::Toggle),
+        Message::Browse => model.intent(Intent::Browse),
+        Message::Input(_) if !model.nav.is_visible() => Vec::new(),
+        Message::Input(input) => model.input(input),
         Message::Indexed(index) => {
             model.indexing = false;
-            model.launcher.set_file_index(Some(index));
-            model.panel.refresh(&model.launcher, now);
+            model.file_index = Some(index);
+            // the open query is asked again, now with the files
+            model.searched = None;
             Vec::new()
         }
         Message::Launch(launch, token) => {
@@ -360,19 +918,60 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             eprintln!("cupertino-launcher: the file index was not built");
             Vec::new()
         }
-        Message::Locked if model.panel.is_visible() => {
-            model.hide();
+        Message::Locked => {
+            if model.presenting() {
+                model.hide(true);
+            }
             Vec::new()
         }
-        Message::Locked => Vec::new(),
         Message::Remap => {
             model.hidden += 1;
             Vec::new()
         }
         Message::Previewed(id, preview) => {
-            if model.previewing.as_ref() == Some(&id) {
-                model.preview = Some(preview);
+            // only for the result last asked about; one that comes after its deadline still shows
+            if model.previewed.as_deref() == Some(id.as_str()) {
+                model.preview = PreviewState::Ready(Arc::new(bounded((*preview).clone())));
             }
+            Vec::new()
+        }
+        Message::PreviewOverdue(id) => {
+            let answered = matches!(model.preview, PreviewState::Ready(_));
+            if model.previewed.as_deref() == Some(id.as_str()) && !answered {
+                model.preview = PreviewState::Unavailable;
+            }
+            Vec::new()
+        }
+        Message::Provided(update) => {
+            if model.tracker.apply(update) == crate::providers::Applied::Taken {
+                let results =
+                    model
+                        .launcher
+                        .compose(model.panel.query(), now.unix, model.tracker.sections());
+                model.panel.set_results(results);
+            }
+            Vec::new()
+        }
+        Message::Overdue(generation) => {
+            if generation == model.tracker.generation() {
+                // the timer fired at the deadline
+                let deadline = model.tracker.deadline().unwrap_or(now.mono);
+                if model.tracker.expire(deadline) {
+                    eprintln!("cupertino-launcher: the file search did not answer in time");
+                }
+            }
+            Vec::new()
+        }
+        Message::Output(size) => {
+            model.output = Some(size);
+            let height = model.browse_height();
+            if let Some(b) = model.browser.as_mut() {
+                b.set_height(height);
+            }
+            Vec::new()
+        }
+        Message::ReduceMotion(on) => {
+            model.motion.set_reduce_motion(on);
             Vec::new()
         }
         Message::Unheard => {
@@ -380,14 +979,16 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             vec![Command::Exit]
         }
     };
-    let mut commands = commands;
     commands.extend(model.changed());
+    if !model.presenting() {
+        model.browser = None;
+    }
     commands
 }
 
 /// The shown panel and its catcher, or the window kept mapped while it is hidden.
 pub fn view(model: &Model) -> Vec<Window<Message>> {
-    if !model.panel.is_visible() {
+    if !model.presenting() {
         return vec![view::hidden_window(model.hidden, Message::Remap)];
     }
     let actions = model
@@ -395,13 +996,32 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         .selected_item()
         .map(|item| model.launcher.actions(item))
         .unwrap_or_default();
+    let frame = model.presented();
+    let browser = model
+        .browser
+        .as_ref()
+        .filter(|_| model.nav.view == View::Browse || frame.content > 0.0);
     let panel = PanelView {
         panel: &model.panel,
         revision: model.revision,
-        alpha: model.alpha(),
+        frame,
+        extent: model.extent,
+        open: model.nav.is_visible(),
+        keys: model.key_mode(),
+        nested: model.nav.nested,
+        status: model.status(),
         icons: &model.icons,
         actions: &actions,
         preview: model.preview(),
+        preview_unavailable: model.preview == PreviewState::Unavailable,
+        browser,
+        app_icons: &model.app_icons,
+        option: model.option,
+        now: model.now().mono,
     };
-    vec![view::panel_window(&panel), view::catcher_window()]
+    let mut windows = vec![view::panel_window(&panel)];
+    if model.nav.is_visible() {
+        windows.push(view::catcher_window());
+    }
+    windows
 }

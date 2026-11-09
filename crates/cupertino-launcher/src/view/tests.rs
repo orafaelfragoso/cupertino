@@ -4,15 +4,18 @@
 //! fails, so the variable can never pass a run.
 
 use super::*;
+use crate::browse::Zone;
 use crate::engine::tests_support::test_launcher;
 use crate::exec::CommandSpec;
 use crate::files::FileSearchConfig;
-use crate::kit::{self, Host, Message, Model};
+use crate::kit::{self, Host, Message, Model, SearchRequest};
+use crate::nav::View;
 use crate::panel::Now;
+use crate::providers::{Provider, Reply, Update};
 use cupertino_assets::BUILTIN_FONT;
 use cupertino_kit::core::{
-    AccessibilityNode, Application, Command, FrameSnapshot, NodeId, PlaceholderIcons,
-    RuntimeOptions,
+    AccessibilityNode, AccessibleValue, Application, Checked, Command, FrameSnapshot, NodeId,
+    PlaceholderIcons, RuntimeOptions,
 };
 use cupertino_kit::geometry::Point;
 use cupertino_kit::layout::LayoutDirection;
@@ -39,11 +42,25 @@ const OUTPUT: Size = Size {
 thread_local! {
     /// What the test host was asked to do, in order.
     static HOST: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    /// The height the model last gave the shown panel.
-    static HEIGHT: RefCell<Option<f64>> = const { RefCell::new(None) };
+    /// The size the model last gave the shown panel's window.
+    static EXTENT: RefCell<Option<Size>> = const { RefCell::new(None) };
     /// Messages a test sends the model as the session would (`Toggle` from the bus, `Locked` from the server).
     static INBOX: RefCell<Option<(async_channel::Sender<Message>, async_channel::Receiver<Message>)>> =
         const { RefCell::new(None) };
+    /// The message being handled came from [`INBOX`] (so the inbox is listened to again).
+    static INBOXED: RefCell<bool> = const { RefCell::new(false) };
+    /// While set, the file searches the model asks for wait here instead of answering at once.
+    static HELD: RefCell<Option<Vec<SearchRequest>>> = const { RefCell::new(None) };
+}
+
+/// Holds the file searches from now on, for a test to answer as it likes.
+fn hold_searches() {
+    HELD.set(Some(Vec::new()));
+}
+
+/// The file searches held since the last call.
+fn held_searches() -> Vec<SearchRequest> {
+    HELD.with_borrow_mut(|held| held.as_mut().map(std::mem::take).unwrap_or_default())
 }
 
 /// Waits for the next message of [`INBOX`].
@@ -51,7 +68,9 @@ fn listen() -> Command<Message> {
     let inbox = INBOX.with_borrow(|inbox| inbox.as_ref().map(|(_, r)| r.clone()));
     let inbox = inbox.expect("the test app started");
     Command::Perform(Box::pin(async move {
-        inbox.recv().await.unwrap_or(Message::Unheard)
+        let message = inbox.recv().await.unwrap_or(Message::Unheard);
+        INBOXED.set(true);
+        message
     }))
 }
 
@@ -92,8 +111,8 @@ impl Host for TestHost {
         Vec::new()
     }
 
-    fn resize(&mut self, height: f64) {
-        HEIGHT.set(Some(height));
+    fn resize(&mut self, size: Size) {
+        EXTENT.set(Some(size));
     }
 
     fn frame(&mut self, _: u64) -> Vec<Command<Message>> {
@@ -107,6 +126,23 @@ impl Host for TestHost {
     fn preview(&mut self, item: &ResultItem) -> Vec<Command<Message>> {
         log(format!("preview {}", item.id));
         Vec::new()
+    }
+
+    fn search(&mut self, request: SearchRequest) -> Vec<Command<Message>> {
+        let held = HELD.with_borrow_mut(|held| match held {
+            Some(held) => {
+                held.push(request.clone());
+                true
+            }
+            None => false,
+        });
+        if held {
+            return Vec::new();
+        }
+        let update = request.run();
+        vec![Command::Perform(Box::pin(async move {
+            Message::Provided(update)
+        }))]
     }
 
     fn now(&self) -> Now {
@@ -127,7 +163,9 @@ impl Application for TestApp {
 
     fn init() -> (Model, Vec<Command<Message>>) {
         HOST.with_borrow_mut(Vec::clear);
-        HEIGHT.set(None);
+        EXTENT.set(None);
+        HELD.set(None);
+        INBOXED.set(false);
         let mut model = Model::new(test_launcher(), Box::new(TestHost));
         model.settled = true;
         INBOX.set(Some(async_channel::unbounded()));
@@ -138,10 +176,7 @@ impl Application for TestApp {
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         // what a test delivers comes from the inbox, which is listened to again
-        let inbox = matches!(
-            message,
-            Message::Toggle | Message::Locked | Message::Indexed(_) | Message::Previewed(..)
-        );
+        let inbox = INBOXED.replace(false);
         let mut commands = kit::update(model, message);
         if inbox {
             commands.push(listen());
@@ -172,7 +207,7 @@ struct Run {
     driver: TestDriver<TestApp>,
     configured: BTreeSet<WindowId>,
     /// The height the panel window was last configured at.
-    panel_height: Option<f64>,
+    extent: Option<Size>,
     /// Each input and what it left, for the keyboard golden.
     trace: String,
     /// A screen reader following the windows.
@@ -222,7 +257,7 @@ impl Run {
         let mut run = Run {
             driver,
             configured: BTreeSet::new(),
-            panel_height: None,
+            extent: None,
             trace: String::new(),
             reader,
         };
@@ -277,12 +312,13 @@ impl Run {
                 let catcher = key == WindowKey(Key::from("catcher"));
                 let size = match () {
                     () if panel => {
-                        let height = HEIGHT.with_borrow(|h| h.unwrap_or(COLLAPSED_HEIGHT));
-                        if self.configured.contains(&id) && self.panel_height == Some(height) {
+                        let extent =
+                            EXTENT.with_borrow(|e| e.unwrap_or(window_extent(compact_shape())));
+                        if self.configured.contains(&id) && self.extent == Some(extent) {
                             continue;
                         }
-                        self.panel_height = Some(height);
-                        Some(window_size(height))
+                        self.extent = Some(extent);
+                        Some(extent)
                     }
                     _ if self.configured.contains(&id) => continue,
                     () if catcher => Some(OUTPUT),
@@ -362,6 +398,21 @@ impl Run {
         let panel = &model.panel;
         if !panel.is_visible() {
             return "closed".into();
+        }
+        if let Some(b) = model
+            .browser
+            .as_ref()
+            .filter(|_| model.nav.view == View::Browse)
+        {
+            return format!(
+                "browse query={:?} zone={:?} selected={:?} category={:?} {:?} nested={:?}",
+                b.query(),
+                b.zone(),
+                b.selected_app().map(|a| a.name.as_str()),
+                b.category().map(|c| c.name()),
+                b.arrangement(),
+                model.nav.nested,
+            );
         }
         format!(
             "query={:?} focus={:?} selected={:?} scroll={}",
@@ -563,8 +614,19 @@ fn reading_of(snapshot: &FrameSnapshot) -> String {
             walk(out, nodes, child, depth + 1, describe);
         }
     }
-    if let Some((root, _)) = snapshot.accessibility.first() {
-        walk(&mut out, &nodes, *root, 0, &describe);
+    // the root is no node's child (the snapshot lists the nodes in no particular order)
+    let children: BTreeSet<NodeId> = nodes
+        .values()
+        .flat_map(|n| n.children.iter().copied())
+        .collect();
+    let mut roots: Vec<NodeId> = nodes
+        .keys()
+        .copied()
+        .filter(|id| !children.contains(id))
+        .collect();
+    roots.sort();
+    for root in roots {
+        walk(&mut out, &nodes, root, 0, &describe);
     }
     out
 }
@@ -605,12 +667,14 @@ fn typing_lists_the_ranked_results_in_their_sections() {
         model.panel.selected_item().map(|i| i.title.as_str()),
         Some("Firefox")
     );
+    let shape = search_shape(&model.panel, &model.status(), None);
+    assert_eq!(shape.height, panel_height(&model.panel));
     assert_eq!(
-        run.panel_height,
-        Some(panel_height(&model.panel)),
+        run.extent,
+        Some(window_extent(shape)),
         "the panel window takes the height of its rows"
     );
-    assert!(run.panel_height.unwrap() >= MIN_EXPANDED_HEIGHT);
+    assert!(shape.height >= MIN_EXPANDED_HEIGHT);
     let snapshot = run.snapshot();
     let mut items: Vec<(Option<usize>, Option<&str>, bool)> = snapshot
         .accessibility
@@ -906,13 +970,32 @@ fn the_panel_is_collapsed_without_results_and_expanded_with_them() {
         Rect::new(180.0, 140.0, WIDTH, 430.0)
     );
     // the window keeps room for the shadow around the panel, which alone takes input
-    let window = window_size(430.0);
-    let panel = panel_rect(430.0);
+    let shape = PanelShape::new(WIDTH, 430.0, CORNER_RADIUS);
+    let window = window_extent(shape);
+    let frame = Frame {
+        shape,
+        alpha: 1.0,
+        scale: 1.0,
+        content: 0.0,
+        header: Header::Search,
+    };
+    let panel = enclosure_rect(window, &frame);
     assert_eq!(
         (window.width - panel.width(), window.height - panel.height()),
         (2.0 * SHADOW_SIDE, SHADOW_TOP + SHADOW_BOTTOM)
     );
-    assert_eq!(panel.origin.x, SHADOW_SIDE);
+    assert_eq!(panel.origin, Point::new(SHADOW_SIDE, SHADOW_TOP));
+    // scaled as it opens, about its top centre
+    let opening = enclosure_rect(
+        window,
+        &Frame {
+            scale: 0.5,
+            ..frame
+        },
+    );
+    assert_eq!(opening.min_y(), SHADOW_TOP);
+    assert_eq!(opening.center().x, panel.center().x);
+    assert_eq!(opening.width(), WIDTH / 2.0);
 }
 
 /// A file index of a folder holding `notes.txt`, and the folder.
@@ -1009,7 +1092,7 @@ fn the_selected_file_shows_its_preview_once_the_host_reads_it() {
             .unwrap_or_else(|| panic!("{role:?} {name:?}"))
     };
     let pane = bounds(Role::Group, "Preview");
-    let edge = panel_rect(panel_height(&run.model().panel)).max_x();
+    let edge = enclosure_rect(run.model().extent(), &run.model().presented()).max_x();
     assert!((pane.max_x() - edge).abs() < 1.0, "{pane:?} ends at {edge}");
     assert!(pane.width() > WIDTH - LIST_WIDTH - 2.0, "{pane:?}");
     let name = bounds(Role::StaticText, "notes.txt");
@@ -1107,4 +1190,372 @@ fn a_conversion_lists_its_value_and_copies_it() {
     assert_eq!(run.names(Role::Button), ["Copy"]);
     run.press(Role::Button, "Copy");
     assert!(!run.model().panel.is_visible());
+}
+
+const LEFT_CODE: u32 = 105;
+const SPACE_CODE: u32 = 57;
+const SPACE: u32 = 0x20;
+
+/// The applications the browser lists, by name.
+const ALL_APPS: [&str; 9] = [
+    "Calculator",
+    "Files",
+    "Firefox",
+    "Firewall Configuration",
+    "GIMP",
+    "Htop",
+    "LibreOffice Writer",
+    "Terminal",
+    "Visual Studio Code",
+];
+
+impl Run {
+    /// The query field's accessible name (its placeholder says which view it heads).
+    fn field_name(&self) -> Option<String> {
+        self.snapshot()
+            .accessibility
+            .iter()
+            .find(|(_, n)| n.role == Role::TextInput)
+            .and_then(|(_, n)| n.name.clone())
+    }
+
+    /// The names of the panel's objects of `role` that are selected.
+    fn selected(&self, role: Role) -> Vec<String> {
+        self.snapshot()
+            .accessibility
+            .iter()
+            .filter(|(_, n)| n.role == role && n.states.selected)
+            .filter_map(|(_, n)| n.name.clone())
+            .collect()
+    }
+
+    /// What the panel announces as it changes (its live regions).
+    fn announced(&self) -> Vec<String> {
+        self.snapshot()
+            .accessibility
+            .iter()
+            .filter(|(_, n)| n.live.is_some())
+            .filter_map(|(_, n)| n.name.clone())
+            .collect()
+    }
+
+    /// Hides the panel, then asks for the applications as the Dock's hot corner does (through the server).
+    fn browse_from_hidden(&mut self) {
+        self.key("Escape", ESCAPE_CODE, ESCAPE);
+        assert!(self.window("panel").is_none());
+        self.deliver(Message::Browse);
+    }
+}
+
+#[test]
+fn the_dock_s_request_opens_the_application_browser_and_the_arrows_move_through_it() {
+    let mut run = Run::new();
+    run.browse_from_hidden();
+    assert_eq!(run.model().nav.view, View::Browse);
+    assert_eq!(run.field_name().as_deref(), Some("Applications"));
+    assert_eq!(
+        run.model().extent(),
+        window_extent(browse_shape(BrowseLayout::HEIGHT)),
+        "the window holds the browser and its shadow"
+    );
+    assert_eq!(run.names(Role::Button), ALL_APPS);
+    assert_eq!(
+        run.names(Role::CheckBox),
+        [
+            "Creativity",
+            "Development",
+            "Internet",
+            "Other",
+            "Utilities"
+        ],
+        "only the categories the applications are in, the uncategorised ones as Other"
+    );
+    assert!(
+        run.selected(Role::Button).is_empty(),
+        "it opens with nothing selected"
+    );
+    // the arrows that move along the query stay the field's until an application is selected
+    run.key("Right", RIGHT_CODE, RIGHT);
+    assert!(run.selected(Role::Button).is_empty());
+    run.key("Down", DOWN_CODE, DOWN);
+    assert_eq!(run.selected(Role::Button), ["Calculator"]);
+    run.key("Right", RIGHT_CODE, RIGHT);
+    assert_eq!(run.selected(Role::Button), ["Files"]);
+    assert!(
+        run.announced().contains(&"Files".to_owned()),
+        "{:?}",
+        run.announced()
+    );
+    run.key("Down", DOWN_CODE, DOWN);
+    assert_eq!(
+        run.selected(Role::Button),
+        ["Visual Studio Code"],
+        "a column down, the last row's nearest item"
+    );
+    run.key("Left", LEFT_CODE, LEFT);
+    assert_eq!(run.selected(Role::Button), ["Terminal"]);
+    // the field keeps the keyboard throughout
+    let snapshot = run.snapshot();
+    let focused = snapshot
+        .focus
+        .and_then(|id| snapshot.accessibility.iter().find(|(n, _)| *n == id))
+        .map(|(_, n)| n.role);
+    assert_eq!(focused, Some(Role::TextInput));
+    run.fixtures("browser-grid");
+    run.key("Return", RETURN_CODE, RETURN);
+    assert!(
+        run.window("panel").is_none(),
+        "launching closes the browser"
+    );
+    let host = launches();
+    assert_eq!(host.len(), 1, "{host:?}");
+    assert!(
+        host[0].starts_with("run Some(\"terminal.desktop\")") && host[0].ends_with("token=true"),
+        "{host:?}"
+    );
+}
+
+#[test]
+fn typing_filters_the_applications_and_escape_folds_the_browser_before_it_closes() {
+    let mut run = Run::new();
+    run.browse_from_hidden();
+    run.type_text("fire");
+    let names = run.names(Role::Button);
+    assert!(names.contains(&"Firefox".to_owned()), "{names:?}");
+    assert!(!names.contains(&"GIMP".to_owned()), "{names:?}");
+    run.type_text("zzz");
+    assert!(run.names(Role::Button).is_empty());
+    assert!(
+        run.announced().contains(&"No Results".to_owned()),
+        "{:?}",
+        run.announced()
+    );
+    // Escape clears the query, then folds the browser into the search field, then closes
+    run.key("Escape", ESCAPE_CODE, ESCAPE);
+    assert_eq!(run.model().panel.query(), "");
+    assert_eq!(run.names(Role::Button), ALL_APPS);
+    run.key("Escape", ESCAPE_CODE, ESCAPE);
+    assert_eq!(run.model().nav.view, View::Search);
+    assert_eq!(run.field_name().as_deref(), Some("Search"));
+    assert!(run.names(Role::Button).is_empty());
+    assert_eq!(run.model().extent(), window_extent(compact_shape()));
+    run.key("Escape", ESCAPE_CODE, ESCAPE);
+    assert!(run.window("panel").is_none());
+    assert!(run.hidden().is_some());
+}
+
+#[test]
+fn the_shortcut_unfolds_the_search_into_the_browser_keeping_the_query_and_back() {
+    let mut run = Run::new();
+    run.type_text("ter");
+    run.chord("Super+1", 2, '1' as u32, Some('1'), Mods::PRIMARY);
+    assert_eq!(run.model().nav.view, View::Browse);
+    assert_eq!(run.model().panel.query(), "ter", "the query carries over");
+    assert_eq!(run.names(Role::Button), ["Terminal"]);
+    // the Dock's request while browsing closes it
+    run.deliver(Message::Browse);
+    assert!(run.window("panel").is_none());
+}
+
+#[test]
+fn a_category_filter_narrows_the_applications_and_clearing_it_brings_them_back() {
+    let mut run = Run::new();
+    run.browse_from_hidden();
+    run.press(Role::CheckBox, "Internet");
+    assert_eq!(run.names(Role::Button), ["Firefox"]);
+    let checked = |run: &Run, name: &str| {
+        run.snapshot()
+            .accessibility
+            .iter()
+            .find(|(_, n)| n.role == Role::CheckBox && n.name.as_deref() == Some(name))
+            .and_then(|(_, n)| n.value.clone())
+    };
+    assert_eq!(
+        checked(&run, "Internet"),
+        Some(AccessibleValue::Toggle(Checked::True))
+    );
+    assert_eq!(
+        checked(&run, "Creativity"),
+        Some(AccessibleValue::Toggle(Checked::False))
+    );
+    // Escape clears the filter before it folds the browser
+    run.key("Escape", ESCAPE_CODE, ESCAPE);
+    assert_eq!(run.model().nav.view, View::Browse);
+    assert_eq!(run.names(Role::Button), ALL_APPS);
+    run.press(Role::CheckBox, "Creativity");
+    assert_eq!(run.names(Role::Button), ["GIMP"]);
+    run.press(Role::CheckBox, "Creativity");
+    assert_eq!(
+        run.names(Role::Button),
+        ALL_APPS,
+        "pressing it again clears it"
+    );
+}
+
+#[test]
+fn the_view_options_lay_the_applications_out_as_a_list() {
+    let mut run = Run::new();
+    run.browse_from_hidden();
+    // Tab walks from the applications to the filters and on to the view options
+    run.key("Tab", TAB_CODE, TAB);
+    assert_eq!(
+        run.model().browser.as_ref().unwrap().zone(),
+        Zone::Categories
+    );
+    assert_eq!(run.selected(Role::CheckBox), ["Development"]);
+    run.key("Tab", TAB_CODE, TAB);
+    assert_eq!(run.model().browser.as_ref().unwrap().zone(), Zone::Options);
+    run.key("Return", RETURN_CODE, RETURN);
+    assert_eq!(run.names(Role::Menu), ["View Options"]);
+    run.key("Down", DOWN_CODE, DOWN);
+    run.key("Return", RETURN_CODE, RETURN);
+    assert!(run.names(Role::Menu).is_empty(), "choosing closes the menu");
+    assert_eq!(run.names(Role::ListItem), ALL_APPS);
+    assert!(run.names(Role::Button).is_empty());
+    run.fixtures("browser-list");
+    // the choice lasts to the next opening
+    run.key("Escape", ESCAPE_CODE, ESCAPE);
+    run.key("Escape", ESCAPE_CODE, ESCAPE);
+    run.deliver(Message::Browse);
+    assert_eq!(run.names(Role::ListItem), ALL_APPS);
+}
+
+#[test]
+fn a_late_file_search_is_dropped_and_one_past_its_deadline_says_the_results_may_be_incomplete() {
+    let (_dir, index) = notes_index();
+    let mut run = Run::new();
+    run.deliver(Message::Indexed(index));
+    hold_searches();
+    run.type_text("notes");
+    let searches = held_searches();
+    assert_eq!(searches.len(), 5, "one search per query");
+    let (older, newer) = (&searches[3], &searches[4]);
+    assert!(
+        searches[..4].iter().all(|s| s.cancel.is_cancelled()),
+        "a newer query cancels the older searches"
+    );
+    assert!(!newer.cancel.is_cancelled());
+    assert_eq!(run.announced(), ["Searching"]);
+    // the older answer comes last: it is dropped, the newer one shows
+    run.deliver(Message::Provided(newer.run()));
+    run.deliver(Message::Provided(Update {
+        generation: older.generation,
+        provider: Provider::Files,
+        reply: Reply::Sections(Vec::new()),
+    }));
+    assert!(
+        run.names(Role::ListItem).contains(&"notes.txt".to_owned()),
+        "{:?}",
+        run.names(Role::ListItem)
+    );
+    // a search that misses its deadline: what shows says it may be incomplete, not that nothing was found
+    run.type_text("tesq");
+    let late = held_searches().pop().expect("a search");
+    run.deliver(Message::Overdue(late.generation));
+    assert!(
+        late.cancel.is_cancelled(),
+        "the overdue search is told to stop"
+    );
+    assert_eq!(run.announced(), [INCOMPLETE]);
+    run.deliver(Message::Provided(late.run()));
+    assert_eq!(run.announced(), [INCOMPLETE], "its late answer is dropped");
+    // a search that failed is not "no results" either
+    run.type_text("u");
+    let failing = held_searches().pop().expect("a search");
+    run.deliver(Message::Provided(Update {
+        generation: failing.generation,
+        provider: Provider::Files,
+        reply: Reply::Failed("unreadable".into()),
+    }));
+    assert_eq!(run.announced(), [INCOMPLETE]);
+    // and one that answered with nothing is
+    run.type_text("x");
+    let empty = held_searches().pop().expect("a search");
+    run.deliver(Message::Provided(Update {
+        generation: empty.generation,
+        provider: Provider::Files,
+        reply: Reply::Sections(Vec::new()),
+    }));
+    assert_eq!(run.announced(), [NO_RESULTS]);
+    assert_eq!(
+        run.model().extent(),
+        window_extent(PanelShape::new(
+            WIDTH,
+            COLLAPSED_HEIGHT + 1.0 + STATUS_HEIGHT,
+            CORNER_RADIUS
+        ))
+    );
+}
+
+#[test]
+fn space_enlarges_the_preview_which_says_when_none_came_in_time_and_escape_returns_to_the_list() {
+    let (_dir, index) = notes_index();
+    let mut run = Run::new();
+    run.deliver(Message::Indexed(index));
+    run.type_text("notes");
+    run.key("Down", DOWN_CODE, DOWN);
+    assert_eq!(run.model().panel.focus(), Focus::List);
+    let item = run
+        .model()
+        .panel
+        .selected_item()
+        .cloned()
+        .expect("a result");
+    run.chord("Space", SPACE_CODE, SPACE, Some(' '), Mods::NONE);
+    assert_eq!(run.model().nav.nested, Some(Nested::Preview));
+    assert!(
+        run.names(Role::ListItem).is_empty(),
+        "the preview covers the list"
+    );
+    run.deliver(Message::PreviewOverdue(item.id.clone()));
+    assert!(
+        run.announced().contains(&PREVIEW_UNAVAILABLE.to_owned()),
+        "{:?}",
+        run.announced()
+    );
+    // a preview arriving after all still shows
+    run.deliver(Message::Previewed(
+        item.id.clone(),
+        Arc::new(Preview {
+            body: PreviewBody::Text("first line".into()),
+            icon: Vec::new(),
+            kind: "Plain text".into(),
+            details: Vec::new(),
+        }),
+    ));
+    assert!(!run.announced().contains(&PREVIEW_UNAVAILABLE.to_owned()));
+    assert!(run
+        .names(Role::StaticText)
+        .contains(&"first line".to_owned()));
+    run.key("Escape", ESCAPE_CODE, ESCAPE);
+    assert_eq!(run.model().nav.nested, None);
+    assert_eq!(
+        run.model().panel.focus(),
+        Focus::List,
+        "the keys go back to the list"
+    );
+    assert!(run.names(Role::ListItem).contains(&"notes.txt".to_owned()));
+    // a preview for a result no longer selected is dropped
+    run.key("Escape", ESCAPE_CODE, ESCAPE);
+    run.deliver(Message::Previewed(
+        "file:/elsewhere".into(),
+        Arc::new(Preview {
+            body: PreviewBody::Text("not this".into()),
+            icon: Vec::new(),
+            kind: String::new(),
+            details: Vec::new(),
+        }),
+    ));
+    assert!(!run.names(Role::StaticText).contains(&"not this".to_owned()));
+}
+
+#[test]
+fn reduce_motion_puts_the_panel_where_it_heads_at_once() {
+    use crate::motion::Motion;
+    let mut motion = Motion::new(compact_shape());
+    motion.set_reduce_motion(true);
+    motion.show(browse_shape(BrowseLayout::HEIGHT), true, 0.0);
+    let frame = motion.frame(0.0);
+    assert_eq!(frame.scale, 1.0);
+    assert_eq!(frame.shape, browse_shape(BrowseLayout::HEIGHT));
 }

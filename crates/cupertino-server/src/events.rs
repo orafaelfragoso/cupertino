@@ -385,14 +385,13 @@ impl Cupertino {
             InputEvent::Keyboard { event } => self.on_keyboard::<B>(event),
             InputEvent::PointerMotion { event } => self.on_pointer_motion::<B>(event),
             InputEvent::PointerMotionAbsolute { event } => {
-                let Some(out) = self.outputs.first() else {
+                let Some((id, pixels)) = self.absolute_device_space() else {
                     return;
                 };
-                let size = smithay::utils::Size::<i32, Logical>::from((
-                    out.rect.w as i32,
-                    out.rect.h as i32,
-                ));
-                let pos = event.position_transformed(size) + Point::from((out.rect.x, out.rect.y));
+                let at = event.position_transformed(pixels);
+                let Some(pos) = self.output_pixels_to_global(id, (at.x, at.y)) else {
+                    return;
+                };
                 self.pointer_moved_to(pos, event.time_msec(), None);
             }
             InputEvent::PointerButton { event } => self.on_pointer_button::<B>(event),
@@ -833,6 +832,27 @@ impl Cupertino {
             // an unshifted key wins over a shifted one
             found[0].map(|c| (c, false)).or(found[1].map(|c| (c, true)))
         })
+    }
+
+    /// Where an absolute pointing device reports: the output under its pointer, and that output's mode turned as it
+    /// is shown, in panel pixels. The device's range spans those pixels, so a position maps through the output's exact
+    /// scale ([`Cupertino::output_pixels_to_global`]) and lands where drawing puts that pixel, up to the far edge.
+    fn absolute_device_space(
+        &self,
+    ) -> Option<(cupertino_wm::OutputId, smithay::utils::Size<i32, Logical>)> {
+        let id = self.pointer_output()?;
+        let geometry = self.output_geometry(id)?;
+        let turned = if geometry.rotated {
+            geometry.mode.swapped()
+        } else {
+            geometry.mode
+        };
+        // the size type of `position_transformed`; its values here are panel pixels
+        let pixels = smithay::utils::Size::<i32, Logical>::from((
+            i32::try_from(turned.width).ok()?,
+            i32::try_from(turned.height).ok()?,
+        ));
+        Some((id, pixels))
     }
 
     /// A mouse is listed in `Mice` from its first motion, scroll or click on.

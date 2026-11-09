@@ -51,6 +51,7 @@ use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_ba
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 /// Memory order of an Argb8888 pixel is blue, green, red, alpha.
+pub mod absolute;
 pub mod desktop;
 pub mod overlays;
 pub mod shell;

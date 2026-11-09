@@ -60,7 +60,10 @@ it (see `cupertino-ui-controls`).
 
 `ci/capture.sh kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them)
 headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`,
-`kit/virtual-list` and `kit/editor` draw the examples' windows as they open.
+`kit/virtual-list` and `kit/editor` draw the examples' windows as they open. `kit/gallery` draws every control family
+side by side, `--state rest|held-button|held-switch|held-slider|held-segment|disabled` holding the pointer down on one
+or disabling them all, at `--control-size mini|small|regular|large|extra-large` and `--compact on|off`, over
+`--backdrop flat|busy`.
 
 The `control-fixtures` test renders every control in each state it has (normal, hover, pressed, disabled, focused,
 selected) in Light, Dark and both high-contrast appearances, left to right and right to left, through the CPU renderer,

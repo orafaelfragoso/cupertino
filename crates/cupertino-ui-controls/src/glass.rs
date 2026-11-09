@@ -11,6 +11,11 @@
 //! Glass lies under everything the window paints, so a window with glass over its content pane has the compositor
 //! draw that pane's background too ([`Surface::WindowBackground`]): the glass then reads the window, not the desktop
 //! behind it.
+//!
+//! Roles are either content surfaces, which hold a window's content (the sidebar panel), or floating controls over
+//! that content (a toolbar group, a translucent button, a held thumb's lens); see [`GlassRole::floating`]. Glass is
+//! never laid on glass: a role whose node already lies on glass ([`PaintCx::on_glass`]) draws none of its own, the
+//! glass under it serving both.
 
 use cupertino_geometry::{Insets, Rect};
 use cupertino_ui_core::{Glass, PaintCx};
@@ -24,6 +29,11 @@ pub enum GlassRole {
     ToolbarGroup,
     /// The sidebar panel of a full-height-sidebar window, from its top edge to its bottom edge.
     SidebarPanel,
+    /// An action button drawn on glass of its own, a shaded body with a fine bright rim, as against the quiet fill of
+    /// an ordinary button.
+    GlassButton,
+    /// The lens a switch's thumb or a slider's knob becomes while held, over the track it slides along.
+    ThumbLens,
 }
 
 /// What draws a [`GlassRole`].
@@ -42,10 +52,21 @@ impl GlassRole {
     /// What draws each role. A floating toolbar group is glass over the content pane's background, which the
     /// compositor draws below it; the sidebar panel lies at the window's edge over what is behind the window, which
     /// the compositor's sidebar material shows.
+    /// A translucent button and a thumb's lens lie over the window's own content (a form's background, the track),
+    /// which would hide the compositor's glass, so the toolkit paints them.
     pub const fn material(self) -> GlassMaterial {
         match self {
             GlassRole::ToolbarGroup => GlassMaterial::Glass,
             GlassRole::SidebarPanel => GlassMaterial::Compositor(Surface::Sidebar),
+            GlassRole::GlassButton | GlassRole::ThumbLens => GlassMaterial::Painted,
+        }
+    }
+
+    /// Whether the role is a floating control over the window's content rather than a surface holding content.
+    pub const fn floating(self) -> bool {
+        match self {
+            GlassRole::SidebarPanel => false,
+            GlassRole::ToolbarGroup | GlassRole::GlassButton | GlassRole::ThumbLens => true,
         }
     }
 
@@ -54,7 +75,7 @@ impl GlassRole {
     pub const fn container(self) -> (u32, f64) {
         match self {
             GlassRole::ToolbarGroup => (TOOLBAR_CONTAINER, TOOLBAR_SPACING),
-            GlassRole::SidebarPanel => (0, 0.0),
+            GlassRole::SidebarPanel | GlassRole::GlassButton | GlassRole::ThumbLens => (0, 0.0),
         }
     }
 }
@@ -83,8 +104,12 @@ const SHADE_LIGHT: f32 = 0.10;
 const SHADE_BLUR: f64 = 3.0;
 
 /// Paints the glass of `role` over the whole node, `rect` being the node's bounds and `radius` its corner radius.
-/// Returns true when the compositor draws it.
+/// Returns true when the compositor draws it, or when the node already lies on glass, which then serves it: glass is
+/// never doubled.
 pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f64) -> bool {
+    if cx.on_glass() {
+        return true;
+    }
     match role.material() {
         GlassMaterial::Compositor(surface) => {
             if cx.material(surface, radius, 1.0) {
@@ -112,7 +137,10 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
             false
         }
         GlassMaterial::Painted => {
-            paint_body(cx, rect, radius);
+            match role {
+                GlassRole::GlassButton => paint_button_body(cx, rect, radius),
+                _ => paint_body(cx, rect, radius),
+            }
             false
         }
     }
@@ -167,6 +195,94 @@ fn paint_body(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
     });
 }
 
+/// A translucent button's body: a share of white over the dark appearance, nearly white over the light one; with
+/// Reduce Transparency a darker opaque body in the dark appearance and a white one in the light.
+const BUTTON_BODY_DARK: f32 = 0.13;
+const BUTTON_BODY_LIGHT: f32 = 0.82;
+const BUTTON_OPAQUE_DARK: f32 = 0.19;
+/// The fine rim just inside the body's edge, bright at the top and the bottom and faint across the middle: white in
+/// the dark appearance, black in the light one, stronger with Increase Contrast.
+const BUTTON_RIM_DARK: f32 = 0.38;
+const BUTTON_RIM_LIGHT: f32 = 0.10;
+const BUTTON_RIM_HIGH_CONTRAST: f32 = 0.70;
+/// What the rim keeps across the middle of the sides.
+const BUTTON_RIM_MIDDLE: f32 = 0.3;
+/// The soft shade under the body in the light appearance.
+const BUTTON_SHADE_LIGHT: f32 = 0.12;
+
+/// The colours of a translucent button's body and rim in `theme`.
+pub(crate) fn button_body_colors(theme: &cupertino_ui_theme::ThemeTokens) -> (Color, Color) {
+    let dark = theme.preferences.appearance.is_dark();
+    let contrast = theme.preferences.appearance.is_high_contrast();
+    let opaque = theme.preferences.reduce_transparency;
+    let body = match (dark, opaque) {
+        (true, false) => Color::new(1.0, 1.0, 1.0, BUTTON_BODY_DARK),
+        (true, true) => Color::new(
+            BUTTON_OPAQUE_DARK,
+            BUTTON_OPAQUE_DARK,
+            BUTTON_OPAQUE_DARK + 0.02,
+            1.0,
+        ),
+        (false, false) => Color::new(1.0, 1.0, 1.0, BUTTON_BODY_LIGHT),
+        (false, true) => Color::new(1.0, 1.0, 1.0, 1.0),
+    };
+    let tone = if dark { 1.0 } else { 0.0 };
+    let rim = if contrast {
+        BUTTON_RIM_HIGH_CONTRAST
+    } else if dark {
+        BUTTON_RIM_DARK
+    } else {
+        BUTTON_RIM_LIGHT
+    };
+    (body, Color::new(tone, tone, tone, rim))
+}
+
+/// A translucent button's body: in the light appearance a soft shade first, then the body and its rim, brightest at
+/// the top and bottom edges.
+fn paint_button_body(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
+    let theme = cx.env().theme.clone();
+    let (body, rim) = button_body_colors(&theme);
+    let scale = cx.env().scale.max(1.0);
+    let shape = Shape::RoundedRect { rect, radius };
+    if !theme.preferences.appearance.is_dark() {
+        cx.push(PaintOp::PushLayer {
+            opacity: 1.0,
+            effects: vec![cupertino_ui_render::Effect::DropShadow {
+                offset: cupertino_geometry::Point::new(0.0, 0.5),
+                blur: SHADE_BLUR,
+                color: Color::new(0.0, 0.0, 0.0, BUTTON_SHADE_LIGHT),
+            }],
+        });
+        cx.push(PaintOp::Fill {
+            shape: shape.clone(),
+            paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, 1.0)),
+        });
+        cx.push(PaintOp::PopLayer);
+    }
+    cx.push(PaintOp::Fill {
+        shape,
+        paint: Paint::Solid(body),
+    });
+    let px = 1.0 / scale;
+    let middle = Color {
+        a: rim.a * BUTTON_RIM_MIDDLE,
+        ..rim
+    };
+    let stop = |offset, color| cupertino_ui_render::GradientStop { offset, color };
+    cx.push(PaintOp::Stroke {
+        shape: Shape::RoundedRect {
+            rect: rect.inset(Insets::uniform(px / 2.0)),
+            radius: nested_radius(radius, px / 2.0),
+        },
+        width: px,
+        paint: Paint::Linear {
+            start: cupertino_geometry::Point::new(rect.min_x(), rect.min_y()),
+            end: cupertino_geometry::Point::new(rect.min_x(), rect.max_y()),
+            stops: vec![stop(0.0, rim), stop(0.5, middle), stop(1.0, rim)],
+        },
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +301,20 @@ mod tests {
             GlassRole::SidebarPanel.material(),
             GlassMaterial::Compositor(Surface::Sidebar)
         );
+        assert_eq!(GlassRole::GlassButton.material(), GlassMaterial::Painted);
+        assert_eq!(GlassRole::ThumbLens.material(), GlassMaterial::Painted);
+    }
+
+    #[test]
+    fn content_surfaces_and_floating_controls_are_told_apart() {
+        assert!(!GlassRole::SidebarPanel.floating());
+        for role in [
+            GlassRole::ToolbarGroup,
+            GlassRole::GlassButton,
+            GlassRole::ThumbLens,
+        ] {
+            assert!(role.floating(), "{role:?}");
+            assert_eq!(role.container().0 == 0, role != GlassRole::ToolbarGroup);
+        }
     }
 }

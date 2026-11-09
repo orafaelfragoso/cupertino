@@ -71,10 +71,10 @@ fn fill<A: Application>(h: &Harness<A>, key: &'static str) -> Option<Color> {
 fn the_box_and_its_label_make_the_chrome() {
     let h = Harness::<App>::new();
     let label = label_size("off");
-    assert!(label.height > 14.0);
     assert_eq!(
         h.rect("off").size,
-        Size::new(14.0 + 6.0 + label.width, label.height)
+        Size::new(16.0 + 6.0 + label.width, label.height.max(16.0)),
+        "the regular box is 16 pt"
     );
 }
 
@@ -97,11 +97,8 @@ fn a_checked_box_fills_as_selected_and_is_a_check_box_to_accessibility() {
     let h = Harness::<App>::new();
     assert_eq!(
         fill(&h, "off"),
-        Some(color(
-            ColorRole::ControlFill,
-            InteractionVariant::Normal,
-            false
-        ))
+        Some(cupertino_ui_theme::Color::new(0.0, 0.0, 0.0, 0.095)),
+        "unchecked, a quiet well"
     );
     assert_eq!(
         fill(&h, "on"),

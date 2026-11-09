@@ -308,6 +308,8 @@ fn inside(rect: &cupertino_kit::render::PixelRect, bounds: Rect) -> bool {
 
 /// How far past its bounds a control may paint: its focus ring and its shadow.
 const CONTROL_REACH: f64 = 8.0;
+/// How far past its bounds a held slider may paint: its knob swells into a lens, with a shadow.
+const HELD_REACH: f64 = 16.0;
 
 #[test]
 fn a_switch_repaints_only_itself_while_its_knob_slides() {
@@ -370,7 +372,7 @@ fn a_slider_repaints_only_itself_while_its_knob_is_dragged() {
     until_quiet(&mut driver, &mut meter, 10, 200);
     let (damage, after) = damage_since(&driver, window, before);
     assert!(after > before + 5, "the knob moved with the pointer");
-    let reach = slider.outset(CONTROL_REACH);
+    let reach = slider.outset(HELD_REACH);
     assert!(
         damage.iter().all(|r| inside(r, reach)),
         "only the slider: {damage:?} outside {reach:?}"

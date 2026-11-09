@@ -305,6 +305,8 @@ pub struct PaintCx<'a> {
     pub(crate) focused: bool,
     pub(crate) focus_visible: bool,
     pub(crate) window_active: bool,
+    /// The node lies on glass shown by an ancestor, an earlier node that holds it, or the window's background.
+    pub(crate) on_glass: bool,
     /// The window system shows the material of the window's [`WindowBackground::Surface`](crate::WindowBackground).
     pub(crate) backdrop: bool,
     pub(crate) now: Timestamp,
@@ -345,6 +347,13 @@ impl PaintCx<'_> {
 
     pub fn window_active(&self) -> bool {
         self.window_active
+    }
+
+    /// Whether the node lies on glass the window shows: an ancestor's, the glass of an earlier node that holds it
+    /// whole, or the window's own glass background. A control that would draw glass of its own there draws none, so
+    /// glass is never laid on glass.
+    pub fn on_glass(&self) -> bool {
+        self.on_glass
     }
 
     /// Whether the window system shows the material of the window's

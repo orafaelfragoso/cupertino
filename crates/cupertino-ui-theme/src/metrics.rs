@@ -383,6 +383,10 @@ mod tests {
                     look(appearance, reduced, Surface::WindowBackground).material,
                     Some("WindowBackground")
                 );
+                assert_eq!(
+                    look(appearance, reduced, Surface::TextBackground).material,
+                    Some("TextBackground")
+                );
             }
         }
     }

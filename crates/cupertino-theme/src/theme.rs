@@ -3,9 +3,10 @@ use crate::appearance::Appearance;
 use crate::error::Result;
 use crate::metrics::{ShapeTokens, WindowShadowPreset};
 use crate::recipe::{
-    app_grid_background, dock_reduced, running_indicator, switcher_panel, window_background,
-    MaterialLibrary, MaterialOptions, Recipe, APP_GRID_MATERIAL, DOCK_MATERIAL,
-    RUNNING_INDICATOR_MATERIAL, SWITCHER_MATERIAL, WINDOW_BACKGROUND_MATERIAL,
+    app_grid_background, dock_reduced, opaque_background, running_indicator, switcher_panel,
+    window_background, MaterialLibrary, MaterialOptions, Recipe, APP_GRID_MATERIAL, DOCK_MATERIAL,
+    RUNNING_INDICATOR_MATERIAL, SWITCHER_MATERIAL, TEXT_BACKGROUND_MATERIAL,
+    WINDOW_BACKGROUND_MATERIAL,
 };
 use crate::tokens::DesignTokens;
 use std::path::{Path, PathBuf};
@@ -49,6 +50,8 @@ pub struct Theme {
 
 /// The colour token of a window's background, which the window background material draws.
 const WINDOW_BACKGROUND_TOKEN: &str = "window-background";
+/// The colour token of the text background material.
+const TEXT_BACKGROUND_TOKEN: &str = "text-background";
 
 impl Theme {
     /// Load from [`spec_dir`].
@@ -99,6 +102,11 @@ impl Theme {
         if material == WINDOW_BACKGROUND_MATERIAL {
             if let Some(color) = self.tokens.color(appearance, WINDOW_BACKGROUND_TOKEN) {
                 return Ok(window_background(color));
+            }
+        }
+        if material == TEXT_BACKGROUND_MATERIAL {
+            if let Some(color) = self.tokens.color(appearance, TEXT_BACKGROUND_TOKEN) {
+                return Ok(opaque_background(TEXT_BACKGROUND_MATERIAL, color));
             }
         }
         self.materials.recipe(appearance, material, opts)
@@ -178,6 +186,28 @@ mod tests {
                 assert_eq!(recipe.fills[0].blend, Blend::Copy);
                 assert_eq!(recipe.fills[0].rgba, [color.r, color.g, color.b, 1.0]);
             }
+        }
+    }
+
+    /// The text background material is the text background colour, opaque, as the window background material is.
+    #[test]
+    fn the_text_background_material_is_the_text_background_colour() {
+        use crate::recipe::{MaterialOptions, TEXT_BACKGROUND_MATERIAL};
+        let theme = Theme::load().unwrap();
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let color = theme
+                .tokens
+                .color(appearance, TEXT_BACKGROUND_TOKEN)
+                .unwrap();
+            let recipe = theme
+                .recipe(
+                    appearance,
+                    TEXT_BACKGROUND_MATERIAL,
+                    &MaterialOptions::default(),
+                )
+                .unwrap();
+            assert!(recipe.backdrop.is_none() && recipe.opaque, "{appearance:?}");
+            assert_eq!(recipe.fills[0].rgba, [color.r, color.g, color.b, 1.0]);
         }
     }
 

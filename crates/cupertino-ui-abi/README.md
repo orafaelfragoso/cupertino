@@ -47,6 +47,46 @@ runtime's generation and owner, its posted messages and its wake fd.
   `catch_unwind`, leaking it on a panic, and frees the slot. Posts then return `CK_ERROR_STALE_HANDLE`, and a new
   runtime can start.
 
+## The installed SDK
+
+The `cupertino-kit` package (`packaging/release.py`'s `sdk` manifest) installs:
+
+| File | What it is |
+|---|---|
+| `/usr/lib/libcupertinokit.so.1.<minor>.0` | the library; `<minor>` is `CUPERTINOKIT_ABI_MINOR` of its header |
+| `/usr/lib/libcupertinokit.so.1` | the soname, a link to the library |
+| `/usr/lib/libcupertinokit.so` | the name a program links with (`-lcupertinokit`), a link to the soname |
+| `/usr/include/cupertinokit-1/cupertinokit.h` | `abi/cupertinokit.h`, byte for byte |
+| `/usr/lib/pkgconfig/cupertinokit.pc` | from `cupertinokit.pc.in`, with `Version: 1.<minor>.0` |
+| `/usr/share/cupertino-kit/build-info.json` | the package, its version and the commit it was built from |
+
+A new major version would get a new soname and include directory, so both can be installed at once. A program builds
+with `pkg-config cupertinokit` alone and needs no path of its own:
+
+```sh
+cc -std=c11 $(pkg-config --cflags cupertinokit) app.c -o app $(pkg-config --libs cupertinokit)
+```
+
+`release.py verify --package sdk` reads the packaged library with `readelf`. It fails unless the exports equal
+`abi/symbols-1.txt`, no symbol version is defined, the soname is `libcupertinokit.so.1` and `FLAGS_1` has `NODELETE`, and
+unless the header and every other copied file equal the checkout's.
+
+## C samples
+
+- `examples/c/headless.c` negotiates the version (a minor version newer than the library's gives `CK_ERROR_VERSION` and
+  a message naming it), asks for capabilities, starts a headless runtime, posts two messages from another thread through
+  a waker and polls them, and shows the thread and stale-handle rules. It prints the trace in
+  `examples/c/headless.expected` and exits 0. It compiles as C11 and as C++17. Until the runtime has a pollable fd,
+  it polls `ck_poll_events` in steps of 1 ms.
+- `examples/c/Makefile` builds the samples with `pkg-config cupertinokit` only.
+- `tests/c/layout.c` prints every struct's size, alignment and field offsets as the C compiler sees them through the
+  installed header, in the format of `abi/layout-1.txt`.
+
+`ci/c-sdk.py` installs the SDK from a build into a temporary root, compiles the samples there with
+`-Wall -Wextra -Werror` (also as C++), runs them against the trace, diffs the layout probe with `abi/layout-1.txt`, and
+builds and runs the project `cupertino sdk new --lang c` writes. The package's install test does the same against
+`/usr` in a fresh container, with the `cupertino-kit` package installed alone.
+
 ## Tests
 
 - `src/tests.rs`: the hostile inputs, the thread rules, the post queue and injected panics, calling the functions
@@ -63,6 +103,4 @@ ABI 1.
 
 - Only the headless backend exists. `CK_BACKEND_WAYLAND` returns `CK_ERROR_UNSUPPORTED`.
 - There are no windows, views or UI events yet. `ck_poll_events` returns only posted messages, and nothing waits on the
-  wake fd until `ck_runtime_dispatch` exists.
-- The library has no C test programs yet, and packaging installs neither the library nor the header.
-- The registry check (`ci/contracts.py`) does not yet fail on a `cdylib` without a `c-library` entry.
+  wake fd until `ck_runtime_dispatch` exists; the samples poll in steps instead.

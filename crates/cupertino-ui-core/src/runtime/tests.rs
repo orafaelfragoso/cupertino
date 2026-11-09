@@ -83,6 +83,8 @@ impl Application for Counter {
                     alpha: 1.0,
                 }
             }
+            "catcher" => model.background = WindowBackground::Solid(Color::new(0.0, 0.0, 0.0, 0.0)),
+            "scrim" => model.background = WindowBackground::Solid(SCRIM),
             "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
             "wait" => return vec![Command::Perform(Box::pin(async { "done 7".to_string() }))],
             "launch" | "launch from gone" => {
@@ -184,6 +186,9 @@ impl Application for Counter {
 }
 
 use crate::Element;
+
+/// The colour of a window that dims what is under it.
+const SCRIM: Color = Color::new(0.0, 0.0, 0.0, 0.3);
 
 type Rt = Runtime<Counter, FakeSystem>;
 
@@ -297,6 +302,224 @@ fn a_window_is_drawn_only_after_its_first_configure_which_the_frame_acknowledges
     );
     assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
     assert_eq!(rt.step(steps()).unwrap(), StepStatus::Idle);
+}
+
+/// A window of one colour (here a transparent one that only takes input) is shown by the window system without a frame:
+/// nothing is rendered or presented, its content still takes the pointer, and it is shown again only to answer a
+/// configure or to show another colour; a new scale or a change of its content shows nothing new. Back on the theme's
+/// background it draws a whole frame.
+#[test]
+fn a_solid_window_is_shown_without_a_frame_and_again_only_for_a_configure_or_another_colour() {
+    let (mut rt, window, damage) = start();
+    rt.window_system_mut().solid = true;
+    rt.messages.push_back("catcher".into());
+    rt.step(steps()).unwrap();
+    configure(&mut rt, window, 4);
+    let clear = Color::new(0.0, 0.0, 0.0, 0.0);
+    assert_eq!(
+        rt.window_system().solids,
+        vec![(window, clear, Some(ConfigureId(4)))]
+    );
+    assert!(rt.window_system().presented.is_empty(), "no frame");
+    assert!(damage.borrow().is_empty(), "nothing rendered");
+    let frame = |rt: &mut Rt| {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+    };
+    frame(&mut rt);
+
+    click(&mut rt, window, 5.0);
+    assert_eq!(rt.model().count, 1, "the content takes the pointer");
+    rt.window_system_mut().send(window, WindowEvent::Scale(1.5));
+    rt.step(steps()).unwrap();
+    frame(&mut rt);
+    assert_eq!(rt.window_system().solids.len(), 1, "nothing new to show");
+
+    configure_at(&mut rt, window, 5, Size::new(100.0, 200.0));
+    assert_eq!(
+        rt.window_system().solids[1],
+        (window, clear, Some(ConfigureId(5)))
+    );
+    frame(&mut rt);
+    rt.messages.push_back("scrim".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids[2], (window, SCRIM, None));
+    assert!(rt.window_system().presented.is_empty());
+    assert!(damage.borrow().is_empty());
+
+    // a refused present waits for the window system, then shows the colour
+    frame(&mut rt);
+    rt.window_system_mut().refuse_next = true;
+    rt.messages.push_back("catcher".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids.len(), 3);
+    rt.window_system_mut().release(window);
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids[3], (window, clear, None));
+
+    frame(&mut rt);
+    rt.messages.push_back("panel".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().presented, vec![(window, None)]);
+    assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
+    assert_eq!(rt.window_system().solids.len(), 4);
+}
+
+/// One window whose content lays the popover's glass under itself, on the theme's background or on one colour as the
+/// model says.
+struct Glassy;
+
+impl Application for Glassy {
+    type Model = WindowBackground;
+    type Message = WindowBackground;
+
+    fn init() -> (WindowBackground, Vec<Command<WindowBackground>>) {
+        (WindowBackground::Theme, Vec::new())
+    }
+
+    fn update(
+        model: &mut WindowBackground,
+        message: WindowBackground,
+    ) -> Vec<Command<WindowBackground>> {
+        *model = message;
+        Vec::new()
+    }
+
+    fn view(model: &WindowBackground) -> Vec<Window<WindowBackground>> {
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Glass".into(),
+                app_id: "test.glass".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            popup: None,
+            background: *model,
+            content: Element::new(GlassPane),
+            menus: None,
+        }]
+    }
+}
+
+/// A 50 x 20 pane on the popover's glass.
+struct GlassPane;
+
+impl<M: 'static> Widget<M> for GlassPane {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(50.0, 20.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        cx.material(Surface::Popover, 6.0, 1.0);
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// A window whose content stood on glass and turns one colour takes the glass away with the colour, since its content
+/// paints nothing to stand on it; back on the theme's background it asks for the glass again.
+#[test]
+fn a_window_turning_solid_takes_its_content_s_glass_away_and_gets_it_back_when_drawn_again() {
+    let damage = Rc::default();
+    let mut system = FakeSystem::default();
+    system.effects = true;
+    system.solid = true;
+    let mut rt = Runtime::<Glassy, FakeSystem>::new(system, options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let materials = |rt: &Runtime<Glassy, FakeSystem>| -> Vec<usize> {
+        rt.window_system()
+            .requests
+            .iter()
+            .filter_map(|(w, r)| match r {
+                WindowRequest::Materials(m) if *w == window => Some(m.len()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(materials(&rt), [1], "the pane's glass");
+    assert_eq!(rt.window_system().presented.len(), 1);
+
+    let frame = |rt: &mut Runtime<Glassy, FakeSystem>| {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+    };
+    frame(&mut rt);
+    rt.messages.push_back(WindowBackground::INPUT_ONLY);
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids.len(), 1);
+    assert_eq!(materials(&rt), [1, 0], "no glass under the colour");
+
+    frame(&mut rt);
+    rt.messages.push_back(WindowBackground::Theme);
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().presented.len(), 2);
+    assert_eq!(materials(&rt), [1, 0, 1], "the glass again");
+}
+
+/// Where the window system cannot show a colour without a frame, a solid window is drawn like any other: filled with
+/// its colour under its content, and not filled when the colour is transparent.
+#[test]
+fn a_solid_window_the_window_system_cannot_show_is_drawn_filled_with_its_colour() {
+    let (mut rt, window, damage) = start();
+    rt.messages.push_back("scrim".into());
+    rt.step(steps()).unwrap();
+    configure(&mut rt, window, 1);
+    assert!(rt.window_system().solids.is_empty());
+    assert_eq!(
+        rt.window_system().presented,
+        vec![(window, Some(ConfigureId(1)))]
+    );
+    assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
+    let first_op = |rt: &Rt| {
+        rt.snapshot(window).unwrap().display_list.nodes[0]
+            .ops
+            .first()
+            .cloned()
+    };
+    assert_eq!(
+        first_op(&rt),
+        Some(PaintOp::Fill {
+            shape: Shape::Rect(cupertino_geometry::Rect::new(0.0, 0.0, 200.0, 100.0)),
+            paint: Paint::Solid(SCRIM),
+        })
+    );
+
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.messages.push_back("catcher".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(first_op(&rt), None, "nothing to fill");
+    assert_eq!(rt.window_system().presented.len(), 2);
 }
 
 #[test]
@@ -4224,4 +4447,522 @@ mod popup_release {
             );
         }
     }
+}
+
+thread_local! {
+    /// What the last paint of a [`Marked`] node read of [`PaintCx::obscured`].
+    static OBSCURED_SEEN: Cell<Option<cupertino_geometry::Insets>> = const { Cell::new(None) };
+}
+
+/// A row in the window's raised layer, 30 pt tall: glass under it where the window system draws it, else a fill of
+/// its own, and a mark over it.
+struct RaisedRow;
+
+const ROW_FILL: Color = Color::new(0.5, 0.5, 0.5, 1.0);
+const ROW_MARK: Color = Color::new(1.0, 0.0, 0.0, 1.0);
+
+impl Widget<String> for RaisedRow {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fixed(30.0),
+            align_self: Some(Align::Start),
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 30.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, String>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        if !cx.glass(crate::Glass::regular()) {
+            cx.push(PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, size.width, size.height)),
+                paint: Paint::Solid(ROW_FILL),
+            });
+        }
+        cx.push(PaintOp::Fill {
+            shape: Shape::Rect(Rect::new(10.0, 10.0, 10.0, 10.0)),
+            paint: Paint::Solid(ROW_MARK),
+        });
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn raised(&self, _: &()) -> bool {
+        true
+    }
+}
+
+/// A block 20 pt tall that draws an overlay over itself, as a caret does, and notes how far raised nodes cover it.
+struct Marked;
+
+impl Widget<String> for Marked {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(50.0),
+            height: SizeSpec::Fixed(20.0),
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(50.0, 20.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, String>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        OBSCURED_SEEN.set(Some(cx.obscured()));
+        cx.overlay();
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn overlay(&self, _: &(), cx: &mut crate::OverlayCx<'_>) {
+        cx.fill_pixels(
+            Rect::new(0.0, 0.0, 2.0, 20.0),
+            Color::new(0.0, 0.0, 1.0, 1.0),
+        );
+    }
+}
+
+/// Layers its children over each other, filling the window.
+struct Layers(Vec<Element<String>>);
+
+impl Widget<String> for Layers {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Overlay)
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<String>> {
+        std::mem::take(&mut self.0)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, String>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// A page that scrolls under a raised row: the page's offset is the model; it starts with a focusable block under the
+/// row and a marked block below it.
+struct UnderRow;
+
+impl Application for UnderRow {
+    /// The page's offset, and whether the window shows one colour instead of its content.
+    type Model = (f64, bool);
+    type Message = String;
+
+    fn init() -> ((f64, bool), Vec<Command<String>>) {
+        ((20.0, false), Vec::new())
+    }
+
+    fn update((offset, solid): &mut (f64, bool), message: String) -> Vec<Command<String>> {
+        let parts: Vec<&str> = message.split(':').collect();
+        match parts[..] {
+            ["reveal", "page", y] | ["scroll", y] => *offset = y.parse().unwrap(),
+            ["solid", on] => *solid = on == "on",
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn view((offset, solid): &(f64, bool)) -> Vec<Window<String>> {
+        let page = Element::new(Pane {
+            name: "page",
+            height: SizeSpec::Fill,
+            offset: *offset,
+            content: Some(column(vec![
+                block(40.0, false),
+                block(20.0, true).key("target"),
+                Element::new(Marked).key("marked"),
+                block(300.0, false),
+            ])),
+        })
+        .key("page");
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Under".into(),
+                app_id: "test.under".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            background: if *solid {
+                WindowBackground::INPUT_ONLY
+            } else {
+                WindowBackground::Theme
+            },
+            popup: None,
+            content: Element::new(Layers(vec![page, Element::new(RaisedRow).key("row")])),
+            menus: None,
+        }]
+    }
+}
+
+type Under = Runtime<UnderRow, FakeSystem>;
+
+/// A window under a raised row, on a window system that shows raised layers (`layers`) and the desktop's effects.
+fn under_row(layers: bool) -> (Under, WindowId) {
+    let damage = Rc::default();
+    let mut system = FakeSystem::default();
+    system.layers = layers;
+    system.effects = true;
+    let mut rt = Under::new(system, options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    (rt, window)
+}
+
+/// Whether the window's list (`layer`: its raised layer's) holds a node that fills with `color`.
+fn draws(rt: &Under, layer: bool, color: Color) -> bool {
+    let w = &rt.windows[0];
+    let list = if layer {
+        &w.layer.list
+    } else {
+        &w.display_list
+    };
+    list.nodes.iter().any(|n| {
+        n.ops
+            .iter()
+            .any(|op| matches!(op, PaintOp::Fill { paint: Paint::Solid(c), .. } if *c == color))
+    })
+}
+
+fn last_materials(rt: &Under) -> Vec<MaterialRegion> {
+    rt.window_system()
+        .requests
+        .iter()
+        .rev()
+        .find_map(|(_, r)| match r {
+            WindowRequest::Materials(m) => Some(m.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_raised_row_draws_in_its_own_layer_with_its_glass_above_the_content() {
+    let (rt, _) = under_row(true);
+    let presents = &rt.window_system().layer_presents;
+    let (_, layer) = presents.last().expect("the layer was presented");
+    let layer = layer.as_ref().expect("and shown");
+    assert_eq!(
+        layer.height, 30,
+        "from the window's top down to the row's bottom"
+    );
+    assert_eq!(layer.size, (200, 30), "as wide as the window, at its scale");
+    assert!(draws(&rt, true, ROW_MARK), "the row's mark is in the layer");
+    assert!(!draws(&rt, false, ROW_MARK), "and not in the content");
+    assert!(
+        !draws(&rt, true, ROW_FILL) && !draws(&rt, false, ROW_FILL),
+        "glass, no fill"
+    );
+    assert_eq!(
+        last_materials(&rt),
+        vec![MaterialRegion {
+            material: cupertino_ui_theme::GLASS_MATERIAL.into(),
+            rect: Rect::new(0.0, 0.0, 200.0, 30.0),
+            radius: 0.0,
+            alpha: 1.0,
+            glass: Some(cupertino_ui_platform::GlassRegion {
+                style: cupertino_ui_platform::GlassStyle::Regular,
+                container: 0,
+                spacing: 0.0,
+            }),
+            raised: true,
+        }],
+        "the row's glass lies above the content, under the layer"
+    );
+}
+
+#[test]
+fn content_scrolling_under_the_raised_row_presents_the_content_and_leaves_the_layer() {
+    let (mut rt, window) = under_row(true);
+    let layers = rt.window_system().layer_presents.len();
+    let frames = rt.window_system().presented.len();
+    rt.messages.push_back("scroll:35".into());
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().0, 35.0);
+    assert_eq!(
+        rt.window_system().presented.len(),
+        frames + 1,
+        "the content moved"
+    );
+    assert_eq!(
+        rt.window_system().layer_presents.len(),
+        layers,
+        "the layer, which did not change, is not drawn again: the scroll damages none of the header band"
+    );
+}
+
+/// A raised row that comes first in the tree, over a pane filling the window with a material of its own.
+struct RowFirst;
+
+impl Application for RowFirst {
+    type Model = ();
+    type Message = String;
+
+    fn init() -> ((), Vec<Command<String>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: String) -> Vec<Command<String>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<String>> {
+        let mut window = UnderRow::view(&(0.0, false)).remove(0);
+        window.content = Element::new(Layers(vec![
+            Element::new(RaisedRow).key("row"),
+            Element::new(GlassPane).key("pane"),
+        ]));
+        vec![window]
+    }
+}
+
+/// Without a raised layer a raised node's material still lies over the materials of the nodes it lies over, though it
+/// comes first in the tree (the order of the window's regions is the order they are drawn in); with a layer it lies
+/// above the content anyway.
+#[test]
+fn without_a_layer_a_raised_row_s_glass_lies_over_a_material_that_comes_after_it_in_the_tree() {
+    for layers in [false, true] {
+        let damage = Rc::default();
+        let mut system = FakeSystem::default();
+        system.layers = layers;
+        system.effects = true;
+        let mut rt = Runtime::<RowFirst, FakeSystem>::new(system, options(&damage));
+        rt.step(steps()).unwrap();
+        let window = rt.windows()[0].1;
+        configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+        let materials = rt
+            .window_system()
+            .requests
+            .iter()
+            .rev()
+            .find_map(|(_, r)| match r {
+                WindowRequest::Materials(m) => Some(m.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(materials.len(), 2, "{materials:?}");
+        // the row is 30 points tall, the pane fills the window
+        let row = materials
+            .iter()
+            .position(|m| m.rect.height() == 30.0)
+            .unwrap();
+        let pane = materials
+            .iter()
+            .position(|m| m.rect.height() == 100.0)
+            .unwrap();
+        if layers {
+            assert!(materials[row].raised && !materials[pane].raised);
+        } else {
+            assert!(pane < row, "the row's glass is drawn last: {materials:?}");
+            let w = &rt.windows[0];
+            let order: Vec<_> = w.display_list.nodes.iter().map(|n| n.id).collect();
+            let at = |key: &'static str| {
+                let id: crate::NodeId = rt.find(w.id, &key.into()).unwrap();
+                order.iter().position(|&n| n == id.into()).unwrap()
+            };
+            assert!(at("pane") < at("row"), "and its paint too");
+        }
+    }
+}
+
+/// A window that turns one colour hides its raised layer with the colour's commit, as it takes its glass away, and
+/// shows it again once its content is drawn again.
+#[test]
+fn a_window_turning_solid_hides_its_raised_layer_and_shows_it_again_when_drawn() {
+    let (mut rt, window) = under_row(true);
+    rt.window_system_mut().solid = true;
+    let frame = |rt: &mut Under| {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+    };
+    frame(&mut rt);
+    rt.messages.push_back("solid:on".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids.len(), 1);
+    let presents = &rt.window_system().layer_presents;
+    assert!(
+        matches!(presents.last(), Some((w, None)) if *w == window),
+        "the layer is hidden: {:?}",
+        presents
+            .iter()
+            .map(|(_, l)| l.is_some())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(rt.windows[0].layer.shown, None);
+    let hidden = presents.len();
+
+    frame(&mut rt);
+    rt.messages.push_back("solid:off".into());
+    rt.step(steps()).unwrap();
+    let presents = &rt.window_system().layer_presents;
+    assert_eq!(presents.len(), hidden + 1, "shown again with the content");
+    assert!(matches!(presents.last(), Some((_, Some(l))) if l.height == 30));
+}
+
+#[test]
+fn without_a_raised_layer_the_row_draws_in_place_and_nothing_scrolls_under_its_glass() {
+    let (rt, _) = under_row(false);
+    assert!(rt.window_system().layer_presents.is_empty());
+    assert!(
+        draws(&rt, false, ROW_MARK),
+        "the row's mark is in the content"
+    );
+    assert!(!draws(&rt, false, ROW_FILL), "glass, no fill");
+    let materials = last_materials(&rt);
+    assert_eq!(materials.len(), 1, "{materials:?}");
+    assert!(
+        materials[0].glass.is_some() && !materials[0].raised,
+        "the glass lies under the window, as any other: {materials:?}"
+    );
+    let w = &rt.windows[0];
+    let order: Vec<_> = w.display_list.nodes.iter().map(|n| n.id).collect();
+    let page = order
+        .iter()
+        .position(|&id| Some(id) == rt.find(w.id, &"page".into()).map(Into::into));
+    let row = order
+        .iter()
+        .position(|&id| Some(id) == rt.find(w.id, &"row".into()).map(Into::into));
+    assert!(page < row, "the row draws over the page");
+    // the page clips what it scrolls to below the row, so none of it covers the glass
+    let page: crate::NodeId = rt.find(w.id, &"page".into()).unwrap();
+    let node = w
+        .display_list
+        .nodes
+        .iter()
+        .find(|n| n.id == page.into())
+        .unwrap();
+    assert_eq!(
+        node.clip,
+        Some(Shape::Rect(Rect::new(0.0, 30.0, 200.0, 70.0))),
+        "cut at the row's bottom edge"
+    );
+    let target: crate::NodeId = rt.find(w.id, &"target".into()).unwrap();
+    let target = w
+        .display_list
+        .nodes
+        .iter()
+        .find(|n| n.id == target.into())
+        .unwrap();
+    assert!(
+        target.bounds.is_empty() || target.bounds.min_y() >= 29.0,
+        "the block under the row is not drawn there: {:?}",
+        target.bounds
+    );
+}
+
+#[test]
+fn focus_reveals_a_node_below_the_raised_row_and_overlays_are_cut_from_it() {
+    let (mut rt, window) = under_row(true);
+    // the page starts 20 pt down: the target (content 40–60) lies at 20–40, half under the 30 pt row
+    assert_eq!(
+        OBSCURED_SEEN.get().map(|i| i.top),
+        Some(0.0),
+        "the marked block, at 40–60, lies below the row"
+    );
+    rt.messages.push_back("scroll:50".into());
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+    // the marked block (content 60–80) now lies at 10–30: all under the row
+    assert_eq!(OBSCURED_SEEN.get().map(|i| i.top), Some(20.0));
+    let w = &rt.windows[0];
+    let marked: crate::NodeId = rt.find(window, &"marked".into()).unwrap();
+    let overlay = w
+        .display_list
+        .nodes
+        .iter()
+        .find(|n| n.id == crate::paint::overlay_id(marked));
+    assert!(
+        overlay.is_none_or(|o| o.bounds.is_empty() || o.bounds.min_y() >= 30.0),
+        "the mark is cut from the row: {overlay:?}"
+    );
+    // Tab to the target, at 40 - 50 = -10..10: the page shows it below the row, not at the window's top
+    rt.window_system_mut().send(
+        window,
+        WindowEvent::Key(
+            KeyEvent {
+                code: 0,
+                keysym: Keysym(0xff09),
+                text: None,
+                pressed: true,
+                repeat: false,
+                mods: Mods::NONE,
+            },
+            Timestamp(0),
+        ),
+    );
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        rt.snapshot(window).unwrap().focus,
+        rt.find(window, &"target".into())
+    );
+    assert_eq!(rt.model().0, 10.0, "the target's top at the row's bottom");
 }

@@ -121,6 +121,33 @@ impl ShmPresenter {
         self.draw_with(conn, damage, |pixmap, scale, _| paint(pixmap, scale))
     }
 
+    /// Show the surface as `rgba` (straight sRGB components from 0 to 1) all over: one pixel the compositor stretches
+    /// over it ([`Connection::present_solid`]), which costs nothing whatever the surface's size, or where the compositor
+    /// cannot, a frame filled with the colour. Commits with a frame callback, like [`draw`]; the next frame drawn is whole.
+    ///
+    /// [`draw`]: Self::draw
+    /// [`Connection::present_solid`]: cupertino_wayland_client::Connection::present_solid
+    pub fn draw_solid(&mut self, conn: &mut Connection, rgba: [f32; 4]) -> Result<(), Error> {
+        let size = self
+            .size
+            .ok_or(cupertino_wayland_client::Error::NotConfigured)?;
+        match conn.present_solid(self.surface, size, rgba) {
+            Ok(()) => {
+                self.frame_pending = true;
+                // the pixmap no longer holds what is shown
+                self.drawn_scale = None;
+                self.reconfigured = false;
+                Ok(())
+            }
+            Err(cupertino_wayland_client::Error::Unsupported(_)) => {
+                let [r, g, b, a] = rgba.map(|c| c.clamp(0.0, 1.0));
+                let color = Color::from_rgba(r, g, b, a).unwrap_or(Color::TRANSPARENT);
+                self.draw(conn, None, |pixmap, _| pixmap.fill(color))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// [`draw`] with the device-pixel rectangles that were cleared given to `paint` too: `None` when the frame is whole
     /// (the pixmap was cleared all over), also when `damage` was given but could not be kept.
     ///

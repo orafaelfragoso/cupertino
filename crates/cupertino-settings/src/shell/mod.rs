@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use cupertino_kit::controls::{
-    FormBackground, Modal, Navigation, NavigationStack, ScrollView, Scroller, SearchField,
+    unobscured_insets, Modal, Navigation, NavigationStack, ScrollView, Scroller, SearchField,
     SidebarWindow, SplitLayout, TileSidebar, TileSidebarItem, ToolbarTitle,
 };
 use cupertino_kit::core::{CommandRegistry, Menus, Shortcut};
@@ -552,9 +552,14 @@ impl Shell {
         } else {
             form::results(&self.hits())
         };
+        // the page fills the pane, under the toolbar row, and starts below it
+        let row = unobscured_insets(DecorationMode::Sidebar);
         let page = Element::new(Stack {
             axis: Axis::Vertical,
-            padding: PAGE_INSET,
+            padding: Insets {
+                top: PAGE_INSET.top + row.top,
+                ..PAGE_INSET
+            },
             spacing: 0.0,
             align: Align::Stretch,
             children: vec![body],
@@ -580,9 +585,10 @@ impl Shell {
             can_go_back: self.state.history.can_go_back(),
             can_go_forward: self.state.history.can_go_forward(),
             on_navigate: Some(Box::new(Message::Navigate)),
-            under_toolbar: false,
+            under_toolbar: true,
         });
-        Element::from(FormBackground { content: stack })
+        // the pane's background is the window's, which the sidebar window draws
+        stack
     }
 }
 
@@ -740,74 +746,82 @@ mod tests {
     const END: u32 = 0xff57;
 
     /// The back and forward buttons share one glass capsule over the page, as in the file manager: where the desktop
-    /// draws materials, the form's background is the compositor's too, below the capsule's glass, so no opaque fill of
-    /// the window covers the glass.
+    /// draws materials, the pane's background is the compositor's too, below the capsule's glass, and the page fills
+    /// the pane under the row: in the row's layer, the glass lies above the page and reads it.
     #[test]
-    fn back_and_forward_share_a_glass_capsule_over_the_compositors_form_background() {
+    fn back_and_forward_share_a_glass_capsule_over_the_compositors_pane_background() {
         use cupertino_kit::platform::WindowRequest;
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
-        let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
-        let capabilities = Capabilities {
-            app_effects: true,
-            ..Capabilities::default()
-        };
-        let (driver, window) = start_hosted(
-            dir.path(),
-            PaneId::Appearance,
-            services,
-            |_| {},
-            capabilities,
-        );
-        let regions = driver
-            .runtime()
-            .window_system()
-            .requests(window)
-            .unwrap()
-            .iter()
-            .rev()
-            .find_map(|request| match request {
-                WindowRequest::Materials(regions) => Some(regions.clone()),
-                _ => None,
-            })
-            .expect("the window asks for materials");
-        let form = regions
-            .iter()
-            .position(|r| r.material == "TextBackground")
-            .unwrap_or_else(|| panic!("the form's background: {regions:?}"));
-        let capsules: Vec<_> = regions
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.glass.is_some() && r.rect.height() == 36.0)
-            .collect();
-        assert_eq!(
-            capsules.len(),
-            1,
-            "one capsule for both buttons: {regions:?}"
-        );
-        let (glass, capsule) = capsules[0];
-        assert!(form < glass, "the glass lies over the form: {regions:?}");
-        assert_eq!(capsule.rect.width(), 73.0, "two 36.5 pt segments");
-        assert_eq!(
-            capsule.rect.center().y,
-            26.0,
-            "in the middle of the 52 pt row"
-        );
-        // both buttons lie in it
-        let snapshot = driver.runtime().snapshot(window).unwrap();
-        for name in ["Back", "Forward"] {
-            let button = snapshot
-                .accessibility
-                .iter()
-                .find(|(_, n)| n.role == Role::Button && n.name.as_deref() == Some(name))
-                .unwrap_or_else(|| panic!("the {name} button"))
-                .1
-                .bounds;
-            assert!(
-                capsule.rect.intersection(&button) == Some(button),
-                "{name} {button:?} in {:?}",
-                capsule.rect
+        // with a window system that draws the row in a layer over the page and with one that draws it in place
+        for layered in [false, true] {
+            let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+            let capabilities = Capabilities {
+                app_effects: true,
+                raised_layer: layered,
+                ..Capabilities::default()
+            };
+            let (driver, window) = start_hosted(
+                dir.path(),
+                PaneId::Appearance,
+                services,
+                |_| {},
+                capabilities,
             );
+            let regions = driver
+                .runtime()
+                .window_system()
+                .requests(window)
+                .unwrap()
+                .iter()
+                .rev()
+                .find_map(|request| match request {
+                    WindowRequest::Materials(regions) => Some(regions.clone()),
+                    _ => None,
+                })
+                .expect("the window asks for materials");
+            let form = regions
+                .iter()
+                .position(|r| r.material == "WindowBackground")
+                .unwrap_or_else(|| panic!("the form's background: {regions:?}"));
+            let capsules: Vec<_> = regions
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.glass.is_some() && r.rect.height() == 36.0)
+                .collect();
+            assert_eq!(
+                capsules.len(),
+                1,
+                "one capsule for both buttons: {regions:?}"
+            );
+            let (glass, capsule) = capsules[0];
+            assert!(form < glass, "the glass lies over the pane: {regions:?}");
+            assert_eq!(
+                capsule.raised, layered,
+                "above the page in the layer: {regions:?}"
+            );
+            assert_eq!(capsule.rect.width(), 73.0, "two 36.5 pt segments");
+            assert_eq!(
+                capsule.rect.center().y,
+                26.0,
+                "in the middle of the 52 pt row"
+            );
+            // both buttons lie in it
+            let snapshot = driver.runtime().snapshot(window).unwrap();
+            for name in ["Back", "Forward"] {
+                let button = snapshot
+                    .accessibility
+                    .iter()
+                    .find(|(_, n)| n.role == Role::Button && n.name.as_deref() == Some(name))
+                    .unwrap_or_else(|| panic!("the {name} button"))
+                    .1
+                    .bounds;
+                assert!(
+                    capsule.rect.intersection(&button) == Some(button),
+                    "{name} {button:?} in {:?}",
+                    capsule.rect
+                );
+            }
         }
     }
 
@@ -1648,11 +1662,11 @@ mod tests {
         };
         let field = rect(&driver, "search");
         let y = field.origin.y + field.size.height / 2.0;
-        // in the toolbar row above the page, after the back and forward buttons, where no toolbar item lies
+        // in the toolbar row over the top of the page, after the back and forward buttons, where no toolbar item lies
         let content = rect(&driver, "content");
         let gap = Point::new(
             content.origin.x + content.size.width - 60.0,
-            content.origin.y - 26.0,
+            content.origin.y + 26.0,
         );
         let at = |time: u64, event| WindowEvent::Pointer(event, Timestamp(time));
         let button = |position, pressed| PointerEvent::Button {

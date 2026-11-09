@@ -40,7 +40,9 @@ It exits with a failure (and the server restarts it) when a connection is lost, 
 
 One prompt is on screen at a time; the others wait in polkitd's order. Each output gets a scrim on the overlay layer,
 above the menu bar and the dock, and the panel sits above them on the active output, where it takes the keyboard
-exclusively. A click on the scrim does nothing. The server keeps the prompt's surfaces out of every capture.
+exclusively. A click on the scrim does nothing. A scrim is one pixel of its colour the compositor stretches over the output
+(`ShmPresenter::draw_solid`), so its fade draws and uploads nothing; a compositor without one-pixel buffers gets
+frames filled with the colour. The server keeps the prompt's surfaces out of every capture.
 
 The panel shows the lock symbol, "Authentication Required", polkit's message (at most six lines), a user pop-up when
 polkitd offers more than one user (a collapsed pop-up button to a screen reader), the field, the error, PAM's information and Caps Lock, a Details disclosure, and

@@ -27,7 +27,7 @@ semantics
   NodeId(3v1) role=Button name=Some("+") description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[75.322265625,20 35.60107421875x24] actions=[Click] relations=[] children=[]
 display
   paint 4294967296 parent=None revision=1 bounds=[0,0 200x64] hit=[0,0 200x64] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 200.0, height: 64.0 } }), paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 200.0, height: 64.0 } }), paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
   paint 4294967297 parent=Some(4294967296) revision=14 bounds=[16,16 43.5x33.68] hit=[20,20 32.9794921875x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 20.0]
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 32.9794921875, height: 24.0 } }, radius: 6.0 }, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.075 }) }
     Glyphs origin=13.5,16.68 font=FontId(0) size=13 count=1 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.84705883 }

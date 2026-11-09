@@ -5,7 +5,9 @@
 
 use crate::paint::Painting;
 use cupertino_geometry::Rect;
-use cupertino_ui_render::{DamageRegion, PaintNodeId, PaintRevision, Shape, Transform};
+use cupertino_ui_render::{
+    DamageRegion, DisplayList, PaintNodeId, PaintRevision, Shape, Transform,
+};
 use std::collections::HashMap;
 
 #[derive(Clone, PartialEq)]
@@ -41,12 +43,22 @@ impl DamageTracker {
     }
 
     pub(crate) fn damage(&mut self, painting: &Painting) -> DamageRegion {
-        let order: Vec<PaintNodeId> = painting.list.nodes.iter().map(|n| n.id).collect();
+        self.damage_of(&painting.list, &painting.own, &painting.blank)
+    }
+
+    /// [`Self::damage`] of a list with its damage boxes and blank flags, as a window's raised layer has its own.
+    pub(crate) fn damage_of(
+        &mut self,
+        list: &DisplayList,
+        own: &[Rect],
+        blank: &[bool],
+    ) -> DamageRegion {
+        let order: Vec<PaintNodeId> = list.nodes.iter().map(|n| n.id).collect();
         let mut current = HashMap::with_capacity(order.len());
         let mut rects = Vec::new();
         let mut repainted = false;
-        for (i, (node, &own)) in painting.list.nodes.iter().zip(&painting.own).enumerate() {
-            let blank = painting.blank.get(i).copied().unwrap_or(false);
+        for (i, (node, &own)) in list.nodes.iter().zip(own).enumerate() {
+            let blank = blank.get(i).copied().unwrap_or(false);
             let seen = Seen {
                 revision: node.revision,
                 transform: node.transform,
@@ -124,6 +136,7 @@ mod tests {
             animating: Vec::new(),
             resources: Default::default(),
             materials: Vec::new(),
+            layer: None,
         }
     }
 

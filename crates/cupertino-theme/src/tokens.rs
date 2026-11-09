@@ -142,7 +142,7 @@ mod tests {
         let hex = |a, c| t.semantic(a, c).unwrap().hex();
         assert_eq!(
             hex(Appearance::Light, SemanticColor::WindowBackground),
-            "#ECECEC"
+            "#FFFFFF"
         );
         assert_eq!(
             hex(Appearance::Dark, SemanticColor::WindowBackground),

@@ -12,14 +12,15 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="10">
+  <interface name="cupertino_app_effects_v1" version="11">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
       event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
       event of cupertino_appearance_v1, version 6 the unified_compact and sidebar title bar styles and
       set_glass of cupertino_backdrop_v1, version 7 the tone event of cupertino_backdrop_v1, version 8 the always_show_scroll_bars display
       option of cupertino_appearance_v1, version 9 its steady_caret display option, version 10 the large_panel glass
-      style of cupertino_backdrop_v1; the other interfaces of the protocol are unchanged in each.
+      style of cupertino_backdrop_v1, version 11 the backdrops of a subsurface (get_backdrop); the other interfaces of
+      the protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -62,6 +63,13 @@
         A surface may have several backdrops; they are drawn in creation order, all below the
         surface. A new backdrop has no material and draws nothing until the material and shape
         are set and the surface is committed.
+        From version 11 the surface may be a subsurface: its backdrops are drawn directly below the
+        subsurface and the subsurfaces placed below it, above the rest of the surface tree, and
+        they read what of the tree lies below them, so content the parent draws under a bar in a
+        subsurface shows through the bar's glass. Their state applies with the subsurface's
+        commit, which a synchronized subsurface caches until its parent commits. The shape is in
+        the subsurface's coordinates. Backdrops created through an object below version 11 draw
+        nothing on a subsurface.
         Posts invalid_surface when the surface belongs to another client, and too_many_backdrops
         when the surface already has 64 backdrops or the client has 128 (the limits count the
         backdrops that are not destroyed yet).

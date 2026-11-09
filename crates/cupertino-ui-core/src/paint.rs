@@ -7,7 +7,7 @@ use crate::cx::{OverlayCx, PaintCx};
 use crate::route::Geometry;
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
-use cupertino_geometry::{Point, Rect, Size};
+use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_platform::{GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
 use cupertino_ui_render::{
     DisplayList, Effect, Group, ImageResource, Paint, PaintNode, PaintNodeId, PaintOp,
@@ -47,6 +47,8 @@ struct Painted {
     /// The ops snapped to the window's device pixels where a frame draws the node ([`PaintCx::fill_pixels`]), by
     /// index.
     pixels: Vec<usize>,
+    /// How far raised nodes covered the node's edges when it painted, when its paint depended on it.
+    obscured: Option<Insets>,
 }
 
 /// The glass a node paints on, which picks the colours of its text and symbols: the tone of the glass it lies on, if
@@ -311,6 +313,106 @@ struct Pending {
     node: PaintNode,
     /// The clip of the node's ancestors.
     clip: Option<Rect>,
+    /// It draws in the raised layer.
+    layered: bool,
+}
+
+/// How far the raised nodes' rects (`raised`, window coordinates) cover `rect` from its top: a raised rect that lies
+/// across it and reaches its top edge covers it down to the raised rect's bottom. The raised layer runs from the
+/// window's top edge, so nothing raised covers a node from another edge.
+pub(crate) fn obscured_insets(rect: Rect, raised: &[(NodeId, Rect)]) -> Insets {
+    const SLACK: f64 = 0.5;
+    let top = raised
+        .iter()
+        .filter(|(_, r)| {
+            r.min_y() <= rect.min_y() + SLACK
+                && r.max_y() > rect.min_y()
+                && r.min_x().max(rect.min_x()) < r.max_x().min(rect.max_x())
+        })
+        .map(|(_, r)| r.max_y().min(rect.max_y()) - rect.min_y())
+        .fold(0.0_f64, f64::max);
+    Insets {
+        top,
+        left: 0.0,
+        bottom: 0.0,
+        right: 0.0,
+    }
+}
+
+/// The raised nodes ([`Widget::raised`](crate::Widget::raised)) under `root` with their rects in window coordinates,
+/// in paint order; a raised node's subtree is part of it, so none under it is listed.
+pub(crate) fn raised_nodes<M: 'static>(
+    tree: &Tree<M>,
+    root: NodeId,
+    geometry: &Geometry,
+) -> Vec<(NodeId, Rect)> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        let Some(node) = tree.get(id) else { continue };
+        if node.widget.raised(&*node.state) {
+            if let Some(placement) = geometry.get(&id) {
+                out.push((id, placement.rect));
+            }
+            continue;
+        }
+        stack.extend(node.children.iter().rev());
+    }
+    out
+}
+
+/// `rect` less the top of it raised rects lie across, whole width and from its top edge: what of it shows below them.
+pub(crate) fn unobscured(rect: Rect, raised: &[(NodeId, Rect)]) -> Rect {
+    const SLACK: f64 = 0.5;
+    let top = raised
+        .iter()
+        .filter(|(_, r)| {
+            r.min_y() <= rect.min_y() + SLACK
+                && r.max_y() > rect.min_y()
+                && r.min_x() <= rect.min_x() + SLACK
+                && r.max_x() >= rect.max_x() - SLACK
+        })
+        .map(|(_, r)| r.max_y())
+        .fold(rect.min_y(), f64::max)
+        .min(rect.max_y());
+    Rect::from_ltrb(rect.min_x(), top, rect.max_x(), rect.max_y())
+}
+
+/// The nodes under `root` in the order they paint: the tree's preorder, and where raised nodes (`raised`) draw in place
+/// (no `layer`) their subtrees after all the rest, so what they draw and the materials they ask for lie over the rest
+/// of the window's, wherever they are in the tree. A raised subtree's root still comes after its parent.
+fn paint_order<M: 'static>(
+    tree: &Tree<M>,
+    root: NodeId,
+    raised: &HashSet<NodeId>,
+    layer: bool,
+) -> Vec<NodeId> {
+    let all = tree.preorder(root);
+    if layer || raised.is_empty() {
+        return all;
+    }
+    let mut lifted: HashSet<NodeId> = HashSet::new();
+    let (mut rest, mut over) = (Vec::with_capacity(all.len()), Vec::new());
+    for id in all {
+        let parent_lifted = tree
+            .get(id)
+            .and_then(|n| n.parent)
+            .is_some_and(|p| lifted.contains(&p));
+        if raised.contains(&id) || parent_lifted {
+            lifted.insert(id);
+            over.push(id);
+        } else {
+            rest.push(id);
+        }
+    }
+    rest.append(&mut over);
+    rest
+}
+
+/// The id of the node that clips the `n`th raised subtree of a layer to the clip of its ancestors: apart from every
+/// node's (a generation in the upper half) and every overlay's (none, and an index below `u32::MAX`).
+fn layer_clip_id(n: usize) -> PaintNodeId {
+    PaintNodeId(u64::MAX - n as u64)
 }
 
 /// Whether `ancestor` is `id` or holds it.
@@ -350,6 +452,17 @@ pub(crate) struct Painting {
     pub(crate) resources: PaintResources,
     /// The materials the nodes asked for, in window coordinates, in paint order.
     pub(crate) materials: Vec<MaterialRegion>,
+    /// What the raised nodes draw, when the window system shows them in a layer of their own.
+    pub(crate) layer: Option<LayerPainting>,
+}
+
+/// The raised layer of a [`Painting`]: its own list, damage boxes and blank flags, in window coordinates.
+pub(crate) struct LayerPainting {
+    pub(crate) list: DisplayList,
+    pub(crate) own: Vec<Rect>,
+    pub(crate) blank: Vec<bool>,
+    /// How far down the window the layer's nodes draw, in points.
+    pub(crate) bottom: f64,
 }
 
 pub(crate) struct PaintInput<'a> {
@@ -363,6 +476,10 @@ pub(crate) struct PaintInput<'a> {
     /// The window system can show materials under nodes.
     pub(crate) materials: bool,
     pub(crate) now: Timestamp,
+    /// The window's raised nodes ([`Widget::raised`](crate::Widget::raised)) with their rects, in window coordinates.
+    pub(crate) raised: &'a [(NodeId, Rect)],
+    /// The window system shows a raised layer, which the raised nodes draw in.
+    pub(crate) layer: bool,
 }
 
 /// The paint node a UI node draws into, so tests and the inspector can find a node's operations.
@@ -422,11 +539,14 @@ impl Painter {
         let mut blank = Vec::new();
         let window = geometry.get(&root).map(|p| p.rect);
         let mut pending: Vec<Pending> = Vec::new();
+        // whether each node of the list is raised: in the raised layer where there is one, else over the rest
+        let mut layered: Vec<bool> = Vec::new();
         let flush = |pending: &mut Vec<Pending>,
                      until: Option<NodeId>,
                      list: &mut DisplayList,
                      clips: &mut Vec<Option<Rect>>,
-                     blank: &mut Vec<bool>| {
+                     blank: &mut Vec<bool>,
+                     layered: &mut Vec<bool>| {
             while let Some(top) = pending.last() {
                 if until.is_some_and(|id| within(tree, top.owner, id)) {
                     break;
@@ -435,8 +555,12 @@ impl Painter {
                 list.nodes.push(done.node);
                 clips.push(done.clip);
                 blank.push(false);
+                layered.push(done.layered);
             }
         };
+        let raised_ids: HashSet<NodeId> = input.raised.iter().map(|(id, _)| *id).collect();
+        // whether each node draws in the raised layer, as its children inherit it
+        let mut in_layer: HashMap<NodeId, bool> = HashMap::new();
         let mut overlaid = HashSet::new();
         // whether each node's children lie on a material, from the window's background down
         let mut material_below: HashMap<NodeId, bool> = HashMap::new();
@@ -444,17 +568,35 @@ impl Painter {
             input.background,
             WindowBackground::Surface { surface, .. } if crate::cx::translucent(surface)
         );
-        for id in tree.preorder(root) {
+        for id in paint_order(tree, root, &raised_ids, input.layer) {
             let (Some(node), Some(placement)) = (tree.get(id), geometry.get(&id)) else {
                 continue;
             };
-            flush(&mut pending, Some(id), &mut list, &mut clips, &mut blank);
+            flush(
+                &mut pending,
+                Some(id),
+                &mut list,
+                &mut clips,
+                &mut blank,
+                &mut layered,
+            );
+            let raised = raised_ids.contains(&id)
+                || node
+                    .parent
+                    .is_some_and(|p| in_layer.get(&p).copied().unwrap_or(false));
+            in_layer.insert(id, raised);
+            let obscured = if raised {
+                Insets::ZERO
+            } else {
+                obscured_insets(placement.rect, input.raised)
+            };
             let size = placement.rect.size;
             let focused = input.focus == Some(id);
             let background = (id == root
                 && match input.background {
                     WindowBackground::Theme => true,
                     WindowBackground::Surface { .. } => !input.backdrop,
+                    WindowBackground::Solid(color) => color.a > 0.0,
                     WindowBackground::None => false,
                 })
             .then_some(input.background);
@@ -473,6 +615,9 @@ impl Painter {
                 .map_or(Rect::new(0.0, 0.0, 0.0, 0.0), |shown| {
                     shown.translate(-origin.x, -origin.y)
                 });
+            // without a layer a raised node's material lies under the window, as any other: what scrolls under it is
+            // clipped away (`placements`), so it shows, and it comes after the rest's (`paint_order`), so it lies over
+            // them
             let can_show = input.materials && materials.len() < MAX_MATERIALS;
             let under = match node.parent {
                 Some(parent) => on_glass.get(&parent).copied().unwrap_or(Under::Window),
@@ -508,6 +653,7 @@ impl Painter {
                     && p.foreground.on == foreground.on
                     && p.on_material == on_material
                     && (p.materials.is_none() || p.foreground.own == foreground.own)
+                    && p.obscured.is_none_or(|o| o == obscured)
             });
             if !fresh {
                 let mut ops = Vec::new();
@@ -537,6 +683,7 @@ impl Painter {
                             },
                             surface_fill(surface, alpha),
                         ),
+                        WindowBackground::Solid(color) => (Shape::Rect(bounds), Some(color)),
                         _ => {
                             let state = StateVariant {
                                 window_active: input.window_active,
@@ -563,6 +710,7 @@ impl Painter {
                 let mut overlay = false;
                 let mut lays_material = false;
                 let mut pixels = Vec::new();
+                let mut reads_obscured = false;
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
@@ -593,6 +741,9 @@ impl Painter {
                         on_material,
                         lays_material: &mut lays_material,
                         pixels: &mut pixels,
+                        obscured,
+                        reads_obscured: &mut reads_obscured,
+                        layer: input.layer,
                     },
                 );
                 if animate {
@@ -618,6 +769,7 @@ impl Painter {
                         on_material,
                         lays_material,
                         pixels,
+                        obscured: reads_obscured.then_some(obscured),
                     },
                 );
             }
@@ -650,6 +802,7 @@ impl Painter {
                         radius,
                         alpha: material.alpha,
                         glass: material.glass,
+                        raised: raised && input.layer,
                     });
                 }
             }
@@ -682,11 +835,13 @@ impl Painter {
                 ops: on_pixels(&painted.ops, &painted.pixels, origin, input.env.scale),
             });
             clips.push(placement.clip);
+            layered.push(raised);
             seen.insert(id);
             if painted.overlay {
                 overlaid.insert(id);
                 let mut fills = Vec::new();
                 let mut clip = None;
+                let mut reach_obscured = false;
                 node.widget.overlay(
                     &*node.state,
                     &mut OverlayCx {
@@ -699,60 +854,124 @@ impl Painter {
                         origin,
                         ops: &mut fills,
                         clip: &mut clip,
+                        obscured,
+                        reach_obscured: &mut reach_obscured,
                     },
                 );
+                // a caret and the like are cut from what raised nodes cover, as what they mark lies under them
+                let cut = match (raised || reach_obscured, placement.clip.or(window)) {
+                    (false, Some(around)) if !input.raised.is_empty() => {
+                        Some(unobscured(around, input.raised))
+                    }
+                    _ => None,
+                };
+                let clip = match (clip, cut) {
+                    (Some(clip), Some(cut)) => Some(clip.intersection(&cut).unwrap_or(Rect::new(
+                        cut.min_x(),
+                        cut.min_y(),
+                        0.0,
+                        0.0,
+                    ))),
+                    (clip, cut) => clip.or(cut),
+                };
                 if let Some(overlay) = self.overlay(id, fills, clip, placement.clip) {
                     pending.push(Pending {
                         owner: id,
                         node: overlay,
                         clip: placement.clip,
+                        layered: raised,
                     });
                 }
             }
         }
-        flush(&mut pending, None, &mut list, &mut clips, &mut blank);
+        flush(
+            &mut pending,
+            None,
+            &mut list,
+            &mut clips,
+            &mut blank,
+            &mut layered,
+        );
         self.nodes.retain(|id, _| seen.contains(id));
         self.overlays.retain(|id, _| overlaid.contains(id));
-        let mut own: Vec<Rect> = list.nodes.iter().map(|n| n.bounds).collect();
-        // Children come after their parent, so walking backwards widens each parent by its finished children.
-        let index: HashMap<PaintNodeId, usize> = list
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.id, i))
-            .collect();
-        for i in (0..list.nodes.len()).rev() {
-            if let Some(group) = &list.nodes[i].group {
-                let widened = with_effects(list.nodes[i].bounds, &group.effects);
-                list.nodes[i].bounds = match clips[i] {
-                    Some(clip) => widened
-                        .intersection(&clip.outset(CLIP_EDGE))
-                        .unwrap_or(list.nodes[i].bounds),
-                    None => widened,
-                };
+        let any_raised = layered.iter().any(|&l| l);
+        if any_raised && !input.layer {
+            // in place, the raised subtrees draw after the rest of the window, over it
+            let mut main = (Vec::new(), Vec::new(), Vec::new());
+            let mut over = (Vec::new(), Vec::new(), Vec::new());
+            for ((node, clip), (blank, raised)) in std::mem::take(&mut list.nodes)
+                .into_iter()
+                .zip(std::mem::take(&mut clips))
+                .zip(std::mem::take(&mut blank).into_iter().zip(&layered))
+            {
+                let to = if *raised { &mut over } else { &mut main };
+                to.0.push(node);
+                to.1.push(clip);
+                to.2.push(blank);
             }
-            let (bounds, parent) = (list.nodes[i].bounds, list.nodes[i].parent);
-            if let Some(&p) = parent.and_then(|p| index.get(&p)) {
-                list.nodes[p].bounds = list.nodes[p].bounds.union(&bounds);
-            }
+            main.0.append(&mut over.0);
+            main.1.append(&mut over.1);
+            main.2.append(&mut over.2);
+            (list.nodes, clips, blank) = main;
         }
-        // A group's opacity and effects reach its whole subtree, so the group damages all of it; under a group with
-        // effects, which spread each pixel across their reach, any node damages the outermost such group's whole reach.
-        let mut spread: Vec<Option<usize>> = Vec::with_capacity(list.nodes.len());
-        for (i, (node, own)) in list.nodes.iter().zip(&mut own).enumerate() {
-            let above = node
-                .parent
-                .and_then(|p| index.get(&p))
-                .and_then(|&p| spread[p]);
-            if node.group.is_some() {
-                *own = node.bounds;
+        let layer = (any_raised && input.layer).then(|| {
+            // the raised subtrees move to a list of their own; a subtree's root keeps the clip of its ancestors
+            let mut main = (DisplayList::default(), Vec::new(), Vec::new());
+            let mut raised = (DisplayList::default(), Vec::new(), Vec::new());
+            let ids: HashSet<PaintNodeId> = list
+                .nodes
+                .iter()
+                .zip(&layered)
+                .filter(|(_, &l)| l)
+                .map(|(n, _)| n.id)
+                .collect();
+            let mut roots = 0;
+            for ((mut node, clip), (blank, layered)) in std::mem::take(&mut list.nodes)
+                .into_iter()
+                .zip(std::mem::take(&mut clips))
+                .zip(std::mem::take(&mut blank).into_iter().zip(&layered))
+            {
+                let to = if *layered { &mut raised } else { &mut main };
+                if *layered && !node.parent.is_some_and(|p| ids.contains(&p)) {
+                    node.parent = clip.map(|clip| {
+                        let id = layer_clip_id(roots);
+                        roots += 1;
+                        to.0.nodes.push(PaintNode {
+                            id,
+                            parent: None,
+                            revision: PaintRevision(0),
+                            transform: Transform::IDENTITY,
+                            clip: Some(Shape::Rect(clip)),
+                            bounds: clip,
+                            hit: Rect::new(clip.min_x(), clip.min_y(), 0.0, 0.0),
+                            group: None,
+                            ops: Vec::new(),
+                        });
+                        to.1.push(None);
+                        to.2.push(true);
+                        id
+                    });
+                }
+                to.0.nodes.push(node);
+                to.1.push(clip);
+                to.2.push(blank);
             }
-            if let Some(group) = above {
-                *own = list.nodes[group].bounds;
+            (list, clips, blank) = main;
+            let (list, own, blank) = finish(raised.0, &raised.1, raised.2);
+            let bottom = list
+                .nodes
+                .iter()
+                .filter(|n| n.parent.is_none() || !n.ops.is_empty())
+                .map(|n| n.bounds.max_y())
+                .fold(0.0_f64, f64::max);
+            LayerPainting {
+                list,
+                own,
+                blank,
+                bottom,
             }
-            let effects = node.group.as_ref().is_some_and(|g| !g.effects.is_empty());
-            spread.push(above.or(effects.then_some(i)));
-        }
+        });
+        let (list, own, blank) = finish(list, &clips, blank);
         Painting {
             list,
             own,
@@ -760,8 +979,59 @@ impl Painter {
             animating,
             resources,
             materials,
+            layer,
         }
     }
+}
+
+/// The list's boxes made whole: each node's bounds widened by its children and its group's effects, and what each
+/// node damages when it changes. `clips` are the clips of each node's ancestors, in the list's order.
+fn finish(
+    mut list: DisplayList,
+    clips: &[Option<Rect>],
+    blank: Vec<bool>,
+) -> (DisplayList, Vec<Rect>, Vec<bool>) {
+    let mut own: Vec<Rect> = list.nodes.iter().map(|n| n.bounds).collect();
+    // Children come after their parent, so walking backwards widens each parent by its finished children.
+    let index: HashMap<PaintNodeId, usize> = list
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id, i))
+        .collect();
+    for i in (0..list.nodes.len()).rev() {
+        if let Some(group) = &list.nodes[i].group {
+            let widened = with_effects(list.nodes[i].bounds, &group.effects);
+            list.nodes[i].bounds = match clips[i] {
+                Some(clip) => widened
+                    .intersection(&clip.outset(CLIP_EDGE))
+                    .unwrap_or(list.nodes[i].bounds),
+                None => widened,
+            };
+        }
+        let (bounds, parent) = (list.nodes[i].bounds, list.nodes[i].parent);
+        if let Some(&p) = parent.and_then(|p| index.get(&p)) {
+            list.nodes[p].bounds = list.nodes[p].bounds.union(&bounds);
+        }
+    }
+    // A group's opacity and effects reach its whole subtree, so the group damages all of it; under a group with
+    // effects, which spread each pixel across their reach, any node damages the outermost such group's whole reach.
+    let mut spread: Vec<Option<usize>> = Vec::with_capacity(list.nodes.len());
+    for (i, (node, own)) in list.nodes.iter().zip(&mut own).enumerate() {
+        let above = node
+            .parent
+            .and_then(|p| index.get(&p))
+            .and_then(|&p| spread[p]);
+        if node.group.is_some() {
+            *own = node.bounds;
+        }
+        if let Some(group) = above {
+            *own = list.nodes[group].bounds;
+        }
+        let effects = node.group.as_ref().is_some_and(|g| !g.effects.is_empty());
+        spread.push(above.or(effects.then_some(i)));
+    }
+    (list, own, blank)
 }
 
 impl Painter {

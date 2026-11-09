@@ -30,10 +30,7 @@ use super::band::{self, Band};
 use super::clicks::Clicks;
 use super::grid::by_name;
 use super::{Event as WindowEvent, Message};
-use crate::metrics::{drag, list_view};
-
-/// The height of the table's column header, above its rows.
-const HEADER_HEIGHT: f64 = list_view::HEADER_HEIGHT;
+use crate::metrics::drag;
 
 const TAB: Keysym = Keysym(0xff09);
 const LEFT_TAB: Keysym = Keysym(0xfe20);
@@ -372,6 +369,9 @@ pub(super) struct Gestures {
     pub presses: SharedPresses,
     /// The band being drawn, in the rows' content.
     pub band: Option<Rect>,
+    /// From the frame's top to the first row's at rest: the header, and the toolbar row over it when the list fills
+    /// the pane under the row.
+    pub lead: f64,
     pub children: Vec<Element<Message>>,
 }
 
@@ -380,12 +380,12 @@ impl Gestures {
         cx.emit(Message::Window(self.window, event));
     }
 
-    /// Where the rows' content starts in the window: under the header, moved up by the scroll.
+    /// Where the rows' content starts in the window: under the header (and the row over it), moved up by the scroll.
     fn content_origin(&self, cx: &EventCx<'_, Message>) -> Option<Point> {
         let bounds = cx.bounds()?;
         Some(Point::new(
             bounds.min_x(),
-            bounds.min_y() + HEADER_HEIGHT - self.scroll.offset.y,
+            bounds.min_y() + self.lead - self.scroll.offset.y,
         ))
     }
 
@@ -394,9 +394,9 @@ impl Gestures {
         let bounds = cx.bounds()?;
         Some(Rect::new(
             bounds.min_x(),
-            bounds.min_y() + HEADER_HEIGHT,
+            bounds.min_y() + self.lead,
             bounds.size.width,
-            (bounds.size.height - HEADER_HEIGHT).max(0.0),
+            (bounds.size.height - self.lead).max(0.0),
         ))
     }
 
@@ -477,14 +477,14 @@ impl Widget<Message> for Gestures {
         let mut children = std::mem::take(&mut self.children);
         if let Some(rect) = self.band {
             // the band moves with the rows, under the header
-            let top = HEADER_HEIGHT - self.scroll.offset.y;
+            let top = self.lead - self.scroll.offset.y;
             let shown = Rect::new(
                 rect.min_x(),
                 rect.min_y() + top,
                 rect.width(),
                 rect.height(),
             );
-            let clipped_top = shown.min_y().max(HEADER_HEIGHT);
+            let clipped_top = shown.min_y().max(self.lead);
             let clipped = Rect::new(
                 shown.min_x(),
                 clipped_top,

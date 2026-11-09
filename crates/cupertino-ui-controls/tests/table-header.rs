@@ -93,6 +93,7 @@ impl Application for Sorted {
             on_row_key: Some(Box::new(|row, key| {
                 (key.keysym.0 != TAB).then_some(Message::RowKey(row, key.keysym.0))
             })),
+            header_top: 0.0,
         }))
     }
 }

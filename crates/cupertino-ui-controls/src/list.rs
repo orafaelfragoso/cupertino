@@ -213,6 +213,12 @@ impl<M: 'static> ListView<M> {
     /// The list's element with each row's selection and focus ring drawn `selection_inset` points in from the row's
     /// sides, in place of the standard inset `Element::from` gives.
     pub fn inset_element(self, selection_inset: f64) -> Element<M> {
+        self.under_element(selection_inset, 0.0)
+    }
+
+    /// [`inset_element`](Self::inset_element) for a list that fills a pane under a toolbar row `lead` points tall
+    /// ([`crate::unobscured_insets`]): its rows start below the row and scroll under it.
+    pub fn under_element(self, selection_inset: f64, lead: f64) -> Element<M> {
         let list = self;
         let rows = Rows {
             kind: Kind::List,
@@ -231,9 +237,10 @@ impl<M: 'static> ListView<M> {
             on_row_key: None,
             outline: None,
             selection_inset,
+            lead,
         };
         scroll::frame(
-            Element::new(rows),
+            led(Element::new(rows), lead),
             list.scroll,
             (false, true),
             Scroller::Overlay,
@@ -264,6 +271,7 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
                 on_toggle: tree.on_toggle,
             })),
             selection_inset: SELECTION_INSET,
+            lead: 0.0,
         };
         scroll::frame(
             Element::new(rows),
@@ -331,6 +339,7 @@ fn table_element<M: 'static>(
         on_row_key: table.on_row_key,
         outline,
         selection_inset: SELECTION_INSET,
+        lead: table.header_top + HEADER_HEIGHT * f64::from(u8::from(table.header_top > 0.0)),
     };
     let on_sort = table.on_sort.map(Rc::new);
     let header = Element::new(Header {
@@ -344,18 +353,54 @@ fn table_element<M: 'static>(
             })
             .collect(),
     });
-    let body = scroll::frame(
-        Element::new(rows),
+    // the rows start below the header, which lies over the view's top with what covers it
+    let lead = rows.lead;
+    let rows = led(Element::new(rows), lead);
+    // a header over the rows' scrolled top holds text outside glass: the edge under it is solid
+    let body = if table.header_top > 0.0 {
+        scroll::pinned
+    } else {
+        scroll::frame
+    }(
+        rows,
         table.scroll,
         (false, true),
         Scroller::Overlay,
         Rc::new(table.on_scroll),
     );
+    let header = if table.header_top > 0.0 {
+        Element::new(RaisedHeader {
+            top: table.header_top,
+            children: vec![header],
+        })
+    } else {
+        header
+    };
     Element::new(TableFrame {
         label: table.label,
         count: table.count,
         multiple: table.multiple,
+        under: table.header_top > 0.0,
         children: vec![header, body],
+    })
+}
+
+/// `rows` `lead` points down a scroll view's content, the part what covers the view's top hides at rest.
+fn led<M: 'static>(rows: Element<M>, lead: f64) -> Element<M> {
+    if lead <= 0.0 {
+        return rows;
+    }
+    Element::new(crate::Stack {
+        axis: Axis::Vertical,
+        padding: Insets {
+            top: lead,
+            left: 0.0,
+            bottom: 0.0,
+            right: 0.0,
+        },
+        spacing: 0.0,
+        align: Align::Stretch,
+        children: vec![rows],
     })
 }
 
@@ -385,6 +430,9 @@ struct Rows<M> {
     outline: Option<Rc<Outline<M>>>,
     /// From a row's sides to its selection.
     selection_inset: f64,
+    /// How far above the first row the scroll view's content starts: the part raised nodes over the view's top cover
+    /// at rest, which the rows scroll under.
+    lead: f64,
 }
 
 /// What an assistive Click on row `index` reports: the row selected alone, unless it already is.
@@ -439,7 +487,12 @@ impl<M: 'static> Rows<M> {
         let Ok(mut list) = VirtualList::new(self.count, ItemMetrics::Fixed(self.row_height)) else {
             return Vec::new();
         };
-        let window = list.window(self.scroll.offset.y, self.scroll.viewport.height, OVERSCAN);
+        // the rows under what covers the view's top show too: from `lead` above the first row in view
+        let window = list.window(
+            (self.scroll.offset.y - self.lead).max(0.0),
+            self.scroll.viewport.height,
+            OVERSCAN,
+        );
         let mut rows: Vec<usize> = (window.first..window.last).collect();
         match self.cursor() {
             Some(c) if c < window.first => rows.insert(0, c),
@@ -486,7 +539,8 @@ impl<M: 'static> Rows<M> {
             && !mods.contains(Mods::PRIMARY);
         let shift = mods.contains(Mods::SHIFT);
         let last = self.count - 1;
-        let page = ((self.scroll.viewport.height / self.row_height).floor() as usize).max(1);
+        let shown = self.scroll.viewport.height - self.lead;
+        let page = ((shown / self.row_height).floor() as usize).max(1);
         let cursor = self.selection.cursor.filter(|&c| c < self.count);
         if let Some(outline) = &self.outline {
             if let Some(propagation) = self.tree_key(outline, at, key, cx) {
@@ -1276,6 +1330,8 @@ struct TableFrame<M> {
     label: String,
     count: usize,
     multiple: bool,
+    /// The table fills a pane under a toolbar row: its header lies over its scroll view, which runs to its top.
+    under: bool,
     children: Vec<Element<M>>,
 }
 
@@ -1283,16 +1339,21 @@ impl<M: 'static> Widget<M> for TableFrame<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
-        LayoutSpec {
-            width: SizeSpec::Fill,
-            height: SizeSpec::Fill,
-            flex: Flex::grow(1.0),
-            ..LayoutSpec::new(ContainerKind::Stack {
+        let kind = if self.under {
+            ContainerKind::Overlay
+        } else {
+            ContainerKind::Stack {
                 axis: Axis::Vertical,
                 spacing: 0.0,
                 align: Align::Stretch,
                 justify: Justify::Start,
-            })
+            }
+        };
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            flex: Flex::grow(1.0),
+            ..LayoutSpec::new(kind)
         }
     }
 
@@ -1302,8 +1363,12 @@ impl<M: 'static> Widget<M> for TableFrame<M> {
 
     fn state(&self) {}
 
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.under != old.under {
+            Change::Layout
+        } else {
+            Change::None
+        }
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
@@ -1324,6 +1389,70 @@ impl<M: 'static> Widget<M> for TableFrame<M> {
             ..AccessibleStates::default()
         });
         cx.item_count(self.count);
+    }
+}
+
+/// A table's header below the toolbar row over the table's top: raised with the row, over the rows that scroll under
+/// both. It takes no point above the header, which belongs to the row.
+struct RaisedHeader<M> {
+    top: f64,
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for RaisedHeader<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            insets: Insets {
+                top: self.top,
+                left: 0.0,
+                bottom: 0.0,
+                right: 0.0,
+            },
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fixed(self.top + HEADER_HEIGHT),
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Vertical,
+                spacing: 0.0,
+                align: Align::Stretch,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.top != old.top {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn hit(&self, _: &(), point: Point) -> bool {
+        point.y >= self.top
+    }
+
+    fn raised(&self, _: &()) -> bool {
+        true
     }
 }
 

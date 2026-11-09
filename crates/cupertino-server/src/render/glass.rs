@@ -63,6 +63,9 @@ pub struct GlassContainer {
     /// For the glass of a window, the part of the window it reads (output-local points): what lies outside it is read
     /// as the nearest pixel inside, so the glass shows the window and not what is around it.
     pub within: Option<Rectangle<f64, Logical>>,
+    /// For the glass of a subsurface, the subsurface's rectangle (output-local points): the glass reads and draws only
+    /// there, so what changes below the subsurface repaints no more of the output than it.
+    pub bound: Option<Rectangle<f64, Logical>>,
 }
 
 /// A glass shape whose text follows what lies behind it: the backdrop it was made for and its rectangle in
@@ -106,6 +109,7 @@ impl GlassContainer {
             container,
             probes: Vec::new(),
             within: None,
+            bound: None,
         }
     }
 
@@ -136,6 +140,20 @@ impl GlassContainer {
         self
     }
 
+    /// The container reading and drawing only inside `bound` (output-local points), and of that only what `within`
+    /// lets it read.
+    pub fn bounded(self, bound: Rectangle<f64, Logical>) -> Self {
+        let within = match self.within {
+            Some(w) => w
+                .intersection(bound)
+                .unwrap_or_else(|| Rectangle::new(bound.loc, (0.0, 0.0).into())),
+            None => bound,
+        };
+        let mut c = self.within(within);
+        c.bound = Some(bound);
+        c
+    }
+
     /// Identity of the textures the container needs: its look, the backdrop signature and the scale.
     pub fn state(&self, generation: u64, scale: f32) -> u64 {
         Sig::new()
@@ -145,15 +163,21 @@ impl GlassContainer {
             .finish()
     }
 
-    /// What of the backdrop the container reads, in output-local points.
+    /// What of the backdrop the container reads, in output-local points: no more than its bound.
     pub fn sample_area(&self) -> Option<Rectangle<f64, Logical>> {
         let [x, y, w, h] = self.container.sample_area()?;
-        (w > 0.0 && h > 0.0).then(|| {
+        let area = (w > 0.0 && h > 0.0).then(|| {
             Rectangle::new(
                 (f64::from(x), f64::from(y)).into(),
                 (f64::from(w), f64::from(h)).into(),
             )
-        })
+        })?;
+        match self.bound {
+            Some(bound) => area
+                .intersection(bound)
+                .filter(|a| a.size.w > 0.0 && a.size.h > 0.0),
+            None => Some(area),
+        }
     }
 }
 
@@ -1340,6 +1364,37 @@ mod tests {
         assert_eq!(part.key, container().within(window).key);
         assert_ne!(part.key, container().within(moved).key);
         assert_ne!(part.state(1, 1.0), container().within(moved).state(1, 1.0));
+    }
+
+    /// The glass of a subsurface reads and draws only inside the subsurface: its sampled area, which the damage tracker
+    /// repaints when what lies below changes, stops at the subsurface's edges, and what it reads is the window's part
+    /// of them.
+    #[test]
+    fn bounded_glass_samples_no_more_than_its_bound_and_reads_the_window_s_part_of_it() {
+        let container = || {
+            GlassContainer::new(Container::new(
+                vec![GlassShape::new([180.0, 8.0, 120.0, 36.0], 18.0)],
+                0.0,
+                GlassMode::default(),
+            ))
+        };
+        let band = Rectangle::<f64, Logical>::new((0.0, 0.0).into(), (480.0, 52.0).into());
+        let free = container().sample_area().unwrap();
+        assert!(
+            free.loc.y < 0.0 && free.loc.y + free.size.h > 52.0,
+            "unbounded, the blur reaches past the row: {free:?}"
+        );
+        let bounded = container().bounded(band);
+        assert_eq!(bounded.sample_area(), free.intersection(band));
+        assert_eq!(bounded.within, Some(band));
+        assert_ne!(bounded.key, container().key);
+        let window = Rectangle::<f64, Logical>::new((2.0, 3.0).into(), (400.0, 300.0).into());
+        let both = container().within(window).bounded(band);
+        assert_eq!(both.within, window.intersection(band));
+        assert_eq!(both.sample_area(), free.intersection(band));
+        // a bound the shapes do not reach samples nothing
+        let away = Rectangle::<f64, Logical>::new((0.0, 400.0).into(), (480.0, 52.0).into());
+        assert_eq!(container().bounded(away).sample_area(), None);
     }
 
     #[test]

@@ -156,22 +156,31 @@ fn close(run: &mut Run, window: WindowId) {
     run.settle();
 }
 
-/// Run `work` on a thread of its own while Files keeps turning, and give what it returned. The thread wakes the
-/// runtime once the work ended, so the turning waits for Files' own threads and that one alike; the thirty seconds only
-/// guard against a hang.
+/// How long a wait for an event may last before the test calls it a hang: far past what any event takes on a loaded
+/// machine, and under the two minutes after which the runner kills a test.
+const HANG_GUARD: Duration = Duration::from_secs(60);
+
+/// Run `work` on a thread of its own while Files keeps turning, and give what it returned. The thread hands its result
+/// over and then wakes the runtime, so the turning waits for Files' own threads and that one alike, and finds the result
+/// after the wake that follows it; [`HANG_GUARD`] only ends a hang.
 fn while_turning<T: Send + 'static>(run: &mut Run, work: impl FnOnce() -> T + Send + 'static) -> T {
     let waker = run.waker();
+    let (done, result) = mpsc::channel();
     let work = std::thread::spawn(move || {
-        let out = work();
+        // the result (or the work's panic) is sent before the wake: a thread that woke the runtime may not have ended
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
+        let _ = done.send(out);
         waker.wake();
-        out
     });
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !work.is_finished() {
+    let deadline = Instant::now() + HANG_GUARD;
+    loop {
+        if let Ok(out) = result.try_recv() {
+            work.join().unwrap();
+            return out.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        }
         assert!(run.wait_for_progress(deadline), "it never ended");
         run.settle();
     }
-    work.join().unwrap()
 }
 
 /// `cupertino-files` started with `args` in `dir`, on `bus` alone (no display, no other session), as a launch from

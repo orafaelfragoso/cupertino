@@ -111,7 +111,7 @@ impl Palette {
                 rim_1x: rgba8([255, 255, 255, 89]),
                 rim_2x: rgba8([255, 255, 255, 153]),
                 shadow: [0.0, 0.0, 0.0, 1.0],
-                window_background: rgba8([236, 236, 236, 255]),
+                window_background: rgba8([255, 255, 255, 255]),
             }
         }
     }

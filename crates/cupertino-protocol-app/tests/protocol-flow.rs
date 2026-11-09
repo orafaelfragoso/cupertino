@@ -1047,3 +1047,18 @@ fn toplevels_are_decorated_by_the_server_sized_scrolled_and_closed() {
     });
     conn.destroy(window.surface()).unwrap();
 }
+
+/// From version 11 the backdrops of a subsurface draw, above the rest of its window; an older binding says they don't,
+/// so a toolkit keeps its bar's glass on the window's own surface there.
+#[test]
+fn subsurface_backdrops_draw_from_version_11() {
+    for (version, draws) in [(9, false), (10, false), (11, true)] {
+        let (mut conn, _control, _committed, _seen) = connect_at(version);
+        let effects = AppEffects::bind(&mut conn).unwrap();
+        assert_eq!(
+            effects.draws_subsurface_backdrops(),
+            draws,
+            "version {version}"
+        );
+    }
+}

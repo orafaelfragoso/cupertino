@@ -799,9 +799,13 @@ fn edits_after_the_field_disables_never_reach_it() {
     let field = Field::open(&mut h, "text-input.one");
     field.send(TiDo::Enable("".into(), 0));
     wait_im(&mut h, &im, "the activation", activated);
+    // the window taking the keyboard already deactivated the input method once: forget that, so the wait below is
+    // for the deactivation the field's disable causes, after the server has handled that disable
+    im.clear();
     field.send(TiDo::Disable);
+    h.sync(&[&field.rounds]);
     wait_im(&mut h, &im, "the deactivation", |s| {
-        s.contains(&ImSeen::Deactivate)
+        s.contains(&ImSeen::Deactivate) && s.contains(&ImSeen::Done)
     });
     field.clear();
     im.send(ImDo::Preedit("late".into(), 4, 4));

@@ -19,7 +19,7 @@ use cupertino_launcher::control::{self, Call};
 use cupertino_launcher::engine::{Action, ItemKind, ResultItem};
 use cupertino_launcher::exec::CommandSpec;
 use cupertino_launcher::files::{FileIndex, FileSearchConfig};
-use cupertino_launcher::kit::{self, Host, Message, Model, SearchRequest};
+use cupertino_launcher::kit::{self, Host, Message, Model, Running, SearchRequest};
 use cupertino_launcher::panel::Now;
 use cupertino_launcher::preview::{self, LatestOnly, Preview, PreviewBody, TEXT_SNIFF};
 use cupertino_launcher::providers::{Provider, Reply, Update};
@@ -32,8 +32,8 @@ use cupertino_launcher::{Launcher, LauncherConfig};
 use cupertino_modifiers::Profile;
 use cupertino_protocol_app::AppEvent;
 use cupertino_shell_client::{
-    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
-    ShellEvent,
+    Anchor, AppActivation, KeyboardInteractivity, Layer, LayerShell, LayerSurface,
+    LayerSurfaceConfig, Margin, Session, Shell, ShellEvent,
 };
 use cupertino_thumbnails::{ThumbSize, Thumbnailer};
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
@@ -145,6 +145,8 @@ enum Signal {
     Output(Size),
     /// The session's Reduce Motion option.
     ReduceMotion(bool),
+    /// The server's answer for the application opened as this launch.
+    Opened(u64, Running),
 }
 
 /// The top margin of the panel's window on an output `height` points tall: the panel at [`TOP_FRACTION`] of the
@@ -253,6 +255,17 @@ impl SurfaceRoles for LauncherRoles {
             }
             _ => {}
         }
+        if let Some(&ShellEvent::AppActivation { serial, result }) = event.downcast_ref() {
+            let running = match result {
+                AppActivation::Activated => Running::Raised,
+                AppActivation::Resident => Running::Resident,
+                AppActivation::NotRunning => Running::NotRunning,
+            };
+            let _ = self
+                .signals
+                .try_send(Signal::Opened(u64::from(serial), running));
+            return None;
+        }
         let surfaces = &mut *self.surfaces.borrow_mut();
         match *event.downcast_ref::<ShellEvent>()? {
             ShellEvent::Configure { surface, size } => {
@@ -358,6 +371,9 @@ struct AppHost {
     previews: Option<LatestOnly<PreviewRead>>,
     /// Searches the file index, the newest query only; started at the first search.
     searches: Option<LatestOnly<FileSearch>>,
+    /// The session object of the shell global, which brings a running application forward; `None` when the server
+    /// does not offer the global to the launcher.
+    session: Option<Session>,
 }
 
 /// A file search the search thread is asked for, and where its answer goes. A search replaced by a newer one before
@@ -713,6 +729,30 @@ impl Host for AppHost {
             unix: unix_now(),
         }
     }
+
+    fn bring_forward(&mut self, desktop_id: &str, launch: u64) -> bool {
+        // the answer carries the launch back as its serial
+        let (Some(session), Ok(serial)) = (&self.session, u32::try_from(launch)) else {
+            return false;
+        };
+        session.activate_app(serial, desktop_id)
+    }
+
+    fn ask_for_window(
+        &mut self,
+        bus_name: &str,
+        source: Option<&Path>,
+        token: Option<String>,
+    ) -> Option<kit::BusCall> {
+        if !source.is_some_and(cupertino_apps::entry::dbus_activatable_file) {
+            return None;
+        }
+        Some(Box::pin(cupertino_apps::activate::activate_in_thread(
+            "cupertino-launcher",
+            bus_name.to_owned(),
+            token,
+        )))
+    }
 }
 
 /// The model and the channel `Toggle` and the session lock arrive on.
@@ -733,6 +773,7 @@ fn listen(signals: &async_channel::Receiver<Signal>) -> Command<Message> {
                 Signal::Locked => Message::Locked,
                 Signal::Output(size) => Message::Output(size),
                 Signal::ReduceMotion(on) => Message::ReduceMotion(on),
+                Signal::Opened(launch, running) => Message::Opened(launch, running),
             })
     }))
 }
@@ -755,6 +796,7 @@ impl Application for App {
                 | Message::Locked
                 | Message::Output(_)
                 | Message::ReduceMotion(_)
+                | Message::Opened(..)
         );
         let mut commands = kit::update(&mut app.model, message);
         if signalled {
@@ -774,6 +816,8 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let shell =
         LayerShell::bind(system.connection()).ok_or("the server lacks zwlr_layer_shell_v1")?;
+    // the session object brings a running application forward; without it every application is started
+    let session = Shell::bind(system.connection()).map(|shell| shell.session(system.connection()));
     let mut config = LauncherConfig::default();
     let terminal = options.terminal.clone().or_else(|| {
         let entries = DEFAULT_TERMINALS.map(String::from);
@@ -834,6 +878,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         files: None,
         previews: None,
         searches: None,
+        session,
     };
     let mut model = Model::new(Launcher::from_system(config), Box::new(host));
     model.files = files;

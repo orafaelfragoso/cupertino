@@ -198,7 +198,7 @@ running dot follows it:
   when its next window comes.
 - Opening it (a click on its tile, its menu's Open) asks that process for a new window. When the desktop entry
   says `DBusActivatable=true`, the dock calls `org.freedesktop.Application.Activate` on the bus name of the desktop file ID
-  (`src/activate.rs`, on a thread of its own). The activation token goes in the platform data as `activation-token` and
+  (`cupertino_apps::activate`, on a thread of its own; the launcher shares it). The activation token goes in the platform data as `activation-token` and
   `desktop-startup-id`. Otherwise, or when the call fails or is not answered within 3 s (`ACTIVATE_TIMEOUT`), the dock
   starts the entry again with an activation token, and a running instance opens a window. Neither bounces the tile: the application is already running.
 - Only an application the desktop shows stays without windows: a process with no desktop entry, or with a `NoDisplay`
@@ -296,8 +296,10 @@ A hot corner or gesture the dock maps to `app-grid` (by default the four-finger 
 `toggle_app_grid` from an older server is ignored.
 
 **Decision** (recorded here): one application browser. The dock's grid was removed rather than kept beside the
-launcher's, and the browser launches with an activation token like the launcher's other results; an application that
-runs is not brought forward by the browser the way a tile click brings it (`activate_app`).
+launcher's. Choosing an application in the browser (or in the launcher's search) opens it as a click on its tile does: the
+launcher asks the server (`cupertino_session_v1.activate_app`, the same server path as this dock's `activate_app`), which
+brings a running application forward, and only otherwise asks a resident one for a window or starts the entry with an
+activation token (see the launcher's README, *Opening an application*).
 
 ### Overview
 
@@ -399,7 +401,7 @@ cargo test -p cupertino-dock --features app
 
 | Test | Proves |
 |---|---|
-| Activation unit tests (`src/activate.rs`) | The object path of a desktop file ID and the token in the platform data. |
+| Activation unit tests (`cupertino-apps`, `src/activate.rs`) | The object path of a desktop file ID and the token in the platform data. |
 | `tests/activate.rs` | `Activate` reaches a fake `org.freedesktop.Application` on a private session bus (`cupertino-test-bus`) at the desktop file ID's path, with the token in its platform data; a name nobody owns fails. |
 | Stack unit tests (`src/stack.rs`) | The grid growing to five columns then up to three rows, cells in reading order, presses on entries and the button, the quarter-second entry that only fades under Reduce Motion, the newest-first order without hidden files, a real folder listed without hidden files, dangling links or names that are not UTF-8 and with only the shown entries' icons looked up, and the downloads folder from `user-dirs.dirs`. |
 | Switcher unit tests | Layout, hit-testing, delay and fade timing, hover slack, colours. |

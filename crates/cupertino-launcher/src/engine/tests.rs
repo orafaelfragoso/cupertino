@@ -224,7 +224,7 @@ fn empty_query_lists_frecent_applications() {
 fn launch_builds_command_and_records_frecency() {
     let mut l = launcher();
     let item = l.query("visual studio", NOW).get(0).unwrap().clone();
-    let Activation::Run(cmd) = l.activate(&item, "visual studio", NOW) else {
+    let Some(cmd) = l.activate(&item, "visual studio", NOW).into_command() else {
         panic!("expected a command")
     };
     assert_eq!(cmd.argv(), ["code"], "file field codes are stripped");
@@ -241,20 +241,36 @@ fn launch_builds_command_and_records_frecency() {
 fn action_launch_and_terminal_wrapping() {
     let mut l = launcher();
     let item = l.query("private", NOW).get(0).unwrap().clone();
-    let Activation::Run(cmd) = l.activate(&item, "private", NOW) else {
+    let Some(cmd) = l.activate(&item, "private", NOW).into_command() else {
         panic!()
     };
     assert_eq!(cmd.argv(), ["firefox", "--private-window"]);
     let htop = l.query("htop", NOW).get(0).unwrap().clone();
-    let Activation::Run(cmd) = l.activate(&htop, "htop", NOW) else {
+    let Some(cmd) = l.activate(&htop, "htop", NOW).into_command() else {
         panic!()
     };
     assert_eq!(cmd.argv(), ["xterm", "-e", "htop"]);
     l.config.terminal_command = vec!["foot".into()];
-    let Activation::Run(cmd) = l.activate(&htop, "htop", NOW) else {
+    let Some(cmd) = l.activate(&htop, "htop", NOW).into_command() else {
         panic!()
     };
     assert_eq!(cmd.argv(), ["foot", "htop"]);
+}
+
+#[test]
+fn an_application_opens_as_its_dock_tile_and_a_desktop_action_runs() {
+    let mut l = launcher();
+    let firefox = l.query("firefox", NOW).get(0).unwrap().clone();
+    let Activation::OpenApp { desktop_id, spec } = l.activate(&firefox, "firefox", NOW) else {
+        panic!("the application itself is opened")
+    };
+    assert_eq!(desktop_id, "browser.desktop");
+    assert_eq!(spec.argv(), ["firefox"]);
+    let private = l.query("private", NOW).get(0).unwrap().clone();
+    assert!(
+        matches!(l.activate(&private, "private", NOW), Activation::Run(_)),
+        "a desktop action is a command of its own"
+    );
 }
 
 #[test]
@@ -267,7 +283,7 @@ fn activation_token_hook_sets_environment() {
         Some("tok-123".into())
     })));
     let item = l.query("gimp", NOW).get(0).unwrap().clone();
-    let Activation::Run(cmd) = l.activate(&item, "gimp", NOW) else {
+    let Some(cmd) = l.activate(&item, "gimp", NOW).into_command() else {
         panic!()
     };
     assert!(cmd
@@ -280,7 +296,7 @@ fn activation_token_hook_sets_environment() {
     assert_eq!(req.desktop_id.as_deref(), Some("gimp.desktop"));
     assert_eq!(req.title, "GIMP");
     l.set_activation_token_hook(Some(Box::new(|_| None)));
-    let Activation::Run(cmd) = l.activate(&item, "gimp", NOW) else {
+    let Some(cmd) = l.activate(&item, "gimp", NOW).into_command() else {
         panic!()
     };
     assert!(cmd.env.is_empty());
@@ -326,7 +342,7 @@ fn file_results_form_folder_and_file_sections() {
         .iter()
         .all(|i| matches!(i.action, Action::OpenPath(_)) && i.id.starts_with("file:")));
     let item = files.items[0].clone();
-    let Activation::Run(cmd) = l.activate(&item, "report", NOW) else {
+    let Some(cmd) = l.activate(&item, "report", NOW).into_command() else {
         panic!()
     };
     assert_eq!(cmd.program, "xdg-open");
@@ -371,7 +387,7 @@ fn web_fallback_is_off_by_default_and_encodes_the_query() {
         Action::OpenUrl("https://search.example/?q=a%26b+c".into())
     );
     let item = last.items[0].clone();
-    let Activation::Run(cmd) = l.activate(&item, "a&b c", NOW) else {
+    let Some(cmd) = l.activate(&item, "a&b c", NOW).into_command() else {
         panic!()
     };
     assert_eq!(
@@ -489,7 +505,10 @@ fn a_file_offers_open_reveal_and_copy_path_and_reveal_opens_its_folder_in_files(
     assert_eq!(labels, ["Open", "Reveal in Files", "Copy Path"]);
     let folder = d.path().to_string_lossy().into_owned();
     // without the session's file manager the folder opens with the open command
-    let Activation::Run(open) = l.activate_action(&item, &actions[1], "budget", NOW) else {
+    let Some(open) = l
+        .activate_action(&item, &actions[1], "budget", NOW)
+        .into_command()
+    else {
         panic!()
     };
     assert_eq!(
@@ -506,7 +525,10 @@ fn a_file_offers_open_reveal_and_copy_path_and_reveal_opens_its_folder_in_files(
         "cupertino-files %F",
     ));
     l.set_entries(entries);
-    let Activation::Run(files) = l.activate_action(&item, &actions[1], "budget", NOW) else {
+    let Some(files) = l
+        .activate_action(&item, &actions[1], "budget", NOW)
+        .into_command()
+    else {
         panic!()
     };
     assert_eq!(files.program, "cupertino-files");

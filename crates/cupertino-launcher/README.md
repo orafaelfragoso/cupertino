@@ -126,13 +126,34 @@ Primary+R) opens the folder holding a file, or a folder itself, in the session's
 (`engine::FILE_MANAGER_ID`, with an activation token), else with `xdg-open`; the file manager opens folders, so the file itself is
 not selected. Web search runs `xdg-open`. The other panel commands are logged as not provided.
 
+**Opening an application.** Choosing an application, in the browser or among the search results (its Open action),
+opens it as a click on its Dock tile does; a desktop action (a new private window, say) always runs its own command.
+`Launcher::activate` gives `Activation::OpenApp` for it, and the token is asked for as above. When the token arrives the host
+asks the server to bring the application forward (`Host::bring_forward`: `cupertino_session_v1.activate_app` with the desktop
+file ID, shell version 20), and the server answers with `app_activation` (`Message::Opened`):
+
+- `activated`: it showed a window and the server brought it forward through the same path as the Dock's `activate_app`: the
+  frontmost window takes the focus, a minimised window is restored when it has no other, a hidden application is shown, and
+  nothing is started.
+- `resident`: a process of it runs without a window. When the desktop file says `DBusActivatable=true` the host calls
+  `org.freedesktop.Application.Activate` with the token (`cupertino_apps::activate`, the Dock's call, bounded by 3 s); when
+  that is not answered, or the entry is not D-Bus activatable, the entry is started again with the token and a running
+  instance opens a window.
+- `not_running`: the entry is started with the token, as before.
+
+With a server older than shell version 20, or without the shell global (the launcher has the Session role by default), the
+application is started at once, as before. The server matches the desktop file ID to an application the way the Dock does:
+its application id, or the desktop entry of its application id (by ID, `StartupWMClass` or program), without regard to case.
+
 Screenshot: `cupertino-server/output/launcher-open.png`.
 
 ## Protocols / D-Bus it speaks
 
 The process owns `org.cupertino.Launcher1` at `/org/cupertino/Launcher1`. A second launcher cannot take the name and exits with
-failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`). It also speaks `cupertino_session_v1` and
-`xdg-activation` to the server.
+failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`). It also speaks `cupertino_session_v1` (from
+shell version 20 its `activate_app` request, which needs the Session role the server gives the launcher's connection and
+checks on every request) and `xdg-activation` to the server, and calls `org.freedesktop.Application.Activate` on a resident
+D-Bus activatable application.
 
 | Method | Effect |
 |---|---|
@@ -264,6 +285,11 @@ at shutdown.
 
 * The launcher's browser is the desktop's only application browser: the Dock's app-grid action opens it (`ToggleApplications`)
   and the Dock's own grid is gone.
+* An application chosen in the launcher opens as its Dock tile does (*Opening an application*). The server does the raising
+  (a session-object request rather than a window list in the launcher), so the launcher learns nothing about windows beyond
+  that one answer, and an ordinary client, which never sees the shell global, gains nothing. The token is asked for before
+  the server is, while the panel's window still exists, so a launch after the answer still takes the focus; a token the
+  answer makes unnecessary is left to expire.
 * Escape clears a category filter before it folds the browser; the arrangement is remembered while the process runs; the browser
   reopens at the top with nothing selected; applications whose entry maps to no category are under Other.
 * The keyboard stays in the query field while browsing, and the selection is spoken through a live region.
@@ -289,7 +315,7 @@ CUPERTINO_REPAINT_DIR=out cargo test -p cupertino-launcher --release frames::fra
 |---|---|
 | `tests/control.rs` | The `Toggle` and `ToggleApplications` methods against a private `dbus-daemon`, that a second launcher cannot take the name, and that another process (a `dbus-send` the test starts) is refused as `UntrustedCaller`. |
 | `cupertino-server/tests/shell_processes.rs` | The real process (`--no-files`) connects to the real server, maps its hidden window at start and keeps running; the Dock's app-grid action opens the browser, and Escape folds it into the search field and then closes it. |
-| `src/view/tests.rs` | The windows run headless on Kit's test driver: the search field, the results list and keyboard navigation against the Inspector goldens in `tests/goldens/` and the screen-reader readings in `tests/fixtures/screen-reader/`; launching, the clipboard, hover, click and dismissal; the preview arriving (and a stale one dropped), Reveal in Files, choosing an action with the arrows, a conversion; the browser opened by the Dock's request, the arrows, typing and category filters, the list arrangement (goldens `browser-grid` and `browser-list`), the shortcut that unfolds the search field, a late file search dropped and one past its deadline, the enlarged preview and its timeout, Reduce Motion, and the window following the browser on a moving clock. |
+| `src/view/tests.rs` | The windows run headless on Kit's test driver: the search field, the results list and keyboard navigation against the Inspector goldens in `tests/goldens/` and the screen-reader readings in `tests/fixtures/screen-reader/`; launching, the clipboard, hover, click and dismissal; opening an application that runs (brought forward from the search and the browser, nothing started), one that does not (started with its token once the server says so), a resident one (asked over D-Bus, started again when it does not answer or is not D-Bus activatable) and a desktop action (never asks the server); the preview arriving (and a stale one dropped), Reveal in Files, choosing an action with the arrows, a conversion; the browser opened by the Dock's request, the arrows, typing and category filters, the list arrangement (goldens `browser-grid` and `browser-list`), the shortcut that unfolds the search field, a late file search dropped and one past its deadline, the enlarged preview and its timeout, Reduce Motion, and the window following the browser on a moving clock. |
 | `src/view/tests/frames.rs` | On a clock that moves a 60 Hz frame at a time: at 1.25, 1.5 and 1.75, the arrows and the pointer in the browser reshape no glass and repaint no whole window, and a transition reshapes it at most once a frame; at 1 to 2, a settled panel's glass ends on whole device pixels. `frame_cost_report` (ignored) times each interaction's frames with the CPU renderer and counts its whole repaints and glass changes. |
 | `src/nav.rs`, `src/browse/tests.rs`, `src/motion.rs`, `src/providers.rs` | The navigation table (Escape order, toggles, dismissal), the browser's model (categories, grid and list keys, Tab zones, scroll kept across a filter, selection kept by application, 5 000 applications), the transitions and their interruption, generations, cancellation and deadlines. |
 | `cargo test` | Matching, ranking, frecency, calculator (division by zero, huge numbers, invalid input), conversions, preview words and dates, file search, panel state and action traversal, that `takes_key` agrees with `handle_key`, and the `app` process code. |

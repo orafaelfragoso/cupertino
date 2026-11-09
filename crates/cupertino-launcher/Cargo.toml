@@ -14,6 +14,7 @@ default = []
 app = [
     "dep:async-channel",
     "dep:async-io",
+    "cupertino-apps/dbus",
     "dep:cupertino-assets",
     "dep:cupertino-defaults",
     "dep:cupertino-icons",

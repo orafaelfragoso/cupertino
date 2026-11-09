@@ -869,5 +869,6 @@ fn the_input_methods_popup_is_on_the_output_of_the_text_cursor_while_active() {
     h.wait_until("the popup to leave the output", move |_| {
         shared.lock().unwrap().popup.last() == Some(&"leave".to_string())
     });
+    h.sync(&[&im.rounds]);
     assert_eq!(im.popup(), ["enter", "scale 2", "leave"]);
 }

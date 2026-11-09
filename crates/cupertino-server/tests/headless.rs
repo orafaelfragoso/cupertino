@@ -108,6 +108,13 @@ impl Harness {
         PathBuf::from(dir).join(self.state.socket_name.as_ref().unwrap())
     }
 
+    /// Wait for `client`'s [`common::Rounds::barrier`]: it has every event sent before, so a test can say what it did
+    /// not hear.
+    fn sync(&mut self, client: &TestClient) {
+        let done = client.rounds.barrier();
+        self.wait_until("the client's roundtrips", move |_| done());
+    }
+
     fn screenshot(&mut self, name: &str) -> image::RgbaImage {
         let path =
             std::env::temp_dir().join(format!("cupertino-test-{}-{name}.png", std::process::id()));
@@ -339,6 +346,8 @@ struct TestClient {
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<Status>>,
     thread: Option<JoinHandle<()>>,
+    /// The roundtrips the client's thread finished.
+    rounds: common::Rounds,
 }
 
 impl TestClient {
@@ -378,8 +387,10 @@ impl TestClient {
     ) -> TestClient {
         let stop = Arc::new(AtomicBool::new(false));
         let status = Arc::new(Mutex::new(Status::default()));
-        let (s2, st2) = (stop.clone(), status.clone());
+        let rounds = common::Rounds::default();
+        let (s2, st2, rounds2) = (stop.clone(), status.clone(), rounds.clone());
         let thread = std::thread::spawn(move || {
+            let _ended = rounds2.ended_on_drop();
             let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
             let conn = Connection::from_socket(stream).unwrap();
             let (globals, mut queue) = registry_queue_init::<ClientState>(&conn).unwrap();
@@ -429,6 +440,7 @@ impl TestClient {
                 if queue.roundtrip(&mut client).is_err() {
                     break;
                 }
+                rounds2.tick();
                 if let (Some((popup_size, (ax, ay))), None, true) =
                     (options.popup, &client.popup, client.buffer.is_some())
                 {
@@ -450,6 +462,7 @@ impl TestClient {
             stop,
             status,
             thread: Some(thread),
+            rounds,
         }
     }
 
@@ -1729,9 +1742,7 @@ fn the_window_buttons_reach_assistive_technology_with_their_names_and_states() {
         "nothing is published while the session is locked"
     );
     h.state.press_published_button(id, ButtonKind::Close);
-    for _ in 0..10 {
-        h.step();
-    }
+    h.sync(&client);
     assert!(!client.closed(), "no press is taken while locked");
     locker.unlock();
     h.wait_until("the session to be unlocked", |s| {

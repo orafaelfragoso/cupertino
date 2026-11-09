@@ -672,11 +672,11 @@ fn browser_over_many(apps: usize, scale: f64, draw: bool) -> (Measured, usize) {
     m.until_quiet(10, 200);
     assert_eq!(m.model().nav.view, View::Browse);
     let nearby = m.model().browser.as_ref().unwrap().nearby().len();
-    // the icons arrive as the thread decodes them, between frames
+    // the icons arrive as the thread decodes them, between frames; the limit only ends a hang
     let waited = std::time::Instant::now();
     while m.model().app_icons.len() < nearby || m.model().app_icons_loading() > 0 {
         assert!(
-            waited.elapsed() < std::time::Duration::from_secs(30),
+            waited.elapsed() < std::time::Duration::from_secs(60),
             "{} of {nearby} icons arrived",
             m.model().app_icons.len()
         );

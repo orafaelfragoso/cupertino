@@ -379,6 +379,8 @@ struct Client {
     stop: Arc<AtomicBool>,
     /// Layer surfaces to open.
     opens: Opens,
+    /// The roundtrips the client's thread finished.
+    rounds: common::Rounds,
 }
 
 impl Client {
@@ -390,8 +392,10 @@ impl Client {
     fn spawn(socket: PathBuf, kind: Kind) -> Client {
         let log = Log::default();
         let stop = Arc::new(AtomicBool::new(false));
-        let (log2, stop2) = (log.clone(), stop.clone());
+        let rounds = common::Rounds::default();
+        let (log2, stop2, rounds2) = (log.clone(), stop.clone(), rounds.clone());
         std::thread::spawn(move || {
+            let _ended = rounds2.ended_on_drop();
             let stream = std::os::unix::net::UnixStream::connect(&socket).unwrap();
             let conn = Connection::from_socket(stream).unwrap();
             let (globals, mut queue) = registry_queue_init::<App>(&conn).unwrap();
@@ -481,6 +485,7 @@ impl Client {
                     if queue.roundtrip(&mut app).is_err() {
                         break;
                     }
+                    rounds2.tick();
                     app.draw(&qh);
                     std::thread::sleep(Duration::from_millis(2));
                 }
@@ -515,6 +520,7 @@ impl Client {
                 if queue.roundtrip(&mut app).is_err() {
                     break;
                 }
+                rounds2.tick();
                 app.draw(&qh);
                 std::thread::sleep(Duration::from_millis(2));
             }
@@ -523,6 +529,7 @@ impl Client {
             log,
             stop,
             opens: Default::default(),
+            rounds,
         }
     }
 
@@ -531,8 +538,11 @@ impl Client {
         let log = Log::default();
         let stop = Arc::new(AtomicBool::new(false));
         let opens = Opens::default();
-        let (log2, stop2, opens2) = (log.clone(), stop.clone(), opens.clone());
+        let rounds = common::Rounds::default();
+        let (log2, stop2, opens2, rounds2) =
+            (log.clone(), stop.clone(), opens.clone(), rounds.clone());
         std::thread::spawn(move || {
+            let _ended = rounds2.ended_on_drop();
             let stream = std::os::unix::net::UnixStream::connect(&socket).unwrap();
             let conn = Connection::from_socket(stream).unwrap();
             let (globals, mut queue) = registry_queue_init::<App>(&conn).unwrap();
@@ -594,11 +604,17 @@ impl Client {
                 if queue.roundtrip(&mut app).is_err() {
                     break;
                 }
+                rounds2.tick();
                 app.draw(&qh);
                 std::thread::sleep(Duration::from_millis(2));
             }
         });
-        Client { log, stop, opens }
+        Client {
+            log,
+            stop,
+            opens,
+            rounds,
+        }
     }
 
     /// Open the layer surface `tag`, on the output the surface `beside` is on, or naming no output.
@@ -737,7 +753,7 @@ impl Harness {
         client: &Client,
         mut cond: impl FnMut(&Cupertino, &Client) -> bool,
     ) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&self.state, client) {
@@ -748,6 +764,13 @@ impl Harness {
             "timed out waiting for {what}; the client heard {:?}",
             client.log.lock().unwrap()
         );
+    }
+
+    /// Wait for `client`'s [`common::Rounds::barrier`]: it has every event sent before, so a test can say what it did
+    /// not hear.
+    fn sync(&mut self, client: &Client) {
+        let done = client.rounds.barrier();
+        self.wait("the client's roundtrips", client, move |_, _| done());
     }
 
     /// Let every animation finish.
@@ -899,6 +922,7 @@ fn a_window_is_told_the_outputs_it_is_on_and_their_scale_as_it_moves_and_as_they
             .iter()
             .all(|t| c.on(t) == ["headless-2"] && c.scale(t) == 2)
     });
+    h.sync(&client);
     for t in [WINDOW, SUBSURFACE, POPUP] {
         let heard = client.heard(t);
         let leave = heard
@@ -911,7 +935,7 @@ fn a_window_is_told_the_outputs_it_is_on_and_their_scale_as_it_moves_and_as_they
         assert_eq!(client.scales(t), [2], "{t}: one new scale");
     }
     // the client that draws at whole-number scales only now draws at 2, twice the window's points
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::HANG_GUARD;
     while h.drawn().0 != 2 {
         assert!(
             Instant::now() < deadline,
@@ -942,6 +966,7 @@ fn a_window_is_told_the_outputs_it_is_on_and_their_scale_as_it_moves_and_as_they
     h.wait("the global of the display to go", &client, |_, c| {
         c.heard(REGISTRY) == [Heard::Removed("headless-2".into())]
     });
+    h.sync(&client);
     let log = client.log.lock().unwrap().clone();
     let removed = log
         .iter()
@@ -1011,6 +1036,7 @@ fn a_scale_change_sends_the_exact_scale_and_the_whole_number_one_rounded_up() {
         h.state.heads_changed();
         h.settle();
         h.wait("the new scale", &client, |_, c| c.scale(WINDOW) == whole);
+        h.sync(&client);
         assert_eq!(h.fractional(), Some(scale), "{scale}: exact");
         assert_eq!(client.on(WINDOW), ["headless-2"], "{scale}");
     }
@@ -1071,6 +1097,7 @@ fn a_window_dragged_across_the_seam_changes_scale_once_per_crossing() {
     h.wait("the client to hear every switch", &client, |_, c| {
         c.scales(WINDOW).len() == 4
     });
+    h.sync(&client);
     assert_eq!(client.scales(WINDOW), [2, 1, 2, 1]);
 
     // a little over half on the second display, within the margin: the first holds until the drag ends

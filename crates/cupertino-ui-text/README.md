@@ -12,7 +12,19 @@ buffer follow.
   lower cap stays.
 - `Preedit`, `ImeBatch` and `Surrounding` print lengths in `Debug`, never the text.
 - `TextInputSession::state` sends a protected field's own rectangle and no text; `Surrounding::around` cuts the
-  bounded window around the caret on grapheme boundaries.
+  bounded window around the caret on grapheme boundaries. `TextInputSession::protected_hints` are a protected field's
+  hints: hidden, sensitive text with completion, spell checking and capitalisation off. `TextInputState::reset` asks
+  the window system to enable the input method afresh, so it drops a composition the field ended itself.
+- `TextBuffer::apply_ime` applies one input-method batch in the protocol's order: the composition is taken away, the
+  bytes around the selection are deleted (cut inward to character boundaries, the selection kept, caret and anchor
+  then on grapheme boundaries), the commit replaces the selection as typing (a commit or a kept composition that joins marks after it leaves the caret
+  after the whole cluster), and the new composition shows in its
+  place with its own cursor (`composition_cursor`, moved back to a character boundary inside the composition, hidden
+  when the input method hides it). A batch that answers an older state still applies; the field just does not answer
+  it. `TextBuffer::surrounding` is the committed text around the caret, without the composition, with the caret where
+  the composition starts. A press while composing keeps the composition as typed; a shift press extends from the
+  anchor; a third press selects the paragraph with its line break in an editor, everything in a field.
+  `SecureBuffer::select_masked` selects by grapheme index, so a click lands between bullets.
 - `TextBuffer` is the single-line editing model of Kit's fields and the apps' text fields: grapheme caret and selection,
   undo, kill buffer, composition range, click counting, caret blink and scroll. `Keymap` resolves a key (evdev code, modifiers
   physical through a profile or already logical, and the character) through `cupertino-key-bindings`' chords, and

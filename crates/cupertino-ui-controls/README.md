@@ -51,10 +51,22 @@ from the application's model and reports changes as messages.
   `cupertino-key-bindings`, no settings or file watching) with the platform's logical modifiers. Edits report the
   committed text with a revision; the field takes the model's text only at or past its last reported revision, so a
   model that lags is not undone. An input method's composition never reaches the model, the accessible value or a
-  snapshot. Return submits unless a composition holds it, and Escape cancels a composition first.
+  snapshot. Return submits unless a composition holds it, and Escape cancels a composition first and asks the input
+  method to start afresh. A click, losing the focus or the window, and the input method leaving keep the composition
+  as typed (committed and reported) and reset the input method. The composition draws a thin underline at the same
+  distance below the baseline at every scale, the clause the input method is converting a heavier one and no caret,
+  and otherwise a caret inside the composition where the input method puts it. The input method learns the committed
+  text around the caret and the caret's rectangle. The caret is a whole number of device pixels wide with its edges
+  on device pixels of the field (crisp at 1x and 2x, and at 1.5x where the field sits on whole pixels), and selection
+  bars snap the same way. It blinks in `caret_phase_ms` phases and stays on with Reduce Motion or a phase of 0 (a
+  session that asks for a steady caret). Shift-click and shift-drag extend the selection; a drag held past the field's
+  edge (an editor's top or bottom) keeps scrolling and selecting every 50 ms by the distance past the edge until the
+  text ends; the caret scrolls into view after every edit and move.
 - **Passwords.** `SecureField` keeps its text in a `SecureBuffer` only: no undo, copy, cut or other command chord, no
   surrounding text for the input method, a protected accessible value, and the secret reaches the application only
-  borrowed, in the submit handler. A composition is never held; only committed text goes in. `busy` and `invalid`
+  borrowed, in the submit handler. A composition is never held; only committed text goes in. The input method is
+  asked for hidden, sensitive text with completion and spell checking off and is given the field's rectangle, never
+  the caret's. A click puts the caret between bullets, shift-click and dragging select, and a double click selects all. `busy` and `invalid`
   give assistive technology the field's busy and invalid states, which the application sets while a password is checked
   and after it is refused. `max_len` caps the text in bytes: text past it is cut at a grapheme boundary and a key with
   no room left is refused without an edit. Build the field with `..SecureField::default()` for the fields left out.

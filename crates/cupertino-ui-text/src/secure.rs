@@ -150,6 +150,20 @@ impl SecureBuffer {
         self.caret = self.len;
     }
 
+    /// Put the anchor and the caret at grapheme indices of the [`mask`](Self::mask) (where a press and a drag land on
+    /// its bullets), each clamped to the text's end.
+    pub fn select_masked(&mut self, anchor: usize, caret: usize) {
+        let byte = |index: usize| {
+            self.text()
+                .grapheme_indices(true)
+                .nth(index)
+                .map_or(self.len, |(i, _)| i)
+        };
+        let (anchor, caret) = (byte(anchor), byte(caret));
+        self.anchor = anchor;
+        self.caret = caret;
+    }
+
     /// Empty the buffer and zero what it held.
     pub fn clear(&mut self) {
         self.bytes[..self.len].zeroize();
@@ -245,6 +259,17 @@ impl SecureBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_masked_selection_lands_on_whole_graphemes_and_clamps_to_the_end() {
+        let mut b = SecureBuffer::new();
+        b.insert("a\u{301}👨\u{200d}👩\u{200d}👧b");
+        b.select_masked(1, 2);
+        assert_eq!(b.masked_selection(), (2, 1..2));
+        assert_eq!(b.selection(), 3..21, "the family emoji is one grapheme");
+        b.select_masked(0, 99);
+        assert_eq!(b.masked_selection(), (3, 0..3));
+    }
 
     fn assert_zeroed_on_drop<T: ZeroizeOnDrop>() {}
 

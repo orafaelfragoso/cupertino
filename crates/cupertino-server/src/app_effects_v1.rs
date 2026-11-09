@@ -39,7 +39,7 @@ pub struct AppEffectsV1Global {
 impl AppEffectsV1Global {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(8, ()),
+            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(9, ()),
         }
     }
 }

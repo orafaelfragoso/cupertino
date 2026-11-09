@@ -11,6 +11,7 @@
 //! | `color_filter` | `off`, `grayscale`, `protanopia`, `deuteranopia`, `tritanopia` or `tint <hue 0…1> | off |
 //! | `color_filter_intensity` | 0.25 to 1, or `default` | the filter's own |
 //! | `screen_reader` | `on` or `off`: the session's screen reader runs ([`installed_screen_reader`]) | off |
+//! | `steady_caret` | `on` or `off`: text fields and editors show the caret without blinking | off |
 //!
 //! Every option is off when its key is absent, as the design reads a missing preference as false.
 //! The contrast slider is 0 by default and accepts 0 to 1. Filter intensities are clamped to 0.25 to 1
@@ -39,6 +40,8 @@ pub const SYSTEM_ACCESSIBILITY: &str = "/etc/cupertino/accessibility.conf";
 pub const SCREEN_READER_AT_LOGIN: &str = "screen_reader_at_login";
 /// The key of a person's file that runs the screen reader in their session. The machine's file cannot set it.
 pub const SCREEN_READER: &str = "screen_reader";
+/// The key that keeps the text caret of every application from blinking.
+pub const STEADY_CARET: &str = "steady_caret";
 /// The keys the machine's file may set: display options that cannot make the login screen unusable for someone else,
 /// and [`SCREEN_READER_AT_LOGIN`]. A key joins only after a security review.
 pub const SYSTEM_KEYS: &[&str] = &["reduce_motion", SCREEN_READER_AT_LOGIN];
@@ -172,6 +175,9 @@ pub struct AccessibilitySettings {
     /// The session's screen reader runs. The compositor starts and stops it to match; at the login screen the machine's
     /// [`SCREEN_READER_AT_LOGIN`] decides instead.
     pub screen_reader: bool,
+    /// Text fields and editors show the caret without blinking. The compositor tells applications through their
+    /// appearance observers.
+    pub steady_caret: bool,
 }
 
 impl AccessibilitySettings {
@@ -205,6 +211,7 @@ impl AccessibilitySettings {
                 .map_or_else(|| "default".to_string(), |i| i.to_string()),
         ));
         entries.push((SCREEN_READER, on(self.screen_reader)));
+        entries.push((STEADY_CARET, on(self.steady_caret)));
         entries
     }
 
@@ -233,6 +240,7 @@ impl AccessibilitySettings {
             "color_filter" => self.color_filter = from.color_filter,
             "color_filter_intensity" => self.color_filter_intensity = from.color_filter_intensity,
             SCREEN_READER => self.screen_reader = from.screen_reader,
+            STEADY_CARET => self.steady_caret = from.steady_caret,
             _ => {}
         }
     }
@@ -262,6 +270,7 @@ impl AccessibilitySettings {
                 }
             }
             SCREEN_READER => self.screen_reader = on(value)?,
+            STEADY_CARET => self.steady_caret = on(value)?,
             other => return Err(format!("unknown setting {other:?}")),
         }
         Ok(())
@@ -495,6 +504,7 @@ mod tests {
             color_filter: Some(ColorFilter::Tint { hue: 0.125 }),
             color_filter_intensity: Some(0.75),
             screen_reader: true,
+            steady_caret: true,
         };
         let mut back = AccessibilitySettings::default();
         assert!(back.apply_text(&s.to_text()).is_empty());
@@ -540,6 +550,24 @@ mod tests {
             entries.contains(&("display_contrast", "0".to_string())),
             "the refused value changed nothing"
         );
+    }
+
+    #[test]
+    fn a_steady_caret_is_off_until_a_person_turns_it_on() {
+        let mut s = AccessibilitySettings::default();
+        assert!(!s.steady_caret);
+        assert!(s.entries().contains(&(STEADY_CARET, "off".to_string())));
+        s.set(STEADY_CARET, "on").unwrap();
+        assert!(s.steady_caret);
+        assert!(s.set(STEADY_CARET, "sometimes").is_err());
+        let (personal, errors) = PersonalAccessibility::from_text("steady_caret = on\n");
+        assert!(errors.is_empty());
+        assert!(
+            personal
+                .over(&AccessibilitySettings::default())
+                .steady_caret
+        );
+        assert_eq!(personal.to_text(), "steady_caret = on\n");
     }
 
     fn machine() -> AccessibilitySettings {

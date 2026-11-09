@@ -3108,3 +3108,78 @@ fn a_scroll_is_timed_from_its_input_to_the_frame_the_compositor_showed() {
     let latency = timing.latency();
     assert_eq!((latency.handled, latency.presented), (50, Some(300)));
 }
+
+/// Two text fields side by side.
+struct TwoFields;
+
+impl Application for TwoFields {
+    type Model = ();
+    type Message = String;
+
+    fn init() -> ((), Vec<Command<String>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: String) -> Vec<Command<String>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<String>> {
+        let mut windows = Counter::view(&Model::default());
+        windows[0].content = Element::new(row(vec![
+            Element::new(Leaf {
+                secret: true,
+                ..leaf("first")
+            })
+            .key("first"),
+            Element::new(Leaf {
+                secret: true,
+                ..leaf("second")
+            })
+            .key("second"),
+        ]));
+        windows
+    }
+}
+
+#[test]
+fn the_input_method_lets_go_of_one_field_before_the_next_takes_it() {
+    let damage = Rc::default();
+    let mut rt = Runtime::<TwoFields, _>::new(FakeSystem::default(), options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let tab = |rt: &mut Runtime<TwoFields, FakeSystem>| {
+        rt.window_system_mut().send(
+            window,
+            WindowEvent::Key(
+                KeyEvent {
+                    code: 0,
+                    keysym: Keysym(0xff09),
+                    text: None,
+                    pressed: true,
+                    repeat: false,
+                    mods: Mods::NONE,
+                },
+                Timestamp(0),
+            ),
+        );
+        rt.step(steps()).unwrap();
+    };
+    tab(&mut rt);
+    let first = rt.find(window, &Key::from("first")).unwrap();
+    assert_eq!(rt.snapshot(window).unwrap().text_input, Some(first));
+    let before = rt.window_system().text_input.len();
+    tab(&mut rt);
+    let second = rt.find(window, &Key::from("second")).unwrap();
+    assert_eq!(rt.snapshot(window).unwrap().text_input, Some(second));
+    let told: Vec<bool> = rt.window_system().text_input[before..]
+        .iter()
+        .map(Option::is_some)
+        .collect();
+    assert_eq!(
+        told,
+        [false, true],
+        "the first field's input method is turned off, so what it composed never reaches the second"
+    );
+}

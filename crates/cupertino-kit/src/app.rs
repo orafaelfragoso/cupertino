@@ -73,6 +73,7 @@ pub fn run_on_with_appearance<A: Application>(
 ) -> Result<(), AppError> {
     let first = appearance(system.appearance().unwrap_or_default());
     let (mut options, theme) = options_and_theme(preferences(&first))?;
+    keep_caret(Arc::make_mut(&mut options.theme), &first);
     let follow = mapped(theme_for(theme, Arc::clone(&options.theme)), appearance);
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
     Runtime::<A, _>::start(system, options, start)
@@ -90,6 +91,10 @@ pub fn run_on_with<A: Application>(
 ) -> Result<(), AppError> {
     // the first frame already has the session's appearance
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
+    keep_caret(
+        Arc::make_mut(&mut options.theme),
+        &system.appearance().unwrap_or_default(),
+    );
     let follow = theme_for(theme, Arc::clone(&options.theme));
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
     let start = start(&options);
@@ -107,6 +112,10 @@ pub fn run_lock_screen_on_with<A: Application>(
     start: impl FnOnce(&RuntimeOptions) -> (A::Model, Vec<Command<A::Message>>),
 ) -> Result<(), AppError> {
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
+    keep_caret(
+        Arc::make_mut(&mut options.theme),
+        &system.appearance().unwrap_or_default(),
+    );
     let follow = theme_for(theme, Arc::clone(&options.theme));
     options.accessibility = Some(Box::new(AtspiAdapter::lock_screen(system.waker())));
     let start = start(&options);
@@ -207,6 +216,13 @@ pub fn preferences(appearance: &SystemAppearance) -> ThemePreferences {
     }
 }
 
+/// Keep the text caret of `tokens` from blinking when the session asks for a steady one.
+fn keep_caret(tokens: &mut ThemeTokens, appearance: &SystemAppearance) {
+    if appearance.steady_caret {
+        tokens.motion.caret_phase_ms = 0;
+    }
+}
+
 /// `follow`, with the session's appearance passed through `appearance` first.
 fn mapped(
     mut follow: ThemeForAppearance,
@@ -227,13 +243,15 @@ fn theme_for(theme: Option<Theme>, start: Arc<ThemeTokens>) -> ThemeForAppearanc
                 })
                 .ok()
         });
-        Arc::new(followed.unwrap_or_else(|| {
+        let mut tokens = followed.unwrap_or_else(|| {
             let mut tokens = (*start).clone();
             tokens.preferences = preferences;
             tokens.colors = ColorTokens::neutral(preferences.appearance);
             tokens.motion.reduce = preferences.reduce_motion;
             tokens
-        }))
+        });
+        keep_caret(&mut tokens, appearance);
+        Arc::new(tokens)
     })
 }
 
@@ -400,6 +418,7 @@ mod tests {
                 increase_contrast,
                 reduce_transparency,
                 reduce_motion,
+                steady_caret: false,
             };
         assert_eq!(
             preferences(&session(false, false, false, false)).appearance,
@@ -489,6 +508,27 @@ mod tests {
             *follow(&dark),
             ThemeTokens::neutral(preferences(&dark)).unwrap()
         );
+    }
+
+    #[test]
+    fn a_session_that_keeps_the_caret_steady_gets_a_caret_that_never_blinks() {
+        let start =
+            Arc::new(ThemeTokens::neutral(preferences(&SystemAppearance::default())).unwrap());
+        let mut follow = theme_for(None, Arc::clone(&start));
+        assert_eq!(
+            follow(&SystemAppearance::default()).motion.caret_phase_ms,
+            start.motion.caret_phase_ms
+        );
+        assert!(start.motion.caret_phase_ms > 0);
+        let steady = SystemAppearance {
+            steady_caret: true,
+            ..SystemAppearance::default()
+        };
+        assert_eq!(follow(&steady).motion.caret_phase_ms, 0);
+        let mut follow = theme_for(Some(Theme::load().unwrap()), start);
+        let tokens = follow(&steady);
+        assert_eq!(tokens.motion.caret_phase_ms, 0);
+        assert!(!tokens.motion.reduce, "the rest of motion stays as it is");
     }
 
     #[test]

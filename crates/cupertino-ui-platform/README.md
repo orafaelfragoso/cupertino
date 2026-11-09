@@ -15,6 +15,9 @@ and `GlassTone::{Appearance, Dark, Light}` picks the colour of the text over it.
 (thin bars over the content while it scrolls) or `ScrollBars::Always` (tracks beside it that stay shown). A system
 that cannot tell never sends it, and each view keeps its own style.
 
+`SystemAppearance::steady_caret` says the session wants text carets shown without blinking; a system that cannot tell
+leaves it off.
+
 A pointer scroll (`PointerEvent::Scroll`) keeps its provenance: the source (`ScrollSource::{Wheel, Finger,
 Continuous, WheelTilt}`), the high-resolution wheel steps (`value120`, 120 a detent), the stop that ends a finger or
 continuous scroll, and `inverted`, whether each axis is in natural (inverted) direction.

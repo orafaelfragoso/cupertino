@@ -613,6 +613,8 @@ pub struct SystemAppearance {
     pub increase_contrast: bool,
     pub reduce_transparency: bool,
     pub reduce_motion: bool,
+    /// The text caret stays shown instead of blinking.
+    pub steady_caret: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

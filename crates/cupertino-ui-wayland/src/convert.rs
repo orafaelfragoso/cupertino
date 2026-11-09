@@ -385,6 +385,7 @@ pub(crate) fn text_input(state: &text::TextInputState) -> wl::TextInputState {
         hint: hints(state.hints),
         purpose: purpose(state.purpose),
         cursor_rect: state.cursor_rect,
+        reset: state.reset,
     }
 }
 
@@ -612,6 +613,7 @@ mod tests {
             },
             cause: text::ChangeCause::InputMethod,
             cursor_rect: Some(Rect::new(1.0, 2.0, 1.0, 14.0)),
+            reset: false,
         };
         let sent = text_input(&state);
         assert_eq!(sent.surrounding, wl::SurroundingText::new("héllo", 3, 1));

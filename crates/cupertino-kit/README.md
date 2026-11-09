@@ -20,7 +20,8 @@ fn paint(cx: &mut PaintCx<'_>) {
 compositor. `app::run_on` and `app::run_on_with` run on a window system a desktop shell set up with its surface roles;
 `app::run_lock_screen_on_with` does the same for the lock screen, whose AT-SPI adapter the session's lock never mutes
 (`AtspiAdapter::lock_screen`), and `app::run_on_with_appearance` passes the session's appearance through a function first, for a
-shell surface that keeps the dark appearance in a light session. The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
+shell surface that keeps the dark appearance in a light session. Every one of them keeps the text caret from blinking
+(`caret_phase_ms` 0) while the session asks for a steady caret, from the first frame. The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
 Every one of them reports scroll timing when `CUPERTINO_SCROLL_TIMING` (`app::SCROLL_TIMING_ENV`) names an absolute path:
 one JSON line a pointer scroll event, appended, with its stages in nanoseconds of `CLOCK_MONOTONIC` (`input`, the
 window system's timestamp; `handled`; `updated`, the model update and view, or `null`; `submitted`, the frame that drew

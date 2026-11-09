@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from argparse import Namespace
@@ -352,6 +353,30 @@ class SourceSnapshotTest(unittest.TestCase):
             args.commit = None
             with self.assertRaisesRegex(SystemExit, 'not from this commit'):
                 release.cmd_verify_packages(args)
+
+
+class SourceCommitTest(unittest.TestCase):
+    def test_the_source_archive_names_its_commit_in_data_build_commit(self):
+        """`git archive` fills the tracked data/build-commit (export-subst), so a build from the archive knows its
+        commit without .git."""
+        checkout = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(release, 'ROOT', Path(directory)):
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', root], check=True)
+            for name in ('.gitattributes', 'data/build-commit', 'crates/cupertino-server/Cargo.toml'):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(checkout / name, root / name)
+            self.assertEqual((root / 'data/build-commit').read_text(), '$Format:%H$\n')
+            subprocess.run(['git', '-C', root, 'add', '.'], check=True)
+            subprocess.run(['git', '-C', str(root), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                            '-c', 'commit.gpgsign=false', 'commit', '-qm', 'source'], check=True)
+            commit = release.git('rev-parse', 'HEAD')
+            out = root / 'out'
+            release.cmd_source(Namespace(commit=None, tag='v0.1.0', output=out))
+            with tarfile.open(out / 'cupertino-0.1.0-source.tar.xz') as archive:
+                text = archive.extractfile('cupertino-0.1.0/data/build-commit').read().decode()
+            self.assertRegex(text, r'\A[0-9a-f]{40}\n\Z')
+            self.assertEqual(text, commit + '\n')
 
 
 GIT_RECIPE = Path(__file__).resolve().parent / 'arch/cupertino-git/PKGBUILD'

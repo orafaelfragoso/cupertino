@@ -1004,6 +1004,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-build-info"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "cupertino-capture"
 version = "0.1.0"
 dependencies = [

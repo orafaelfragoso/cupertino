@@ -1,0 +1,15 @@
+[package]
+name = "cupertino-build-info"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "What a Cupertino build is: the source commit, the component name and version, and the OS image and kernel it runs on"
+build = "build.rs"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3"

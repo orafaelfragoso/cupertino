@@ -10,10 +10,11 @@
 digraph "layers" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (18)";
+    label="foundation (19)";
     "cupertino-animation";
     "cupertino-apps";
     "cupertino-assets";
+    "cupertino-build-info";
     "cupertino-capture";
     "cupertino-defaults";
     "cupertino-filepicker";

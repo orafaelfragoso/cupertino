@@ -1087,14 +1087,14 @@ mod tests {
         assert_eq!(shared.for_new_surface(&[vec![]]), None, "the card");
         // both are told they are on `a`; the active output becomes `b`; the fade starts and the catcher goes, so only
         // the card is open when the toggle comes
-        let card = vec![a];
-        let catcher = shared.for_new_surface(&[card.clone()]);
+        let card = [vec![a]];
+        let catcher = shared.for_new_surface(&card);
         assert_eq!(
             catcher,
             Some(a),
             "the catcher shares the card's output, not the active `b`"
         );
-        assert_eq!(catcher, card.first().copied());
+        assert_eq!(catcher, card[0].first().copied());
         // learnt once, the output holds while a surface is open
         assert_eq!(shared.for_new_surface(&[vec![]]), Some(a));
         // after the fade nothing is open: the next panel opens on the active output again, now `b`

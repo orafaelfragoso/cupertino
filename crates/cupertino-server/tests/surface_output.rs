@@ -57,6 +57,10 @@ const POPUP: &str = "popup";
 
 type Log = Arc<Mutex<Vec<(&'static str, Heard)>>>;
 
+/// Layer surfaces a client is asked to open: each by name, with the name of the surface whose output it names (none:
+/// it names no output).
+type Opens = Arc<Mutex<Vec<(&'static str, Option<&'static str>)>>>;
+
 /// One surface the client draws: its size in points and the whole-number scale it draws at.
 struct Drawn {
     surface: wl_surface::WlSurface,
@@ -252,8 +256,8 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
 struct Client {
     log: Log,
     stop: Arc<AtomicBool>,
-    /// Layer surfaces to open: by name, with the name of the surface whose output to name (none: name no output).
-    opens: Arc<Mutex<Vec<(&'static str, Option<&'static str>)>>>,
+    /// Layer surfaces to open.
+    opens: Opens,
 }
 
 impl Client {
@@ -354,7 +358,7 @@ impl Client {
     fn layers(socket: PathBuf) -> Client {
         let log = Log::default();
         let stop = Arc::new(AtomicBool::new(false));
-        let opens: Arc<Mutex<Vec<(&'static str, Option<&'static str>)>>> = Default::default();
+        let opens = Opens::default();
         let (log2, stop2, opens2) = (log.clone(), stop.clone(), opens.clone());
         std::thread::spawn(move || {
             let stream = std::os::unix::net::UnixStream::connect(&socket).unwrap();

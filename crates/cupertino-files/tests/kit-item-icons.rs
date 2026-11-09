@@ -35,6 +35,8 @@ use cupertino_ui_test::{ManualClock, TestDriver};
 
 /// How long a test waits for the folder's watcher or a thumbnail worker.
 const WAIT: Duration = Duration::from_secs(20);
+/// How long no thumbnail worker wakes the window before its workers count as settled.
+const SETTLED: Duration = Duration::from_millis(200);
 /// The colour of the pictures, and of a picture after it changed.
 const PICTURE: [u8; 3] = [230, 30, 60];
 const CHANGED: [u8; 3] = [20, 40, 220];
@@ -298,13 +300,21 @@ impl Browser {
         self.pixel(at)
     }
 
-    /// Settle until `done` holds, for what the watcher and the thumbnail workers report from their threads.
+    /// Settle until `done` holds, for what the watcher and the thumbnail workers report from their threads: between
+    /// two looks it settles again while the window waits for a frame, and otherwise waits for a thread to wake the
+    /// runtime. [`WAIT`] only guards against a hang.
     #[track_caller]
     fn wait_until(&mut self, mut done: impl FnMut(&mut Browser) -> bool) {
         let deadline = Instant::now() + WAIT;
         while !done(self) {
-            assert!(Instant::now() < deadline, "the window never caught up");
-            std::thread::sleep(Duration::from_millis(10));
+            let system = self.driver.window_system_mut();
+            let progress = if system.frame_requested(self.window).unwrap() {
+                Instant::now() < deadline
+            } else {
+                let left = deadline.saturating_duration_since(Instant::now());
+                !left.is_zero() && system.wait_for_wake(left)
+            };
+            assert!(progress, "the window never caught up");
             self.settle();
         }
     }
@@ -414,15 +424,15 @@ fn only_the_pictures_in_view_get_thumbnails_until_the_others_scroll_in() {
     );
     browser.wait_until(|b| b.label("p000.png").is_some());
     browser.wait_until(|b| near(b.icon_colour("p000.png", false), PICTURE));
-    // the workers settle on the items in view and near it
-    let mut last = 0;
-    browser.wait_until(|b| {
-        std::thread::sleep(Duration::from_millis(200));
-        let now = b.cached();
-        let still = now == last;
-        last = now;
-        still
-    });
+    // the workers settle on the items in view and near it: each thumbnail made wakes the window, and the end of the
+    // work has no event of its own, so they have settled once none wakes it for a while. Reading early can only
+    // count fewer thumbnails than the bound below allows.
+    let deadline = Instant::now() + WAIT;
+    while browser.driver.window_system_mut().wait_for_wake(SETTLED) {
+        assert!(Instant::now() < deadline, "the workers never settled");
+        browser.settle();
+    }
+    let last = browser.cached();
     assert!(
         last < COUNT / 2,
         "{last} of {COUNT} thumbnails were made for a window that shows a few rows"

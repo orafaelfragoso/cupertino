@@ -12,7 +12,7 @@ use common::{place, Run};
 use cupertino_files::kit::Observer;
 use cupertino_files::notice::Notices;
 use cupertino_files::places::PlaceKind;
-use cupertino_kit::core::Role;
+use cupertino_kit::core::{Key, Role, WindowKey};
 use cupertino_kit::geometry::Point;
 use cupertino_kit::platform::{Mods, MouseButton};
 use cupertino_kit::theme::{Appearance, ThemePreferences};
@@ -260,8 +260,12 @@ fn a_folder_is_not_pasted_into_itself() {
     run.key_with(u32::from('c'), Some('c'), Mods::PRIMARY);
     enter(&mut run, "Notes");
     run.key_with(u32::from('v'), Some('v'), Mods::PRIMARY);
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    run.settle();
+    // the paste runs on a worker and ends refused: its failure is listed in the progress window, which opens
+    let progress = WindowKey(Key::from("progress".to_owned()));
+    run.wait_until(|run| {
+        let windows = run.driver.runtime().windows();
+        windows.into_iter().any(|(key, _)| key == progress)
+    });
     assert_eq!(
         std::fs::read_dir(&notes).unwrap().count(),
         0,

@@ -158,6 +158,17 @@ pub fn theme() -> ThemeTokens {
     entries.push(((Link, state(Normal, false)), gray(8)));
     entries.push(((PanelTrack, state(Normal, false)), gray(9)));
     entries.push(((QuaternaryLabel, state(Normal, false)), gray(10)));
+    // a sidebar's neutral selection, and its fainter look in a window that is not active
+    entries.push(((SidebarSelection, state(Normal, false)), gray(11)));
+    for interaction in [Normal, Hover, Pressed, Disabled] {
+        for selected in [false, true] {
+            let inactive = StateVariant {
+                window_active: false,
+                ..state(interaction, selected)
+            };
+            entries.push(((SidebarSelection, inactive), gray(16)));
+        }
+    }
     ThemeTokens {
         preferences: ThemePreferences {
             appearance: Appearance::Light,

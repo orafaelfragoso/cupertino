@@ -81,6 +81,55 @@ S['pause'] = path('M7 4v16M17 4v16')
 S['forward'] = path('m3 5 9 7-9 7Zm10 0 9 7-9 7Z')
 S['backward'] = path('m21 5-9 7 9 7Zm-10 0-9 7 9 7Z')
 
+# Filled editions, for sidebar rows: the glyph's body or its key parts drawn solid, the rest kept as heavier strokes.
+def solid(body):
+    # filled and stroked, so its corners round as the strokes' do
+    return '<g fill="currentColor">' + body + '</g>'
+def cut(body):
+    # filled with its holes cut out, no stroke
+    return '<g fill="currentColor" stroke="none" fill-rule="evenodd">' + body + '</g>'
+def heavy(body):
+    return '<g stroke-width="2.4">' + body + '</g>'
+# a rounded rectangle as a path, so a hole can be cut in it
+def box(x, y, w, h, r):
+    return (f'M{x+r} {y}h{w-2*r}a{r} {r} 0 0 1 {r} {r}v{h-2*r}a{r} {r} 0 0 1 -{r} {r}h-{w-2*r}'
+            f'a{r} {r} 0 0 1 -{r} -{r}v-{h-2*r}a{r} {r} 0 0 1 {r} -{r}Z')
+# the places of a file browser: outlines with a solid part
+S['house.fill'] = path('m3 11 9-8 9 8M5 10v11h14V10') + solid(rect(10.2, 14.5, 3.6, 6, .6))
+S['desktop.fill'] = rect(2.5, 4.5, 19, 15, 3) + solid(rect(6.5, 14.5, 11, 2, .8))
+S['document.fill'] = path('M6 3h8l4 4v14H6Z') + solid(path('M14 3v4h4Z'))
+S['download.fill'] = circle(12, 12, 9.2) + path('M12 7v7') + solid(path('m8.5 12.5 3.5 4 3.5-4Z'))
+S['applications.fill'] = solid(''.join(rect(x, y, 6, 6, 1) for x in (4, 14) for y in (4, 14)))
+S['music.fill'] = path('M10 17V6l10-3v11M10 9l10-3') + solid(circle(7, 18, 2.6) + circle(17, 15, 2.6))
+S['photo.fill'] = rect(3, 4, 18, 16) + solid(circle(8.5, 9, 1.4) + path('M4.5 18.5 10 12.5l4 4 3-3 3.5 4v1Z'))
+S['film.fill'] = rect(3, 3, 18, 18) + solid(rect(7.5, 3, 9, 18, 0)) + path('M3 8h4m-4 8h4M17 8h4m-4 8h4')
+S['recents.fill'] = circle(12, 12, 9.2) + heavy(path('M12 6.5V12l3.8 2.8'))
+S['computer.fill'] = rect(3, 4, 18, 13) + solid(rect(6, 7, 12, 7, .5)) + path('M12 17v4m-5 0h10')
+S['trash.fill'] = path('M4 6h16M9 6V3h6v3') + solid(path('M6.2 7.5h11.6l-.9 13.5H7.1Z'))
+S['externaldrive.fill'] = rect(3, 5, 18, 14, 3) + solid(path('M3 14h18v2a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3Z'))
+S['flash-drive.fill'] = solid(rect(7, 9, 10, 13, 1.5)) + path('M9 9V2h6v7')
+S['memory-card.fill'] = cut(path('M7 2h11a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7Z'
+                                 'M9.2 3.8h1.6v3.5H9.2Zm3 0h1.6v3.5h-1.6Zm3 0h1.6v3.5h-1.6Z'))
+S['tag.fill'] = cut(path('M3.5 3h8l10 10.5-7.5 7.5L3 11V3.5a.5.5 0 0 1 .5-.5ZM7.5 5.8a1.7 1.7 0 1 0 0 3.4 1.7 1.7 0 0 0 0-3.4Z'))
+# the panes of a settings window: white on a coloured tile, solid
+S['wifi.fill'] = heavy(path('M2.5 8.5a15 15 0 0 1 19 0M5.5 12.2a10.4 10.4 0 0 1 13 0M8.6 15.8a5.6 5.6 0 0 1 6.8 0')) + solid(circle(12, 19.6, 1.1))
+S['bluetooth.fill'] = heavy(S['bluetooth'])
+S['network.fill'] = solid(rect(8.5, 3, 7, 4.5, 1) + rect(1.5, 17, 5, 4, 1) + rect(9.5, 17, 5, 4, 1) + rect(17.5, 17, 5, 4, 1)) + path('M12 7.5V13M4 17v-4h16v4')
+S['battery.fill'] = solid(rect(2, 7, 18, 10, 2.5)) + heavy(path('M22.2 10.5v3'))
+S['accessibility.fill'] = circle(12, 12, 9.6) + solid(circle(12, 7.3, 1.3)) + heavy(path('M7.5 10.2 12 11l4.5-.8M12 11v3.6m-2.8 3.9 2.8-3.9 2.8 3.9'))
+S['appearance.fill'] = circle(12, 12, 9) + solid(path('M12 3a9 9 0 0 1 0 18Z'))
+S['control-panel.fill'] = rect(2, 3, 20, 7, 3.5) + rect(2, 14, 20, 7, 3.5) + solid(circle(7.5, 6.5, 1.8) + circle(16.5, 17.5, 1.8))
+S['sun.fill'] = solid(circle(12, 12, 4)) + heavy(path('M12 2.5v1.5m0 16v1.5M2.5 12H4m16 0h1.5M5.3 5.3l1 1m11.4 11.4 1 1M5.3 18.7l1-1m11.4-11.4 1-1'))
+S['speaker.high.fill'] = solid(path('M3 9h4l6-5v16l-6-5H3Z')) + path('M16 8a6 6 0 0 1 0 8M19 4a11 11 0 0 1 0 16')
+S['bell.fill'] = solid(path('M5 17h14l-2-4V9a5 5 0 0 0-10 0v4Z')) + path('M10 21h4M12 2v2')
+S['lock-screen.fill'] = solid(rect(5, 10.5, 14, 10.5)) + path('M8 10.5V7a4 4 0 0 1 8 0v3.5')
+S['privacy.fill'] = cut(path('m12 2 8 3v6q0 7-8 11-8-4-8-11V5ZM7.6 11.3l3.4 3.4 5.6-6.2-1.3-1.2-4.3 4.7-2.1-2.1Z'))
+S['keyboard.fill'] = cut(path(box(2, 6, 20, 14, 2.5) + ''.join(f'M{x} {y}h2v2h-2Z' for x in (5, 9, 13, 17) for y in (9, 12.5)) + 'M7 16h10v1.8H7Z'))
+S['mouse.fill'] = cut(path(box(6, 2, 12, 20, 6) + 'M11.2 4.5h1.6v4h-1.6Z'))
+S['trackpad.fill'] = rect(3, 4, 18, 16, 3) + solid(path('M3 15h18v2a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3Z'))
+S['grid.fill'] = S['applications.fill']
+S['screen-mirroring.fill'] = rect(2, 3, 15, 12) + solid(rect(8, 9, 14, 12))
+
 # Artwork has independent 16- and 32-pixel optical editions.
 import sys
 sys.dont_write_bytecode = True

@@ -68,8 +68,9 @@ sidebar row (approximate). The desktop entry is `data/applications/cupertino-set
   the Mouse and Trackpad rows' device predicates (both rows always show until the device monitor is wired, §3).
 - The width cannot be fixed at the server: `ToplevelConfig` carries a minimum size only, so the window can be widened.
 - The interface width factor f is 1 (approximate).
-- Symbols: the process requires `symbol.accessibility`, `symbol.appearance`, `symbol.lock-screen`, `symbol.keyboard`,
-  `symbol.mouse`, `symbol.trackpad`, `symbol.moon.fill`, `symbol.bell` and `symbol.xmark.circle` (gap G8). The design's `appearance` and
+- Symbols: every tile (the sidebar's, a header card's, a sub-page row's) wears a filled symbol (`symbol.wifi.fill`,
+  `symbol.trackpad.fill` and so on), so the process requires each pane's `.fill` name, `symbol.moon.fill` and
+  `symbol.xmark.circle` (gap G8). The design's `appearance` and
   `dots.below.lock.fill` are not in the system glyph catalogs; `circle.lefthalf.filled` and `lock.display` stand in for
   them (approximate).
 - A click outside the results popup on another client or the desktop ends the search (the field clears) and reaches what it hit; a click in this window keeps the popup's grab and reaches the window. Whether the design needs a second click is unknown.

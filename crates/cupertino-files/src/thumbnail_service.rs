@@ -485,10 +485,50 @@ mod tests {
         assert!(service.queued().is_empty());
     }
 
+    /// A service over a cache in `dir` with one worker that makes its first thumbnail at once and holds every later one:
+    /// it says on the second channel when it starts one, and makes it once the first channel lets it go (or is
+    /// dropped). What the wakes arrive on comes last.
+    fn held_after_first(
+        dir: &Path,
+    ) -> (
+        ThumbnailService,
+        mpsc::Sender<()>,
+        mpsc::Receiver<()>,
+        mpsc::Receiver<()>,
+    ) {
+        let thumbnailer = Thumbnailer::new(dir.join("cache"), "cupertino-files");
+        let root = thumbnailer.root().to_path_buf();
+        let (release, held) = mpsc::channel::<()>();
+        let held = Mutex::new(held);
+        let (started, starts) = mpsc::channel();
+        let started = Mutex::new(started);
+        let makes = AtomicU64::new(0);
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let next = Arc::new(AtomicU64::new(1));
+        let service = ThumbnailService::with_make(
+            root,
+            Box::new(move |path: &Path, size, edge| {
+                if makes.fetch_add(1, Ordering::SeqCst) > 0 {
+                    let _ = started.lock().unwrap().send(());
+                    let _ = held.lock().unwrap().recv();
+                }
+                thumbnailer.pixels(path, size, edge)
+            }),
+            1,
+            MEMORY_BUDGET,
+            Arc::new(move || {
+                let _ = tx.lock().unwrap().send(());
+            }),
+            Arc::new(move || next.fetch_add(1, Ordering::Relaxed)),
+        );
+        (service, release, starts, rx)
+    }
+
     #[test]
     fn a_changed_file_is_made_again_and_the_old_thumbnail_drawn_meanwhile() {
         let dir = tempfile::tempdir().unwrap();
-        let (service, rx) = service(dir.path(), 1, MEMORY_BUDGET);
+        let (service, release, starts, rx) = held_after_first(dir.path());
         let path = dir.path().join("p.png");
         picture(&path, 20, 20, 10);
         let first = stamp(&path);
@@ -503,11 +543,16 @@ mod tests {
         let second = stamp(&path);
         assert_ne!(first, second);
         service.want(0, 64, [(path.clone(), second)]);
+        // the worker is making the new one, and holds it until let go
+        starts
+            .recv_timeout(WAIT)
+            .expect("the worker starts the new one");
         assert_eq!(
             service.get(&path, 64).map(|t| t.id),
             Some(old.id),
             "the old one is drawn until the new one is made"
         );
+        release.send(()).unwrap();
         while service.get(&path, 64).unwrap().id == old.id {
             rx.recv_timeout(WAIT).expect("a worker finishes");
         }

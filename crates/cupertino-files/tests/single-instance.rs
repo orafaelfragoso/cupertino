@@ -156,13 +156,19 @@ fn close(run: &mut Run, window: WindowId) {
     run.settle();
 }
 
-/// Run `work` on a thread of its own while Files keeps turning, and give what it returned.
+/// Run `work` on a thread of its own while Files keeps turning, and give what it returned. The thread wakes the
+/// runtime once the work ended, so the turning waits for Files' own threads and that one alike; the thirty seconds only
+/// guard against a hang.
 fn while_turning<T: Send + 'static>(run: &mut Run, work: impl FnOnce() -> T + Send + 'static) -> T {
-    let work = std::thread::spawn(work);
+    let waker = run.waker();
+    let work = std::thread::spawn(move || {
+        let out = work();
+        waker.wake();
+        out
+    });
     let deadline = Instant::now() + Duration::from_secs(30);
     while !work.is_finished() {
-        assert!(Instant::now() < deadline, "it never ended");
-        std::thread::sleep(Duration::from_millis(10));
+        assert!(run.wait_for_progress(deadline), "it never ended");
         run.settle();
     }
     work.join().unwrap()
@@ -222,6 +228,31 @@ fn owner(bus: &PrivateBus) -> Option<String> {
     dbus.get_name_owner(BUS_NAME.try_into().unwrap())
         .ok()
         .map(|o| o.to_string())
+}
+
+/// Waits until nobody owns the name, as the bus announces it; the ten seconds only guard against a hang.
+fn wait_until_unowned(bus: &PrivateBus) {
+    let connection = bus.connect();
+    let dbus = zbus::blocking::fdo::DBusProxy::new(&connection).unwrap();
+    // listening before looking, so a change between the two is heard
+    let changes = dbus
+        .receive_name_owner_changed_with_args(&[(0, BUS_NAME)])
+        .unwrap();
+    if owner(bus).is_none() {
+        return;
+    }
+    let (unowned, heard) = mpsc::channel();
+    std::thread::spawn(move || {
+        for change in changes {
+            if change.args().is_ok_and(|args| args.new_owner().is_none()) {
+                let _ = unowned.send(());
+                return;
+            }
+        }
+    });
+    heard
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the name is given up");
 }
 
 #[test]
@@ -340,10 +371,9 @@ fn activate_with_no_window_open_opens_one_and_show_progress_brings_the_progress_
     let deadline = Instant::now() + Duration::from_secs(20);
     while window(&run, "progress").is_none() {
         assert!(
-            Instant::now() < deadline,
+            run.wait_for_progress(deadline),
             "the progress window never opened"
         );
-        std::thread::sleep(Duration::from_millis(10));
         run.settle();
     }
     let progress = window(&run, "progress").unwrap();
@@ -464,13 +494,24 @@ fn a_call_naming_anything_but_a_local_folder_or_the_trash_is_refused() {
     assert_eq!(run.windows().len(), 2);
 }
 
-/// A program that owns the name and never answers a call.
-struct Hung;
+/// A program that owns the name and never answers a call; it says on `called`, if it has one, when a call came.
+struct Hung {
+    called: Option<Mutex<mpsc::Sender<()>>>,
+}
+
+impl Hung {
+    fn hang(&self) -> impl std::future::Future<Output = ()> {
+        if let Some(called) = &self.called {
+            let _ = called.lock().unwrap().send(());
+        }
+        std::future::pending::<()>()
+    }
+}
 
 #[zbus::interface(name = "org.freedesktop.Application")]
 impl Hung {
     async fn activate(&self, _platform_data: HashMap<String, OwnedValue>) {
-        std::future::pending::<()>().await
+        self.hang().await
     }
 
     async fn open(
@@ -479,15 +520,25 @@ impl Hung {
         _hint: String,
         _platform_data: HashMap<String, OwnedValue>,
     ) {
-        std::future::pending::<()>().await
+        self.hang().await
     }
 }
 
 fn hung(bus: &PrivateBus) -> zbus::blocking::Connection {
+    hung_telling(bus, None)
+}
+
+/// [`hung`], saying on `called` when a call came.
+fn hung_telling(bus: &PrivateBus, called: Option<mpsc::Sender<()>>) -> zbus::blocking::Connection {
     bus.blocking_builder()
         .name(BUS_NAME)
         .unwrap()
-        .serve_at(OBJECT_PATH, Hung)
+        .serve_at(
+            OBJECT_PATH,
+            Hung {
+                called: called.map(Mutex::new),
+            },
+        )
         .unwrap()
         .build()
         .unwrap()
@@ -539,9 +590,13 @@ fn launch_alone(bus: &PrivateBus, home: &Path, args: &[&str]) -> std::process::O
 #[test]
 fn an_owner_that_leaves_while_it_is_asked_lets_the_launch_serve() {
     let Some(bus) = bus() else { return };
-    let hung = hung(&bus);
+    let (called, calls) = mpsc::channel();
+    let hung = hung_telling(&bus, Some(called));
     let leaves = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
+        // once the launch's call is waiting on it
+        calls
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the launch calls the owner");
         // as the process exits: the socket closes, whatever call it was answering
         hung.close().unwrap();
     });
@@ -557,11 +612,7 @@ fn an_owner_that_leaves_while_it_is_asked_lets_the_launch_serve() {
     };
     assert!(owner(&bus).is_some());
     drop(service);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while owner(&bus).is_some() {
-        assert!(Instant::now() < deadline, "the name is given up");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_until_unowned(&bus);
 }
 
 #[test]
@@ -572,11 +623,7 @@ fn files_gives_its_name_up_as_it_exits_and_the_next_launch_serves() {
     let browser = run.window;
     close(&mut run, browser);
     assert!(run.driver.runtime().exited());
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while owner(&bus).is_some() {
-        assert!(Instant::now() < deadline, "the name is given up");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_until_unowned(&bus);
     let launch = instance::serve_or_forward(
         connect(&bus),
         &Request::Activate,
@@ -598,14 +645,24 @@ fn a_launch_racing_the_exit_starts_a_new_files_instead_of_handing_over() {
             .map(|launch| matches!(launch, Launch::Serve(_)))
             .map_err(|e| e.to_string())
     });
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // the service's wake, heard on a thread of its own so the wait has a guard
+    let woken = service.woken().clone();
+    let (wake, wakes) = mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(()) = woken.recv_blocking() {
+            if wake.send(()).is_err() {
+                break;
+            }
+        }
+    });
     let waiting = loop {
         let calls = service.take();
         if !calls.is_empty() {
             break calls;
         }
-        assert!(Instant::now() < deadline, "the launch never called");
-        std::thread::sleep(Duration::from_millis(10));
+        wakes
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the launch calls");
     };
     // Files quits without answering
     drop(waiting);

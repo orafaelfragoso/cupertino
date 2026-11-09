@@ -42,8 +42,8 @@ pub use evidence::Evidence;
 pub use glass::{GlassMode, GlassParams, GlassStyle};
 pub use metrics::{ControlSize, ShapeTokens, WindowShadowPreset};
 pub use recipe::{
-    Backdrop, Blend, Catalog, ColorOp, CornerCurve, Fill, Interaction, MaterialLibrary,
-    MaterialOptions, Recipe, WindowState,
+    kept_when_inactive, Backdrop, Blend, Catalog, ColorOp, CornerCurve, Fill, Interaction,
+    MaterialLibrary, MaterialOptions, Recipe, WindowState, KEPT_WHEN_INACTIVE,
 };
 pub use theme::{spec_dir, Theme, SPEC_DIR_ENV};
 pub use tokens::DesignTokens;

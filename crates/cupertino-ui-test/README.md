@@ -88,3 +88,9 @@ each frame's damage is copied, into one buffer per window, as a client copies a 
 timing run does not count a whole-window copy that only a test makes. The Files and Settings repaint reports use both
 (see their READMEs). Wall time depends on the machine: a test that pins what a frame repaints reads the damage of
 `HeadlessWindowSystem::frames`.
+
+The runtime's waker does not dispatch anything in a headless window system, so `run_until_idle` never blocks.
+`HeadlessWindowSystem::wait_for_wake(timeout)` blocks until a task finishing on another thread (a listing, a
+thumbnail, a file read) wakes it, or the timeout passes, which only guards against a hang. A wake since the last wait
+counts, so none is lost between draining the runtime and waiting: a test drains, checks its condition, and waits only
+when it does not hold yet.

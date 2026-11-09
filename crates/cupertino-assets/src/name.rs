@@ -70,7 +70,7 @@ pub const RASTER_NAMES: [&str; 26] = [
 ];
 
 /// The template symbol names the shell looks up.
-pub const SYMBOL_NAMES: [&str; 67] = [
+pub const SYMBOL_NAMES: [&str; 99] = [
     "symbol.backward",
     "symbol.bell",
     "symbol.dock.hide",
@@ -138,6 +138,39 @@ pub const SYMBOL_NAMES: [&str; 67] = [
     "symbol.trash",
     "symbol.wifi",
     "symbol.xmark.circle",
+    // filled editions, for sidebar rows
+    "symbol.accessibility.fill",
+    "symbol.appearance.fill",
+    "symbol.applications.fill",
+    "symbol.battery.fill",
+    "symbol.bell.fill",
+    "symbol.bluetooth.fill",
+    "symbol.computer.fill",
+    "symbol.control-panel.fill",
+    "symbol.desktop.fill",
+    "symbol.document.fill",
+    "symbol.download.fill",
+    "symbol.externaldrive.fill",
+    "symbol.film.fill",
+    "symbol.flash-drive.fill",
+    "symbol.grid.fill",
+    "symbol.house.fill",
+    "symbol.keyboard.fill",
+    "symbol.lock-screen.fill",
+    "symbol.memory-card.fill",
+    "symbol.mouse.fill",
+    "symbol.music.fill",
+    "symbol.network.fill",
+    "symbol.photo.fill",
+    "symbol.privacy.fill",
+    "symbol.recents.fill",
+    "symbol.screen-mirroring.fill",
+    "symbol.speaker.high.fill",
+    "symbol.sun.fill",
+    "symbol.tag.fill",
+    "symbol.trackpad.fill",
+    "symbol.trash.fill",
+    "symbol.wifi.fill",
 ];
 
 /// The cursor names the server asks for (the CSS cursor names of the cursor-shape protocol).

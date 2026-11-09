@@ -84,14 +84,14 @@ impl SubPage {
     /// The `symbol.*` template symbol of its row's tile, and the tile's colour.
     pub fn symbol(self) -> &'static str {
         match self {
-            SubPage::Display => "symbol.computer",
-            SubPage::LoginScreen => "symbol.lock-screen",
-            SubPage::ScreenReader => "symbol.speaker.high",
-            SubPage::Pointer => "symbol.mouse",
-            SubPage::Keyboard => "symbol.keyboard",
-            SubPage::HotCorners => "symbol.grid",
-            SubPage::ClipboardAccess => "symbol.document",
-            SubPage::ScreenSharing => "symbol.screen-mirroring",
+            SubPage::Display => "symbol.computer.fill",
+            SubPage::LoginScreen => "symbol.lock-screen.fill",
+            SubPage::ScreenReader => "symbol.speaker.high.fill",
+            SubPage::Pointer => "symbol.mouse.fill",
+            SubPage::Keyboard => "symbol.keyboard.fill",
+            SubPage::HotCorners => "symbol.grid.fill",
+            SubPage::ClipboardAccess => "symbol.document.fill",
+            SubPage::ScreenSharing => "symbol.screen-mirroring.fill",
         }
     }
 
@@ -313,7 +313,11 @@ mod tests {
     fn every_sub_page_names_a_section_of_its_pane_and_a_result_opens_it() {
         for sub in SubPage::ALL {
             assert_eq!(SubPage::of(sub.pane(), sub.title()), Some(sub));
-            assert!(sub.symbol().starts_with("symbol."));
+            assert!(
+                sub.symbol().starts_with("symbol.") && sub.symbol().ends_with(".fill"),
+                "a tile wears a filled symbol: {}",
+                sub.symbol()
+            );
         }
         let hit = Hit {
             pane: PaneId::Accessibility,

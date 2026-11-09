@@ -531,4 +531,68 @@ mod tests {
             }
         }
     }
+
+    /// A sidebar over a blue wallpaper, in a dark window: drawn over a dark window body and over the bare wallpaper.
+    /// The active sidebar takes the colour of what lies behind it, so it differs between the two; an inactive window's
+    /// sidebar is an opaque grey laid with the wallpaper's tint, the same over both and a navy whose blue stands well
+    /// above its red and green (an inactive sidebar over a blue wallpaper reads as a dark navy, not a vivid blue).
+    #[test]
+    fn an_inactive_sidebar_is_the_same_navy_over_any_scene_and_an_active_one_follows_the_scene() {
+        use cupertino_theme::{Appearance, MaterialOptions, Theme, WindowState};
+        let theme = Theme::load().unwrap();
+        let sidebar = |window| {
+            theme
+                .recipe(
+                    Appearance::Dark,
+                    "Sidebar",
+                    &MaterialOptions {
+                        window,
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+        };
+        let blue = [52.0 / 255.0, 53.0 / 255.0, 182.0 / 255.0];
+        let wall = |rgb: [f32; 3]| {
+            image::RgbaImage::from_pixel(
+                32,
+                32,
+                image::Rgba([
+                    (rgb[0] * 255.0) as u8,
+                    (rgb[1] * 255.0) as u8,
+                    (rgb[2] * 255.0) as u8,
+                    255,
+                ]),
+            )
+        };
+        let draw = |window, scene: [f32; 3]| {
+            let recipe = sidebar(window);
+            let region = MaterialRegion::new([0.0, 0.0, 32.0, 32.0], &recipe);
+            render_regions(&wall(scene), &[region], 1.0, blue, true, true)
+                .get_pixel(16, 16)
+                .0
+        };
+        let body = [30.0 / 255.0, 32.0 / 255.0, 38.0 / 255.0];
+        let (over_body, over_wall) = (
+            draw(WindowState::Inactive, body),
+            draw(WindowState::Inactive, blue),
+        );
+        assert_eq!(
+            over_body, over_wall,
+            "the inactive sidebar ignores the scene"
+        );
+        let [r, g, b, _] = over_body.map(i32::from);
+        assert!(
+            r <= 45 && g <= 45 && b - r >= 10 && b <= 60,
+            "a dark navy: {over_body:?}"
+        );
+        let (active_body, active_wall) = (
+            draw(WindowState::Active, body),
+            draw(WindowState::Active, blue),
+        );
+        assert!(
+            i32::from(active_wall[2]) - i32::from(active_body[2]) > 30,
+            "the active sidebar follows the scene: {active_body:?} {active_wall:?}"
+        );
+    }
 }

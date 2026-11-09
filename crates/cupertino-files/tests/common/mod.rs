@@ -742,15 +742,40 @@ impl Run {
         }
     }
 
-    /// Settles until `done` holds, for changes a watcher thread reports.
+    /// Settles until `done` holds, for changes a watcher or worker thread reports: between two looks it settles again
+    /// while a window waits for a frame, and otherwise waits for a thread to wake the runtime. The ten seconds only
+    /// guard against a hang.
     #[track_caller]
     pub fn wait_until(&mut self, mut done: impl FnMut(&Run) -> bool) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !done(self) {
-            assert!(Instant::now() < deadline, "the window never caught up");
-            std::thread::sleep(Duration::from_millis(10));
+            assert!(
+                self.wait_for_progress(deadline),
+                "the window never caught up"
+            );
             self.settle();
         }
+    }
+
+    /// Whether the runtime has something to do before `deadline`: a window waits for a frame, or a thread woke the
+    /// runtime (a task finished), which this waits for. `false` once the deadline passed with neither.
+    pub fn wait_for_progress(&mut self, deadline: Instant) -> bool {
+        let windows = self.windows();
+        let system = self.driver.window_system_mut();
+        if windows
+            .into_iter()
+            .any(|w| system.frame_requested(w).unwrap_or(false))
+        {
+            return Instant::now() < deadline;
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        !left.is_zero() && system.wait_for_wake(left)
+    }
+
+    /// The runtime's waker, for a test's own thread to wake it once it is done.
+    pub fn waker(&self) -> std::task::Waker {
+        use cupertino_kit::platform::WindowSystem;
+        self.driver.runtime().window_system().waker()
     }
 }
 

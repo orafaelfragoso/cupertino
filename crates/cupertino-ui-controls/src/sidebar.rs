@@ -539,21 +539,26 @@ impl<M: 'static> Widget<M> for Row<M> {
         };
         let m = self.style.metrics;
         let neutral = self.style.neutral;
+        let active = cx.window_active();
+        // the accent look's selection in an active window is the accent; the neutral look's, and any selection in a
+        // window that is not active, is the sidebar's neutral selection laid over its material, fainter when inactive
+        let accented = self.selected && !neutral && active;
         if self.selected {
-            // the neutral look's selection is a grey that reads on either appearance whether the window is active or not
-            let fill = if neutral {
-                theme
-                    .colors
-                    .get(ColorRole::QuaternaryLabel, StateVariant::NORMAL)
-            } else {
+            let fill = if accented {
                 look::color(&theme, ColorRole::ControlFill, &selected)
+            } else {
+                look::color(&theme, ColorRole::SidebarSelection, &selected)
             };
             look::fill(cx, chrome, m.selection_radius, fill);
         }
-        // a selected row's icon and label take the selected text colour on the accent; on the neutral grey they keep
-        // their own colours
-        let text = if self.selected && !neutral {
+        // a row on the accent takes the selected text colour; on the neutral selection it keeps its own colours; in a
+        // window that is not active every label is the secondary label colour, the selected row's too
+        let text = if accented {
             look::color(&theme, ColorRole::ControlText, &selected)
+        } else if !active {
+            theme
+                .colors
+                .get(ColorRole::SecondaryText, StateVariant::NORMAL)
         } else {
             theme.colors.get(ColorRole::Text, StateVariant::NORMAL)
         };
@@ -580,9 +585,9 @@ impl<M: 'static> Widget<M> for Row<M> {
             let secondary = theme
                 .colors
                 .get(ColorRole::SecondaryText, StateVariant::NORMAL);
-            let tint = if self.selected && !neutral {
+            let tint = if accented {
                 text
-            } else if !cx.window_active() {
+            } else if !active {
                 secondary
             } else if self.selected || self.style.accent {
                 accent
@@ -801,7 +806,7 @@ impl<M: 'static> Widget<M> for AccessoryButton<M> {
             window_active: cx.window_active(),
             ..ControlState::default()
         };
-        let color = if self.selected && !self.style.neutral {
+        let color = if self.selected && !self.style.neutral && cx.window_active() {
             look::color(&theme, ColorRole::ControlText, &state)
         } else {
             theme

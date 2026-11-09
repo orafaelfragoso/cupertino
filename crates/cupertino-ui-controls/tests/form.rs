@@ -335,6 +335,84 @@ fn the_selected_sidebar_row_fills_with_the_selected_control_colour() {
     );
 }
 
+/// A window that is not active draws its tile sidebar as an active one does but for the documented roles: every label,
+/// the selected row's too, takes the secondary label colour and the selection turns from the accent to the sidebar's
+/// faint inactive selection; the tiles keep their colours and every shape stays where it was.
+#[test]
+fn an_inactive_window_s_tile_sidebar_differs_only_in_its_labels_and_selection() {
+    let mut h = harness();
+    h.click(h.center("Network"));
+    let rows = |h: &Harness<Settings>| ROWS.map(|name| h.ops(name));
+    let active = rows(&h);
+    h.rt.window_system_mut()
+        .configure(
+            h.window,
+            Some(Size::new(640.0, 480.0)),
+            cupertino_ui_platform::WindowStates::default(),
+        )
+        .unwrap();
+    h.settle();
+    let inactive = rows(&h);
+    let theme = support::theme();
+    let secondary = theme
+        .colors
+        .get(
+            ColorRole::SecondaryText,
+            cupertino_ui_theme::StateVariant::NORMAL,
+        )
+        .unwrap();
+    let faint = theme
+        .colors
+        .get(
+            ColorRole::SidebarSelection,
+            cupertino_ui_theme::StateVariant {
+                window_active: false,
+                ..cupertino_ui_theme::StateVariant::NORMAL
+            },
+        )
+        .unwrap();
+    let accent = color(ColorRole::ControlFill, InteractionVariant::Normal, true);
+    for (name, (a, b)) in ROWS.iter().zip(active.iter().zip(&inactive)) {
+        assert_eq!(a.len(), b.len(), "{name}");
+        let mut labels = 0;
+        for (x, y) in a.iter().zip(b) {
+            match (x, y) {
+                (
+                    PaintOp::Glyphs { origin, run, .. },
+                    PaintOp::Glyphs {
+                        origin: o2,
+                        run: r2,
+                        color,
+                    },
+                ) => {
+                    assert_eq!((origin, run), (o2, r2), "{name}");
+                    assert_eq!(*color, secondary, "{name}: the label is secondary");
+                    labels += 1;
+                }
+                (
+                    PaintOp::Fill {
+                        shape,
+                        paint: Paint::Solid(before),
+                    },
+                    PaintOp::Fill {
+                        shape: s2,
+                        paint: Paint::Solid(after),
+                    },
+                ) if before != after => {
+                    assert_eq!(shape, s2, "{name}");
+                    assert_eq!(
+                        (*name, *before, *after),
+                        ("Network", accent, faint),
+                        "only the selection changes its fill"
+                    );
+                }
+                _ => assert_eq!(x, y, "{name}: the tiles and the rest stay"),
+            }
+        }
+        assert!(labels > 0, "{name} has a label");
+    }
+}
+
 #[test]
 fn the_search_field_edits_and_reads_as_a_text_field_at_a_search_fields_height() {
     let mut h = harness();

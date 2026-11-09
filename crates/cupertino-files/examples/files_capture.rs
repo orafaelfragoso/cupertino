@@ -20,7 +20,7 @@ use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_files::kit::{prepare, Files, Start};
@@ -97,8 +97,9 @@ const SIDEBAR: f64 = cupertino_files::metrics::sidebar::DEFAULT_WIDTH;
 const LISTING: Duration = Duration::from_secs(5);
 /// The work the runtime may do between two looks at the window.
 const TURNS: u32 = 10_000;
-/// The frames a window may ask for before it rests.
-const FRAMES: usize = 8;
+/// The frames a window may ask for without resting or showing a steady state before the capture gives up: a guard
+/// against a hang only.
+const HANG_FRAMES: usize = 10_000;
 
 fn io(e: std::io::Error) -> String {
     e.to_string()
@@ -327,39 +328,22 @@ impl Capture {
                 })
                 .unwrap_or_default()
         };
-        let end = Instant::now() + LISTING;
-        while !names(&driver).iter().any(|n| n == "notes.txt") {
-            if Instant::now() > end {
-                return Err(format!(
-                    "listing {} took over {LISTING:?}",
-                    self.home.display()
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(5));
-            settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
-        }
+        wait_until(&mut driver, window, turns, LISTING, |driver| {
+            names(driver).iter().any(|n| n == "notes.txt")
+        })
+        .map_err(|e| e.unwrap_or_else(|| format!("listing {} never ended", self.home.display())))?;
         // the pictures' thumbnails are made on worker threads: wait until the window draws each
-        let end = Instant::now() + THUMBNAILS;
-        while thumbnails_drawn(&driver, window) < PICTURES {
-            if Instant::now() > end {
-                return Err(format!("the thumbnails took over {THUMBNAILS:?}"));
-            }
-            std::thread::sleep(Duration::from_millis(5));
-            settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
-        }
+        wait_until(&mut driver, window, turns, THUMBNAILS, |driver| {
+            thumbnails_drawn(driver, window) >= PICTURES
+        })
+        .map_err(|e| e.unwrap_or_else(|| "the thumbnails were never drawn".into()))?;
         // a path of names is clicked one after the other, each once its column shows it
         for name in selected.into_iter().flat_map(|path| path.split('/')) {
-            let end = Instant::now() + LISTING;
-            let at = loop {
-                if let Some(at) = text_center(&driver, window, name) {
-                    break at;
-                }
-                if Instant::now() > end {
-                    return Err(format!("{name}: no item of the sample folder"));
-                }
-                std::thread::sleep(Duration::from_millis(5));
-                settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
-            };
+            wait_until(&mut driver, window, turns, LISTING, |driver| {
+                text_center(driver, window, name).is_some()
+            })
+            .map_err(|e| e.unwrap_or_else(|| format!("{name}: no item of the sample folder")))?;
+            let at = text_center(&driver, window, name).expect("shown");
             click(&mut driver, window, at, turns).map_err(|e| fail(&e))?;
             settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
         }
@@ -382,17 +366,12 @@ impl Capture {
             .and_then(|path| path.rsplit('/').next())
             .filter(|name| sample_text(name, 1).is_some());
         if let Some(name) = previewed {
-            let end = Instant::now() + LISTING;
             let group = format!("Preview of {name}");
-            while any_named(&driver, |n| n == group)
-                && !any_named(&driver, |n| n.starts_with(SAMPLE_LINES[0]))
-            {
-                if Instant::now() > end {
-                    return Err(format!("{name}: its text never showed"));
-                }
-                std::thread::sleep(Duration::from_millis(5));
-                settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
-            }
+            wait_until(&mut driver, window, turns, LISTING, |driver| {
+                !any_named(driver, |n| n == group)
+                    || any_named(driver, |n| n.starts_with(SAMPLE_LINES[0]))
+            })
+            .map_err(|e| e.unwrap_or_else(|| format!("{name}: its text never showed")))?;
         }
         let shown = driver.runtime().windows();
         let window = match shown.last() {
@@ -411,16 +390,21 @@ impl Capture {
                     .map_err(|e| fail(&e))?;
                 // its motion runs on the frames' clock: present frames a sixtieth of a second apart until it rests
                 let mut at = 0;
-                for _ in 0..MOTION_FRAMES {
+                let mut rested = false;
+                for _ in 0..HANG_FRAMES {
                     driver.run_until_idle(turns).map_err(|e| fail(&e))?;
                     let system = driver.window_system_mut();
                     if !system.frame_requested(newest).map_err(|e| fail(&e))? {
+                        rested = true;
                         break;
                     }
                     at += 16_666_667;
                     system
                         .frame_ready(newest, Timestamp(at))
                         .map_err(|e| fail(&e))?;
+                }
+                if !rested {
+                    return Err("the opened window's motion never rests".into());
                 }
                 newest
             }
@@ -450,15 +434,27 @@ impl Capture {
     }
 }
 
-/// Run the window and present the frames it asks for until it rests, or draws the same pixels frame after frame;
-/// `false` when it does neither.
+/// Run the window and present the frames it asks for until it rests, or presents the same pixels twice in a row (a
+/// busy row's activity indicator at the capture's fixed clock shows its last state); `false` when it does neither
+/// within [`HANG_FRAMES`], which only guards against a hang.
 fn settle(
     driver: &mut TestDriver<Files>,
     window: WindowId,
     turns: NonZeroU32,
 ) -> Result<bool, Box<dyn std::fmt::Debug>> {
-    for _ in 0..FRAMES {
+    let presented = |driver: &mut TestDriver<Files>| -> Result<usize, Box<dyn std::fmt::Debug>> {
+        Ok(driver
+            .window_system_mut()
+            .frames(window)
+            .map_err(|e| Box::new(e) as _)?
+            .len())
+    };
+    let before = presented(driver)?;
+    // the frames presented when the window was last given a frame, if it was
+    let mut given = None;
+    for _ in 0..HANG_FRAMES {
         driver.run_until_idle(turns).map_err(|e| Box::new(e) as _)?;
+        let now = presented(driver)?;
         let system = driver.window_system_mut();
         if !system
             .frame_requested(window)
@@ -466,17 +462,42 @@ fn settle(
         {
             return Ok(true);
         }
+        // it asks again: a steady state when the frame it was given drew nothing, or two frames of this settling
+        // drew the same pixels
+        let frames = system.frames(window).map_err(|e| Box::new(e) as _)?;
+        if given == Some(now)
+            || (now >= before + 2 && matches!(frames, [.., a, b] if a.pixels == b.pixels))
+        {
+            return Ok(true);
+        }
+        given = Some(now);
         system
             .frame_ready(window, Timestamp(0))
             .map_err(|e| Box::new(e) as _)?;
     }
-    // a window that goes on asking for frames but presents the same pixels each time (a busy row's activity indicator
-    // at the capture's fixed clock) shows its last state
-    let frames = driver
-        .window_system_mut()
-        .frames(window)
-        .map_err(|e| Box::new(e) as _)?;
-    Ok(matches!(frames, [.., a, b] if a.pixels == b.pixels))
+    Ok(false)
+}
+
+/// Settle the window until `done` holds of it, waiting for a task on another thread (a listing, a thumbnail, a file
+/// read) to wake the runtime between two looks. `guard` only guards against a hang: the error is `None` when nothing
+/// woke the runtime within it, and the reason when the window could not be run.
+fn wait_until(
+    driver: &mut TestDriver<Files>,
+    window: WindowId,
+    turns: NonZeroU32,
+    guard: Duration,
+    done: impl Fn(&TestDriver<Files>) -> bool,
+) -> Result<(), Option<String>> {
+    loop {
+        settle(driver, window, turns)
+            .map_err(|e| Some(format!("the headless window system: {e:?}")))?;
+        if done(driver) {
+            return Ok(());
+        }
+        if !driver.window_system_mut().wait_for_wake(guard) {
+            return Err(None);
+        }
+    }
 }
 
 /// How many thumbnails the window draws: the images that are not square.
@@ -504,9 +525,6 @@ enum Step {
     /// A click on the text or the control of this name.
     Click(&'static str),
 }
-
-/// The frames a window opened by a step may take to finish its motion.
-const MOTION_FRAMES: usize = 120;
 
 /// The middle of the node named `name` in the window.
 fn named_center(driver: &TestDriver<Files>, window: WindowId, name: &str) -> Option<Point> {

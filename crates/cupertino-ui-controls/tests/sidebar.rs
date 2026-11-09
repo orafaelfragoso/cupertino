@@ -654,7 +654,7 @@ fn the_neutral_look_fills_the_selected_row_grey_and_tints_symbols_by_section() {
     let grey = support::theme()
         .colors
         .get(
-            ColorRole::QuaternaryLabel,
+            ColorRole::SidebarSelection,
             cupertino_ui_theme::StateVariant::NORMAL,
         )
         .unwrap();
@@ -710,7 +710,7 @@ fn the_neutral_looks_selected_symbol_turns_grey_with_the_others_when_the_window_
     let secondary = theme.colors.get(ColorRole::SecondaryText, normal).unwrap();
     let selection = theme
         .colors
-        .get(ColorRole::QuaternaryLabel, normal)
+        .get(ColorRole::SidebarSelection, inactive())
         .unwrap();
     let asked: HashMap<String, _> = tints.asked.lock().unwrap().iter().cloned().collect();
     for name in PLACES {
@@ -723,5 +723,231 @@ fn the_neutral_looks_selected_symbol_turns_grey_with_the_others_when_the_window_
     assert_ne!(
         secondary, selection,
         "the selected symbol stands out from the selection behind it"
+    );
+}
+
+fn inactive() -> cupertino_ui_theme::StateVariant {
+    cupertino_ui_theme::StateVariant {
+        window_active: false,
+        ..cupertino_ui_theme::StateVariant::NORMAL
+    }
+}
+
+/// The window drawn active, then again after it lost the activation, node by node. Every op of each node is the same
+/// but for its colour; the colours that changed are returned as (active, inactive) pairs. A symbol's image is told
+/// apart by its place only, since its pixels carry its tint.
+fn active_then_inactive<A: Application>(h: &mut Harness<A>, size: Size) -> Vec<(Paint, Paint)> {
+    let configure = |h: &mut Harness<A>, activated| {
+        h.rt.window_system_mut()
+            .configure(
+                h.window,
+                Some(size),
+                cupertino_ui_platform::WindowStates {
+                    activated,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        h.settle();
+        h.snapshot().display_list.nodes
+    };
+    let active = configure(h, true);
+    let inactive = configure(h, false);
+    assert_eq!(active.len(), inactive.len(), "the same nodes");
+    let mut changed = Vec::new();
+    for (a, b) in active.iter().zip(&inactive) {
+        assert_eq!((a.id, a.bounds, &a.clip), (b.id, b.bounds, &b.clip));
+        assert_eq!(a.ops.len(), b.ops.len(), "{:?}: the same ops", a.id);
+        for (x, y) in a.ops.iter().zip(&b.ops) {
+            match (x, y) {
+                (
+                    PaintOp::Fill { shape, paint },
+                    PaintOp::Fill {
+                        shape: shape2,
+                        paint: paint2,
+                    },
+                ) => {
+                    assert_eq!(shape, shape2);
+                    if paint != paint2 {
+                        changed.push((paint.clone(), paint2.clone()));
+                    }
+                }
+                (
+                    PaintOp::Glyphs { origin, run, color },
+                    PaintOp::Glyphs {
+                        origin: origin2,
+                        run: run2,
+                        color: color2,
+                    },
+                ) => {
+                    assert_eq!(
+                        (origin, run),
+                        (origin2, run2),
+                        "the same text in the same place"
+                    );
+                    if color != color2 {
+                        changed.push((Paint::Solid(*color), Paint::Solid(*color2)));
+                    }
+                }
+                (
+                    PaintOp::Image { src, dst, .. },
+                    PaintOp::Image {
+                        src: src2,
+                        dst: dst2,
+                        ..
+                    },
+                ) => {
+                    assert_eq!(
+                        (src, dst),
+                        (src2, dst2),
+                        "the same symbol in the same place"
+                    );
+                }
+                _ => assert_eq!(x, y),
+            }
+        }
+    }
+    changed
+}
+
+/// [`Places`] with Computer selected and every row wearing a symbol.
+struct AccentSelected;
+
+impl Application for AccentSelected {
+    type Model = Model;
+    type Message = Message;
+
+    fn init() -> (Model, Vec<Command<Message>>) {
+        let (mut model, commands) = Places::init();
+        model.selected = Some(4);
+        (model, commands)
+    }
+
+    fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
+        Places::update(model, message)
+    }
+
+    fn view(model: &Model) -> Vec<Window<Message>> {
+        window(Element::from(Sidebar {
+            label: "Places".into(),
+            sections: vec![SidebarSection {
+                title: Some("Favourites".into()),
+                items: PLACES
+                    .iter()
+                    .map(|name| SidebarItem {
+                        icon: Some(format!("symbol.{name}")),
+                        ..item(name)
+                    })
+                    .collect(),
+            }],
+            selected: model.selected,
+            scroll: model.scroll,
+            on_scroll: Box::new(Message::Scroll),
+            on_select: Some(Box::new(Message::Select)),
+            on_accessory: None,
+        }))
+    }
+}
+
+/// A window that is not active draws its sidebar as an active one does but for the documented roles: every label and
+/// symbol takes the secondary label colour and the selection turns from the accent (or the neutral selection) to the
+/// fainter inactive neutral selection; the heading, the geometry and the text stay.
+#[test]
+fn an_inactive_window_s_sidebar_differs_only_in_its_labels_symbols_and_selection() {
+    let theme = support::theme();
+    let normal = cupertino_ui_theme::StateVariant::NORMAL;
+    let get = |role, state| theme.colors.get(role, state).unwrap();
+    let secondary = Paint::Solid(get(ColorRole::SecondaryText, normal));
+    let faint = Paint::Solid(get(ColorRole::SidebarSelection, inactive()));
+    let accent = Paint::Solid(color(
+        ColorRole::ControlFill,
+        InteractionVariant::Normal,
+        true,
+    ));
+    let neutral = Paint::Solid(get(ColorRole::SidebarSelection, normal));
+    let size = Size::new(200.0, 300.0);
+    for (look, changed, selection) in [
+        (
+            "accent",
+            active_then_inactive(&mut Harness::<AccentSelected>::new(), size),
+            accent,
+        ),
+        (
+            "neutral",
+            active_then_inactive(&mut Harness::<Neutral>::new(), size),
+            neutral,
+        ),
+    ] {
+        assert!(
+            changed.contains(&(selection.clone(), faint.clone())),
+            "{look}: the selection fades to the inactive neutral selection: {changed:?}"
+        );
+        for (before, after) in &changed {
+            if *before == selection {
+                assert_eq!(*after, faint, "{look}");
+            } else {
+                assert_eq!(
+                    *after, secondary,
+                    "{look}: a label turns secondary, from {before:?}"
+                );
+            }
+        }
+        assert!(
+            changed
+                .iter()
+                .filter(|(_, after)| *after == secondary)
+                .count()
+                >= PLACES.len(),
+            "{look}: every row's label turns secondary: {changed:?}"
+        );
+    }
+}
+
+/// Every symbol of a window that is not active, the selected row's too, takes the secondary label colour in either
+/// look, and the selected row's label is the secondary label colour on the faint selection.
+#[test]
+fn an_inactive_window_s_selected_row_reads_secondary_on_the_faint_selection() {
+    let tints = std::sync::Arc::new(Tints::default());
+    let mut h = Harness::<AccentSelected>::with_icons(
+        cupertino_ui_layout::LayoutDirection::Ltr,
+        tints.clone(),
+    );
+    h.rt.window_system_mut()
+        .configure(
+            h.window,
+            Some(Size::new(200.0, 300.0)),
+            cupertino_ui_platform::WindowStates::default(),
+        )
+        .unwrap();
+    tints.asked.lock().unwrap().clear();
+    h.settle();
+    let theme = support::theme();
+    let secondary = theme
+        .colors
+        .get(
+            ColorRole::SecondaryText,
+            cupertino_ui_theme::StateVariant::NORMAL,
+        )
+        .unwrap();
+    let asked: HashMap<String, _> = tints.asked.lock().unwrap().iter().cloned().collect();
+    assert_eq!(asked.get("symbol.Computer"), Some(&secondary));
+    let id = PaintNodeId::from(row(&h, "Computer"));
+    let ops = h
+        .snapshot()
+        .display_list
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id)
+        .unwrap()
+        .ops;
+    assert!(
+        matches!(ops.first(), Some(PaintOp::Fill { paint: Paint::Solid(c), .. })
+            if *c == theme.colors.get(ColorRole::SidebarSelection, inactive()).unwrap()),
+        "{ops:?}"
+    );
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, PaintOp::Glyphs { color, .. } if *color == secondary)),
+        "the label is secondary"
     );
 }

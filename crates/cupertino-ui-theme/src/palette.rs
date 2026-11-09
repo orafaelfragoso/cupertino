@@ -19,6 +19,8 @@ pub(crate) struct StateColors<C> {
     pub disabled_switch_thumb: C,
     /// A panel's level slider track that takes no input: the enabled track, faded towards the module behind it.
     pub disabled_panel_track: C,
+    /// A sidebar's selected row in a window that is not active: fainter than the active neutral selection.
+    pub inactive_sidebar_selection: C,
 }
 
 /// One appearance's colours, `normal` in [`ColorRole::ALL`] order.
@@ -50,6 +52,7 @@ impl<C: Copy> Palette<C> {
                 disabled_selected_switch_track: f(s.disabled_selected_switch_track)?,
                 disabled_switch_thumb: f(s.disabled_switch_thumb)?,
                 disabled_panel_track: f(s.disabled_panel_track)?,
+                inactive_sidebar_selection: f(s.inactive_sidebar_selection)?,
             },
         })
     }
@@ -105,6 +108,7 @@ impl Palette<Color> {
             (_, ControlText) if selected && state.window_active => self.normal(SelectedControlText),
             (_, ControlText) if selected => self.normal(SecondarySelectedControlText),
             (_, SwitchTrack) if selected => s.selected_switch_track,
+            (_, SidebarSelection) if !state.window_active => s.inactive_sidebar_selection,
             _ => self.normal(role),
         }
     }
@@ -220,5 +224,78 @@ mod tests {
             get(SwitchTrack, state(Normal, false, false)),
             palette.normal(SwitchTrack)
         );
+    }
+
+    /// A sidebar's selection is its own neutral fill in an active window and the fainter inactive one in a window
+    /// that is not, whatever the row's interaction, in every palette.
+    #[test]
+    fn a_sidebar_selection_fades_in_a_window_that_is_not_active() {
+        use ColorRole::*;
+        use InteractionVariant::*;
+        let palettes = [
+            neutral::LIGHT,
+            neutral::DARK,
+            neutral::HIGH_CONTRAST_LIGHT,
+            neutral::HIGH_CONTRAST_DARK,
+        ]
+        .map(|p| p.colors());
+        for palette in palettes {
+            let colors = palette.resolve();
+            for interaction in [Normal, Hover, Pressed] {
+                for selected in [false, true] {
+                    let get =
+                        |active| colors.get(SidebarSelection, state(interaction, selected, active));
+                    assert_eq!(get(true), Some(palette.normal(SidebarSelection)));
+                    assert_eq!(get(false), Some(palette.states.inactive_sidebar_selection));
+                }
+            }
+            assert_ne!(
+                palette.normal(SidebarSelection),
+                palette.states.inactive_sidebar_selection
+            );
+        }
+    }
+
+    /// Over every role, interaction and selection, in every palette, a window that is not active resolves the same
+    /// colours as an active one but for the documented roles: a selected control's fill and text (the secondary
+    /// selection, where the palette tells them apart) and the sidebar's neutral selection (its fainter edition).
+    #[test]
+    fn an_inactive_window_differs_from_an_active_one_only_in_the_selection_roles() {
+        use ColorRole::*;
+        use InteractionVariant::*;
+        let palettes = [
+            neutral::LIGHT,
+            neutral::DARK,
+            neutral::HIGH_CONTRAST_LIGHT,
+            neutral::HIGH_CONTRAST_DARK,
+        ]
+        .map(|p| p.colors());
+        for palette in palettes {
+            let colors = palette.resolve();
+            let mut differs = std::collections::BTreeSet::new();
+            for role in ColorRole::ALL {
+                for interaction in [Normal, Hover, Pressed, Disabled] {
+                    for selected in [false, true] {
+                        let get = |active| colors.get(role, state(interaction, selected, active));
+                        if get(true) != get(false) {
+                            differs.insert((format!("{role:?}"), selected));
+                        }
+                    }
+                }
+            }
+            let expected: std::collections::BTreeSet<_> = [
+                (format!("{ControlFill:?}"), true),
+                (format!("{ControlText:?}"), true),
+                (format!("{SidebarSelection:?}"), false),
+                (format!("{SidebarSelection:?}"), true),
+            ]
+            .into_iter()
+            .collect();
+            assert!(differs.is_subset(&expected), "{differs:?}");
+            assert!(
+                differs.contains(&(format!("{SidebarSelection:?}"), false)),
+                "{differs:?}"
+            );
+        }
     }
 }

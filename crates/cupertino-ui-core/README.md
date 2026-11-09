@@ -164,8 +164,8 @@ all on one thread.
   is obscured for the rest of it (`PaintCx::obscured`): a scroll container sees it at its top and moves its bar,
   paging and focus scrolling below it, overlays such as a caret are cut from it (`OverlayCx::reach_obscured` lets one
   draw there), and a scroll container tells assistive technology only its part below it, while its items keep their
-  true bounds. Without a layer the raised nodes draw in place, after the rest of the window, and scroll containers
-  outside them clip what they scroll to the part the raised nodes leave.
+  true bounds. Without a layer the raised nodes draw in place, after the rest of the window, their materials after the rest's
+  too (`paint_order`), and scroll containers outside them clip what they scroll to the part the raised nodes leave.
 - **Menus.** A toplevel's `menus` go to the window system as `WindowRequest::Menus` when its bar or its disabled
   items change, and `None` withdraws them; an item chosen in the desktop's menu bar (`WindowEvent::MenuActivated`)
   sends `on_activate`'s message. A popup's menus are ignored.

@@ -378,6 +378,37 @@ pub(crate) fn unobscured(rect: Rect, raised: &[(NodeId, Rect)]) -> Rect {
     Rect::from_ltrb(rect.min_x(), top, rect.max_x(), rect.max_y())
 }
 
+/// The nodes under `root` in the order they paint: the tree's preorder, and where raised nodes (`raised`) draw in place
+/// (no `layer`) their subtrees after all the rest, so what they draw and the materials they ask for lie over the rest
+/// of the window's, wherever they are in the tree. A raised subtree's root still comes after its parent.
+fn paint_order<M: 'static>(
+    tree: &Tree<M>,
+    root: NodeId,
+    raised: &HashSet<NodeId>,
+    layer: bool,
+) -> Vec<NodeId> {
+    let all = tree.preorder(root);
+    if layer || raised.is_empty() {
+        return all;
+    }
+    let mut lifted: HashSet<NodeId> = HashSet::new();
+    let (mut rest, mut over) = (Vec::with_capacity(all.len()), Vec::new());
+    for id in all {
+        let parent_lifted = tree
+            .get(id)
+            .and_then(|n| n.parent)
+            .is_some_and(|p| lifted.contains(&p));
+        if raised.contains(&id) || parent_lifted {
+            lifted.insert(id);
+            over.push(id);
+        } else {
+            rest.push(id);
+        }
+    }
+    rest.append(&mut over);
+    rest
+}
+
 /// The id of the node that clips the `n`th raised subtree of a layer to the clip of its ancestors: apart from every
 /// node's (a generation in the upper half) and every overlay's (none, and an index below `u32::MAX`).
 fn layer_clip_id(n: usize) -> PaintNodeId {
@@ -537,7 +568,7 @@ impl Painter {
             input.background,
             WindowBackground::Surface { surface, .. } if crate::cx::translucent(surface)
         );
-        for id in tree.preorder(root) {
+        for id in paint_order(tree, root, &raised_ids, input.layer) {
             let (Some(node), Some(placement)) = (tree.get(id), geometry.get(&id)) else {
                 continue;
             };
@@ -585,7 +616,8 @@ impl Painter {
                     shown.translate(-origin.x, -origin.y)
                 });
             // without a layer a raised node's material lies under the window, as any other: what scrolls under it is
-            // clipped away (`placements`), so it shows
+            // clipped away (`placements`), so it shows, and it comes after the rest's (`paint_order`), so it lies over
+            // them
             let can_show = input.materials && materials.len() < MAX_MATERIALS;
             let under = match node.parent {
                 Some(parent) => on_glass.get(&parent).copied().unwrap_or(Under::Window),

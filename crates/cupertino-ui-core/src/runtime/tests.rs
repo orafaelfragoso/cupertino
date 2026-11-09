@@ -4758,6 +4758,80 @@ fn content_scrolling_under_the_raised_row_presents_the_content_and_leaves_the_la
     );
 }
 
+/// A raised row that comes first in the tree, over a pane filling the window with a material of its own.
+struct RowFirst;
+
+impl Application for RowFirst {
+    type Model = ();
+    type Message = String;
+
+    fn init() -> ((), Vec<Command<String>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: String) -> Vec<Command<String>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<String>> {
+        let mut window = UnderRow::view(&(0.0, false)).remove(0);
+        window.content = Element::new(Layers(vec![
+            Element::new(RaisedRow).key("row"),
+            Element::new(GlassPane).key("pane"),
+        ]));
+        vec![window]
+    }
+}
+
+/// Without a raised layer a raised node's material still lies over the materials of the nodes it lies over, though it
+/// comes first in the tree (the order of the window's regions is the order they are drawn in); with a layer it lies
+/// above the content anyway.
+#[test]
+fn without_a_layer_a_raised_row_s_glass_lies_over_a_material_that_comes_after_it_in_the_tree() {
+    for layers in [false, true] {
+        let damage = Rc::default();
+        let mut system = FakeSystem::default();
+        system.layers = layers;
+        system.effects = true;
+        let mut rt = Runtime::<RowFirst, FakeSystem>::new(system, options(&damage));
+        rt.step(steps()).unwrap();
+        let window = rt.windows()[0].1;
+        configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+        let materials = rt
+            .window_system()
+            .requests
+            .iter()
+            .rev()
+            .find_map(|(_, r)| match r {
+                WindowRequest::Materials(m) => Some(m.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(materials.len(), 2, "{materials:?}");
+        // the row is 30 points tall, the pane fills the window
+        let row = materials
+            .iter()
+            .position(|m| m.rect.height() == 30.0)
+            .unwrap();
+        let pane = materials
+            .iter()
+            .position(|m| m.rect.height() == 100.0)
+            .unwrap();
+        if layers {
+            assert!(materials[row].raised && !materials[pane].raised);
+        } else {
+            assert!(pane < row, "the row's glass is drawn last: {materials:?}");
+            let w = &rt.windows[0];
+            let order: Vec<_> = w.display_list.nodes.iter().map(|n| n.id).collect();
+            let at = |key: &'static str| {
+                let id: crate::NodeId = rt.find(w.id, &key.into()).unwrap();
+                order.iter().position(|&n| n == id.into()).unwrap()
+            };
+            assert!(at("pane") < at("row"), "and its paint too");
+        }
+    }
+}
+
 /// A window that turns one colour hides its raised layer with the colour's commit, as it takes its glass away, and
 /// shows it again once its content is drawn again.
 #[test]

@@ -97,14 +97,6 @@ impl Harness {
             s.live.reloads > before
         });
     }
-
-    /// Steps for twice the watcher's quiet time: what a change would have done by then.
-    fn settle(&mut self) {
-        let end = Instant::now() + cupertino_defaults::watch::COALESCE * 6;
-        while Instant::now() < end {
-            self.step();
-        }
-    }
 }
 
 #[test]
@@ -196,12 +188,10 @@ fn keyboard_and_power_changes_apply() {
 fn the_appearance_setter_stores_the_key_and_applies_it_once() {
     let Some(mut h) = Harness::new() else { return };
     let path = h.path("compositor.json");
-    std::fs::write(
-        &path,
+    h.write(
+        "compositor.json",
         "{\"keybindings\":{\"Super+t\":\"spawn-terminal\"},\"future_key\":1}\n",
-    )
-    .unwrap();
-    h.settle();
+    );
     let reloads = h.state.live.reloads;
     assert_eq!(h.state.set_session_appearance("dark"), Ok(()));
     assert!(h.state.config.is_dark());
@@ -578,7 +568,7 @@ fn the_screen_reader_switch_starts_and_stops_the_reader_over_the_session_bus() {
         ]
     );
     let pid = pid.unwrap();
-    let end = Instant::now() + Duration::from_secs(5);
+    let end = Instant::now() + common::HANG_GUARD;
     while Path::new(&format!("/proc/{pid}")).exists() && Instant::now() < end {
         std::thread::sleep(Duration::from_millis(20));
     }

@@ -134,7 +134,7 @@ impl Scene {
     /// shell processes' display clocks stand still ([`common::shell::TEST_CLOCK`]) and the server's model clock is
     /// pinned, so nothing changes by itself after that; real time bounds the wait only as a deadline.
     fn settle(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + common::HANG_GUARD;
         let mut last = (self.structure(), self.image());
         loop {
             assert!(Instant::now() < deadline, "scene never settled");

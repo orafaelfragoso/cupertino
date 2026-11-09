@@ -3,6 +3,8 @@
 //! but its own descends from its compositor. In a person's session the compositor runs a reader itself while
 //! `screen_reader` is on, and the same chord turns it on or off.
 
+mod common;
+
 use std::os::fd::OwnedFd;
 
 use cupertino_server::backend::headless;
@@ -134,9 +136,9 @@ fn away_from_the_login_screen_there_is_no_socket_and_no_toggle() {
     assert!(h.state.screen_reader.is_none());
 }
 
-/// Whether `file` appears within 3 s.
+/// Whether `file` appears before the hang guard.
 fn appears(file: &std::path::Path) -> bool {
-    let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let end = std::time::Instant::now() + common::HANG_GUARD;
     while std::time::Instant::now() < end {
         if file.exists() {
             return true;
@@ -144,6 +146,20 @@ fn appears(file: &std::path::Path) -> bool {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     false
+}
+
+/// Whether a program was started that names `program` among its arguments or wrote `file`. The server starts a program
+/// before its call returns, so one it started is running then, or has run and written the file.
+fn started(program: &std::path::Path, file: &std::path::Path) -> bool {
+    let program = program.as_os_str().as_encoded_bytes();
+    file.exists()
+        || std::fs::read_dir("/proc").unwrap().flatten().any(|entry| {
+            std::fs::read(entry.path().join("cmdline")).is_ok_and(|cmdline| {
+                cmdline
+                    .split(|b| *b == 0)
+                    .any(|arg| arg.windows(program.len()).any(|w| w == program))
+            })
+        })
 }
 
 #[test]
@@ -156,8 +172,9 @@ fn the_login_screen_starts_no_program() {
     h.state.spawn("sh", &["-c", &touch("spawned")]);
     h.state
         .start_screenshot(cupertino_input::ScreenshotRequest::Screen);
+    let spawned = dir.path().join("spawned");
     assert!(
-        !appears(&dir.path().join("spawned")),
+        !started(&spawned, &spawned),
         "a program at the login screen"
     );
     assert!(
@@ -193,9 +210,9 @@ fn fake_reader(dir: &std::path::Path, out: &std::path::Path) -> std::path::PathB
     script
 }
 
-/// Whether process `pid` is gone (reaped) within 5 s.
+/// Whether process `pid` is gone (reaped) before the hang guard.
 fn ends(pid: u32) -> bool {
-    let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let end = std::time::Instant::now() + common::HANG_GUARD;
     while std::time::Instant::now() < end {
         let alive = std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
             !stat[stat.rfind(')').unwrap() + 1..]
@@ -338,7 +355,7 @@ fn without_a_reader_or_at_the_login_screen_nothing_starts_and_the_chord_is_not_t
     h.chord(&[KEY_SUPER, KEY_LEFTALT, KEY_S]);
     assert_eq!(h.state.session_reader.pid(), None);
     assert!(
-        !appears(&out.join("env")),
+        !started(&dir.path().join("fake-reader"), &out.join("env")),
         "the login screen's compositor starts no reader of its own"
     );
     assert!(

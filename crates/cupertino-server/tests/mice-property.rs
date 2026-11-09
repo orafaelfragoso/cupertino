@@ -143,7 +143,7 @@ fn the_mice_property_lists_the_mice_with_their_resolution_and_follows_the_config
         )
         .unwrap();
         let mut changed = first.clone();
-        let end = Instant::now() + Duration::from_secs(30);
+        let end = Instant::now() + common::HANG_GUARD;
         while changed == first && Instant::now() < end {
             std::thread::sleep(Duration::from_millis(20));
             changed = proxy.get_property("Mice").unwrap();

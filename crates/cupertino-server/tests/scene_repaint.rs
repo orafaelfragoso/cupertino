@@ -150,7 +150,7 @@ fn a_window_going_away_repaints_to_the_full_picture() {
     let (mut d, mut b) = start(1.0, 2);
     both_ways(&mut d, &mut b, 0, "first frame");
     d.clients.pop();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + common::HANG_GUARD;
     while d.state.wm.windows().count() != 1 {
         d.pump();
         assert!(

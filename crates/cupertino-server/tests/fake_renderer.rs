@@ -284,7 +284,7 @@ fn a_closing_ghost_and_the_input_hud_resolve_without_a_gpu() {
         fading_since: None,
     });
     d.clients.clear();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + common::HANG_GUARD;
     while d.state.wm.windows().count() != 0 {
         d.pump();
         assert!(

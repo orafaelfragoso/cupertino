@@ -227,7 +227,11 @@ t; a toolbar group is regular glass (`PaintCx::glass`) in one container
   hears of anything only for a menu no held press opened. A press dragged over the menus and let go away from all of
   them chooses nothing and closes them; one that never came over them leaves them open. Escape closes them at once,
   mid-drag too, and a pop-up button keeps its value. None of this waits on how a menu appears: it tracks alike with
-  Reduce Motion (`tests/menu-tracking.rs`).
+  Reduce Motion (`tests/menu-tracking.rs`). A finger does the same: put down on a `PopUpButton` it opens the menu,
+  slid onto an item and lifted it chooses it, tapped it leaves the menu open, and a later tap on an item chooses. A
+  finger that rests 0.5 s within 8 pt of where it went down on a `ContextMenu`'s region opens its menu there, and the
+  content under it is not clicked. A second finger chooses nothing while the first holds the menu, and a cancelled
+  touch chooses nothing and leaves the menu open (`tests/menu-touch.rs`).
   `MenuItem::Shortcut` is an item that shows the keys that choose it ("⇧⌘N") at its trailing edge in the secondary
   label colour (the row's colour when it is highlighted or disabled), which assistive technology reads as its
   description; the application binds the keys itself.

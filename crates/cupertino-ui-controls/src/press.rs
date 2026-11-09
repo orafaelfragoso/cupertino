@@ -47,7 +47,8 @@ impl Press {
         self.key || ((self.pointer || self.touch.is_some()) && self.inside)
     }
 
-    fn armed(&self) -> bool {
+    /// Armed by the pointer, a finger or a key, over the control or not.
+    pub(crate) fn armed(&self) -> bool {
         self.pointer || self.touch.is_some() || self.key
     }
 

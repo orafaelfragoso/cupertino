@@ -3884,6 +3884,100 @@ fn a_solid_colour_is_one_pixel_stretched_over_the_configured_size_at_any_scale()
     );
 }
 
+/// On a compositor whose viewporter comes without fractional scaling, a window takes turns between frames and a solid
+/// colour: a frame before any colour is sent at the whole buffer scale, the colour at buffer scale 1, a magnified
+/// frame's crop does not stay under the colour that follows, and a frame after a colour keeps the viewport the colour
+/// made, at buffer scale 1, stretched to the same size it would have shown at its whole scale.
+#[test]
+fn frames_and_a_solid_colour_take_turns_on_one_surface_with_no_stale_scale_or_crop() {
+    let (mut conn, control, seen) = connect(Globals {
+        output_scale: Some(2),
+        single_pixel: true,
+        ..Globals::core()
+    });
+    assert!(!conn.capabilities().contains(Capability::FractionalScale));
+    assert!(conn.capabilities().contains(Capability::SolidColor));
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    let configure = configured(&mut conn, &mut stash, w);
+    control.send(Control::EnterOutput).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(e, Event::ScaleChanged { .. }).then_some(())
+    });
+    let mut lease = conn
+        .lease(w.surface(), (320, 240), BufferFormat::Xrgb8888)
+        .unwrap();
+    assert!(!lease.set_zoom(1.25), "no viewport yet");
+    lease.present().unwrap();
+    assert_eq!(next_seen(&seen), Seen::Ack(configure.serial));
+    assert_eq!(
+        next_seen(&seen),
+        Seen::Commit {
+            size: (640, 480),
+            scale: 2,
+            format: wl_shm::Format::Xrgb8888
+        }
+    );
+
+    conn.present_solid(w.surface(), (320, 240), [0.0; 4])
+        .unwrap();
+    assert_eq!(next_seen(&seen), Seen::Viewport(320, 240));
+    assert!(matches!(
+        next_seen(&seen),
+        Seen::SolidCommit {
+            color: [0, 0, 0, 0],
+            scale: 1,
+            ..
+        }
+    ));
+
+    // the viewport the colour made now also crops a magnified frame
+    let mut lease = conn
+        .lease(w.surface(), (320, 240), BufferFormat::Xrgb8888)
+        .unwrap();
+    assert_eq!(lease.missed(), None, "drawn whole after the colour");
+    assert!(lease.set_zoom(2.0));
+    lease.present().unwrap();
+    assert_eq!(
+        next_seen(&seen),
+        Seen::ViewportSource(160.0, 120.0, 320.0, 240.0)
+    );
+    assert_eq!(next_seen(&seen), Seen::Viewport(320, 240));
+    assert_eq!(
+        next_seen(&seen),
+        Seen::Commit {
+            size: (640, 480),
+            scale: 1,
+            format: wl_shm::Format::Xrgb8888
+        }
+    );
+
+    // the colour after it shows the whole pixel, not the crop
+    conn.present_solid(w.surface(), (320, 240), [0.0; 4])
+        .unwrap();
+    assert_eq!(
+        next_seen(&seen),
+        Seen::ViewportSource(-1.0, -1.0, -1.0, -1.0)
+    );
+    assert_eq!(next_seen(&seen), Seen::Viewport(320, 240));
+    assert!(matches!(
+        next_seen(&seen),
+        Seen::SolidCommit { scale: 1, .. }
+    ));
+
+    // and an unmagnified frame after it is the whole buffer at the window's scale, stretched to its size
+    present(&mut conn, w.surface(), (320, 240));
+    assert_eq!(next_seen(&seen), Seen::Viewport(320, 240));
+    assert_eq!(
+        next_seen(&seen),
+        Seen::Commit {
+            size: (640, 480),
+            scale: 1,
+            format: wl_shm::Format::Xrgb8888
+        }
+    );
+}
+
 /// Without fractional scaling the viewporter alone stretches the pixel; without the one-pixel buffers a solid colour
 /// is refused, for the caller to draw it, and nothing is sent.
 #[test]

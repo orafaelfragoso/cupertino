@@ -42,6 +42,7 @@ pub use pointer::SCROLL_IDLE_NS;
 pub use runtime::{
     RendererFactory, Runtime, RuntimeOptions, ThemeForAppearance, WindowErrorHandler,
 };
+pub use scroll::session_scroll_bars;
 pub use widget::{Change, Element, Propagation, Widget};
 
 use cupertino_geometry::{Point, Rect, Size};

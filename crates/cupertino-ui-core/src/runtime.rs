@@ -263,6 +263,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         (model, commands): (A::Model, Vec<Command<A::Message>>),
     ) -> Self {
         let executor = Executor::new(system.waker());
+        // a runtime starts without the session's word, whatever one before it on this thread heard
+        crate::scroll::set_session_scroll_bars(None);
         let mut runtime = Self {
             model,
             tree: Tree::new(options.node_limit),
@@ -881,6 +883,16 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             PlatformEvent::SessionLock(locked) => {
                 if let Some(adapter) = &mut self.options.accessibility {
                     adapter.session_locked(locked);
+                }
+                return Ok(());
+            }
+            PlatformEvent::ScrollBars(bars) => {
+                // the views pick their bars as they are built: build every window again
+                if crate::scroll::set_session_scroll_bars(Some(bars)) {
+                    self.view_dirty = true;
+                    for w in &mut self.windows {
+                        w.invalidate();
+                    }
                 }
                 return Ok(());
             }

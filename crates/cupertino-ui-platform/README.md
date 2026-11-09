@@ -11,6 +11,14 @@ The compositor may tell whether the face of a glass material is dark or light: `
 names the region by its index in the last `WindowRequest::Materials` list, or the window's own backdrop with `None`,
 and `GlassTone::{Appearance, Dark, Light}` picks the colour of the text over it. A system that cannot tell sends none.
 
+`PlatformEvent::ScrollBars` tells how the session wants scroll views to show their bars: `ScrollBars::WhenScrolling`
+(thin bars over the content while it scrolls) or `ScrollBars::Always` (tracks beside it that stay shown). A system
+that cannot tell never sends it, and each view keeps its own style.
+
+A pointer scroll (`PointerEvent::Scroll`) keeps its provenance: the source (`ScrollSource::{Wheel, Finger,
+Continuous, WheelTilt}`), the high-resolution wheel steps (`value120`, 120 a detent), the stop that ends a finger or
+continuous scroll, and `inverted`, whether each axis is in natural (inverted) direction.
+
 `WindowSpec::decorations` chooses the window's style: `Preferred` (titled: the compositor's title bar over the
 content), `Client`, `None`, and the styles whose content fills the window and draws the row the compositor's window
 control buttons lie in (`DecorationMode::content_fills_window`): `Unified` (the 52 pt toolbar row), `UnifiedCompact`

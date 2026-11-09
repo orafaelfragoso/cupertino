@@ -592,6 +592,18 @@ pub enum PlatformEvent {
     /// Whether the session is locked, once when the window system learns it and on every change; a window system that
     /// can't tell sends false once.
     SessionLock(bool),
+    /// How the session wants scroll views to show their bars, once when the window system learns it and on every
+    /// change; a window system that can't tell never sends it, and each view keeps its own style.
+    ScrollBars(ScrollBars),
+}
+
+/// How the session wants scroll views to show their bars.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScrollBars {
+    /// Thin bars over the content, shown while it scrolls.
+    WhenScrolling,
+    /// Tracks beside the content that stay shown.
+    Always,
 }
 
 /// The session's appearance and the display options that change how windows draw.

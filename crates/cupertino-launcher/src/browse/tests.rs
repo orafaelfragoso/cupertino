@@ -270,6 +270,36 @@ fn switching_to_the_list_keeps_the_selection_in_view() {
     assert!(cell.min_y() >= content.min_y() - 0.5 && cell.max_y() <= content.max_y() + 0.5);
 }
 
+/// The selected row the keys scroll to stays inset from the panel's bottom edge as the list is from its sides, the
+/// last row too, in either arrangement.
+#[test]
+fn a_row_scrolled_into_view_keeps_the_bottom_inset() {
+    for arrangement in [Arrangement::List, Arrangement::Grid] {
+        let mut b = Browser::new(apps(60), &[], BrowseLayout::HEIGHT);
+        b.set_arrangement(arrangement);
+        let bottom = b.layout().panel.max_y() - BrowseLayout::INSET;
+        let inset = |b: &Browser| bottom - b.cell_of(b.selected().unwrap()).unwrap().max_y();
+        b.set_zone(Zone::Content);
+        for _ in 0..12 {
+            b.key(Key::Down, 0.0);
+        }
+        assert!(b.scroll() > 0.0, "{arrangement:?}: the keys scrolled");
+        assert!(
+            inset(&b).abs() < 0.5,
+            "{arrangement:?}: a row the keys reached sits on the inset, {}",
+            inset(&b)
+        );
+        b.key(Key::End, 0.0);
+        assert_eq!(b.selected(), Some(59));
+        assert!((b.scroll() - b.max_scroll()).abs() < 1e-9);
+        assert!(
+            inset(&b).abs() < 0.5,
+            "{arrangement:?}: the last row sits on the inset, {}",
+            inset(&b)
+        );
+    }
+}
+
 #[test]
 fn only_rows_in_view_are_placed_even_for_thousands_of_applications() {
     let mut b = Browser::new(apps(5000), &[], BrowseLayout::HEIGHT);

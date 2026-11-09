@@ -100,7 +100,10 @@ jobs:
           echo RUSTUP_TOOLCHAIN=1.99.1 >> "$GITHUB_ENV"
       # check-metadata and test_release read the dependency graph with cargo metadata --offline.
       - run: cargo fetch --locked
+      # the SDK's verify tests compile a library with cc; without one they must fail here, not skip
       - run: python3 -I packaging/test_release.py
+        env:
+          CUPERTINO_CC_REQUIRED: "1"
       # the session command's logout lock runs against the real keyring daemon too
       - run: python3 -I packaging/test_session.py
         env:
@@ -110,6 +113,7 @@ jobs:
       - run: python3 -I packaging/iso/test-build-iso.py
       - run: python3 -I packaging/arch/test-build-environment.py
       - run: python3 -I ci/test_contracts.py
+      - run: python3 -I ci/test_c_sdk.py
       - run: python3 -I ci/test_goldens_log.py
       - run: python3 -I ci/test-build-test-fixtures.py
       - run: python3 -I ci/test-worktree-build.py
@@ -370,6 +374,40 @@ jobs:
           df -h .
           if [ -d target ]; then du -sh target; fi
 
+  # The C SDK as the cupertino-kit package installs it, built into a staging root: the C samples build as C11 and as
+  # C++17 with -Werror and print their traces, the samples' Makefile and the layout probe build with pkg-config alone,
+  # `cupertino sdk info` and `sdk check` read and build against the root, and the projects `cupertino sdk new` writes
+  # build (C: built and run headless; Rust: cargo check against this checkout's cupertino-kit).
+  c-sdk:
+    needs: selection
+    if: >-
+      inputs.full == true ||
+      contains(fromJSON(needs.selection.outputs.packages), 'cupertino-ui-abi') ||
+      contains(fromJSON(needs.selection.outputs.packages), 'cupertino-cli') ||
+      contains(fromJSON(needs.selection.outputs.packages), 'cupertino-kit')
+    name: C SDK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    container: *arch-with-room
+    defaults: *as-ci
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - *free-disk
+      - *arch-bootstrap
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: System packages and the build user
+        shell: bash
+        run: ci/arch-ci.sh install build && ci/arch-ci.sh user
+      - *rust-toolchain
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: c-sdk-arch
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - *own-restored
+      - run: cargo fetch --locked
+      - run: python3 -I ci/c-sdk.py
+
   # The transport's simple-window on a second compositor: Weston's headless backend, which offers no decoration
   # protocol and no Cupertino protocol. These tests are ignored in the other jobs, which have no Weston.
   weston:
@@ -423,7 +461,7 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [selection, gate, docs, deny, fmt, layers, clippy, tests, weston, goldens]
+    needs: [selection, gate, docs, deny, fmt, layers, clippy, tests, c-sdk, weston, goldens]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -440,10 +478,13 @@ jobs:
           if needs["selection"]["result"] == "success":
               outputs = needs["selection"]["outputs"]
               expected.update(name for name, enabled in json.loads(outputs["checks"]).items() if enabled)
-              if json.loads(outputs["packages"]):
+              packages = json.loads(outputs["packages"])
+              if packages:
                   expected.update(("clippy", "tests"))
+              if {"cupertino-ui-abi", "cupertino-cli", "cupertino-kit"} & set(packages):
+                  expected.add("c-sdk")
           if os.environ["FULL"] == "true":
-              expected.update(("docs", "deny", "fmt", "layers", "clippy", "tests", "weston", "goldens"))
+              expected.update(("docs", "deny", "fmt", "layers", "clippy", "tests", "c-sdk", "weston", "goldens"))
           failed = {name: job["result"] for name, job in needs.items()
                     if job["result"] in ("failure", "cancelled") or
                     (name in expected and job["result"] != "success")}

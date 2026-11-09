@@ -543,6 +543,7 @@ mod contracts {
     use serde_json::Value;
     use std::collections::BTreeSet;
     use std::io::{self, Write};
+    use std::os::unix::fs::PermissionsExt;
 
     fn run(words: &[&str]) -> Output {
         let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
@@ -730,6 +731,22 @@ mod contracts {
             &["desktop", "start", "--backend", "tty"],
             Context::isolated(dir.path()).with_var("XDG_SESSION_TYPE", "wayland"),
         ));
+        // unavailable: a machine without the C SDK
+        reachable.insert(isolated(
+            &["sdk", "info", "--require"],
+            Context::isolated(dir.path()),
+        ));
+        // denied: a project in a directory the caller cannot write (root writes anywhere, so it shows nothing there)
+        if unsafe { libc::geteuid() } != 0 {
+            let locked = dir.path().join("locked");
+            std::fs::create_dir(&locked).unwrap();
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+            reachable.insert(isolated(
+                &["sdk", "new", "--lang", "c", "demo", "--dir", "locked/demo"],
+                Context::isolated(dir.path()),
+            ));
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         assert_eq!(reachable, BTreeSet::from([0, 2, 3, 4, 5, 6, 8]));
 
         let page = std::fs::read_to_string(concat!(

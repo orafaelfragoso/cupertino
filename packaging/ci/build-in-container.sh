@@ -5,12 +5,13 @@
 #
 # Arch is the only distribution the packages target; the first argument names it so callers read the same everywhere.
 # The source is the committed HEAD (git archive), so untracked or modified files never reach a package. A build
-# container makes the runtime and data packages with makepkg (check() included) on the release source archive and the
-# stable PKGBUILD, in a Cargo target of its own that is removed afterwards. A second container runs namcap, and
+# container makes the runtime, data and SDK packages with makepkg (check() included) on the release source archive and
+# the stable PKGBUILD, in a Cargo target of its own that is removed afterwards. A second container runs namcap, and
 # release.py verifies each package against the manifest. A fresh container of the plain base installs them, checks the
-# login-screen account, the unit state, the payload and conffile preservation across a reinstall, then removes them.
-# Packages, file lists and the test log land in DIST_DIR. --test-only skips the build and install-tests the packages
-# already in DIST_DIR. Needs Docker Buildx, Python 3 and git; nothing is installed on the host.
+# login-screen account, the unit state, the payload and conffile preservation across a reinstall, then removes them. It
+# then installs the SDK package alone and builds and runs the C samples (the source's crates/cupertino-ui-abi, mounted
+# read-only at /abi) against /usr. Packages, file lists and the test log land in DIST_DIR. --test-only skips the build
+# and install-tests the packages already in DIST_DIR. Needs Docker Buildx, Python 3 and git; nothing is installed on the host.
 #
 # Build slots (ci/worktree-build.py): the script holds this worktree for its whole run, every slot only while makepkg
 # compiles and tests, one slot while the builder image builds, and none for the source archive, namcap, verification
@@ -26,7 +27,8 @@
 #
 # --upgrade packages the same build twice, as release 1 in DIST_DIR/rev-1 and as release 2 in DIST_DIR/rev-2 (no
 # second compile), then, in a fresh container, installs release 1, enables the login service, edits login.conf,
-# upgrades to release 2 and checks that the version rose and that the account, conffile, unit state and payload survived.
+# upgrades to release 2 and checks that the version rose and that the account, conffile, unit state and payload (the
+# SDK's library and links too) survived.
 set -euo pipefail
 
 usage="usage: build-in-container.sh arch DIST_DIR [--test-only|--upgrade]"
@@ -182,6 +184,7 @@ publish() {
     cp arch-build/*.pkg.tar.zst arch-build/PKGBUILD "\$1/"
     python3 packaging/release.py verify --format arch --package runtime --bindir /src/target/release "\$1"/cupertino-0*.pkg.tar.zst
     python3 packaging/release.py verify --format arch --package data "\$1"/cupertino-data-*.pkg.tar.zst
+    python3 packaging/release.py verify --format arch --package sdk "\$1"/cupertino-kit-*.pkg.tar.zst
     for p in "\$1"/*.pkg.tar.zst; do pacman -Qip "\$p" > "\$p.info"; pacman -Qlp "\$p" > "\$p.contents"; done
 }
 if [ "\$upgrade" = 1 ]; then
@@ -290,6 +293,52 @@ reinstall
 check 'login.conf kept across reinstall' grep -q '^# local edit' /etc/cupertino/login.conf
 remove
 check 'removed cleanly' absent /usr/bin/cupertino-server /usr/share/cupertino/assets/manifest.json
+# The C SDK as a developer gets it: the cupertino-kit package alone, then C programs built from / by a user without a
+# session, with only /usr/bin on PATH, against the installed header, library and pkg-config file.
+sdk_checks() {
+    local user=cupertino-sdk-test home=/tmp/sdk major minor version
+    pacman -S --noconfirm --needed -q gcc make pkgconf >/dev/null
+    pacman -U --noconfirm /dist/cupertino-kit-*.pkg.tar.zst >/dev/null
+    check 'cupertino-kit installs without cupertino' sh -c '! pacman -Q cupertino >/dev/null 2>&1'
+    major=$(sed -n 's/^#define CUPERTINOKIT_ABI_MAJOR \([0-9]*\)$/\1/p' /usr/include/cupertinokit-1/cupertinokit.h)
+    minor=$(sed -n 's/^#define CUPERTINOKIT_ABI_MINOR \([0-9]*\)$/\1/p' /usr/include/cupertinokit-1/cupertinokit.h)
+    version=$(pkg-config --modversion cupertinokit)
+    check "pkg-config --modversion cupertinokit: $version, the header's ABI $major.$minor" test "$version" = "$major.$minor.0"
+    check 'libcupertinokit.so.1 is the soname' sh -c "readelf -d /usr/lib/libcupertinokit.so.1 | grep -q 'SONAME.*libcupertinokit.so.1'"
+    check "libcupertinokit.so.1 -> $(readlink /usr/lib/libcupertinokit.so.1)" \
+        test "$(readlink /usr/lib/libcupertinokit.so.1)" = "libcupertinokit.so.1.$minor.0"
+    check 'libcupertinokit.so -> libcupertinokit.so.1' test "$(readlink /usr/lib/libcupertinokit.so)" = libcupertinokit.so.1
+    if ldd /usr/lib/libcupertinokit.so.1 | grep -q 'not found'; then ldd /usr/lib/libcupertinokit.so.1; exit 1; fi
+    echo 'libcupertinokit.so.1 resolves its libraries'
+    useradd --no-create-home --shell /usr/bin/nologin "$user"
+    install -d -o "$user" -g "$user" -m 700 "$home" "$home/make"
+    install -o "$user" -g "$user" -m 644 /abi/examples/c/headless.c /abi/examples/c/headless.expected /abi/tests/c/layout.c \
+        /abi/abi/layout-1.txt "$home/"
+    install -o "$user" -g "$user" -m 644 /abi/examples/c/headless.c /abi/examples/c/Makefile "$home/make/"
+    sdk_user() { (cd "$home" && exec setpriv --reuid="$user" --regid="$user" --clear-groups env -i PATH=/usr/bin HOME="$home" sh -c "$1"); }
+    check 'the headless sample compiles against /usr with -Werror' sdk_user \
+        'cc -std=c11 -Wall -Wextra -Werror -pthread $(pkg-config --cflags cupertinokit) headless.c -o headless $(pkg-config --libs cupertinokit)'
+    check 'it compiles as C++ too' sdk_user \
+        'c++ -x c++ -std=c++17 -Wall -Wextra -Werror -pthread $(pkg-config --cflags cupertinokit) headless.c -o headless-cxx $(pkg-config --libs cupertinokit)'
+    check 'the headless sample prints its trace and exits 0' sdk_user './headless > headless.out && cmp headless.out headless.expected'
+    check 'the C++ build prints the same trace' sdk_user './headless-cxx > headless-cxx.out && cmp headless-cxx.out headless.expected'
+    check 'the Makefile builds it with pkg-config alone' sdk_user 'make -C make && ./make/headless > make.out && cmp make.out headless.expected'
+    check 'the C compiler sees the struct layouts of layout-1.txt' sdk_user \
+        'cc -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags cupertinokit) layout.c -o layout && ./layout > layout.out && diff layout.out layout-1.txt'
+    # with the desktop installed too, the cupertino command reports and checks the SDK, and starts a project on it
+    pacman -U --noconfirm /dist/cupertino-data-*.pkg.tar.zst /dist/cupertino-0*.pkg.tar.zst >/dev/null
+    check 'cupertino sdk info --require: the SDK is installed' sdk_user 'cupertino sdk info --require'
+    check 'cupertino sdk check compiles and runs its probe' sdk_user 'cupertino sdk check'
+    check 'cupertino sdk new --lang c demo && make -C demo: the starter builds and runs' sdk_user \
+        'cupertino sdk new --lang c demo && make -C demo && ./demo/demo'
+    pacman -Rns --noconfirm cupertino cupertino-data >/dev/null
+    pacman -Rns --noconfirm cupertino-kit >/dev/null
+    check 'cupertino-kit removed cleanly' absent /usr/lib/libcupertinokit.so.1 /usr/lib/libcupertinokit.so \
+        /usr/include/cupertinokit-1 /usr/lib/pkgconfig/cupertinokit.pc /usr/share/cupertino-kit
+    check 'no libcupertinokit file is left' sh -c '! ls /usr/lib/libcupertinokit.so* 2>/dev/null'
+    userdel "$user"
+}
+sdk_checks
 EOF
 )
 
@@ -298,12 +347,12 @@ set -euo pipefail
 check() { local label=$1; shift; "$@" || { echo "FAIL: $label"; exit 1; }; echo "$label"; }
 absent() { for p in "$@"; do [ ! -e "$p" ] || return 1; done; }
 pacman -Syu --noconfirm -q >/dev/null
-install() { pacman -U --noconfirm "$1"/cupertino-data-*.pkg.tar.zst "$1"/cupertino-0*.pkg.tar.zst >/dev/null; }
+install() { pacman -U --noconfirm "$1"/cupertino-data-*.pkg.tar.zst "$1"/cupertino-0*.pkg.tar.zst "$1"/cupertino-kit-*.pkg.tar.zst >/dev/null; }
 version() { pacman -Q cupertino | cut -d' ' -f2; }
 newer() { [ "$(vercmp "$1" "$2")" = 1 ]; }
-files() { pacman -Qql cupertino cupertino-data; }
-altered() { pacman -Qkk cupertino cupertino-data 2>&1 | grep '^warning' | grep -v '/etc/cupertino/login.conf' || true; }
-remove() { pacman -Rns --noconfirm cupertino cupertino-data >/dev/null; }
+files() { pacman -Qql cupertino cupertino-data cupertino-kit; }
+altered() { pacman -Qkk cupertino cupertino-data cupertino-kit 2>&1 | grep '^warning' | grep -v '/etc/cupertino/login.conf' || true; }
+remove() { pacman -Rns --noconfirm cupertino cupertino-data cupertino-kit >/dev/null; }
 units() { for u in login netd btd powerd; do echo "cupertino-$u.service: $(systemctl is-enabled "cupertino-$u.service" 2>/dev/null || true)"; done; }
 install /dist/rev-1
 old=$(version)
@@ -315,6 +364,7 @@ conf=$(sha256sum /etc/cupertino/login.conf)
 account=$(getent passwd cupertino-greeter)
 units_before=$(units)
 sha256sum /usr/bin/cupertino-server > /tmp/server.before
+sha256sum "$(readlink -f /usr/lib/libcupertinokit.so)" > /tmp/sdk.before
 install /dist/rev-2
 new=$(version)
 echo "upgraded: $old -> $new"
@@ -325,6 +375,8 @@ units_after=$(units)
 echo "$units_after"
 check 'unit state unchanged across upgrade' [ "$units_after" = "$units_before" ]
 check 'cupertino-server payload identical' sha256sum --check --status /tmp/server.before
+check 'the SDK library behind libcupertinokit.so identical' sha256sum --check --status /tmp/sdk.before
+check 'kit upgraded with the runtime' test "$(pacman -Q cupertino-kit | cut -d' ' -f2)" = "$new"
 changed=$(altered)
 [ -z "$changed" ] || { echo "$changed"; exit 1; }
 echo 'package verification clean'
@@ -339,6 +391,7 @@ echo 'cupertino-server --help: ok'
 remove
 check 'removed cleanly' absent /usr/bin/cupertino-server /usr/share/cupertino/assets/manifest.json
 check 'login enablement removed' absent /etc/systemd/system/multi-user.target.wants/cupertino-login.service
+check 'SDK removed' absent /usr/lib/libcupertinokit.so.1 /usr/include/cupertinokit-1
 EOF
 )
 
@@ -418,7 +471,7 @@ if [ "$upgrade" = 1 ]; then
     start_container "$container" "$dist/upgrade-test-$distro.log" none
 else
     container=$(docker create --cidfile "$work/test.cid" --name "cupertino-$distro-$(basename "$work")-test" \
-        -v "$dist:/dist:ro" "$test_image" bash -c "$test_script")
+        -v "$dist:/dist:ro" -v "$work/src/crates/cupertino-ui-abi:/abi:ro" "$test_image" bash -c "$test_script")
     start_container "$container" "$dist/install-test-$distro.log" none
 fi
 if [ "$mode" = build ]; then

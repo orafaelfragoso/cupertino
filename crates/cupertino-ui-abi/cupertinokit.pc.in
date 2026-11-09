@@ -1,0 +1,11 @@
+# pkg-config metadata of CupertinoKit's C ABI; packaging/release.py writes cupertinokit.pc from it.
+prefix=/usr
+libdir=${prefix}/lib
+includedir=${prefix}/include/cupertinokit-1
+
+Name: cupertinokit
+Description: CupertinoKit C ABI 1, the UI toolkit of the Cupertino desktop
+URL: https://github.com/orafaelfragoso/cupertino
+Version: @VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lcupertinokit

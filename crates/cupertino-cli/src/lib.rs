@@ -22,6 +22,7 @@ mod dev;
 mod diagnose;
 mod diagnose_events;
 pub mod manual;
+mod sdk;
 pub mod stream;
 mod version;
 
@@ -49,6 +50,7 @@ pub const REGISTRY: &[Group] = &[
     diagnose::GROUP,
     desktop::GROUP,
     dev::GROUP,
+    sdk::GROUP,
     version::GROUP,
     completions::GROUP,
 ];

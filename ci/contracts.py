@@ -4,8 +4,10 @@
 Checks the registry itself (fields, enums, duplicates, every source and test_owner path exists, every source_match
 occurs in its source file, and the test_owner of a socket or a binary names it), then compares it with the code: every
 `#[zbus::interface(name = ...)]` outside tests, examples and `#[cfg(test)]` modules, every org.cupertino.* name in the
-sources (test modules included) and every binary target of the workspace has an entry. The Wayland globals are compared
-at run time, by crates/cupertino-server/tests/contracts.rs."""
+sources (test modules included) and every binary target of the workspace has an entry. Every crate that builds a
+`cdylib` has a `c-library` entry, whose name is the soname its build script links with and whose version is the
+MAJOR.MINOR of the ABI header under the crate's abi/. The Wayland globals are compared at run time, by
+crates/cupertino-server/tests/contracts.rs."""
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -109,6 +111,16 @@ def served(root):
         file = PurePosixPath(path)
         if not any(file.with_suffix("") == d or d in file.parents for d in test_dirs):
             yield path, text
+
+
+def workspace_libraries(root):
+    """{crate: path of its manifest relative to root} of every workspace crate that builds a C shared library."""
+    meta = json.loads(subprocess.check_output(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"], cwd=root))
+    return {
+        package["name"]: Path(package["manifest_path"]).relative_to(root).as_posix()
+        for package in meta["packages"] for target in package["targets"] if "cdylib" in target["crate_types"]
+    }
 
 
 def workspace_binaries(root):
@@ -245,9 +257,49 @@ def check_binaries(entries, root, built=None, shipped=None):
     return problems
 
 
-def check(root, built=None, shipped=None):
+ABI_DEFINE = re.compile(r"^#define \w+_ABI_(MAJOR|MINOR) (\d+)$", re.M)
+SONAME = re.compile(r"-soname,([^\s\")]+)")
+
+
+def abi_header(root, crate):
+    """(path, "MAJOR.MINOR") of the header under crates/<crate>/abi/ that defines its ABI version, or None."""
+    for header in sorted((root / "crates" / crate / "abi").glob("*.h")):
+        version = dict(ABI_DEFINE.findall(header.read_text()))
+        if version.keys() == {"MAJOR", "MINOR"}:
+            return header.relative_to(root).as_posix(), f"{version['MAJOR']}.{version['MINOR']}"
+    return None
+
+
+def check_libraries(entries, root, libraries=None):
+    libraries = workspace_libraries(root) if libraries is None else libraries
+    problems = []
+    registered = [e for e in entries if e.get("kind") == "c-library"]
+    owners = {e.get("owner_crate") for e in registered}
+    for crate, manifest in sorted(libraries.items()):
+        if crate not in owners:
+            problems.append(f"{manifest}: {crate} builds a cdylib without a c-library entry in {REGISTRY}")
+    for e in registered:
+        where, crate = f"{REGISTRY}:{e['line']}", e.get("owner_crate")
+        if crate not in libraries:
+            problems.append(f"{where}: {e.get('name')} names {crate}, which builds no cdylib")
+            continue
+        header = abi_header(root, crate)
+        if header is None:
+            problems.append(f"{where}: crates/{crate}/abi/ has no header defining its ABI MAJOR and MINOR")
+        elif e.get("version") != header[1]:
+            problems.append(f"{where}: {e.get('name')} version is {e.get('version')}, {header[0]} says {header[1]}")
+        build = root / "crates" / crate / "build.rs"
+        sonames = SONAME.findall(build.read_text()) if build.is_file() else []
+        if sonames != [e.get("name")]:
+            problems.append(f"{where}: {e.get('name')} is not the soname crates/{crate}/build.rs links with "
+                            f"({', '.join(sonames) or 'none'})")
+    return problems
+
+
+def check(root, built=None, shipped=None, libraries=None):
     entries = parse((root / REGISTRY).read_text())
-    return (check_entries(entries, root) + check_dbus(entries, root) + check_ratchet(entries) + check_binaries(entries, root, built, shipped))
+    return (check_entries(entries, root) + check_dbus(entries, root) + check_ratchet(entries) +
+            check_binaries(entries, root, built, shipped) + check_libraries(entries, root, libraries))
 
 
 def main(argv):

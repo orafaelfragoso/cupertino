@@ -1,0 +1,23 @@
+abi version: CK_OK
+same major version as the header: yes
+minor version not older than the header: yes
+runtime asking for a newer minor version: CK_ERROR_VERSION
+the message names the version asked for: yes
+capability backend.headless: CK_OK
+the headless backend is there: yes
+capability example.unknown: CK_OK
+an unknown capability is not there: yes
+runtime: CK_OK
+second runtime: CK_ERROR_STATE
+poll from another thread: CK_ERROR_WRONG_THREAD
+waker: CK_OK
+posts from another thread: CK_OK
+both messages arrived: yes
+message: 42
+message: 43
+release waker: CK_OK
+post through the released waker: CK_ERROR_STALE_HANDLE
+release runtime: CK_OK
+waker of the released runtime: CK_ERROR_STALE_HANDLE
+release the runtime again: CK_ERROR_STALE_HANDLE
+done

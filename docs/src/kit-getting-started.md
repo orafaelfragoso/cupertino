@@ -60,6 +60,33 @@ them.
 `cargo test -p cupertino-kit` drives the examples with input on the headless window system and compares their traces and
 tree dumps with files in `crates/cupertino-kit/tests/goldens/`. `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. The timing matrix is ignored in a normal run; run it with `--release --ignored --nocapture`. Test counts change as the toolkit grows; use the command output for the checked-out commit.
 
+## From C
+
+The C SDK is the `cupertino-kit` package: the library `libcupertinokit.so.1`, the header
+`/usr/include/cupertinokit-1/cupertinokit.h` and `cupertinokit.pc`. A C program needs nothing else, and takes every
+path from pkg-config. The ABI's rules (versions, handles, threads, errors) are at the top of the header and in
+`crates/cupertino-ui-abi/README.md`. Today the library runs the headless backend only. With the package installed,
+and `gcc`, `make` and `pkgconf`:
+
+```bash
+cupertino sdk info                 # what is installed, file by file
+cupertino sdk check                # build and run a probe with /usr/bin/cc
+cupertino sdk new --lang c demo    # main.c, a Makefile, demo.desktop and a README
+make -C demo && ./demo/demo        # prints count: 1, count: 2, count: 3
+```
+
+Versions: the header defines `CUPERTINOKIT_ABI_MAJOR` and `CUPERTINOKIT_ABI_MINOR` for the compiler, and
+`pkg-config --atleast-version=1.0.0 cupertinokit` checks the installed SDK in a build script. At run time
+`ck_abi_version` reports the library's version; pass the minor version the program needs as `abi_minor` to
+`ck_runtime_new`, which refuses an older library with `CK_ERROR_VERSION`, and ask `ck_has_capability` before calling a
+function added after 1.0. A new major version gets a new soname and include directory. Threads: a runtime belongs to the
+thread that created it; other threads only post to it through a waker (`ck_runtime_waker`, `ck_waker_post`), and the
+runtime's thread reads the posts with `ck_poll_events`.
+
+`cupertino sdk new --lang rust NAME` starts a Rust project on the `cupertino-kit` crate of the same release instead
+(`--source CHECKOUT` takes it from a Cupertino checkout, offline or before the release is tagged). The samples in `crates/cupertino-ui-abi/examples/c` build with `make` the same way. From a checkout, `python3
+ci/c-sdk.py` builds the SDK into a staging directory and runs all of the above against it.
+
 ## Accessibility
 
 `app::run` publishes every window's accessibility tree over AT-SPI (`cupertino-ui-atspi`, on AccessKit's Unix

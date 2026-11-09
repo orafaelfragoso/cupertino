@@ -71,7 +71,10 @@ check
                                             env=env, text=True, capture_output=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     records = [json.loads(line) for line in log.read_text().splitlines()]
-                    self.assertEqual(len(records), 6)
+                    # each pass: the workspace's binaries, the SDK's library, the tests and the doctests
+                    self.assertEqual(len(records), 8)
+                    self.assertEqual(records[1]['command'][1:], ['build', '--frozen', '--release', '-p', 'cupertino-ui-abi',
+                                                                 '--lib', '--all-features'])
                     expected = ' '.join([part for part in (flags, source_remap if flags != source_remap else '', cargo_remap, target_remap) if part])
                     self.assertEqual({record['env']['RUSTFLAGS'] for record in records}, {expected})
                     self.assertEqual(shlex.split(expected).count(source_remap), 1)
@@ -82,7 +85,8 @@ check
                         self.assertEqual(record['env']['CARGO_PROFILE_RELEASE_DEBUG'], '0')
                         self.assertEqual(record['env']['CUPERTINO_THEME_DIR'], '/usr/share/cupertino/theme')
                     self.assertIsNone(records[0]['env']['CUPERTINO_SPEC_DIR'])
-                    self.assertEqual(records[1]['env']['CUPERTINO_SPEC_DIR'], str(tree / 'data/theme'))
+                    self.assertIsNone(records[1]['env']['CUPERTINO_SPEC_DIR'])
+                    self.assertEqual(records[2]['env']['CUPERTINO_SPEC_DIR'], str(tree / 'data/theme'))
 
 
 if __name__ == '__main__':

@@ -20,6 +20,9 @@ cupertino --format jsonl diagnose           # JSON lines: a check event per chec
 cupertino diagnose events [--since 24h] [--component <name>]... [--id <prefix>]... [--severity info|warn|error|fatal] [--follow]
 cupertino diagnose events clear --yes       # delete the user store's events, keep its salt
 cupertino diagnose export --output <file> [--include-logs] [--since <duration|time>]
+cupertino sdk info [--require] [--root <dir>] # the installed C SDK (the cupertino-kit package), part by part
+cupertino sdk check [--root <dir>]          # build and run a probe against it with /usr/bin/cc and pkg-config
+cupertino sdk new --lang c|rust <name> [--dir <dir>] [--source <checkout>] # a starter project; `make -C <name>` builds the C one
 ```
 
 `desktop start` runs `$CUPERTINO_SERVER` when it is set (for development), else the `cupertino-server` beside the
@@ -114,10 +117,10 @@ and `problems` there.
 |---|---|
 | 0 | (success; also a closed stdout, and a follow stream stopped by a signal) |
 | 2 | `invalid_usage`: also `confirmation_required` |
-| 3 | `unavailable`: `no_checkout`, `no_cargo`, `no_host_display`, `no_runtime_dir`, `server_not_installed`, `server_failed`, `not_a_vt`, `session_not_installed`, `session_failed` |
-| 4 | `denied`: `inside_graphical_session` |
-| 5 | `validation`: `pack_unreadable`, `manifest_invalid`, `font_invalid`, `checks_failed`, `layer_violations`, `metadata_failed`, `file_exists` (`diagnose export`) |
-| 6 | `temporary`: also `output_failed` (stdout cannot be written), `interrupted` (a finite stream stopped), `write_failed` (also an export file) |
+| 3 | `unavailable`: `no_checkout`, `no_cargo`, `no_host_display`, `no_runtime_dir`, `server_not_installed`, `server_failed`, `not_a_vt`, `session_not_installed`, `session_failed`, `sdk_not_installed`, `no_compiler`, `no_pkg_config`, `tool_failed`, `no_working_directory` |
+| 4 | `denied`: `inside_graphical_session`, `not_writable` (`sdk new`) |
+| 5 | `validation`: `pack_unreadable`, `manifest_invalid`, `font_invalid`, `checks_failed`, `layer_violations`, `metadata_failed`, `file_exists` (`diagnose export`), `sdk_invalid`, `compile_failed`, `abi_mismatch`, `probe_failed`, `directory_not_empty`, `not_a_directory` |
+| 6 | `temporary`: also `output_failed` (stdout cannot be written), `interrupted` (a finite stream stopped), `write_failed` (also an export file and the files of `sdk new` and `sdk check`), `timed_out` (a compiler or probe of `sdk check`) |
 | 7 | `transaction_failed` (reserved) |
 | 8 | `unsupported`: also `not_in_this_release` for the reserved groups `system` and `ai` |
 
@@ -157,8 +160,9 @@ The help JSON (`cupertino --format json help`) lists, per command, `path`, `summ
 ## Design
 
 `src/lib.rs` holds the registry types and the runner; `src/stream.rs` the output writer, the stream rules and the stop
-flag; each group is a module (`appearance`, `diagnose`, `desktop`, `version`, `completions`, `dev`; `diagnose_events`
-adds the event commands to the `diagnose` group). `src/manual.rs`
+flag; each group is a module (`appearance`, `diagnose`, `desktop`, `version`, `completions`, `dev`, `sdk`;
+`diagnose_events` adds the event commands to the `diagnose` group). The files `sdk new` writes and the probe `sdk check`
+compiles are in `templates/`, built into the binary. `src/manual.rs`
 and `src/completions.rs` generate the manual pages and the completion scripts from a registry, `GLOBAL_OPTIONS`,
 `BUILTINS` and `FailureKind::ALL`, so a new command or option needs no edit there. The completions take an option's
 value after the option or in the same word (`--area=gpu`; bash splits such a word at the `=`, and the script joins it
@@ -236,6 +240,8 @@ answers on `--ready-fd`, stops, the kill after the grace, every error code, the 
 `tests/version.rs` (a fixture root with each part present, missing and unreadable), `tests/dev.rs` (fixture checkouts),
 `tests/completions.rs` (bash, zsh and fish run the scripts; a missing shell skips unless `CUPERTINO_SHELLS_REQUIRED=1`)
 and `tests/manual.rs` (the pages, and `mandoc -T lint` unless it is missing and `CUPERTINO_MANDOC_REQUIRED` is not 1).
+`tests/sdk.rs` runs the `sdk` commands against a temporary root with a fake SDK, compiler and pkg-config;
+`ci/c-sdk.py` runs them against a real one, built into a staging root.
 `cupertino-server/tests/desktop-start.rs` runs `desktop start` on the real headless compositor.
 
 The command is an unprivileged client: a group calls libraries of the `foundation` to `tools` layers or the D-Bus and
@@ -243,4 +249,9 @@ socket interfaces of the services; it never links compositor state.
 
 ## Open issues
 
-None.
+- `sdk check` compiles with the system's `cc` and checks the C ABI only. The Rust project of `sdk new` depends on the
+  release's git tag of `cupertino-kit`, so it builds once that tag is published; until then, or offline, `--source`
+  points it at a checkout's crates by path. `ci/c-sdk.py` checks both forms against this checkout.
+- OWNER DECISION: `sdk new` refuses a `--dir` (or `./<name>`) that is a symbolic link, even one to an empty directory,
+  as `validation`/`not_a_directory`. It writes only into a real directory it has found empty or makes itself, so a
+  link never redirects the project elsewhere; give the link's target as `--dir` instead.

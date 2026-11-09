@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name={{name}}
+Comment=A CupertinoKit application
+Exec={{name}}
+Terminal=false

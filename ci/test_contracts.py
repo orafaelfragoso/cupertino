@@ -34,7 +34,7 @@ LIB = '#[zbus::interface(name = "org.cupertino.Demo1")]\nstruct Demo;\n'
 BUILT = {"cupertino-demo": ("cupertino-demo", "crates/cupertino-demo/src/main.rs")}
 
 
-def run(registry, files=None, built=BUILT, shipped=frozenset({"cupertino-demo"}), unknown=None):
+def run(registry, files=None, built=BUILT, shipped=frozenset({"cupertino-demo"}), unknown=None, libraries=None):
     unknown = registry.count("test_owner: unknown") if unknown is None else unknown
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -45,7 +45,22 @@ def run(registry, files=None, built=BUILT, shipped=frozenset({"cupertino-demo"})
             (root / rel).write_text(text)
         with mock.patch.object(contracts, "UNKNOWN_TEST_OWNERS", unknown), \
                 mock.patch.object(contracts, "UNKNOWN_SCOPES", 0):
-            return contracts.check(root.resolve(), built, set(shipped))
+            return contracts.check(root.resolve(), built, set(shipped), libraries or {})
+
+
+LIBRARY_ENTRY = ("- name: libdemo.so.1\n  kind: c-library\n  version: 1.0\n  owner_crate: cupertino-demo\n"
+                 "  owner_area: apps\n  scope: public\n  test_owner: crates/cupertino-demo/tests/symbols.rs\n"
+                 "  source: crates/cupertino-demo/src/lib.rs\n")
+HEADER, BUILD = "crates/cupertino-demo/abi/demo.h", "crates/cupertino-demo/build.rs"
+
+
+def library_run(entry=LIBRARY_ENTRY, files=None, libraries=None):
+    """The check of a checkout whose crate cupertino-demo builds libdemo.so.1, ABI 1.0, unless changed."""
+    files = {HEADER: "#define DEMO_ABI_MAJOR 1\n\n#define DEMO_ABI_MINOR 0\n",
+             BUILD: 'println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libdemo.so.1");\n',
+             "crates/cupertino-demo/tests/symbols.rs": '"libdemo.so.1"\n', **(files or {})}
+    libraries = {"cupertino-demo": "crates/cupertino-demo/Cargo.toml"} if libraries is None else libraries
+    return run(INTERFACE_ENTRY + BINARY_ENTRY + entry, files, libraries=libraries)
 
 
 class RegistryTest(unittest.TestCase):
@@ -115,14 +130,34 @@ class RegistryTest(unittest.TestCase):
                                     "crates/cupertino-demo/tests/run.rs does not name cupertino-demo"])
 
     def test_a_c_library_test_must_name_its_soname(self):
-        entry = ("- name: libdemo.so.1\n  kind: c-library\n  version: 1.0\n  owner_crate: cupertino-demo\n"
-                 "  owner_area: apps\n  scope: public\n  test_owner: crates/cupertino-demo/tests/symbols.rs\n"
-                 "  source: crates/cupertino-demo/src/lib.rs\n")
         test = "crates/cupertino-demo/tests/symbols.rs"
-        self.assertEqual(run(INTERFACE_ENTRY + BINARY_ENTRY + entry, {test: '"libdemo.so.1"\n'}), [])
-        problems = run(INTERFACE_ENTRY + BINARY_ENTRY + entry, {test: "fn main() {}\n"})
+        self.assertEqual(library_run(files={test: '"libdemo.so.1"\n'}), [])
+        problems = library_run(files={test: "fn main() {}\n"})
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("does not name libdemo.so.1", problems[0])
+
+    def test_a_cdylib_without_a_c_library_entry_fails(self):
+        problems = library_run(entry="")
+        self.assertEqual(problems, ["crates/cupertino-demo/Cargo.toml: cupertino-demo builds a cdylib without a "
+                                    "c-library entry in docs/architecture/contracts.yaml"])
+
+    def test_a_c_library_entry_of_a_crate_without_a_cdylib_fails(self):
+        problems = library_run(libraries={})
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml:21: libdemo.so.1 names cupertino-demo, which "
+                                    "builds no cdylib"])
+
+    def test_a_c_library_version_must_be_the_header_abi_version(self):
+        problems = library_run(files={HEADER: "#define DEMO_ABI_MAJOR 1\n\n#define DEMO_ABI_MINOR 1\n"})
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml:21: libdemo.so.1 version is 1.0, "
+                                    "crates/cupertino-demo/abi/demo.h says 1.1"])
+        problems = library_run(files={HEADER: "/* no version */\n"})
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml:21: crates/cupertino-demo/abi/ has no header "
+                                    "defining its ABI MAJOR and MINOR"])
+
+    def test_a_c_library_name_must_be_the_soname_it_links_with(self):
+        problems = library_run(files={BUILD: 'println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libdemo.so.2");\n'})
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml:21: libdemo.so.1 is not the soname "
+                                    "crates/cupertino-demo/build.rs links with (libdemo.so.2)"])
 
     def test_an_interface_test_need_not_name_it(self):
         entry = INTERFACE_ENTRY.replace("test_owner: unknown", "test_owner: crates/cupertino-demo/tests/bus.rs")

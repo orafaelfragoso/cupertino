@@ -1,0 +1,16 @@
+[package]
+name = "{{crate_name}}"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+cupertino-kit = {{kit_dependency}}
+
+# CupertinoKit's keyboard handling uses the pure-Rust xkbcommon crate of the same release in place of the C binding.
+[patch.crates-io]
+xkbcommon = {{xkbcommon_dependency}}
+
+# The toolkit draws on the CPU, so its crates are optimized even in a debug build of the application.
+[profile.dev.package."*"]
+opt-level = 3

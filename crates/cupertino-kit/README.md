@@ -21,6 +21,11 @@ compositor. `app::run_on` and `app::run_on_with` run on a window system a deskto
 `app::run_lock_screen_on_with` does the same for the lock screen, whose AT-SPI adapter the session's lock never mutes
 (`AtspiAdapter::lock_screen`), and `app::run_on_with_appearance` passes the session's appearance through a function first, for a
 shell surface that keeps the dark appearance in a light session. The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
+Every one of them reports scroll timing when `CUPERTINO_SCROLL_TIMING` (`app::SCROLL_TIMING_ENV`) names an absolute path:
+one JSON line a pointer scroll event, appended, with its stages in nanoseconds of `CLOCK_MONOTONIC` (`input`, the
+window system's timestamp; `handled`; `updated`, the model update and view, or `null`; `submitted`, the frame that drew
+it; `presented`, the compositor's time for that frame, or `null` when it was dropped). Without the variable no timing
+is kept (`app::Timed`, on `Runtime::with_scroll_timing`).
 `app::mono_family` names the asset packs' fixed-pitch family, which the text system loads with the interface face, for
 text that lines up by character (a file's contents); `None` when no pack names one.
 

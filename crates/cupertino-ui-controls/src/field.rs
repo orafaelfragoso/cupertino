@@ -219,12 +219,13 @@ pub(crate) fn position(byte: usize) -> TextPosition {
     }
 }
 
-/// A search field's magnifying glass: its size and its leading edge, and the text's leading edge. Its height is the
-/// size table's for a search field ([`ControlFamily::SearchField`]): 24 points at the regular size, 28 at the large
-/// size a sidebar's search uses.
-const SEARCH_GLYPH: f64 = 13.0;
-const SEARCH_GLYPH_X: f64 = 10.0;
-const SEARCH_TEXT_X: f64 = 27.0;
+/// A search field's magnifying glass: the size of the symbol's box (its strokes span about 12.5 points of it, from
+/// about 10.5 points in) and the box's leading edge, and the text's leading edge. Its height is the size table's for
+/// a search field ([`ControlFamily::SearchField`]): 24 points at the regular size, 28 at the large size a sidebar's
+/// search uses.
+const SEARCH_GLYPH: f64 = 16.0;
+const SEARCH_GLYPH_X: f64 = 8.25;
+const SEARCH_TEXT_X: f64 = 29.5;
 /// A search field's capsule on a material: its fill and rim, white at these opacities in a dark appearance, the fill
 /// white and the rim black in a light one. On the window's content it is a text field's recessed well instead.
 const SEARCH_FILL_DARK: f32 = 0.23;

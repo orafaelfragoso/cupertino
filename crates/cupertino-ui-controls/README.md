@@ -98,8 +98,8 @@ from the application's model and reports changes as messages.
   (`Surface::TextBackground`) where the desktop can, below the window's glass, so a toolbar's capsules over a form
   show, and it paints it where the desktop cannot. A `TextField`'s chrome is a recessed well: darker than what it
   sits on in the dark appearance (black at 25 %), the text background in the light one, with a faint edge (the
-  theme's stronger border under Increase Contrast). `SearchField` is a `TextField` with a 13 pt magnifying glass
-  10 pt from its leading edge and its text 27 pt in; on the window's content it is a text field's recessed well, on a
+  theme's stronger border under Increase Contrast). `SearchField` is a `TextField` with a magnifying glass
+  about 12.5 pt across, 10.5 pt from its leading edge, and its text 29.5 pt in; on the window's content it is a text field's recessed well, on a
   material (`PaintCx::on_material`: a sidebar, a popover, glass) a light capsule (white at 23 % in the dark
   appearance, 45 % in the light one, with a faint rim; the theme's border under Increase Contrast). It edits and reads
   as its field does. Its height is the size table's for a search field at its `size`, the window's when `None`

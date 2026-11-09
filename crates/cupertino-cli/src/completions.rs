@@ -505,10 +505,12 @@ function __cupertino_complete
     set -l n 0
     for cpath in (__cupertino_paths)
         set -l p (string split ' ' -- $cpath)
-        if test (count $p) -gt $n; and test (count $seen) -ge (count $p)
-            if test "$seen[1..(count $p)]" = "$cpath"
+        set -l np (count $p)
+        # an index holds variables only, never a command substitution
+        if test $np -gt $n; and test (count $seen) -ge $np
+            if test "$seen[1..$np]" = "$cpath"
                 set cmd $cpath
-                set n (count $p)
+                set n $np
             end
         end
     end
@@ -521,11 +523,13 @@ function __cupertino_complete
         end
     end
     set -l candidates
+    set -l nt (count $topic)
+    set -l at (math $nt + 1)
     for cpath in (__cupertino_paths)
         set -l p (string split ' ' -- $cpath)
-        if test (count $p) -gt (count $topic)
-            if test (count $topic) -eq 0; or test "$p[1..(count $topic)]" = "$topic"
-                set -l next $p[(math (count $topic) + 1)]
+        if test (count $p) -gt $nt
+            if test $nt -eq 0; or test "$p[1..$nt]" = "$topic"
+                set -l next $p[$at]
                 contains -- $next $candidates; or set -a candidates $next
             end
         end
@@ -557,9 +561,10 @@ function __cupertino_complete
         end
         return
     end
-    set -l rest $seen[(math $n + 1)..-1]
-    if test (count $seen) -le $n
-        set rest
+    set -l rest
+    if test (count $seen) -gt $n
+        set -l from (math $n + 1)
+        set rest $seen[$from..-1]
     end
     if string match -q -- '-*' $cur
         for line in $spec

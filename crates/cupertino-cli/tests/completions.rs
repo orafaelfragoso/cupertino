@@ -288,13 +288,93 @@ fn zsh_reads_the_script_and_registers_it() {
         "autoload -Uz compinit && compinit -u -d ./zcompdump && source ./_cupertino && print -r -- $_comps[cupertino]",
     );
     assert_eq!(registered, "_cupertino\n");
-    // from fpath, as a package installs it
+    // from fpath, as a package installs it; compinit skips a `.` entry, so the directory is absolute
     let autoloaded = shell(
         "zsh",
         dir.path(),
-        "fpath=(. $fpath) && autoload -Uz compinit && compinit -u -d ./zcompdump2 && print -r -- $_comps[cupertino]",
+        "fpath=($PWD $fpath) && autoload -Uz compinit && compinit -u -d ./zcompdump2 && print -r -- $_comps[cupertino]",
     );
     assert_eq!(autoloaded, "_cupertino\n");
+}
+
+/// What the zsh script offers for `line`, the cursor at its end. Outside a completion widget `words` and `CURRENT` are
+/// plain parameters and `compadd` a function of the test's: it keeps the candidates the current word begins, as zsh
+/// does, and `_files` stands for the file completion.
+fn zsh_offers(dir: &Path, registry: &[Group], line: &str) -> Vec<String> {
+    std::fs::write(dir.join("_cupertino"), script("zsh", registry)).unwrap();
+    let mut words: Vec<&str> = line.split_whitespace().collect();
+    if line.ends_with(' ') {
+        words.push("");
+    }
+    let words: Vec<String> = words.iter().map(|w| sh(w)).collect();
+    let code = format!(
+        "compdef() {{ :; }}\n\
+         compadd() {{ local -a xs; xs=(${{(M)${{(P)2}}:#${{words[CURRENT]}}*}}); (( $#xs )) && print -rl -- $xs; return 0; }}\n\
+         _files() {{ print -r -- '(files)'; }}\n\
+         source ./_cupertino\n\
+         words=({}) CURRENT={}\n\
+         _cupertino",
+        words.join(" "),
+        words.len()
+    );
+    let mut offers: Vec<String> = shell("zsh", dir, &code)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    offers.sort();
+    offers
+}
+
+#[test]
+fn zsh_completes_commands_options_and_values() {
+    if !have("zsh") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    assert_eq!(zsh_offers(d, REGISTRY, "cupertino dia"), ["diagnose"]);
+    assert_eq!(zsh_offers(d, REGISTRY, "cupertino de"), ["desktop", "dev"]);
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino --format json desk"),
+        ["desktop"]
+    );
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino --format "),
+        ["human", "json", "jsonl"]
+    );
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino diagnose --area g"),
+        ["gpu"]
+    );
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino desktop start --backend "),
+        ["headless", "nested", "tty"]
+    );
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino diagnose --strict --"),
+        ["--area", "--format", "--help", "--version"]
+    );
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino diagnose --area gpu --"),
+        ["--area", "--format", "--help", "--strict", "--version"]
+    );
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino help dev "),
+        ["layers", "manual"]
+    );
+    assert_eq!(zsh_offers(d, REGISTRY, "cupertino he"), ["help"]);
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino dev manual "),
+        ["(files)"]
+    );
+    assert_eq!(
+        zsh_offers(d, PROBE, "cupertino probe widget --colour "),
+        ["blue", "green", "red"]
+    );
+    assert_eq!(
+        zsh_offers(d, PROBE, "cupertino probe widget "),
+        ["gear", "spring"]
+    );
 }
 
 /// What fish offers for `line` with the script loaded.

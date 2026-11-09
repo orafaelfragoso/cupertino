@@ -504,37 +504,31 @@ fn glass_regions(run: &mut Run) -> Vec<Rect> {
         .expect("the panel asks for glass")
 }
 
-/// Edit Controls is a neutral control, not a tile: in a dark session the theme's control fill (white at 63/255) with
-/// no glass under it, so the wallpaper does not tint it; in a light session, where the panel's white text needs the
-/// tiles' darkened glass, it is drawn as they are.
+/// Edit Controls is glass as the tiles are, in a dark and in a light session: the capsule takes its colour from what lies
+/// behind it (a light blue-grey over a light part of the wallpaper), with the tiles' rim, rather than a flat fill of its
+/// own.
 #[test]
-fn edit_controls_is_the_neutral_control_fill_without_glass_in_a_dark_session() {
+fn edit_controls_is_glass_as_the_tiles_are() {
     let capsule = Rect::new(107.0, 468.0, 94.0, 24.0);
-    let mut dark = Run::start(tokens(Appearance::Dark, false), Presentation::SHOWN);
-    let regions = glass_regions(&mut dark);
-    assert_eq!(regions.len(), Module::ALL.len(), "a glass region per tile");
-    assert!(
-        regions.iter().all(|r| !r.intersects(&capsule)),
-        "no glass under Edit Controls: {regions:?}"
-    );
-    let (frame, _) = dark.capture();
-    // inside the capsule's round end, clear of its label
-    let fill = frame.pixel(113, 480).unwrap();
-    assert!(
-        fill.alpha().abs_diff(63) <= 2 && fill.red() == fill.alpha() && fill.blue() == fill.alpha(),
-        "white at 63/255: {fill:?}"
-    );
-    let mut light = Run::start(
-        tokens(Appearance::Dark, false),
-        Presentation {
-            light: true,
-            ..Presentation::SHOWN
-        },
-    );
-    assert!(
-        glass_regions(&mut light).contains(&capsule),
-        "a light session's Edit Controls is glass"
-    );
+    for light in [false, true] {
+        let mut run = Run::start(
+            tokens(Appearance::Dark, false),
+            Presentation {
+                light,
+                ..Presentation::SHOWN
+            },
+        );
+        let regions = glass_regions(&mut run);
+        assert_eq!(
+            regions.len(),
+            Module::ALL.len() + 1,
+            "a glass region per tile and Edit Controls (light {light})"
+        );
+        assert!(
+            regions.iter().any(|r| *r == capsule),
+            "Edit Controls is glass (light {light}): {regions:?}"
+        );
+    }
 }
 
 #[test]

@@ -580,9 +580,6 @@ struct GlassTile<M> {
     /// The tile's own opacity, glass and content.
     alpha: f64,
     light: bool,
-    /// A neutral control rather than a tile: in the dark session the theme's control fill over what lies behind, with
-    /// no glass to tint it by the wallpaper (see [`GlassTile::paint`]).
-    neutral: bool,
     children: Vec<Element<M>>,
 }
 
@@ -607,7 +604,6 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
             || self.panel != old.panel
             || self.alpha != old.alpha
             || self.light != old.light
-            || self.neutral != old.neutral
             || self.label != old.label
         {
             Change::Paint
@@ -666,23 +662,6 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
                 width: IC_RIM,
                 paint: Paint::Solid(IC_RIM_COLOR),
             });
-            return;
-        }
-        // the light session's tiles carry the panel's white text on a darkened glass, which a neutral control keeps
-        let control = cx
-            .env()
-            .theme
-            .colors
-            .get(ColorRole::ControlFill, StateVariant::NORMAL);
-        if let Some(control) = control.filter(|_| self.neutral && !self.light) {
-            let panel = finite_alpha(self.panel) as f32;
-            fill(
-                cx,
-                rect,
-                radius,
-                Color::new(control.r, control.g, control.b, control.a * panel),
-            );
-            lift(cx, rect, radius, false);
             return;
         }
         let shape = if self.capsule {
@@ -1353,19 +1332,6 @@ impl<M: Clone + 'static> Builder<'_, M> {
         alpha: f64,
         children: Vec<Element<M>>,
     ) -> Element<M> {
-        self.tile_of(label, frame, outline, alpha, false, children)
-    }
-
-    /// [`Self::tile`], or a neutral control's capsule when `neutral`.
-    fn tile_of(
-        &self,
-        label: &str,
-        frame: Rect,
-        outline: Outline,
-        alpha: f64,
-        neutral: bool,
-        children: Vec<Element<M>>,
-    ) -> Element<M> {
         let frame = frame.translate(INSET, INSET);
         Element::new(GlassTile {
             label: label.to_owned(),
@@ -1375,7 +1341,6 @@ impl<M: Clone + 'static> Builder<'_, M> {
             panel: self.presentation.alpha,
             alpha,
             light: self.presentation.light,
-            neutral,
             children,
         })
     }
@@ -1945,12 +1910,11 @@ impl<M: Clone + 'static> Builder<'_, M> {
         let origin = frame.origin;
         let origin = Point::new(origin.x + INSET, origin.y + INSET);
         let size = frame.size;
-        self.tile_of(
+        self.tile(
             "Edit Controls",
             frame,
             Outline::Capsule,
             alpha,
-            true,
             vec![self.pressable(
                 origin,
                 "edit-controls",

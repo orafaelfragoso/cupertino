@@ -1001,7 +1001,7 @@
 - name: cupertino
   kind: binary
   version: 0.1.0
-  shipped: no
+  shipped: yes
   owner_crate: cupertino-cli
   owner_area: packaging
   scope: public
@@ -1050,7 +1050,7 @@
   owner_crate: cupertino-diagnostics
   owner_area: services
   scope: public
-  test_owner: unknown
+  test_owner: crates/cupertino-diagnostics/tests/exit-codes.rs
   source: crates/cupertino-diagnostics/src/bin/cupertino-diagnose.rs
 - name: cupertino-dock
   kind: binary

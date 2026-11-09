@@ -34,7 +34,7 @@ LITERAL_NAME = re.compile(r'\(\s*name\s*=\s*"([^"]+)"\s*[,)]')
 TEST_ATTRIBUTE = re.compile(r'^([ \t]*)#\[cfg\(test\)\][ \t]*$')
 TEST_MODULE = re.compile(r'^([ \t]*)(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+(\w+)[ \t]*([{;])')
 # Entries without a test file. It only goes down: give an entry a test_owner and lower this number.
-UNKNOWN_TEST_OWNERS = 15
+UNKNOWN_TEST_OWNERS = 14
 UNKNOWN_SCOPES = 1
 # Kinds whose test_owner must name the entry: a socket path, binary name or soname is a string its tests use. Wayland
 # globals need not, since crates/cupertino-server/tests/contracts.rs compares them with the registry at run time; D-Bus

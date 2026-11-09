@@ -254,7 +254,7 @@ impl Decorations {
         let align = self.config.title_alignment;
         let (_, max) = title_slot(
             frame_width,
-            layout.group_right(),
+            layout.group_reach(),
             full,
             align,
             &self.config.metrics,
@@ -266,7 +266,7 @@ impl Decorations {
         let w = w_px as f64 / scale;
         let (left, _) = title_slot(
             frame_width,
-            layout.group_right(),
+            layout.group_reach(),
             w,
             align,
             &self.config.metrics,

@@ -8,7 +8,8 @@ premultiplied RGBA buffers that a compositor uploads as textures.
 | Module | Content |
 |---|---|
 | `metrics` | `TitlebarStyle::{Standard, Unified, UnifiedCompact, Sidebar}`, `ButtonKind`, `DecorationMetrics`, `DoubleClickAction`, `TitleAlignment`; the window style constants `WINDOW_BUTTON_DIAMETER`, `WINDOW_BUTTON_PITCH`, `TITLED_BAR_HEIGHT`, `TOOLBAR_ROW_HEIGHT`, `COMPACT_TOOLBAR_ROW_HEIGHT` and `WINDOW_CORNER_RADIUS` |
-| `layout` | `FrameLayout`: titlebar, content, three button circles + art boxes, button group, `title_slot` (centred title stays centred and clear of the buttons, leading title for unified bars) |
+| `chrome` | Window chrome as a layout system: `ChromeStyle` (frame kind, `ToolbarStyle`, title shown, full-size content, transparent title bar), `ChromeLayout` (outer `frame`, drawable `content`, `unobscured` layout rectangle, button row, toolbar row, title and items slots, accessories), `ChromeLayout::full_screen`, `button_presence` (the capability table), `Direction` (`of_locale`), `Accessory` |
+| `layout` | `FrameLayout`: titlebar, content, `unobscured` (the content no title bar or client-drawn row covers), three button circles + art boxes (mirrored right to left with `DecorationMetrics::direction`), button group, `title_slot` (centred title stays centred and clear of the buttons, leading title for unified bars) |
 | `hit` | `hit_test` → `Hit::{Button, Titlebar, Content, Resize(edge), None}`; `resize_hit(frame, metrics, p, exterior)` the resize zone alone, for any frame (the compositor uses it for client-decorated and untitled windows; `exterior` false leaves out the 4 pt outside part, which titled windows only have) (no `Titlebar` hit in a unified frame: the client moves the window), resize zones from `resize_outset` outside to `resize_inset` inside the geometry with corner zones measured along the edges (`resize_corner`, `resize_corner_bottom_right`), `input_region`, button-group hover, double-click action |
 | `buttons` | states normal / hover-group (glyphs on all three) / pressed / inactive (grey, colour returns on hover) / disabled; glyphs authored as vector strokes (cross, dash, plus) |
 | `palette` | colours from the theme tokens: titlebar fills from the opaque titlebar recipes, the window rim token and its 2× variant, the window frame text token for the title, button hues from the system colours; `Palette::builtin` works without spec files and is tested equal |
@@ -53,12 +54,50 @@ rounded) is `Decorations::shape`, and the compositor must clip the client conten
 |---|---|---|---|
 | `Standard` (titled) | a 32 pt title bar above the content | (16, 16), then every 23 pt | the title bar, the centred title and the buttons |
 | `Unified` | the client's 52 pt toolbar row | (26, 26), then every 23 pt | the buttons only |
-| `UnifiedCompact` | the client's 38 pt toolbar row | (19, 19), then every 23 pt | the buttons only |
+| `UnifiedCompact` | the client's 40 pt toolbar row | (19, 20), then every 23 pt | the buttons only |
 | `Sidebar` (full-height sidebar) | the 52 pt top of the client's sidebar | (26, 26), then every 23 pt | the buttons only |
 
-The buttons are 14 pt across; each centre lies half the row's height from the top and leading edges. Every style has a
+The buttons are 14 pt across; each centre lies half the row's height from the top and leading edges, except in the
+compact row, whose group starts 12 pt from the leading edge (13 pt from the top). Every style has a
 16 pt window corner and the same edge and shadow. In the three client-drawn styles the content fills the frame, the
 client draws the row and moves the window from it, and `hit_test` gives `Hit::Button` over the buttons alone.
+
+### Chrome layout
+
+`ChromeLayout::new(content, style, capabilities, direction, accessories)` models three rectangles: the outer frame, the
+content the client draws and the unobscured rectangle where its layout starts. With full-size content the content is
+the whole frame and the chrome covers its top; otherwise the frame grows by the chrome. The chrome's height (frame less
+unobscured) depends on the frame kind and toolbar only:
+
+| Style | Chrome | First button (left, top), side, pitch |
+|---|---|---|
+| titled, no toolbar (title shown or hidden, transparent or not) | 32 | (9, 9), 14, 23 |
+| utility panel | 24 | (8, 8), 10, 17 |
+| unified toolbar (also the automatic style) | 52 | (19, 19), 14, 23 |
+| compact unified toolbar | 40 | (12, 13), 14, 23 |
+| expanded toolbar (title row above a 36 pt toolbar row) | 68 | (9, 9), 14, 23 |
+| settings-style toolbar (title row above a 56 pt toolbar row) | 88 | (9, 9), 14, 23 |
+| borderless | 0 | none |
+
+So a 600 pt full-size-content window has a 568 pt unobscured rectangle without a toolbar and 548 pt under a unified
+toolbar. The server's styles map onto it with `ChromeStyle::of_titlebar`: `Standard` is titled, `Unified` and
+`UnifiedCompact` are full-size content under their row, `Sidebar` is the unified row with the title hidden.
+
+The title shares the unified or compact row after the button group, or sits centred above an expanded or settings-style
+toolbar, or in the title bar without one; hiding it gives its room to the toolbar items. Leading and trailing
+accessories sit in the toolbar row clear of the group, the title and the items; bottom accessories add to the chrome,
+and `ChromeLayout::full_screen` keeps only their `full_screen_min_height` while the title bar and toolbar hide. A
+right-to-left window (`Direction::RightToLeft`, from the locale with `Direction::of_locale`) mirrors the group, the
+title, the items and the accessories; close stays outermost.
+
+`button_presence(frame, capabilities)` decides the buttons: a borderless window, and a titled one that can neither
+close, minimize nor resize, has none; any other has all three in place, each disabled when the window cannot do it
+(zoom follows resizability; a window that may not go full screen keeps zoom enabled). A utility panel closes only, so its
+minimize and zoom are present and disabled.
+
+Decisions: an expanded or settings-style toolbar keeps its allocation with the title hidden, as a titled window does;
+the title in a shared row takes at most 160 pt before the items (`SHARED_TITLE_WIDTH`). The server decorates every
+window in the left-to-right direction: no client tells it its direction yet.
 
 ### Samples
 

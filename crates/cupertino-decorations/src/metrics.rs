@@ -2,8 +2,10 @@
 //!
 //! Four window styles share the window control buttons: 14 pt discs whose centres are 23 pt apart, the first one as
 //! far from the window's leading edge as from its top edge, so the group sits in the middle of the row it occupies
-//! (the 32 pt title bar of a titled window, the 52 pt or 38 pt toolbar row of a unified window, the 52 pt top of the
-//! sidebar panel of a full-height-sidebar window). Every style has the 16 pt window corner radius. The rim width of
+//! (the 32 pt title bar of a titled window, the 52 pt toolbar row of a unified window, the 52 pt top of the sidebar
+//! panel of a full-height-sidebar window). The compact 40 pt row is the exception: its group starts 12 pt from the
+//! leading edge and 13 pt below the top, centred vertically only. A right-to-left window mirrors the group to the
+//! trailing edge ([`DecorationMetrics::direction`]). Every style has the 16 pt window corner radius. The rim width of
 //! one device pixel and the live-resize zones are as designed. The small button size class (9 pt) comes from the
 //! control table; the title metrics and the glyph proportions are approximate, labelled, and configurable.
 
@@ -20,7 +22,7 @@ pub enum TitlebarStyle {
     /// buttons, vertically centred in the row with the unified leading inset.
     /// The client draws the toolbar, its fill ([`crate::palette::Palette::titlebar`]) and the title.
     Unified,
-    /// [`TitlebarStyle::Unified`] with the compact 38 pt toolbar row.
+    /// [`TitlebarStyle::Unified`] with the compact 40 pt toolbar row.
     UnifiedCompact,
     /// A full-height sidebar: the client's surface fills the window, its sidebar panel runs from the
     /// window's top edge to its bottom edge, and the decorations draw only the window control
@@ -59,7 +61,10 @@ pub const TITLED_BAR_HEIGHT: f64 = 32.0;
 /// Height of a toolbar row: the unified bar, and the top of a full-height sidebar.
 pub const TOOLBAR_ROW_HEIGHT: f64 = 52.0;
 /// Height of the compact unified toolbar row.
-pub const COMPACT_TOOLBAR_ROW_HEIGHT: f64 = 38.0;
+pub const COMPACT_TOOLBAR_ROW_HEIGHT: f64 = 40.0;
+/// Distance from the leading edge to the first button of the compact unified row (its top is 13 pt down, the middle
+/// of the row).
+pub const COMPACT_BUTTON_LEADING: f64 = 12.0;
 /// The window's corner radius.
 pub const WINDOW_CORNER_RADIUS: f64 = 16.0;
 
@@ -108,6 +113,8 @@ pub struct DecorationMetrics {
     pub corner_radius: f64,
     /// diameter of a window control button, regular size class.
     pub button_diameter: f64,
+    /// Which way the title bar lays out: right to left puts the button group at the right edge, close outermost.
+    pub direction: crate::chrome::Direction,
     /// edge of the square art box of a button, used as its hit area.
     pub button_art: f64,
     /// size of the frame of one button (the cell the frame view lays out);
@@ -170,12 +177,13 @@ impl DecorationMetrics {
             titlebar_height_sidebar: TOOLBAR_ROW_HEIGHT,
             corner_radius: WINDOW_CORNER_RADIUS,
             button_diameter: d,
+            direction: crate::chrome::Direction::LeftToRight,
             button_art: 16.0,
             button_cell: (WINDOW_BUTTON_DIAMETER, 16.0),
             button_spacing: WINDOW_BUTTON_PITCH - WINDOW_BUTTON_DIAMETER,
             button_leading_standard: leading(TITLED_BAR_HEIGHT),
             button_leading_unified: leading(TOOLBAR_ROW_HEIGHT),
-            button_leading_compact: leading(COMPACT_TOOLBAR_ROW_HEIGHT),
+            button_leading_compact: COMPACT_BUTTON_LEADING,
             button_leading_sidebar: leading(TOOLBAR_ROW_HEIGHT),
             glyph_half_extent: 0.2,
             glyph_stroke: 1.1,
@@ -265,15 +273,21 @@ mod tests {
         let rows = [
             (TitlebarStyle::Standard, 32.0),
             (TitlebarStyle::Unified, 52.0),
-            (TitlebarStyle::UnifiedCompact, 38.0),
+            (TitlebarStyle::UnifiedCompact, 40.0),
             (TitlebarStyle::Sidebar, 52.0),
         ];
         for (style, row) in rows {
             assert_eq!(m.titlebar_height(style), row, "{style:?}");
-            // the first cell is half a button from the centre, which is half the row from the edge
+            // the first cell is half a button from the centre, which is half the row from the edge; the compact row's
+            // group starts a point nearer the edge
+            let centre = if style == TitlebarStyle::UnifiedCompact {
+                19.0
+            } else {
+                row / 2.0
+            };
             assert_eq!(
                 m.button_leading(style) + m.button_cell.0 / 2.0,
-                row / 2.0,
+                centre,
                 "{style:?}"
             );
         }

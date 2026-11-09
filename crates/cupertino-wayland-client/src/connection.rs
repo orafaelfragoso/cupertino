@@ -24,6 +24,8 @@ use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_shm::WlShm;
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
+use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
+use wayland_client::protocol::wl_subsurface::WlSubsurface;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::protocol::wl_touch::{self, WlTouch};
 use wayland_client::{
@@ -355,6 +357,15 @@ enum Role {
         /// The size of the latest [`State::configure_external`]; a 0 dimension is left to the client.
         size: (u32, u32),
     },
+    /// Part of `parent`, drawn at its scale; its state applies with the parent's commit.
+    Subsurface {
+        subsurface: WlSubsurface,
+        parent: SurfaceId,
+        /// The logical size its buffers are drawn at, from [`Connection::place_subsurface`].
+        size: (u32, u32),
+        /// Its position in the parent's coordinates, as last sent.
+        position: (i32, i32),
+    },
 }
 
 /// The role an extension gives a surface of [`Connection::external_surface`] through a protocol of its own, such as
@@ -406,6 +417,7 @@ pub struct State {
     compositor: WlCompositor,
     shm: WlShm,
     wm_base: XdgWmBase,
+    subcompositor: Option<WlSubcompositor>,
     seat: Option<WlSeat>,
     decoration_manager: Option<ZxdgDecorationManagerV1>,
     importer: Option<ZxdgImporterV2>,
@@ -530,6 +542,7 @@ impl Connection {
             shm,
             // version 4 adds `configure_bounds`, version 6 the suspended state
             wm_base: required(bind(&globals, &qh, 1..=6), "xdg_wm_base")?,
+            subcompositor: bind(&globals, &qh, 1..=1),
             seat,
             decoration_manager: bind(&globals, &qh, 1..=1),
             importer: bind(&globals, &qh, 1..=1),
@@ -679,6 +692,9 @@ impl Connection {
         let parent_xdg = match &s.surface(parent)?.role {
             Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => Some(xdg.clone()),
             Role::External { .. } => None,
+            Role::Subsurface { .. } => {
+                return Err(Error::Protocol("a subsurface takes no popups"));
+            }
         };
         let positioner = positioner(&s.wm_base, &qh, placement, s.surface(parent)?.serials)?;
         let grab_serial = if placement.grab {
@@ -756,7 +772,11 @@ impl Connection {
             .surfaces
             .iter()
             .filter_map(|s| match s.role {
-                Role::Popup { parent, .. } if parent == surface => Some(s.id),
+                Role::Popup { parent, .. } | Role::Subsurface { parent, .. }
+                    if parent == surface =>
+                {
+                    Some(s.id)
+                }
                 _ => None,
             })
             .collect();
@@ -793,6 +813,7 @@ impl Connection {
                 xdg.destroy();
             }
             Role::External { role, .. } => role.destroy(),
+            Role::Subsurface { subsurface, .. } => subsurface.destroy(),
         }
         if let Some(v) = &s.viewport {
             v.destroy();
@@ -1290,6 +1311,84 @@ impl Connection {
         id
     }
 
+    /// Create a surface drawn as part of `parent` (a window, popup or external surface), above it, at its top left
+    /// corner until [`Connection::place_subsurface`] moves it. It is synchronized: what it presents shows with the
+    /// parent's next commit, so the two always change together. It takes no input (its input region is empty), so
+    /// the pointer and touches over it reach the parent below, and it is drawn at the parent's scale; it gets no
+    /// frame callbacks of its own. It shows nothing until it has a size and presents a buffer, and
+    /// [`Connection::unmap_subsurface`] hides it again with the parent's next commit. Needs
+    /// [`Capability::Subsurface`].
+    pub fn subsurface(&mut self, parent: SurfaceId) -> Result<SurfaceId, Error> {
+        let qh = self.queue.handle();
+        let s = &mut self.state;
+        let subcompositor = s
+            .subcompositor
+            .clone()
+            .ok_or(Error::Unsupported(Capability::Subsurface))?;
+        let parent_wl = s.surface(parent)?.wl.clone();
+        let id = s.next_id();
+        let wl = s.compositor.create_surface(&qh, id);
+        let subsurface = subcompositor.get_subsurface(&wl, &parent_wl, &qh, ());
+        subsurface.set_sync();
+        let region = s.compositor.create_region(&qh, ());
+        wl.set_input_region(Some(&region));
+        region.destroy();
+        s.add_surface(
+            id,
+            wl,
+            Role::Subsurface {
+                subsurface,
+                parent,
+                size: (0, 0),
+                position: (0, 0),
+            },
+            &qh,
+        );
+        Ok(id)
+    }
+
+    /// Move `surface`, a subsurface, to `position` in its parent's logical coordinates (with the parent's next commit)
+    /// and draw its next buffers `size` logical points large.
+    pub fn place_subsurface(
+        &mut self,
+        surface: SurfaceId,
+        position: (i32, i32),
+        size: (u32, u32),
+    ) -> Result<(), Error> {
+        let surf = self.state.surface_mut(surface)?;
+        let Role::Subsurface {
+            subsurface,
+            size: current,
+            position: at,
+            ..
+        } = &mut surf.role
+        else {
+            return Err(Error::Protocol(
+                "place_subsurface on a surface that is not a subsurface",
+            ));
+        };
+        if *at != position {
+            subsurface.set_position(position.0, position.1);
+            *at = position;
+        }
+        *current = size;
+        Ok(())
+    }
+
+    /// Hide `surface`, a subsurface, with its parent's next commit; presenting a buffer shows it again.
+    pub fn unmap_subsurface(&mut self, surface: SurfaceId) -> Result<(), Error> {
+        let surf = self.state.surface_mut(surface)?;
+        if !matches!(surf.role, Role::Subsurface { .. }) {
+            return Err(Error::Protocol(
+                "unmap_subsurface on a surface that is not a subsurface",
+            ));
+        }
+        surf.wl.attach(None, 0, 0);
+        surf.wl.commit();
+        // the buffers it showed are the compositor's until it releases them; what they hold is still known
+        self.flush()
+    }
+
     /// Send the queued requests and dispatch every event the compositor sent in answer, keeping the events for the
     /// next [`Connection::wait`]; for extensions that read state at setup.
     pub fn roundtrip(&mut self) -> Result<(), Error> {
@@ -1323,8 +1422,16 @@ impl Connection {
         let qh = self.queue.handle();
         let s = &mut self.state;
         let shm = s.shm.clone();
+        // a subsurface is drawn at its parent's scale and answers no configure
+        let parent_scale = match &s.surface(surface)?.role {
+            Role::Subsurface { parent, .. } => Some(s.surface(*parent)?.scale),
+            _ => None,
+        };
         let surf = s.surface_mut(surface)?;
-        let serial = surf.serials.latest().ok_or(Error::NotConfigured)?;
+        let serial = match surf.role {
+            Role::Subsurface { .. } => 0,
+            _ => surf.serials.latest().ok_or(Error::NotConfigured)?,
+        };
         let logical = match &surf.role {
             Role::Toplevel { current, .. } => current.and_then(|c| c.size).unwrap_or(preferred),
             Role::Popup { current, .. } => current
@@ -1334,8 +1441,10 @@ impl Connection {
                 if *w == 0 { preferred.0 } else { *w },
                 if *h == 0 { preferred.1 } else { *h },
             ),
+            Role::Subsurface { size, .. } if size.0 > 0 && size.1 > 0 => *size,
+            Role::Subsurface { .. } => return Err(Error::NotConfigured),
         };
-        let scale = surf.scale;
+        let scale = parent_scale.unwrap_or(surf.scale);
         let layout = scale
             .to_physical(logical.0)
             .zip(scale.to_physical(logical.1))
@@ -1579,10 +1688,16 @@ impl BufferLease<'_> {
         let qh = self.connection.queue.handle();
         let presentation = self.connection.state.presentation.clone();
         let surf = self.connection.state.surface_mut(self.surface)?;
-        if let Some(serial) = surf.serials.present()? {
-            match &surf.role {
-                Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => xdg.ack_configure(serial),
-                Role::External { role, .. } => role.ack_configure(serial),
+        let subsurface = matches!(surf.role, Role::Subsurface { .. });
+        if !subsurface {
+            if let Some(serial) = surf.serials.present()? {
+                match &surf.role {
+                    Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => {
+                        xdg.ack_configure(serial)
+                    }
+                    Role::External { role, .. } => role.ack_configure(serial),
+                    Role::Subsurface { .. } => {}
+                }
             }
         }
         let layout = surf.slots[self.slot].layout;
@@ -1626,9 +1741,12 @@ impl BufferLease<'_> {
                 }
             }
         }
-        surf.wl.frame(&qh, self.surface);
-        if let Some(presentation) = presentation {
-            presentation.feedback(&surf.wl, &qh, self.surface);
+        // a subsurface shows with its parent's commit, whose frame callback and feedback stand for both
+        if !subsurface {
+            surf.wl.frame(&qh, self.surface);
+            if let Some(presentation) = presentation {
+                presentation.feedback(&surf.wl, &qh, self.surface);
+            }
         }
         surf.wl.commit();
         self.connection.flush()
@@ -1758,7 +1876,12 @@ impl State {
             ),
             None => (None, None),
         };
-        if !matches!(&role, Role::External { role, .. } if !role.initial_commit()) {
+        let configured = match &role {
+            Role::External { role, .. } => role.initial_commit(),
+            Role::Subsurface { .. } => false,
+            Role::Toplevel { .. } | Role::Popup { .. } => true,
+        };
+        if configured {
             // the initial commit without a buffer asks for the first configure
             wl.commit();
         }
@@ -1800,7 +1923,7 @@ impl State {
     fn toplevel(&self, window: Toplevel) -> Result<&XdgToplevel, Error> {
         match &self.surface(window.0)?.role {
             Role::Toplevel { toplevel, .. } => Ok(toplevel),
-            Role::Popup { .. } | Role::External { .. } => {
+            Role::Popup { .. } | Role::External { .. } | Role::Subsurface { .. } => {
                 unreachable!("a Toplevel handle names a toplevel")
             }
         }
@@ -1852,6 +1975,11 @@ impl State {
                     .collect(),
             };
             let scale = sources.resolve(fractional);
+            // a subsurface is drawn at its parent's scale: the parent's change is the one reported
+            if matches!(surf.role, Role::Subsurface { .. }) {
+                surf.scale = scale;
+                continue;
+            }
             if scale != surf.scale {
                 surf.scale = scale;
                 self.events.push(Event::ScaleChanged {
@@ -1905,6 +2033,8 @@ impl State {
 
 delegate_noop!(State: WlCompositor);
 delegate_noop!(State: WlRegion);
+delegate_noop!(State: WlSubcompositor);
+delegate_noop!(State: WlSubsurface);
 delegate_noop!(State: ignore WlShm);
 delegate_noop!(State: ignore WlShmPool);
 delegate_noop!(State: XdgPositioner);
@@ -2214,7 +2344,7 @@ impl Dispatch<XdgSurface, SurfaceId> for State {
                     configure,
                 }
             }
-            Role::External { .. } => {
+            Role::External { .. } | Role::Subsurface { .. } => {
                 return state.fail(Error::Protocol(
                     "an xdg_surface configure for a surface with an external role",
                 ))

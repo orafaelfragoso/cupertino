@@ -45,10 +45,12 @@ pub enum Capability {
     TextInput,
     /// `wp_presentation`: when each presented frame reached the screen ([`crate::Event::Presented`]).
     Presentation,
+    /// `wl_subcompositor`: surfaces drawn as part of another one ([`crate::Connection::subsurface`]).
+    Subsurface,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 9] = [
+    pub const ALL: [Capability; 10] = [
         Capability::Seat,
         Capability::Clipboard,
         Capability::FractionalScale,
@@ -58,6 +60,7 @@ impl Capability {
         Capability::OutputLayout,
         Capability::TextInput,
         Capability::Presentation,
+        Capability::Subsurface,
     ];
 
     /// The globals that must all be advertised for the capability.
@@ -72,6 +75,7 @@ impl Capability {
             Capability::OutputLayout => &["zxdg_output_manager_v1"],
             Capability::TextInput => &["zwp_text_input_manager_v3", "wl_seat"],
             Capability::Presentation => &["wp_presentation"],
+            Capability::Subsurface => &["wl_subcompositor"],
         }
     }
 

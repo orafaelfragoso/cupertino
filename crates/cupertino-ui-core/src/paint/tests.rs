@@ -1169,6 +1169,7 @@ enum Beneath {
     Nothing,
     Surface(cupertino_ui_theme::Surface),
     Glass,
+    LargePanel,
 }
 
 /// A box that asks for a material or glass under itself, around one child.
@@ -1213,6 +1214,9 @@ impl Widget<M> for Asking {
             }
             Beneath::Glass => {
                 cx.glass(crate::Glass::regular());
+            }
+            Beneath::LargePanel => {
+                cx.glass(crate::Glass::large_panel());
             }
         }
     }
@@ -1320,6 +1324,10 @@ fn a_node_lies_on_a_material_under_glass_a_translucent_surface_or_such_a_window_
             WindowBackground::Theme
         ));
         assert!(on(Beneath::Glass, WindowBackground::Theme), "glass");
+        assert!(
+            on(Beneath::LargePanel, WindowBackground::Theme),
+            "large-panel glass"
+        );
         assert!(
             on(Beneath::Nothing, surface(Surface::Sidebar)),
             "a sidebar window"

@@ -70,7 +70,7 @@ display
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 844.0, height: 576.0 } }, radius: 24.0 }, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }) }
     PopLayer
     PopClip
-    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 844.0, height: 576.0 } }, radius: 24.0 }, paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 844.0, height: 576.0 } }, radius: 24.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -0.25, y: -0.25 }, size: Size { width: 844.5, height: 576.5 } }, radius: 24.25 }, width: 0.5, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.12 }) }
   paint 8589934595 parent=Some(8589934597) revision=28 bounds=[60,43 844x577] hit=[60,44 844x576] clip=None transform=[1.0, 0.0, 0.0, 1.0, 60.0, 44.0]
   paint 8589934594 parent=Some(8589934595) revision=4 bounds=[60,43 844x64.36] hit=[60,44 844x56] clip=None transform=[1.0, 0.0, 0.0, 1.0, 60.0, 44.0]

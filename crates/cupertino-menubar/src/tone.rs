@@ -77,6 +77,11 @@ pub const HALO_UNDER_LIGHT: f32 = 0.5625;
 pub const HALO_UNDER_DARK: f32 = 0.75;
 pub const HALO_BLUR_CALM: f64 = 0.5;
 pub const HALO_BLUR_BUSY: f64 = 3.0;
+/// The halo's dense core over measured wallpaper, hugging the strokes under the soft halo so a thin glyph keeps a
+/// solid edge over stripes: its opacity at full strength under light and under dark text, and its blur in points.
+pub const HALO_CORE_UNDER_LIGHT: f32 = 0.5;
+pub const HALO_CORE_UNDER_DARK: f32 = 0.6;
+pub const HALO_CORE_BLUR: f64 = 0.75;
 
 /// The soft halo of the opposite tone an item of the bar draws under its text and symbols, so they read over a busy
 /// wallpaper.
@@ -86,41 +91,63 @@ pub struct Halo {
     pub strength: f32,
     /// How far it spreads, in points.
     pub blur: f64,
+    /// From 0 (none) to 1 (full): the share of [`HALO_CORE_UNDER_LIGHT`] or [`HALO_CORE_UNDER_DARK`] its core is
+    /// drawn at; none while the spread is unknown, where the halo is the one the bar always drew.
+    pub core: f32,
 }
 
 impl Halo {
     /// The halo's colour under text of colour `text`: dark at its strength's share of [`HALO_UNDER_LIGHT`] under light
     /// text, light at its share of [`HALO_UNDER_DARK`] under dark text.
     pub fn color(self, text: Rgba) -> Rgba {
-        let light = 0.2126 * text[0] + 0.7152 * text[1] + 0.0722 * text[2] > 0.5;
-        if light {
+        if light(text) {
             [0.0, 0.0, 0.0, HALO_UNDER_LIGHT * self.strength]
         } else {
             [1.0, 1.0, 1.0, HALO_UNDER_DARK * self.strength]
         }
     }
+
+    /// The colour of the halo's core under text of colour `text`, in the same tone as [`Halo::color`]; `None` when it
+    /// has none.
+    pub fn core_color(self, text: Rgba) -> Option<Rgba> {
+        (self.core > 0.0).then(|| {
+            if light(text) {
+                [0.0, 0.0, 0.0, HALO_CORE_UNDER_LIGHT * self.core]
+            } else {
+                [1.0, 1.0, 1.0, HALO_CORE_UNDER_DARK * self.core]
+            }
+        })
+    }
+}
+
+/// Whether text of colour `text` is light (a dark halo goes under it).
+fn light(text: Rgba) -> bool {
+    0.2126 * text[0] + 0.7152 * text[1] + 0.0722 * text[2] > 0.5
 }
 
 /// The halo of an item over wallpaper whose spread under it is `spread` (the most of the bands it covers; `None`
 /// while unknown), on a bar that is `solid` or not ([`solid_bar`] of the session's display options). A solid bar
 /// draws none, and neither does an item over a calm part of the wallpaper (at most [`CALM_SPREAD`]): the halo is
-/// invisible there. Past that its strength and its blur grow smoothly with the spread, to full at [`BUSY_SPREAD`].
+/// invisible there. Past that its strength, its blur and its core grow smoothly with the spread, to full at
+/// [`BUSY_SPREAD`].
 pub fn halo(spread: Option<u16>, solid: bool) -> Option<Halo> {
     if solid {
         return None;
     }
-    let strength = match spread {
-        None => UNKNOWN_SPREAD_STRENGTH,
+    let (strength, core) = match spread {
+        None => (UNKNOWN_SPREAD_STRENGTH, 0.0),
         Some(spread) => {
             let t = (f32::from(spread.saturating_sub(CALM_SPREAD))
                 / f32::from(BUSY_SPREAD - CALM_SPREAD))
             .clamp(0.0, 1.0);
-            t * t * (3.0 - 2.0 * t)
+            let s = t * t * (3.0 - 2.0 * t);
+            (s, s)
         }
     };
     (strength > 0.0).then(|| Halo {
         strength,
         blur: HALO_BLUR_CALM + (HALO_BLUR_BUSY - HALO_BLUR_CALM) * f64::from(strength),
+        core,
     })
 }
 
@@ -128,7 +155,7 @@ pub fn halo(spread: Option<u16>, solid: bool) -> Option<Halo> {
 /// spreads by `bands` from its left edge to its right: the most of the bands the item covers, or `None` while
 /// nothing was measured.
 pub fn spread_under(bands: &[u16], width: f64, left: f64, right: f64) -> Option<u16> {
-    if bands.is_empty() || !(width > 0.0) {
+    if bands.is_empty() || width.is_nan() || width <= 0.0 {
         return None;
     }
     let n = bands.len();
@@ -296,6 +323,7 @@ mod tests {
         let mut last = Halo {
             strength: 0.0,
             blur: HALO_BLUR_CALM,
+            core: 0.0,
         };
         for spread in CALM_SPREAD + 1..=BUSY_SPREAD {
             let h = halo(Some(spread), false).unwrap();
@@ -314,6 +342,11 @@ mod tests {
         }
         let unknown = halo(None, false).unwrap();
         assert_eq!(unknown.strength, UNKNOWN_SPREAD_STRENGTH);
+        assert_eq!(
+            unknown.core_color([1.0; 4]),
+            None,
+            "no core without a measure"
+        );
         assert!((unknown.blur - 2.5).abs() < 1e-6);
         assert!((unknown.color([0.97, 0.97, 0.98, 0.95])[3] - 0.45).abs() < 1e-6);
         assert!((unknown.color([0.05, 0.05, 0.06, 0.92])[3] - 0.6).abs() < 1e-6);
@@ -326,6 +359,17 @@ mod tests {
             full.color([0.05, 0.05, 0.06, 0.92]),
             [1.0, 1.0, 1.0, HALO_UNDER_DARK]
         );
+        // the core follows the halo's strength in the same tone, from nothing just past calm to full over busy
+        assert_eq!(
+            full.core_color([0.97, 0.97, 0.98, 0.95]),
+            Some([0.0, 0.0, 0.0, HALO_CORE_UNDER_LIGHT])
+        );
+        assert_eq!(
+            full.core_color([0.05, 0.05, 0.06, 0.92]),
+            Some([1.0, 1.0, 1.0, HALO_CORE_UNDER_DARK])
+        );
+        assert!(faint.core_color([1.0; 4]).unwrap()[3] < 0.02 * HALO_CORE_UNDER_DARK);
+        const { assert!(HALO_CORE_BLUR < HALO_BLUR_BUSY) };
     }
 
     #[test]

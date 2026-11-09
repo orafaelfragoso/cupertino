@@ -811,14 +811,23 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
         }
         // over a busy wallpaper the text and symbols keep a soft halo of the opposite tone, so they read where the
         // picture under them is as light or as dark as they are; a calm wallpaper and a solid bar need none
+        // (over measured wallpaper a dense core hugs the strokes first, and the soft halo spreads from both)
         if let Some(halo) = self.halo {
+            let core = halo
+                .core_color(palette.text)
+                .map(|core| Effect::DropShadow {
+                    offset: Point::ZERO,
+                    blur: crate::tone::HALO_CORE_BLUR,
+                    color: color(core),
+                });
+            let soft = Effect::DropShadow {
+                offset: Point::ZERO,
+                blur: halo.blur,
+                color: color(halo.color(palette.text)),
+            };
             cx.push(PaintOp::PushLayer {
                 opacity: 1.0,
-                effects: vec![Effect::DropShadow {
-                    offset: Point::ZERO,
-                    blur: halo.blur,
-                    color: color(halo.color(palette.text)),
-                }],
+                effects: core.into_iter().chain([soft]).collect(),
             });
         }
         self.paint_look(cx, &palette);

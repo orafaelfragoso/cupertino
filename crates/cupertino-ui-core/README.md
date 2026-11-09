@@ -144,6 +144,5 @@ all on one thread.
 
 ## Not yet
 
-Popups (`create_popup`), clipboard reads, and image resources in `PaintResources` are not
-wired yet. Scrolling repaints everything the scroll view shows: the CPU renderer draws it again rather than moving
+An application cannot read the clipboard (a paste): the runtime reads offered data only for a drop. Scrolling repaints everything the scroll view shows: the CPU renderer draws it again rather than moving
 the pixels it has.

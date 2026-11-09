@@ -196,6 +196,7 @@ struct TestClient {
     stop: Arc<AtomicBool>,
     log: Arc<Mutex<Log>>,
     asks: Arc<Mutex<Vec<Ask>>>,
+    rounds: common::Rounds,
 }
 
 impl TestClient {
@@ -203,8 +204,11 @@ impl TestClient {
         let stop = Arc::new(AtomicBool::new(false));
         let log = Arc::new(Mutex::new(Log::default()));
         let asks: Arc<Mutex<Vec<Ask>>> = Arc::default();
-        let (stop2, log2, asks2) = (stop.clone(), log.clone(), asks.clone());
+        let rounds = common::Rounds::default();
+        let (stop2, log2, asks2, rounds2) =
+            (stop.clone(), log.clone(), asks.clone(), rounds.clone());
         std::thread::spawn(move || {
+            let _ended = rounds2.ended_on_drop();
             let conn = Connection::from_socket(UnixStream::connect(socket).unwrap()).unwrap();
             let (globals, mut queue) = registry_queue_init::<Client>(&conn).unwrap();
             let qh = queue.handle();
@@ -228,6 +232,7 @@ impl TestClient {
                 if queue.roundtrip(&mut client).is_err() {
                     break;
                 }
+                rounds2.tick();
                 for ask in asks2.lock().unwrap().drain(..) {
                     match ask {
                         Ask::Move(serial) => toplevel._move(&seat, serial),
@@ -239,7 +244,12 @@ impl TestClient {
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
-        TestClient { stop, log, asks }
+        TestClient {
+            stop,
+            log,
+            asks,
+            rounds,
+        }
     }
 
     fn ask(&self, ask: Ask) {
@@ -297,9 +307,11 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
-    fn run_for(&mut self, duration: Duration) {
-        let end = Instant::now() + duration;
-        self.wait_until("the time to pass", |_| Instant::now() >= end);
+    /// Wait for `client`'s [`common::Rounds::barrier`]: it has every event sent before, and the server handled its
+    /// answers and what it was asked to send.
+    fn sync(&mut self, client: &TestClient) {
+        let done = client.rounds.barrier();
+        self.wait_until("the client's roundtrips", move |_| done());
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -313,7 +325,7 @@ impl Harness {
         let frame = self.state.wm.window(window).unwrap().geometry();
         self.state
             .pointer_moved_to((frame.x + 120.0, frame.y + 150.0).into(), 0, None);
-        self.run_for(Duration::from_millis(60));
+        self.sync(client);
         self.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
         self.wait_until("the press to reach the client", |_| {
             client
@@ -326,10 +338,10 @@ impl Harness {
         client.log.lock().unwrap().press.unwrap().0
     }
 
-    fn release(&mut self) {
+    fn release(&mut self, client: &TestClient) {
         self.state
             .pointer_button(BTN_LEFT, ButtonState::Released, 0);
-        self.run_for(Duration::from_millis(60));
+        self.sync(client);
     }
 }
 
@@ -340,7 +352,7 @@ fn mapped_client(h: &mut Harness) -> TestClient {
     common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     h.wait_until("the window to draw", |_| client.log.lock().unwrap().drawn);
-    h.run_for(Duration::from_millis(100));
+    h.sync(&client);
     client
 }
 
@@ -351,13 +363,13 @@ fn a_move_and_a_resize_with_the_serial_of_a_held_press_start() {
     let serial = h.press(&client);
     client.ask(Ask::Move(serial));
     h.wait_until("the move to start", |s| s.wm.is_interacting());
-    h.release();
+    h.release(&client);
     assert!(!h.state.wm.is_interacting(), "the release ends it");
 
     let serial = h.press(&client);
     client.ask(Ask::Resize(serial));
     h.wait_until("the resize to start", |s| s.wm.is_interacting());
-    h.release();
+    h.release(&client);
     assert!(!h.state.wm.is_interacting());
 }
 
@@ -368,15 +380,15 @@ fn a_stale_released_or_made_up_serial_starts_nothing() {
     // a serial no press ever had
     client.ask(Ask::Move(1));
     client.ask(Ask::Resize(4242));
-    h.run_for(Duration::from_millis(300));
+    h.sync(&client);
     assert!(!h.state.wm.is_interacting(), "no press at all");
 
     // the serial of a press that has been released
     let serial = h.press(&client);
-    h.release();
+    h.release(&client);
     client.ask(Ask::Move(serial));
     client.ask(Ask::Resize(serial));
-    h.run_for(Duration::from_millis(300));
+    h.sync(&client);
     assert!(
         !h.state.wm.is_interacting(),
         "the button is up: nothing follows the pointer"
@@ -385,12 +397,12 @@ fn a_stale_released_or_made_up_serial_starts_nothing() {
     // a held press, but another serial
     let serial = h.press(&client);
     client.ask(Ask::Move(serial.wrapping_add(1000)));
-    h.run_for(Duration::from_millis(300));
+    h.sync(&client);
     assert!(
         !h.state.wm.is_interacting(),
         "not the serial of the held press"
     );
-    h.release();
+    h.release(&client);
 }
 
 #[test]
@@ -414,7 +426,7 @@ fn a_move_with_the_serial_of_a_key_after_the_held_press_starts_nothing_and_the_p
 
     client.ask(Ask::Move(later));
     client.ask(Ask::Resize(later));
-    h.run_for(Duration::from_millis(300));
+    h.sync(&client);
     assert!(
         !h.state.wm.is_interacting(),
         "the serial of a key after the press is stale"
@@ -422,6 +434,6 @@ fn a_move_with_the_serial_of_a_key_after_the_held_press_starts_nothing_and_the_p
 
     client.ask(Ask::Move(press));
     h.wait_until("the move to start", |s| s.wm.is_interacting());
-    h.release();
+    h.release(&client);
     assert!(!h.state.wm.is_interacting(), "the release ends it");
 }

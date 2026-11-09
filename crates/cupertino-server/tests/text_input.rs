@@ -88,12 +88,13 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
-    /// Steps for `ms` milliseconds, so what would arrive has arrived.
-    fn run_for(&mut self, ms: u64) {
-        let end = Instant::now() + Duration::from_millis(ms);
-        while Instant::now() < end {
-            self.step();
-        }
+    /// Wait for each of `clients`' [`common::Rounds::barrier`] together: they have every event sent before, and the
+    /// server handled their answers and what they were told to send.
+    fn sync(&mut self, clients: &[&common::Rounds]) {
+        let barriers: Vec<_> = clients.iter().map(|r| r.barrier()).collect();
+        self.wait_until("the clients' roundtrips", move |_| {
+            barriers.iter().all(|b| b())
+        });
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -217,6 +218,7 @@ struct InputMethod {
     tx: Sender<ImDo>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    rounds: common::Rounds,
 }
 
 impl InputMethod {
@@ -235,8 +237,10 @@ impl InputMethod {
         let shared = Arc::new(Mutex::new(ImShared::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx): (Sender<ImDo>, Receiver<ImDo>) = channel();
-        let (sh, st) = (shared.clone(), stop.clone());
+        let rounds = common::Rounds::default();
+        let (sh, st, rt) = (shared.clone(), stop.clone(), rounds.clone());
         let thread = std::thread::spawn(move || {
+            let _ended = rt.ended_on_drop();
             let conn = Connection::from_socket(client_end).unwrap();
             let (globals, mut queue) = registry_queue_init::<ImState>(&conn).unwrap();
             let qh = queue.handle();
@@ -269,6 +273,7 @@ impl InputMethod {
                 if queue.roundtrip(&mut state).is_err() {
                     break;
                 }
+                rt.tick();
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
@@ -277,12 +282,13 @@ impl InputMethod {
             tx,
             stop,
             thread: Some(thread),
+            rounds,
         };
         let shared = im.shared.clone();
         h.wait_until("the input method to bind", move |_| {
             shared.lock().unwrap().bound
         });
-        h.run_for(50);
+        h.sync(&[&im.rounds]);
         im
     }
 
@@ -456,6 +462,7 @@ struct Field {
     tx: Sender<TiDo>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    rounds: common::Rounds,
 }
 
 impl Field {
@@ -465,8 +472,10 @@ impl Field {
         let shared = Arc::new(Mutex::new(TiShared::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx): (Sender<TiDo>, Receiver<TiDo>) = channel();
-        let (sh, st) = (shared.clone(), stop.clone());
+        let rounds = common::Rounds::default();
+        let (sh, st, rt) = (shared.clone(), stop.clone(), rounds.clone());
         let thread = std::thread::spawn(move || {
+            let _ended = rt.ended_on_drop();
             let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
             let conn = Connection::from_socket(stream).unwrap();
             let (globals, mut queue) = registry_queue_init::<TiState>(&conn).unwrap();
@@ -515,6 +524,7 @@ impl Field {
                 if queue.roundtrip(&mut state).is_err() {
                     break;
                 }
+                rt.tick();
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
@@ -523,6 +533,7 @@ impl Field {
             tx,
             stop,
             thread: Some(thread),
+            rounds,
         };
         let shared = field.shared.clone();
         let window_of = |s: &Cupertino| {
@@ -535,7 +546,7 @@ impl Field {
         });
         // only a process's first window takes the keyboard by itself, and the test clients share one process
         let window = window_of(&h.state).unwrap();
-        h.run_for(50);
+        h.sync(&[&field.rounds]);
         if h.state.wm.key_window() != Some(window) {
             h.state.focus_window_by_input(window);
         }
@@ -544,7 +555,7 @@ impl Field {
             st.wm.key_window() == Some(window)
                 && shared.lock().unwrap().seen.contains(&TiSeen::Enter)
         });
-        h.run_for(50);
+        h.sync(&[&field.rounds]);
         field
     }
 
@@ -682,7 +693,9 @@ fn a_preedit_commit_and_delete_reach_the_field_as_one_done_with_its_serial() {
     // the field sends its new state; an input method that commits for an older one gets its batch through as stale
     field.clear();
     field.send(TiDo::Surrounding("a日".into(), 4));
-    h.run_for(50);
+    // the server has the field's new state, then the input method has heard of it
+    h.sync(&[&field.rounds]);
+    h.sync(&[&im.rounds]);
     im.send(ImDo::Commit("本".into()));
     im.send(ImDo::Apply { stale: true });
     wait_field(&mut h, &field, "the stale batch", |s| {
@@ -727,7 +740,9 @@ fn a_focus_change_deactivates_the_input_method_and_its_edits_never_reach_the_old
     first.clear();
     im.send(ImDo::Commit("x".into()));
     im.send(ImDo::Apply { stale: false });
-    h.run_for(100);
+    // the server handled the late edit, then the fields heard all it sent them
+    h.sync(&[&im.rounds]);
+    h.sync(&[&first.rounds, &second.rounds]);
     assert!(
         !first
             .seen()
@@ -765,7 +780,9 @@ fn edits_after_the_field_disables_never_reach_it() {
     im.send(ImDo::Preedit("late".into(), 4, 4));
     im.send(ImDo::Commit("late".into()));
     im.send(ImDo::Apply { stale: false });
-    h.run_for(100);
+    // the server handled the late edits, then the field heard all it sent it
+    h.sync(&[&im.rounds]);
+    h.sync(&[&field.rounds]);
     assert!(
         !field.seen().iter().any(|e| matches!(
             e,

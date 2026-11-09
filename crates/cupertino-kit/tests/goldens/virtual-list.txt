@@ -254,7 +254,7 @@ semantics
   NodeId(104v2) role=ListItem name=None description=None value=none index=49973 states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,-296 480x36] actions=[Click] relations=[] children=[NodeId(103v2), NodeId(102v2)]
 display
   paint 4294967296 parent=None revision=1 bounds=[-1,-1 481x601] hit=[0,0 480x600] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 600.0 } }), paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 600.0 } }), paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
   paint 4294967297 parent=Some(4294967296) revision=2 bounds=[-1,-1 481x565] hit=[0,0 480x563] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
   paint 4294967298 parent=Some(4294967297) revision=240 bounds=[-1,-1 481x565] hit=[0,0 480x563] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 563.0 } })) transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
   paint 4294967299 parent=Some(4294967298) revision=263 bounds=[-1,-1 481x565] hit=[0,0 480x563] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, -1799324.0]

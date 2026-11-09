@@ -26,7 +26,7 @@ semantics
 display
   paint 4294967296 parent=None revision=14 bounds=[0,-20.25 456.25x115.5] hit=[0,0 388x82] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
   paint 4294967297 parent=Some(4294967296) revision=15 bounds=[54.75,-20.25 401.5x115.5] hit=[88,12 344x58] clip=None transform=[1.0, 0.0, 0.0, 1.0, 88.0, 12.0]
-    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 58.0 } }, radius: 18.0 }, paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 58.0 } }, radius: 18.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 58.0 } }, radius: 18.0 }, width: 0.5, paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
   paint 4294967298 parent=Some(4294967297) revision=3 bounds=[88,12 344x58] hit=[88,12 344x58] clip=None transform=[1.0, 0.0, 0.0, 1.0, 88.0, 12.0]
   paint 4294967299 parent=Some(4294967298) revision=4 bounds=[101,24 32x32] hit=[101,24 32x32] clip=None transform=[1.0, 0.0, 0.0, 1.0, 101.0, 24.0]
@@ -69,7 +69,7 @@ semantics
 display
   paint 4294967296 parent=None revision=17 bounds=[0,-11.25 464.7094605444208x106.5] hit=[0,0 388x82] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
   paint 4294967297 parent=Some(4294967296) revision=18 bounds=[72.20946054442079,-11.25 392.5x106.5] hit=[96.45946054442079,12 344x58] clip=None transform=[1.0, 0.0, 0.0, 1.0, 96.45946054442079, 12.0]
-    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 58.0 } }, radius: 18.0 }, paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 58.0 } }, radius: 18.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 58.0 } }, radius: 18.0 }, width: 0.5, paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
   paint 4294967298 parent=Some(4294967297) revision=3 bounds=[96.45946054442079,12 344x58] hit=[96.45946054442079,12 344x58] clip=None transform=[1.0, 0.0, 0.0, 1.0, 96.45946054442079, 12.0]
   paint 4294967299 parent=Some(4294967298) revision=4 bounds=[109.45946054442079,24 31.999999999999986x32] hit=[109.45946054442079,24 32x32] clip=None transform=[1.0, 0.0, 0.0, 1.0, 109.45946054442079, 24.0]

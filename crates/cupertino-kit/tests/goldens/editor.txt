@@ -75,7 +75,7 @@ semantics
   NodeId(2v1) role=MultilineTextInput name=Some("Document") description=None value=Text { value: "Hello\nworld", editing: Some(TextSemantics { caret: 6, selection: 6..11 }) } states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 480x320] actions=[Focus, SetValue, SetSelection] relations=[] children=[]
 display
   paint 4294967296 parent=None revision=1 bounds=[-1,-0.90625 481x320.90625] hit=[0,0 480x320] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 320.0 } }), paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 320.0 } }), paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
   paint 4294967297 parent=Some(4294967296) revision=2 bounds=[-1,-0.90625 481x320.90625] hit=[0,0 480x320] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 320.0 } })) transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
   paint 4294967298 parent=Some(4294967297) revision=50 bounds=[-1,-0.90625 481x320.90625] hit=[0,0 480x320] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
     Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 320.0 } }), paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }

@@ -61,6 +61,7 @@ pub enum ControlId {
     MouseAcceleration,
     MouseNatural,
     TrackpadSpeed,
+    TrackpadAcceleration,
     TrackpadNatural,
     ModifierProfile,
     CapsLockDelay,
@@ -1048,6 +1049,12 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                         "Tracking speed",
                         tracking(settings.trackpad_speed()),
                         key("trackpad_speed"),
+                    ),
+                    row(
+                        ControlId::TrackpadAcceleration,
+                        "Pointer acceleration",
+                        switch(settings.trackpad_acceleration()),
+                        key("trackpad_acceleration"),
                     ),
                     row(
                         ControlId::TrackpadNatural,
@@ -2262,6 +2269,10 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             settings.compositor.trackpad_speed = Some(mapping::TRACKING_STOPS[index_of(value)]);
             store(File::Compositor)
         }
+        ControlId::TrackpadAcceleration => {
+            settings.compositor.trackpad_acceleration = Some(bool_of(value));
+            store(File::Compositor)
+        }
         ControlId::MouseAcceleration => {
             settings.compositor.mouse_acceleration = Some(bool_of(value));
             store(File::Compositor)
@@ -2820,6 +2831,10 @@ mod tests {
             Control::Switch { on: true }
         );
         assert_eq!(
+            control(PaneId::Trackpad, ControlId::TrackpadAcceleration, &s),
+            Control::Switch { on: true }
+        );
+        assert_eq!(
             control(PaneId::DesktopDock, ControlId::AutoHide, &s),
             Control::Switch { on: false }
         );
@@ -2863,6 +2878,16 @@ mod tests {
             [Effect::Store(File::Compositor)]
         );
         assert_eq!(s.compositor.mouse_speed, Some(3.0));
+        assert_eq!(
+            change(
+                ControlId::TrackpadAcceleration,
+                Value::Bool(false),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::Store(File::Compositor)]
+        );
+        assert_eq!(s.compositor.trackpad_acceleration, Some(false));
         change(
             ControlId::DockSize,
             Value::Fraction(0.5),

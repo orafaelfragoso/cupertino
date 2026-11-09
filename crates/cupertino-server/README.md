@@ -435,7 +435,8 @@ Shortcuts are the `cupertino-input` `ShortcutMap` (defaults approximate, `Super`
 | `hot_corner_size` | number | `2` | hot corner size |
 | `mouse_speed`, `trackpad_speed` | number | `0.6875` | tracking speed |
 | `mouse_dpi` | object | `{}` | resolution per mouse in dpi (50…32000), key `vendor:product:name` in hex ids; applies live |
-| `mouse_acceleration` | bool | `true` | pointer acceleration |
+| `mouse_acceleration` | bool | `true` | pointer acceleration of mice; off gives a constant gain by `mouse_speed` |
+| `trackpad_acceleration` | bool | `true` | pointer acceleration of touchpads; off gives a constant gain by `trackpad_speed` |
 | `natural_scrolling` | bool | `true` | natural scrolling of touchpads; applies live, to the next event of every touchpad. It no longer covers wheels: a file that sets it to `true` and has no `mouse_natural_scrolling` now scrolls wheels the traditional way |
 | `mouse_natural_scrolling` | bool | `false` | natural scrolling of wheels; applies live, to the next event of every mouse |
 | `wallpaper`, `wallpaper_dark` | absolute path | none | the wallpaper image (PNG or JPEG) and the one of the dark appearance (`wallpaper` serves both when only it is set); applies live |

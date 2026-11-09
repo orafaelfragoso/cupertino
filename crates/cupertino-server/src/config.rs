@@ -420,6 +420,8 @@ pub struct PointerSettings {
     /// Speed-dependent mouse acceleration (default on); off gives a constant gain by `mouse_speed`, per
     /// count of a 1000 dpi mouse and scaled by the real resolution (a negative speed passes counts through).
     pub mouse_acceleration: bool,
+    /// Speed-dependent touchpad acceleration (default on); off gives a constant gain by `trackpad_speed`.
+    pub trackpad_acceleration: bool,
     /// On touchpads, content follows the fingers (default on).
     pub natural_scrolling: bool,
     /// On mouse wheels, content follows the wheel (default off: a wheel scrolls the view, as it does on every other
@@ -460,6 +462,9 @@ impl PointerSettings {
         if let Some(b) = f.mouse_acceleration {
             self.mouse_acceleration = b;
         }
+        if let Some(b) = f.trackpad_acceleration {
+            self.trackpad_acceleration = b;
+        }
         if let Some(b) = f.natural_scrolling {
             self.natural_scrolling = b;
         }
@@ -490,6 +495,7 @@ impl Default for PointerSettings {
             trackpad_speed: speed,
             mouse_dpi: std::collections::BTreeMap::new(),
             mouse_acceleration: cupertino_input::DEFAULT_ACCELERATION,
+            trackpad_acceleration: cupertino_input::DEFAULT_ACCELERATION,
             natural_scrolling: true,
             mouse_natural_scrolling: false,
             cursor_scale: cupertino_input::CURSOR_SCALE_MIN,
@@ -1043,7 +1049,7 @@ mod tests {
         assert_eq!(
             apply(
                 &mut c,
-                r#"{"mouse_speed":0.6875,"trackpad_speed":3,"mouse_acceleration":false,"natural_scrolling":false,"mouse_natural_scrolling":true}"#
+                r#"{"mouse_speed":0.6875,"trackpad_speed":3,"mouse_acceleration":false,"trackpad_acceleration":false,"natural_scrolling":false,"mouse_natural_scrolling":true}"#
             ),
             Vec::<String>::new()
         );
@@ -1053,6 +1059,7 @@ mod tests {
                 mouse_speed: 0.6875,
                 trackpad_speed: 3.0,
                 mouse_acceleration: false,
+                trackpad_acceleration: false,
                 natural_scrolling: false,
                 mouse_natural_scrolling: true,
                 ..PointerSettings::default()

@@ -248,6 +248,7 @@ impl Cupertino {
             mouse_speed,
             trackpad_speed,
             mouse_acceleration,
+            trackpad_acceleration,
             mouse_dpi,
             natural_scrolling,
             mouse_natural_scrolling,
@@ -256,7 +257,13 @@ impl Cupertino {
             cursor_outline,
             shake_to_locate
         ) {
-            let tracking = changed!(mouse_speed, trackpad_speed, mouse_acceleration, mouse_dpi);
+            let tracking = changed!(
+                mouse_speed,
+                trackpad_speed,
+                mouse_acceleration,
+                trackpad_acceleration,
+                mouse_dpi
+            );
             self.config.pointer = target.pointer.clone();
             if tracking {
                 for device in self.pointer_devices.values_mut() {

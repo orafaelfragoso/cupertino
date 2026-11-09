@@ -522,6 +522,10 @@ impl Settings {
         self.compositor.mouse_acceleration.unwrap_or(true)
     }
 
+    pub fn trackpad_acceleration(&self) -> bool {
+        self.compositor.trackpad_acceleration.unwrap_or(true)
+    }
+
     pub fn natural_scrolling(&self) -> bool {
         self.compositor.natural_scrolling.unwrap_or(true)
     }

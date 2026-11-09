@@ -112,6 +112,7 @@ impl PointerDevice {
         let (accel, scroll) = if touchpad {
             let pad = cupertino_input::TouchpadSettings {
                 tracking_speed: cfg.trackpad_speed,
+                acceleration: cfg.trackpad_acceleration,
                 ..cupertino_input::TouchpadSettings::default()
             };
             (
@@ -1710,6 +1711,47 @@ mod tests {
         let first = pad.accelerate((40.0, 0.0).into(), 0).x;
         let late = pad.accelerate((40.0, 0.0).into(), 33_333).x;
         assert!(late < first, "{late} < {first}");
+    }
+
+    /// Each profile is applied once, on device counts: the adaptive one grows with speed, the flat one is one gain at
+    /// every speed, and neither depends on the cursor's size, colours or shake.
+    #[test]
+    fn a_touchpad_has_an_adaptive_and_a_flat_profile_independent_of_the_cursor() {
+        let ratio = |cfg: &PointerSettings, counts: f64| {
+            let mut pad = PointerDevice::new(true, cfg);
+            pad.accelerate((counts, 0.0).into(), 0).x / counts
+        };
+        let adaptive = PointerSettings::default();
+        assert!(ratio(&adaptive, 4.0) < ratio(&adaptive, 80.0));
+        let flat = PointerSettings {
+            trackpad_acceleration: false,
+            trackpad_speed: 1.5,
+            ..adaptive.clone()
+        };
+        let (slow, fast) = (ratio(&flat, 4.0), ratio(&flat, 80.0));
+        assert!((slow - fast).abs() < 1e-12, "{slow} {fast}");
+        assert!(
+            (slow - 1.5).abs() < 1e-12,
+            "the tracking speed is the gain: {slow}"
+        );
+        let big_cursor = PointerSettings {
+            cursor_scale: 4.0,
+            cursor_colors: crate::cursor::CursorColors {
+                fill: [255, 0, 0, 255],
+                outline: [0, 0, 255, 255],
+            },
+            shake_to_locate: false,
+            ..adaptive.clone()
+        };
+        for counts in [4.0, 80.0] {
+            assert_eq!(ratio(&big_cursor, counts), ratio(&adaptive, counts));
+        }
+        let mut mouse = |cfg: &PointerSettings| {
+            PointerDevice::new(false, cfg)
+                .accelerate((60.0, 0.0).into(), 1_000)
+                .x
+        };
+        assert_eq!(mouse(&big_cursor), mouse(&adaptive));
     }
 
     #[test]

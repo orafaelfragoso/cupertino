@@ -588,9 +588,7 @@ impl<M: 'static> Widget<M> for Row<M> {
             let secondary = theme
                 .colors
                 .get(ColorRole::SecondaryText, StateVariant::NORMAL);
-            let tint = if accented {
-                text
-            } else if !active {
+            let tint = if accented || !active {
                 text
             } else if self.selected || self.style.accent {
                 accent

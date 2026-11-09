@@ -1413,6 +1413,21 @@ impl Run {
             .collect()
     }
 
+    /// The query has stood for its settling time: the timer the host would have fired.
+    fn settle_query(&mut self) {
+        let change = self.model().query_change();
+        self.deliver(Message::Settled(change));
+    }
+
+    /// What a screen reader said since the last call, oldest first.
+    fn said(&self) -> Vec<String> {
+        self.reader
+            .take_announcements()
+            .into_iter()
+            .map(|a| a.text)
+            .collect()
+    }
+
     /// Hides the panel, then asks for the applications as the Dock's hot corner does (through the server).
     fn browse_from_hidden(&mut self) {
         self.key("Escape", ESCAPE_CODE, ESCAPE);
@@ -1899,7 +1914,16 @@ fn a_late_file_search_is_dropped_and_one_past_its_deadline_says_the_results_may_
         "a newer query cancels the older searches"
     );
     assert!(!newer.cancel.is_cancelled());
-    assert_eq!(run.announced(), ["Searching"]);
+    assert_eq!(
+        run.announced(),
+        Vec::<String>::new(),
+        "nothing said while typing"
+    );
+    // the query stood past the deadline with no result yet: said once
+    run.settle_query();
+    assert_eq!(run.announced(), [SEARCHING]);
+    run.settle_query();
+    assert_eq!(run.announced(), [SEARCHING]);
     // the older answer comes last: it is dropped, the newer one shows
     run.deliver(Message::Provided(newer.run()));
     run.deliver(Message::Provided(Update {
@@ -1920,6 +1944,8 @@ fn a_late_file_search_is_dropped_and_one_past_its_deadline_says_the_results_may_
         late.cancel.is_cancelled(),
         "the overdue search is told to stop"
     );
+    assert_eq!(run.announced(), Vec::<String>::new(), "not settled yet");
+    run.settle_query();
     assert_eq!(run.announced(), [INCOMPLETE]);
     run.deliver(Message::Provided(late.run()));
     assert_eq!(run.announced(), [INCOMPLETE], "its late answer is dropped");
@@ -1931,6 +1957,7 @@ fn a_late_file_search_is_dropped_and_one_past_its_deadline_says_the_results_may_
         provider: Provider::Files,
         reply: Reply::Failed("unreadable".into()),
     }));
+    run.settle_query();
     assert_eq!(run.announced(), [INCOMPLETE]);
     // and one that answered with nothing is
     run.type_text("x");
@@ -1940,6 +1967,7 @@ fn a_late_file_search_is_dropped_and_one_past_its_deadline_says_the_results_may_
         provider: Provider::Files,
         reply: Reply::Sections(Vec::new()),
     }));
+    run.settle_query();
     assert_eq!(run.announced(), [NO_RESULTS]);
     assert_eq!(
         run.model().extent(),
@@ -1949,6 +1977,72 @@ fn a_late_file_search_is_dropped_and_one_past_its_deadline_says_the_results_may_
             CORNER_RADIUS
         ))
     );
+}
+
+/// Typing says nothing between keys: a status is said once the query stood for its settling time, at most one per
+/// settled query, never again for the same query, and a timer of an earlier query says nothing.
+#[test]
+fn a_typing_trace_says_at_most_one_status_per_settled_query() {
+    let (_dir, index) = notes_index();
+    let mut run = Run::new();
+    run.deliver(Message::Indexed(index));
+    run.said();
+    hold_searches();
+    let answer = |run: &mut Run, sections: bool| {
+        let search = held_searches().pop().expect("a search");
+        let update = if sections {
+            search.run()
+        } else {
+            Update {
+                generation: search.generation,
+                provider: Provider::Files,
+                reply: Reply::Sections(Vec::new()),
+            }
+        };
+        run.deliver(Message::Provided(update));
+    };
+    // each key a new query that is still searching, then found nothing: nothing said while the keys come
+    for c in ["z", "q", "x"] {
+        let before = run.model().query_change();
+        run.type_text(c);
+        answer(&mut run, false);
+        // the timer of the previous query fires late: it is not this query's
+        run.deliver(Message::Settled(before));
+    }
+    assert_eq!(run.said(), Vec::<String>::new(), "nothing between keys");
+    run.settle_query();
+    run.settle_query();
+    assert_eq!(run.said(), [NO_RESULTS], "once, for the settled query");
+    // a key that leaves nothing found again is a new query: said again once it settles
+    run.type_text("y");
+    answer(&mut run, false);
+    assert_eq!(run.said(), Vec::<String>::new());
+    run.settle_query();
+    assert_eq!(run.said(), [NO_RESULTS]);
+    // the same query typed again says nothing new
+    run.key("Backspace", BACKSPACE_CODE, BACKSPACE);
+    answer(&mut run, false);
+    run.settle_query();
+    run.said();
+    run.type_text("y");
+    answer(&mut run, false);
+    run.settle_query();
+    assert_eq!(run.said(), Vec::<String>::new(), "\"zqxy\" said it already");
+    // a search still running when the query settles says so, and nothing more once it answers
+    run.type_text("w");
+    run.settle_query();
+    answer(&mut run, false);
+    run.settle_query();
+    assert_eq!(run.said(), [SEARCHING]);
+    // results say no status
+    for _ in 0..5 {
+        run.key("Backspace", BACKSPACE_CODE, BACKSPACE);
+    }
+    run.type_text("notes");
+    answer(&mut run, true);
+    run.settle_query();
+    assert!(!run.names(Role::ListItem).is_empty(), "results show");
+    assert_eq!(run.said(), Vec::<String>::new());
 }
 
 #[test]

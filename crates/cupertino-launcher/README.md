@@ -96,7 +96,12 @@ glass. Reduce Motion puts every shape where it heads at once and keeps only the 
 **Slow results.** The file search runs off the loop (`Host::search`). Each query starts a new generation (`providers::Tracker`)
 whose cancel token the worker checks; a reply for an older generation is dropped, and a provider that has not answered within
 0.5 s times out. With no result to show the panel says why in a status row: still searching, no results, or that some results
-could not be searched (a failure or a timeout, announced assertively), never an empty answer for a failure. Space on a file
+could not be searched (a failure or a timeout), never an empty answer for a failure. The row shows at once but is said aloud
+only once the query has stood 0.5 s (`kit::STATUS_SETTLE`, the providers' deadline; `Message::Settled`): providers still
+pending then time out first, so a search that answers in time says nothing before its results, typing says nothing between
+keys, and one status is said per settled query at most, by a live region of its own (`StatusAnnouncer`; a failure
+assertively, the rest politely). The same status is never said twice for the same query while the panel is open, even when
+the query is edited away and typed again (the last 32 are remembered). Space on a file
 result enlarges its preview (Escape returns to the list); a preview that has not arrived 1.5 s later (`kit::PREVIEW_TIMEOUT`)
 says there is none, and one that arrives late still shows.
 

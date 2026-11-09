@@ -44,6 +44,12 @@ const MAX_ICONS: usize = 512;
 pub const PREVIEW_TIMEOUT: f64 = 1.5;
 /// Room kept free below the browser on a short output (the dock's), in points.
 pub const BROWSE_BOTTOM_ROOM: f64 = 96.0;
+/// How long the query must stand before what the panel says of it ("Searching", "No Results", that results may be
+/// incomplete) is said aloud, in seconds: the providers' deadline, so a search that answers in time says nothing
+/// before its results, and typing says nothing between keys.
+pub const STATUS_SETTLE: f64 = crate::providers::DEADLINE;
+/// How many queries the panel remembers having said a status of.
+const MAX_SAID: usize = 32;
 /// Application icons the browser loads in one pass; the rest come on the next passes.
 pub const BROWSE_ICONS_PER_PASS: usize = 14;
 
@@ -179,6 +185,9 @@ pub enum Message {
     Provided(Update),
     /// The slow providers of this generation are overdue.
     Overdue(Generation),
+    /// The query of this change ([`Model::query_change`]) has stood for [`STATUS_SETTLE`]: what the panel says of it
+    /// may be said aloud.
+    Settled(u64),
     /// The output the panel is on is this large, in points.
     Output(Size),
     /// The session's Reduce Motion option.
@@ -228,6 +237,14 @@ pub struct Model {
     tracker: Tracker,
     /// The query the providers were last asked about.
     searched: Option<String>,
+    /// How many times the query changed: what is said aloud belongs to one change.
+    query_change: u64,
+    /// The status said aloud and the query change it was said for. Said once per change at most, after the query
+    /// stood for [`STATUS_SETTLE`].
+    said: Option<(u64, Status)>,
+    /// The queries and statuses said aloud since the panel opened, the latest [`MAX_SAID`]: the same status is not said
+    /// again for the same query, even after it was edited away and typed again.
+    said_before: Vec<(String, Status)>,
     /// The panel window's size as last given.
     extent: Size,
     /// Launches waiting for their activation token.
@@ -268,6 +285,9 @@ impl Model {
             file_index: None,
             tracker: Tracker::new(),
             searched: None,
+            query_change: 0,
+            said: None,
+            said_before: Vec::new(),
             extent: view::window_extent(view::compact_shape()),
             pending: HashMap::new(),
             opening: HashMap::new(),
@@ -428,6 +448,8 @@ impl Model {
         self.panel.hide(now.mono);
         self.tracker.cancel();
         self.searched = None;
+        self.said = None;
+        self.said_before.clear();
         self.preview = PreviewState::None;
         self.previewed = None;
         self.motion.hide(browse, now.mono);
@@ -469,11 +491,16 @@ impl Model {
             return Vec::new();
         }
         self.searched = Some(text.clone());
+        // nothing is said of the new query until it has stood a while
+        self.query_change += 1;
+        let mut commands = self
+            .host
+            .after(STATUS_SETTLE, Message::Settled(self.query_change));
         let now = self.now();
         let index = self.file_index.clone().filter(|_| !text.trim().is_empty());
         let Some(index) = index else {
             self.tracker.begin(&[], now.mono);
-            return Vec::new();
+            return commands;
         };
         let generation = self.tracker.begin(&[Provider::Files], now.mono);
         let request = SearchRequest {
@@ -484,12 +511,43 @@ impl Model {
             cancel: self.tracker.token(),
             unix: now.unix,
         };
-        let mut commands = self.host.search(request);
+        commands.extend(self.host.search(request));
         commands.extend(
             self.host
                 .after(crate::providers::DEADLINE, Message::Overdue(generation)),
         );
         commands
+    }
+
+    /// The query of change `change` has stood for [`STATUS_SETTLE`]: say what the panel says of it, once. Providers past
+    /// their deadline give up first, so what is said is final.
+    fn settle(&mut self, change: u64) {
+        if change != self.query_change || self.said.as_ref().is_some_and(|(c, _)| *c == change) {
+            return;
+        }
+        self.tracker.expire(self.now().mono);
+        let status = self.status();
+        let said = (self.panel.query().to_owned(), status.clone());
+        if view::status_text(&status).is_some() && !self.said_before.contains(&said) {
+            self.said = Some((change, status));
+            if self.said_before.len() == MAX_SAID {
+                self.said_before.remove(0);
+            }
+            self.said_before.push(said);
+        }
+    }
+
+    /// The status said aloud for the query now, while the panel still says it: `None` before the query settled, once
+    /// results show, and after the query changed.
+    pub fn said(&self) -> Option<Status> {
+        let (change, said) = self.said.as_ref()?;
+        let now = self.status();
+        (*change == self.query_change && view::status_text(&now).is_some()).then(|| said.clone())
+    }
+
+    /// How many times the query changed ([`Message::Settled`]).
+    pub fn query_change(&self) -> u64 {
+        self.query_change
     }
 
     /// After every change: the providers, the shown icons, the selected result's preview, the window's size and the
@@ -1099,6 +1157,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             }
             Vec::new()
         }
+        Message::Settled(change) => {
+            model.settle(change);
+            Vec::new()
+        }
         Message::Output(size) => {
             model.output = Some(size);
             let height = model.browse_height();
@@ -1147,6 +1209,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         keys: model.key_mode(),
         nested: model.nav.nested,
         status: model.status(),
+        said: model.said(),
         icons: &model.icons,
         actions: &actions,
         preview: model.preview(),

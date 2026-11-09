@@ -458,6 +458,8 @@ pub struct PanelView<'a> {
     pub nested: Option<Nested>,
     /// Why nothing shows, when nothing does.
     pub status: Status,
+    /// The status said aloud for the query, once it settled ([`crate::kit::Model::said`]).
+    pub said: Option<Status>,
     /// Images of the results' icons by [`ResultItem::id`]; a result without one shows its kind's symbol.
     pub icons: &'a HashMap<String, Vec<ImageSource>>,
     /// The selected result's actions, its own activation first.
@@ -677,20 +679,27 @@ where
         return vec![separator(), enlarged_preview(view).key("enlarged-preview")];
     }
     if rows.is_empty() {
-        let said = match &view.status {
-            Status::Searching => SEARCHING,
-            Status::NoResults => NO_RESULTS,
-            Status::Failed(_) => INCOMPLETE,
-            Status::Idle | Status::Results => return Vec::new(),
+        let Some(text) = status_text(&view.status) else {
+            return Vec::new();
         };
-        return vec![
+        // the row says it at once; aloud it is said once the query settled, by a node of its own
+        let said = view.said.as_ref().and_then(|s| {
+            Some(StatusAnnouncer {
+                text: status_text(s)?,
+                failed: matches!(s, Status::Failed(_)),
+            })
+        });
+        let mut body = vec![
             separator(),
             Element::new(StatusRow {
-                text: said,
+                text,
                 failed: matches!(view.status, Status::Failed(_)),
+                live: false,
             })
             .key("status"),
         ];
+        body.extend(said.map(|s| Element::new(s).key("status-said")));
+        return body;
     }
     let body = vec![
         results(view, &rows).key("results"),
@@ -719,6 +728,7 @@ where
             Element::new(StatusRow {
                 text: PREVIEW_UNAVAILABLE,
                 failed: false,
+                live: true,
             })
             .key("unavailable"),
         );
@@ -1259,11 +1269,23 @@ impl<M: 'static> Widget<M> for Hairline {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-/// Why nothing shows, centred in its row and read out as it changes: still searching, nothing found, or that a source
-/// failed (so what shows may be incomplete).
+/// What the row saying why nothing shows says of `status`; `None` when it does not show.
+pub fn status_text(status: &Status) -> Option<&'static str> {
+    match status {
+        Status::Searching => Some(SEARCHING),
+        Status::NoResults => Some(NO_RESULTS),
+        Status::Failed(_) => Some(INCOMPLETE),
+        Status::Idle | Status::Results => None,
+    }
+}
+
+/// Why nothing shows, centred in its row: still searching, nothing found, or that a source failed (so what shows may be
+/// incomplete); or that the preview did not come in time. A search's status is read where it is, and
+/// [`StatusAnnouncer`] says it aloud once the query settled; the preview's is said as it shows (`live`).
 struct StatusRow {
     text: &'static str,
     failed: bool,
+    live: bool,
 }
 
 impl<M: 'static> Widget<M> for StatusRow {
@@ -1280,7 +1302,7 @@ impl<M: 'static> Widget<M> for StatusRow {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (self.text, self.failed) != (old.text, old.failed) {
+        if (self.text, self.failed, self.live) != (old.text, old.failed, old.live) {
             Change::Paint
         } else {
             Change::None
@@ -1332,6 +1354,60 @@ impl<M: 'static> Widget<M> for StatusRow {
             color,
         );
     }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::StaticText);
+        cx.name(self.text.to_owned());
+        if self.live {
+            cx.live(Live::Polite);
+        }
+    }
+}
+
+/// The status said aloud for a settled query: a live region of no size that draws nothing, added once per query with
+/// what it says, so a screen reader says it once. A failure is said at once, anything else politely.
+struct StatusAnnouncer {
+    text: &'static str,
+    failed: bool,
+}
+
+impl<M: 'static> Widget<M> for StatusAnnouncer {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(0.0),
+            height: SizeSpec::Fixed(0.0),
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if (self.text, self.failed) != (old.text, old.failed) {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::StaticText);

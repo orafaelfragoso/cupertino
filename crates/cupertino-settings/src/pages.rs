@@ -133,7 +133,7 @@ pub fn description(pane: PaneId, has_battery: Option<bool>) -> &'static str {
         PaneId::DesktopDock => {
             "Set the Dock's size, position and behaviour, and what the screen corners do."
         }
-        PaneId::Displays => "Set the brightness and see the resolution of each display.",
+        PaneId::Displays => "Set the size and brightness of each display.",
         PaneId::Wallpaper => "Pick the picture behind your desktop, from ours or your own.",
         PaneId::Sound => "Choose where sound plays and how loud it is.",
         PaneId::Notifications => {

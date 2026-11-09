@@ -5,6 +5,7 @@ use std::fmt;
 use std::io::{ErrorKind, Read, Write};
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1292,8 +1293,22 @@ impl Connection {
 
     /// Send the queued requests and dispatch every event the compositor sent in answer, keeping the events for the
     /// next [`Connection::wait`]; for extensions that read state at setup.
+    ///
+    /// Each read is prepared before the sync goes out: `EventQueue::roundtrip` sends first, so another thread reading
+    /// the connection for a queue of its own could take the answer in between and leave this one waiting on a socket
+    /// that stays quiet.
     pub fn roundtrip(&mut self) -> Result<(), Error> {
-        self.queue.roundtrip(&mut self.state)?;
+        let done = Synced::default();
+        self.conn.display().sync(&self.queue.handle(), done.clone());
+        let mut woken = false;
+        while !done.0.load(Ordering::SeqCst) {
+            woken |= self.block(None)?;
+            self.queue.dispatch_pending(&mut self.state)?;
+        }
+        // a wake read meanwhile is kept for the next wait
+        if woken {
+            self.waker.wake();
+        }
         Ok(())
     }
 
@@ -1441,6 +1456,13 @@ impl Connection {
                     self.queue.dispatch_pending(&mut self.state)?;
                 }
             }
+        };
+        // another thread reading the connection for a queue of its own may have read events for this queue since
+        // the last dispatch; with the read prepared it reads no more without this one, so what is dispatched now is
+        // all that arrived, and the wait does not block when it found something
+        let timeout = match self.queue.dispatch_pending(&mut self.state)? {
+            0 => timeout,
+            _ => Some(Duration::ZERO),
         };
         self.flush()?;
         let timespec = timeout.map(|d| rustix::event::Timespec {
@@ -2094,6 +2116,25 @@ impl Dispatch<WpFractionalScaleV1, SurfaceId> for State {
             (Some(scale), Ok(surf)) => surf.fractional_scale = Some(scale),
             (None, _) => state.fail(Error::InvalidScale),
             (_, Err(_)) => {}
+        }
+    }
+}
+
+/// Set when the compositor answered the `wl_display.sync` of [`Connection::roundtrip`].
+#[derive(Clone, Default)]
+struct Synced(Arc<AtomicBool>);
+
+impl Dispatch<WlCallback, Synced> for State {
+    fn event(
+        _: &mut Self,
+        _: &WlCallback,
+        event: wl_callback::Event,
+        done: &Synced,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            done.0.store(true, Ordering::SeqCst);
         }
     }
 }

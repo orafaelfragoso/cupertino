@@ -38,7 +38,8 @@
 //!
 //! The [`StopFlag`] of the runner asks a running stream to stop; the real command's flag is set by SIGINT and SIGTERM,
 //! whose handlers are installed only when a [`Run::Stream`](crate::Run::Stream) command starts (a one-shot command
-//! keeps the default actions) and reset after the first signal, so a second one ends the process at once. They are
+//! keeps the default actions) and both reset after the first signal, so a second one of either ends the process at
+//! once, by the signal's default action. They are
 //! installed without `SA_RESTART`, so a blocking system call returns `EINTR`; a command should still wait in steps (a
 //! `poll` with a timeout, for example) and check [`Sink::stop_requested`] between them. A signal the parent set to be
 //! ignored stays ignored.
@@ -119,13 +120,29 @@ impl Default for StopFlag {
     }
 }
 
+/// The signals whose handler [`install_handlers`] installed; a signal the parent ignored is not one of them.
+static HANDLED: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+
+/// The signals that ask a stream to stop, in the order of [`HANDLED`].
+const STOP_SIGNALS: [libc::c_int; 2] = [libc::SIGINT, libc::SIGTERM];
+
 extern "C" fn on_signal(_: libc::c_int) {
-    // an atomic store is safe in a signal handler
+    // Only atomics and sigaction(2), both async-signal-safe. `SA_RESETHAND` already gave the delivered signal its
+    // default action back; the other one gets it here, so a second signal of either kind ends the process.
     SIGNALLED.store(true, Ordering::SeqCst);
+    for (signal, handled) in STOP_SIGNALS.iter().zip(&HANDLED) {
+        if handled.swap(false, Ordering::SeqCst) {
+            // SAFETY: a zeroed sigaction is `SIG_DFL` with an empty mask and no flags.
+            unsafe {
+                let default: libc::sigaction = std::mem::zeroed();
+                libc::sigaction(*signal, &default, std::ptr::null_mut());
+            }
+        }
+    }
 }
 
 fn install_handlers() {
-    for signal in [libc::SIGINT, libc::SIGTERM] {
+    for (signal, handled) in STOP_SIGNALS.into_iter().zip(&HANDLED) {
         // SAFETY: the action is fully initialised (zeroed, an empty mask, a handler that only stores an atomic), and
         // the old action is read into a zeroed struct.
         unsafe {
@@ -139,7 +156,11 @@ fn install_handlers() {
             action.sa_sigaction = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
             action.sa_flags = libc::SA_RESETHAND;
             libc::sigemptyset(&mut action.sa_mask);
-            libc::sigaction(signal, &action, std::ptr::null_mut());
+            // marked first, so a signal right after the install resets it too
+            handled.store(true, Ordering::SeqCst);
+            if libc::sigaction(signal, &action, std::ptr::null_mut()) != 0 {
+                handled.store(false, Ordering::SeqCst);
+            }
         }
     }
 }

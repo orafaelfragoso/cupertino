@@ -247,17 +247,93 @@ fn a_signal_the_parent_ignored_stays_ignored() {
 }
 
 #[test]
-fn a_second_signal_ends_a_stream_that_did_not_stop_at_the_first() {
-    let (child, mut stdin, mut stdout) = lines_probe(None);
+fn a_second_signal_of_either_kind_ends_a_stream_that_did_not_stop_at_the_first() {
+    for (first, second) in [
+        (libc::SIGINT, libc::SIGINT),
+        (libc::SIGINT, libc::SIGTERM),
+        (libc::SIGTERM, libc::SIGINT),
+    ] {
+        let (child, mut stdin, mut stdout) = lines_probe(None);
+        assert!(signal_then_line(&child, &mut stdin, &mut stdout, first));
+        // SAFETY: kill only sends a signal to the child this test started and still owns.
+        assert_eq!(unsafe { libc::kill(child.id() as i32, second) }, 0);
+        // The signal is pending before stdin closes, so a process it did not end would read the end of stdin and
+        // exit 0 instead of waiting for a line forever. The default action, not an exit: the parent sees the signal.
+        drop(stdin);
+        let status = child.wait_with_output().unwrap().status;
+        assert_eq!(
+            status.signal(),
+            Some(second),
+            "{first} then {second}: {status:?}"
+        );
+    }
+}
+
+#[test]
+fn a_second_signal_keeps_a_signal_the_parent_ignored_ignored() {
+    let (child, mut stdin, mut stdout) = lines_probe(Some(libc::SIGTERM));
     assert!(signal_then_line(
         &child,
         &mut stdin,
         &mut stdout,
         libc::SIGINT
     ));
-    // SAFETY: kill only sends a signal to the child this test started and still owns.
-    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
-    let status = child.wait_with_output().unwrap().status;
-    assert_eq!(status.signal(), Some(libc::SIGINT), "{status:?}");
+    assert!(signal_then_line(
+        &child,
+        &mut stdin,
+        &mut stdout,
+        libc::SIGTERM
+    ));
     drop(stdin);
+    let (code, stderr) = stderr_of(child);
+    assert_eq!((code, stderr.as_str()), (Some(0), ""));
+}
+
+#[test]
+fn a_full_stdout_is_exit_6_with_one_stderr_line_in_human_form_only() {
+    for (args, stderr) in [
+        (
+            &["help"][..],
+            "cupertino: cannot write the output: No space left on device (os error 28)\n",
+        ),
+        (&["--format", "json", "help"], ""),
+        (&["--format", "jsonl", "help"], ""),
+    ] {
+        let full = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .unwrap();
+        let cli = cupertino()
+            .args(args)
+            .stdout(full)
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        assert_eq!(stderr_of(cli), (Some(6), stderr.to_string()), "{args:?}");
+    }
+}
+
+#[test]
+fn a_program_a_stream_starts_gets_the_default_sigpipe_and_stop_signals() {
+    let out = probe()
+        .args(["--format", "jsonl", "probe", "child"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let first: Value = serde_json::from_str(
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    let ignored = u64::from_str_radix(first["data"]["sig_ign"].as_str().unwrap(), 16).unwrap();
+    for signal in [libc::SIGPIPE, libc::SIGINT, libc::SIGTERM] {
+        assert_eq!(
+            ignored & (1 << (signal - 1)),
+            0,
+            "signal {signal} is ignored in the child: {ignored:x}"
+        );
+    }
 }

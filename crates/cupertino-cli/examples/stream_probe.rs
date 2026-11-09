@@ -1,7 +1,9 @@
 //! A `cupertino` program with a registry of probe streams, run through the same [`cupertino_cli::main_with`] as the
 //! real command: `tests/stream-process.rs` stops it with signals and closes its output.
 
-use cupertino_cli::{Args, Command, Context, Failure, Group, Reply, Run, Sink, Stability};
+use cupertino_cli::{
+    Args, Command, Context, Failure, FailureKind, Group, Reply, Run, Sink, Stability,
+};
 use std::time::Duration;
 
 const COMMANDS: &[Command] = &[
@@ -41,6 +43,19 @@ const COMMANDS: &[Command] = &[
         stability: Stability::Preview,
         args: &[],
         run: Run::Stream(lines),
+    },
+    Command {
+        path: &["probe", "child"],
+        summary:
+            "Starts `cat /proc/self/status` and reports the signals the child starts with ignored",
+        description: "A stream that starts a program, as a command that runs others does.",
+        examples: &[(
+            "cupertino probe child",
+            "Report the child's ignored signals.",
+        )],
+        stability: Stability::Preview,
+        args: &[],
+        run: Run::Stream(child),
     },
 ];
 
@@ -95,6 +110,24 @@ fn lines(_: &Args, _: &Context, sink: &mut Sink) -> Result<Reply, Failure> {
             "line",
         )?;
     }
+    Ok(Reply::new(&serde_json::json!({}), ""))
+}
+
+/// The child's `SigIgn` mask, read by a program that is not built with Rust's start-up code, so it shows what it
+/// inherited.
+fn child(_: &Args, _: &Context, sink: &mut Sink) -> Result<Reply, Failure> {
+    let out = std::process::Command::new("cat")
+        .arg("/proc/self/status")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| Failure::new(FailureKind::Unavailable, "no_cat", e.to_string()))?;
+    let status = String::from_utf8_lossy(&out.stdout);
+    let ignored = status
+        .lines()
+        .find_map(|l| l.strip_prefix("SigIgn:"))
+        .map(str::trim)
+        .unwrap_or_default();
+    sink.event("child", &serde_json::json!({ "sig_ign": ignored }), ignored)?;
     Ok(Reply::new(&serde_json::json!({}), ""))
 }
 

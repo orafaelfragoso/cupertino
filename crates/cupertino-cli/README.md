@@ -65,7 +65,10 @@ is its final object plus `events` (`[{event, data}]`) and `warnings` (`[{kind, c
 exits 0 and writes nothing to stderr. Any other write error (`ENOSPC`, `EIO`) exits 6 with one stderr line,
 `cupertino: cannot write the output: …`, in human form only.
 
-**Signals.** While a stream command runs, SIGINT and SIGTERM ask it to stop; a second one ends the process at once. A
+**Signals.** While a stream command runs, SIGINT and SIGTERM ask it to stop; a second one of either ends the process at
+once by the signal's default action. A program the command starts gets the default actions of SIGPIPE, SIGINT and
+SIGTERM, unless the parent ignored SIGINT or SIGTERM: the standard library resets the ignored SIGPIPE when it starts a
+process, and `exec` resets caught signals (`tests/stream-process.rs` checks it). A
 follow stream (one that runs until stopped) then ends with `end {ok: true, exit_code: 0, reason: "stopped"}`; a finite
 stream ends with `temporary`/`interrupted`, exit 6. A one-shot command keeps the default signal actions, and a signal
 the parent ignored stays ignored.

@@ -450,6 +450,7 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
         can_go_back: history.back_target().is_some(),
         can_go_forward: history.forward_target().is_some(),
         on_navigate: Some(send(id, Event::Navigate)),
+        under_toolbar: false,
     })
     .key("navigation")
     .fill()];

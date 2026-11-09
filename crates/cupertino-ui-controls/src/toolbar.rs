@@ -27,6 +27,27 @@ use cupertino_ui_theme::{Color, ColorRole};
 
 /// The toolbar row's height: the controls lie in its middle.
 pub const TOOLBAR_ROW: f64 = 52.0;
+/// The compact toolbar row's height.
+pub const COMPACT_TOOLBAR_ROW: f64 = 40.0;
+
+/// How far the chrome covers the top of a window's content: the unobscured rectangle is the content less these insets.
+/// A window whose content fills it ([`DecorationMode::content_fills_window`]) draws its toolbar row over its top, 52 pt
+/// ([`TOOLBAR_ROW`]) or 40 pt compact ([`COMPACT_TOOLBAR_ROW`]); the other modes put the title bar above the content and
+/// cover none of it.
+pub fn unobscured_insets(mode: cupertino_ui_platform::DecorationMode) -> Insets {
+    use cupertino_ui_platform::DecorationMode;
+    let top = match mode {
+        DecorationMode::Unified | DecorationMode::Sidebar => TOOLBAR_ROW,
+        DecorationMode::UnifiedCompact => COMPACT_TOOLBAR_ROW,
+        DecorationMode::Preferred | DecorationMode::Client | DecorationMode::None => 0.0,
+    };
+    Insets {
+        top,
+        left: 0.0,
+        bottom: 0.0,
+        right: 0.0,
+    }
+}
 /// The room between the toolbar's controls and the edges of the pane it floats over.
 pub const TOOLBAR_EDGE: f64 = 8.0;
 /// The room between neighbouring toolbar controls.

@@ -132,7 +132,12 @@ from the application's model and reports changes as messages.
   group to the tree. `ToolbarMenuButton` is a 47 pt capsule of a symbol and a chevron, `ToolbarButton` a 36 pt circle,
   `ToolbarSearch` a search field that rests as such a circle and passes the press to the field under it, and
   `ToolbarTitle` the 15 pt bold title that takes the room the controls leave. `NavigationStack` puts its back and
-  forward buttons in such a group. Glyphs recede to the secondary label colour in an inactive window and to the
+  forward buttons in such a group. With `under_toolbar` its page fills the whole pane and the row lies over it (the
+  row takes the pointer first); the page lays out below the row with `unobscured_insets(mode)`, the top the window's
+  chrome covers (52 pt for the unified and sidebar modes, 40 pt compact, none for a title bar above the content), so a
+  `ScrollView` whose content starts that far down scrolls behind the row. The compositor draws a window's glass and
+  materials below everything the window paints, so opaque content scrolled under the row covers the row's glass:
+  Files and Settings keep the page below the row. Glyphs recede to the secondary label colour in an inactive window and to the
   disabled colour when disabled.
 - **Glass.** Each glass surface names a `GlassRole` (`ToolbarGroup`, `SidebarPanel`) and `GlassRole::material` says
   what draws it: the sidebar panel asks for the compositor's sidebar material under the node, with the surface's

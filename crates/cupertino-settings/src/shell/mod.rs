@@ -576,6 +576,7 @@ impl Shell {
             can_go_back: self.state.history.can_go_back(),
             can_go_forward: self.state.history.can_go_forward(),
             on_navigate: Some(Box::new(Message::Navigate)),
+            under_toolbar: false,
         });
         Element::from(FormBackground { content: stack })
     }

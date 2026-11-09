@@ -57,10 +57,10 @@ pub use stepper::StepperState;
 pub use text_box::TextBoxState;
 pub use tile_sidebar::TILE_SIDEBAR_ROW_HEIGHT;
 pub use toolbar::{
-    ToolbarButton, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarSearch,
-    ToolbarTitle, TOOLBAR_CHOICE_INSET, TOOLBAR_CHOICE_SEGMENT, TOOLBAR_CONTROL, TOOLBAR_DIVIDER,
-    TOOLBAR_EDGE, TOOLBAR_GAP, TOOLBAR_MENU_BUTTON, TOOLBAR_ROW, TOOLBAR_SEGMENT, TOOLBAR_SYMBOL,
-    TOOLBAR_TITLE_GAP, TOOLBAR_TITLE_SIZE, TOOLBAR_TITLE_WEIGHT,
+    unobscured_insets, ToolbarButton, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton,
+    ToolbarSearch, ToolbarTitle, COMPACT_TOOLBAR_ROW, TOOLBAR_CHOICE_INSET, TOOLBAR_CHOICE_SEGMENT,
+    TOOLBAR_CONTROL, TOOLBAR_DIVIDER, TOOLBAR_EDGE, TOOLBAR_GAP, TOOLBAR_MENU_BUTTON, TOOLBAR_ROW,
+    TOOLBAR_SEGMENT, TOOLBAR_SYMBOL, TOOLBAR_TITLE_GAP, TOOLBAR_TITLE_SIZE, TOOLBAR_TITLE_WEIGHT,
 };
 pub use tooltip::{TooltipChange, TooltipState};
 
@@ -577,6 +577,11 @@ pub struct NavigationStack<M> {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub on_navigate: Option<Handler<Navigation, M>>,
+    /// The page fills the whole pane and the toolbar row lies over its top: the page draws under the row and lays out
+    /// below it, with [`unobscured_insets`] for its window's decorations (a [`ScrollView`] whose content starts that far
+    /// down scrolls behind the row). Without it the page takes the height the row leaves. The window's material and
+    /// glass lie under everything it paints, so a page drawn under the row covers the row's glass where it is opaque.
+    pub under_toolbar: bool,
 }
 
 /// Marks `content` as a drag region of its window, the size of the content (add `.fill()` to the element for all the

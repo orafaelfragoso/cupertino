@@ -924,11 +924,18 @@ mod tests {
             other => eprintln!("no read-only mount to try without user namespaces: {other:?}"),
         }
     }
-    use std::sync::Arc;
+    use std::sync::{Arc, Condvar, Mutex, PoisonError};
     use std::time::{Duration, Instant};
 
-    fn quiet() -> Notify {
-        Arc::new(|| {})
+    /// The wakes of every browser's threads in the process, counted: [`pump`] waits for the next.
+    static WAKES: (Mutex<u64>, Condvar) = (Mutex::new(0), Condvar::new());
+
+    /// What a browser's threads call when they have something for it: one more wake.
+    fn waking() -> Notify {
+        Arc::new(|| {
+            *WAKES.0.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+            WAKES.1.notify_all();
+        })
     }
 
     /// A bookmark file for windows that never show Recents.
@@ -947,14 +954,28 @@ mod tests {
             .collect()
     }
 
-    /// Poll until `done` holds; panics after five seconds.
+    /// Poll until `done` holds, waiting for a browser's thread to wake between two polls; the five seconds only
+    /// guard against a hang.
     fn pump(b: &mut Browser, what: &str, mut done: impl FnMut(&Browser) -> bool) {
         let end = Instant::now() + Duration::from_secs(5);
-        while !done(b) {
-            assert!(Instant::now() < end, "timed out waiting for {what}");
+        loop {
+            // counted before the poll, so a wake during it is not missed
+            let seen = *WAKES.0.lock().unwrap_or_else(PoisonError::into_inner);
             let polled = b.poll();
             assert_eq!(polled.errors, Vec::<String>::new());
-            std::thread::sleep(Duration::from_millis(10));
+            if done(b) {
+                return;
+            }
+            let mut wakes = WAKES.0.lock().unwrap_or_else(PoisonError::into_inner);
+            while *wakes == seen {
+                let left = end.saturating_duration_since(Instant::now());
+                assert!(!left.is_zero(), "timed out waiting for {what}");
+                wakes = WAKES
+                    .1
+                    .wait_timeout(wakes, left)
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0;
+            }
         }
     }
 
@@ -975,7 +996,7 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
@@ -1013,7 +1034,7 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
@@ -1038,7 +1059,7 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
@@ -1088,7 +1109,7 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         assert!(b.go(d.path().join("missing")).is_err());
@@ -1106,7 +1127,7 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         pump(&mut b, "the empty listing", |b| !b.model.is_loading());
@@ -1122,7 +1143,7 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
@@ -1152,7 +1173,7 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
@@ -1185,7 +1206,7 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
@@ -1252,7 +1273,7 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
@@ -1323,7 +1344,7 @@ mod tests {
             SortSpec::default(),
             xbel.clone(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         assert!(b.is_virtual());
@@ -1350,7 +1371,7 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
@@ -1389,11 +1410,14 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         assert!(!b.no_results(), "no search, nothing to report");
-        pump(&mut b, "the listing", |b| b.entries().len() == 4);
+        // read once listed and no longer loading: the last items can arrive before the read ends
+        pump(&mut b, "the read listing", |b| {
+            b.entries().len() == 4 && !b.model.is_loading()
+        });
         b.set_filter("zzz-no-such-name");
         assert!(b.no_results());
         b.set_filter("file");
@@ -1406,7 +1430,7 @@ mod tests {
             SortSpec::default(),
             unused_recents(),
             None,
-            quiet(),
+            waking(),
         )
         .unwrap();
         pump(&mut e, "the empty listing", |e| !e.model.is_loading());

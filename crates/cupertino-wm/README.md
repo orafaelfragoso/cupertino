@@ -85,7 +85,10 @@ which may refuse; when its last window goes, the application stays registered an
 whether it then quits is the application's own policy (the toolkit's resident flag), never the window manager's.
 When an output goes away its windows move to the remaining output with every frame they go back to (normal, zoomed,
 tiled, full screen) fitted to it; a full-screen window leaves full screen there, since its full-screen workspace went with
-the output.
+the output. A window being dragged on it keeps being dragged: the drag goes on on the remaining output, where the server
+brings the pointer. `Command::MoveWindowToOutput` puts a window on another output's current workspace with its normal frame
+at a given place fitted into that output's usable area, its zoomed and tiled frames fitted there too (the server uses it to
+bring windows back to a display that returns); a full-screen or sticky window, or one already there, stays.
 
 Decisions where the behaviour is not known: the resize hit zones (3 pt inside, 4 pt outside, 12 pt corners, 15 pt
 bottom-right) and the title bar's double click (zoom) stay configurable defaults; the drag-to-edge thresholds and the

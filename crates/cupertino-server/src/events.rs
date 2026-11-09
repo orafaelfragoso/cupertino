@@ -241,6 +241,49 @@ pub struct AxisInput {
     pub relative_direction: [AxisRelativeDirection; 2],
 }
 
+/// `wl_pointer.axis` carries a fixed-point value in 1/256 steps. A value is sent rounded to that step and what the
+/// rounding lost is added to the next value of the same axis, source and direction, so a run of small scrolls (a
+/// high-resolution wheel's fractions of a notch) adds up to the distance the device moved. A stop, another source or
+/// a reversal starts the axis over.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AxisCarry {
+    carried: [f64; 2],
+    /// Whether the last value of each axis was positive.
+    positive: [bool; 2],
+    source: Option<AxisSource>,
+}
+
+/// Steps of the protocol's fixed-point numbers per unit.
+const FIXED_STEPS: f64 = 256.0;
+
+impl AxisCarry {
+    /// The value to send on axis `i` for `value` of `source`: `value` plus what earlier values lost, rounded to the
+    /// fixed-point step.
+    pub fn send(&mut self, i: usize, source: AxisSource, value: f64) -> f64 {
+        if self.source != Some(source) {
+            *self = AxisCarry {
+                source: Some(source),
+                ..AxisCarry::default()
+            };
+        }
+        let positive = value > 0.0;
+        let carried = &mut self.carried[i];
+        if self.positive[i] != positive {
+            self.positive[i] = positive;
+            *carried = 0.0;
+        }
+        let total = value + *carried;
+        let sent = (total * FIXED_STEPS).round() / FIXED_STEPS;
+        *carried = total - sent;
+        sent
+    }
+
+    /// The axis `i` stopped: nothing carries into the next gesture.
+    pub fn stop(&mut self, i: usize) {
+        self.carried[i] = 0.0;
+    }
+}
+
 fn axis_index(axis: Axis) -> usize {
     match axis {
         Axis::Horizontal => 0,
@@ -1316,6 +1359,7 @@ impl Cupertino {
             let i = axis_index(axis);
             if value != 0.0 {
                 carries_axis = true;
+                let value = self.axis_carry.send(i, input.source, value);
                 frame = frame
                     .relative_direction(axis, input.relative_direction[i])
                     .value(axis, value);
@@ -1325,6 +1369,7 @@ impl Cupertino {
             }
             if input.source == AxisSource::Finger && input.amount[i] == Some(0.0) {
                 carries_axis = true;
+                self.axis_carry.stop(i);
                 frame = frame.stop(axis);
             }
         }
@@ -1672,7 +1717,7 @@ mod tests {
         let cfg = PointerSettings::default();
         // 30 counts every 8 ms on the trackpad scroll curves at the fresh 0.3125: lines from
         // `ScrollAxis` of the design tool; every event is above the consume unit (8 counts), so
-        // each is emitted at once, truncated to whole points (0.1 line)
+        // each is emitted at once, truncated to whole points (0.1 line), what it truncated going out with the next
         let lines: [f64; 5] = [
             0.6697329504898516,
             1.7655862070282453,
@@ -1681,12 +1726,15 @@ mod tests {
             2.7236750541732406,
         ];
         let mut pad = PointerDevice::new(true, &cfg);
+        let mut sum = 0.0;
         for (i, want) in lines.iter().enumerate() {
             let got = pad
                 .scroll_points(Axis::Vertical, 30.0, i as u64 * 8_000)
                 .unwrap();
+            let before = (sum * 10.0_f64).trunc();
+            sum += want;
             assert!(
-                (got - (want * 10.0).trunc()).abs() < 1e-9,
+                (got - ((sum * 10.0).trunc() - before)).abs() < 1e-9,
                 "event {i}: {got}"
             );
         }
@@ -1702,6 +1750,35 @@ mod tests {
             PointerDevice::new(false, &cfg).scroll_points(Axis::Vertical, 30.0, 0),
             None
         );
+    }
+
+    #[test]
+    fn axis_values_carry_what_the_fixed_point_rounding_lost() {
+        // a high-resolution wheel turned one notch in 120 steps of 1/120: 0.4 points each
+        let mut carry = AxisCarry::default();
+        let step = cupertino_input::wheel_points(1.0);
+        let sent: Vec<f64> = (0..120)
+            .map(|_| carry.send(1, AxisSource::Wheel, step))
+            .collect();
+        assert!(sent.iter().all(|v| (v * 256.0).fract() == 0.0), "{sent:?}");
+        let total: f64 = sent.iter().sum();
+        assert!(
+            (total - cupertino_input::wheel_points(120.0)).abs() <= 0.5 / 256.0,
+            "{total}"
+        );
+        // without the carry every step would lose the same fraction
+        let rounded = (step * 256.0).round() / 256.0 * 120.0;
+        assert!((rounded - total).abs() > 0.1, "{rounded} {total}");
+        // a reversal, another source and a stop start the axis over
+        carry.send(1, AxisSource::Wheel, 0.001);
+        assert_eq!(carry.send(1, AxisSource::Wheel, -0.0005), 0.0);
+        assert_eq!(carry.carried[1], -0.0005);
+        assert_eq!(carry.send(1, AxisSource::Wheel, -0.0005), 0.0);
+        assert_eq!(carry.carried[1], -0.001, "the same direction carries on");
+        assert_eq!(carry.send(1, AxisSource::Finger, 0.001), 0.0);
+        assert_eq!(carry.carried[1], 0.001);
+        carry.stop(1);
+        assert_eq!(carry.carried, [0.0, 0.0]);
     }
 
     #[test]

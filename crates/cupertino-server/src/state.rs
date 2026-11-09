@@ -648,6 +648,11 @@ pub struct Cupertino {
     pub next_output: u64,
     pub screenshot_requests: Vec<std::path::PathBuf>,
     pub exit_after_screenshot: bool,
+    /// Each screenshot is written for every output: the first output's at the path asked for, every other one's beside
+    /// it with the output's name added (`--extra-output` runs).
+    pub screenshot_each_output: bool,
+    /// The screenshots of [`Cupertino::screenshot_each_output`] still to write, by output.
+    pub output_screenshots: Vec<(OutputId, std::path::PathBuf)>,
     /// Replaces the clock for the model and animations (deterministic tests, frame stepping).
     pub fixed_time: Option<f64>,
     /// Model time runs at this multiple of the wall clock (slow motion for inspection, 1.0 = real
@@ -950,6 +955,8 @@ impl Cupertino {
             next_output: 1,
             screenshot_requests: Vec::new(),
             exit_after_screenshot: false,
+            screenshot_each_output: false,
+            output_screenshots: Vec::new(),
             fixed_time: None,
             time_scale: 1.0,
             time_origin: policy::clock_seconds(std::time::Duration::from(
@@ -1042,6 +1049,7 @@ impl Cupertino {
             self.note_departures(id, &identity, from);
         }
         self.end_popup_grab_on(id);
+        self.output_screenshots.retain(|(o, _)| *o != id);
         // the overview of this output has nothing left to show on; one open elsewhere takes the windows that arrive
         if self.shell.overview.as_ref().is_some_and(|o| o.output == id) {
             tracing::info!(output = id.0, "the overview's output went away");

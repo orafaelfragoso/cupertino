@@ -83,7 +83,9 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         &self.stats
     }
 
-    fn prepare(&mut self, request: &RenderRequest<'_>) -> Result<bool, RenderError> {
+    /// Checks the request and sizes the frame's pixels for it: whether the frame is drawn whole, and whether its pixels
+    /// were just allocated, all zero (transparent), so a clear need not write them.
+    fn prepare(&mut self, request: &RenderRequest<'_>) -> Result<(bool, bool), RenderError> {
         validate::check(
             request.list,
             request.resources,
@@ -105,23 +107,33 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             || !self.valid;
         let full = resized || matches!(request.damage, DamageRegion::Full);
         self.valid = false;
+        let mut zeroed = false;
         if full {
             let len = usize::try_from(len).map_err(|_| RenderError::ResourceLimit)?;
-            self.frame.pixels.clear();
-            self.frame
-                .pixels
-                .try_reserve_exact(len)
-                .map_err(|_| RenderError::ResourceLimit)?;
-            self.frame.pixels.resize(len, 0);
+            // a frame drawn whole clears or paints over every pixel, so pixels of the right size are kept as they are;
+            // pixels of a new size are allocated zeroed, which the system gives without writing them, so the first
+            // frame of a window touches only what it paints (the old ones are let go first, not held alongside)
+            if self.frame.pixels.len() != len {
+                self.frame.pixels = Vec::new();
+                self.frame.pixels = vec![0; len];
+                zeroed = true;
+            }
             self.frame.width = request.width;
             self.frame.height = request.height;
             self.frame.stride = stride;
             self.scale = request.scale;
         }
-        Ok(full)
+        Ok((full, zeroed))
     }
 
-    fn paint(&mut self, request: &RenderRequest<'_>, dirty: &[Bounds]) -> Result<(), RenderError> {
+    /// Paints the `dirty` rectangles; `zeroed`: every pixel of the frame is zero (transparent), so clearing writes
+    /// nothing.
+    fn paint(
+        &mut self,
+        request: &RenderRequest<'_>,
+        dirty: &[Bounds],
+        zeroed: bool,
+    ) -> Result<(), RenderError> {
         let (width, height, scale) = (request.width, request.height, request.scale);
         let whole = Bounds::of_size(width, height);
         let mut base = PixmapMut::from_bytes(&mut self.frame.pixels, width, height)
@@ -136,7 +148,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             images: &mut self.images,
             rasterizer: &mut self.rasterizer,
             fast: self.fast,
-            pending: spans::Pending::default(),
+            pending: spans::Pending::over_zero(zeroed),
         };
         for d in dirty {
             let hidden = if self.fast {
@@ -148,7 +160,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             if hidden.is_none() {
                 if self.fast {
                     painter.pending.set(*d, [0; 4]);
-                } else {
+                } else if !zeroed {
                     clear(&mut base, d);
                 }
                 painter
@@ -182,7 +194,7 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
 
     fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
         self.stats = RenderStats::default();
-        let full = self.prepare(request)?;
+        let (full, zeroed) = self.prepare(request)?;
         let (width, height, scale) = (request.width, request.height, request.scale);
         let whole = Bounds::of_size(width, height);
         let dirty = match (full, request.damage) {
@@ -203,7 +215,7 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
             frame_bytes: self.frame.pixels.len() as u64,
             ..RenderStats::default()
         };
-        let painted = self.paint(request, &dirty);
+        let painted = self.paint(request, &dirty, zeroed);
         self.stats.glyph_rasterize = self.glyphs.take_filled();
         self.stats.image_decode = self.images.take_filled();
         painted?;
@@ -565,7 +577,12 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         // the whole group, whatever the damage: its descendants are rasterized into the same pixels and its blurs and
         // shadows read the same ones in every frame
         let area = Bounds::of_rect(&node.bounds, self.scale).intersect(&t.rect);
-        if area.is_empty() || area.intersect(&t.limit).is_empty() {
+        // laid over at no opacity, the group changes no pixel (a panel's first frame as it fades in), so nothing of it
+        // is painted
+        if area.is_empty()
+            || area.intersect(&t.limit).is_empty()
+            || opacity_factor(group.opacity) == 0
+        {
             return Ok(());
         }
         self.stats.groups_painted += 1;
@@ -1280,6 +1297,11 @@ fn source_over(dst: &mut PixmapMut<'_>, at: (i32, i32), src: &Pixmap, opacity: f
 }
 
 /// [`source_over`] of the pixels `part` of `src` (in its own pixels), with the part's top-left pixel at `at`.
+/// What a layer laid over at `opacity` is multiplied by, from 0 (it changes nothing) to 255.
+fn opacity_factor(opacity: f32) -> u32 {
+    (opacity.clamp(0.0, 1.0) * 255.0).round() as u32
+}
+
 fn source_over_part(
     dst: &mut PixmapMut<'_>,
     at: (i32, i32),
@@ -1287,7 +1309,7 @@ fn source_over_part(
     part: &Bounds,
     opacity: f32,
 ) {
-    let k = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let k = opacity_factor(opacity);
     let stride = dst.width() as usize * 4;
     let part = part.intersect(&Bounds::of_size(src.width(), src.height()));
     if part.is_empty() {
@@ -2269,6 +2291,80 @@ mod tests {
             }
             before = after;
         }
+    }
+
+    /// A group at an opacity that rounds to nothing (a panel fading in from 0) paints the bytes of a frame without it,
+    /// and allocates and paints nothing of its subtree: no scratch image or mask past those of the node under it.
+    #[test]
+    fn a_group_at_no_opacity_paints_nothing_of_its_subtree() {
+        let none = resources();
+        let fill = |id, parent, color| {
+            plain(
+                id,
+                parent,
+                (0.0, 0.0),
+                vec![PaintOp::Fill {
+                    shape: Shape::RoundedRect {
+                        rect: Rect::new(4.0, 4.0, 40.0, 30.0),
+                        radius: 6.0,
+                    },
+                    paint: Paint::Solid(color),
+                }],
+            )
+        };
+        let base = fill(1, None, Color::new(0.2, 0.4, 0.8, 1.0));
+        let render = |nodes: Vec<PaintNode>| {
+            let mut r = CpuRenderer::new(
+                CpuConfig {
+                    max_pixels: 1 << 20,
+                    glyph_cache_bytes: 1 << 16,
+                    image_cache_bytes: 1 << 16,
+                    font_smoothing: true,
+                },
+                NoGlyphs,
+            );
+            let list = DisplayList { nodes };
+            let id = r
+                .render(&RenderRequest {
+                    list: &list,
+                    resources: &none,
+                    scale: 2.0,
+                    width: 120,
+                    height: 90,
+                    damage: &DamageRegion::Full,
+                })
+                .unwrap();
+            (r.frame(id).unwrap().pixels.clone(), *r.stats())
+        };
+        let (without, alone) = render(vec![base.clone()]);
+        for opacity in [0.0, 1.0 / 600.0] {
+            let mut group = fill(2, None, Color::new(0.9, 0.1, 0.1, 0.8));
+            group.group = Some(Group {
+                opacity,
+                effects: vec![crate::Effect::DropShadow {
+                    offset: cupertino_geometry::Point::new(0.0, 2.0),
+                    blur: 3.0,
+                    color: Color::new(0.0, 0.0, 0.0, 0.5),
+                }],
+            });
+            let child = fill(3, Some(2), Color::new(0.1, 0.9, 0.1, 1.0));
+            let (with, stats) = render(vec![base.clone(), group, child]);
+            assert!(with == without, "opacity {opacity}");
+            assert_eq!(
+                (stats.groups_painted, stats.scratch_images, stats.masks),
+                (0, alone.scratch_images, alone.masks),
+                "opacity {opacity}"
+            );
+        }
+        // the least opacity that shows paints the group
+        let mut group = fill(2, None, Color::new(0.9, 0.1, 0.1, 0.8));
+        group.group = Some(Group {
+            opacity: 1.0 / 255.0,
+            effects: Vec::new(),
+        });
+        let (with, stats) = render(vec![base, group]);
+        assert!(with != without);
+        assert_eq!(stats.groups_painted, 1);
     }
 
     #[test]

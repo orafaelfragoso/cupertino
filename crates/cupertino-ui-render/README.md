@@ -20,7 +20,13 @@ Laying an image over another (`source_over_part`, a group's opacity, a clip mask
 pixels as words, two channels to a 16-bit lane (`effects::mul_px`, `effects::over_px`, the same bytes as the channel by
 channel arithmetic, which a test checks on every value and on random pixels), skips runs of 16 empty pixels (or of
 pixels a mask covers fully) read a word at a time, and has no branch per pixel, so it vectorizes: a mostly empty layer
-the size of a 2x window, such as a panel's outline, is laid over in a fraction of a millisecond.
+the size of a 2x window, such as a panel's outline, is laid over in a fraction of a millisecond. A group whose opacity
+rounds to nothing (a panel fading in from 0) changes no pixel, so nothing of its subtree is painted.
+
+The frame's pixels are kept from one frame to the next; a frame drawn whole clears or paints over every one of them, so
+they are not cleared beforehand as well. Pixels of a new size (a window's first frame) are allocated zeroed, which the
+system gives without writing them, and the frame's clear then writes nothing, so a transparent window touches only the
+pixels it paints.
 
 A drop or inner shadow is one coverage byte a pixel until it is tinted: the layer's alpha, shifted, blurred by three box
 passes on each axis (rows in place, columns a row at a time with a running sum per column), then tinted and laid under

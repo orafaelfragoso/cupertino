@@ -343,3 +343,32 @@ fn the_panic_hook_records_the_panic_and_calls_the_hook_before_it() {
     let user = "someone";
     panic!("the bad thing at /home/{user}/secretfile");
 }
+
+#[test]
+fn a_test_can_make_a_process_panic_right_after_init() {
+    if !support::is_child() {
+        let state = tempfile::tempdir().unwrap();
+        let name = "a_test_can_make_a_process_panic_right_after_init";
+        let out = support::child(name, state.path(), &[(diag::TEST_PANIC_ENV, "test")]);
+        assert_eq!(out.status.code(), Some(101), "{}", support::stderr(&out));
+        let records = diag::store::read(&state.path().join("cupertino/events"))
+            .unwrap()
+            .records;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].record.id, "test.panic");
+        assert!(records[0]
+            .record
+            .fields
+            .get("location")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .starts_with("emitter.rs:"));
+        // another area is not asked
+        let state = tempfile::tempdir().unwrap();
+        let out = support::child(name, state.path(), &[(diag::TEST_PANIC_ENV, "dock")]);
+        assert!(out.status.success(), "{}", support::stderr(&out));
+        return;
+    }
+    diag::init(diag::component!(), "test", diag::Sink::UserStore);
+}

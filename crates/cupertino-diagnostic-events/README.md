@@ -50,8 +50,11 @@ diag::event(Severity::Warn, "dock.icon.load_failed", "an icon could not be loade
 | `Journal` | system services: `cupertino-sessiond`, `-netd`, `-btd`, `-powerd` | one datagram per event to `/run/systemd/journal/socket`; without the socket, one line on standard error |
 | `Memory` | tests | nowhere else |
 
-`CUPERTINO_DIAG_JOURNAL_SOCKET` names another journal socket. It is for tests only: a test binds a `UnixDatagram` in a
-temporary directory and reads the datagrams.
+Two variables are for tests only:
+- `CUPERTINO_DIAG_JOURNAL_SOCKET` names another journal socket: a test binds a `UnixDatagram` in a temporary directory
+  and reads the datagrams.
+- `CUPERTINO_DIAG_TEST_PANIC=<area>` makes the process whose `init` names that area panic right after it, so a test
+  drives the panic path of a real binary.
 
 ## The record (`cupertino.diag.v1`)
 

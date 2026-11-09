@@ -567,7 +567,7 @@ fn record_guarded(
 
 /// The process's emitter: installs it (see [`Emitter::install`]; a second call keeps the first), chains the panic hook
 /// ([`install_panic_hook`]) and writes the open rate-limit summaries when the process exits. The one line each
-/// program's `main` starts with.
+/// program's `main` starts with. With [`TEST_PANIC_ENV`] set to `area`, it panics once all is in place.
 pub fn init(component: Component, area: &'static str, sink: Sink) -> &'static Emitter {
     let emitter = Emitter::install(component, area, sink).unwrap_or_else(|first| first);
     install_panic_hook();
@@ -586,8 +586,15 @@ pub fn init(component: Component, area: &'static str, sink: Sink) -> &'static Em
             atexit(at_exit);
         }
     });
+    if std::env::var_os(TEST_PANIC_ENV).is_some_and(|named| named == area) {
+        panic!("{TEST_PANIC_ENV} asked this process to panic");
+    }
     emitter
 }
+
+/// Names the `area` of a process that should panic right after [`init`]: tests only, so a test drives the panic path of
+/// a real binary.
+pub const TEST_PANIC_ENV: &str = "CUPERTINO_DIAG_TEST_PANIC";
 
 /// Chains a panic hook that records `<area>.panic` (`fatal`, the message through the free-text scrubber, the location's
 /// file basename and line) and writes the open summaries, then calls the hook that was there before. Once per process.

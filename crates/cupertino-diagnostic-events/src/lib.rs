@@ -29,7 +29,7 @@ pub use cupertino_build_info::{component, Component};
 pub use emitter::{
     boot_id, dropped_before_install, exit_error, flush, init, install_panic_hook, recent,
     set_context, Emitter, FatalRecord, Sink, FATAL_LINE, RING_BYTES, RING_EVENTS,
-    STORE_UNAVAILABLE,
+    STORE_UNAVAILABLE, TEST_PANIC_ENV,
 };
 pub use event::{
     event, AddressKind, Corrupt, Event, Fields, Identity, Origin, Record, Severity, Value,

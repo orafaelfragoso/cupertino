@@ -4,8 +4,9 @@
 //! which holds the keyboard), opened with a grab after a press on it. The keyboard is then taken by each kind of surface
 //! that can take it: another window (the focus policy), an exclusive overlay surface (the launcher, Control Center), an
 //! exclusive top layer surface (Focus Dock, the menu bar engaged by its shortcut), the lock screen, the authentication
-//! prompt, an on-demand layer surface (by a press), or nothing (the key window goes). The tests need an offscreen EGL
-//! device.
+//! prompt, an on-demand layer surface (by a press), or nothing (the key window goes). A submenu opened from a menu with
+//! a grab of its own belongs to the same chain: focus moving within it keeps both open, and a surface outside it closes
+//! both, each told once. The tests need an offscreen EGL device.
 
 mod common;
 
@@ -25,6 +26,7 @@ use cupertino_wm::Command;
 use smithay::backend::input::ButtonState;
 use smithay::desktop::{layer_map_for_output, WindowSurfaceType};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
+use smithay::utils::SERIAL_COUNTER;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
@@ -41,6 +43,8 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 
 /// The size of a menu.
 const MENU: (i32, i32) = (160, 120);
+/// The size of a submenu, which opens beside its menu.
+const SUBMENU: (i32, i32) = (120, 80);
 /// The size of a window that owns a menu.
 const WINDOW: (i32, i32) = (400, 300);
 
@@ -120,11 +124,13 @@ const APP_WINDOW: Panel = Panel {
     press: None,
 };
 
-/// What a panel's client saw.
+/// What a panel's client saw: whether the menu and the submenu drew themselves, and how many `popup_done` each got.
 #[derive(Default)]
 struct Seen {
     menu_drawn: bool,
-    popup_done: bool,
+    submenu_drawn: bool,
+    menu_done: usize,
+    submenu_done: usize,
 }
 
 struct State {
@@ -132,8 +138,12 @@ struct State {
     /// The surface of the window, for a window's client.
     window: Option<wl_surface::WlSurface>,
     window_drawn: bool,
+    /// The surface of the submenu, once it was made.
+    submenu: Option<wl_surface::WlSurface>,
     shm: wl_shm::WlShm,
-    press: Option<u32>,
+    /// The serials of the presses the client got, in order: the first opens the menu, the second (on the menu) the
+    /// submenu.
+    presses: Vec<u32>,
     buffers: Vec<wl_buffer::WlBuffer>,
 }
 
@@ -223,7 +233,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, wl_surface::WlSurface> 
     }
 }
 
-/// The window and the menu: each draws itself at its first configure.
+/// The window, the menu and the submenu: each draws itself at its first configure.
 impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for State {
     fn event(
         state: &mut Self,
@@ -240,6 +250,11 @@ impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for State {
                     draw(state, surface, WINDOW, qh);
                     state.window_drawn = true;
                 }
+            } else if state.submenu.as_ref() == Some(surface) {
+                if !state.seen.lock().unwrap().submenu_drawn {
+                    draw(state, surface, SUBMENU, qh);
+                    state.seen.lock().unwrap().submenu_drawn = true;
+                }
             } else if !state.seen.lock().unwrap().menu_drawn {
                 draw(state, surface, MENU, qh);
                 state.seen.lock().unwrap().menu_drawn = true;
@@ -248,17 +263,23 @@ impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for State {
     }
 }
 
-impl Dispatch<xdg_popup::XdgPopup, ()> for State {
+/// A popup, `true` for the submenu: it counts the `popup_done` it gets.
+impl Dispatch<xdg_popup::XdgPopup, bool> for State {
     fn event(
         state: &mut Self,
         _: &xdg_popup::XdgPopup,
         event: xdg_popup::Event,
-        _: &(),
+        submenu: &bool,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
         if let xdg_popup::Event::PopupDone = event {
-            state.seen.lock().unwrap().popup_done = true;
+            let mut seen = state.seen.lock().unwrap();
+            if *submenu {
+                seen.submenu_done += 1;
+            } else {
+                seen.menu_done += 1;
+            }
         }
     }
 }
@@ -298,24 +319,28 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
             ..
         } = event
         {
-            state.press.get_or_insert(serial);
+            state.presses.push(serial);
         }
     }
 }
 
-/// A panel's client on a thread of its own: it maps the panel, and the first press on it opens the menu with a popup
-/// grab on that press. It disconnects when dropped.
+/// A panel's client on a thread of its own: it maps the panel, the first press on it opens the menu with a popup grab
+/// on that press, and a second press (on the menu) opens a submenu beside it with a grab of its own. It disconnects when
+/// dropped.
 struct PanelClient {
     seen: Arc<Mutex<Seen>>,
     stop: Arc<AtomicBool>,
+    rounds: common::Rounds,
 }
 
 impl PanelClient {
     fn spawn(stream: UnixStream, panel: &'static Panel) -> PanelClient {
         let seen = Arc::new(Mutex::new(Seen::default()));
         let stop = Arc::new(AtomicBool::new(false));
-        let (seen2, stop2) = (seen.clone(), stop.clone());
+        let rounds = common::Rounds::default();
+        let (seen2, stop2, rounds2) = (seen.clone(), stop.clone(), rounds.clone());
         std::thread::spawn(move || {
+            let _ended = rounds2.ended_on_drop();
             let conn = Connection::from_socket(stream).unwrap();
             let (globals, mut queue) = registry_queue_init::<State>(&conn).unwrap();
             let qh = queue.handle();
@@ -351,16 +376,19 @@ impl PanelClient {
                 seen: seen2,
                 window: panel.window.then(|| surface.clone()),
                 window_drawn: false,
+                submenu: None,
                 shm,
-                press: None,
+                presses: Vec::new(),
                 buffers: Vec::new(),
             };
             let mut menu = None;
+            let mut submenu = None;
             while !stop2.load(Ordering::SeqCst) {
                 if queue.roundtrip(&mut state).is_err() {
                     return;
                 }
-                if let (Some(serial), None) = (state.press, &menu) {
+                rounds2.tick();
+                if let (Some(&serial), None) = (state.presses.first(), &menu) {
                     let positioner = wm_base.create_positioner(&qh, ());
                     positioner.set_size(MENU.0, MENU.1);
                     positioner.set_anchor_rect(panel.opener.0, panel.opener.1, 1, 1);
@@ -376,7 +404,7 @@ impl PanelClient {
                     positioner.set_gravity(gravity);
                     let menu_surface = compositor.create_surface(&qh, ());
                     let xdg = wm_base.get_xdg_surface(&menu_surface, &qh, menu_surface.clone());
-                    let popup = xdg.get_popup(parent.as_ref(), &positioner, &qh, ());
+                    let popup = xdg.get_popup(parent.as_ref(), &positioner, &qh, false);
                     if let Some(layer) = &layer {
                         layer.get_popup(&popup);
                     }
@@ -384,18 +412,44 @@ impl PanelClient {
                     menu_surface.commit();
                     menu = Some((menu_surface, xdg, popup));
                 }
+                if let (Some(&serial), Some((_, menu_xdg, _)), None) =
+                    (state.presses.get(1), &menu, &submenu)
+                {
+                    let positioner = wm_base.create_positioner(&qh, ());
+                    positioner.set_size(SUBMENU.0, SUBMENU.1);
+                    positioner.set_anchor_rect(MENU.0 - 1, 10, 1, 1);
+                    positioner.set_anchor(xdg_positioner::Anchor::Right);
+                    positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+                    let surface = compositor.create_surface(&qh, ());
+                    let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
+                    let popup = xdg.get_popup(Some(menu_xdg), &positioner, &qh, true);
+                    popup.grab(&seat, serial);
+                    surface.commit();
+                    state.submenu = Some(surface.clone());
+                    submenu = Some((surface, xdg, popup));
+                }
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
-        PanelClient { seen, stop }
+        PanelClient { seen, stop, rounds }
     }
 
     fn menu_drawn(&self) -> bool {
         self.seen.lock().unwrap().menu_drawn
     }
 
+    fn submenu_drawn(&self) -> bool {
+        self.seen.lock().unwrap().submenu_drawn
+    }
+
     fn popup_done(&self) -> bool {
-        self.seen.lock().unwrap().popup_done
+        self.seen.lock().unwrap().menu_done > 0
+    }
+
+    /// The `popup_done` the menu and the submenu got.
+    fn done_counts(&self) -> (usize, usize) {
+        let seen = self.seen.lock().unwrap();
+        (seen.menu_done, seen.submenu_done)
     }
 }
 
@@ -825,4 +879,110 @@ fn the_key_window_closing_closes_the_dock_menu() {
         menu.popup_done()
     });
     assert!(d.state.popup_grab_root().is_none());
+}
+
+/// A point of the output where `surface` takes the pointer, once it has a buffer there.
+fn point_on(s: &Cupertino, surface: &ServerSurface) -> Option<(f64, f64)> {
+    for y in (0..700).step_by(4) {
+        for x in (0..1000).step_by(4) {
+            let at = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+            if s
+                .surface_under(at.into())
+                .is_some_and(|(under, _)| &under == surface)
+            {
+                return Some(at);
+            }
+        }
+    }
+    None
+}
+
+/// [`menu_open`], then a press on the menu opens a submenu beside it with a grab of its own, which takes the keyboard;
+/// with the menu's and the submenu's surfaces.
+fn submenu_open(panel: &'static Panel) -> (Desktop, PanelClient, ServerSurface, ServerSurface) {
+    let (mut d, client) = menu_open(panel);
+    let menu = keyboard_focus(&d.state).expect("the menu has the keyboard");
+    wait_until(&mut d, "the menu's buffer", |s| point_on(s, &menu).is_some());
+    let at = point_on(&d.state, &menu).unwrap();
+    click(&mut d, at);
+    wait_until(&mut d, "the submenu to open with a grab", |s| {
+        client.submenu_drawn()
+            && keyboard_focus(s).is_some_and(|f| f != menu && s.popups.find_popup(&f).is_some())
+    });
+    let submenu = keyboard_focus(&d.state).unwrap();
+    (d, client, menu, submenu)
+}
+
+/// Wait until `client` has every event sent before, and the server handled its answers.
+fn sync(d: &mut Desktop, client: &PanelClient) {
+    let done = client.rounds.barrier();
+    wait_until(d, "the client's roundtrips", move |_| done());
+}
+
+/// Focus given to the menu, to the panel or window that owns it, or to the submenu keeps both open: the submenu keeps
+/// the keys, and neither is told it is done.
+fn nested_focus_keeps_the_chain(panel: &'static Panel) {
+    let (mut d, client, menu, submenu) = submenu_open(panel);
+    let root = d.state.popup_grab_root().cloned().expect("the grab's owner");
+    for target in [menu, root.clone(), submenu.clone()] {
+        d.state.set_keyboard_focus(Some(target));
+        assert_eq!(d.state.popup_grab_root(), Some(&root), "the grab goes on");
+        assert_eq!(
+            keyboard_focus(&d.state).as_ref(),
+            Some(&submenu),
+            "the keys stay with the submenu"
+        );
+    }
+    sync(&mut d, &client);
+    assert_eq!(client.done_counts(), (0, 0), "no menu was dismissed");
+}
+
+#[test]
+fn focus_within_a_dock_menus_chain_keeps_its_submenu_open() {
+    nested_focus_keeps_the_chain(&DOCK);
+}
+
+#[test]
+fn focus_within_a_window_menus_chain_keeps_its_submenu_open() {
+    nested_focus_keeps_the_chain(&APP_WINDOW);
+}
+
+/// With a submenu open, `taker` takes the keyboard: the menu and the submenu are each dismissed exactly once, the grab
+/// is gone and the keyboard is with `taker`; ending the grab again afterwards sends nothing more.
+fn nested_dismissed_once_when_taken(panel: &'static Panel, taker: Taker) {
+    let (mut d, client, _menu, _submenu) = submenu_open(panel);
+    let _taker = take_keyboard(&mut d, taker);
+    wait_until(&mut d, "the menu and the submenu to be dismissed", |_| {
+        let (menu, submenu) = client.done_counts();
+        menu > 0 && submenu > 0
+    });
+    assert!(d.state.popup_grab_root().is_none(), "the grab is gone");
+    wait_until(
+        &mut d,
+        &format!("the {taker:?} to hold the keyboard"),
+        |s| holds_keyboard(s, taker),
+    );
+    d.state.end_popup_grab(SERIAL_COUNTER.next_serial(), 0);
+    sync(&mut d, &client);
+    assert_eq!(client.done_counts(), (1, 1), "each menu is told once");
+}
+
+#[test]
+fn a_dock_menu_and_its_submenu_close_once_when_the_launcher_takes_the_keyboard() {
+    nested_dismissed_once_when_taken(&DOCK, Taker::Launcher);
+}
+
+#[test]
+fn a_menu_bar_menu_and_its_submenu_close_once_when_the_authentication_prompt_takes_the_keyboard() {
+    nested_dismissed_once_when_taken(&MENU_BAR, Taker::Prompt);
+}
+
+#[test]
+fn the_launchers_menu_and_its_submenu_close_once_when_the_session_locks() {
+    nested_dismissed_once_when_taken(&LAUNCHER, Taker::LockScreen);
+}
+
+#[test]
+fn a_window_menu_and_its_submenu_close_once_when_another_window_takes_the_keyboard() {
+    nested_dismissed_once_when_taken(&APP_WINDOW, Taker::Window);
 }

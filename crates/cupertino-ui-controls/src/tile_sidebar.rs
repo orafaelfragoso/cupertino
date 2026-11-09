@@ -349,7 +349,12 @@ impl<M: 'static> Widget<M> for TileRow<M> {
             } else {
                 ColorRole::SidebarSelection
             };
-            look::fill(cx, chrome, SELECTION_RADIUS, look::color(&theme, role, &state));
+            look::fill(
+                cx,
+                chrome,
+                SELECTION_RADIUS,
+                look::color(&theme, role, &state),
+            );
         }
         let leading = |offset: f64, width: f64| {
             if rtl {

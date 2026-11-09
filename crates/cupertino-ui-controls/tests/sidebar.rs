@@ -780,13 +780,28 @@ fn active_then_inactive<A: Application>(h: &mut Harness<A>, size: Size) -> Vec<(
                         color: color2,
                     },
                 ) => {
-                    assert_eq!((origin, run), (origin2, run2), "the same text in the same place");
+                    assert_eq!(
+                        (origin, run),
+                        (origin2, run2),
+                        "the same text in the same place"
+                    );
                     if color != color2 {
                         changed.push((Paint::Solid(*color), Paint::Solid(*color2)));
                     }
                 }
-                (PaintOp::Image { src, dst, .. }, PaintOp::Image { src: src2, dst: dst2, .. }) => {
-                    assert_eq!((src, dst), (src2, dst2), "the same symbol in the same place");
+                (
+                    PaintOp::Image { src, dst, .. },
+                    PaintOp::Image {
+                        src: src2,
+                        dst: dst2,
+                        ..
+                    },
+                ) => {
+                    assert_eq!(
+                        (src, dst),
+                        (src2, dst2),
+                        "the same symbol in the same place"
+                    );
                 }
                 _ => assert_eq!(x, y),
             }
@@ -844,7 +859,11 @@ fn an_inactive_window_s_sidebar_differs_only_in_its_labels_symbols_and_selection
     let get = |role, state| theme.colors.get(role, state).unwrap();
     let secondary = Paint::Solid(get(ColorRole::SecondaryText, normal));
     let faint = Paint::Solid(get(ColorRole::SidebarSelection, inactive()));
-    let accent = Paint::Solid(color(ColorRole::ControlFill, InteractionVariant::Normal, true));
+    let accent = Paint::Solid(color(
+        ColorRole::ControlFill,
+        InteractionVariant::Normal,
+        true,
+    ));
     let neutral = Paint::Solid(get(ColorRole::SidebarSelection, normal));
     let size = Size::new(200.0, 300.0);
     for (look, changed, selection) in [
@@ -867,11 +886,18 @@ fn an_inactive_window_s_sidebar_differs_only_in_its_labels_symbols_and_selection
             if *before == selection {
                 assert_eq!(*after, faint, "{look}");
             } else {
-                assert_eq!(*after, secondary, "{look}: a label turns secondary, from {before:?}");
+                assert_eq!(
+                    *after, secondary,
+                    "{look}: a label turns secondary, from {before:?}"
+                );
             }
         }
         assert!(
-            changed.iter().filter(|(_, after)| *after == secondary).count() >= PLACES.len(),
+            changed
+                .iter()
+                .filter(|(_, after)| *after == secondary)
+                .count()
+                >= PLACES.len(),
             "{look}: every row's label turns secondary: {changed:?}"
         );
     }
@@ -898,7 +924,10 @@ fn an_inactive_window_s_selected_row_reads_secondary_on_the_faint_selection() {
     let theme = support::theme();
     let secondary = theme
         .colors
-        .get(ColorRole::SecondaryText, cupertino_ui_theme::StateVariant::NORMAL)
+        .get(
+            ColorRole::SecondaryText,
+            cupertino_ui_theme::StateVariant::NORMAL,
+        )
         .unwrap();
     let asked: HashMap<String, _> = tints.asked.lock().unwrap().iter().cloned().collect();
     assert_eq!(asked.get("symbol.Computer"), Some(&secondary));

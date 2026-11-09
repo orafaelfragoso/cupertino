@@ -263,3 +263,90 @@ fn the_resting_search_is_a_round_button_whose_press_reaches_the_field() {
     // button is unseen, so nothing needs to hide it
     assert_eq!(round(&h), 4);
 }
+
+/// The edges of the toolbar's glass the toolkit draws over the compositor's: each rim's stops, top to bottom, and how
+/// many shades are cut out of their shapes.
+fn glass_edges(h: &Harness<Browser>) -> (Vec<Vec<cupertino_ui_theme::Color>>, usize) {
+    use cupertino_ui_render::{Effect, FillRule, Paint};
+    let ops: Vec<PaintOp> = h
+        .snapshot()
+        .display_list
+        .nodes
+        .into_iter()
+        .flat_map(|n| n.ops)
+        .collect();
+    let rims = ops
+        .iter()
+        .filter_map(|op| match op {
+            PaintOp::Stroke {
+                paint: Paint::Linear { stops, .. },
+                ..
+            } => Some(stops.iter().map(|s| s.color).collect()),
+            _ => None,
+        })
+        .collect();
+    let shades = ops
+        .windows(2)
+        .filter(|w| {
+            matches!(
+                &w[0],
+                PaintOp::PushClip(Shape::Path {
+                    fill_rule: FillRule::EvenOdd,
+                    ..
+                })
+            ) && matches!(&w[1], PaintOp::PushLayer { effects, .. }
+                    if matches!(effects.as_slice(), [Effect::DropShadow { .. }]))
+        })
+        .count();
+    (rims, shades)
+}
+
+/// Over a light face the glass's rim light marks no edge, so in the light appearance the toolkit draws a fine dark
+/// rim on each floating control's glass, stronger at its sides than at its top and bottom where the light falls, and
+/// a faint shade below it that never dims the glass; the dark appearance's glass marks its own edge.
+#[test]
+fn the_light_toolbar_glass_has_a_fine_dark_rim_and_a_shade_outside_it() {
+    use cupertino_ui_theme::Appearance;
+    let mut theme = support::theme();
+    theme.preferences.appearance = Appearance::Light;
+    let mut h = Harness::<Browser>::with_effects(theme.clone());
+    h.settle();
+    let (rims, shades) = glass_edges(&h);
+    // the choice, the menu button, the action group, the round button, and the resting search with the field under it
+    assert_eq!(rims.len(), 6, "{rims:?}");
+    assert_eq!(
+        shades,
+        rims.len(),
+        "each glass casts its shade, cut out of its shape"
+    );
+    for stops in &rims {
+        let [top, middle, bottom] = stops.as_slice() else {
+            panic!("{stops:?}")
+        };
+        for c in [top, middle, bottom] {
+            assert_eq!((c.r, c.g, c.b), (0.0, 0.0, 0.0), "a dark rim");
+        }
+        assert!(
+            middle.a > top.a && top.a == bottom.a && top.a > 0.0,
+            "{stops:?}"
+        );
+    }
+
+    theme.preferences.appearance = Appearance::LightHighContrast;
+    let mut contrast = Harness::<Browser>::with_effects(theme.clone());
+    contrast.settle();
+    let (strong, _) = glass_edges(&contrast);
+    assert!(
+        strong[0][1].a > rims[0][1].a && strong[0][0].a > rims[0][0].a,
+        "Increase Contrast strengthens it"
+    );
+
+    theme.preferences.appearance = Appearance::Dark;
+    let mut dark = Harness::<Browser>::with_effects(theme);
+    dark.settle();
+    assert_eq!(
+        glass_edges(&dark),
+        (Vec::new(), 0),
+        "the dark glass marks its own edge"
+    );
+}

@@ -356,7 +356,10 @@ fn an_inactive_window_s_tile_sidebar_differs_only_in_its_labels_and_selection() 
     let theme = support::theme();
     let secondary = theme
         .colors
-        .get(ColorRole::SecondaryText, cupertino_ui_theme::StateVariant::NORMAL)
+        .get(
+            ColorRole::SecondaryText,
+            cupertino_ui_theme::StateVariant::NORMAL,
+        )
         .unwrap();
     let faint = theme
         .colors

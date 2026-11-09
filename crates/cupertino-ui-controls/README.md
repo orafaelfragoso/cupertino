@@ -211,7 +211,11 @@ t; a toolbar group is regular glass (`PaintCx::glass`) in one container
   per window (`GlassRole::container`, blending only when two controls come closer than the 8 pt gap between them),
   kept by the compositor with Reduce Transparency and Increase Contrast, over the content pane's background, which the
   compositor draws below it; where the desktop shows no glass it paints a translucent body with a one-pixel rim (and a
-  soft shade in the light appearance). The field under a resting `ToolbarSearch` button is not drawn, so the button's
+  soft shade in the light appearance). Over a light face the compositor's rim light marks no edge, so in the light
+  appearance the toolkit lays its own over the compositor's glass: a dark rim on the outermost device pixel, 25 %
+  black at the sides and 9 % at the top and bottom where the light falls (50 % and 30 % with Increase Contrast), and
+  a faint shade below, cut out of the shape so it never dims the glass. A light divider is 40 % black, as strong over
+  the glass as the disabled glyphs beside it. The field under a resting `ToolbarSearch` button is not drawn, so the button's
   glass shows what lies below the field. Moving a role to another material is its one arm in `GlassRole::material`.
   `GlassRole::floating` tells the floating controls (toolbar groups, glass buttons, a held thumb) from the content
   surfaces (the sidebar panel). Glass is never laid on glass: a node on glass the window shows

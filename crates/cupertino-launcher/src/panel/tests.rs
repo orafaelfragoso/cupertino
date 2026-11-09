@@ -270,7 +270,10 @@ fn enter_carries_out_the_chosen_action() {
     p.handle_key(Key::Tab, Mods::NONE, &mut l, now(0.0));
     p.handle_key(Key::Tab, Mods::NONE, &mut l, now(0.0));
     let ev = p.handle_key(Key::Enter, Mods::NONE, &mut l, now(1.0));
-    let PanelEvent::Activate(Activation::Run(cmd)) = ev else {
+    let Some(cmd) = (match ev.clone() {
+        PanelEvent::Activate(activation) => activation.into_command(),
+        _ => None,
+    }) else {
         panic!("{ev:?}")
     };
     assert_eq!(cmd.args, ["--private-window"]);
@@ -293,7 +296,10 @@ fn enter_activates_the_selection_and_closes() {
     let (mut p, mut l) = open();
     type_str(&mut p, &mut l, "gimp");
     let ev = p.handle_key(Key::Enter, Mods::NONE, &mut l, now(1.0));
-    let PanelEvent::Activate(Activation::Run(cmd)) = ev else {
+    let Some(cmd) = (match ev.clone() {
+        PanelEvent::Activate(activation) => activation.into_command(),
+        _ => None,
+    }) else {
         panic!("{ev:?}")
     };
     assert_eq!(cmd.program, "gimp-2.10");

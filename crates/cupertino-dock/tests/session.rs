@@ -253,6 +253,26 @@ fn a_launch_that_was_announced_keeps_its_bounce_until_the_window_and_is_not_doub
     assert_eq!(lift(&s, "foot", 5.0 + 2.0 * s.dock.bounce.period), 0.0);
 }
 
+/// A launch announced for an application that already shows a window (the launcher asks for its token before the
+/// server brings the application forward) does not bounce its tile: no first window will come to end the bounce. Once
+/// its last window has closed, a launch bounces again.
+#[test]
+fn a_launch_announced_for_an_application_that_shows_a_window_does_not_bounce() {
+    let mut s = session(
+        &["org.mozilla.firefox"],
+        vec![entry("org.mozilla.firefox", "StartupWMClass=firefox\n")],
+    );
+    s.list_taken();
+    s.window(1, "firefox", "page", false, 0.0);
+    let peak = s.dock.bounce.period / 2.0;
+    s.launching("org.mozilla.firefox.desktop", 5.0);
+    assert_eq!(lift(&s, "org.mozilla.firefox", 5.0 + peak), 0.0);
+    assert_eq!(lift(&s, "org.mozilla.firefox", 30.0), 0.0);
+    s.window_closed(1, 40.0);
+    s.launching("org.mozilla.firefox.desktop", 50.0);
+    assert!(lift(&s, "org.mozilla.firefox", 50.0 + peak) > 0.0);
+}
+
 /// a refused activation reaches the tile of the application's desktop entry, however the
 /// server names the application.
 #[test]

@@ -963,10 +963,13 @@ dependencies = [
 name = "cupertino-apps"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
+ "async-io",
  "percent-encoding",
  "serde",
  "serde_json",
  "tempfile",
+ "zbus",
 ]
 
 [[package]]

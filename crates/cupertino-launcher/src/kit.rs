@@ -24,6 +24,20 @@ use cupertino_kit::geometry::Size;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// A launch waiting for its activation token.
+struct Pending {
+    spec: CommandSpec,
+    /// The desktop file ID of the application it starts, when it is opened as its dock tile opens it.
+    opens: Option<String>,
+}
+
+/// An application being opened, with its token: waiting for the server's answer, then for its D-Bus call.
+struct Opening {
+    desktop_id: String,
+    spec: CommandSpec,
+    token: Option<String>,
+}
+
 /// The most result icons kept; past it the cache starts again.
 const MAX_ICONS: usize = 512;
 /// How long the preview of a result may take before the pane says it is unavailable, in seconds.
@@ -63,6 +77,20 @@ impl SearchRequest {
     }
 }
 
+/// An `org.freedesktop.Application.Activate` call under way ([`Host::ask_for_window`]): whether it was answered.
+pub type BusCall = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
+
+/// What the server found for an application the launcher opens ([`Host::bring_forward`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Running {
+    /// It showed a window and was brought forward, as a click on its dock tile brings it: nothing is started.
+    Raised,
+    /// A process of it runs but shows no window: it is asked for one, or started again.
+    Resident,
+    /// It does not run: it is started.
+    NotRunning,
+}
+
 /// What the model needs the session for.
 pub trait Host {
     /// Start `spec`, with the activation token the compositor gave for it.
@@ -97,6 +125,24 @@ pub trait Host {
     }
     /// Both clocks now.
     fn now(&self) -> Now;
+    /// Ask the server to bring the application of desktop file ID `desktop_id` forward as a click on its dock tile
+    /// does; the answer comes back as [`Message::Opened`] with `launch`. False when the server cannot be asked (the
+    /// default): the application is then started as before.
+    fn bring_forward(&mut self, _desktop_id: &str, _launch: u64) -> bool {
+        false
+    }
+    /// Ask the resident application of bus name `bus_name` (its desktop file ID without `.desktop`), whose desktop file
+    /// is `source`, for a new window over D-Bus with `token`, when its entry is D-Bus activatable; the call ends in
+    /// whether it was answered. `None` (the default) when it is not: the entry is then started again, and a running
+    /// instance opens a window.
+    fn ask_for_window(
+        &mut self,
+        _bus_name: &str,
+        _source: Option<&std::path::Path>,
+        _token: Option<String>,
+    ) -> Option<BusCall> {
+        None
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -111,6 +157,10 @@ pub enum Message {
     Indexed(Arc<FileIndex>),
     /// The activation token of the launch waiting as `launch` arrived (`None` when there is none).
     Launch(u64, Option<String>),
+    /// The server's answer for the application opened as `launch` ([`Host::bring_forward`]).
+    Opened(u64, Running),
+    /// The resident application opened as `launch` answered the request for a window (`true`) or not.
+    Asked(u64, bool),
     /// An animation frame.
     Frame(u64),
     /// The file index could not be built.
@@ -181,7 +231,9 @@ pub struct Model {
     /// The panel window's size as last given.
     extent: Size,
     /// Launches waiting for their activation token.
-    pending: HashMap<u64, CommandSpec>,
+    pending: HashMap<u64, Pending>,
+    /// Applications opened with their token, waiting for the server's answer or for their D-Bus call.
+    opening: HashMap<u64, Opening>,
     next_launch: u64,
     /// The animation frame that counts; an older one is ignored when it arrives.
     pub(crate) frame: u64,
@@ -220,6 +272,7 @@ impl Model {
             searched: None,
             extent: view::window_extent(view::compact_shape()),
             pending: HashMap::new(),
+            opening: HashMap::new(),
             next_launch: 0,
             frame: 0,
             hidden: 0,
@@ -615,17 +668,8 @@ impl Model {
     fn activated(&mut self, activation: Activation) -> Vec<Command<Message>> {
         let commands = match activation {
             Activation::CopyToClipboard(text) => vec![Command::SetClipboard(text)],
-            Activation::Run(spec) => {
-                let launch = self.next_launch;
-                self.next_launch += 1;
-                let app_id = spec.desktop_id.clone();
-                self.pending.insert(launch, spec);
-                vec![Command::ActivationToken {
-                    window: WindowKey(Key::from("panel")),
-                    app_id,
-                    on_token: Box::new(move |token| Message::Launch(launch, token)),
-                }]
-            }
+            Activation::Run(spec) => self.ask_token(spec, None),
+            Activation::OpenApp { desktop_id, spec } => self.ask_token(spec, Some(desktop_id)),
             Activation::Nothing => {
                 eprintln!("cupertino-launcher: the entry has no usable command");
                 Vec::new()
@@ -633,6 +677,84 @@ impl Model {
         };
         self.hide(false);
         commands
+    }
+
+    /// Ask for the activation token of `spec` while the panel's window still exists. `opens` is the application it
+    /// starts when that is to be brought forward instead when it runs.
+    fn ask_token(&mut self, spec: CommandSpec, opens: Option<String>) -> Vec<Command<Message>> {
+        let launch = self.next_launch;
+        self.next_launch += 1;
+        let app_id = spec.desktop_id.clone();
+        self.pending.insert(launch, Pending { spec, opens });
+        vec![Command::ActivationToken {
+            window: WindowKey(Key::from("panel")),
+            app_id,
+            on_token: Box::new(move |token| Message::Launch(launch, token)),
+        }]
+    }
+
+    /// The token of `launch` arrived: an application to open is first brought forward if it runs (the server is
+    /// asked), anything else starts.
+    fn launch(&mut self, launch: u64, token: Option<String>) {
+        let Some(Pending { spec, opens }) = self.pending.remove(&launch) else {
+            return;
+        };
+        if let Some(desktop_id) = opens {
+            if self.host.bring_forward(&desktop_id, launch) {
+                self.opening.insert(
+                    launch,
+                    Opening {
+                        desktop_id,
+                        spec,
+                        token,
+                    },
+                );
+                return;
+            }
+        }
+        self.host.run(spec, token);
+    }
+
+    /// The server's answer for the application opened as `launch`, as a click on its dock tile goes on: nothing more
+    /// when it came forward; a resident one is asked for a window over D-Bus when its entry allows, else started again;
+    /// one that does not run is started.
+    fn opened(&mut self, launch: u64, running: Running) -> Vec<Command<Message>> {
+        let Some(opening) = self.opening.remove(&launch) else {
+            return Vec::new();
+        };
+        match running {
+            Running::Raised => Vec::new(),
+            Running::NotRunning => {
+                self.host.run(opening.spec, opening.token);
+                Vec::new()
+            }
+            Running::Resident => {
+                let source = self
+                    .launcher
+                    .entry(&opening.desktop_id)
+                    .and_then(|e| e.source.clone());
+                let bus_id = opening
+                    .desktop_id
+                    .strip_suffix(".desktop")
+                    .unwrap_or(&opening.desktop_id)
+                    .to_owned();
+                match self
+                    .host
+                    .ask_for_window(&bus_id, source.as_deref(), opening.token.clone())
+                {
+                    Some(call) => {
+                        self.opening.insert(launch, opening);
+                        vec![Command::Perform(Box::pin(async move {
+                            Message::Asked(launch, call.await)
+                        }))]
+                    }
+                    None => {
+                        self.host.run(opening.spec, opening.token);
+                        Vec::new()
+                    }
+                }
+            }
+        }
     }
 
     /// Open the browser's application `id` as the search would.
@@ -917,8 +1039,16 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::Launch(launch, token) => {
-            if let Some(spec) = model.pending.remove(&launch) {
-                model.host.run(spec, token);
+            model.launch(launch, token);
+            Vec::new()
+        }
+        Message::Opened(launch, running) => model.opened(launch, running),
+        Message::Asked(launch, answered) => {
+            // an application that did not answer is started again with the token, as the dock does
+            if let Some(opening) = model.opening.remove(&launch) {
+                if !answered {
+                    model.host.run(opening.spec, opening.token);
+                }
             }
             Vec::new()
         }

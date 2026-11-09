@@ -259,8 +259,24 @@ pub const FILE_MANAGER_ID: &str = "cupertino-files.desktop";
 pub enum Activation {
     /// Spawn this command (environment already contains the activation token, if any).
     Run(CommandSpec),
+    /// Open the application of desktop file ID `desktop_id` as a click on its dock tile does: bring it forward when it
+    /// runs, and only otherwise spawn `spec`, its entry's command.
+    OpenApp {
+        desktop_id: String,
+        spec: CommandSpec,
+    },
     CopyToClipboard(String),
     Nothing,
+}
+
+impl Activation {
+    /// The command it would spawn: [`Activation::Run`]'s, or the entry's command of [`Activation::OpenApp`].
+    pub fn into_command(self) -> Option<CommandSpec> {
+        match self {
+            Activation::Run(spec) | Activation::OpenApp { spec, .. } => Some(spec),
+            Activation::CopyToClipboard(_) | Activation::Nothing => None,
+        }
+    }
 }
 
 struct AppCandidate {
@@ -865,6 +881,14 @@ impl Launcher {
             Action::LaunchApp { desktop_id, .. } => Some(desktop_id.clone()),
             _ => None,
         };
+        // the application itself, not one of its desktop actions: it is brought forward when it runs
+        let opens = match &item.action {
+            Action::LaunchApp {
+                desktop_id,
+                action: None,
+            } => Some(desktop_id.clone()),
+            _ => None,
+        };
         if let Some(hook) = self.token_hook.as_mut() {
             if let Some(t) = hook(&LaunchRequest {
                 desktop_id,
@@ -875,7 +899,13 @@ impl Launcher {
         }
         self.frecency
             .record(&item.id, &Query::new(query).normalized(), now);
-        Activation::Run(cmd)
+        match opens {
+            Some(desktop_id) => Activation::OpenApp {
+                desktop_id,
+                spec: cmd,
+            },
+            None => Activation::Run(cmd),
+        }
     }
 }
 

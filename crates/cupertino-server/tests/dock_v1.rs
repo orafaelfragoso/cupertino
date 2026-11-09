@@ -18,6 +18,7 @@ use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::CupertinoBa
 use cupertino_protocols::client::cupertino_dock_v1::{
     self, AppCommand, CupertinoDockV1, WindowState,
 };
+use cupertino_protocols::client::cupertino_session_v1::{self, CupertinoSessionV1};
 use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
 use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless::{self, HeadlessDisplay};
@@ -243,6 +244,8 @@ enum DockEvent {
     /// `app_resident`: the application id and whether it is resident.
     Resident(String, bool),
     Done,
+    /// `cupertino_session_v1.app_activation`: the serial and the result (0 activated, 1 resident, 2 not running).
+    Opened(u32, u32),
 }
 
 #[derive(Default)]
@@ -438,6 +441,31 @@ impl Dispatch<CupertinoDockV1, ()> for ClientState {
     }
 }
 
+impl Dispatch<CupertinoSessionV1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &CupertinoSessionV1,
+        event: cupertino_session_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        // the session's state is not what these tests are about
+        if let cupertino_session_v1::Event::AppActivation { serial, result } = event {
+            let result = match result {
+                WEnum::Value(v) => v as u32,
+                WEnum::Unknown(v) => v,
+            };
+            state
+                .status
+                .lock()
+                .unwrap()
+                .events
+                .push(DockEvent::Opened(serial, result));
+        }
+    }
+}
+
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
     fn event(
         _: &mut Self,
@@ -515,6 +543,8 @@ enum Cmd {
     CloseWindow,
     /// The dock asks for exclusive keyboard interactivity (true) or for none, and commits.
     SetKeyboard(bool),
+    /// The launcher's session object asks to bring the application of a desktop file ID forward, with a serial.
+    OpenApp(u32, &'static str),
     /// Drop the connection: the dock process died.
     Quit,
 }
@@ -680,8 +710,9 @@ impl DockClient {
                 | Cmd::GtkPresent
                 | Cmd::GtkRequestFocus(_)
                 | Cmd::SetIcon(_)
-                | Cmd::CloseWindow => {
-                    panic!("the dock does not act as an application window")
+                | Cmd::CloseWindow
+                | Cmd::OpenApp(..) => {
+                    panic!("the dock does not act as an application window or the launcher")
                 }
                 Cmd::Quit => unreachable!("handled by the client loop"),
             });
@@ -712,6 +743,62 @@ impl DockClient {
         self.0.status.lock().unwrap().error.clone()
     }
 }
+
+/// The launcher: a shell process with the Session role and its session object, on a shell global of version 20.
+struct LauncherClient(TestClient);
+
+impl LauncherClient {
+    fn spawn(stream: UnixStream) -> LauncherClient {
+        LauncherClient(run_client(stream, |globals, qh, status| {
+            let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
+            let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
+            let shell: CupertinoShellV1 = globals.bind(qh, 20..=20, ()).unwrap();
+            let session = shell.get_session(qh, ());
+            let state = ClientState {
+                status: status.clone(),
+                shm,
+                surface: compositor.create_surface(qh, ()),
+                attached: false,
+                toplevel_size: (0, 0),
+            };
+            let apply = Box::new(move |cmd: Cmd| match cmd {
+                Cmd::OpenApp(serial, desktop_id) => {
+                    session.activate_app(serial, desktop_id.to_string());
+                }
+                _ => panic!("the launcher only opens applications"),
+            });
+            (state, apply)
+        }))
+    }
+
+    fn send(&self, cmd: Cmd) {
+        self.0.commands.send(cmd).unwrap();
+    }
+
+    /// The answers so far: (serial, result).
+    fn answers(&self) -> Vec<(u32, u32)> {
+        self.0
+            .status
+            .lock()
+            .unwrap()
+            .events
+            .iter()
+            .filter_map(|e| match *e {
+                DockEvent::Opened(serial, result) => Some((serial, result)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn error(&self) -> Option<(String, u32)> {
+        self.0.status.lock().unwrap().error.clone()
+    }
+}
+
+/// `app_activation` results.
+const ACTIVATED: u32 = 0;
+const RESIDENT: u32 = 1;
+const NOT_RUNNING: u32 = 2;
 
 const ICON_SIDE: i32 = 4;
 /// One ARGB8888 pixel, little-endian: half-transparent premultiplied blue.
@@ -1243,6 +1330,108 @@ fn activate_app_raises_the_application() {
     h.wait_until("the first application to take focus", |s| {
         s.wm.key_window() == Some(first)
     });
+}
+
+/// The launcher opening an application by its desktop file ID: one that shows a window comes forward as the dock's
+/// `activate_app` brings it (its minimized window restored, nothing started); one matched through its desktop entry
+/// too; a resident one without windows and one that does not run are only reported, for the launcher to start.
+#[test]
+fn the_launcher_brings_a_running_application_forward_or_learns_it_must_start_it() {
+    let Some(mut h) = Harness::new() else { return };
+    let data = tempfile::tempdir().unwrap();
+    let apps = data.path().join("applications");
+    std::fs::create_dir(&apps).unwrap();
+    std::fs::write(
+        apps.join("org.example.Maps.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Maps\nExec=maps\nStartupWMClass=maps-window\n",
+    )
+    .unwrap();
+    h.state.desktop = DesktopIndex::load_from(&[data.path().to_path_buf()]);
+    let launcher = LauncherClient::spawn(
+        cupertino_server::shell_connection::shell_process_connection(
+            &h.state.display_handle,
+            &[ShellRole::Session],
+        )
+        .unwrap(),
+    );
+    let _a = spawn_app(h.socket_path(), "org.example.a");
+    let first = h.mapped_window(1);
+    let maps = spawn_app(h.socket_path(), "maps-window");
+    let second = h.mapped_window(2);
+    let _c = spawn_app(h.socket_path(), "org.example.c");
+    let third = h.mapped_window(3);
+    assert_eq!(h.state.wm.key_window(), Some(third));
+
+    // by its ID with the suffix, in another case
+    launcher.send(Cmd::OpenApp(1, "Org.Example.A.desktop"));
+    h.wait_until("the first application to take focus", |s| {
+        s.wm.key_window() == Some(first)
+    });
+    h.wait_until("the answer", |_| !launcher.answers().is_empty());
+    assert_eq!(launcher.answers(), [(1, ACTIVATED)]);
+
+    // through its entry's StartupWMClass, out of its minimized window
+    h.state.command(Command::Minimize {
+        window: second,
+        target: None,
+    });
+    h.advance(5.0);
+    assert!(h.state.wm.window(second).unwrap().state().is_minimized());
+    launcher.send(Cmd::OpenApp(2, "org.example.Maps.desktop"));
+    h.wait_until("the minimized window to take focus", |s| {
+        s.wm.key_window() == Some(second)
+    });
+    h.advance(5.0);
+    assert!(!h.state.wm.window(second).unwrap().state().is_minimized());
+    assert_eq!(launcher.answers()[1], (2, ACTIVATED));
+
+    // not running: reported, nothing started and nothing raised
+    launcher.send(Cmd::OpenApp(3, "org.example.absent.desktop"));
+    h.wait_until("the answer", |_| launcher.answers().len() == 3);
+    assert_eq!(launcher.answers()[2], (3, NOT_RUNNING));
+    assert_eq!(h.state.wm.key_window(), Some(second));
+
+    // resident without windows: reported, for the launcher to ask it for a window
+    maps.commands.send(Cmd::CloseWindow).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while h.state.wm.windows().count() != 2 && Instant::now() < end {
+        h.advance(0.1);
+    }
+    assert_eq!(h.state.wm.windows().count(), 2, "the window closed");
+    launcher.send(Cmd::OpenApp(4, "org.example.Maps.desktop"));
+    h.wait_until("the answer", |_| launcher.answers().len() == 4);
+    assert_eq!(launcher.answers()[3], (4, RESIDENT));
+    assert_eq!(h.state.wm.windows().count(), 2, "nothing was started");
+    assert_eq!(launcher.error(), None);
+}
+
+/// `activate_app` checks the Session role on every request: once the launcher's process exits, its session object is
+/// refused with the permission error, nothing comes forward and nothing is answered.
+#[test]
+fn a_launcher_whose_process_exited_is_refused_activate_app() {
+    let Some(mut h) = Harness::new() else { return };
+    let (stream, holder) = common::held_shell_connection(&h.state, &[ShellRole::Session]);
+    let launcher = LauncherClient::spawn(stream);
+    let _a = spawn_app(h.socket_path(), "org.example.a");
+    let first = h.mapped_window(1);
+    let _b = spawn_app(h.socket_path(), "org.example.b");
+    let second = h.mapped_window(2);
+    launcher.send(Cmd::OpenApp(1, "org.example.a"));
+    h.wait_until("the first application to take focus", |s| {
+        s.wm.key_window() == Some(first)
+    });
+
+    holder.end();
+    launcher.send(Cmd::OpenApp(2, "org.example.b"));
+    h.wait_until("the permission error", |_| launcher.error().is_some());
+    // error 2 of cupertino_shell_v1.error is `permission`
+    assert_eq!(
+        launcher.error(),
+        Some(("cupertino_session_v1".to_string(), 2))
+    );
+    assert_eq!(h.state.wm.key_window(), Some(first));
+    assert_ne!(first, second);
+    assert_eq!(launcher.answers(), [(1, ACTIVATED)]);
 }
 
 /// The role is checked on every request, not only at `get_dock`: once the process the connection was made for exits, a

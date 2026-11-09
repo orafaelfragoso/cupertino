@@ -10,7 +10,7 @@ use crate::browse::Zone;
 use crate::engine::tests_support::test_launcher;
 use crate::exec::CommandSpec;
 use crate::files::FileSearchConfig;
-use crate::kit::{self, Host, Message, Model, SearchRequest};
+use crate::kit::{self, Host, Message, Model, Running, SearchRequest};
 use crate::nav::View;
 use crate::panel::Now;
 use crate::providers::{Provider, Reply, Update};
@@ -54,6 +54,12 @@ thread_local! {
     static INBOXED: RefCell<bool> = const { RefCell::new(false) };
     /// While set, the file searches the model asks for wait here instead of answering at once.
     static HELD: RefCell<Option<Vec<SearchRequest>>> = const { RefCell::new(None) };
+    /// The server can be asked to bring an application forward ([`Host::bring_forward`]).
+    static FORWARDS: Cell<bool> = const { Cell::new(false) };
+    /// The launch the server was last asked about.
+    static ASKED: Cell<Option<u64>> = const { Cell::new(None) };
+    /// The entries are D-Bus activatable, and their `Activate` call ends in this answer.
+    static BUS_ANSWER: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
 /// Holds the file searches from now on, for a test to answer as it likes.
@@ -154,6 +160,26 @@ impl Host for TestHost {
             unix: 1_000_000.0,
         }
     }
+
+    fn bring_forward(&mut self, desktop_id: &str, launch: u64) -> bool {
+        if !FORWARDS.get() {
+            return false;
+        }
+        log(format!("bring forward {desktop_id}"));
+        ASKED.set(Some(launch));
+        true
+    }
+
+    fn ask_for_window(
+        &mut self,
+        bus_name: &str,
+        _: Option<&std::path::Path>,
+        token: Option<String>,
+    ) -> Option<kit::BusCall> {
+        let answer = BUS_ANSWER.get()?;
+        log(format!("ask {bus_name} token={}", token.is_some()));
+        Some(Box::pin(async move { answer }))
+    }
 }
 
 /// The launcher on the test entries, shown at once with its appear animation settled.
@@ -168,6 +194,9 @@ impl Application for TestApp {
         HOST.with_borrow_mut(Vec::clear);
         EXTENT.set(None);
         HELD.set(None);
+        FORWARDS.set(false);
+        ASKED.set(None);
+        BUS_ANSWER.set(None);
         INBOXED.set(false);
         let mut model = Model::new(test_launcher(), Box::new(TestHost));
         model.settled = true;
@@ -743,6 +772,119 @@ fn return_launches_the_selection_with_its_token_and_closes() {
         host[0].starts_with("run Some(\"browser.desktop\") [\"firefox\"]"),
         "{host:?}"
     );
+}
+
+impl Run {
+    /// The server answers `running` for the application it was last asked to bring forward.
+    fn answer(&mut self, running: Running) {
+        let launch = ASKED.take().expect("the server was asked");
+        self.deliver(Message::Opened(launch, running));
+    }
+}
+
+#[test]
+fn an_application_that_runs_comes_forward_from_the_search_and_the_browser_without_a_second_copy() {
+    let mut run = Run::new();
+    FORWARDS.set(true);
+    run.type_text("fire");
+    run.key("Return", RETURN_CODE, RETURN);
+    assert!(!run.model().panel.is_visible(), "the panel closes at once");
+    assert_eq!(launches(), ["bring forward browser.desktop"]);
+    run.answer(Running::Raised);
+    assert_eq!(
+        launches(),
+        ["bring forward browser.desktop"],
+        "nothing is started"
+    );
+
+    // the panel is hidden already: the Dock's request opens the browser
+    run.deliver(Message::Browse);
+    run.key("Down", DOWN_CODE, DOWN);
+    // the recents row leads with the application just opened
+    assert_eq!(run.selected(Role::Button), ["Firefox"]);
+    run.key("Return", RETURN_CODE, RETURN);
+    assert!(run.window("panel").is_none());
+    run.answer(Running::Raised);
+    assert_eq!(
+        launches(),
+        [
+            "bring forward browser.desktop",
+            "bring forward browser.desktop"
+        ],
+        "nothing is started"
+    );
+}
+
+#[test]
+fn an_application_that_does_not_run_starts_with_its_token_once_the_server_says_so() {
+    let mut run = Run::new();
+    FORWARDS.set(true);
+    run.type_text("fire");
+    run.key("Return", RETURN_CODE, RETURN);
+    assert_eq!(launches(), ["bring forward browser.desktop"]);
+    run.answer(Running::NotRunning);
+    let host = launches();
+    assert_eq!(host.len(), 2, "{host:?}");
+    assert!(
+        host[1].starts_with("run Some(\"browser.desktop\") [\"firefox\"]")
+            && host[1].ends_with("token=true"),
+        "{host:?}"
+    );
+    // a late or repeated answer starts nothing more
+    run.deliver(Message::Opened(0, Running::NotRunning));
+    assert_eq!(launches().len(), 2);
+}
+
+#[test]
+fn a_resident_application_is_asked_for_a_window_over_the_bus_and_started_again_when_it_cannot_be() {
+    // D-Bus activatable and answering: asked, not started
+    let mut run = Run::new();
+    FORWARDS.set(true);
+    BUS_ANSWER.set(Some(true));
+    run.type_text("fire");
+    run.key("Return", RETURN_CODE, RETURN);
+    run.answer(Running::Resident);
+    assert_eq!(
+        launches(),
+        ["bring forward browser.desktop", "ask browser token=true"]
+    );
+
+    // D-Bus activatable but not answering: started again with the token
+    let mut run = Run::new();
+    FORWARDS.set(true);
+    BUS_ANSWER.set(Some(false));
+    run.type_text("fire");
+    run.key("Return", RETURN_CODE, RETURN);
+    run.answer(Running::Resident);
+    let host = launches();
+    assert_eq!(host.len(), 3, "{host:?}");
+    assert_eq!(host[1], "ask browser token=true");
+    assert!(
+        host[2].starts_with("run Some(\"browser.desktop\")") && host[2].ends_with("token=true")
+    );
+
+    // not D-Bus activatable: started again, and a running instance opens a window
+    let mut run = Run::new();
+    FORWARDS.set(true);
+    run.type_text("fire");
+    run.key("Return", RETURN_CODE, RETURN);
+    run.answer(Running::Resident);
+    let host = launches();
+    assert_eq!(host.len(), 2, "{host:?}");
+    assert!(host[1].starts_with("run Some(\"browser.desktop\")"));
+}
+
+#[test]
+fn a_desktop_action_runs_its_command_without_asking_the_server() {
+    let mut run = Run::new();
+    FORWARDS.set(true);
+    run.type_text("fire");
+    run.key("Tab", TAB_CODE, TAB);
+    run.key("Tab", TAB_CODE, TAB);
+    run.key("Return", RETURN_CODE, RETURN);
+    let host = launches();
+    assert_eq!(host.len(), 1, "{host:?}");
+    assert!(host[0].contains("--private-window"), "{host:?}");
 }
 
 #[test]

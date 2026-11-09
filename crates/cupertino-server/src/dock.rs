@@ -28,6 +28,7 @@ use cupertino_overview::OverviewMode;
 use cupertino_protocols::server::cupertino_dock_v1::{
     self, Corner, CupertinoDockV1, Gesture, WindowState,
 };
+use cupertino_protocols::server::cupertino_session_v1::Activation as AppActivation;
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
 use cupertino_wm::{Command, LifecycleState, OutputId, Rect, WindowId};
 use smithay::desktop::{layer_map_for_output, WindowSurfaceType};
@@ -792,6 +793,61 @@ impl Cupertino {
     fn dock_activate_app(&mut self, app_id: &str) {
         if let Some(app) = self.wm.app_for_identity(app_id) {
             self.command(Command::ActivateApp { app });
+        }
+    }
+
+    /// Whether the application `identity` is the one of desktop file ID `id` (without `.desktop`): it is the ID, or its
+    /// desktop entry has it, without regard to case.
+    fn is_desktop_app(&self, identity: &str, id: &str) -> bool {
+        identity.eq_ignore_ascii_case(id)
+            || self
+                .desktop
+                .find(identity)
+                .is_some_and(|e| e.id.eq_ignore_ascii_case(id))
+    }
+
+    /// `cupertino_session_v1.activate_app` (the launcher opening an application): bring the application of desktop
+    /// file ID `desktop_id` forward the way the dock's `activate_app` does (the same [`Command::ActivateApp`], so the
+    /// same choice of window, restore of a minimized one and unhiding), when it shows a window the dock would list.
+    /// An application matches when its identity is the ID, or the desktop entry of its identity has that ID, without
+    /// regard to case; of several, the most recently active. Without a window, whether it is resident
+    /// ([`Self::resident_apps`]) or not running; nothing is started.
+    pub fn activate_desktop_app(&mut self, desktop_id: &str) -> AppActivation {
+        let id = desktop_id.strip_suffix(".desktop").unwrap_or(desktop_id);
+        if id.is_empty() {
+            return AppActivation::NotRunning;
+        }
+        let shown = |app| {
+            self.wm.windows().any(|w| {
+                w.app == app
+                    && !matches!(
+                        w.state(),
+                        LifecycleState::Created
+                            | LifecycleState::Closing
+                            | LifecycleState::Destroyed
+                    )
+            })
+        };
+        let app = self.wm.app_mru().iter().copied().find(|&app| {
+            shown(app)
+                && self
+                    .wm
+                    .app(app)
+                    .is_some_and(|a| self.is_desktop_app(&a.identity, id))
+        });
+        if let Some(app) = app {
+            self.command(Command::ActivateApp { app });
+            return AppActivation::Activated;
+        }
+        self.note_residents();
+        if self
+            .resident_apps()
+            .iter()
+            .any(|identity| self.is_desktop_app(identity, id))
+        {
+            AppActivation::Resident
+        } else {
+            AppActivation::NotRunning
         }
     }
 }

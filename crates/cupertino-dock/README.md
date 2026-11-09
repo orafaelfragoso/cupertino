@@ -186,7 +186,8 @@ The bar follows Reduce Motion too:
   starts a program that has a desktop entry and when an `xdg-activation-v1` token names an application (`set_app_id`: the
   launcher, Open With, GTK's launch context). An application that appears with no such signal (started from a terminal)
   bounces for one cycle at its first window; the windows listed when the dock starts do not bounce; a second signal for a
-  bounce already running does not restart it.
+  bounce already running does not restart it; an application that already shows a window does not bounce (the launcher
+  asks for a token before the server brings the application forward, and no first window would end the bounce).
 - `attention` (the server refused an application's activation) bounces its tile once (informational attention).
 - An application's own icon comes from `cupertino-icons` (its desktop entry's `Icon=`: an absolute path or `hicolor` only); the trash is the asset `trash.empty` or `trash.full` (the home trash folder has an entry or not, looked at once a second).
 
@@ -198,7 +199,7 @@ running dot follows it:
   when its next window comes.
 - Opening it (a click on its tile, its menu's Open) asks that process for a new window. When the desktop entry
   says `DBusActivatable=true`, the dock calls `org.freedesktop.Application.Activate` on the bus name of the desktop file ID
-  (`src/activate.rs`, on a thread of its own). The activation token goes in the platform data as `activation-token` and
+  (`cupertino_apps::activate`, on a thread of its own; the launcher shares it). The activation token goes in the platform data as `activation-token` and
   `desktop-startup-id`. Otherwise, or when the call fails or is not answered within 3 s (`ACTIVATE_TIMEOUT`), the dock
   starts the entry again with an activation token, and a running instance opens a window. Neither bounces the tile: the application is already running.
 - Only an application the desktop shows stays without windows: a process with no desktop entry, or with a `NoDisplay`
@@ -296,8 +297,10 @@ A hot corner or gesture the dock maps to `app-grid` (by default the four-finger 
 `toggle_app_grid` from an older server is ignored.
 
 **Decision** (recorded here): one application browser. The dock's grid was removed rather than kept beside the
-launcher's, and the browser launches with an activation token like the launcher's other results; an application that
-runs is not brought forward by the browser the way a tile click brings it (`activate_app`).
+launcher's. Choosing an application in the browser (or in the launcher's search) opens it as a click on its tile does: the
+launcher asks the server (`cupertino_session_v1.activate_app`, the same server path as this dock's `activate_app`), which
+brings a running application forward, and only otherwise asks a resident one for a window or starts the entry with an
+activation token (see the launcher's README, *Opening an application*).
 
 ### Overview
 
@@ -399,7 +402,7 @@ cargo test -p cupertino-dock --features app
 
 | Test | Proves |
 |---|---|
-| Activation unit tests (`src/activate.rs`) | The object path of a desktop file ID and the token in the platform data. |
+| Activation unit tests (`cupertino-apps`, `src/activate.rs`) | The object path of a desktop file ID and the token in the platform data. |
 | `tests/activate.rs` | `Activate` reaches a fake `org.freedesktop.Application` on a private session bus (`cupertino-test-bus`) at the desktop file ID's path, with the token in its platform data; a name nobody owns fails. |
 | Stack unit tests (`src/stack.rs`) | The grid growing to five columns then up to three rows, cells in reading order, presses on entries and the button, the quarter-second entry that only fades under Reduce Motion, the newest-first order without hidden files, a real folder listed without hidden files, dangling links or names that are not UTF-8 and with only the shown entries' icons looked up, and the downloads folder from `user-dirs.dirs`. |
 | Switcher unit tests | Layout, hit-testing, delay and fade timing, hover slack, colours. |
@@ -409,5 +412,5 @@ cargo test -p cupertino-dock --features app
 | Tile drag unit tests | The press that becomes a drag past the threshold, the held press, and the removal puff's timing. |
 | `tests/dock.rs` | Sections, orientations, hit-testing, minimize targets and drag-reorder: the grab, the gap rule, the slide, the strip and section limits, the removal gate, the dim, the settle and the removal fade. |
 | `tests/wm_surfaces.rs` | The overview and switcher on Kit, headless: three windows of different sizes clear the workspaces bar by 20 pt and each other on four outputs at scales 1, 1.25, 1.5 and 2, and hit-test to themselves; the keys, the bar's slots, add and remove, screen-reader reading and presses, the closing fade, reflow, Reduce Motion, opaque fills under Reduce Transparency and Increase Contrast; the switcher's delay, pointer and screen-reader activation, live label, step, commit and cancel fades, and a lost panel resumed. With `CUPERTINO_LOOK_DIR` set, `look_captures` writes light and dark pictures at 1× and 2×. |
-| `tests/session.rs` | Windows and tiles, the launch bounce (announced, not doubled, unannounced, not for the first list) and the refused-activation hop. |
+| `tests/session.rs` | Windows and tiles, the launch bounce (announced, not doubled, unannounced, not for the first list, not for an application that shows a window) and the refused-activation hop. |
 | `tests/kit.rs` | The dock as CupertinoKit runs it, headless (`cupertino-ui-test`), behind a fake host: the bar's accessible tree, a click that activates or launches with an activation token, a drag off the bar that removes a pin, a tile menu whose item reaches the server, Focus Dock with the arrows, Return and Escape, the move to another display by resting on its edge strip, the window list from the bar's role only and a gesture from any, the bar's material as one region of the window (none under Reduce Transparency), the Force Quit dialog from the keyboard, the app-grid trigger sent to the server as its action with no window of its own, and the lock. Also the running indicators under their tiles, an attention bounce and a launch bounce run on frames with no timer faster than the fallback and back to rest, the tile menu as a grabbing popup anchored to its tile, every Focus Dock starting on the first tile with the ring shown, the focus moving to a neighbour when its tile goes, a keyboard leave ending Focus Dock except the menu's own, no new frame for pointer motion that changes nothing, a new frame for every change the bar shows (an application starting or quitting, a bounce, a new scale, Focus Dock, and a `dock.conf` turning magnification on, which changes only the surface's depth, or changing the tile size, position or auto-hide) and for the strip of a plugged-in output and the bar moved off an unplugged one, the switcher on the output the server names with desktop names and a click that switches, and the overview taking the keyboard, framing three windows and closing. Residency: the dot kept after the last window, a resident application asked over D-Bus with a token once and without a bounce, started again with a token without the bus or when the call fails, no second launch from the bar, and the dot dropped when the process goes or a new role does not list it. Reduce Motion: a launch that dims in place and magnification at once. Launches: a token that never comes lets the launch go ahead without one after 2 s, a program that fails at once can be opened again straight away, one that exits successfully before its window stays guarded, an earlier launch's exit leaves a later guard alone, and icons loading in the background (the bar's magnified side) with one left out loaded on the spot. Recents: an application that quits comes into the recents between two separators and opens from there, the quit ones then the launcher's history at most three, and none with `recents = off`. The name label over the tile under the pointer, following it, and gone with a menu open or the pointer away. Stacks: the downloads tile before the trash, its stack opening on a click with its files and button, a file opening and closing it, a second click, Escape and the button closing it, and a stack that shows only once its folder is listed and stays closed when closed meanwhile. With `CUPERTINO_LOOK_DIR` set, `look_captures` writes the bar, a tile's menu, the switcher, the overview's chrome over three windows, light and dark at 1× and 2×. |

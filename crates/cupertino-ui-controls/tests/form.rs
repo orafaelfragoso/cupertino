@@ -338,7 +338,7 @@ fn the_selected_sidebar_row_fills_with_the_selected_control_colour() {
 }
 
 /// A window that is not active draws its tile sidebar as an active one does but for the documented roles: every label,
-/// the selected row's too, takes the secondary label colour and the selection turns from the accent to the sidebar's
+/// the selected row's too, takes the inactive sidebar text colour and the selection turns from the accent to the sidebar's
 /// faint inactive selection; the tiles keep their colours and every shape stays where it was.
 #[test]
 fn an_inactive_window_s_tile_sidebar_differs_only_in_its_labels_and_selection() {
@@ -359,7 +359,7 @@ fn an_inactive_window_s_tile_sidebar_differs_only_in_its_labels_and_selection() 
     let secondary = theme
         .colors
         .get(
-            ColorRole::SecondaryText,
+            ColorRole::InactiveSidebarText,
             cupertino_ui_theme::StateVariant::NORMAL,
         )
         .unwrap();
@@ -388,7 +388,7 @@ fn an_inactive_window_s_tile_sidebar_differs_only_in_its_labels_and_selection() 
                     },
                 ) => {
                     assert_eq!((origin, run), (o2, r2), "{name}");
-                    assert_eq!(*color, secondary, "{name}: the label is secondary");
+                    assert_eq!(*color, secondary, "{name}: the label recedes");
                     labels += 1;
                 }
                 (

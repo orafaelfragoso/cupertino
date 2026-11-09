@@ -919,13 +919,14 @@ fn chevron(area: Rect, right: bool) -> Shape {
     }
 }
 
-/// A glyph's colour: the label colour; dimmed when disabled, and receding in an inactive window.
+/// A glyph's colour, and the title's: the label colour; dimmed when disabled, and the faintest text colour in a window
+/// that is not active, where the toolbar recedes.
 fn glyph_color(theme: &cupertino_ui_theme::ThemeTokens, state: &ControlState) -> Color {
     let normal = cupertino_ui_theme::StateVariant::NORMAL;
     let role = if !state.enabled {
         ColorRole::DisabledControlText
     } else if !state.window_active {
-        ColorRole::SecondaryText
+        ColorRole::TertiaryText
     } else {
         ColorRole::Text
     };

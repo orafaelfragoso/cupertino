@@ -7,6 +7,10 @@
 //! bar: with Reduce Transparency and in high contrast. A band that holds text outside glass, a table's pinned header
 //! under the row, is always the hard edge, its header drawing the line along its bottom. Where the window system has no raised layer nothing scrolls
 //! under raised nodes (their scroll containers clip it away) and there is no edge.
+//!
+//! In a window that is not active the row recedes into a band of its own: the band is filled with the inactive title
+//! bar colour, a little lighter (dark) or darker (light) than the window, with the hard edge's separator where the
+//! edge is hard, so the content stops at the row as it does under a solid title bar.
 
 use cupertino_geometry::{Point, Rect};
 use cupertino_ui_core::{OverlayCx, PaintCx};
@@ -72,6 +76,8 @@ pub(crate) struct EdgeLook {
     edge: ScrollEdge,
     background: Color,
     separator: Option<Color>,
+    /// The band's fill in a window that is not active, which replaces the veil.
+    inactive: Option<Color>,
     band: f64,
 }
 
@@ -99,6 +105,13 @@ impl EdgeLook {
                 .colors
                 .get(ColorRole::WindowBackground, state)
                 .unwrap_or(Color::new(0.0, 0.0, 0.0, 0.0)),
+            inactive: (!firm && !cx.window_active())
+                .then(|| {
+                    theme
+                        .colors
+                        .get(ColorRole::InactiveTitlebar, StateVariant::NORMAL)
+                })
+                .flatten(),
             separator: match edge {
                 ScrollEdge::Hard if !firm => theme.colors.get(ColorRole::Separator, state),
                 _ => None,
@@ -114,6 +127,14 @@ impl EdgeLook {
             return;
         }
         let rect = Rect::new(0.0, 0.0, size.width, band);
+        if let Some(fill) = self.inactive {
+            cx.fill(rect, Paint::Solid(fill));
+            if let Some(separator) = self.separator {
+                let hair = 1.0 / cx.env().scale.max(1.0);
+                cx.fill_pixels(Rect::new(0.0, band - hair, size.width, hair), separator);
+            }
+            return;
+        }
         match self.edge {
             ScrollEdge::Soft => cx.fill(
                 rect,

@@ -402,10 +402,13 @@ impl<M: 'static> Widget<M> for Section<M> {
         let size = f64::from(HEADING_SIZE);
         let first = layout.lines().first().map_or(0.0, |line| line.baseline);
         let baseline = self.metrics.heading / 2.0 + size * 0.36;
-        let color = env
-            .theme
-            .colors
-            .get(ColorRole::SecondaryText, StateVariant::NORMAL);
+        // in a window that is not active the heading recedes with the rows' labels
+        let role = if cx.window_active() {
+            ColorRole::SecondaryText
+        } else {
+            ColorRole::InactiveSidebarText
+        };
+        let color = env.theme.colors.get(role, StateVariant::NORMAL);
         look::glyphs(cx, &layout, Point::new(x, baseline - first), color);
     }
 
@@ -552,13 +555,13 @@ impl<M: 'static> Widget<M> for Row<M> {
             look::fill(cx, chrome, m.selection_radius, fill);
         }
         // a row on the accent takes the selected text colour; on the neutral selection it keeps its own colours; in a
-        // window that is not active every label is the secondary label colour, the selected row's too
+        // window that is not active every label is the inactive sidebar text, the selected row's too
         let text = if accented {
             look::color(&theme, ColorRole::ControlText, &selected)
         } else if !active {
             theme
                 .colors
-                .get(ColorRole::SecondaryText, StateVariant::NORMAL)
+                .get(ColorRole::InactiveSidebarText, StateVariant::NORMAL)
         } else {
             theme.colors.get(ColorRole::Text, StateVariant::NORMAL)
         };
@@ -577,9 +580,9 @@ impl<M: 'static> Widget<M> for Row<M> {
             }
         };
         if let Some(name) = &self.item.icon {
-            // in a window that is not active no symbol is the accent: each takes the secondary label colour, which
-            // keeps its contrast against the sidebar and the neutral selection where the inactive accent would fade
-            // into them; in an active window the neutral look's selected row keeps the accent symbol, and its
+            // in a window that is not active no symbol is the accent: each takes the label's inactive sidebar text,
+            // which keeps its contrast against the sidebar and the neutral selection where the inactive accent would
+            // fade into them; in an active window the neutral look's selected row keeps the accent symbol, and its
             // sections without the accent the secondary
             let accent = look::color(&theme, ColorRole::ControlFill, &selected);
             let secondary = theme
@@ -588,7 +591,7 @@ impl<M: 'static> Widget<M> for Row<M> {
             let tint = if accented {
                 text
             } else if !active {
-                secondary
+                text
             } else if self.selected || self.style.accent {
                 accent
             } else {
@@ -806,8 +809,13 @@ impl<M: 'static> Widget<M> for AccessoryButton<M> {
             window_active: cx.window_active(),
             ..ControlState::default()
         };
+        // in a window that is not active the accessory recedes with the labels
         let color = if self.selected && !self.style.neutral && cx.window_active() {
             look::color(&theme, ColorRole::ControlText, &state)
+        } else if !cx.window_active() {
+            theme
+                .colors
+                .get(ColorRole::InactiveSidebarText, StateVariant::NORMAL)
         } else {
             theme
                 .colors

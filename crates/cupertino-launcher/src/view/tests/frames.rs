@@ -108,11 +108,40 @@ impl UiRenderer for Blank {
     }
 }
 
+/// An icon the metered host's icon thread is asked for, and where its renditions go.
+type IconLoad = (String, async_channel::Sender<Vec<ImageSource>>);
+
 thread_local! {
     /// The animation frame the model waits for, delivered at the next step.
     static PENDING: Cell<Option<u64>> = const { Cell::new(None) };
     /// The session's monotonic clock, in seconds: the meter's.
     static CLOCK: Cell<f64> = const { Cell::new(0.0) };
+    /// How many applications the next [`Metered`] launcher lists; the test entries when `None`.
+    static APPS: Cell<Option<usize>> = const { Cell::new(None) };
+    /// The metered host's icon thread, started at the first icon asked.
+    static ICON_THREAD: RefCell<Option<std::sync::mpsc::Sender<IconLoad>>> = const { RefCell::new(None) };
+    /// The icons asked of the host so far, and the most waiting at once.
+    static ICONS_ASKED: Cell<usize> = const { Cell::new(0) };
+    static MOST_LOADING: Cell<usize> = const { Cell::new(0) };
+    /// The wall time the loop spent asking the host for icons.
+    static LOOP_ICON_NANOS: Cell<u128> = const { Cell::new(0) };
+}
+
+/// What loading and decoding one application icon costs the metered host's icon thread: about what a large theme icon
+/// takes to read and scale in this profile.
+const ICON_DECODE: std::time::Duration = std::time::Duration::from_millis(3);
+
+/// A launcher listing `count` applications, each with an icon of its own.
+fn launcher_of(count: usize) -> crate::Launcher {
+    use crate::engine::tests_support::app;
+    let entries = (0..count)
+        .map(|i| app(&format!("app{i}"), &format!("Application {i}"), "", "true"))
+        .collect();
+    crate::Launcher::new(
+        crate::LauncherConfig::default(),
+        entries,
+        crate::Frecency::in_memory(),
+    )
 }
 
 /// The test host, with a clock that moves and animation frames answered one per step.
@@ -137,6 +166,34 @@ impl Host for MeteredHost {
     fn preview(&mut self, _: &ResultItem) -> Vec<Command<Message>> {
         Vec::new()
     }
+    /// As the session's host does: the icon is loaded and decoded on a thread of the host's, which spends
+    /// [`ICON_DECODE`] on it, and arrives as a message.
+    fn app_icon(&mut self, app: &crate::browse::App) -> Vec<Command<Message>> {
+        let start = std::time::Instant::now();
+        ICONS_ASKED.set(ICONS_ASKED.get() + 1);
+        let loads = ICON_THREAD.with_borrow_mut(|thread| {
+            thread
+                .get_or_insert_with(|| {
+                    let (loads, queue) = std::sync::mpsc::channel::<IconLoad>();
+                    std::thread::spawn(move || {
+                        for (_, reply) in queue {
+                            std::thread::sleep(ICON_DECODE);
+                            let _ = reply.send_blocking(Vec::new());
+                        }
+                    });
+                    loads
+                })
+                .clone()
+        });
+        let (reply, loaded) = async_channel::bounded(1);
+        loads.send((app.id.clone(), reply)).unwrap();
+        let id = app.id.clone();
+        let commands = vec![Command::Perform(Box::pin(async move {
+            Message::AppIcon(id, loaded.recv().await.unwrap_or_default())
+        }))];
+        LOOP_ICON_NANOS.set(LOOP_ICON_NANOS.get() + start.elapsed().as_nanos());
+        commands
+    }
     fn now(&self) -> Now {
         Now {
             mono: CLOCK.get(),
@@ -159,7 +216,8 @@ impl Application for MeteredApp {
         PENDING.set(None);
         CLOCK.set(0.0);
         INBOX.set(Some(async_channel::unbounded()));
-        let model = Model::new(test_launcher(), Box::new(MeteredHost));
+        let launcher = APPS.get().map_or_else(test_launcher, launcher_of);
+        let model = Model::new(launcher, Box::new(MeteredHost));
         (model, vec![listen()])
     }
 
@@ -169,6 +227,7 @@ impl Application for MeteredApp {
         if inbox {
             commands.push(listen());
         }
+        MOST_LOADING.set(MOST_LOADING.get().max(model.app_icons_loading()));
         commands
     }
 
@@ -576,7 +635,8 @@ fn scales() -> Vec<f64> {
 fn frame_cost_report() {
     let dir = std::env::var_os("CUPERTINO_REPAINT_DIR").map(std::path::PathBuf::from);
     for scale in scales() {
-        let runs = interactions(scale, true);
+        let mut runs = interactions(scale, true);
+        runs.push(browser_over_many(200, scale, true).0);
         let (head, rule) = Summary::markdown_header().split_once('\n').unwrap();
         let mut table = format!(
             "Launcher at scale {scale}\n\n{head} glass changes |\n{}---|\n",
@@ -595,4 +655,89 @@ fn frame_cost_report() {
             std::fs::write(dir.join(format!("launcher-{scale}x.csv")), csv(rows)).unwrap();
         }
     }
+}
+
+/// The Dock opens the browser over `apps` applications at `scale` and every icon near the view arrives: the frames,
+/// and how many icons were near the view.
+fn browser_over_many(apps: usize, scale: f64, draw: bool) -> (Measured, usize) {
+    APPS.set(Some(apps));
+    ICON_THREAD.set(None);
+    ICONS_ASKED.set(0);
+    MOST_LOADING.set(0);
+    LOOP_ICON_NANOS.set(0);
+    let mut m = Metered::new(scale, draw);
+    APPS.set(None);
+    send(Message::Browse);
+    m.step(|_, _| {});
+    m.until_quiet(10, 200);
+    assert_eq!(m.model().nav.view, View::Browse);
+    let nearby = m.model().browser.as_ref().unwrap().nearby().len();
+    // the icons arrive as the thread decodes them, between frames
+    let waited = std::time::Instant::now();
+    while m.model().app_icons.len() < nearby || m.model().app_icons_loading() > 0 {
+        assert!(
+            waited.elapsed() < std::time::Duration::from_secs(30),
+            "{} of {nearby} icons arrived",
+            m.model().app_icons.len()
+        );
+        m.step(|_, _| {});
+        std::thread::sleep(ICON_DECODE);
+    }
+    m.until_quiet(10, 200);
+    ICON_THREAD.set(None);
+    (m.take("dock opens browser, 200 apps"), nearby)
+}
+
+/// The Dock opens the browser over 200 applications: every icon near the view is loaded and decoded off the loop, at
+/// most [`kit::MAX_APP_ICON_LOADS`] waiting at once, though each costs [`ICON_DECODE`] to decode (a pass decoded on the
+/// loop would overrun several frames). What the loop spends asking for them is a small part of one frame budget, and
+/// the frames that show them arriving stay within it. The window's first frame, which lays out the browser whole, is held
+/// to the budget in an optimised build only (about 4 ms there at 1x); unoptimised it takes several times that.
+#[test]
+fn opening_the_browser_over_200_applications_keeps_icon_decoding_off_the_frames() {
+    use cupertino_ui_test::repaint::FRAME_BUDGET;
+    let (run, nearby) = browser_over_many(200, 1.0, false);
+    assert!(
+        nearby > 2 * kit::MAX_APP_ICON_LOADS,
+        "{nearby} icons near the view"
+    );
+    assert_eq!(
+        ICONS_ASKED.get(),
+        nearby,
+        "each icon near the view asked once"
+    );
+    assert_eq!(
+        MOST_LOADING.get(),
+        kit::MAX_APP_ICON_LOADS,
+        "the loads waiting are capped"
+    );
+    let summary = Summary::of(&run.frames);
+    eprintln!(
+        "{}\n{}\nicon requests on the loop: {} us in all",
+        Summary::markdown_header(),
+        summary.markdown_row(run.name),
+        LOOP_ICON_NANOS.get() / 1000
+    );
+    assert!(
+        LOOP_ICON_NANOS.get() < FRAME_BUDGET.as_nanos() / 8,
+        "asking for {nearby} icons took the loop {} us",
+        LOOP_ICON_NANOS.get() / 1000
+    );
+    let first_ms = run.frames[0].nanos as f64 / 1e6;
+    eprintln!("first frame: {first_ms:.2} ms");
+    if !cfg!(debug_assertions) {
+        assert!(
+            first_ms < FRAME_BUDGET.as_secs_f64() * 1000.0,
+            "the first frame lays out 200 applications in {first_ms:.2} ms"
+        );
+    }
+    let arriving = Summary::of(&run.frames[1..]);
+    assert!(
+        arriving.frames >= nearby / kit::MAX_APP_ICON_LOADS,
+        "the icons show as they arrive: {arriving:?}"
+    );
+    assert!(
+        arriving.p50_ms < FRAME_BUDGET.as_secs_f64() * 1000.0,
+        "frames as the icons arrive: {arriving:?}"
+    );
 }

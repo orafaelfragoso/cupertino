@@ -4,7 +4,7 @@
 //! searching it, the layer surface's size, timers, icons and what the preview shows of a file) goes through [`Host`],
 //! so the model runs headless in tests.
 
-use crate::browse::{self, App, Arrangement, BrowseLayout, Browser, Zone};
+use crate::browse::{self, App, Arrangement, BrowseLayout, Browser, Category, Zone};
 use crate::engine::{
     self, ActionKind, Activation, ItemAction, Launcher, LauncherConfig, ResultItem,
 };
@@ -21,7 +21,7 @@ use crate::view::{self, Input, KeyMode, PanelView, MAX_ROWS};
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// A launch waiting for its activation token.
@@ -44,8 +44,15 @@ const MAX_ICONS: usize = 512;
 pub const PREVIEW_TIMEOUT: f64 = 1.5;
 /// Room kept free below the browser on a short output (the dock's), in points.
 pub const BROWSE_BOTTOM_ROOM: f64 = 96.0;
-/// Application icons the browser loads in one pass; the rest come on the next passes.
-pub const BROWSE_ICONS_PER_PASS: usize = 14;
+/// How long the query must stand before what the panel says of it ("Searching", "No Results", that results may be
+/// incomplete) is said aloud, in seconds: the providers' deadline, so a search that answers in time says nothing
+/// before its results, and typing says nothing between keys.
+pub const STATUS_SETTLE: f64 = crate::providers::DEADLINE;
+/// How many queries the panel remembers having said a status of.
+const MAX_SAID: usize = 32;
+/// The most application icons the browser has being loaded at once, off the loop: those nearest the view are asked
+/// first, and each one that arrives makes room for the next.
+pub const MAX_APP_ICON_LOADS: usize = 14;
 
 /// A file search for the host to run off the loop: [`engine::file_sections`] over `index`, answered as
 /// [`Message::Provided`] with `generation`, given up once `cancel` is cancelled.
@@ -105,9 +112,14 @@ pub trait Host {
     fn frame(&mut self, frame: u64) -> Vec<Command<Message>>;
     /// The renditions of `item`'s icon, one per output scale it is loaded at; none to show its kind's symbol.
     fn icon(&mut self, item: &ResultItem) -> Vec<ImageSource>;
-    /// The renditions of an application's icon at the browser's sizes; none draws a placeholder.
-    fn app_icon(&mut self, _app: &App) -> Vec<ImageSource> {
-        Vec::new()
+    /// Load and decode the renditions of an application's icon at the browser's sizes off the loop; the commands
+    /// deliver them as [`Message::AppIcon`] with its desktop ID, none to draw a placeholder. The default delivers none
+    /// at once.
+    fn app_icon(&mut self, app: &App) -> Vec<Command<Message>> {
+        let id = app.id.clone();
+        vec![Command::Perform(Box::pin(async move {
+            Message::AppIcon(id, Vec::new())
+        }))]
     }
     /// Find out what the preview shows of `item`, the selected result, off the loop; the commands deliver it as
     /// [`Message::Previewed`]. None when the preview shows only the result itself.
@@ -177,8 +189,16 @@ pub enum Message {
     PreviewOverdue(String),
     /// A slow provider answered.
     Provided(Update),
+    /// The renditions of the icon of the browser's application with this desktop ID arrived ([`Host::app_icon`]).
+    AppIcon(String, Vec<ImageSource>),
     /// The slow providers of this generation are overdue.
     Overdue(Generation),
+    /// The query of this change ([`Model::query_change`]) has stood for [`STATUS_SETTLE`]: what the panel says of it
+    /// may be said aloud.
+    Settled(u64),
+    /// The browser's filter (its query and category) of this change ([`Model::browse_change`]) has stood for
+    /// [`STATUS_SETTLE`]: "No Results" may be said aloud.
+    BrowseSettled(u64),
     /// The output the panel is on is this large, in points.
     Output(Size),
     /// The session's Reduce Motion option.
@@ -217,6 +237,8 @@ pub struct Model {
     pub icons: HashMap<String, Vec<ImageSource>>,
     /// Images of the browser's applications by desktop ID.
     pub app_icons: HashMap<String, Vec<ImageSource>>,
+    /// The applications whose icons are being loaded, at most [`MAX_APP_ICON_LOADS`].
+    app_icons_loading: HashSet<String>,
     /// Where the file index is built from; `None` without file results.
     pub files: Option<FileSearchConfig>,
     /// Put every transition at its end at once (the server's settled test clock).
@@ -228,6 +250,23 @@ pub struct Model {
     tracker: Tracker,
     /// The query the providers were last asked about.
     searched: Option<String>,
+    /// How many times the query changed: what is said aloud belongs to one change.
+    query_change: u64,
+    /// The status said aloud and the query change it was said for. Said once per change at most, after the query
+    /// stood for [`STATUS_SETTLE`].
+    said: Option<(u64, Status)>,
+    /// The queries and statuses said aloud since the panel opened, the latest [`MAX_SAID`]: the same status is not said
+    /// again for the same query, even after it was edited away and typed again.
+    said_before: Vec<(String, Status)>,
+    /// The browser's filter last seen: its query and category.
+    browse_filter: Option<(String, Option<Category>)>,
+    /// How many times the browser's filter changed: its "No Results" belongs to one change.
+    browse_change: u64,
+    /// The browser's filter change "No Results" was said aloud for, once it stood for [`STATUS_SETTLE`].
+    browse_said: Option<u64>,
+    /// The browser's filters "No Results" was said for since the panel opened, the latest [`MAX_SAID`]: not said again
+    /// for the same filter.
+    browse_said_before: Vec<(String, Option<Category>)>,
     /// The panel window's size as last given.
     extent: Size,
     /// Launches waiting for their activation token.
@@ -261,6 +300,7 @@ impl Model {
             revision: 0,
             icons: HashMap::new(),
             app_icons: HashMap::new(),
+            app_icons_loading: HashSet::new(),
             files: None,
             settled: false,
             host,
@@ -268,6 +308,13 @@ impl Model {
             file_index: None,
             tracker: Tracker::new(),
             searched: None,
+            query_change: 0,
+            said: None,
+            said_before: Vec::new(),
+            browse_filter: None,
+            browse_change: 0,
+            browse_said: None,
+            browse_said_before: Vec::new(),
             extent: view::window_extent(view::compact_shape()),
             pending: HashMap::new(),
             opening: HashMap::new(),
@@ -428,6 +475,11 @@ impl Model {
         self.panel.hide(now.mono);
         self.tracker.cancel();
         self.searched = None;
+        self.said = None;
+        self.said_before.clear();
+        self.browse_filter = None;
+        self.browse_said = None;
+        self.browse_said_before.clear();
         self.preview = PreviewState::None;
         self.previewed = None;
         self.motion.hide(browse, now.mono);
@@ -469,11 +521,16 @@ impl Model {
             return Vec::new();
         }
         self.searched = Some(text.clone());
+        // nothing is said of the new query until it has stood a while
+        self.query_change += 1;
+        let mut commands = self
+            .host
+            .after(STATUS_SETTLE, Message::Settled(self.query_change));
         let now = self.now();
         let index = self.file_index.clone().filter(|_| !text.trim().is_empty());
         let Some(index) = index else {
             self.tracker.begin(&[], now.mono);
-            return Vec::new();
+            return commands;
         };
         let generation = self.tracker.begin(&[Provider::Files], now.mono);
         let request = SearchRequest {
@@ -484,12 +541,93 @@ impl Model {
             cancel: self.tracker.token(),
             unix: now.unix,
         };
-        let mut commands = self.host.search(request);
+        commands.extend(self.host.search(request));
         commands.extend(
             self.host
                 .after(crate::providers::DEADLINE, Message::Overdue(generation)),
         );
         commands
+    }
+
+    /// The query of change `change` has stood for [`STATUS_SETTLE`]: say what the panel says of it, once. Providers past
+    /// their deadline give up first, so what is said is final.
+    fn settle(&mut self, change: u64) {
+        if change != self.query_change || self.said.as_ref().is_some_and(|(c, _)| *c == change) {
+            return;
+        }
+        self.tracker.expire(self.now().mono);
+        let status = self.status();
+        let said = (self.panel.query().to_owned(), status.clone());
+        if view::status_text(&status).is_some() && !self.said_before.contains(&said) {
+            self.said = Some((change, status));
+            if self.said_before.len() == MAX_SAID {
+                self.said_before.remove(0);
+            }
+            self.said_before.push(said);
+        }
+    }
+
+    /// The status said aloud for the query now, while the panel still says it: `None` before the query settled, once
+    /// results show, and after the query changed.
+    pub fn said(&self) -> Option<Status> {
+        let (change, said) = self.said.as_ref()?;
+        let now = self.status();
+        (*change == self.query_change && view::status_text(&now).is_some()).then(|| said.clone())
+    }
+
+    /// How many times the query changed ([`Message::Settled`]).
+    pub fn query_change(&self) -> u64 {
+        self.query_change
+    }
+
+    /// A browser whose filter (query or category) changed waits [`STATUS_SETTLE`] before "No Results" may be said of it.
+    fn watch_browse_filter(&mut self) -> Vec<Command<Message>> {
+        let Some(b) = self
+            .browser
+            .as_ref()
+            .filter(|_| self.nav.view == View::Browse)
+        else {
+            return Vec::new();
+        };
+        let filter = (b.query().to_owned(), b.category());
+        if self.browse_filter.as_ref() == Some(&filter) {
+            return Vec::new();
+        }
+        self.browse_filter = Some(filter);
+        self.browse_change += 1;
+        self.host
+            .after(STATUS_SETTLE, Message::BrowseSettled(self.browse_change))
+    }
+
+    /// The browser's filter of change `change` has stood for [`STATUS_SETTLE`]: say "No Results" when nothing shows,
+    /// once, and never again for the same filter while the panel is open.
+    fn settle_browse(&mut self, change: u64) {
+        if change != self.browse_change || self.browse_said == Some(change) {
+            return;
+        }
+        let Some(filter) = self.browse_filter.clone() else {
+            return;
+        };
+        let empty = self.browser.as_ref().is_some_and(|b| b.item_count() == 0);
+        if empty && !self.browse_said_before.contains(&filter) {
+            self.browse_said = Some(change);
+            if self.browse_said_before.len() == MAX_SAID {
+                self.browse_said_before.remove(0);
+            }
+            self.browse_said_before.push(filter);
+        }
+    }
+
+    /// Whether the browser says "No Results" aloud now: its filter stood for [`STATUS_SETTLE`] with nothing to show,
+    /// and it was not said for that filter before.
+    pub fn browse_no_results_said(&self) -> bool {
+        self.browse_said == Some(self.browse_change)
+            && self.browser.as_ref().is_some_and(|b| b.item_count() == 0)
+    }
+
+    /// How many times the browser's filter changed ([`Message::BrowseSettled`]).
+    pub fn browse_change(&self) -> u64 {
+        self.browse_change
     }
 
     /// After every change: the providers, the shown icons, the selected result's preview, the window's size and the
@@ -544,6 +682,7 @@ impl Model {
             }
             commands.extend(self.ask_preview());
         }
+        commands.extend(self.watch_browse_filter());
         commands.extend(self.load_app_icons());
         let now = self.now().mono;
         let target = self.target_shape();
@@ -616,7 +755,9 @@ impl Model {
         commands
     }
 
-    /// Load the icons of the browser's applications near the view, a few at a time; more frames while some are left.
+    /// Ask for the icons of the browser's applications near the view, nearest first, while fewer than
+    /// [`MAX_APP_ICON_LOADS`] are being loaded. The host loads and decodes them off the loop; each that arrives
+    /// ([`Message::AppIcon`]) makes room for the next.
     fn load_app_icons(&mut self) -> Vec<Command<Message>> {
         let Some(browser) = self
             .browser
@@ -625,23 +766,28 @@ impl Model {
         else {
             return Vec::new();
         };
+        let room = MAX_APP_ICON_LOADS.saturating_sub(self.app_icons_loading.len());
         let wanted: Vec<App> = browser
             .nearby()
             .into_iter()
             .filter_map(|i| browser.item(i))
-            .filter(|a| !self.app_icons.contains_key(&a.id))
+            .filter(|a| {
+                !self.app_icons.contains_key(&a.id) && !self.app_icons_loading.contains(&a.id)
+            })
+            .take(room)
             .cloned()
             .collect();
-        for app in wanted.iter().take(BROWSE_ICONS_PER_PASS) {
-            let sources = self.host.app_icon(app);
-            self.app_icons.insert(app.id.clone(), sources);
+        let mut commands = Vec::new();
+        for app in &wanted {
+            self.app_icons_loading.insert(app.id.clone());
+            commands.extend(self.host.app_icon(app));
         }
-        if wanted.len() > BROWSE_ICONS_PER_PASS {
-            self.frame += 1;
-            self.host.frame(self.frame)
-        } else {
-            Vec::new()
-        }
+        commands
+    }
+
+    /// The applications whose icons are being loaded now.
+    pub fn app_icons_loading(&self) -> usize {
+        self.app_icons_loading.len()
     }
 
     /// Carry out what the panel asked for.
@@ -1099,6 +1245,19 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             }
             Vec::new()
         }
+        Message::AppIcon(id, sources) => {
+            model.app_icons_loading.remove(&id);
+            model.app_icons.insert(id, sources);
+            Vec::new()
+        }
+        Message::Settled(change) => {
+            model.settle(change);
+            Vec::new()
+        }
+        Message::BrowseSettled(change) => {
+            model.settle_browse(change);
+            Vec::new()
+        }
         Message::Output(size) => {
             model.output = Some(size);
             let height = model.browse_height();
@@ -1147,12 +1306,14 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         keys: model.key_mode(),
         nested: model.nav.nested,
         status: model.status(),
+        said: model.said(),
         icons: &model.icons,
         actions: &actions,
         preview: model.preview(),
         preview_unavailable: model.preview == PreviewState::Unavailable,
         browser,
         app_icons: &model.app_icons,
+        browse_no_results_said: model.browse_no_results_said(),
         now: model.now().mono,
     };
     let mut windows = vec![view::panel_window(&panel)];

@@ -726,6 +726,8 @@ pub fn run(cli: Cli) -> Result<()> {
     if mode == Mode::Udev && !login_screen {
         state.session_reader.program = cupertino_defaults::accessibility::installed_screen_reader();
         state.sync_screen_reader();
+        // the window buttons the server draws are read on the session's accessibility bus, as the clients' content is
+        state.start_button_access();
     }
     if mode != Mode::Headless || cli.dbus {
         start_dbus(&mut state);

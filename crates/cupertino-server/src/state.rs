@@ -641,6 +641,8 @@ pub struct Cupertino {
 
     pub wm: Wm,
     pub decor: Decor,
+    /// The window control buttons published to assistive technology; off until a session on the hardware starts it.
+    pub button_access: crate::decor_access::ButtonAccessibility,
     pub fx: Effects,
     pub windows: Vec<WindowEntry>,
     pub outputs: Vec<OutputEntry>,
@@ -951,6 +953,7 @@ impl Cupertino {
             capture,
             wm,
             decor,
+            button_access: Default::default(),
             fx,
             windows: Vec::new(),
             outputs: Vec::new(),
@@ -995,6 +998,8 @@ impl Cupertino {
     }
 
     pub fn request_redraw(&mut self) {
+        // what shows changed, perhaps the window buttons too
+        self.button_access.invalidate();
         for o in &mut self.outputs {
             o.scheduler.damage();
         }
@@ -2009,6 +2014,8 @@ impl Cupertino {
     // ---- model effects ---------------------------------------------------------------------
 
     pub fn command(&mut self, cmd: Command) {
+        // the model may change a window's buttons: its title, its state, what it can do
+        self.button_access.invalidate();
         let now = self.now();
         // a minimize without a target (key binding, action) flies into the dock's slot
         let cmd = match cmd {
@@ -2057,6 +2064,7 @@ impl Cupertino {
         self.tick_menu_bars(now);
         self.tick_input_timers(now);
         self.tick_overlays(now);
+        self.sync_button_access();
         let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
         self.refresh_shortcut_inhibitors(focus.as_ref());
         self.refresh_pointer_constraints(focus.as_ref());

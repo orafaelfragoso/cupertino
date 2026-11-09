@@ -371,6 +371,11 @@ struct AppHost {
     previews: Option<LatestOnly<PreviewRead>>,
     /// Searches the file index, the newest query only; started at the first search.
     searches: Option<LatestOnly<FileSearch>>,
+    /// Loads and decodes the browser's application icons in the order asked, on a thread of its own; started at the
+    /// first icon asked. The model keeps at most `kit::MAX_APP_ICON_LOADS` waiting.
+    icon_loads: Option<std::sync::mpsc::Sender<IconLoad>>,
+    /// The asset packs, for the icon thread's own lookup.
+    assets: Assets,
     /// The session object of the shell global, which brings a running application forward; `None` when the server
     /// does not offer the global to the launcher.
     session: Option<Session>,
@@ -381,6 +386,39 @@ struct AppHost {
 struct FileSearch {
     request: SearchRequest,
     reply: async_channel::Sender<Update>,
+}
+
+/// An application icon the icon thread is asked for (the entry's `Icon`), and where its renditions go.
+struct IconLoad {
+    icon: Option<String>,
+    reply: async_channel::Sender<Vec<ImageSource>>,
+}
+
+/// The renditions of the browser's icon `name` at its sizes, from the icon theme, or the generic application's.
+fn browser_icon(
+    themes: &mut ThemeIcons,
+    system: &mut SystemIcons,
+    name: Option<&str>,
+) -> Vec<ImageSource> {
+    let own: Vec<ImageSource> = name
+        .map(|name| {
+            BROWSE_ICON_PX
+                .iter()
+                .filter_map(|&px| themes.load(name, px))
+                .map(|pixmap| image(pixmap.width(), pixmap.height(), pixmap.data()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !own.is_empty() {
+        return own;
+    }
+    BROWSE_ICON_PX
+        .iter()
+        .map(|&px| {
+            let pixmap = system.raster(GENERIC_APPLICATION_ICON, px);
+            image(pixmap.width(), pixmap.height(), pixmap.data())
+        })
+        .collect()
 }
 
 /// A file the preview reader is asked about, and where its answer goes.
@@ -661,28 +699,38 @@ impl Host for AppHost {
         }
     }
 
-    fn app_icon(&mut self, app: &BrowserApp) -> Vec<ImageSource> {
-        let own: Vec<ImageSource> = app
-            .icon
-            .as_deref()
-            .map(|name| {
-                BROWSE_ICON_PX
-                    .iter()
-                    .filter_map(|&px| self.themes.load(name, px))
-                    .map(|pixmap| image(pixmap.width(), pixmap.height(), pixmap.data()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !own.is_empty() {
-            return own;
+    fn app_icon(&mut self, app: &BrowserApp) -> Vec<Command<Message>> {
+        if self.icon_loads.is_none() {
+            let assets = self.assets.clone();
+            let (jobs, queue) = std::sync::mpsc::channel::<IconLoad>();
+            let started = std::thread::Builder::new()
+                .name("launcher-icons".to_owned())
+                .spawn(move || {
+                    // the thread's own lookup and rasters: nothing it reads or decodes is shared with the loop
+                    let mut themes = ThemeIcons::new(&assets);
+                    let mut system = SystemIcons::new(&assets);
+                    for job in queue {
+                        let images = browser_icon(&mut themes, &mut system, job.icon.as_deref());
+                        let _ = job.reply.send_blocking(images);
+                    }
+                });
+            match started {
+                Ok(_) => self.icon_loads = Some(jobs),
+                Err(e) => eprintln!("cupertino-launcher: no icon thread: {e}"),
+            }
         }
-        BROWSE_ICON_PX
-            .iter()
-            .map(|&px| {
-                let pixmap = self.system.raster(GENERIC_APPLICATION_ICON, px);
-                image(pixmap.width(), pixmap.height(), pixmap.data())
-            })
-            .collect()
+        let id = app.id.clone();
+        let (reply, loaded) = async_channel::bounded(1);
+        if let Some(loads) = &self.icon_loads {
+            let _ = loads.send(IconLoad {
+                icon: app.icon.clone(),
+                reply,
+            });
+        }
+        // without the thread, or once it is gone, the browser draws a placeholder
+        vec![Command::Perform(Box::pin(async move {
+            Message::AppIcon(id, loaded.recv().await.unwrap_or_default())
+        }))]
     }
 
     fn search(&mut self, request: SearchRequest) -> Vec<Command<Message>> {
@@ -878,6 +926,8 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         files: None,
         previews: None,
         searches: None,
+        icon_loads: None,
+        assets,
         session,
     };
     let mut model = Model::new(Launcher::from_system(config), Box::new(host));

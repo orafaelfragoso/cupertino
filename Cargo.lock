@@ -1670,6 +1670,8 @@ dependencies = [
 name = "cupertino-server"
 version = "0.1.0"
 dependencies = [
+ "accesskit",
+ "accesskit_unix",
  "anyhow",
  "async-channel",
  "async-io",

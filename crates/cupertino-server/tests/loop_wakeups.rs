@@ -62,6 +62,9 @@ const AUDITED: [&str; 25] = [
     "self.request_redraw(",
     "self.seat.get_keyboard(",
     "self.send_deferred_configures(",
+    // the window buttons for assistive technology follow the windows, which change on events and frames; nothing in it
+    // runs on a clock
+    "self.sync_button_access(",
     "self.tick_display_power(",
     "self.tick_force_quit(",
     "self.tick_hung(",

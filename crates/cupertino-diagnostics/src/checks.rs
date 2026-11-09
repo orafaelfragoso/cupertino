@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use cupertino_devices::preflight;
 
-use crate::{Area, Check, Scope, Sources, Status, Unit};
+use cupertino_diagnostic_events::Severity;
+
+use crate::{events, Area, Check, Scope, Sources, Status, Unit};
 
 /// The longest log line a check quotes.
 const QUOTE_LIMIT: usize = 300;
@@ -694,5 +696,73 @@ pub fn logs(sources: &Sources) -> Vec<Check> {
     vec![check.fact(
         "journal",
         "`journalctl -b -u cupertino-login.service` has the login screen's and the sessions' output",
+    )]
+}
+
+/// How far back `events.recent` looks.
+const RECENT: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// The `error` and `fatal` diagnostic events of the last 24 hours, from the store, `session.log` and the journal.
+pub fn events(sources: &Sources) -> Vec<Check> {
+    let since = std::time::SystemTime::now().checked_sub(RECENT);
+    let filter = events::Filter {
+        since,
+        ..events::Filter::default()
+    };
+    let report = events::read(sources, &filter);
+    let readable = report.sources.iter().any(|s| s.status.readable());
+    let with_sources = |mut check: Check| {
+        for source in &report.sources {
+            check = check.fact(
+                "source",
+                format!("{}: {}", source.name, source.status_text()),
+            );
+        }
+        check
+    };
+    if !readable {
+        return vec![with_sources(Check::new(
+            "events.recent",
+            Area::Events,
+            Status::Skip,
+            "no diagnostic events can be read",
+        ))];
+    }
+    let counts = report.counts();
+    let bad: Vec<&events::Event> = report
+        .events
+        .iter()
+        .filter(|e| e.record.severity >= Severity::Error)
+        .collect();
+    if bad.is_empty() {
+        let check = Check::new(
+            "events.recent",
+            Area::Events,
+            Status::Ok,
+            format!(
+                "no error or fatal event in the last 24 h ({} events)",
+                counts.events
+            ),
+        )
+        .fact("events", counts.events.to_string());
+        return vec![with_sources(check)];
+    }
+    let mut check = Check::new(
+        "events.recent",
+        Area::Events,
+        Status::Warn,
+        format!(
+            "{} error and {} fatal events in the last 24 h",
+            counts.error, counts.fatal
+        ),
+    )
+    .fact("error", counts.error.to_string())
+    .fact("fatal", counts.fatal.to_string());
+    for (id, severity, n, last) in events::by_id(bad) {
+        check = check.fact("event", format!("{id}: {n} {severity}, the last at {last}"));
+    }
+    vec![with_sources(check).fix(
+        "`cupertino diagnose events --since 24h` lists them with their fields; `cupertino diagnose export --output \
+         FILE` writes them with this report into one file for a bug report",
     )]
 }

@@ -1,9 +1,11 @@
 //! Typed diagnostics of a Cupertino installation and the session it runs in: the GPU and its driver, the session, the
-//! desktop portal, the services, how the last sessions ended and where the logs are. Every check reads files and asks
-//! systemd for unit states; nothing is changed and no device is opened. [`run`] takes its inputs as [`Sources`], so the
-//! tests run it against a fixture tree.
+//! desktop portal, the services, how the last sessions ended, where the logs are and the recent diagnostic events. Every
+//! check reads files, asks systemd for unit states and reads the journal; nothing is changed and no device is opened.
+//! [`run`] takes its inputs as [`Sources`], so the tests run it against a fixture tree. [`events`] reads the diagnostic
+//! events back.
 
 mod checks;
+pub mod events;
 pub mod report;
 
 use std::collections::HashMap;
@@ -44,7 +46,18 @@ pub struct Sources {
     /// The environment of the session asking.
     pub env: HashMap<String, String>,
     pub unit_state: UnitState,
+    /// Reads the system journal's diagnostic events ([`events::journalctl`] on this machine).
+    pub journal: JournalFn,
+    /// The command that follows the system journal from a point on, printing `--output=json` lines
+    /// ([`events::journalctl_follow`] on this machine).
+    pub journal_follow: JournalFollowFn,
 }
+
+/// Reads the system journal's diagnostic events for a filter.
+pub type JournalFn = Box<dyn Fn(&events::Filter) -> events::JournalResult>;
+
+/// Makes the command that follows the system journal.
+pub type JournalFollowFn = Box<dyn Fn(&events::FollowFrom) -> Command>;
 
 impl Sources {
     /// This machine and the calling process's environment.
@@ -54,6 +67,8 @@ impl Sources {
             root: PathBuf::from("/"),
             env: std::env::vars().collect(),
             unit_state: Box::new(systemctl_state),
+            journal: Box::new(events::journalctl),
+            journal_follow: Box::new(events::journalctl_follow),
         }
     }
 
@@ -70,12 +85,17 @@ impl Sources {
     }
 
     /// The directory of the session's logs, as `cupertino-session` and the server name it.
-    fn state_dir(&self) -> Option<PathBuf> {
+    pub fn state_dir(&self) -> Option<PathBuf> {
         let state = self
             .var("XDG_STATE_HOME")
             .map(PathBuf::from)
             .or_else(|| self.var("HOME").map(|h| Path::new(h).join(".local/state")))?;
         Some(state.join("cupertino"))
+    }
+
+    /// The user's store of diagnostic events, as the emitter names it (`store::user_dir`).
+    pub fn store_dir(&self) -> Option<PathBuf> {
+        cupertino_diagnostic_events::store::user_dir(|k| self.var(k).map(Into::into))
     }
 }
 
@@ -123,6 +143,7 @@ pub fn run(sources: &Sources, areas: &[Area]) -> Report {
             Area::Services => checks::services(sources),
             Area::Crash => checks::crash(sources),
             Area::Logs => checks::logs(sources),
+            Area::Events => checks::events(sources),
         });
     }
     Report {

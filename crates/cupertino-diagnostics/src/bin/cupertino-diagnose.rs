@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use cupertino_diagnostics::{Area, Sources};
 
 const USAGE: &str =
-    "usage: cupertino-diagnose [--json] [--area gpu|session|portals|services|crash|logs]...
+    "usage: cupertino-diagnose [--json] [--area gpu|session|portals|services|crash|logs|events]...
 Checks this machine and session for what Cupertino needs. Exits 0 once the checks ran, whatever they found.";
 
 fn main() -> ExitCode {

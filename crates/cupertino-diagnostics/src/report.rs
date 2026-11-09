@@ -23,16 +23,19 @@ pub enum Area {
     Crash,
     /// Where the logs are.
     Logs,
+    /// The diagnostic events of the last day: the errors and fatal ends the desktop's processes recorded.
+    Events,
 }
 
 impl Area {
-    pub const ALL: [Area; 6] = [
+    pub const ALL: [Area; 7] = [
         Area::Gpu,
         Area::Session,
         Area::Portals,
         Area::Services,
         Area::Crash,
         Area::Logs,
+        Area::Events,
     ];
 
     pub fn name(self) -> &'static str {
@@ -43,6 +46,7 @@ impl Area {
             Area::Services => "services",
             Area::Crash => "crash",
             Area::Logs => "logs",
+            Area::Events => "events",
         }
     }
 

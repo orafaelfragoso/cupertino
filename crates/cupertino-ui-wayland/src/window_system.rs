@@ -110,6 +110,8 @@ struct Window {
     menus: Option<ShownMenus>,
     /// An input region to send with the next present; `Some(None)` gives the whole surface back.
     input_region: Option<Option<Vec<Rect>>>,
+    /// The surface has the keyboard focus, between its `wl_keyboard.enter` and `leave`.
+    keyboard: bool,
 }
 
 /// A toplevel's menus as the runtime asked for them, and their publication.
@@ -172,6 +174,37 @@ fn set_look(
 
 /// The window and region of the window's material that `backdrop` draws: `None` for the window's own backdrop, or
 /// the index of the region under a part of it.
+/// Whether window `i` or a popup of its chain has the keyboard focus. A role's configure has no activated state, so
+/// this stands for it: the window is the one in use while keys reach it, as a toplevel stays activated while its popup
+/// holds the keyboard.
+fn holds_keyboard(windows: &[Window], i: usize) -> bool {
+    let chain: Vec<_> = windows
+        .iter()
+        .map(|w| (w.id, w.parent, w.keyboard))
+        .collect();
+    keyboard_in_chain(&chain, windows[i].id)
+}
+
+/// Whether `root` or a window opened from it, through any number of parents, has the keyboard; each window is its
+/// id, its parent and whether it has the keyboard.
+fn keyboard_in_chain(windows: &[(WindowId, Option<WindowId>, bool)], root: WindowId) -> bool {
+    windows.iter().any(|&(id, parent, keyboard)| {
+        let (mut at, mut parent) = (id, parent);
+        // each popup opens after its parent, so the chain is never longer than the windows open
+        for _ in 0..windows.len() {
+            if at == root {
+                return keyboard;
+            }
+            let Some(next) = parent else {
+                return false;
+            };
+            at = next;
+            parent = windows.iter().find(|w| w.0 == next).and_then(|w| w.1);
+        }
+        false
+    })
+}
+
 fn glass_region(windows: &[Window], backdrop: BackdropId) -> Option<(WindowId, Option<usize>)> {
     windows.iter().find_map(|w| {
         if w.backdrop
@@ -465,6 +498,7 @@ impl WaylandWindowSystem {
             configured: false,
             menus: None,
             input_region: None,
+            keyboard: false,
         });
         id
     }
@@ -817,6 +851,11 @@ impl WaylandWindowSystem {
                 {
                     roles.keyboard_focus(surface, matches!(event, KeyboardEvent::Enter));
                 }
+                match event {
+                    KeyboardEvent::Enter => self.windows[i].keyboard = true,
+                    KeyboardEvent::Leave => self.windows[i].keyboard = false,
+                    KeyboardEvent::Key { .. } => {}
+                }
                 let event = match event {
                     KeyboardEvent::Enter => WindowEvent::Focus(true),
                     KeyboardEvent::Leave => WindowEvent::Focus(false),
@@ -875,18 +914,20 @@ impl WaylandWindowSystem {
             Event::Extension(extension) => {
                 if let Some(role) = self.roles.as_mut().and_then(|r| r.event(&extension)) {
                     let (surface, event) = match role {
-                        RoleEvent::Configure { surface, size } => {
-                            self.role_configures = self.role_configures.wrapping_add(1);
-                            let configure = convert::role_configure(self.role_configures, size);
-                            (surface, Some((size, configure)))
-                        }
+                        RoleEvent::Configure { surface, size } => (surface, Some(size)),
                         RoleEvent::Closed(surface) => (surface, None),
                     };
                     let Some(i) = on(&self.windows, surface) else {
                         return;
                     };
                     match event {
-                        Some((size, configure)) => {
+                        Some(size) => {
+                            self.role_configures = self.role_configures.wrapping_add(1);
+                            let configure = convert::role_configure(
+                                self.role_configures,
+                                size,
+                                holds_keyboard(&self.windows, i),
+                            );
                             self.windows[i].size = size;
                             due = self.resume(i);
                             (i, WindowEvent::Configure(configure))
@@ -1701,5 +1742,24 @@ mod tests {
             })
         );
         assert_eq!(clip(r(200), 200, 100), None);
+    }
+
+    #[test]
+    fn a_window_holds_the_keyboard_while_it_or_a_popup_of_its_chain_has_it() {
+        let (bar, menu, submenu, other) = (WindowId(1), WindowId(2), WindowId(3), WindowId(4));
+        let open = |keyboard: WindowId| {
+            [
+                (bar, None, bar == keyboard),
+                (menu, Some(bar), menu == keyboard),
+                (submenu, Some(menu), submenu == keyboard),
+                (other, None, other == keyboard),
+            ]
+        };
+        assert!(keyboard_in_chain(&open(bar), bar));
+        assert!(keyboard_in_chain(&open(submenu), bar));
+        assert!(keyboard_in_chain(&open(submenu), menu));
+        assert!(!keyboard_in_chain(&open(menu), submenu));
+        assert!(!keyboard_in_chain(&open(other), bar));
+        assert!(!keyboard_in_chain(&open(WindowId(9)), bar));
     }
 }

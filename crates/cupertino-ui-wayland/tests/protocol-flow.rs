@@ -47,6 +47,7 @@ use wayland_server::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_server::protocol::wl_data_device_manager::{self, WlDataDeviceManager};
 use wayland_server::protocol::wl_data_offer::{self, WlDataOffer};
 use wayland_server::protocol::wl_data_source::{self, WlDataSource};
+use wayland_server::protocol::wl_keyboard::WlKeyboard;
 use wayland_server::protocol::wl_output::WlOutput;
 use wayland_server::protocol::wl_pointer::{self, WlPointer};
 use wayland_server::protocol::wl_region::{self, WlRegion};
@@ -116,6 +117,12 @@ enum Control {
     DragIn(String),
     /// Then it drops there.
     DropIn,
+    /// The keyboard enters the window's surface.
+    KeyboardEnter,
+    /// The keyboard leaves it.
+    KeyboardLeave,
+    /// Configure the window again, still leaving the size to the client and with no states.
+    Reconfigure,
 }
 
 /// A request the server saw that the commit record does not cover.
@@ -202,6 +209,7 @@ struct Mock {
     outputs: Vec<WlOutput>,
     pointer: Option<WlPointer>,
     touch: Option<WlTouch>,
+    keyboard: Option<WlKeyboard>,
     pending_frames: Vec<WlCallback>,
     shown: Option<WlBuffer>,
     /// Replaced buffers kept unreleased, while holding.
@@ -340,6 +348,7 @@ ignore_requests!(
     WlOutput: (),
     WlPointer: (),
     WlTouch: (),
+    WlKeyboard: (),
     XdgToplevel: (),
     CupertinoAppearanceV1: ()
 );
@@ -606,7 +615,7 @@ impl GlobalDispatch<WlSeat, ()> for Mock {
         init: &mut DataInit<'_, Self>,
     ) {
         init.init(r, ())
-            .capabilities(Capability::Pointer | Capability::Touch);
+            .capabilities(Capability::Pointer | Capability::Touch | Capability::Keyboard);
     }
 }
 impl Dispatch<WlSeat, ()> for Mock {
@@ -622,6 +631,7 @@ impl Dispatch<WlSeat, ()> for Mock {
         match request {
             wl_seat::Request::GetPointer { id } => state.pointer = Some(init.init(id, ())),
             wl_seat::Request::GetTouch { id } => state.touch = Some(init.init(id, ())),
+            wl_seat::Request::GetKeyboard { id } => state.keyboard = Some(init.init(id, ())),
             _ => {}
         }
     }
@@ -893,6 +903,7 @@ fn spawn_server_with(
             outputs: Vec::new(),
             pointer: None,
             touch: None,
+            keyboard: None,
             pending_frames: Vec::new(),
             shown: None,
             held: None,
@@ -958,6 +969,24 @@ fn spawn_server_with(
                     offer.action(wl_data_device_manager::DndAction::Move);
                 }
                 Ok(Control::DropIn) => mock.data_device.as_ref().unwrap().drop(),
+                Ok(Control::KeyboardEnter) => {
+                    let t = mock.toplevel.as_ref().unwrap();
+                    mock.next_serial += 1;
+                    let keyboard = mock.keyboard.as_ref().unwrap();
+                    keyboard.enter(mock.next_serial, &t.surface, Vec::new());
+                }
+                Ok(Control::KeyboardLeave) => {
+                    let t = mock.toplevel.as_ref().unwrap();
+                    mock.next_serial += 1;
+                    let keyboard = mock.keyboard.as_ref().unwrap();
+                    keyboard.leave(mock.next_serial, &t.surface);
+                }
+                Ok(Control::Reconfigure) => {
+                    let t = mock.toplevel.as_ref().unwrap();
+                    mock.next_serial += 1;
+                    t.toplevel.configure(0, 0, Vec::new());
+                    t.xdg.configure(mock.next_serial);
+                }
                 Ok(Control::PointerPress) => {
                     let (pointer, t) = (
                         mock.pointer.as_ref().unwrap(),
@@ -2561,6 +2590,61 @@ mod window_system {
 
         control.send(Control::Close).unwrap();
         kit.window_event(|e| matches!(e, WindowEvent::CloseRequested).then_some(()));
+    }
+
+    #[test]
+    fn a_window_given_a_role_is_activated_by_its_configures_while_it_has_the_keyboard() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let (control, _committed, _seen) = spawn_server(server_stream);
+        let ws = WaylandWindowSystem::new(
+            Connection::from_stream(client_stream).unwrap(),
+            Profile::cupertino(),
+        )
+        .with_roles(role::Roles::default());
+        let mut kit = Kit {
+            ws,
+            window: WindowId(0),
+            stash: VecDeque::new(),
+        };
+        kit.window = kit
+            .ws
+            .create_window(&WindowSpec {
+                title: "Search".into(),
+                app_id: role::APP_ID.into(),
+                size: Size::new(10.0, 10.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::None,
+                foreign_parent: None,
+                input_region: None,
+            })
+            .unwrap();
+        let configured = |kit: &mut Kit| {
+            control.send(Control::Reconfigure).unwrap();
+            kit.window_event(|e| match e {
+                WindowEvent::Configure(c) => Some(c.states.activated),
+                _ => None,
+            })
+        };
+        let first = kit.window_event(|e| match e {
+            WindowEvent::Configure(c) => Some(c.states.activated),
+            _ => None,
+        });
+        assert!(!first, "no keyboard yet");
+
+        control.send(Control::KeyboardEnter).unwrap();
+        assert!(kit.window_event(|e| match e {
+            WindowEvent::Focus(focused) => Some(*focused),
+            _ => None,
+        }));
+        assert!(configured(&mut kit), "keys still reach the window");
+
+        control.send(Control::KeyboardLeave).unwrap();
+        assert!(!kit.window_event(|e| match e {
+            WindowEvent::Focus(focused) => Some(*focused),
+            _ => None,
+        }));
+        assert!(!configured(&mut kit));
     }
 
     #[test]

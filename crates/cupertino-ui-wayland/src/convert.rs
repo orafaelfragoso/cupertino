@@ -198,12 +198,17 @@ pub(crate) fn popup_configure(c: &wl::PopupConfigure) -> platform::Configure {
     }
 }
 
-/// The `n`th configure of a surface with a role from [`crate::SurfaceRoles`], at `size`.
-pub(crate) fn role_configure(n: u32, size: (u32, u32)) -> platform::Configure {
+/// The `n`th configure of a surface with a role from [`crate::SurfaceRoles`], at `size`. The role's protocol has no
+/// activated state, so the window system passes whether the window has the keyboard (`activated`): otherwise every
+/// configure would turn a window inactive that keys still reach.
+pub(crate) fn role_configure(n: u32, size: (u32, u32), activated: bool) -> platform::Configure {
     platform::Configure {
         id: platform::ConfigureId(n),
         size: Some(Size::new(f64::from(size.0), f64::from(size.1))),
-        states: platform::WindowStates::default(),
+        states: platform::WindowStates {
+            activated,
+            ..platform::WindowStates::default()
+        },
         bounds: None,
         server_decorations: false,
         wm_capabilities: platform::WmCapabilities {

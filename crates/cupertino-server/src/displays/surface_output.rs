@@ -114,16 +114,32 @@ struct Placement {
     moving: bool,
 }
 
+/// What a window's [`Placement`] was worked out from, besides the outputs: while it and the outputs stay the same, so
+/// does the placement.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Inputs {
+    frame: Rect,
+    on_screen: bool,
+    moving: bool,
+    /// The output the window model has the window on.
+    output: OutputId,
+}
+
+/// An output as the placements were worked out against it: its id, rectangle, scale and transform.
+type OutputFacts = (OutputId, Rect, f64, Transform);
+
 /// The outputs and scale of each mapped window, as last told to its surfaces.
 #[derive(Debug, Default)]
 pub struct SurfaceOutputs {
-    windows: HashMap<WindowId, Placement>,
+    windows: HashMap<WindowId, (Placement, Inputs)>,
+    /// The outputs the placements were worked out against.
+    outputs: Vec<OutputFacts>,
 }
 
 impl SurfaceOutputs {
     /// The output whose scale `window` draws at, once it was placed.
     pub fn scale_output(&self, window: WindowId) -> Option<OutputId> {
-        self.windows.get(&window).and_then(|p| p.scale_output)
+        self.windows.get(&window).and_then(|(p, _)| p.scale_output)
     }
 }
 
@@ -181,23 +197,51 @@ impl Cupertino {
     }
 
     /// Work out again which outputs each window is on and the scale it draws at, and tell the surfaces of each window
-    /// whose placement changed, with their subsurfaces and popups (all of them with `force`).
+    /// whose placement changed, with their subsurfaces and popups (all of them with `force`). This runs after every
+    /// change of the window model, every tick included, so a window whose frame, visibility, move or resize and output
+    /// are as they were, against the same outputs, is passed over at the cost of a few lookups.
     pub fn refresh_window_outputs(&mut self, force: bool) {
+        let same_outputs = self.surface_outputs.outputs.len() == self.outputs.len()
+            && self
+                .surface_outputs
+                .outputs
+                .iter()
+                .zip(&self.outputs)
+                .all(|(f, o)| *f == (o.id, o.rect, o.scale, o.output.current_transform()));
+        if !same_outputs {
+            self.surface_outputs.outputs = self
+                .outputs
+                .iter()
+                .map(|o| (o.id, o.rect, o.scale, o.output.current_transform()))
+                .collect();
+        }
         let outputs: Vec<(OutputId, Rect)> = self.outputs.iter().map(|o| (o.id, o.rect)).collect();
         let interacting = self.wm.interacting_window();
-        let mut placed = HashMap::with_capacity(self.windows.len());
+        let mut placements = std::mem::take(&mut self.surface_outputs.windows);
+        let mut kept = 0;
         for entry in &self.windows {
             let Some(w) = self.wm.window(entry.id) else {
+                placements.remove(&entry.id);
                 continue;
             };
-            let frame = w.geometry();
-            let before = self.surface_outputs.windows.get(&entry.id);
-            let moving = interacting == Some(entry.id);
-            let settle = before.is_some_and(|b| b.moving && !moving);
+            let inputs = Inputs {
+                frame: w.geometry(),
+                on_screen: self.wm.window_on_screen(entry.id),
+                moving: interacting == Some(entry.id),
+                output: w.output,
+            };
+            let before = placements.get(&entry.id);
+            if !force && same_outputs && before.is_some_and(|(_, i)| *i == inputs) {
+                kept += 1;
+                continue;
+            }
+            let before = before.map(|(p, _)| p);
+            let frame = inputs.frame;
+            let settle = before.is_some_and(|b| b.moving && !inputs.moving);
             let scale_output =
                 scale_output(before.and_then(|b| b.scale_output), frame, &outputs, settle)
                     .or_else(|| Some(w.output).filter(|o| self.output_entry(*o).is_some()));
-            let entered = if self.wm.window_on_screen(entry.id) {
+            let entered = if inputs.on_screen {
                 overlapping(frame, &outputs)
                     .into_iter()
                     .filter_map(|id| self.output_entry(id).map(|o| o.output.clone()))
@@ -214,7 +258,7 @@ impl Cupertino {
                 scale_output,
                 scale,
                 transform,
-                moving,
+                moving: inputs.moving,
             };
             if force || before != Some(&now) {
                 let left: Vec<&Output> = before
@@ -234,9 +278,14 @@ impl Cupertino {
                     )
                 });
             }
-            placed.insert(entry.id, now);
+            placements.insert(entry.id, (now, inputs));
+            kept += 1;
         }
-        self.surface_outputs.windows = placed;
+        // the windows that went
+        if placements.len() > kept {
+            placements.retain(|id, _| self.windows.iter().any(|e| e.id == *id));
+        }
+        self.surface_outputs.windows = placements;
     }
 
     /// Tell every surface where it is: each window ([`Cupertino::refresh_window_outputs`]), each layer surface and its
@@ -330,7 +379,7 @@ impl Cupertino {
     /// `None` for a window not placed yet and for any other surface.
     fn root_placement(&self, root: &WlSurface) -> Option<RootPlacement> {
         if let Some(entry) = self.windows.iter().find(|w| w.has_surface(root)) {
-            let p = self.surface_outputs.windows.get(&entry.id)?;
+            let (p, _) = self.surface_outputs.windows.get(&entry.id)?;
             return Some(RootPlacement {
                 entered: p.entered.clone(),
                 scale: p.scale,

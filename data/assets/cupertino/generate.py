@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Rebuild the project's original icon artwork; requires rsvg-convert."""
+"""Rebuild original SVG artwork and PNG renditions with the native icon loader."""
+import argparse
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parent
 # Symbols share a 24-unit canvas, 1.9-unit strokes and rounded terminals.
@@ -85,7 +87,9 @@ sys.dont_write_bytecode = True
 from artwork import render
 
 
-def build():
+def build(renderer):
+    if not renderer.is_file():
+        raise SystemExit("Build the cupertino-icons render-artwork example before generating the pack")
     icons = {}
     (ROOT / 'symbols').mkdir(exist_ok=True)
     (ROOT / 'icons').mkdir(exist_ok=True)
@@ -105,11 +109,17 @@ def build():
         for size in (16, 32, 64, 128, 256, 512, 1024):
             out = f'icons/{stem}-{size}.png'
             source = render(name, size if size <= 32 else 0, S)
-            subprocess.run(['rsvg-convert', '-w', str(size), '-h', str(size), '-o', str(ROOT / out)], input=source.encode(), check=True)
+            with tempfile.TemporaryDirectory(prefix='.render-', dir=ROOT) as staging:
+                optical = Path(staging) / 'artwork.svg'
+                optical.write_text(source)
+                subprocess.run([str(renderer), str(optical), str(ROOT / out), str(size)], check=True)
             rasters[str(size)] = out
         icons[name] = {'svg': p, 'raster': rasters}
     (ROOT / 'manifest.json').write_text(json.dumps({'version': 2, 'name': 'Cupertino original icons', 'credits': 'CREDITS.md', 'icons': icons}, indent=2) + '\n')
 
 
 if __name__ == '__main__':
-    build()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--renderer', type=Path, default=ROOT.parents[2] / 'target/debug/examples/render-artwork')
+    args = parser.parse_args()
+    build(args.renderer.resolve())

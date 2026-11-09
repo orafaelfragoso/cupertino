@@ -2,7 +2,10 @@
 
 The asset packs every Cupertino process draws its text, icons, cursors and wallpaper from, and the `cupertino-assets`
 tool that checks a pack. A pack is a directory with a `manifest.json`. The original first-party icon pack lives in
-`data/assets/cupertino` (GPL-3.0-or-later); third-party packs live outside the repository. With no
+`data/assets/cupertino` (GPL-3.0-or-later); third-party packs live outside the repository. Its full-colour artwork uses
+1024-unit source canvases, glass app tiles, sky-blue folders with recessed marks, folded white documents and neutral ribbed bins.
+The pack supplies 16/32-pixel optical editions and 64–1024-pixel master renditions. Lettering is outlined geometry.
+`data/assets/cupertino/CREDITS.md` describes regeneration through the same native SVG loader the shell uses. With no
 pack installed, the built-in fallback (the embedded Inter subset, procedural cursors and placeholder icons) is used.
 
 ## Manifest

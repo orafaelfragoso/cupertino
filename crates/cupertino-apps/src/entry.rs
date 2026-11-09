@@ -189,6 +189,20 @@ fn parse_groups(text: &str) -> Vec<(String, Group)> {
     groups
 }
 
+/// Whether the desktop file `text` says `DBusActivatable=true` in its `[Desktop Entry]` group: the application takes
+/// `org.freedesktop.Application` calls on the bus name of its desktop file ID.
+pub fn dbus_activatable(text: &str) -> bool {
+    parse_groups(text)
+        .iter()
+        .find(|(n, _)| n == "Desktop Entry")
+        .is_some_and(|(_, g)| g.boolean("DBusActivatable"))
+}
+
+/// [`dbus_activatable`] of the desktop file at `path`; false when it cannot be read.
+pub fn dbus_activatable_file(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|text| dbus_activatable(&text))
+}
+
 /// Why an entry is not offered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hidden {
@@ -558,6 +572,24 @@ mod tests {
         assert!(
             parse_desktop_entry("x", &text(tool.to_str().unwrap()), &Locale::default(), &v).is_ok()
         );
+    }
+
+    #[test]
+    fn only_the_main_group_makes_an_entry_dbus_activatable() {
+        let main =
+            "[Desktop Entry]\nType=Application\nName=Maps\nExec=maps\nDBusActivatable=true\n";
+        assert!(dbus_activatable(main));
+        assert!(!dbus_activatable(
+            "[Desktop Entry]\nName=Maps\nExec=maps\n[Desktop Action new]\nDBusActivatable=true\n"
+        ));
+        assert!(!dbus_activatable(
+            "[Desktop Entry]\nName=Maps\nDBusActivatable=false\n"
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("org.example.Maps.desktop");
+        std::fs::write(&file, main).unwrap();
+        assert!(dbus_activatable_file(&file));
+        assert!(!dbus_activatable_file(&dir.path().join("gone.desktop")));
     }
 
     #[test]

@@ -13,7 +13,7 @@
 
 pub mod actions;
 #[cfg(feature = "app")]
-pub mod activate;
+pub use cupertino_apps::activate;
 pub mod autohide;
 pub mod bounce;
 pub mod conf;

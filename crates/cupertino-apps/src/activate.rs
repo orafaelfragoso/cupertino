@@ -1,6 +1,7 @@
 //! Asking a running application for a window over D-Bus: `org.freedesktop.Application.Activate` on the bus name of
 //! its desktop file ID, as the Desktop Entry specification's `DBusActivatable` defines it, with the activation token in
-//! the platform data so the window it opens may take the focus.
+//! the platform data so the window it opens may take the focus. The dock and the launcher ask a resident application for
+//! a window this way (feature `dbus`).
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -10,11 +11,11 @@ use zbus::zvariant::{ObjectPath, Value};
 /// The interface a D-Bus activatable application implements.
 pub const INTERFACE: &str = "org.freedesktop.Application";
 
-/// How long an application has to answer `Activate`: one that has not answered by then counts as failed, so the dock
+/// How long an application has to answer `Activate`: one that has not answered by then counts as failed, so the caller
 /// starts its entry again instead of waiting on it.
 pub const ACTIVATE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// `builder` with its method calls bounded by `timeout` ([`ACTIVATE_TIMEOUT`] for the dock's own connection): a hung
+/// `builder` with its method calls bounded by `timeout` ([`ACTIVATE_TIMEOUT`] for the caller's own connection): a hung
 /// application fails the call instead of holding it open.
 pub fn bounded(
     builder: zbus::connection::Builder<'_>,
@@ -54,7 +55,7 @@ pub async fn activate(conn: &zbus::Connection, id: &str, token: Option<&str>) ->
     .map(|_| ())
 }
 
-/// [`activate`] on the session bus, on a thread of its own so the dock's loop does not wait for the application, and
+/// [`activate`] on the session bus, on a thread of its own so the caller's loop does not wait for the application, and
 /// bounded by [`ACTIVATE_TIMEOUT`]: the future ends in whether the call succeeded. A failure is reported on standard
 /// error, prefixed with `process`.
 pub fn activate_in_thread(

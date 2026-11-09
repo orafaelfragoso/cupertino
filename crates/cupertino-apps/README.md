@@ -6,13 +6,15 @@ Rust over the freedesktop text formats and JSON, with no C library. Layer: `foun
 
 `cupertino-launcher` re-exports its `desktop` and `exec` modules and keeps its usage store in the `frecency` format,
 `cupertino-icons` uses it for document icons, `cupertino-files` to open files and to list Recents, the dock to launch,
-and the menu bar to launch and to list Recent Items.
+and the menu bar to launch and to list Recent Items. The dock and the launcher ask a resident application for a window
+with `activate` (feature `dbus`, which adds `zbus`; without it the crate has no D-Bus code).
 
 ## Public API
 
 | Module | Contents |
 |---|---|
-| `entry` | Desktop Entry Specification: `parse_desktop_entry` (listings: `NoDisplay`, `Hidden`, `OnlyShowIn` / `NotShowIn` against `XDG_CURRENT_DESKTOP`, `TryExec`), `parse_handler` (MIME handlers: only `Hidden` and `TryExec` remove an entry, the `MimeType` list is kept), localised keys with the `lang_COUNTRY@MODIFIER` fallback, `index_dirs` with desktop file ID shadowing |
+| `activate` (feature `dbus`) | `org.freedesktop.Application.Activate` on the bus name of a desktop file ID (`object_path`, `platform_data` with the activation token as `activation-token` and `desktop-startup-id`, `activate`), and `activate_in_thread`, the call on the session bus on a thread of its own, bounded by `ACTIVATE_TIMEOUT` (3 s), ending in whether it was answered |
+| `entry` | Desktop Entry Specification: `dbus_activatable` / `dbus_activatable_file` (`DBusActivatable=true` in the main group), `parse_desktop_entry` (listings: `NoDisplay`, `Hidden`, `OnlyShowIn` / `NotShowIn` against `XDG_CURRENT_DESKTOP`, `TryExec`), `parse_handler` (MIME handlers: only `Hidden` and `TryExec` remove an entry, the `MimeType` list is kept), localised keys with the `lang_COUNTRY@MODIFIER` fallback, `index_dirs` with desktop file ID shadowing |
 | `exec` | `Exec` quoting, field codes (`%f %F %u %U %i %c %k`), `CommandSpec` (`from_argv`) with the activation token variables and terminal wrapping |
 | `launch` | What a shell process starts, `Launch::{Program, App, Open}`, and its command with an activation token (`Launch::command`: an application without files, a file through the `%f %F %u %U` codes); `open_with_default` (a file's default application, `inode/directory` for a folder, `application/octet-stream` for a name no glob matches); `spawn` (detached, the exit reaped on a thread and an unsuccessful one logged); `OPEN_COMMAND` (`xdg-open`, for what no installed application handles). The token request stays in each process, on its own Wayland connection. |
 | `recent` | `recently-used.xbel` in the data home (`xbel_path`, `XBEL_NAME`), read only: `parse_xbel` (local files in file order, each once), `parse_recent_files` / `read_recent_files` (with the latest `added`, `modified` or `visited` time of each file) |
@@ -46,4 +48,5 @@ Out of scope:
 
 ## Tests
 
-`cargo test -p cupertino-apps`.
+`cargo test -p cupertino-apps` (`--features dbus` adds the activation unit tests; the call against a private bus is
+`cupertino-dock`'s `tests/activate.rs`).

@@ -14,6 +14,7 @@ app = [
     "dep:async-channel",
     "dep:async-io",
     "dep:cupertino-apps",
+    "cupertino-apps/dbus",
     "dep:cupertino-assets",
     "dep:cupertino-geometry",
     "dep:cupertino-icons",

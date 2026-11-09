@@ -12,6 +12,10 @@ How Cupertino treats monitors, the GPU driver and X11 programs on the text-conso
 
 **Default scale.** For a display without a stored scale, the scale comes from its mode in pixels and its physical size in millimetres. It is 1 when the physical size is unknown, or when the display is too small to have a list of choices.
 
+- The machine's own panel (an `eDP`, `LVDS` or `DSI` connector) offers five sizes: its default size, three with larger text and one with more space. The default is the size at about 127 points per inch, at a whole scale when one is within 5 % of that. A 14-inch 3024 × 1964 panel looks like 1024 × 665, 1147 × 745, 1352 × 878, 1512 × 982 (the default, scale 2) or 1800 × 1169.
+- Any other display offers up to five sizes around the one at 110 points per inch, from scales between 1 and 3 in eighths, and starts at that one.
+- Settings shows these choices for each display under Displays, from larger text to more space, and the server sets the chosen one's exact scale, so the desktop has exactly the size the choice names.
+
 **`displays.conf`.** The file keeps one section per display, keyed by make, model and serial, or by the connector name when there is no serial. The default path is `displays.conf` in the Cupertino configuration directory; `CUPERTINO_DISPLAYS_CONFIG` overrides it. A display that is unplugged and plugged in again gets its arrangement back.
 
 **Mode fallback.** If a display cannot show the mode it starts in (a link or dock too slow for it, or a mode the driver refuses), the server tries other modes of that display in this order: the same size at lower refresh rates, then smaller sizes, each from its highest refresh rate. It never tries a mode larger or faster than the wanted one. The first mode that works is shown and announced as the current mode, and the log says `the display shows a fallback mode`. The fallback is not stored: the next time the display is plugged in, the wanted mode is tried again. If no mode works, the display stays off and the log says why. No other mode is tried when the failure is "device busy" or "permission denied", because another mode cannot fix those.

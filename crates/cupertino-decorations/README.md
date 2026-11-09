@@ -99,6 +99,9 @@ cargo bench -p cupertino-decorations
 Tests cover layout, hit tests, button
 colours and glyphs per state, the edge (outline strength by appearance, activity and Increase Contrast, the side
 fall-off of a menu's outline, the inner rim and its device pixels), titlebar fills, shadow fall-off and peak density (0.40 light, 0.70 dark), nine-slice
-equals direct render at 1× and 2×, GPU parameters, and title centring, truncation, tracking, the weight scale, ink growth with weight and the optical size. The bench prints, on the
+equals direct render at 1× and 2×, GPU parameters, and title centring, truncation, tracking, the weight scale, ink growth with weight and the optical size. The same title bar
+at 1, 1.25, 1.5, 1.75 and 2 is painted throughout, has each button's ink centred on its laid-out point within half a
+device pixel (in the dark appearance too: a colour change moves no control), has an inked title and a rim on whole device
+pixels, and after other scales draws the same bytes at 2 again. The bench prints, on the
 development host, titlebar rasterisation (≈0.3 ms), nine-slice shadow expansion (≈2 ms at 1×, ≈11 ms at 2× for a 1600×900
 window) and the direct render (≈31 ms).

@@ -11,8 +11,8 @@ use cupertino_ui_core::{
 };
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{
-    DecorationMode, KeyEvent, Keysym, Mods, MouseButton, PlatformEvent, PointerEvent, Timestamp,
-    TouchEvent, WindowEvent, WindowId, WindowSpec, WindowStates,
+    Capabilities, DecorationMode, KeyEvent, Keysym, Mods, MouseButton, PlatformEvent, PointerEvent,
+    Timestamp, TouchEvent, WindowEvent, WindowId, WindowSpec, WindowStates,
 };
 use cupertino_ui_render::{CpuConfig, CpuRenderer, PaintNodeId, PaintOp};
 use cupertino_ui_test::{HeadlessWindowSystem, ManualClock};
@@ -24,7 +24,7 @@ use cupertino_ui_theme::{
     Appearance, Color, ColorRole, ColorTokens, ControlMetrics, ControlSize, FocusRing,
     InteractionVariant, Motion, StateVariant, ThemePreferences, ThemeTokens, TypeRole, TypeScale,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -92,6 +92,11 @@ pub fn state(interaction: InteractionVariant, selected: bool) -> StateVariant {
 
 fn placeholder_icons() -> Arc<dyn Icons> {
     Arc::new(PlaceholderIcons::default())
+}
+
+thread_local! {
+    /// Whether the next harness's desktop has effects.
+    static EFFECTS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Every role gets its own grey per state, 13 apart: `base + 1` hover, `+ 2` pressed, `+ 3` disabled, `+ 8` selected.
@@ -304,6 +309,15 @@ impl<A: Application> Harness<A> {
         Self::build(direction, theme(), icons, false)
     }
 
+    /// [`with_theme`](Self::with_theme) on a desktop with effects, which shows the glass and materials the nodes
+    /// ask for.
+    pub fn with_effects(theme: ThemeTokens) -> Self {
+        EFFECTS.with(|e| e.set(true));
+        let harness = Self::with_theme(theme);
+        EFFECTS.with(|e| e.set(false));
+        harness
+    }
+
     /// A harness whose window draws with `theme` instead of the fixture theme.
     pub fn with_theme(theme: ThemeTokens) -> Self {
         Self::build(LayoutDirection::Ltr, theme, placeholder_icons(), false)
@@ -349,7 +363,15 @@ impl<A: Application> Harness<A> {
             clock: clock.clone(),
             on_window_error: None,
         };
-        let mut rt = Runtime::new(HeadlessWindowSystem::default(), options);
+        let system = if EFFECTS.with(Cell::get) {
+            HeadlessWindowSystem::new(Capabilities {
+                app_effects: true,
+                ..Capabilities::default()
+            })
+        } else {
+            HeadlessWindowSystem::default()
+        };
+        let mut rt = Runtime::new(system, options);
         rt.step(turns()).unwrap();
         let window = rt.windows()[0].1;
         rt.window_system_mut()

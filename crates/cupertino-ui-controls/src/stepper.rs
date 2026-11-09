@@ -9,7 +9,7 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
-use cupertino_ui_theme::ColorRole;
+use cupertino_ui_theme::{Color, ColorRole};
 
 const HOME: Keysym = Keysym(0xff50);
 const UP: Keysym = Keysym(0xff52);
@@ -21,6 +21,9 @@ const END: Keysym = Keysym(0xff57);
 /// A chevron's width; it is half as high. Approximate design value.
 const CHEVRON: f64 = 7.0;
 const CHEVRON_STROKE: f64 = 1.5;
+/// The line between the halves: its thickness and its inset from the sides. Approximate design values.
+const DIVIDER: f64 = 1.0;
+const DIVIDER_INSET: f64 = 4.0;
 /// The page keys move this many steps. Approximate design value.
 const PAGE: f64 = 10.0;
 
@@ -251,12 +254,9 @@ impl<M: 'static> Widget<M> for Stepper<M> {
         };
         let chrome = chrome(cx.size());
         let radius = theme.metrics.button_radius;
-        look::fill(
-            cx,
-            chrome,
-            radius,
-            look::color(&theme, ColorRole::ControlFill, &base),
-        );
+        // an ordinary button's quiet bezel, split by a faint line between its halves
+        let bezel = look::quiet(&theme, look::BEZEL, &base);
+        look::fill(cx, chrome, radius, Some(bezel));
         for half in [Half::Up, Half::Down] {
             let area = half_rect(chrome, half);
             let own = ControlState {
@@ -265,12 +265,18 @@ impl<M: 'static> Widget<M> for Stepper<M> {
                 ..base
             };
             if own.pressed {
-                look::fill(
-                    cx,
-                    area.inset(Insets::uniform(1.0)),
-                    radius - 1.0,
-                    look::color(&theme, ColorRole::ControlFill, &own),
-                );
+                // the pressed half darkens by the bezel's own pressed step
+                let pressed = look::quiet(&theme, look::BEZEL, &own);
+                let step = Color {
+                    a: pressed.a - bezel.a,
+                    ..pressed
+                };
+                cx.push(PaintOp::PushClip(Shape::RoundedRect {
+                    rect: chrome,
+                    radius,
+                }));
+                look::fill(cx, area, 0.0, Some(step));
+                cx.push(PaintOp::PopClip);
             }
             if let Some(color) = look::color(&theme, ColorRole::ControlText, &own) {
                 cx.push(PaintOp::Stroke {
@@ -280,12 +286,26 @@ impl<M: 'static> Widget<M> for Stepper<M> {
                 });
             }
         }
+        let mid = chrome.min_y() + chrome.height() / 2.0;
+        let line = Rect::new(
+            chrome.min_x() + DIVIDER_INSET,
+            mid - DIVIDER / 2.0,
+            chrome.width() - 2.0 * DIVIDER_INSET,
+            DIVIDER,
+        );
+        look::fill(
+            cx,
+            line,
+            0.0,
+            look::color(&theme, ColorRole::Separator, &base),
+        );
+        let contrast = theme.preferences.appearance.is_high_contrast();
         look::stroke(
             cx,
             chrome.inset(Insets::uniform(0.5)),
             radius - 0.5,
             1.0,
-            look::color(&theme, ColorRole::ControlBorder, &base),
+            look::color(&theme, ColorRole::ControlBorder, &base).filter(|_| contrast),
         );
         paint_focus_ring(cx, chrome, radius);
     }

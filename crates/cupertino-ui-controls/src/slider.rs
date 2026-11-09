@@ -314,16 +314,21 @@ impl<M: 'static> Widget<M> for Slider<M> {
         let mid = size.height / 2.0;
         let track = Rect::new(0.0, mid - track_height / 2.0, size.width, track_height);
         let radius = track_height / 2.0;
-        let track_role = match self.style {
-            SliderStyle::PanelLevel(_) => ColorRole::PanelTrack,
-            _ => ColorRole::SliderTrack,
+        // a quiet well, which neither darkens under the pointer nor while dragged; a strong one under increased
+        // contrast
+        let resting = ControlState {
+            hovered: false,
+            pressed: false,
+            ..look_state
         };
-        look::fill(
-            cx,
-            track,
-            radius,
-            look::color(&theme, track_role, &look_state),
-        );
+        let empty = match self.style {
+            SliderStyle::PanelLevel(_) => look::color(&theme, ColorRole::PanelTrack, &look_state),
+            _ if theme.preferences.appearance.is_high_contrast() => {
+                look::color(&theme, ColorRole::SliderTrack, &look_state)
+            }
+            _ => Some(look::quiet(&theme, look::WELL, &resting)),
+        };
+        look::fill(cx, track, radius, empty);
         if let SliderStyle::PanelLevel(_) = self.style {
             look::stroke(
                 cx,
@@ -397,7 +402,6 @@ impl<M: 'static> Widget<M> for Slider<M> {
         let held = state.dragging && self.enabled && self.style == SliderStyle::Regular;
         if let Some(lens) = Lens::of(LensKind::Slider, thumb, held) {
             // held, the knob is a lens: the track and its fill show through it, shrunk about its centre
-            let empty = look::color(&theme, track_role, &look_state);
             let fill = look::color(&theme, ColorRole::ControlFill, &filled_state);
             paint_lens(cx, &lens, |cx, lens| {
                 let r = radius * lens.minify;

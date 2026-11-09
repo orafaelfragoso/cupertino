@@ -75,6 +75,18 @@ fn fills<A: Application>(h: &Harness<A>) -> Vec<(Rect, f64, cupertino_ui_theme::
         .collect()
 }
 
+/// An off track: a quiet well, black at `share` in the light appearance.
+fn well(share: f32) -> cupertino_ui_theme::Color {
+    cupertino_ui_theme::Color::new(0.0, 0.0, 0.0, share)
+}
+
+/// Whether the thumb is drawn as a lens, which clips what shows through it.
+fn lens<A: Application>(h: &Harness<A>) -> bool {
+    h.ops("toggle")
+        .iter()
+        .any(|op| matches!(op, PaintOp::PushClip(_)))
+}
+
 fn thumb_x(h: &Harness<App>) -> f64 {
     fills(h)[1].0.min_x()
 }
@@ -92,10 +104,7 @@ fn the_pill_lays_out_on_its_track_and_the_thumb_moves_to_the_end_when_on() {
         (Rect::new(2.0, 2.0, 28.8, 18.0), 9.0),
         "a capsule thumb, wider than it is high"
     );
-    assert_eq!(
-        track.2,
-        color(ColorRole::SwitchTrack, InteractionVariant::Normal, false)
-    );
+    assert_eq!(track.2, well(0.095), "off, a quiet well");
 
     h.click(h.center("toggle"));
 
@@ -180,18 +189,13 @@ fn a_press_shows_pressed_and_a_release_outside_does_not_toggle() {
     let center = h.center("toggle");
     h.pointer(PointerEvent::Motion { position: center });
     h.button(center, true);
-    assert_eq!(
-        fills(&h)[0].2,
-        color(ColorRole::SwitchTrack, InteractionVariant::Pressed, false)
-    );
+    assert!(lens(&h), "pressed, the thumb is held");
+    assert_eq!(fills(&h)[0].2, well(0.095), "the track stays quiet");
 
     let outside = point(150.0, 80.0);
     h.pointer(PointerEvent::Motion { position: outside });
-    assert_eq!(
-        fills(&h)[0].2,
-        color(ColorRole::SwitchTrack, InteractionVariant::Normal, false),
-        "dragged off, it no longer looks pressed"
-    );
+    assert!(!lens(&h), "dragged off, it no longer looks pressed");
+    assert_eq!(fills(&h)[0].2, well(0.095));
     h.button(outside, false);
     assert!(!h.model().on);
 
@@ -239,10 +243,7 @@ fn space_toggles_on_release_and_return_does_not() {
     assert!(h.focused("toggle"));
 
     h.key(SPACE, true);
-    assert_eq!(
-        fills(&h)[0].2,
-        color(ColorRole::SwitchTrack, InteractionVariant::Pressed, false)
-    );
+    assert!(lens(&h), "held by the key");
     assert!(!h.model().on, "nothing happens until Space comes up");
     h.key(SPACE, false);
     assert!(h.model().on);
@@ -304,10 +305,7 @@ fn a_disabled_switch_ignores_input_skips_tab_and_says_it_is_disabled() {
     h.tap(SPACE);
     assert!(!h.model().on);
     assert!(!h.focused("toggle"));
-    assert_eq!(
-        fills(&h)[0].2,
-        color(ColorRole::SwitchTrack, InteractionVariant::Disabled, false)
-    );
+    assert_eq!(fills(&h)[0].2, well(0.05), "a fainter well");
     let node = h.accessible("toggle");
     assert!(node.states.disabled && !node.states.focusable);
     assert!(node.actions.is_empty());

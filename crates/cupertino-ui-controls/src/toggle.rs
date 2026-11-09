@@ -10,7 +10,21 @@ use cupertino_ui_core::{
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 use cupertino_ui_platform::{MouseButton, PointerEvent};
-use cupertino_ui_theme::{switch_geometry, ColorRole, ControlMetrics};
+use cupertino_ui_theme::{switch_geometry, Color, ColorRole, ControlMetrics, ThemeTokens};
+
+/// The track: the accent when on; off, a quiet well that neither darkens under the pointer nor while held, or the
+/// theme's stronger track under increased contrast.
+fn track_color(theme: &ThemeTokens, on: bool, state: &ControlState) -> Option<Color> {
+    if on || theme.preferences.appearance.is_high_contrast() {
+        return look::color(theme, ColorRole::SwitchTrack, state);
+    }
+    let resting = ControlState {
+        hovered: false,
+        pressed: false,
+        ..*state
+    };
+    Some(look::quiet(theme, look::WELL, &resting))
+}
 
 impl<M: 'static> Toggle<M> {
     fn paint_shaped(&self, state: &SwitchState, cx: &mut PaintCx<'_>, shape: &SwitchShape) {
@@ -24,7 +38,7 @@ impl<M: 'static> Toggle<M> {
         );
         let track = track(cx.size(), shape);
         let radius = track.height() / 2.0;
-        let track_color = look::color(&theme, ColorRole::SwitchTrack, &look_state);
+        let track_color = track_color(&theme, self.on, &look_state);
         look::fill(cx, track, radius, track_color);
         let thumb = thumb_at(track, self.on, direction, shape, state.travel());
         match Lens::of(LensKind::Switch, thumb, state.held() && self.enabled) {

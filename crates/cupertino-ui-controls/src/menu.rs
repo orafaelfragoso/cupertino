@@ -8,14 +8,17 @@
 //! the menu (a secondary press, a press on a pop-up button) and is let go on a row chooses it once the pointer reached
 //! a row or the press was held; a quick click leaves the menu open.
 
+use crate::button::ButtonLook;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
-use crate::{ContextMenu, Handler, Menu, MenuAnchor, MenuItem, PopUpButton};
+use crate::{
+    ButtonRole, ButtonStyle, ContextMenu, Handler, Menu, MenuAnchor, MenuItem, PopUpButton,
+};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_menu_model::tracking::{
     Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY,
 };
-use cupertino_theme::metrics::Control;
+use cupertino_theme::ControlFamily;
 use cupertino_typeahead::TypeAhead;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActivationSource, Change, Checked, CommandRegistry,
@@ -97,6 +100,11 @@ const MAX: Size = Size {
 };
 /// Between a pop-up button's label and its chevrons.
 const CHEVRONS_GAP: f64 = 6.0;
+/// A pop-up button's chevrons: their width, each one's distance from the middle, and their stroke. Approximate
+/// design values.
+const POPUP_CHEVRON: f64 = 6.0;
+const POPUP_CHEVRON_GAP: f64 = 2.75;
+const POPUP_CHEVRON_STROKE: f64 = 1.25;
 /// Between a pop-up button's sides and its label or chevrons; its menu lines its rows' labels up with the label.
 const LABEL_INSET: f64 = 10.0;
 
@@ -510,6 +518,8 @@ struct PanelState {
     pointer: Option<Point>,
     /// The row, of any kind, the pointer was last found on outside the way into a submenu.
     hovered: Option<usize>,
+    /// The pointer has been over the panel.
+    visited: bool,
     /// The row, of any kind, the pointer was first found on.
     first: Option<Option<usize>>,
     aim: SubmenuAim,
@@ -588,6 +598,7 @@ impl<M: Clone + 'static> Panel<M> {
             return;
         };
         state.pointer = Some(p);
+        state.visited |= bounds.contains(p);
         let placed = self
             .submenu
             .as_ref()
@@ -680,6 +691,7 @@ impl<M: Clone + 'static> Panel<M> {
             }
             return;
         }
+        let inside = cx.bounds().is_some_and(|bounds| bounds.contains(p));
         // a release without a press here ends the press that opened the menu
         let tracking = state.press.take().unwrap_or_else(|| {
             let pressed = cx.opening_press().or(state.opened).unwrap_or(now);
@@ -689,6 +701,15 @@ impl<M: Clone + 'static> Panel<M> {
             }
             tracking
         });
+        if !inside {
+            // the press was let go away from every menu: dragged through the menus, it chooses nothing and closes
+            // them, which the outermost one does; one that never came over the menus leaves them open
+            let close = tracking.release(seconds(now), Under::Outside) == Release::Close;
+            if close && state.visited && self.back.is_none() {
+                cx.emit(self.escape.clone());
+            }
+            return;
+        }
         // let go on a panel, a release never closes the menu without choosing
         let under = match action {
             Some(RowAction::Select { .. }) => Under::Item,
@@ -1402,7 +1423,7 @@ impl<M: Clone + 'static> Widget<M> for PopUpButton<M> {
             .filter_map(|o| look::label(env, o))
             .map(|l| l.size().width)
             .fold(0.0, f64::max);
-        let height = look::metric(Control::PopUpButton, &env.theme);
+        let height = look::geometry(&env.theme, ControlFamily::PopUp).height;
         let width = LABEL_INSET + widest + CHEVRONS_GAP + SYMBOL + LABEL_INSET;
         Measured {
             size: Size::new(
@@ -1471,23 +1492,21 @@ impl<M: Clone + 'static> Widget<M> for PopUpButton<M> {
             ..ControlState::default()
         };
         let size = cx.size();
-        let height = look::metric(Control::PopUpButton, theme);
+        let geometry = look::geometry(theme, ControlFamily::PopUp);
+        let height = geometry.height;
         let chrome = Rect::new(0.0, (size.height - height) / 2.0, size.width, height);
-        let radius = theme.metrics.button_radius;
-        look::fill(
-            cx,
-            chrome,
-            radius,
-            look::color(theme, ColorRole::ControlFill, &state),
-        );
+        let radius = geometry.corners.radius(height);
+        // an ordinary button's quiet bezel
+        let bezel = ButtonLook::of(ButtonRole::Normal, ButtonStyle::Bordered, theme, &state);
+        look::fill(cx, chrome, radius, bezel.fill);
         look::stroke(
             cx,
             chrome.inset(Insets::uniform(0.5)),
             radius - 0.5,
             1.0,
-            look::color(theme, ColorRole::ControlBorder, &state),
+            bezel.border,
         );
-        let text = look::color(theme, ColorRole::ControlText, &state);
+        let text = bezel.text;
         let inset = LABEL_INSET;
         let rtl = env.direction == LayoutDirection::Rtl;
         if let Some(label) = look::label(&env, self.chosen()) {
@@ -1509,13 +1528,22 @@ impl<M: Clone + 'static> Widget<M> for PopUpButton<M> {
         } else {
             chrome.max_x() - inset - SYMBOL / 2.0
         };
-        symbol(
-            cx,
-            "symbol.chevron.up.down",
-            Point::new(x, chrome.min_y() + chrome.height() / 2.0),
-            text,
-            false,
-        );
+        // opposing chevrons: a choice among values, as against a pull-down's single one
+        if let Some(color) = text {
+            let mid = chrome.min_y() + chrome.height() / 2.0;
+            for up in [true, false] {
+                let offset = if up {
+                    -POPUP_CHEVRON_GAP
+                } else {
+                    POPUP_CHEVRON_GAP
+                };
+                cx.push(PaintOp::Stroke {
+                    shape: look::chevron(Point::new(x, mid + offset), POPUP_CHEVRON, up),
+                    width: POPUP_CHEVRON_STROKE,
+                    paint: Paint::Solid(color),
+                });
+            }
+        }
         paint_focus_ring(cx, chrome, radius);
     }
 

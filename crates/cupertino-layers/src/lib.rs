@@ -2,13 +2,19 @@
 //! (`[package.metadata.cupertino] layer = "<layer>"`); [`RULES`] checks those layers, excusing the edges in
 //! [`EXCEPTIONS`]. The check also fails on any chain of dependencies that [`DENIED_PATHS`] forbids, and on any chain of
 //! normal dependencies, external crates included, that [`DENIED_CRATES`] forbids.
+//!
+//! [`check_workspace`] runs every check on a checkout, as the `cupertino-layers` binary and `cupertino dev layers` do.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+mod closure;
 mod graph;
+mod workspace;
 
+pub use closure::REQUIRED_MPL_ROOTS;
 pub use graph::{denied_crate_paths, denied_paths, dot};
+pub use workspace::{check_workspace, check_workspace_with, Findings, LayersError, Policy, POLICY};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Layer {
@@ -399,6 +405,62 @@ pub enum Problem {
     GplDependency(String, String, String),
     /// An MPL-2.0 crate without the licence text in a `LICENSE` file next to its manifest.
     MissingLicenceText(String),
+    /// A crate that must be in the workspace under MPL-2.0 is not there.
+    MissingMplRoot(String),
+    /// A crate that must be under MPL-2.0 is not: `(crate, its licence)`.
+    NonMplRoot(String, String),
+    /// A crate in the normal or build closure of an MPL-2.0 workspace crate, external ones included, whose licence is
+    /// not accepted for it.
+    UnapprovedLicence {
+        root: String,
+        package: String,
+        version: String,
+        licence: String,
+    },
+}
+
+impl Problem {
+    /// A stable snake_case name of the kind of problem.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Problem::Forbidden(_) => "forbidden_edge",
+            Problem::DeniedPath(_) => "denied_path",
+            Problem::StaleException(_) => "stale_exception",
+            Problem::GplDependency(..) => "gpl_dependency",
+            Problem::MissingLicenceText(_) => "missing_licence_text",
+            Problem::MissingMplRoot(_) => "missing_mpl_root",
+            Problem::NonMplRoot(..) => "non_mpl_root",
+            Problem::UnapprovedLicence { .. } => "unapproved_licence",
+        }
+    }
+
+    /// The crate the problem starts at.
+    pub fn from(&self) -> &str {
+        match self {
+            Problem::Forbidden(e) => &e.from,
+            Problem::DeniedPath(path) => path.first().map_or("", String::as_str),
+            Problem::StaleException(x) => x.from,
+            Problem::GplDependency(from, ..) => from,
+            Problem::MissingLicenceText(name)
+            | Problem::MissingMplRoot(name)
+            | Problem::NonMplRoot(name, _) => name,
+            Problem::UnapprovedLicence { root, .. } => root,
+        }
+    }
+
+    /// The crate it leads to, when it is about a dependency.
+    pub fn to(&self) -> Option<&str> {
+        match self {
+            Problem::Forbidden(e) => Some(&e.to),
+            Problem::DeniedPath(path) => path.last().map(String::as_str),
+            Problem::StaleException(x) => Some(x.to),
+            Problem::GplDependency(_, to, _) => Some(to),
+            Problem::UnapprovedLicence { package, .. } => Some(package),
+            Problem::MissingLicenceText(_)
+            | Problem::MissingMplRoot(_)
+            | Problem::NonMplRoot(..) => None,
+        }
+    }
 }
 
 impl fmt::Display for Problem {
@@ -427,6 +489,21 @@ impl fmt::Display for Problem {
                     "{name} is MPL-2.0 and has no LICENSE with the MPL-2.0 text"
                 )
             }
+            Problem::MissingMplRoot(name) => {
+                write!(f, "required MPL root {name} is missing from workspace")
+            }
+            Problem::NonMplRoot(name, licence) => {
+                write!(f, "required MPL root {name} has non-MPL licence {licence}")
+            }
+            Problem::UnapprovedLicence {
+                root,
+                package,
+                version,
+                licence,
+            } => write!(
+                f,
+                "{root} MPL closure: {package} {version} has unapproved licence {licence}"
+            ),
         }
     }
 }

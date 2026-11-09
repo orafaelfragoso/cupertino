@@ -12,7 +12,8 @@ cargo run -p cupertino-layers -- --graph    # DOT graph of the declared layers
 ```
 
 The binary runs `cargo metadata`, collects every dependency between workspace crates (normal, build and
-dev, one edge per kind), and prints one line per problem to stderr. Without `--graph` the last line is a summary:
+dev, one edge per kind), and prints one line per problem to stderr. `cupertino dev layers` runs the same checks from
+the library and reports them in the `cupertino` command's forms. Without `--graph` the last line is a summary:
 
 ```
 71 crates, 291 internal dependencies, 3 exceptions, 0 problems
@@ -83,10 +84,24 @@ layer, or with a layer that has no row in `RULES`, stops the check.
 
 Library: `Layer` (`ALL`, `name`, `from_name`), `Kind`, `allows(rules, from, to)`, `Edge`, `edges(layers, deps)`,
 `Exception`, `Area`, `Tracking`, `check(rules, edges, exceptions, denied)`,
-`exception(exceptions, edge)`, `Problem`, `denied_paths(edges, denied)`, `denied_crate_paths(deps, denied)`, `licence_problems(licences, deps, has_text)`, `is_mpl`, `is_gpl`, `dot(…)`.
+`exception(exceptions, edge)`, `Problem` (with `kind()`, a stable snake_case name, `from()` and `to()`),
+`denied_paths(edges, denied)`, `denied_crate_paths(deps, denied)`, `licence_problems(licences, deps, has_text)`,
+`is_mpl`, `is_gpl`, `dot(…)`, `REQUIRED_MPL_ROOTS`.
+
+The whole check of a checkout is `check_workspace(root)`, or `check_workspace_with(root, cargo, policy)` with the
+command that runs Cargo (its environment is the caller's) and a `Policy` (`rules`, `exceptions`, `denied_paths`,
+`denied_crates`, `mpl_roots`; `POLICY` is this repository's). It runs `cargo metadata` in `root`, without the
+dependencies and then resolved (`--all-features --locked --offline`), and returns `Findings`: each crate's layer, the
+edges, the layer, path and workspace licence `problems`, and the `closure` problems of the MPL-2.0 crates, with
+`is_clean()`, `all_problems()`, `summary()`, `dot()` and `by_layer()`. A Cargo that cannot start, a `cargo metadata`
+that fails and a crate without a layer are a `LayersError` (`Cargo`, `Metadata`, `Manifest`), never a panic. The
+binary is this call on the working directory.
 
 ## Tests
 
 ```sh
 cargo test -p cupertino-layers
 ```
+
+`tests/workspace.rs` builds fixture workspaces with `cargo generate-lockfile --offline`: a clean one, one with an edge
+the rules deny, one whose MPL-2.0 crate depends on a GPL crate outside the members, and the errors.

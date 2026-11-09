@@ -1,8 +1,13 @@
+//! The licence closure of the MPL-2.0 crates: every crate an MPL-2.0 workspace crate links, through normal and build
+//! dependencies and external crates included, must have an accepted licence, and the toolkit and transport roots must
+//! exist and be MPL-2.0.
+
 use std::collections::{BTreeMap, BTreeSet};
-use std::process::Command;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+
+use crate::{is_mpl, Problem};
 
 const ACCEPTED: &[&str] = &[
     "0BSD",
@@ -19,7 +24,8 @@ const ACCEPTED: &[&str] = &[
     "Zlib",
 ];
 
-const REQUIRED_ROOTS: &[&str] = &[
+/// The crates that must be in the workspace under MPL-2.0: the transport, the toolkit and the C library.
+pub const REQUIRED_MPL_ROOTS: &[&str] = &[
     "cupertino-wayland-client",
     "cupertino-kit",
     "cupertino-ui-abi",
@@ -54,32 +60,54 @@ fn clarified(package: &Value, root: &str) -> bool {
         == "091f822cc42299060805fc0a4c7a6552147f22aa6833147a15a6be0111dced30"
 }
 
-pub fn check() -> Vec<String> {
-    let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--all-features",
-            "--locked",
-            "--offline",
-        ])
-        .output()
-        .expect("run cargo metadata for MPL closure");
-    assert!(
-        out.status.success(),
-        "cargo metadata failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let metadata: Value = serde_json::from_slice(&out.stdout).expect("cargo metadata JSON");
-    check_metadata(&metadata)
+/// The closure problems of `meta` (the full `cargo metadata` of the workspace, all features), sorted by their text and
+/// without repeats. `required_roots` must exist and be MPL-2.0. Metadata without the fields cargo writes is an error.
+pub(crate) fn check_roots(meta: &Value, required_roots: &[&str]) -> Result<Vec<Problem>, String> {
+    if !well_formed(meta) {
+        return Err(
+            "cargo metadata lacks the packages, members or resolved nodes it always has".to_owned(),
+        );
+    }
+    let problems = closure_problems(meta, required_roots);
+    let mut sorted: BTreeMap<String, Problem> = BTreeMap::new();
+    for problem in problems {
+        sorted.entry(problem.to_string()).or_insert(problem);
+    }
+    Ok(sorted.into_values().collect())
 }
 
-fn check_metadata(meta: &Value) -> Vec<String> {
-    check_roots(meta, REQUIRED_ROOTS)
+/// Whether `meta` has the fields [`closure_problems`] reads, so it cannot panic on them: every member and dependency
+/// names a known package and node.
+fn well_formed(meta: &Value) -> bool {
+    let (Some(packages), Some(members), Some(nodes)) = (
+        meta["packages"].as_array(),
+        meta["workspace_members"].as_array(),
+        meta["resolve"]["nodes"].as_array(),
+    ) else {
+        return false;
+    };
+    let ids: BTreeSet<&str> = packages.iter().filter_map(|p| p["id"].as_str()).collect();
+    let node_ids: BTreeSet<&str> = nodes.iter().filter_map(|n| n["id"].as_str()).collect();
+    let deps_known = nodes.iter().all(|n| {
+        n["deps"].as_array().is_some_and(|deps| {
+            deps.iter().all(|d| {
+                d["pkg"]
+                    .as_str()
+                    .is_some_and(|id| ids.contains(id) && node_ids.contains(id))
+                    && d["dep_kinds"].as_array().is_some()
+            })
+        })
+    });
+    ids.len() == packages.len()
+        && packages.iter().all(|p| p["name"].as_str().is_some())
+        && meta["workspace_root"].as_str().is_some()
+        && members
+            .iter()
+            .all(|m| m.as_str().is_some_and(|id| ids.contains(id)))
+        && deps_known
 }
 
-fn check_roots(meta: &Value, required_roots: &[&str]) -> Vec<String> {
+fn closure_problems(meta: &Value, required_roots: &[&str]) -> Vec<Problem> {
     let packages: BTreeMap<_, _> = meta["packages"]
         .as_array()
         .expect("packages")
@@ -98,36 +126,28 @@ fn check_roots(meta: &Value, required_roots: &[&str]) -> Vec<String> {
         .iter()
         .map(|n| (n["id"].as_str().expect("node id"), n))
         .collect();
-    let mut problems = BTreeSet::new();
+    let mut problems = Vec::new();
     for name in required_roots {
         match workspace.iter().find_map(|id| {
             let package = packages.get(id).expect("workspace package");
             (package["name"].as_str() == Some(name)).then_some(package)
         }) {
-            None => {
-                problems.insert(format!(
-                    "required MPL root {name} is missing from workspace"
-                ));
-            }
-            Some(package)
-                if !package["license"]
-                    .as_str()
-                    .is_some_and(cupertino_layers::is_mpl) =>
-            {
-                problems.insert(format!(
-                    "required MPL root {name} has non-MPL licence {}",
-                    package["license"].as_str().unwrap_or("<missing>")
-                ));
+            None => problems.push(Problem::MissingMplRoot((*name).to_owned())),
+            Some(package) if !package["license"].as_str().is_some_and(is_mpl) => {
+                problems.push(Problem::NonMplRoot(
+                    (*name).to_owned(),
+                    package["license"]
+                        .as_str()
+                        .unwrap_or("<missing>")
+                        .to_owned(),
+                ))
             }
             Some(_) => {}
         }
     }
     for root in &workspace {
         let package = packages.get(root).expect("workspace package");
-        if !package["license"]
-            .as_str()
-            .is_some_and(cupertino_layers::is_mpl)
-        {
+        if !package["license"].as_str().is_some_and(is_mpl) {
             continue;
         }
         let mut seen = BTreeSet::new();
@@ -146,16 +166,21 @@ fn check_roots(meta: &Value, required_roots: &[&str]) -> Vec<String> {
                             meta["workspace_root"].as_str().expect("workspace root"),
                         ))
                 {
-                    problems.insert(format!(
-                        "{} MPL closure: {} {} has unapproved licence {}",
-                        packages[root]["name"].as_str().expect("root name"),
-                        package["name"].as_str().expect("package name"),
-                        package["version"].as_str().expect("package version"),
-                        licence.unwrap_or("<missing>")
-                    ));
+                    problems.push(Problem::UnapprovedLicence {
+                        root: packages[root]["name"]
+                            .as_str()
+                            .expect("root name")
+                            .to_owned(),
+                        package: package["name"].as_str().expect("package name").to_owned(),
+                        version: package["version"].as_str().unwrap_or_default().to_owned(),
+                        licence: licence.unwrap_or("<missing>").to_owned(),
+                    });
                 }
             }
-            let node = nodes.get(id).expect("resolved node");
+            // a package cargo resolved no node for has no dependencies to follow
+            let Some(node) = nodes.get(id) else {
+                continue;
+            };
             for dep in node["deps"].as_array().expect("resolved deps") {
                 if dep["dep_kinds"]
                     .as_array()
@@ -168,7 +193,7 @@ fn check_roots(meta: &Value, required_roots: &[&str]) -> Vec<String> {
             }
         }
     }
-    problems.into_iter().collect()
+    problems
 }
 
 #[cfg(test)]
@@ -176,16 +201,25 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn texts(problems: Result<Vec<Problem>, String>) -> Vec<String> {
+        problems.unwrap().iter().map(Problem::to_string).collect()
+    }
+
+    #[test]
+    fn metadata_without_its_fields_is_an_error_not_a_panic() {
+        assert!(check_roots(&json!({"packages": []}), &[]).is_err());
+    }
+
     #[test]
     fn required_roots_cover_the_denied_kit_crates() {
-        for (name, _) in cupertino_layers::DENIED_CRATES {
+        for (name, _) in crate::DENIED_CRATES {
             if *name == "cupertino-kit"
                 || *name == "cupertino-wayland-client"
                 || name.starts_with("cupertino-ui-")
             {
                 assert!(
-                    REQUIRED_ROOTS.contains(name),
-                    "{name} is missing from REQUIRED_ROOTS"
+                    REQUIRED_MPL_ROOTS.contains(name),
+                    "{name} is missing from REQUIRED_MPL_ROOTS"
                 );
             }
         }
@@ -220,7 +254,7 @@ mod tests {
             ]}
         });
         assert_eq!(
-            check_roots(&meta, &["root"]),
+            texts(check_roots(&meta, &["root"])),
             vec![
                 "root MPL closure: build 1 has unapproved licence GPL-3.0-only",
                 "root MPL closure: dep 2 has unapproved licence GPL-3.0-only"
@@ -233,7 +267,7 @@ mod tests {
         let meta = json!({"workspace_root":"/workspace", "workspace_members":["root"],
             "packages":[{"id":"root", "name":"root", "license":"MIT"}], "resolve":{"nodes":[]}});
         assert_eq!(
-            check_roots(&meta, &["root", "absent"]),
+            texts(check_roots(&meta, &["root", "absent"])),
             vec![
                 "required MPL root absent is missing from workspace",
                 "required MPL root root has non-MPL licence MIT",
@@ -261,11 +295,11 @@ mod tests {
             "packages":[{"id":"root", "name":"root", "license":"MPL-2.0"},
                 {"id":"x", "name":"xkbcommon", "version":"1", "license":null, "manifest_path":package["manifest_path"]}],
             "resolve":{"nodes":[{"id":"root", "deps":[{"pkg":"x", "dep_kinds":[{"kind":null}]}]}, {"id":"x", "deps":[]}]}});
-        assert!(check_roots(&meta, &["root"]).is_empty());
+        assert!(check_roots(&meta, &["root"]).unwrap().is_empty());
         let mut unclarified = meta;
         unclarified["packages"][1]["manifest_path"] = json!("/elsewhere/Cargo.toml");
         assert_eq!(
-            check_roots(&unclarified, &["root"]),
+            texts(check_roots(&unclarified, &["root"])),
             vec!["root MPL closure: xkbcommon 1 has unapproved licence <missing>"]
         );
     }

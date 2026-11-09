@@ -42,7 +42,7 @@ All rules are constants in `src/lib.rs`; nothing is read from a configuration fi
 
 | Layer | May depend on | Crates |
 |---|---|---|
-| `foundation` | `foundation` | animation, apps, assets, build-info, defaults, filepicker, geometry, glyph, icons, key-bindings, keyboard, menu-model, modifiers, test-bus, theme, thumbnails, typeahead, xkbcommon |
+| `foundation` | `foundation` | animation, apps, assets, build-info, defaults, diagnostic-events, filepicker, geometry, glyph, icons, key-bindings, keyboard, menu-model, modifiers, test-bus, theme, thumbnails, typeahead, xkbcommon |
 | `models` | `foundation`, `models` | displays, effects, input, overview, render-api, scene, stage, wm |
 | `platform` | `foundation`, `platform` | alsa, bluetooth, devices, evdev, netlink, peer, seat |
 | `protocol` | `foundation`, `protocol` | app-protocols, login-ipc, protocols |

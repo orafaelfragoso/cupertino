@@ -13,10 +13,11 @@ mod stats;
 mod validate;
 
 pub use cpu::{CpuConfig, CpuRenderer};
+/// The colour [`Paint::Solid`] and the other paints take.
+pub use cupertino_theme::Color;
 pub use stats::{RenderStats, Tally};
 
 use cupertino_geometry::{Point, Rect};
-use cupertino_theme::Color;
 use cupertino_ui_text::{GlyphRun, TextError};
 use std::collections::HashMap;
 use std::sync::Arc;

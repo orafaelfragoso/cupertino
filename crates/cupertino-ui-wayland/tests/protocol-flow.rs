@@ -32,6 +32,11 @@ use wayland_protocols::wp::presentation_time::server::wp_presentation::{self, Wp
 use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::{
     Kind, WpPresentationFeedback,
 };
+use wayland_protocols::wp::single_pixel_buffer::v1::server::wp_single_pixel_buffer_manager_v1::{
+    self, WpSinglePixelBufferManagerV1,
+};
+use wayland_protocols::wp::viewporter::server::wp_viewport::{self, WpViewport};
+use wayland_protocols::wp::viewporter::server::wp_viewporter::{self, WpViewporter};
 use wayland_protocols::xdg::activation::v1::server::xdg_activation_token_v1::{
     self, XdgActivationTokenV1,
 };
@@ -171,6 +176,16 @@ enum Seen {
     DropFinished,
     /// Its offer was destroyed.
     DropDestroyed,
+    /// A commit attached a one-pixel buffer of `color` (premultiplied, over the whole `u32` range).
+    SolidCommitted {
+        color: [u32; 4],
+        /// The viewport's destination then, in points.
+        destination: Option<(i32, i32)>,
+        buffer_scale: i32,
+        damage: Vec<[i32; 4]>,
+        /// The input region set since the last commit, when one was.
+        input_region: Option<Option<Vec<[i32; 4]>>>,
+    },
 }
 
 #[derive(Default)]
@@ -181,9 +196,14 @@ struct SurfaceState {
     frames: Vec<WlCallback>,
     input_region: Option<Option<Vec<[i32; 4]>>>,
     offset: (i32, i32),
+    /// The destination of the surface's viewport.
+    destination: Option<(i32, i32)>,
 }
 
 type SurfaceData = Arc<Mutex<SurfaceState>>;
+
+/// The colour of a one-pixel buffer.
+struct SolidPixel([u32; 4]);
 
 struct BufferData {
     map: Arc<Mmap>,
@@ -245,8 +265,60 @@ plain_global!(
     WlCompositor,
     WlShm,
     WlDataDeviceManager,
-    CupertinoAppEffectsV1
+    CupertinoAppEffectsV1,
+    WpViewporter,
+    WpSinglePixelBufferManagerV1
 );
+
+impl Dispatch<WpViewporter, ()> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WpViewporter,
+        request: wp_viewporter::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let wp_viewporter::Request::GetViewport { id, surface } = request {
+            init.init(id, surface.data::<SurfaceData>().unwrap().clone());
+        }
+    }
+}
+
+impl Dispatch<WpViewport, SurfaceData> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WpViewport,
+        request: wp_viewport::Request,
+        data: &SurfaceData,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let wp_viewport::Request::SetDestination { width, height } = request {
+            data.lock().unwrap().destination = (width > 0).then_some((width, height));
+        }
+    }
+}
+
+impl Dispatch<WpSinglePixelBufferManagerV1, ()> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WpSinglePixelBufferManagerV1,
+        request: wp_single_pixel_buffer_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let wp_single_pixel_buffer_manager_v1::Request::CreateU32RgbaBuffer { id, r, g, b, a } =
+            request
+        {
+            init.init(id, SolidPixel([r, g, b, a]));
+        }
+    }
+}
 
 /// The session is locked: an observer that can tell (version 5) is told so at once. The menu bar shows a window's
 /// menus.
@@ -345,6 +417,7 @@ macro_rules! ignore_requests {
 ignore_requests!(
     WlCallback: (),
     WlBuffer: BufferData,
+    WlBuffer: SolidPixel,
     WlOutput: (),
     WlPointer: (),
     WlTouch: (),
@@ -461,7 +534,23 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                     t.toplevel.configure(0, 0, Vec::new());
                     t.xdg.configure(state.next_serial);
                 }
-                if let Some(buffer) = s.buffer.take() {
+                if let Some(pixel) = s.buffer.as_ref().and_then(|b| b.data::<SolidPixel>()) {
+                    state
+                        .seen
+                        .send(Seen::SolidCommitted {
+                            color: pixel.0,
+                            destination: s.destination,
+                            buffer_scale: s.scale,
+                            damage: std::mem::take(&mut s.damage),
+                            input_region: s.input_region.take(),
+                        })
+                        .unwrap();
+                    let buffer = s.buffer.take().expect("checked above");
+                    if let Some(previous) = state.shown.replace(buffer) {
+                        previous.release();
+                    }
+                    state.pending_frames.append(&mut s.frames);
+                } else if let Some(buffer) = s.buffer.take() {
                     let b = buffer.data::<BufferData>().expect("buffer data");
                     let start = b.offset as usize;
                     let first_pixel = b.map[start..start + 4].try_into().unwrap();
@@ -879,6 +968,15 @@ fn spawn_server_with(
     stream: UnixStream,
     effects: Option<u32>,
 ) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+    spawn_server_offering(stream, effects, false)
+}
+
+/// [`spawn_server_with`], offering `wp_viewporter` and `wp_single_pixel_buffer_manager_v1` when `solid`.
+fn spawn_server_offering(
+    stream: UnixStream,
+    effects: Option<u32>,
+    solid: bool,
+) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
     let (committed_tx, committed_rx) = channel();
     let (seen_tx, seen_rx) = channel();
@@ -895,6 +993,10 @@ fn spawn_server_with(
         dh.create_global::<Mock, XdgActivationV1, _>(1, ());
         if let Some(version) = effects {
             dh.create_global::<Mock, CupertinoAppEffectsV1, _>(version, ());
+        }
+        if solid {
+            dh.create_global::<Mock, WpViewporter, _>(1, ());
+            dh.create_global::<Mock, WpSinglePixelBufferManagerV1, _>(1, ());
         }
         let mut mock = Mock {
             committed: committed_tx,
@@ -1219,6 +1321,63 @@ fn a_frame_is_drawn_at_the_output_scale_in_wl_shm_byte_order_and_the_next_waits_
     assert_eq!(second.first_pixel, [0, 0, 0, 0]);
 }
 
+/// A presenter shows one colour as one pixel the compositor stretches over the window where it offers that, the frame
+/// callback pacing it like a frame, and the next frame is drawn whole; where it does not, as a frame filled with the
+/// colour, which the next frame keeps outside its damage.
+#[test]
+fn a_solid_colour_is_one_stretched_pixel_or_where_the_compositor_cannot_a_filled_frame() {
+    for offered in [true, false] {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let (control, committed, seen) = spawn_server_offering(server_stream, None, offered);
+        let mut app = App::connect(client_stream);
+        app.wait_for_draw();
+        // straight half-transparent red
+        app.presenter
+            .draw_solid(&mut app.conn, [1.0, 0.0, 0.0, 0.5])
+            .unwrap();
+        app.flush();
+        if offered {
+            let half = u32::MAX / 2 + 1;
+            assert_eq!(
+                seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+                Seen::SolidCommitted {
+                    color: [half, 0, 0, half],
+                    destination: Some((100, 50)),
+                    buffer_scale: 1,
+                    damage: vec![[0, 0, 1, 1]],
+                    input_region: None,
+                }
+            );
+        } else {
+            let filled = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(filled.buffer_size, (200, 100));
+            // premultiplied, in wl_shm byte order (B, G, R, A)
+            assert_eq!(filled.first_pixel, [0, 0, 128, 128]);
+        }
+        let early = app.wait(Duration::from_millis(100));
+        assert!(
+            !early
+                .iter()
+                .any(|r| matches!(r, Report::Ready(Ready::Draw))),
+            "the frame callback paces it: {early:?}"
+        );
+        control.send(Control::FrameDone).unwrap();
+        app.presenter.request_redraw();
+        app.wait_for_draw();
+        app.presenter
+            .draw(&mut app.conn, Some(&[Rect::new(0.0, 0.0, 1.0, 1.0)]), |_, _| {})
+            .unwrap();
+        app.flush();
+        let next = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        let damage = if offered {
+            [0, 0, i32::MAX, i32::MAX]
+        } else {
+            [0, 0, 2, 2]
+        };
+        assert_eq!(next.damage, vec![damage], "offered {offered}");
+    }
+}
+
 #[test]
 fn a_paste_reads_another_clients_text_selection() {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
@@ -1462,7 +1621,7 @@ mod window_system {
     use cupertino_geometry::{Point, Size};
     use cupertino_modifiers::Profile;
     use cupertino_ui_platform::{
-        ClipboardKind, DecorationMode, MaterialRegion, MenuDescription, MouseButton, PlatformEvent,
+        ClipboardKind, Color, DecorationMode, MaterialRegion, MenuDescription, MouseButton, PlatformEvent,
         PointerEvent, PresentOutcome, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
         WindowSystem,
     };
@@ -2716,6 +2875,119 @@ mod window_system {
             .request(w, WindowRequest::SetInputRegion(None))
             .unwrap();
         assert_eq!(present(&mut kit, 4), Some(None));
+    }
+
+    /// A window of one colour over the output (a catcher of presses around a panel) is one transparent pixel the
+    /// compositor stretches to the configured size, at buffer scale 1 on an output at 2, its input region going with
+    /// the commit as a frame's does; the frame presented after it is a whole buffer at the window's scale, which the
+    /// viewport the colour needed now stretches to the same size.
+    #[test]
+    fn a_solid_window_is_one_pixel_stretched_over_its_configured_size_and_keeps_its_input_region() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let (control, committed, seen) = spawn_server_offering(server_stream, None, true);
+        let ws = WaylandWindowSystem::new(
+            Connection::from_stream(client_stream).unwrap(),
+            Profile::cupertino(),
+        )
+        .with_roles(role::Roles::default());
+        let mut kit = Kit {
+            ws,
+            window: WindowId(0),
+            stash: VecDeque::new(),
+        };
+        let w = kit
+            .ws
+            .create_window(&WindowSpec {
+                title: "Close the panel".into(),
+                app_id: role::APP_ID.into(),
+                size: Size::new(1.0, 1.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::None,
+                foreign_parent: None,
+                input_region: Some(vec![Rect::new(0.0, 0.0, 120.0, 40.0)]),
+            })
+            .unwrap();
+        kit.window = w;
+        let configure = kit.window_event(|e| match e {
+            WindowEvent::Configure(c) => Some(*c),
+            _ => None,
+        });
+        assert_eq!(configure.size, Some(Size::new(120.0, 40.0)));
+        let clear = Color::new(0.0, 0.0, 0.0, 0.0);
+        let solid = |kit: &mut Kit, color: Color| {
+            kit.ws.request_frame(w);
+            kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+            let outcome = kit.ws.present_solid(w, color, Some(configure.id)).unwrap();
+            assert_eq!(outcome, PresentOutcome::Presented);
+            kit.pump();
+            control.send(Control::FrameDone).unwrap();
+            loop {
+                if let s @ Seen::SolidCommitted { .. } =
+                    seen.recv_timeout(Duration::from_secs(5)).unwrap()
+                {
+                    return s;
+                }
+            }
+        };
+
+        assert_eq!(
+            solid(&mut kit, clear),
+            Seen::SolidCommitted {
+                color: [0; 4],
+                destination: Some((120, 40)),
+                buffer_scale: 1,
+                damage: vec![[0, 0, 1, 1]],
+                input_region: Some(Some(vec![[0, 0, 120, 40]])),
+            }
+        );
+        let Seen::SolidCommitted { input_region, .. } = solid(&mut kit, clear) else {
+            unreachable!()
+        };
+        assert_eq!(input_region, None, "an unchanged region is not sent again");
+        kit.ws
+            .request(w, WindowRequest::SetInputRegion(None))
+            .unwrap();
+        let Seen::SolidCommitted {
+            input_region,
+            destination,
+            ..
+        } = solid(&mut kit, clear)
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            (input_region, destination),
+            (Some(None), Some((120, 40))),
+            "the whole surface takes input again"
+        );
+
+        kit.ws.request_frame(w);
+        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+        let outcome = kit
+            .ws
+            .present(w, &frame_sized(1, (240, 80), [1, 2, 3, 4], &[]), None)
+            .unwrap();
+        assert_eq!(outcome, PresentOutcome::Presented);
+        kit.pump();
+        let shown = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        // the output's scale 2, the viewport stretching the buffer to the same 120 x 40 points
+        assert_eq!(
+            (shown.buffer_size, shown.buffer_scale, shown.damage),
+            ((240, 80), 1, vec![[0, 0, i32::MAX, i32::MAX]]),
+            "drawn whole after the colour"
+        );
+    }
+
+    #[test]
+    fn a_solid_window_is_refused_where_the_compositor_has_no_one_pixel_buffers() {
+        let (mut kit, _control, _committed, _seen) = mapped();
+        let w = kit.window;
+        assert_eq!(
+            kit.ws
+                .present_solid(w, Color::new(0.0, 0.0, 0.0, 0.0), None),
+            Err(cupertino_ui_platform::PlatformError::Unsupported)
+        );
     }
 
     #[test]

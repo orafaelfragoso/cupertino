@@ -1,23 +1,27 @@
-# The renderer the golden baselines are recorded on: Rust and Debian are pinned by digest, and every package comes from one
-# Debian snapshot, so Mesa and LLVM do not move until this file does. Change the digest, the snapshot and
-# tests/fixtures/goldens/renderer.txt together, and re-record with ci/goldens.sh --update.
-FROM rust:1.99.1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc
+# The renderer the golden baselines are recorded on: Arch is pinned by digest (archlinux:base-devel-20261101.0.620205),
+# and every package comes from one Arch Linux Archive date, so Mesa and LLVM do not move until this file does. Change the
+# digest, the date and tests/fixtures/goldens/renderer.txt together, and re-record with ci/goldens.sh --update (or the
+# Record goldens workflow); see CONTRIBUTING.md.
+FROM docker.io/library/archlinux:base-devel@sha256:2de80105abb49f813a85393c6758a4334deb6bcec4a2411bd2f059c0bee6ee4c
 
-ARG SNAPSHOT=20261020T213255Z
-RUN sed -i \
-      -e "s|http://deb.debian.org/debian-security|http://snapshot.debian.org/archive/debian-security/${SNAPSHOT}|" \
-      -e "s|http://deb.debian.org/debian\$|http://snapshot.debian.org/archive/debian/${SNAPSHOT}|" \
-      /etc/apt/sources.list.d/debian.sources \
- && grep -q snapshot.debian.org /etc/apt/sources.list.d/debian.sources \
- && ! grep -rq --include='*.list' --include='*.sources' deb.debian.org /etc/apt \
- && apt-get -o Acquire::Check-Valid-Until=false update \
- && apt-get install -y --no-install-recommends \
-      build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 libegl-mesa0 xkb-data \
-      clang libclang-dev libpipewire-0.3-dev python3 \
- && rm -rf /var/lib/apt/lists/* \
+ARG ARCHIVE=2026/11/01
+# The archive date is the only package source: the mirror list holds that one server, pacman.conf names no server of
+# its own and every repository includes the mirror list. -Syyuu moves every installed package to that date, down too.
+RUN printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' "$ARCHIVE" > /etc/pacman.d/mirrorlist \
+ && [ "$(grep -c '^[[:space:]]*Server' /etc/pacman.d/mirrorlist)" = 1 ] \
+ && grep -qxF "Server = https://archive.archlinux.org/repos/$ARCHIVE/\$repo/os/\$arch" /etc/pacman.d/mirrorlist \
+ && ! grep -q '^[[:space:]]*Server' /etc/pacman.conf \
+ && [ -z "$(grep '^[[:space:]]*Include' /etc/pacman.conf | grep -v '= /etc/pacman.d/mirrorlist$')" ] \
+ && pacman -Syyuu --noconfirm --needed \
+      rustup python mesa libglvnd pam dbus xkeyboard-config clang libpipewire \
+ && pacman -Scc --noconfirm \
  && test -f /usr/share/glvnd/egl_vendor.d/50_mesa.json
+
+# The toolchain is read-only for the unprivileged user ci/goldens.sh runs the tests as.
+ENV RUSTUP_HOME=/opt/rustup RUSTUP_TOOLCHAIN=1.99.1
+RUN rustup toolchain install 1.99.1 --profile minimal \
+ && chmod -R a+rX /opt/rustup \
+ && cargo --version
 
 # llvmpipe picks its vector width from the CPU; the baselines are rendered at one width on every host.
 ENV LP_NATIVE_VECTOR_WIDTH=256
-# Use the installed toolchain without changing its components when the checkout is mounted.
-ENV RUSTUP_TOOLCHAIN=1.99.1

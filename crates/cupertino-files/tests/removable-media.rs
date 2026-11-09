@@ -6,7 +6,7 @@ mod common;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use cupertino_files::notice::Notices;
@@ -32,7 +32,60 @@ struct State {
     passphrase: String,
 }
 
-type Shared = Arc<Mutex<State>>;
+type Shared = Arc<Logged>;
+
+/// The fake's state, and what wakes a test waiting for its log: every lock of it tells the waiters once let go.
+#[derive(Default)]
+struct Logged {
+    state: Mutex<State>,
+    changed: Condvar,
+}
+
+/// A lock of [`Logged`], which tells the waiters once let go.
+struct Guard<'a> {
+    state: MutexGuard<'a, State>,
+    changed: &'a Condvar,
+}
+
+impl std::ops::Deref for Guard<'_> {
+    type Target = State;
+
+    fn deref(&self) -> &State {
+        &self.state
+    }
+}
+
+impl std::ops::DerefMut for Guard<'_> {
+    fn deref_mut(&mut self) -> &mut State {
+        &mut self.state
+    }
+}
+
+impl Drop for Guard<'_> {
+    fn drop(&mut self) {
+        self.changed.notify_all();
+    }
+}
+
+impl Logged {
+    fn lock(&self) -> Result<Guard<'_>, std::convert::Infallible> {
+        Ok(Guard {
+            state: self.state.lock().unwrap_or_else(PoisonError::into_inner),
+            changed: &self.changed,
+        })
+    }
+
+    /// The log once `done` holds of it; panics after `guard`, which only guards against a hang.
+    fn log_once(&self, guard: Duration, done: impl Fn(&[String]) -> bool) -> Vec<String> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let (state, waited) = self
+            .changed
+            .wait_timeout_while(state, guard, |s| !done(&s.log))
+            .unwrap_or_else(PoisonError::into_inner);
+        assert!(!waited.timed_out(), "log {:?}", state.log);
+        state.log.clone()
+    }
+}
 
 #[derive(Debug, Clone, zbus::DBusError)]
 #[zbus(prefix = "org.freedesktop.UDisks2.Error")]
@@ -426,17 +479,12 @@ impl Fake {
         self.state.lock().unwrap().log.clone()
     }
 
-    /// The log once a notification came, waiting up to 5 s: notices are posted on a thread of their own.
+    /// The log once a notification came: notices are posted on a thread of their own. The five seconds only guard
+    /// against a hang.
     fn log_once_notified(&self) -> Vec<String> {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            let log = self.log();
-            if log.iter().any(|l| l.starts_with("Notify")) {
-                return log;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        panic!("no notification within 5 s; log {:?}", self.log());
+        self.state.log_once(Duration::from_secs(5), |log| {
+            log.iter().any(|l| l.starts_with("Notify"))
+        })
     }
 
     fn watch(&self) -> Watch {
@@ -703,11 +751,7 @@ fn eject_from_the_window_on_a_card_goes_home_and_ejects_its_drive() {
     assert!(!run.disabled().contains(&common::action("eject")));
 
     run.menu("eject");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while fake.log().len() < 2 {
-        assert!(Instant::now() < deadline, "log {:?}", fake.log());
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for_log(&fake, 2);
     assert_eq!(fake.log(), ["Unmount sdc1 0", "Eject card 0"]);
     assert_eq!(run.title(), window_title(&run.home(), &[]));
 }
@@ -892,14 +936,10 @@ fn row(run: &common::Run, name: &str, description: &str) -> bool {
     })
 }
 
-/// Waits up to 5 s for the fake's log to hold `count` lines.
+/// The fake's log once it holds `count` lines; the five seconds only guard against a hang.
 fn wait_for_log(fake: &Fake, count: usize) -> Vec<String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while fake.log().len() < count {
-        assert!(Instant::now() < deadline, "log {:?}", fake.log());
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    fake.log()
+    fake.state
+        .log_once(Duration::from_secs(5), |log| log.len() >= count)
 }
 
 #[test]
@@ -1245,8 +1285,17 @@ fn cancel_closes_the_passphrase_sheet_without_a_call() {
     run.wait_until(|run| run.named(Role::PasswordInput) == ["Passphrase"]);
     run.click_named(Role::Button, "Cancel");
     run.wait_until(|run| run.named(Role::PasswordInput).is_empty());
-    std::thread::sleep(Duration::from_millis(100));
+    // a call starts on the window's thread, marking its device busy until its end is taken in: none did
+    assert!(!busy(&run, "Kingston DataTraveler"), "a call started");
     assert!(fake.log().is_empty(), "{:?}", fake.log());
+}
+
+/// Whether the sidebar's row named `name` is busy.
+fn busy(run: &common::Run, name: &str) -> bool {
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    snapshot.accessibility.iter().any(|(_, node)| {
+        node.role == Role::ListItem && node.name.as_deref() == Some(name) && node.states.busy
+    })
 }
 
 #[test]

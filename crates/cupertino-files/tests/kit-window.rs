@@ -306,7 +306,8 @@ fn items_that_cannot_go_to_the_trash_stay_and_are_reported_in_one_notice() {
         return;
     };
     let (_service, received) = notifications(&bus);
-    let mut run = Run::with(false, Notices::start(Some(bus.connect())));
+    let notices = Notices::start(Some(bus.connect()));
+    let mut run = Run::with(false, notices.clone());
     run.wait_until(|run| run.rows().len() == 3);
     std::fs::write(run.home().join("Trash"), "").unwrap();
     run.menu("select-all");
@@ -315,7 +316,8 @@ fn items_that_cannot_go_to_the_trash_stay_and_are_reported_in_one_notice() {
         received.recv_timeout(Duration::from_secs(5)).unwrap(),
         "3 items couldn't be moved to the Trash / File exists."
     );
-    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+    notices.flush(Duration::from_secs(5));
+    assert!(received.try_recv().is_err(), "one notice");
     assert_eq!(run.rows(), ["a.txt", "b.txt", "Notes"]);
 }
 

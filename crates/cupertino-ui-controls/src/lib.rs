@@ -6,6 +6,9 @@ mod button;
 mod canvas;
 mod checkbox;
 mod choice;
+mod color_well;
+mod combo;
+mod date_picker;
 mod dialog;
 mod disclosure;
 mod editor;
@@ -45,6 +48,7 @@ mod window_drag;
 mod window_group;
 
 pub use choice::{segment_at, ChoiceState};
+pub use date_picker::DatePickerState;
 pub use editor::EditorState;
 pub use field::{FieldState, SecureState};
 pub use form::{FORM_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT};
@@ -829,6 +833,69 @@ pub struct Menu<M> {
 pub struct ContextMenu<M> {
     pub content: Element<M>,
     pub on_open: Option<Handler<Point, M>>,
+}
+
+/// An editable field with a button at its end that opens a menu of choices: the field takes any text, and a choice
+/// replaces it. Build its element with `Element::from`, keyed, and declare [`ComboBox::menu`] while `open`; the
+/// button's press, Space or Return sends `on_open`.
+pub struct ComboBox<M> {
+    pub field: TextField<M>,
+    pub options: Vec<String>,
+    pub open: bool,
+    pub on_open: Option<M>,
+    /// The field's text size in points.
+    pub text_size: f64,
+}
+
+/// A day of the proleptic Gregorian calendar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CalendarDate {
+    pub year: i32,
+    /// 1 to 12.
+    pub month: u8,
+    /// 1 to the month's length.
+    pub day: u8,
+}
+
+/// A part of a [`DatePicker`]'s date.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DatePart {
+    Year,
+    Month,
+    Day,
+}
+
+/// A date in a field's well, shown `YYYY-MM-DD`, with a stepper beside it. A click picks the year, month or day, as
+/// Left and Right do; Up, Down and the stepper step that part, wrapping within its range, and send `on_change` with
+/// the new date.
+pub struct DatePicker<M> {
+    /// The accessible name.
+    pub label: String,
+    pub date: CalendarDate,
+    pub enabled: bool,
+    pub on_change: Option<Handler<CalendarDate, M>>,
+}
+
+/// A colour in a capsule set in a quiet rim. A press, Space or Return sends `on_open`, for the application to show a
+/// colour picker; its accessible value is the colour as `#RRGGBB`.
+pub struct ColorWell<M> {
+    /// The accessible name.
+    pub label: String,
+    pub color: cupertino_ui_theme::Color,
+    pub enabled: bool,
+    pub on_open: Option<M>,
+}
+
+/// A button titled with what it does that opens a menu of actions below itself on a press, Space, Return, Up or Down,
+/// marked by a single downward chevron; unlike a [`PopUpButton`] it keeps no chosen value. Give its element a key
+/// and declare [`PullDownButton::menu`] while `open`.
+pub struct PullDownButton<M> {
+    /// The title it shows, also its accessible name.
+    pub label: String,
+    pub actions: Vec<String>,
+    pub open: bool,
+    pub enabled: bool,
+    pub on_open: Option<M>,
 }
 
 /// A button that shows the chosen option and opens a menu of the options over itself on a press, Space, Return, Up

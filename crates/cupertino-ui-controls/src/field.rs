@@ -420,7 +420,7 @@ fn paint_chrome(cx: &mut PaintCx<'_>, state: &ControlState, field: FieldLook) {
 
 /// A field's recessed well: darker than what it sits on in a dark appearance, the text background in a light one,
 /// with a faint edge; the theme's stronger border under increased contrast. Disabled, the dark well is fainter.
-fn well(theme: &ThemeTokens, state: &ControlState) -> (Option<Color>, Option<Color>) {
+pub(crate) fn well(theme: &ThemeTokens, state: &ControlState) -> (Option<Color>, Option<Color>) {
     let appearance = theme.preferences.appearance;
     let fill = if appearance.is_dark() {
         let share = if state.enabled {

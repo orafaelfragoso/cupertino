@@ -397,6 +397,24 @@ mod tests {
     }
 
     #[test]
+    fn each_frame_of_an_animated_cursor_is_drawn_from_a_buffer_of_its_own() {
+        // two frames of one size, delay and hotspot that differ only in their pixels
+        let mut loader = CursorLoader::load(None, CursorColors::DEFAULT);
+        loader.cache.insert(
+            CursorIcon::Default.name(),
+            vec![image(24, 100, 1), image(24, 100, 2)],
+        );
+        for millis in [50, 150, 250, 350] {
+            loader.frame(CursorIcon::Default, 24, Duration::from_millis(millis));
+        }
+        assert_eq!(
+            loader.buffers.len(),
+            2,
+            "the second frame is not shown from the first one's buffer"
+        );
+    }
+
+    #[test]
     fn the_smallest_image_at_least_the_size_is_picked() {
         let imgs = vec![image(24, 0, 1), image(48, 0, 2), image(64, 0, 3)];
         let size = |pixels| imgs[pick_frame(&imgs, pixels, 0)].size;

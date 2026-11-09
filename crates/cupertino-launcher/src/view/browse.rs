@@ -177,11 +177,14 @@ fn leaf_measure(rect: &Rect) -> Measured {
 
 /// The browser's part of the panel, below the header row, laid out from the panel's top-left corner less the header.
 /// `no_results_said`: with nothing to show, "No Results" is said aloud (the filter settled; once per filter).
+/// `alpha` is the content's opacity (what input and assistive technology follow); `panel` the enclosure's, which the
+/// body is drawn at too when the enclosure leaves its fade to its parts.
 pub fn body<M>(
     browser: &Browser,
     icons: &HashMap<String, Vec<ImageSource>>,
     no_results_said: bool,
     alpha: f64,
+    panel: f64,
     now: f64,
 ) -> Element<M>
 where
@@ -308,6 +311,7 @@ where
     Element::new(BodyNode {
         size: Size::new(layout.panel.width(), layout.panel.height() - top),
         alpha,
+        opacity: alpha * panel.clamp(0.0, 1.0),
         children,
     })
 }
@@ -325,7 +329,10 @@ pub fn options_rect(width: f64) -> Rect {
 /// The browser's part: placed below the header, faded as one layer; the wheel scrolls the applications.
 struct BodyNode<M> {
     size: Size,
+    /// The content's opacity, which decides whether it takes the wheel and is shown to assistive technology.
     alpha: f64,
+    /// What it is drawn at: `alpha`, times the enclosure's opacity when the enclosure fades its parts one by one.
+    opacity: f64,
     children: Vec<Element<M>>,
 }
 
@@ -350,7 +357,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for BodyNode<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.size != old.size {
             Change::Layout
-        } else if self.alpha != old.alpha {
+        } else if (self.alpha, self.opacity) != (old.alpha, old.opacity) {
             Change::Paint
         } else {
             Change::None
@@ -377,8 +384,8 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for BodyNode<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if self.alpha < 1.0 {
-            cx.set_group(self.alpha.clamp(0.0, 1.0) as f32, Vec::new());
+        if self.opacity < 1.0 {
+            cx.set_group(self.opacity.clamp(0.0, 1.0) as f32, Vec::new());
         }
     }
 

@@ -10,7 +10,9 @@
 //!
 //! `glass_follows_only_the_panel_s_shape_at_fractional_scales` checks that at every scale of [`SCALES`]: the arrows
 //! and hover inside a settled panel reshape no glass and repaint no whole window, and a transition reshapes it at
-//! most once a frame. `frame_cost_report` is `#[ignore]`d: it measures wall time, which depends on the machine, and
+//! most once a frame. `every_frame_of_the_panel_s_transitions_fits_the_budget_in_an_optimised_build` holds each
+//! frame of every interaction to the frame budget at 1x and 2x when the tests are built optimised (the release
+//! profile); unoptimised it measures nothing. `frame_cost_report` is `#[ignore]`d: it measures wall time, which depends on the machine, and
 //! is run by hand in the release profile (see the crate's README); the tables go to standard output and, when
 //! `CUPERTINO_REPAINT_DIR` names a folder, to `launcher-<scale>x.md` and `.csv` there.
 
@@ -740,4 +742,61 @@ fn opening_the_browser_over_200_applications_keeps_icon_decoding_off_the_frames(
         arriving.p50_ms < FRAME_BUDGET.as_secs_f64() * 1000.0,
         "frames as the icons arrive: {arriving:?}"
     );
+}
+
+/// What one frame of the panel may take at a backing scale: [`FRAME_BUDGET`] at 1x, twice that at 2x (four times
+/// the pixels, with the layout and the group composites shared).
+///
+/// [`FRAME_BUDGET`]: cupertino_ui_test::repaint::FRAME_BUDGET
+fn budget_ms(scale: f64) -> f64 {
+    cupertino_ui_test::repaint::FRAME_BUDGET.as_secs_f64() * 1000.0 * scale.max(1.0)
+}
+
+/// How many times an interaction is run before a frame over the budget fails it. Wall time on a shared machine has
+/// outliers from other work; a frame that is too slow is too slow on every run.
+const BUDGET_ATTEMPTS: usize = 3;
+
+/// In an optimised build, every frame of the panel opening and closing, unfolding and folding, typing, and the Dock
+/// opening the browser over 200 applications, drawn at 1x and at 2x, fits [`budget_ms`]. An interaction with a slow
+/// frame is run again, up to [`BUDGET_ATTEMPTS`] times, and fails only if no run fits. Unoptimised builds take several
+/// times as long and measure nothing.
+#[test]
+fn every_frame_of_the_panel_s_transitions_fits_the_budget_in_an_optimised_build() {
+    if cfg!(debug_assertions) {
+        eprintln!("frame budgets are held in optimised builds only");
+        return;
+    }
+    let worst = |run: &Measured| {
+        run.frames
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (i, f.nanos as f64 / 1e6))
+            .fold((0, 0.0_f64), |a, b| if b.1 > a.1 { b } else { a })
+    };
+    for scale in [1.0, 2.0] {
+        let budget = budget_ms(scale);
+        let mut over: BTreeMap<&'static str, (usize, f64)> = BTreeMap::new();
+        for attempt in 0..BUDGET_ATTEMPTS {
+            let mut runs = interactions(scale, true);
+            runs.push(browser_over_many(200, scale, true).0);
+            let mut slow = BTreeMap::new();
+            for run in &runs {
+                assert!(!run.frames.is_empty(), "{} presented no frames", run.name);
+                let (frame, ms) = worst(run);
+                let failed_before = attempt == 0 || over.contains_key(run.name);
+                if ms >= budget && failed_before {
+                    slow.insert(run.name, (frame, ms));
+                }
+            }
+            over = slow;
+            if over.is_empty() {
+                break;
+            }
+        }
+        assert!(
+            over.is_empty(),
+            "at {scale}x, frames over {budget} ms in each of {BUDGET_ATTEMPTS} runs \
+             (interaction: (frame, ms) of the last run): {over:?}"
+        );
+    }
 }

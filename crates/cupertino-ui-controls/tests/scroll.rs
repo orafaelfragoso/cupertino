@@ -31,6 +31,8 @@ struct Setup {
     buttons: bool,
     /// The view sits 60 tall in an outer view.
     nested: bool,
+    /// Three rows instead of ten: everything fits.
+    short: bool,
 }
 
 thread_local! {
@@ -86,7 +88,7 @@ impl Application for Scrolled {
 
     fn view(model: &Model) -> Vec<Window<Message>> {
         let setup = SETUP.get();
-        let rows = (0..10)
+        let rows = (0..if setup.short { 3 } else { 10 })
             .map(|i| {
                 let row = if setup.buttons {
                     Element::new(Button {
@@ -225,7 +227,7 @@ fn thumb(h: &Harness<Scrolled>) -> Option<(Rect, f32)> {
             PaintOp::Fill {
                 shape: Shape::RoundedRect { rect, radius },
                 paint: cupertino_ui_render::Paint::Solid(color),
-            } if *radius == 6.0 && rect.size.width == 12.0 => Some((*rect, color.a)),
+            } if *radius == 3.0 && rect.size.width == 6.0 => Some((*rect, color.a)),
             _ => None,
         })
 }
@@ -360,9 +362,9 @@ fn an_overlay_thumb_shows_on_scroll_fades_after_a_second_and_lets_clicks_through
 
     wheel(&mut h, point(50.0, 50.0), 70.0, ScrollSource::Wheel, false);
     let (rect, alpha) = thumb(&h).expect("a scroll shows the thumb");
-    // in the bar's 16 at the trailing edge: track 96 from y 2; thumb 96 × 100 / 240 = 40, half way down its 56 of
-    // travel
-    assert_eq!(rect, Rect::new(2.0, 30.0, 12.0, 40.0));
+    // in the bar's 17 at the trailing edge, 6 wide and 3 in from it: track 96 from y 2; thumb 96 × 100 / 240 = 40,
+    // half way down its 56 of travel
+    assert_eq!(rect, Rect::new(8.0, 30.0, 6.0, 40.0));
     let full = alpha;
 
     h.clock().advance_to(Timestamp(1_150 * MS)).unwrap();
@@ -397,7 +399,8 @@ fn an_always_shown_track_pages_on_a_click_and_its_thumb_drags() {
         scroller: Scroller::Always,
         ..Setup::default()
     });
-    assert_eq!(h.model().inner.viewport, Size::new(185.0, 100.0));
+    // the track takes 17 beside the content
+    assert_eq!(h.model().inner.viewport, Size::new(183.0, 100.0));
     h.click(point(192.0, 90.0));
     assert_eq!(h.model().inner.offset.y, 60.0, "a page leaves 40 in view");
     // thumb 100 × 100 / 240 ≈ 41.7 tall over 58.3 of travel: at 60 of 140 it starts near 25
@@ -692,5 +695,134 @@ fn coasting_content_keeps_moving_while_the_pointer_scrolls_another_view() {
         h.model().inner.offset.y > coasting,
         "the inner view coasts on from {coasting} to {}",
         h.model().inner.offset.y
+    );
+}
+
+fn scroll_bar_roles(h: &Harness<Scrolled>) -> usize {
+    h.snapshot()
+        .accessibility
+        .into_iter()
+        .filter(|(_, n)| n.role == Role::ScrollBar)
+        .count()
+}
+
+#[test]
+fn an_always_shown_track_gives_its_gutter_back_while_everything_fits() {
+    let mut h = harness(Setup {
+        scroller: Scroller::Always,
+        short: true,
+        ..Setup::default()
+    });
+    assert_eq!(h.model().inner.content.height, 72.0);
+    assert_eq!(
+        h.model().inner.viewport,
+        Size::new(200.0, 100.0),
+        "no gutter for a track with nothing to scroll"
+    );
+    assert_eq!(scroll_bar_roles(&h), 0);
+    // taller than the view: the track comes back and takes its 17
+    h.resize(Size::new(200.0, 50.0));
+    assert_eq!(h.model().inner.viewport, Size::new(183.0, 50.0));
+    assert_eq!(scroll_bar_roles(&h), 1);
+}
+
+#[test]
+fn the_session_style_overrides_the_view_s_own() {
+    use cupertino_ui_platform::{PlatformEvent, ScrollBars};
+    let mut h = harness(Setup::default());
+    assert_eq!(
+        h.model().inner.viewport.width,
+        200.0,
+        "the view's overlay bars"
+    );
+    h.rt.window_system_mut()
+        .enqueue(PlatformEvent::ScrollBars(ScrollBars::Always))
+        .unwrap();
+    h.settle();
+    assert_eq!(
+        h.model().inner.viewport.width,
+        183.0,
+        "the session keeps scroll bars shown beside the content"
+    );
+    assert_eq!(scroll_bar_roles(&h), 1);
+
+    SETUP.set(Setup {
+        scroller: Scroller::Always,
+        ..Setup::default()
+    });
+    let mut h = Harness::<Scrolled>::new();
+    h.rt.window_system_mut()
+        .enqueue(PlatformEvent::ScrollBars(ScrollBars::WhenScrolling))
+        .unwrap();
+    h.settle();
+    assert_eq!(
+        h.model().inner.viewport.width,
+        200.0,
+        "the session shows bars over the content while it scrolls"
+    );
+    assert_eq!(scroll_bar_roles(&h), 0);
+}
+
+#[test]
+fn an_overlay_thumb_stays_while_the_pointer_is_on_it_and_fades_after_it_leaves() {
+    let mut h = harness(Setup::default());
+    wheel(&mut h, point(50.0, 50.0), 70.0, ScrollSource::Wheel, false);
+    assert!(thumb(&h).is_some());
+    // on the thumb's strip, wider than the thumb as drawn: x 185 is in the strip, left of the 6 drawn
+    h.pointer(PointerEvent::Motion {
+        position: point(185.0, 50.0),
+    });
+    h.clock().advance_to(Timestamp(3_000 * MS)).unwrap();
+    h.settle();
+    let (_, alpha) = thumb(&h).expect("held by the pointer");
+    assert!(alpha > 0.0);
+
+    // off the thumb: shown a second longer, then it fades
+    h.pointer(PointerEvent::Motion {
+        position: point(50.0, 50.0),
+    });
+    h.clock().advance_to(Timestamp(3_900 * MS)).unwrap();
+    h.settle();
+    assert!(
+        thumb(&h).is_some(),
+        "shown for a second after the pointer left"
+    );
+    h.clock().advance_to(Timestamp(4_400 * MS)).unwrap();
+    step(&mut h);
+    next_frame(&mut h);
+    h.settle();
+    assert_eq!(thumb(&h), None);
+}
+
+#[test]
+fn dragging_an_overlay_thumb_keeps_it_shown_until_the_release() {
+    let mut h = harness(Setup::default());
+    wheel(&mut h, point(50.0, 50.0), 70.0, ScrollSource::Wheel, false);
+    // the thumb is 40 long from y 30
+    h.pointer(PointerEvent::Motion {
+        position: point(191.0, 40.0),
+    });
+    h.button(point(191.0, 40.0), true);
+    h.pointer(PointerEvent::Motion {
+        position: point(191.0, 54.0),
+    });
+    let y = h.model().inner.offset.y;
+    // 14 of the thumb's 56 of travel is 35 of the content's 140
+    assert!((y - 105.0).abs() < 0.5, "{y}");
+    h.clock().advance_to(Timestamp(5_000 * MS)).unwrap();
+    h.settle();
+    assert!(thumb(&h).is_some(), "held while dragged");
+    h.button(point(191.0, 54.0), false);
+    h.pointer(PointerEvent::Motion {
+        position: point(50.0, 50.0),
+    });
+    h.clock().advance_to(Timestamp(6_400 * MS)).unwrap();
+    step(&mut h);
+    next_frame(&mut h);
+    h.settle();
+    assert_eq!(
+        thumb(&h),
+        None,
+        "gone a second and a fade after the release"
     );
 }

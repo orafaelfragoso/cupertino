@@ -6,6 +6,7 @@ use crate::look::{self, paint_focus_ring};
 use crate::{Handler, ScrollView, Scroller};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_core::kinetic::ScrollMotion;
+use cupertino_ui_core::session_scroll_bars;
 use cupertino_ui_core::{
     AccessibleValue, Change, ControlState, Element, Event, EventCx, MeasureCx, PaintCx, Phase,
     Propagation, Role, SemanticsCx, Widget,
@@ -15,7 +16,7 @@ use cupertino_ui_layout::{
     Overflow, ScrollState, SizeSpec,
 };
 use cupertino_ui_platform::{
-    Keysym, Mods, MouseButton, PointerEvent, ScrollSource, Timestamp, TouchEvent,
+    Keysym, Mods, MouseButton, PointerEvent, ScrollBars, ScrollSource, Timestamp, TouchEvent,
 };
 use cupertino_ui_theme::ColorRole;
 use std::cell::Cell;
@@ -35,12 +36,20 @@ const SPACE: Keysym = Keysym(0x20);
 const LINE: f64 = 40.0;
 /// A wheel burst ends after this long without an event.
 const WHEEL_IDLE_NS: u64 = 300_000_000;
-const THUMB: f64 = 12.0;
+/// A scroll bar's frame across its axis, in either style: the strip an overlay bar takes the pointer in and the
+/// gutter an always-shown track takes from the content.
+const BAR: f64 = 17.0;
+/// An overlay thumb's width: thinner than the strip it is grabbed in.
+const OVERLAY_THUMB: f64 = 6.0;
+/// Between an overlay thumb and the outer edge of its strip.
+const OVERLAY_EDGE: f64 = 3.0;
+/// An always-shown track's thumb, centred in the track.
+const TRACK_THUMB: f64 = 11.0;
 const THUMB_MIN: f64 = 24.0;
-/// Between an overlay thumb and the view's edges.
+/// Between an overlay thumb and the ends of its strip.
 const INSET: f64 = 2.0;
-/// An always-visible scroll bar's track.
-const TRACK: f64 = 15.0;
+/// An overlay bar stays shown this long after the content last moved or the pointer last left or let go of it, then
+/// fades for [`FADE_NS`].
 const SHOWN_NS: u64 = 1_000_000_000;
 const FADE_NS: u64 = 300_000_000;
 
@@ -64,6 +73,15 @@ impl<M: 'static> From<ScrollView<M>> for Element<M> {
     }
 }
 
+/// The bars a view shows: the session's style when it said one, else the view's own.
+fn style(own: Scroller) -> Scroller {
+    match session_scroll_bars() {
+        Some(ScrollBars::Always) => Scroller::Always,
+        Some(ScrollBars::WhenScrolling) => Scroller::Overlay,
+        None => own,
+    }
+}
+
 /// A viewport around `content` with its scroll bars; ListView builds on it too.
 pub(crate) fn frame<M: 'static>(
     content: Element<M>,
@@ -84,6 +102,7 @@ pub(crate) fn tracked<M: 'static>(
     on_scroll: ScrollHandler<M>,
     enabled: bool,
 ) -> Element<M> {
+    let scroller = style(scroller);
     let viewport = Element::new(Viewport {
         content: Some(content),
         state,
@@ -653,6 +672,8 @@ pub struct BarState {
     shown_from: Cell<Option<Timestamp>>,
     /// Where on the thumb a drag holds it, along the bar.
     grab: Option<f64>,
+    /// The pointer is on the shown thumb: an overlay bar stays shown.
+    hover: bool,
     /// The bar's size and direction at its last paint, for hit-testing.
     painted: Cell<Option<(Size, bool)>>,
 }
@@ -701,10 +722,24 @@ impl<M: 'static> Bar<M> {
         Some((start + (track - len) * (offset / max).clamp(0.0, 1.0), len))
     }
 
+    /// Whether the content passes the viewport along the bar's axis.
+    fn scrolls(&self) -> bool {
+        let (viewport, content, _) = self.lengths();
+        content > viewport && viewport > 0.0
+    }
+
+    /// The frame across the axis; an always-shown track that has nothing to scroll gives its gutter back.
     fn thickness(&self) -> f64 {
         match self.scroller {
-            Scroller::Overlay => THUMB + 2.0 * INSET,
-            Scroller::Always => TRACK,
+            Scroller::Always if !self.scrolls() => 0.0,
+            _ => BAR,
+        }
+    }
+
+    fn thumb_width(&self) -> f64 {
+        match self.scroller {
+            Scroller::Overlay => OVERLAY_THUMB,
+            Scroller::Always => TRACK_THUMB,
         }
     }
 
@@ -727,27 +762,68 @@ impl<M: 'static> Bar<M> {
         }
     }
 
-    /// The thumb's rect in the bar, with a horizontal bar's start on the right in right-to-left.
+    /// The thumb as drawn, with a horizontal bar's start on the right in right-to-left: centred in an always-shown
+    /// track, near the outer edge of an overlay strip (the trailing edge of a vertical bar, the bottom of a horizontal
+    /// one).
     fn thumb_rect(&self, size: Size, rtl: bool) -> Option<Rect> {
         let strip = self.strip(size, rtl);
         let (start, len) = self.thumb(size)?;
-        let thickness = match self.axis {
-            Axis::Horizontal => strip.height(),
-            Axis::Vertical => strip.width(),
+        // from the strip's low edge across it, of `thickness`, with the outer edge at its high end or not
+        let across = |low: f64, thickness: f64, outer_high: bool| {
+            let width = self.thumb_width().min(thickness);
+            let edge = OVERLAY_EDGE.min(thickness - width);
+            let at = match (self.scroller, outer_high) {
+                (Scroller::Always, _) => (thickness - width) / 2.0,
+                (Scroller::Overlay, true) => thickness - edge - width,
+                (Scroller::Overlay, false) => edge,
+            };
+            (low + at, width)
         };
-        let across = (thickness - THUMB) / 2.0;
-        let (x, y) = (strip.min_x(), strip.min_y());
         Some(match self.axis {
-            Axis::Vertical => Rect::new(x + across, start, THUMB, len),
-            Axis::Horizontal if rtl => Rect::new(size.width - start - len, y + across, len, THUMB),
-            Axis::Horizontal => Rect::new(start, y + across, len, THUMB),
+            Axis::Vertical => {
+                let (x, width) = across(strip.min_x(), strip.width(), !rtl);
+                Rect::new(x, start, width, len)
+            }
+            Axis::Horizontal => {
+                let (y, width) = across(strip.min_y(), strip.height(), true);
+                let x = if rtl { size.width - start - len } else { start };
+                Rect::new(x, y, len, width)
+            }
         })
+    }
+
+    /// Where the thumb takes the pointer: its length along the bar and the whole strip across, wider than drawn.
+    fn target_rect(&self, size: Size, rtl: bool) -> Option<Rect> {
+        let strip = self.strip(size, rtl);
+        let thumb = self.thumb_rect(size, rtl)?;
+        Some(match self.axis {
+            Axis::Vertical => {
+                Rect::new(strip.min_x(), thumb.min_y(), strip.width(), thumb.height())
+            }
+            Axis::Horizontal => {
+                Rect::new(thumb.min_x(), strip.min_y(), thumb.width(), strip.height())
+            }
+        })
+    }
+
+    /// The pointer left the thumb or let go of it: an overlay bar shown meanwhile stays a while longer, then fades.
+    fn release_hold(&self, state: &BarState, cx: &mut EventCx<'_, M>) {
+        if state.shown_from.get().is_some() {
+            let now = cx.now();
+            state.shown_from.set(Some(now));
+            cx.wake_at(Timestamp(now.0 + SHOWN_NS));
+            cx.request_paint();
+        }
     }
 
     fn shown(&self, state: &BarState, now: Timestamp, reduce: bool) -> Shown {
         let Some(from) = state.shown_from.get() else {
             return Shown::Hidden;
         };
+        // held by the pointer on it or dragging it
+        if state.hover || state.grab.is_some() {
+            return Shown::Until(Timestamp(now.0 + SHOWN_NS));
+        }
         let until = from.0 + SHOWN_NS;
         if now.0 < until {
             Shown::Until(Timestamp(until))
@@ -814,7 +890,11 @@ impl<M: 'static> Widget<M> for Bar<M> {
         if self.state.offset != old.state.offset {
             state.moved.set(true);
         }
-        if self.fit != old.fit {
+        // an always-shown track that starts or stops having something to scroll takes or gives back its gutter
+        if self.fit != old.fit
+            || self.scroller != old.scroller
+            || (self.scroller == Scroller::Always && self.scrolls() != old.scrolls())
+        {
             Change::Layout
         } else if self.state != old.state
             || self.scroller != old.scroller
@@ -868,7 +948,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
                 _,
             ) => {
                 let local = local(position);
-                let Some(thumb) = self.thumb_rect(size, rtl) else {
+                let Some(thumb) = self.target_rect(size, rtl) else {
                     return Propagation::Continue;
                 };
                 if thumb.contains(local) {
@@ -914,8 +994,24 @@ impl<M: 'static> Widget<M> for Bar<M> {
             ) if state.grab.is_some() => {
                 state.grab = None;
                 cx.release_pointer();
+                if !state.hover {
+                    self.release_hold(state, cx);
+                }
             }
-            Event::Cancel => state.grab = None,
+            Event::Pointer(PointerEvent::Enter { .. }, _) if cx.node() == cx.target() => {
+                state.hover = true;
+            }
+            Event::Pointer(PointerEvent::Leave, _) if cx.node() == cx.target() => {
+                state.hover = false;
+                if state.grab.is_none() {
+                    self.release_hold(state, cx);
+                }
+            }
+            Event::Cancel => {
+                state.grab = None;
+                state.hover = false;
+                self.release_hold(state, cx);
+            }
             _ => return Propagation::Continue,
         }
         Propagation::Stop
@@ -932,6 +1028,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
             ..ControlState::default()
         };
         let alpha = match self.scroller {
+            Scroller::Always if !self.scrolls() => return,
             Scroller::Always => {
                 look::fill(
                     cx,
@@ -965,11 +1062,12 @@ impl<M: 'static> Widget<M> for Bar<M> {
         };
         let color = look::color(&theme, ColorRole::ScrollerThumb, &normal)
             .map(|c| c.with_alpha(c.a * alpha));
-        look::fill(cx, thumb, THUMB / 2.0, color);
+        let radius = thumb.width().min(thumb.height()) / 2.0;
+        look::fill(cx, thumb, radius, color);
     }
 
     fn semantics(&self, _: &BarState, cx: &mut SemanticsCx<'_>) {
-        if self.scroller == Scroller::Always {
+        if self.scroller == Scroller::Always && self.scrolls() {
             let (viewport, content, offset) = self.lengths();
             cx.role(Role::ScrollBar);
             cx.value(AccessibleValue::Number {
@@ -991,7 +1089,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
             Scroller::Overlay => {
                 state.shown_from.get().is_some()
                     && state.painted.get().is_some_and(|(size, rtl)| {
-                        self.thumb_rect(size, rtl)
+                        self.target_rect(size, rtl)
                             .is_some_and(|t| t.contains(point))
                     })
             }

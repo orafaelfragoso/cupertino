@@ -308,14 +308,14 @@ fn content_taller_than_its_bound_scrolls_inside_the_padding() {
             PaintOp::Fill {
                 shape: Shape::RoundedRect { rect, radius },
                 paint: Paint::Solid(_),
-            } if *radius == 6.0 && rect.size.width == 12.0 => Some(*rect),
+            } if *radius == 3.0 && rect.size.width == 6.0 => Some(*rect),
             _ => None,
         })
         .expect("the scroller shows while it moves");
     assert_eq!(
         (thumb.origin.x, thumb.size.width),
-        (362.0, 12.0),
-        "along the trailing edge, 2 pt in"
+        (367.0, 6.0),
+        "along the trailing edge, 3 pt in"
     );
     assert_eq!(
         h.rect("First").origin,

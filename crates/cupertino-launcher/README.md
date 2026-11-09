@@ -55,7 +55,9 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   fill and a shadow of its own instead. While the browser shows, the panel fades by giving the glass, the search bar and
   the browser's body each their opacity rather than compositing the whole window as one group, which keeps every frame of
   the fade within the frame budget at 2x;
-* the catcher: top layer, over the whole output, below the panel; a press on it closes the panel;
+* the catcher: top layer, over the whole output, below the panel; a press on it closes the panel. It is
+  `WindowBackground::INPUT_ONLY`: a transparent single pixel the compositor stretches over the output, so it costs no
+  drawing or upload at any output size or scale (a compositor without one-pixel buffers gets a drawn transparent frame);
 * while the panel is hidden, one transparent point that takes no input, so the process always has a mapped surface.
 
 Opening the panel closes the hidden window and opens the panel and the catcher; closing it does the reverse. A panel or catcher
@@ -329,6 +331,7 @@ cargo test  -p cupertino-launcher --features app
 CUPERTINO_UPDATE_GOLDENS=1 cargo test -p cupertino-launcher view::   # re-record the fixtures, then fails
 cargo bench -p cupertino-launcher
 CUPERTINO_REPAINT_DIR=out cargo test -p cupertino-launcher --release frames::frame_cost_report -- --ignored --nocapture
+CUPERTINO_REPAINT_OUTPUT=1512x982 CUPERTINO_REPAINT_SCALES=1,2 CUPERTINO_REPAINT_DIR=out cargo test -p cupertino-launcher --release frames::frame_cost_report -- --ignored --nocapture   # on another output
 cargo test -p cupertino-launcher --release frames::   # the frame budgets hold only in an optimised build, on an idle machine
 ```
 

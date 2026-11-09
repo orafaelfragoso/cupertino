@@ -4,6 +4,11 @@ CupertinoKit's window-system interface: the `WindowSystem` trait (windows, popup
 input method, activation tokens, drags), its events and `Capabilities`. MPL-2.0. Implemented by `cupertino-ui-wayland` on the desktop and by
 `cupertino-ui-test` headless.
 
+`present_solid(window, Color, configure)` shows a window as one colour without a frame (`Color` is the theme's,
+re-exported): the compositor stretches a single pixel over the window, so a transparent window that only takes input,
+or a uniform scrim, costs nothing per frame at any size or scale. It answers like `present`; the trait's default, and a
+system that cannot, refuse with `PlatformError::Unsupported`, and the caller presents a drawn frame instead.
+
 A popup asks for a place beside an anchor (`PopupSpec`); where the compositor put it, after flipping or sliding it to
 fit, arrives as `WindowEvent::PopupPlaced(rect)`, in its parent's coordinates, before each configure that places it.
 

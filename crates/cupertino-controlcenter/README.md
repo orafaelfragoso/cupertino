@@ -57,7 +57,7 @@ With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 4
 the Edit Controls capsule, closing in to an open detail view as it opens. With Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of
 grey 0.341, with no glass. A
 tile the window cannot show glass under fills a dark grey instead. `view::catcher` is a transparent window with no drawing
-that takes a left or right press anywhere on it. The process's `PanelRoles` gives the panel (`view::APP_ID`) an overlay
+(`WindowBackground::INPUT_ONLY`: one transparent pixel stretched over the output) that takes a left or right press anywhere on it. The process's `PanelRoles` gives the panel (`view::APP_ID`) an overlay
 layer surface anchored top and right, with an exclusive zone of -1 and margins that put the window 6 pt from the right edge
 and 12 pt below the bar, so the tiles sit 14 pt from the edge and 20 pt below the bar, 44 pt from the top of the output. The bar reserves no layer zone, so
 the top margin adds the theme's menu bar height. The catcher (`view::CATCHER_APP_ID`) gets a top layer surface just below

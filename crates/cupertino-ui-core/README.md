@@ -105,6 +105,12 @@ all on one thread.
   whose current value is what fails (a blur animating down from over the renderer's limit, say) therefore stays at
   that value until the application changes something or the compositor configures. Other windows go on, and only a
   lost connection ends `step`.
+- **Windows of one colour.** A window whose background is `WindowBackground::Solid(color)` draws nothing: its view
+  is laid out for focus, accessibility and hit testing, but no display list is rendered, and core asks the window
+  system to show the colour (`WindowSystem::present_solid`), which the compositor stretches from a single pixel. It is
+  shown again only for a configure, a new size or another colour. `WindowBackground::INPUT_ONLY` is the transparent
+  one, for windows that only take input (outside-click catchers, edge strips). A window system that refuses it gets a
+  drawn frame filled with the colour from then on, as a window of any other background would.
 - **Window materials.** A window whose background is `WindowBackground::Surface` asks the window system for the
   surface's material (`WindowRequest::Backdrop`) when it reports `app_effects` and the theme asks for one; otherwise,
   or when the request fails, core paints the surface's opaque fill in the window's rounded shape. A theme change

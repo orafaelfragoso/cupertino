@@ -45,6 +45,16 @@ palettes, at 3:1 or more against the window there. The dialog scrim (`DialogScri
 translucent in every palette, since it dims what it covers: 20 % black in light, 40 % in dark, 60 % in high-contrast
 dark.
 
+Selection. The selected fills of every control (a sidebar's, a list's, a table's or an outline's selected row in an
+active window, a menu's highlighted item, the default button, an on switch) are the theme's accent token itself, on a
+window and on glass: no role lightens, fades, saturates or tints it (`tests/selection-roles.rs`). A sidebar's neutral
+selection (`SidebarSelection`) is a grey laid over the sidebar's material, so it lifts each of the material's channels
+evenly and keeps its hue: white at 34/255 in dark (each channel of a navy material up by about 29), black at 25/255 in
+light. A file browser's places draw their selected row with it in an active window, and every sidebar draws it for its
+selected row in a window that is not active, where it resolves fainter: white at 16/255 in dark, black at 13/255 in
+light. The built-in palettes flatten it onto the window background, opaque, with a sidebar's labels at 4.5:1 on it (the
+neutral light inactive selection is a lighter grey, 246, so the secondary label stays readable on it).
+
 Links (`Link`) take the theme's link token in light and dark and reach 4.5:1 against the window and text backgrounds in
 the built-in palettes. A page indicator dot for a page not shown (`PageDot`) is text at 20 % in light and dark and an
 opaque grey at 3:1 or more in the built-in palettes; the shown page's dot is `Text`.

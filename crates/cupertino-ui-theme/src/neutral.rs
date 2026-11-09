@@ -55,6 +55,7 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         (PanelTrackBorder, gray(106)),
         (QuaternaryLabel, gray(213)),
         (SliderTrack, gray(128)),
+        (SidebarSelection, gray(213)),
     ],
     states: StateColors {
         emphasized_border: gray(100),
@@ -67,6 +68,7 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         disabled_selected_switch_track: [166, 198, 232, 255],
         disabled_switch_thumb: gray(248),
         disabled_panel_track: gray(185),
+        inactive_sidebar_selection: gray(246),
     },
 };
 
@@ -114,6 +116,7 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         (PanelTrackBorder, gray(145)),
         (QuaternaryLabel, [53, 54, 58, 255]),
         (SliderTrack, gray(128)),
+        (SidebarSelection, [61, 62, 66, 255]),
     ],
     states: StateColors {
         emphasized_border: gray(159),
@@ -126,6 +129,7 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         disabled_selected_switch_track: [54, 82, 112, 255],
         disabled_switch_thumb: gray(180),
         disabled_panel_track: gray(95),
+        inactive_sidebar_selection: [45, 46, 51, 255],
     },
 };
 
@@ -173,6 +177,7 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
         (PanelTrackBorder, gray(105)),
         (QuaternaryLabel, gray(160)),
         (SliderTrack, gray(118)),
+        (SidebarSelection, gray(160)),
     ],
     states: StateColors {
         emphasized_border: BLACK,
@@ -185,6 +190,7 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
         disabled_selected_switch_track: [150, 170, 215, 255],
         disabled_switch_thumb: gray(248),
         disabled_panel_track: gray(160),
+        inactive_sidebar_selection: gray(200),
     },
 };
 
@@ -231,6 +237,7 @@ pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
         (PanelTrackBorder, gray(165)),
         (QuaternaryLabel, gray(111)),
         (SliderTrack, gray(150)),
+        (SidebarSelection, gray(111)),
     ],
     states: StateColors {
         emphasized_border: WHITE,
@@ -243,6 +250,7 @@ pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
         disabled_selected_switch_track: [54, 82, 112, 255],
         disabled_switch_thumb: gray(170),
         disabled_panel_track: gray(110),
+        inactive_sidebar_selection: gray(80),
     },
 };
 
@@ -350,6 +358,16 @@ mod tests {
                 };
                 for pair in text_pairs {
                     check(pair, TEXT);
+                }
+                // a sidebar's selected row: its label is the text colour in an active window, the secondary label
+                // colour in one that is not
+                let label = if state.window_active {
+                    Text
+                } else {
+                    SecondaryText
+                };
+                if !disabled {
+                    check((label, SidebarSelection), TEXT);
                 }
                 for pair in link_pairs.into_iter().chain(thumb_pairs) {
                     if !disabled {

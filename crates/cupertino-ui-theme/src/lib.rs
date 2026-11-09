@@ -76,10 +76,15 @@ pub enum ColorRole {
     /// The empty part of a slider's track (a panel's level slider has [`ColorRole::PanelTrack`]); the filled part is
     /// the selected [`ColorRole::ControlFill`].
     SliderTrack,
+    /// A sidebar row's selection where it is not the accent: a neutral fill over the sidebar's material, laid over
+    /// what is beneath so the material's tint shows through. A file browser's places draw their selected row with it
+    /// in an active window; every sidebar draws it, fainter, for its selected row in a window that is not active
+    /// (resolved with `window_active` false).
+    SidebarSelection,
 }
 
 impl ColorRole {
-    pub const ALL: [ColorRole; 39] = {
+    pub const ALL: [ColorRole; 40] = {
         use ColorRole::*;
         [
             WindowBackground,
@@ -121,6 +126,7 @@ impl ColorRole {
             PanelTrackBorder,
             QuaternaryLabel,
             SliderTrack,
+            SidebarSelection,
         ]
     };
 }

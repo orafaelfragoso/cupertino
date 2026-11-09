@@ -25,6 +25,8 @@ struct Harness {
     state: Cupertino,
     event_loop: EventLoop<'static, Cupertino>,
     now: f64,
+    /// The roundtrips of the test's clients, for [`Harness::settle`].
+    clients: Vec<common::Rounds>,
 }
 
 impl Harness {
@@ -45,6 +47,7 @@ impl Harness {
                 state,
                 event_loop,
                 now: 100.0,
+                clients: Vec::new(),
             }),
             Err(e) => {
                 common::egl_unavailable(format_args!("{e:#}"));
@@ -54,7 +57,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.state.fixed_time = Some(self.now);
             headless::step(
@@ -70,10 +73,19 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
-    /// Let the real time the clients need pass at the model time `now`.
+    /// Step at the model time `now` until each client has every event sent before and the server handled their
+    /// answers ([`Client::barrier`]).
     fn settle(&mut self) {
-        let end = Instant::now() + Duration::from_millis(150);
-        self.wait_until("the time to pass", |_| Instant::now() >= end);
+        let barriers: Vec<_> = self.clients.iter().map(common::Rounds::barrier).collect();
+        self.wait_until("the clients' roundtrips", move |_| {
+            barriers.iter().all(|b| b())
+        });
+    }
+
+    /// `client`, which [`Harness::settle`] waits for from now on.
+    fn track(&mut self, client: Client) -> Client {
+        self.clients.push(client.rounds());
+        client
     }
 
     /// Move the model clock on by `seconds`, a few steps so that every tick sees it.
@@ -95,7 +107,7 @@ impl Harness {
 }
 
 fn mapped_window(h: &mut Harness) -> (Client, cupertino_wm::WindowId) {
-    let client = Client::toplevel(h.socket_path());
+    let client = h.track(Client::toplevel(h.socket_path()));
     h.wait_until("the window to map", |s| s.windows.iter().any(|e| e.mapped));
     let id = h.state.windows.iter().find(|e| e.mapped).unwrap().id;
     h.settle();

@@ -6,8 +6,9 @@
 //! launcher, notifications, the control panel), the overview, the application switcher's panel, the dock the keyboard
 //! goes to and workspace shortcuts. A dock and a menu bar are per output and stay on their own.
 //!
-//! Each output keeps its own work area and scale. A window is told the scale of the output the window manager has it on
-//! and a layer surface its own output's, so a window or panel on one output never draws at the scale of another.
+//! Each output keeps its own work area and scale. A window is told the scale of the output its frame overlaps most, held
+//! near a seam (`surface_output`), and a layer surface its own output's, so a panel on one output never draws at the
+//! scale of another.
 
 use cupertino_wm::{OutputId, WindowId};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -44,19 +45,19 @@ impl Cupertino {
     }
 
     /// The scale of output `id`, the active output's when it is unknown.
-    fn output_scale(&self, id: Option<OutputId>) -> f64 {
+    pub(crate) fn output_scale(&self, id: Option<OutputId>) -> f64 {
         id.and_then(|id| self.output_entry(id))
             .or_else(|| self.active_output().and_then(|o| self.output_entry(o)))
             .map_or(1.0, |o| o.scale)
     }
 
-    /// The scale window `window` draws at: its output's.
+    /// The scale window `window` draws at: its scale output's (`surface_output`).
     pub fn window_scale(&self, window: WindowId) -> f64 {
-        self.output_scale(self.wm.window(window).map(|w| w.output))
+        self.output_scale(self.window_scale_output(window))
     }
 
     /// The scale a surface that asks for its preferred scale starts at: a window's (a popup's or subsurface's root
-    /// window's), a layer surface's output's, else the active output's.
+    /// window's), a layer surface's or a lock surface's output's, else the active output's.
     pub fn surface_scale(&self, surface: &WlSurface) -> f64 {
         if let Some(window) = self
             .root_window_surface(surface)
@@ -65,9 +66,10 @@ impl Cupertino {
             return self.window_scale(window);
         }
         let layer_output = self.outputs.iter().find(|o| {
-            smithay::desktop::layer_map_for_output(&o.output)
-                .layer_for_surface(surface, smithay::desktop::WindowSurfaceType::ALL)
-                .is_some()
+            o.lock.wl_surface() == Some(surface)
+                || smithay::desktop::layer_map_for_output(&o.output)
+                    .layer_for_surface(surface, smithay::desktop::WindowSurfaceType::ALL)
+                    .is_some()
         });
         match layer_output {
             Some(o) => o.scale,
@@ -75,21 +77,8 @@ impl Cupertino {
         }
     }
 
-    /// Tell every window the scale of the output it is on now.
+    /// Tell every window the outputs it is on and the scale of the one it draws at.
     pub fn refresh_window_scales(&mut self) {
-        let ids: Vec<WindowId> = self.windows.iter().map(|w| w.id).collect();
-        self.refresh_scales_of(&ids);
-    }
-
-    /// Tell `windows` the scale of the output each is on now, with their subsurfaces and popups; nothing is sent to a
-    /// surface whose scale did not change.
-    pub(crate) fn refresh_scales_of(&self, windows: &[WindowId]) {
-        use smithay::wayland::fractional_scale::with_fractional_scale;
-        for w in self.windows.iter().filter(|w| windows.contains(&w.id)) {
-            let scale = self.window_scale(w.id);
-            w.window.with_surfaces(|_, states| {
-                with_fractional_scale(states, |fs| fs.set_preferred_scale(scale))
-            });
-        }
+        self.refresh_window_outputs(true);
     }
 }

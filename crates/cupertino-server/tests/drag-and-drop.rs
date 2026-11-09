@@ -59,6 +59,8 @@ fn drawn_at(drawn: (i32, i32), at: (f64, f64)) -> bool {
 struct Harness {
     state: Cupertino,
     event_loop: EventLoop<'static, Cupertino>,
+    /// The roundtrips of each test client, for [`Harness::sync`].
+    rounds: Vec<common::Rounds>,
 }
 
 impl Harness {
@@ -91,7 +93,11 @@ impl Harness {
         match headless::init(&mut state, OUTPUT, scale) {
             Ok(()) => {
                 start_shell_supervision(&state, &event_loop).expect("the supervision timer");
-                Some(Harness { state, event_loop })
+                Some(Harness {
+                    state,
+                    event_loop,
+                    rounds: Vec::new(),
+                })
             }
             Err(e) => {
                 common::egl_unavailable(format!("{e:#}"));
@@ -101,7 +107,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             headless::step(
                 &mut self.state,
@@ -116,9 +122,23 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
-    fn run_for(&mut self, duration: Duration) {
-        let end = Instant::now() + duration;
-        self.wait_until("the time to pass", |_| Instant::now() >= end);
+    /// Wait for every test client's [`common::Rounds::barrier`]: each has every event sent before, and the server
+    /// handled their answers.
+    fn sync(&mut self) {
+        let barriers: Vec<_> = self.rounds.iter().map(common::Rounds::barrier).collect();
+        self.wait_until("the clients' roundtrips", move |_| {
+            barriers.iter().all(|b| b())
+        });
+    }
+
+    /// One turn of the event loop.
+    fn step(&mut self) {
+        headless::step(
+            &mut self.state,
+            &mut self.event_loop,
+            Duration::from_millis(5),
+        )
+        .unwrap();
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -145,7 +165,7 @@ impl Harness {
 
     fn move_to(&mut self, at: (f64, f64)) {
         self.state.pointer_moved_to(at.into(), 0, None);
-        self.run_for(Duration::from_millis(60));
+        self.sync();
     }
 
     /// The physical rectangle (x, y, width, height) of each element drawn of `size` points on the output at `scale`.
@@ -180,13 +200,13 @@ impl Harness {
             .collect()
     }
 
-    /// Press Escape and let it go.
+    /// Press Escape and let it go, and let the clients hear it.
     fn escape(&mut self) {
         for state in [KeyState::Pressed, KeyState::Released] {
             self.state
                 .keyboard_event_now(Keycode::new(ESCAPE), state, 0);
-            self.run_for(Duration::from_millis(20));
         }
+        self.sync();
     }
 
     /// Stops the compositor's clock where it is, so an animation moves only as [`Harness::advance`] moves it, however
@@ -199,7 +219,7 @@ impl Harness {
     fn advance(&mut self, seconds: f64) {
         let now = self.state.fixed_time.expect("the clock is stopped");
         self.state.fixed_time = Some(now + seconds);
-        self.run_for(Duration::from_millis(20));
+        self.state.tick();
     }
 
     /// Where the icon of a drag that ended without a drop goes, while it shows.
@@ -559,17 +579,21 @@ struct TestClient {
 }
 
 impl TestClient {
-    fn spawn(socket: PathBuf, role: Role, size: (i32, i32)) -> TestClient {
-        TestClient::sending(socket, role, size, TEXT.to_vec())
+    fn spawn(h: &mut Harness, role: Role, size: (i32, i32)) -> TestClient {
+        TestClient::sending(h, role, size, TEXT.to_vec())
     }
 
     /// A client whose drag sends `payload`.
-    fn sending(socket: PathBuf, role: Role, size: (i32, i32), payload: Vec<u8>) -> TestClient {
+    fn sending(h: &mut Harness, role: Role, size: (i32, i32), payload: Vec<u8>) -> TestClient {
+        let socket = h.socket_path();
         let stop = Arc::new(AtomicBool::new(false));
         let close = Arc::new(AtomicBool::new(false));
         let log: Arc<Mutex<Log>> = Arc::default();
+        let rounds = common::Rounds::default();
+        h.rounds.push(rounds.clone());
         let (stop2, close2, log2) = (stop.clone(), close.clone(), log.clone());
         std::thread::spawn(move || {
+            let _ended = rounds.ended_on_drop();
             let conn = Connection::from_socket(
                 UnixStream::connect(&socket).expect("connecting to the compositor"),
             )
@@ -621,6 +645,7 @@ impl TestClient {
                 if queue.roundtrip(&mut client).is_err() {
                     break;
                 }
+                rounds.tick();
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
@@ -655,15 +680,15 @@ fn drag_as_held_over_the_target(
     role: Role,
 ) -> (TestClient, TestClient, (f64, f64)) {
     // the wide source and the tall target cross, so each has an end the other cannot cover, whichever is on top
-    let target = TestClient::spawn(h.socket_path(), Role::Target, TARGET_SIZE);
+    let target = TestClient::spawn(h, Role::Target, TARGET_SIZE);
     h.wait_until("the target window", |s| {
         s.windows.iter().filter(|w| w.mapped).count() == 1
     });
-    let source = TestClient::spawn(h.socket_path(), role, SOURCE_SIZE);
+    let source = TestClient::spawn(h, role, SOURCE_SIZE);
     h.wait_until("the source window", |s| {
         s.windows.iter().filter(|w| w.mapped).count() == 2
     });
-    h.run_for(Duration::from_millis(100));
+    h.sync();
     let frames = h.frames();
     let (sx, sy, _, sh) = frames[0];
     let (tx, ty, tw, th) = frames[1];
@@ -678,7 +703,7 @@ fn drag_as_held_over_the_target(
 
     h.move_to(start);
     h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
-    h.run_for(Duration::from_millis(100));
+    h.sync();
     for step in 1..=10 {
         let t = f64::from(step) / 10.0;
         h.move_to((
@@ -742,17 +767,17 @@ fn a_drag_icon_is_the_clients_surface_drawn_with_the_pointer_at_its_hotspot() {
         let Some(mut h) = Harness::with_scale(f64::from(scale)) else {
             return;
         };
-        let source = TestClient::spawn(h.socket_path(), Role::IconSource(scale), SOURCE_SIZE);
+        let source = TestClient::spawn(&mut h, Role::IconSource(scale), SOURCE_SIZE);
         h.wait_until("the source window", |s| {
             s.windows.iter().filter(|w| w.mapped).count() == 1
         });
-        h.run_for(Duration::from_millis(100));
+        h.sync();
         let (sx, sy, sw, sh) = h.frames()[0];
         let start = (sx + 40.0, sy + sh / 2.0);
         h.move_to(start);
         h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
         h.wait_until("the drag icon", |s| s.drag_icon.is_some());
-        h.run_for(Duration::from_millis(60));
+        h.sync();
         let at = (sx + sw / 2.0, sy + sh / 2.0 + 7.0);
         h.move_to(at);
 
@@ -785,11 +810,11 @@ fn a_drag_icon_is_the_clients_surface_drawn_with_the_pointer_at_its_hotspot() {
 #[test]
 fn a_refused_drop_flies_the_icon_back_and_gives_the_pointer_back() {
     let Some(mut h) = Harness::new() else { return };
-    let source = TestClient::spawn(h.socket_path(), Role::IconSource(1), SOURCE_SIZE);
+    let source = TestClient::spawn(&mut h, Role::IconSource(1), SOURCE_SIZE);
     h.wait_until("the source window", |s| {
         s.windows.iter().filter(|w| w.mapped).count() == 1
     });
-    h.run_for(Duration::from_millis(100));
+    h.sync();
     let (sx, sy, _, sh) = h.frames()[0];
     let start = (sx + 40.0, sy + sh / 2.0);
     h.move_to(start);
@@ -885,6 +910,8 @@ fn escape_cancels_a_drag_held_over_a_target_and_flies_the_icon_back() {
         target.log().pointer.last().map(String::as_str) == Some("enter")
     });
     h.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    // the clients heard all the release led to before they are asked what they did not hear
+    h.sync();
     h.advance(DRAG_RETURN_DURATION);
     assert!(h.drawn_near_size(ICON_SIZE).is_empty(), "back and gone");
     assert_eq!(h.icon_going(), None);
@@ -921,11 +948,11 @@ fn escape_cancels_a_drag_held_over_a_target_and_flies_the_icon_back() {
 #[test]
 fn a_refused_drop_whose_window_closed_fades_the_icon_where_it_was_let_go() {
     let Some(mut h) = Harness::new() else { return };
-    let source = TestClient::spawn(h.socket_path(), Role::IconSource(1), SOURCE_SIZE);
+    let source = TestClient::spawn(&mut h, Role::IconSource(1), SOURCE_SIZE);
     h.wait_until("the source window", |s| {
         s.windows.iter().filter(|w| w.mapped).count() == 1
     });
-    h.run_for(Duration::from_millis(100));
+    h.sync();
     let (sx, sy, _, sh) = h.frames()[0];
     let start = (sx + 40.0, sy + sh / 2.0);
     h.move_to(start);
@@ -988,6 +1015,7 @@ fn files_process(
         name: "cupertino-files".into(),
         command: vec![
             "env".into(),
+            "CUPERTINO_ASSET_SEARCH_PATH=".into(),
             format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
             env("HOME", home),
             env("XDG_CONFIG_HOME", &home.join(".config")),
@@ -1024,18 +1052,12 @@ fn a_file_dragged_from_another_client_into_the_file_manager_moves_into_its_folde
     h.wait_until("the file manager's window", |s| {
         s.windows.iter().filter(|w| w.mapped).count() == 1
     });
-    h.run_for(Duration::from_millis(500));
     let uri = format!("file://{}\r\n", dragged.display());
-    let source = TestClient::sending(
-        h.socket_path(),
-        Role::FileSource,
-        FILE_SOURCE_SIZE,
-        uri.into_bytes(),
-    );
+    let source = TestClient::sending(&mut h, Role::FileSource, FILE_SOURCE_SIZE, uri.into_bytes());
     h.wait_until("the source window", |s| {
         s.windows.iter().filter(|w| w.mapped).count() == 2
     });
-    h.run_for(Duration::from_millis(100));
+    h.sync();
     // the wide file manager first, then the tall source
     let frames = h.frames();
     let (fx, fy, fw, fh) = frames[0];
@@ -1056,7 +1078,7 @@ fn a_file_dragged_from_another_client_into_the_file_manager_moves_into_its_folde
 
     h.move_to(start);
     h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
-    h.run_for(Duration::from_millis(100));
+    h.sync();
     for step in 1..=10 {
         let t = f64::from(step) / 10.0;
         h.move_to((
@@ -1064,13 +1086,13 @@ fn a_file_dragged_from_another_client_into_the_file_manager_moves_into_its_folde
             start.1 + (end.1 - start.1) * t,
         ));
     }
-    let end_at = Instant::now() + Duration::from_secs(10);
+    let end_at = Instant::now() + common::HANG_GUARD;
     let moved = |source: &TestClient| {
         let log = source.log();
         log.source.iter().any(|e| e == "action DndAction(Move)")
     };
     while !moved(&source) && Instant::now() < end_at {
-        h.run_for(Duration::from_millis(20));
+        h.step();
     }
     assert!(
         moved(&source),

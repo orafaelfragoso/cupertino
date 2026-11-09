@@ -238,6 +238,7 @@ fn an_assistive_technology_finds_a_focusable_sorted_column_header_whose_click_so
         .unwrap();
     let mut app = std::process::Command::new(std::env::current_exe().unwrap())
         .args([NAME, "--exact", "--nocapture"])
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env(APPLICATION, "1")
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
         .env("AT_SPI_BUS_ADDRESS", &bus.address)

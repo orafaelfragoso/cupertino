@@ -77,7 +77,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(20);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&self.state) {
@@ -445,7 +445,7 @@ impl TestClient {
     fn exit(mut self, h: &mut Harness) {
         self.stop.store(true, Ordering::SeqCst);
         let thread = self.thread.take().unwrap();
-        let end = Instant::now() + Duration::from_secs(20);
+        let end = Instant::now() + common::HANG_GUARD;
         while !thread.is_finished() {
             assert!(
                 Instant::now() < end,

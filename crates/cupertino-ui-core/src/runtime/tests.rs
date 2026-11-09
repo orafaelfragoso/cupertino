@@ -3183,3 +3183,498 @@ fn the_input_method_lets_go_of_one_field_before_the_next_takes_it() {
         "the first field's input method is turned off, so what it composed never reaches the second"
     );
 }
+
+/// Where the release of a press that opened menus lands, and what each menu hears of it.
+mod popup_release {
+    use super::*;
+    use crate::test_support::spec;
+    use crate::{Popup, PopupAnchor};
+    use std::sync::Arc;
+
+    /// The space between a menu's items, which hits the menu itself.
+    const GAP: f64 = 10.0;
+
+    /// A menu's container: its items side by side `GAP` apart. It tells each button event it hears: the phase, whether
+    /// the point is inside it and the press that opened its popup.
+    struct Menu {
+        label: &'static str,
+        children: Vec<Element<String>>,
+    }
+
+    impl Widget<String> for Menu {
+        type State = ();
+
+        fn layout(&self) -> LayoutSpec {
+            spec(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: GAP,
+                align: Align::Start,
+                justify: Justify::Start,
+            })
+        }
+
+        fn take_children(&mut self) -> Vec<Element<String>> {
+            std::mem::take(&mut self.children)
+        }
+
+        fn state(&self) {}
+
+        fn update(&self, _: &Self, _: &mut ()) -> Change {
+            Change::None
+        }
+
+        fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+            Measured {
+                size: Size::new(0.0, 0.0),
+                baseline: None,
+            }
+        }
+
+        fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, String>) -> Propagation {
+            if let Event::Pointer(
+                PointerEvent::Button {
+                    position, pressed, ..
+                },
+                _,
+            ) = event
+            {
+                let place = match cx.bounds().is_some_and(|b| b.contains(*position)) {
+                    true => "inside",
+                    false => "outside",
+                };
+                let what = if *pressed { "press" } else { "release" };
+                let opened = cx.opening_press().map(|t| t.0);
+                cx.emit(format!(
+                    "{}:{:?}:{what} {place}, opened by {opened:?}",
+                    self.label,
+                    cx.phase()
+                ));
+            }
+            Propagation::Continue
+        }
+
+        fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+        fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+    }
+
+    /// A window with an opener that opens a menu as it is pressed, a second window, and a submenu opened by moving
+    /// over the menu's `more` item.
+    struct Menus;
+
+    #[derive(Default)]
+    struct Shown {
+        menu: bool,
+        submenu: bool,
+        /// Every message, in order.
+        heard: Vec<String>,
+    }
+
+    fn toplevel(key: &str, content: Element<String>) -> Window<String> {
+        Window {
+            key: WindowKey(key.to_owned().into()),
+            spec: WindowSpec {
+                title: key.to_owned(),
+                app_id: "test.menus".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            popup: None,
+            background: WindowBackground::Theme,
+            content,
+            menus: None,
+        }
+    }
+
+    fn popup(key: &str, parent: &str, at: Point, content: Element<String>) -> Window<String> {
+        Window {
+            popup: Some(Popup {
+                parent: WindowKey(parent.to_owned().into()),
+                anchor: PopupAnchor::At(at),
+                grab: true,
+                on_dismiss: format!("{key} dismissed"),
+            }),
+            spec: WindowSpec {
+                size: Size::new(100.0, 40.0),
+                ..toplevel(key, Element::new(leaf("unused"))).spec
+            },
+            ..toplevel(key, content)
+        }
+    }
+
+    impl Application for Menus {
+        type Model = Shown;
+        type Message = String;
+
+        fn init() -> (Shown, Vec<Command<String>>) {
+            (Shown::default(), Vec::new())
+        }
+
+        fn update(model: &mut Shown, message: String) -> Vec<Command<String>> {
+            match message.as_str() {
+                "opener:Target:press" => model.menu = true,
+                "more:Target:motion" => model.submenu = true,
+                _ => {}
+            }
+            model.heard.push(message);
+            Vec::new()
+        }
+
+        fn view(model: &Shown) -> Vec<Window<String>> {
+            let mut windows = vec![
+                toplevel(
+                    "main",
+                    Element::new(row(vec![
+                        Element::new(leaf("opener")).key("opener"),
+                        Element::new(leaf("other")),
+                    ])),
+                ),
+                toplevel(
+                    "second",
+                    Element::new(row(vec![Element::new(leaf("elsewhere"))])),
+                ),
+            ];
+            if model.menu {
+                windows.push(popup(
+                    "menu",
+                    "main",
+                    Point::new(0.0, 10.0),
+                    Element::new(Menu {
+                        label: "menu",
+                        children: vec![Element::new(leaf("item")), Element::new(leaf("more"))],
+                    }),
+                ));
+            }
+            if model.submenu {
+                windows.push(popup(
+                    "submenu",
+                    "menu",
+                    Point::new(30.0, 0.0),
+                    Element::new(Menu {
+                        label: "submenu",
+                        children: vec![Element::new(leaf("deep"))],
+                    }),
+                ));
+            }
+            windows
+        }
+    }
+
+    type Rt = Runtime<Menus, FakeSystem>;
+
+    /// Points of the windows: each item is 10 points square, the menus' items `GAP` apart from their left edge.
+    const OPENER: Point = Point::new(5.0, 5.0);
+    const BACKGROUND: Point = Point::new(100.0, 50.0);
+    const ITEM: Point = Point::new(5.0, 5.0);
+    const BETWEEN: Point = Point::new(15.0, 5.0);
+    const MORE: Point = Point::new(25.0, 5.0);
+    const DEEP: Point = Point::new(5.0, 5.0);
+
+    /// The press that opens the menu comes at this time.
+    const PRESSED: u64 = 1_000;
+
+    struct Desk {
+        rt: Rt,
+        clock: Arc<FakeClock>,
+        configures: u32,
+    }
+
+    impl Desk {
+        /// The two windows shown, nothing open.
+        fn new() -> Self {
+            let clock = Arc::new(FakeClock::default());
+            let mut options = options(&Rc::default());
+            options.clock = clock.clone();
+            let mut system = FakeSystem::default();
+            system.popups = true;
+            let mut rt = Rt::new(system, options);
+            rt.step(steps()).unwrap();
+            let mut desk = Self {
+                rt,
+                clock,
+                configures: 0,
+            };
+            desk.show("main", Size::new(200.0, 100.0));
+            desk.show("second", Size::new(200.0, 100.0));
+            desk
+        }
+
+        fn id(&self, key: &str) -> WindowId {
+            self.rt
+                .windows()
+                .into_iter()
+                .find(|(k, _)| *k == WindowKey(key.to_owned().into()))
+                .unwrap_or_else(|| panic!("no window {key}"))
+                .1
+        }
+
+        fn show(&mut self, key: &str, size: Size) {
+            self.configures += 1;
+            let id = self.id(key);
+            configure_at(&mut self.rt, id, self.configures, size);
+        }
+
+        fn at(&mut self, time: u64) {
+            self.clock.0.store(time, Ordering::SeqCst);
+        }
+
+        fn send(&mut self, key: &str, event: PointerEvent) {
+            let id = self.id(key);
+            self.rt.window_system_mut().send(
+                id,
+                WindowEvent::Pointer(event, Timestamp(self.clock.now().0)),
+            );
+            self.rt.step(steps()).unwrap();
+        }
+
+        fn button(&mut self, key: &str, position: Point, pressed: bool) {
+            self.send(
+                key,
+                PointerEvent::Button {
+                    position,
+                    button: MouseButton::Left,
+                    pressed,
+                    serial: 1,
+                    mods: Mods::NONE,
+                },
+            );
+        }
+
+        fn motion(&mut self, key: &str, position: Point) {
+            self.send(key, PointerEvent::Motion { position });
+        }
+
+        /// The opener pressed at `PRESSED` and held: the menu opens and is shown.
+        fn press_opener(&mut self) {
+            self.at(PRESSED);
+            self.button("main", OPENER, true);
+            self.show("menu", Size::new(100.0, 40.0));
+        }
+
+        /// The pointer, still held, moves over the menu's `more`: the submenu opens and is shown.
+        fn open_submenu(&mut self) {
+            self.motion("menu", MORE);
+            assert!(
+                self.rt.model().submenu,
+                "moving over more opens the submenu"
+            );
+            self.show("submenu", Size::new(100.0, 40.0));
+        }
+
+        /// The button let go in window `key` at `position`, some time after the press; what was heard of it.
+        fn release(&mut self, key: &str, position: Point) -> Vec<String> {
+            let before = self.rt.model().heard.len();
+            self.at(PRESSED + 500);
+            self.button(key, position, false);
+            self.rt.model().heard[before..].to_vec()
+        }
+    }
+
+    /// What `menu` heard of a button.
+    fn told<'a>(heard: &'a [String], menu: &str) -> Vec<&'a str> {
+        let prefix = format!("{menu}:");
+        heard
+            .iter()
+            .filter(|m| m.starts_with(&prefix))
+            .map(String::as_str)
+            .collect()
+    }
+
+    #[test]
+    fn a_press_on_the_opener_dragged_off_the_menu_and_let_go_tells_the_menu_of_a_release_outside_it(
+    ) {
+        let mut desk = Desk::new();
+        desk.press_opener();
+        assert_eq!(
+            desk.rt.window_system().popups_created.len(),
+            1,
+            "the press opens the menu"
+        );
+        desk.motion("menu", ITEM);
+        desk.motion("main", BACKGROUND);
+        let heard = desk.release("main", BACKGROUND);
+        assert_eq!(
+            told(&heard, "menu"),
+            ["menu:Target:release outside, opened by Some(1000)"],
+            "heard: {heard:?}"
+        );
+    }
+
+    #[test]
+    fn a_release_on_the_opener_tells_the_menu_of_a_release_outside_it() {
+        let mut desk = Desk::new();
+        desk.press_opener();
+        let heard = desk.release("main", OPENER);
+        assert_eq!(
+            told(&heard, "menu"),
+            ["menu:Target:release outside, opened by Some(1000)"],
+            "heard: {heard:?}"
+        );
+        assert!(
+            heard.iter().any(|m| m == "opener:Target:release"),
+            "the opener hears its own release too: {heard:?}"
+        );
+    }
+
+    #[test]
+    fn a_release_in_another_window_tells_the_menu_of_a_release_outside_it() {
+        let mut desk = Desk::new();
+        desk.press_opener();
+        let heard = desk.release("second", Point::new(5.0, 5.0));
+        assert_eq!(
+            told(&heard, "menu"),
+            ["menu:Target:release outside, opened by Some(1000)"],
+            "heard: {heard:?}"
+        );
+    }
+
+    #[test]
+    fn a_release_on_a_gap_between_items_reaches_the_menu_inside_it_with_the_press_that_opened_it() {
+        let mut desk = Desk::new();
+        desk.press_opener();
+        desk.motion("menu", BETWEEN);
+        let heard = desk.release("menu", BETWEEN);
+        assert_eq!(
+            told(&heard, "menu"),
+            ["menu:Target:release inside, opened by Some(1000)"],
+            "the menu itself is let go on, once and not as outside it: {heard:?}"
+        );
+        assert!(!heard.iter().any(|m| m.starts_with("item:")));
+    }
+
+    #[test]
+    fn a_release_on_an_item_reaches_the_item_and_the_menu_inside_it() {
+        let mut desk = Desk::new();
+        desk.press_opener();
+        desk.motion("menu", ITEM);
+        let heard = desk.release("menu", ITEM);
+        assert!(
+            heard.iter().any(|m| m == "item:Target:release"),
+            "heard: {heard:?}"
+        );
+        assert_eq!(
+            told(&heard, "menu"),
+            [
+                "menu:Capture:release inside, opened by Some(1000)",
+                "menu:Bubble:release inside, opened by Some(1000)"
+            ],
+            "heard: {heard:?}"
+        );
+    }
+
+    #[test]
+    fn nested_menus_opened_by_one_press_each_hear_a_release_outside_them_all() {
+        let mut desk = Desk::new();
+        desk.press_opener();
+        desk.open_submenu();
+        let heard = desk.release("main", BACKGROUND);
+        assert_eq!(
+            told(&heard, "menu"),
+            ["menu:Target:release outside, opened by Some(1000)"],
+            "heard: {heard:?}"
+        );
+        assert_eq!(
+            told(&heard, "submenu"),
+            ["submenu:Target:release outside, opened by Some(1000)"],
+            "heard: {heard:?}"
+        );
+    }
+
+    #[test]
+    fn a_release_in_a_submenu_tells_neither_menu_of_a_release_outside() {
+        let mut desk = Desk::new();
+        desk.press_opener();
+        desk.open_submenu();
+        desk.motion("submenu", DEEP);
+        let heard = desk.release("submenu", DEEP);
+        assert!(
+            heard.iter().any(|m| m == "deep:Target:release"),
+            "heard: {heard:?}"
+        );
+        assert_eq!(
+            told(&heard, "submenu"),
+            [
+                "submenu:Capture:release inside, opened by Some(1000)",
+                "submenu:Bubble:release inside, opened by Some(1000)"
+            ],
+            "heard: {heard:?}"
+        );
+        assert_eq!(told(&heard, "menu"), Vec::<&str>::new(), "heard: {heard:?}");
+    }
+
+    #[test]
+    fn a_release_on_a_gap_of_the_parent_menu_tells_the_submenu_nothing() {
+        let mut desk = Desk::new();
+        desk.press_opener();
+        desk.open_submenu();
+        desk.motion("menu", BETWEEN);
+        let heard = desk.release("menu", BETWEEN);
+        assert_eq!(
+            told(&heard, "menu"),
+            ["menu:Target:release inside, opened by Some(1000)"],
+            "heard: {heard:?}"
+        );
+        assert_eq!(
+            told(&heard, "submenu"),
+            Vec::<&str>::new(),
+            "heard: {heard:?}"
+        );
+    }
+
+    /// A menu opened by a click, and a submenu opened after it with no button down: a later press is not theirs, so
+    /// its release elsewhere tells them nothing, while each still knows the press that opened it, if any.
+    #[test]
+    fn a_later_press_let_go_elsewhere_tells_menus_it_did_not_open_nothing() {
+        let mut desk = Desk::new();
+        desk.press_opener();
+        let clicked = desk.release("main", OPENER);
+        assert_eq!(
+            told(&clicked, "menu"),
+            ["menu:Target:release outside, opened by Some(1000)"],
+            "heard: {clicked:?}"
+        );
+        desk.open_submenu();
+
+        desk.at(3_000);
+        desk.button("menu", ITEM, true);
+        desk.motion("main", BACKGROUND);
+        let before = desk.rt.model().heard.len();
+        desk.at(3_500);
+        desk.button("main", BACKGROUND, false);
+        let heard = desk.rt.model().heard[before..].to_vec();
+        assert_eq!(told(&heard, "menu"), Vec::<&str>::new(), "heard: {heard:?}");
+        assert_eq!(
+            told(&heard, "submenu"),
+            Vec::<&str>::new(),
+            "heard: {heard:?}"
+        );
+
+        desk.at(4_000);
+        desk.button("submenu", DEEP, true);
+        let heard = desk.release("submenu", DEEP);
+        assert_eq!(
+            told(&heard, "submenu"),
+            [
+                "submenu:Capture:release inside, opened by None",
+                "submenu:Bubble:release inside, opened by None"
+            ],
+            "the submenu opened with no button down: {heard:?}"
+        );
+        desk.button("menu", ITEM, true);
+        let heard = desk.release("menu", ITEM);
+        assert_eq!(
+            told(&heard, "menu"),
+            [
+                "menu:Capture:release inside, opened by Some(1000)",
+                "menu:Bubble:release inside, opened by Some(1000)"
+            ],
+            "heard: {heard:?}"
+        );
+    }
+}

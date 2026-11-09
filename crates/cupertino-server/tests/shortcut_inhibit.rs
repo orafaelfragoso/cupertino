@@ -27,6 +27,8 @@ struct Harness {
     state: Cupertino,
     event_loop: EventLoop<'static, Cupertino>,
     now: f64,
+    /// The roundtrips of the test's clients, for [`Harness::settle`].
+    clients: Vec<common::Rounds>,
 }
 
 impl Harness {
@@ -47,6 +49,7 @@ impl Harness {
                 state,
                 event_loop,
                 now: 100.0,
+                clients: Vec::new(),
             }),
             Err(e) => {
                 eprintln!("skipping: no EGL device ({e:#})");
@@ -56,7 +59,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.state.fixed_time = Some(self.now);
             headless::step(
@@ -72,10 +75,19 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
-    /// Let the real time the clients need pass at the model time `now`.
+    /// Step at the model time `now` until each client has every event sent before and the server handled their
+    /// answers ([`Client::barrier`]).
     fn settle(&mut self) {
-        let end = Instant::now() + Duration::from_millis(150);
-        self.wait_until("the time to pass", |_| Instant::now() >= end);
+        let barriers: Vec<_> = self.clients.iter().map(common::Rounds::barrier).collect();
+        self.wait_until("the clients' roundtrips", move |_| {
+            barriers.iter().all(|b| b())
+        });
+    }
+
+    /// `client`, which [`Harness::settle`] waits for from now on.
+    fn track(&mut self, client: Client) -> Client {
+        self.clients.push(client.rounds());
+        client
     }
 
     /// Move the model clock on by `seconds`, a few steps so that every tick sees it.
@@ -140,7 +152,7 @@ impl Harness {
 #[test]
 fn the_application_that_holds_the_shortcuts_gets_super_tab_and_no_switcher_opens() {
     let Some(mut h) = Harness::new() else { return };
-    let vm = Client::inhibiting(h.socket_path(), "org.example.vm");
+    let vm = h.track(Client::inhibiting(h.socket_path(), "org.example.vm"));
     h.wait_until("the inhibitor to be active", |_| {
         vm.inhibitor_events() == [true]
     });
@@ -171,9 +183,9 @@ fn the_application_that_holds_the_shortcuts_gets_super_tab_and_no_switcher_opens
 #[test]
 fn the_release_chord_gives_the_shortcuts_back_and_is_not_forwarded() {
     let Some(mut h) = Harness::new() else { return };
-    let vm = Client::inhibiting(h.socket_path(), "org.example.vm");
+    let vm = h.track(Client::inhibiting(h.socket_path(), "org.example.vm"));
     // the switcher needs a second application to switch to
-    let _other = Client::toplevel(h.socket_path());
+    let _other = h.track(Client::toplevel(h.socket_path()));
     h.mapped(2, "org.example.vm");
     h.wait_until("the inhibitor to be active", |_| {
         vm.inhibitor_events().last() == Some(&true)
@@ -204,11 +216,11 @@ fn the_release_chord_gives_the_shortcuts_back_and_is_not_forwarded() {
 #[test]
 fn a_released_surface_is_armed_again_only_by_focus_from_the_persons_input() {
     let Some(mut h) = Harness::new() else { return };
-    let vm = Client::inhibiting(h.socket_path(), "org.example.vm");
+    let vm = h.track(Client::inhibiting(h.socket_path(), "org.example.vm"));
     h.wait_until("the inhibitor to be active", |_| {
         vm.inhibitor_events() == [true]
     });
-    let _other = Client::toplevel(h.socket_path());
+    let _other = h.track(Client::toplevel(h.socket_path()));
     let a = h.mapped(2, "org.example.vm");
     let b = h.window_of("org.example.locked-out");
 
@@ -290,7 +302,7 @@ fn the_notice_keeps_the_way_out_whatever_the_application_is_called() {
     let long: &'static str =
         Box::leak(format!("org.example.\u{202e}\u{7}{}", "x".repeat(2000)).into_boxed_str());
     let Some(mut h) = Harness::new() else { return };
-    let vm = Client::inhibiting(h.socket_path(), long);
+    let vm = h.track(Client::inhibiting(h.socket_path(), long));
     h.wait_until("the inhibitor to be active", |_| {
         vm.inhibitor_events() == [true]
     });
@@ -322,16 +334,12 @@ fn the_notice_keeps_the_way_out_whatever_the_application_is_called() {
 #[test]
 fn a_layer_surface_never_holds_the_shortcuts() {
     let Some(mut h) = Harness::new() else { return };
-    let layer = Client::inhibiting_layer(h.socket_path());
+    let layer = h.track(Client::inhibiting_layer(h.socket_path()));
     // the layer surface maps and takes the keyboard (exclusive); an inhibitor on it must stay inactive
-    let end = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < end {
-        h.settle();
-    }
-    assert!(
-        h.state.exclusive_layer.is_some(),
-        "the layer surface has the keyboard"
-    );
+    h.wait_until("the layer surface to take the keyboard", |s| {
+        s.exclusive_layer.is_some()
+    });
+    h.settle();
     assert_eq!(layer.inhibitor_events(), Vec::<bool>::new());
     assert!(h.state.overlays.shortcut_notice.is_none());
 }
@@ -339,11 +347,11 @@ fn a_layer_surface_never_holds_the_shortcuts() {
 #[test]
 fn the_notice_of_the_window_that_has_the_focus_survives_the_deactivation_of_another() {
     let Some(mut h) = Harness::new() else { return };
-    let a = Client::inhibiting(h.socket_path(), "org.example.first");
+    let a = h.track(Client::inhibiting(h.socket_path(), "org.example.first"));
     h.wait_until("the first inhibitor to be active", |_| {
         a.inhibitor_events().last() == Some(&true)
     });
-    let b = Client::inhibiting(h.socket_path(), "org.example.second");
+    let b = h.track(Client::inhibiting(h.socket_path(), "org.example.second"));
     h.wait_until("both windows", |s| s.wm.windows().count() == 2);
     h.advance(1.0);
     let (first, second) = (
@@ -374,7 +382,7 @@ fn the_notice_of_the_window_that_has_the_focus_survives_the_deactivation_of_anot
 #[test]
 fn the_notice_ends_at_its_time_and_not_before() {
     let Some(mut h) = Harness::new() else { return };
-    let vm = Client::inhibiting(h.socket_path(), "org.example.vm");
+    let vm = h.track(Client::inhibiting(h.socket_path(), "org.example.vm"));
     h.wait_until("the inhibitor to be active", |_| {
         vm.inhibitor_events() == [true]
     });

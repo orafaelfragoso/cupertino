@@ -129,7 +129,7 @@ impl Harness {
 
     /// Handle the clients' requests without the model tick, which is where a pending edit is sent.
     fn dispatch_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.event_loop
                 .dispatch(Some(Duration::from_millis(5)), &mut self.state)
@@ -143,7 +143,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&self.state) {
@@ -163,7 +163,7 @@ impl Harness {
 
     /// Step until the bar client has seen `count` groups.
     fn wait_for_groups(&mut self, bar: &BarClient, count: usize) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if bar.groups().len() >= count {
@@ -738,14 +738,14 @@ fn run_client(
 }
 
 /// A client thread on a connected stream (a privileged client's stream comes from the server itself).
-/// Flush, then read without writing until the server ends the connection: its protocol error, `None` after 10 s or
-/// on an end without one.
+/// Flush, then read without writing until the server ends the connection: its protocol error, `None` after
+/// [`common::HANG_GUARD`] or on an end without one.
 fn read_until_error(
     conn: &Connection,
     queue: &mut EventQueue<ClientState>,
     client: &mut ClientState,
 ) -> Option<(String, u32)> {
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     let _ = conn.flush();
     while Instant::now() < end {
         if let Some(guard) = queue.prepare_read() {
@@ -1646,7 +1646,7 @@ fn a_version_13_bar_never_gets_the_backdrop_lightness() {
 fn a_surface_without_the_layer_role_is_a_role_error() {
     let Some(mut h) = Harness::new() else { return };
     let bar = BarClient::spawn(h.shell_stream(), false);
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while bar.error().is_none() && Instant::now() < end {
         h.step();
     }
@@ -1904,7 +1904,7 @@ fn gtk_clients_are_told_the_bar_is_gone_when_its_output_is() {
 
 impl Harness {
     fn wait_for_shown(&mut self, app: &KitAppClient, shown: &[u32]) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while app.menu_bar_shown() != shown && Instant::now() < end {
             self.step();
         }
@@ -2228,7 +2228,7 @@ fn a_bar_gone_with_a_menu_open_does_not_keep_the_next_bar_revealed() {
     });
     h.advance(6.0);
     bar.send(Cmd::SetMenuOpen(true));
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while visible(&h) != 1.0 && Instant::now() < end {
         h.step();
     }
@@ -2279,7 +2279,7 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
 
     // an open menu keeps the bar shown, closing it hides the bar again
     bar.send(Cmd::SetMenuOpen(true));
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while !h
         .state
         .menu_bars
@@ -2298,7 +2298,7 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
         "revealed while a menu is open"
     );
     bar.send(Cmd::SetMenuOpen(false));
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while h
         .state
         .menu_bars
@@ -2414,6 +2414,124 @@ fn the_top_edge_reveals_the_title_bar_of_a_full_screen_window_and_its_zoom_butto
     );
 }
 
+/// Keeps the window buttons the server publishes for assistive technology.
+#[derive(Clone, Default)]
+struct PublishedButtons(
+    Arc<Mutex<std::collections::HashMap<u64, cupertino_server::decor_access::WindowButtons>>>,
+);
+
+impl cupertino_server::decor_access::ButtonSink for PublishedButtons {
+    fn publish(
+        &mut self,
+        window: cupertino_wm::WindowId,
+        buttons: &cupertino_server::decor_access::WindowButtons,
+    ) {
+        self.0.lock().unwrap().insert(window.0, buttons.clone());
+    }
+    fn withdraw(&mut self, window: cupertino_wm::WindowId) {
+        self.0.lock().unwrap().remove(&window.0);
+    }
+}
+
+/// A full-screen window's buttons reach assistive technology while its title bar shows, revealed with the menu bar,
+/// with minimize disabled as drawn and at the bar's place; they are withdrawn when it hides. A pointer press on that
+/// disabled minimize does nothing.
+#[test]
+fn the_revealed_title_bar_of_a_full_screen_window_is_published_while_it_shows() {
+    use cupertino_decorations::{ButtonKind, TitlebarStyle};
+    use cupertino_geometry::Size;
+    use smithay::backend::input::ButtonState;
+
+    let Some(mut h) = Harness::new() else { return };
+    let published = PublishedButtons::default();
+    h.state.button_access.set_sink(Box::new(published.clone()));
+    let _bar = BarClient::spawn(h.shell_stream(), true);
+    let _app = AppClient::spawn(h.socket_path(), "org.example.full");
+    let id = h.mapped_window(1);
+    let out = h.state.outputs[0].id;
+    let width = h.state.outputs[0].rect.w;
+    h.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
+        window: id,
+        output: None,
+    });
+    h.advance(5.0);
+    h.advance(1.0);
+    assert_eq!(
+        h.state.wm.window(id).unwrap().state(),
+        LifecycleState::FullScreen
+    );
+    assert!(
+        !published.0.lock().unwrap().contains_key(&id.0),
+        "hidden with the bar: not published"
+    );
+
+    let t = h.state.now();
+    h.state.pointer_moved_to((500.0, 0.0).into(), 0, None);
+    common::set_time(&mut h.state, &mut h.event_loop, t + 0.3);
+    h.state.tick();
+    h.advance(1.0);
+    h.advance(1.0);
+    let height = h
+        .state
+        .decor
+        .decorations()
+        .config
+        .metrics
+        .titlebar_height(TitlebarStyle::Standard);
+    let shown = published.0.lock().unwrap().get(&id.0).cloned();
+    let shown = shown.expect("published while the title bar shows");
+    assert_eq!(
+        shown.frame,
+        cupertino_geometry::Rect::new(0.0, 24.0, width, height),
+        "at the revealed bar's place"
+    );
+    assert_eq!(
+        shown.buttons.map(|b| (b.kind, b.enabled)),
+        [
+            (ButtonKind::Close, true),
+            (ButtonKind::Minimize, false),
+            (ButtonKind::Zoom, true)
+        ],
+        "as drawn: a full-screen window does not minimize"
+    );
+
+    // a pointer press on the disabled minimize does nothing, as on the rest of that bar
+    let minimize = h
+        .state
+        .decor
+        .decorations()
+        .layout(Size::new(width, 300.0))
+        .button(ButtonKind::Minimize)
+        .center;
+    h.state
+        .pointer_moved_to((minimize.x, 24.0 + minimize.y).into(), 0, None);
+    h.advance(0.1);
+    h.state
+        .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Pressed, 0);
+    assert_eq!(h.state.decor.pressed, None, "no pressed look");
+    h.state
+        .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Released, 0);
+    h.state.press_published_button(id, ButtonKind::Minimize);
+    h.advance(1.0);
+    assert_eq!(
+        h.state.wm.window(id).unwrap().state(),
+        LifecycleState::FullScreen,
+        "minimize does nothing"
+    );
+
+    // the pointer leaves: the bar and its title bar hide, and the buttons are withdrawn
+    h.state.pointer_moved_to((500.0, 600.0).into(), 0, None);
+    for _ in 0..5 {
+        h.advance(1.0);
+    }
+    assert!(!h.state.menu_bars.set.is_revealed(out), "the bar hid");
+    assert!(
+        !published.0.lock().unwrap().contains_key(&id.0),
+        "withdrawn when the title bar hides"
+    );
+}
+
 /// The session agent's side: records which methods the server called.
 struct FakeLogin(Arc<Mutex<Vec<&'static str>>>);
 
@@ -2478,7 +2596,7 @@ fn the_session_menu_entries_reach_the_session_agent_through_the_server() {
     ] {
         bar.send(Cmd::SessionAction(action));
     }
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while calls.lock().unwrap().len() < 7 && Instant::now() < end {
         h.step();
     }
@@ -2567,6 +2685,7 @@ impl Foreign {
     fn start_named(bus: &PrivateBus, name: &str) -> Foreign {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "foreign_menu_owner_process", "--nocapture"])
+            .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .env(FOREIGN_BUS, &bus.address)
             .env(FOREIGN_NAME_VAR, name)
             .stdin(std::process::Stdio::piped())
@@ -2584,7 +2703,7 @@ impl Foreign {
         });
         let unique = loop {
             let line = lines
-                .recv_timeout(Duration::from_secs(10))
+                .recv_timeout(common::HANG_GUARD)
                 .expect("the foreign process is ready");
             if let Some(unique) = line.strip_prefix("ready ") {
                 break unique.to_owned();
@@ -2597,19 +2716,33 @@ impl Foreign {
         }
     }
 
-    /// The method calls made on the foreign connection that it reported within `wait`.
-    fn calls_within(&self, wait: Duration) -> Vec<String> {
-        let end = Instant::now() + wait;
+    /// The method calls the foreign connection reported before the ping `own` sends it now. A call the server made
+    /// was on the bus before the server concluded what it waited on, so before this ping: these are the calls made so
+    /// far.
+    fn calls_before_ping(&self, own: &zbus::blocking::Connection) -> Vec<String> {
+        let ping = zbus::message::Message::method_call("/", "Ping")
+            .unwrap()
+            .destination(self.unique.as_str())
+            .unwrap()
+            .interface("org.freedesktop.DBus.Peer")
+            .unwrap()
+            .build(&())
+            .unwrap();
+        own.send(&ping).unwrap();
         let mut calls = Vec::new();
-        while let Ok(line) = self
-            .lines
-            .recv_timeout(end.saturating_duration_since(Instant::now()))
-        {
-            if line.starts_with("call ") {
-                calls.push(line);
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(common::HANG_GUARD)
+                .expect("the foreign process reports the ping");
+            if !line.starts_with("call ") {
+                continue;
             }
+            if line.contains("Ping") {
+                return calls;
+            }
+            calls.push(line);
         }
-        calls
     }
 }
 
@@ -2752,22 +2885,8 @@ fn a_bus_name_of_another_process_gives_no_menus_and_is_never_called() {
         "{:?}",
         bar.groups()
     );
-    assert_eq!(
-        foreign.calls_within(Duration::from_millis(300)),
-        Vec::<String>::new()
-    );
-
-    // the foreign process does report a call made on its name
-    let ping = zbus::message::Message::method_call("/", "Ping")
-        .unwrap()
-        .destination(foreign.unique.as_str())
-        .unwrap()
-        .interface("org.freedesktop.DBus.Peer")
-        .unwrap()
-        .build(&())
-        .unwrap();
-    own.send(&ping).unwrap();
-    assert_eq!(foreign.calls_within(Duration::from_secs(2)).len(), 1);
+    // the foreign process reports a call made on its name, the ping, and no other came before it
+    assert_eq!(foreign.calls_before_ping(&own), Vec::<String>::new());
 }
 
 /// A well-known name is resolved to its owner's unique name, which is checked, and the bar is sent the unique name.
@@ -2918,7 +3037,7 @@ fn a_name_that_is_gone_before_the_check_gives_no_menus() {
     let gone_name = gone.unique_name().unwrap().to_owned();
     drop(gone);
     let daemon = zbus::blocking::fdo::DBusProxy::new(&own).unwrap();
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while daemon.name_has_owner(gone_name.as_ref().into()).unwrap() {
         assert!(
             Instant::now() < end,
@@ -2980,7 +3099,7 @@ fn the_result_of_an_announcement_superseded_while_it_was_checked_is_dropped() {
 #[test]
 fn a_kit_window_announcing_a_bus_name_of_another_process_gets_no_menus() {
     let Some(mut h) = Harness::new() else { return };
-    let Some((bus, _own)) = menu_bus(&mut h) else {
+    let Some((bus, own)) = menu_bus(&mut h) else {
         return;
     };
     let foreign = Foreign::start(&bus);
@@ -3014,10 +3133,7 @@ fn a_kit_window_announcing_a_bus_name_of_another_process_gets_no_menus() {
         "{:?}",
         bar.groups()
     );
-    assert_eq!(
-        foreign.calls_within(Duration::from_millis(300)),
-        Vec::<String>::new()
-    );
+    assert_eq!(foreign.calls_before_ping(&own), Vec::<String>::new());
 }
 
 /// A client announcing the menus of 100 surfaces at once has at most its own limit of checks on the worker, and a
@@ -3643,7 +3759,7 @@ fn a_version_9_bar_gets_none_of_the_version_10_events_or_commands() {
     assert_eq!(new, None);
 
     bar.send(Cmd::WindowCommand(BarCommand::TileLeft));
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while bar.error().is_none() && Instant::now() < end {
         h.step();
     }

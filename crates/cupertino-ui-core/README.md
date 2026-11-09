@@ -36,7 +36,11 @@ all on one thread.
   losing the focus cancels it with `Event::Cancel`. A scroll gesture keeps the path its first event hit: a finger's
   until its stop, a wheel's or another source's until it pauses for `SCROLL_IDLE_NS`, the source changes or the
   pointer moves, and any of them until the pointer leaves the surface. A cancelled touch reaches every node its path
-  went through, the touched one first.
+  went through, the touched one first. A button let go anywhere but in a popup its press opened (on the opener, in
+  the opener's window, in another window) also reaches the root of every popup that press opened, nested ones
+  included, as a release at a point outside it, so a menu dragged through and let go elsewhere can close; one let go
+  in such a popup goes only where it lands, and popups the press did not open hear nothing of it. The unit tests open
+  popups through the fake window system and let go at each of those places.
 - **Touch and popups.** Every event of a finger goes to the window it went down in. The first finger held is the one a
   popup opened meanwhile follows: in a window that is not a popup, what it went through hears `Event::Cancel` as the
   popup opens, so a button under it is not clicked as it lifts. Its moves reach each popup it opened at that popup's
@@ -164,6 +168,5 @@ all on one thread.
 
 ## Not yet
 
-Popups (`create_popup`), clipboard reads, and image resources in `PaintResources` are not
-wired yet. Scrolling repaints everything the scroll view shows: the CPU renderer draws it again rather than moving
+An application cannot read the clipboard (a paste): the runtime reads offered data only for a drop. Scrolling repaints everything the scroll view shows: the CPU renderer draws it again rather than moving
 the pixels it has.

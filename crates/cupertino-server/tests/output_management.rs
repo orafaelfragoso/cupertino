@@ -90,7 +90,7 @@ impl Harness {
         what: &str,
         mut cond: impl FnMut(&Cupertino, &Seen) -> bool,
     ) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             headless::step(
                 &mut self.state,

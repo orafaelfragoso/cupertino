@@ -18,6 +18,7 @@ pub mod cursor;
 pub mod data_control;
 pub mod dbus;
 pub mod decor;
+pub mod decor_access;
 pub mod desktop;
 pub mod display_power;
 pub mod displays;

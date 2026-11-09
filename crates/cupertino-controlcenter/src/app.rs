@@ -215,14 +215,14 @@ impl CardKeyboard {
 /// a hidden panel takes no input. Hears the session lock, the card losing the keyboard and the panel's output going
 /// away for the application.
 ///
-/// The surfaces name no output: the server opens them on its active output (the one the person works on, where the
-/// menu bar was clicked), both in the same pass. When that output goes the server closes them, which dismisses the
-/// panel at once (it does not move to another output); the next toggle opens it on an output that exists.
+/// The card and the catcher are always on the same output ([`SharedOutput`]): the server's active output when the panel
+/// opens (the one the person works on, where the menu bar was clicked), kept for a toggle during the fade. When that
+/// output goes the server closes them, which dismisses the panel at once (it does not move to another output); the
+/// next toggle opens it on an output that exists.
 struct PanelRoles {
     shell: LayerShell,
-    /// The output the panel's surfaces are asked for; `None` lets the server choose (its active output, or it closes
-    /// what opens when it has no output).
-    output: Option<OutputId>,
+    /// The output the panel's surfaces share.
+    output: SharedOutput<OutputId>,
     /// The menu bar's height, in whole points.
     menu_bar: i32,
     requests: async_channel::Sender<Request>,
@@ -231,10 +231,53 @@ struct PanelRoles {
     keyboard: CardKeyboard,
 }
 
+/// The output the panel's two surfaces share. A panel that opens with no surface open names no output, so the server
+/// opens the catcher and the card on its active output, the one the person works on, in the same pass. The surfaces are
+/// then told that output (`wl_surface.enter`), and a surface that opens while the other is still open names it: the
+/// catcher of a toggle during the fade opens on the fading card's output, even when the active output changed
+/// meanwhile. Until an open surface was told its output, the next one names none, as the first did.
+#[derive(Debug)]
+struct SharedOutput<O> {
+    output: Option<O>,
+}
+
+impl<O> Default for SharedOutput<O> {
+    fn default() -> Self {
+        Self { output: None }
+    }
+}
+
+impl<O: Copy> SharedOutput<O> {
+    /// The output a surface about to open names; `open` holds the outputs each of the panel's open surfaces is on.
+    fn for_new_surface(&mut self, open: &[Vec<O>]) -> Option<O> {
+        if open.is_empty() {
+            self.output = None;
+        } else {
+            self.learn(open);
+        }
+        self.output
+    }
+
+    /// Learn the output from the panel's open surfaces, once one of them was told it.
+    fn learn(&mut self, open: &[Vec<O>]) {
+        if self.output.is_none() {
+            self.output = open.iter().find_map(|on| on.first().copied());
+        }
+    }
+}
+
 impl PanelRoles {
-    fn config(&self, spec: &WindowSpec) -> Option<LayerSurfaceConfig> {
+    /// The outputs each of the panel's open surfaces is on.
+    fn open_outputs(&self, conn: &Connection) -> Vec<Vec<OutputId>> {
+        [&self.card, &self.catcher]
+            .into_iter()
+            .flatten()
+            .map(|l| conn.surface_outputs(l.surface()).unwrap_or_default())
+            .collect()
+    }
+
+    fn config(&self, spec: &WindowSpec, output: Option<OutputId>) -> Option<LayerSurfaceConfig> {
         let namespace = NAMESPACE.to_string();
-        let output = self.output;
         Some(match spec.app_id.as_str() {
             APP_ID => LayerSurfaceConfig {
                 namespace,
@@ -283,10 +326,9 @@ impl SurfaceRoles for PanelRoles {
         conn: &mut Connection,
         spec: &WindowSpec,
     ) -> Option<std::result::Result<SurfaceId, WaylandError>> {
-        if self.card.is_none() && self.catcher.is_none() {
-            self.output = None;
-        }
-        let config = self.config(spec)?;
+        let open = self.open_outputs(conn);
+        let output = self.output.for_new_surface(&open);
+        let config = self.config(spec, output)?;
         let layer = match self.shell.layer_surface(conn, &config) {
             Ok(layer) => layer,
             Err(cupertino_shell_client::Error::Transport(e)) => return Some(Err(e)),
@@ -368,8 +410,10 @@ impl SurfaceRoles for PanelRoles {
     /// The panel's output went away: the panel goes at once. The server also closes the surfaces of an output it drops,
     /// which hides the panel the same way.
     fn outputs_changed(&mut self, conn: &Connection) {
-        if output_gone(self.output, &described(conn)) {
-            self.output = None;
+        let open = self.open_outputs(conn);
+        self.output.learn(&open);
+        if output_gone(self.output.output, &described(conn)) {
+            self.output.output = None;
             if self.card.is_some() || self.catcher.is_some() {
                 let _ = self.requests.send_blocking(Request::OutputGone);
             }
@@ -695,7 +739,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     })?;
     let system = system.with_roles(PanelRoles {
         shell,
-        output: None,
+        output: SharedOutput::default(),
         menu_bar,
         requests: sender,
         card: None,
@@ -1029,6 +1073,33 @@ mod tests {
         );
         assert!(output_gone(Some(a), &[(b, true)]));
         assert!(output_gone(Some(a), &[]), "the last output went");
+    }
+
+    /// The panel opens on output `a`, the active one; the person moves to output `b`, which becomes the active one, and
+    /// dismisses the panel; while the card fades they toggle it again: the new catcher opens on the card's output.
+    #[test]
+    fn a_toggle_during_the_fade_opens_the_catcher_on_the_card_s_output() {
+        let (a, b) = (4_u32, 7_u32);
+        let mut shared = SharedOutput::default();
+        // the catcher opens first, then the card, in one pass: neither names an output, so both go to the server's
+        // active output, `a`
+        assert_eq!(shared.for_new_surface(&[]), None, "the catcher");
+        assert_eq!(shared.for_new_surface(&[vec![]]), None, "the card");
+        // both are told they are on `a`; the active output becomes `b`; the fade starts and the catcher goes, so only
+        // the card is open when the toggle comes
+        let card = [vec![a]];
+        let catcher = shared.for_new_surface(&card);
+        assert_eq!(
+            catcher,
+            Some(a),
+            "the catcher shares the card's output, not the active `b`"
+        );
+        assert_eq!(catcher, card[0].first().copied());
+        // learnt once, the output holds while a surface is open
+        assert_eq!(shared.for_new_surface(&[vec![]]), Some(a));
+        // after the fade nothing is open: the next panel opens on the active output again, now `b`
+        assert_eq!(shared.for_new_surface(&[]), None);
+        assert_eq!(shared.for_new_surface(&[vec![b]]), Some(b));
     }
 
     #[test]

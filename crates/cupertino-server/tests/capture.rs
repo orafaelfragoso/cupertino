@@ -594,14 +594,14 @@ impl Harness {
         PathBuf::from(dir).join(self.state.socket_name.as_ref().unwrap())
     }
 
-    /// Step the server and the clients until `cond` holds on the server; panics after ten seconds.
+    /// Step the server and the clients until `cond` holds on the server; panics after [`common::HANG_GUARD`].
     fn clients_until(
         &mut self,
         clients: &mut [&mut dyn Pump],
         what: &str,
         mut cond: impl FnMut(&Cupertino) -> bool,
     ) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             for c in clients.iter_mut() {
                 c.pump();
@@ -617,14 +617,14 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
-    /// Step the server and one client until `cond` holds on the client's state; panics after ten seconds.
+    /// Step the server and one client until `cond` holds on the client's state; panics after [`common::HANG_GUARD`].
     fn pump_until<S>(
         &mut self,
         client: &mut TestClient<S>,
         what: &str,
         mut cond: impl FnMut(&S) -> bool,
     ) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             client.pump();
             self.step();
@@ -908,12 +908,9 @@ fn a_toplevel_is_captured_at_its_frame_size_and_listed_in_the_window_feed() {
 /// Lock the session through a lock screen client and wait until it is locked.
 fn locked(h: &mut Harness) -> common::Client {
     let locker = common::Client::locker(common::session_agent(&h.state));
-    for _ in 0..200 {
-        if locker.locked() {
-            break;
-        }
+    let end = std::time::Instant::now() + common::HANG_GUARD;
+    while !locker.locked() && std::time::Instant::now() < end {
         h.step();
-        std::thread::sleep(Duration::from_millis(5));
     }
     assert!(locker.locked(), "the session lock was not granted");
     locker
@@ -1127,7 +1124,7 @@ fn a_toplevel_of_the_authentication_prompt_ends_its_connection_and_is_no_window(
     let toplevel = xdg.get_toplevel(&qh, ());
     toplevel.set_title("Authenticate".to_string());
     surface.commit();
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while prompt.conn.protocol_error().is_none() {
         assert!(Instant::now() < end, "the prompt's toplevel was accepted");
         let _ = prompt.conn.flush();

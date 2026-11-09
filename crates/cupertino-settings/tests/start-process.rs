@@ -8,7 +8,7 @@ mod common;
 use std::process::{Command, Output};
 
 /// Run the binary on `bus` with no display, no user asset pack and no host icon theme (`XDG_DATA_HOME`, `XDG_DATA_DIRS` and `HOME` are `data`) and the asset pack `assets`
-/// (`None`: `CUPERTINO_ASSET_DIR` unset).
+/// alone (`None`: no pack at all, not even one installed on the machine).
 fn start(
     bus: &common::PrivateBus,
     data: &std::path::Path,
@@ -21,10 +21,11 @@ fn start(
         .env("XDG_DATA_DIRS", data)
         .env("HOME", data)
         .env_remove("WAYLAND_DISPLAY")
-        .env_remove("CUPERTINO_ASSET_DIR");
-    if let Some(dir) = assets {
-        command.env("CUPERTINO_ASSET_DIR", dir);
-    }
+        .env_remove("CUPERTINO_ASSET_DIR")
+        .env(
+            "CUPERTINO_ASSET_SEARCH_PATH",
+            assets.unwrap_or(std::path::Path::new("")),
+        );
     command.output().expect("the binary runs")
 }
 

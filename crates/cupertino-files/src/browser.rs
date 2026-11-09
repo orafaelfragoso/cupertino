@@ -905,6 +905,7 @@ mod tests {
         assert!(!super::mounted_read_only(d.path()).unwrap());
         let status = std::process::Command::new("unshare")
             .args(["--map-root-user", "--mount", "sh", "-c"])
+            .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .arg(r#"mount --bind -o ro "$1" "$1" || exit 77; shift; exec "$@""#)
             .args([std::ffi::OsStr::new("sh"), d.path().as_os_str()])
             .arg(std::env::current_exe().unwrap())

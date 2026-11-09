@@ -13,6 +13,7 @@ pub mod management;
 pub mod placement;
 pub mod power;
 pub mod recovery;
+pub mod surface_output;
 
 use std::path::PathBuf;
 
@@ -839,25 +840,10 @@ impl Cupertino {
         }
     }
 
-    /// Tell every surface the scale it should draw at: a layer surface its output's, a window the scale of the output
-    /// it is on (`placement`).
+    /// Tell every surface which outputs it is on and the scale it should draw at: a layer surface its output's, a window
+    /// that of the output it overlaps most (`surface_output`).
     pub fn refresh_surface_scales(&mut self) {
-        use smithay::wayland::compositor::with_states;
-        use smithay::wayland::fractional_scale::with_fractional_scale;
-        let set =
-            |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
-             scale: f64| {
-                with_states(surface, |states| {
-                    with_fractional_scale(states, |fs| fs.set_preferred_scale(scale))
-                });
-            };
-        for o in &self.outputs {
-            let map = smithay::desktop::layer_map_for_output(&o.output);
-            for layer in map.layers() {
-                set(layer.wl_surface(), o.scale);
-            }
-        }
-        self.refresh_window_scales();
+        self.refresh_surface_outputs();
     }
 }
 

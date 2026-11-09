@@ -29,6 +29,8 @@ struct Harness {
     state: Cupertino,
     event_loop: EventLoop<'static, Cupertino>,
     now: f64,
+    /// The roundtrips of the test's clients, for [`Harness::settle`].
+    clients: Vec<common::Rounds>,
 }
 
 impl Harness {
@@ -49,6 +51,7 @@ impl Harness {
                 state,
                 event_loop,
                 now: 100.0,
+                clients: Vec::new(),
             }),
             Err(e) => {
                 eprintln!("skipping: no EGL device ({e:#})");
@@ -58,7 +61,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.state.fixed_time = Some(self.now);
             headless::step(
@@ -74,10 +77,19 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
-    /// Let the real time the clients need pass at the model time `now`.
+    /// Step at the model time `now` until each client has every event sent before and the server handled their
+    /// answers ([`Client::barrier`]).
     fn settle(&mut self) {
-        let end = Instant::now() + Duration::from_millis(150);
-        self.wait_until("the time to pass", |_| Instant::now() >= end);
+        let barriers: Vec<_> = self.clients.iter().map(common::Rounds::barrier).collect();
+        self.wait_until("the clients' roundtrips", move |_| {
+            barriers.iter().all(|b| b())
+        });
+    }
+
+    /// `client`, which [`Harness::settle`] waits for from now on.
+    fn track(&mut self, client: Client) -> Client {
+        self.clients.push(client.rounds());
+        client
     }
 
     fn advance(&mut self, seconds: f64) {
@@ -165,7 +177,12 @@ impl Harness {
 #[test]
 fn a_lock_keeps_the_pointer_in_place_and_sends_only_relative_motion_until_the_release_chord() {
     let Some(mut h) = Harness::new() else { return };
-    let game = Client::constraining(h.socket_path(), "org.example.game", Constraint::Lock, false);
+    let game = h.track(Client::constraining(
+        h.socket_path(),
+        "org.example.game",
+        Constraint::Lock,
+        false,
+    ));
     let window = h.mapped(1, "org.example.game");
     let centre = h.in_window(window, 200.0, 150.0);
     h.move_to(centre);
@@ -218,7 +235,12 @@ fn a_lock_keeps_the_pointer_in_place_and_sends_only_relative_motion_until_the_re
 #[test]
 fn the_authentication_prompt_ends_the_lock_and_the_inhibitor_while_it_is_shown() {
     let Some(mut h) = Harness::new() else { return };
-    let game = Client::constraining(h.socket_path(), "org.example.game", Constraint::Lock, true);
+    let game = h.track(Client::constraining(
+        h.socket_path(),
+        "org.example.game",
+        Constraint::Lock,
+        true,
+    ));
     let window = h.mapped(1, "org.example.game");
     // the prompt is in the top left corner of the output, away from the pointer and the window
     h.move_to(h.in_window(window, 200.0, 150.0));
@@ -226,7 +248,7 @@ fn the_authentication_prompt_ends_the_lock_and_the_inhibitor_while_it_is_shown()
         game.constraint_events() == [true] && game.inhibitor_events() == [true]
     });
 
-    let prompt = Client::prompt(common::prompt_agent(&h.state));
+    let prompt = h.track(Client::prompt(common::prompt_agent(&h.state)));
     h.wait_until("the prompt to be shown", |s| s.prompt_shown());
     h.wait_until("the lock and the inhibitor to end", |_| {
         game.constraint_events() == [true, false] && game.inhibitor_events() == [true, false]
@@ -249,7 +271,12 @@ fn a_confine_keeps_the_pointer_inside_its_region_and_lets_it_slide_along_the_edg
         w: 100,
         h: 50,
     };
-    let game = Client::constraining(h.socket_path(), "org.example.game", region, false);
+    let game = h.track(Client::constraining(
+        h.socket_path(),
+        "org.example.game",
+        region,
+        false,
+    ));
     let window = h.mapped(1, "org.example.game");
     h.move_to(h.in_window(window, 20.0, 20.0));
     assert_eq!(
@@ -275,14 +302,19 @@ fn a_confine_keeps_the_pointer_inside_its_region_and_lets_it_slide_along_the_edg
 #[test]
 fn a_constraint_is_active_only_on_the_window_with_the_keyboard_focus() {
     let Some(mut h) = Harness::new() else { return };
-    let game = Client::constraining(h.socket_path(), "org.example.game", Constraint::Lock, false);
+    let game = h.track(Client::constraining(
+        h.socket_path(),
+        "org.example.game",
+        Constraint::Lock,
+        false,
+    ));
     let window = h.mapped(1, "org.example.game");
     // a corner of the window, away from the layer surface in the middle of the output
     h.move_to(h.in_window(window, 5.0, 5.0));
     h.wait_until("the lock", |_| game.constraint_events() == [true]);
 
     // a layer surface takes the keyboard; the pointer stays over the game
-    let _layer = Client::inhibiting_layer(h.socket_path());
+    let _layer = h.track(Client::inhibiting_layer(h.socket_path()));
     h.wait_until("the layer to take the keyboard", |s| {
         s.exclusive_layer.is_some()
     });
@@ -297,7 +329,12 @@ fn a_constraint_is_active_only_on_the_window_with_the_keyboard_focus() {
 #[test]
 fn a_released_window_shows_the_cursor_and_is_armed_again_by_a_press_while_it_has_the_focus() {
     let Some(mut h) = Harness::new() else { return };
-    let vm = Client::constraining(h.socket_path(), "org.example.vm", Constraint::Lock, true);
+    let vm = h.track(Client::constraining(
+        h.socket_path(),
+        "org.example.vm",
+        Constraint::Lock,
+        true,
+    ));
     let window = h.mapped(1, "org.example.vm");
     h.move_to(h.in_window(window, 200.0, 150.0));
     h.wait_until("both held", |_| {
@@ -341,7 +378,12 @@ fn a_released_window_shows_the_cursor_and_is_armed_again_by_a_press_while_it_has
 #[test]
 fn a_client_that_does_not_answer_its_pings_holds_neither_the_keys_nor_the_pointer() {
     let Some(mut h) = Harness::new() else { return };
-    let vm = Client::constraining(h.socket_path(), "org.example.vm", Constraint::Lock, true);
+    let vm = h.track(Client::constraining(
+        h.socket_path(),
+        "org.example.vm",
+        Constraint::Lock,
+        true,
+    ));
     let window = h.mapped(1, "org.example.vm");
     h.move_to(h.in_window(window, 200.0, 150.0));
     h.wait_until("both held", |_| {
@@ -371,7 +413,10 @@ fn a_client_that_does_not_answer_its_pings_holds_neither_the_keys_nor_the_pointe
 #[test]
 fn a_lock_holds_while_the_pointer_is_over_a_subsurface_of_its_surface() {
     let Some(mut h) = Harness::new() else { return };
-    let game = Client::constraining_under_subsurface(h.socket_path(), "org.example.game");
+    let game = h.track(Client::constraining_under_subsurface(
+        h.socket_path(),
+        "org.example.game",
+    ));
     let window = h.mapped(1, "org.example.game");
     let centre = h.in_window(window, 200.0, 150.0);
     h.move_to(centre);
@@ -389,7 +434,12 @@ fn a_lock_holds_while_the_pointer_is_over_a_subsurface_of_its_surface() {
 #[test]
 fn the_notice_goes_with_the_hold_however_it_ends() {
     let Some(mut h) = Harness::new() else { return };
-    let game = Client::constraining(h.socket_path(), "org.example.game", Constraint::Lock, false);
+    let game = h.track(Client::constraining(
+        h.socket_path(),
+        "org.example.game",
+        Constraint::Lock,
+        false,
+    ));
     let window = h.mapped(1, "org.example.game");
     h.move_to(h.in_window(window, 200.0, 150.0));
     h.wait_until("the lock", |_| game.constraint_events() == [true]);
@@ -405,7 +455,7 @@ fn the_notice_goes_with_the_hold_however_it_ends() {
 #[test]
 fn the_release_chord_releases_the_application_not_only_its_window() {
     let Some(mut h) = Harness::new() else { return };
-    let _vm = Client::inhibiting_twice(h.socket_path(), "org.example.vm");
+    let _vm = h.track(Client::inhibiting_twice(h.socket_path(), "org.example.vm"));
     h.wait_until("both windows", |s| s.wm.windows().count() == 2);
     h.advance(1.0);
     let windows: Vec<WindowId> = h.state.wm.windows().map(|w| w.id).collect();

@@ -51,7 +51,7 @@
   note: Carries authentication secrets between the greeter and the root session manager. cupertino-sessiond enforces access in bind (mode 0600, owned by the greeter user) and Manager::accept (SO_PEERCRED uid must be the greeter's; one login-screen connection at a time). Frames are capped at MAX_REQUEST_FRAME (2 KiB) from the greeter and MAX_EVENT_FRAME (4 MiB) to it.
 - name: wl_compositor
   kind: wayland-global
-  version: 5
+  version: 6
   owner_crate: cupertino-server
   owner_area: compositor
   scope: public
@@ -59,7 +59,7 @@
   advertised: always
   test_owner: crates/cupertino-server/tests/headless.rs
   source: crates/cupertino-server/src/state.rs
-  source_match: CompositorState::new
+  source_match: CompositorState::new_v6
 - name: wl_subcompositor
   kind: wayland-global
   version: 1

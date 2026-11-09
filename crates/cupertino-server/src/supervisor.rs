@@ -273,10 +273,17 @@ mod tests {
     use crate::restart_policy::RESTART_THROTTLE;
     use crate::state::ClientState;
 
+    /// A process that runs `script` under `sh`, with the empty asset search path a test's processes get.
     fn spec(script: &str) -> ShellProcess {
         ShellProcess {
             name: "test".into(),
-            command: vec!["sh".into(), "-c".into(), script.into()],
+            command: vec![
+                "env".into(),
+                "CUPERTINO_ASSET_SEARCH_PATH=".into(),
+                "sh".into(),
+                "-c".into(),
+                script.into(),
+            ],
             roles: Vec::new(),
         }
     }

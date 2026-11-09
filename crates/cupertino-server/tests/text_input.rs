@@ -22,7 +22,7 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_output, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_protocols::wp::text_input::zv3::client::{
@@ -78,7 +78,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&mut Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&mut self.state) {
@@ -88,12 +88,13 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
-    /// Steps for `ms` milliseconds, so what would arrive has arrived.
-    fn run_for(&mut self, ms: u64) {
-        let end = Instant::now() + Duration::from_millis(ms);
-        while Instant::now() < end {
-            self.step();
-        }
+    /// Wait for each of `clients`' [`common::Rounds::barrier`] together: they have every event sent before, and the
+    /// server handled their answers and what they were told to send.
+    fn sync(&mut self, clients: &[&common::Rounds]) {
+        let barriers: Vec<_> = clients.iter().map(|r| r.barrier()).collect();
+        self.wait_until("the clients' roundtrips", move |_| {
+            barriers.iter().all(|b| b())
+        });
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -128,6 +129,8 @@ enum ImDo {
 struct ImShared {
     seen: Vec<ImSeen>,
     bound: bool,
+    /// What the input method's popup surface heard: `enter`, `leave` and `scale N` (`preferred_buffer_scale`).
+    popup: Vec<String>,
 }
 
 struct ImState {
@@ -157,9 +160,28 @@ macro_rules! ignore_im_events {
 ignore_im_events!(
     wl_seat::WlSeat,
     wl_compositor::WlCompositor,
-    wl_surface::WlSurface,
+    wl_output::WlOutput,
     zwp_input_popup_surface_v2::ZwpInputPopupSurfaceV2
 );
+
+impl Dispatch<wl_surface::WlSurface, ()> for ImState {
+    fn event(
+        state: &mut Self,
+        _: &wl_surface::WlSurface,
+        event: wl_surface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let heard = match event {
+            wl_surface::Event::Enter { .. } => "enter".to_string(),
+            wl_surface::Event::Leave { .. } => "leave".to_string(),
+            wl_surface::Event::PreferredBufferScale { factor } => format!("scale {factor}"),
+            _ => return,
+        };
+        state.shared.lock().unwrap().popup.push(heard);
+    }
+}
 
 impl Dispatch<zwp_input_method_manager_v2::ZwpInputMethodManagerV2, ()> for ImState {
     fn event(
@@ -217,6 +239,7 @@ struct InputMethod {
     tx: Sender<ImDo>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    rounds: common::Rounds,
 }
 
 impl InputMethod {
@@ -235,8 +258,10 @@ impl InputMethod {
         let shared = Arc::new(Mutex::new(ImShared::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx): (Sender<ImDo>, Receiver<ImDo>) = channel();
-        let (sh, st) = (shared.clone(), stop.clone());
+        let rounds = common::Rounds::default();
+        let (sh, st, rt) = (shared.clone(), stop.clone(), rounds.clone());
         let thread = std::thread::spawn(move || {
+            let _ended = rt.ended_on_drop();
             let conn = Connection::from_socket(client_end).unwrap();
             let (globals, mut queue) = registry_queue_init::<ImState>(&conn).unwrap();
             let qh = queue.handle();
@@ -244,6 +269,8 @@ impl InputMethod {
             let manager: zwp_input_method_manager_v2::ZwpInputMethodManagerV2 =
                 globals.bind(&qh, 1..=1, ()).unwrap();
             let im = manager.get_input_method(&seat, &qh, ());
+            // the output, so the popup can be told it is on it
+            let _output: wl_output::WlOutput = globals.bind(&qh, 1..=4, ()).unwrap();
             // a candidate popup, through which the compositor learns the field's cursor rectangle
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
             let popup_surface = compositor.create_surface(&qh, ());
@@ -269,6 +296,7 @@ impl InputMethod {
                 if queue.roundtrip(&mut state).is_err() {
                     break;
                 }
+                rt.tick();
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
@@ -277,12 +305,13 @@ impl InputMethod {
             tx,
             stop,
             thread: Some(thread),
+            rounds,
         };
         let shared = im.shared.clone();
         h.wait_until("the input method to bind", move |_| {
             shared.lock().unwrap().bound
         });
-        h.run_for(50);
+        h.sync(&[&im.rounds]);
         im
     }
 
@@ -296,6 +325,10 @@ impl InputMethod {
 
     fn clear(&self) {
         self.shared.lock().unwrap().seen.clear();
+    }
+
+    fn popup(&self) -> Vec<String> {
+        self.shared.lock().unwrap().popup.clone()
     }
 }
 
@@ -456,6 +489,7 @@ struct Field {
     tx: Sender<TiDo>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    rounds: common::Rounds,
 }
 
 impl Field {
@@ -465,8 +499,10 @@ impl Field {
         let shared = Arc::new(Mutex::new(TiShared::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx): (Sender<TiDo>, Receiver<TiDo>) = channel();
-        let (sh, st) = (shared.clone(), stop.clone());
+        let rounds = common::Rounds::default();
+        let (sh, st, rt) = (shared.clone(), stop.clone(), rounds.clone());
         let thread = std::thread::spawn(move || {
+            let _ended = rt.ended_on_drop();
             let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
             let conn = Connection::from_socket(stream).unwrap();
             let (globals, mut queue) = registry_queue_init::<TiState>(&conn).unwrap();
@@ -515,6 +551,7 @@ impl Field {
                 if queue.roundtrip(&mut state).is_err() {
                     break;
                 }
+                rt.tick();
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
@@ -523,6 +560,7 @@ impl Field {
             tx,
             stop,
             thread: Some(thread),
+            rounds,
         };
         let shared = field.shared.clone();
         let window_of = |s: &Cupertino| {
@@ -535,7 +573,7 @@ impl Field {
         });
         // only a process's first window takes the keyboard by itself, and the test clients share one process
         let window = window_of(&h.state).unwrap();
-        h.run_for(50);
+        h.sync(&[&field.rounds]);
         if h.state.wm.key_window() != Some(window) {
             h.state.focus_window_by_input(window);
         }
@@ -544,7 +582,7 @@ impl Field {
             st.wm.key_window() == Some(window)
                 && shared.lock().unwrap().seen.contains(&TiSeen::Enter)
         });
-        h.run_for(50);
+        h.sync(&[&field.rounds]);
         field
     }
 
@@ -569,7 +607,7 @@ impl Drop for Field {
 }
 
 fn wait_im(h: &mut Harness, im: &InputMethod, what: &str, cond: impl Fn(&[ImSeen]) -> bool) {
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while Instant::now() < end {
         h.step();
         if cond(&im.seen()) {
@@ -583,7 +621,7 @@ fn wait_im(h: &mut Harness, im: &InputMethod, what: &str, cond: impl Fn(&[ImSeen
 }
 
 fn wait_field(h: &mut Harness, field: &Field, what: &str, cond: impl Fn(&[TiSeen]) -> bool) {
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while Instant::now() < end {
         h.step();
         if cond(&field.seen()) {
@@ -682,7 +720,9 @@ fn a_preedit_commit_and_delete_reach_the_field_as_one_done_with_its_serial() {
     // the field sends its new state; an input method that commits for an older one gets its batch through as stale
     field.clear();
     field.send(TiDo::Surrounding("a日".into(), 4));
-    h.run_for(50);
+    // the server has the field's new state, then the input method has heard of it
+    h.sync(&[&field.rounds]);
+    h.sync(&[&im.rounds]);
     im.send(ImDo::Commit("本".into()));
     im.send(ImDo::Apply { stale: true });
     wait_field(&mut h, &field, "the stale batch", |s| {
@@ -727,7 +767,9 @@ fn a_focus_change_deactivates_the_input_method_and_its_edits_never_reach_the_old
     first.clear();
     im.send(ImDo::Commit("x".into()));
     im.send(ImDo::Apply { stale: false });
-    h.run_for(100);
+    // the server handled the late edit, then the fields heard all it sent them
+    h.sync(&[&im.rounds]);
+    h.sync(&[&first.rounds, &second.rounds]);
     assert!(
         !first
             .seen()
@@ -765,7 +807,9 @@ fn edits_after_the_field_disables_never_reach_it() {
     im.send(ImDo::Preedit("late".into(), 4, 4));
     im.send(ImDo::Commit("late".into()));
     im.send(ImDo::Apply { stale: false });
-    h.run_for(100);
+    // the server handled the late edits, then the field heard all it sent it
+    h.sync(&[&im.rounds]);
+    h.sync(&[&field.rounds]);
     assert!(
         !field.seen().iter().any(|e| matches!(
             e,
@@ -774,4 +818,57 @@ fn edits_after_the_field_disables_never_reach_it() {
         "{:?}",
         field.seen()
     );
+}
+
+/// The input method's popup is on the output of the field's text cursor while the input method is active, at that
+/// output's whole-number scale, and on none once the field disables its text input.
+#[test]
+fn the_input_methods_popup_is_on_the_output_of_the_text_cursor_while_active() {
+    let Some(mut h) = Harness::new() else {
+        return;
+    };
+    let im = InputMethod::connect(&mut h);
+    let field = Field::open(&mut h, "text-input.popup");
+    assert!(
+        im.popup().is_empty(),
+        "not shown before an activation: {:?}",
+        im.popup()
+    );
+    field.send(TiDo::Enable("text".into(), 2));
+    wait_im(&mut h, &im, "the activation", activated);
+    let shared = im.shared.clone();
+    h.wait_until("the popup to enter the output", move |_| {
+        shared.lock().unwrap().popup.contains(&"enter".to_string())
+    });
+    // at scale 1, which a wl_surface of version 6 needs not be told
+    assert!(
+        !im.popup().iter().any(|e| e.starts_with("scale")),
+        "{:?}",
+        im.popup()
+    );
+
+    // the output's scale changes: the popup is asked for the new one
+    let head = h.state.displays.heads[0].id;
+    let mut state = h.state.displays.heads[0].state;
+    state.scale = 2.0;
+    h.state
+        .configure_heads(&[(head, state)], false)
+        .expect("the scale applies");
+    h.state.heads_changed();
+    let shared = im.shared.clone();
+    h.wait_until("the popup's new scale", move |_| {
+        shared
+            .lock()
+            .unwrap()
+            .popup
+            .contains(&"scale 2".to_string())
+    });
+
+    field.send(TiDo::Disable);
+    let shared = im.shared.clone();
+    h.wait_until("the popup to leave the output", move |_| {
+        shared.lock().unwrap().popup.last() == Some(&"leave".to_string())
+    });
+    h.sync(&[&im.rounds]);
+    assert_eq!(im.popup(), ["enter", "scale 2", "leave"]);
 }

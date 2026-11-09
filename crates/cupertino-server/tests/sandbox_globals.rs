@@ -91,7 +91,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&self.state) {
@@ -108,7 +108,7 @@ impl Harness {
 
     /// Step the server until the client thread ends, and give back what it returned.
     fn finish<T>(&mut self, thread: JoinHandle<T>) -> T {
-        let end = Instant::now() + Duration::from_secs(20);
+        let end = Instant::now() + common::HANG_GUARD;
         while !thread.is_finished() {
             assert!(Instant::now() < end, "timed out waiting for the client");
             self.step();

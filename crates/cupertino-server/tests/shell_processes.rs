@@ -41,7 +41,6 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 const OUTPUT: (i32, i32) = (1000, 700);
-const TIMEOUT: Duration = Duration::from_secs(15);
 /// The restart throttle of the supervisor.
 const THROTTLE: Duration = Duration::from_secs(1);
 
@@ -101,9 +100,17 @@ impl Server {
         .unwrap();
     }
 
-    /// Step the server until `cond` holds; panics after [`TIMEOUT`].
+    /// [`common::ping_barrier`] on `client`: it has handled what it was sent, and the server has what it did with it.
+    fn settle_on(&mut self, client: &smithay::wayland::shell::xdg::ShellClient) {
+        let event_loop = &mut self.event_loop;
+        common::ping_barrier(&mut self.state, client, |state| {
+            headless::step(state, event_loop, Duration::from_millis(5)).unwrap();
+        });
+    }
+
+    /// Step the server until `cond` holds; panics after [`common::HANG_GUARD`].
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&self.state) {
@@ -113,9 +120,9 @@ impl Server {
         panic!("timed out waiting for {what}");
     }
 
-    /// Step the server until the file has `count` lines and return them; panics after [`TIMEOUT`].
+    /// Step the server until the file has `count` lines and return them; panics after [`common::HANG_GUARD`].
     fn wait_for_lines(&mut self, file: &Path, count: usize) -> Vec<String> {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             let lines = read_lines(file);
@@ -160,11 +167,14 @@ impl Drop for TempDir {
     }
 }
 
-/// A stand-in process: `script` runs under `sh` with the log file as `$1`.
+/// A stand-in process: `script` runs under `sh` with the log file as `$1`, with the empty asset search path, as a script
+/// may start a binary of the workspace.
 fn stand_in(name: &str, script: &str, log: &Path) -> ShellProcess {
     ShellProcess {
         name: name.into(),
         command: vec![
+            "env".into(),
+            "CUPERTINO_ASSET_SEARCH_PATH=".into(),
             "sh".into(),
             "-c".into(),
             script.into(),
@@ -255,6 +265,60 @@ fn a_process_that_exits_successfully_is_not_restarted() {
     // the failing process cycling once proves a full throttle period passed since the first start of both
     server.wait_for_lines(&failing, 2);
     assert_eq!(read_lines(&done), vec!["run"]);
+}
+
+/// The process of the Wayland client `client`, as the server identified it.
+fn pid_of_client(client: &smithay::reexports::wayland_server::Client) -> Option<u32> {
+    let data = client.get_data::<cupertino_server::state::ClientState>()?;
+    Some(data.process()?.pid)
+}
+
+/// Whether the process `pid` has a Wayland connection the server keeps.
+fn connected(state: &Cupertino, pid: u32) -> bool {
+    let mut ids = Vec::new();
+    state
+        .display_handle
+        .backend_handle()
+        .with_all_clients(|id| ids.push(id));
+    ids.into_iter().any(|id| {
+        state
+            .display_handle
+            .backend_handle()
+            .get_client_data(id)
+            .ok()
+            .and_then(|data| {
+                let client = data.downcast_ref::<cupertino_server::state::ClientState>()?;
+                Some(client.process()?.pid)
+            })
+            == Some(pid)
+    })
+}
+
+/// The layer surfaces of the process `pid`, those on an output that went included until the process destroys them.
+fn layer_surfaces_of(state: &Cupertino, pid: u32) -> usize {
+    use smithay::reexports::wayland_server::Resource;
+    state
+        .layer_shell_state
+        .layer_surfaces()
+        .filter(|l| {
+            l.wl_surface()
+                .client()
+                .is_some_and(|c| pid_of_client(&c) == Some(pid))
+        })
+        .count()
+}
+
+/// The xdg-shell client of the first popup of the layer surface with `namespace`, to ping.
+fn popup_client(
+    state: &Cupertino,
+    namespace: &str,
+) -> Option<smithay::wayland::shell::xdg::ShellClient> {
+    let map = layer_map_for_output(&state.outputs.first()?.output);
+    let layer = map.layers().find(|l| l.namespace() == namespace)?;
+    PopupManager::popups_for_surface(layer.wl_surface()).find_map(|(popup, _)| match popup {
+        PopupKind::Xdg(p) => Some(p.client()),
+        _ => None,
+    })
 }
 
 /// The capabilities of the connection the server made for the process `pid`.
@@ -532,7 +596,7 @@ fn ask_notification_server(bus: &PrivateBus) -> Receiver<(String, String, String
     let address = bus.address.clone();
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         let conn = zbus::block_on(
             zbus::connection::Builder::address(address.as_str())
                 .unwrap()
@@ -800,10 +864,11 @@ fn the_notification_centre_with_a_long_history_keeps_its_connection() {
     server.wait_until("the centre to draw its cards", |s| {
         centre_backdrop_heights(s).is_some_and(|h| !h.is_empty())
     });
-    let settle = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < settle {
-        server.step();
-    }
+    // the commit that drew the cards was handled: a request the server refuses ends the connection as it is handled
+    assert!(
+        connected(&server.state, pid),
+        "the notifications process lost its connection"
+    );
     assert_eq!(
         server.state.supervisor.pid_of("cupertino-notifications"),
         Some(pid),
@@ -1152,6 +1217,7 @@ fn a_click_on_empty_bar_space_closes_the_menu_and_the_keyboard_goes_back_to_the_
         open(s) && s.popup_grab.is_some() && !window_has_keyboard(s)
     });
     let system = popup_location(&server.state, "cupertino-menubar").unwrap();
+    let menubar = popup_client(&server.state, "cupertino-menubar").unwrap();
     eprintln!(
         "trace: click on the system menu at (20, 12): menu open at {system:?}, keyboard on {}",
         focus(&server.state)
@@ -1166,10 +1232,8 @@ fn a_click_on_empty_bar_space_closes_the_menu_and_the_keyboard_goes_back_to_the_
         focus(&server.state),
         server.state.wm.key_window()
     );
-    let end = Instant::now() + Duration::from_millis(500);
-    while Instant::now() < end {
-        server.step();
-    }
+    // the menu bar handled the click, and what it did about it is on the server
+    server.settle_on(&menubar);
     assert!(!open(&server.state), "the click opened no other menu");
     assert_eq!(server.state.wm.key_window(), Some(window));
     assert_eq!(
@@ -1281,11 +1345,13 @@ fn the_menu_bar_process_outlives_an_unplugged_display() {
             })
     });
     let pid = server.state.supervisor.pid_of("cupertino-menubar");
+    let bars = layer_surfaces_of(&server.state, pid.unwrap());
     headless::remove_display(&mut server.state, head).unwrap();
-    let end = Instant::now() + THROTTLE * 2;
-    while Instant::now() < end {
-        server.step();
-    }
+    // the process heard that the bar of the display that went is closed, and destroyed it
+    server.wait_until("the menu bar to destroy the closed bar", |s| {
+        layer_surfaces_of(s, pid.unwrap()) == bars - 1
+    });
+    assert!(connected(&server.state, pid.unwrap()));
     assert_eq!(server.state.supervisor.pid_of("cupertino-menubar"), pid);
     assert!(committed_buffer(&server.state, "cupertino-menubar").is_some());
 }
@@ -1354,7 +1420,7 @@ fn toggle_panel(bus: &PrivateBus) -> Receiver<()> {
     let address = bus.address.clone();
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         let conn = zbus::block_on(
             zbus::connection::Builder::address(address.as_str())
                 .unwrap()
@@ -1540,11 +1606,12 @@ fn the_control_panel_goes_with_its_output_and_opens_again_on_the_remaining_or_re
     eprintln!(
         "trace: output 0 unplugged: card and catcher destroyed, no exclusive layer, no popup grab, keyboard on the window"
     );
-    server.run_for(Duration::from_millis(500));
+    // the panel destroyed its surfaces when it heard they were closed: it has handled the unplug
     assert!(
         panel_surfaces(&server.state).is_empty(),
         "nothing reopens by itself"
     );
+    assert!(connected(&server.state, pid));
     assert_eq!(
         server.state.supervisor.pid_of(PANEL),
         Some(pid),
@@ -1593,8 +1660,10 @@ fn the_control_panel_goes_with_its_output_and_opens_again_on_the_remaining_or_re
             "no panel surface"
         }
     );
+    // the panel answered the toggle: it has handled it
     server.toggle_panel(&bus);
-    server.run_for(Duration::from_millis(500));
+    assert!(panel_surfaces(&server.state).is_empty());
+    assert!(connected(&server.state, pid));
     assert_eq!(
         server.state.supervisor.pid_of(PANEL),
         Some(pid),
@@ -2097,6 +2166,7 @@ fn the_screenshot_action_maps_the_overlay_and_a_drag_writes_a_png_of_the_selecti
     let binary = shell_bin_dir().join("cupertino-screenshot");
     server.state.config.screenshot_command = vec![
         "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
@@ -2175,6 +2245,7 @@ fn the_screenshot_toolbar_sits_at_the_bottom_and_return_captures_the_screen() {
     let binary = shell_bin_dir().join("cupertino-screenshot");
     server.state.config.screenshot_command = vec![
         "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
@@ -2256,6 +2327,7 @@ fn escape_on_the_screenshot_toolbar_removes_its_surfaces_and_gives_the_keyboard_
     let binary = shell_bin_dir().join("cupertino-screenshot");
     server.state.config.screenshot_command = vec![
         "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
@@ -2308,6 +2380,7 @@ fn the_screenshot_options_menu_opens_above_the_toolbar_on_its_output() {
     let binary = shell_bin_dir().join("cupertino-screenshot");
     server.state.config.screenshot_command = vec![
         "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
@@ -2346,17 +2419,11 @@ fn the_screenshot_options_menu_opens_above_the_toolbar_on_its_output() {
     server.wait_until("the toolbar to take the keyboard", |s| {
         s.seat.get_keyboard().unwrap().current_focus().is_some()
     });
-    // the process hears the pointer enter, then the press and the release, each before the next
-    let settle = |server: &mut Server| {
-        let until = Instant::now() + Duration::from_millis(300);
-        server.wait_until("the process to keep up", |_| Instant::now() >= until);
-    };
+    // the process hears the pointer enter, then the press and the release, in that order on its connection
     server.state.pointer_moved_to(options.into(), 10, None);
-    settle(&mut server);
     server
         .state
         .pointer_button(BTN_LEFT, ButtonState::Pressed, 20);
-    settle(&mut server);
     server
         .state
         .pointer_button(BTN_LEFT, ButtonState::Released, 30);
@@ -2388,6 +2455,7 @@ fn the_clipboard_screenshot_offers_a_png_of_the_output() {
     let binary = shell_bin_dir().join("cupertino-screenshot");
     server.state.config.screenshot_command = vec![
         "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
@@ -2545,6 +2613,7 @@ fn the_network_bluetooth_and_power_daemons_own_their_bus_names() {
         Daemon(
             Command::new(shell_bin_dir().join(binary))
                 .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+                .env("CUPERTINO_ASSET_SEARCH_PATH", "")
                 .args(args)
                 .stdout(Stdio::null())
                 .stderr(std::fs::File::create(logs.file(binary)).unwrap())
@@ -2578,7 +2647,7 @@ fn the_network_bluetooth_and_power_daemons_own_their_bus_names() {
         "org.cupertino.Bluetooth1",
         "org.cupertino.Power1",
     ];
-    let end = Instant::now() + TIMEOUT;
+    let end = Instant::now() + common::HANG_GUARD;
     loop {
         let names = bus_names(&bus);
         if wanted.iter().all(|name| names.iter().any(|n| n == name)) {
@@ -2614,6 +2683,7 @@ fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
         std::fs::write(&file, text).unwrap();
         let output = Command::new(&sessiond)
             .arg("--check-config")
+            .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .env("CUPERTINO_LOGIN_CONF", &file)
             .output()
             .expect("the binary starts");
@@ -2661,6 +2731,7 @@ fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
     let output = Command::new(&sessiond)
         .arg("--check-config")
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env("CUPERTINO_LOGIN_CONF", &file)
         .output()
         .expect("the binary starts");
@@ -2680,6 +2751,7 @@ fn the_session_manager_binary_refuses_what_it_cannot_serve() {
     let sessiond = shell_bin_dir().join("cupertino-sessiond");
     let output = Command::new(&sessiond)
         .arg("no-such-mode")
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .output()
         .expect("the binary starts");
     assert!(!output.status.success());
@@ -2695,7 +2767,10 @@ fn the_session_manager_binary_refuses_what_it_cannot_serve() {
         eprintln!("skipping the start: root or a login.conf would let the manager run");
         return;
     }
-    let output = Command::new(&sessiond).output().expect("the binary starts");
+    let output = Command::new(&sessiond)
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+        .output()
+        .expect("the binary starts");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -2788,6 +2863,7 @@ fn start_server_binary(mode: &str) -> Option<(Daemon, Option<PrivateBus>)> {
         .args([mode, "--size", "800x600"])
         .env("XDG_CONFIG_HOME", &config.0)
         .env("DBUS_SESSION_BUS_ADDRESS", address)
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     if mode == "--winit" {
@@ -2803,7 +2879,7 @@ fn start_server_binary(mode: &str) -> Option<(Daemon, Option<PrivateBus>)> {
             }
         }
     });
-    let end = Instant::now() + TIMEOUT;
+    let end = Instant::now() + common::HANG_GUARD;
     let mut lines: Vec<String> = Vec::new();
     let has = |lines: &[String], text: &str| lines.iter().any(|l| l.contains(text));
     loop {

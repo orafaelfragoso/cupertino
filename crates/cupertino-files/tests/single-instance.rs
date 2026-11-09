@@ -179,6 +179,7 @@ fn launch(bus: &PrivateBus, home: &Path, dir: &Path, args: &[&str]) -> Command {
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
         .env("HOME", home)
         .env("XDG_DATA_HOME", home.join(".local/share"))
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

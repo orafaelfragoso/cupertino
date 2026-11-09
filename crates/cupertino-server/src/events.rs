@@ -1232,15 +1232,17 @@ impl Cupertino {
         let mp = MPoint::new(pos.x, pos.y);
         self.command(Command::FocusWindow { window: id });
         match hit {
-            // a disabled button takes the press and does nothing: no pressed look, no action on release
             Hit::Button(kind) if self.decor_button_enabled(id, kind) => {
                 self.decor.pressed = Some((id, kind));
                 self.request_redraw();
             }
-            Hit::Button(_) => {}
-            Hit::Titlebar => {
+            // a disabled button on the title bar revealed over a full-screen window is as the rest of that bar: nothing
+            Hit::Button(_) if self.entry(id).is_some_and(|e| e.fullscreen) => {}
+            // a disabled button is no control: the press is the title bar's, which moves the window past the drag
+            // threshold, and fires nothing
+            Hit::Button(_) | Hit::Titlebar => {
                 if self.decor.register_click(id, now) {
-                    match self.decor.double_click_action(hit) {
+                    match self.decor.double_click_action(Hit::Titlebar) {
                         DoubleClickAction::Zoom => self.command(Command::ToggleZoom { window: id }),
                         DoubleClickAction::Minimize => {
                             let target = self.minimize_target(id);
@@ -1297,21 +1299,33 @@ impl Cupertino {
         id: WindowId,
         kind: cupertino_decorations::ButtonKind,
     ) -> bool {
+        // a full-screen window does not minimize: its revealed title bar draws minimize disabled
+        let fullscreen = self.entry(id).is_some_and(|e| e.fullscreen);
         self.wm.window(id).is_some_and(|w| {
-            crate::decor::button_enabled(w.can_minimize(), w.can_zoom())[kind.index()]
+            crate::decor::button_enabled(w.can_minimize() && !fullscreen, w.can_zoom())
+                [kind.index()]
         })
     }
 
     /// Button released after a press on a window control button: run the action when the pointer
     /// is still over the same button.
     fn decor_button_release(&mut self, pos: Point<f64, Logical>) {
-        use cupertino_decorations::{ButtonKind, Hit};
+        use cupertino_decorations::Hit;
         let Some((id, kind)) = self.decor.pressed.take() else {
             return;
         };
         self.request_redraw();
         let still = matches!(self.window_target_under(pos), Some(WindowTarget::Decoration { id: w, hit: Hit::Button(k), .. }) if w == id && k == kind);
-        if !still {
+        if still {
+            self.press_window_button(id, kind);
+        }
+    }
+
+    /// Do what window control button `kind` of window `id` is for, as a click on it does: an assistive technology's
+    /// press comes here too ([`crate::decor_access`]). Nothing when the button is disabled.
+    pub fn press_window_button(&mut self, id: WindowId, kind: cupertino_decorations::ButtonKind) {
+        use cupertino_decorations::ButtonKind;
+        if !self.decor_button_enabled(id, kind) {
             return;
         }
         match kind {

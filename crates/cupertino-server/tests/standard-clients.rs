@@ -27,7 +27,6 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
 const OUTPUT: (i32, i32) = (1280, 800);
-const TIMEOUT: Duration = Duration::from_secs(20);
 /// The xkb offset of evdev key codes.
 const XKB_OFFSET: u32 = 8;
 /// Evdev codes of Escape, H, I and Return.
@@ -81,9 +80,9 @@ impl Server {
         .unwrap();
     }
 
-    /// Step the server until `cond` holds; panics after [`TIMEOUT`].
+    /// Step the server until `cond` holds; panics after [`common::HANG_GUARD`].
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&mut Cupertino) -> bool) {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&mut self.state) {

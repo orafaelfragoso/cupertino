@@ -249,6 +249,7 @@ fn run(name: &str, enabled: bool) -> Option<Session> {
         .unwrap();
     let app = std::process::Command::new(std::env::current_exe().unwrap())
         .args([name, "--exact", "--nocapture"])
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env(APPLICATION, if enabled { "on" } else { "off" })
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
         .env("AT_SPI_BUS_ADDRESS", &bus.address)

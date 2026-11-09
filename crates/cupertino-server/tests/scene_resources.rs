@@ -53,7 +53,7 @@ fn ghost() -> Desktop {
     d.window();
     d.at(3000);
     d.clients.clear();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + common::HANG_GUARD;
     while d.state.wm.windows().count() != 0 {
         d.pump();
         assert!(

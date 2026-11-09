@@ -1455,6 +1455,7 @@ fn assistive_technology_reads_the_sidebar_over_atspi_and_its_eject_button_ejects
         .unwrap();
     let mut window = std::process::Command::new(std::env::current_exe().unwrap())
         .args([NAME, "--exact", "--nocapture"])
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env(ATSPI_WINDOW, "1")
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
         .env("AT_SPI_BUS_ADDRESS", &bus.address)

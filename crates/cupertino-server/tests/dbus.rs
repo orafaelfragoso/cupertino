@@ -2,13 +2,31 @@
 //! launcher toggles (its search and its application browser), the overlay's media keys, the lock request and the power key's press and release reach their processes. Skipped when `dbus-daemon` is not installed.
 #![cfg(feature = "dbus")]
 
+mod common;
+
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cupertino_server::dbus::{DbusHandle, LoginTrust, Request, Toggle};
 use cupertino_server::input::OsdKey;
 use cupertino_test_bus::PrivateBus;
 use zbus::{block_on, connection};
+
+/// Wait until `cond` holds, checking it as the bus work goes on; panics after [`common::HANG_GUARD`].
+async fn until(cond: impl Fn() -> bool) {
+    let end = Instant::now() + common::HANG_GUARD;
+    while !cond() {
+        assert!(Instant::now() < end, "timed out");
+        async_io::Timer::after(Duration::from_millis(5)).await;
+    }
+}
+
+/// Wait until the worker is done with every call queued so far: made (and answered), refused, or failed, with what
+/// it does about that (the fallback, the notice) done too.
+async fn worker_done(handle: &DbusHandle) {
+    let (queued, _) = handle.shell_calls();
+    until(|| handle.shell_calls().1 >= queued).await;
+}
 
 /// The shell processes' side of the interfaces: count the toggles.
 struct FakeCentre(Arc<Mutex<u32>>);
@@ -101,12 +119,7 @@ fn each_toggle_calls_its_own_process() {
         let handle = DbusHandle::start_on(Some(bus.address.clone()), || {}).expect("worker thread");
         handle.set_login(LoginTrust::Agent(std::process::id()));
         handle.send(Request::Toggle(Toggle::Launcher));
-        for _ in 0..200 {
-            if *launcher_toggles.lock().unwrap() > 0 {
-                break;
-            }
-            async_io::Timer::after(Duration::from_millis(20)).await;
-        }
+        until(|| *launcher_toggles.lock().unwrap() > 0).await;
         assert_eq!(
             (
                 *centre_toggles.lock().unwrap(),
@@ -115,12 +128,7 @@ fn each_toggle_calls_its_own_process() {
             (0, 1)
         );
         handle.send(Request::Toggle(Toggle::NotificationCentre));
-        for _ in 0..200 {
-            if *centre_toggles.lock().unwrap() > 0 {
-                break;
-            }
-            async_io::Timer::after(Duration::from_millis(20)).await;
-        }
+        until(|| *centre_toggles.lock().unwrap() > 0).await;
         assert_eq!(
             (
                 *centre_toggles.lock().unwrap(),
@@ -130,12 +138,7 @@ fn each_toggle_calls_its_own_process() {
         );
         // the app-grid action: the launcher's application browser
         handle.send(Request::Toggle(Toggle::Applications));
-        for _ in 0..200 {
-            if *browser_toggles.lock().unwrap() > 0 {
-                break;
-            }
-            async_io::Timer::after(Duration::from_millis(20)).await;
-        }
+        until(|| *browser_toggles.lock().unwrap() > 0).await;
         assert_eq!(
             (
                 *launcher_toggles.lock().unwrap(),
@@ -162,12 +165,7 @@ fn each_toggle_calls_its_own_process() {
             key: OsdKey::Mute,
             fine: false,
         });
-        for _ in 0..200 {
-            if osd_calls.lock().unwrap().len() == 2 {
-                break;
-            }
-            async_io::Timer::after(Duration::from_millis(20)).await;
-        }
+        until(|| osd_calls.lock().unwrap().len() == 2).await;
         let mut calls = osd_calls.lock().unwrap().clone();
         calls.sort();
         assert_eq!(
@@ -193,22 +191,12 @@ fn each_toggle_calls_its_own_process() {
             .await
             .expect("connect");
         handle.send(Request::Lock);
-        for _ in 0..200 {
-            if *lock_calls.lock().unwrap() > 0 {
-                break;
-            }
-            async_io::Timer::after(Duration::from_millis(20)).await;
-        }
+        until(|| *lock_calls.lock().unwrap() > 0).await;
         assert_eq!(*lock_calls.lock().unwrap(), 1);
 
         handle.send(Request::PowerKey { pressed: true });
         handle.send(Request::PowerKey { pressed: false });
-        for _ in 0..200 {
-            if power_keys.lock().unwrap().len() >= 2 {
-                break;
-            }
-            async_io::Timer::after(Duration::from_millis(20)).await;
-        }
+        until(|| power_keys.lock().unwrap().len() >= 2).await;
         assert_eq!(
             (
                 *lock_calls.lock().unwrap(),
@@ -245,7 +233,7 @@ fn a_log_out_request_without_a_login_process_runs_the_fallback_and_with_one_does
         // a supervised login process that has not taken its name yet is not a session without one
         handle.set_login(LoginTrust::Agent(std::process::id()));
         assert!(handle.send(Request::LogOut));
-        async_io::Timer::after(Duration::from_millis(500)).await;
+        worker_done(&handle).await;
         assert_eq!(
             *fallbacks.lock().unwrap(),
             0,
@@ -254,12 +242,7 @@ fn a_log_out_request_without_a_login_process_runs_the_fallback_and_with_one_does
 
         handle.set_login(LoginTrust::Nobody);
         assert!(handle.send(Request::LogOut));
-        for _ in 0..200 {
-            if *fallbacks.lock().unwrap() > 0 {
-                break;
-            }
-            async_io::Timer::after(Duration::from_millis(20)).await;
-        }
+        until(|| *fallbacks.lock().unwrap() > 0).await;
         assert_eq!(
             *fallbacks.lock().unwrap(),
             1,
@@ -269,7 +252,7 @@ fn a_log_out_request_without_a_login_process_runs_the_fallback_and_with_one_does
 
         // other requests to a missing process are only logged
         assert!(handle.send(Request::Toggle(Toggle::Launcher)));
-        async_io::Timer::after(Duration::from_millis(300)).await;
+        worker_done(&handle).await;
         assert_eq!(*fallbacks.lock().unwrap(), 1);
 
         let asked = Arc::new(Mutex::new(0u32));
@@ -283,12 +266,7 @@ fn a_log_out_request_without_a_login_process_runs_the_fallback_and_with_one_does
             .await
             .expect("connect");
         assert!(handle.send(Request::LogOut));
-        for _ in 0..200 {
-            if *asked.lock().unwrap() > 0 {
-                break;
-            }
-            async_io::Timer::after(Duration::from_millis(20)).await;
-        }
+        until(|| *asked.lock().unwrap() > 0).await;
         assert_eq!(
             *asked.lock().unwrap(),
             1,
@@ -322,13 +300,8 @@ fn log_out_with(bus: &PrivateBus, trust: LoginTrust) -> (u32, u32) {
         .expect("worker thread");
         handle.set_login(trust);
         assert!(handle.send(Request::LogOut));
-        for _ in 0..50 {
-            if *asked.lock().unwrap() + *fallbacks.lock().unwrap() > 0 {
-                break;
-            }
-            async_io::Timer::after(Duration::from_millis(20)).await;
-        }
-        async_io::Timer::after(Duration::from_millis(100)).await;
+        // the login process's answer and the fallback both come before the worker is done with the call
+        worker_done(&handle).await;
         let counts = (*asked.lock().unwrap(), *fallbacks.lock().unwrap());
         counts
     })
@@ -419,13 +392,24 @@ fn log_out_banners(bus: &PrivateBus, trust: LoginTrust, login_up: bool) -> Vec<(
         let handle = DbusHandle::start_on(Some(bus.address.clone()), || ()).expect("worker thread");
         handle.set_login(trust);
         assert!(handle.send(Request::LogOut));
-        for _ in 0..100 {
-            if !shown.lock().unwrap().is_empty() {
-                break;
-            }
-            async_io::Timer::after(Duration::from_millis(20)).await;
-        }
-        async_io::Timer::after(Duration::from_millis(100)).await;
+        // a notice the worker posts is on the bus before it is done with the call; the service has it once it answers a
+        // call made after that
+        worker_done(&handle).await;
+        let probe = connection::Builder::address(bus.address.as_str())
+            .expect("address")
+            .build()
+            .await
+            .expect("connect");
+        probe
+            .call_method(
+                Some("org.freedesktop.Notifications"),
+                "/org/freedesktop/Notifications",
+                Some("org.freedesktop.DBus.Peer"),
+                "Ping",
+                &(),
+            )
+            .await
+            .expect("the notification service answers");
         let banners = shown.lock().unwrap().clone();
         banners
     })

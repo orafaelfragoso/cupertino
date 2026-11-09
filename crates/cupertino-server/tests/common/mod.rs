@@ -15,7 +15,7 @@ use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -57,6 +57,83 @@ pub mod overlays;
 pub mod shell;
 pub mod spawn;
 
+/// How long a test waits for what it waits on before it calls it a hang. The waits are for events (a frame
+/// presented, a state the server reached), never for time to pass, so the limit only ends a test that would otherwise
+/// hang, and it is generous enough that a loaded machine never reaches it.
+pub const HANG_GUARD: Duration = Duration::from_secs(60);
+
+/// The roundtrips a client thread has finished, as a barrier for the test that serves it: [`Rounds::barrier`] holds
+/// once the server has handled the client's answer to every event sent before the barrier began, so a test asserts
+/// what did not happen only after it. The server runs on the test's thread, so what it sent before the barrier is on
+/// the client's socket then: it arrives within the second roundtrip after that, what the client sends in answer goes
+/// out before the sync of the third, and the server handles it before answering that sync.
+#[derive(Clone, Default)]
+pub struct Rounds(Arc<(AtomicUsize, AtomicBool)>);
+
+impl Rounds {
+    /// The client thread finished a roundtrip.
+    pub fn tick(&self) {
+        self.0 .0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Marks the client thread ended when dropped, however it ends, so a barrier does not wait on it.
+    pub fn ended_on_drop(&self) -> RoundsEnd {
+        RoundsEnd(self.clone())
+    }
+
+    /// The condition that the client has finished three roundtrips more than it has now, or ended.
+    pub fn barrier(&self) -> impl Fn() -> bool + 'static {
+        let target = self.0 .0.load(Ordering::SeqCst) + 3;
+        let rounds = self.clone();
+        move || rounds.0 .1.load(Ordering::SeqCst) || rounds.0 .0.load(Ordering::SeqCst) >= target
+    }
+}
+
+/// See [`Rounds::ended_on_drop`].
+pub struct RoundsEnd(Rounds);
+
+impl Drop for RoundsEnd {
+    fn drop(&mut self) {
+        self.0 .0 .1.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A barrier for a client the test does not run, a real application: the server pings it (`xdg_wm_base.ping`) and
+/// waits for the pong, three times in a row. A client answers a ping once it has dispatched every event sent before
+/// it, and a ping sent after a pong reaches it only once it is back waiting on its connection, so what it did with
+/// the events it had before the barrier, its requests and the frames it drew, is on the server by the last pong. A
+/// ping already out (the server's own, for hung applications) is waited out first. Ends early if the client goes.
+pub fn ping_barrier(
+    state: &mut Cupertino,
+    client: &smithay::wayland::shell::xdg::ShellClient,
+    mut step: impl FnMut(&mut Cupertino),
+) {
+    use smithay::wayland::shell::PingError;
+    let deadline = Instant::now() + HANG_GUARD;
+    let ping = || client.send_ping(smithay::utils::SERIAL_COUNTER.next_serial());
+    // a ping of the barrier's own goes out once nothing is pending
+    loop {
+        match ping() {
+            Ok(()) => break,
+            Err(PingError::PingAlreadyPending(_)) => {}
+            Err(PingError::DeadSurface) => return,
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for a pong");
+        step(state);
+    }
+    // each pong lets the next ping out; the one sent after the third pong is left for the client to answer
+    let mut pongs = 0;
+    while pongs < 3 {
+        assert!(Instant::now() < deadline, "timed out waiting for a pong");
+        step(state);
+        match ping() {
+            Ok(()) => pongs += 1,
+            Err(PingError::PingAlreadyPending(_)) => {}
+            Err(PingError::DeadSurface) => return,
+        }
+    }
+}
+
 pub const TOPLEVEL_BLUE: [u8; 4] = [255, 0, 0, 255];
 pub const LOCK_GREEN: [u8; 4] = [0, 255, 0, 255];
 
@@ -72,7 +149,7 @@ pub fn set_time(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cuper
 /// The same clock barrier for clients whose queues the test must dispatch itself.
 pub fn set_time_with(state: &mut Cupertino, time: f64, mut dispatch: impl FnMut(&mut Cupertino)) {
     state.fixed_time = Some(state.now());
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + HANG_GUARD;
     loop {
         dispatch(state);
         if !state.hung.awaiting_pong() {
@@ -155,6 +232,8 @@ struct ClientState {
     /// The client does not answer pings (it is hung); a ping that arrives meanwhile waits in `held_ping`.
     silent: Arc<AtomicBool>,
     held_ping: Option<(xdg_wm_base::XdgWmBase, u32)>,
+    /// The roundtrips the thread finished, setup loops included.
+    rounds: Rounds,
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
@@ -546,6 +625,9 @@ pub struct Client {
     unlock: Arc<AtomicBool>,
     lock_status: Arc<Mutex<LockStatus>>,
     silent: Arc<AtomicBool>,
+    rounds: Rounds,
+    /// Set once the unlock [`Client::unlock`] asked for is on the connection.
+    unlock_sent: Arc<AtomicBool>,
 }
 
 impl Client {
@@ -581,14 +663,19 @@ impl Client {
         );
         let lock_status = Arc::new(Mutex::new(LockStatus::default()));
         let silent = Arc::new(AtomicBool::new(false));
-        let (stop2, unlock2, status2, silent2) = (
+        let rounds = Rounds::default();
+        let unlock_sent = Arc::new(AtomicBool::new(false));
+        let (stop2, unlock2, status2, silent2, rounds2, sent2) = (
             stop.clone(),
             unlock.clone(),
             lock_status.clone(),
             silent.clone(),
+            rounds.clone(),
+            unlock_sent.clone(),
         );
         let thread_stream = stream.try_clone().unwrap();
         std::thread::spawn(move || {
+            let _ended = rounds2.ended_on_drop();
             let conn = Connection::from_socket(thread_stream).unwrap();
             let (globals, mut queue) = registry_queue_init::<ClientState>(&conn).unwrap();
             let qh = queue.handle();
@@ -599,6 +686,7 @@ impl Client {
                 toplevel_size: (400, 300),
                 silent: silent2.clone(),
                 held_ping: None,
+                rounds: rounds2.clone(),
             };
             let Setup {
                 objects: _objects,
@@ -609,6 +697,9 @@ impl Client {
                 if unlock2.swap(false, Ordering::SeqCst) {
                     if let Some(lock) = lock.take() {
                         lock.unlock_and_destroy();
+                        if conn.flush().is_ok() {
+                            sent2.store(true, Ordering::SeqCst);
+                        }
                     }
                     if let Some(release) = release.take() {
                         release();
@@ -617,6 +708,7 @@ impl Client {
                 if queue.roundtrip(&mut client).is_err() {
                     break;
                 }
+                client.rounds.tick();
                 // a client that gets going again answers the ping it was too busy for
                 if !silent2.load(Ordering::SeqCst) {
                     if let Some((base, serial)) = client.held_ping.take() {
@@ -632,7 +724,19 @@ impl Client {
             unlock,
             lock_status,
             silent,
+            rounds,
+            unlock_sent,
         }
+    }
+
+    /// The client's [`Rounds::barrier`]: true once it has every event sent before, and the server handled its answers.
+    pub fn barrier(&self) -> impl Fn() -> bool + 'static {
+        self.rounds.barrier()
+    }
+
+    /// The client's roundtrips, for a harness that keeps a barrier over all its clients.
+    pub fn rounds(&self) -> Rounds {
+        self.rounds.clone()
     }
 
     /// Stop answering pings, as a hung program does, or start again (the ping that came meanwhile is answered then).
@@ -945,6 +1049,7 @@ impl Client {
                 globals.bind(&qh, 1..=1, ()).unwrap();
             while !gate.load(Ordering::SeqCst) {
                 queue.roundtrip(client).unwrap();
+                client.rounds.tick();
                 std::thread::sleep(Duration::from_millis(5));
             }
             let surface = compositor.create_surface(&qh, ());
@@ -1065,7 +1170,9 @@ impl Client {
         )
     }
 
-    fn layer(
+    /// A layer surface of `size` on `level` over `stream`, named `namespace`, anchored to `anchor`, which takes the
+    /// keyboard as `keyboard` says.
+    pub fn layer(
         stream: UnixStream,
         level: zwlr_layer_shell_v1::Layer,
         namespace: &'static str,
@@ -1147,6 +1254,11 @@ impl Client {
     /// Send `unlock_and_destroy`; a constraining client destroys its pointer constraint, a prompt unmaps its surface.
     pub fn unlock(&self) {
         self.unlock.store(true, Ordering::SeqCst);
+    }
+
+    /// The unlock [`Client::unlock`] asked for has been written to the connection, whether or not the server read it.
+    pub fn unlock_sent(&self) -> bool {
+        self.unlock_sent.load(Ordering::SeqCst)
     }
 
     /// Close the connection at once, as a crash would.

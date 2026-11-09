@@ -13,15 +13,17 @@ pub fn spec_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/theme")
 }
 
-/// `binary` with an empty environment but `PATH`, `HOME` (the folder `home`) and `CUPERTINO_SPEC_DIR`; the caller adds
-/// the rest.
+/// `binary` with an empty environment but `PATH`, `HOME` (the folder `home`), `CUPERTINO_SPEC_DIR` and the empty asset
+/// search path (`CUPERTINO_ASSET_SEARCH_PATH`), so it draws with the built-in assets whatever packs the machine has
+/// installed; the caller adds the rest.
 pub fn cleared(binary: impl AsRef<OsStr>, home: &Path) -> Command {
     let mut command = Command::new(binary);
     command
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", home)
-        .env("CUPERTINO_SPEC_DIR", spec_dir());
+        .env("CUPERTINO_SPEC_DIR", spec_dir())
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "");
     command
 }
 
@@ -49,6 +51,7 @@ pub fn run_child_test_after(
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args(["--exact", name, "--nocapture"])
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     for (key, value) in env {

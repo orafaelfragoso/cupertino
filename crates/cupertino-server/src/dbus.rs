@@ -269,7 +269,13 @@ pub type OwnerChanged = Box<dyn Fn() + Send>;
 pub struct DbusHandle {
     tx: async_channel::Sender<Job>,
     login: std::sync::Arc<std::sync::Mutex<LoginTrust>>,
+    calls: ShellCalls,
 }
+
+/// The calls on shell processes queued with [`DbusHandle::send`], and those the worker is done with (made, failed or
+/// refused); a test reads them as a barrier on the worker.
+#[derive(Clone, Default)]
+struct ShellCalls(std::sync::Arc<(AtomicUsize, AtomicUsize)>);
 
 /// Runs on the worker thread when the login process, the one that shows the log out panel, is not on the bus.
 pub type LoginMissing = std::sync::Arc<dyn Fn() + Send + Sync>;
@@ -297,6 +303,8 @@ impl DbusHandle {
         let login = std::sync::Arc::new(std::sync::Mutex::new(LoginTrust::Nobody));
         let worker_login = login.clone();
         let identifying = std::sync::Arc::new(AtomicUsize::new(0));
+        let calls = ShellCalls::default();
+        let worker_calls = calls.clone();
         let spawned = std::thread::Builder::new()
             .name("cupertino-dbus".into())
             .spawn(move || {
@@ -306,15 +314,22 @@ impl DbusHandle {
                     login_missing,
                     worker_login,
                     identifying,
+                    worker_calls,
                 ))
             });
         match spawned {
-            Ok(_) => Some(DbusHandle { tx, login }),
+            Ok(_) => Some(DbusHandle { tx, login, calls }),
             Err(e) => {
                 tracing::warn!(error = %e, "cannot start the D-Bus worker");
                 None
             }
         }
+    }
+
+    /// How many calls on shell processes were queued, and how many of them the worker is done with.
+    pub fn shell_calls(&self) -> (usize, usize) {
+        let (queued, done) = &*self.calls.0;
+        (queued.load(Ordering::SeqCst), done.load(Ordering::SeqCst))
     }
 
     /// Say whose ownership of `org.cupertino.Login1` the worker may trust.
@@ -327,8 +342,11 @@ impl DbusHandle {
 
     /// Queue a call on a shell process; false when the worker is gone (no session bus).
     pub fn send(&self, what: Request) -> bool {
+        // counted before the worker can be done with it, so the done count never runs ahead
+        self.calls.0 .0.fetch_add(1, Ordering::SeqCst);
         let queued = self.tx.try_send(Job::Call(what)).is_ok();
         if !queued {
+            self.calls.0 .0.fetch_sub(1, Ordering::SeqCst);
             tracing::warn!(?what, "no session bus: cannot reach the shell process");
         }
         queued
@@ -437,6 +455,7 @@ async fn worker(
     login_missing: LoginMissing,
     login: SharedLoginTrust,
     identifying: Identifying,
+    calls: ShellCalls,
 ) {
     let conn = match async { bus(address.as_deref())?.build().await }.await {
         Ok(c) => c,
@@ -518,13 +537,18 @@ async fn worker(
         // a key's press and release must arrive in the order they happened, so those calls are awaited in turn
         if matches!(what, Request::PowerKey { .. }) {
             call(&conn, what, &login_missing, &login).await;
+            calls.0 .1.fetch_add(1, Ordering::SeqCst);
         } else {
             let login_missing = login_missing.clone();
             let login = login.clone();
+            let calls = calls.clone();
             conn.executor()
                 .clone()
                 .spawn(
-                    async move { call(&conn, what, &login_missing, &login).await },
+                    async move {
+                        call(&conn, what, &login_missing, &login).await;
+                        calls.0 .1.fetch_add(1, Ordering::SeqCst);
+                    },
                     "cupertino-shell-call",
                 )
                 .detach();

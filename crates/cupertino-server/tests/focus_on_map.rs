@@ -63,7 +63,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             headless::step(
                 &mut self.state,
@@ -78,9 +78,13 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
-    fn run_for(&mut self, duration: Duration) {
-        let end = Instant::now() + duration;
-        self.wait_until("the time to pass", |_| Instant::now() >= end);
+    /// Wait for each of `clients`' [`Client::barrier`]: they have every event sent before, and the server handled
+    /// their answers.
+    fn sync(&mut self, clients: &[&Client]) {
+        let barriers: Vec<_> = clients.iter().map(|c| c.barrier()).collect();
+        self.wait_until("the clients' roundtrips", move |_| {
+            barriers.iter().all(|b| b())
+        });
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -102,17 +106,17 @@ impl Harness {
             .find(|id| !known.contains(id))
     }
 
-    /// A press on the window `id`: input that goes to its client.
-    fn click_on(&mut self, id: WindowId) {
+    /// A press on the window `id` of `client`: input that goes to its client, which hears each step before the next.
+    fn click_on(&mut self, client: &Client, id: WindowId) {
         let frame = self.state.wm.window(id).unwrap().geometry();
         self.state
             .pointer_moved_to((frame.x + 60.0, frame.y + 120.0).into(), 0, None);
-        self.run_for(Duration::from_millis(60));
+        self.sync(&[client]);
         self.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
-        self.run_for(Duration::from_millis(30));
+        self.sync(&[client]);
         self.state
             .pointer_button(BTN_LEFT, ButtonState::Released, 0);
-        self.run_for(Duration::from_millis(30));
+        self.sync(&[client]);
     }
 }
 
@@ -139,7 +143,7 @@ fn with_front_window(h: &mut Harness) -> (Client, WindowId) {
     h.state.tick();
     let id = h.newest(&[]).expect("a mapped window");
     assert_eq!(h.state.wm.key_window(), Some(id));
-    h.run_for(Duration::from_millis(100));
+    h.sync(&[&a]);
     (a, id)
 }
 
@@ -167,9 +171,9 @@ fn the_first_window_of_a_program_the_person_just_started_comes_to_the_front() {
 #[test]
 fn a_program_that_connects_and_maps_while_the_person_types_opens_behind_the_key_window() {
     let Some(mut h) = Harness::new() else { return };
-    let (_a, front) = with_front_window(&mut h);
+    let (a, front) = with_front_window(&mut h);
     advance(&mut h, 1.0);
-    h.click_on(front);
+    h.click_on(&a, front);
     let _intruder = Client::toplevel_after(
         h.socket_path(),
         "org.example.intruder",
@@ -232,19 +236,19 @@ fn a_process_that_reconnects_gets_the_first_window_grant_once() {
 #[test]
 fn a_program_the_person_left_before_its_window_mapped_opens_behind_the_key_window() {
     let Some(mut h) = Harness::new() else { return };
-    let (_a, front) = with_front_window(&mut h);
+    let (a, front) = with_front_window(&mut h);
     let before = h.clients();
     let gate = Arc::new(AtomicBool::new(false));
-    let _slow = Client::toplevel_after(
+    let slow = Client::toplevel_after(
         h.socket_path(),
         "org.example.slow",
         gate.clone(),
         Arc::default(),
     );
     h.wait_until("the program to connect", |s| client_count(s) > before);
-    h.run_for(Duration::from_millis(50));
+    h.sync(&[&slow]);
     // the person goes back to the front application before the slow program has a window
-    h.click_on(front);
+    h.click_on(&a, front);
     gate.store(true, Ordering::SeqCst);
     h.wait_until("the second window to map", |s| {
         s.windows.iter().filter(|e| e.mapped).count() == 2
@@ -259,21 +263,20 @@ fn a_program_the_person_left_before_its_window_mapped_opens_behind_the_key_windo
 #[test]
 fn a_valid_token_presented_before_the_window_maps_brings_it_forward() {
     let Some(mut h) = Harness::new() else { return };
-    let (_a, front) = with_front_window(&mut h);
+    let (a, front) = with_front_window(&mut h);
     let before = h.clients();
     let gate = Arc::new(AtomicBool::new(false));
     let token = Arc::new(Mutex::new(None));
-    let _launched = Client::toplevel_after(
+    let launched = Client::toplevel_after(
         h.socket_path(),
         "org.example.launched",
         gate.clone(),
         token.clone(),
     );
     h.wait_until("the program to connect", |s| client_count(s) > before);
-    h.run_for(Duration::from_millis(50));
+    h.sync(&[&launched]);
     // the person goes back to the front application, then starts something: the token is made after that input
-    h.click_on(front);
-    h.run_for(Duration::from_millis(150));
+    h.click_on(&a, front);
     advance(&mut h, 1.0);
     *token.lock().unwrap() = Some(h.state.server_activation_token());
     gate.store(true, Ordering::SeqCst);
@@ -291,17 +294,17 @@ fn a_valid_token_presented_before_the_window_maps_brings_it_forward() {
 #[test]
 fn a_token_made_before_the_person_moved_on_does_not() {
     let Some(mut h) = Harness::new() else { return };
-    let (_a, front) = with_front_window(&mut h);
+    let (a, front) = with_front_window(&mut h);
     let before = h.clients();
     let gate = Arc::new(AtomicBool::new(false));
     let token = Arc::new(Mutex::new(Some(h.state.server_activation_token())));
-    let _launched =
+    let launched =
         Client::toplevel_after(h.socket_path(), "org.example.stale", gate.clone(), token);
     h.wait_until("the program to connect", |s| client_count(s) > before);
-    h.run_for(Duration::from_millis(150));
+    h.sync(&[&launched]);
     // the model clock stands still in these tests: a second passes before the click
     advance(&mut h, 1.0);
-    h.click_on(front);
+    h.click_on(&a, front);
     gate.store(true, Ordering::SeqCst);
     h.wait_until("the second window to map", |s| {
         s.windows.iter().filter(|e| e.mapped).count() == 2
@@ -316,10 +319,10 @@ fn a_token_made_before_the_person_moved_on_does_not() {
 #[test]
 fn a_program_that_maps_while_the_session_is_locked_does_not_take_the_keyboard_at_unlock() {
     let Some(mut h) = Harness::new() else { return };
-    let (_a, front) = with_front_window(&mut h);
+    let (a, front) = with_front_window(&mut h);
     let locker = Client::locker(common::session_agent(&h.state));
     h.wait_until("the session to be locked", |_| locker.locked());
-    let _intruder = Client::toplevel_after(
+    let intruder = Client::toplevel_after(
         h.socket_path(),
         "org.example.during-lock",
         Arc::new(AtomicBool::new(true)),
@@ -330,7 +333,8 @@ fn a_program_that_maps_while_the_session_is_locked_does_not_take_the_keyboard_at
     });
     locker.unlock();
     h.wait_until("the session to unlock", |s| !s.session_lock.is_active());
-    h.run_for(Duration::from_millis(100));
+    // what the unlock leads to, the clients' answers to it included, before the keyboard is looked at
+    h.sync(&[&a, &intruder, &locker]);
     assert_eq!(
         h.state.wm.key_window(),
         Some(front),
@@ -341,10 +345,10 @@ fn a_program_that_maps_while_the_session_is_locked_does_not_take_the_keyboard_at
 #[test]
 fn a_program_that_never_presents_its_launch_token_still_comes_forward_with_it() {
     let Some(mut h) = Harness::new() else { return };
-    let (_a, front) = with_front_window(&mut h);
+    let (a, front) = with_front_window(&mut h);
     advance(&mut h, 1.0);
     // the click on a dock tile (or the launcher's Return) that launches the program, then the token made for it
-    h.click_on(front);
+    h.click_on(&a, front);
     let token = h.state.server_activation_token();
     h.state.launch_token_of = Box::new(move |_, _| Some(token.clone()));
     let _launched = Client::toplevel_after(

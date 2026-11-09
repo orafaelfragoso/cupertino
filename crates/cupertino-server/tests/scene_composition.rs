@@ -216,7 +216,7 @@ fn desktop_with(
         Some(mode) => {
             let client = common::Client::decorated(d.socket(), mode);
             d.clients.push(client);
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let deadline = std::time::Instant::now() + common::HANG_GUARD;
             while d.state.wm.windows().count() != 1 {
                 d.pump();
                 assert!(

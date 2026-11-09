@@ -483,6 +483,7 @@ fn a_process_started_by_the_same_parent_is_refused_and_the_parent_is_not() {
     };
     let mut service = Command::new(std::env::current_exe().expect("this test binary"))
         .args(["--exact", "login_service_process", "--nocapture"])
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env(SERVICE_ADDRESS, &bus.address)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

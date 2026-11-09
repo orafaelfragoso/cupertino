@@ -123,7 +123,7 @@ impl Scene {
     }
 
     fn wait_until(&mut self, what: &str, mut condition: impl FnMut(&Scene) -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + common::HANG_GUARD;
         while !condition(self) {
             self.pump();
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
@@ -134,7 +134,7 @@ impl Scene {
     /// shell processes' display clocks stand still ([`common::shell::TEST_CLOCK`]) and the server's model clock is
     /// pinned, so nothing changes by itself after that; real time bounds the wait only as a deadline.
     fn settle(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + common::HANG_GUARD;
         let mut last = (self.structure(), self.image());
         loop {
             assert!(Instant::now() < deadline, "scene never settled");
@@ -206,7 +206,7 @@ impl Scene {
         let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap())
             .join(self.state.socket_name.as_ref().unwrap());
         self.clients.push(common::Client::toplevel(socket));
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + common::HANG_GUARD;
         loop {
             self.pump();
             if self.state.wm.windows().count() == expected {
@@ -780,7 +780,7 @@ fn shell_process_goldens() {
         // a lock request that finds no lock screen connected goes to the owner of the name, and the server trusts only
         // its own login process there: the one before must be gone first
         drop(scene);
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + common::HANG_GUARD;
         while has_owner(&connection, "org.cupertino.Login1") {
             assert!(
                 Instant::now() < deadline,

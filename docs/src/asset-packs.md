@@ -36,7 +36,8 @@ so the raster source preferred by manifest version 2 has the same lighting and f
 
 For development, set `CUPERTINO_ASSET_DIR="$PWD/data/assets/cupertino"`. Headless session captures search your user pack
 (when there is one), then that pack; set `CUPERTINO_ASSET_DIR=` to capture the built-in fallback. Tests keep their
-isolated asset search path.
+isolated asset search path: every process a test starts gets `CUPERTINO_ASSET_SEARCH_PATH=` and never opens an installed
+pack.
 
 ## Manifest, version 2
 

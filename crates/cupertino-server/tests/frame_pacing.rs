@@ -118,7 +118,7 @@ fn a_commit_marks_only_the_heads_that_show_its_surface() {
     );
 
     let _layer = common::Client::inhibiting_layer(d.socket());
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::HANG_GUARD;
     let (layer_head, layer) = loop {
         d.pump();
         let found = d.state.outputs.iter().enumerate().find_map(|(idx, o)| {

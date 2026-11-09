@@ -211,14 +211,17 @@ impl Dispatch<wl_pointer::WlPointer, ()> for Client {
 struct TestClient {
     stop: Arc<AtomicBool>,
     log: Arc<Mutex<Log>>,
+    rounds: common::Rounds,
 }
 
 impl TestClient {
     fn spawn(socket: PathBuf) -> TestClient {
         let stop = Arc::new(AtomicBool::new(false));
         let log = Arc::new(Mutex::new(Log::default()));
-        let (stop2, log2) = (stop.clone(), log.clone());
+        let rounds = common::Rounds::default();
+        let (stop2, log2, rounds2) = (stop.clone(), log.clone(), rounds.clone());
         std::thread::spawn(move || {
+            let _ended = rounds2.ended_on_drop();
             let conn = Connection::from_socket(UnixStream::connect(socket).unwrap()).unwrap();
             let (globals, mut queue) = registry_queue_init::<Client>(&conn).unwrap();
             let qh = queue.handle();
@@ -248,6 +251,7 @@ impl TestClient {
                 if queue.roundtrip(&mut client).is_err() {
                     break;
                 }
+                rounds2.tick();
                 if let (Some(serial), None) = (client.press_serial, &client.popup_surface) {
                     let (x, y, w, h) = POPUP;
                     let positioner = wm_base.create_positioner(&qh, ());
@@ -282,7 +286,7 @@ impl TestClient {
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
-        TestClient { stop, log }
+        TestClient { stop, log, rounds }
     }
 }
 
@@ -321,7 +325,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             headless::step(
                 &mut self.state,
@@ -336,9 +340,11 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
-    fn run_for(&mut self, duration: Duration) {
-        let end = Instant::now() + duration;
-        self.wait_until("the time to pass", |_| Instant::now() >= end);
+    /// Wait for `client`'s [`common::Rounds::barrier`]: it has every event sent before, and the server handled its
+    /// answers.
+    fn sync(&mut self, client: &TestClient) {
+        let done = client.rounds.barrier();
+        self.wait_until("the client's roundtrips", move |_| done());
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -346,14 +352,15 @@ impl Harness {
         PathBuf::from(dir).join(self.state.socket_name.as_ref().unwrap())
     }
 
-    fn click(&mut self, at: (f64, f64)) {
+    /// A press and release at `at`, each step heard by `client` before the next.
+    fn click(&mut self, client: &TestClient, at: (f64, f64)) {
         self.state.pointer_moved_to(at.into(), 0, None);
-        self.run_for(Duration::from_millis(60));
+        self.sync(client);
         self.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
-        self.run_for(Duration::from_millis(60));
+        self.sync(client);
         self.state
             .pointer_button(BTN_LEFT, ButtonState::Released, 0);
-        self.run_for(Duration::from_millis(60));
+        self.sync(client);
     }
 }
 
@@ -367,25 +374,28 @@ fn a_press_on_a_popup_subsurface_keeps_the_grab_and_an_outside_press_ends_it() {
     h.state.tick();
     let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
     let frame = h.state.wm.window(window.id).unwrap().geometry();
-    h.run_for(Duration::from_millis(100));
+    h.sync(&client);
 
     // the press that gives the client the serial its popup grab needs
-    h.click((frame.x + 300.0, frame.y + 220.0));
+    h.click(&client, (frame.x + 300.0, frame.y + 220.0));
     h.wait_until("a drawn popup", |s| {
         let window = s.windows.iter().find(|w| w.mapped).unwrap();
         client.log.lock().unwrap().popup_ready
             && PopupManager::popups_for_surface(window.surface()).count() == 1
     });
-    h.run_for(Duration::from_millis(200));
+    h.sync(&client);
     assert!(h.state.popup_grab.is_some(), "the popup holds a grab");
     let before = client.log.lock().unwrap().buttons.len();
 
     let (px, py, ..) = POPUP;
     let (sx, sy, sw, sh) = SUBSURFACE;
-    h.click((
-        frame.x + f64::from(px + sx + sw / 2),
-        frame.y + f64::from(py + sy + sh / 2),
-    ));
+    h.click(
+        &client,
+        (
+            frame.x + f64::from(px + sx + sw / 2),
+            frame.y + f64::from(py + sy + sh / 2),
+        ),
+    );
     {
         let log = client.log.lock().unwrap();
         let sub = log.subsurface.clone().unwrap();
@@ -399,8 +409,13 @@ fn a_press_on_a_popup_subsurface_keeps_the_grab_and_an_outside_press_ends_it() {
     assert!(h.state.popup_grab.is_some());
 
     let before = client.log.lock().unwrap().buttons.len();
-    h.click((frame.x + 350.0, frame.y + 250.0));
-    h.run_for(Duration::from_millis(200));
+    h.click(&client, (frame.x + 350.0, frame.y + 250.0));
+    let done = client.log.clone();
+    h.wait_until("the popup to be dismissed", move |_| {
+        done.lock().unwrap().popup_done
+    });
+    // a button event the toplevel got would have arrived by a roundtrip after the click
+    h.sync(&client);
     let log = client.log.lock().unwrap();
     assert!(log.popup_done, "a press outside the popup dismisses it");
     assert_eq!(
@@ -421,27 +436,32 @@ fn a_session_lock_ends_the_popup_grab_and_the_first_press_reaches_the_lock_surfa
     h.state.tick();
     let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
     let frame = h.state.wm.window(window.id).unwrap().geometry();
-    h.run_for(Duration::from_millis(100));
-    h.click((frame.x + 300.0, frame.y + 220.0));
+    h.sync(&client);
+    h.click(&client, (frame.x + 300.0, frame.y + 220.0));
     h.wait_until("a drawn popup", |s| {
         let window = s.windows.iter().find(|w| w.mapped).unwrap();
         client.log.lock().unwrap().popup_ready
             && PopupManager::popups_for_surface(window.surface()).count() == 1
     });
-    h.run_for(Duration::from_millis(200));
+    h.sync(&client);
     assert!(h.state.popup_grab.is_some(), "the popup holds a grab");
 
     let locker = common::Client::locker(common::session_agent(&h.state));
     h.wait_until("the session to be locked", |_| locker.locked());
-    h.run_for(Duration::from_millis(200));
-    assert!(
-        client.log.lock().unwrap().popup_done,
-        "the lock dismisses the popup"
-    );
+    let done = client.log.clone();
+    h.wait_until("the lock to dismiss the popup", move |_| {
+        done.lock().unwrap().popup_done
+    });
     assert!(h.state.popup_grab.is_none());
 
     // the first press after the lock is the lock surface's, not a dismissal's
-    h.click((f64::from(OUTPUT.0) / 2.0, f64::from(OUTPUT.1) / 2.0));
+    h.click(
+        &client,
+        (f64::from(OUTPUT.0) / 2.0, f64::from(OUTPUT.1) / 2.0),
+    );
+    h.wait_until("the lock surface to get the press", |_| {
+        locker.presses() >= 1
+    });
     assert_eq!(locker.presses(), 1, "the lock surface got the press");
 }
 
@@ -455,14 +475,14 @@ fn a_window_that_takes_the_focus_ends_the_popup_grab_of_another_application() {
     h.state.tick();
     let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
     let frame = h.state.wm.window(window.id).unwrap().geometry();
-    h.run_for(Duration::from_millis(100));
-    h.click((frame.x + 300.0, frame.y + 220.0));
+    h.sync(&client);
+    h.click(&client, (frame.x + 300.0, frame.y + 220.0));
     h.wait_until("a drawn popup", |s| {
         let window = s.windows.iter().find(|w| w.mapped).unwrap();
         client.log.lock().unwrap().popup_ready
             && PopupManager::popups_for_surface(window.surface()).count() == 1
     });
-    h.run_for(Duration::from_millis(200));
+    h.sync(&client);
     assert!(h.state.popup_grab.is_some(), "the popup holds a grab");
 
     // a window the person asked for (a token made by the server) comes up and takes the keyboard
@@ -478,10 +498,10 @@ fn a_window_that_takes_the_focus_ends_the_popup_grab_of_another_application() {
     h.wait_until("the second window to map", |s| {
         s.windows.iter().filter(|w| w.mapped).count() == 2
     });
-    h.run_for(Duration::from_millis(200));
-    assert!(
-        client.log.lock().unwrap().popup_done,
-        "the menu is dismissed, not left open without its keys"
+    let done = client.log.clone();
+    h.wait_until(
+        "the menu to be dismissed, not left open without its keys",
+        move |_| done.lock().unwrap().popup_done,
     );
     assert!(h.state.popup_grab.is_none());
 }
@@ -519,18 +539,17 @@ fn a_display_that_goes_dismisses_the_menus_of_its_windows() {
     common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let frame = h.state.wm.window(id).unwrap().geometry();
-    h.run_for(Duration::from_millis(100));
-    h.click((frame.x + 300.0, frame.y + 220.0));
+    h.sync(&client);
+    h.click(&client, (frame.x + 300.0, frame.y + 220.0));
     h.wait_until("a drawn popup", |s| {
         client.log.lock().unwrap().popup_ready && s.popup_grab.is_some()
     });
 
     headless::remove_display(&mut h.state, head).unwrap();
-    h.run_for(Duration::from_millis(200));
-    assert!(
-        client.log.lock().unwrap().popup_done,
-        "the menu was dismissed"
-    );
+    let done = client.log.clone();
+    h.wait_until("the menu to be dismissed", move |_| {
+        done.lock().unwrap().popup_done
+    });
     assert!(h.state.popup_grab.is_none());
     let left = h.state.outputs[0].id;
     assert_eq!(h.state.wm.window(id).unwrap().output, left);

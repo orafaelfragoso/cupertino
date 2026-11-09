@@ -45,7 +45,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             headless::step(
                 &mut self.state,
@@ -101,6 +101,15 @@ impl Harness {
         let p = self.toplevel_center();
         self.screenshot(name).get_pixel(p.0 as u32, p.1 as u32).0
     }
+}
+
+fn client_count(state: &Cupertino) -> usize {
+    let mut count = 0;
+    state
+        .display_handle
+        .backend_handle()
+        .with_all_clients(|_| count += 1);
+    count
 }
 
 fn mapped_toplevel(h: &mut Harness) -> (Client, (f64, f64)) {
@@ -213,7 +222,15 @@ fn an_unlock_from_a_refused_lock_does_not_open_a_session_whose_locker_crashed() 
 
     // both reach the compositor in the same dispatch: the intruder's unlock request and the holder's crash
     intruder.unlock();
-    std::thread::sleep(Duration::from_millis(100));
+    // the server is not dispatched meanwhile, so the unlock waits on the connection for the dispatch that sees the crash
+    let deadline = Instant::now() + common::HANG_GUARD;
+    while !intruder.unlock_sent() {
+        assert!(
+            Instant::now() < deadline,
+            "the intruder did not send its unlock"
+        );
+        std::thread::yield_now();
+    }
     holder.kill();
     h.wait_until("the holder's lock surface to go away", |s| {
         s.surface_under(center.into()).is_none()
@@ -349,17 +366,13 @@ fn an_application_stays_told_locked_when_the_lock_client_crashes() {
 }
 
 impl Harness {
-    /// Step the server for `time` of wall time.
-    fn run_for(&mut self, time: Duration) {
-        let end = Instant::now() + time;
-        while Instant::now() < end {
-            headless::step(
-                &mut self.state,
-                &mut self.event_loop,
-                Duration::from_millis(5),
-            )
-            .unwrap();
-        }
+    /// Wait for each of `clients`' [`Client::barrier`]: they have every event sent before, and the server handled
+    /// their answers.
+    fn sync(&mut self, clients: &[&Client]) {
+        let barriers: Vec<_> = clients.iter().map(|c| c.barrier()).collect();
+        self.wait_until("the clients' roundtrips", move |_| {
+            barriers.iter().all(|b| b())
+        });
     }
 
     /// Press `keys` in order on the keyboard device and release them in reverse.
@@ -372,7 +385,6 @@ impl Harness {
         ] {
             for key in keys {
                 self.state.key_from_device(Keycode::new(key + 8), state, 0);
-                self.run_for(Duration::from_millis(10));
             }
         }
     }
@@ -417,7 +429,7 @@ fn every_toplevel_is_deactivated_while_locked_and_the_active_one_is_active_again
     h.wait_until("a toplevel to be mapped behind the lock", |s| {
         s.windows.iter().filter(|e| e.mapped).count() == 3
     });
-    h.run_for(Duration::from_millis(100));
+    h.sync(&[&first, &second, &third]);
     assert!(
         !third.activations().contains(&true),
         "a window was activated behind the lock: {:?}",
@@ -433,7 +445,7 @@ fn every_toplevel_is_deactivated_while_locked_and_the_active_one_is_active_again
         first.activations().last() == Some(&true)
     });
     assert_eq!(h.state.wm.key_window(), Some(ids[0]));
-    h.run_for(Duration::from_millis(50));
+    h.sync(&[&second, &third]);
     assert_eq!(second.activations().last(), Some(&false));
     assert!(!third.activations().contains(&true));
 }
@@ -505,7 +517,7 @@ fn at_the_lock_screen_super_alt_s_turns_the_reader_on_and_off_and_no_other_short
     for chord in shortcuts {
         h.chord(chord);
     }
-    h.run_for(Duration::from_millis(100));
+    h.sync(&[&locker]);
     let pressed: Vec<u32> = locker
         .keys()
         .into_iter()
@@ -643,8 +655,11 @@ fn a_lock_client_that_hangs_before_presenting_and_then_dies_leaves_a_sleeping_se
     assert!(!hung.locked(), "the lock is still pending");
     assert_eq!(h.center_pixel("pending")[..3], [0, 0, 0][..]);
 
+    let connected = client_count(&h.state);
     hung.kill();
-    h.run_for(Duration::from_millis(300));
+    h.wait_until("the server to see the lock client gone", |s| {
+        client_count(s) < connected
+    });
     assert!(
         h.state.session_lock.is_active(),
         "the session opened when the lock client died after the system slept"

@@ -18,6 +18,7 @@ fn without_counts(graph: &str) -> String {
 fn committed_graph_matches_the_workspace() {
     let out = Command::new(env!("CARGO_BIN_EXE_cupertino-layers"))
         .arg("--graph")
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .output()
         .expect("run cupertino-layers");
     assert!(

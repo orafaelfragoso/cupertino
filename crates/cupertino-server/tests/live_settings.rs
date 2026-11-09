@@ -79,7 +79,7 @@ impl Harness {
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
             if cond(&self.state) {
@@ -96,14 +96,6 @@ impl Harness {
         self.wait_until(&format!("{name} to be reloaded"), move |s| {
             s.live.reloads > before
         });
-    }
-
-    /// Steps for twice the watcher's quiet time: what a change would have done by then.
-    fn settle(&mut self) {
-        let end = Instant::now() + cupertino_defaults::watch::COALESCE * 6;
-        while Instant::now() < end {
-            self.step();
-        }
     }
 }
 
@@ -196,12 +188,10 @@ fn keyboard_and_power_changes_apply() {
 fn the_appearance_setter_stores_the_key_and_applies_it_once() {
     let Some(mut h) = Harness::new() else { return };
     let path = h.path("compositor.json");
-    std::fs::write(
-        &path,
+    h.write(
+        "compositor.json",
         "{\"keybindings\":{\"Super+t\":\"spawn-terminal\"},\"future_key\":1}\n",
-    )
-    .unwrap();
-    h.settle();
+    );
     let reloads = h.state.live.reloads;
     assert_eq!(h.state.set_session_appearance("dark"), Ok(()));
     assert!(h.state.config.is_dark());
@@ -448,7 +438,7 @@ fn the_setters_are_served_on_the_session_bus() {
         );
         unavailable.send(()).unwrap();
         // the name is taken once the service thread is up
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while proxy.get_property::<String>("Appearance").is_err() {
             assert!(Instant::now() < end, "the session interface did not appear");
             std::thread::sleep(Duration::from_millis(20));
@@ -466,7 +456,7 @@ fn the_setters_are_served_on_the_session_bus() {
             .call_method("SetAccessibility", &("zoom", "on"))
             .unwrap_err()
             .to_string();
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         let (mut appearance, mut accessibility) = (
             String::new(),
             std::collections::HashMap::<String, String>::new(),
@@ -481,7 +471,7 @@ fn the_setters_are_served_on_the_session_bus() {
         }
         (before, auto, bad, appearance, accessibility)
     });
-    first_read.recv_timeout(Duration::from_secs(10)).unwrap();
+    first_read.recv_timeout(common::HANG_GUARD).unwrap();
     cupertino_server::quit::start_session_service_on(&mut h.state, Some(bus.address.clone()));
     while !client.is_finished() {
         h.step();
@@ -536,7 +526,7 @@ fn the_screen_reader_switch_starts_and_stops_the_reader_over_the_session_bus() {
             .cache_properties(zbus::proxy::CacheProperties::No)
             .build()
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while proxy
             .get_property::<std::collections::HashMap<String, String>>("Accessibility")
             .is_err()
@@ -578,7 +568,7 @@ fn the_screen_reader_switch_starts_and_stops_the_reader_over_the_session_bus() {
         ]
     );
     let pid = pid.unwrap();
-    let end = Instant::now() + Duration::from_secs(5);
+    let end = Instant::now() + common::HANG_GUARD;
     while Path::new(&format!("/proc/{pid}")).exists() && Instant::now() < end {
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -622,7 +612,7 @@ fn the_session_interface_refuses_a_host_process_that_is_not_the_agent() {
                 .output()
                 .unwrap()
         };
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         loop {
             let probe = call("QuitNextApplication", &[]);
             let stderr = String::from_utf8_lossy(&probe.stderr).to_string();

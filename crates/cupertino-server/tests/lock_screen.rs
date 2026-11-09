@@ -29,9 +29,9 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Display;
 
 const OUTPUT: (i32, i32) = (800, 600);
-const TIMEOUT: Duration = Duration::from_secs(30);
-/// How long the test lets input settle before it reads what the application got.
-const QUIET: Duration = Duration::from_millis(300);
+/// How long the test waits after the wake signal before it counts the sleep delays: the login process ignores the
+/// signal, so nothing it does can say it has read it.
+const WAKE_QUIET: Duration = Duration::from_millis(300);
 const APP_ID: &str = "org.example.underneath";
 /// Evdev codes the tests type: the letters of a password and Return.
 const TYPED: [u32; 4] = [35, 18, 38, 28];
@@ -83,7 +83,7 @@ impl Server {
     }
 
     fn wait_until(&mut self, what: &str, mut condition: impl FnMut(&Cupertino) -> bool) {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         while !condition(&self.state) {
             assert!(
                 Instant::now() < end,
@@ -121,8 +121,15 @@ impl Server {
         (client, (g.x + g.w / 2.0, g.y + g.h / 2.0))
     }
 
-    /// Keys typed, the pointer moved over `point` and back, and a click there.
-    fn input(&mut self, point: (f64, f64)) {
+    /// Wait for `client`'s [`Client::barrier`]: it has every event sent before, and the server handled its answers.
+    fn sync(&mut self, client: &Client) {
+        let done = client.barrier();
+        self.wait_until("the application's roundtrips", move |_| done());
+    }
+
+    /// Keys typed, the pointer moved over `point` and back, and a click there; returns once `application` has heard all
+    /// that reached it.
+    fn input(&mut self, application: &Client, point: (f64, f64)) {
         for code in TYPED {
             for state in [KeyState::Pressed, KeyState::Released] {
                 self.time += 10;
@@ -141,7 +148,7 @@ impl Server {
             self.state.pointer_button(BTN_LEFT, state, self.time);
             self.step();
         }
-        self.run_for(QUIET);
+        self.sync(application);
     }
 }
 
@@ -304,7 +311,7 @@ fn the_login_process_locks_before_the_system_sleeps_and_only_then_lets_it() {
 
     // the system woke up: still locked, and the delay is not taken again before the person unlocks
     session.logind.prepare_for_sleep(false);
-    session.server.run_for(QUIET);
+    session.server.run_for(WAKE_QUIET);
     assert!(lock_screen_up(&session.server.state, center));
     let delays = held
         .lock()
@@ -322,7 +329,7 @@ fn while_locked_an_application_gets_no_input_and_a_return_from_another_console_k
     };
     let (application, center) = session.server.application();
     // the application gets input while the session is open, so the test would see it
-    session.server.input(center);
+    session.server.input(&application, center);
     let open = got(&application);
     assert!(
         open.0 > 0 && open.1 > 0 && open.2 > 0,
@@ -335,9 +342,9 @@ fn while_locked_an_application_gets_no_input_and_a_return_from_another_console_k
         .wait_until("the lock screen to be up", |state| {
             lock_screen_up(state, center)
         });
-    session.server.run_for(QUIET);
+    session.server.sync(&application);
     let before = got(&application);
-    session.server.input(center);
+    session.server.input(&application, center);
     assert_eq!(
         got(&application),
         before,
@@ -345,14 +352,15 @@ fn while_locked_an_application_gets_no_input_and_a_return_from_another_console_k
     );
 
     // the console went to another session and came back to this one
+    // the server acts on it at once: it fades in, and tells no client
     session.server.state.session_activated();
-    session.server.run_for(QUIET);
+    session.server.sync(&application);
     assert!(
         lock_screen_up(&session.server.state, center),
         "the return from another console opened the session:\n{}",
         session.log()
     );
-    session.server.input(center);
+    session.server.input(&application, center);
     assert_eq!(
         got(&application),
         before,
@@ -378,7 +386,7 @@ fn a_login_process_killed_while_locked_leaves_the_session_locked_until_its_succe
         .wait_until("the lock screen to be up", |state| {
             lock_screen_up(state, center)
         });
-    session.server.run_for(QUIET);
+    session.server.sync(&application);
     let before = got(&application);
 
     let pid = session
@@ -404,7 +412,7 @@ fn a_login_process_killed_while_locked_leaves_the_session_locked_until_its_succe
         session.server.state.session_lock.is_active(),
         "the crash of the lock screen opened the session"
     );
-    session.server.input(center);
+    session.server.input(&application, center);
     assert_eq!(
         got(&application),
         before,
@@ -420,7 +428,7 @@ fn a_login_process_killed_while_locked_leaves_the_session_locked_until_its_succe
                 .is_some_and(|p| p != pid)
                 && lock_screen_up(state, center)
         });
-    session.server.input(center);
+    session.server.input(&application, center);
     assert_eq!(
         got(&application),
         before,

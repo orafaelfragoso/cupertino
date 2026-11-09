@@ -248,6 +248,7 @@ mod tests {
                 "atomic::tests::a_process_killed_between_write_and_rename_leaves_the_old_file",
                 "--test-threads=1",
             ])
+            .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .env(CRASH_CHILD_ENV, &path)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

@@ -617,8 +617,10 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
     ) {
         if let xdg_toplevel::Event::Configure { states, .. } = event {
             let activated = states
-                .chunks_exact(4)
-                .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_ne_bytes(*c))
                 .any(|s| s == xdg_toplevel::State::Activated as u32);
             state
                 .status

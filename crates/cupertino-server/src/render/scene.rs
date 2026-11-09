@@ -2529,6 +2529,11 @@ mod tests {
                 sidebar(false, WindowState::Active),
                 sidebar(false, WindowState::Inactive),
             );
+            if active.opaque {
+                // the high-contrast appearances draw the opaque sidebar alone
+                assert_eq!(active, inactive, "{appearance:?}");
+                continue;
+            }
             assert!(
                 active.has_backdrop(),
                 "{appearance:?}: the active sidebar blurs what is behind"

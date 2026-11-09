@@ -13,7 +13,8 @@
 //! | `end` | `ok`, `exit_code`; `error` when `ok` is false; `reason: "stopped"` when a stop ended a follow stream | always, exactly once, last |
 //!
 //! A [`Run::Once`](crate::Run::Once) command prints `result` and `end`. A usage error before a command starts prints
-//! `end` alone. A failed command prints `end` with its `error` and no `result`.
+//! `end` alone. A failed command prints `end` with its `error` and no `result`. A command that replaces its own process
+//! (`desktop start --backend tty` becomes the session) prints its events up to then and no `end`.
 //!
 //! # The other forms
 //!

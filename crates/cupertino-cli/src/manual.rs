@@ -207,7 +207,8 @@ fn main_page(registry: &[Group], date: &str) -> String {
          \\fBtype\\fR: \\fBevent\\fR (\\fBevent\\fR, \\fBdata\\fR), \\fBerror\\fR (a problem the command continued \
          past), \\fBresult\\fR (\\fBdata\\fR) and \\fBend\\fR (\\fBok\\fR, \\fBexit_code\\fR, \\fBerror\\fR when it \
          failed, \\fBreason\\fR \\fBstopped\\fR when a stop ended a command that runs until stopped). There is \
-         exactly one \\fBend\\fR, always last.\n\
+         exactly one \\fBend\\fR, always last, except after \\fBdesktop start \\-\\-backend tty\\fR, which prints \
+         \\fBstarting\\fR and then becomes the session, so that nothing follows.\n\
          .PP\n\
          In the JSON forms nothing goes to standard error. When the reader of standard output goes away the command \
          stops and exits 0. Within a schema, fields, \\fBkind\\fR and \\fBcode\\fR values and event names are only \

@@ -620,6 +620,52 @@ mod contracts {
         assert_has(&end["error"], &["kind", "code", "message"]);
     }
 
+    fn fails_with_data(
+        _: &cupertino_cli::Args,
+        _: &Context,
+    ) -> Result<cupertino_cli::Reply, cupertino_cli::Failure> {
+        Err(
+            cupertino_cli::Failure::new(FailureKind::Validation, "probe_failed", "it failed")
+                .with_data(&serde_json::json!({"found": 2})),
+        )
+    }
+
+    const WITH_DATA: &[cupertino_cli::Group] = &[cupertino_cli::Group {
+        name: "probe",
+        summary: "A test group",
+        description: "A test group.",
+        commands: &[&[cupertino_cli::Command {
+            path: &["probe"],
+            summary: "Fails with what it found",
+            description: "Fails with what it found.",
+            examples: &[("cupertino probe", "Fail.")],
+            stability: cupertino_cli::Stability::Preview,
+            args: &[],
+            run: cupertino_cli::Run::Once(fails_with_data),
+        }]],
+    }];
+
+    /// A failure may carry `data` beside its `error`: an added field, so the v1 failure shape keeps all it had.
+    #[test]
+    fn a_failure_with_data_keeps_the_v1_failure_shape() {
+        let words: Vec<String> = ["--format", "json", "probe"]
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        let out = Runner::new(WITH_DATA)
+            .context(Context::isolated("/fixture"))
+            .run(&words, "r1");
+        assert_eq!(out.code, 5);
+        let v: Value = serde_json::from_str(&out.stdout).unwrap();
+        assert_has(
+            &v,
+            &["schema", "command", "request_id", "ok", "error", "data"],
+        );
+        assert_has(&v["error"], &["kind", "code", "message"]);
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["data"]["found"], 2);
+    }
+
     #[test]
     fn the_kind_names_are_the_ones_the_json_forms_print() {
         let mut codes = Vec::new();

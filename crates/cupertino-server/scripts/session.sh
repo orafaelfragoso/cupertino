@@ -5,8 +5,9 @@
 # Usage: session.sh [server flags...]
 #   session.sh --spawn cupertino-files --shot 5:/tmp/files.png --run-for 6
 # The fixture home, XDG directories and session bus are temporary; the environment is cleared, so nothing from the
-# caller's HOME or XDG directories is read. One asset pack is used: $CUPERTINO_ASSET_DIR, else the user pack under
-# $XDG_DATA_HOME (or ~/.local/share), else none (built-in assets only; the system pack is not searched).
+# caller's HOME or XDG directories is read. Asset packs: $CUPERTINO_ASSET_DIR alone when set (an empty value selects
+# the built-in fallback); else the user pack under $XDG_DATA_HOME (or ~/.local/share) when there is one, then the
+# checkout's original icon pack, per name in that order. System packs are not searched.
 # Environment: SIZE (default 1280x800), BIN_DIR (default
 # target/release, else target/debug; build with: cargo build --release --workspace --all-features --bins).
 # FIXTURE_DIR: a folder whose contents are copied into the fixture home first (sample pictures, say); links are followed,
@@ -32,8 +33,15 @@ BIN_DIR=${BIN_DIR:-$ROOT/target/release}
 [ -x "$BIN_DIR/cupertino-server" ] || BIN_DIR=$ROOT/target/debug
 [ -x "$BIN_DIR/cupertino-server" ] || { echo "session.sh: no cupertino-server in target/release or target/debug" >&2; exit 1; }
 
-PACK=${CUPERTINO_ASSET_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/cupertino/assets}
-[ -d "$PACK" ] || PACK=
+if [ -n "${CUPERTINO_ASSET_DIR+set}" ]; then
+    PACK=$CUPERTINO_ASSET_DIR
+    [ -d "$PACK" ] || PACK=
+else
+    PACK=
+    for dir in "${XDG_DATA_HOME:-$HOME/.local/share}/cupertino/assets" "$ROOT/data/assets/cupertino"; do
+        [ -d "$dir" ] && PACK=${PACK:+$PACK:}$dir
+    done
+fi
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/cupertino-capture.XXXXXX")
 trap 'fusermount3 -u "$RUNTIME/doc" 2>/dev/null || true; rm -rf "$SCRATCH"' EXIT

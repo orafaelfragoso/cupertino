@@ -143,6 +143,9 @@ def data():
     files = [(f'{a}/{p}', f'{d}/{p}', 0o644, False) for p in ('manifest.json', 'icon-map.toml', 'wallpapers/credits.txt')]
     files += [(f'{a}/fonts/{n}', f'{fonts}/{n}', 0o644, False) for n in ('InterVariable-subset.ttf', 'OFL.txt')]
     files += [(f'{a}/wallpapers/{w["file"]}', f'{d}/wallpapers/{w["file"]}', 0o644, False) for w in WALLPAPERS]
+    original = ROOT / 'data/assets/cupertino'
+    files += [(f'{a}/cupertino/{p.relative_to(original).as_posix()}', p.relative_to(ROOT).as_posix(), 0o644, False)
+              for p in sorted(original.rglob('*')) if p.is_file() and p.suffix != '.py']
     lic = 'usr/share/licenses/cupertino-data'
     files += [(f'{lic}/DATA', 'packaging/licenses/DATA', 0o644, False),
               (f'{lic}/Unsplash.txt', 'packaging/licenses/Unsplash.txt', 0o644, False),

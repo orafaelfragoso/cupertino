@@ -33,6 +33,16 @@ SHIPPED = ['crates/cupertino-files/data/applications/cupertino-files.desktop',
 
 
 class ApplicationsTest(unittest.TestCase):
+    def test_original_pack_and_every_manifest_payload_are_installed(self):
+        root = release.ROOT / 'data/assets/cupertino'
+        manifest = json.loads((root / 'manifest.json').read_text())
+        payloads = {'manifest.json', 'CREDITS.md', 'LICENSE'}
+        for entry in manifest['icons'].values():
+            payloads.update(entry.get('raster', {}).values())
+            payloads.update(entry[k] for k in ('svg', 'symbol') if k in entry)
+        installed = {p for p, _src, _mode, _conf in release.data()}
+        self.assertEqual({f'usr/share/cupertino/assets/cupertino/{p}' for p in payloads} - installed, set())
+
     def test_the_apps_entries_and_the_mimeapps_list_are_installed(self):
         self.assertEqual(check(SHIPPED), SHIPPED)
 

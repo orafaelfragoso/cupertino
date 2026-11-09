@@ -2,7 +2,8 @@
 //!
 //! An asset pack is a directory described by `manifest.json` (version 2, or version 1 read as the subset of version 2
 //! it is). [`Assets::discover`] looks for packs in order ([`search_path`]): `$CUPERTINO_ASSET_DIR`,
-//! `$XDG_DATA_HOME/cupertino/assets` (`~/.local/share` when unset), `/usr/share/cupertino/assets`, then the built-in
+//! `$XDG_DATA_HOME/cupertino/assets` (`~/.local/share` when unset), `/usr/share/cupertino/assets/cupertino`,
+//! `/usr/share/cupertino/assets`, then the built-in
 //! fallback. Resolution is per name: for each logical name the first pack that provides it wins, so a pack may be
 //! partial. A missing pack, an invalid manifest or entry and a missing file never stop a process; each is reported once on
 //! stderr. The built-in fallback is the embedded Inter font ([`BUILTIN_UI_FAMILY`]); icons the packs lack are drawn as
@@ -336,7 +337,10 @@ fn search_path_from(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<Pat
     var(ASSET_DIR_ENV)
         .into_iter()
         .chain(data_home.map(|d| d.join("cupertino/assets")))
-        .chain([PathBuf::from(SYSTEM_PACK)])
+        .chain([
+            PathBuf::from(SYSTEM_PACK).join("cupertino"),
+            PathBuf::from(SYSTEM_PACK),
+        ])
         .collect()
 }
 

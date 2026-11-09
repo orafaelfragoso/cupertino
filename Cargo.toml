@@ -11,6 +11,46 @@ license = "GPL-3.0-or-later"
 [profile.release]
 debug = 1
 
+# Dev builds optimise the crates where CPU drawing spends its time: the rasteriser, the font, SVG and PNG crates, and
+# cupertino-ui-render's own shadow and blur loops. Unoptimised, a 2x frame or capture is several times slower; why each
+# is listed is in CONTRIBUTING.md. Debug assertions and overflow checks stay as the dev profile sets them.
+[profile.dev.package.tiny-skia]
+opt-level = 3
+[profile.dev.package.tiny-skia-path]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.simd-adler32]
+opt-level = 3
+[profile.dev.package.adler2]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.dev.package.swash]
+opt-level = 3
+[profile.dev.package.zeno]
+opt-level = 3
+[profile.dev.package.skrifa]
+opt-level = 3
+[profile.dev.package.read-fonts]
+opt-level = 3
+[profile.dev.package.harfrust]
+opt-level = 3
+[profile.dev.package.yazi]
+opt-level = 3
+[profile.dev.package.resvg]
+opt-level = 3
+[profile.dev.package.usvg]
+opt-level = 3
+[profile.dev.package.cupertino-ui-render]
+opt-level = 3
+
 [patch.crates-io]
 # Pure-Rust replacement for the C-binding crate of the same name (no libxkbcommon)
 xkbcommon = { path = "crates/cupertino-xkbcommon" }

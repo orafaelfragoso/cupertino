@@ -691,6 +691,70 @@ fn a_flick_delivered_in_one_batch_coasts_as_one_delivered_as_it_happened() {
     }
 }
 
+/// Where a touch dragging the content up by 2 points every 10 ms five times, then lifting, leaves it on frames from
+/// 66 ms to 1 s: delivered one at a time as it happens, or (`batched`) all at once at the lift, each with its own time.
+fn touch_flick_trace(batched: bool) -> Vec<f64> {
+    use cupertino_ui_platform::TouchEvent;
+    let mut h = harness(Setup::default());
+    let at = |i: u64| point(50.0, 80.0 - 2.0 * i as f64);
+    let mut events = vec![(
+        0,
+        TouchEvent::Down {
+            id: 1,
+            position: at(0),
+        },
+    )];
+    events.extend((1..=5).map(|i| {
+        (
+            i * 10,
+            TouchEvent::Motion {
+                id: 1,
+                position: at(i),
+            },
+        )
+    }));
+    events.push((50, TouchEvent::Up { id: 1 }));
+    if batched {
+        h.clock().advance_to(Timestamp(50 * MS)).unwrap();
+    }
+    for (ms, event) in events {
+        if !batched {
+            h.clock().advance_to(Timestamp(ms * MS)).unwrap();
+        }
+        h.rt.window_system_mut()
+            .enqueue_window(h.window, WindowEvent::Touch(event, Timestamp(ms * MS)))
+            .unwrap();
+        if !batched {
+            step(&mut h);
+        }
+    }
+    if batched {
+        step(&mut h);
+    }
+    assert_eq!(h.model().inner.offset.y, 10.0);
+    let mut trace = Vec::new();
+    let mut ms = 66;
+    while ms <= 1_000 {
+        frames(&mut h, ms, ms);
+        trace.push(drawn(&h));
+        ms += 16;
+    }
+    trace
+}
+
+#[test]
+fn a_touch_flick_delivered_in_one_batch_coasts_as_one_delivered_as_it_happened() {
+    let spread = touch_flick_trace(false);
+    let batched = touch_flick_trace(true);
+    assert!(*spread.last().unwrap() > 80.0, "the touch flick coasts");
+    for (i, (s, b)) in spread.iter().zip(&batched).enumerate() {
+        assert!(
+            (b - s).abs() <= 0.02 * (s - 10.0).abs().max(1.0),
+            "frame {i}: batched at {b}, spread at {s}"
+        );
+    }
+}
+
 #[test]
 fn a_cancelled_touch_stops_the_drag_and_the_stretch_returns() {
     use cupertino_ui_platform::TouchEvent;

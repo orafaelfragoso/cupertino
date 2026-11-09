@@ -637,6 +637,11 @@ impl<M: 'static> Widget<M> for Viewport<M> {
                 self.lift(state, t, cx);
             }
             Event::Touch(TouchEvent::Cancel, _) | Event::Cancel => {
+                // a touch cancel happened when it is stamped; a cancel of the runtime's own, now
+                let t = match *event {
+                    Event::Touch(_, at) => self.input_seconds(state, at, cx),
+                    _ => t,
+                };
                 state.touch = None;
                 state.latch = None;
                 // the drag stops where it is; a stretch still returns

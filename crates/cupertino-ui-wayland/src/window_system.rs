@@ -172,8 +172,6 @@ fn set_look(
     }
 }
 
-/// The window and region of the window's material that `backdrop` draws: `None` for the window's own backdrop, or
-/// the index of the region under a part of it.
 /// Whether window `i` or a popup of its chain has the keyboard focus. A role's configure has no activated state, so
 /// this stands for it: the window is the one in use while keys reach it, as a toplevel stays activated while its popup
 /// holds the keyboard.
@@ -205,6 +203,8 @@ fn keyboard_in_chain(windows: &[(WindowId, Option<WindowId>, bool)], root: Windo
     })
 }
 
+/// The window and region of the window's material that `backdrop` draws: `None` for the window's own backdrop, or
+/// the index of the region under a part of it.
 fn glass_region(windows: &[Window], backdrop: BackdropId) -> Option<(WindowId, Option<usize>)> {
     windows.iter().find_map(|w| {
         if w.backdrop

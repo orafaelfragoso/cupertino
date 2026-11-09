@@ -1379,6 +1379,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     state.surrounding = None;
                 }
             }
+            // another field takes the input method: the one before lets go of it first, so the input method starts
+            // afresh and nothing it still composes for that field reaches this one
+            if state.is_some() && w.text_input.is_some_and(|before| before != node) {
+                self.system.set_text_input(w.id, None);
+            }
             w.text_input = state.as_ref().map(|_| node);
             self.system.set_text_input(w.id, state.as_ref());
         }

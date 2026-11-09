@@ -634,7 +634,8 @@ where
     let mut children = vec![query_row];
     let showing_browser = view.browser.filter(|_| browsing || frame.content > 0.0);
     if let Some(browser) = showing_browser {
-        children.push(browse::body(browser, view.app_icons, frame.content, view.now).key("browser"));
+        children
+            .push(browse::body(browser, view.app_icons, frame.content, view.now).key("browser"));
     } else {
         children.extend(search_body(view));
     }

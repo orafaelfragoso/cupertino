@@ -106,7 +106,9 @@ composite then, per pixel:
    the light scaled by one plus the colour bias;
 7. outside the shape, the drop shadow and the ring shadow at their opacity.
 
-Unit tests check each stage on the model (`glass::tests`), and that body text (black at 85 %) on light regular glass stays at 4.5:1 or more over the darkest backdrops at every panel size and accessibility recipe, and `tests/shaders.rs` checks that the `Glass` block has the
+Unit tests check each stage on the model (`glass::tests`; a one-dimensional run of stages 3 and 4, each level and the
+fill a Gaussian of its radius, shows the large panel blurring a step over twice the distance of regular glass of its
+size and a 6 point bright stripe coming through at about half the height), and that body text (black at 85 %) on light regular glass stays at 4.5:1 or more over the darkest backdrops at every panel size and accessibility recipe, and `tests/shaders.rs` checks that the `Glass` block has the
 same members in both shader languages and the Rust struct's size.
 
 **Foreground.** `cupertino-theme` holds the foreground matrices (`foreground_matrix`, lifting the face under a glyph to

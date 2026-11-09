@@ -79,9 +79,17 @@ pub const HALO_BLUR_CALM: f64 = 0.5;
 pub const HALO_BLUR_BUSY: f64 = 3.0;
 /// The halo's dense core over measured wallpaper, hugging the strokes under the soft halo so a thin glyph keeps a
 /// solid edge over stripes: its opacity at full strength under light and under dark text, and its blur in points.
-pub const HALO_CORE_UNDER_LIGHT: f32 = 0.5;
-pub const HALO_CORE_UNDER_DARK: f32 = 0.6;
-pub const HALO_CORE_BLUR: f64 = 0.75;
+/// It is laid [`HALO_CORE_PASSES`] times, each pass under the strokes and the passes before it, so it grows past a
+/// thin stroke at close to its full opacity instead of thinning out as one blur of a hairline does: about a point
+/// around every stroke reads at 4.5:1 or more against the text even over white (or black) wallpaper.
+pub const HALO_CORE_UNDER_LIGHT: f32 = 0.8;
+pub const HALO_CORE_UNDER_DARK: f32 = 0.85;
+pub const HALO_CORE_BLUR: f64 = 1.0;
+pub const HALO_CORE_PASSES: usize = 3;
+/// Under the highlight of the open title over measured wallpaper, a backing of the halo's tone at this opacity at full
+/// strength, under light and under dark text, so the highlight shows as a shape of its own over a busy picture.
+pub const HALO_PILL_UNDER_LIGHT: f32 = 0.4;
+pub const HALO_PILL_UNDER_DARK: f32 = 0.5;
 
 /// The soft halo of the opposite tone an item of the bar draws under its text and symbols, so they read over a busy
 /// wallpaper.
@@ -115,6 +123,28 @@ impl Halo {
                 [0.0, 0.0, 0.0, HALO_CORE_UNDER_LIGHT * self.core]
             } else {
                 [1.0, 1.0, 1.0, HALO_CORE_UNDER_DARK * self.core]
+            }
+        })
+    }
+
+    /// The shadows the halo is drawn as under text of colour `text`, each `(blur in points, colour)` and each laid
+    /// under the content and the ones before it: the core's passes, then the soft halo.
+    pub fn shadows(self, text: Rgba) -> Vec<(f64, Rgba)> {
+        let core = self.core_color(text).map(|c| (HALO_CORE_BLUR, c));
+        std::iter::repeat_n(core, HALO_CORE_PASSES)
+            .flatten()
+            .chain([(self.blur, self.color(text))])
+            .collect()
+    }
+
+    /// The backing under the open title's highlight with text of colour `text`: the halo's tone at its core's share of
+    /// [`HALO_PILL_UNDER_LIGHT`] or [`HALO_PILL_UNDER_DARK`]; `None` without a core (no measure yet).
+    pub fn pill_backing(self, text: Rgba) -> Option<Rgba> {
+        (self.core > 0.0).then(|| {
+            if light(text) {
+                [0.0, 0.0, 0.0, HALO_PILL_UNDER_LIGHT * self.core]
+            } else {
+                [1.0, 1.0, 1.0, HALO_PILL_UNDER_DARK * self.core]
             }
         })
     }
@@ -370,6 +400,44 @@ mod tests {
         );
         assert!(faint.core_color([1.0; 4]).unwrap()[3] < 0.02 * HALO_CORE_UNDER_DARK);
         const { assert!(HALO_CORE_BLUR < HALO_BLUR_BUSY) };
+    }
+
+    /// Over measured wallpaper the halo is drawn as its core's passes, each the core's colour at its blur, then the soft
+    /// halo; with no measure it is the soft halo alone, as before the spread was measured. The open title's backing
+    /// follows the core in the halo's tone, and there is none with no measure.
+    #[test]
+    fn the_halo_is_drawn_as_the_core_s_passes_then_the_soft_halo() {
+        let (light_text, dark_text) = ([0.97, 0.97, 0.98, 0.95], [0.05, 0.05, 0.06, 0.92]);
+        let full = halo(Some(BUSY_SPREAD), false).unwrap();
+        for text in [light_text, dark_text] {
+            let shadows = full.shadows(text);
+            assert_eq!(shadows.len(), HALO_CORE_PASSES + 1);
+            for &(blur, color) in &shadows[..HALO_CORE_PASSES] {
+                assert_eq!((blur, Some(color)), (HALO_CORE_BLUR, full.core_color(text)));
+            }
+            assert_eq!(
+                shadows[HALO_CORE_PASSES],
+                (HALO_BLUR_BUSY, full.color(text))
+            );
+        }
+        const { assert!(HALO_CORE_PASSES >= 2) };
+        assert_eq!(
+            full.pill_backing(light_text),
+            Some([0.0, 0.0, 0.0, HALO_PILL_UNDER_LIGHT])
+        );
+        assert_eq!(
+            full.pill_backing(dark_text),
+            Some([1.0, 1.0, 1.0, HALO_PILL_UNDER_DARK])
+        );
+        let mid = halo(Some((CALM_SPREAD + BUSY_SPREAD) / 2), false).unwrap();
+        let backing = mid.pill_backing(light_text).unwrap()[3];
+        assert!((backing - HALO_PILL_UNDER_LIGHT * mid.core).abs() < 1e-6);
+        let unknown = halo(None, false).unwrap();
+        assert_eq!(
+            unknown.shadows(light_text),
+            vec![(unknown.blur, unknown.color(light_text))]
+        );
+        assert_eq!(unknown.pill_backing(light_text), None);
     }
 
     #[test]

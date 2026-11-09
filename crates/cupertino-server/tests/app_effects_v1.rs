@@ -278,6 +278,11 @@ impl TestClient {
     }
 
     fn spawn_with(socket: PathBuf, layout: Layout) -> TestClient {
+        Self::spawn_at(socket, layout, 6)
+    }
+
+    /// [`spawn_with`](Self::spawn_with) with `cupertino_app_effects_v1` bound at `version` at most.
+    fn spawn_at(socket: PathBuf, layout: Layout, version: u32) -> TestClient {
         let (commands, inbox): (Sender<Cmd>, Receiver<Cmd>) = channel();
         let status = Arc::new(Mutex::new(Status::default()));
         let st = status.clone();
@@ -291,7 +296,7 @@ impl TestClient {
             let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
             // version 6 for set_glass
-            let effects: CupertinoAppEffectsV1 = globals.bind(&qh, 1..=6, ()).unwrap();
+            let effects: CupertinoAppEffectsV1 = globals.bind(&qh, 1..=version, ()).unwrap();
             let surface = compositor.create_surface(&qh, ());
             let layer = layer_shell.get_layer_surface(
                 &surface,
@@ -519,6 +524,50 @@ fn negative_glass_spacing_is_a_protocol_error() {
         Cmd::SetGlass(cupertino_backdrop_v1::GlassStyle::Regular, 1, -4.0),
         INVALID_GLASS,
     );
+}
+
+/// A backdrop of version 10 asks for large-panel glass; one of version 9, which the style is not defined for, gets
+/// `invalid_glass` for it.
+#[test]
+fn large_panel_glass_is_a_style_from_version_10() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_at(h.socket_path(), CARD, 10);
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    client.send(Cmd::SetGlass(
+        cupertino_backdrop_v1::GlassStyle::LargePanel,
+        0,
+        0.0,
+    ));
+    client.send(Cmd::Commit);
+    h.wait_until("the glass commit", |s| {
+        layer_backdrops(&s.outputs[0].output)
+            .iter()
+            .any(|b| b.glass.is_some())
+    });
+    assert_eq!(
+        h.backdrops()[0].glass.unwrap().style,
+        cupertino_theme::GlassStyle::LargePanel
+    );
+    assert_eq!(client.backdrop_error(), None);
+    drop(h);
+
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_at(h.socket_path(), CARD, 9);
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    client.send(Cmd::SetGlass(
+        cupertino_backdrop_v1::GlassStyle::LargePanel,
+        0,
+        0.0,
+    ));
+    let end = Instant::now() + common::HANG_GUARD;
+    while client.backdrop_error().is_none() && Instant::now() < end {
+        h.step();
+    }
+    assert_eq!(client.backdrop_error(), Some(INVALID_GLASS));
 }
 
 /// `set_glass` and `set_material` replace each other: the one sent last decides how the backdrop draws.

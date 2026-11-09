@@ -657,6 +657,38 @@ fn a_cancelled_touch_stops_the_drag_and_the_stretch_returns() {
     assert!(!h.snapshot().pending.animating);
 }
 
+/// A finger on an inner view at its end, pushing on past it, stretches the inner view; the outer view, which could
+/// still move, stays where it is.
+#[test]
+fn a_finger_on_an_inner_view_at_its_end_stretches_it_and_leaves_the_outer_view() {
+    let mut h = harness(Setup {
+        nested: true,
+        ..Setup::default()
+    });
+    let inside = point(50.0, 30.0);
+    wheel(&mut h, inside, 1_000.0, ScrollSource::Wheel, false);
+    assert_eq!(h.model().inner.offset.y, 240.0 - 60.0);
+    let end = drawn(&h);
+    // the wheel's burst is over
+    h.clock().advance_to(Timestamp(400 * MS)).unwrap();
+    h.settle();
+    for i in 1..=4 {
+        finger(&mut h, inside, 400 + i * 10, 30.0, false);
+    }
+    assert_eq!(h.model().outer.offset.y, 0.0, "the outer view stays");
+    assert_eq!(h.model().inner.offset.y, 240.0 - 60.0);
+    // four pushes of 30 past a viewport of 60 show as 60 × (1 − 1 / (1 + 0.07 × 120 / 60)) ≈ 7.4
+    let stretch = drawn(&h) - end;
+    assert!(
+        (stretch - 7.4).abs() < 0.2,
+        "the inner content is drawn {stretch} past its end"
+    );
+    finger(&mut h, inside, 450, 0.0, true);
+    frames(&mut h, 466, 900);
+    assert_eq!(drawn(&h), end, "the stretch returns");
+    assert_eq!(h.model().outer.offset.y, 0.0);
+}
+
 #[test]
 fn coasting_content_keeps_moving_while_the_pointer_scrolls_another_view() {
     let mut h = harness(Setup {

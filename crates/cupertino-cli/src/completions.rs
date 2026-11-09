@@ -3,11 +3,12 @@
 //! Each script has two parts. Its tables are generated from the registry alone: every command path, and for each
 //! command (and for the global options) one line per argument, `KIND NAME REPEAT HINT VALUES` (`VALUES` joined by
 //! commas, `-` for none). Its engine is the same
-//! for every registry: it skips the global options, finds the longest command path the words before the cursor start
-//! with, and offers the next words of the paths, the command's options (a single option once, a repeatable one again),
-//! the values of the option before the cursor, or what the next positional argument takes: its values, files,
-//! directories or program names by its hint. `help` completes command words. Nothing in a script names a command
-//! except its tables.
+//! for every registry: it skips the global options by their table (with the value of one that takes a value), finds the
+//! longest command path the words before the cursor start with, and offers the next words of the paths, the command's
+//! options (a single option until it is given, as `--name` or `--name=value`; a repeatable one again), the values of the
+//! option before the cursor or of the option in a `--name=` word (bash splits that word at the `=` and the engine joins
+//! it again), or what the next positional argument takes: its values, files, directories or program names by its hint.
+//! `help` completes command words. Nothing in a script names a command or an option except its tables.
 
 use crate::{
     Arg, ArgKind, Args, Command, Context, Failure, Group, Reply, Run, Stability, ValueHint,
@@ -242,7 +243,7 @@ pub fn fish(registry: &[Group]) -> String {
     out
 }
 
-const BASH_ENGINE: &str = r#"# Adds what an argument takes to COMPREPLY: HINT VALUES (joined by commas, - for none).
+const BASH_ENGINE: &str = r#"# Adds what an argument takes to COMPREPLY for the word $cur: HINT VALUES (joined by commas, - for none).
 _cupertino_reply() {
     local IFS=$' \t\n'
     case $1 in
@@ -255,20 +256,47 @@ _cupertino_reply() {
 
 _cupertino() {
     local IFS=$' \t\n'
-    local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD - 1]}
-    local i w cpath cmd= n=0 line kind name repeat hint values count k
-    local -a seen=() p=() topic=() candidates=() spec=() rest=() opts=()
+    local i w cpath cmd= n=0 line kind name repeat hint values count k cur prev= taken split=0
+    local -a words=() seen=() p=() topic=() candidates=() global=() spec=() rest=() opts=()
     COMPREPLY=()
-    # the words before the cursor, without the global options
-    for ((i = 1; i < COMP_CWORD; i++)); do
+    # the words up to the cursor; bash splits `--name=value` at the `=`, so the parts are joined again
+    for ((i = 1; i <= COMP_CWORD; i++)); do
         w=${COMP_WORDS[i]}
-        case $w in
-        --format) ((i++)) ;;
-        --format=* | --help | --version) ;;
+        if [[ $w == = ]] && ((${#words[@]})) && [[ ${words[-1]} == --* && ${words[-1]} != *=* ]]; then
+            words[-1]+==
+            if ((i < COMP_CWORD)); then
+                ((i++))
+                words[-1]+=${COMP_WORDS[i]}
+            fi
+            ((i == COMP_CWORD)) && split=1
+            continue
+        fi
+        words+=("$w")
+    done
+    cur=${words[-1]}
+    unset 'words[-1]'
+    ((${#words[@]})) && prev=${words[-1]}
+    # the words before the cursor without the global options (and the value of one that takes a value)
+    mapfile -t global < <(_cupertino_args '')
+    for ((i = 0; i < ${#words[@]}; i++)); do
+        w=${words[i]}
+        taken=
+        for line in "${global[@]}"; do
+            read -r kind name repeat hint values <<<"$line"
+            if [[ $w == "--$name" ]]; then
+                taken=$kind
+            elif [[ $kind == option && $w == "--$name="* ]]; then
+                taken=flag
+            fi
+            [[ -n $taken ]] && break
+        done
+        case $taken in
+        option) ((i++)) ;;
+        flag) ;;
         *) seen+=("$w") ;;
         esac
     done
-    mapfile -t spec < <(_cupertino_args '')
+    spec=("${global[@]}")
     # the longest command path the words start with
     while IFS= read -r cpath; do
         read -ra p <<<"$cpath"
@@ -291,13 +319,27 @@ _cupertino() {
         mapfile -t -O "${#candidates[@]}" candidates < <(_cupertino_builtins)
     fi
     [[ -n $cmd ]] && mapfile -t -O "${#spec[@]}" spec < <(_cupertino_args "$cmd")
+    # the value of an option given as --name=value: bash replaces the part after the `=` when it split the word there,
+    # else the whole word, which then keeps its --name=
+    if [[ $cur == --*=* ]]; then
+        for line in "${spec[@]}"; do
+            read -r kind name repeat hint values <<<"$line"
+            if [[ $kind == option && ${cur%%=*} == "--$name" ]]; then
+                cur=${cur#*=}
+                _cupertino_reply "$hint" "$values"
+                ((split)) || COMPREPLY=("${COMPREPLY[@]/#/--$name=}")
+                break
+            fi
+        done
+        return 0
+    fi
     # the value of the option before the cursor
     if [[ $prev == --* ]]; then
         for line in "${spec[@]}"; do
             read -r kind name repeat hint values <<<"$line"
             if [[ $kind == option && $prev == "--$name" ]]; then
                 _cupertino_reply "$hint" "$values"
-                return
+                return 0
             fi
         done
     fi
@@ -311,19 +353,20 @@ _cupertino() {
         else
             COMPREPLY=($(compgen -W "${candidates[*]}" -- "$cur"))
         fi
-        return
+        return 0
     fi
     rest=("${seen[@]:n}")
     if [[ $cur == -* ]]; then
         for line in "${spec[@]}"; do
             read -r kind name repeat hint values <<<"$line"
             [[ $kind == positional ]] && continue
-            if [[ $repeat == 1 || " ${rest[*]} " != *" --$name "* ]]; then
+            # a single option is offered until it is given, as --name or --name=value
+            if [[ $repeat == 1 || (" ${rest[*]} " != *" --$name "* && " ${rest[*]} " != *" --$name="*) ]]; then
                 opts+=("--$name")
             fi
         done
         COMPREPLY=($(compgen -W "${opts[*]}" -- "$cur"))
-        return
+        return 0
     fi
     # the positional argument the cursor is at
     count=0
@@ -368,19 +411,30 @@ _cupertino_reply() {
 
 _cupertino() {
     local cur=${words[CURRENT]} prev=${words[CURRENT-1]}
-    local i w cpath cmd= n=0 line kind name repeat hint values count k
-    local -a seen p topic candidates spec rest opts
+    local i w cpath cmd= n=0 line kind name repeat hint values count k taken
+    local -a seen p topic candidates global spec rest opts
     typeset -U candidates
-    # the words before the cursor, without the global options
+    # the words before the cursor without the global options (and the value of one that takes a value)
+    global=("${(@f)$(_cupertino_args '')}")
     for (( i = 2; i < CURRENT; i++ )); do
         w=${words[i]}
-        case $w in
-        (--format) (( i++ )) ;;
-        (--format=*|--help|--version) ;;
+        taken=
+        for line in "${global[@]}"; do
+            read -r kind name repeat hint values <<<"$line"
+            if [[ $w == "--$name" ]]; then
+                taken=$kind
+            elif [[ $kind == option && $w == "--$name="* ]]; then
+                taken=flag
+            fi
+            [[ -n $taken ]] && break
+        done
+        case $taken in
+        (option) (( i++ )) ;;
+        (flag) ;;
         (*) seen+=("$w") ;;
         esac
     done
-    spec=("${(@f)$(_cupertino_args '')}")
+    spec=("${global[@]}")
     # the longest command path the words start with
     for cpath in "${(@f)$(_cupertino_paths)}"; do
         p=(${=cpath})
@@ -400,6 +454,18 @@ _cupertino() {
     done
     (( $#seen == 0 )) && candidates+=("${(@f)$(_cupertino_builtins)}")
     [[ -n $cmd ]] && spec+=("${(@f)$(_cupertino_args "$cmd")}")
+    # the value of an option given as --name=value: the --name= becomes an ignored prefix
+    if [[ $cur == --*=* ]]; then
+        for line in "${spec[@]}"; do
+            read -r kind name repeat hint values <<<"$line"
+            if [[ $kind == option && ${cur%%=*} == "--$name" ]]; then
+                compset -P 1 '*='
+                _cupertino_reply "$hint" "$values"
+                return
+            fi
+        done
+        return 1
+    fi
     # the value of the option before the cursor
     if [[ $prev == --* ]]; then
         for line in "${spec[@]}"; do
@@ -427,7 +493,8 @@ _cupertino() {
         for line in "${spec[@]}"; do
             read -r kind name repeat hint values <<<"$line"
             [[ $kind == positional ]] && continue
-            if [[ $repeat == 1 || -z ${(M)rest:#--$name} ]]; then
+            # a single option is offered until it is given, as --name or --name=value
+            if [[ $repeat == 1 || ( -z ${(M)rest:#--$name} && -z ${(M)rest:#--$name=*} ) ]]; then
                 opts+=("--$name")
             fi
         done
@@ -468,15 +535,15 @@ else
 fi
 "#;
 
-const FISH_ENGINE: &str = r#"# Prints what an argument takes: HINT VALUES (joined by commas, - for none).
+const FISH_ENGINE: &str = r#"# Prints what an argument takes for the word in $argv[3]: HINT VALUES (joined by commas, - for none).
 function __cupertino_reply
     switch $argv[1]
         case file
-            __fish_complete_path (commandline -ct)
+            __fish_complete_path $argv[3]
         case dir
-            __fish_complete_directories (commandline -ct)
+            __fish_complete_directories $argv[3]
         case command shell
-            __fish_complete_command
+            complete -C -- $argv[3]
         case '*'
             test "$argv[2]" != -; and string split , -- $argv[2]
     end
@@ -486,20 +553,33 @@ function __cupertino_complete
     set -l tokens (commandline -opc)
     set -l cur (commandline -ct)
     set -l prev $tokens[-1]
+    # the words before the cursor without the global options (and the value of one that takes a value)
+    set -l global (__cupertino_args '')
     set -l seen
     set -l i 2
-    # the words before the cursor, without the global options
     while test $i -le (count $tokens)
-        switch $tokens[$i]
-            case --format
+        set -l w $tokens[$i]
+        set -l taken
+        for line in $global
+            set -l f (string split ' ' -- $line)
+            if test "$w" = "--$f[2]"
+                set taken $f[1]
+                break
+            else if test $f[1] = option; and string match -q -- "--$f[2]=*" $w
+                set taken flag
+                break
+            end
+        end
+        switch "$taken"
+            case option
                 set i (math $i + 1)
-            case '--format=*' --help --version
+            case flag
             case '*'
-                set -a seen $tokens[$i]
+                set -a seen $w
         end
         set i (math $i + 1)
     end
-    set -l spec (__cupertino_args '')
+    set -l spec $global
     # the longest command path the words start with
     set -l cmd ''
     set -l n 0
@@ -540,12 +620,26 @@ function __cupertino_complete
     if test -n "$cmd"
         set -a spec (__cupertino_args $cmd)
     end
+    # the value of an option given as --name=value, offered with its --name=
+    if string match -q -- '--*=*' $cur
+        set -l given (string split -m 1 = -- $cur)
+        for line in $spec
+            set -l f (string split ' ' -- $line)
+            if test $f[1] = option; and test $given[1] = "--$f[2]"
+                for value in (__cupertino_reply $f[4] $f[5] $given[2])
+                    printf '%s=%s\n' $given[1] $value
+                end
+                return
+            end
+        end
+        return
+    end
     # the value of the option before the cursor
     if string match -q -- '--*' $prev
         for line in $spec
             set -l f (string split ' ' -- $line)
             if test $f[1] = option; and test $prev = "--$f[2]"
-                __cupertino_reply $f[4] $f[5]
+                __cupertino_reply $f[4] $f[5] $cur
                 return
             end
         end
@@ -570,7 +664,8 @@ function __cupertino_complete
         for line in $spec
             set -l f (string split ' ' -- $line)
             test $f[1] = positional; and continue
-            if test $f[3] = 1; or not contains -- --$f[2] $rest
+            # a single option is offered until it is given, as --name or --name=value
+            if test $f[3] = 1; or begin; not contains -- --$f[2] $rest; and not string match -q -- "--$f[2]=*" $rest; end
                 printf '%s\n' --$f[2]
             end
         end
@@ -598,7 +693,7 @@ function __cupertino_complete
         set -l f (string split ' ' -- $line)
         test $f[1] = positional; or continue
         if test $k -eq $count; or begin; test $f[3] = 1; and test $count -gt $k; end
-            __cupertino_reply $f[4] $f[5]
+            __cupertino_reply $f[4] $f[5] $cur
             break
         end
         set k (math $k + 1)

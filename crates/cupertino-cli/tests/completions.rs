@@ -9,7 +9,7 @@ use std::process::Command as Process;
 use cupertino_cli::completions::{self, SHELLS};
 use cupertino_cli::{
     Arg, Args, Command, Context, Failure, Group, Reply, Run, Runner, Stability, BUILTINS,
-    GLOBAL_OPTIONS, REGISTRY,
+    GLOBAL_OPTIONS, REGISTRY, RESERVED,
 };
 use support::{args, envelope};
 
@@ -163,18 +163,51 @@ fn shell(shell: &str, dir: &Path, code: &str) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// What the bash script offers for `line`, the cursor at its end.
+/// The words bash hands a completion function for `line`, the cursor at its end. With `split_at_equals` they are what
+/// bash makes of them with its default `COMP_WORDBREAKS`, which holds `=`: `--area=g` is the three words `--area`, `=`
+/// and `g`, and `--area=` the two words `--area` and `=`, the cursor on the `=`.
+fn bash_words(line: &str, split_at_equals: bool) -> Vec<String> {
+    let mut words = Vec::new();
+    for word in line.split_whitespace() {
+        match word.split_once('=') {
+            Some((name, value)) if split_at_equals && name.starts_with("--") => {
+                words.extend([name.to_owned(), "=".to_owned()]);
+                if !value.is_empty() {
+                    words.push(value.to_owned());
+                }
+            }
+            _ => words.push(word.to_owned()),
+        }
+    }
+    if line.ends_with(' ') {
+        words.push(String::new());
+    }
+    words
+}
+
+/// What the bash script offers for `line`, the cursor at its end, split as bash splits it by default.
 fn bash_offers(dir: &Path, registry: &[Group], line: &str) -> Vec<String> {
+    bash_offers_split(dir, registry, line, true)
+}
+
+fn bash_offers_split(
+    dir: &Path,
+    registry: &[Group],
+    line: &str,
+    split_at_equals: bool,
+) -> Vec<String> {
     std::fs::write(dir.join("cupertino.bash"), script("bash", registry)).unwrap();
+    let words: Vec<String> = bash_words(line, split_at_equals)
+        .iter()
+        .map(|w| sh(w))
+        .collect();
     let code = format!(
         "source ./cupertino.bash\n\
-         line={}\n\
-         read -ra COMP_WORDS <<<\"$line\"\n\
-         [[ $line == *' ' ]] && COMP_WORDS+=('')\n\
+         COMP_WORDS=({})\n\
          COMP_CWORD=$((${{#COMP_WORDS[@]}} - 1))\n\
          _cupertino\n\
          printf '%s\\n' \"${{COMPREPLY[@]}}\"",
-        sh(line)
+        words.join(" ")
     );
     let mut offers: Vec<String> = shell("bash", dir, &code)
         .lines()
@@ -297,9 +330,10 @@ fn zsh_reads_the_script_and_registers_it() {
     assert_eq!(autoloaded, "_cupertino\n");
 }
 
-/// What the zsh script offers for `line`, the cursor at its end. Outside a completion widget `words` and `CURRENT` are
-/// plain parameters and `compadd` a function of the test's: it keeps the candidates the current word begins, as zsh
-/// does, and `_files` stands for the file completion.
+/// What the zsh script offers for `line`, the cursor at its end. Outside a completion widget `words`, `CURRENT`, `PREFIX`
+/// and `IPREFIX` are plain parameters, and `compadd` and `compset` functions of the test's: `compadd` keeps the
+/// candidates `PREFIX` begins and prints them after `IPREFIX`, as zsh inserts them, `compset -P 1 '*='` moves what goes
+/// up to the first `=` from `PREFIX` to `IPREFIX`, and `_files` stands for the file completion.
 fn zsh_offers(dir: &Path, registry: &[Group], line: &str) -> Vec<String> {
     std::fs::write(dir.join("_cupertino"), script("zsh", registry)).unwrap();
     let mut words: Vec<&str> = line.split_whitespace().collect();
@@ -309,10 +343,12 @@ fn zsh_offers(dir: &Path, registry: &[Group], line: &str) -> Vec<String> {
     let words: Vec<String> = words.iter().map(|w| sh(w)).collect();
     let code = format!(
         "compdef() {{ :; }}\n\
-         compadd() {{ local -a xs; xs=(${{(M)${{(P)2}}:#${{words[CURRENT]}}*}}); (( $#xs )) && print -rl -- $xs; return 0; }}\n\
-         _files() {{ print -r -- '(files)'; }}\n\
+         compadd() {{ local -a xs; xs=(${{(M)${{(P)2}}:#${{PREFIX}}*}}); (( $#xs )) && print -rl -- $IPREFIX${{^xs}}; return 0; }}\n\
+         compset() {{ [[ $1 == -P && $2 == 1 && $3 == '*=' && $PREFIX == *=* ]] && IPREFIX+=${{PREFIX%%=*}}= && PREFIX=${{PREFIX#*=}}; }}\n\
+         _files() {{ print -r -- \"$IPREFIX(files $*)\"; }}\n\
          source ./_cupertino\n\
          words=({}) CURRENT={}\n\
+         PREFIX=$words[CURRENT] IPREFIX=\n\
          _cupertino",
         words.join(" "),
         words.len()
@@ -365,7 +401,8 @@ fn zsh_completes_commands_options_and_values() {
     assert_eq!(zsh_offers(d, REGISTRY, "cupertino he"), ["help"]);
     assert_eq!(
         zsh_offers(d, REGISTRY, "cupertino dev manual "),
-        ["(files)"]
+        ["(files -/)"],
+        "directories alone"
     );
     assert_eq!(
         zsh_offers(d, PROBE, "cupertino probe widget --colour "),
@@ -412,5 +449,221 @@ fn fish_completes_commands_options_and_values() {
     assert_eq!(
         fish_offers(d, PROBE, "cupertino probe widget --colour "),
         ["blue", "green", "red"]
+    );
+}
+
+#[test]
+fn no_engine_names_a_global_option() {
+    for shell in SHELLS {
+        let text = script(shell, REGISTRY);
+        for arg in GLOBAL_OPTIONS {
+            assert!(
+                !text.contains(&format!("--{}", arg.name)),
+                "{shell}: the global options come from the table alone, not `--{}`",
+                arg.name
+            );
+        }
+    }
+}
+
+#[test]
+fn bash_completes_the_value_of_a_name_equals_option() {
+    if !have("bash") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    std::fs::create_dir(d.join("pages")).unwrap();
+    std::fs::write(d.join("pages.txt"), "").unwrap();
+    // bash splits the word at the `=` and replaces what follows it
+    assert_eq!(
+        bash_offers(d, REGISTRY, "cupertino diagnose --area=g"),
+        ["gpu"]
+    );
+    assert_eq!(
+        bash_offers(d, REGISTRY, "cupertino desktop start --backend="),
+        ["headless", "nested", "tty"]
+    );
+    assert_eq!(
+        bash_offers(d, REGISTRY, "cupertino --format=j"),
+        ["json", "jsonl"]
+    );
+    assert_eq!(
+        bash_offers(d, REGISTRY, "cupertino dev layers --root=pa"),
+        ["pages"],
+        "directories alone"
+    );
+    assert_eq!(
+        bash_offers(d, PROBE, "cupertino probe widget --colour=r"),
+        ["red"]
+    );
+    // a global option given with its value is not a command word
+    assert_eq!(
+        bash_offers(d, REGISTRY, "cupertino --format=json dia"),
+        ["diagnose"]
+    );
+    assert_eq!(
+        bash_offers(d, REGISTRY, "cupertino --help dia"),
+        ["diagnose"]
+    );
+    // nor a positional argument, and a single option given so is not offered again
+    assert_eq!(
+        bash_offers(d, PROBE, "cupertino probe widget --colour=red "),
+        ["gear", "spring"]
+    );
+    assert_eq!(
+        bash_offers(
+            d,
+            REGISTRY,
+            "cupertino desktop start --backend=headless --s"
+        ),
+        ["--scale", "--size", "--spawn"]
+    );
+    assert_eq!(
+        bash_offers(
+            d,
+            REGISTRY,
+            "cupertino desktop start --backend=headless --b"
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        bash_offers(d, REGISTRY, "cupertino diagnose --area=gpu --a"),
+        ["--area"],
+        "a repeatable one is"
+    );
+    // the reserved groups answer that they are not in this release, so they are not offered
+    let first = bash_offers(d, REGISTRY, "cupertino ");
+    assert!(first.contains(&"diagnose".to_owned()), "{first:?}");
+    for reserved in RESERVED {
+        assert!(!first.contains(&reserved.name.to_owned()), "{first:?}");
+        assert_eq!(
+            bash_offers(d, REGISTRY, &format!("cupertino {} ", reserved.name)),
+            Vec::<String>::new()
+        );
+    }
+    // without `=` in COMP_WORDBREAKS the word is whole, and so is what replaces it
+    assert_eq!(
+        bash_offers_split(d, REGISTRY, "cupertino diagnose --area=g", false),
+        ["--area=gpu"]
+    );
+    assert_eq!(
+        bash_offers_split(d, REGISTRY, "cupertino dev layers --root=pa", false),
+        ["--root=pages"]
+    );
+    assert_eq!(
+        bash_offers_split(d, REGISTRY, "cupertino --format=json dia", false),
+        ["diagnose"]
+    );
+}
+
+#[test]
+fn zsh_completes_the_value_of_a_name_equals_option() {
+    if !have("zsh") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino diagnose --area=g"),
+        ["--area=gpu"]
+    );
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino desktop start --backend="),
+        ["--backend=headless", "--backend=nested", "--backend=tty"]
+    );
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino --format=j"),
+        ["--format=json", "--format=jsonl"]
+    );
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino dev layers --root=pa"),
+        ["--root=(files -/)"]
+    );
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino --format=json dia"),
+        ["diagnose"]
+    );
+    assert_eq!(
+        zsh_offers(d, PROBE, "cupertino probe widget --colour=red "),
+        ["gear", "spring"]
+    );
+    assert_eq!(
+        zsh_offers(
+            d,
+            REGISTRY,
+            "cupertino desktop start --backend=headless --s"
+        ),
+        ["--scale", "--size", "--spawn"]
+    );
+    assert_eq!(
+        zsh_offers(
+            d,
+            REGISTRY,
+            "cupertino desktop start --backend=headless --b"
+        ),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn fish_completes_the_value_of_a_name_equals_option() {
+    if !have("fish") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    std::fs::create_dir(d.join("pages")).unwrap();
+    std::fs::write(d.join("pages.txt"), "").unwrap();
+    assert_eq!(
+        fish_offers(d, REGISTRY, "cupertino diagnose --area=g"),
+        ["--area=gpu"]
+    );
+    assert_eq!(
+        fish_offers(d, REGISTRY, "cupertino desktop start --backend="),
+        ["--backend=headless", "--backend=nested", "--backend=tty"]
+    );
+    assert_eq!(
+        fish_offers(d, REGISTRY, "cupertino --format=j"),
+        ["--format=json", "--format=jsonl"]
+    );
+    assert_eq!(
+        fish_offers(d, REGISTRY, "cupertino dev layers --root=pa"),
+        ["--root=pages/"],
+        "directories alone"
+    );
+    assert_eq!(
+        fish_offers(d, REGISTRY, "cupertino --format=json dia"),
+        ["diagnose"]
+    );
+    assert_eq!(
+        fish_offers(d, PROBE, "cupertino probe widget --colour=red "),
+        ["gear", "spring"]
+    );
+    assert_eq!(
+        fish_offers(
+            d,
+            REGISTRY,
+            "cupertino desktop start --backend=headless --s"
+        ),
+        ["--scale", "--size", "--spawn"]
+    );
+    assert_eq!(
+        fish_offers(
+            d,
+            REGISTRY,
+            "cupertino desktop start --backend=headless --b"
+        ),
+        Vec::<String>::new()
+    );
+    assert!(
+        fish_offers(
+            d,
+            REGISTRY,
+            "cupertino desktop start --backend headless --spawn=ba"
+        )
+        .iter()
+        .any(|c| c == "--spawn=bash"),
+        "program names after --spawn="
     );
 }

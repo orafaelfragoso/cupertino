@@ -120,7 +120,9 @@ The help JSON (`cupertino --format json help`) lists, per command, `path`, `summ
 `src/lib.rs` holds the registry types and the runner; `src/stream.rs` the output writer, the stream rules and the stop
 flag; each group is a module (`appearance`, `diagnose`, `desktop`, `version`, `completions`, `dev`). `src/manual.rs`
 and `src/completions.rs` generate the manual pages and the completion scripts from a registry, `GLOBAL_OPTIONS`,
-`BUILTINS` and `FailureKind::ALL`, so a new command or option needs no edit there. The crate docs of `stream` state
+`BUILTINS` and `FailureKind::ALL`, so a new command or option needs no edit there. The completions take an option's
+value after the option or in the same word (`--area=gpu`; bash splits such a word at the `=`, and the script joins it
+again), and skip the global options by their table wherever they stand. The crate docs of `stream` state
 the rules for stream commands.
 
 ### The registry

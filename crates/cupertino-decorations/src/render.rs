@@ -511,6 +511,122 @@ mod tests {
         assert_eq!(u.height(), 52);
     }
 
+    /// The centre of the strongly coloured ink (a button's hue, not the grey fill or the title) inside `box_pt`
+    /// (x, y, size in points), in points.
+    fn ink_centre(pm: &Pixmap, scale: f64, box_pt: (f64, f64, f64)) -> Option<(f64, f64)> {
+        let (x0, y0) = (
+            (box_pt.0 * scale).floor() as u32,
+            (box_pt.1 * scale).floor() as u32,
+        );
+        let side = (box_pt.2 * scale).ceil() as u32 + 1;
+        let (mut sx, mut sy, mut sw) = (0.0, 0.0, 0.0);
+        for y in y0..(y0 + side).min(pm.height()) {
+            for x in x0..(x0 + side).min(pm.width()) {
+                let [r, g, b, _] = rgba(pm, x, y);
+                let chroma = f64::from(r.max(g).max(b) - r.min(g).min(b));
+                if chroma > 60.0 {
+                    sx += (f64::from(x) + 0.5) * chroma;
+                    sy += (f64::from(y) + 0.5) * chroma;
+                    sw += chroma;
+                }
+            }
+        }
+        (sw > 0.0).then(|| (sx / sw / scale, sy / sw / scale))
+    }
+
+    #[test]
+    fn the_same_titlebar_at_every_scale_is_complete_and_keeps_its_geometry() {
+        // Our own criterion: at each scale the strip is fully painted inside, every button is drawn with its centre
+        // at the same point within half a device pixel, the title has ink, and the inner rim covers whole device
+        // pixels. Going through other scales and back draws the same pixels again (nothing stale is reused), and the
+        // dark appearance changes colours without moving a control.
+        let state = DecorationState {
+            title: "Document".into(),
+            ..Default::default()
+        };
+        let width = 400.0;
+        let mut d = decorations(TitlebarStyle::Standard, Appearance::Light);
+        let first_two = d.render_titlebar(width, 2.0, &state).data().to_vec();
+        let layout = d.layout(Size::new(width, 0.0));
+        let mut dark = decorations(TitlebarStyle::Standard, Appearance::Dark);
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            let pm = d.render_titlebar(width, scale, &state);
+            assert_eq!(
+                (pm.width(), pm.height()),
+                (
+                    (width * scale).round() as u32,
+                    (32.0 * scale).round() as u32
+                ),
+                "{scale}"
+            );
+            // complete: no hole in the strip away from its rounded corners and its edges
+            for y in (2.0 * scale).ceil() as u32..(28.0 * scale) as u32 {
+                for x in (20.0 * scale) as u32..((width - 20.0) * scale) as u32 {
+                    assert_eq!(rgba(&pm, x, y)[3], 255, "{scale}: ({x}, {y}) is painted");
+                }
+            }
+            let dark_pm = dark.render_titlebar(width, scale, &state);
+            for b in &layout.buttons {
+                let r = 7.0;
+                let at = (b.center.x - r - 1.0, b.center.y - r - 1.0, 2.0 * r + 2.0);
+                let light = ink_centre(&pm, scale, at).expect("the button is drawn");
+                let tolerance = 0.5 / scale;
+                assert!(
+                    (light.0 - b.center.x).abs() <= tolerance
+                        && (light.1 - b.center.y).abs() <= tolerance,
+                    "{scale}: {:?} drawn at {light:?}, laid out at {:?}",
+                    b.kind,
+                    b.center
+                );
+                let dark_centre =
+                    ink_centre(&dark_pm, scale, at).expect("the dark button is drawn");
+                assert!(
+                    (dark_centre.0 - light.0).abs() <= tolerance
+                        && (dark_centre.1 - light.1).abs() <= tolerance,
+                    "{scale}: the dark appearance moves {:?}",
+                    b.kind
+                );
+            }
+            let (left, w, _) = d.title_placement(width, "Document", scale).unwrap();
+            let fill = rgba(&pm, (left * scale) as u32 - 2, (16.0 * scale) as u32);
+            let ink = (((left * scale) as u32)..((left + w) * scale) as u32)
+                .flat_map(|x| (0..pm.height()).map(move |y| (x, y)))
+                .filter(|&(x, y)| rgba(&pm, x, y) != fill)
+                .count();
+            assert!(
+                ink > (20.0 * scale * scale) as usize,
+                "{scale}: the title is drawn ({ink} pixels)"
+            );
+            assert_ne!(
+                rgba(&pm, (width * scale) as u32 / 2, 2),
+                rgba(&dark_pm, (width * scale) as u32 / 2, 2)
+            );
+
+            // the rim lies on whole device pixels at both sides
+            let rim = d.render_rim(Size::new(width, 300.0), scale);
+            let (px, _) = d.edge(true).inner.unwrap().device(scale);
+            let mid = rim.height() / 2;
+            for (x, inward) in [(0, 1i64), (rim.width() - 1, -1)] {
+                let alpha: Vec<u8> = (0..=px as i64)
+                    .map(|i| rgba(&rim, (x as i64 + inward * i) as u32, mid)[3])
+                    .collect();
+                let (line, inside) = alpha.split_at(px as usize);
+                assert!(
+                    line.iter().all(|&a| a > 0 && a == line[0]),
+                    "{scale}: {alpha:?}"
+                );
+                assert_eq!(inside, [0], "{scale}: nothing inside the rim");
+            }
+        }
+        for scale in [1.25, 1.75, 1.0] {
+            d.render_titlebar(width, scale, &state);
+        }
+        assert!(
+            d.render_titlebar(width, 2.0, &state).data() == first_two.as_slice(),
+            "the strip at 2 after other scales is the first one"
+        );
+    }
+
     #[test]
     fn a_flush_titlebar_fills_its_top_corners() {
         let mut d = decorations(TitlebarStyle::Standard, Appearance::Light);

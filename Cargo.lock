@@ -1811,6 +1811,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-test-pam"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+]
+
+[[package]]
+name = "cupertino-test-pam-shim"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "cupertino-testclient"
 version = "0.1.0"
 dependencies = [

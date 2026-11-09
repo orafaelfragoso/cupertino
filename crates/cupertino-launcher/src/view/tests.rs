@@ -669,7 +669,7 @@ fn typing_lists_the_ranked_results_in_their_sections() {
         Some("Firefox")
     );
     let shape = search_shape(&model.panel, &model.status(), None);
-    assert_eq!(shape.height, panel_height(&model.panel));
+    assert_eq!(shape.height, on_shape_grid(panel_height(&model.panel)));
     assert_eq!(
         run.extent,
         Some(window_extent(shape)),
@@ -1482,7 +1482,7 @@ fn a_late_file_search_is_dropped_and_one_past_its_deadline_says_the_results_may_
         run.model().extent(),
         window_extent(PanelShape::new(
             WIDTH,
-            COLLAPSED_HEIGHT + 1.0 + STATUS_HEIGHT,
+            on_shape_grid(COLLAPSED_HEIGHT + 1.0 + STATUS_HEIGHT),
             CORNER_RADIUS
         ))
     );

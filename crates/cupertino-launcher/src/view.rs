@@ -352,6 +352,15 @@ pub fn panel_height(panel: &Panel) -> f64 {
     (COLLAPSED_HEIGHT + 1.0 + 2.0 * LIST_PADDING + list).max(MIN_EXPANDED_HEIGHT)
 }
 
+/// A settled panel's width and height are whole multiples of this many points, so the glass under it ends on whole
+/// device pixels at every quarter-step backing scale (1.25, 1.5, 1.75 and 2) and its edges stay sharp.
+pub const SHAPE_GRID: f64 = 4.0;
+
+/// `length` rounded up to [`SHAPE_GRID`].
+pub fn on_shape_grid(length: f64) -> f64 {
+    (length / SHAPE_GRID).ceil() * SHAPE_GRID
+}
+
 /// The search field alone.
 pub fn compact_shape() -> PanelShape {
     PanelShape::new(WIDTH, COLLAPSED_HEIGHT, CORNER_RADIUS)
@@ -372,7 +381,7 @@ pub fn search_shape(panel: &Panel, status: &Status, nested: Option<Nested>) -> P
     } else {
         panel_height(panel)
     };
-    PanelShape::new(WIDTH, height, CORNER_RADIUS)
+    PanelShape::new(WIDTH, on_shape_grid(height), CORNER_RADIUS)
 }
 
 /// The browsing panel's shape, `height` points tall.

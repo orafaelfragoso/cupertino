@@ -223,7 +223,7 @@ pub struct BrowseLayout {
 
 impl BrowseLayout {
     /// The panel's size, its corner radius, and the least height it shrinks to on a short output.
-    pub const WIDTH: f64 = 842.0;
+    pub const WIDTH: f64 = 844.0;
     pub const HEIGHT: f64 = 576.0;
     pub const MIN_HEIGHT: f64 = 300.0;
     pub const RADIUS: f64 = 24.0;
@@ -294,9 +294,12 @@ impl BrowseLayout {
     }
 
     /// The panel's height on an output `output_height` points tall whose top `top` points the panel starts at: as
-    /// tall as it is designed where the output allows, keeping `bottom` points free below it (the dock's room).
+    /// tall as it is designed where the output allows, keeping `bottom` points free below it (the dock's room), on the
+    /// panel's shape grid ([`crate::view::SHAPE_GRID`]).
     pub fn height_on(output_height: f64, top: f64, bottom: f64) -> f64 {
-        (output_height - top - bottom).clamp(Self::MIN_HEIGHT, Self::HEIGHT)
+        let grid = crate::view::SHAPE_GRID;
+        let room = ((output_height - top - bottom) / grid).floor() * grid;
+        room.clamp(Self::MIN_HEIGHT, Self::HEIGHT)
     }
 
     /// The separator under the header, inset like the category row.

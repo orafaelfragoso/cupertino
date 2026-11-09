@@ -10,6 +10,7 @@ mod damage;
 mod drop_target;
 mod focus;
 mod icons;
+pub mod kinetic;
 mod layout_view;
 mod paint;
 mod pointer;

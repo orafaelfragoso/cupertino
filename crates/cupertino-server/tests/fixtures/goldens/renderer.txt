@@ -1,1 +1,1 @@
-llvmpipe (LLVM 19.1.7) / OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+llvmpipe (LLVM 23.1.4) / OpenGL ES 3.2 Mesa 26.2.6-arch1.1

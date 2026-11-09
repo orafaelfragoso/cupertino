@@ -754,7 +754,11 @@ mod tests {
         let l = lib();
         for appearance in Appearance::ALL {
             for reduce_transparency in [false, true] {
-                for interaction in [Interaction::Normal, Interaction::Rollover, Interaction::Pressed] {
+                for interaction in [
+                    Interaction::Normal,
+                    Interaction::Rollover,
+                    Interaction::Pressed,
+                ] {
                     for material in KEPT_WHEN_INACTIVE {
                         let opts = |window| MaterialOptions {
                             window,
@@ -797,7 +801,14 @@ mod tests {
     fn only_a_window_s_body_materials_are_kept_when_inactive() {
         assert!(kept_when_inactive("Sidebar") && kept_when_inactive("Sidebar-Opaque"));
         assert!(kept_when_inactive("Titlebar-Opaque") && kept_when_inactive("InlineSidebar"));
-        for other in ["Menu", "Selection", "MenuSelection", "Sheet", "MenuBar", "Glass"] {
+        for other in [
+            "Menu",
+            "Selection",
+            "MenuSelection",
+            "Sheet",
+            "MenuBar",
+            "Glass",
+        ] {
             assert!(!kept_when_inactive(other), "{other}");
         }
         let l = lib();
@@ -812,7 +823,10 @@ mod tests {
             )
             .unwrap()
         };
-        assert_eq!(selection(WindowState::Inactive).rendition_key, "inactive.normal");
+        assert_eq!(
+            selection(WindowState::Inactive).rendition_key,
+            "inactive.normal"
+        );
     }
 
     #[test]

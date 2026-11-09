@@ -683,7 +683,11 @@ mod tests {
             }
         }
         for kind in kinds {
-            assert_eq!(kind.sidebar_symbol(), format!("{}.fill", kind.symbol()), "{kind:?}");
+            assert_eq!(
+                kind.sidebar_symbol(),
+                format!("{}.fill", kind.symbol()),
+                "{kind:?}"
+            );
         }
     }
 

@@ -32,6 +32,12 @@ pub const CONTENT_FADE: f64 = 0.10;
 pub const FOLD_FADE: f64 = 0.05;
 /// The enclosure's spring between shapes: critically damped, with this response in seconds.
 pub const SHAPE_RESPONSE: f64 = 0.24;
+/// The spring's tail: once every edge is this many points from its target, and still is a frame ([`REST_LOOKAHEAD`]
+/// seconds) later, the shape is at its target. The tail moves nothing a display shows, and presenting it would
+/// reshape the glass under the panel on every repaint long after the motion ended. A spring past its settling time
+/// presents its target too.
+pub const SHAPE_REST: f64 = 1.0 / 64.0;
+pub const REST_LOOKAHEAD: f64 = 1.0 / 60.0;
 /// The content fading in as the browser unfolds: its delay and its duration.
 pub const UNFOLD_CONTENT_DELAY: f64 = 0.06;
 pub const UNFOLD_CONTENT_FADE: f64 = 0.12;
@@ -315,10 +321,25 @@ impl Motion {
         self.target
     }
 
+    /// Whether the shape is within [`SHAPE_REST`] of its target at `now` and a frame later.
+    fn shape_rests(&self, now: f64) -> bool {
+        let target = self.target.array();
+        let near = |at: f64| {
+            let value = self.shape.value(at);
+            (0..3).all(|i| (value[i] - target[i]).abs() <= SHAPE_REST)
+        };
+        near(now) && near(now + REST_LOOKAHEAD)
+    }
+
     /// What is presented at `now`.
     pub fn frame(&self, now: f64) -> Frame {
+        let shape = if !self.shape.is_animating(now) || self.shape_rests(now) {
+            self.target
+        } else {
+            Shape::of(self.shape.value(now))
+        };
         Frame {
-            shape: Shape::of(self.shape.value(now)),
+            shape,
             alpha: self.alpha.value(now).clamp(0.0, 1.0),
             scale: if self.reduce {
                 1.0
@@ -332,7 +353,7 @@ impl Motion {
 
     /// Whether anything still moves at `now`.
     pub fn animating(&self, now: f64) -> bool {
-        self.shape.is_animating(now)
+        (self.shape.is_animating(now) && !self.shape_rests(now))
             || self.alpha.animating(now)
             || self.scale.animating(now)
             || self.content.animating(now)
@@ -511,6 +532,26 @@ mod tests {
         assert_eq!(m.frame(2.0).shape, OPEN);
         m.hide(true, 3.0);
         assert_eq!(m.frame(3.0 + CLOSE_DURATION / 2.0).scale, 1.0);
+    }
+
+    #[test]
+    fn the_spring_s_tail_presents_the_target_and_ends_the_motion() {
+        let mut m = Motion::new(COMPACT);
+        m.show(COMPACT, false, 0.0);
+        m.shape_to(RESULTS, 0.0, 0.0);
+        // mid-way it moves
+        assert!(m.animating(0.1));
+        assert_ne!(m.frame(0.1).shape, RESULTS);
+        let rest = (1..400)
+            .map(|i| f64::from(i) / 120.0)
+            .find(|&t| !m.animating(t))
+            .unwrap();
+        assert_ne!(m.frame(rest - 1.0 / 120.0).shape, RESULTS);
+        // the spring's value keeps a remainder long after, which no frame presents: each would reshape the glass
+        assert_ne!(Shape::of(m.shape.value(rest + 0.5)), RESULTS);
+        for i in 0..120 {
+            assert_eq!(m.frame(rest + f64::from(i) / 60.0).shape, RESULTS);
+        }
     }
 
     #[test]

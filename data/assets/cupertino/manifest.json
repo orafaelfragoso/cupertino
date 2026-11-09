@@ -204,30 +204,6 @@
     "symbol.xmark.circle": {
       "symbol": "symbols/xmark-circle.svg"
     },
-    "application.file-manager": {
-      "svg": "icons/application-file-manager.svg",
-      "raster": {
-        "16": "icons/application-file-manager-16.png",
-        "32": "icons/application-file-manager-32.png",
-        "64": "icons/application-file-manager-64.png",
-        "128": "icons/application-file-manager-128.png",
-        "256": "icons/application-file-manager-256.png",
-        "512": "icons/application-file-manager-512.png",
-        "1024": "icons/application-file-manager-1024.png"
-      }
-    },
-    "application.settings": {
-      "svg": "icons/application-settings.svg",
-      "raster": {
-        "16": "icons/application-settings-16.png",
-        "32": "icons/application-settings-32.png",
-        "64": "icons/application-settings-64.png",
-        "128": "icons/application-settings-128.png",
-        "256": "icons/application-settings-256.png",
-        "512": "icons/application-settings-512.png",
-        "1024": "icons/application-settings-1024.png"
-      }
-    },
     "alias.badge": {
       "svg": "icons/alias-badge.svg",
       "raster": {
@@ -240,6 +216,18 @@
         "1024": "icons/alias-badge-1024.png"
       }
     },
+    "application.file-manager": {
+      "svg": "icons/application-file-manager.svg",
+      "raster": {
+        "16": "icons/application-file-manager-16.png",
+        "32": "icons/application-file-manager-32.png",
+        "64": "icons/application-file-manager-64.png",
+        "128": "icons/application-file-manager-128.png",
+        "256": "icons/application-file-manager-256.png",
+        "512": "icons/application-file-manager-512.png",
+        "1024": "icons/application-file-manager-1024.png"
+      }
+    },
     "application.generic": {
       "svg": "icons/application-generic.svg",
       "raster": {
@@ -250,6 +238,18 @@
         "256": "icons/application-generic-256.png",
         "512": "icons/application-generic-512.png",
         "1024": "icons/application-generic-1024.png"
+      }
+    },
+    "application.settings": {
+      "svg": "icons/application-settings.svg",
+      "raster": {
+        "16": "icons/application-settings-16.png",
+        "32": "icons/application-settings-32.png",
+        "64": "icons/application-settings-64.png",
+        "128": "icons/application-settings-128.png",
+        "256": "icons/application-settings-256.png",
+        "512": "icons/application-settings-512.png",
+        "1024": "icons/application-settings-1024.png"
       }
     },
     "computer": {

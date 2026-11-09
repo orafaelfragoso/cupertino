@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parent
-# Symbols share a 24-unit canvas, 1.7-unit strokes and rounded terminals.
+# Symbols share a 24-unit canvas, 1.9-unit strokes and rounded terminals.
 def path(d):
     return f'<path d="{d}"/>'
 def rect(x, y, w, h, r=2):
@@ -79,63 +79,37 @@ S['pause'] = path('M7 4v16M17 4v16')
 S['forward'] = path('m3 5 9 7-9 7Zm10 0 9 7-9 7Z')
 S['backward'] = path('m21 5-9 7 9 7Zm-10 0-9 7 9 7Z')
 
-# Document emblems are full-colour artwork details, outside the symbol contract.
-DETAILS = {
-    'archive': rect(4,3,16,18)+path('M12 3v3m-2 0h4m-2 0v3m-2 0h4m-2 0v3m-2 0h4m-4 3h4v4h-4Z'),
-    'terminal': rect(2,4,20,16)+path('m6 9 4 3-4 3m7 1h5'),
-    'pdf': path('M5 4h14v16H5ZM8 16l4-9 4 9M9 13h6'),
-    'trash-full': S['trash']+path('m8 4 1-3 7 2 1 2'),
-}
+# Artwork has independent 16- and 32-pixel optical editions.
+import sys
+sys.dont_write_bytecode = True
+from artwork import render
 
-def svg(body, size=24):
-    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">{body}</svg>\n'
 
 def build():
     icons = {}
-    (ROOT/'symbols').mkdir(exist_ok=True)
-    (ROOT/'icons').mkdir(exist_ok=True)
+    (ROOT / 'symbols').mkdir(exist_ok=True)
+    (ROOT / 'icons').mkdir(exist_ok=True)
     for name, body in sorted(S.items()):
         p = f'symbols/{name.replace(".", "-")}.svg'
-        (ROOT/p).write_text(svg('<g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+body+'</g>'))
-        icons['symbol.'+name] = {'symbol': p}
-    # App tiles use layered enamel, an inset edge and a clear top light.
-    defs = '<defs><linearGradient id="tile" x2="0.2" y2="1"><stop stop-color="#85e2f3"/><stop offset="1" stop-color="#1757b9"/></linearGradient><linearGradient id="paper" x2="0" y2="1"><stop stop-color="#fff"/><stop offset="1" stop-color="#b9ddf6"/></linearGradient><linearGradient id="metal" x2="0.7" y2="1"><stop stop-color="#e6f0ff"/><stop offset=".45" stop-color="#7796bd"/><stop offset="1" stop-color="#263e65"/></linearGradient></defs>'
-    folder = '<path d="M86 166V126q0-22 22-22h101l34 36h161q22 0 22 22v218H86Z" fill="#063c8c" opacity=".35"/><path d="M82 155V119q0-18 18-18h105l33 35h168q20 0 20 20v212H82Z" fill="url(#paper)"/><path d="M72 188q0-18 18-18h332q20 0 18 20l-19 177q-2 22-24 22H110q-22 0-24-22Z" fill="#48b8ef" stroke="#acf0ff" stroke-width="4"/><path d="M115 209h280" stroke="#d5f7ff" stroke-width="5" stroke-linecap="round" opacity=".6"/>'
-    settings = '<g transform="translate(256 256)" fill="url(#metal)" stroke="#dcecff" stroke-width="4">'+''.join(f'<rect x="-29" y="-157" width="58" height="100" rx="16" transform="rotate({i*45})"/>' for i in range(8))+'<circle r="119"/><circle r="66" fill="#233c60"/><circle r="43" fill="url(#paper)"/></g>'
-    artwork = {'application.file-manager': folder, 'application.settings': settings}
-    contract = (ROOT.parents[2]/'crates/cupertino-assets/src/name.rs').read_text().split('pub const SYMBOL_NAMES')[0]
+        source = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + body + '</g></svg>\n'
+        (ROOT / p).write_text(source)
+        icons['symbol.' + name] = {'symbol': p}
     import re
-    for name in re.findall(r'"([a-z][a-z.-]+)"', contract.split('pub const RASTER_NAMES')[1]):
-        if name in artwork:
-            continue
-        if name.startswith('folder'):
-            mark = {'documents':'document','downloads':'download','home':'house','pictures':'photo','movies':'film','music':'music','applications':'grid','desktop':'desktop'}.get(name.split('.')[-1], 'folder')
-            artwork[name] = folder + '<g transform="translate(190 230) scale(5.5)" fill="none" stroke="#12629c" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+S[mark]+'</g>'
-        else:
-            mark = {'document.audio':'music','document.video':'film','document.image':'photo','document.archive':'archive','document.executable':'terminal','document.pdf':'pdf','trash.full':'trash-full'}.get(name)
-            mark = mark or ('document' if name.startswith('document') else {'computer':'computer','alias.badge':'share','locked.badge':'lock','trash.empty':'trash'}.get(name,'grid'))
-            artwork[name] = '<rect x="113" y="89" width="286" height="346" rx="32" fill="#12385c" opacity=".2"/><rect x="113" y="83" width="286" height="346" rx="32" fill="url(#paper)" stroke="#a8c9e5" stroke-width="3"/><g transform="translate(160 155) scale(8)" fill="none" stroke="#276b9f" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+(DETAILS.get(mark) or S[mark])+'</g>'
-    for name, body in artwork.items():
+    contract = (ROOT.parents[2] / 'crates/cupertino-assets/src/name.rs').read_text().split('pub const SYMBOL_NAMES')[0]
+    names = re.findall(r'"([a-z][a-z.-]+)"', contract.split('pub const RASTER_NAMES')[1])
+    for name in names:
         stem = name.replace('.', '-')
         p = f'icons/{stem}.svg'
-        tile = '<rect x="24" y="30" width="464" height="464" rx="110" fill="#102747" opacity=".22"/><rect x="24" y="18" width="464" height="464" rx="110" fill="url(#tile)"/><rect x="29" y="23" width="454" height="454" rx="105" fill="none" stroke="#d0f6ff" stroke-opacity=".65" stroke-width="3"/>'
-        if not name.startswith('application.'):
-            tile = ''
-        palette = defs
-        if name == 'application.settings':
-            palette = defs.replace('#85e2f3', '#b9bce9').replace('#1757b9', '#434978')
-        (ROOT/p).write_text(svg(palette+tile+body,512))
+        (ROOT / p).write_text(render(name, 0, S))
         rasters = {}
-        for size in (16,32,64,128,256,512,1024):
+        for size in (16, 32, 64, 128, 256, 512, 1024):
             out = f'icons/{stem}-{size}.png'
-            # Small renditions enlarge the motif and remove the delicate inset rim.
-            source = svg(palette+tile+body,512)
-            if size <= 32:
-                source = svg(palette+tile+'<g transform="translate(-20 -20) scale(1.08)">'+body+'</g>',512)
-            subprocess.run(['rsvg-convert','-w',str(size),'-h',str(size),'-o',str(ROOT/out)],input=source.encode(),check=True)
+            source = render(name, size if size <= 32 else 0, S)
+            subprocess.run(['rsvg-convert', '-w', str(size), '-h', str(size), '-o', str(ROOT / out)], input=source.encode(), check=True)
             rasters[str(size)] = out
-        icons[name] = {'svg':p,'raster':rasters}
-    (ROOT/'manifest.json').write_text(json.dumps({'version':2,'name':'Cupertino original icons','credits':'CREDITS.md','icons':icons},indent=2)+'\n')
+        icons[name] = {'svg': p, 'raster': rasters}
+    (ROOT / 'manifest.json').write_text(json.dumps({'version': 2, 'name': 'Cupertino original icons', 'credits': 'CREDITS.md', 'icons': icons}, indent=2) + '\n')
+
 
 if __name__ == '__main__':
     build()

@@ -5,5 +5,6 @@ Licensed under GPL-3.0-or-later; see LICENSE.
 
 The SVG files are the source artwork. Run `python3 data/assets/cupertino/generate.py`
 from the checkout to reproduce them and their PNG renditions with rsvg-convert.
-Symbols use a 24-unit grid, rounded terminals and a 1.7-unit regular stroke.
-Small raster renditions enlarge the motif for legibility.
+Full-colour artwork is constructed in `artwork.py`: fourth-power superellipse tiles,
+top-lit materials, original layered objects and separate optical editions at 16 and 32 pixels.
+Symbols use a 24-unit grid, rounded terminals and a 1.9-unit regular stroke.

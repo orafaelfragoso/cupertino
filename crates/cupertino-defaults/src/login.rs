@@ -37,8 +37,8 @@ pub const LOGIN_CONF_PATH: &str = "/etc/cupertino/login.conf";
 const DEFAULT_VT: u32 = 1;
 /// The account the login screen runs as when the file does not name one (the sysusers entry of the package).
 const DEFAULT_GREETER_USER: &str = "cupertino-greeter";
-/// The administrators' groups when the file does not name them: the build's `CUPERTINO_ADMIN_GROUPS` (the packaging sets the
-/// distribution's, `sudo` on Debian), else `wheel`.
+/// The administrators' groups when the file does not name them: the build's `CUPERTINO_ADMIN_GROUPS` (for a system whose
+/// administrators' group is not `wheel`), else `wheel`.
 pub const DEFAULT_ADMIN_GROUPS: &str = match option_env!("CUPERTINO_ADMIN_GROUPS") {
     Some(groups) => groups,
     None => "wheel",

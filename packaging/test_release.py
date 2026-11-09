@@ -357,6 +357,43 @@ class SourceSnapshotTest(unittest.TestCase):
 GIT_RECIPE = Path(__file__).resolve().parent / 'arch/cupertino-git/PKGBUILD'
 
 
+class TestPamShimTest(unittest.TestCase):
+    """The tests' PAM shim (`cupertino-test-pam-shim`, which replaces `pam_start`, `connect` and `syslog` in a process that
+    loads it) and its helper never reach a package: the packages build only the binaries, neither crate is in their
+    dependencies, and no manifest installs either."""
+
+    TEST_CRATES = ('cupertino-test-pam-shim', 'cupertino-test-pam')
+
+    def test_no_package_installs_the_shim_or_its_helper(self):
+        for package, manifest in release.MANIFESTS.items():
+            for destination, source, _mode, _conf in manifest():
+                for name in (destination, source or ''):
+                    self.assertNotIn('test_pam', name, package)
+                    self.assertNotIn('test-pam', name, package)
+
+    def test_the_shipped_binaries_do_not_link_the_shim_or_its_helper(self):
+        linked = {p['name'] for p in release.linked_packages()}
+        self.assertIn('cupertino-login', linked)
+        for crate in self.TEST_CRATES:
+            self.assertNotIn(crate, linked)
+            self.assertNotIn(crate, release.BINARIES)
+
+    def test_the_packages_build_only_the_binaries(self):
+        for recipe in (release.ROOT / 'packaging/arch').glob('*/PKGBUILD'):
+            builds = [line for line in recipe.read_text().splitlines() if 'cargo build' in line]
+            self.assertTrue(builds, recipe)
+            for line in builds:
+                self.assertIn('--bins', line, recipe)
+                self.assertNotIn('--all-targets', line, recipe)
+                self.assertNotIn('--lib', line, recipe)
+
+    def test_the_shim_is_a_test_only_library(self):
+        manifest = (release.ROOT / 'crates/cupertino-test-pam-shim/Cargo.toml').read_text()
+        self.assertIn('crate-type = ["cdylib"]', manifest)
+        self.assertIn('publish = false', manifest)
+        self.assertNotIn('[[bin]]', manifest)
+
+
 class LicenceTest(unittest.TestCase):
     def test_a_list_missing_a_shipped_licence_is_reported(self):
         shipped = {'GPL-3.0-or-later', 'MPL-2.0'}

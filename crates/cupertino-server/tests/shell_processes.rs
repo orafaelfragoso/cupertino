@@ -22,6 +22,7 @@ use cupertino_server::config::{BuiltIn, Config, ShellProcess};
 use cupertino_server::input::{ActionPlan, ShellOp};
 use cupertino_server::Cupertino;
 use cupertino_test_bus::PrivateBus;
+use cupertino_test_pam::PamIsolated;
 use cupertino_theme::Appearance;
 use cupertino_wm::Rect;
 use smithay::backend::input::{ButtonState, KeyState};
@@ -440,17 +441,20 @@ fn shell_bin_dir() -> &'static Path {
 
 /// A real shell process on the private bus: `env` puts the bus address in its environment, which
 /// the supervisor then passes on with `WAYLAND_DISPLAY`. The empty `CUPERTINO_ASSET_SEARCH_PATH` gives it the
-/// built-in assets alone, like the test process, whatever asset packs the machine has installed.
+/// built-in assets alone, like the test process, whatever asset packs the machine has installed. The test PAM shim
+/// keeps it off the machine's PAM stack, journal and real buses ([`cupertino_test_pam`]).
 fn real_process(binary: &str, bus: &PrivateBus) -> ShellProcess {
     let path = shell_bin_dir().join(binary);
+    let mut command = vec![
+        "env".into(),
+        format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
+    ];
+    command.extend(cupertino_test_pam::shared().env_words());
+    command.push(path.display().to_string());
     ShellProcess {
         name: binary.into(),
-        command: vec![
-            "env".into(),
-            format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
-            "CUPERTINO_ASSET_SEARCH_PATH=".into(),
-            path.display().to_string(),
-        ],
+        command,
         roles: roles_of(binary),
     }
 }
@@ -2516,8 +2520,10 @@ fn the_file_manager_and_the_settings_app_map_their_windows() {
 }
 
 /// Outside a login session the lock-screen process connects to the server with its roles, finds no session to lock and
-/// exits with that message, a success exit the supervisor does not restart. The lock and unlock cycle needs logind and
-/// is not run here.
+/// exits with that message, a success exit the supervisor does not restart. Its system bus is a private one whose
+/// stand-in logind knows no session for any process, and the test's own `XDG_SESSION_ID` is not passed on, so the
+/// process is outside a session wherever the test runs, a real login session included. The lock and unlock cycle is
+/// `lock_screen.rs`'s.
 #[test]
 fn the_login_process_connects_and_exits_outside_a_login_session() {
     let dir = TempDir::new("login-stderr");
@@ -2526,7 +2532,15 @@ fn the_login_process_connects_and_exits_outside_a_login_session() {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
+    let Some(system) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let _logind = no_session_logind::serve(&system.address);
     let mut login = real_process("cupertino-login", &bus);
+    login
+        .command
+        .splice(1..1, ["-u".to_owned(), "XDG_SESSION_ID".to_owned()]);
     let program = login.command.pop().unwrap();
     // inside a real login session the process gets as far as its login items and the applications saved to reopen: every
     // directory it reads them from is the test's, so it never starts the host user's programs
@@ -2540,6 +2554,7 @@ fn the_login_process_connects_and_exits_outside_a_login_session() {
         path.display().to_string()
     };
     login.command.extend([
+        format!("DBUS_SYSTEM_BUS_ADDRESS={}", system.address),
         format!("HOME={}", isolated("home")),
         format!("XDG_CONFIG_HOME={}", isolated("config")),
         format!("XDG_CONFIG_DIRS={}", isolated("config-dirs")),
@@ -2561,6 +2576,42 @@ fn the_login_process_connects_and_exits_outside_a_login_session() {
         std::fs::read_to_string(&log)
             .is_ok_and(|text| text.contains("this process is in no login session"))
     });
+}
+
+/// A stand-in for logind on a private system bus that knows no session for any process, as logind answers a process
+/// outside every session.
+mod no_session_logind {
+    #[derive(Debug, zbus::DBusError)]
+    #[zbus(prefix = "org.freedesktop.login1")]
+    enum Error {
+        #[zbus(error)]
+        ZBus(zbus::Error),
+        NoSessionForPID(String),
+    }
+
+    struct Manager;
+
+    #[zbus::interface(name = "org.freedesktop.login1.Manager")]
+    impl Manager {
+        #[zbus(name = "GetSessionByPID")]
+        fn get_session_by_pid(&self, pid: u32) -> Result<zbus::zvariant::OwnedObjectPath, Error> {
+            Err(Error::NoSessionForPID(format!(
+                "PID {pid} does not belong to any known session"
+            )))
+        }
+    }
+
+    /// Serve the stand-in on the bus at `address` for as long as the connection lives.
+    pub fn serve(address: &str) -> zbus::blocking::Connection {
+        zbus::blocking::connection::Builder::address(address)
+            .unwrap()
+            .name("org.freedesktop.login1")
+            .unwrap()
+            .serve_at("/org/freedesktop/login1", Manager)
+            .unwrap()
+            .build()
+            .unwrap()
+    }
 }
 
 /// A daemon child that is killed on drop.
@@ -2682,6 +2733,7 @@ fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
     let check = |text: &str| {
         std::fs::write(&file, text).unwrap();
         let output = Command::new(&sessiond)
+            .pam_isolated(cupertino_test_pam::shared())
             .arg("--check-config")
             .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .env("CUPERTINO_LOGIN_CONF", &file)
@@ -2730,6 +2782,7 @@ fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
     let output = Command::new(&sessiond)
+        .pam_isolated(cupertino_test_pam::shared())
         .arg("--check-config")
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env("CUPERTINO_LOGIN_CONF", &file)
@@ -2750,6 +2803,7 @@ fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
 fn the_session_manager_binary_refuses_what_it_cannot_serve() {
     let sessiond = shell_bin_dir().join("cupertino-sessiond");
     let output = Command::new(&sessiond)
+        .pam_isolated(cupertino_test_pam::shared())
         .arg("no-such-mode")
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .output()
@@ -2768,6 +2822,7 @@ fn the_session_manager_binary_refuses_what_it_cannot_serve() {
         return;
     }
     let output = Command::new(&sessiond)
+        .pam_isolated(cupertino_test_pam::shared())
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .output()
         .expect("the binary starts");

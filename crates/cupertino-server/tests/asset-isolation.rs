@@ -206,9 +206,11 @@ fn every_test_spawn_in_the_workspace_sets_the_empty_asset_search_path() {
     }
     assert!(tests.len() > 100, "the scan finds the test sources");
     let this = Path::new(file!()).file_name().unwrap();
+    // the PAM guard's examples are spawns in strings, like this file's own
+    let examples = std::ffi::OsStr::new("pam-isolation.rs");
     let mut checked: Vec<(PathBuf, usize, String)> = tests
         .into_iter()
-        .filter(|f| f.file_name() != Some(this))
+        .filter(|f| f.file_name() != Some(this) && f.file_name() != Some(examples))
         .map(|f| {
             let source = std::fs::read_to_string(&f).unwrap();
             (f, 0, source)

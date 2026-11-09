@@ -1,0 +1,20 @@
+[package]
+name = "cupertino-test-pam-shim"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Test-only shared object preloaded into the login and session processes under test: points PAM at a private policy directory, is that policy's scripted module, and refuses every connection to the journal, syslog and the real buses"
+publish = false
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[lib]
+crate-type = ["cdylib"]
+# the library exports `connect`, `syslog`, `pam_start` and the password database lookups: a test harness linked from
+# it would replace them in the test process itself
+test = false
+doctest = false
+
+[dependencies]
+libc = "0.2"

@@ -74,6 +74,19 @@ value is protected, so neither what is typed nor its length leaves the process; 
 The colours are the design tokens of the session's appearance; the scrim is `authentication-scrim`. Values marked
 approximate in `panel` and `render` are Cupertino's own.
 
+## Diagnostic events
+
+The agent records versioned diagnostic events to the user's event store (`$XDG_STATE_HOME/cupertino/events`), each
+beside the line it already writes; `main` installs the recorder first, before the process hardens itself. No event
+names the user, polkitd's identities or anything typed.
+
+| Event | Severity | Fields | Where |
+|---|---|---|---|
+| `polkit.register.failed` | error | `when` (`start`, or `again` after polkitd started anew), `error_name` (the D-Bus error name), `error` | polkitd does not take the agent's registration |
+| `polkit.auth.failed` | warn | `action` (polkit's action id), `reason` (`refused`: PAM refused what was typed; `helper_failed`, `helper_start`, `helper_answer`: polkit's helper failed), `attempt` (1 to 3), `last` (the authentication ends with it), `error` (for the helper's failures) | each failed attempt of a prompt |
+| `polkit.exit_error` | error | `error` | the agent ends with an error, or cannot harden itself |
+| `polkit.panic` | fatal | `panic`, `location` | any panic |
+
 ## Tests
 
 `cargo test -p cupertino-polkit-agent`: the model, the panel, the text and the helper's protocol as unit tests;

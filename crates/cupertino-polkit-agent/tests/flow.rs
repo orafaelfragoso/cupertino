@@ -5,18 +5,20 @@
 //! own cancel stop it with polkitd told it was cancelled.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use cupertino_diagnostic_events::{self as events, store, Record, Severity};
 use cupertino_polkit_agent::agent::{serve, Event, User, AGENT_PATH, POLKIT};
 use cupertino_polkit_agent::conversation::Conversation;
 use cupertino_polkit_agent::helper::{HelperError, Line, Route};
 use cupertino_polkit_agent::model::{Agent, Key, Phase, TRY_AGAIN};
 use cupertino_polkit_agent::users;
-use cupertino_test_bus::PrivateBus;
+use cupertino_test_bus::{missing_tool, PrivateBus};
 use zbus::blocking::Connection;
 use zbus::zvariant::{OwnedValue, Value};
 
@@ -72,6 +74,17 @@ fn me() -> User {
 }
 
 fn start() -> Option<Flow> {
+    start_with(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/polkit-agent-helper-1"
+        )
+        .into(),
+    )
+}
+
+/// The flow with polkit's helper at `helper`.
+fn start_with(helper: PathBuf) -> Option<Flow> {
     let bus = PrivateBus::start()?;
     let (registered, registration) = channel();
     let polkitd = bus
@@ -95,14 +108,10 @@ fn start() -> Option<Flow> {
     registration
         .recv_timeout(WAIT)
         .expect("the agent registered");
-    let helper = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/polkit-agent-helper-1"
-    );
     let lines = Mutex::new(sender);
     let conversation = Conversation::new(
         Agent::new(me()),
-        vec![Route::Binary(helper.into())],
+        vec![Route::Binary(helper)],
         move |run, line| {
             let _ = lines.lock().unwrap().send(Message::Line(run, line));
         },
@@ -314,4 +323,151 @@ fn a_process_that_is_gone_or_a_forged_id_names_no_application() {
     flow.type_password("right");
     flow.until("the prompt closes", |c| c.agent().prompt().is_none());
     call.join().unwrap().unwrap();
+}
+
+/// Set in the child process of a test that records events: the test runs its body.
+const CHILD: &str = "DIAG_TEST_CHILD";
+
+/// Runs the test `name` of this binary again in a process of its own whose user store is under `state`, and returns
+/// the store's records and lines; `None` when the child skipped its test.
+fn recorded(name: &str, state: &Path) -> Option<Vec<(Record, String)>> {
+    let output = Command::new(std::env::current_exe().unwrap())
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+        .args(["--exact", name, "--nocapture", "--test-threads", "1"])
+        .env(CHILD, "1")
+        .env("XDG_STATE_HOME", state)
+        .env_remove("XDG_SESSION_ID")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "the child failed: {stderr}");
+    if stderr.contains("SKIPPED:") {
+        eprintln!("{stderr}");
+        return None;
+    }
+    let contents = store::read(&state.join("cupertino/events")).unwrap();
+    Some(
+        contents
+            .records
+            .into_iter()
+            .map(|stored| (stored.record, stored.line))
+            .filter(|(record, _)| record.id == "polkit.auth.failed")
+            .collect(),
+    )
+}
+
+/// The failed attempts recorded: their `reason`, `attempt` and `last`; each names the action, and no line holds the
+/// user's login or what was typed.
+fn attempts(failed: &[(Record, String)], typed: Option<&str>) -> Vec<(String, u64, bool)> {
+    let login = users::account(me()).unwrap().login;
+    failed
+        .iter()
+        .map(|(record, line)| {
+            assert_eq!(record.severity, Severity::Warn);
+            assert_eq!(record.component, "cupertino-polkit-agent");
+            assert_eq!(record.fields.get("action").unwrap(), ACTION);
+            assert!(!line.contains(&login), "the login is in {line}");
+            if let Some(typed) = typed {
+                assert!(!line.contains(typed), "the password is in {line}");
+            }
+            (
+                record
+                    .fields
+                    .get("reason")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                record.fields.get("attempt").unwrap().as_u64().unwrap(),
+                record.fields.get("last").unwrap().as_bool().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn each_wrong_password_is_recorded_with_its_action_and_attempt_but_not_the_user_or_the_password() {
+    const TYPED: &str = "hunter2-not-it";
+    if std::env::var_os(CHILD).is_none() {
+        let state = tempfile::tempdir().unwrap();
+        let Some(failed) = recorded(
+            "each_wrong_password_is_recorded_with_its_action_and_attempt_but_not_the_user_or_the_password",
+            state.path(),
+        ) else {
+            return;
+        };
+        assert_eq!(
+            attempts(&failed, Some(TYPED)),
+            [
+                ("refused".to_owned(), 1, false),
+                ("refused".to_owned(), 2, false),
+                ("refused".to_owned(), 3, true),
+            ]
+        );
+        assert!(failed.iter().all(|(r, _)| r.fields.get("error").is_none()));
+        return;
+    }
+    events::init(events::component!(), "polkit", events::Sink::UserStore);
+    let Some(mut flow) = start() else {
+        return missing_tool("dbus-daemon");
+    };
+    let call = flow.begin("denied");
+    for attempt in 1..=3 {
+        flow.until_asked();
+        flow.type_password(TYPED);
+        if attempt < 3 {
+            flow.until("a second helper asks again", |c| {
+                c.agent().prompt().is_some_and(|p| {
+                    p.phase == Phase::Asking && p.error.as_deref() == Some(TRY_AGAIN)
+                })
+            });
+        }
+    }
+    flow.until("the prompt closes", |c| c.agent().prompt().is_none());
+    // polkitd is answered as before
+    assert_eq!(call.join().unwrap(), Ok(()));
+}
+
+#[test]
+fn a_helper_that_cannot_start_is_recorded_for_each_attempt_and_polkitd_is_answered() {
+    if std::env::var_os(CHILD).is_none() {
+        let state = tempfile::tempdir().unwrap();
+        let Some(failed) = recorded(
+            "a_helper_that_cannot_start_is_recorded_for_each_attempt_and_polkitd_is_answered",
+            state.path(),
+        ) else {
+            return;
+        };
+        assert_eq!(
+            attempts(&failed, None),
+            [
+                ("helper_start".to_owned(), 1, false),
+                ("helper_start".to_owned(), 2, false),
+                ("helper_start".to_owned(), 3, true),
+            ]
+        );
+        for (record, _) in &failed {
+            assert!(!record
+                .fields
+                .get("error")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .is_empty());
+        }
+        return;
+    }
+    events::init(events::component!(), "polkit", events::Sink::UserStore);
+    let missing = tempfile::tempdir().unwrap();
+    let Some(mut flow) = start_with(missing.path().join("polkit-agent-helper-1")) else {
+        return missing_tool("dbus-daemon");
+    };
+    let call = flow.begin("no-helper");
+    // the prompt shows and each attempt fails at once, so the request is over as soon as it is handed on
+    let Ok(Message::Polkit(Event::Begin(request, reply))) = flow.messages.recv_timeout(WAIT) else {
+        panic!("expected polkitd's request");
+    };
+    flow.conversation.begin(request, reply);
+    assert!(flow.conversation.agent().prompt().is_none());
+    assert_eq!(call.join().unwrap(), Ok(()));
 }

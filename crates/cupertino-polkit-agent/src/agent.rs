@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value as Field};
 use cupertino_peer::signal::{sent_by_bus, BUS_DAEMON};
 use zbus::fdo::DBusProxy;
 use zbus::message::{Header, Type};
@@ -250,6 +251,23 @@ pub fn register(
     Ok(())
 }
 
+/// Records `polkit.register.failed`: polkitd did not take the agent's registration, when the agent `start`s or `again`
+/// after polkitd started anew.
+fn register_failed(when: &'static str, error: &zbus::Error) {
+    let mut event = diag::event(
+        Severity::Error,
+        "polkit.register.failed",
+        "the agent could not register with polkitd",
+    )
+    .field("when", Field::Public(when));
+    if let zbus::Error::MethodError(name, _, _) = error {
+        event = event.field("error_name", Field::Public(name.as_str()));
+    }
+    event
+        .field("error", Field::Public(&error.to_string()))
+        .emit();
+}
+
 /// Serves the agent on `connection` and registers it with polkitd for `session_id`, then again whenever polkitd
 /// starts anew; `events` receives what polkitd asks. Returns once the first registration is done, with the thread that
 /// follows polkitd's restarts running. Only the bus daemon's `NameOwnerChanged` counts as a restart, checked on each
@@ -276,7 +294,8 @@ pub fn serve(
         .arg(0, POLKIT)?
         .build();
     let owners = blocking::MessageIterator::for_match_rule(rule, connection, None)?;
-    register(connection, session_id, locale)?;
+    register(connection, session_id, locale)
+        .inspect_err(|error| register_failed("start", error))?;
     let (connection, session_id, locale) =
         (connection.clone(), session_id.to_owned(), locale.to_owned());
     std::thread::Builder::new()
@@ -299,6 +318,7 @@ pub fn serve(
                         eprintln!(
                             "cupertino-polkit-agent: registering again with polkitd: {error}"
                         );
+                        register_failed("again", &error);
                     }
                 }
             }

@@ -8,9 +8,11 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
+
 use crate::agent::{Outcome, Reply, Request, User};
 use crate::helper::{Answers, Helper, HelperError, Line, Route};
-use crate::model::{Agent, Effect};
+use crate::model::{Agent, Effect, ATTEMPTS};
 use crate::users;
 
 /// Where a helper's lines go: the run they belong to and the line, or how the helper ended.
@@ -76,9 +78,15 @@ impl Conversation {
             return;
         }
         let effects = match line {
-            Ok(line) => self.agent.helper(line),
+            Ok(line) => {
+                if matches!(line, Line::Failure) {
+                    self.auth_failed("refused", None);
+                }
+                self.agent.helper(line)
+            }
             Err(error) => {
                 eprintln!("cupertino-polkit-agent: the helper: {error}");
+                self.auth_failed("helper_failed", Some(&error.to_string()));
                 self.helper = None;
                 self.agent.helper_lost()
             }
@@ -95,6 +103,7 @@ impl Conversation {
                     self.helper = None;
                     if let Err(error) = self.start_helper(user, &cookie) {
                         eprintln!("cupertino-polkit-agent: starting the helper: {error}");
+                        self.auth_failed("helper_start", Some(&error.to_string()));
                         effects.extend(self.agent.helper_lost());
                     }
                 }
@@ -105,6 +114,7 @@ impl Conversation {
                     };
                     if let Err(error) = sent {
                         eprintln!("cupertino-polkit-agent: answering the helper: {error}");
+                        self.auth_failed("helper_answer", Some(&error.to_string()));
                         self.helper = None;
                         effects.extend(self.agent.helper_lost());
                     }
@@ -120,6 +130,29 @@ impl Conversation {
                 }
             }
         }
+    }
+
+    /// Records `polkit.auth.failed` for the attempt of the prompt on screen: `reason` is `refused` (PAM refused what was
+    /// typed) or how polkit's helper failed (`helper_failed`, `helper_start`, `helper_answer`, with its `error`). It
+    /// names the action and the attempt, never the user or what was typed.
+    fn auth_failed(&self, reason: &'static str, error: Option<&str>) {
+        let Some(prompt) = self.agent.prompt() else {
+            return;
+        };
+        let attempt = prompt.failures() + 1;
+        let mut event = diag::event(
+            Severity::Warn,
+            "polkit.auth.failed",
+            "an authentication attempt failed",
+        )
+        .field("action", Value::Public(&prompt.request.action))
+        .field("reason", Value::Public(reason))
+        .field("attempt", Value::Count(u64::from(attempt)))
+        .field("last", Value::Bool(attempt >= ATTEMPTS));
+        if let Some(error) = error {
+            event = event.field("error", Value::Public(error));
+        }
+        event.emit();
     }
 
     /// Start the helper for `user` and read its lines on a thread of its own.

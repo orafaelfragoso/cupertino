@@ -229,6 +229,55 @@ mod tests {
         }
     }
 
+    /// Increase Contrast keeps the default backgrounds: it strengthens borders and text, not the surfaces under them. A
+    /// light background is never darker than the default one, so content under Increase Contrast never looks dimmer
+    /// than without it; in dark the window stays within a few levels of the default and the wells for text and lists
+    /// are no lighter than the default ones, so they stand further apart from the window.
+    #[test]
+    fn high_contrast_backgrounds_keep_the_default_ones() {
+        const WINDOW_SPREAD: u8 = 4;
+        let t = tokens();
+        let backgrounds = [
+            "window-background",
+            "control-background",
+            "text-background",
+            "text-background-disabled",
+            "under-page-background",
+            "tool-tip",
+        ];
+        for (contrast, base) in [
+            (Appearance::LightHighContrast, Appearance::Light),
+            (Appearance::DarkHighContrast, Appearance::Dark),
+        ] {
+            for name in backgrounds {
+                let ic = t.color(contrast, name).unwrap().to_rgba8();
+                let default = t.color(base, name).unwrap().to_rgba8();
+                for c in 0..3 {
+                    if !base.is_dark() {
+                        assert!(
+                            ic[c] >= default[c],
+                            "{name}: {ic:?} darker than {default:?}"
+                        );
+                    } else if name == "window-background" {
+                        assert!(
+                            ic[c].abs_diff(default[c]) <= WINDOW_SPREAD,
+                            "{name}: {ic:?} {default:?}"
+                        );
+                    } else {
+                        assert!(
+                            ic[c] <= default[c],
+                            "{name}: {ic:?} lighter than {default:?}"
+                        );
+                    }
+                }
+                assert!(
+                    ic[3] >= default[3],
+                    "{name}: {ic:?} less opaque than {default:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn from_str_rejects_garbage() {
         assert!(DesignTokens::from_str("{").is_err());

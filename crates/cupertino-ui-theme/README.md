@@ -15,10 +15,13 @@ both.
 - `ColorTokens::neutral(appearance)`: built in, for any compositor, with no theme data, pack or desktop service. Every
   colour is opaque. Light and dark are the Cupertino colours flattened onto the surface they are drawn on (a test keeps
   them in step with the token data), except where that falls short: text is raised to 4.5:1 and control and field
-  borders and the focus ring to 3:1 against their surface in every enabled state, with disabled text readable at
-  4.5:1 too. The accent and red fills are darker, so white text on them reaches 4.5:1.
+  borders and the focus ring to 3:1 against their surface in every enabled state. Disabled text recedes, as the
+  token data's does: grey 192 on white, [86,87,91] on dark, at least 1.4:1 against its surface and 2.5:1 apart from
+  enabled text. The accent and red fills are darker, so white text on them reaches 4.5:1.
 - High contrast is built in and used by both: opaque, text at least 4.5:1 and borders, tracks, thumbs, separators and
-  the focus ring at least 3:1 against their surface in every enabled state (tested per resolved pair). Hover and press
+  the focus ring at least 3:1 against their surface in every enabled state (tested per resolved pair). Disabled text
+  reads at 3:1 there (grey 150 in dark) and still stands 2.5:1 apart from enabled text. The backgrounds keep the
+  normal ones: a white window in light, [33,34,39] and a text background of 23 in dark. Hover and press
   turn borders black (light) or white (dark). The dark switch thumb is dark, so it stands out on both tracks, and it
   stands 3:1 against the control border and the panel track, so a slider's knob shows against its ring and its track.
 
@@ -55,6 +58,12 @@ selected row in a window that is not active, where it resolves fainter: white at
 light. The built-in palettes flatten it onto the window background, opaque, with an active sidebar's labels at 4.5:1 on it;
 an inactive window's secondary labels read at 4:1 or better on its fainter selection (the neutral light one, 224, a
 little darker than the opaque sidebar it lies on, so a little under 4.5:1 there, as on the sidebar itself).
+
+Inactive windows. Three roles carry what an inactive window's chrome recedes to: `InactiveSidebarText`, a sidebar's
+labels, symbols and headings (white at 89/255 in dark, black at 102/255 in light, so the sidebar's tint still shows
+around them), `TertiaryText`, the toolbar's title and glyphs (the tertiary label token), and `InactiveTitlebar`, the
+solid band under an inactive window's toolbar row ([38,39,44] dark, 247 light). The built-in palettes give opaque
+greys that read at 4:1 or better on the sidebar's inactive selection and 4.5:1 on the band.
 
 Links (`Link`) take the theme's link token in light and dark and reach 4.5:1 against the window and text backgrounds in
 the built-in palettes. A page indicator dot for a page not shown (`PageDot`) is text at 20 % in light and dark and an

@@ -5,7 +5,8 @@
 //! hovered"), their proportions are approximate.
 //!
 //! States: normal (coloured), hover-group (glyphs on all three), pressed (darker),
-//! inactive window (grey, colour returns while the group is hovered), disabled (grey, no glyph).
+//! inactive window (a translucent grey disc without a ring, colour returns while the group is hovered), disabled (the
+//! same disc, no glyph).
 
 use crate::metrics::{ButtonKind, DecorationMetrics};
 use crate::palette::{Palette, Rgba};
@@ -123,6 +124,18 @@ pub fn draw_button(
         anti_alias: true,
         ..Paint::default()
     };
+    if !v.colored {
+        // one translucent disc over what the window draws beneath: a ring under it would show through doubled
+        paint.set_color(color(button_fill(palette, kind, v)));
+        pm.fill_path(
+            &disc,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+        return;
+    }
     paint.set_color(color(button_ring(palette, kind, v)));
     pm.fill_path(
         &disc,
@@ -234,6 +247,10 @@ mod tests {
         assert!(
             (g[0] - g[1]).abs() < 1e-6 && (g[1] - g[2]).abs() < 1e-6,
             "inactive buttons are grey"
+        );
+        assert!(
+            g[3] > 0.0 && g[3] < 0.5,
+            "inactive buttons are translucent, so what is under them shows through"
         );
         assert_eq!(
             g,

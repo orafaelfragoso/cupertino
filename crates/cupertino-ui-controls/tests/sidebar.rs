@@ -446,7 +446,7 @@ impl cupertino_ui_core::Icons for Tints {
 }
 
 #[test]
-fn an_inactive_windows_row_icons_take_the_secondary_label_colour() {
+fn an_inactive_windows_row_icons_take_the_inactive_sidebar_text_colour() {
     let tints = std::sync::Arc::new(Tints::default());
     let mut h =
         Harness::<Places>::with_icons(cupertino_ui_layout::LayoutDirection::Ltr, tints.clone());
@@ -464,16 +464,16 @@ fn an_inactive_windows_row_icons_take_the_secondary_label_colour() {
     h.settle();
     let asked = tints.asked.lock().unwrap().clone();
     assert!(!asked.is_empty(), "the rows drew their icons again");
-    let secondary = support::theme()
+    let inactive_text = support::theme()
         .colors
         .get(
-            ColorRole::SecondaryText,
+            ColorRole::InactiveSidebarText,
             cupertino_ui_theme::StateVariant::NORMAL,
         )
         .unwrap();
     assert!(
-        asked.iter().all(|(_, c)| *c == secondary),
-        "every row's icon in the secondary label colour: {asked:?}"
+        asked.iter().all(|(_, c)| *c == inactive_text),
+        "every row's icon in the inactive sidebar text colour: {asked:?}"
     );
 }
 
@@ -707,7 +707,10 @@ fn the_neutral_looks_selected_symbol_turns_grey_with_the_others_when_the_window_
     h.settle();
     let normal = cupertino_ui_theme::StateVariant::NORMAL;
     let theme = support::theme();
-    let secondary = theme.colors.get(ColorRole::SecondaryText, normal).unwrap();
+    let secondary = theme
+        .colors
+        .get(ColorRole::InactiveSidebarText, normal)
+        .unwrap();
     let selection = theme
         .colors
         .get(ColorRole::SidebarSelection, inactive())
@@ -717,7 +720,7 @@ fn the_neutral_looks_selected_symbol_turns_grey_with_the_others_when_the_window_
         assert_eq!(
             asked.get(&format!("symbol.{name}")).copied(),
             Some(secondary),
-            "{name}: every symbol is the secondary label colour, the marked sections' and the selected row's too"
+            "{name}: every symbol is the inactive sidebar text colour, the marked sections' and the selected row's too"
         );
     }
     assert_ne!(
@@ -849,15 +852,15 @@ impl Application for AccentSelected {
     }
 }
 
-/// A window that is not active draws its sidebar as an active one does but for the documented roles: every label and
-/// symbol takes the secondary label colour and the selection turns from the accent (or the neutral selection) to the
-/// fainter inactive neutral selection; the heading, the geometry and the text stay.
+/// A window that is not active draws its sidebar as an active one does but for the documented roles: every label,
+/// symbol and heading takes the inactive sidebar text colour and the selection turns from the accent (or the neutral
+/// selection) to the fainter inactive neutral selection; the geometry and the text stay.
 #[test]
 fn an_inactive_window_s_sidebar_differs_only_in_its_labels_symbols_and_selection() {
     let theme = support::theme();
     let normal = cupertino_ui_theme::StateVariant::NORMAL;
     let get = |role, state| theme.colors.get(role, state).unwrap();
-    let secondary = Paint::Solid(get(ColorRole::SecondaryText, normal));
+    let secondary = Paint::Solid(get(ColorRole::InactiveSidebarText, normal));
     let faint = Paint::Solid(get(ColorRole::SidebarSelection, inactive()));
     let accent = Paint::Solid(color(
         ColorRole::ControlFill,
@@ -903,8 +906,8 @@ fn an_inactive_window_s_sidebar_differs_only_in_its_labels_symbols_and_selection
     }
 }
 
-/// Every symbol of a window that is not active, the selected row's too, takes the secondary label colour in either
-/// look, and the selected row's label is the secondary label colour on the faint selection.
+/// Every symbol of a window that is not active, the selected row's too, takes the inactive sidebar text colour in either
+/// look, and the selected row's label is that colour on the faint selection.
 #[test]
 fn an_inactive_window_s_selected_row_reads_secondary_on_the_faint_selection() {
     let tints = std::sync::Arc::new(Tints::default());
@@ -925,7 +928,7 @@ fn an_inactive_window_s_selected_row_reads_secondary_on_the_faint_selection() {
     let secondary = theme
         .colors
         .get(
-            ColorRole::SecondaryText,
+            ColorRole::InactiveSidebarText,
             cupertino_ui_theme::StateVariant::NORMAL,
         )
         .unwrap();

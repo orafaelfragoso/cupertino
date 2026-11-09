@@ -465,6 +465,16 @@ struct Field {
 }
 
 /// Whether the session's appearance is dark, which picks the palette of the menus and of a bar without its own tone.
+/// The colours of a popup's rows: the appearance's, strengthened with Increase Contrast.
+fn popup_palette(env: &Environment) -> MenuPalette {
+    let palette = MenuPalette::new(dark(env));
+    if env.theme.preferences.appearance.is_high_contrast() {
+        palette.high_contrast()
+    } else {
+        palette
+    }
+}
+
 fn dark(env: &Environment) -> bool {
     matches!(
         env.theme.preferences.appearance,
@@ -1080,7 +1090,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let palette = MenuPalette::new(dark(cx.env()));
+        let palette = popup_palette(cx.env());
         let size = cx.size();
         let m = &self.metrics;
         let item = &self.row.item;
@@ -1102,7 +1112,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 size.width - 2.0 * m.padding_x,
                 line,
             );
-            fill(cx, rect, 0.0, palette.separator);
+            fill(cx, rect, 0.0, palette.rule);
             return;
         }
         if self.hot {

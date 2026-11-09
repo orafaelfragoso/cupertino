@@ -532,31 +532,64 @@ fn over_a_raised_layer_the_page_shows_under_the_row_through_a_soft_edge() {
     );
 }
 
+/// In a window that is not active the row recedes into a solid band of the inactive title bar colour, in place of
+/// the veil: the content stops at the row as under a solid title bar, a little lighter than the window in dark.
 #[test]
-fn an_inactive_window_keeps_its_soft_edge_in_its_inactive_background() {
+fn an_inactive_window_sets_its_row_on_the_inactive_title_bar_band() {
     let mut h = Harness::<Behind>::with_layer(support::theme());
     h.resize(Size::new(600.0, 300.0));
     scrolled_by(&mut h, 30.0);
     h.send(cupertino_ui_platform::WindowEvent::Focus(false));
-    let inactive = support::theme().colors.get(
-        ColorRole::WindowBackground,
-        cupertino_ui_theme::StateVariant {
-            window_active: false,
-            ..cupertino_ui_theme::StateVariant::NORMAL
-        },
+    let band = support::color(
+        ColorRole::InactiveTitlebar,
+        InteractionVariant::Normal,
+        false,
     );
-    let edge = fills(&h)
-        .into_iter()
-        .find_map(|(rect, paint)| match paint {
-            Paint::Linear { stops, .. } if stops.len() == SOFT_EDGE_STOPS => Some((rect, stops)),
-            _ => None,
-        })
-        .expect("a soft edge in an inactive window");
-    assert_eq!(edge.0, Rect::new(0.0, 0.0, 600.0, 52.0));
-    assert_eq!(
-        edge.1,
-        soft_edge_stops(inactive.expect("a window background"))
+    let drawn = fills(&h);
+    assert!(
+        !drawn.iter().any(
+            |(_, p)| matches!(p, Paint::Linear { stops, .. } if stops.len() == SOFT_EDGE_STOPS)
+        ),
+        "no veil while the window is not active"
     );
+    assert!(
+        drawn
+            .iter()
+            .any(|(rect, paint)| *rect == Rect::new(0.0, 0.0, 600.0, 52.0)
+                && *paint == Paint::Solid(band)),
+        "the band is the inactive title bar colour"
+    );
+    let level_of = (band.g * 255.0).round() as u8;
+    for y in [2, 30, 51] {
+        assert_eq!(level(&h, 300, y), level_of, "solid at {y}");
+    }
+    assert_eq!(level(&h, 300, 60), 0, "plain below the band");
+    let background = window_background();
+    assert_ne!(band, background, "the band stands apart from the window");
+    // active again, the veil returns
+    h.send(cupertino_ui_platform::WindowEvent::Focus(true));
+    assert!(fills(&h)
+        .iter()
+        .any(|(_, p)| matches!(p, Paint::Linear { stops, .. } if stops.len() == SOFT_EDGE_STOPS)));
+}
+
+/// With Reduce Transparency an inactive window's band is the inactive title bar colour, with the hard edge's separator.
+#[test]
+fn an_inactive_window_with_reduce_transparency_keeps_the_separator_under_its_band() {
+    let mut rt = support::theme();
+    rt.preferences.reduce_transparency = true;
+    let mut h = Harness::<Behind>::with_layer(rt);
+    h.resize(Size::new(600.0, 300.0));
+    scrolled_by(&mut h, 30.0);
+    h.send(cupertino_ui_platform::WindowEvent::Focus(false));
+    let band = support::color(
+        ColorRole::InactiveTitlebar,
+        InteractionVariant::Normal,
+        false,
+    );
+    let separator = support::color(ColorRole::Separator, InteractionVariant::Normal, false);
+    assert_eq!(level(&h, 300, 30), (band.g * 255.0).round() as u8);
+    assert_eq!(level(&h, 300, 51), (separator.g * 255.0).round() as u8);
 }
 
 #[test]

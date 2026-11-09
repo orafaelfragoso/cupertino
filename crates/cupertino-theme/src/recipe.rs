@@ -853,8 +853,10 @@ mod tests {
         let sidebar = inactive("Sidebar");
         assert_eq!(sidebar.rendition_key, "inactive.normal");
         assert!(sidebar.backdrop.is_none());
-        assert!(near(sidebar.fills[0].rgba[0], 0.1569) && near(sidebar.fills[0].rgba[3], 1.0));
-        assert!(sidebar.fills[1].tint_layer && near(sidebar.fills[1].rgba[3], 0.1));
+        // a grey near the window's background, laid with the desktop tint strongly enough that the wallpaper's colour
+        // still reads in the sidebar of a window that is not active
+        assert!(near(sidebar.fills[0].rgba[0], 0.13) && near(sidebar.fills[0].rgba[3], 1.0));
+        assert!(sidebar.fills[1].tint_layer && near(sidebar.fills[1].rgba[3], 0.145));
     }
 
     #[test]

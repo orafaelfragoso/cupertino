@@ -37,6 +37,9 @@ let recipe = theme.recipe(Appearance::Light, "Sidebar", &MaterialOptions::defaul
 colour catalogs are partial, so missing names fall back to the matching normal-contrast appearance.
 `light-high-contrast` has its own `window-rim` and `window-rim-2x`, [0,0,0,127] like `dark-high-contrast`'s
 (approximated), so its rims are dark strokes instead of the light appearance's white one.
+The high-contrast backgrounds keep the normal ones: the light window stays white, the dark window is [33,34,39] (a
+shade above the normal one) and the dark control and text backgrounds are 23; none is lighter than its normal token
+in light or darker in dark beyond that, and none is more transparent (tested).
 `Appearance::of_session(dark, increase_contrast) is the appearance a shell process draws with, from the session's dark
 flag and its Increase Contrast option.
 
@@ -48,7 +51,8 @@ flag and its Increase Contrast option.
 - **Inactive windows.** The materials of a window's own body (`KEPT_WHEN_INACTIVE`: `Sidebar`, `InlineSidebar`,
   `Titlebar`, `SeamlessWindowTitlebar`, `Header`) draw their own inactive variant in an inactive window: an opaque base
   laid with the desktop tint and no backdrop, so the sidebar keeps the wallpaper's tint whatever lies behind the window
-  and reads the same over a busy or a dark scene. Their `-Opaque` variants (Reduce Transparency) are drawn the same in
+  and reads the same over a busy or a dark scene. The dark sidebar's base is grey 0.13 with the tint at 0.145, so a
+  blue wallpaper leaves it a dark navy; the light one is grey 0.9412 with the tint at 0.075. Their `-Opaque` variants (Reduce Transparency) are drawn the same in
   an inactive window as in an active one, in every appearance and interaction, since the data's inactive opaque
   variants are darker than the window. What else an inactive window changes is its labels, its selection and its
   window buttons, through their own roles. Other materials (menus, selections, sheets) keep their inactive variants,

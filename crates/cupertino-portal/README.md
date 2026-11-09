@@ -200,6 +200,23 @@ captured unless the person agrees.
 Known limitations: no window or area target and no pointer in the image. A picked colour is the copied pixel's value,
 without the display's colour profile, and the picker has no keyboard movement of the pointer.
 
+## Diagnostic events
+
+The process records versioned diagnostic events to the user's event store (`$XDG_STATE_HOME/cupertino/events`), each
+beside the line or answer it already gives; `main` installs the recorder before anything else. App ids, interfaces and
+D-Bus error names are recorded as they are; a path in an error's text is recorded as its hash.
+
+| Event | Severity | Fields | Where |
+|---|---|---|---|
+| `portal.request.failed` | warn | `interface`, `method`, `app_id` (when the call has one), `error` (the D-Bus error name) | a call of FileChooser, AppChooser, ScreenCast, Session, Screenshot or Request is refused (a caller other than the frontend, bad arguments, a limit) |
+| `portal.screencast.failed` | error | `stage` (`start`: the stream never reached the app; `running`: a share failed after), `app_id` (for `start`), `error` | a share does not start or ends on a failure |
+| `portal.permission.store_failed` | warn | `operation` (`save`, `load`), `app_id`, `error` | `screen-sharing.conf` cannot be written (the share is kept only while the app runs) or read (nothing is restored) |
+| `portal.screenshot.failed` | error | `method` (`Screenshot`, `PickColor`), `app_id` (when known), `error` | a granted screenshot or colour pick cannot copy, write or pick |
+| `portal.exit_error` | error | `error` | the process ends with an error |
+| `portal.panic` | fatal | `panic`, `location` | any panic |
+
+`cupertino diagnose events --component cupertino-portal` lists them.
+
 ## Installing
 
 - `bin/cupertino-portal`

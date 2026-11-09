@@ -1,6 +1,7 @@
 //! What every dialog of the backend shares: only xdg-desktop-portal may call it, and the frontend may end a call early
 //! through the `org.freedesktop.impl.portal.Request` object at the call's handle.
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use zbus::fdo::DBusProxy;
 use zbus::message::Header;
 use zbus::names::BusName;
@@ -30,6 +31,35 @@ pub enum PortalError {
     AccessDenied(String),
     InvalidArgs(String),
     LimitsExceeded(String),
+}
+
+/// `result` of `method` of `interface`, which `app_id` asked for through the frontend, as it was; a refusal is recorded
+/// as `portal.request.failed` with its D-Bus error name.
+pub fn answered<T>(
+    interface: &'static str,
+    method: &'static str,
+    app_id: Option<&str>,
+    result: Result<T, PortalError>,
+) -> Result<T, PortalError> {
+    if let Err(error) = &result {
+        let mut event = diag::event(
+            Severity::Warn,
+            "portal.request.failed",
+            "a portal request was refused",
+        )
+        .field("interface", Value::Public(interface))
+        .field("method", Value::Public(method));
+        if let Some(app_id) = app_id {
+            event = event.field("app_id", Value::Public(app_id));
+        }
+        event
+            .field(
+                "error",
+                Value::Public(zbus::DBusError::name(error).as_str()),
+            )
+            .emit();
+    }
+    result
 }
 
 /// Refuses a call that does not come from the current owner of [`FRONTEND`], so no application can skip the
@@ -65,9 +95,13 @@ impl Request {
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] connection: &Connection,
     ) -> Result<(), PortalError> {
-        from_frontend(&header, connection).await?;
-        let _ = self.closed.try_send(());
-        Ok(())
+        let result = async {
+            from_frontend(&header, connection).await?;
+            let _ = self.closed.try_send(());
+            Ok(())
+        }
+        .await;
+        answered("org.freedesktop.impl.portal.Request", "Close", None, result)
     }
 }
 

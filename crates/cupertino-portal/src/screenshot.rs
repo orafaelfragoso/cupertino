@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use cupertino_diagnostic_events::{self as diag, Severity, Value as Field};
 use cupertino_filepicker::places::parse_user_dirs;
 use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, Transform};
 use zbus::message::Header;
@@ -24,7 +25,7 @@ use zbus::{interface, Connection};
 use crate::consent::{identify, Identity};
 use crate::file_chooser::file_uri;
 use crate::pick::Picked;
-use crate::request::{from_frontend, Exported, PortalError, Response};
+use crate::request::{answered, from_frontend, Exported, PortalError, Response};
 
 /// The interface version served.
 pub const VERSION: u32 = 3;
@@ -293,6 +294,21 @@ impl Screenshot {
 
 type Options = HashMap<String, OwnedValue>;
 
+/// Records `portal.screenshot.failed`: `method` (`Screenshot` or `PickColor`) of `app_id` (when known) was granted but
+/// the displays could not be copied, written or picked from.
+pub fn screenshot_failed(method: &'static str, app_id: Option<&str>, error: &str) {
+    let mut event = diag::event(
+        Severity::Error,
+        "portal.screenshot.failed",
+        "a screenshot or colour pick failed",
+    )
+    .field("method", Field::Public(method));
+    if let Some(app_id) = app_id {
+        event = event.field("app_id", Field::Public(app_id));
+    }
+    event.field("error", Field::Public(error)).emit();
+}
+
 #[interface(name = "org.freedesktop.impl.portal.Screenshot")]
 impl Screenshot {
     async fn screenshot(
@@ -304,59 +320,71 @@ impl Screenshot {
         parent_window: String,
         options: Options,
     ) -> Result<(u32, HashMap<String, OwnedValue>), PortalError> {
-        from_frontend(&header, connection).await?;
-        let app_id = text("app_id", app_id)?;
-        let parent_window = text("parent_window", parent_window)?;
-        // the consent window is a window of its own over its parent, and the same window whether interactive or not;
-        // it shows even when the frontend checked the permission store, so nothing is captured without consent
-        option::<bool>(&options, "modal")?;
-        option::<bool>(&options, "interactive")?;
-        option::<bool>(&options, "permission_store_checked")?;
-        if let Some(target) = option::<u32>(&options, "target")? {
-            if target != TARGET_SCREEN {
-                return Err(invalid(format!("target {target} is not served")));
+        let app = app_id.clone();
+        let result = async {
+            from_frontend(&header, connection).await?;
+            let app_id = text("app_id", app_id)?;
+            let parent_window = text("parent_window", parent_window)?;
+            // the consent window is a window of its own over its parent, and the same window whether interactive or not;
+            // it shows even when the frontend checked the permission store, so nothing is captured without consent
+            option::<bool>(&options, "modal")?;
+            option::<bool>(&options, "interactive")?;
+            option::<bool>(&options, "permission_store_checked")?;
+            if let Some(target) = option::<u32>(&options, "target")? {
+                if target != TARGET_SCREEN {
+                    return Err(invalid(format!("target {target} is not served")));
+                }
             }
-        }
 
-        let _pending = Pending::take(&self.calls, &handle, &app_id)?;
-        let request = Exported::at(connection, handle.as_ref()).await?;
-        let (reply, answer) = async_channel::bounded(1);
-        let identity = self.identity(&app_id);
-        (self.events)(Event::Ask {
-            handle: handle.clone(),
-            ask: Box::new(Ask {
-                app_name: identity.name,
-                app_icon: identity.icon,
-                app_id,
-                parent_window,
-            }),
-            reply: Reply(reply),
-        });
-        let answer = futures_lite::future::or(async { Some(answer.recv().await.ok()) }, async {
-            request.closed().await;
-            None
-        })
-        .await;
-        let answered = match answer {
-            Some(Some(Answer::Granted)) => match self.take(&request).await {
-                Ok(path) => match file_uri(&path) {
-                    Some(uri) => (Response::Success as u32, results(uri)?),
-                    None => (Response::Other as u32, HashMap::new()),
+            let _pending = Pending::take(&self.calls, &handle, &app_id)?;
+            let request = Exported::at(connection, handle.as_ref()).await?;
+            let (reply, answer) = async_channel::bounded(1);
+            let identity = self.identity(&app_id);
+            (self.events)(Event::Ask {
+                handle: handle.clone(),
+                ask: Box::new(Ask {
+                    app_name: identity.name,
+                    app_icon: identity.icon,
+                    app_id,
+                    parent_window,
+                }),
+                reply: Reply(reply),
+            });
+            let answer =
+                futures_lite::future::or(async { Some(answer.recv().await.ok()) }, async {
+                    request.closed().await;
+                    None
+                })
+                .await;
+            let answered = match answer {
+                Some(Some(Answer::Granted)) => match self.take(&request).await {
+                    Ok(path) => match file_uri(&path) {
+                        Some(uri) => (Response::Success as u32, results(uri)?),
+                        None => (Response::Other as u32, HashMap::new()),
+                    },
+                    Err(reason) => {
+                        eprintln!("cupertino-portal: the screenshot for {handle} failed: {reason}");
+                        screenshot_failed("Screenshot", Some(&app), &reason);
+                        (Response::Other as u32, HashMap::new())
+                    }
                 },
-                Err(reason) => {
-                    eprintln!("cupertino-portal: the screenshot for {handle} failed: {reason}");
+                Some(Some(Answer::Cancelled)) => (Response::Cancelled as u32, HashMap::new()),
+                Some(None) => (Response::Other as u32, HashMap::new()),
+                None => {
+                    (self.events)(Event::Close { handle });
                     (Response::Other as u32, HashMap::new())
                 }
-            },
-            Some(Some(Answer::Cancelled)) => (Response::Cancelled as u32, HashMap::new()),
-            Some(None) => (Response::Other as u32, HashMap::new()),
-            None => {
-                (self.events)(Event::Close { handle });
-                (Response::Other as u32, HashMap::new())
-            }
-        };
-        request.remove().await;
-        Ok(answered)
+            };
+            request.remove().await;
+            Ok(answered)
+        }
+        .await;
+        answered(
+            "org.freedesktop.impl.portal.Screenshot",
+            "Screenshot",
+            Some(&app),
+            result,
+        )
     }
 
     /// The colour of a pixel the person clicks on any display ([`crate::pick`]); 1 when they press Escape, 2 without
@@ -371,53 +399,66 @@ impl Screenshot {
         // the pick has no option: it is always made by the person, over every display
         _options: Options,
     ) -> Result<(u32, HashMap<String, OwnedValue>), PortalError> {
-        from_frontend(&header, connection).await?;
-        let app_id = text("app_id", app_id)?;
-        text("parent_window", parent_window)?;
-        let Some(picks) = &self.picks else {
-            return Ok((Response::Other as u32, HashMap::new()));
-        };
-        let _pending = Pending::take(&self.calls, &handle, &app_id)?;
-        // one pick at a time, refused before a single display is copied for it
-        let Some(_one) = OnePick::take(&self.picking) else {
-            eprintln!("cupertino-portal: {handle} asked for a colour during another pick");
-            return Ok((Response::Other as u32, HashMap::new()));
-        };
-        let request = Exported::at(connection, handle.as_ref()).await?;
-        // nothing of the portal is on screen yet, so the displays are copied at once
-        let answered = match self.copy(&request, Instant::now()).await {
-            Ok(displays) => {
-                let (reply, picked) = async_channel::bounded(1);
-                picks(PickEvent::Pick {
-                    handle: handle.clone(),
-                    displays,
-                    reply: PickReply(reply),
-                });
-                let picked =
-                    futures_lite::future::or(async { Some(picked.recv().await.ok()) }, async {
-                        request.closed().await;
-                        None
-                    })
-                    .await;
-                match picked {
-                    Some(Some(Picked::Colour(colour))) => {
-                        (Response::Success as u32, colour_results(colour)?)
-                    }
-                    Some(Some(Picked::Cancelled)) => (Response::Cancelled as u32, HashMap::new()),
-                    Some(None) => (Response::Other as u32, HashMap::new()),
-                    None => {
-                        picks(PickEvent::Close { handle });
-                        (Response::Other as u32, HashMap::new())
+        let app = app_id.clone();
+        let result = async {
+            from_frontend(&header, connection).await?;
+            let app_id = text("app_id", app_id)?;
+            text("parent_window", parent_window)?;
+            let Some(picks) = &self.picks else {
+                return Ok((Response::Other as u32, HashMap::new()));
+            };
+            let _pending = Pending::take(&self.calls, &handle, &app_id)?;
+            // one pick at a time, refused before a single display is copied for it
+            let Some(_one) = OnePick::take(&self.picking) else {
+                eprintln!("cupertino-portal: {handle} asked for a colour during another pick");
+                return Ok((Response::Other as u32, HashMap::new()));
+            };
+            let request = Exported::at(connection, handle.as_ref()).await?;
+            // nothing of the portal is on screen yet, so the displays are copied at once
+            let answered = match self.copy(&request, Instant::now()).await {
+                Ok(displays) => {
+                    let (reply, picked) = async_channel::bounded(1);
+                    picks(PickEvent::Pick {
+                        handle: handle.clone(),
+                        displays,
+                        reply: PickReply(reply),
+                    });
+                    let picked =
+                        futures_lite::future::or(async { Some(picked.recv().await.ok()) }, async {
+                            request.closed().await;
+                            None
+                        })
+                        .await;
+                    match picked {
+                        Some(Some(Picked::Colour(colour))) => {
+                            (Response::Success as u32, colour_results(colour)?)
+                        }
+                        Some(Some(Picked::Cancelled)) => {
+                            (Response::Cancelled as u32, HashMap::new())
+                        }
+                        Some(None) => (Response::Other as u32, HashMap::new()),
+                        None => {
+                            picks(PickEvent::Close { handle });
+                            (Response::Other as u32, HashMap::new())
+                        }
                     }
                 }
-            }
-            Err(reason) => {
-                eprintln!("cupertino-portal: the colour pick for {handle} failed: {reason}");
-                (Response::Other as u32, HashMap::new())
-            }
-        };
-        request.remove().await;
-        Ok(answered)
+                Err(reason) => {
+                    eprintln!("cupertino-portal: the colour pick for {handle} failed: {reason}");
+                    screenshot_failed("PickColor", Some(&app), &reason);
+                    (Response::Other as u32, HashMap::new())
+                }
+            };
+            request.remove().await;
+            Ok(answered)
+        }
+        .await;
+        answered(
+            "org.freedesktop.impl.portal.Screenshot",
+            "PickColor",
+            Some(&app),
+            result,
+        )
     }
 
     #[zbus(property)]

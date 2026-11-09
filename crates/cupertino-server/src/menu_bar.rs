@@ -1468,9 +1468,6 @@ impl Cupertino {
         });
     }
 
-    /// The keyboard focus moved to `focused`. The first move after the bar's popup grab ended decides on the pending
-    /// edit: it goes out at the next tick when the keyboard came back to its window, and is dropped when it went
-    /// anywhere else, so it never reaches whatever has the keyboard later.
     /// The keyboard went to the menu bar: its layer surface (the bar's keyboard mode) or one of its menus. The window
     /// whose menus the bar shows is still the window in use, so it keeps its activated state, and since its client heard
     /// the keyboard leave it is told so again: an application whose menu is open in the bar keeps its active look. The
@@ -1487,6 +1484,9 @@ impl Cupertino {
         }
     }
 
+    /// The keyboard focus moved to `focused`. The first move after the bar's popup grab ended decides on the pending
+    /// edit: it goes out at the next tick when the keyboard came back to its window, and is dropped when it went
+    /// anywhere else, so it never reaches whatever has the keyboard later.
     pub(crate) fn menu_bar_edit_focus(&mut self, focused: Option<&WlSurface>) {
         let Some(edit) = &self.menu_bars.edit else {
             return;

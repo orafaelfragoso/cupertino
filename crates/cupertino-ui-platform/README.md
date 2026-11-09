@@ -14,7 +14,7 @@ and `GlassTone::{Appearance, Dark, Light}` picks the colour of the text over it.
 `WindowSpec::decorations` chooses the window's style: `Preferred` (titled: the compositor's title bar over the
 content), `Client`, `None`, and the styles whose content fills the window and draws the row the compositor's window
 control buttons lie in (`DecorationMode::content_fills_window`): `Unified` (the 52 pt toolbar row), `UnifiedCompact`
-(the 38 pt one) and `Sidebar` (the buttons at the top of a full-height sidebar). Without the desktop's effects those
+(the 40 pt one) and `Sidebar` (the buttons at the top of a full-height sidebar). Without the desktop's effects those
 three are titled.
 
 `start_drag(window, DragRequest)` drags data out of a window from the pointer button held in it: the data in each of

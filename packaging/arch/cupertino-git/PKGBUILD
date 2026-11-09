@@ -1,6 +1,8 @@
 # Maintainer: Rafael Fragoso <rafaelfragosom@gmail.com>
-# Development recipe: the runtime from the latest commit; the asset pack comes from the stable cupertino-data.
-pkgname=cupertino-git
+# Development recipe: the runtime and the C SDK from the latest commit; the asset pack comes from the stable
+# cupertino-data.
+pkgbase=cupertino-git
+pkgname=('cupertino-git' 'cupertino-kit-git')
 pkgver=0.1.0 # replaced by pkgver()
 pkgrel=1
 pkgdesc='Wayland desktop shell and compositor'
@@ -12,8 +14,6 @@ checkdepends=('cargo-nextest>=0.9.151')
 # makepkg's LTO flags would reach the C code of build dependencies only; the release profile decides for Rust. No
 # split debug package: it is ~0.9 GB of debug info for the sixteen binaries.
 options=('!lto' '!debug')
-provides=('cupertino')
-conflicts=('cupertino')
 source=("cupertino::git+$url.git")
 sha256sums=('SKIP')
 
@@ -34,9 +34,9 @@ build_environment() {
   export CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
   local remap target_dir
   target_dir=$(realpath -m "${CARGO_TARGET_DIR:-target}")
-  for remap in "--remap-path-prefix=$srcdir=/usr/src/debug/$pkgname" \
+  for remap in "--remap-path-prefix=$srcdir=/usr/src/debug/$pkgbase" \
                "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" \
-               "--remap-path-prefix=$target_dir=/usr/src/debug/$pkgname/target"; do
+               "--remap-path-prefix=$target_dir=/usr/src/debug/$pkgbase/target"; do
     case " ${RUSTFLAGS:-} " in
       *" $remap "*) ;;
       *) RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$remap" ;;
@@ -49,6 +49,8 @@ build() {
   cd cupertino
   build_environment
   cargo build --frozen --release --workspace --all-features --bins
+  # libcupertinokit.so, the C SDK's library: the cdylib of cupertino-ui-abi, which no binary links
+  cargo build --frozen --release -p cupertino-ui-abi --lib --all-features
 }
 
 check() {
@@ -62,7 +64,9 @@ check() {
   cargo test --frozen --release --workspace --all-features --doc
 }
 
-package() {
+package_cupertino-git() {
+  provides=('cupertino')
+  conflicts=('cupertino')
   depends=('glibc' 'sh' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus>=1.16' 'polkit' 'gnome-keyring' 'libsecret' 'pipewire>=1:1.4' 'xdg-desktop-portal' 'xdg-desktop-portal-gtk' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'cupertino-data')
   optdepends=('wayland: nested session inside another Wayland desktop'
               'libxkbcommon: nested session'
@@ -75,4 +79,19 @@ package() {
           'etc/pam.d/cupertino-greeter' 'etc/pam.d/cupertino-autologin')
   cd cupertino
   python3 packaging/release.py install --format arch --package runtime --destdir "$pkgdir" --bindir "${CARGO_TARGET_DIR:-target}/release"
+}
+
+# The C SDK: libcupertinokit.so.1 with its soname links, header and pkg-config file (release.py's sdk manifest). It
+# links the toolkit statically and the C and GCC runtimes dynamically; the theme and the asset pack are read at run time
+# when installed, else the toolkit uses its built-in fallbacks.
+package_cupertino-kit-git() {
+  pkgdesc='CupertinoKit C SDK: the libcupertinokit shared library, its header and pkg-config file'
+  license=('MPL-2.0' 'MIT' 'OFL-1.1')
+  depends=('glibc' 'gcc-libs')
+  optdepends=('cupertino-data: the fonts and icons of the desktop'
+              'cupertino: the desktop theme')
+  provides=('cupertino-kit' 'libcupertinokit.so')
+  conflicts=('cupertino-kit')
+  cd cupertino
+  python3 packaging/release.py install --format arch --package sdk --destdir "$pkgdir" --bindir "${CARGO_TARGET_DIR:-target}/release"
 }

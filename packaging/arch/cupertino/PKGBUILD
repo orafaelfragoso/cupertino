@@ -1,7 +1,7 @@
 # Maintainer: Rafael Fragoso <rafaelfragosom@gmail.com>
-# Stable recipe: the runtime and the default asset pack from one release source archive.
+# Stable recipe: the runtime, the default asset pack and the C SDK from one release source archive.
 pkgbase=cupertino
-pkgname=('cupertino' 'cupertino-data')
+pkgname=('cupertino' 'cupertino-data' 'cupertino-kit')
 pkgver=0.1.0
 pkgrel=1
 pkgdesc='Wayland desktop shell and compositor'
@@ -44,6 +44,8 @@ build() {
   cd "cupertino-$pkgver"
   build_environment
   cargo build --frozen --release --workspace --all-features --bins
+  # libcupertinokit.so, the C SDK's library: the cdylib of cupertino-ui-abi, which no binary links
+  cargo build --frozen --release -p cupertino-ui-abi --lib --all-features
 }
 
 check() {
@@ -79,4 +81,18 @@ package_cupertino-data() {
   depends=('adwaita-icon-theme')
   cd "cupertino-$pkgver"
   python3 packaging/release.py install --format arch --package data --destdir "$pkgdir"
+}
+
+# The C SDK: libcupertinokit.so.1 with its soname links, header and pkg-config file (release.py's sdk manifest). It
+# links the toolkit statically and the C and GCC runtimes dynamically; the theme and the asset pack are read at run time
+# when installed, else the toolkit uses its built-in fallbacks.
+package_cupertino-kit() {
+  pkgdesc='CupertinoKit C SDK: the libcupertinokit shared library, its header and pkg-config file'
+  license=('MPL-2.0' 'MIT' 'OFL-1.1')
+  depends=('glibc' 'gcc-libs')
+  optdepends=('cupertino-data: the fonts and icons of the desktop'
+              'cupertino: the desktop theme')
+  provides=('libcupertinokit.so')
+  cd "cupertino-$pkgver"
+  python3 packaging/release.py install --format arch --package sdk --destdir "$pkgdir" --bindir "${CARGO_TARGET_DIR:-target}/release"
 }

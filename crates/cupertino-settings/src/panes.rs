@@ -1448,11 +1448,14 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
     }
 }
 
-/// The label of a "looks like" choice: its size in points, with the default, the one with the biggest text and the one
-/// with the most room named.
-pub fn display_size_label(list: &cupertino_displays::Catalogue, index: usize) -> String {
-    let c = &list.choices[index];
-    let size = about::mode_text((c.mode.width, c.mode.height));
+/// The label of a "looks like" choice of `monitor`: its size in points as the display shows it, with the default, the
+/// one with the biggest text and the one with the most room named.
+pub fn display_size_label(
+    monitor: &crate::live::Monitor,
+    list: &cupertino_displays::Catalogue,
+    index: usize,
+) -> String {
+    let size = about::mode_text(monitor.choice_logical(&list.choices[index]));
     let note = if list.default == Some(index) {
         Some("Default")
     } else if index == 0 {
@@ -1477,15 +1480,19 @@ fn display_size_row(index: usize, monitor: &crate::live::Monitor) -> Option<Row>
         return None;
     }
     let mut choices: Vec<String> = (0..list.choices.len())
-        .map(|i| display_size_label(&list, i))
+        .map(|i| display_size_label(monitor, &list, i))
         .collect();
-    let shown = monitor
-        .logical
-        .map(|(w, h)| cupertino_displays::Extent::new(w, h));
-    let selected = match shown.map(|e| (list.position(e), e)) {
+    let shown = monitor.logical.map(|logical| {
+        let at = list
+            .choices
+            .iter()
+            .position(|c| monitor.choice_logical(c) == logical);
+        (at, logical)
+    });
+    let selected = match shown {
         Some((Some(i), _)) => i,
-        Some((None, extent)) => {
-            choices.push(about::mode_text((extent.width, extent.height)));
+        Some((None, logical)) => {
+            choices.push(about::mode_text(logical));
             choices.len() - 1
         }
         None => list.default.unwrap_or(0),
@@ -2537,7 +2544,7 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
                 // the extra item of a size that is none of the choices: choosing it again keeps it
                 return Vec::new();
             };
-            if monitor.logical == Some((choice.mode.width, choice.mode.height)) {
+            if monitor.logical == Some(monitor.choice_logical(choice)) {
                 return Vec::new();
             }
             match &monitor.connector {
@@ -2847,6 +2854,52 @@ mod tests {
         assert_eq!(
             rows,
             ["Desktop Size", "Resolution", "Refresh Rate", "Scale"]
+        );
+    }
+
+    #[test]
+    fn a_turned_display_shows_its_sizes_turned_and_the_one_it_shows_chosen() {
+        // a 27-inch 4K monitor turned upright, at 1.5: the desktop is 1440 x 2560 points
+        let upright = crate::live::Monitor {
+            title: "Studio 27".into(),
+            mode: (3840, 2160),
+            refresh_mhz: Some(60_000),
+            scale: 1.5,
+            connector: Some("DP-1".into()),
+            physical_mm: Some((597, 336)),
+            logical: Some((1440, 2560)),
+            rotated: true,
+        };
+        let live = displays(vec![upright.clone()]);
+        let list = upright.catalogue();
+        let at = list
+            .choices
+            .iter()
+            .position(|c| c.scale == 1.5)
+            .expect("1.5 is one of the choices");
+        let Control::Popup { choices, selected } = size_row(&live).unwrap().control else {
+            panic!("a popup");
+        };
+        assert_eq!(
+            choices.len(),
+            list.choices.len(),
+            "no extra size: {choices:?}"
+        );
+        assert_eq!(selected, at);
+        assert!(
+            choices[at].starts_with(&format!("1440{nb}×{nb}2560", nb = '\u{202f}')),
+            "{}",
+            choices[at]
+        );
+        assert_eq!(
+            change(
+                ControlId::DisplaySize(0),
+                Value::Index(at),
+                &mut unset(),
+                &live
+            ),
+            [],
+            "the size shown already"
         );
     }
 

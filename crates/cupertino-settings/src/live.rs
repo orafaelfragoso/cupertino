@@ -283,6 +283,18 @@ impl Monitor {
                 default: None,
             })
     }
+
+    /// The points the desktop has on this display at `choice`, turned with the display like `logical`: a choice is
+    /// sized on the mode as the display scans it out, so a display turned by 90 or 270 degrees shows it with its sides
+    /// swapped.
+    pub fn choice_logical(&self, choice: &cupertino_displays::Candidate) -> (u32, u32) {
+        let (w, h) = (choice.mode.width, choice.mode.height);
+        if self.rotated {
+            (h, w)
+        } else {
+            (w, h)
+        }
+    }
 }
 
 /// Every live reading.

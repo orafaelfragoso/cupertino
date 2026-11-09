@@ -1,4 +1,4 @@
-"""Original layered icon constructions on a common superellipse keyline."""
+"""Original layered app tiles and free-standing system icon constructions."""
 import math
 
 # The tile occupies 236 of 256 units, leaving room for its soft lower shadow.
@@ -195,16 +195,21 @@ def document(kind, small):
 def trash(full, small):
     result = ''
     if full:
-        for x,y,angle,color in [(75,49,-14,'url(#paper)'),(120,42,17,'url(#gold)'),(101,61,-2,'url(#ice)')]:
-            result += box(x,y,65,96,9,color,f'transform="rotate({angle} 128 120)" stroke="#fff" stroke-width="1.2"')
+        result += shape('M76 91L72 63L84 49L111 54L120 79L111 103Z','url(#paper)','stroke="#fff" stroke-width="1.2"')
+        result += shape('M115 91L123 47L143 42L163 56L174 84L153 106Z','url(#gold)','stroke="#fff" stroke-width="1.2"')
+        result += shape('M95 105L101 69L119 61L144 72L151 101L126 119Z','url(#ice)','stroke="#fff" stroke-width="1.2"')
+        if not small:
+            result += line('M76 63L99 71L84 49M99 71L111 94M123 47L142 65L163 56M142 65L150 95M101 69L122 84L144 72M122 84L126 110','#86acbb',1.3,'opacity=".6"')
     silhouette = 'M65 83L77 190Q80 211 128 211Q176 211 179 190L191 83Z'
     result += shadow(shape(silhouette,'#005369'),small)
     result += shape(silhouette,'url(#mint)','fill-opacity=".75" stroke="#e3ffff" stroke-width="1.7"')
     result += '<ellipse cx="128" cy="83" rx="63" ry="19" fill="#126e83" opacity=".65"/>'
     result += '<ellipse cx="128" cy="81" rx="63" ry="19" fill="none" stroke="url(#ice)" stroke-width="6"/>'
     if full:
-        result += shape('M87 115L114 107L133 145L104 158Z','#fff','opacity=".55"')
-        result += shape('M134 131L159 117L169 159L142 174Z','#d1ffef','opacity=".45"')
+        result += shape('M87 119L102 108L118 114L130 137L120 153L103 158L91 143Z','#fff','opacity=".65"')
+        result += shape('M134 133L147 118L162 125L169 148L160 164L142 174L136 153Z','#e8fff6','opacity=".55"')
+        if not small:
+            result += line('M88 120L111 134L103 158M111 134L118 114M135 134L154 143L142 174M154 143L162 125','#388b8d',1.5,'opacity=".4"')
     if not small:
         result += line('M79 107L89 184Q91 195 106 196','#efffff',5,'opacity=".7"')
         result += line('M179 105L170 183','#007781',4,'opacity=".35"')
@@ -230,14 +235,14 @@ def computer(small):
 def badge(locked, small):
     if locked:
         arch = 'M86 119V92Q86 50 128 50Q170 50 170 92V119H155V91Q155 66 128 66Q101 66 101 92V119Z'
-        result = shadow(shape(arch,'#6c3100'),small)+shape(arch,'url(#edge)','stroke="#fff" stroke-width="1.1"')
+        result = shadow(shape(arch,'#6c3100'),small)+shape(arch,'url(#edge)','stroke="#6d512b" stroke-width="3"' if small else 'stroke="#fff" stroke-width="1.1"')
         result += shadow(box(70,108,116,103,23,'#843800'),small)+box(70,108,116,103,23,'url(#gold)','stroke="#fff1cb" stroke-width="1.6"')
         result += orb(128,150,13 if small else 11,'#83501c')+box(123,152,10,25,5,'#83501c')
         if not small:
             result += shape('M81 117H176V140Q126 122 80 151Z','url(#sheen)')
         return result
     arrow = 'M60 188V141Q60 103 99 103H140V72Q140 63 148 69L201 114Q207 120 201 126L148 171Q140 178 140 168V137H100Q90 137 90 148V188Q90 196 82 196H68Q60 196 60 188Z'
-    result = shadow(shape(arrow,'#001f40'),small)+shape(arrow,'url(#ice)','stroke="#e8ffff" stroke-width="1.5"')
+    result = shadow(shape(arrow,'#001f40'),small)+shape(arrow,'url(#ice)' if small else 'url(#glass)','stroke="#064c80" stroke-width="7" stroke-linejoin="round"' if small else 'stroke="#e8ffff" stroke-width="1.5"')
     if not small:
         result += line('M70 179V141Q70 113 100 113H149V84','#fff',3,'opacity=".7"')
     return result
@@ -265,4 +270,25 @@ def render(name, small, symbols):
         palette, body = ['#ffdb7b','#f4a82e','#c77215'], badge(True,small)
     else:
         palette, body = ['#469cae','#225e79','#12394e'], badge(False,small)
-    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">'+definitions(palette)+tile(small)+body+'</svg>\n'
+    if name.startswith('application.'):
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">'+definitions(palette)+tile(small)+body+'</svg>\n'
+    # Free-standing objects have their own silhouette and optical canvas fit.
+    if name.startswith('folder'):
+        transform = 'translate(-25 -30) scale(1.2)' if name.endswith('generic-open') else 'translate(-38 -43) scale(1.3)'
+        ground = '<ellipse cx="128" cy="225" rx="96" ry="5" fill="#07152c" opacity=".2" filter="url(#shadow)"/>'
+    elif name.startswith('document.'):
+        transform = 'translate(-22 -21) scale(1.15)'
+        ground = ''
+    elif name.startswith('trash.'):
+        transform = 'translate(-26 -24) scale(1.2)'
+        ground = '<ellipse cx="128" cy="230" rx="55" ry="5" fill="#073b3e" opacity=".22" filter="url(#shadow)"/>'
+    elif name == 'computer':
+        transform = 'translate(-29 -35) scale(1.23)'
+        ground = '<ellipse cx="128" cy="232" rx="66" ry="4" fill="#07152c" opacity=".22" filter="url(#shadow)"/>'
+    elif name == 'locked.badge':
+        transform = 'translate(-89 -43) scale(1.7 1.3)'
+        ground = ''
+    else:
+        transform = 'translate(-60 -59) scale(1.45)'
+        ground = ''
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">'+definitions(palette)+ground+'<g transform="'+transform+'">'+body+'</g></svg>\n'

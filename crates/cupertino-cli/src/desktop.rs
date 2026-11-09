@@ -306,8 +306,16 @@ fn session(args: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure>
         },
         &format!("starting {}", program.display()),
     )?;
+    let mut command = cx.command(&program);
+    // SAFETY: close_range, getrlimit and fcntl are async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            close_others_on_exec();
+            Ok(())
+        });
+    }
     // only returns when it could not run the program
-    let e = cx.command(&program).exec();
+    let e = command.exec();
     Err(Failure::new(
         FailureKind::Unavailable,
         "session_failed",
@@ -407,10 +415,12 @@ impl Server {
             .stdout(Stdio::from(out))
             // its own process group: a Ctrl-C of the terminal reaches this command, which asks it to end
             .process_group(0);
-        // SAFETY: only async-signal-safe calls (fcntl, prctl, getppid, kill) run between fork and exec.
+        // SAFETY: only async-signal-safe calls (close_range, getrlimit, fcntl, prctl, getppid, kill) run between fork
+        // and exec.
         unsafe {
             command.pre_exec(move || {
-                // the write end alone survives the exec, under the number --ready-fd names
+                // the write end alone survives the exec beside the standard streams, under the number --ready-fd names
+                close_others_on_exec();
                 if libc::fcntl(fd, libc::F_SETFD, 0) == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -533,6 +543,40 @@ impl Drop for Server {
         while self.exited().is_none() {
             self.terminate();
             self.wait_step();
+        }
+    }
+}
+
+/// Marks every descriptor above the standard streams close-on-exec, so a program the command starts gets none of what
+/// this process inherited from its own parent (the lock of a build tool, a pipe of a terminal multiplexer). Runs between
+/// fork and exec: only async-signal-safe calls.
+fn close_others_on_exec() {
+    // SAFETY: close_range only changes descriptor flags; the fallback reads the descriptor limit and sets the flag of
+    // each number below it, which fails harmlessly on a number that is not open.
+    unsafe {
+        if libc::syscall(
+            libc::SYS_close_range,
+            3 as libc::c_uint,
+            libc::c_uint::MAX,
+            libc::CLOSE_RANGE_CLOEXEC,
+        ) == 0
+        {
+            return;
+        }
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        let end = if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 {
+            limit.rlim_cur.min(1 << 16) as RawFd
+        } else {
+            1024
+        };
+        for fd in 3..end {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags != -1 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
         }
     }
 }

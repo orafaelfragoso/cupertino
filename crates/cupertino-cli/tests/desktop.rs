@@ -21,7 +21,9 @@ const HANG_GUARD: Duration = Duration::from_secs(60);
 /// - `wait`: says it is ready, writes a runtime file with its pid, and sleeps until a signal ends it;
 /// - `stubborn`: says it is ready and ignores SIGTERM;
 /// - `exit-0` and `exit-3`: says it is ready and exits with that status;
-/// - `early`: exits 1 without saying it is ready.
+/// - `early`: exits 1 without saying it is ready;
+/// - `silent`: never says it is ready, keeps the descriptor open and sleeps until a signal ends it;
+/// - `partial`: writes `WAYLAND_DISPLAY=` without the line end, keeps the descriptor open and sleeps.
 const FAKE: &str = r#"#!/bin/bash
 # the command passes its own PATH, which may be empty
 PATH=/usr/bin:/bin
@@ -45,6 +47,8 @@ case "$FAKE_MODE" in
     exit-0) ready; exit 0 ;;
     exit-3) ready; exit 3 ;;
     early) exit 1 ;;
+    silent) exec sleep infinity ;;
+    partial) printf 'WAYLAND_DISPLAY=wayland-fake' >&"$fd"; exec sleep infinity ;;
 esac
 exit 2
 "#;
@@ -68,15 +72,65 @@ impl Bench {
         self.dir.path().join(name)
     }
 
+    /// The stand-ins of this bench still running: the processes whose environment names its `FAKE_ARGS`.
+    fn stand_ins(&self) -> Vec<libc::pid_t> {
+        let mut mark = b"FAKE_ARGS=".to_vec();
+        mark.extend_from_slice(self.path("args").as_os_str().as_encoded_bytes());
+        mark.push(0);
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<libc::pid_t>().ok())
+            .filter(|pid| {
+                std::fs::read(format!("/proc/{pid}/environ"))
+                    .is_ok_and(|env| env.windows(mark.len()).any(|w| w == mark))
+            })
+            // a zombie has an empty environment and holds nothing
+            .collect()
+    }
+}
+
+impl Drop for Bench {
+    /// A stand-in that outlived its test, because the test failed or what ends it is broken, is killed: it would hold
+    /// the descriptors it inherited (a build tool's lock among them) until the machine restarts.
+    fn drop(&mut self) {
+        for pid in self.stand_ins() {
+            // SAFETY: a signal to a process this bench started, found by the environment only it has.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+}
+
+/// The installed command run by a process test: killed and reaped when the test ends, also when it fails.
+struct Job(std::process::Child);
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
+impl std::ops::Deref for Job {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Job {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Bench {
     /// A context with the stand-in as `CUPERTINO_SERVER`, in `mode`, and a runtime directory.
     fn context(&self, mode: &str) -> Context<'static> {
-        Context::isolated(self.dir.path())
-            .with_var("CUPERTINO_SERVER", self.path("cupertino-server"))
-            .with_var("FAKE_MODE", mode)
-            .with_var("FAKE_ARGS", self.path("args"))
-            .with_var("XDG_RUNTIME_DIR", self.path("runtime"))
-            .with_var("PATH", "/usr/bin:/bin")
-            .with_var("CUPERTINO_ASSET_SEARCH_PATH", "")
+        bench_context(self.dir.path(), mode)
     }
 
     /// The arguments the stand-in got, its `--ready-fd` number replaced with `N`.
@@ -91,20 +145,32 @@ impl Bench {
     }
 }
 
+/// The context of the bench in `dir`: what [`Bench::context`] gives, for a thread that cannot borrow the bench.
+fn bench_context(dir: &std::path::Path, mode: &str) -> Context<'static> {
+    Context::isolated(dir)
+        .with_var("CUPERTINO_SERVER", dir.join("cupertino-server"))
+        .with_var("FAKE_MODE", mode)
+        .with_var("FAKE_ARGS", dir.join("args"))
+        .with_var("XDG_RUNTIME_DIR", dir.join("runtime"))
+        .with_var("PATH", "/usr/bin:/bin")
+        .with_var("CUPERTINO_ASSET_SEARCH_PATH", "")
+}
+
 fn run(cx: Context, words: &[&str]) -> Output {
     Runner::new(REGISTRY).context(cx).run(&args(words), "r1")
 }
 
-/// Standard output that sets `stop` once a `ready` event has been written: what Ctrl-C does once the compositor runs.
-struct StopWhenReady<'a> {
+/// Standard output that sets `stop` once the event `when` has been written: what Ctrl-C does at that point.
+struct StopWhen<'a> {
     out: Vec<u8>,
     stop: &'a StopFlag,
+    when: &'static str,
 }
 
-impl Write for StopWhenReady<'_> {
+impl Write for StopWhen<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.out.extend_from_slice(buf);
-        if String::from_utf8_lossy(&self.out).contains(r#""event":"ready""#) {
+        if String::from_utf8_lossy(&self.out).contains(&format!(r#""event":"{}""#, self.when)) {
             self.stop.set();
         }
         Ok(buf.len())
@@ -117,10 +183,16 @@ impl Write for StopWhenReady<'_> {
 
 /// Runs `words` and asks the command to stop once the compositor is ready.
 fn run_until_ready(cx: Context, words: &[&str]) -> Output {
+    run_until(cx, words, "ready")
+}
+
+/// Runs `words` and asks the command to stop once it wrote the event `when`.
+fn run_until(cx: Context, words: &[&str], when: &'static str) -> Output {
     let stop = StopFlag::new();
-    let mut out = StopWhenReady {
+    let mut out = StopWhen {
         out: Vec::new(),
         stop: &stop,
+        when,
     };
     let mut err = Vec::new();
     let code = Runner::new(REGISTRY).context(cx).stop(&stop).run_to(
@@ -509,7 +581,7 @@ fn installed_pair(b: &Bench) -> PathBuf {
 fn the_installed_command_finds_the_compositor_beside_it_and_forwards_sigterm() {
     let b = Bench::new();
     let cli = installed_pair(&b);
-    let mut child = Command::new(&cli)
+    let mut child = Job(Command::new(&cli)
         .args([
             "--format",
             "jsonl",
@@ -528,7 +600,7 @@ fn the_installed_command_finds_the_compositor_beside_it_and_forwards_sigterm() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let stdout = child.stdout.take().unwrap();
     let (tx, rx) = mpsc::channel();
     let reader = std::thread::spawn(move || {
@@ -585,4 +657,213 @@ fn the_installed_command_finds_the_compositor_beside_it_and_forwards_sigterm() {
     assert!(!b
         .path("runtime/cupertino/server-wayland-fake.json")
         .exists());
+    assert_eq!(
+        b.stand_ins(),
+        Vec::<libc::pid_t>::new(),
+        "nothing outlives it"
+    );
+}
+
+/// A compositor that never says it is ready, or says half of it and keeps the pipe open, is stopped all the same: the
+/// command never waits on the pipe or on the process, only for one of them with a bound.
+#[test]
+fn a_stop_ends_a_compositor_that_never_said_it_was_ready() {
+    for mode in ["silent", "partial"] {
+        // the bench stays with the test, so its stand-in is killed when the test fails
+        let b = Bench::new();
+        let dir = b.dir.path().to_path_buf();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let words = [
+                "--format",
+                "jsonl",
+                "desktop",
+                "start",
+                "--backend",
+                "headless",
+            ];
+            let _ = tx.send(run_until(bench_context(&dir, mode), &words, "starting"));
+        });
+        let out = rx
+            .recv_timeout(HANG_GUARD)
+            .unwrap_or_else(|_| panic!("{mode}: the command hung"));
+        assert_eq!(out.code, 0, "{mode}: {}", out.stdout);
+        let r = records(&out, "desktop start");
+        assert_eq!(
+            kinds(&r),
+            ["event:starting", "event:exited", "result", "end"],
+            "{mode}"
+        );
+        assert_eq!(r[1]["data"]["signal"], 15, "{mode}: {}", r[1]);
+        assert_eq!(r[2]["data"]["wayland_display"], Value::Null, "{mode}");
+        assert_eq!(r[3]["reason"], "stopped", "{mode}");
+        assert_eq!(b.stand_ins(), Vec::<libc::pid_t>::new(), "{mode}");
+    }
+}
+
+/// The installed command started like a terminal's job: in a process group of its own, with the stand-in in `mode`.
+fn start_job(b: &Bench, mode: &str) -> (Job, mpsc::Receiver<String>) {
+    use std::os::unix::process::CommandExt;
+    let cli = installed_pair(b);
+    let mut child = Job(Command::new(&cli)
+        .args([
+            "--format",
+            "jsonl",
+            "desktop",
+            "start",
+            "--backend",
+            "headless",
+        ])
+        .env_clear()
+        .env("PATH", "")
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+        .env("FAKE_MODE", mode)
+        .env("FAKE_ARGS", b.path("args"))
+        .env("XDG_RUNTIME_DIR", b.path("runtime"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap());
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    (child, rx)
+}
+
+/// The lines up to and with the `ready` event.
+fn until_ready(rx: &mpsc::Receiver<String>) -> Vec<String> {
+    let mut lines = Vec::new();
+    loop {
+        let line = rx.recv_timeout(HANG_GUARD).expect("the ready event");
+        let ready = line.contains(r#""event":"ready""#);
+        lines.push(line);
+        if ready {
+            return lines;
+        }
+    }
+}
+
+/// Ctrl-C at a terminal sends SIGINT to the foreground process group, the command's. The compositor runs in a group of
+/// its own, so it does not get the SIGINT: the command asks it to end with SIGTERM and reports that.
+#[test]
+fn ctrl_c_at_the_terminal_reaches_the_command_which_ends_the_compositor_with_sigterm() {
+    let b = Bench::new();
+    let (mut child, rx) = start_job(&b, "wait");
+    let mut lines = until_ready(&rx);
+    // SAFETY: SIGINT to the process group the command leads, as a terminal sends it.
+    assert_eq!(
+        unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGINT) },
+        0
+    );
+    while let Ok(line) = rx.recv_timeout(HANG_GUARD) {
+        lines.push(line);
+    }
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(0));
+    let records: Vec<Value> = lines
+        .iter()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(
+        records[2]["data"]["signal"], 15,
+        "the compositor got the command's SIGTERM, not the terminal's SIGINT: {}",
+        records[2]
+    );
+    assert_eq!(records.last().unwrap()["reason"], "stopped");
+    assert_eq!(
+        b.stand_ins(),
+        Vec::<libc::pid_t>::new(),
+        "nothing outlives it"
+    );
+}
+
+/// A command killed outright cannot ask the compositor to end; its parent-death signal does.
+#[test]
+fn a_killed_command_takes_the_compositor_with_it() {
+    let b = Bench::new();
+    let (mut child, rx) = start_job(&b, "wait");
+    until_ready(&rx);
+    let info: Value = serde_json::from_slice(
+        &std::fs::read(b.path("runtime/cupertino/server-wayland-fake.json")).unwrap(),
+    )
+    .unwrap();
+    let server = info["pid"].as_i64().unwrap() as libc::pid_t;
+    // SAFETY: pidfd_open takes a pid and flags and returns a new descriptor or -1.
+    let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, server, 0) };
+    assert!(pidfd >= 0, "the compositor runs");
+    // SAFETY: a signal to the child, which is not reaped yet.
+    assert_eq!(
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGKILL) },
+        0
+    );
+    child.wait().unwrap();
+    let mut poll = libc::pollfd {
+        fd: pidfd as i32,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one valid pollfd; the pidfd becomes readable when the process ends.
+    let ended = unsafe { libc::poll(&mut poll, 1, HANG_GUARD.as_millis() as libc::c_int) };
+    // SAFETY: closing the pidfd opened above.
+    unsafe { libc::close(pidfd as i32) };
+    assert_eq!(ended, 1, "the compositor {server} ended with the command");
+    assert_eq!(
+        b.stand_ins(),
+        Vec::<libc::pid_t>::new(),
+        "nothing outlives it"
+    );
+}
+
+/// The compositor gets the standard streams and the ready descriptor alone, whatever the command inherited: a
+/// descriptor the command's parent left open (a build tool's lock, say) never reaches it, so a compositor that outlived
+/// everything could not hold it. The stand-in has closed the ready descriptor by the time it sleeps.
+#[test]
+fn the_compositor_inherits_no_descriptor_but_the_ready_one() {
+    let b = Bench::new();
+    let mut fds = [0; 2];
+    // SAFETY: a pipe without close-on-exec, which the command started below inherits, as a build tool's lock is.
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    let (job, rx) = start_job(&b, "wait");
+    // SAFETY: closing the pipe this test made; the command has its own copy.
+    unsafe {
+        libc::close(fds[0]);
+        libc::close(fds[1]);
+    }
+    until_ready(&rx);
+    let info: Value = serde_json::from_slice(
+        &std::fs::read(b.path("runtime/cupertino/server-wayland-fake.json")).unwrap(),
+    )
+    .unwrap();
+    let server = info["pid"].as_i64().unwrap();
+    // the stand-in writes the file as a script, then closes the ready descriptor and becomes `sleep`
+    let since = std::time::Instant::now();
+    while std::fs::read_to_string(format!("/proc/{server}/comm")).unwrap_or_default() != "sleep\n" {
+        assert!(since.elapsed() < HANG_GUARD, "the stand-in never slept");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let held = |pid: i64| -> Vec<i32> {
+        let mut fds: Vec<i32> = std::fs::read_dir(format!("/proc/{pid}/fd"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_str().unwrap().parse().unwrap())
+            .collect();
+        fds.sort();
+        fds
+    };
+    assert!(
+        held(i64::from(job.id())).contains(&fds[1]),
+        "the command itself inherited the pipe, as the test means"
+    );
+    assert_eq!(held(server), [0, 1, 2], "the compositor holds nothing else");
+    drop(job);
+    // the guard killed the command; its parent-death signal ends the stand-in, and the bench kills one left over
+    let _ = b.stand_ins();
 }

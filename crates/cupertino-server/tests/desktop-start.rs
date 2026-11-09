@@ -66,6 +66,36 @@ impl Dirs {
     }
 }
 
+/// Kills a process the test started when the test ends, also when it fails, so no server or command outlives it holding
+/// what it inherited. It holds a pidfd, so a process already gone and its reused pid are never signalled.
+struct KillOnDrop(Option<OwnedFd>);
+
+impl KillOnDrop {
+    fn new(pid: u32) -> Self {
+        // SAFETY: pidfd_open takes a pid and flags and returns a new descriptor or -1.
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
+        // SAFETY: a non-negative result is a new descriptor owned here.
+        Self((fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd as i32) }))
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(fd) = &self.0 {
+            // SAFETY: a signal through a pidfd this guard owns; one to a process that ended fails harmlessly.
+            unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    std::os::fd::AsRawFd::as_raw_fd(fd),
+                    libc::SIGKILL,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                )
+            };
+        }
+    }
+}
+
 /// The lines of `from`, as a reader thread sends them; the channel closes at its end.
 fn lines(from: impl Read + Send + 'static) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel();
@@ -132,6 +162,7 @@ fn the_server_announces_its_socket_on_the_ready_descriptor_and_writes_its_runtim
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    let _guard = KillOnDrop::new(child.id());
     drop(write);
     let pid = child.id();
     let announced = lines(std::fs::File::from(read)).recv_timeout(HANG_GUARD);
@@ -235,6 +266,7 @@ fn desktop_start_runs_the_headless_server_until_it_is_stopped() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let _guard = KillOnDrop::new(child.id());
     let stdout = lines(child.stdout.take().unwrap());
     // the server's own output goes to the command's stderr, read as it comes so it never fills
     let stderr = lines(child.stderr.take().unwrap());
@@ -370,6 +402,7 @@ fn a_server_ended_by_a_signal_removes_its_runtime_file_and_still_ends_by_that_si
     for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP, libc::SIGABRT] {
         let dirs = Dirs::new();
         let (child, announced) = start_announced(&dirs);
+        let _guard = KillOnDrop::new(child.id());
         let Ok(line) = announced.recv_timeout(HANG_GUARD) else {
             let status = exit_of(child);
             if dirs.no_device("") {
@@ -421,6 +454,7 @@ fn a_killed_desktop_start_ends_its_server_which_removes_its_runtime_file() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let _guard = KillOnDrop::new(child.id());
     let stdout = lines(child.stdout.take().unwrap());
     let stderr = lines(child.stderr.take().unwrap());
     let mut ready = None;
@@ -445,6 +479,7 @@ fn a_killed_desktop_start_ends_its_server_which_removes_its_runtime_file() {
         .join(format!("server-{display}.json"));
     let info: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     let server = u32::try_from(info["pid"].as_u64().unwrap()).unwrap();
+    let _server_guard = KillOnDrop::new(server);
     // nothing of the command runs after SIGKILL: the server hears of it through its parent-death signal
     // SAFETY: a signal to the child, which is not reaped yet.
     assert_eq!(

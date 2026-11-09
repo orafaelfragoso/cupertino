@@ -16,6 +16,7 @@
 //! [`FailureKind`]. The rules for streams (records, a closed output, signals) are in [`stream`].
 
 mod appearance;
+pub mod completions;
 mod desktop;
 mod dev;
 mod diagnose;
@@ -48,6 +49,7 @@ pub const REGISTRY: &[Group] = &[
     desktop::GROUP,
     dev::GROUP,
     version::GROUP,
+    completions::GROUP,
 ];
 
 /// Group names kept for commands of a later release. `cupertino <name>` answers `unsupported`/`not_in_this_release`

@@ -4,7 +4,8 @@ Display mode model: the scaled "looks like" sizes a display offers, the scale a 
 quantities (mode, logical extent, scale, rasters) kept apart. Pure functions,
 no I/O, no dependencies., §1a. Layer: `models`.
 
-Used by `cupertino-server` (`displays::default_scale`: the scale of a display without stored settings).
+Used by `cupertino-server` (`displays::default_scale`: the scale of a display without stored settings; `displays` and
+`displays::recovery`: the arrangement checks, a returning display's place, windows and the pointer kept reachable).
 
 ## Public API
 
@@ -17,6 +18,7 @@ Used by `cupertino-server` (`displays::default_scale`: the scale of a display wi
 | `default_choice(panel, refresh_mhz) | the scale a new display starts at: a built-in panel's default size, an external display's anchor; `None` (unscaled) when the native height is at or below the floor |
 | `scaled_choices(panel, refresh_mhz) | `catalogue(..).choices` |
 | `is_built_in(connector)` | whether a connector name (`eDP-1`, `LVDS-1`, `DSI-1`) is the machine's own panel |
+| `arrangement`: `Area`, `check`, `ArrangementError`, `free_place`, `relocate`, `reachable_point` | the displays that are on as one arrangement in the global logical space: `check` refuses an empty set, an area that is empty or not finite, one beyond `COORDINATE_LIMIT` (the 32-bit range positions travel in) and two that overlap (touching along an edge is fine; there is no mirroring); `free_place` keeps a returning display's place when it is free, else puts it right of the others level with the highest; `relocate` keeps a frame's distance from its display's top-left corner on another display; `reachable_point` brings a point no display covers onto the nearest point of the nearest display |
 | `geometry`: `Extent`, `OutputGeometry`, `GeometryError`, `raster`, `scale_in_120ths` | the quantities of an output kept apart: the mode in panel pixels (not turned), the logical extent in points (the turned mode over the scale, rounded), the effective scale, and buffer rasters for a logical extent at a scale in 120ths (halves rounded up, as the fractional-scale protocol does; `whole_raster` at the next whole scale). `to_points` / `to_pixels` map panel pixels and points by the scale the output is drawn with; `snap` and `snap_outward` put edges on panel pixel edges. A zero extent, a scale that is not finite and positive, or a side that overflows fails with `GeometryError` |
 
 ## Tests
@@ -29,7 +31,10 @@ ratio, and the candidate scales. A 14-inch 3024 × 1964 built-in panel offers 10
 whole table of 22 sizes pick the same five; eight built-in panels from 1280 × 800 to 3840 × 2400 get ordered ladders
 with their default, the panel's aspect ratio and outputs of exactly their points; connectors tell the built-in panel.
 `geometry` tests: logical extents, rasters and their rounding, refusal of empty, invalid and overflowing sizes,
-pixel-point mapping at 1, 1.25, 1.5, 1.75, 2 and 2.953125, and snapped edges on pixel edges.
+pixel-point mapping at 1, 1.25, 1.5, 1.75, 2 and 2.953125, and snapped edges on pixel edges. `arrangement` tests: side by side and
+stacked displays pass, overlapping and identical ones are refused, empty, non-finite and out-of-range areas are refused, a
+returning display keeps a free place or goes right of the others, a frame keeps its offset across displays, and a lost
+point comes onto the nearest display.
 
 Decision: the built-in ladder is used only for a connector of the machine's own panel; an external display keeps the
 bucket list, so the default of external monitors does not change.

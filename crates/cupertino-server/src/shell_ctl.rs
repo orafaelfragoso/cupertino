@@ -12,17 +12,14 @@ use crate::shell::{self, OverviewSession};
 use crate::state::Cupertino;
 
 impl Cupertino {
-    /// The overview shortcut: open on the pointer's output (`app_mode`: the front application's
+    /// The overview shortcut: open on the active output (`app_mode`: the front application's
     /// windows), or leave an open one.
     pub fn toggle_overview(&mut self, app_mode: bool) {
         if self.shell.overview_open() {
             self.close_overview();
             return;
         }
-        let Some(output) = self
-            .output_at(self.pointer.current_location())
-            .map(|o| o.id)
-        else {
+        let Some(output) = self.active_output() else {
             return;
         };
         let mode = match (app_mode, self.wm.front_app()) {

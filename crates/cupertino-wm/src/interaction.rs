@@ -50,12 +50,12 @@ struct EdgeDwell {
 }
 
 pub(crate) struct MoveState {
-    window: WindowId,
+    pub(crate) window: WindowId,
     grab: Point,
     start_pointer: Point,
-    start_frame: Rect,
+    pub(crate) start_frame: Rect,
     pulled_out: bool,
-    output: OutputId,
+    pub(crate) output: OutputId,
     snap: Option<SnapCandidate>,
     preview: Option<Preview>,
     edge: Option<EdgeDwell>,
@@ -65,7 +65,7 @@ pub(crate) struct MoveState {
 }
 
 pub(crate) struct ResizeState {
-    window: WindowId,
+    pub(crate) window: WindowId,
     edges: Edges,
     start_pointer: Point,
     start_frame: Rect,

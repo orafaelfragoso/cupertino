@@ -10,7 +10,9 @@
 
 pub mod edid;
 pub mod management;
+pub mod placement;
 pub mod power;
+pub mod recovery;
 
 use std::path::PathBuf;
 
@@ -18,6 +20,7 @@ use anyhow::{anyhow, Context, Result};
 use cupertino_defaults::displays::{
     display_key, DisplaySettings, DisplaysConfig, ModeSetting, Transform as StoredTransform,
 };
+use cupertino_displays::arrangement::{self, Area, ArrangementError};
 use cupertino_wm::OutputId;
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::wayland_server::backend::GlobalId;
@@ -148,6 +151,8 @@ pub struct Displays {
     pub saved: DisplaysConfig,
     /// Something changed that output-management clients have not been sent `done` for.
     dirty: bool,
+    /// Windows that moved off a display that went away, until it comes back (`recovery`).
+    pub departed: Vec<recovery::Departure>,
     pub(crate) managers: Vec<management::Manager>,
     pub(crate) powers: Vec<power::PowerObject>,
     _management: GlobalId,
@@ -163,6 +168,7 @@ impl Displays {
             store: None,
             saved: DisplaysConfig::default(),
             dirty: false,
+            departed: Vec::new(),
             managers: Vec::new(),
             powers: Vec::new(),
             _management: management::create_global(dh),
@@ -218,6 +224,17 @@ impl Displays {
             .max()
             .unwrap_or(0)
     }
+}
+
+/// The area of the global logical space a head in `state` covers.
+fn state_area(state: &HeadState) -> Area {
+    let r = output_rect(
+        state.mode.output_mode(),
+        state.scale,
+        state.transform,
+        state.position,
+    );
+    Area::new(r.x, r.y, r.w, r.h)
 }
 
 /// The display model's panel for a head showing `mode`: `None` when its physical size is unknown.
@@ -435,6 +452,19 @@ impl Cupertino {
         if let Some(scale) = scale {
             state.scale = scale;
         }
+        // a display that comes back to a place another one took meanwhile goes beside the others
+        let others: Vec<Area> = self
+            .displays
+            .heads
+            .iter()
+            .filter(|h| h.state.enabled)
+            .map(|h| state_area(&h.state))
+            .collect();
+        let (x, y) = arrangement::free_place(&others, state_area(&state));
+        if (x, y) != (f64::from(state.position.0), f64::from(state.position.1)) {
+            tracing::info!(%key, from = ?state.position, to = ?(x, y), "the stored place is taken; the display goes beside the others");
+            state.position = (x as i32, y as i32);
+        }
         if !state.enabled && !self.displays.heads.iter().any(|h| h.state.enabled) {
             tracing::info!(%key, "enabling a display stored as disabled: no other display is on");
             state.enabled = true;
@@ -570,6 +600,11 @@ impl Cupertino {
         let head = self.displays.head_mut(id).expect("the head being enabled");
         head.output = Some(output);
         head.powered = true;
+        let key = head.key.clone();
+        if let Some(entry) = self.outputs.iter_mut().find(|o| o.id == output) {
+            entry.identity = Some(key.clone());
+        }
+        self.restore_departed(output, &key);
         self.refresh_surface_scales();
         output
     }
@@ -621,9 +656,7 @@ impl Cupertino {
                 .expect("every head is listed");
             slot.1 = *state;
         }
-        if !after.iter().any(|(_, s)| s.enabled) {
-            return Err("at least one display must stay on".into());
-        }
+        self.check_arrangement(&after)?;
         if test_only {
             return Ok(());
         }
@@ -633,9 +666,19 @@ impl Cupertino {
             .iter()
             .map(|h| (h.id, h.state))
             .collect();
+        let offered: Vec<Vec<HeadMode>> = self
+            .displays
+            .heads
+            .iter()
+            .map(|h| h.info.modes.clone())
+            .collect();
         let result = self.set_head_states(&after);
         if let Err(e) = &result {
             tracing::warn!(error = %e, "applying the display configuration failed, restoring the previous one");
+            // a mode the failed configuration added is not offered afterwards
+            for (head, modes) in self.displays.heads.iter_mut().zip(offered) {
+                head.info.modes = modes;
+            }
             if let Err(e) = self.set_head_states(&before) {
                 tracing::error!(error = %e, "restoring the previous display configuration failed");
             }
@@ -655,6 +698,30 @@ impl Cupertino {
             self.store_displays();
         }
         result
+    }
+
+    /// Check the arrangement `states` would give as a whole (`cupertino_displays::arrangement::check`): a display on,
+    /// each inside the coordinate range, none overlapping another.
+    fn check_arrangement(&self, states: &[(HeadId, HeadState)]) -> Result<(), String> {
+        let on: Vec<(&str, Area)> = states
+            .iter()
+            .filter(|(_, s)| s.enabled)
+            .filter_map(|(id, s)| {
+                let head = self.displays.head(*id)?;
+                Some((head.info.connector.as_str(), state_area(s)))
+            })
+            .collect();
+        let areas: Vec<Area> = on.iter().map(|(_, a)| *a).collect();
+        arrangement::check(&areas).map_err(|e| match e {
+            ArrangementError::Nothing => e.to_string(),
+            ArrangementError::Empty(i) => format!("{} would have no logical size", on[i].0),
+            ArrangementError::OutOfRange(i) => {
+                format!("{} would lie beyond the coordinate range", on[i].0)
+            }
+            ArrangementError::Overlap(a, b) => {
+                format!("{} and {} would overlap", on[a].0, on[b].0)
+            }
+        })
     }
 
     /// Bring every head to its wanted state: the ones turned off first, so their resources are
@@ -772,8 +839,8 @@ impl Cupertino {
         }
     }
 
-    /// Tell every surface the scale it should draw at: a layer surface its output's, a window the
-    /// first output's (windows are not tracked per output yet).
+    /// Tell every surface the scale it should draw at: a layer surface its output's, a window the scale of the output
+    /// it is on (`placement`).
     pub fn refresh_surface_scales(&mut self) {
         use smithay::wayland::compositor::with_states;
         use smithay::wayland::fractional_scale::with_fractional_scale;
@@ -790,10 +857,7 @@ impl Cupertino {
                 set(layer.wl_surface(), o.scale);
             }
         }
-        let scale = self.preferred_scale();
-        for w in &self.windows {
-            set(w.surface(), scale);
-        }
+        self.refresh_window_scales();
     }
 }
 

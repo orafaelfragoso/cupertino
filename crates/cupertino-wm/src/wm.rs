@@ -7,7 +7,7 @@ use crate::command::{Activation, AnimationKind, Command, Effect, MapParams, Requ
 use crate::config::WmConfig;
 use crate::focus::FocusState;
 use crate::geometry::Rect;
-use crate::ids::{AppId, OutputId, WindowId};
+use crate::ids::{AppId, OutputId, WindowId, WorkspaceId};
 use crate::interaction::Interaction;
 use crate::kind;
 use crate::lifecycle::{Lifecycle, LifecycleState, Presentation, Resting};
@@ -206,8 +206,13 @@ impl Wm {
                 output,
                 rect,
                 usable,
-            } => self.add_output(output, rect, usable, o),
+            } => self.add_output(output, rect, usable, now, o),
             Command::RemoveOutput { output } => self.remove_output(output, now, o),
+            Command::MoveWindowToOutput {
+                window,
+                output,
+                frame,
+            } => self.move_window_to_output(window, output, frame, now, o),
             Command::SetUsableArea { output, usable } => {
                 if let Some(op) = self.outputs.iter_mut().find(|p| p.id == output) {
                     op.usable = usable;
@@ -373,7 +378,14 @@ impl Wm {
         out
     }
 
-    fn add_output(&mut self, id: OutputId, rect: Rect, usable: Rect, out: &mut Vec<Effect>) {
+    fn add_output(
+        &mut self,
+        id: OutputId,
+        rect: Rect,
+        usable: Rect,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         if self.outputs.iter().any(|o| o.id == id) {
             return;
         }
@@ -384,6 +396,19 @@ impl Wm {
             dock_zone: None,
         });
         self.create_output_workspaces(id, out);
+        // windows left without an output when the last one went come onto this one, so they are reachable again
+        let ws = self.workspaces[&id].current;
+        let mut orphans: Vec<WindowId> = self
+            .windows
+            .values()
+            .filter(|w| !self.outputs.iter().any(|o| o.id == w.output))
+            .map(|w| w.id)
+            .collect();
+        orphans.sort();
+        for wid in orphans {
+            let normal = self.windows[&wid].lifecycle.normal_frame();
+            self.transfer_to_output(wid, id, ws, normal, now, out);
+        }
     }
 
     /// Refit the windows of an output whose rectangle changed.
@@ -453,36 +478,123 @@ impl Wm {
             .map(|w| w.id)
             .collect();
         ids.sort();
+        for &wid in &ids {
+            let normal = self.windows[&wid].lifecycle.normal_frame();
+            self.transfer_to_output(wid, dest.id, dest_ws, normal, now, out);
+        }
+        self.interaction_left_output(id, dest.id, &ids, out);
+    }
+
+    /// Output `gone` went and its windows, `moved`, are on `dest` now. A window being dragged keeps following the
+    /// pointer, which the server brings onto a remaining output; a cancelled drag puts it back where it is now rather
+    /// than where it started on the output that went. A resize ends with the frame the window was given on `dest`: its
+    /// edges were measured from a frame and a pointer on the output that went.
+    fn interaction_left_output(
+        &mut self,
+        gone: OutputId,
+        dest: OutputId,
+        moved: &[WindowId],
+        out: &mut Vec<Effect>,
+    ) {
+        match &self.interaction {
+            Interaction::Moving(m) => {
+                let frame = moved
+                    .contains(&m.window)
+                    .then(|| self.windows.get(&m.window))
+                    .flatten()
+                    .map(|w| w.lifecycle.normal_frame());
+                if let Interaction::Moving(m) = &mut self.interaction {
+                    if m.output == gone {
+                        m.output = dest;
+                    }
+                    if let Some(frame) = frame {
+                        m.start_frame = frame;
+                    }
+                }
+            }
+            Interaction::Resizing(r) if moved.contains(&r.window) => {
+                let window = r.window;
+                self.interaction = Interaction::Idle;
+                if let Some(c) = self.configure_effect(window, false) {
+                    out.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Put window `wid` on output `dest`, in its workspace `ws`, with its normal frame at `normal` fitted into the
+    /// output's usable area. Every frame the window can go back to moves with it: the zoomed, tiled and full-screen
+    /// ones are fitted to `dest`. A full-screen window leaves full screen there, since its full-screen workspace stays
+    /// with (or went with) the output it was on.
+    fn transfer_to_output(
+        &mut self,
+        wid: WindowId,
+        dest: OutputId,
+        ws: WorkspaceId,
+        normal: Rect,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(o) = self.output(dest).copied() else {
+            return;
+        };
         let margin = self.cfg.snap.tiled_margin;
-        for wid in ids {
-            let w = self.windows.get_mut(&wid).unwrap();
-            w.output = dest.id;
-            w.workspace = dest_ws;
-            // every frame the window can go back to moves with it: the normal frame, and the zoomed, tiled and
-            // full-screen ones fitted to the remaining output
-            let normal = w.lifecycle.normal_frame().clamp_into(&dest.usable);
-            let zoom = best_fit(&self.cfg.zoom, dest.usable, normal, &w.hints());
-            let tile = match w.lifecycle.resting() {
-                Resting::Tiled(kind) => tile_rect(kind, dest.usable, margin),
-                _ => normal,
-            };
-            let changed = w.lifecycle.move_to_output(normal, zoom, tile, dest.rect);
-            // its full-screen workspace went with the output: it leaves full screen on the remaining one rather than
-            // take that output's screen over
-            if w.lifecycle.state().is_fullscreen() && w.lifecycle.exit_fullscreen(now) {
-                self.emit_layout(wid, AnimationKind::ExitFullScreen, out);
-                continue;
-            }
-            if !w.lifecycle.state().is_visible() {
-                continue;
-            }
-            if let Some(c) = self.configure_effect(wid, false).filter(|_| changed) {
-                out.push(c);
-            }
-            out.push(Effect::Place {
-                window: wid,
-                rect: self.windows[&wid].geometry(),
-            });
+        let Some(w) = self.windows.get_mut(&wid) else {
+            return;
+        };
+        w.output = dest;
+        w.workspace = ws;
+        let normal = normal.clamp_into(&o.usable);
+        let zoom = best_fit(&self.cfg.zoom, o.usable, normal, &w.hints());
+        let tile = match w.lifecycle.resting() {
+            Resting::Tiled(kind) => tile_rect(kind, o.usable, margin),
+            _ => normal,
+        };
+        let changed = w.lifecycle.move_to_output(normal, zoom, tile, o.rect);
+        if w.lifecycle.state().is_fullscreen() && w.lifecycle.exit_fullscreen(now) {
+            self.emit_layout(wid, AnimationKind::ExitFullScreen, out);
+            return;
+        }
+        if !w.lifecycle.state().is_visible() {
+            return;
+        }
+        if let Some(c) = self.configure_effect(wid, false).filter(|_| changed) {
+            out.push(c);
+        }
+        out.push(Effect::Place {
+            window: wid,
+            rect: self.windows[&wid].geometry(),
+        });
+    }
+
+    /// [`Command::MoveWindowToOutput`]: a full-screen window and a sticky one stay; one already on `output` takes the
+    /// frame in its own workspace.
+    fn move_window_to_output(
+        &mut self,
+        wid: WindowId,
+        output: OutputId,
+        frame: Rect,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(current) = self.workspaces.get(&output).map(|o| o.current) else {
+            return;
+        };
+        let Some(w) = self.windows.get(&wid) else {
+            return;
+        };
+        if w.sticky || w.lifecycle.state().is_fullscreen() {
+            return;
+        }
+        let ws = if w.output == output {
+            w.workspace
+        } else {
+            current
+        };
+        self.transfer_to_output(wid, output, ws, frame, now, out);
+        if self.focus.key_window == Some(wid) && !self.focusable(wid) {
+            self.release_focus(wid, now, out);
         }
     }
 

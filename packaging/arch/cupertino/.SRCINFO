@@ -55,7 +55,7 @@ pkgname = cupertino
 	backup = etc/pam.d/cupertino-autologin
 
 pkgname = cupertino-data
-	pkgdesc = Default asset pack of Cupertino: Inter, the icon map and six Unsplash wallpapers
+	pkgdesc = Default asset pack of Cupertino: original icons, Inter and six Unsplash wallpapers
 	arch = any
 	license = GPL-3.0-or-later
 	license = OFL-1.1

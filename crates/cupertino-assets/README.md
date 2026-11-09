@@ -1,7 +1,11 @@
 # cupertino-assets
 
 The asset packs every Cupertino process draws its text, icons, cursors and wallpaper from, and the `cupertino-assets`
-tool that checks a pack. A pack is a directory with a `manifest.json`; packs live outside the repository. With no
+tool that checks a pack. A pack is a directory with a `manifest.json`. The original first-party icon pack lives in
+`data/assets/cupertino` (GPL-3.0-or-later); third-party packs live outside the repository. Its full-colour artwork uses
+1024-unit source canvases, glass app tiles, sky-blue folders with recessed marks, folded white documents and neutral ribbed bins.
+The pack supplies 16/32-pixel optical editions and 64–1024-pixel master renditions. Lettering is outlined geometry.
+`data/assets/cupertino/CREDITS.md` describes regeneration through the same native SVG loader the shell uses. With no
 pack installed, the built-in fallback (the embedded Inter subset, procedural cursors and placeholder icons) is used.
 
 ## Manifest
@@ -43,7 +47,8 @@ skipped; only invalid JSON or an unsupported version makes the pack unusable.
 ## Resolution
 
 `Assets::discover()` reads the packs of `search_path()`, in order: `$CUPERTINO_ASSET_DIR` (when set and not empty),
-`$XDG_DATA_HOME/cupertino/assets` (`~/.local/share/cupertino/assets` when unset), `/usr/share/cupertino/assets`, then the
+`$XDG_DATA_HOME/cupertino/assets` (`~/.local/share/cupertino/assets` when unset), `/usr/share/cupertino/assets/cupertino`,
+`/usr/share/cupertino/assets`, then the
 built-in fallback. Resolution is per logical name: the first pack that provides a name wins. Nothing here stops a process.
 
 | Kind | Built-in fallback |
@@ -114,8 +119,8 @@ unsupported version, never because assets are missing. `PackReport` is that repo
 ## Open issues
 
 Every process draws the system's icons from this crate by logical name and reports the names no pack provides at
-startup (`SystemIcons::required`); they are drawn as placeholders. A public default pack (an open icon theme map) is not
-in this tree yet. `volume.internal` and `volume.external` are not in the directory (those
+startup (`SystemIcons::required`). The packaged original icon pack provides all raster and symbol names; the
+built-in fallback stays available to isolated tests. `volume.internal` and `volume.external` are not in the directory (those
 icons do not exist yet) and `document.script` has no payload icon (scripts use `document.text`). The semantic icon name
 list is not checked against the contract's list, only its shape.
 

@@ -93,7 +93,11 @@ Size, Kind, each cut with an ellipsis in its cell; a type the kind table does no
 subtype (`mime::kind_description`), in capitals only when it is an abbreviation of up to four letters and digits, else
 in words with the first capitalised and, in a subtype of several words, each of up to three kept as an abbreviation
 ("MS WMV movie"); a header click sorts, again reverses; a folder's disclosure triangle, Left and Right open and close
-it in place) or the column view (below). The toolbar and the top of the sidebar are the window's drag region (Kit's `NavigationStack` and
+it in place) or the column view (below). Every view fills the pane and scrolls under the toolbar row, starting below
+it (Kit's `NavigationStack` with `under_toolbar`): icons pass under the row's glass behind the scroll edge, the list
+view's column header sits just below the row and its rows scroll under both on a solid band, and the column view's
+columns scroll under the row while its preview pane starts below it. The row stays first for the keyboard and
+assistive technology. With the tab bar shown the page sits below the row and the bar. The toolbar and the top of the sidebar are the window's drag region (Kit's `NavigationStack` and
 `SidebarWindow`): a drag where no control lies moves the window and a double click there zooms it; back / forward, the
 toolbar's buttons and the search field keep their
 presses, and from the keyboard the compositor's Zoom shortcut (Super+Ctrl+Z by default) and the menu bar's Window menu

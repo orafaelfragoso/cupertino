@@ -32,7 +32,8 @@ all on one thread.
   generation, and a slot whose generation would wrap is retired. More nodes than the ceiling is `UiError::NodeLimit`.
 - **Events.** An event goes down the target's path (capture), reaches the target and goes back up (bubble); a handler
   can stop it. Hit-testing takes the topmost node and respects every clip. Hover enter and leave reach each node the
-  pointer crosses. A captured pointer goes to its node alone until it is released; leaving the surface or the window
+  pointer crosses. A raised node (`Widget::raised`, a toolbar row over a page that scrolls under it) takes a point
+  before the nodes it lies over, wherever it is in the tree, and only where its own `hit` takes it. A captured pointer goes to its node alone until it is released; leaving the surface or the window
   losing the focus cancels it with `Event::Cancel`. A scroll gesture keeps the path its first event hit: a finger's
   until its stop, a wheel's or another source's until it pauses for `SCROLL_IDLE_NS`, the source changes or the
   pointer moves, and any of them until the pointer leaves the surface. A cancelled touch reaches every node its path
@@ -148,6 +149,16 @@ all on one thread.
       }
   }
   ```
+- **Raised nodes.** A node whose `Widget::raised` says so, with its subtree, draws in the window's raised layer
+  when the window system has one (`Capabilities::raised_layer`; `PaintCx::raised_layer`): a frame over the rest of the
+  window from its top edge, with the raised nodes' glass between the two (`MaterialRegion::raised`), so a page
+  scrolled under a toolbar row shows through the row's glass and never covers it, and scrolling repaints the page
+  alone. Content under the layer is not on a material (`on_material`). The part of the window the raised nodes cover
+  is obscured for the rest of it (`PaintCx::obscured`): a scroll container sees it at its top and moves its bar,
+  paging and focus scrolling below it, overlays such as a caret are cut from it (`OverlayCx::reach_obscured` lets one
+  draw there), and a scroll container tells assistive technology only its part below it, while its items keep their
+  true bounds. Without a layer the raised nodes draw in place, after the rest of the window, and scroll containers
+  outside them clip what they scroll to the part the raised nodes leave.
 - **Menus.** A toplevel's `menus` go to the window system as `WindowRequest::Menus` when its bar or its disabled
   items change, and `None` withdraws them; an item chosen in the desktop's menu bar (`WindowEvent::MenuActivated`)
   sends `on_activate`'s message. A popup's menus are ignored.

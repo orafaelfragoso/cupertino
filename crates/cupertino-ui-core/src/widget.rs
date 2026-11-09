@@ -70,8 +70,11 @@ pub trait Widget<M>: 'static {
     /// cut from it. Where the window system has no raised layer
     /// ([`Capabilities::raised_layer`](cupertino_ui_platform::Capabilities)) the nodes draw in place, over what comes
     /// before them, with their materials under the window as any other's, and scroll containers outside them clip
-    /// what they scroll to the part the raised nodes leave, so nothing scrolls over those materials. A widget whose answer changes returns
-    /// [`Change::Layout`] from its update.
+    /// what they scroll to the part the raised nodes leave, so nothing scrolls over those materials. Their paint draws
+    /// after the rest of the window then, but their materials keep their place in the window's list: a material the
+    /// rest of the window asks for later, under the raised nodes, lies over theirs. Raised nodes take a point before the
+    /// nodes they lie over, wherever they are in the tree, so a toolbar row can come first for the keyboard and
+    /// assistive technology. A widget whose answer changes returns [`Change::Layout`] from its update.
     fn raised(&self, _state: &Self::State) -> bool {
         false
     }

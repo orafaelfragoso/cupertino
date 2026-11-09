@@ -89,6 +89,10 @@ timing run does not count a whole-window copy that only a test makes. The Files 
 (see their READMEs). Wall time depends on the machine: a test that pins what a frame repaints reads the damage of
 `HeadlessWindowSystem::frames`.
 
+A `HeadlessWindowSystem::new` with `Capabilities::raised_layer` takes raised layers: `layers(window)` lists every raised
+layer presented (`None` where it was hidden) and `composited(window)` gives the last frame's pixels with the layer
+drawn over them, as a compositor shows them without the materials between the two.
+
 The runtime's waker does not dispatch anything in a headless window system, so `run_until_idle` never blocks.
 `HeadlessWindowSystem::wait_for_wake(timeout)` blocks until a task finishing on another thread (a listing, a
 thumbnail, a file read) wakes it, or the timeout passes, which only guards against a hang. A wake since the last wait

@@ -55,7 +55,12 @@ No free buffer, no configure yet, or a frame at another size than the latest con
 damage is carried (more than 64 rectangles become the whole frame). The transport acknowledges the latest configure
 with every frame. A window's input region (`WindowSpec::input_region`, then `WindowRequest::SetInputRegion`) is sent with
 the next present that follows a change, rounded outwards to whole points; a window that never sets one takes input over
-its whole surface. `request_frame` answers at once when no frame callback is outstanding, else with the callback; a
+its whole surface. A raised layer (`present_layer`) is drawn into a synchronized subsurface at the window's top left
+corner, as wide as the window, at its scale and with an empty input region; its raised materials go to the
+subsurface's backdrops (`cupertino_app_effects_v1` version 11), so the compositor draws them between the subsurface and
+the window's content. Its frame copies only its own damage and what its buffer missed, and it commits before the
+window, so it applies with the window's next commit. The capability needs the transport's subsurfaces and version 11
+of the effects global. `request_frame` answers at once when no frame callback is outstanding, else with the callback; a
 callback nobody asked for is not reported. On a compositor with `wp_presentation`, each presented frame is reported as
 `Presented` with the time it turned visible, moved from the compositor's presentation clock onto the window system's
 clock and never later than now, or as `Discarded` when the compositor never showed it.

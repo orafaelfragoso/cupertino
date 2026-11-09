@@ -1746,7 +1746,7 @@ mod tests {
         for counts in [4.0, 80.0] {
             assert_eq!(ratio(&big_cursor, counts), ratio(&adaptive, counts));
         }
-        let mut mouse = |cfg: &PointerSettings| {
+        let mouse = |cfg: &PointerSettings| {
             PointerDevice::new(false, cfg)
                 .accelerate((60.0, 0.0).into(), 1_000)
                 .x

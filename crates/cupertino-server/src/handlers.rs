@@ -359,6 +359,7 @@ impl SeatHandler for Cupertino {
         }
         self.text_cursor = None;
         self.menu_bar_edit_focus(focused);
+        self.keep_activated_under_menu_bar(focused);
         self.shortcut_inhibit_focus(focused);
     }
 

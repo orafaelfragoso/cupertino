@@ -292,6 +292,19 @@ struct Status {
     force_quit_dialogs: usize,
     /// What an application's keyboard received, in order.
     keys: Vec<KeyEvent>,
+    /// The keyboard's enters and leaves and the toplevel's configures of an application, in order.
+    activity: Vec<Activity>,
+}
+
+/// What tells an application whether its window is the one in use.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Activity {
+    Enter,
+    Leave,
+    /// An `xdg_toplevel.configure`, activated or not.
+    Configure {
+        activated: bool,
+    },
 }
 
 /// A `wl_keyboard` event of an application.
@@ -384,7 +397,13 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for ClientState {
             ),
             _ => return,
         };
-        state.status.lock().unwrap().keys.push(event);
+        let mut status = state.status.lock().unwrap();
+        match event {
+            KeyEvent::Enter => status.activity.push(Activity::Enter),
+            KeyEvent::Leave => status.activity.push(Activity::Leave),
+            _ => {}
+        }
+        status.keys.push(event);
     }
 }
 
@@ -589,13 +608,25 @@ impl Dispatch<xdg_surface::XdgSurface, OtherWindow> for ClientState {
 
 impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         _: &xdg_toplevel::XdgToplevel,
-        _: xdg_toplevel::Event,
+        event: xdg_toplevel::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let xdg_toplevel::Event::Configure { states, .. } = event {
+            let activated = states
+                .chunks_exact(4)
+                .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+                .any(|s| s == xdg_toplevel::State::Activated as u32);
+            state
+                .status
+                .lock()
+                .unwrap()
+                .activity
+                .push(Activity::Configure { activated });
+        }
     }
 }
 
@@ -1205,6 +1236,11 @@ impl AppClient {
     /// What the application's keyboard received so far.
     fn keys(&self) -> Vec<KeyEvent> {
         self.0.status.lock().unwrap().keys.clone()
+    }
+
+    /// The keyboard's enters and leaves and the toplevel's configures so far.
+    fn activity(&self) -> Vec<Activity> {
+        self.0.status.lock().unwrap().activity.clone()
     }
 
     /// The application has the keyboard: its last enter or leave is an enter.
@@ -3780,6 +3816,78 @@ fn open_menu(h: &mut Harness, bar: &BarClient, app: &AppClient) {
     h.wait_until("the menu to hold the grab", |s| {
         s.popup_grab.is_some() && !app.has_keyboard()
     });
+}
+
+/// Whether the application would draw its window as the one in use: the last of its keyboard enter and leave and its
+/// configures decides, as a client that follows both does.
+fn draws_active(activity: &[Activity]) -> bool {
+    match activity.last() {
+        Some(Activity::Enter) => true,
+        Some(Activity::Configure { activated }) => *activated,
+        Some(Activity::Leave) | None => false,
+    }
+}
+
+/// The bar's menu takes the keyboard from the key window, which stays activated: after the leave its client is told
+/// again that it is activated, so the application whose menu is open keeps its active look. Once the menu closes the
+/// keyboard is back, and no further configure comes.
+#[test]
+fn the_window_whose_menu_is_open_in_the_bar_is_told_it_is_still_activated() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, window) = key_app(&mut h, "org.example.editor");
+    settle_app(&mut h, &app);
+    assert!(draws_active(&app.activity()));
+    let from = app.activity().len();
+    open_menu(&mut h, &bar, &app);
+    settle_app(&mut h, &app);
+    let opened = app.activity()[from..].to_vec();
+    assert_eq!(
+        opened,
+        [Activity::Leave, Activity::Configure { activated: true }],
+        "the leave, then the activated state again"
+    );
+    assert!(
+        draws_active(&app.activity()),
+        "active while its menu is open"
+    );
+    assert_eq!(h.state.activated_window(), Some(window));
+
+    let from = app.activity().len();
+    bar.send(Cmd::CloseMenu);
+    h.wait_until("the keyboard back on the application", |_| {
+        app.has_keyboard()
+    });
+    settle_app(&mut h, &app);
+    assert_eq!(app.activity()[from..], [Activity::Enter]);
+    assert_eq!(bar.error(), None);
+}
+
+/// Another application becoming the key window while the bar's menu is open is no longer activated, whatever the menu.
+#[test]
+fn a_window_that_is_no_longer_the_key_window_is_not_told_it_is_activated_by_the_bars_menu() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (other, other_window) = key_app(&mut h, "org.example.other");
+    let (app, _) = key_app(&mut h, "org.example.editor");
+    settle_app(&mut h, &other);
+    assert!(!draws_active(&other.activity()));
+    let from = other.activity().len();
+    open_menu(&mut h, &bar, &app);
+    settle_app(&mut h, &other);
+    assert_eq!(
+        other.activity()[from..],
+        [],
+        "the menu tells the other window nothing"
+    );
+    h.state.command(Command::FocusWindow {
+        window: other_window,
+    });
+    settle_app(&mut h, &app);
+    assert!(
+        !draws_active(&app.activity()),
+        "no longer the window in use"
+    );
 }
 
 /// Choose `action` in the open menu as the bar does (the request, then the menu goes) and return what the application's

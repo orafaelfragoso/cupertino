@@ -304,7 +304,7 @@ class UpdateStatusTest(unittest.TestCase):
                               + ' while not removed.exists(): time.sleep(0.01)\n')
             docker.chmod(0o755)
             env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", CUPERTINO_GOLDENS_IMAGE="prebuilt",
-                       CUPERTINO_BUILD_LOCK_FD="test-lease")
+                       CUPERTINO_BUILD_LOCK_FD="test-lease", HOME=str(root / "home"), CUPERTINO_CONTAINER_CACHE="")
             env.pop("CUPERTINO_GOLDENS_CACHE", None)
             process = subprocess.Popen(["bash", str(root / "ci/goldens.sh")], env=env,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)

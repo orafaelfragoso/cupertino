@@ -81,6 +81,8 @@ pub enum ControlId {
     /// The session's screen reader on or off (`screen_reader`, which the server runs).
     ScreenReader,
     CursorSize,
+    CursorOutline,
+    CursorFill,
     ShakeToLocate,
     StickyKeys,
     StickyKeysShortcut,
@@ -726,6 +728,37 @@ fn header(text: &str) -> Option<String> {
     Some(text.to_string())
 }
 
+/// The colours the pointer's outline and fill pop-ups offer, opaque sRGB.
+pub const POINTER_COLORS: [(&str, [u8; 4]); 8] = [
+    ("White", [255, 255, 255, 255]),
+    ("Black", [0, 0, 0, 255]),
+    ("Red", [230, 40, 40, 255]),
+    ("Orange", [245, 140, 20, 255]),
+    ("Yellow", [250, 210, 20, 255]),
+    ("Green", [40, 180, 70, 255]),
+    ("Blue", [30, 110, 235, 255]),
+    ("Purple", [150, 70, 200, 255]),
+];
+/// The pointer's outline and fill when the file sets none: a white outline around a black fill.
+const POINTER_OUTLINE: [u8; 4] = [255, 255, 255, 255];
+const POINTER_FILL: [u8; 4] = [0, 0, 0, 255];
+
+/// A pointer colour pop-up showing `stored` (else `default`): the named colours, and a colour the file holds that is
+/// none of them as one more item, kept until the user picks another.
+fn pointer_color(stored: Option<[u8; 4]>, default: [u8; 4]) -> Control {
+    let color = stored.unwrap_or(default);
+    let mut choices: Vec<String> = POINTER_COLORS.iter().map(|(n, _)| n.to_string()).collect();
+    let selected = match POINTER_COLORS.iter().position(|(_, c)| *c == color) {
+        Some(i) => i,
+        None => {
+            let [r, g, b, a] = color;
+            choices.push(format!("#{r:02x}{g:02x}{b:02x}{a:02x}"));
+            POINTER_COLORS.len()
+        }
+    };
+    Control::Popup { choices, selected }
+}
+
 fn switch(on: bool) -> Control {
     Control::Switch { on }
 }
@@ -1159,6 +1192,18 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                                 labels: ("Normal", "Large"),
                             },
                             pointer("cursor_size"),
+                        ),
+                        row(
+                            ControlId::CursorOutline,
+                            "Pointer outline color",
+                            pointer_color(settings.compositor.cursor_outline, POINTER_OUTLINE),
+                            pointer("cursor_outline"),
+                        ),
+                        row(
+                            ControlId::CursorFill,
+                            "Pointer fill color",
+                            pointer_color(settings.compositor.cursor_fill, POINTER_FILL),
+                            pointer("cursor_fill"),
                         ),
                         row(
                             ControlId::ShakeToLocate,
@@ -2384,6 +2429,19 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             settings.compositor.shake_to_locate = Some(bool_of(value));
             store(File::Compositor)
         }
+        ControlId::CursorOutline | ControlId::CursorFill => {
+            // the extra item of a colour the file holds is already the value
+            let Some((_, color)) = POINTER_COLORS.get(index_of(value)) else {
+                return Vec::new();
+            };
+            let slot = if id == ControlId::CursorOutline {
+                &mut settings.compositor.cursor_outline
+            } else {
+                &mut settings.compositor.cursor_fill
+            };
+            *slot = Some(*color);
+            store(File::Compositor)
+        }
         ControlId::DisplaySleepBattery
         | ControlId::DisplaySleepAc
         | ControlId::RequirePassword
@@ -3194,6 +3252,44 @@ mod tests {
             panic!("a slider")
         };
         assert_eq!(value, 1.0, "grayscale's default intensity 1.0");
+    }
+
+    #[test]
+    fn the_pointer_colours_start_white_around_black_and_keep_a_colour_of_the_file() {
+        let mut s = unset();
+        let popup = |id, s: &Settings| match control(PaneId::Accessibility, id, s) {
+            Control::Popup { choices, selected } => (choices, selected),
+            other => panic!("a pop-up, not {other:?}"),
+        };
+        let (choices, outline) = popup(ControlId::CursorOutline, &s);
+        assert_eq!((choices[outline].as_str(), choices.len()), ("White", 8));
+        let (choices, fill) = popup(ControlId::CursorFill, &s);
+        assert_eq!(choices[fill], "Black");
+        assert_eq!(
+            change(
+                ControlId::CursorFill,
+                Value::Index(6),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::Store(File::Compositor)]
+        );
+        assert_eq!(s.compositor.cursor_fill, Some([30, 110, 235, 255]));
+        assert_eq!(
+            s.compositor.cursor_outline, None,
+            "the outline is untouched"
+        );
+        s.compositor.cursor_outline = Some([1, 2, 3, 128]);
+        let (choices, outline) = popup(ControlId::CursorOutline, &s);
+        assert_eq!((choices[outline].as_str(), choices.len()), ("#01020380", 9));
+        assert!(change(
+            ControlId::CursorOutline,
+            Value::Index(8),
+            &mut s,
+            &Live::default()
+        )
+        .is_empty());
+        assert_eq!(s.compositor.cursor_outline, Some([1, 2, 3, 128]));
     }
 
     fn login_live(login: Option<LoginScreen>) -> Live {

@@ -255,4 +255,47 @@ mod tests {
             );
         }
     }
+
+    /// Over every role, interaction and selection, in every palette, a window that is not active resolves the same
+    /// colours as an active one but for the documented roles: a selected control's fill and text (the secondary
+    /// selection, where the palette tells them apart) and the sidebar's neutral selection (its fainter edition).
+    #[test]
+    fn an_inactive_window_differs_from_an_active_one_only_in_the_selection_roles() {
+        use ColorRole::*;
+        use InteractionVariant::*;
+        let palettes = [
+            neutral::LIGHT,
+            neutral::DARK,
+            neutral::HIGH_CONTRAST_LIGHT,
+            neutral::HIGH_CONTRAST_DARK,
+        ]
+        .map(|p| p.colors());
+        for palette in palettes {
+            let colors = palette.resolve();
+            let mut differs = std::collections::BTreeSet::new();
+            for role in ColorRole::ALL {
+                for interaction in [Normal, Hover, Pressed, Disabled] {
+                    for selected in [false, true] {
+                        let get = |active| colors.get(role, state(interaction, selected, active));
+                        if get(true) != get(false) {
+                            differs.insert((format!("{role:?}"), selected));
+                        }
+                    }
+                }
+            }
+            let expected: std::collections::BTreeSet<_> = [
+                (format!("{ControlFill:?}"), true),
+                (format!("{ControlText:?}"), true),
+                (format!("{SidebarSelection:?}"), false),
+                (format!("{SidebarSelection:?}"), true),
+            ]
+            .into_iter()
+            .collect();
+            assert!(differs.is_subset(&expected), "{differs:?}");
+            assert!(
+                differs.contains(&(format!("{SidebarSelection:?}"), false)),
+                "{differs:?}"
+            );
+        }
+    }
 }

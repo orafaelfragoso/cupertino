@@ -389,6 +389,9 @@ pub struct OutputEntry {
     /// Rectangle in the global logical space.
     pub rect: Rect,
     pub scale: f64,
+    /// Counts the scale changes of the output: whoever keeps something drawn for the output's scale (a raster, a
+    /// cursor image, an input transform) compares it with the value it was made at.
+    pub scale_generation: u64,
     pub tracker: OutputDamageTracker,
     pub cache: ElementCache,
     pub global: Option<GlobalId>,
@@ -983,6 +986,7 @@ impl Cupertino {
             id,
             rect,
             scale,
+            scale_generation: 0,
             tracker,
             cache: ElementCache::default(),
             global: Some(global),
@@ -1095,6 +1099,10 @@ impl Cupertino {
             Some(position.into()),
         );
         entry.output.set_preferred(mode);
+        if entry.scale != scale {
+            entry.scale_generation += 1;
+            tracing::debug!(output = ?id, from = entry.scale, to = scale, "output scale changed");
+        }
         entry.scale = scale;
         entry.rect = output_rect(mode, scale, transform, position);
         entry.tracker = OutputDamageTracker::from_output(&entry.output);
@@ -1111,6 +1119,33 @@ impl Cupertino {
         });
         self.refresh_usable_area(id);
         self.request_redraw();
+    }
+
+    /// The output's quantities kept apart: its mode in panel pixels, how it is turned, its scale and its logical
+    /// extent. `None` for an unknown output or one without a mode.
+    pub fn output_geometry(&self, id: OutputId) -> Option<cupertino_displays::OutputGeometry> {
+        let entry = self.output_entry(id)?;
+        let mode = entry.output.current_mode()?;
+        let extent = cupertino_displays::Extent::new(
+            u32::try_from(mode.size.w).ok()?,
+            u32::try_from(mode.size.h).ok()?,
+        );
+        let turned = matches!(
+            entry.output.current_transform(),
+            Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270
+        );
+        cupertino_displays::OutputGeometry::new(extent, entry.scale, turned).ok()
+    }
+
+    /// A position in an output's turned panel pixels (a pointer that reports pixels) in the global logical space.
+    pub fn output_pixels_to_global(
+        &self,
+        id: OutputId,
+        pixels: (f64, f64),
+    ) -> Option<Point<f64, Logical>> {
+        let entry = self.output_entry(id)?;
+        let (x, y) = self.output_geometry(id)?.to_points(pixels);
+        Some(Point::from((entry.rect.x + x, entry.rect.y + y)))
     }
 
     pub fn output_entry(&self, id: OutputId) -> Option<&OutputEntry> {

@@ -157,6 +157,7 @@ struct Frame {
 
 /// The cursor on screen: which images, the one shown, and when the next is due.
 struct Showing {
+    shape: Shape,
     key: (u32, u32),
     frame: usize,
     next: Option<Instant>,
@@ -232,6 +233,18 @@ impl ThemedCursor {
         true
     }
 
+    /// The surface under the cursor now draws at `scale`: a cursor showing at another scale is drawn again from the
+    /// images for this one, so it is never left magnified or blurred from the old scale. Whether it was.
+    pub(crate) fn rescale(&mut self, qh: &QueueHandle<State>, scale: u32) -> Result<bool, Error> {
+        let scale = scale.max(1);
+        let Some(showing) = self.showing.as_ref().filter(|s| s.scale != scale) else {
+            return Ok(false);
+        };
+        let (pointer, serial, shape) = (showing.pointer.clone(), showing.serial, showing.shape);
+        self.show(qh, &pointer, serial, shape, scale)?;
+        Ok(true)
+    }
+
     /// Show `shape` drawn for `scale` as the cursor of the pointer entered with `serial`.
     pub(crate) fn show(
         &mut self,
@@ -254,6 +267,7 @@ impl ThemedCursor {
         draw(surface, pointer, serial, &frames[0], scale);
         let animated = frames.len() > 1;
         self.showing = Some(Showing {
+            shape,
             key,
             frame: 0,
             next: animated.then(|| Instant::now() + frames[0].delay),

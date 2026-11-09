@@ -18,6 +18,8 @@ app = [
     "dep:cupertino-alsa",
     "dep:cupertino-pipewire",
     "dep:async-channel",
+    "dep:wayland-client",
+    "dep:wayland-protocols-wlr",
 ]
 
 [dependencies]
@@ -26,6 +28,7 @@ cupertino-kit = { path = "../cupertino-kit", optional = true }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-displays = { path = "../cupertino-displays" }
 cupertino-filepicker = { path = "../cupertino-filepicker" }
 cupertino-thumbnails = { path = "../cupertino-thumbnails" }
 cupertino-typeahead = { path = "../cupertino-typeahead" }
@@ -35,6 +38,8 @@ cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 cupertino-alsa = { path = "../cupertino-alsa", optional = true }
 cupertino-pipewire = { path = "../cupertino-pipewire", optional = true }
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
 zeroize = "1"
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }

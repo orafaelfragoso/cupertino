@@ -1290,3 +1290,139 @@ fn a_blur_reads_only_its_own_layer_never_what_is_drawn_under_it() {
         "the layer's own square is blurred past its edge"
     );
 }
+
+/// The same logical scene at the desktop scales, drawn by one renderer going from scale to scale: our own criterion
+/// for complete assets and aligned edges. Each frame equals a fresh renderer's at that scale (no glyph or image raster
+/// of another scale is reused), an opaque rectangle whose edges are snapped to device pixels covers whole pixels with
+/// nothing half covered beside it, and the text has ink at every scale, growing with the scale's square.
+#[test]
+fn the_same_scene_at_every_desktop_scale_is_complete_and_snapped_edges_stay_sharp() {
+    let (width, height) = (96.0, 64.0);
+    let snap = |v: f64, scale: f64| (v * scale).round() / scale;
+    let frame_at = |r: &mut CpuRenderer<Boxes>, scale: f64| {
+        let (x0, y0, x1, y1) = (
+            snap(20.3, scale),
+            snap(12.7, scale),
+            snap(61.1, scale),
+            snap(41.4, scale),
+        );
+        let list = DisplayList {
+            nodes: vec![
+                node(
+                    1,
+                    rect(0.0, 0.0, width, height),
+                    vec![fill(
+                        Shape::Rect(rect(0.0, 0.0, width, height)),
+                        solid(1.0, 1.0, 1.0, 1.0),
+                    )],
+                ),
+                node(
+                    2,
+                    rect(x0, y0, x1 - x0, y1 - y0),
+                    vec![fill(
+                        Shape::Rect(rect(x0, y0, x1 - x0, y1 - y0)),
+                        solid(0.0, 0.0, 1.0, 1.0),
+                    )],
+                ),
+                node(
+                    3,
+                    rect(0.0, 44.0, width, 20.0),
+                    vec![PaintOp::Glyphs {
+                        origin: Point { x: 8.0, y: 58.0 },
+                        run: GlyphRun {
+                            font: FontId(1),
+                            size: 12.0,
+                            glyphs: (0..4)
+                                .map(|i| PositionedGlyph {
+                                    id: GlyphId(i),
+                                    x: i as f32 * 9.0,
+                                    y: 0.0,
+                                    cluster: i as usize,
+                                })
+                                .collect(),
+                        },
+                        color: Color::new(0.0, 0.0, 0.0, 1.0),
+                    }],
+                ),
+            ],
+        };
+        let (w, h) = (
+            (width * scale).round() as u32,
+            (height * scale).round() as u32,
+        );
+        let id = r
+            .render(&RenderRequest {
+                list: &list,
+                resources: &PaintResources::default(),
+                scale,
+                width: w,
+                height: h,
+                damage: &DamageRegion::Full,
+            })
+            .unwrap();
+        let pixels = r.frame(id).unwrap().pixels.clone();
+        (
+            pixels,
+            (w, h),
+            (x0 * scale, y0 * scale, x1 * scale, y1 * scale),
+        )
+    };
+    let mut travelling = renderer();
+    let mut ink_at_one = 0;
+    for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 1.25, 1.0] {
+        let (pixels, (w, h), (x0, y0, x1, y1)) = frame_at(&mut travelling, scale);
+        let (fresh, ..) = frame_at(&mut renderer(), scale);
+        assert!(
+            pixels == fresh,
+            "{scale}: the frame equals a fresh renderer's"
+        );
+        assert_eq!(pixels.len(), (w * h * 4) as usize);
+        let px = |x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+        };
+        let (x0, y0, x1, y1) = (
+            x0.round() as u32,
+            y0.round() as u32,
+            x1.round() as u32,
+            y1.round() as u32,
+        );
+        let mid = (y0 + y1) / 2;
+        for x in x0..x1 {
+            assert_eq!(px(x, mid), [0, 0, 255, 255], "{scale}: ({x}, {mid}) inside");
+        }
+        assert_eq!(
+            px(x0 - 1, mid),
+            [255, 255, 255, 255],
+            "{scale}: left of the edge"
+        );
+        assert_eq!(
+            px(x1, mid),
+            [255, 255, 255, 255],
+            "{scale}: right of the edge"
+        );
+        let centre = (x0 + x1) / 2;
+        assert_eq!(
+            px(centre, y0 - 1),
+            [255, 255, 255, 255],
+            "{scale}: above the edge"
+        );
+        assert_eq!(px(centre, y0), [0, 0, 255, 255], "{scale}: the top row");
+        // the glyph boxes lie below the rectangle, on the white ground
+        let ink = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| (y as f64) >= y1 as f64 && px(x, y)[0] < 250)
+            .count();
+        if scale == 1.0 {
+            ink_at_one = ink_at_one.max(ink);
+        }
+        assert!(ink > 0, "{scale}: the text has ink");
+        if ink_at_one > 0 {
+            let expected = ink_at_one as f64 * scale * scale;
+            assert!(
+                (ink as f64) > expected * 0.5 && (ink as f64) < expected * 2.0,
+                "{scale}: {ink} ink pixels, about {expected} expected"
+            );
+        }
+    }
+}

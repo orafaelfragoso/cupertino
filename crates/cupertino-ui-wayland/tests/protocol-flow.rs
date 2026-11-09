@@ -1877,9 +1877,19 @@ mod window_system {
         let (mut kit, control, committed, _seen) = mapped();
         let w = kit.window;
 
-        // nothing paces a window that never presented: the frame is due at once
+        // nothing paces a window that never presented: the frame is due at once, timed on the system's monotonic
+        // clock, which the runtime reads too
         kit.ws.request_frame(w);
-        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+        let at = kit.window_event(|e| match e {
+            WindowEvent::Frame(at) => Some(*at),
+            _ => None,
+        });
+        let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+        let now = now.tv_sec as u64 * 1_000_000_000 + now.tv_nsec as u64;
+        assert!(
+            at.0 <= now && now - at.0 < 5_000_000_000,
+            "frame at {at:?}, monotonic now {now}"
+        );
         let first = kit
             .ws
             .present(w, &frame(1, [10, 20, 30, 40], &[]), None)

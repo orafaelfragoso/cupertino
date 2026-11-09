@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="19">
+  <interface name="cupertino_shell_v1" version="20">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -20,7 +20,7 @@
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
       session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
       object, version 9 the log_out_requested event of the session object, version 10 the window list, the shortcuts and the further
-      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event, version 19 its app_resident event. An object this global
+      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event, version 19 its app_resident event, version 20 the activate_app request and app_activation event of the session object. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -205,7 +205,7 @@
     </enum>
   </interface>
 
-  <interface name="cupertino_session_v1" version="9">
+  <interface name="cupertino_session_v1" version="20">
     <description summary="appearance, display options and lock state of the session">
       The state every shell process follows. Right after the object is created the server sends
       appearance, then display_options (version 2), then locked or unlocked. Later events say
@@ -274,6 +274,39 @@
         the session menu: the client shows its log out confirmation as if it had been asked on
         its own control interface, which a process on the session bus cannot take over.
       </description>
+    </event>
+
+    <enum name="activation" since="20">
+      <entry name="activated" value="0" summary="the application's windows were brought forward"/>
+      <entry name="resident" value="1" summary="a process of the application runs but shows no window"/>
+      <entry name="not_running" value="2" summary="no process of the application runs"/>
+    </enum>
+
+    <request name="activate_app" since="20">
+      <description summary="bring a running application forward by its desktop file ID">
+        Brings the application of the desktop file ID desktop_id (with or without the .desktop
+        suffix) forward as the dock's activate_app does, when it shows a window: its frontmost
+        window takes the focus, a minimised one is restored when it has no other, and a hidden
+        application is shown. An application matches when its application id is the desktop file
+        ID, or when the server's desktop entry for its application id has that ID; both compare
+        without regard to case. The server answers with app_activation and the same serial, at
+        once. It starts nothing: the client launches the application itself when the answer is
+        not activated. Needs the Session role, checked on every request: a connection that no
+        longer holds it gets the permission error and nothing is done.
+      </description>
+      <arg name="serial" type="uint" summary="chosen by the client, returned in app_activation"/>
+      <arg name="desktop_id" type="string"/>
+    </request>
+
+    <event name="app_activation" since="20">
+      <description summary="what activate_app found">
+        The answer to the activate_app request with this serial: activated when the
+        application showed a window and was brought forward; resident when a process of it is
+        connected after showing a window but shows none now (the client may ask that process
+        for a window); not_running otherwise.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="result" type="uint" enum="activation"/>
     </event>
   </interface>
 

@@ -36,6 +36,7 @@ const SHELL_GET_MENU_BAR: u16 = 1;
 const SHELL_GET_DOCK: u16 = 2;
 const SHELL_GET_SESSION: u16 = 3;
 const SHELL_GET_WINDOW_MANAGER: u16 = 4;
+const SESSION_ACTIVATE_APP: u16 = 1;
 const EFFECTS_GET_BACKDROP: u16 = 1;
 const EFFECTS_SET_TITLEBAR_STYLE: u16 = 2;
 const EFFECTS_SET_DISABLED_CONTROLS: u16 = 5;
@@ -337,7 +338,7 @@ fn a_public_client_cannot_see_bind_or_use_a_role_global() {
 
     let (shell_name, shell_version) = offered(&holder, holder_registry, "cupertino_shell_v1")
         .expect("a shell process is offered cupertino_shell_v1");
-    assert_eq!(shell_version, 19);
+    assert_eq!(shell_version, 20);
     let public_interfaces: Vec<String> = public
         .globals(registry)
         .into_iter()
@@ -375,6 +376,21 @@ fn a_public_client_cannot_see_bind_or_use_a_role_global() {
         forger.closed,
         "a request on a guessed object id: the connection survived"
     );
+
+    // the launcher's `activate_app` on a session object id it guessed: no answer, and the connection ends
+    let mut opener = h.public();
+    let _ = opener.get_registry();
+    opener.send(
+        forged_object,
+        SESSION_ACTIVATE_APP,
+        &[Arg::Uint(1), Arg::Str("org.example.a.desktop")],
+    );
+    h.settle(&mut [&mut opener]);
+    assert!(
+        opener.closed,
+        "activate_app from a public client: the connection survived"
+    );
+    assert_eq!(opener.events_of(forged_object), 0);
 }
 
 /// A capture role alone does not make the shell global visible.

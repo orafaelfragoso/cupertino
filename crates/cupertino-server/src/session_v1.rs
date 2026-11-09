@@ -5,7 +5,9 @@
 //! assistive technology behind the lock. The appearance changes only through
 //! [`Cupertino::set_appearance`], the display options through `accessibility.rs`, which calls
 //! [`SessionObservers::display_options`]; the lock state follows `session_lock.rs`, which calls
-//! [`SessionObservers::lock`] where the lock begins and ends.
+//! [`SessionObservers::lock`] where the lock begins and ends. From shell version 20 a session observer also takes
+//! `activate_app` (the launcher opening an application, [`Cupertino::activate_desktop_app`]), checked for the Session role
+//! on every request, and answers it with `app_activation`.
 
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_defaults::compositor::ScrollBarsName;
@@ -20,7 +22,7 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, New, Resource,
 };
 
-use crate::authorization::{authorized, refuse, role, Permit, ShellRole};
+use crate::authorization::{authorized, refuse, require, role, Permit, ShellRole};
 use crate::state::Cupertino;
 
 /// The session observers of every client, in creation order.
@@ -257,15 +259,23 @@ impl Cupertino {
 
 impl Dispatch<CupertinoSessionV1, ()> for Cupertino {
     fn request(
-        _: &mut Self,
-        _: &Client,
-        _: &CupertinoSessionV1,
-        _: cupertino_session_v1::Request,
+        state: &mut Self,
+        client: &Client,
+        observer: &CupertinoSessionV1,
+        request: cupertino_session_v1::Request,
         _: &(),
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
         // `Destroy` is handled in `destroyed`
+        if let cupertino_session_v1::Request::ActivateApp { serial, desktop_id } = request {
+            // the role is checked again here: the holder may have exited since `get_session`
+            if !require(client, ShellRole::Session, observer) {
+                return;
+            }
+            let result = state.activate_desktop_app(&desktop_id);
+            observer.app_activation(serial, result);
+        }
     }
 
     fn destroyed(state: &mut Self, _: ClientId, resource: &CupertinoSessionV1, _: &()) {

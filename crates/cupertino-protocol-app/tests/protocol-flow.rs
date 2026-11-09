@@ -552,6 +552,9 @@ fn spawn_server(
                     if observer.version() >= 8 {
                         options |= DisplayOption::AlwaysShowScrollBars;
                     }
+                    if observer.version() >= 9 {
+                        options |= DisplayOption::SteadyCaret;
+                    }
                     observer.display_options(options);
                 }
                 Ok(Control::Lock) => {
@@ -686,11 +689,11 @@ fn present(conn: &mut Connection, stash: &mut Stash, surface: SurfaceId, preferr
     stash.extend(conn.wait(Some(Duration::from_millis(50))).unwrap());
 }
 
-/// From version 8 each display options is followed by whether scroll bars stay shown; an older observer is never
-/// sent the bit and the views keep their own bars.
+/// From version 8 each display options is followed by whether scroll bars stay shown, and from version 9 by whether
+/// text carets keep from blinking; an older observer is never sent the bits and the views keep their own ways.
 #[test]
 fn the_appearance_and_display_options_arrive_at_once_and_on_every_change() {
-    for version in [7, 8] {
+    for version in [7, 8, 9] {
         let (mut conn, control, _committed, _seen) = connect_at(version);
         let effects = AppEffects::bind(&mut conn).unwrap();
         let _appearance = effects.appearance(&conn);
@@ -698,7 +701,12 @@ fn the_appearance_and_display_options_arrive_at_once_and_on_every_change() {
         let mut stash = Stash::new();
         let mut changes = Vec::new();
         let told = version >= 8;
-        let (first, all) = if told { (3, 6) } else { (2, 4) };
+        let steady_told = version >= 9;
+        let (first, all) = match version {
+            9 => (4, 8),
+            8 => (3, 6),
+            _ => (2, 4),
+        };
         wait_for(&mut conn, &mut stash, |e| {
             // the lock state is another test's
             changes.extend(app_event(e).filter(|e| !matches!(e, AppEvent::SessionLock { .. })));
@@ -717,6 +725,7 @@ fn the_appearance_and_display_options_arrive_at_once_and_on_every_change() {
                 ..DisplayOptions::default()
             }),
             AppEvent::ScrollBars { always: false },
+            AppEvent::SteadyCaret { on: false },
             AppEvent::Appearance { dark: false },
             AppEvent::DisplayOptions(DisplayOptions {
                 reduce_transparency: true,
@@ -724,9 +733,13 @@ fn the_appearance_and_display_options_arrive_at_once_and_on_every_change() {
                 ..DisplayOptions::default()
             }),
             AppEvent::ScrollBars { always: true },
+            AppEvent::SteadyCaret { on: true },
         ];
         if !told {
             want.retain(|e| !matches!(e, AppEvent::ScrollBars { .. }));
+        }
+        if !steady_told {
+            want.retain(|e| !matches!(e, AppEvent::SteadyCaret { .. }));
         }
         assert_eq!(changes, want, "version {version}");
     }

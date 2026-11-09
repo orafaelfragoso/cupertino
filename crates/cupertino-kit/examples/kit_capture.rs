@@ -829,6 +829,7 @@ fn draw_with<A: Application>(
         increase_contrast: look.increase_contrast,
         reduce_transparency: look.reduce_transparency,
         reduce_motion: false,
+        steady_caret: false,
     });
     let theme = Theme::load().map_err(|e| e.to_string())?;
     let mut tokens = ThemeTokens::cupertino(&theme, preferences).map_err(|e| e.to_string())?;

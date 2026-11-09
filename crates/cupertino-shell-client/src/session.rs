@@ -30,6 +30,7 @@ impl SessionChange {
             AppEvent::SessionLock { locked } => Some(SessionChange::Lock { locked }),
             AppEvent::ScrollCount { .. }
             | AppEvent::ScrollBars { .. }
+            | AppEvent::SteadyCaret { .. }
             | AppEvent::MenuBar { .. }
             | AppEvent::MenuReader { .. }
             | AppEvent::BackdropTone { .. } => None,

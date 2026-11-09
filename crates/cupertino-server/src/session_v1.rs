@@ -32,6 +32,8 @@ pub struct SessionObservers {
     appearance_observers: Vec<CupertinoAppearanceV1>,
     /// What the appearance observers were last told of the scroll bars: always shown.
     always_show_scroll_bars: bool,
+    /// What the appearance observers were last told of the text caret: kept from blinking.
+    steady_caret: bool,
 }
 
 /// Whether the connection of `observer` still holds the Session role: an observer whose holder exited is not told.
@@ -58,7 +60,14 @@ impl SessionObservers {
             send_display_options(observer, options);
         }
         for observer in &self.appearance_observers {
-            send_appearance_options(observer, options, self.always_show_scroll_bars);
+            send_appearance_options(observer, options, self.extras());
+        }
+    }
+
+    fn extras(&self) -> Extras {
+        Extras {
+            always_show_scroll_bars: self.always_show_scroll_bars,
+            steady_caret: self.steady_caret,
         }
     }
 
@@ -125,17 +134,30 @@ fn send_display_options(observer: &CupertinoSessionV1, options: DisplayOptions) 
 /// observer takes an unknown bit as a protocol error, so it is never sent one.
 const SCROLL_BARS_VERSION: u32 = 8;
 
-/// `display_options` with the bits of `options`, and `always_show_scroll_bars` when the scroll bars stay shown and the
-/// observer knows the bit.
+/// The version of `cupertino_appearance_v1` that knows the `steady_caret` display option.
+const STEADY_CARET_VERSION: u32 = 9;
+
+/// The display options of the appearance observers that are not the session's display options.
+#[derive(Clone, Copy)]
+struct Extras {
+    always_show_scroll_bars: bool,
+    steady_caret: bool,
+}
+
+/// `display_options` with the bits of `options`, and each of `extras` that is on when the observer knows its bit.
 fn send_appearance_options(
     observer: &CupertinoAppearanceV1,
     options: DisplayOptions,
-    always_show_scroll_bars: bool,
+    extras: Extras,
 ) {
     let mut bits = AppearanceOption::empty();
     bits.set(
         AppearanceOption::AlwaysShowScrollBars,
-        always_show_scroll_bars && observer.version() >= SCROLL_BARS_VERSION,
+        extras.always_show_scroll_bars && observer.version() >= SCROLL_BARS_VERSION,
+    );
+    bits.set(
+        AppearanceOption::SteadyCaret,
+        extras.steady_caret && observer.version() >= STEADY_CARET_VERSION,
     );
     bits.set(AppearanceOption::ReduceMotion, options.reduce_motion);
     bits.set(
@@ -197,11 +219,7 @@ impl Cupertino {
         let observer = init.init(id, ());
         observer.appearance(u32::from(self.config.is_dark()));
         self.sync_scroll_bars();
-        send_appearance_options(
-            &observer,
-            self.display_options(),
-            self.sessions.always_show_scroll_bars,
-        );
+        send_appearance_options(&observer, self.display_options(), self.sessions.extras());
         send_appearance_lock(&observer, self.session_lock.is_active());
         self.sessions.appearance_observers.push(observer);
     }
@@ -225,11 +243,31 @@ impl Cupertino {
             return;
         }
         self.sessions.always_show_scroll_bars = always;
-        let options = self.display_options();
+        let (options, extras) = (self.display_options(), self.sessions.extras());
         for observer in &self.sessions.appearance_observers {
             // an older observer would be told the same options again
             if observer.version() >= SCROLL_BARS_VERSION {
-                send_appearance_options(observer, options, always);
+                send_appearance_options(observer, options, extras);
+            }
+        }
+    }
+
+    /// Tell the observers the display options changed when they differ from `before`, and the appearance observers
+    /// that know it when only the setting that keeps the text caret from blinking changed.
+    pub(crate) fn tell_display_options(&mut self, before: DisplayOptions) {
+        let steady = self.accessibility.settings.steady_caret;
+        let steady_changed = steady != self.sessions.steady_caret;
+        self.sessions.steady_caret = steady;
+        let options = self.display_options();
+        if options != before {
+            self.sessions.display_options(options);
+        } else if steady_changed {
+            let extras = self.sessions.extras();
+            for observer in &self.sessions.appearance_observers {
+                // an older observer would be told the same options again
+                if observer.version() >= STEADY_CARET_VERSION {
+                    send_appearance_options(observer, options, extras);
+                }
             }
         }
     }

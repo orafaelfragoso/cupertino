@@ -7,7 +7,8 @@ use cupertino_geometry::Rect;
 use unicode_segmentation::GraphemeCursor;
 
 use crate::{
-    ChangeCause, ImeBatch, Preedit, Selection, Surrounding, TextInputSession, TextInputState,
+    ChangeCause, ContentHints, ImeBatch, Preedit, Selection, Surrounding, TextInputSession,
+    TextInputState,
 };
 
 /// The most bytes of text sent around the caret (the transport cuts at 4000; this keeps both sides inside it).
@@ -118,12 +119,24 @@ impl TextInputSession {
             hints: self.hints,
             cause,
             cursor_rect,
+            reset: false,
         }
     }
 
-    /// Whether a batch answers the field's latest state; a stale one resets the composition instead of applying.
+    /// Whether a batch answers the field's latest state, so the field answers it with its new one; a stale batch still
+    /// applies (the input method answers the newer state next).
     pub fn accepts(&self, batch: &ImeBatch) -> bool {
         batch.current
+    }
+
+    /// The content hints of a protected field: hidden, sensitive text, without completion, spell checking or
+    /// automatic capitalisation, so nothing is predicted, learned or stored.
+    pub fn protected_hints() -> ContentHints {
+        ContentHints {
+            hidden_text: true,
+            sensitive_data: true,
+            ..ContentHints::default()
+        }
     }
 
     /// The selection the session holds, as the buffer reports it.
@@ -138,7 +151,7 @@ impl TextInputSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ContentHints, ContentPurpose};
+    use crate::ContentPurpose;
 
     fn session(protected: bool) -> TextInputSession {
         TextInputSession {

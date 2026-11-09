@@ -324,3 +324,80 @@ fn a_new_width_breaks_the_lines_again_without_shaping_them_again() {
         "the lines wrap at the new width"
     );
 }
+
+fn selection<const LINES: usize>(h: &Harness<Editor<LINES>>) -> std::ops::Range<usize> {
+    match h.accessible("editor").value {
+        Some(AccessibleValue::Text {
+            editing: Some(editing),
+            ..
+        }) => editing.selection,
+        other => panic!("not an editable text: {other:?}"),
+    }
+}
+
+const MS: u64 = 1_000_000;
+
+#[test]
+fn a_third_click_selects_the_paragraph_with_its_line_break() {
+    let mut h = focused::<3>();
+    press(&mut h, UP, Mods::PRIMARY);
+    let editor = h.rect("editor");
+    // the second line, "line 1"
+    let at = Point::new(editor.min_x() + 20.0, editor.min_y() + 6.0 + 16.0 * 1.5);
+    for _ in 0..3 {
+        h.click(at);
+    }
+    assert_eq!(selection(&h), 7..14, "\"line 1\\n\"");
+}
+
+#[test]
+fn a_drag_held_below_the_shown_lines_keeps_scrolling_and_selecting() {
+    let mut h = focused::<200>();
+    press(&mut h, UP, Mods::PRIMARY);
+    assert_eq!(h.model().scroll.offset.y, 0.0);
+    let shown = h.rect("box");
+    let start = Point::new(shown.min_x() + 20.0, shown.min_y() + 10.0);
+    h.pointer(cupertino_ui_platform::PointerEvent::Motion { position: start });
+    h.button(start, true);
+    let below = Point::new(start.x, shown.max_y() + 20.0);
+    h.pointer(cupertino_ui_platform::PointerEvent::Motion { position: below });
+    let (first, offset) = (selection(&h).end, h.model().scroll.offset.y);
+    for step in 1..=20 {
+        h.clock()
+            .advance_to(cupertino_ui_platform::Timestamp(step * 50 * MS))
+            .unwrap();
+        h.settle();
+    }
+    assert!(
+        h.model().scroll.offset.y > offset + 100.0,
+        "held still, the text scrolls on: {} from {offset}",
+        h.model().scroll.offset.y
+    );
+    assert!(selection(&h).end > first, "and the selection follows");
+    h.button(below, false);
+    let after = h.model().scroll.offset.y;
+    h.clock()
+        .advance_to(cupertino_ui_platform::Timestamp(2_000 * MS))
+        .unwrap();
+    h.settle();
+    assert_eq!(h.model().scroll.offset.y, after, "the release stops it");
+}
+
+#[test]
+fn an_editor_keeps_its_composition_as_typed_when_the_focus_moves_on() {
+    use cupertino_ui_platform::WindowEvent;
+    use cupertino_ui_text::{ImeBatch, ImeEvent, Preedit};
+    let mut h = focused::<1>();
+    h.send(WindowEvent::Ime(ImeEvent::Done(ImeBatch {
+        preedit: Some(Preedit {
+            text: "한".into(),
+            cursor: Some(3..3),
+        }),
+        current: true,
+        ..ImeBatch::default()
+    })));
+    assert_eq!(h.model().text, "line 0", "a composition is not a change");
+    press(&mut h, TAB_KEY, Mods::NONE);
+    assert!(h.focused("after"));
+    assert_eq!(h.model().text, "line 0한");
+}

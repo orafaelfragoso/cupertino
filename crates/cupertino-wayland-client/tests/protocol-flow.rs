@@ -4513,6 +4513,45 @@ fn the_focused_field_is_sent_on_text_input_enter_and_each_change_once() {
 }
 
 #[test]
+fn a_reset_enables_afresh_once_and_then_the_state_is_kept_as_sent() {
+    use zwp_text_input_v3::ChangeCause;
+    use TextInputRequest::*;
+    let (mut conn, control, seen, surface, mut stash) = text_input_window();
+    conn.set_text_input(surface, Some(&field("ka", 2))).unwrap();
+    control.send(Control::TextInputEnter).unwrap();
+    text_input_event(&mut conn, &mut stash);
+    conn.flush().unwrap();
+    while next_text_input(&seen) != Commit {}
+
+    // the field kept a composition as typed on a click: the input method starts afresh
+    let reset = TextInputState {
+        reset: true,
+        ..field("ka", 2)
+    };
+    conn.set_text_input(surface, Some(&reset)).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(next_text_input(&seen), Enable);
+    assert_eq!(
+        next_text_input(&seen),
+        Surrounding("ka".into(), 2, 2),
+        "the whole state follows the enable"
+    );
+    assert_eq!(next_text_input(&seen), Cause(ChangeCause::Other));
+    while next_text_input(&seen) != Commit {}
+
+    // the same state again sends nothing: the reset went once
+    conn.set_text_input(surface, Some(&field("ka", 2))).unwrap();
+    conn.set_text_input(surface, Some(&field("kai", 3)))
+        .unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        next_text_input(&seen),
+        Surrounding("kai".into(), 3, 3),
+        "no second enable"
+    );
+}
+
+#[test]
 fn a_password_field_never_shows_its_text_to_the_input_method() {
     use zwp_text_input_v3::{ChangeCause, ContentHint, ContentPurpose};
     use TextInputRequest::*;

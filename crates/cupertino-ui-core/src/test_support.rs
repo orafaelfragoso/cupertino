@@ -206,6 +206,7 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
                         hints: ContentHints::default(),
                         cause: ChangeCause::Other,
                         cursor_rect: None,
+                        reset: false,
                     }));
                 }
                 "focus"

@@ -45,6 +45,9 @@ pub enum AppEvent {
     /// Whether scroll views keep tracks beside their content that stay shown (`always`) or show thin bars over it
     /// while it scrolls; sent after every [`AppEvent::DisplayOptions`] of an appearance observer from version 8.
     ScrollBars { always: bool },
+    /// Whether text carets stay shown without blinking (`on`) or blink; sent after every [`AppEvent::ScrollBars`] of an
+    /// appearance observer from version 9.
+    SteadyCaret { on: bool },
     /// Whether the session is locked; also sent once when the observer is created, from version 5. While it is, the
     /// application announces nothing to assistive technology.
     SessionLock { locked: bool },
@@ -75,7 +78,7 @@ pub struct AppEffects(CupertinoAppEffectsV1);
 impl AppEffects {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<AppEffects> {
-        conn.bind_extension(1..=8, Quiet).map(AppEffects)
+        conn.bind_extension(1..=9, Quiet).map(AppEffects)
     }
 
     /// Observe the session's appearance and display options: [`AppEvent::Appearance`] and
@@ -187,6 +190,8 @@ const DISABLED_CONTROLS_VERSION: u32 = 4;
 const SESSION_LOCK_VERSION: u32 = 5;
 /// The version whose display options say whether scroll bars stay shown.
 const SCROLL_BARS_VERSION: u32 = 8;
+/// The version whose display options say whether text carets keep from blinking.
+const STEADY_CARET_VERSION: u32 = 9;
 
 /// How the server decorates an application window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -329,6 +334,11 @@ impl Dispatch<CupertinoAppearanceV1, Quiet> for State {
                         if observer.version() >= SCROLL_BARS_VERSION {
                             state.emit(AppEvent::ScrollBars {
                                 always: bits.contains(DisplayOption::AlwaysShowScrollBars),
+                            });
+                        }
+                        if observer.version() >= STEADY_CARET_VERSION {
+                            state.emit(AppEvent::SteadyCaret {
+                                on: bits.contains(DisplayOption::SteadyCaret),
                             });
                         }
                     }

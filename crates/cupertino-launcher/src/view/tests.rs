@@ -248,6 +248,8 @@ struct Run {
     trace: String,
     /// A screen reader following the windows.
     reader: AssistiveTechnology,
+    /// The windows are layer surfaces, active while they have the keyboard rather than by their configures' state.
+    layers: bool,
 }
 
 fn active() -> WindowStates {
@@ -264,6 +266,19 @@ impl Run {
 
     /// A run in `appearance`, on a desktop that draws the panel's glass when `app_effects`.
     fn with(appearance: Appearance, app_effects: bool) -> Run {
+        Run::build(appearance, app_effects, false)
+    }
+
+    /// A run whose windows are layer surfaces, as on the desktop: their configures carry no activated state, and the
+    /// panel takes the keyboard once it is mapped.
+    fn on_layer_surfaces() -> Run {
+        let mut run = Run::build(Appearance::Light, false, true);
+        let panel = run.panel();
+        run.send(panel, WindowEvent::Focus(true));
+        run
+    }
+
+    fn build(appearance: Appearance, app_effects: bool, layers: bool) -> Run {
         let reader = AssistiveTechnology::new();
         let mut fonts = FontIndex::new();
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
@@ -304,6 +319,7 @@ impl Run {
             extent: None,
             trace: String::new(),
             reader,
+            layers,
         };
         run.settle();
         run
@@ -369,10 +385,11 @@ impl Run {
                     _ => None,
                 };
                 self.configured.insert(id);
-                self.driver
-                    .window_system_mut()
-                    .configure(id, size, active())
-                    .unwrap();
+                let system = self.driver.window_system_mut();
+                if self.layers {
+                    system.activate_by_keyboard(id).unwrap();
+                }
+                system.configure(id, size, active()).unwrap();
                 busy = true;
             }
             self.driver.run_until_idle(budget()).unwrap();
@@ -1791,7 +1808,43 @@ fn on_a_moving_clock_the_window_follows_the_browser_and_settles_at_the_search_fi
     );
 }
 
+/// The panel is a layer surface, whose configures carry no activated state: it stays the active window while it has the
+/// keyboard, so the field still draws its caret after the panel is configured again for its results.
+#[test]
+fn on_a_layer_surface_the_field_draws_its_caret_while_the_panel_has_the_keyboard() {
+    let mut run = Run::on_layer_surfaces();
+    assert!(run.caret_drawn(), "the empty field");
+    let compact = run.extent;
+    run.type_text("fire");
+    assert_ne!(run.extent, compact, "the panel was configured again");
+    assert!(run.caret_drawn(), "after the query");
+}
+
 impl Run {
+    /// Whether the focused field paints its caret: a thin bar of the text's colour.
+    fn caret_drawn(&self) -> bool {
+        let snapshot = self.snapshot();
+        let Some(field) = snapshot.focus else {
+            return false;
+        };
+        let paint = cupertino_kit::render::PaintNodeId::from(field);
+        snapshot
+            .display_list
+            .nodes
+            .iter()
+            .filter(|n| n.id == paint)
+            .flat_map(|n| &n.ops)
+            .any(|op| {
+                matches!(
+                    op,
+                    PaintOp::Fill {
+                        shape: cupertino_kit::render::Shape::Rect(r),
+                        ..
+                    } if r.width() <= 2.0 && r.height() > 10.0
+                )
+            })
+    }
+
     /// The colour of the fill the node `key` names in the panel paints.
     fn fill_of(&self, key: &'static str) -> Option<Color> {
         let id = self.driver.runtime().find(self.panel(), &Key::from(key))?;

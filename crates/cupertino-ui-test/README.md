@@ -28,7 +28,8 @@ not application paste delivery.
 `Trace::replay` validates the trace and returns ordered, timestamped events; protected entries require matching
 `SecureInputs` fixtures. Advance the driver to each recorded time and enqueue each event. Recreate compositor
 lifecycle state through the headless helpers (for example, `configure` registers an acknowledgement before queuing
-the configure event), and repeat clipboard requests through the driver before delivering their replies. Raw event
+the configure event; after `activate_by_keyboard(window)` a window's configures say it is activated while the last
+focus event queued for it gave it the keyboard, whatever states the test passes, as a layer surface's do), and repeat clipboard requests through the driver before delivering their replies. Raw event
 injection alone does not recreate outstanding configure or clipboard requests. Snapshots and presented frames are
 available through the runtime and window system; the inspector formats the same snapshots.
 

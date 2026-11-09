@@ -15,7 +15,7 @@ pub mod window {
     /// the unified style is.
     pub const UNIFIED_TOOLBAR_HEIGHT: f64 = 52.0;
     /// Height of the compact variant. data table.
-    pub const COMPACT_TOOLBAR_HEIGHT: f64 = 38.0;
+    pub const COMPACT_TOOLBAR_HEIGHT: f64 = 40.0;
     /// Path bar height..
     pub const PATH_BAR_HEIGHT: f64 = 28.0;
     /// Status bar height (default mode).

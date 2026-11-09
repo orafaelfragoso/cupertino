@@ -9,6 +9,10 @@ fresh one within a few levels: a group's layer covers the pixels its descendants
 anti-aliased curved or fractional edge cut by a damaged rectangle's border is sampled on a slightly different sub-pixel
 grid.
 
+Glyph rasters are keyed by their pixel size, so one renderer drawing a scene at 1, 1.25, 1.5, 1.75 and 2 and back gives
+each frame the bytes a fresh renderer gives at that scale; a test checks that, and that an opaque rectangle whose edges
+lie on device pixel edges covers whole pixels with nothing half covered beside it, and that text has ink at every scale.
+
 Two fast paths give the same bytes as that general path, which a test checks on random scenes at several scales and
 damages. A node the general path would paint through a scratch image (one that a clip above it or the damage cuts),
 under clips that are all axis-aligned rectangles, whose large fills are solid rectangles or rounded rectangles, has

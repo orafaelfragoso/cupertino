@@ -1,7 +1,7 @@
 //! Input event processing for every backend: keyboard through the [`KeyRouter`], pointer routing
 //! between the shell, the window model and clients, and touchpad gestures.
 
-use cupertino_wm::{Command, Edges, Modifiers as WmModifiers, Point as MPoint};
+use cupertino_wm::{Command, Edges, Modifiers as WmModifiers, Point as MPoint, WindowId};
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
     DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent,
@@ -1212,10 +1212,12 @@ impl Cupertino {
         let mp = MPoint::new(pos.x, pos.y);
         self.command(Command::FocusWindow { window: id });
         match hit {
-            Hit::Button(kind) => {
+            // a disabled button takes the press and does nothing: no pressed look, no action on release
+            Hit::Button(kind) if self.decor_button_enabled(id, kind) => {
                 self.decor.pressed = Some((id, kind));
                 self.request_redraw();
             }
+            Hit::Button(_) => {}
             Hit::Titlebar => {
                 if self.decor.register_click(id, now) {
                     match self.decor.double_click_action(hit) {
@@ -1267,6 +1269,17 @@ impl Cupertino {
             Hit::Content | Hit::None => {}
         }
         true
+    }
+
+    /// Whether window control button `kind` of window `id` takes clicks ([`crate::decor::button_enabled`]).
+    pub(crate) fn decor_button_enabled(
+        &self,
+        id: WindowId,
+        kind: cupertino_decorations::ButtonKind,
+    ) -> bool {
+        self.wm.window(id).is_some_and(|w| {
+            crate::decor::button_enabled(w.can_minimize(), w.can_zoom())[kind.index()]
+        })
     }
 
     /// Button released after a press on a window control button: run the action when the pointer

@@ -64,6 +64,8 @@ flag and its Increase Contrast option.
   - `WindowBackground`, a window's own background drawn by the compositor (`window_background`): the theme's
     `window-background` colour, copied opaque, so glass over it in the same window reads the window and not the
     desktop.
+  - `TextBackground`, the colour behind a form's groups drawn the same way (`opaque_background`): the theme's
+    `text-background` colour, copied opaque.
 - **Glass** (`glass.rs`, code). `GlassParams` holds every value of the glass background pass in stage order: the
   blur (`GlassBlur`: four levels of radius `radius·2^i`, widest first, each narrower one laid over at its opacity, and
   a blur fill that darkens, lightens or covers), the face colour (`GlassFace`: saturation, white gain and per-channel

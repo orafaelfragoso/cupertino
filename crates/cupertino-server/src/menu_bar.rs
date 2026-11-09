@@ -512,6 +512,8 @@ pub struct MenuBars {
     /// The timer of the next check of the reader after a refusal for a passing reason, and the wait after it.
     reader_retry: Option<RegistrationToken>,
     reader_backoff: Duration,
+    /// The keyboard is on a bar or one of its menus ([`Cupertino::keep_activated_under_menu_bar`]).
+    holds_keyboard: bool,
 }
 
 impl MenuBars {
@@ -538,6 +540,7 @@ impl MenuBars {
             reader: None,
             reader_retry: None,
             reader_backoff: READER_RETRY_FIRST,
+            holds_keyboard: false,
         }
     }
 
@@ -1463,6 +1466,22 @@ impl Cupertino {
             since: self.now(),
             returned: false,
         });
+    }
+
+    /// The keyboard went to the menu bar: its layer surface (the bar's keyboard mode) or one of its menus. The window
+    /// whose menus the bar shows is still the window in use, so it keeps its activated state, and since its client heard
+    /// the keyboard leave it is told so again: an application whose menu is open in the bar keeps its active look. The
+    /// keyboard coming back, or another window becoming the key window, changes nothing here.
+    pub(crate) fn keep_activated_under_menu_bar(&mut self, focused: Option<&WlSurface>) {
+        let on_bar =
+            focused.is_some_and(|f| self.menu_bars.has_surface(&self.shell_surface_root(f)));
+        // moving between the bar and its menus is no new leave for the window
+        if std::mem::replace(&mut self.menu_bars.holds_keyboard, on_bar) || !on_bar {
+            return;
+        }
+        if let Some(entry) = self.activated_window().and_then(|w| self.entry(w)) {
+            entry.restate_activated();
+        }
     }
 
     /// The keyboard focus moved to `focused`. The first move after the bar's popup grab ended decides on the pending

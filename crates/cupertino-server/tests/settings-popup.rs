@@ -27,13 +27,14 @@ use smithay::wayland::shm::with_buffer_contents;
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// The window's content height; a title bar the server drew would sit above it in the frame.
 const CONTENT_HEIGHT: f64 = 625.0;
-// Centres in the 715 × 625 content: the Accessibility pane's Display row and the Colour filter button on the page it
+// Centres in the 739 × 625 content: the Accessibility pane's Display row and the Colour filter button on the page it
 // opens, and the Appearance sidebar row.
 const DISPLAY_ROW: (f64, f64) = (474.0, 262.0);
 const COLOUR_FILTER: (f64, f64) = (586.0, 308.0);
 const APPEARANCE_ROW: (f64, f64) = (116.0, 194.0);
-// The Desktop & Dock pane's Hot Corners row and the Top Left corner's button on the page it opens.
-const HOT_CORNERS_ROW: (f64, f64) = (474.0, 542.0);
+// The Desktop & Dock pane's Hot Corners row (the pane has no header card) and the Top Left corner's button on the page
+// it opens.
+const HOT_CORNERS_ROW: (f64, f64) = (474.0, 348.0);
 const TOP_LEFT_CORNER: (f64, f64) = (609.0, 83.0);
 
 struct Process(Child);

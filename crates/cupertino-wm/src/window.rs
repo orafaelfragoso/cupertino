@@ -110,6 +110,12 @@ impl Window {
         !self.disabled.zoom && self.min_size.zip(self.max_size).is_none_or(|(a, b)| a != b)
     }
 
+    /// Whether the window can be the main window ([`crate::Wm::main_window`]): a top-level window that is not a utility
+    /// panel. A panel and a child window (a sheet, a dialog) can take the keyboard but never become main.
+    pub fn can_be_main(&self) -> bool {
+        self.parent.is_none() && self.level != WindowLevel::Floating
+    }
+
     /// Logical frame the client is configured to (the model's notion of "geometry").
     pub fn geometry(&self) -> Rect {
         self.lifecycle.target_frame()

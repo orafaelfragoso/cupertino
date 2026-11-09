@@ -46,6 +46,17 @@ struct Harness {
 impl Harness {
     /// A compositor with `headless-1` (`LEFT` pixels) and `headless-2` (`RIGHT` pixels), unscaled.
     fn new() -> Option<Harness> {
+        Self::with(
+            &[
+                display_of("headless-1", LEFT),
+                display_of("headless-2", RIGHT),
+            ],
+            Some(1.0),
+        )
+    }
+
+    /// A compositor with `displays`, at `scale` or else at their own default scales.
+    fn with(displays: &[HeadlessDisplay], scale: Option<f64>) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> =
             EventLoop::try_new().expect("create test event loop");
         let display: Display<Cupertino> = Display::new().expect("create test display");
@@ -58,11 +69,7 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .expect("create test compositor");
-        let displays = [
-            display_of("headless-1", LEFT),
-            display_of("headless-2", RIGHT),
-        ];
-        match headless::init_displays(&mut state, &displays, Some(1.0)) {
+        match headless::init_displays(&mut state, displays, scale) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
                 common::egl_unavailable(format!("{e:#}"));
@@ -554,6 +561,52 @@ fn both_heads_are_listed_and_can_be_rearranged() {
     let seen = client.seen.lock().unwrap();
     assert_eq!(seen.head("headless-1").unwrap().position, (RIGHT.0, 0));
     assert_eq!(seen.head("headless-2").unwrap().position, (0, 0));
+}
+
+#[test]
+fn a_built_in_panel_starts_at_its_default_size_and_takes_each_choice_exactly() {
+    let panel = HeadlessDisplay {
+        name: "eDP-1".into(),
+        size: (3024, 1964),
+        physical_mm: (302, 196),
+    };
+    let Some(mut h) = Harness::with(&[panel], None) else {
+        return;
+    };
+    let client = Client::connect(h.socket_path());
+    h.wait_until(&client, "the panel", |_, seen| {
+        seen.serial.is_some() && seen.head("eDP-1").is_some()
+    });
+    assert_eq!(
+        client.seen.lock().unwrap().head("eDP-1").unwrap().scale,
+        2.0
+    );
+    assert_eq!(h.output_rect("eDP-1"), Some((0.0, 0.0, 1512.0, 982.0)));
+    // each scale goes over the wire in 256ths; the output still gets exactly the choice's points
+    for (n, (width, height)) in [
+        (1, (1352, 878)),
+        (2, (1024, 665)),
+        (3, (1800, 1169)),
+        (4, (1147, 745)),
+    ] {
+        let serial = client.serial();
+        let change = HeadChange {
+            position: None,
+            scale: Some(3024.0 / f64::from(width)),
+        };
+        client.configure(serial, vec![("eDP-1", Some(change))], false);
+        h.wait_until(&client, "the new size", |state, seen| {
+            seen.results.len() == n && state.outputs[0].rect.w == f64::from(width)
+        });
+        assert_eq!(
+            client.seen.lock().unwrap().results.last(),
+            Some(&"succeeded")
+        );
+        assert_eq!(
+            h.output_rect("eDP-1"),
+            Some((0.0, 0.0, f64::from(width), f64::from(height)))
+        );
+    }
 }
 
 #[test]

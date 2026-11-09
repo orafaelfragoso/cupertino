@@ -1750,6 +1750,7 @@ dependencies = [
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
+ "cupertino-displays",
  "cupertino-filepicker",
  "cupertino-icons",
  "cupertino-kit",
@@ -1764,6 +1765,8 @@ dependencies = [
  "cupertino-wayland-client",
  "serde_json",
  "tempfile",
+ "wayland-client",
+ "wayland-protocols-wlr",
  "zbus",
  "zeroize",
 ]

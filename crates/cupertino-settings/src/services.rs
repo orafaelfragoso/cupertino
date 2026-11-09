@@ -538,6 +538,10 @@ impl Services {
                             mode,
                             refresh_mhz: o.refresh_mhz,
                             scale: o.effective_scale().unwrap_or_else(|| o.scale.factor()),
+                            connector: o.name.clone(),
+                            physical_mm: o.physical_size_mm,
+                            logical: o.geometry.map(|g| (g.width, g.height)),
+                            rotated: o.transform.swaps_sides(),
                         })
                     })
                     .collect(),
@@ -831,6 +835,10 @@ impl Services {
                 let max: u32 = p.call("GetMaxBrightness", &())?;
                 let raw = ((level.clamp(0.0, 1.0) * f64::from(max)).round() as u32).clamp(BRIGHTNESS_FLOOR.min(max), max);
                 p.call::<_, _, ()>("SetBrightness", &(raw,))
+            }),
+            Call::SetDisplayScale { connector, scale } => crate::output_config::set_scale(connector, *scale).map_err(|e| {
+                log_once(&format!("the display size could not be changed: {e}"));
+                "The display size could not be changed.".to_string()
             }),
             Call::SetWirelessEnabled(on) => system(self, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME, &|p| p.set_property("WirelessEnabled", *on).map_err(zbus::Error::from)),
             Call::Join { ssid, passphrase } => system(self, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME, &|p| p.call::<_, _, ()>("Connect", &(ssid.as_str(), passphrase.as_ref().map_or("", |p| p.as_str())))),

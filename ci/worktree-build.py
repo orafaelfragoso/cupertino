@@ -11,6 +11,7 @@ Seeds are explicitly promoted snapshots, never arbitrary target directories; `re
 import argparse
 import contextlib
 import ctypes
+import errno
 import fcntl
 import functools
 import hashlib
@@ -88,6 +89,10 @@ HOLDS = ("every", "one", "none")
 # Swap two directory entries in one step (renameat2), so a seed's name always holds a whole seed.
 AT_FDCWD = -100
 RENAME_EXCHANGE = 2
+# What renameat2 reports when a filesystem or kernel cannot swap; promotion then renames twice (replace_seed).
+UNSWAPPABLE = frozenset({errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP})
+# A seed name: it never starts with STAGING and never leaves the seeds directory.
+SEED_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
 class Metadata(TypedDict):
@@ -432,6 +437,12 @@ def clone(source: Path, destination: Path, root: Path, leases: tuple[int, ...]) 
         raise
 
 
+def seed_path(state: Path, name: str) -> Path:
+    if SEED_NAME.fullmatch(name) is None:
+        raise ValueError(f"seed name {name!r}: use letters, digits, '.', '_' and '-', starting with a letter or digit")
+    return seed_directory(state) / name
+
+
 def seed_directory(state: Path) -> Path:
     seeds = state / "seeds"
     if state.is_symlink() or seeds.is_symlink():
@@ -486,7 +497,7 @@ def prepare(root: Path, state: Path, identity: str, seed: str | None, leases: tu
     if seed is None:
         target.mkdir()
     else:
-        source = seed_directory(state) / seed
+        source = seed_path(state, seed)
         metadata = read_marker(source, str(state))
         if not matches(metadata, identity, legacy):
             if metadata["schema"] != SCHEMA:
@@ -535,10 +546,33 @@ def cargo_command(command: list[str], profile: str) -> list[str]:
 
 def exchange(first: Path, second: Path) -> None:
     """Swap two existing directory entries atomically: a reader of either name sees one whole directory or the other."""
-    libc = ctypes.CDLL(None, use_errno=True)
-    if libc.renameat2(AT_FDCWD, os.fsencode(first), AT_FDCWD, os.fsencode(second), RENAME_EXCHANGE) != 0:
+    renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+    if renameat2 is None:
+        raise OSError(errno.ENOSYS, f"cannot swap {first} and {second}: the C library has no renameat2")
+    if renameat2(AT_FDCWD, os.fsencode(first), AT_FDCWD, os.fsencode(second), RENAME_EXCHANGE) != 0:
         error = ctypes.get_errno()
         raise OSError(error, f"cannot swap {first} and {second}: {os.strerror(error)}")
+
+
+def replace_seed(staging: Path, destination: Path, retired: Path) -> None:
+    """Put the seed at `staging` in the place of the one at `destination`, leaving the previous one at `staging`.
+
+    Where the filesystem cannot swap two names, the previous seed is renamed to `retired` and removed, and the new one
+    takes its name. Every reader and writer of seeds holds every build slot, so nobody looks between the two renames;
+    a crash there leaves no seed of that name (the next refresh-seed makes it) and never a partial one.
+    """
+    try:
+        exchange(staging, destination)
+    except OSError as error:
+        if error.errno not in UNSWAPPABLE:
+            raise
+        destination.rename(retired)
+        try:
+            staging.rename(destination)
+        except BaseException:
+            retired.rename(destination)
+            raise
+        shutil.rmtree(retired)
 
 
 def remove_staging(seeds: Path) -> None:
@@ -563,10 +597,10 @@ def promote(root: Path, state: Path, identity: str, name: str, max_seed_gib: int
     metadata = read_marker(target, str(root))
     if not matches(metadata, identity, legacy) or metadata.get("successful") is not True:
         raise ValueError("only a target from a successful run with matching inputs can be promoted")
-    seeds = seed_directory(state)
+    destination = seed_path(state, name)
+    seeds = destination.parent
     seeds.mkdir(parents=True, exist_ok=True)
     remove_staging(seeds)
-    destination = seeds / name
     if destination.exists() or destination.is_symlink():
         if not replace:
             raise ValueError(f"seed {name} exists; refresh-seed replaces it")
@@ -578,19 +612,20 @@ def promote(root: Path, state: Path, identity: str, name: str, max_seed_gib: int
     if max_seed_gib <= 0 or size > max_seed_gib * 1024**3:
         raise ValueError(f"target exceeds the positive --max-seed-gib budget ({max_seed_gib})")
     disk_room(seeds)
-    staging = seeds / f"{STAGING}{name}.new"
+    staging, retired = seeds / f"{STAGING}{name}.new", seeds / f"{STAGING}{name}.old"
     clone(target, staging, root, leases)
     try:
         write_marker(staging, Metadata(schema=SCHEMA, owner=str(state), fingerprint=identity, successful=True,
                                        created=time.time()))
         if destination.exists():
-            exchange(staging, destination)
+            replace_seed(staging, destination, retired)
             print(f"worktree-build: replaced seed {name}", flush=True)
         else:
             staging.rename(destination)
     finally:
-        if staging.exists():
-            shutil.rmtree(staging)
+        for leftover in (staging, retired):
+            if leftover.exists():
+                shutil.rmtree(leftover)
     print(f"worktree-build: promoted {destination}", flush=True)
 
 

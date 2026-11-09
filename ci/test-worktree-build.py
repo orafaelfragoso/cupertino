@@ -1,5 +1,6 @@
 """Run without compiling Rust: python3 -I ci/test-worktree-build.py."""
 import contextlib
+import errno
 import fcntl
 import importlib.util
 import os
@@ -285,11 +286,56 @@ class WorktreeBuildTest(unittest.TestCase):
                 if failure == "clone":
                     patcher = patch.object(BUILD, "child", return_value=1)
                 else:
-                    patcher = patch.object(BUILD, "exchange", side_effect=OSError(22, "unsupported"))
+                    patcher = patch.object(BUILD, "exchange", side_effect=OSError(errno.EIO, "input/output error"))
                 with patcher, self.assertRaises((ValueError, OSError)):
                     BUILD.promote(self.root, self.state, "host", "parity-dev", 12, lease, replace=True)
                 self.assertEqual((seed / "artifact").read_text(), "old build")
                 self.assertEqual([path.name for path in seed.parent.iterdir()], ["parity-dev"])
+
+    def test_a_filesystem_that_cannot_swap_names_still_replaces_the_seed_whole(self):
+        self.require_reflinks()
+        seed = self.state / "seeds" / "parity-dev"
+        for error in (errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP):
+            with self.subTest(error=errno.errorcode[error]):
+                shutil.rmtree(self.state / "seeds", ignore_errors=True)
+                shutil.rmtree(self.root / "target", ignore_errors=True)
+                self.metadata(seed, self.state, fingerprint="host", successful=True)
+                (seed / "artifact").write_text("old build")
+                self.successful_target(f"new build {error}")
+                with patch.object(BUILD, "disk_room"), BUILD.acquire(self.root / "locks", 1, True) as lease, \
+                        patch.object(BUILD, "exchange", side_effect=OSError(error, "unsupported")):
+                    BUILD.promote(self.root, self.state, "host", "parity-dev", 12, lease, replace=True)
+                self.assertEqual((seed / "artifact").read_text(), f"new build {error}")
+                self.assertEqual([path.name for path in seed.parent.iterdir()], ["parity-dev"])
+                self.assertEqual(BUILD.read_marker(seed, str(self.state))["schema"], BUILD.SCHEMA)
+        real_rename = Path.rename
+        def rename(path, destination):
+            if path.name == ".parity-dev.new":
+                raise OSError(errno.EIO, "input/output error")
+            return real_rename(path, destination)
+        shutil.rmtree(self.root / "target")
+        self.successful_target("never published")
+        with patch.object(BUILD, "disk_room"), BUILD.acquire(self.root / "locks", 1, True) as lease, \
+                patch.object(BUILD, "exchange", side_effect=OSError(errno.EINVAL, "unsupported")), \
+                patch.object(BUILD.Path, "rename", rename), self.assertRaises(OSError):
+            BUILD.promote(self.root, self.state, "host", "parity-dev", 12, lease, replace=True)
+        self.assertEqual((seed / "artifact").read_text(), f"new build {errno.EOPNOTSUPP}")
+        self.assertEqual([path.name for path in seed.parent.iterdir()], ["parity-dev"])
+        with patch.object(BUILD.ctypes, "CDLL", return_value=object()), \
+                self.assertRaises(OSError) as raised:
+            BUILD.exchange(seed, self.root / "target")
+        self.assertEqual(raised.exception.errno, errno.ENOSYS)
+
+    def test_seed_names_never_take_the_staging_prefix_or_leave_the_seed_directory(self):
+        self.successful_target()
+        for name in (".parity-dev.new", ".hidden", "..", ".", "../escape", "a/b", "", "-flag"):
+            with self.subTest(name=name), patch.object(BUILD, "disk_room"), patch.object(BUILD, "clone") as clone:
+                with self.assertRaisesRegex(ValueError, "seed name"):
+                    BUILD.promote(self.root, self.state, "host", name, 12, (), replace=True)
+                with self.assertRaisesRegex(ValueError, "seed name"):
+                    BUILD.prepare(self.root / "elsewhere", self.state, "host", name, ())
+                clone.assert_not_called()
+        self.assertEqual(BUILD.seed_path(self.state, "parity-dev_2.x"), self.state / "seeds" / "parity-dev_2.x")
 
     def git_worktree(self, root, files):
         root.mkdir(parents=True, exist_ok=True)

@@ -1,13 +1,15 @@
 # Contracts registry: every Wayland global the server advertises, every D-Bus interface a Cupertino process serves, and
 # every binary a workspace crate builds. Checked in CI by:
 #   - crates/cupertino-server/tests/contracts.rs  (the globals each kind of connection sees, at run time)
-#   - ci/contracts.py                             (D-Bus interfaces and org.cupertino.* names in the source, binaries)
+#   - ci/contracts.py                             (D-Bus interfaces and org.cupertino.* names in the source, binaries,
+#                                                   C libraries)
 #
 # Format: a list of flat entries, one `key: value` per line, no quoting, no nesting. Both checkers read exactly this.
-#   name        interface name, or binary name
+#   name        interface name, binary name, or the soname of a C library (the one its build script links with)
 #   kind        wayland-global | dbus-interface | binary | socket-protocol | c-library
 #   version     advertised version (globals), interface generation (D-Bus: the number in the name, n/a if none), crate
-#               version (binaries), ABI version (C libraries); `unknown` where it cannot be measured
+#               version (binaries), ABI version (C libraries: MAJOR.MINOR of the header under the crate's abi/, and
+#               every crate that builds a cdylib has an entry); `unknown` where it cannot be measured
 #   owner_crate workspace crate that defines it
 #   owner_area  compositor | rendering | design | apps | services | packaging
 #   scope       public: any client or application may use it
@@ -38,7 +40,7 @@
   scope: public
   test_owner: crates/cupertino-ui-abi/tests/symbols.rs
   source: crates/cupertino-ui-abi/src/lib.rs
-  note: CupertinoKit's C ABI. The exported ck_* functions, the header and the struct layouts are pinned in crates/cupertino-ui-abi/abi/.
+  note: CupertinoKit's C ABI. The exported ck_* functions, the header and the struct layouts are pinned in crates/cupertino-ui-abi/abi/. Shipped in the cupertino-kit package as /usr/lib/libcupertinokit.so.1.<minor>.0 with the soname link, /usr/include/cupertinokit-1/cupertinokit.h and the pkg-config file cupertinokit.pc; release.py verify --package sdk checks the packaged library against the same baselines.
 - name: /run/cupertino-login/greeter.sock
   kind: socket-protocol
   version: 5

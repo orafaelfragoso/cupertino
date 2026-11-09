@@ -1070,7 +1070,9 @@ impl Client {
         )
     }
 
-    fn layer(
+    /// A layer surface of `size` on `level` over `stream`, named `namespace`, anchored to `anchor`, which takes the
+    /// keyboard as `keyboard` says.
+    pub fn layer(
         stream: UnixStream,
         level: zwlr_layer_shell_v1::Layer,
         namespace: &'static str,

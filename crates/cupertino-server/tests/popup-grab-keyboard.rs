@@ -1,9 +1,11 @@
-//! A menu never stays open without its keys: when another surface takes the keyboard, the popup grab of a shell panel's
-//! menu ends and the menu gets `popup_done`. Each menu belongs to a layer surface placed as the shell process places its
-//! panel (the dock's bar at the bottom edge, the menu bar along the top, the launcher's panel on the overlay layer, which
-//! holds the keyboard), opened with a grab after a press on the panel; the keyboard is then taken by the launcher or
-//! Control Center (exclusive overlay surfaces of shell processes), the lock screen or the authentication prompt. The
-//! tests need an offscreen EGL device.
+//! A menu never stays open without its keys: when another surface takes the keyboard, the popup grab of the menu ends
+//! and the menu gets `popup_done`. Each menu belongs to a window or to a layer surface placed as the shell process places
+//! its panel (the dock's bar at the bottom edge, the menu bar along the top, the launcher's panel on the overlay layer,
+//! which holds the keyboard), opened with a grab after a press on it. The keyboard is then taken by each kind of surface
+//! that can take it: another window (the focus policy), an exclusive overlay surface (the launcher, Control Center), an
+//! exclusive top layer surface (Focus Dock, the menu bar engaged by its shortcut), the lock screen, the authentication
+//! prompt, an on-demand layer surface (by a press), or nothing (the key window goes). The tests need an offscreen EGL
+//! device.
 
 mod common;
 
@@ -19,6 +21,7 @@ use cupertino_server::authorization::ShellRole;
 use cupertino_server::events::BTN_LEFT;
 use cupertino_server::shell_connection::shell_process_connection;
 use cupertino_server::Cupertino;
+use cupertino_wm::Command;
 use smithay::backend::input::ButtonState;
 use smithay::desktop::{layer_map_for_output, WindowSurfaceType};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
@@ -27,7 +30,9 @@ use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
-use wayland_protocols::xdg::shell::client::{xdg_popup, xdg_positioner, xdg_surface, xdg_wm_base};
+use wayland_protocols::xdg::shell::client::{
+    xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
+};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
     Anchor, KeyboardInteractivity,
@@ -36,10 +41,14 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 
 /// The size of a menu.
 const MENU: (i32, i32) = (160, 120);
+/// The size of a window that owns a menu.
+const WINDOW: (i32, i32) = (400, 300);
 
-/// A shell panel with a menu: where its layer surface lies, the roles of its process and where a press opens the
-/// menu, in output coordinates.
+/// A surface with a menu: a window, or a shell panel's layer surface; where it lies, the roles of its process and where
+/// a press opens the menu, in output coordinates.
 struct Panel {
+    /// A window of an application on the public socket, rather than a layer surface.
+    window: bool,
     namespace: &'static str,
     roles: &'static [ShellRole],
     layer: Layer,
@@ -50,11 +59,13 @@ struct Panel {
     /// otherwise.
     opener: (i32, i32),
     upward: bool,
-    press: (f64, f64),
+    /// Where the press goes; `None` for a window, pressed at its centre wherever it was placed.
+    press: Option<(f64, f64)>,
 }
 
 /// The dock's bar: on the top layer at the bottom edge of the 1000 x 700 output, centred, without the keyboard.
 const DOCK: Panel = Panel {
+    window: false,
     namespace: "dock",
     roles: &[ShellRole::Session, ShellRole::Dock],
     layer: Layer::Top,
@@ -63,11 +74,12 @@ const DOCK: Panel = Panel {
     keyboard: KeyboardInteractivity::None,
     opener: (300, 0),
     upward: true,
-    press: (500.0, 660.0),
+    press: Some((500.0, 660.0)),
 };
 
 /// The menu bar: on the top layer along the top edge, without the keyboard.
 const MENU_BAR: Panel = Panel {
+    window: false,
     namespace: "menu-bar",
     roles: &[ShellRole::Session, ShellRole::MenuBar],
     layer: Layer::Top,
@@ -76,12 +88,13 @@ const MENU_BAR: Panel = Panel {
     keyboard: KeyboardInteractivity::None,
     opener: (40, 24),
     upward: false,
-    press: (40.0, 12.0),
+    press: Some((40.0, 12.0)),
 };
 
 /// The launcher's panel, whose View Options button opens a menu: on the overlay layer at the top, centred, holding the
 /// keyboard.
 const LAUNCHER: Panel = Panel {
+    window: false,
     namespace: "launcher",
     roles: &[ShellRole::Session],
     layer: Layer::Overlay,
@@ -90,7 +103,21 @@ const LAUNCHER: Panel = Panel {
     keyboard: KeyboardInteractivity::Exclusive,
     opener: (560, 40),
     upward: false,
-    press: (760.0, 20.0),
+    press: Some((760.0, 20.0)),
+};
+
+/// A window of an application, whose menu opens below the press.
+const APP_WINDOW: Panel = Panel {
+    window: true,
+    namespace: "",
+    roles: &[],
+    layer: Layer::Top,
+    anchor: Anchor::empty(),
+    size: (0, 0),
+    keyboard: KeyboardInteractivity::None,
+    opener: (WINDOW.0 / 2, WINDOW.1 / 2),
+    upward: false,
+    press: None,
 };
 
 /// What a panel's client saw.
@@ -102,6 +129,9 @@ struct Seen {
 
 struct State {
     seen: Arc<Mutex<Seen>>,
+    /// The surface of the window, for a window's client.
+    window: Option<wl_surface::WlSurface>,
+    window_drawn: bool,
     shm: wl_shm::WlShm,
     press: Option<u32>,
     buffers: Vec<wl_buffer::WlBuffer>,
@@ -152,6 +182,7 @@ ignore_events!(
     wl_buffer::WlBuffer,
     wl_surface::WlSurface,
     xdg_positioner::XdgPositioner,
+    xdg_toplevel::XdgToplevel,
     zwlr_layer_shell_v1::ZwlrLayerShellV1
 );
 
@@ -192,7 +223,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, wl_surface::WlSurface> 
     }
 }
 
-/// The menu: it draws itself at its first configure.
+/// The window and the menu: each draws itself at its first configure.
 impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for State {
     fn event(
         state: &mut Self,
@@ -204,7 +235,12 @@ impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for State {
     ) {
         if let xdg_surface::Event::Configure { serial } = event {
             xdg.ack_configure(serial);
-            if !state.seen.lock().unwrap().menu_drawn {
+            if state.window.as_ref() == Some(surface) {
+                if !state.window_drawn {
+                    draw(state, surface, WINDOW, qh);
+                    state.window_drawn = true;
+                }
+            } else if !state.seen.lock().unwrap().menu_drawn {
                 draw(state, surface, MENU, qh);
                 state.seen.lock().unwrap().menu_drawn = true;
             }
@@ -290,20 +326,31 @@ impl PanelClient {
             let layers: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
             let surface = compositor.create_surface(&qh, ());
-            let layer = layers.get_layer_surface(
-                &surface,
-                None,
-                panel.layer,
-                panel.namespace.into(),
-                &qh,
-                surface.clone(),
-            );
-            layer.set_size(panel.size.0, panel.size.1);
-            layer.set_anchor(panel.anchor);
-            layer.set_keyboard_interactivity(panel.keyboard);
+            // the menu's parent: the window's xdg surface, or the panel's layer surface
+            let (parent, layer, _toplevel) = if panel.window {
+                let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
+                let toplevel = xdg.get_toplevel(&qh, ());
+                toplevel.set_app_id("org.example.menu-window".into());
+                (Some(xdg), None, Some(toplevel))
+            } else {
+                let layer = layers.get_layer_surface(
+                    &surface,
+                    None,
+                    panel.layer,
+                    panel.namespace.into(),
+                    &qh,
+                    surface.clone(),
+                );
+                layer.set_size(panel.size.0, panel.size.1);
+                layer.set_anchor(panel.anchor);
+                layer.set_keyboard_interactivity(panel.keyboard);
+                (None, Some(layer), None)
+            };
             surface.commit();
             let mut state = State {
                 seen: seen2,
+                window: panel.window.then(|| surface.clone()),
+                window_drawn: false,
                 shm,
                 press: None,
                 buffers: Vec::new(),
@@ -329,8 +376,10 @@ impl PanelClient {
                     positioner.set_gravity(gravity);
                     let menu_surface = compositor.create_surface(&qh, ());
                     let xdg = wm_base.get_xdg_surface(&menu_surface, &qh, menu_surface.clone());
-                    let popup = xdg.get_popup(None, &positioner, &qh, ());
-                    layer.get_popup(&popup);
+                    let popup = xdg.get_popup(parent.as_ref(), &positioner, &qh, ());
+                    if let Some(layer) = &layer {
+                        layer.get_popup(&popup);
+                    }
                     popup.grab(&seat, serial);
                     menu_surface.commit();
                     menu = Some((menu_surface, xdg, popup));
@@ -391,17 +440,48 @@ fn mapped(s: &Cupertino, name: &str) -> bool {
     })
 }
 
-/// A desktop with `panel` mapped and its menu open with a popup grab, after a press on the panel.
-fn menu_open(panel: &'static Panel) -> (Desktop, PanelClient) {
-    let mut d = Desktop::new(1.0);
-    let stream = shell_process_connection(&d.state.display_handle, panel.roles).unwrap();
-    let client = PanelClient::spawn(stream, panel);
-    wait_until(&mut d, "the panel to map", |s| mapped(s, panel.namespace));
-    d.state.pointer_moved_to(panel.press.into(), 0, None);
+/// The centre of the first mapped window, in output coordinates.
+fn window_centre(s: &Cupertino) -> (f64, f64) {
+    let window = s
+        .windows
+        .iter()
+        .find(|w| w.mapped)
+        .expect("a mapped window");
+    let frame = s.wm.window(window.id).unwrap().geometry();
+    (
+        frame.x + f64::from(WINDOW.0) / 2.0,
+        frame.y + f64::from(WINDOW.1) / 2.0,
+    )
+}
+
+/// A press and release at `at`.
+fn click(d: &mut Desktop, at: (f64, f64)) {
+    d.state.pointer_moved_to(at.into(), 0, None);
     d.pump();
     d.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
     d.pump();
     d.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    d.pump();
+}
+
+/// A desktop with `panel` mapped and its menu open with a popup grab, after a press on the panel.
+fn menu_open(panel: &'static Panel) -> (Desktop, PanelClient) {
+    let mut d = Desktop::new(1.0);
+    let stream = if panel.window {
+        UnixStream::connect(d.socket()).unwrap()
+    } else {
+        shell_process_connection(&d.state.display_handle, panel.roles).unwrap()
+    };
+    let client = PanelClient::spawn(stream, panel);
+    if panel.window {
+        wait_until(&mut d, "the window to map", |s| {
+            s.windows.iter().any(|w| w.mapped)
+        });
+    } else {
+        wait_until(&mut d, "the panel to map", |s| mapped(s, panel.namespace));
+    }
+    let at = panel.press.unwrap_or_else(|| window_centre(&d.state));
+    click(&mut d, at);
     wait_until(&mut d, "the menu to open with a grab", |s| {
         client.menu_drawn() && s.popup_grab_root().is_some()
     });
@@ -417,8 +497,16 @@ fn menu_open(panel: &'static Panel) -> (Desktop, PanelClient) {
 /// What takes the keyboard from a menu.
 #[derive(Clone, Copy, Debug)]
 enum Taker {
+    /// The launcher: an exclusive overlay surface of a shell process.
     Launcher,
+    /// Control Center's card: an exclusive overlay surface of a shell process.
     ControlCenter,
+    /// The dock's bar engaged by Focus Dock: an exclusive top layer surface at the bottom edge.
+    FocusDock,
+    /// The menu bar engaged by its shortcut: an exclusive top layer surface along the top edge.
+    EngagedMenuBar,
+    /// Another application's window, focused by the focus policy (as a click on it does).
+    Window,
     LockScreen,
     Prompt,
 }
@@ -431,11 +519,46 @@ fn take_keyboard(d: &mut Desktop, taker: Taker) -> Vec<common::Client> {
         wait_until(d, &format!("the {name} to map"), |s| mapped(s, name));
         client
     };
+    let bar = |d: &mut Desktop, roles: &[ShellRole], name: &'static str, anchor: Anchor| {
+        let stream = shell_process_connection(&d.state.display_handle, roles).unwrap();
+        let client = common::Client::layer(
+            stream,
+            Layer::Top,
+            name,
+            (600, 30),
+            anchor,
+            KeyboardInteractivity::Exclusive,
+        );
+        wait_until(d, &format!("the {name} to map"), |s| mapped(s, name));
+        client
+    };
     match taker {
         Taker::Launcher => {
             let stream =
                 shell_process_connection(&d.state.display_handle, &[ShellRole::Session]).unwrap();
             vec![overlay(d, stream, "launcher-taker")]
+        }
+        Taker::FocusDock => vec![bar(
+            d,
+            &[ShellRole::Session, ShellRole::Dock],
+            "focus-dock",
+            Anchor::Bottom,
+        )],
+        Taker::EngagedMenuBar => vec![bar(
+            d,
+            &[ShellRole::Session, ShellRole::MenuBar],
+            "engaged-menu-bar",
+            Anchor::Top,
+        )],
+        Taker::Window => {
+            let before = d.state.windows.len();
+            let client = common::Client::toplevel(d.socket());
+            wait_until(d, "the other window to map", |s| {
+                s.windows.iter().filter(|w| w.mapped).count() > before
+            });
+            let window = d.state.windows.last().unwrap().id;
+            d.state.command(Command::FocusWindow { window });
+            vec![client]
         }
         Taker::ControlCenter => {
             let stream =
@@ -458,6 +581,9 @@ fn holds_keyboard(s: &Cupertino, taker: Taker) -> bool {
     match taker {
         Taker::Launcher => namespace(s, &focus).as_deref() == Some("launcher-taker"),
         Taker::ControlCenter => namespace(s, &focus).as_deref() == Some("control-center"),
+        Taker::FocusDock => namespace(s, &focus).as_deref() == Some("focus-dock"),
+        Taker::EngagedMenuBar => namespace(s, &focus).as_deref() == Some("engaged-menu-bar"),
+        Taker::Window => s.windows.last().is_some_and(|w| w.surface() == &focus),
         Taker::Prompt => cupertino_server::authorization::is_prompt(&focus),
         Taker::LockScreen => s.is_lock_surface(&focus),
     }
@@ -471,7 +597,7 @@ fn dismissed_when_taken(panel: &'static Panel, taker: Taker) {
     wait_until(
         &mut d,
         &format!(
-            "the {} menu to be dismissed by the {taker:?}",
+            "the {:?} menu to be dismissed by the {taker:?}",
             panel.namespace
         ),
         |_| menu.popup_done(),
@@ -558,4 +684,145 @@ fn focus_on_the_menus_own_panel_or_the_menu_keeps_it_open() {
         Some(menu),
         "the keys stay with the menu"
     );
+}
+
+#[test]
+fn the_dock_menu_closes_when_the_menu_bar_is_engaged() {
+    dismissed_when_taken(&DOCK, Taker::EngagedMenuBar);
+}
+
+#[test]
+fn the_dock_menu_closes_when_a_window_takes_the_keyboard() {
+    dismissed_when_taken(&DOCK, Taker::Window);
+}
+
+#[test]
+fn a_menu_bar_menu_closes_when_focus_dock_takes_the_keyboard() {
+    dismissed_when_taken(&MENU_BAR, Taker::FocusDock);
+}
+
+#[test]
+fn a_menu_bar_menu_closes_when_a_window_takes_the_keyboard() {
+    dismissed_when_taken(&MENU_BAR, Taker::Window);
+}
+
+#[test]
+fn the_launchers_view_options_menu_closes_when_focus_dock_takes_the_keyboard() {
+    dismissed_when_taken(&LAUNCHER, Taker::FocusDock);
+}
+
+#[test]
+fn the_launchers_view_options_menu_closes_when_the_menu_bar_is_engaged() {
+    dismissed_when_taken(&LAUNCHER, Taker::EngagedMenuBar);
+}
+
+#[test]
+fn a_window_menu_closes_when_the_launcher_takes_the_keyboard() {
+    dismissed_when_taken(&APP_WINDOW, Taker::Launcher);
+}
+
+#[test]
+fn a_window_menu_closes_when_control_center_takes_the_keyboard() {
+    dismissed_when_taken(&APP_WINDOW, Taker::ControlCenter);
+}
+
+#[test]
+fn a_window_menu_closes_when_focus_dock_takes_the_keyboard() {
+    dismissed_when_taken(&APP_WINDOW, Taker::FocusDock);
+}
+
+#[test]
+fn a_window_menu_closes_when_the_menu_bar_is_engaged() {
+    dismissed_when_taken(&APP_WINDOW, Taker::EngagedMenuBar);
+}
+
+#[test]
+fn a_window_menu_closes_when_another_window_takes_the_keyboard() {
+    dismissed_when_taken(&APP_WINDOW, Taker::Window);
+}
+
+#[test]
+fn a_window_menu_closes_when_the_session_locks() {
+    dismissed_when_taken(&APP_WINDOW, Taker::LockScreen);
+}
+
+#[test]
+fn a_window_menu_closes_when_the_authentication_prompt_takes_the_keyboard() {
+    dismissed_when_taken(&APP_WINDOW, Taker::Prompt);
+}
+
+/// While the launcher holds the keyboard, a window the focus policy picks does not get it (the exclusive layer keeps
+/// it until it lets go), so the launcher's menu stays open with its keys.
+#[test]
+fn a_window_focused_under_the_launcher_leaves_its_menu_open() {
+    let (mut d, menu) = menu_open(&LAUNCHER);
+    let _window = take_keyboard(&mut d, Taker::Window);
+    let focus = keyboard_focus(&d.state).expect("the menu");
+    assert!(
+        d.state.popups.find_popup(&focus).is_some(),
+        "the menu keeps the keys"
+    );
+    assert!(d.state.popup_grab_root().is_some(), "the grab goes on");
+    assert!(!menu.popup_done());
+}
+
+/// An on-demand layer surface takes the keyboard only by a press on it: while a menu is open that press is outside the
+/// menu, so it closes the menu and is consumed; the next press gives the surface the keyboard.
+#[test]
+fn a_press_on_an_on_demand_layer_surface_closes_the_menu_then_the_next_takes_the_keyboard() {
+    let (mut d, menu) = menu_open(&DOCK);
+    let stream = shell_process_connection(&d.state.display_handle, &[ShellRole::Session]).unwrap();
+    let _panel = common::Client::overlay(
+        stream,
+        "on-demand",
+        (300, 200),
+        KeyboardInteractivity::OnDemand,
+    );
+    wait_until(&mut d, "the on-demand surface to map", |s| {
+        mapped(s, "on-demand")
+    });
+    assert!(
+        d.state.popup_grab_root().is_some(),
+        "mapping takes no keyboard"
+    );
+    click(&mut d, (150.0, 100.0));
+    wait_until(&mut d, "the dock menu to be dismissed", |_| {
+        menu.popup_done()
+    });
+    assert!(d.state.popup_grab_root().is_none());
+    assert_ne!(
+        keyboard_focus(&d.state)
+            .and_then(|f| namespace(&d.state, &f))
+            .as_deref(),
+        Some("on-demand"),
+        "the press that closed the menu was consumed"
+    );
+    click(&mut d, (150.0, 100.0));
+    wait_until(&mut d, "the on-demand surface to take the keyboard", |s| {
+        keyboard_focus(s).and_then(|f| namespace(s, &f)).as_deref() == Some("on-demand")
+    });
+}
+
+/// The key window going (the keyboard goes to nothing) while the dock's menu is open ends the grab too: the keyboard
+/// moves outside the menu's chain.
+#[test]
+fn the_key_window_closing_closes_the_dock_menu() {
+    let mut d = Desktop::new(1.0);
+    d.window();
+    wait_until(&mut d, "the window to have the keyboard", |s| {
+        keyboard_focus(s).is_some()
+    });
+    let stream = shell_process_connection(&d.state.display_handle, DOCK.roles).unwrap();
+    let menu = PanelClient::spawn(stream, &DOCK);
+    wait_until(&mut d, "the dock to map", |s| mapped(s, DOCK.namespace));
+    click(&mut d, DOCK.press.unwrap());
+    wait_until(&mut d, "the dock menu to open with a grab", |s| {
+        menu.menu_drawn() && s.popup_grab_root().is_some()
+    });
+    d.clients.clear();
+    wait_until(&mut d, "the window to go", |s| s.wm.windows().count() == 0);
+    wait_until(&mut d, "the dock menu to be dismissed", |_| {
+        menu.popup_done()
+    });
+    assert!(d.state.popup_grab_root().is_none());
 }

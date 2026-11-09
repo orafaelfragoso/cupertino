@@ -6,9 +6,9 @@
   browse query="" zone=Options selected=Some("Calculator") category=None Grid nested=None
 > Return
   browse query="" zone=Options selected=Some("Calculator") category=None Grid nested=Some(ViewOptions)
-> Down
+> Down (menu)
   browse query="" zone=Options selected=Some("Calculator") category=None Grid nested=Some(ViewOptions)
-> Return
+> Return (menu)
   browse query="" zone=Options selected=Some("Calculator") category=None List nested=None
 
 focus: TextInput "Applications" value="" [focused] actions=[Focus, SetValue, SetSelection]

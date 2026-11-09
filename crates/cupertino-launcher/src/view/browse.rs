@@ -1,28 +1,28 @@
 //! The application browser's part of the panel, below the shared query row: a separator, the category filters, the
-//! applications (a grid or a list, the recents first) clipped to their scrolled area, the scroll indicator, and the
-//! view options while they are open. Everything is placed where [`Browser`]'s layout puts it; only the rows on screen
+//! applications (a grid or a list, the recents first) clipped to their scrolled area and the scroll indicator; the view
+//! options open as a menu in a popup of the panel's window. Everything is placed where [`Browser`]'s layout puts it; only the rows on screen
 //! are nodes. The whole part fades as one layer with the browser's content opacity, so folding into the search field
 //! withdraws it before the enclosure contracts.
 //!
 //! The query field keeps the keyboard throughout: the selection is shown and announced (the selected application is
 //! read out through a polite live region), never focused. Filters are check boxes, applications are buttons in the
-//! grid and list items in the list, the view options are a menu of two radio items.
+//! grid and list items in the list, the view options are a menu of two checked items.
 
 use super::{glyphs, Input};
 use crate::browse::{Arrangement, BrowseLayout, Browser, Category, Zone};
-use cupertino_kit::controls::ImageSource;
+use cupertino_kit::controls::{ImageSource, Menu, MenuAnchor, MenuItem};
 use cupertino_kit::core::{
-    AccessibleStates, AccessibleValue, Action, Change, Checked, Element, Event, EventCx, Live,
-    MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, AccessibleValue, Action, Change, Checked, Element, Event, EventCx, Key, Live,
+    MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget, Window, WindowKey,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, Overflow, SizeSpec};
 use cupertino_kit::platform::{MouseButton, PointerEvent};
-use cupertino_kit::render::{Effect, Paint, PaintOp, Sampling, Shape};
+use cupertino_kit::render::{Paint, PaintOp, Sampling, Shape};
 use cupertino_kit::text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle, Wrap,
 };
-use cupertino_kit::theme::{Color, ColorRole, StateVariant, Surface};
+use cupertino_kit::theme::{Color, ColorRole, StateVariant};
 use std::collections::HashMap;
 
 /// What assistive technology calls the applications, and the recents row's group.
@@ -32,6 +32,8 @@ pub const RECENTS: &str = "Recently Used";
 pub const NO_RESULTS: &str = "No Results";
 /// The view options button and its menu.
 pub const VIEW_OPTIONS: &str = "View Options";
+/// The view options button's key in the panel's window, which its menu opens below.
+pub const OPTIONS_BUTTON: &str = "view-options-button";
 
 /// A filter that is off and the scroll indicator's thumb: the label colour at these shares.
 const FILTER_FILL_SHARE: f32 = 0.08;
@@ -45,14 +47,6 @@ const NO_RESULTS_FONT_PT: f64 = 22.0;
 /// A list row's name and its category: their sizes.
 const LIST_NAME_PT: f64 = 14.0;
 const LIST_CATEGORY_PT: f64 = 12.0;
-/// The view options menu: its width, a row's height, its padding, corner radius and shadow.
-pub const MENU_WIDTH: f64 = 160.0;
-pub const MENU_ROW: f64 = 24.0;
-pub const MENU_PAD: f64 = 5.0;
-pub const MENU_RADIUS: f64 = 10.0;
-const MENU_SHADOW_BLUR: f64 = 16.0;
-const MENU_SHADOW_OFFSET: f64 = 6.0;
-const MENU_SHADOW_ALPHA: f32 = 0.25;
 /// The view options button: its side and its dots' radius and spacing.
 pub const OPTIONS_SIZE: f64 = 28.0;
 const DOT_RADIUS: f64 = 1.75;
@@ -186,7 +180,6 @@ pub fn body<M>(
     browser: &Browser,
     icons: &HashMap<String, Vec<ImageSource>>,
     alpha: f64,
-    menu: Option<Arrangement>,
     now: f64,
 ) -> Element<M>
 where
@@ -308,23 +301,6 @@ where
         Zone::Options => VIEW_OPTIONS.to_owned(),
     };
     children.push(Element::new(Announcer { text: announced }).key("announcer"));
-    if let Some(option) = menu {
-        let button = options_rect(layout.panel.width());
-        let rect = Rect::new(
-            button.max_x() - MENU_WIDTH,
-            button.max_y() + 4.0 - top,
-            MENU_WIDTH,
-            2.0 * MENU_PAD + 2.0 * MENU_ROW,
-        );
-        children.push(
-            Element::new(MenuNode {
-                rect,
-                highlighted: option,
-                current: browser.arrangement(),
-            })
-            .key("view-options"),
-        );
-    }
     Element::new(BodyNode {
         size: Size::new(layout.panel.width(), layout.panel.height() - top),
         alpha,
@@ -944,142 +920,34 @@ impl<M: 'static> Widget<M> for Announcer {
     }
 }
 
-/// The view options: a small menu under its button, one radio item per arrangement, the current one checked and the
-/// highlighted one filled.
-struct MenuNode {
-    rect: Rect,
-    highlighted: Arrangement,
-    current: Arrangement,
-}
-
-impl<M: From<Input> + Clone + 'static> Widget<M> for MenuNode {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        placed(self.rect, ContainerKind::Leaf)
+/// The view options: a menu in a popup of the panel's window `parent`, below the button and free of the panel's
+/// bounds, on the menu material every menu of the shell uses. One item per arrangement, the current one checked and
+/// focused when it opens; choosing one sends [`Input::Arrange`], and Escape or a press outside [`Input::CloseMenu`].
+pub fn options_menu<M>(parent: WindowKey, current: Arrangement, key: WindowKey) -> Vec<Window<M>>
+where
+    M: From<Input> + Clone + 'static,
+{
+    let arrangements = [Arrangement::Grid, Arrangement::List];
+    let items = arrangements
+        .into_iter()
+        .map(|choice| MenuItem::Item {
+            label: choice.name().to_owned(),
+            enabled: true,
+            checked: choice == current,
+            on_select: M::from(Input::Arrange(choice)),
+        })
+        .collect();
+    Menu {
+        parent,
+        anchor: MenuAnchor::Below(Key::from(OPTIONS_BUTTON)),
+        label: VIEW_OPTIONS.to_owned(),
+        items,
+        current: arrangements.iter().position(|&a| a == current),
+        open: Vec::new(),
+        on_open: Box::new(|_| M::from(Input::CloseMenu)),
+        on_close: M::from(Input::CloseMenu),
     }
-
-    fn state(&self) {}
-
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.rect != old.rect {
-            Change::Layout
-        } else if (self.highlighted, self.current) != (old.highlighted, old.current) {
-            Change::Paint
-        } else {
-            Change::None
-        }
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        leaf_measure(&self.rect)
-    }
-
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        if cx.phase() == Phase::Capture {
-            return Propagation::Continue;
-        }
-        match event {
-            Event::Pointer(
-                PointerEvent::Button {
-                    button: MouseButton::Left,
-                    pressed: true,
-                    position,
-                    ..
-                },
-                _,
-            ) => {
-                let row = ((position.y - MENU_PAD) / MENU_ROW).floor();
-                let choice = if row < 1.0 {
-                    Arrangement::Grid
-                } else {
-                    Arrangement::List
-                };
-                cx.emit(M::from(Input::Arrange(choice)));
-                Propagation::Stop
-            }
-            Event::Pointer(PointerEvent::Scroll { .. }, _) => Propagation::Stop,
-            _ => Propagation::Continue,
-        }
-    }
-
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let size = cx.size();
-        let rect = Rect::new(0.0, 0.0, size.width, size.height);
-        let theme = cx.env().theme.clone();
-        cx.push(PaintOp::PushLayer {
-            opacity: 1.0,
-            effects: vec![Effect::DropShadow {
-                offset: Point::new(0.0, MENU_SHADOW_OFFSET),
-                blur: MENU_SHADOW_BLUR,
-                color: Color::new(0.0, 0.0, 0.0, MENU_SHADOW_ALPHA),
-            }],
-        });
-        let back = theme
-            .surface(Surface::Menu)
-            .fill
-            .unwrap_or(Color::new(0.95, 0.95, 0.95, 1.0));
-        // the menu sits on the panel's glass: it is drawn opaque so its items stay readable over any backdrop
-        fill(cx, rect, MENU_RADIUS, Color { a: 1.0, ..back });
-        cx.push(PaintOp::PopLayer);
-        let text = label(cx);
-        for (i, choice) in [Arrangement::Grid, Arrangement::List]
-            .into_iter()
-            .enumerate()
-        {
-            let row = Rect::new(
-                MENU_PAD,
-                MENU_PAD + i as f64 * MENU_ROW,
-                size.width - 2.0 * MENU_PAD,
-                MENU_ROW,
-            );
-            let mut fore = text;
-            if choice == self.highlighted {
-                let accent = role(cx, ColorRole::SelectedControlFill, text);
-                fill(cx, row, 5.0, accent);
-                fore = role(
-                    cx,
-                    ColorRole::SelectedControlText,
-                    Color::new(1.0, 1.0, 1.0, 1.0),
-                );
-            }
-            if choice == self.current {
-                if let Some(mark) = line(cx, "✓", 13.0, 600, 20.0) {
-                    let h = mark.size().height;
-                    glyphs(
-                        cx,
-                        &mark,
-                        Point::new(row.x() + 6.0, row.y() + (row.height() - h) / 2.0),
-                        fore,
-                    );
-                }
-            }
-            if let Some(l) = line(cx, choice.name(), 13.0, 400, row.width() - 30.0) {
-                let h = l.size().height;
-                glyphs(
-                    cx,
-                    &l,
-                    Point::new(row.x() + 24.0, row.y() + (row.height() - h) / 2.0),
-                    fore,
-                );
-            }
-        }
-    }
-
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.role(Role::Menu);
-        cx.name(VIEW_OPTIONS.to_owned());
-        cx.describe_content(format!(
-            "{}, {}",
-            self.current.name(),
-            if self.highlighted == self.current {
-                "chosen"
-            } else {
-                "not chosen"
-            }
-        ));
-        cx.live(Live::Polite);
-    }
+    .windows(key)
 }
 
 /// The view options button at the header's end: three dots, a ring while the keys are on it.

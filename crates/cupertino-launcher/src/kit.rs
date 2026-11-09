@@ -246,8 +246,6 @@ pub struct Model {
     arrangement: Arrangement,
     /// The output's size, once known.
     output: Option<Size>,
-    /// The view options' highlighted choice while they are open.
-    pub option: Arrangement,
 }
 
 impl Model {
@@ -280,7 +278,6 @@ impl Model {
             previewed: None,
             arrangement: Arrangement::Grid,
             output: None,
-            option: Arrangement::Grid,
         }
     }
 
@@ -388,9 +385,6 @@ impl Model {
                 self.motion.unfold(self.target_shape(), now.mono);
             }
             Step::Leave(_, _) => {}
-            Step::Enter(Nested::ViewOptions) => {
-                self.option = self.arrangement;
-            }
             Step::Enter(_) => {}
             Step::FocusField => self.panel.focus_field(),
             Step::ClearQuery => {
@@ -894,19 +888,11 @@ impl Model {
         }
     }
 
-    /// The view options' keys: Up and Down choose, Return or Space applies, everything else waits.
+    /// A key that reaches the panel while the view options are open. Their menu holds the keyboard and moves between
+    /// its items itself, so only a key the panel still hears matters: Escape closes the menu, everything else waits.
     fn menu_key(&mut self, key: PanelKey) -> Vec<Command<Message>> {
         match key {
             PanelKey::Escape => self.intent(Intent::Escape),
-            PanelKey::Up => {
-                self.option = Arrangement::Grid;
-                Vec::new()
-            }
-            PanelKey::Down => {
-                self.option = Arrangement::List;
-                Vec::new()
-            }
-            PanelKey::Enter | PanelKey::Char(' ') => self.arrange(self.option),
             _ => Vec::new(),
         }
     }
@@ -989,18 +975,23 @@ impl Model {
                 }
                 self.animate()
             }
+            // the pointer (or assistive technology) pressed the button: the keys stay where they were, so the button
+            // shows no focus ring once the menu closes
             Input::ViewOptions => {
                 if self.nav.nested == Some(Nested::ViewOptions) {
                     self.intent(Intent::Done)
                 } else {
-                    if let Some(b) = self.browser.as_mut() {
-                        b.set_zone(Zone::Options);
-                    }
-                    self.nav.apply(Intent::Focus(NavFocus::Categories));
                     self.intent(Intent::Open(Nested::ViewOptions))
                 }
             }
             Input::Arrange(arrangement) => self.arrange(arrangement),
+            Input::CloseMenu => {
+                if self.nav.nested == Some(Nested::ViewOptions) {
+                    self.intent(Intent::Done)
+                } else {
+                    Vec::new()
+                }
+            }
             Input::ClosePreview => self.intent(Intent::Done),
         }
     }
@@ -1157,12 +1148,18 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         preview_unavailable: model.preview == PreviewState::Unavailable,
         browser,
         app_icons: &model.app_icons,
-        option: model.option,
         now: model.now().mono,
     };
     let mut windows = vec![view::panel_window(&panel)];
     if model.nav.is_visible() {
         windows.push(view::catcher_window());
+    }
+    if model.nav.nested == Some(Nested::ViewOptions) && browser.is_some() {
+        windows.extend(view::browse::options_menu(
+            view::panel_window_key(),
+            model.arrangement,
+            view::options_menu_key(),
+        ));
     }
     windows
 }

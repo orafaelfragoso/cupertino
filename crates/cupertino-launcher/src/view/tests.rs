@@ -1566,24 +1566,97 @@ fn a_category_filter_narrows_the_applications_and_clearing_it_brings_them_back()
     );
 }
 
+impl Run {
+    /// The view options menu's popup, while it is open.
+    fn options_menu(&self) -> Option<WindowId> {
+        let key = options_menu_key();
+        self.driver
+            .runtime()
+            .windows()
+            .into_iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, id)| id)
+    }
+
+    /// Presses and releases a key in the open view options menu, which holds the keyboard while it is open.
+    fn menu_key(&mut self, name: &str, code: u32, keysym: u32) {
+        let menu = self.options_menu().expect("the view options are open");
+        for pressed in [true, false] {
+            self.send(
+                menu,
+                WindowEvent::Key(
+                    KeyEvent {
+                        code,
+                        keysym: Keysym(keysym),
+                        text: None,
+                        pressed,
+                        repeat: false,
+                        mods: Mods::NONE,
+                    },
+                    Timestamp(0),
+                ),
+            );
+        }
+        let note = self.note();
+        let _ = writeln!(self.trace, "> {name} (menu)\n  {note}");
+    }
+
+    /// The rectangle of the node `key` names in `window`.
+    fn rect_in(&self, window: WindowId, key: impl Into<Key>) -> Rect {
+        let runtime = self.driver.runtime();
+        let id = runtime.find(window, &key.into()).expect("the node");
+        let r = runtime
+            .snapshot(window)
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap()
+            .rect;
+        Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height)
+    }
+
+    /// Opens the view options from the keyboard: Tab to the filters, Tab to the button, Return.
+    fn open_options_by_keys(&mut self) {
+        self.key("Tab", TAB_CODE, TAB);
+        assert_eq!(
+            self.model().browser.as_ref().unwrap().zone(),
+            Zone::Categories
+        );
+        assert_eq!(self.selected(Role::CheckBox), ["Development"]);
+        self.key("Tab", TAB_CODE, TAB);
+        assert_eq!(self.model().browser.as_ref().unwrap().zone(), Zone::Options);
+        self.key("Return", RETURN_CODE, RETURN);
+        assert!(self.options_menu().is_some(), "Return opens the menu");
+    }
+
+    /// Whether the view options button draws its focus ring (a stroke; the button is otherwise filled dots).
+    fn options_ring(&self) -> bool {
+        let id = self
+            .driver
+            .runtime()
+            .find(self.panel(), &Key::from(browse::OPTIONS_BUTTON))
+            .expect("the button shows");
+        let paint = cupertino_kit::render::PaintNodeId::from(id);
+        self.snapshot()
+            .display_list
+            .nodes
+            .iter()
+            .filter(|n| n.id == paint)
+            .flat_map(|n| &n.ops)
+            .any(|op| matches!(op, PaintOp::Stroke { .. }))
+    }
+}
+
 #[test]
 fn the_view_options_lay_the_applications_out_as_a_list() {
     let mut run = Run::new();
     run.browse_from_hidden();
     // Tab walks from the applications to the filters and on to the view options
-    run.key("Tab", TAB_CODE, TAB);
-    assert_eq!(
-        run.model().browser.as_ref().unwrap().zone(),
-        Zone::Categories
-    );
-    assert_eq!(run.selected(Role::CheckBox), ["Development"]);
-    run.key("Tab", TAB_CODE, TAB);
-    assert_eq!(run.model().browser.as_ref().unwrap().zone(), Zone::Options);
-    run.key("Return", RETURN_CODE, RETURN);
-    assert_eq!(run.names(Role::Menu), ["View Options"]);
-    run.key("Down", DOWN_CODE, DOWN);
-    run.key("Return", RETURN_CODE, RETURN);
-    assert!(run.names(Role::Menu).is_empty(), "choosing closes the menu");
+    run.open_options_by_keys();
+    run.menu_key("Down", DOWN_CODE, DOWN);
+    run.menu_key("Return", RETURN_CODE, RETURN);
+    assert!(run.options_menu().is_none(), "choosing closes the menu");
     assert_eq!(run.names(Role::ListItem), ALL_APPS);
     assert!(run.names(Role::Button).is_empty());
     run.fixtures("browser-list");
@@ -1592,6 +1665,131 @@ fn the_view_options_lay_the_applications_out_as_a_list() {
     run.key("Escape", ESCAPE_CODE, ESCAPE);
     run.deliver(Message::Browse);
     assert_eq!(run.names(Role::ListItem), ALL_APPS);
+}
+
+/// The view options are a menu in a popup of the panel's window that takes the keyboard, opened below the button
+/// and free of the panel's bounds: nothing of it is drawn in the panel, where the header would clip it.
+#[test]
+fn the_view_options_open_in_a_popup_below_their_button() {
+    let mut run = Run::new();
+    run.browse_from_hidden();
+    let panel = run.panel();
+    let button = run.rect_in(panel, browse::OPTIONS_BUTTON);
+    run.click(panel, run.centre(browse::OPTIONS_BUTTON));
+    let menu = run.options_menu().expect("the press opened the menu");
+    assert!(
+        run.names(Role::Menu).is_empty(),
+        "the panel draws no menu of its own"
+    );
+    let system = run.driver.window_system_mut();
+    assert_eq!(system.parent(menu).unwrap(), Some(panel));
+    let spec = system.placement(menu).unwrap().expect("placed").clone();
+    assert!(
+        spec.grab,
+        "it takes the keyboard and closes on a press outside"
+    );
+    assert_eq!(spec.anchor_rect, button, "anchored to the button");
+    assert_eq!(
+        (spec.anchor, spec.gravity),
+        (
+            cupertino_kit::platform::PopupEdge::Bottom,
+            cupertino_kit::platform::PopupEdge::Bottom
+        ),
+        "opening below it"
+    );
+    assert!(spec.offset.y > 0.0, "a gap under the button");
+    // its two rows are whole: the first row's top lies below the menu's own top edge and padding
+    let first = run.rect_in(menu, 0u64);
+    let second = run.rect_in(menu, 1u64);
+    assert!(first.y() > 0.0, "{first:?}");
+    assert!(second.max_y() < spec.size.height, "{second:?} in {spec:?}");
+}
+
+/// The view options are drawn as every menu of the shell is: a menu on the menu material, which a desktop with glass
+/// shows as glass under the popup.
+#[test]
+fn the_view_options_are_a_menu_on_the_menu_material() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let mut run = Run::with(appearance, true);
+        run.browse_from_hidden();
+        let panel = run.panel();
+        run.click(panel, run.centre(browse::OPTIONS_BUTTON));
+        let menu = run.options_menu().expect("the press opened the menu");
+        let reader = run.reader.tree(menu).expect("the reader holds the menu");
+        let root = reader
+            .nodes
+            .iter()
+            .map(|(_, n)| n)
+            .find(|n| n.role == Role::Menu)
+            .expect("a menu");
+        assert_eq!(root.name.as_deref(), Some(browse::VIEW_OPTIONS));
+        let items: Vec<_> = reader
+            .nodes
+            .iter()
+            .map(|(_, n)| n)
+            .filter(|n| n.role == Role::MenuItem || n.role == Role::MenuItemCheckBox)
+            .filter_map(|n| n.name.clone())
+            .collect();
+        assert_eq!(items.len(), 2, "{items:?}");
+        let material = theme_in(appearance)
+            .surface(Surface::Menu)
+            .material
+            .expect("the menu surface has a material")
+            .to_owned();
+        let backdrop = run
+            .driver
+            .window_system_mut()
+            .requests(menu)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|r| match r {
+                cupertino_kit::platform::WindowRequest::Backdrop(b) => Some(b.clone()),
+                _ => None,
+            })
+            .flatten()
+            .expect("the menu asks for a material");
+        assert_eq!(backdrop.material, material, "{appearance:?}");
+        assert!(backdrop.radius > 0.0);
+    }
+}
+
+/// A choice made with the pointer leaves no focus ring on the button that opened the menu; one made from the
+/// keyboard leaves the ring where the keys are.
+#[test]
+fn only_a_keyboard_choice_leaves_the_focus_ring_on_the_view_options_button() {
+    let mut run = Run::new();
+    run.browse_from_hidden();
+    let panel = run.panel();
+    assert!(!run.options_ring());
+    run.click(panel, run.centre(browse::OPTIONS_BUTTON));
+    let menu = run.options_menu().expect("the press opened the menu");
+    let list = run.rect_in(menu, 1u64);
+    run.click(menu, list.center());
+    assert!(run.options_menu().is_none(), "the click chose");
+    assert_eq!(
+        run.model().browser.as_ref().unwrap().arrangement(),
+        Arrangement::List
+    );
+    assert!(!run.options_ring(), "no ring after a pointer choice");
+    run.open_options_by_keys();
+    run.menu_key("Up", UP_CODE, UP);
+    run.menu_key("Return", RETURN_CODE, RETURN);
+    assert!(run.options_menu().is_none(), "Return chose");
+    assert_eq!(
+        run.model().browser.as_ref().unwrap().arrangement(),
+        Arrangement::Grid
+    );
+    assert!(run.options_ring(), "the ring after a keyboard choice");
+    // Escape in the menu closes it and leaves the arrangement
+    run.key("Return", RETURN_CODE, RETURN);
+    run.menu_key("Escape", ESCAPE_CODE, ESCAPE);
+    assert!(run.options_menu().is_none());
+    assert_eq!(
+        run.model().browser.as_ref().unwrap().arrangement(),
+        Arrangement::Grid
+    );
+    assert!(run.model().panel.is_visible(), "only the menu closed");
 }
 
 #[test]

@@ -197,6 +197,8 @@ pub enum Input {
     ViewOptions,
     /// A view option was chosen.
     Arrange(Arrangement),
+    /// The view options menu closed: an option was chosen, or Escape or a press outside dismissed it.
+    CloseMenu,
     /// The enlarged preview's close was pressed.
     ClosePreview,
 }
@@ -464,8 +466,6 @@ pub struct PanelView<'a> {
     pub browser: Option<&'a Browser>,
     /// Images of the applications' icons by desktop id.
     pub app_icons: &'a HashMap<String, Vec<ImageSource>>,
-    /// The view option highlighted while the view options are open.
-    pub option: Arrangement,
     /// The monotonic clock, for the browser's scroll indicator.
     pub now: f64,
 }
@@ -493,6 +493,16 @@ fn empty<M: 'static>() -> Element<M> {
     })
 }
 
+/// The panel's window's key.
+pub fn panel_window_key() -> WindowKey {
+    WindowKey(Key::from("panel"))
+}
+
+/// The key of the view options menu's popup, a popup of the panel's window.
+pub fn options_menu_key() -> WindowKey {
+    WindowKey(Key::from("view-options"))
+}
+
 /// The panel's window: transparent, [`PanelView::extent`] large, the enclosure inside it at [`enclosure_rect`], which
 /// alone takes input while the panel is open (none while it closes).
 pub fn panel_window<M>(view: &PanelView<'_>) -> Window<M>
@@ -503,7 +513,7 @@ where
     let mut spec = window_spec("Launcher", APP_ID, view.extent);
     spec.input_region = Some(if view.open { vec![rect] } else { Vec::new() });
     Window {
-        key: WindowKey(Key::from("panel")),
+        key: panel_window_key(),
         spec,
         shortcuts: CommandRegistry::new(),
         on_close: Some(M::from(Input::Dismiss)),
@@ -612,7 +622,7 @@ where
                     && view.nested != Some(Nested::ViewOptions),
                 expanded: view.nested == Some(Nested::ViewOptions),
             })
-            .key("view-options-button"),
+            .key(browse::OPTIONS_BUTTON),
         );
     }
     let query_row = Element::new(Bar {
@@ -624,10 +634,7 @@ where
     let mut children = vec![query_row];
     let showing_browser = view.browser.filter(|_| browsing || frame.content > 0.0);
     if let Some(browser) = showing_browser {
-        let menu = (view.nested == Some(Nested::ViewOptions)).then_some(view.option);
-        children.push(
-            browse::body(browser, view.app_icons, frame.content, menu, view.now).key("browser"),
-        );
+        children.push(browse::body(browser, view.app_icons, frame.content, view.now).key("browser"));
     } else {
         children.extend(search_body(view));
     }

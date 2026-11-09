@@ -2505,28 +2505,38 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn an_inactive_window_draws_the_inactive_variant_of_its_sidebar() {
+    fn an_inactive_window_keeps_its_sidebar_s_material() {
         let theme = Theme::load().unwrap();
-        let sidebar = |window| {
-            theme
-                .recipe(
-                    Appearance::Dark,
-                    "Sidebar",
-                    &super::material_options(false, window),
-                )
-                .unwrap()
-        };
-        let (active, inactive) = (sidebar(WindowState::Active), sidebar(WindowState::Inactive));
+        for appearance in Appearance::ALL {
+            for reduce_transparency in [false, true] {
+                let sidebar = |window| {
+                    theme
+                        .recipe(
+                            appearance,
+                            "Sidebar",
+                            &super::material_options(reduce_transparency, window),
+                        )
+                        .unwrap()
+                };
+                let (active, inactive) =
+                    (sidebar(WindowState::Active), sidebar(WindowState::Inactive));
+                assert_eq!(
+                    active, inactive,
+                    "{appearance:?} rt={reduce_transparency}: the inactive sidebar is the active one's material"
+                );
+            }
+        }
+        let active = theme
+            .recipe(
+                Appearance::Dark,
+                "Sidebar",
+                &super::material_options(false, WindowState::Inactive),
+            )
+            .unwrap();
         assert!(
-            active.has_backdrop(),
-            "the active sidebar blurs what is behind"
+            active.has_backdrop() && active.uses_tint_layer(),
+            "it blurs and tints what is behind, as the active one does"
         );
-        assert!(
-            !inactive.has_backdrop(),
-            "the inactive one is a solid grey tinted by the wallpaper"
-        );
-        assert!(inactive.uses_tint_layer());
-        assert_eq!(inactive.rendition_key, "inactive.normal");
     }
 
     use super::super::material::{MaterialElement, MaterialGl};

@@ -353,6 +353,24 @@ pub fn curve_coeffs(v: [f32; 4]) -> [f32; 4] {
     ]
 }
 
+/// The materials of a window's own body: its sidebars, its title bars and its header. A window that is not active draws
+/// them as an active one does, in every appearance and with Reduce Transparency, so it keeps the tint of what lies
+/// behind it and its brightness; what changes is its text, its selection and its window buttons, which their own roles
+/// follow. An explicit [`MaterialOptions::rendition_key`] still reads any variant of the data.
+pub const KEPT_WHEN_INACTIVE: [&str; 5] = [
+    "Sidebar",
+    "InlineSidebar",
+    "Titlebar",
+    "SeamlessWindowTitlebar",
+    "Header",
+];
+
+/// Whether a window that is not active draws `material` (or its `-Opaque` variant) as an active one does.
+pub fn kept_when_inactive(material: &str) -> bool {
+    let plain = material.strip_suffix("-Opaque").unwrap_or(material);
+    KEPT_WHEN_INACTIVE.contains(&plain)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WindowState {
     #[default]
@@ -640,10 +658,15 @@ impl MaterialLibrary {
             .get(catalog.label())
             .and_then(|c| c.get(material))
             .ok_or_else(|| Error::NotFound(format!("material {}/{material}", catalog.label())))?;
+        let window = if kept_when_inactive(material) {
+            WindowState::Active
+        } else {
+            opts.window
+        };
         let key = opts
             .rendition_key
             .clone()
-            .unwrap_or_else(|| format!("{}.{}", opts.window.key(), opts.interaction.key()));
+            .unwrap_or_else(|| format!("{}.{}", window.key(), opts.interaction.key()));
         let mut r = variants.get(&key).cloned().ok_or_else(|| {
             Error::NotFound(format!("variant {key} of {}/{material}", catalog.label()))
         })?;
@@ -722,22 +745,74 @@ mod tests {
         assert!(matches!(r.backdrop.unwrap().ops[..], [ColorOp::Saturate(s)] if near(s, 2.4)));
     }
 
+    /// A window that is not active keeps its body's materials, in every appearance, with and without Reduce
+    /// Transparency and in every interaction: the same backdrop and fills as the active window's, so its sidebar keeps
+    /// the tint of what lies behind it and it grows no darker. The data's own inactive variant is still there for an
+    /// explicit rendition key.
     #[test]
-    fn inactive_window_is_opaque_fill() {
+    fn an_inactive_window_keeps_its_body_s_materials() {
         let l = lib();
-        let r = l
+        for appearance in Appearance::ALL {
+            for reduce_transparency in [false, true] {
+                for interaction in [Interaction::Normal, Interaction::Rollover, Interaction::Pressed] {
+                    for material in KEPT_WHEN_INACTIVE {
+                        let opts = |window| MaterialOptions {
+                            window,
+                            interaction,
+                            reduce_transparency,
+                            ..Default::default()
+                        };
+                        let (Ok(active), Ok(inactive)) = (
+                            l.recipe(appearance, material, &opts(WindowState::Active)),
+                            l.recipe(appearance, material, &opts(WindowState::Inactive)),
+                        ) else {
+                            continue;
+                        };
+                        assert_eq!(
+                            active, inactive,
+                            "{appearance:?} {material} rt={reduce_transparency} {interaction:?}"
+                        );
+                    }
+                }
+            }
+        }
+        let explicit = l
             .recipe(
                 Appearance::Light,
                 "Sidebar",
                 &MaterialOptions {
-                    window: WindowState::Inactive,
+                    rendition_key: Some("inactive.normal".into()),
                     ..Default::default()
                 },
             )
             .unwrap();
-        assert!(r.backdrop.is_none());
-        assert_eq!(r.rendition_key, "inactive.normal");
-        assert!(near(r.fills[0].rgba[0], 0.941) && near(r.fills[0].rgba[3], 1.0));
+        assert!(explicit.backdrop.is_none());
+        assert_eq!(explicit.rendition_key, "inactive.normal");
+        assert!(near(explicit.fills[0].rgba[0], 0.941) && near(explicit.fills[0].rgba[3], 1.0));
+    }
+
+    /// The materials an inactive window keeps are those of its body; a menu, a selection or a sheet still draws its
+    /// own inactive variant.
+    #[test]
+    fn only_a_window_s_body_materials_are_kept_when_inactive() {
+        assert!(kept_when_inactive("Sidebar") && kept_when_inactive("Sidebar-Opaque"));
+        assert!(kept_when_inactive("Titlebar-Opaque") && kept_when_inactive("InlineSidebar"));
+        for other in ["Menu", "Selection", "MenuSelection", "Sheet", "MenuBar", "Glass"] {
+            assert!(!kept_when_inactive(other), "{other}");
+        }
+        let l = lib();
+        let selection = |window| {
+            l.recipe(
+                Appearance::Dark,
+                "Selection",
+                &MaterialOptions {
+                    window,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(selection(WindowState::Inactive).rendition_key, "inactive.normal");
     }
 
     #[test]

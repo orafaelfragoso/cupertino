@@ -12,11 +12,11 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{
     Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
 };
-use cupertino_ui_platform::{KeyEvent, Keysym, MouseButton, PointerEvent, Timestamp};
+use cupertino_ui_platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{
     Affinity, ChangeCause, ContentHints, ContentPurpose, ImeBatch, ImeEvent, Keymap,
-    ParagraphLayout, Response, SecureBuffer, Selection, Surrounding, TextBuffer, TextFieldKeys,
+    ParagraphLayout, Response, SecureBuffer, Selection, TextBuffer, TextFieldKeys,
     TextInputSession, TextPosition, CARET_WIDTH, SURROUNDING_MAX_BYTES,
 };
 use cupertino_ui_theme::{Color, ColorRole, ThemeTokens};
@@ -29,8 +29,110 @@ const KP_ENTER: Keysym = Keysym(0xff8d);
 const ESCAPE: Keysym = Keysym(0xff1b);
 const TAB: Keysym = Keysym(0xff09);
 const BULLET: char = '\u{2022}';
-/// Points between the baseline and the composition's one-pixel underline.
-const COMPOSITION_DROP: f64 = 1.5;
+/// Points between a line's baseline and the top of the composition's underline.
+pub(crate) const COMPOSITION_DROP: f64 = 1.5;
+/// How thick the composition's underline is, in points.
+const COMPOSITION_LINE: f64 = 1.0;
+/// How thick the underline of the clause the input method is converting is, in points.
+const CLAUSE_LINE: f64 = 2.0;
+/// How often a drag held past a field's or an editor's edge scrolls on by itself, in nanoseconds; each step scrolls
+/// as far as the pointer is past the edge.
+pub(crate) const AUTOSCROLL_NS: u64 = 50_000_000;
+
+/// A stroke `points` thick at `scale` in whole device pixels, at least one.
+pub(crate) fn device_thickness(points: f64, scale: f64) -> f64 {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    (points * scale).round().max(1.0) / scale
+}
+
+/// `at` (points from the node's origin) on the nearest device pixel edge at `scale`.
+pub(crate) fn snap(at: f64, scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 {
+        (at * scale).round() / scale
+    } else {
+        at
+    }
+}
+
+/// The bar a caret `caret` (a layout's caret rectangle, in node points) draws as at `scale`: [`CARET_WIDTH`] in whole
+/// device pixels (at least one), its left edge, top and bottom on device pixel edges, so it stays sharp at every scale
+/// where the node lies on whole pixels.
+pub(crate) fn caret_bar(caret: Rect, scale: f64) -> Rect {
+    let width = device_thickness(CARET_WIDTH, scale);
+    let top = snap(caret.min_y(), scale);
+    let bottom = snap(caret.max_y(), scale).max(top + device_thickness(0.0, scale));
+    Rect::new(snap(caret.min_x(), scale), top, width, bottom - top)
+}
+
+/// A selection rectangle with its left and right edges on device pixel edges, so it meets the caret and its neighbours
+/// without a blended column.
+pub(crate) fn selection_bar(rect: Rect, scale: f64) -> Rect {
+    let (left, right) = (snap(rect.min_x(), scale), snap(rect.max_x(), scale));
+    Rect::new(left, rect.min_y(), (right - left).max(0.0), rect.height())
+}
+
+/// The composition's underline under `composition` (bytes of `layout`'s text) on each line it covers,
+/// [`COMPOSITION_DROP`] below the baseline, and a heavier one under `clause`, the part the input method is converting.
+/// The layout's origin is at `origin`, in node points.
+pub(crate) fn paint_composition(
+    cx: &mut PaintCx<'_>,
+    layout: &ParagraphLayout,
+    origin: Point,
+    composition: Range<usize>,
+    clause: Option<Range<usize>>,
+    color: Option<Color>,
+) {
+    let scale = cx.env().scale;
+    let underline = |cx: &mut PaintCx<'_>, range: Range<usize>, points: f64| {
+        for rect in layout.selection_rects(range) {
+            let Some(line) = layout.lines().iter().find(|l| l.rect.y() == rect.y()) else {
+                continue;
+            };
+            let bar = selection_bar(rect.translate(origin.x, 0.0), scale);
+            let top = snap(origin.y + line.baseline + COMPOSITION_DROP, scale);
+            fill_rect(
+                cx,
+                Rect::new(
+                    bar.min_x(),
+                    top,
+                    bar.width(),
+                    device_thickness(points, scale),
+                ),
+                color,
+            );
+        }
+    };
+    underline(cx, composition, COMPOSITION_LINE);
+    if let Some(clause) = clause.filter(|c| !c.is_empty()) {
+        underline(cx, clause, CLAUSE_LINE);
+    }
+}
+
+/// Where a buffer's caret draws: the input method's cursor while it composes (`None` when it hides it or converts a
+/// clause), else the buffer's caret.
+pub(crate) fn drawn_caret(buffer: &TextBuffer) -> Option<TextPosition> {
+    match buffer.composition() {
+        Some(_) => buffer
+            .composition_cursor()
+            .filter(Range::is_empty)
+            .map(|c| position(c.start)),
+        None => Some(buffer.caret_position()),
+    }
+}
+
+/// The position the input method's candidate window anchors at and a field scrolls to show: the input method's
+/// cursor (its clause's start) while it composes, else the caret.
+pub(crate) fn input_anchor(buffer: &TextBuffer) -> TextPosition {
+    match (buffer.composition(), buffer.composition_cursor()) {
+        (Some(_), Some(cursor)) => position(cursor.start),
+        (Some(range), None) => position(range.start),
+        (None, _) => buffer.caret_position(),
+    }
+}
 
 pub(crate) fn session(purpose: ContentPurpose, protected: bool) -> TextInputSession {
     let caret = TextPosition {
@@ -215,9 +317,14 @@ pub(crate) fn fill_rect(
 /// What a field paints of its buffer, in byte offsets of `text`.
 struct Shown<'a> {
     text: &'a str,
+    /// Where the field scrolls to keep in view: the caret, or the input method's cursor.
     caret: TextPosition,
+    /// The caret draws (an input method can hide it, or convert a clause in its place).
+    caret_drawn: bool,
     selection: Range<usize>,
     composition: Option<Range<usize>>,
+    /// The clause of the composition the input method is converting, drawn with a heavier underline.
+    clause: Option<Range<usize>>,
     /// The caret is in the on phase of its blink.
     caret_on: bool,
 }
@@ -244,7 +351,7 @@ fn paint_text(
     let caret = layout.caret_rect(shown.caret);
     let focused = look.focused && enabled;
     let (shown_x, shown_width) = if focused {
-        (caret.min_x(), CARET_WIDTH)
+        (caret.min_x(), device_thickness(CARET_WIDTH, env.scale))
     } else {
         (layout.caret_rect(position(0)).min_x(), 0.0)
     };
@@ -266,7 +373,7 @@ fn paint_text(
         for rect in layout.selection_rects(shown.selection.clone()) {
             fill_rect(
                 cx,
-                rect.translate(origin.x, origin.y),
+                selection_bar(rect.translate(origin.x, origin.y), env.scale),
                 color(ColorRole::SelectedTextBackground),
             );
         }
@@ -289,19 +396,24 @@ fn paint_text(
         look::glyphs(cx, &layout, origin, color(ColorRole::Text));
     }
     if let Some(range) = &shown.composition {
-        let start = layout.caret_rect(position(range.start)).min_x();
-        let end = layout.caret_rect(position(range.end)).min_x();
-        let y = look::baseline_sized(chrome, field.text_size(&env.theme)) + COMPOSITION_DROP;
-        fill_rect(
+        paint_composition(
             cx,
-            Rect::new(origin.x + start, y, end - start, 1.0 / env.scale),
+            &layout,
+            origin,
+            range.clone(),
+            shown.clause.clone(),
             color(ColorRole::Text),
         );
     }
-    if focused && look.window_active && shown.selection.is_empty() && shown.caret_on {
+    if focused
+        && look.window_active
+        && shown.selection.is_empty()
+        && shown.caret_drawn
+        && shown.caret_on
+    {
         fill_rect(
             cx,
-            caret.translate(origin.x, origin.y),
+            caret_bar(caret.translate(origin.x, origin.y), env.scale),
             color(ColorRole::Text),
         );
     }
@@ -551,15 +663,15 @@ pub struct FieldState {
     scroll: Cell<f64>,
     blink: Blink,
     look: FieldLook,
+    /// Where the pointer is while a press drags, in window coordinates, so the selection scrolls on past the edge.
+    drag_point: Option<Point>,
+    /// The next change tells the input method to start afresh.
+    reset_input: bool,
 }
 
 /// The text without what an input method is still composing: what the model holds.
 pub(crate) fn committed(buffer: &TextBuffer) -> String {
-    let text = buffer.text();
-    match buffer.composition() {
-        Some(range) => format!("{}{}", &text[..range.start], &text[range.end..]),
-        None => text.to_string(),
-    }
+    buffer.committed()
 }
 
 /// Whether a model's `value` is the text the buffer holds, once the buffer's own clean-up is applied to it, so a value
@@ -578,55 +690,31 @@ fn anchor(buffer: &TextBuffer) -> usize {
     }
 }
 
-/// Tells the input method where an editable text stands now, with its caret at `caret` in window coordinates.
+/// Tells the input method where an editable text stands now: the committed text around the caret (never what it is
+/// still composing), and `caret`, the rectangle its candidate window anchors at, in window coordinates. With `reset`
+/// the input method starts afresh, as after the field kept or dropped a composition it still holds.
 pub(crate) fn sync_input<M>(
     buffer: &TextBuffer,
     session: &mut TextInputSession,
     caret: Option<Rect>,
     cause: ChangeCause,
+    reset: bool,
     cx: &mut EventCx<'_, M>,
 ) {
     session.select(Selection {
         anchor: position(anchor(buffer)),
         focus: position(buffer.caret()),
     });
-    let surrounding = Surrounding::around(
-        buffer.text(),
-        buffer.caret(),
-        anchor(buffer),
-        SURROUNDING_MAX_BYTES,
-    );
+    let surrounding = buffer.surrounding(SURROUNDING_MAX_BYTES);
     let field = cx.bounds();
-    cx.set_text_input(Some(session.state(Some(surrounding), cause, caret, field)));
+    let mut state = session.state(Some(surrounding), cause, caret, field);
+    state.reset = reset;
+    cx.set_text_input(Some(state));
 }
 
-/// Applies one input-method batch: delete around the caret, commit, then show the preedit. A batch that answers an
-/// older state resets the composition instead.
-pub(crate) fn apply_ime(buffer: &mut TextBuffer, session: &TextInputSession, batch: &ImeBatch) {
-    if !session.accepts(batch) {
-        buffer.cancel_composition();
-        return;
-    }
-    let (before, after) = batch.delete;
-    if before > 0 || after > 0 {
-        let caret = buffer.caret();
-        let start = caret.saturating_sub(before as usize);
-        let end = (caret + after as usize).min(buffer.text().len());
-        buffer.select(start..end);
-        buffer.delete_selection();
-    }
-    if let Some(commit) = &batch.commit {
-        if buffer.composition().is_some() {
-            buffer.set_composition(commit);
-            buffer.commit_composition();
-        } else {
-            buffer.insert(commit);
-        }
-    }
-    match &batch.preedit {
-        Some(preedit) => buffer.set_composition(&preedit.text),
-        None => buffer.cancel_composition(),
-    }
+/// Applies one input-method batch ([`TextBuffer::apply_ime`]).
+pub(crate) fn apply_ime(buffer: &mut TextBuffer, batch: &ImeBatch) {
+    buffer.apply_ime(batch);
 }
 
 impl FieldState {
@@ -634,16 +722,17 @@ impl FieldState {
         committed(&self.buffer)
     }
 
-    /// The caret in window coordinates, for the input method's candidate window, at the scroll the next paint takes.
+    /// The caret (the input method's cursor while it composes) in window coordinates, for the input method's
+    /// candidate window, at the scroll the next paint takes.
     fn caret_rect<M>(&self, cx: &EventCx<'_, M>) -> Option<Rect> {
         let bounds = cx.bounds()?;
         let (layout, origin) = placed(cx.env(), self.buffer.text(), bounds.size, 0.0, self.look)?;
-        let caret = layout.caret_rect(self.buffer.caret_position());
+        let caret = layout.caret_rect(input_anchor(&self.buffer));
         let width = interior(bounds.size, &cx.env().theme, self.look, cx.env().direction).width();
         let scroll = follow(
             self.scroll.get(),
             caret.min_x(),
-            CARET_WIDTH,
+            device_thickness(CARET_WIDTH, cx.env().scale),
             layout.size().width,
             width,
         );
@@ -667,29 +756,51 @@ impl FieldState {
     }
 
     /// A press, a drag with the button held and its release: the caret, then a word or the whole text on a second
-    /// and third press, extended to where the pointer goes. The press captures the pointer, so a drag past the field
-    /// still extends the selection.
-    fn select<M>(&mut self, event: &Event, cx: &mut EventCx<'_, M>) -> Option<Propagation> {
+    /// and third press, extended to where the pointer goes; with Shift the press extends the selection. The press
+    /// captures the pointer, so a drag past the field still extends the selection, and one held past its start or end
+    /// scrolls on by itself. A press while the input method composes keeps the composed text as typed (reported as
+    /// an edit) and has the input method start afresh.
+    fn select<M>(
+        &mut self,
+        event: &Event,
+        on_commit: &mut dyn FnMut(&mut Self, &mut EventCx<'_, M>),
+        cx: &mut EventCx<'_, M>,
+    ) -> Option<Propagation> {
         match *event {
             Event::Pointer(
                 PointerEvent::Button {
                     position,
                     button: MouseButton::Left,
                     pressed: true,
+                    mods,
                     ..
                 },
                 _,
-            ) if cx.node() == cx.target() && self.buffer.composition().is_none() => {
+            ) if cx.node() == cx.target() => {
+                if self.buffer.composition().is_some() {
+                    self.buffer.commit_composition();
+                    self.reset_input = true;
+                    on_commit(self, cx);
+                }
                 let at = self.index_at(position, cx)?;
                 let now = Duration::from_nanos(cx.now().0);
-                self.buffer.press_at(at, false, now);
+                self.buffer.press_at(at, mods.contains(Mods::SHIFT), now);
+                self.drag_point = Some(position);
                 cx.capture_pointer();
                 None
             }
             Event::Pointer(PointerEvent::Motion { position }, _) if self.buffer.is_dragging() => {
+                self.drag_point = Some(position);
                 let at = self.index_at(position, cx)?;
                 self.buffer.drag_to(at);
                 Some(Propagation::Stop)
+            }
+            Event::Wake(_) if self.buffer.is_dragging() => {
+                if let Some(point) = self.drag_point.filter(|p| self.past_edge(*p, cx)) {
+                    let at = self.index_at(point, cx)?;
+                    self.buffer.drag_to(at);
+                }
+                None
             }
             Event::Pointer(
                 PointerEvent::Button {
@@ -700,22 +811,44 @@ impl FieldState {
                 _,
             ) if self.buffer.is_dragging() => {
                 self.buffer.release();
+                self.drag_point = None;
                 cx.release_pointer();
                 Some(Propagation::Stop)
             }
             // the capture was lost: the drag ends where it is
             Event::Cancel if self.buffer.is_dragging() => {
                 self.buffer.release();
+                self.drag_point = None;
                 Some(Propagation::Continue)
             }
             _ => None,
         }
     }
 
+    /// Whether `point` (window coordinates) lies before the start or past the end of the text area, where a held drag
+    /// scrolls.
+    fn past_edge<M>(&self, point: Point, cx: &EventCx<'_, M>) -> bool {
+        let Some(bounds) = cx.bounds() else {
+            return false;
+        };
+        let area = interior(bounds.size, &cx.env().theme, self.look, cx.env().direction);
+        let x = point.x - bounds.min_x();
+        x < area.min_x() || x > area.max_x()
+    }
+
+    /// Asks for the next autoscroll step while a drag is held past the edge; after the blink, whose wake it replaces
+    /// with an earlier one.
+    fn arm_autoscroll<M>(&self, cx: &mut EventCx<'_, M>) {
+        if self.buffer.is_dragging() && self.drag_point.is_some_and(|p| self.past_edge(p, cx)) {
+            cx.wake_at(Timestamp(cx.now().0 + AUTOSCROLL_NS));
+        }
+    }
+
     /// Tells the input method where the field stands now.
     fn sync_input<M>(&mut self, cause: ChangeCause, cx: &mut EventCx<'_, M>) {
         let caret = self.caret_rect(cx);
-        sync_input(&self.buffer, &mut self.session, caret, cause, cx);
+        let reset = std::mem::take(&mut self.reset_input);
+        sync_input(&self.buffer, &mut self.session, caret, cause, reset, cx);
     }
 }
 
@@ -735,7 +868,7 @@ impl<M: Clone + 'static> TextField<M> {
     ) -> Propagation {
         if self.enabled {
             let selection = state.buffer.selection();
-            let ended = state.select(event, cx);
+            let ended = state.select(event, &mut |state, cx| self.report(state, cx), cx);
             if state.buffer.selection() != selection || state.buffer.is_dragging() {
                 if cx.is_focused() {
                     state.sync_input(ChangeCause::Other, cx);
@@ -755,9 +888,14 @@ impl<M: Clone + 'static> TextField<M> {
                 cx.request_paint();
                 Propagation::Continue
             }
+            // what the input method composed stays as typed; the window system turns the input method off
             Event::Focus { gained: false, .. } => {
-                state.buffer.cancel_composition();
+                let composing = state.buffer.composition().is_some();
                 state.buffer.blur();
+                state.drag_point = None;
+                if composing {
+                    self.report(state, cx);
+                }
                 cx.request_paint();
                 Propagation::Continue
             }
@@ -766,16 +904,23 @@ impl<M: Clone + 'static> TextField<M> {
             }
             Event::Ime(ImeEvent::Done(batch)) if self.enabled => {
                 let before = state.committed();
-                apply_ime(&mut state.buffer, &state.session, batch);
+                apply_ime(&mut state.buffer, batch);
                 if state.committed() != before {
                     self.report(state, cx);
                 }
-                state.sync_input(ChangeCause::InputMethod, cx);
+                // a stale batch is answered by the input method's next one, not by this state
+                if state.session.accepts(batch) {
+                    state.sync_input(ChangeCause::InputMethod, cx);
+                }
                 cx.request_paint();
                 Propagation::Stop
             }
+            // the window lost the keyboard: the input method dropped its composition, which stays as typed
             Event::Ime(ImeEvent::Leave) => {
-                state.buffer.cancel_composition();
+                if state.buffer.composition().is_some() {
+                    state.buffer.commit_composition();
+                    self.report(state, cx);
+                }
                 cx.request_paint();
                 Propagation::Continue
             }
@@ -821,6 +966,7 @@ impl<M: Clone + 'static> TextField<M> {
             }
             ESCAPE if composing => {
                 state.buffer.cancel_composition();
+                state.reset_input = true;
                 state.sync_input(ChangeCause::Other, cx);
                 cx.request_paint();
                 return Propagation::Stop;
@@ -867,6 +1013,8 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             scroll: Cell::new(0.0),
             blink: Blink::default(),
             look: FieldLook::Plain,
+            drag_point: None,
+            reset_input: false,
         }
     }
 
@@ -908,17 +1056,21 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
         let propagation = self.handle(state, event, cx);
         let selecting = !state.buffer.selection().is_empty();
         state.blink.follow(event, selecting, cx);
+        state.arm_autoscroll(cx);
         propagation
     }
 
     fn paint(&self, state: &FieldState, cx: &mut PaintCx<'_>) {
         let look = control_state(self.enabled, state.hovered, cx);
         paint_chrome(cx, &look, state.look);
+        let drawn = drawn_caret(&state.buffer);
         let shown = Shown {
             text: state.buffer.text(),
-            caret: state.buffer.caret_position(),
+            caret: drawn.unwrap_or_else(|| input_anchor(&state.buffer)),
+            caret_drawn: drawn.is_some(),
             selection: state.buffer.selection(),
             composition: state.buffer.composition(),
+            clause: state.buffer.composition_cursor(),
             caret_on: state.blink.on(cx.env(), cx.now()),
         };
         paint_text(
@@ -970,6 +1122,98 @@ pub struct SecureState {
     hovered: bool,
     scroll: Cell<f64>,
     blink: Blink,
+    /// The bullet a held press started from, while it drags.
+    drag: Option<usize>,
+    /// When and at which bullet the last press went down, for a double click.
+    last_press: Option<(Timestamp, usize)>,
+}
+
+impl SecureState {
+    /// The bullet boundary under `point` (window coordinates): a grapheme index of the password.
+    fn mask_index<M>(&self, point: Point, cx: &EventCx<'_, M>) -> Option<usize> {
+        let bounds = cx.bounds()?;
+        let mask = self.buffer.mask(BULLET);
+        let (layout, origin) = placed(
+            cx.env(),
+            &mask,
+            bounds.size,
+            self.scroll.get(),
+            FieldLook::Plain,
+        )?;
+        Some(layout.index_at(point - bounds.origin - origin).byte / BULLET.len_utf8())
+    }
+
+    /// A press puts the caret between two bullets (with Shift it extends the selection), a drag selects to the
+    /// pointer, and a second press at the same place selects the whole password: it has no words to show.
+    fn select<M>(&mut self, event: &Event, cx: &mut EventCx<'_, M>) -> bool {
+        match *event {
+            Event::Pointer(
+                PointerEvent::Button {
+                    position,
+                    button: MouseButton::Left,
+                    pressed: true,
+                    mods,
+                    ..
+                },
+                _,
+            ) if cx.node() == cx.target() => {
+                let Some(at) = self.mask_index(position, cx) else {
+                    return false;
+                };
+                let now = cx.now();
+                let again = self.last_press.is_some_and(|(then, index)| {
+                    index == at
+                        && now.0.saturating_sub(then.0)
+                            <= cupertino_ui_text::MULTI_CLICK_INTERVAL.as_nanos() as u64
+                });
+                self.last_press = (!again).then_some((now, at));
+                let (caret, selection) = self.buffer.masked_selection();
+                let anchor = if caret == selection.start {
+                    selection.end
+                } else {
+                    selection.start
+                };
+                if again {
+                    self.buffer.select_all();
+                    self.drag = None;
+                } else {
+                    let from = if mods.contains(Mods::SHIFT) {
+                        anchor
+                    } else {
+                        at
+                    };
+                    self.buffer.select_masked(from, at);
+                    self.drag = Some(from);
+                    cx.capture_pointer();
+                }
+                true
+            }
+            Event::Pointer(PointerEvent::Motion { position }, _) => {
+                let (Some(from), Some(at)) = (self.drag, self.mask_index(position, cx)) else {
+                    return false;
+                };
+                self.buffer.select_masked(from, at);
+                true
+            }
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                },
+                _,
+            ) if self.drag.is_some() => {
+                self.drag = None;
+                cx.release_pointer();
+                true
+            }
+            Event::Cancel => {
+                self.drag = None;
+                false
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Inserts `text` in place of the selection, and whether that changed the buffer: not when [`SecureField::max_len`]
@@ -987,25 +1231,39 @@ impl<M: 'static> SecureField<M> {
         event: &Event,
         cx: &mut EventCx<'_, M>,
     ) -> Propagation {
+        if self.enabled && state.select(event, cx) {
+            cx.request_paint();
+            if state.drag.is_some()
+                && !matches!(event, Event::Pointer(PointerEvent::Button { .. }, _))
+            {
+                return Propagation::Stop;
+            }
+        }
         if let Some(propagation) = pointer(event, self.enabled, &mut state.hovered, cx) {
             return propagation;
         }
         match event {
+            // the input method learns the field's place for its window, its purpose and hints, and nothing of its text
             Event::Focus { gained: true, .. } if self.enabled => {
                 cx.set_text_input(Some(state.session.state(
                     None,
                     ChangeCause::Other,
                     None,
-                    None,
+                    cx.bounds(),
                 )));
                 cx.request_paint();
+                Propagation::Continue
+            }
+            Event::Focus { gained: false, .. } => {
+                state.drag = None;
                 Propagation::Continue
             }
             Event::Key(key, _) if self.enabled && cx.node() == cx.target() => {
                 self.key(state, key, cx)
             }
-            // a password takes committed text only; a composition is never held anywhere
-            Event::Ime(ImeEvent::Done(batch)) if self.enabled && state.session.accepts(batch) => {
+            // a password takes committed text only; a composition is never held anywhere, and with no surrounding
+            // text there is nothing to delete
+            Event::Ime(ImeEvent::Done(batch)) if self.enabled => {
                 if let Some(commit) = &batch.commit {
                     if insert(&mut state.buffer, commit) {
                         self.changed(&state.buffer, cx);
@@ -1104,12 +1362,16 @@ impl<M: 'static> Widget<M> for SecureField<M> {
     fn state(&self) -> SecureState {
         let mut buffer = SecureBuffer::new();
         buffer.set_max_len(self.max_len);
+        let mut session = session(ContentPurpose::Password, true);
+        session.hints = TextInputSession::protected_hints();
         SecureState {
             buffer,
-            session: session(ContentPurpose::Password, true),
+            session,
             hovered: false,
             scroll: Cell::new(0.0),
             blink: Blink::default(),
+            drag: None,
+            last_press: None,
         }
     }
 
@@ -1165,8 +1427,10 @@ impl<M: 'static> Widget<M> for SecureField<M> {
         let shown = Shown {
             text: &mask,
             caret: position(caret * width),
+            caret_drawn: true,
             selection: selection.start * width..selection.end * width,
             composition: None,
+            clause: None,
             caret_on: state.blink.on(cx.env(), cx.now()),
         };
         paint_text(

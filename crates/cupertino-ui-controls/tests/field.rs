@@ -273,16 +273,251 @@ fn the_input_method_composes_without_reporting_and_commits_once() {
 }
 
 #[test]
-fn escape_and_a_stale_batch_cancel_the_composition() {
+fn escape_cancels_the_composition_and_a_stale_batch_still_applies() {
     let mut h = focused_name();
     h.type_text("a");
     h.send(batch(Some("ni"), None, true));
     h.tap(ESCAPE);
+    assert_eq!(editing(&h).0, "a");
+    assert!(
+        told(&h).reset,
+        "the input method drops the composition Escape cancelled"
+    );
+    // a batch that answers an older state applies, as the protocol orders, but is not answered with a state
+    let sent = told(&h);
     h.send(batch(None, Some("x"), false));
+    assert_eq!(h.model().text, "ax");
+    assert_eq!(
+        told(&h).surrounding,
+        sent.surrounding,
+        "no answer to a stale batch"
+    );
     h.send(batch(Some("ha"), None, true));
     h.send(batch(None, None, false));
-    assert_eq!(h.model().text, "a");
-    assert_eq!(editing(&h).0, "a");
+    assert_eq!(h.model().text, "ax");
+    assert_eq!(editing(&h).0, "ax");
+}
+
+/// What the field last told the input method.
+fn told(h: &Harness<App>) -> cupertino_ui_text::TextInputState {
+    h.rt.window_system()
+        .text_input(h.window)
+        .unwrap()
+        .cloned()
+        .unwrap()
+}
+
+fn preedit(text: &str, cursor: Option<std::ops::Range<usize>>) -> WindowEvent {
+    WindowEvent::Ime(ImeEvent::Done(ImeBatch {
+        preedit: Some(Preedit {
+            text: text.into(),
+            cursor,
+        }),
+        current: true,
+        ..ImeBatch::default()
+    }))
+}
+
+#[test]
+fn the_input_method_learns_the_committed_text_and_where_its_cursor_is() {
+    let mut h = focused_name();
+    h.type_text("ab");
+    h.send(preedit("にほん", Some(3..3)));
+    let state = told(&h);
+    let around = state.surrounding.unwrap();
+    assert_eq!(
+        around.text, "ab",
+        "the composition is never surrounding text"
+    );
+    assert_eq!((around.cursor, around.anchor), (2, 2));
+    // the candidate window anchors at the input method's cursor, after the first kana
+    let field = h.rect("name");
+    let x = state.cursor_rect.unwrap().min_x() - field.min_x();
+    let expected = 6.0 + label_width("abに");
+    assert!((x - expected).abs() < 1.0, "{x} near {expected}");
+    // the caret draws there too, not at the composition's end
+    let drawn = caret(&h).expect("a caret in the composition");
+    assert!((drawn.min_x() - expected).abs() < 1.0, "{drawn:?}");
+}
+
+#[test]
+fn a_converting_clause_draws_a_heavier_underline_and_no_caret() {
+    let mut h = focused_name();
+    h.send(preedit("変換中", Some(0..6)));
+    let lines: Vec<Rect> = rects(&h, "name")
+        .into_iter()
+        .filter(|(r, c)| *c == normal(ColorRole::Text) && r.height() <= 2.0)
+        .map(|(r, _)| r)
+        .collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "the composition's and the clause's: {lines:?}"
+    );
+    let (thin, thick) = (lines[0], lines[1]);
+    assert_eq!((thin.height(), thick.height()), (1.0, 2.0));
+    assert_eq!(thin.min_y(), thick.min_y());
+    assert!(thick.width() < thin.width() && thick.min_x() == thin.min_x());
+    assert_eq!(caret(&h), None, "a clause takes the caret's place");
+    h.send(preedit("変換中", None));
+    assert_eq!(caret(&h), None, "the input method hides its cursor");
+}
+
+#[test]
+fn a_click_while_composing_keeps_the_text_as_typed_and_resets_the_input_method() {
+    let mut h = focused_name();
+    h.type_text("ab");
+    h.send(batch(Some("ka"), None, true));
+    assert_eq!(h.model().changes, 2);
+    h.click(after(&h, "a"));
+    assert_eq!(h.model().text, "abka", "the composed text stays");
+    assert_eq!(h.model().changes, 3, "and is reported once");
+    let state = told(&h);
+    assert!(state.reset, "the input method starts afresh");
+    assert_eq!(state.surrounding.unwrap().text, "abka");
+    h.type_text("X");
+    assert_eq!(h.model().text, "aXbka", "the click placed the caret");
+    assert!(!told(&h).reset, "the reset is told once");
+}
+
+#[test]
+fn losing_the_focus_or_the_window_keeps_the_composition_as_typed() {
+    let mut h = focused_name();
+    h.send(batch(Some("ni"), None, true));
+    h.tap(TAB);
+    assert!(h.focused("password"));
+    assert_eq!(h.model().text, "ni");
+    let mut h = focused_name();
+    h.send(batch(Some("ha"), None, true));
+    h.send(WindowEvent::Ime(ImeEvent::Leave));
+    assert_eq!(h.model().text, "ha");
+    assert_eq!(editing(&h).0, "ha");
+}
+
+#[test]
+fn a_shift_click_extends_the_selection_from_the_caret() {
+    let mut h = focused_name();
+    h.type_text("hello world");
+    h.click(after(&h, "he"));
+    h.clock().advance_to(Timestamp(600 * MS)).unwrap();
+    h.click_with(after(&h, "hello wo"), Mods::SHIFT);
+    assert_eq!(editing(&h).1.selection, 2..8);
+}
+
+#[test]
+fn a_drag_held_past_the_field_keeps_scrolling_until_the_text_ends() {
+    let mut h = focused_name();
+    h.type_text(&"w".repeat(60));
+    h.press_key(102, 0xff50, true, false, Mods::NONE);
+    let start = after(&h, "w");
+    h.pointer(PointerEvent::Motion { position: start });
+    h.button(start, true);
+    let past = point(h.rect("name").max_x() + 10.0, start.y);
+    h.pointer(PointerEvent::Motion { position: past });
+    let first = editing(&h).1.selection;
+    assert!(
+        first.end < 60,
+        "one move reaches only past the edge: {first:?}"
+    );
+    let mut ms = 0;
+    let mut last = first.end;
+    while ms < 5_000 && last < 60 {
+        ms += 50;
+        at(&mut h, ms);
+        let now = editing(&h).1.selection.end;
+        assert!(now >= last, "the selection only grows");
+        last = now;
+    }
+    assert_eq!(
+        last, 60,
+        "held still past the edge, the selection reaches the end"
+    );
+    h.button(past, false);
+    at(&mut h, ms + 50);
+    assert_eq!(editing(&h).1.selection.end, 60);
+}
+
+/// The caret bar painted in the name field at the window's scale, any width.
+fn caret_any(h: &Harness<App>) -> Option<Rect> {
+    rects(h, "name")
+        .into_iter()
+        .find(|(r, c)| r.height() > 4.0 && r.width() <= 2.0 && *c == normal(ColorRole::Text))
+        .map(|(r, _)| r)
+}
+
+#[test]
+fn the_caret_is_whole_device_pixels_on_pixel_edges_at_every_scale() {
+    for (scale, pixels) in [(1.0, 1.0), (1.5, 2.0), (2.0, 2.0)] {
+        let mut h = Harness::<App>::new();
+        h.send(WindowEvent::Scale(scale));
+        h.tap(TAB);
+        h.type_text("Ada");
+        let bar = caret_any(&h).unwrap_or_else(|| panic!("a caret at {scale}"));
+        let whole = |v: f64| ((v * scale) - (v * scale).round()).abs() < 1e-9;
+        assert_eq!(
+            bar.width() * scale,
+            pixels,
+            "{pixels} device pixels wide at {scale}"
+        );
+        assert!(
+            whole(bar.min_x()) && whole(bar.min_y()) && whole(bar.max_y()),
+            "on device pixel edges at {scale}: {bar:?}"
+        );
+        let line = h.rect("name").height();
+        assert!(
+            bar.height() > 13.0 && bar.height() < line,
+            "a line high: {bar:?}"
+        );
+    }
+}
+
+#[test]
+fn a_password_field_asks_for_hidden_sensitive_text_without_prediction_at_its_own_place() {
+    let mut h = Harness::<App>::new();
+    h.tap(TAB);
+    h.tap(TAB);
+    assert!(h.focused("password"));
+    let state = told(&h);
+    assert_eq!(state.purpose, ContentPurpose::Password);
+    assert!(state.hints.hidden_text && state.hints.sensitive_data);
+    assert!(
+        !(state.hints.completion || state.hints.spellcheck || state.hints.auto_capitalization),
+        "nothing predicted, corrected or learned"
+    );
+    assert_eq!(state.surrounding, None);
+    assert_eq!(
+        state.cursor_rect,
+        Some(h.rect("password")),
+        "the candidate window has the field's place, not the caret's"
+    );
+    // nothing typed changes what the input method is told
+    h.type_text("hunter2");
+    assert_eq!(told(&h), state);
+}
+
+#[test]
+fn a_click_in_a_password_field_puts_the_caret_between_bullets() {
+    let mut h = Harness::<App>::new();
+    h.tap(TAB);
+    h.tap(TAB);
+    h.type_text("abcd");
+    let field = h.rect("password");
+    let bullet = label_width("\u{2022}");
+    h.click(point(
+        field.min_x() + 6.0 + bullet * 2.0 + 0.5,
+        field.center().y,
+    ));
+    h.type_text("X");
+    h.tap(RETURN);
+    assert_eq!(h.model().password, Some(5));
+    // a double click selects the whole password: Return then submits what replaces it
+    h.clock().advance_to(Timestamp(1000 * MS)).unwrap();
+    let inside = point(field.min_x() + 6.0 + bullet, field.center().y);
+    h.click(inside);
+    h.click(inside);
+    h.type_text("z");
+    h.tap(RETURN);
+    assert_eq!(h.model().password, Some(1));
 }
 
 #[test]
@@ -472,15 +707,16 @@ fn the_caret_follows_typing_and_gives_way_to_the_selection() {
     h.type_text("Ada");
     let end = caret(&h).unwrap();
     assert!(end.min_x() > start.min_x());
-    assert_eq!(
+    let told =
         h.rt.window_system()
             .text_input(h.window)
             .unwrap()
             .unwrap()
             .cursor_rect
-            .map(|r| r.min_x()),
-        Some(h.rect("name").min_x() + end.min_x()),
-        "the input method learns where the caret is"
+            .unwrap();
+    assert!(
+        (told.min_x() - (h.rect("name").min_x() + end.min_x())).abs() <= 0.5,
+        "the input method learns where the caret is, within the half pixel the caret snaps by"
     );
 
     h.press_key(A, 'a' as u32, true, false, Mods::PRIMARY);
@@ -697,7 +933,11 @@ fn a_composition_is_underlined_one_pixel_below_the_baseline() {
     assert_eq!(c, normal(ColorRole::Text));
     assert!(rect.width() > 0.0);
     let baseline = h.rect("name").height() / 2.0 + 13.0 * 0.36;
-    assert!((rect.min_y() - (baseline + 1.5)).abs() < 1e-9);
+    assert_eq!(
+        rect.min_y(),
+        (baseline + 1.5).round(),
+        "1.5 points below the baseline, on a pixel edge"
+    );
 
     h.send(batch(None, Some("か"), true));
     assert_eq!(underline(&h), None);

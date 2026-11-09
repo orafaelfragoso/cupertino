@@ -13,21 +13,19 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{
     Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
 };
-use cupertino_ui_platform::{KeyEvent, Keysym, MouseButton, PointerEvent};
+use cupertino_ui_platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_text::{
     AttributedText, ChangeCause, ContentPurpose, FontWeight, ImeEvent, Keymap, LineLayout,
     Paragraph, ParagraphLayout, ParagraphStyle, Response, TextAlign, TextBuffer, TextEditorKeys,
     TextInputSession, TextPosition, TextStyle, TextSystem, CARET_WIDTH,
 };
 use cupertino_ui_theme::ColorRole;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
 const ESCAPE: Keysym = Keysym(0xff1b);
-/// Points between a line's baseline and the composition's one-pixel underline.
-const COMPOSITION_DROP: f64 = 1.5;
 
 /// One paragraph (the text between two line breaks) laid out.
 struct Laid {
@@ -335,6 +333,13 @@ pub struct EditorState {
     blink: Blink,
     lines: RefCell<Lines>,
     bordered: bool,
+    /// The part of the editor that last showed, in its coordinates (set by paint): a drag held above or below it
+    /// scrolls on.
+    visible: Cell<Option<Rect>>,
+    /// Where the pointer is while a press drags, in window coordinates.
+    drag_point: Option<Point>,
+    /// The next change tells the input method to start afresh.
+    reset_input: bool,
 }
 
 impl EditorState {
@@ -362,13 +367,31 @@ impl EditorState {
         true
     }
 
-    /// The caret in node coordinates.
+    /// The caret in node coordinates: the input method's cursor while it composes.
     fn caret_rect(&self, env: &Environment) -> Option<Rect> {
         let inset = self.inset(env);
         self.lines
             .borrow()
-            .caret_rect(self.buffer.caret_position())
+            .caret_rect(field::input_anchor(&self.buffer))
             .map(|caret| caret.translate(inset, inset))
+    }
+
+    /// Whether `point` (window coordinates) lies above or below the part of the editor that shows, where a held drag
+    /// scrolls on.
+    fn past_edge<M>(&self, point: Point, cx: &EventCx<'_, M>) -> bool {
+        let (Some(bounds), Some(visible)) = (cx.bounds(), self.visible.get()) else {
+            return false;
+        };
+        let y = point.y - bounds.min_y();
+        y < visible.min_y() || y > visible.max_y()
+    }
+
+    /// Asks for the next autoscroll step while a drag is held past the shown part (after the blink, whose wake it
+    /// replaces with an earlier one).
+    fn arm_autoscroll<M>(&self, cx: &mut EventCx<'_, M>) {
+        if self.buffer.is_dragging() && self.drag_point.is_some_and(|p| self.past_edge(p, cx)) {
+            cx.wake_at(Timestamp(cx.now().0 + field::AUTOSCROLL_NS));
+        }
     }
 
     /// The text position under `point`, in window coordinates.
@@ -406,31 +429,56 @@ impl EditorState {
         let window = caret
             .zip(cx.bounds())
             .map(|(caret, bounds)| caret.translate(bounds.min_x(), bounds.min_y()));
-        field::sync_input(&self.buffer, &mut self.session, window, cause, cx);
+        let reset = std::mem::take(&mut self.reset_input);
+        field::sync_input(&self.buffer, &mut self.session, window, cause, reset, cx);
     }
 
-    /// A press, a drag with the button held and its release, as in a text field.
-    fn select<M>(&mut self, event: &Event, cx: &mut EventCx<'_, M>) -> Option<Propagation> {
+    /// A press, a drag with the button held and its release, as in a text field; a third press selects the
+    /// paragraph, and a drag held above or below the shown part scrolls on.
+    fn select<M>(
+        &mut self,
+        event: &Event,
+        on_commit: &mut dyn FnMut(&mut Self, &mut EventCx<'_, M>),
+        cx: &mut EventCx<'_, M>,
+    ) -> Option<Propagation> {
         match *event {
             Event::Pointer(
                 PointerEvent::Button {
                     position,
                     button: MouseButton::Left,
                     pressed: true,
+                    mods,
                     ..
                 },
                 _,
-            ) if cx.node() == cx.target() && self.buffer.composition().is_none() => {
+            ) if cx.node() == cx.target() => {
+                if self.buffer.composition().is_some() {
+                    self.buffer.commit_composition();
+                    self.reset_input = true;
+                    on_commit(self, cx);
+                }
                 let at = self.index_at(position, cx)?;
-                self.buffer
-                    .press_at(at, false, Duration::from_nanos(cx.now().0));
+                self.buffer.press_at(
+                    at,
+                    mods.contains(Mods::SHIFT),
+                    Duration::from_nanos(cx.now().0),
+                );
+                self.drag_point = Some(position);
                 cx.capture_pointer();
                 None
             }
             Event::Pointer(PointerEvent::Motion { position }, _) if self.buffer.is_dragging() => {
+                self.drag_point = Some(position);
                 let at = self.index_at(position, cx)?;
                 self.buffer.drag_to(at);
                 Some(Propagation::Stop)
+            }
+            Event::Wake(_) if self.buffer.is_dragging() => {
+                if let Some(point) = self.drag_point.filter(|p| self.past_edge(*p, cx)) {
+                    let at = self.index_at(point, cx)?;
+                    self.buffer.drag_to(at);
+                }
+                None
             }
             Event::Pointer(
                 PointerEvent::Button {
@@ -441,11 +489,13 @@ impl EditorState {
                 _,
             ) if self.buffer.is_dragging() => {
                 self.buffer.release();
+                self.drag_point = None;
                 cx.release_pointer();
                 Some(Propagation::Stop)
             }
             Event::Cancel if self.buffer.is_dragging() => {
                 self.buffer.release();
+                self.drag_point = None;
                 Some(Propagation::Continue)
             }
             _ => None,
@@ -463,7 +513,7 @@ impl<M: Clone + 'static> TextEditor<M> {
         if self.enabled {
             let selection = state.buffer.selection();
             let caret = state.buffer.caret_position();
-            let ended = state.select(event, cx);
+            let ended = state.select(event, &mut |state, cx| self.report(state, cx), cx);
             if state.buffer.selection() != selection || state.buffer.caret_position() != caret {
                 state.changed(ChangeCause::Other, cx);
             }
@@ -479,9 +529,14 @@ impl<M: Clone + 'static> TextEditor<M> {
                 state.changed(ChangeCause::Other, cx);
                 Propagation::Continue
             }
+            // what the input method composed stays as typed; the window system turns the input method off
             Event::Focus { gained: false, .. } => {
-                state.buffer.cancel_composition();
+                let composing = state.buffer.composition().is_some();
                 state.buffer.blur();
+                state.drag_point = None;
+                if composing {
+                    self.report(state, cx);
+                }
                 cx.request_paint();
                 Propagation::Continue
             }
@@ -490,15 +545,28 @@ impl<M: Clone + 'static> TextEditor<M> {
             }
             Event::Ime(ImeEvent::Done(batch)) if self.enabled => {
                 let before = field::committed(&state.buffer);
-                field::apply_ime(&mut state.buffer, &state.session, batch);
+                field::apply_ime(&mut state.buffer, batch);
                 if field::committed(&state.buffer) != before {
                     self.report(state, cx);
                 }
-                state.changed(ChangeCause::InputMethod, cx);
+                if state.session.accepts(batch) {
+                    state.changed(ChangeCause::InputMethod, cx);
+                } else {
+                    // a stale batch is answered by the input method's next one, not by this state
+                    let height = state.lines.borrow().height();
+                    if state.sync(cx) && state.lines.borrow().height() != height {
+                        cx.request_layout();
+                    }
+                    cx.request_paint();
+                }
                 Propagation::Stop
             }
+            // the window lost the keyboard: the input method dropped its composition, which stays as typed
             Event::Ime(ImeEvent::Leave) => {
-                state.buffer.cancel_composition();
+                if state.buffer.composition().is_some() {
+                    state.buffer.commit_composition();
+                    self.report(state, cx);
+                }
                 state.changed(ChangeCause::Other, cx);
                 Propagation::Continue
             }
@@ -539,6 +607,7 @@ impl<M: Clone + 'static> TextEditor<M> {
                 return Propagation::Continue;
             }
             state.buffer.cancel_composition();
+            state.reset_input = true;
             state.changed(ChangeCause::Other, cx);
             return Propagation::Stop;
         }
@@ -588,6 +657,9 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
             blink: Blink::default(),
             lines: RefCell::default(),
             bordered: self.bordered,
+            visible: Cell::new(None),
+            drag_point: None,
+            reset_input: false,
         }
     }
 
@@ -651,6 +723,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
         let propagation = self.handle(state, event, cx);
         let selecting = !state.buffer.selection().is_empty();
         state.blink.follow(event, selecting, cx);
+        state.arm_autoscroll(cx);
         propagation
     }
 
@@ -659,6 +732,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
         let look = field::control_state(self.enabled, state.hovered, cx);
         let color = |role| look::color(&env.theme, role, &look);
         let visible = cx.visible();
+        state.visible.set(Some(visible));
         field::fill_rect(cx, visible, color(ColorRole::TextBackground));
         let inset = state.inset(&env);
         let mut lines = state.lines.borrow_mut();
@@ -676,6 +750,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
         let focused = look.focused && self.enabled;
         let selection = state.buffer.selection();
         let composition = state.buffer.composition();
+        let clause = state.buffer.composition_cursor();
         if state.buffer.is_empty() {
             if let Some(placeholder) = look::label(&env, &self.placeholder) {
                 let at = Point::new(inset, inset);
@@ -695,7 +770,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
                     for rect in laid.layout.selection_rects(range) {
                         field::fill_rect(
                             cx,
-                            rect.translate(origin.x, origin.y),
+                            field::selection_bar(rect.translate(origin.x, origin.y), env.scale),
                             color(ColorRole::SelectedTextBackground),
                         );
                     }
@@ -703,27 +778,24 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
             }
             look::glyphs(cx, &laid.layout, origin, color(ColorRole::Text));
             if let Some(range) = composition.as_ref().and_then(part) {
-                for rect in laid.layout.selection_rects(range) {
-                    let Some(line) = laid.layout.lines().iter().find(|l| l.rect.y() == rect.y())
-                    else {
-                        continue;
-                    };
-                    field::fill_rect(
-                        cx,
-                        Rect::new(
-                            origin.x + rect.min_x(),
-                            origin.y + line.baseline + COMPOSITION_DROP,
-                            rect.width(),
-                            1.0 / env.scale,
-                        ),
-                        color(ColorRole::Text),
-                    );
-                }
+                field::paint_composition(
+                    cx,
+                    &laid.layout,
+                    origin,
+                    range,
+                    clause.as_ref().and_then(part),
+                    color(ColorRole::Text),
+                );
             }
         }
+        let drawn = field::drawn_caret(&state.buffer);
         if focused && look.window_active && selection.is_empty() && state.blink.on(&env, cx.now()) {
-            if let Some(caret) = lines.caret_rect(state.buffer.caret_position()) {
-                field::fill_rect(cx, caret.translate(inset, inset), color(ColorRole::Text));
+            if let Some(caret) = drawn.and_then(|at| lines.caret_rect(at)) {
+                field::fill_rect(
+                    cx,
+                    field::caret_bar(caret.translate(inset, inset), env.scale),
+                    color(ColorRole::Text),
+                );
             }
         }
     }

@@ -510,8 +510,13 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         let reach = tree.extents[i]
             .outset(node_support(node, self.scale))
             .intersect(rect);
-        chain.iter().all(|owner| owner.clip.is_none())
-            && reach.intersect(limit) == reach
+        // a clip that lets all the node can reach through whole cuts nothing of it
+        chain.iter().all(|owner| {
+            owner
+                .clip
+                .as_ref()
+                .is_none_or(|clip| geometry::clip_holds(clip, &owner.transform, self.scale, &reach))
+        }) && reach.intersect(limit) == reach
             && node.ops.iter().all(|op| {
                 matches!(
                     op,
@@ -615,15 +620,24 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             self.stats
                 .mask_apply
                 .add(u64::from(area.width()) * u64::from(area.height()) * 4);
-            for (px, m) in layer
+            // a pixel the clip covers fully keeps its value (div255(c · 255) is c), and runs of them are passed over
+            for (pixels, cover) in layer
                 .data_mut()
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .zip(mask.data())
+                .chunks_mut(4 * 8)
+                .zip(mask.data().chunks(8))
             {
-                for c in px.iter_mut() {
-                    *c = div255(u32::from(*c) * u32::from(*m)) as u8;
+                if cover.iter().all(|&m| m == 255) {
+                    continue;
+                }
+                for (px, &m) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(cover) {
+                    match m {
+                        255 => {}
+                        0 => *px = [0; 4],
+                        m => {
+                            *px =
+                                effects::mul_px(u32::from_le_bytes(*px), u32::from(m)).to_le_bytes()
+                        }
+                    }
                 }
             }
         }
@@ -1316,22 +1330,28 @@ fn source_over_part(
             debug_assert!(false, "the layer is taller than the target");
             return;
         };
-        for (s, d) in s.as_chunks::<4>().0.iter().zip(d.as_chunks_mut::<4>().0) {
-            let s = if k == 255 {
-                s.map(u32::from)
-            } else {
-                s.map(|c| div255(u32::from(c) * k))
-            };
-            match s[3] {
-                0 if s == [0; 4] => {}
-                255 => *d = s.map(|c| c as u8),
-                a => {
-                    let keep = 255 - a;
-                    for i in 0..4 {
-                        d[i] = (s[i] + div255(u32::from(d[i]) * keep)).min(255) as u8;
-                    }
-                }
+        // most of a layer is often empty: runs of empty pixels are passed over, and nothing is scaled or laid for them
+        for (s, d) in s.chunks(4 * 8).zip(d.chunks_mut(4 * 8)) {
+            if s.iter().all(|&b| b == 0) {
+                continue;
             }
+            over_run(s, d, k);
+        }
+    }
+}
+
+/// [`source_over_part`] of one run of pixels of `s` onto `d` at opacity `k` (0..=255).
+fn over_run(s: &[u8], d: &mut [u8], k: u32) {
+    for (s, d) in s.as_chunks::<4>().0.iter().zip(d.as_chunks_mut::<4>().0) {
+        let s = u32::from_le_bytes(*s);
+        if s == 0 {
+            continue;
+        }
+        let s = if k == 255 { s } else { effects::mul_px(s, k) };
+        match s >> 24 {
+            0 if s == 0 => {}
+            255 => *d = s.to_le_bytes(),
+            _ => *d = effects::over_px(s, u32::from_le_bytes(*d)).to_le_bytes(),
         }
     }
 }

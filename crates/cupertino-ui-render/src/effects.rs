@@ -388,16 +388,26 @@ mod tests {
 
     #[test]
     fn the_shadows_match_four_channel_shadows_byte_for_byte_at_every_scale() {
-        let color = Color::new(0.1, 0.2, 0.3, 0.28);
+        // translucent and coloured, opaque and saturated, and light enough that the sums reach the clamp
+        let colors = [
+            Color::new(0.1, 0.2, 0.3, 0.28),
+            Color::new(1.0, 0.4, 0.0, 1.0),
+            Color::new(1.0, 1.0, 1.0, 0.6),
+        ];
         let mut seed = 0;
         for &scale in &[1.0, 1.5, 2.0] {
             for &(w, h) in &[(97, 61), (5, 140), (160, 3), (1, 1), (40, 40)] {
-                for &(offset, b) in &[
+                for (&(offset, b), color) in [
                     (Point::new(0.0, 8.0), 24.0),
                     (Point::new(-3.0, 2.5), 6.0),
                     (Point::new(40.0, -50.0), 1.0),
                     (Point::new(0.0, 0.0), 0.0),
-                ] {
+                    // a kernel wider than every layer here
+                    (Point::new(2.0, 0.0), 200.0),
+                ]
+                .iter()
+                .flat_map(|case| colors.iter().map(move |&c| (case, c)))
+                {
                     for effect in [
                         Effect::DropShadow {
                             offset,

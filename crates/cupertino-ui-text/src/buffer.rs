@@ -234,6 +234,7 @@ impl TextBuffer {
     /// ends.
     pub fn blur(&mut self) {
         self.composition = None;
+        self.settle();
         self.anchor = self.caret;
         self.drag = None;
         self.group = None;
@@ -390,6 +391,7 @@ impl TextBuffer {
         }
         if let Some(commit) = commit {
             self.replace_selection(&commit, Some(Group::Typing));
+            self.settle();
         }
         match &batch.preedit {
             Some(preedit) if !preedit.text.is_empty() => {
@@ -438,6 +440,7 @@ impl TextBuffer {
     /// Keep the composed text as typed text; what is typed next is a new undo step.
     pub fn commit_composition(&mut self) {
         self.composition = None;
+        self.settle();
         self.group = None;
     }
 
@@ -489,7 +492,9 @@ impl TextBuffer {
             index,
             count,
         });
-        self.composition = None;
+        if self.composition.take().is_some() {
+            self.settle();
+        }
         self.group = None;
         self.activity = Some(now);
         let granularity = match count {
@@ -900,6 +905,24 @@ impl TextBuffer {
             .map_or(at, |g| at + g.len())
     }
 
+    /// Moves the caret and the anchor on to the end of the cluster each lies inside, as when committed text joins the
+    /// combining marks or joiners after it.
+    fn settle(&mut self) {
+        let boundaries = self.boundaries();
+        let after = |at: usize| {
+            boundaries
+                .iter()
+                .copied()
+                .find(|b| *b >= at)
+                .unwrap_or(self.text.len())
+        };
+        let (caret, anchor) = (after(self.caret), after(self.anchor));
+        if caret != self.caret {
+            self.set_caret(caret);
+        }
+        self.anchor = anchor;
+    }
+
     fn boundary_at_or_before(&self, at: usize) -> usize {
         self.boundaries()
             .into_iter()
@@ -941,11 +964,22 @@ impl TextBuffer {
         for (i, w) in self.text.split_word_bound_indices() {
             let range = i..i + w.len();
             if range.contains(&at) {
-                return range;
+                return self.whole_clusters(range);
             }
             last = range;
         }
-        last
+        self.whole_clusters(last)
+    }
+
+    /// `range` widened out to the grapheme boundaries around it: a word bound can fall inside a cluster (a flag pair
+    /// after a lone regional indicator with a mark).
+    fn whole_clusters(&self, range: Range<usize>) -> Range<usize> {
+        let end = self
+            .boundaries()
+            .into_iter()
+            .find(|b| *b >= range.end)
+            .unwrap_or(self.text.len());
+        self.boundary_at_or_before(range.start)..end
     }
 }
 
@@ -1302,6 +1336,169 @@ mod tests {
             f.press_at(1, false, Duration::from_millis(1000 + n * 100));
         }
         assert_eq!(f.selected_text(), "one two");
+    }
+
+    #[test]
+    fn text_that_joins_the_marks_after_it_leaves_the_caret_after_the_whole_cluster() {
+        // a commit before a joiner: the joiner joins the committed letter
+        let mut b = buffer("\u{200d}x");
+        b.select(0..0);
+        b.apply_ime(&batch(None, Some("ñ"), (0, 0)));
+        assert_eq!((b.text(), b.caret()), ("ñ\u{200d}x", 5));
+        // a composition before a combining mark, kept by a Shift press: the anchor is not left inside the cluster
+        let mut b = buffer("\u{301}");
+        b.select(0..0);
+        b.set_composition("e");
+        b.press_at(2, true, Duration::from_secs(1));
+        assert_eq!(b.text(), "e\u{301}");
+        let selection = b.selection();
+        assert!(
+            b.boundaries().contains(&selection.start) && b.boundaries().contains(&selection.end),
+            "{selection:?}"
+        );
+        // a word bound inside a flag pair: a double press selects the whole pair
+        let mut b = buffer("🇱\u{301}🇳🇳");
+        b.press_at(7, false, Duration::from_millis(1000));
+        b.release();
+        b.press_at(7, false, Duration::from_millis(1100));
+        assert_eq!(b.selection(), 0..14);
+    }
+
+    /// A small fixed-seed generator, so the randomised test below is the same on every run.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    /// Text made of pieces that join into clusters: combining marks alone, joiners, emoji, half flag pairs, CJK.
+    fn pieces(rng: &mut Rng, most: usize) -> String {
+        let count = rng.below(most);
+        const PIECES: &[&str] = &[
+            "a", "e", " ", "\u{301}", "\u{308}", "\u{200d}", "👨", "👩", "👧", "🇳", "🇱", "字",
+            "仮名", "é", "ñ", "\u{fe0f}", "❤", "한",
+        ];
+        (0..count)
+            .map(|_| PIECES[rng.below(PIECES.len())])
+            .collect()
+    }
+
+    /// Random edits through the input method path (batches with deletes, commits and preedits with cursors anywhere,
+    /// selections, presses and cancels): the caret and anchor stay on grapheme boundaries once nothing is composed,
+    /// the composition and its cursor on character boundaries inside the text, and the surrounding window inside its limit with both offsets
+    /// on its own character boundaries.
+    #[test]
+    fn random_input_method_edits_never_leave_an_offset_inside_a_character_or_cluster() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        for round in 0..400 {
+            let mut b = if round % 2 == 0 {
+                TextBuffer::new()
+            } else {
+                TextBuffer::multiline()
+            };
+            let start = pieces(&mut rng, 12);
+            b.set_text(&start);
+            for step in 0..40 {
+                let len = b.text().len();
+                let op = rng.below(7);
+                let before = (b.text().to_string(), b.selection(), b.composition());
+                match op {
+                    0 => b.select(rng.below(len + 1)..rng.below(len + 1)),
+                    1 => b.delete_surrounding(rng.below(12), rng.below(12)),
+                    2 => b.press_at(
+                        rng.below(len + 1),
+                        rng.below(2) == 0,
+                        Duration::from_millis(step * 300),
+                    ),
+                    3 => b.cancel_composition(),
+                    4 => b.commit_composition(),
+                    _ => {
+                        let preedit = (rng.below(3) > 0).then(|| {
+                            let text = pieces(&mut rng, 4);
+                            let cursor = (rng.below(4) > 0)
+                                .then(|| rng.below(text.len() + 3)..rng.below(text.len() + 3));
+                            crate::Preedit { text, cursor }
+                        });
+                        let commit = (rng.below(2) == 0).then(|| pieces(&mut rng, 3));
+                        b.apply_ime(&ImeBatch {
+                            preedit,
+                            commit,
+                            delete: (rng.below(10) as u32, rng.below(10) as u32),
+                            current: rng.below(4) > 0,
+                        });
+                    }
+                }
+                let text = b.text();
+                let context = format!(
+                    "round {round} step {step} (op {op} from {before:?}): {text:?} composing {:?}",
+                    b.composition()
+                );
+                // while composing, the caret is the composition's end, which can join marks after it; it is
+                // neither drawn nor told to the input method then
+                let boundaries = if b.composition().is_some() {
+                    (0..=text.len())
+                        .filter(|i| text.is_char_boundary(*i))
+                        .collect()
+                } else {
+                    b.boundaries()
+                };
+                assert!(
+                    boundaries.contains(&b.caret()),
+                    "caret {} in {context}",
+                    b.caret()
+                );
+                let selection = b.selection();
+                assert!(
+                    boundaries.contains(&selection.start) && boundaries.contains(&selection.end),
+                    "selection {selection:?} in {context}"
+                );
+                if let Some(composition) = b.composition() {
+                    assert!(
+                        composition.end <= text.len(),
+                        "composition {composition:?} in {context}"
+                    );
+                    assert!(
+                        text.is_char_boundary(composition.start)
+                            && text.is_char_boundary(composition.end),
+                        "composition {composition:?} in {context}"
+                    );
+                    if let Some(cursor) = b.composition_cursor() {
+                        assert!(
+                            composition.start <= cursor.start
+                                && cursor.start <= cursor.end
+                                && cursor.end <= composition.end
+                                && text.is_char_boundary(cursor.start)
+                                && text.is_char_boundary(cursor.end),
+                            "preedit cursor {cursor:?} of {composition:?} in {context}"
+                        );
+                    }
+                }
+                let limit = 1 + rng.below(24);
+                let around = b.surrounding(limit);
+                assert!(
+                    around.text.len() <= limit,
+                    "surrounding of {limit} in {context}"
+                );
+                assert!(
+                    around.text.is_char_boundary(around.cursor)
+                        && around.text.is_char_boundary(around.anchor),
+                    "surrounding {:?} {}..{} in {context}",
+                    around.text,
+                    around.anchor,
+                    around.cursor
+                );
+                assert!(b.committed().len() <= text.len());
+            }
+        }
     }
 
     /// Run with `cargo test --release -p cupertino-ui-text -- --ignored --nocapture timing`.

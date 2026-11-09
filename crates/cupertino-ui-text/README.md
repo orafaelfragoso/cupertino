@@ -17,7 +17,8 @@ buffer follow.
   the window system to enable the input method afresh, so it drops a composition the field ended itself.
 - `TextBuffer::apply_ime` applies one input-method batch in the protocol's order: the composition is taken away, the
   bytes around the selection are deleted (cut inward to character boundaries, the selection kept, caret and anchor
-  then on grapheme boundaries), the commit replaces the selection as typing, and the new composition shows in its
+  then on grapheme boundaries), the commit replaces the selection as typing (a commit or a kept composition that joins marks after it leaves the caret
+  after the whole cluster), and the new composition shows in its
   place with its own cursor (`composition_cursor`, moved back to a character boundary inside the composition, hidden
   when the input method hides it). A batch that answers an older state still applies; the field just does not answer
   it. `TextBuffer::surrounding` is the committed text around the caret, without the composition, with the caret where

@@ -1020,6 +1020,7 @@ fn files_process(
             env("HOME", home),
             env("XDG_CONFIG_HOME", &home.join(".config")),
             env("XDG_DATA_HOME", &home.join(".local/share")),
+            env("XDG_STATE_HOME", &home.join(".local/state")),
             env("XDG_DATA_DIRS", data_dirs),
             binary.display().to_string(),
         ],

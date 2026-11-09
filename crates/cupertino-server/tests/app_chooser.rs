@@ -130,12 +130,16 @@ fn a_choice_without_a_caller_token_carries_one_the_server_made_for_the_chosen_ap
     };
     let portal = ShellProcess {
         name: "cupertino-portal".into(),
-        command: vec![
-            "env".into(),
-            "CUPERTINO_ASSET_SEARCH_PATH=".into(),
-            format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
-            portal_binary().display().to_string(),
-        ],
+        command: [
+            vec!["env".into()],
+            common::events::isolated().to_vec(),
+            vec![
+                "CUPERTINO_ASSET_SEARCH_PATH=".into(),
+                format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
+                portal_binary().display().to_string(),
+            ],
+        ]
+        .concat(),
         roles: vec![],
     };
     let Some(mut server) = Server::start(vec![portal]) else {

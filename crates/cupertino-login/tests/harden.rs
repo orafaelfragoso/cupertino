@@ -32,6 +32,7 @@ fn the_greeter_is_undumpable_and_has_no_core_file() {
         Command::new(env!("CARGO_BIN_EXE_cupertino-login"))
             .arg("--greeter")
             .env("CUPERTINO_LOGIN_SOCK", dir.path().join("greeter.sock"))
+            .env("XDG_STATE_HOME", dir.path().join("state"))
             .env("WAYLAND_DISPLAY", &compositor)
             .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .stdout(Stdio::null())

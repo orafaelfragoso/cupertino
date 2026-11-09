@@ -145,6 +145,7 @@ fn files_process(home: &Path, data_dirs: &Path, bus: &PrivateBus) -> ShellProces
         env("HOME", home),
         env("XDG_CONFIG_HOME", &home.join(".config")),
         env("XDG_DATA_HOME", &home.join(".local/share")),
+        env("XDG_STATE_HOME", &home.join(".local/state")),
         env("XDG_DATA_DIRS", data_dirs),
         files_binary().display().to_string(),
     ];

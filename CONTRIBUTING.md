@@ -75,7 +75,7 @@ A broken link or anchor in the book fails both commands. CI installs the same tw
 ## What we cannot accept
 
 - Code, text, images, fonts, icons, cursors or wallpapers that are not yours to license. Contribute only work that is yours or that you have the right to license under the terms of the contributor licence agreement below.
-- Third-party assets without a licence compatible with `GPL-3.0-or-later` (and with `MPL-2.0` in an MPL-2.0 crate). Asset packs are loaded from a directory and are not added to the tree.
+- Third-party assets without a licence compatible with `GPL-3.0-or-later` (and with `MPL-2.0` in an MPL-2.0 crate). Asset packs are loaded from a directory and are not added to the tree; the one exception is the first-party icon pack in `data/assets/cupertino` (`GPL-3.0-or-later`).
 - Binary blobs. Add the generator, not the output.
 
 Maintainers (and a CI check, once it is enabled) reject files and strings that suggest otherwise; if a check flags your change by mistake, say so in the pull request.

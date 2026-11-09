@@ -24,10 +24,12 @@ Resolution is **per asset**: for each logical name the first pack that provides 
 The original first-party icon pack lives at `data/assets/cupertino`, under GPL-3.0-or-later. Packaging installs it to
 `/usr/share/cupertino/assets/cupertino`, searched before the remaining system assets. It supplies original SVG artwork,
 PNG renditions from 16 through 1024 pixels, and tintable symbols. The remaining default assets use the embedded font,
-built-in cursors and packaged wallpapers. Third-party packs remain outside the source tree.
+built-in cursors and packaged wallpapers. This pack is the one exception to keeping packs out of the source tree;
+third-party packs stay outside it.
 
-For development, set `CUPERTINO_ASSET_DIR="$PWD/data/assets/cupertino"`. Headless session captures use that pack by default;
-set `CUPERTINO_ASSET_DIR=` to capture the built-in fallback. Tests keep their isolated asset search path.
+For development, set `CUPERTINO_ASSET_DIR="$PWD/data/assets/cupertino"`. Headless session captures search your user pack
+(when there is one), then that pack; set `CUPERTINO_ASSET_DIR=` to capture the built-in fallback. Tests keep their
+isolated asset search path.
 
 ## Manifest, version 2
 
@@ -88,4 +90,4 @@ A pack uses the logical names the shell looks up: 26 raster icon names (such as 
 
 ## Licences
 
-The pack's content has its own licence; it is separate from the licence of the source code (`GPL-3.0-or-later`, or `MPL-2.0` for the `cupertino-assets` crate). Do not add third-party assets to this repository; distribute them as a pack.
+The pack's content has its own licence; it is separate from the licence of the source code (`GPL-3.0-or-later`, or `MPL-2.0` for the `cupertino-assets` crate). The original icon pack in `data/assets/cupertino` is first-party artwork under `GPL-3.0-or-later`, with its `LICENSE` and `CREDITS.md` beside it; it is not part of the `MPL-2.0` crate. Do not add third-party assets to this repository; distribute them as a pack.

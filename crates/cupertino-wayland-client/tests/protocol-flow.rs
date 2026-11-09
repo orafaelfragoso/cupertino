@@ -27,6 +27,9 @@ use wayland_protocols::wp::presentation_time::server::wp_presentation::{self, Wp
 use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::{
     self, WpPresentationFeedback,
 };
+use wayland_protocols::wp::single_pixel_buffer::v1::server::wp_single_pixel_buffer_manager_v1::{
+    self, WpSinglePixelBufferManagerV1,
+};
 use wayland_protocols::wp::text_input::zv3::server::zwp_text_input_manager_v3::{
     self, ZwpTextInputManagerV3,
 };
@@ -110,6 +113,8 @@ struct Globals {
     hold_reads: bool,
     /// Offer `wl_data_device_manager` version 2, from before drag actions, instead of 3.
     no_drag_actions: bool,
+    /// `wp_single_pixel_buffer_manager_v1`, with `wp_viewporter` even without fractional scaling.
+    single_pixel: bool,
 }
 
 impl Globals {
@@ -255,6 +260,15 @@ enum Seen {
     },
     Viewport(i32, i32),
     ViewportSource(f64, f64, f64, f64),
+    /// A commit attached a one-pixel buffer of this colour (premultiplied, over the whole `u32` range), at this buffer
+    /// scale; `buffer` is its protocol id.
+    SolidCommit {
+        color: [u32; 4],
+        scale: i32,
+        buffer: u32,
+    },
+    /// The one-pixel buffer of this colour was destroyed.
+    SolidDestroyed([u32; 4]),
     DecorationMode(Mode),
     Positioner(PositionerState),
     Receive(String),
@@ -344,6 +358,9 @@ struct BufferData {
     format: wl_shm::Format,
 }
 
+/// The colour of a one-pixel buffer.
+struct SolidPixel([u32; 4]);
+
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 struct PositionerState {
     size: (i32, i32),
@@ -430,7 +447,8 @@ plain_global!(
     ZwlrLayerShellV1,
     XdgActivationV1,
     ZxdgOutputManagerV1,
-    ZwpTextInputManagerV3
+    ZwpTextInputManagerV3,
+    WpSinglePixelBufferManagerV1
 );
 
 /// Requests the compositor ignores.
@@ -459,6 +477,40 @@ impl Dispatch<WlBuffer, BufferData> for Mock {
         {
             state.icon_buffer = None;
             state.seen.send(Seen::IconBufferDestroyed).unwrap();
+        }
+    }
+}
+
+impl Dispatch<WpSinglePixelBufferManagerV1, ()> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WpSinglePixelBufferManagerV1,
+        request: wp_single_pixel_buffer_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let wp_single_pixel_buffer_manager_v1::Request::CreateU32RgbaBuffer { id, r, g, b, a } =
+            request
+        {
+            init.init(id, SolidPixel([r, g, b, a]));
+        }
+    }
+}
+
+impl Dispatch<WlBuffer, SolidPixel> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &WlBuffer,
+        request: wl_buffer::Request,
+        pixel: &SolidPixel,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if matches!(request, wl_buffer::Request::Destroy) {
+            state.seen.send(Seen::SolidDestroyed(pixel.0)).unwrap();
         }
     }
 }
@@ -685,15 +737,20 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                     xdg.configure(serial);
                 }
                 if let Some(buffer) = s.buffer.take() {
-                    let b = buffer.data::<BufferData>().unwrap();
-                    state
-                        .seen
-                        .send(Seen::Commit {
+                    let seen = match (buffer.data::<BufferData>(), buffer.data::<SolidPixel>()) {
+                        (Some(b), _) => Seen::Commit {
                             size: (b.width, b.height),
                             scale: s.scale.max(1),
                             format: b.format,
-                        })
-                        .unwrap();
+                        },
+                        (None, Some(pixel)) => Seen::SolidCommit {
+                            color: pixel.0,
+                            scale: s.scale.max(1),
+                            buffer: buffer.id().protocol_id(),
+                        },
+                        (None, None) => unreachable!("a buffer the mock made"),
+                    };
+                    state.seen.send(seen).unwrap();
                     // like a compositor that keeps the current buffer until the next one replaces it
                     let previous = state.shown.replace(buffer);
                     if let Some(previous) = previous.filter(|_| !state.globals.hold_buffers) {
@@ -1395,7 +1452,12 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
         }
         if globals.fractional_scale {
             dh.create_global::<Mock, WpFractionalScaleManagerV1, _>(1, ());
+        }
+        if globals.fractional_scale || globals.single_pixel {
             dh.create_global::<Mock, WpViewporter, _>(1, ());
+        }
+        if globals.single_pixel {
+            dh.create_global::<Mock, WpSinglePixelBufferManagerV1, _>(1, ());
         }
         if globals.output_scale.is_some() {
             dh.create_global::<Mock, WlOutput, _>(4, ());
@@ -3724,6 +3786,143 @@ fn a_zero_dimension_of_an_extension_configure_is_left_to_the_client() {
         .lease(surface, (640, 1), BufferFormat::Argb8888)
         .unwrap();
     assert_eq!(lease.logical_size(), (640, 30));
+}
+
+/// A layer surface over the whole output that only takes input, as a panel's catcher of presses outside it is: one
+/// transparent pixel stretched to the configured size, at buffer scale 1 whatever the surface's scale, its input region
+/// left as set. The pixel is attached again while the colour stays, a new size (an output rotated or resized) only moves
+/// the viewport's destination, and a buffer drawn afterwards is drawn whole.
+#[test]
+fn a_solid_colour_is_one_pixel_stretched_over_the_configured_size_at_any_scale() {
+    const OUTPUT: (u32, u32) = (1000, 700);
+    let (mut conn, control, seen) = connect(Globals {
+        layer_shell: true,
+        fractional_scale: true,
+        single_pixel: true,
+        ..Globals::core()
+    });
+    assert!(conn.capabilities().contains(Capability::SolidColor));
+    let layers = layer::Layers::bind(&mut conn);
+    let surface = layers.surface(&mut conn, OUTPUT);
+    let (configures, _) = layer_configures(&mut conn, 1);
+    conn.set_input_region(surface, Some(&[Rect::new(0.0, 0.0, 1000.0, 700.0)]))
+        .unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        next_seen(&seen),
+        Seen::InputRegion(Some(vec![[0, 0, 1000, 700]]))
+    );
+
+    conn.present_solid(surface, (1, 1), [0.0; 4]).unwrap();
+    assert_eq!(next_seen(&seen), Seen::LayerAck(configures[0].serial));
+    assert_eq!(next_seen(&seen), Seen::Viewport(1000, 700));
+    let Seen::SolidCommit {
+        color,
+        scale,
+        buffer,
+    } = next_seen(&seen)
+    else {
+        panic!("a one-pixel buffer is committed");
+    };
+    assert_eq!((color, scale), ([0; 4], 1));
+    let mut stash = Stash::new();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(e, Event::Frame(f) if f.surface == surface).then_some(())
+    });
+
+    // a fractional scale changes nothing the pixel needs: the same one is attached at the same destination
+    control.send(Control::FractionalScale(180)).unwrap();
+    let scale = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::ScaleChanged { surface: s, scale } if *s == surface => Some(*scale),
+        _ => None,
+    });
+    assert_eq!(scale.factor(), 1.5);
+    conn.present_solid(surface, (1, 1), [0.0; 4]).unwrap();
+    assert_eq!(next_seen(&seen), Seen::Viewport(1000, 700));
+    assert_eq!(
+        next_seen(&seen),
+        Seen::SolidCommit {
+            color: [0; 4],
+            scale: 1,
+            buffer
+        }
+    );
+
+    // the output turns: the configure's new size is the new destination
+    control.send(Control::LayerConfigures(1)).unwrap();
+    let (configures, _) = layer_configures(&mut conn, 1);
+    assert_eq!(configures[0].size, (1001, 700));
+    conn.present_solid(surface, (1, 1), [0.0; 4]).unwrap();
+    assert_eq!(next_seen(&seen), Seen::LayerAck(configures[0].serial));
+    assert_eq!(next_seen(&seen), Seen::Viewport(1001, 700));
+    assert!(matches!(next_seen(&seen), Seen::SolidCommit { buffer: b, .. } if b == buffer));
+
+    // another colour is a new pixel, and the one it replaced goes once it is no longer attached
+    conn.present_solid(surface, (1, 1), [0.0, 0.0, 0.0, 0.5]).unwrap();
+    assert_eq!(next_seen(&seen), Seen::Viewport(1001, 700));
+    let half = u32::MAX / 2 + 1;
+    assert!(matches!(
+        next_seen(&seen),
+        Seen::SolidCommit { color: [0, 0, 0, a], scale: 1, buffer: b } if a == half && b != buffer
+    ));
+    assert_eq!(next_seen(&seen), Seen::SolidDestroyed([0; 4]));
+
+    // drawn again, the buffer is drawn whole at the surface's scale, still stretched to the configured size
+    let lease = conn.lease(surface, (1, 1), BufferFormat::Argb8888).unwrap();
+    assert_eq!(lease.missed(), None);
+    assert_eq!(lease.logical_size(), (1001, 700));
+    lease.present().unwrap();
+    assert_eq!(next_seen(&seen), Seen::Viewport(1001, 700));
+    assert_eq!(
+        next_seen(&seen),
+        Seen::Commit {
+            size: (1502, 1050),
+            scale: 1,
+            format: wl_shm::Format::Argb8888
+        }
+    );
+}
+
+/// Without fractional scaling the viewporter alone stretches the pixel; without the one-pixel buffers a solid colour
+/// is refused, for the caller to draw it, and nothing is sent.
+#[test]
+fn a_solid_colour_needs_the_one_pixel_buffers_and_the_viewporter_only() {
+    let (mut conn, _control, seen) = connect(Globals {
+        layer_shell: true,
+        single_pixel: true,
+        ..Globals::core()
+    });
+    let layers = layer::Layers::bind(&mut conn);
+    let surface = layers.surface(&mut conn, (300, 200));
+    let (configures, _) = layer_configures(&mut conn, 1);
+    conn.present_solid(surface, (1, 1), [1.0, 0.0, 0.0, 1.0])
+        .unwrap();
+    assert_eq!(next_seen(&seen), Seen::LayerAck(configures[0].serial));
+    assert_eq!(next_seen(&seen), Seen::Viewport(300, 200));
+    assert!(matches!(
+        next_seen(&seen),
+        Seen::SolidCommit {
+            color: [u32::MAX, 0, 0, u32::MAX],
+            scale: 1,
+            ..
+        }
+    ));
+
+    let (mut conn, _control, seen) = connect(Globals {
+        layer_shell: true,
+        fractional_scale: true,
+        ..Globals::core()
+    });
+    assert!(!conn.capabilities().contains(Capability::SolidColor));
+    let layers = layer::Layers::bind(&mut conn);
+    let surface = layers.surface(&mut conn, (300, 200));
+    layer_configures(&mut conn, 1);
+    assert!(matches!(
+        conn.present_solid(surface, (1, 1), [0.0; 4]),
+        Err(Error::Unsupported(Capability::SolidColor))
+    ));
+    conn.flush().unwrap();
+    assert!(seen.recv_timeout(Duration::from_millis(100)).is_err());
 }
 
 #[test]

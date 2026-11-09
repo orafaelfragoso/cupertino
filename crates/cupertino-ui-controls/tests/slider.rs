@@ -216,3 +216,29 @@ fn a_drag_ends_once_when_the_pointer_lets_go_and_a_key_change_ends_at_once() {
         "a key at the minimum moves nothing and ends nothing"
     );
 }
+
+fn has_lens(h: &Harness<Volume>) -> bool {
+    h.ops("volume")
+        .iter()
+        .any(|op| matches!(op, PaintOp::PushClip(_)))
+}
+
+#[test]
+fn the_knob_is_a_lens_only_while_dragged_and_the_lens_never_moves_the_layout() {
+    let mut h = Harness::<Volume>::new();
+    let rect = h.rect("volume");
+    assert!(!has_lens(&h), "at rest the knob is plain");
+    let at = h.center("volume");
+    h.pointer(PointerEvent::Motion { position: at });
+    h.button(at, true);
+    assert!(has_lens(&h), "held, the knob is a lens");
+    h.pointer(PointerEvent::Motion {
+        position: Point::new(rect.min_x() + rect.width() * 0.8, at.y),
+    });
+    assert!(has_lens(&h), "dragged, it stays a lens");
+    assert_eq!(*h.model(), 80.0, "the value previews during the drag");
+    assert_eq!(h.rect("volume"), rect, "the lens is paint only");
+    h.button(Point::new(rect.min_x() + rect.width() * 0.8, at.y), false);
+    assert!(!has_lens(&h), "let go, the knob is plain again");
+    assert_eq!(h.rect("volume"), rect);
+}

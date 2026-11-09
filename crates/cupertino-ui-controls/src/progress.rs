@@ -69,7 +69,11 @@ impl<M: 'static> Widget<M> for Progress {
             cx,
             track,
             radius,
-            look::color(&theme, ColorRole::SwitchTrack, &state),
+            if theme.preferences.appearance.is_high_contrast() {
+                look::color(&theme, ColorRole::SwitchTrack, &state)
+            } else {
+                Some(look::quiet(&theme, look::WELL, &state))
+            },
         );
         // the fill as a span from the leading edge, in the track's own direction
         let (start, length) = match self.value {

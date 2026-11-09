@@ -22,7 +22,7 @@ use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, Overflow, SizeSpec};
 use cupertino_kit::platform::{DecorationMode, KeyEvent, MouseButton, PointerEvent, WindowSpec};
 use cupertino_kit::render::{
-    FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat, Sampling, Shape,
+    Effect, FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat, Sampling, Shape,
 };
 use cupertino_kit::text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle, TextSystem,
@@ -47,6 +47,11 @@ const FADED_ALPHA: f32 = 0.65;
 const DOT_ALPHA: f32 = 0.7;
 /// Opacity factor of an item symbol whose radio is off or has no link. approximate (the design does not say).
 const DIMMED_ALPHA: f32 = 0.4;
+/// The halo under the bar's text and symbols: how far it spreads in points, and its opacity under light text and
+/// under dark text.
+const HALO_BLUR: f64 = 2.5;
+const HALO_UNDER_LIGHT: f32 = 0.45;
+const HALO_UNDER_DARK: f32 = 0.6;
 /// Inset of the search field's box in its row, vertically, in points. approximate.
 const FIELD_INSET_Y: f64 = 2.0;
 /// Corner radius of the search field's box in points. approximate.
@@ -790,6 +795,46 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
             );
             fill(cx, rect, m.selection_corner_radius, palette.bar_highlight);
         }
+        // over the wallpaper as it is, the text and symbols keep a soft halo of the opposite tone, so they read where
+        // the picture under them is as light or as dark as they are; a solid bar needs none
+        let halo = !cx.env().theme.preferences.reduce_transparency;
+        if halo {
+            cx.push(PaintOp::PushLayer {
+                opacity: 1.0,
+                effects: vec![Effect::DropShadow {
+                    offset: Point::ZERO,
+                    blur: HALO_BLUR,
+                    color: color(halo_color(palette.text)),
+                }],
+            });
+        }
+        self.paint_look(cx, &palette);
+        if halo {
+            cx.push(PaintOp::PopLayer);
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(self.role);
+        cx.name(self.name.clone());
+        if let Some(place) = self.place {
+            cx.item_index(place);
+        }
+        cx.states(AccessibleStates {
+            selected: self.highlighted,
+            expanded: self.expanded,
+            ..AccessibleStates::default()
+        });
+        if self.role != Role::Image {
+            cx.action(Action::Click);
+        }
+    }
+}
+
+impl<M> SlotNode<M> {
+    /// The slot's text, symbol or mark in `palette`.
+    fn paint_look(&self, cx: &mut PaintCx<'_>, palette: &MenuPalette) {
+        let size = cx.size();
         let middle = Point::new(size.width / 2.0, size.height / 2.0);
         let scale = cx.env().scale;
         match &self.look {
@@ -852,21 +897,15 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
             SlotLook::Nothing => {}
         }
     }
+}
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.role(self.role);
-        cx.name(self.name.clone());
-        if let Some(place) = self.place {
-            cx.item_index(place);
-        }
-        cx.states(AccessibleStates {
-            selected: self.highlighted,
-            expanded: self.expanded,
-            ..AccessibleStates::default()
-        });
-        if self.role != Role::Image {
-            cx.action(Action::Click);
-        }
+/// The halo under the bar's content of colour `text`: dark under light text, light under dark text.
+pub fn halo_color(text: Rgba) -> Rgba {
+    let light = 0.2126 * text[0] + 0.7152 * text[1] + 0.0722 * text[2] > 0.5;
+    if light {
+        [0.0, 0.0, 0.0, HALO_UNDER_LIGHT]
+    } else {
+        [1.0, 1.0, 1.0, HALO_UNDER_DARK]
     }
 }
 

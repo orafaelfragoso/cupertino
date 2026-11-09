@@ -112,6 +112,15 @@ fn fill<A: Application>(h: &Harness<A>, key: &'static str) -> Option<Color> {
     shapes(h, key).into_iter().find(|s| s.0).map(|s| s.3)
 }
 
+/// The quiet bezel of the light test theme: a share of black.
+fn bezel(share: f32) -> Color {
+    Color::new(0.0, 0.0, 0.0, share)
+}
+
+const BEZEL: f32 = 0.075;
+const BEZEL_PRESSED: f32 = 0.16;
+const BEZEL_DISABLED: f32 = 0.035;
+
 fn glyph_colors<A: Application>(h: &Harness<A>, key: &'static str) -> Vec<Color> {
     h.ops(key)
         .into_iter()
@@ -128,7 +137,10 @@ fn the_button_lays_out_on_its_chrome() {
     assert_eq!(h.rect("_").size, Size::new(20.0, 20.0));
     let blank = shapes(&h, "_");
     assert_eq!((blank[0].1.size, blank[0].2), (Size::new(20.0, 20.0), 5.0));
-    assert!(!blank[1].0, "a bordered button strokes its border");
+    assert!(
+        blank.iter().all(|s| s.0),
+        "a bordered button is a quiet fill with no edge"
+    );
     assert_eq!(shapes(&h, "delete")[0].2, 10.0, "a pill is fully rounded");
     assert_eq!(
         (shapes(&h, "round")[0].1, shapes(&h, "round")[0].2),
@@ -209,7 +221,7 @@ fn the_label_takes_its_role_text_colour_and_a_round_icon_button_paints_none() {
     let texts = [
         ("ok", ColorRole::ControlText),
         ("save", ColorRole::DefaultButtonText),
-        ("delete", ColorRole::DestructiveText),
+        ("delete", ColorRole::DestructiveFill),
         ("plain", ColorRole::ControlText),
     ];
     for (key, role) in texts {
@@ -246,18 +258,38 @@ fn the_label_is_centred_with_its_baseline_below_the_chrome_centre() {
 fn roles_pick_the_fill_and_a_borderless_button_fills_only_when_pressed() {
     let mut h = Harness::<App>::new();
     let normal = |role| color(role, InteractionVariant::Normal, false);
-    assert_eq!(fill(&h, "ok"), Some(normal(ColorRole::ControlFill)));
+    assert_eq!(fill(&h, "ok"), Some(bezel(BEZEL)));
     assert_eq!(fill(&h, "save"), Some(normal(ColorRole::DefaultButtonFill)));
-    assert_eq!(fill(&h, "delete"), Some(normal(ColorRole::DestructiveFill)));
+    let red = normal(ColorRole::DestructiveFill);
+    let tint = fill(&h, "delete").unwrap();
+    assert_eq!((tint.r, tint.g, tint.b), (red.r, red.g, red.b));
+    assert!(
+        tint.a < 0.2,
+        "a destructive button is a faint red tint under a red label"
+    );
     assert_eq!(fill(&h, "plain"), None);
 
     let center = h.center("plain");
     h.pointer(PointerEvent::Motion { position: center });
     h.button(center, true);
+    assert_eq!(fill(&h, "plain"), Some(bezel(BEZEL_PRESSED)));
+}
+
+#[test]
+fn no_button_strokes_an_edge_outside_increase_contrast_pressed_or_not() {
+    let border = |h: &Harness<App>, key| shapes(h, key).into_iter().find(|s| !s.0).map(|s| s.3);
+    let mut h = Harness::<App>::new();
+    for key in ["ok", "save", "delete", "round", "plain"] {
+        assert_eq!(border(&h, key), None, "{key}");
+    }
+    let center = h.center("save");
+    h.pointer(PointerEvent::Motion { position: center });
+    h.button(center, true);
+    assert_eq!(border(&h, "save"), None);
     assert_eq!(
-        fill(&h, "plain"),
+        fill(&h, "save"),
         Some(color(
-            ColorRole::ControlFill,
+            ColorRole::DefaultButtonFill,
             InteractionVariant::Pressed,
             false
         ))
@@ -265,29 +297,21 @@ fn roles_pick_the_fill_and_a_borderless_button_fills_only_when_pressed() {
 }
 
 #[test]
-fn every_style_but_borderless_strokes_the_control_border_in_its_state() {
-    let border = |h: &Harness<App>, key| shapes(h, key).into_iter().find(|s| !s.0).map(|s| s.3);
+fn in_a_window_that_is_not_active_the_default_button_rests_as_an_ordinary_one_and_is_not_disabled()
+{
     let mut h = Harness::<App>::new();
-    let normal = Some(color(
-        ColorRole::ControlBorder,
-        InteractionVariant::Normal,
-        false,
-    ));
-    for key in ["ok", "save", "delete", "round"] {
-        assert_eq!(border(&h, key), normal, "{key}");
-    }
-    assert_eq!(border(&h, "plain"), None);
-
-    let center = h.center("save");
-    h.pointer(PointerEvent::Motion { position: center });
-    h.button(center, true);
-    assert_eq!(
-        border(&h, "save"),
-        Some(color(
-            ColorRole::ControlBorder,
-            InteractionVariant::Pressed,
-            false
-        ))
+    h.send(WindowEvent::Focus(false));
+    assert_eq!(fill(&h, "save"), Some(bezel(BEZEL)));
+    let label = glyph_colors(&h, "save");
+    assert!(!label.is_empty());
+    assert!(label
+        .iter()
+        .all(|&c| c != color(ColorRole::ControlText, InteractionVariant::Disabled, false)));
+    let disabled = Harness::<Buttons<false, false>>::new();
+    assert_ne!(
+        fill(&disabled, "ok"),
+        fill(&h, "ok"),
+        "disabled is not the inactive window's look"
     );
 }
 
@@ -373,23 +397,9 @@ fn deactivating_the_window_mid_press_ends_the_press_without_activating() {
     let center = h.center("ok");
     h.pointer(PointerEvent::Motion { position: center });
     h.button(center, true);
-    assert_eq!(
-        fill(&h, "ok"),
-        Some(color(
-            ColorRole::ControlFill,
-            InteractionVariant::Pressed,
-            false
-        ))
-    );
+    assert_eq!(fill(&h, "ok"), Some(bezel(BEZEL_PRESSED)));
     h.send(WindowEvent::Focus(false));
-    assert_ne!(
-        fill(&h, "ok"),
-        Some(color(
-            ColorRole::ControlFill,
-            InteractionVariant::Pressed,
-            false
-        ))
-    );
+    assert_ne!(fill(&h, "ok"), Some(bezel(BEZEL_PRESSED)));
     h.send(WindowEvent::Focus(true));
     h.button(center, false);
     assert!(h.model().pressed.is_empty());
@@ -467,14 +477,7 @@ fn a_disabled_button_looks_disabled_skips_tab_and_ignores_activation() {
     h.tap(TAB);
     assert!(!h.focused("ok"));
     assert!(h.model().pressed.is_empty());
-    assert_eq!(
-        fill(&h, "ok"),
-        Some(color(
-            ColorRole::ControlFill,
-            InteractionVariant::Disabled,
-            false
-        ))
-    );
+    assert_eq!(fill(&h, "ok"), Some(bezel(BEZEL_DISABLED)));
     let node = h.accessible("ok");
     assert!(node.states.disabled && !node.states.focusable);
 }

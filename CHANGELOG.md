@@ -182,6 +182,7 @@ Changes on `main` since `v0.1.0-rc4`.
 - The Arch packages can be signed. The `cupertino-keyring` package carries the signing key, `cupertino-rollback` installs an earlier release from `/var/lib/cupertino/previous`, the package cache or an archive, a pacman hook keeps the last release, and `build-repo` writes the signed repository tree (it copies archived packages into the output and verifies the copy, pins their primary key and signs `SHA256SUMS`). The release workflow signs the packages and attaches the signed repository to the draft release; it needs the signing secret and a repository address. Nothing is published yet.
 - Every package format requires dbus 1.16 or newer and PipeWire 1.4 or newer.
 - Machines installed from the USB image update from their own signed repository: `packaging/keyring/local-release` builds and signs a release, then `sudo pacman -Syu` installs it. pacman refuses an unsigned, tampered or foreign-signed package.
+- Arch is the only target. The Debian and Fedora packages, their PAM files, builder images, install tests and release builds are removed; a final release builds the Arch packages and the ISO. `release.py check-metadata` checks the third-party notices, the shipped licence texts and the PKGBUILD licence lists.
 
 ### Install image
 
@@ -208,6 +209,8 @@ Changes on `main` since `v0.1.0-rc4`.
 - The check job fetches the crates before the layer rules read the dependency graph offline, and runs on Ubuntu 26.04, where the package-environment tests pass.
 - The goldens drop the power panel scene before the lock scene, so a lock reaches the new login process.
 - The dock golden shows window icons at their resting and magnified sizes.
+- CI builds, lints and tests in an Arch container (`archlinux:base-devel`, pinned by digest) as an unprivileged user; the Ubuntu runner only hosts it. `ci/arch-ci.sh` lists the packages, for the workflows and for contributors.
+- The golden renderer image is Arch, with every package from one Arch Linux Archive date. Its baselines must be re-recorded on it; the Record goldens workflow does that and uploads them for review.
 
 ### Documentation
 

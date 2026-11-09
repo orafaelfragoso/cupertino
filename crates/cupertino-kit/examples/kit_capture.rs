@@ -10,10 +10,18 @@
 //! pulled down past its start), `shown` (just after a wheel scroll), `fading` (half way through the bar's fade) or
 //! `hidden` (after it). `--direction ltr|rtl` (default ltr) lays a surface out in that direction; the sheet shows both.
 //!
+//! `kit/gallery` is every control family side by side: buttons (ordinary, default, destructive, disabled and glass),
+//! switches, check boxes, radio buttons, a segmented control, a pop-up button, a stepper, a text and a search field,
+//! a pull-down button, a combo box, a date picker, a colour well, sliders and progress. `--state rest|held-button|held-switch|held-slider|held-segment|disabled` holds the pointer
+//! down on one control (the switch dragged a little, the segmented control dragged from its first segment onto its
+//! last) or disables them all; `--control-size mini|small|regular|large|extra-large` and `--compact on|off` size
+//! them; `--backdrop flat|busy` draws them over the window's background or over hard-edged colour bands. Its sheet
+//! shows each state.
+//!
 //! `ci/capture.sh kit/controls --scale 2` (the flags are `cupertino-capture`'s)
 //!
 //! The fonts, symbols and theme are the system's, as an application's ([`cupertino_kit::app::options`]). The clock
-//! stands still, so every control shows its resting look.
+//! stands still, so every control shows its resting look, but for the gallery's held states.
 
 #[path = "apps/counter.rs"]
 mod counter;
@@ -24,27 +32,29 @@ mod forms;
 #[path = "apps/virtual-list.rs"]
 mod virtual_list;
 
+use std::cell::Cell;
 use std::num::NonZeroU32;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_kit::controls::{
-    CheckBox, Icon, IconDirection, Progress, RadioGroup, ScrollView, Scroller, SegmentedControl,
-    Sidebar, SidebarItem, SidebarSection, Slider, SliderStyle, TextRole, Tooltip, TooltipState,
-    WINDOW_CONTENT_INSET,
+    CalendarDate, Canvas, CheckBox, ColorWell, ComboBox, DatePicker, Icon, IconDirection,
+    PopUpButton, Progress, PullDownButton, RadioGroup, ScrollView, Scroller, SearchField,
+    SegmentedControl, Sidebar, SidebarItem, SidebarSection, Slider, SliderStyle, Stepper, TextRole,
+    Tooltip, TooltipState, WINDOW_CONTENT_INSET,
 };
-use cupertino_kit::core::{Checked, CommandRegistry, Key};
-use cupertino_kit::geometry::{Insets, Point, Size};
+use cupertino_kit::core::{Checked, CommandRegistry, Key, PaintCx};
+use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{LayoutDirection, ScrollState};
 use cupertino_kit::platform::{
-    Capabilities, DecorationMode, PointerEvent, ScrollSource, SystemAppearance, Timestamp,
-    WindowEvent, WindowStates,
+    Capabilities, DecorationMode, MouseButton, PointerEvent, ScrollSource, SystemAppearance,
+    Timestamp, WindowEvent, WindowId, WindowStates,
 };
 use cupertino_kit::prelude::*;
-use cupertino_kit::render::PixelFormat;
-use cupertino_kit::text::{AttributedText, TextStyle};
-use cupertino_kit::theme::{ColorRole, ThemeTokens};
+use cupertino_kit::render::{GradientStop, Paint, PaintOp, PixelFormat, Shape};
+use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
+use cupertino_kit::theme::{Color, ColorRole, ControlSize, ThemeTokens};
 use cupertino_theme::Theme;
 use cupertino_ui_test::{ManualClock, TestDriver};
 use tiny_skia::{IntSize, Pixmap};
@@ -74,10 +84,14 @@ const SYMBOLS: [(&str, IconDirection); 15] = [
 ];
 /// The icon sizes of the grid in points: small, regular and large symbols.
 const ICON_SIZES: [f64; 3] = [16.0, 20.0, 24.0];
+/// The gallery's text and search fields' width.
+const FIELD_WIDTH: f64 = 150.0;
 /// The runtime turns a frame may take.
 const TURNS: u32 = 10_000;
 /// The frames a window may ask for before it rests.
 const FRAMES: usize = 8;
+/// The time between the frames of a held control, in nanoseconds: long enough for any press animation to finish.
+const SETTLE_STEP: u64 = 500_000_000;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Message {}
@@ -92,7 +106,7 @@ fn text(content: &str, role: TextRole) -> Element<Message> {
     })
 }
 
-fn stack(axis: Axis, spacing: f64, children: Vec<Element<Message>>) -> Element<Message> {
+fn stack<M: 'static>(axis: Axis, spacing: f64, children: Vec<Element<M>>) -> Element<M> {
     Element::new(Stack {
         axis,
         padding: Insets::ZERO,
@@ -432,6 +446,283 @@ impl Application for Scrolled {
     }
 }
 
+/// What the gallery shows: the control under the pointer, the controls' size, the compact setting and what lies
+/// under the controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GalleryOptions {
+    held: Option<Held>,
+    disabled: bool,
+    size: ControlSize,
+    compact: bool,
+    busy: bool,
+}
+
+impl Default for GalleryOptions {
+    fn default() -> Self {
+        Self {
+            held: None,
+            disabled: false,
+            size: ControlSize::Regular,
+            compact: false,
+            busy: false,
+        }
+    }
+}
+
+/// The control the gallery holds the pointer down on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Held {
+    /// The ordinary button, pressed.
+    Button,
+    /// The off switch, pressed and dragged a little along its track.
+    Switch,
+    /// The regular slider, its knob pressed.
+    Slider,
+    /// The segmented control, pressed on its first segment and dragged onto its last.
+    Segment,
+}
+
+thread_local! {
+    static GALLERY: Cell<GalleryOptions> = Cell::new(GalleryOptions::default());
+}
+
+/// A backdrop of hard-edged diagonal bands of light and dark colours, for how the controls read over a busy picture.
+fn busy_backdrop(cx: &mut PaintCx<'_>) {
+    const BANDS: [[u8; 3]; 8] = [
+        [242, 160, 48],
+        [24, 52, 96],
+        [250, 246, 236],
+        [40, 150, 140],
+        [12, 14, 20],
+        [214, 70, 120],
+        [250, 220, 90],
+        [70, 90, 200],
+    ];
+    let size = cx.size();
+    let rect = Rect::new(0.0, 0.0, size.width, size.height);
+    let count = BANDS.len() * 3;
+    let stops = (0..count)
+        .flat_map(|i| {
+            let [r, g, b] = BANDS[i % BANDS.len()];
+            let color = Color::from_rgba8([r, g, b, 255]);
+            let from = i as f32 / count as f32;
+            let to = (i + 1) as f32 / count as f32;
+            [
+                GradientStop {
+                    offset: from,
+                    color,
+                },
+                GradientStop { offset: to, color },
+            ]
+        })
+        .collect();
+    cx.push(PaintOp::Fill {
+        shape: Shape::Rect(rect),
+        paint: Paint::Linear {
+            start: Point::ZERO,
+            end: Point::new(size.width, size.height),
+            stops,
+        },
+    });
+}
+
+/// Every control family side by side, in the gallery's options.
+struct Gallery;
+
+impl Application for Gallery {
+    type Model = ();
+    type Message = ();
+
+    fn init() -> ((), Vec<Command<()>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: ()) -> Vec<Command<()>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<()>> {
+        let options = GALLERY.with(Cell::get);
+        let enabled = !options.disabled;
+        let button = |label: &str, role, style, on| {
+            Element::new(Button {
+                label: label.into(),
+                role,
+                style,
+                enabled: on,
+                busy: false,
+                on_press: Some(()),
+            })
+        };
+        let toggle = |label: &str, on, enabled| {
+            Element::new(Toggle {
+                label: label.into(),
+                on,
+                enabled,
+                on_toggle: Some(Box::new(|_| ())),
+            })
+        };
+        let check = |label: &str, checked, enabled| {
+            Element::new(CheckBox {
+                label: label.into(),
+                checked,
+                enabled,
+                on_toggle: Some(Box::new(|_| ())),
+            })
+        };
+        let field = |label: &str, placeholder: &str, value: &str| TextField {
+            label: label.into(),
+            placeholder: placeholder.into(),
+            value: value.into(),
+            revision: 0,
+            purpose: ContentPurpose::Normal,
+            enabled,
+            on_change: Some(Box::new(|_| ())),
+            on_submit: None,
+            selection: None,
+            initial: false,
+        };
+        let slider = |label: &str, value, ticks| {
+            Element::new(Slider {
+                label: label.into(),
+                value,
+                min: 0.0,
+                max: 1.0,
+                step: None,
+                style: SliderStyle::Regular,
+                ticks,
+                enabled,
+                on_change: Some(Box::new(|_| ())),
+                on_end: None,
+            })
+        };
+        let row = |children| stack(Axis::Horizontal, ROW_GAP, children);
+        let rows = vec![
+            row(vec![
+                button("Cancel", ButtonRole::Normal, ButtonStyle::Bordered, enabled).key("button"),
+                button("Save", ButtonRole::Default, ButtonStyle::Bordered, enabled),
+                button(
+                    "Delete",
+                    ButtonRole::Destructive,
+                    ButtonStyle::Bordered,
+                    enabled,
+                ),
+                button("Disabled", ButtonRole::Normal, ButtonStyle::Bordered, false),
+                button("Glass", ButtonRole::Normal, ButtonStyle::Glass, enabled),
+            ]),
+            row(vec![
+                toggle("Off", false, enabled).key("switch"),
+                toggle("On", true, enabled),
+                toggle("Disabled", true, false),
+                check("Off", Checked::False, enabled),
+                check("On", Checked::True, enabled),
+                check("Mixed", Checked::Mixed, enabled),
+            ]),
+            row(vec![
+                Element::new(RadioGroup {
+                    label: "Size".into(),
+                    options: vec!["Small".into(), "Medium".into(), "Large".into()],
+                    selected: Some(1),
+                    axis: Axis::Horizontal,
+                    spacing: ROW_GAP,
+                    enabled,
+                    on_select: Some(Box::new(|_| ())),
+                }),
+                Element::new(SegmentedControl {
+                    label: "View".into(),
+                    segments: vec!["Icons".into(), "List".into(), "Columns".into()],
+                    selected: Some(1),
+                    enabled,
+                    on_select: Some(Box::new(|_| ())),
+                })
+                .key("segments"),
+            ]),
+            row(vec![
+                Element::new(PopUpButton {
+                    label: "Sort".into(),
+                    options: vec!["Name".into(), "Date Modified".into(), "Size".into()],
+                    selected: 0,
+                    open: false,
+                    enabled,
+                    on_open: Some(()),
+                }),
+                Element::new(Stepper {
+                    label: "Copies".into(),
+                    value: 2.0,
+                    min: 1.0,
+                    max: 9.0,
+                    step: 1.0,
+                    enabled,
+                    on_change: Some(Box::new(|_| ())),
+                }),
+                Element::new(field("Name", "Your name", "")).width(FIELD_WIDTH),
+                Element::new(SearchField {
+                    field: field("Search", "Search", ""),
+                })
+                .width(FIELD_WIDTH),
+            ]),
+            row(vec![
+                Element::new(PullDownButton {
+                    label: "Actions".into(),
+                    actions: vec!["Duplicate".into(), "Rename".into()],
+                    open: false,
+                    enabled,
+                    on_open: Some(()),
+                }),
+                Element::from(ComboBox {
+                    field: field("Choice", "", "Alpha"),
+                    options: vec!["Alpha".into(), "Beta".into()],
+                    open: false,
+                    on_open: Some(()),
+                    text_size: 13.0,
+                })
+                .width(FIELD_WIDTH),
+                Element::new(DatePicker {
+                    label: "Date".into(),
+                    date: CalendarDate {
+                        year: 2026,
+                        month: 7,
+                        day: 11,
+                    },
+                    enabled,
+                    on_change: Some(Box::new(|_| ())),
+                }),
+                Element::new(ColorWell {
+                    label: "Colour".into(),
+                    color: Color::from_rgba8([72, 196, 214, 255]),
+                    enabled,
+                    on_open: Some(()),
+                }),
+            ]),
+            slider("Volume", 0.4, 0).key("slider"),
+            slider("Ticks", 0.7, 5),
+            Element::new(Progress {
+                label: "Progress".into(),
+                value: Some(0.6),
+            }),
+        ];
+        let mut windows = window("Gallery", Size::new(640.0, 340.0), Vec::new());
+        let content = Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: WINDOW_CONTENT_INSET,
+            spacing: LINE_GAP,
+            align: Align::Stretch,
+            children: rows,
+        });
+        windows[0].content = Element::new(Canvas {
+            size: None,
+            label: "Backdrop".into(),
+            paint: Box::new(move |cx| {
+                if options.busy {
+                    busy_backdrop(cx);
+                }
+            }),
+            children: vec![content],
+        });
+        windows
+    }
+}
+
 /// A moment of a scroll the `kit/scroll` surface shows.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -444,6 +735,64 @@ enum Phase {
 
 const MS: u64 = 1_000_000;
 
+/// The rectangle of the node with `key` in `window`, in window points.
+fn rect_of<A: Application>(
+    driver: &TestDriver<A>,
+    window: WindowId,
+    key: &'static str,
+) -> Option<Rect> {
+    let snapshot = driver.runtime().snapshot(window)?;
+    let key = Key::from(key);
+    snapshot
+        .nodes
+        .iter()
+        .find(|n| n.key.as_ref() == Some(&key))
+        .map(|n| n.rect)
+}
+
+/// The pointer events that hold `held` down, from the gallery's layout.
+fn hold(driver: &TestDriver<Gallery>, window: WindowId, held: Held) -> Option<Vec<PointerEvent>> {
+    let key = match held {
+        Held::Button => "button",
+        Held::Switch => "switch",
+        Held::Slider => "slider",
+        Held::Segment => "segments",
+    };
+    let rect = rect_of(driver, window, key)?;
+    let middle = rect.center();
+    let at = |x: f64| Point::new(x, middle.y);
+    let (press, moves) = match held {
+        Held::Button => (middle, vec![]),
+        Held::Switch => (middle, vec![at(middle.x + 4.0), at(middle.x + 7.0)]),
+        // the knob of the regular slider at 0.4
+        Held::Slider => {
+            let x = rect.min_x() + 10.0 + 0.4 * (rect.width() - 20.0);
+            (at(x), vec![at(x + 1.0)])
+        }
+        Held::Segment => {
+            let third = rect.width() / 3.0;
+            (
+                at(rect.min_x() + third / 2.0),
+                vec![at(rect.max_x() - third / 2.0)],
+            )
+        }
+    };
+    let button = |pressed| PointerEvent::Button {
+        position: press,
+        button: MouseButton::Left,
+        pressed,
+        serial: 1,
+        mods: Default::default(),
+    };
+    let mut events = vec![PointerEvent::Motion { position: press }, button(true)];
+    events.extend(
+        moves
+            .into_iter()
+            .map(|position| PointerEvent::Motion { position }),
+    );
+    Some(events)
+}
+
 /// The window of `A` drawn at rest in `look` at `scale` and `direction`, `size` points when given.
 fn draw<A: Application>(
     look: Look,
@@ -451,16 +800,27 @@ fn draw<A: Application>(
     direction: LayoutDirection,
     size: Option<Size>,
 ) -> Result<Pixmap, String> {
-    draw_at::<A>(look, scale, direction, size, Phase::Rest)
+    draw_with::<A>(
+        look,
+        scale,
+        direction,
+        size,
+        Phase::Rest,
+        |_| {},
+        |_, _| None,
+    )
 }
 
-/// [`draw`], then the scroll of `phase` and the frame that shows its moment.
-fn draw_at<A: Application>(
+/// [`draw`], the theme tuned by `tune`, then the scroll of `phase` and the frames up to its moment, then the
+/// pointer events `act` gives sent to the window, and the window drawn again as they leave it.
+fn draw_with<A: Application>(
     look: Look,
     scale: f32,
     direction: LayoutDirection,
     size: Option<Size>,
     phase: Phase,
+    tune: impl FnOnce(&mut ThemeTokens),
+    act: impl FnOnce(&TestDriver<A>, WindowId) -> Option<Vec<PointerEvent>>,
 ) -> Result<Pixmap, String> {
     let mut options = cupertino_kit::app::options().map_err(|e| e.to_string())?;
     options.direction = direction;
@@ -471,8 +831,9 @@ fn draw_at<A: Application>(
         reduce_motion: false,
     });
     let theme = Theme::load().map_err(|e| e.to_string())?;
-    options.theme =
-        Arc::new(ThemeTokens::cupertino(&theme, preferences).map_err(|e| e.to_string())?);
+    let mut tokens = ThemeTokens::cupertino(&theme, preferences).map_err(|e| e.to_string())?;
+    tune(&mut tokens);
+    options.theme = Arc::new(tokens);
     let turns = NonZeroU32::new(TURNS).expect("a turn budget");
     let fail = |e: &dyn std::fmt::Debug| format!("the headless window system: {e:?}");
     let mut driver = TestDriver::<A>::new(
@@ -571,6 +932,25 @@ fn draw_at<A: Application>(
             ms += 16;
         }
     }
+    if let Some(events) = act(&driver, window) {
+        let system = driver.window_system_mut();
+        for event in events {
+            system
+                .enqueue_window(window, WindowEvent::Pointer(event, Timestamp(0)))
+                .map_err(|e| fail(&e))?;
+        }
+        // a held control may animate towards its held look: let the clock run until it settles
+        for frame in 1..=FRAMES as u64 {
+            driver.run_until_idle(turns).map_err(|e| fail(&e))?;
+            let at = Timestamp(frame * SETTLE_STEP);
+            driver.advance_to(at).map_err(|e| fail(&e))?;
+            let system = driver.window_system_mut();
+            if !system.frame_requested(window).map_err(|e| fail(&e))? {
+                break;
+            }
+            system.frame_ready(window, at).map_err(|e| fail(&e))?;
+        }
+    }
     let frame = driver
         .window_system_mut()
         .frames(window)
@@ -626,11 +1006,19 @@ struct Capture;
 
 impl App for Capture {
     const NAME: &'static str = "kit";
-    const STATE_FLAGS: &'static [&'static str] = &["direction", "phase"];
+    const STATE_FLAGS: &'static [&'static str] = &[
+        "direction",
+        "phase",
+        "state",
+        "control-size",
+        "compact",
+        "backdrop",
+    ];
 
     fn surfaces(&self) -> Vec<String> {
         [
             "controls",
+            "gallery",
             "icons",
             "sidebar",
             "tooltip",
@@ -645,45 +1033,84 @@ impl App for Capture {
     }
 
     fn sheet_states(&self, surface: &str) -> Vec<State> {
+        let state = |key: &str, value: &str| vec![(key.to_string(), value.to_string())];
         if surface == "scroll" {
             return ["rest", "stretch", "shown", "fading", "hidden"]
-                .map(|p| vec![("phase".to_string(), p.to_string())])
+                .map(|p| state("phase", p))
                 .to_vec();
         }
-        vec![
-            State::new(),
-            vec![("direction".to_string(), "rtl".to_string())],
-        ]
+        if surface == "gallery" {
+            return vec![
+                State::new(),
+                state("state", "held-button"),
+                state("state", "held-switch"),
+                state("state", "held-slider"),
+                state("state", "held-segment"),
+                state("state", "disabled"),
+            ];
+        }
+        vec![State::new(), state("direction", "rtl")]
     }
 
     fn capture(&mut self, r: &Request<'_>) -> Result<Pixmap, String> {
         let size = r.size.map(|(w, h)| Size::new(w, h));
         let mut direction = LayoutDirection::Ltr;
         let mut phase = Phase::Rest;
+        let mut gallery = GalleryOptions::default();
         for (flag, value) in r.state {
-            if flag == "phase" {
-                phase = match value.as_str() {
-                    "rest" => Phase::Rest,
-                    "stretch" => Phase::Stretch,
-                    "shown" => Phase::Shown,
-                    "fading" => Phase::Fading,
-                    "hidden" => Phase::Hidden,
-                    _ => {
-                        return Err(format!(
-                            "--phase {value}: rest, stretch, shown, fading or hidden"
-                        ))
+            let wrong = || {
+                let choices = match flag.as_str() {
+                    "direction" => "ltr or rtl",
+                    "state" => {
+                        "rest, held-button, held-switch, held-slider, held-segment or disabled"
                     }
+                    "control-size" => "mini, small, regular, large or extra-large",
+                    "compact" => "on or off",
+                    "phase" => "rest, stretch, shown, fading or hidden",
+                    _ => "flat or busy",
                 };
-                continue;
-            }
-            direction = match value.as_str() {
-                "ltr" => LayoutDirection::Ltr,
-                "rtl" => LayoutDirection::Rtl,
-                _ => return Err(format!("--direction {value}: ltr or rtl")),
+                Err(format!("--{flag} {value}: {choices}"))
             };
+            match (flag.as_str(), value.as_str()) {
+                ("direction", "ltr") => direction = LayoutDirection::Ltr,
+                ("direction", "rtl") => direction = LayoutDirection::Rtl,
+                ("state", "rest") => {}
+                ("state", "held-button") => gallery.held = Some(Held::Button),
+                ("state", "held-switch") => gallery.held = Some(Held::Switch),
+                ("state", "held-slider") => gallery.held = Some(Held::Slider),
+                ("state", "held-segment") => gallery.held = Some(Held::Segment),
+                ("state", "disabled") => gallery.disabled = true,
+                ("control-size", "mini") => gallery.size = ControlSize::Mini,
+                ("control-size", "small") => gallery.size = ControlSize::Small,
+                ("control-size", "regular") => gallery.size = ControlSize::Regular,
+                ("control-size", "large") => gallery.size = ControlSize::Large,
+                ("control-size", "extra-large") => gallery.size = ControlSize::ExtraLarge,
+                ("compact", "on") => gallery.compact = true,
+                ("compact", "off") => gallery.compact = false,
+                ("backdrop", "flat") => gallery.busy = false,
+                ("backdrop", "busy") => gallery.busy = true,
+                ("phase", "rest") => phase = Phase::Rest,
+                ("phase", "stretch") => phase = Phase::Stretch,
+                ("phase", "shown") => phase = Phase::Shown,
+                ("phase", "fading") => phase = Phase::Fading,
+                ("phase", "hidden") => phase = Phase::Hidden,
+                _ => return wrong(),
+            }
         }
         match r.surface {
             "controls" => draw::<Controls>(r.look, r.scale, direction, size),
+            "gallery" => {
+                GALLERY.with(|g| g.set(gallery));
+                draw_with::<Gallery>(
+                    r.look,
+                    r.scale,
+                    direction,
+                    size,
+                    Phase::Rest,
+                    |theme| theme.metrics = theme.metrics.at_size(gallery.size, gallery.compact),
+                    |driver, window| hold(driver, window, gallery.held?),
+                )
+            }
             "counter" => draw::<counter::Counter>(r.look, r.scale, direction, size),
             "forms" => draw::<forms::Forms>(r.look, r.scale, direction, size),
             "sidebar" => draw::<Places>(r.look, r.scale, direction, size),
@@ -692,7 +1119,9 @@ impl App for Capture {
                 draw::<virtual_list::VirtualList<50_000>>(r.look, r.scale, direction, size)
             }
             "editor" => draw::<SampleEditor>(r.look, r.scale, direction, size),
-            "scroll" => draw_at::<Scrolled>(r.look, r.scale, direction, size, phase),
+            "scroll" => {
+                draw_with::<Scrolled>(r.look, r.scale, direction, size, phase, |_| {}, |_, _| None)
+            }
             _ => draw::<Icons>(r.look, r.scale, direction, size),
         }
     }

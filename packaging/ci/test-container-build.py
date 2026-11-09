@@ -128,14 +128,14 @@ else:
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
     def test_caches_image_and_rotates_export_after_success(self):
-        first = self.run_build([], {}, 'debian')
+        first = self.run_build([], {}, 'arch')
         self.assertEqual(first.returncode, 0, first.stderr)
-        current = self.cache / 'debian/current'
+        current = self.cache / 'arch/current'
         old = current.resolve()
-        cached_source = self.root / 'target/package-build/debian/cargo-home/cached-source'
+        cached_source = self.root / 'target/package-build/arch/cargo-home/cached-source'
         cached_source.write_bytes(b'previously unpacked dependency')
         cached_mtime = cached_source.stat().st_mtime_ns
-        second = self.run_build([], {}, 'debian')
+        second = self.run_build([], {}, 'arch')
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertNotEqual(old, current.resolve())
         self.assertFalse(old.exists())
@@ -146,32 +146,32 @@ else:
         self.assertIn('type=local,src=' + str(current), builds[1])
         creates = [command for command in commands if command[0] == 'create']
         build_run = creates[0]
-        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/debian/targets' / ('a' * 64)) + ',dst=/src/target', build_run)
+        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/arch/targets' / ('a' * 64)) + ',dst=/src/target', build_run)
         self.assertEqual(build_run[-4], 'sha256:' + 'a' * 64)
         self.assertIn('export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target', build_run[-1])
         self.assertIn(' /dist /src /cargo-home\' EXIT', build_run[-1])
         self.assertIn('CARGO_BUILD_JOBS=4', build_run)
         self.assertIn('CARGO_HOME=/cargo-home', build_run)
-        cargo_home = self.root / 'target/package-build/debian/cargo-home'
+        cargo_home = self.root / 'target/package-build/arch/cargo-home'
         self.assertIn('type=bind,src=' + str(cargo_home) + ',dst=/cargo-home', build_run)
         self.assertTrue(cargo_home.is_dir())
         self.assertFalse(any(argument.startswith('PATH=') for argument in build_run))
         self.assertIn('CARGO_BUILD_JOBS=4', builds[0])
         self.assertFalse(list((self.root / 'containers').iterdir()))
         install_run = creates[1]
-        self.assertIn('docker.io/library/debian@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308', install_run)
+        self.assertIn('docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1', install_run)
         self.assertFalse(any('cupertino-package-builder:' in argument for argument in install_run))
         self.assertFalse(any(command[0] == 'run' for command in commands))
 
     def test_changed_image_gets_a_private_compiled_target_and_keeps_downloads(self):
         first_id, second_id = 'sha256:' + 'a' * 64, 'sha256:' + 'b' * 64
-        first = self.run_build([], {'TEST_IMAGE_ID': first_id}, 'debian')
+        first = self.run_build([], {'TEST_IMAGE_ID': first_id}, 'arch')
         self.assertEqual(first.returncode, 0, first.stderr)
-        cargo_home = self.root / 'target/package-build/debian/cargo-home'
+        cargo_home = self.root / 'target/package-build/arch/cargo-home'
         source = cargo_home / 'cached-source'
         source.write_text('downloaded once')
         stamp = source.stat().st_mtime_ns
-        second = self.run_build([], {'TEST_IMAGE_ID': second_id}, 'debian')
+        second = self.run_build([], {'TEST_IMAGE_ID': second_id}, 'arch')
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(source.read_text(), 'downloaded once')
         self.assertEqual(source.stat().st_mtime_ns, stamp)
@@ -179,55 +179,55 @@ else:
                   and any(argument.endswith(',dst=/src/target') for argument in command)]
         self.assertEqual(len(builds), 2)
         for command, image_id in zip(builds, (first_id, second_id), strict=True):
-            target = self.root / 'target/package-build/debian/targets' / image_id.removeprefix('sha256:')
+            target = self.root / 'target/package-build/arch/targets' / image_id.removeprefix('sha256:')
             self.assertTrue(target.is_dir())
             self.assertIn('type=bind,src=' + str(target) + ',dst=/src/target', command)
             self.assertIn('type=bind,src=' + str(cargo_home) + ',dst=/cargo-home', command)
             self.assertEqual(command[-4], image_id)
 
     def test_invalid_image_identity_cannot_create_a_target_or_container(self):
-        result = self.run_build([], {'TEST_IMAGE_ID': 'sha256:../../escape'}, 'debian')
+        result = self.run_build([], {'TEST_IMAGE_ID': 'sha256:../../escape'}, 'arch')
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn('invalid content identity', result.stderr)
         self.assertFalse(any(command[0] == 'create' for command in self.commands()))
-        self.assertFalse((self.root / 'target/package-build/debian/targets').exists())
+        self.assertFalse((self.root / 'target/package-build/arch/targets').exists())
 
     def test_failed_image_export_preserves_previous_cache(self):
-        self.assertEqual(self.run_build([], {}, 'debian').returncode, 0)
-        current = self.cache / 'debian/current'
+        self.assertEqual(self.run_build([], {}, 'arch').returncode, 0)
+        current = self.cache / 'arch/current'
         old = current.resolve()
-        result = self.run_build([], {'TEST_BUILD_FAIL': '1'}, 'debian')
+        result = self.run_build([], {'TEST_BUILD_FAIL': '1'}, 'arch')
         self.assertEqual(result.returncode, 17, result.stderr)
         self.assertEqual(current.resolve(), old)
-        self.assertEqual(list((self.cache / 'debian').glob('generation.*')), [old])
+        self.assertEqual(list((self.cache / 'arch').glob('generation.*')), [old])
         self.assertEqual(sum(command[:2] == ['buildx', 'build'] for command in self.commands()), 2)
         self.assertEqual(sum(command[0] == 'create' for command in self.commands()), 2)
 
     def test_incomplete_export_is_not_published(self):
-        self.assertEqual(self.run_build([], {}, 'debian').returncode, 0)
-        current = self.cache / 'debian/current'
+        self.assertEqual(self.run_build([], {}, 'arch').returncode, 0)
+        current = self.cache / 'arch/current'
         old = current.resolve()
-        result = self.run_build([], {'TEST_INCOMPLETE_CACHE': '1'}, 'debian')
+        result = self.run_build([], {'TEST_INCOMPLETE_CACHE': '1'}, 'arch')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('builder cache export is incomplete', result.stderr)
         self.assertEqual(current.resolve(), old)
-        self.assertEqual(list((self.cache / 'debian').glob('generation.*')), [old])
+        self.assertEqual(list((self.cache / 'arch').glob('generation.*')), [old])
 
     def test_install_failure_propagates(self):
-        result = self.run_build([], {'TEST_INSTALL_FAIL': '1'}, 'debian')
+        result = self.run_build([], {'TEST_INSTALL_FAIL': '1'}, 'arch')
         self.assertEqual(result.returncode, 19, result.stderr)
 
     def test_failed_compilation_repairs_only_its_owned_bind_mounts(self):
-        result = self.run_build([], {'TEST_COMPILE_FAIL': '1'}, 'debian')
+        result = self.run_build([], {'TEST_COMPILE_FAIL': '1'}, 'arch')
         self.assertEqual(result.returncode, 31, result.stderr)
         repairs = [command for command in self.commands() if command[0] == 'run']
         self.assertEqual(len(repairs), 1)
         self.assertIn(str(self.root / 'dist') + ':/dist', repairs[0])
-        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/debian/targets' / ('a' * 64)) + ',dst=/src/target', repairs[0])
-        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/debian/cargo-home') + ',dst=/cargo-home', repairs[0])
+        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/arch/targets' / ('a' * 64)) + ',dst=/src/target', repairs[0])
+        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/arch/cargo-home') + ',dst=/cargo-home', repairs[0])
 
     def test_test_only_needs_no_image_build_or_cargo_target(self):
-        result = self.run_build(['--test-only'], {}, 'debian')
+        result = self.run_build(['--test-only'], {}, 'arch')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([command[0] for command in self.commands() if command[0] != 'archive'],
                          ['create', 'start', 'rm'])
@@ -241,12 +241,19 @@ else:
                          + 'with open(os.environ["TEST_LOG"], "a") as log:\n'
                          + ' log.write(json.dumps(["guard", *sys.argv[1:]]) + "\\n")\n'
                          + 'raise SystemExit(42)\n')
-        result = self.run_build(['--test-only'], {'CUPERTINO_BUILD_LOCK_FD': ''}, 'debian')
+        result = self.run_build(['--test-only'], {'CUPERTINO_BUILD_LOCK_FD': ''}, 'arch')
         self.assertEqual(result.returncode, 42, result.stderr)
         self.assertEqual(self.commands(), [['guard', 'locked', '--', 'bash', 'packaging/ci/build-in-container.sh',
-                                           'debian', str(self.root / 'dist'), '--test-only']])
+                                           'arch', str(self.root / 'dist'), '--test-only']])
         self.assertFalse((self.root / 'target').exists())
         self.assertFalse((self.root / 'containers').exists())
+
+    def test_only_arch_is_packaged(self):
+        for distro in ('debian', 'fedora'):
+            result = self.run_build([], {}, distro)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn('only arch is packaged', result.stderr)
+        self.assertFalse(self.log.exists())
 
     def test_arch_test_only_does_not_relabel_existing_packages(self):
         result = self.run_build(['--test-only'], {}, 'arch')
@@ -282,7 +289,7 @@ else:
         self.assertFalse(any(command[:2] == ['release', 'record-packages'] for command in self.commands()))
 
     def test_cleanup_failure_preserves_original_failure(self):
-        result = self.run_build([], {'TEST_INSTALL_FAIL': '1', 'TEST_REMOVE_FAIL': '1'}, 'debian')
+        result = self.run_build([], {'TEST_INSTALL_FAIL': '1', 'TEST_REMOVE_FAIL': '1'}, 'arch')
         self.assertEqual(result.returncode, 19)
         self.assertIn('cannot remove owned container', result.stderr)
 
@@ -292,7 +299,7 @@ else:
         unrelated = containers / 'unrelated'
         unrelated.write_text('another build')
         env = dict(self.env, TEST_HOLD=hold, CARGO_BUILD_JOBS='2')
-        with subprocess.Popen(self.command('debian', []), env=env, text=True,
+        with subprocess.Popen(self.command('arch', []), env=env, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
             deadline = time.monotonic() + 5
             while not (self.root / 'started').exists():
@@ -318,7 +325,7 @@ else:
             repair = repairs[0]
             self.assertEqual(repair[1:5], ['--rm', '--network', 'none', '-v'])
             self.assertEqual(repair[-7], 'sha256:' + 'a' * 64)
-            self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/debian/cargo-home') + ',dst=/cargo-home', repair)
+            self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/arch/cargo-home') + ',dst=/cargo-home', repair)
             removal_index = max(index for index, command in enumerate(commands) if command[:2] == ['rm', '--force'])
             self.assertGreater(commands.index(repair), removal_index)
         else:

@@ -5,7 +5,7 @@ nothing; the caller is the process behind its connection.
 
 * `identify(connection, sender) -> Caller`: asks the bus daemon for the connection's credentials and takes the process from
   the `ProcessFD` it gives. The descriptor is held as a `ProcessHandle` (a pidfd) while the call is judged, so a process id
-  that is reused meanwhile is never mistaken for the caller. A daemon older than 1.15 (Ubuntu 24.04 ships 1.14) gives no
+  that is reused meanwhile is never mistaken for the caller. A daemon older than 1.15 gives no
   descriptor, so caller identity there is pid-based: the pidfd is opened for its `ProcessID` (logged at debug level each time), which
   leaves a window for a reused process id that a descriptor does not. A caller with no process at all, with a process id that
   disagrees with the descriptor, that cannot be classified or that has exited is `Caller::Anonymous` and trusted with nothing. A process whose `/proc/<pid>/root` the kernel refuses (one that made itself non-dumpable) is `Caller::Unclassified`: its process id is known, but `unsandboxed()` and `require_relation` refuse it, so nothing trusts it by sandbox or relation; only a caller that knows the process by other means may accept it.

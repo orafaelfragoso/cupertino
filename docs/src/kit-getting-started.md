@@ -124,6 +124,15 @@ What exists:
 
   This writes light and dark PNGs under the build directory's `captures/`. `kit/icons` takes the same flag; chevrons
   follow the reading direction.
+- The controls gallery shows every control family together. Hold one down, disable them all, change their size or
+  draw them over a busy backdrop:
+
+  ```bash
+  ci/capture.sh kit/gallery --state held-switch --control-size large --backdrop busy --scale 2
+  ci/capture.sh kit/gallery --sheet
+  ```
+
+  The sheet puts the resting, held and disabled states side by side.
 
 Limits:
 

@@ -798,3 +798,100 @@ fn press_and_hold_counts_from_the_press_however_late_the_menu_opens() {
     assert_eq!(h.model().chosen, ["Copy"], "held from the press");
     assert_eq!(popup(&h, "menu"), None);
 }
+
+/// A harness whose theme reduces motion when `reduce` is set: tracking never waits on how a menu appears.
+fn harness(reduce: bool) -> Harness<Browser> {
+    let mut theme = support::theme();
+    theme.motion.reduce = reduce;
+    theme.preferences.reduce_motion = reduce;
+    Harness::with_theme(theme)
+}
+
+/// A press on the pop-up button dragged onto Large and on away from its menu, then let go there: nothing is chosen,
+/// the menu closes and the button keeps its value.
+fn release_outside(reduce: bool) {
+    let mut h = harness(reduce);
+    let mut ptr = Pointer::new(&h);
+    let button = h.center("size");
+    ptr.move_to(&mut h, button);
+    ptr.button(&mut h, MouseButton::Left, true);
+    let large = row_point(&h, "sizes", 2, 0.5);
+    ptr.glide(&mut h, large, 4, 16);
+    assert_eq!(focused(&h, "sizes"), Some(2), "Large is highlighted");
+    let menu = rect(&h, popup(&h, "sizes").unwrap());
+    let away = Point::new(menu.max_x() + 60.0, menu.max_y() + 40.0);
+    ptr.glide(&mut h, away, 4, 16);
+    ptr.wait(&mut h, (TRACKING_INTERVAL * 1000.0) as u64 + 50);
+    ptr.button(&mut h, MouseButton::Left, false);
+    assert_eq!(
+        (h.model().sizes_chosen, h.model().size),
+        (0, 0),
+        "let go outside, the value stays Small"
+    );
+    assert_eq!((popup(&h, "sizes"), h.model().menu.clone()), (None, None));
+}
+
+#[test]
+fn a_press_dragged_off_a_menu_and_let_go_outside_chooses_nothing_and_keeps_the_value() {
+    release_outside(false);
+}
+
+/// Escape while a press drags over the menu closes it at once; the release that follows chooses nothing.
+fn escape_while_dragging(reduce: bool) {
+    let mut h = harness(reduce);
+    let mut ptr = Pointer::new(&h);
+    let button = h.center("size");
+    ptr.move_to(&mut h, button);
+    ptr.button(&mut h, MouseButton::Left, true);
+    let large = row_point(&h, "sizes", 2, 0.5);
+    ptr.glide(&mut h, large, 4, 16);
+    h.window = popup(&h, "sizes").unwrap();
+    h.key(ESCAPE, true);
+    ptr.settle(&mut h);
+    assert_eq!(popup(&h, "sizes"), None, "Escape closes it");
+    ptr.button(&mut h, MouseButton::Left, false);
+    assert_eq!(
+        (h.model().sizes_chosen, h.model().size, h.model().closes),
+        (0, 0, 1),
+        "nothing chosen, Small kept, closed once"
+    );
+}
+
+#[test]
+fn escape_while_a_press_drags_over_a_menu_closes_it_and_keeps_the_value() {
+    escape_while_dragging(false);
+}
+
+/// A secondary press dragged onto Sort By, held there until its submenu opens, then into it onto Size: the release
+/// chooses Size, once, and closes both menus.
+fn drag_into_a_submenu(reduce: bool) {
+    let mut h = harness(reduce);
+    let mut ptr = Pointer::new(&h);
+    let canvas = h.center("canvas");
+    ptr.move_to(&mut h, canvas);
+    ptr.button(&mut h, MouseButton::Right, true);
+    let sort_by = row_point(&h, "menu", 0, 0.5);
+    ptr.glide(&mut h, sort_by, 4, 16);
+    ptr.wait(&mut h, (SUBMENU_OPEN_DELAY * 1000.0) as u64 + 10);
+    assert!(popup(&h, "menu/1").is_some(), "Sort By's submenu opens");
+    let edge = row_point(&h, "menu", 0, 0.95);
+    ptr.glide(&mut h, edge, 2, 16);
+    let size = row_point(&h, "menu/1", 3, 0.5);
+    ptr.glide(&mut h, size, 6, 16);
+    assert_eq!(focused(&h, "menu/1"), Some(3), "Size is highlighted");
+    ptr.button(&mut h, MouseButton::Right, false);
+    assert_eq!(h.model().chosen, ["Size"], "chosen once");
+    assert_eq!((popup(&h, "menu"), popup(&h, "menu/1")), (None, None));
+}
+
+#[test]
+fn a_press_dragged_into_a_submenu_chooses_its_item_on_release() {
+    drag_into_a_submenu(false);
+}
+
+#[test]
+fn with_reduced_motion_menus_track_the_press_alike() {
+    release_outside(true);
+    escape_while_dragging(true);
+    drag_into_a_submenu(true);
+}

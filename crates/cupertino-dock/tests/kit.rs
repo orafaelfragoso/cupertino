@@ -32,7 +32,7 @@ use cupertino_kit::platform::{
     Capabilities, KeyEvent, Keysym, MaterialRegion, Mods, MouseButton, PointerEvent, Timestamp,
     WindowEvent, WindowId, WindowRequest, WindowStates,
 };
-use cupertino_kit::render::{CpuConfig, CpuRenderer, ImageResource, PixelFormat};
+use cupertino_kit::render::{CpuConfig, CpuRenderer, Effect, ImageResource, PaintOp, PixelFormat};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_theme::Theme;
@@ -3074,5 +3074,141 @@ fn look_captures() {
         run.key(grid, ESCAPE);
         run.key(grid, ESCAPE);
         run.advance(1.0);
+    }
+}
+
+/// How many layers of the grid's last frame cast a drop shadow.
+fn grid_shadows(run: &Run, grid: WindowId) -> usize {
+    run.driver
+        .runtime()
+        .snapshot(grid)
+        .unwrap()
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| &n.ops)
+        .filter(|op| {
+            matches!(op, PaintOp::PushLayer { effects, .. }
+                if effects.iter().any(|e| matches!(e, Effect::DropShadow { .. })))
+        })
+        .count()
+}
+
+/// The entry starts from nothing on the pass the grid is sized: that frame shows nothing, so it costs no shadow, the
+/// blur of the whole panel that is the dearest part of a frame at a high scale. The frames of the entry that show the
+/// panel cast it.
+#[test]
+fn the_grids_first_frame_from_nothing_casts_no_shadow_and_the_entry_casts_it() {
+    let mut run = Run::start();
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::ToggleAppGrid],
+    });
+    let grid = run
+        .window(&format!("{GRID_APP_ID}@1"))
+        .expect("the grid opened");
+    run.driver
+        .window_system_mut()
+        .enqueue_window(grid, WindowEvent::Scale(2.0))
+        .unwrap();
+    run.message(Message::Sized(Sized::Grid, 1280.0, 800.0));
+    assert!(
+        !named(&run, grid, Role::Button).is_empty(),
+        "the panel and its applications are there"
+    );
+    assert_eq!(
+        grid_shadows(&run, grid),
+        0,
+        "no shadow before the panel shows"
+    );
+    run.advance(cupertino_dock::app_grid::SHOW_DURATION / 2.0);
+    assert_eq!(grid_shadows(&run, grid), 1, "the entry's frames cast it");
+    run.advance(cupertino_dock::app_grid::SHOW_DURATION);
+    assert_eq!(grid_shadows(&run, grid), 1, "and so does the panel at rest");
+}
+
+/// The grid's window at `scale` on the main display, its entry over, with the pixels of its last frame: whether the
+/// desktop draws the material (`app_effects`) or the panel paints its fill.
+fn grid_frame(scale: f64, app_effects: bool) -> (u32, u32, Vec<u8>) {
+    let mut run = Run::on(tokens(false), ActionMap::default(), app_effects);
+    run.driver.window_system_mut().set_keep_pixels(true);
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::ToggleAppGrid],
+    });
+    let grid = run
+        .window(&format!("{GRID_APP_ID}@1"))
+        .expect("the grid opened");
+    run.driver
+        .window_system_mut()
+        .enqueue_window(grid, WindowEvent::Scale(scale))
+        .unwrap();
+    run.message(Message::Sized(Sized::Grid, 1280.0, 800.0));
+    for _ in 0..4 {
+        run.advance(cupertino_dock::app_grid::SHOW_DURATION);
+    }
+    let frames = run.driver.window_system_mut().frames(grid).unwrap();
+    let last = frames.last().expect("the grid presented a frame");
+    (last.width, last.height, last.pixels.clone())
+}
+
+/// At 1.5 and 2 the grid draws its content at the output's pixels: the application icons inside the panel, the panel's
+/// fill where the desktop has no material for it, and its shadow below the panel either way.
+#[test]
+fn at_a_high_scale_the_grid_draws_its_icons_and_its_panels_shadow() {
+    let bar = {
+        let run = Run::start();
+        let placement = run.record.borrow().placements.last().copied().unwrap();
+        placement
+    };
+    let layout = cupertino_dock::app_grid::GridLayout::on_output(
+        1280.0,
+        800.0,
+        cupertino_dock::app_grid::Outside::dock(bar.orientation, bar.bar_depth),
+    );
+    let panel = kit_rect(layout.panel);
+    for scale in [1.5, 2.0] {
+        for app_effects in [true, false] {
+            let (w, h, pixels) = grid_frame(scale, app_effects);
+            let at = |x: f64, y: f64| -> [u8; 4] {
+                let (px, py) = ((x * scale) as usize, (y * scale) as usize);
+                let i = (py * w as usize + px) * 4;
+                [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+            };
+            assert_eq!(
+                (w, h),
+                ((1280.0 * scale) as u32, (800.0 * scale) as u32),
+                "the frame has the output's pixels at {scale}"
+            );
+            let icon = [40, 90, 200, 255];
+            let icons = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .enumerate()
+                .filter(|(i, px)| {
+                    let (x, y) = (
+                        (i % w as usize) as f64 / scale,
+                        (i / w as usize) as f64 / scale,
+                    );
+                    **px == icon && panel.contains(Point::new(x, y))
+                })
+                .count();
+            assert!(
+                icons as f64 > 2.0 * (32.0 * scale).powi(2),
+                "the icons are drawn inside the panel at {scale}, material {app_effects}: {icons} pixels"
+            );
+            let shadow = at(panel.center().x, panel.max_y() + 12.0)[3];
+            assert!(
+                shadow > 0,
+                "the shadow shows below the panel at {scale}, material {app_effects}"
+            );
+            let inside = at(panel.x() + 4.0, panel.center().y)[3];
+            if app_effects {
+                assert_eq!(inside, 0, "the material shows through the panel at {scale}");
+            } else {
+                assert_eq!(inside, 255, "the panel paints its fill at {scale}");
+            }
+        }
     }
 }

@@ -8,19 +8,24 @@
 //! the menu (a secondary press, a press on a pop-up button) and is let go on a row chooses it once the pointer reached
 //! a row or the press was held; a quick click leaves the menu open.
 
+use crate::button::ButtonLook;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
-use crate::{ContextMenu, Handler, Menu, MenuAnchor, MenuItem, PopUpButton};
+use crate::{
+    ButtonRole, ButtonStyle, ContextMenu, Handler, Menu, MenuAnchor, MenuItem, PopUpButton,
+    PullDownButton,
+};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_menu_model::tracking::{
     Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY,
 };
-use cupertino_theme::metrics::Control;
+use cupertino_theme::ControlFamily;
 use cupertino_typeahead::TypeAhead;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActivationSource, Change, Checked, CommandRegistry,
-    ControlState, Element, Event, EventCx, FocusTarget, Key, MeasureCx, PaintCx, Phase, Popup,
-    PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
+    ControlState, Element, Environment, Event, EventCx, FocusTarget, Key, MeasureCx, PaintCx,
+    Phase, Popup, PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
+    WindowKey,
 };
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
@@ -97,6 +102,11 @@ const MAX: Size = Size {
 };
 /// Between a pop-up button's label and its chevrons.
 const CHEVRONS_GAP: f64 = 6.0;
+/// A pop-up button's chevrons: their width, each one's distance from the middle, and their stroke. Approximate
+/// design values.
+const POPUP_CHEVRON: f64 = 6.0;
+const POPUP_CHEVRON_GAP: f64 = 2.75;
+const POPUP_CHEVRON_STROKE: f64 = 1.25;
 /// Between a pop-up button's sides and its label or chevrons; its menu lines its rows' labels up with the label.
 const LABEL_INSET: f64 = 10.0;
 
@@ -510,6 +520,8 @@ struct PanelState {
     pointer: Option<Point>,
     /// The row, of any kind, the pointer was last found on outside the way into a submenu.
     hovered: Option<usize>,
+    /// The pointer has been over the panel.
+    visited: bool,
     /// The row, of any kind, the pointer was first found on.
     first: Option<Option<usize>>,
     aim: SubmenuAim,
@@ -588,6 +600,7 @@ impl<M: Clone + 'static> Panel<M> {
             return;
         };
         state.pointer = Some(p);
+        state.visited |= bounds.contains(p);
         let placed = self
             .submenu
             .as_ref()
@@ -680,6 +693,7 @@ impl<M: Clone + 'static> Panel<M> {
             }
             return;
         }
+        let inside = cx.bounds().is_some_and(|bounds| bounds.contains(p));
         // a release without a press here ends the press that opened the menu
         let tracking = state.press.take().unwrap_or_else(|| {
             let pressed = cx.opening_press().or(state.opened).unwrap_or(now);
@@ -689,6 +703,15 @@ impl<M: Clone + 'static> Panel<M> {
             }
             tracking
         });
+        if !inside {
+            // the press was let go away from every menu: dragged through the menus, it chooses nothing and closes
+            // them, which the outermost one does; one that never came over the menus leaves them open
+            let close = tracking.release(seconds(now), Under::Outside) == Release::Close;
+            if close && state.visited && self.back.is_none() {
+                cx.emit(self.escape.clone());
+            }
+            return;
+        }
         // let go on a panel, a release never closes the menu without choosing
         let under = match action {
             Some(RowAction::Select { .. }) => Under::Item,
@@ -1394,129 +1417,15 @@ impl<M: Clone + 'static> Widget<M> for PopUpButton<M> {
 
     /// Wide enough for the widest option, so choosing another never moves what follows.
     fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
-        let env = cx.env();
-        let metrics = env.theme.metrics;
-        let widest = self
-            .options
-            .iter()
-            .filter_map(|o| look::label(env, o))
-            .map(|l| l.size().width)
-            .fold(0.0, f64::max);
-        let height = look::metric(Control::PopUpButton, &env.theme);
-        let width = LABEL_INSET + widest + CHEVRONS_GAP + SYMBOL + LABEL_INSET;
-        Measured {
-            size: Size::new(
-                width.max(metrics.min_target.width),
-                height.max(metrics.min_target.height),
-            ),
-            baseline: None,
-        }
+        menu_button_measure(cx.env(), &self.options)
     }
 
     fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        let Some(on_open) = self.on_open.as_ref().filter(|_| self.enabled) else {
-            return Propagation::Continue;
-        };
-        if let Event::Key(key, _) = event {
-            if key.pressed
-                && (key.keysym == UP || key.keysym == DOWN)
-                && key.mods.is_empty()
-                && cx.node() == cx.target()
-            {
-                cx.emit(on_open.clone());
-                return Propagation::Stop;
-            }
-        }
-        // the menu opens on the press, so the pointer can drag to an option and let go there
-        let pressed = cx.phase() != Phase::Capture
-            && matches!(
-                event,
-                Event::Pointer(
-                    PointerEvent::Button {
-                        button: MouseButton::Left,
-                        pressed: true,
-                        ..
-                    },
-                    _,
-                )
-            );
-        if pressed {
-            cx.emit(on_open.clone());
-        }
-        match press.event(event, true, Keys::SpaceAndReturn, cx) {
-            Outcome::Ignored if pressed => Propagation::Stop,
-            Outcome::Ignored => Propagation::Continue,
-            Outcome::Changed | Outcome::Activated(ActivationSource::Pointer) => {
-                cx.request_paint();
-                Propagation::Stop
-            }
-            Outcome::Activated(_) => {
-                cx.request_paint();
-                cx.emit(on_open.clone());
-                Propagation::Stop
-            }
-        }
+        menu_button_event(press, event, cx, self.enabled, self.on_open.as_ref())
     }
 
     fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
-        let env = cx.env().clone();
-        let theme = &env.theme;
-        let state = ControlState {
-            enabled: self.enabled,
-            hovered: press.hovered(),
-            pressed: press.pressed() || self.open,
-            focused: cx.is_focused(),
-            focus_visible: cx.focus_visible(),
-            window_active: cx.window_active(),
-            ..ControlState::default()
-        };
-        let size = cx.size();
-        let height = look::metric(Control::PopUpButton, theme);
-        let chrome = Rect::new(0.0, (size.height - height) / 2.0, size.width, height);
-        let radius = theme.metrics.button_radius;
-        look::fill(
-            cx,
-            chrome,
-            radius,
-            look::color(theme, ColorRole::ControlFill, &state),
-        );
-        look::stroke(
-            cx,
-            chrome.inset(Insets::uniform(0.5)),
-            radius - 0.5,
-            1.0,
-            look::color(theme, ColorRole::ControlBorder, &state),
-        );
-        let text = look::color(theme, ColorRole::ControlText, &state);
-        let inset = LABEL_INSET;
-        let rtl = env.direction == LayoutDirection::Rtl;
-        if let Some(label) = look::label(&env, self.chosen()) {
-            let width = label.size().width;
-            let x = if rtl {
-                chrome.max_x() - inset - width
-            } else {
-                chrome.min_x() + inset
-            };
-            look::glyphs(
-                cx,
-                &label,
-                Point::new(x, look::top(&label, chrome, &env)),
-                text,
-            );
-        }
-        let x = if rtl {
-            chrome.min_x() + inset + SYMBOL / 2.0
-        } else {
-            chrome.max_x() - inset - SYMBOL / 2.0
-        };
-        symbol(
-            cx,
-            "symbol.chevron.up.down",
-            Point::new(x, chrome.min_y() + chrome.height() / 2.0),
-            text,
-            false,
-        );
-        paint_focus_ring(cx, chrome, radius);
+        paint_menu_button(press, cx, self.enabled, self.open, self.chosen(), false);
     }
 
     fn semantics(&self, _: &Press, cx: &mut SemanticsCx<'_>) {
@@ -1526,6 +1435,241 @@ impl<M: Clone + 'static> Widget<M> for PopUpButton<M> {
             value: self.chosen().to_owned(),
             editing: None,
         });
+        cx.states(AccessibleStates {
+            disabled: !self.enabled,
+            expanded: Some(self.open),
+            ..AccessibleStates::default()
+        });
+        if self.enabled {
+            cx.focusable();
+            if self.on_open.is_some() {
+                cx.action(Action::Click);
+            }
+        }
+    }
+}
+
+/// A pop-up or pull-down button's size: wide enough for the widest of `labels`, so another never moves what follows.
+fn menu_button_measure(env: &Environment, labels: &[String]) -> Measured {
+    let metrics = env.theme.metrics;
+    let widest = labels
+        .iter()
+        .filter_map(|o| look::label(env, o))
+        .map(|l| l.size().width)
+        .fold(0.0, f64::max);
+    let height = look::geometry(&env.theme, ControlFamily::PopUp).height;
+    let width = LABEL_INSET + widest + CHEVRONS_GAP + SYMBOL + LABEL_INSET;
+    Measured {
+        size: Size::new(
+            width.max(metrics.min_target.width),
+            height.max(metrics.min_target.height),
+        ),
+        baseline: None,
+    }
+}
+
+/// A pop-up or pull-down button's events: its menu opens on a press, so the pointer can drag to a row and let go
+/// there, and on Space, Return, Up or Down.
+fn menu_button_event<M: Clone + 'static>(
+    press: &mut Press,
+    event: &Event,
+    cx: &mut EventCx<'_, M>,
+    enabled: bool,
+    on_open: Option<&M>,
+) -> Propagation {
+    let Some(on_open) = on_open.filter(|_| enabled) else {
+        return Propagation::Continue;
+    };
+    if let Event::Key(key, _) = event {
+        if key.pressed
+            && (key.keysym == UP || key.keysym == DOWN)
+            && key.mods.is_empty()
+            && cx.node() == cx.target()
+        {
+            cx.emit(on_open.clone());
+            return Propagation::Stop;
+        }
+    }
+    // the menu opens on the press, so the pointer can drag to an option and let go there
+    let pressed = cx.phase() != Phase::Capture
+        && matches!(
+            event,
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Left,
+                    pressed: true,
+                    ..
+                },
+                _,
+            )
+        );
+    if pressed {
+        cx.emit(on_open.clone());
+    }
+    match press.event(event, true, Keys::SpaceAndReturn, cx) {
+        Outcome::Ignored if pressed => Propagation::Stop,
+        Outcome::Ignored => Propagation::Continue,
+        Outcome::Changed | Outcome::Activated(ActivationSource::Pointer) => {
+            cx.request_paint();
+            Propagation::Stop
+        }
+        Outcome::Activated(_) => {
+            cx.request_paint();
+            cx.emit(on_open.clone());
+            Propagation::Stop
+        }
+    }
+}
+
+/// A pop-up or pull-down button: an ordinary button's quiet bezel with `text_label` and opposing chevrons, or a
+/// single downward one when `pull_down`.
+fn paint_menu_button(
+    press: &Press,
+    cx: &mut PaintCx<'_>,
+    enabled: bool,
+    open: bool,
+    text_label: &str,
+    pull_down: bool,
+) {
+    let env = cx.env().clone();
+    let theme = &env.theme;
+    let state = ControlState {
+        enabled,
+        hovered: press.hovered(),
+        pressed: press.pressed() || open,
+        focused: cx.is_focused(),
+        focus_visible: cx.focus_visible(),
+        window_active: cx.window_active(),
+        ..ControlState::default()
+    };
+    let size = cx.size();
+    let geometry = look::geometry(theme, ControlFamily::PopUp);
+    let height = geometry.height;
+    let chrome = Rect::new(0.0, (size.height - height) / 2.0, size.width, height);
+    let radius = geometry.corners.radius(height);
+    // an ordinary button's quiet bezel
+    let bezel = ButtonLook::of(ButtonRole::Normal, ButtonStyle::Bordered, theme, &state);
+    look::fill(cx, chrome, radius, bezel.fill);
+    look::stroke(
+        cx,
+        chrome.inset(Insets::uniform(0.5)),
+        radius - 0.5,
+        1.0,
+        bezel.border,
+    );
+    let text = bezel.text;
+    let inset = LABEL_INSET;
+    let rtl = env.direction == LayoutDirection::Rtl;
+    if let Some(label) = look::label(&env, text_label) {
+        let width = label.size().width;
+        let x = if rtl {
+            chrome.max_x() - inset - width
+        } else {
+            chrome.min_x() + inset
+        };
+        look::glyphs(
+            cx,
+            &label,
+            Point::new(x, look::top(&label, chrome, &env)),
+            text,
+        );
+    }
+    let x = if rtl {
+        chrome.min_x() + inset + SYMBOL / 2.0
+    } else {
+        chrome.max_x() - inset - SYMBOL / 2.0
+    };
+    // opposing chevrons: a choice among values; a pull-down's single one points down at its actions
+    if let Some(color) = text {
+        let mid = chrome.min_y() + chrome.height() / 2.0;
+        let chevrons: &[bool] = if pull_down { &[false] } else { &[true, false] };
+        for &up in chevrons {
+            let offset = match (pull_down, up) {
+                (true, _) => 0.0,
+                (false, true) => -POPUP_CHEVRON_GAP,
+                (false, false) => POPUP_CHEVRON_GAP,
+            };
+            cx.push(PaintOp::Stroke {
+                shape: look::chevron(Point::new(x, mid + offset), POPUP_CHEVRON, up),
+                width: POPUP_CHEVRON_STROKE,
+                paint: Paint::Solid(color),
+            });
+        }
+    }
+    paint_focus_ring(cx, chrome, radius);
+}
+
+impl<M: Clone + 'static> PullDownButton<M> {
+    /// The menu of the actions below the button, which has the key `anchor` in `parent`: choosing one sends
+    /// `on_select` with its index, and the menu closes with `on_close`. No action is marked: none is chosen for good.
+    pub fn menu(
+        &self,
+        parent: WindowKey,
+        anchor: Key,
+        on_select: Handler<usize, M>,
+        on_close: M,
+    ) -> Menu<M> {
+        let items = self
+            .actions
+            .iter()
+            .enumerate()
+            .map(|(index, label)| MenuItem::Item {
+                label: label.clone(),
+                enabled: true,
+                checked: false,
+                on_select: on_select(index),
+            })
+            .collect();
+        let close = on_close.clone();
+        Menu {
+            parent,
+            anchor: MenuAnchor::Below(anchor),
+            label: self.label.clone(),
+            items,
+            current: None,
+            open: Vec::new(),
+            on_open: Box::new(move |_| close.clone()),
+            on_close,
+        }
+    }
+}
+
+impl<M: Clone + 'static> Widget<M> for PullDownButton<M> {
+    type State = Press;
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) -> Press {
+        Press::default()
+    }
+
+    fn update(&self, old: &Self, _: &mut Press) -> Change {
+        if self.label != old.label {
+            Change::Layout
+        } else if self.enabled != old.enabled || self.open != old.open {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        menu_button_measure(cx.env(), std::slice::from_ref(&self.label))
+    }
+
+    fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        menu_button_event(press, event, cx, self.enabled, self.on_open.as_ref())
+    }
+
+    fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
+        paint_menu_button(press, cx, self.enabled, self.open, &self.label, true);
+    }
+
+    fn semantics(&self, _: &Press, cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::PopUpButton);
+        cx.name(self.label.clone());
         cx.states(AccessibleStates {
             disabled: !self.enabled,
             expanded: Some(self.open),

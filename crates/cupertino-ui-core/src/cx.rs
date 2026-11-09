@@ -193,9 +193,9 @@ impl<M> EventCx<'_, M> {
         }
     }
 
-    /// When the pointer press that opened this popup went down, on the clock of [`now`](Self::now): a popup opened
-    /// while a button was held, such as a menu opened by a press, times press-and-hold from it rather than from the
-    /// first event it hears. `None` in a toplevel and in a popup no press opened.
+    /// When the pointer press or the touch that opened this popup went down, on the clock of [`now`](Self::now): a
+    /// popup opened while a button or a finger was held, such as a menu opened by a press, times press-and-hold from it
+    /// rather than from the first event it hears. `None` in a toplevel and in a popup no press or touch opened.
     pub fn opening_press(&self) -> Option<Timestamp> {
         self.status.opening_press
     }

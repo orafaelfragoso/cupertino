@@ -167,11 +167,14 @@ impl Drop for TempDir {
     }
 }
 
-/// A stand-in process: `script` runs under `sh` with the log file as `$1`.
+/// A stand-in process: `script` runs under `sh` with the log file as `$1`, with the empty asset search path, as a script
+/// may start a binary of the workspace.
 fn stand_in(name: &str, script: &str, log: &Path) -> ShellProcess {
     ShellProcess {
         name: name.into(),
         command: vec![
+            "env".into(),
+            "CUPERTINO_ASSET_SEARCH_PATH=".into(),
             "sh".into(),
             "-c".into(),
             script.into(),

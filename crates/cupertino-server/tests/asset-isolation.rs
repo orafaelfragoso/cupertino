@@ -94,8 +94,10 @@ const WORKSPACE_BINARY: [&str; 3] = ["current_exe", "CARGO_BIN_EXE", "_binary("]
 /// as its line number and what it starts. A spawn starts one unless it names a program by a literal (`sleep`,
 /// `dbus-send`, Cargo itself) and its text names no binary of the workspace either (a `sh` that runs the test binary
 /// does). The text a spawn is checked in runs from `Command::new(` to its first `.spawn()`, `.output()` or `.status()`,
-/// or to the end of the item it is in (a helper that returns the command). A shell process the server starts for a test
-/// through `env` (a `vec!["env", ...]` command) counts as a spawn whose text is the vector.
+/// or to the end of the item it is in (a helper that returns the command). A process the server starts for a test from a
+/// command vector counts as a spawn whose text is the vector: one through `env` (a `vec!["env", ...]`), and any vector
+/// given to a `command` (a shell process's, the screenshot tool's) that is not all literals, since a `sh -c` script or
+/// a path built at run time can start a binary of the workspace.
 fn unset_spawns(source: &str) -> Vec<(usize, String)> {
     let line_of = |at: usize| source[..at].matches('\n').count() + 1;
     let mut found = Vec::new();
@@ -123,14 +125,51 @@ fn unset_spawns(source: &str) -> Vec<(usize, String)> {
     for (at, _) in source.match_indices("vec![") {
         let items = bracketed(&source[at + "vec![".len()..], '[', ']');
         let first = items.trim_start();
-        if (first.starts_with(r#""env".into()"#) || first.starts_with(r#""env".to_string()"#))
-            && !items.contains(SEARCH_PATH)
-        {
+        let env = first.starts_with(r#""env".into()"#) || first.starts_with(r#""env".to_string()"#);
+        let before = source[..at].trim_end();
+        let command = before.ends_with("command:") || before.ends_with("command =");
+        if items.contains(SEARCH_PATH) {
+            continue;
+        }
+        if env {
             found.push((line_of(at), "vec![\"env\", ...]".to_string()));
+        } else if command && !top_level_items(items).iter().all(|item| is_literal(item)) {
+            found.push((line_of(at), "command: vec![...]".to_string()));
         }
     }
     found.sort();
     found
+}
+
+/// The items of a list's text, split at its top-level commas.
+fn top_level_items(list: &str) -> Vec<&str> {
+    let (mut items, mut depth, mut start, mut quoted) = (Vec::new(), 0i32, 0, false);
+    let mut previous = ' ';
+    for (at, c) in list.char_indices() {
+        match c {
+            '"' if previous != '\\' => quoted = !quoted,
+            '(' | '[' | '{' if !quoted => depth += 1,
+            ')' | ']' | '}' if !quoted => depth -= 1,
+            ',' if !quoted && depth == 0 => {
+                items.push(list[start..at].trim());
+                start = at + 1;
+            }
+            _ => {}
+        }
+        previous = c;
+    }
+    items.push(list[start..].trim());
+    items.retain(|item| !item.is_empty());
+    items
+}
+
+/// Whether a list item is a plain string literal, maybe converted (`"sleep".into()`).
+fn is_literal(item: &str) -> bool {
+    let item = [".into()", ".to_string()", ".to_owned()"]
+        .iter()
+        .find_map(|suffix| item.strip_suffix(suffix))
+        .unwrap_or(item);
+    item.len() >= 2 && item.starts_with('"') && item.ends_with('"') && !item[1..item.len() - 1].contains('"')
 }
 
 /// The part of a production source file that only tests compile: from its first `#[cfg(test)]` module on; all of a
@@ -232,6 +271,18 @@ fn the_source_check_finds_a_spawn_without_the_variable() {
     );
     let isolated = "fn f() -> P {\n    P { command: vec![\"env\".into(), \"CUPERTINO_ASSET_SEARCH_PATH=\".into(), b()] }\n}\n";
     assert!(unset_spawns(isolated).is_empty());
+    // a shell process's command that runs a script, or a path built at run time, can start a workspace binary
+    let script = "fn f(script: &str) -> P {\n    P { command: vec![\"sh\".into(), \"-c\".into(), script.into()] }\n}\n";
+    assert_eq!(
+        unset_spawns(script),
+        [(2, "command: vec![...]".to_string())]
+    );
+    let tool = "fn f(s: &mut S) {\n    s.screenshot_command = vec![binary.display().to_string()];\n}\n";
+    assert_eq!(unset_spawns(tool).len(), 1);
+    let fixed = "fn f() -> P {\n    P { command: vec![\"sleep\".into(), \"30\".into()] }\n}\n";
+    assert!(unset_spawns(fixed).is_empty(), "a command of literals starts no workspace binary");
+    let data = "fn f() { let v = vec![a(), b()]; }";
+    assert!(unset_spawns(data).is_empty(), "a vector that is no command is not checked");
     // only what tests compile of a production file is checked
     let production = "fn run() { Command::new(program()).spawn(); }\n#[cfg(test)]\nmod tests {\n    fn t() { Command::new(std::env::current_exe().unwrap()).status(); }\n}\n";
     let (skipped, part) = test_part(Path::new("lib.rs"), production).unwrap();

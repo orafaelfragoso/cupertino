@@ -167,7 +167,13 @@ fn the_login_screen_starts_no_program() {
     let Some(mut h) = Harness::new() else { return };
     let dir = tempfile::tempdir().unwrap();
     let touch = |name: &str| format!("touch {}", dir.path().join(name).display());
-    h.state.config.screenshot_command = vec!["sh".into(), "-c".into(), touch("screenshot")];
+    h.state.config.screenshot_command = vec![
+        "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
+        "sh".into(),
+        "-c".into(),
+        touch("screenshot"),
+    ];
     h.state.login_screen = true;
     h.state.spawn("sh", &["-c", &touch("spawned")]);
     h.state

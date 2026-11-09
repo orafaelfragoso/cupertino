@@ -328,7 +328,7 @@ The apps refresh theirs on `wp_fractional_scale_v1.preferred_scale` (`cupertino-
 
 ### Session bus
 
-`dbus.rs` runs one worker thread (feature `dbus`, on by default; `CUPERTINO_NO_DBUS=1` disables it). It starts on the nested and TTY backends, and with `--dbus` on headless.
+`dbus.rs` runs one worker thread (feature `dbus`, on by default; `CUPERTINO_NO_DBUS=1` disables it). It starts on the nested and TTY backends, and with `--dbus` on headless. `DbusHandle::shell_calls()` tells how many calls on shell processes were queued and how many the worker is done with (made and answered, refused or failed, with what follows), so a test waits on the worker rather than for a while.
 
 * `ToggleCentre` on `org.cupertino.NotificationCenter1` (the notification process);
 * `Toggle` and `ToggleApplications` on `org.cupertino.Launcher1` at `/org/cupertino/Launcher1` (the launcher process) and `Toggle` on `org.cupertino.ControlPanel1`;
@@ -684,7 +684,7 @@ Everything above is built in. The `ShellExtension` trait is gone; the shell proc
 
 ## Tests
 
-From a linked worktree, `python3 ci/worktree-build.py run --profile dev -- python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-server` prepares the client and shell fixtures, then runs the unit tests in `src/` and these files in `tests/`: `clipboard.rs`, `headless.rs`, `layer_input.rs`, `pointer_buttons.rs`, `overlays.rs`, `session_lock.rs`, `app_effects_v1.rs`, `shell_roles.rs`, `shell_processes.rs`, `menu_bar_v1.rs`, `dock_v1.rs`, `session_v1.rs`, `window_manager_v1.rs`, `dbus.rs`, `window_kinds.rs`, `output_management.rs`, `pointer_output.rs`, `cursor.rs`, `capture.rs`, `scroll_v1.rs`, `live_settings.rs`. Use `python3 ci/worktree-build.py run --profile dev -- cargo clippy --workspace --all-targets --all-features` for the workspace lint check.
+From a linked worktree, `python3 ci/worktree-build.py run --profile dev -- python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-server` prepares the client and shell fixtures, then runs the unit tests in `src/` and these files in `tests/`: `clipboard.rs`, `headless.rs`, `layer_input.rs`, `pointer_buttons.rs`, `overlays.rs`, `session_lock.rs`, `app_effects_v1.rs`, `shell_roles.rs`, `shell_processes.rs`, `menu_bar_v1.rs`, `dock_v1.rs`, `session_v1.rs`, `window_manager_v1.rs`, `dbus.rs`, `window_kinds.rs`, `output_management.rs`, `pointer_output.rs`, `cursor.rs`, `capture.rs`, `scroll_v1.rs`, `live_settings.rs`. Use `python3 ci/worktree-build.py run --profile dev -- cargo clippy --workspace --all-targets --all-features` for the workspace lint check. The tests wait on events, not for a time: a test client's finished roundtrips, a real application's pongs (`common::ping_barrier`), presented frames, or the state a shell process's handling leads to; every such wait gives up only after `common::HANG_GUARD` (60 s), a guard against a hang. Waits whose subject is time (a client that answers late on purpose, a retry or arming delay, an encoder's pacing, a teardown budget) keep their durations.
 
 Unless the harness column says otherwise, an integration test runs the compositor in-process on an offscreen EGL device with real Wayland clients and skips (pass) without an EGL device. `CUPERTINO_ARTIFACTS=dir` saves screenshots as PNG.
 

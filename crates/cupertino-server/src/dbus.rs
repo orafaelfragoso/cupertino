@@ -342,11 +342,11 @@ impl DbusHandle {
 
     /// Queue a call on a shell process; false when the worker is gone (no session bus).
     pub fn send(&self, what: Request) -> bool {
+        // counted before the worker can be done with it, so the done count never runs ahead
+        self.calls.0 .0.fetch_add(1, Ordering::SeqCst);
         let queued = self.tx.try_send(Job::Call(what)).is_ok();
-        if queued {
-            self.calls.0 .0.fetch_add(1, Ordering::SeqCst);
-        }
         if !queued {
+            self.calls.0 .0.fetch_sub(1, Ordering::SeqCst);
             tracing::warn!(?what, "no session bus: cannot reach the shell process");
         }
         queued

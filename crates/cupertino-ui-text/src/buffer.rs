@@ -1147,7 +1147,10 @@ mod tests {
         let mut b = buffer("");
         b.set_composition_with_cursor("é字", Some(1..9));
         assert_eq!(b.composition_cursor(), Some(0..5));
-        b.set_composition_with_cursor("ab", Some(2..1));
+        // the input method's begin and end in the other order
+        #[allow(clippy::reversed_empty_ranges)]
+        let reversed = 2..1;
+        b.set_composition_with_cursor("ab", Some(reversed));
         assert_eq!(
             b.composition_cursor(),
             Some(1..2),

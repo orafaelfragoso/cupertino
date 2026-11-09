@@ -1052,6 +1052,24 @@ fn the_caret_blinks_in_phases_from_its_last_move() {
     assert!(caret(&h).is_none());
 }
 
+/// A theme without a blink phase (the session asked for a steady caret) shows the caret at all times and wakes nobody.
+#[test]
+fn a_caret_without_a_blink_phase_stays_on_and_asks_for_no_wake() {
+    let mut theme = support::theme();
+    theme.motion.caret_phase_ms = 0;
+    let mut h = Harness::<App>::with_theme(theme);
+    h.tap(TAB);
+    assert!(h.focused("name"));
+    assert!(caret(&h).is_some());
+    assert_eq!(next_wake(&h), None);
+    for ms in [500, 1000, 1500] {
+        at(&mut h, ms);
+        assert!(caret(&h).is_some(), "on at {ms} ms");
+    }
+    h.type_text("A");
+    assert_eq!(next_wake(&h), None);
+}
+
 #[test]
 fn an_idle_field_stops_blinking_with_the_caret_on_and_a_key_starts_it_again() {
     let mut h = focused_name();

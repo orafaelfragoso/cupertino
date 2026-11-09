@@ -45,7 +45,8 @@ the selection alone is longer, at character boundaries. A password or PIN purpos
 `sensitive_data` hint, never sends its text and always adds the `sensitive_data` hint, whatever the caller set; a
 `Debug` print of the text-input types shows the length of typed text, never the text. A preedit cursor that is off a character boundary is hidden, and a
 batch cut short by a focus change is dropped. Applying the batch to the field (clamping deletes to characters, the
-order in `TextInputDone`) is the caller's.
+order in `TextInputDone`) is the caller's. A state with `reset` set enables the input method afresh once, even when
+nothing else changed, and is then kept as sent.
 
 Copying serves each paste on a short-lived thread (at most 8 at once, 1 s each); pasting reads at most 16 MiB within
 1 s, and returns the client's own contents directly.

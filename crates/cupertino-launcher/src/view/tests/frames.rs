@@ -14,7 +14,8 @@
 //! frame of every interaction to the frame budget at 1x and 2x when the tests are built optimised (the release
 //! profile); unoptimised it measures nothing. `frame_cost_report` is `#[ignore]`d: it measures wall time, which depends on the machine, and
 //! is run by hand in the release profile (see the crate's README); the tables go to standard output and, when
-//! `CUPERTINO_REPAINT_DIR` names a folder, to `launcher-<scale>x.md` and `.csv` there.
+//! `CUPERTINO_REPAINT_DIR` names a folder, to `launcher-<scale>x.md` and `.csv` there; `CUPERTINO_REPAINT_SCALES` picks
+//! the scales and `CUPERTINO_REPAINT_OUTPUT` (`1512x982`) the output's size in points.
 
 use super::*;
 use cupertino_kit::platform::WindowRequest;
@@ -306,6 +307,10 @@ impl Metered {
         };
         metered.driver.window_system_mut().set_keep_pixels(false);
         metered.driver.run_until_idle(budget()).unwrap();
+        if let Some(size) = output_override() {
+            send(Message::Output(size));
+            metered.driver.run_until_idle(budget()).unwrap();
+        }
         metered.configure();
         metered.driver.run_until_idle(budget()).unwrap();
         metered
@@ -326,7 +331,7 @@ impl Metered {
             let size = if key == WindowKey(Key::from("panel")) {
                 Some(EXTENT.with_borrow(|e| e.unwrap_or(window_extent(compact_shape()))))
             } else if key == WindowKey(Key::from("catcher")) {
-                Some(OUTPUT)
+                Some(output_override().unwrap_or(OUTPUT))
             } else {
                 None
             };
@@ -622,6 +627,16 @@ fn the_settled_panel_s_glass_sits_on_whole_device_pixels() {
         m.settle_on(Message::Output(Size::new(1000.0, 703.0)));
         check(&m, "the browser on a short output");
     }
+}
+
+/// The output the panel opens on when `CUPERTINO_REPAINT_OUTPUT` names one in points (`1512x982`): the model hears its
+/// size and the catcher covers it. Without it the catcher covers [`OUTPUT`] and the model has heard of no output.
+fn output_override() -> Option<Size> {
+    let value = std::env::var("CUPERTINO_REPAINT_OUTPUT").ok()?;
+    let (w, h) = value
+        .split_once('x')
+        .expect("CUPERTINO_REPAINT_OUTPUT is WIDTHxHEIGHT");
+    Some(Size::new(w.trim().parse().unwrap(), h.trim().parse().unwrap()))
 }
 
 /// [`SCALES`], or the comma-separated scales of `CUPERTINO_REPAINT_SCALES`.

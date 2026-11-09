@@ -17,6 +17,10 @@ the choice, the reads and how the drop was finished; the driver records drop rea
 or an exhausted turn budget. Each queued platform event gets one runtime turn, so Tab changes focus before the next
 key is recorded even at the same timestamp. Explicit frame callbacks and tasks remain under the fixture's control.
 
+A window shown as one colour (`WindowSystem::present_solid`) makes no frame: `HeadlessWindowSystem::solids(window)`
+lists each such present (`SolidPresent`: the colour and the configure it acknowledged), and `set_solid_colors(false)`
+makes the system refuse them, as a compositor without one-pixel buffers does, so the runtime draws the window instead.
+
 Recording reads protection from core's current focus, including focusable nodes without an accessibility role.
 Start clipboard reads through `TestDriver::read_clipboard(window, kind, mime)`: the driver keeps the requesting focus's
 protection by token until the reply arrives. A protected request stays redacted after Tab moves focus elsewhere;

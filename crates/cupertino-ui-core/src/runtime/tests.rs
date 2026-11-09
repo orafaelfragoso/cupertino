@@ -83,6 +83,8 @@ impl Application for Counter {
                     alpha: 1.0,
                 }
             }
+            "catcher" => model.background = WindowBackground::Solid(Color::new(0.0, 0.0, 0.0, 0.0)),
+            "scrim" => model.background = WindowBackground::Solid(SCRIM),
             "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
             "wait" => return vec![Command::Perform(Box::pin(async { "done 7".to_string() }))],
             "launch" | "launch from gone" => {
@@ -184,6 +186,9 @@ impl Application for Counter {
 }
 
 use crate::Element;
+
+/// The colour of a window that dims what is under it.
+const SCRIM: Color = Color::new(0.0, 0.0, 0.0, 0.3);
 
 type Rt = Runtime<Counter, FakeSystem>;
 
@@ -297,6 +302,224 @@ fn a_window_is_drawn_only_after_its_first_configure_which_the_frame_acknowledges
     );
     assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
     assert_eq!(rt.step(steps()).unwrap(), StepStatus::Idle);
+}
+
+/// A window of one colour (here a transparent one that only takes input) is shown by the window system without a frame:
+/// nothing is rendered or presented, its content still takes the pointer, and it is shown again only to answer a
+/// configure or to show another colour; a new scale or a change of its content shows nothing new. Back on the theme's
+/// background it draws a whole frame.
+#[test]
+fn a_solid_window_is_shown_without_a_frame_and_again_only_for_a_configure_or_another_colour() {
+    let (mut rt, window, damage) = start();
+    rt.window_system_mut().solid = true;
+    rt.messages.push_back("catcher".into());
+    rt.step(steps()).unwrap();
+    configure(&mut rt, window, 4);
+    let clear = Color::new(0.0, 0.0, 0.0, 0.0);
+    assert_eq!(
+        rt.window_system().solids,
+        vec![(window, clear, Some(ConfigureId(4)))]
+    );
+    assert!(rt.window_system().presented.is_empty(), "no frame");
+    assert!(damage.borrow().is_empty(), "nothing rendered");
+    let frame = |rt: &mut Rt| {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+    };
+    frame(&mut rt);
+
+    click(&mut rt, window, 5.0);
+    assert_eq!(rt.model().count, 1, "the content takes the pointer");
+    rt.window_system_mut().send(window, WindowEvent::Scale(1.5));
+    rt.step(steps()).unwrap();
+    frame(&mut rt);
+    assert_eq!(rt.window_system().solids.len(), 1, "nothing new to show");
+
+    configure_at(&mut rt, window, 5, Size::new(100.0, 200.0));
+    assert_eq!(
+        rt.window_system().solids[1],
+        (window, clear, Some(ConfigureId(5)))
+    );
+    frame(&mut rt);
+    rt.messages.push_back("scrim".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids[2], (window, SCRIM, None));
+    assert!(rt.window_system().presented.is_empty());
+    assert!(damage.borrow().is_empty());
+
+    // a refused present waits for the window system, then shows the colour
+    frame(&mut rt);
+    rt.window_system_mut().refuse_next = true;
+    rt.messages.push_back("catcher".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids.len(), 3);
+    rt.window_system_mut().release(window);
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids[3], (window, clear, None));
+
+    frame(&mut rt);
+    rt.messages.push_back("panel".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().presented, vec![(window, None)]);
+    assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
+    assert_eq!(rt.window_system().solids.len(), 4);
+}
+
+/// One window whose content lays the popover's glass under itself, on the theme's background or on one colour as the
+/// model says.
+struct Glassy;
+
+impl Application for Glassy {
+    type Model = WindowBackground;
+    type Message = WindowBackground;
+
+    fn init() -> (WindowBackground, Vec<Command<WindowBackground>>) {
+        (WindowBackground::Theme, Vec::new())
+    }
+
+    fn update(
+        model: &mut WindowBackground,
+        message: WindowBackground,
+    ) -> Vec<Command<WindowBackground>> {
+        *model = message;
+        Vec::new()
+    }
+
+    fn view(model: &WindowBackground) -> Vec<Window<WindowBackground>> {
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Glass".into(),
+                app_id: "test.glass".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            popup: None,
+            background: *model,
+            content: Element::new(GlassPane),
+            menus: None,
+        }]
+    }
+}
+
+/// A 50 x 20 pane on the popover's glass.
+struct GlassPane;
+
+impl<M: 'static> Widget<M> for GlassPane {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(50.0, 20.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        cx.material(Surface::Popover, 6.0, 1.0);
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// A window whose content stood on glass and turns one colour takes the glass away with the colour, since its content
+/// paints nothing to stand on it; back on the theme's background it asks for the glass again.
+#[test]
+fn a_window_turning_solid_takes_its_content_s_glass_away_and_gets_it_back_when_drawn_again() {
+    let damage = Rc::default();
+    let mut system = FakeSystem::default();
+    system.effects = true;
+    system.solid = true;
+    let mut rt = Runtime::<Glassy, FakeSystem>::new(system, options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let materials = |rt: &Runtime<Glassy, FakeSystem>| -> Vec<usize> {
+        rt.window_system()
+            .requests
+            .iter()
+            .filter_map(|(w, r)| match r {
+                WindowRequest::Materials(m) if *w == window => Some(m.len()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(materials(&rt), [1], "the pane's glass");
+    assert_eq!(rt.window_system().presented.len(), 1);
+
+    let frame = |rt: &mut Runtime<Glassy, FakeSystem>| {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+    };
+    frame(&mut rt);
+    rt.messages.push_back(WindowBackground::INPUT_ONLY);
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids.len(), 1);
+    assert_eq!(materials(&rt), [1, 0], "no glass under the colour");
+
+    frame(&mut rt);
+    rt.messages.push_back(WindowBackground::Theme);
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().presented.len(), 2);
+    assert_eq!(materials(&rt), [1, 0, 1], "the glass again");
+}
+
+/// Where the window system cannot show a colour without a frame, a solid window is drawn like any other: filled with
+/// its colour under its content, and not filled when the colour is transparent.
+#[test]
+fn a_solid_window_the_window_system_cannot_show_is_drawn_filled_with_its_colour() {
+    let (mut rt, window, damage) = start();
+    rt.messages.push_back("scrim".into());
+    rt.step(steps()).unwrap();
+    configure(&mut rt, window, 1);
+    assert!(rt.window_system().solids.is_empty());
+    assert_eq!(
+        rt.window_system().presented,
+        vec![(window, Some(ConfigureId(1)))]
+    );
+    assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
+    let first_op = |rt: &Rt| {
+        rt.snapshot(window).unwrap().display_list.nodes[0]
+            .ops
+            .first()
+            .cloned()
+    };
+    assert_eq!(
+        first_op(&rt),
+        Some(PaintOp::Fill {
+            shape: Shape::Rect(cupertino_geometry::Rect::new(0.0, 0.0, 200.0, 100.0)),
+            paint: Paint::Solid(SCRIM),
+        })
+    );
+
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.messages.push_back("catcher".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(first_op(&rt), None, "nothing to fill");
+    assert_eq!(rt.window_system().presented.len(), 2);
 }
 
 #[test]

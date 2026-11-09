@@ -39,7 +39,7 @@ use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderError, RenderRequest, UiRenderer,
 };
 use cupertino_ui_text::TextSystem;
-use cupertino_ui_theme::ThemeTokens;
+use cupertino_ui_theme::{Color, ThemeTokens};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -137,6 +137,11 @@ struct WindowState<M> {
     materials: Vec<MaterialRegion>,
     /// The window system refused materials under nodes: the nodes paint their fills.
     materials_refused: bool,
+    /// The size and colour the window system shows the window in, with no frame, while its background is
+    /// [`WindowBackground::Solid`]; `None` once a frame is shown, or before anything is.
+    solid_shown: Option<(Size, Color)>,
+    /// The window system cannot show a colour without a frame: a solid window is drawn.
+    solid_refused: bool,
     /// The menus the window system was last asked to publish.
     menus: Option<MenuDescription>,
     on_menu: Option<Box<dyn Fn(ActionName) -> M>>,
@@ -690,7 +695,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             };
             w.shortcuts = shortcuts;
             w.on_close = on_close;
-            w.background = background;
+            set_background(&mut w, background);
             sync_backdrop(&mut self.system, &mut w);
             sync_menus(&mut self.system, &mut w, menus);
             w.root = Some(self.tree.reconcile(w.root, content)?);
@@ -718,7 +723,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             if let Some(mut w) = self.popup(key, spec, popup, content, &mut old)? {
                 w.shortcuts = shortcuts;
                 w.on_close = on_close;
-                w.background = background;
+                set_background(&mut w, background);
                 sync_backdrop(&mut self.system, &mut w);
                 w.invalidate();
                 self.windows.push(w);
@@ -774,6 +779,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             backdrop: None,
             materials: Vec::new(),
             materials_refused: false,
+            solid_shown: None,
+            solid_refused: false,
             menus: None,
             on_menu: None,
             root: None,
@@ -1999,6 +2006,55 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if !(w.configured && w.frame_ready) {
             return Ok(());
         }
+        if let (WindowBackground::Solid(color), false) = (w.background, w.solid_refused) {
+            w.dirty = false;
+            w.held_paints = 0;
+            // the compositor still shows this colour at this size, and no configure waits for an answer
+            if w.ack.is_none() && w.solid_shown == Some((w.size, color)) {
+                return Ok(());
+            }
+            // the content paints nothing, so the glass it laid under itself goes with the colour's commit; drawn
+            // again, the window asks for it anew
+            if !w.materials.is_empty() {
+                let _ = self
+                    .system
+                    .request(w.id, WindowRequest::Materials(Vec::new()));
+                w.materials.clear();
+                w.painter.tones.regions.clear();
+            }
+            // and the raised layer goes with it, its subsurface hidden with the colour's commit
+            if w.layer.shown.is_some() {
+                self.system
+                    .present_layer(w.id, None)
+                    .map_err(UiError::Platform)?;
+                w.layer.shown = None;
+                w.layer.damage.invalidate();
+            }
+            match self.system.present_solid(w.id, color, w.ack) {
+                Ok(PresentOutcome::Presented) => {
+                    w.failed = None;
+                    w.solid_shown = Some((w.size, color));
+                    w.ack = None;
+                    w.frame_ready = false;
+                    w.committed = true;
+                    self.system.request_frame(w.id);
+                    return Ok(());
+                }
+                Ok(PresentOutcome::NotReady) => {
+                    w.failed = None;
+                    w.frame_ready = false;
+                    w.dirty = true;
+                    self.system.request_frame(w.id);
+                    return Ok(());
+                }
+                // drawn instead, filled with the colour, from now on
+                Err(PlatformError::Unsupported) => {
+                    w.solid_refused = true;
+                    w.invalidate_damage();
+                }
+                Err(e) => return Err(UiError::Platform(e)),
+            }
+        }
         let capabilities = self.system.capabilities();
         let effects = capabilities.app_effects;
         let layered = capabilities.raised_layer;
@@ -2538,6 +2594,19 @@ fn route<'a, M: 'static>(
         popups: &w.popups,
         effects,
     }
+}
+
+/// Gives `w` the background `background`. A window that leaves a solid colour shown without a frame draws its next
+/// frame whole, and one that turns solid shows its colour with its next frame.
+fn set_background<M>(w: &mut WindowState<M>, background: WindowBackground) {
+    let solid = |b: WindowBackground| matches!(b, WindowBackground::Solid(_));
+    if w.background != background
+        && (solid(w.background) || solid(background))
+        && w.solid_shown.take().is_some()
+    {
+        w.damage.invalidate();
+    }
+    w.background = background;
 }
 
 /// Asks the window system for the material `w`'s background wants, or for none, when that changed. A platform that

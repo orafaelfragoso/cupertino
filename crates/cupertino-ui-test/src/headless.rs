@@ -1,11 +1,11 @@
 use cupertino_geometry::Point;
 use cupertino_geometry::Size;
 use cupertino_ui_platform::{
-    ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Configure,
-    ConfigureId, CursorShape, DragRequest, DragToken, DropAction, DropAnswer, DropEvent, DropToken,
-    MenuDescription, Mods, PlatformError, PlatformEvent, PointerEvent, PopupSpec, PresentOutcome,
-    Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowStates, WindowSystem,
-    WmCapabilities,
+    ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
+    Configure, ConfigureId, CursorShape, DragRequest, DragToken, DropAction, DropAnswer, DropEvent,
+    DropToken, MenuDescription, Mods, PlatformError, PlatformEvent, PointerEvent, PopupSpec,
+    PresentOutcome, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowStates,
+    WindowSystem, WmCapabilities,
 };
 use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -28,6 +28,14 @@ pub struct PresentedFrame {
     pub shown: bool,
 }
 
+/// What a test sees of one time the runtime showed a window as one colour, without a frame
+/// ([`WindowSystem::present_solid`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SolidPresent {
+    pub color: Color,
+    pub acknowledged: Option<ConfigureId>,
+}
+
 #[derive(Debug)]
 struct HeadlessWindow {
     spec: WindowSpec,
@@ -40,6 +48,7 @@ struct HeadlessWindow {
     frame_requested: bool,
     unacknowledged: Vec<ConfigureId>,
     frames: Vec<PresentedFrame>,
+    solids: Vec<SolidPresent>,
     /// The window's pixels, kept up to date with each frame's damage while presented frames keep no pixels.
     buffer: Vec<u8>,
     /// Its configures say it is activated while it has the keyboard ([`HeadlessWindowSystem::activate_by_keyboard`]).
@@ -120,6 +129,21 @@ fn copy_damage(buffer: &mut Vec<u8>, frame: &CpuFrame) {
     }
 }
 
+/// Settles configure `id`, when given, and every older one; one not waiting is an error.
+fn acknowledge(w: &mut HeadlessWindow, id: Option<ConfigureId>) -> Result<(), PlatformError> {
+    if let Some(id) = id {
+        let Some(at) = w.unacknowledged.iter().position(|c| *c == id) else {
+            return Err(PlatformError::Protocol(format!(
+                "configure {} is not waiting for an acknowledgement",
+                id.0
+            )));
+        };
+        // Acknowledging a configure also settles every older one.
+        w.unacknowledged.drain(..=at);
+    }
+    Ok(())
+}
+
 /// Whether the runtime was woken from another thread since a test last waited for it.
 #[derive(Debug, Default)]
 struct Woken {
@@ -157,6 +181,8 @@ pub struct HeadlessWindowSystem {
     accepting_frames: bool,
     /// Whether each presented frame keeps a copy of all its pixels.
     keep_pixels: bool,
+    /// Whether a window can be shown as one colour without a frame.
+    solid_colors: bool,
     pub(crate) dispatch_one: bool,
     woken: Arc<Woken>,
 }
@@ -182,6 +208,7 @@ impl HeadlessWindowSystem {
             drop_reads: HashSet::new(),
             accepting_frames: true,
             keep_pixels: true,
+            solid_colors: true,
             dispatch_one: false,
             woken: Arc::default(),
         }
@@ -242,6 +269,7 @@ impl HeadlessWindowSystem {
                 frame_requested: false,
                 unacknowledged: Vec::new(),
                 frames: Vec::new(),
+                solids: Vec::new(),
                 buffer: Vec::new(),
                 by_keyboard: false,
                 keyboard: false,
@@ -366,6 +394,12 @@ impl HeadlessWindowSystem {
         self.keep_pixels = keep;
     }
 
+    /// While false, [`present_solid`](WindowSystem::present_solid) is refused, as on a compositor without one-pixel
+    /// buffers, and the runtime draws such a window instead. True at first.
+    pub fn set_solid_colors(&mut self, solid: bool) {
+        self.solid_colors = solid;
+    }
+
     pub fn windows(&self) -> Vec<WindowId> {
         self.windows.keys().copied().collect()
     }
@@ -451,6 +485,11 @@ impl HeadlessWindowSystem {
 
     pub fn frames(&self, window: WindowId) -> Result<&[PresentedFrame], PlatformError> {
         Ok(&self.window(window)?.frames)
+    }
+
+    /// Each time the window was shown as one colour without a frame, oldest first.
+    pub fn solids(&self, window: WindowId) -> Result<&[SolidPresent], PlatformError> {
+        Ok(&self.window(window)?.solids)
     }
 
     pub fn clipboard(&self, kind: ClipboardKind) -> Option<&ClipboardData> {
@@ -753,16 +792,7 @@ impl WindowSystem for HeadlessWindowSystem {
         if !accepting {
             return Ok(PresentOutcome::NotReady);
         }
-        if let Some(id) = configure {
-            let Some(at) = w.unacknowledged.iter().position(|c| *c == id) else {
-                return Err(PlatformError::Protocol(format!(
-                    "configure {} is not waiting for an acknowledgement",
-                    id.0
-                )));
-            };
-            // Acknowledging a configure also settles every older one.
-            w.unacknowledged.drain(..=at);
-        }
+        acknowledge(w, configure)?;
         let pixels = if keep {
             frame.pixels.clone()
         } else {
@@ -803,6 +833,30 @@ impl WindowSystem for HeadlessWindowSystem {
             pixels: l.frame.pixels.clone(),
             damage: l.frame.damage.clone(),
         }));
+        Ok(PresentOutcome::Presented)
+    }
+
+    /// Kept as a [`SolidPresent`] while [`set_solid_colors`](Self::set_solid_colors) allows it, and paced like
+    /// [`present`](WindowSystem::present).
+    fn present_solid(
+        &mut self,
+        window: WindowId,
+        color: Color,
+        configure: Option<ConfigureId>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        let (solid, accepting) = (self.solid_colors, self.accepting_frames);
+        let w = self.window_mut(window)?;
+        if !solid {
+            return Err(PlatformError::Unsupported);
+        }
+        if !accepting {
+            return Ok(PresentOutcome::NotReady);
+        }
+        acknowledge(w, configure)?;
+        w.solids.push(SolidPresent {
+            color,
+            acknowledged: configure,
+        });
         Ok(PresentOutcome::Presented)
     }
 
@@ -926,6 +980,39 @@ mod tests {
             ws.frames(window).unwrap()[0].pixels,
             [1, 2, 3, 4, 5, 6, 7, 8]
         );
+    }
+
+    #[test]
+    fn a_window_shown_as_one_colour_keeps_no_frame_and_acknowledges_like_a_frame() {
+        let mut ws = HeadlessWindowSystem::default();
+        let window = ws.create_window(&spec()).unwrap();
+        let configure = ws.configure(window, None, WindowStates::default()).unwrap();
+        let clear = Color::new(0.0, 0.0, 0.0, 0.0);
+        assert_eq!(
+            ws.present_solid(window, clear, Some(configure)),
+            Ok(PresentOutcome::Presented)
+        );
+        assert_eq!(ws.unacknowledged(window).unwrap(), &[]);
+        assert_eq!(
+            ws.solids(window).unwrap(),
+            [SolidPresent {
+                color: clear,
+                acknowledged: Some(configure)
+            }]
+        );
+        assert!(ws.frames(window).unwrap().is_empty());
+
+        ws.set_accepting_frames(false);
+        assert_eq!(
+            ws.present_solid(window, clear, None),
+            Ok(PresentOutcome::NotReady)
+        );
+        ws.set_solid_colors(false);
+        assert_eq!(
+            ws.present_solid(window, clear, None),
+            Err(PlatformError::Unsupported)
+        );
+        assert_eq!(ws.solids(window).unwrap().len(), 1);
     }
 
     #[test]

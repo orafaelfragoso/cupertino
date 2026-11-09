@@ -388,6 +388,10 @@ pub(crate) struct FakeSystem {
     pub(crate) layer_presents: Vec<(WindowId, Option<LayerPresent>)>,
     /// The next layer present is refused, as when no buffer is free.
     pub(crate) refuse_next_layer: bool,
+    /// Shows a window as one colour without a frame; without it every solid present is refused.
+    pub(crate) solid: bool,
+    /// Every solid present: the window, its colour and the configure it acknowledged.
+    pub(crate) solids: Vec<(WindowId, cupertino_ui_theme::Color, Option<ConfigureId>)>,
 }
 
 /// A raised layer as [`FakeSystem`] saw it presented.
@@ -553,6 +557,23 @@ impl WindowSystem for FakeSystem {
                 pixels: l.frame.pixels.clone(),
             }),
         ));
+        Ok(PresentOutcome::Presented)
+    }
+
+    fn present_solid(
+        &mut self,
+        window: WindowId,
+        color: cupertino_ui_theme::Color,
+        configure: Option<ConfigureId>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        if !self.solid {
+            return Err(PlatformError::Unsupported);
+        }
+        if std::mem::take(&mut self.refuse_next) {
+            self.stalled = Some(window);
+            return Ok(PresentOutcome::NotReady);
+        }
+        self.solids.push((window, color, configure));
         Ok(PresentOutcome::Presented)
     }
 

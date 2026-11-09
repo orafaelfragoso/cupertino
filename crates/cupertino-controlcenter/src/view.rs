@@ -2307,7 +2307,8 @@ pub fn catcher<M: Clone + 'static>(to: fn(Input) -> M) -> Window<M> {
         },
         shortcuts: CommandRegistry::new(),
         on_close: Some(to(Input::Closed)),
-        background: WindowBackground::None,
+        // shown without a frame of the output's size: it draws nothing
+        background: WindowBackground::INPUT_ONLY,
         content: Element::new(Catcher {
             on_press: to(Input::Dismiss),
         }),

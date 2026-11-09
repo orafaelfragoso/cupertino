@@ -11,6 +11,7 @@ use std::task::Waker;
 use std::time::Duration;
 
 pub use cupertino_modifiers::Mods;
+pub use cupertino_ui_render::Color;
 
 /// A toplevel window or a popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -727,6 +728,21 @@ pub trait WindowSystem {
             Some(_) => Err(PlatformError::Unsupported),
             None => Ok(PresentOutcome::Presented),
         }
+    }
+    /// Shows `window` as `color` all over, without a frame of its size: the compositor stretches one pixel of the
+    /// colour over the window, so a large window that only takes input (transparent) or only dims what is under it
+    /// costs nothing to show, however often it is shown again. Acknowledges `configure` and is paced like
+    /// [`present`](WindowSystem::present); the window's input region still applies, and its scale needs nothing
+    /// more. A frame presented afterwards is presented whole. [`PlatformError::Unsupported`] (the default) when the
+    /// window system cannot: the caller presents a frame filled with the colour instead.
+    fn present_solid(
+        &mut self,
+        window: WindowId,
+        color: Color,
+        configure: Option<ConfigureId>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        let _ = (window, color, configure);
+        Err(PlatformError::Unsupported)
     }
     /// Waits up to `timeout` (`None`: until something happens) and appends what happened to `events`.
     fn dispatch(

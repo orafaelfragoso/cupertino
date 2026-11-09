@@ -16,7 +16,7 @@ use cupertino_protocol_app::{
 };
 use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_platform::{
-    ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken,
+    ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
     ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
     DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent, Keysym,
     MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
@@ -1584,6 +1584,48 @@ impl WindowSystem for WaylandWindowSystem {
                 bound(&mut state.carried, frame.width, frame.height);
                 Ok(PresentOutcome::NotReady)
             }
+        }
+    }
+
+    /// One pixel of `color` the compositor stretches over the window ([`Connection::present_solid`]), with the input
+    /// region waiting to be sent; refused where the compositor has no one-pixel buffers. The next frame presented is
+    /// whole.
+    fn present_solid(
+        &mut self,
+        window: WindowId,
+        color: Color,
+        _configure: Option<ConfigureId>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        if !self.conn.capabilities().contains(Capability::SolidColor) {
+            return Err(PlatformError::Unsupported);
+        }
+        let w = self.window_mut(window)?;
+        let (surface, size) = (w.surface, w.size);
+        if let Some(b) = w.backdrop.as_mut().filter(|b| b.shaped != Some(size)) {
+            let bounds = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+            if b.material.set_shape(&bounds, b.radius).is_ok() {
+                b.shaped = Some(size);
+            }
+        }
+        if let Some(region) = w.input_region.take() {
+            self.conn
+                .set_input_region(surface, region.as_deref())
+                .map_err(platform_error)?;
+        }
+        match self.conn.present_solid(surface, size, color.to_array()) {
+            Ok(()) => {
+                let w = self.window_mut(window)?;
+                w.frame_pending = true;
+                w.shown = None;
+                w.carried.clear();
+                Ok(PresentOutcome::Presented)
+            }
+            Err(Error::NotConfigured) => {
+                self.window_mut(window)?.stalled = Some(Stall::Configure);
+                Ok(PresentOutcome::NotReady)
+            }
+            Err(Error::Unsupported(_)) => Err(PlatformError::Unsupported),
+            Err(e) => Err(platform_error(e)),
         }
     }
 

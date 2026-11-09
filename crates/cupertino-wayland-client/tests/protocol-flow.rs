@@ -74,6 +74,8 @@ use wayland_server::protocol::wl_region::{self, WlRegion};
 use wayland_server::protocol::wl_seat::{self, WlSeat};
 use wayland_server::protocol::wl_shm::{self, WlShm};
 use wayland_server::protocol::wl_shm_pool::{self, WlShmPool};
+use wayland_server::protocol::wl_subcompositor::{self, WlSubcompositor};
+use wayland_server::protocol::wl_subsurface::{self, WlSubsurface};
 use wayland_server::protocol::wl_surface::{self, WlSurface};
 use wayland_server::protocol::wl_touch::WlTouch;
 use wayland_server::{
@@ -115,6 +117,8 @@ struct Globals {
     no_drag_actions: bool,
     /// `wp_single_pixel_buffer_manager_v1`, with `wp_viewporter` even without fractional scaling.
     single_pixel: bool,
+    /// `wl_subcompositor`.
+    subcompositor: bool,
 }
 
 impl Globals {
@@ -332,6 +336,21 @@ enum Seen {
     },
     /// The drag icon's surface, and the buffer it showed, were destroyed.
     IconSurfaceDestroyed,
+    /// A subsurface was made of a surface, over the toplevel's when `of_toplevel`.
+    Subsurface {
+        of_toplevel: bool,
+    },
+    SubsurfaceSync,
+    SubsurfaceDesync,
+    SubsurfacePosition(i32, i32),
+    SubsurfaceDestroyed,
+    /// A subsurface committed: the pixel size of the buffer it attached (`None` for no buffer, which unmaps it), its
+    /// buffer scale, and whether it asked for a frame callback.
+    SubsurfaceCommit {
+        size: Option<(i32, i32)>,
+        scale: i32,
+        frame: bool,
+    },
     IconBufferDestroyed,
     /// `wl_pointer.set_cursor`, with whether it named a surface.
     Cursor {
@@ -406,6 +425,8 @@ struct Mock {
     /// The icon surface of the latest `start_drag`, and the buffer it showed.
     drag_icon: Option<WlSurface>,
     icon_buffer: Option<WlBuffer>,
+    /// The surfaces given the subsurface role.
+    subsurfaces: Vec<WlSurface>,
 }
 
 impl Mock {
@@ -448,7 +469,8 @@ plain_global!(
     XdgActivationV1,
     ZxdgOutputManagerV1,
     ZwpTextInputManagerV3,
-    WpSinglePixelBufferManagerV1
+    WpSinglePixelBufferManagerV1,
+    WlSubcompositor
 );
 
 /// Requests the compositor ignores.
@@ -661,7 +683,27 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
     ) {
         let mut s = data.lock().unwrap();
         let icon = state.drag_icon.as_ref() == Some(surface);
+        let sub = state.subsurfaces.contains(surface);
         match request {
+            wl_surface::Request::Commit if sub => {
+                let size = s.buffer.take().map(|buffer| {
+                    let b = buffer.data::<BufferData>().expect("a buffer of the pool");
+                    // released at once: the test looks at what was committed, not at buffer reuse
+                    buffer.release();
+                    (b.width, b.height)
+                });
+                let frame = !s.frames.is_empty();
+                state.frames.append(&mut s.frames);
+                state
+                    .seen
+                    .send(Seen::SubsurfaceCommit {
+                        size,
+                        scale: s.scale.max(1),
+                        frame,
+                    })
+                    .unwrap();
+                return;
+            }
             wl_surface::Request::Attach { buffer, x, y } => {
                 s.buffer = buffer;
                 s.offset = (s.offset.0 + x, s.offset.1 + y);
@@ -1086,6 +1128,51 @@ impl Dispatch<WpFractionalScaleManagerV1, ()> for Mock {
     }
 }
 
+impl Dispatch<WlSubcompositor, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &WlSubcompositor,
+        request: wl_subcompositor::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_subcompositor::Request::GetSubsurface {
+            id,
+            surface,
+            parent,
+        } = request
+        {
+            init.init(id, ());
+            let of_toplevel = state.toplevel.as_ref().is_some_and(|t| t.0 == parent);
+            state.subsurfaces.push(surface);
+            state.seen.send(Seen::Subsurface { of_toplevel }).unwrap();
+        }
+    }
+}
+
+impl Dispatch<WlSubsurface, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &WlSubsurface,
+        request: wl_subsurface::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let seen = match request {
+            wl_subsurface::Request::SetSync => Seen::SubsurfaceSync,
+            wl_subsurface::Request::SetDesync => Seen::SubsurfaceDesync,
+            wl_subsurface::Request::SetPosition { x, y } => Seen::SubsurfacePosition(x, y),
+            wl_subsurface::Request::Destroy => Seen::SubsurfaceDestroyed,
+            _ => return,
+        };
+        state.seen.send(seen).unwrap();
+    }
+}
+
 impl Dispatch<WpViewporter, ()> for Mock {
     fn request(
         _: &mut Self,
@@ -1459,6 +1546,9 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
         if globals.single_pixel {
             dh.create_global::<Mock, WpSinglePixelBufferManagerV1, _>(1, ());
         }
+        if globals.subcompositor {
+            dh.create_global::<Mock, WlSubcompositor, _>(1, ());
+        }
         if globals.output_scale.is_some() {
             dh.create_global::<Mock, WlOutput, _>(4, ());
         }
@@ -1502,6 +1592,7 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
             drag_source: None,
             drag_icon: None,
             icon_buffer: None,
+            subsurfaces: Vec::new(),
         };
         let mut handle = display.handle();
         handle.insert_client(stream, Arc::new(Data)).unwrap();
@@ -5290,4 +5381,109 @@ fn a_drag_that_replaces_another_frees_the_old_icon() {
         .unwrap();
     seen_matching(&seen, |s| matches!(s, Seen::IconSurfaceDestroyed));
     seen_matching(&seen, |s| matches!(s, Seen::IconBufferDestroyed));
+}
+
+/// A window's subsurface is synchronized, so what it shows changes with the window's commit; it takes no input, draws
+/// its buffers at the window's scale though it entered no output itself, asks for no frame callback of its own (the
+/// window's stands for both), answers no configure, never takes the one-colour path, is hidden by a commit with no
+/// buffer and goes with its window.
+#[test]
+fn a_subsurface_shows_with_its_window_at_its_scale_and_takes_no_input() {
+    let (mut conn, control, seen) = connect(Globals {
+        output_scale: Some(2),
+        single_pixel: true,
+        subcompositor: true,
+        ..Globals::core()
+    });
+    assert!(conn.capabilities().contains(Capability::Subsurface));
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    let configure = configured(&mut conn, &mut stash, w);
+    control.send(Control::EnterOutput).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(e, Event::ScaleChanged { .. }).then_some(())
+    });
+    present(&mut conn, w.surface(), (320, 240));
+    assert_eq!(next_seen(&seen), Seen::Ack(configure.serial));
+    assert!(matches!(
+        next_seen(&seen),
+        Seen::Commit {
+            size: (640, 480),
+            scale: 2,
+            ..
+        }
+    ));
+
+    let sub = conn.subsurface(w.surface()).unwrap();
+    conn.roundtrip().unwrap();
+    assert_eq!(next_seen(&seen), Seen::Subsurface { of_toplevel: true });
+    assert_eq!(next_seen(&seen), Seen::SubsurfaceSync);
+    assert_eq!(
+        next_seen(&seen),
+        Seen::InputRegion(Some(Vec::new())),
+        "no input"
+    );
+    assert!(
+        matches!(
+            conn.lease(sub, (320, 52), BufferFormat::Argb8888),
+            Err(Error::NotConfigured)
+        ),
+        "nothing to draw before it has a size"
+    );
+
+    conn.place_subsurface(sub, (0, 0), (320, 52)).unwrap();
+    present(&mut conn, sub, (1, 1));
+    assert_eq!(
+        next_seen(&seen),
+        Seen::SubsurfaceCommit {
+            size: Some((640, 104)),
+            scale: 2,
+            frame: false
+        },
+        "at the window's scale, its size its own, no configure acknowledged and no frame asked for"
+    );
+    conn.place_subsurface(sub, (0, 10), (320, 40)).unwrap();
+    present(&mut conn, sub, (1, 1));
+    assert_eq!(next_seen(&seen), Seen::SubsurfacePosition(0, 10));
+    assert!(matches!(
+        next_seen(&seen),
+        Seen::SubsurfaceCommit {
+            size: Some((640, 80)),
+            scale: 2,
+            frame: false
+        }
+    ));
+
+    assert!(
+        matches!(
+            conn.present_solid(sub, (320, 40), [0.0; 4]),
+            Err(Error::Protocol(_))
+        ),
+        "a subsurface has no one-colour path"
+    );
+    conn.roundtrip().unwrap();
+    assert!(seen.try_recv().is_err(), "and sent nothing for it");
+
+    conn.unmap_subsurface(sub).unwrap();
+    assert_eq!(
+        next_seen(&seen),
+        Seen::SubsurfaceCommit {
+            size: None,
+            scale: 2,
+            frame: false
+        },
+        "hidden by a commit with no buffer"
+    );
+
+    conn.destroy(w.surface()).unwrap();
+    conn.roundtrip().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match seen.recv_timeout(left) {
+            Ok(Seen::SubsurfaceDestroyed) => break,
+            Ok(_) => {}
+            Err(e) => panic!("the subsurface was not destroyed with its window: {e}"),
+        }
+    }
 }

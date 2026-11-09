@@ -4602,23 +4602,25 @@ impl Widget<String> for Layers {
 struct UnderRow;
 
 impl Application for UnderRow {
-    type Model = f64;
+    /// The page's offset, and whether the window shows one colour instead of its content.
+    type Model = (f64, bool);
     type Message = String;
 
-    fn init() -> (f64, Vec<Command<String>>) {
-        (20.0, Vec::new())
+    fn init() -> ((f64, bool), Vec<Command<String>>) {
+        ((20.0, false), Vec::new())
     }
 
-    fn update(offset: &mut f64, message: String) -> Vec<Command<String>> {
+    fn update((offset, solid): &mut (f64, bool), message: String) -> Vec<Command<String>> {
         let parts: Vec<&str> = message.split(':').collect();
         match parts[..] {
             ["reveal", "page", y] | ["scroll", y] => *offset = y.parse().unwrap(),
+            ["solid", on] => *solid = on == "on",
             _ => {}
         }
         Vec::new()
     }
 
-    fn view(offset: &f64) -> Vec<Window<String>> {
+    fn view((offset, solid): &(f64, bool)) -> Vec<Window<String>> {
         let page = Element::new(Pane {
             name: "page",
             height: SizeSpec::Fill,
@@ -4645,7 +4647,11 @@ impl Application for UnderRow {
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,
-            background: WindowBackground::Theme,
+            background: if *solid {
+                WindowBackground::INPUT_ONLY
+            } else {
+                WindowBackground::Theme
+            },
             popup: None,
             content: Element::new(Layers(vec![page, Element::new(RaisedRow).key("row")])),
             menus: None,
@@ -4739,7 +4745,7 @@ fn content_scrolling_under_the_raised_row_presents_the_content_and_leaves_the_la
     rt.window_system_mut()
         .send(window, WindowEvent::Frame(Timestamp(1)));
     rt.step(steps()).unwrap();
-    assert_eq!(rt.model(), &35.0);
+    assert_eq!(rt.model().0, 35.0);
     assert_eq!(
         rt.window_system().presented.len(),
         frames + 1,
@@ -4750,6 +4756,41 @@ fn content_scrolling_under_the_raised_row_presents_the_content_and_leaves_the_la
         layers,
         "the layer, which did not change, is not drawn again: the scroll damages none of the header band"
     );
+}
+
+/// A window that turns one colour hides its raised layer with the colour's commit, as it takes its glass away, and
+/// shows it again once its content is drawn again.
+#[test]
+fn a_window_turning_solid_hides_its_raised_layer_and_shows_it_again_when_drawn() {
+    let (mut rt, window) = under_row(true);
+    rt.window_system_mut().solid = true;
+    let frame = |rt: &mut Under| {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+    };
+    frame(&mut rt);
+    rt.messages.push_back("solid:on".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.window_system().solids.len(), 1);
+    let presents = &rt.window_system().layer_presents;
+    assert!(
+        matches!(presents.last(), Some((w, None)) if *w == window),
+        "the layer is hidden: {:?}",
+        presents
+            .iter()
+            .map(|(_, l)| l.is_some())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(rt.windows[0].layer.shown, None);
+    let hidden = presents.len();
+
+    frame(&mut rt);
+    rt.messages.push_back("solid:off".into());
+    rt.step(steps()).unwrap();
+    let presents = &rt.window_system().layer_presents;
+    assert_eq!(presents.len(), hidden + 1, "shown again with the content");
+    assert!(matches!(presents.last(), Some((_, Some(l))) if l.height == 30));
 }
 
 #[test]
@@ -4849,5 +4890,5 @@ fn focus_reveals_a_node_below_the_raised_row_and_overlays_are_cut_from_it() {
         rt.snapshot(window).unwrap().focus,
         rt.find(window, &"target".into())
     );
-    assert_eq!(rt.model(), &10.0, "the target's top at the row's bottom");
+    assert_eq!(rt.model().0, 10.0, "the target's top at the row's bottom");
 }

@@ -254,13 +254,18 @@
       <entry name="reduce_transparency" value="2" summary="draw materials opaque"/>
       <entry name="increase_contrast" value="4" summary="draw with the high-contrast colours"/>
       <entry name="differentiate_without_color" value="8" summary="do not carry state by colour alone"/>
+      <entry name="always_show_scroll_bars" value="16" summary="show scroll bars beside the content at all times"/>
     </enum>
 
     <event name="display_options">
       <description summary="the accessibility display options of the session">
         The options that are on. The client draws again with them: with reduce_motion it fades
         what it would slide, scale or magnify; with reduce_transparency and increase_contrast it
-        picks its opaque and high-contrast palettes. The materials of the client's backdrops
+        picks its opaque and high-contrast palettes; with always_show_scroll_bars it gives its
+        scroll views tracks beside their content that stay shown, and without it thin scroll
+        bars over the content that show only while it scrolls. The server sets
+        always_show_scroll_bars from the session's scroll bar setting, deciding an automatic one by
+        whether a mouse is connected. The materials of the client's backdrops
         follow the options in the server and need no request. Bits the client does not know
         are reserved and stay 0.
       </description>

@@ -2133,18 +2133,10 @@ fn cursor(p: &mut SceneParams<'_>, stack: &mut Composition) {
     match std::mem::replace(&mut p.cursor, CursorPlan::Hidden) {
         CursorPlan::Hidden => {}
         CursorPlan::Themed { frame, size } => {
-            // logical points per image pixel
-            let k = size / f64::from(frame.nominal);
-            let hotspot: Point<f64, Logical> = Point::from((
-                f64::from(frame.hotspot.x) * k,
-                f64::from(frame.hotspot.y) * k,
-            ));
-            let top_left = pos - hotspot;
+            let top_left = pos - frame.hotspot_at(size);
             let (w, h) = frame.pixels;
-            let drawn = (
-                (f64::from(w) * k).round() as i32,
-                (f64::from(h) * k).round() as i32,
-            );
+            let logical = frame.size_at(size);
+            let drawn = (logical.0.round() as i32, logical.1.round() as i32);
             // the whole image: without `src` the element samples a `drawn`-sized corner of it
             let src = smithay::utils::Rectangle::<f64, Logical>::from_size(
                 (f64::from(w), f64::from(h)).into(),

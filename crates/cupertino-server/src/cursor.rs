@@ -30,6 +30,26 @@ pub struct CursorFrame {
     pub nominal: u32,
 }
 
+impl CursorFrame {
+    /// Logical points per image pixel for a cursor drawn `size` points nominal (the nominal size times the
+    /// cursor scale): the image's own scale, whatever the output's.
+    fn points_per_pixel(&self, size: f64) -> f64 {
+        size / f64::from(self.nominal)
+    }
+
+    /// The hotspot in logical points from the image's top-left corner, for a cursor drawn `size` points nominal.
+    pub fn hotspot_at(&self, size: f64) -> Point<f64, Logical> {
+        let k = self.points_per_pixel(size);
+        Point::from((f64::from(self.hotspot.x) * k, f64::from(self.hotspot.y) * k))
+    }
+
+    /// The image's size in logical points for a cursor drawn `size` points nominal.
+    pub fn size_at(&self, size: f64) -> (f64, f64) {
+        let k = self.points_per_pixel(size);
+        (f64::from(self.pixels.0) * k, f64::from(self.pixels.1) * k)
+    }
+}
+
 /// Fill and outline colours (sRGB, straight alpha) of the cursors the server draws. The design
 /// stores both and redraws its cursors with them once the user changed either.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -512,6 +532,53 @@ mod tests {
                 (arrow.width, arrow.height),
                 "not the last-resort arrow"
             );
+        }
+    }
+
+    /// The built-in cursors keep each role's canvas and hotspot in logical points at output scales 1, 1.5 and 2 and
+    /// at a doubled cursor size: the image picked for the output's pixels is scaled so its hotspot stays on the
+    /// pointer's point.
+    #[test]
+    fn built_in_hotspots_stay_on_the_pointer_at_every_output_scale() {
+        let mut loader = CursorLoader {
+            theme: None,
+            size: 24,
+            colors: CursorColors::DEFAULT,
+            cache: HashMap::new(),
+            buffers: HashMap::new(),
+        };
+        for (icon, canvas, hotspot) in [
+            (CursorIcon::Default, (28.0, 40.0), (5.0, 5.0)),
+            (CursorIcon::Text, (23.0, 22.0), (12.0, 11.0)),
+            (CursorIcon::Pointer, (32.0, 32.0), (12.0, 8.0)),
+            (CursorIcon::Grab, (32.0, 32.0), (15.0, 16.0)),
+            (CursorIcon::Grabbing, (32.0, 32.0), (15.0, 16.0)),
+            (CursorIcon::ColResize, (30.0, 24.0), (15.0, 12.0)),
+            (CursorIcon::RowResize, (24.0, 28.0), (12.0, 14.0)),
+        ] {
+            for cursor_scale in [1.0, 2.0] {
+                for output_scale in [1.0, 1.5, 2.0] {
+                    // as `Cupertino::cursor_plan` asks for it
+                    let size = f64::from(loader.size()) * cursor_scale;
+                    let frame =
+                        loader.frame(icon, (size * output_scale).ceil() as u32, Duration::ZERO);
+                    assert!(
+                        f64::from(frame.pixels.1) >= canvas.1 * cursor_scale * output_scale,
+                        "{icon:?} drawn from an image at least as large as the output needs"
+                    );
+                    let at = frame.hotspot_at(size);
+                    assert_eq!(
+                        (at.x, at.y),
+                        (hotspot.0 * cursor_scale, hotspot.1 * cursor_scale),
+                        "{icon:?} cursor ×{cursor_scale} output ×{output_scale}"
+                    );
+                    assert_eq!(
+                        frame.size_at(size),
+                        (canvas.0 * cursor_scale, canvas.1 * cursor_scale),
+                        "{icon:?} cursor ×{cursor_scale} output ×{output_scale}"
+                    );
+                }
+            }
         }
     }
 

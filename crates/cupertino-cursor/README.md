@@ -50,9 +50,9 @@ dependency.
 1. **Drawing**: each procedural cursor is drawn at the target scale `s = size / base_size` (24 → 1 px/pt, 32 → 1.33,
    48 → 2, 64 → 2.67), so it is crisp at every size. An animation (the spinner) has one image per frame.
 2. **Shadow**: Gaussian blur of the alpha channel with σ = 1.8 points × s, tinted `0,0,0,0.65`, shifted one point
-   down, composited *behind* the cursor (`--no-shadow` skips it). The canvas grows by `ceil(3σ) + |offset|` pixels per
-   side.
-3. **Hotspot**: the cursor's hotspot in points × s, rounded, plus the shadow padding.
+   down, composited *behind* the cursor (`--no-shadow` skips it). The image is cut back to the cursor's canvas, so the
+   shadow falls in the canvas's transparent margin and every size keeps the role's canvas.
+3. **Hotspot**: the cursor's hotspot in points × s, rounded.
 4. **XCursor files**: one file per cursor with all sizes (ARGB32 premultiplied, little-endian). Frames of one size follow
    each other with their delay.
 5. **Names**: the primary freedesktop name is the file, aliases are relative symlinks (`names.rs`):
@@ -72,9 +72,23 @@ with a timeout in ms. Compile with `hyprcursor-util --create`.
 
 ### Procedural set
 
-31 cursors on a 32 × 32 pt canvas (arrow with badges for copy/alias/context-menu/help/progress, hands, I-beams, crosshair,
+31 cursors (arrow with badges for copy/alias/context-menu/help/progress, hands, I-beams, crosshair,
 cell, move, magnifiers, not-allowed, resize arrows, a 12-frame spinner), black/white with a halo, drawn at the target
-scale with the common shadow. `output/procedural_cursors.png` is the contact sheet.
+scale with the common shadow. `output/procedural_cursors.png` is the contact sheet. Each role has its own canvas and
+hotspot, in points (transparent margin included):
+
+| Cursor | Canvas | Hotspot |
+|---|---:|---:|
+| arrow (`default`) and its badged variants | 28 × 40 | 5, 5 |
+| I-beam (`text`) | 23 × 22 | 12, 11 |
+| pointing hand (`pointer`) | 32 × 32 | 12, 8 |
+| open and closed hand (`grab`, `grabbing`) | 32 × 32 | 15, 16 |
+| column resize (`col-resize`) | 30 × 24 | 15, 12 |
+| row resize (`row-resize`) | 24 × 28 | 12, 14 |
+| every other cursor | 32 × 32 | its centre (magnifiers 13, 13) |
+
+At a nominal size `N` an image is the canvas times `N / base_size` and its hotspot the point times the same scale, so
+1x, 2x and 4x images (24, 48, 96) put the hotspot on the same logical point.
 
 ## Tests
 
@@ -83,7 +97,8 @@ scale with the common shadow. `output/procedural_cursors.png` is the contact she
 * XCursor writer/parser round trips, shadow maths and the name table (no duplicates, required names covered, every
   procedural cursor mapped);
 * the procedural theme (every required name present and parseable, symlinks, sizes, hotspot scaling, spinner frames,
-  shadow padding, overwrite protection) and the CLI options.
+  the shadow inside the canvas, overwrite protection) and the CLI options;
+* each role's canvas and hotspot at 1x, 2x and 4x, with the shape drawn by its hotspot.
 
 ## Open issues
 

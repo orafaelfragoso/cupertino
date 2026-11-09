@@ -43,10 +43,11 @@ all on one thread.
   popups through the fake window system and let go at each of those places.
 - **Touch and popups.** Every event of a finger goes to the window it went down in. The first finger held is the one a
   popup opened meanwhile follows: in a window that is not a popup, what it went through hears `Event::Cancel` as the
-  popup opens, so a button under it is not clicked as it lifts. Its moves reach each popup it opened at that popup's
-  own point; lifted over one of them, its lift is that popup's, and lifted anywhere else it goes where it lifts and
-  each popup it opened hears it lift there, outside it, as a mouse release elsewhere does. A cancelled touch ends the
-  interaction in those popups too, and another finger put down in one while it is held goes nowhere.
+  popup opens, so a button under it is not clicked as it lifts. Its moves reach the root of each popup it opened at
+  that popup's own point; lifted over one of them, its lift is that popup's, and lifted anywhere else it goes where it
+  lifts and each popup it opened hears it lift there, outside it, as a mouse release elsewhere does. A cancelled touch
+  ends the interaction in those popups too, and another finger put down in one while it is held goes nowhere. The unit
+  tests follow a finger through the same popups as the button.
 - **Scroll timing.** `Runtime::with_scroll_timing(sink)` follows every pointer scroll event to the screen: the window
   system's timestamp, when its handlers ran, the model update and view it caused (`None` when it changed no model),
   when the first frame after it was handed to the window system and when the compositor showed that frame

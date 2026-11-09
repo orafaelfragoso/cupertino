@@ -29,6 +29,8 @@ pub(crate) struct Solid {
     pub color: [u8; 4],
     /// The operations, by index, that cover all of `core`: the fills `core` is cut out of.
     pub covering: Vec<bool>,
+    /// For each glyph run among the operations, by index, the window pixels its rasters cover.
+    pub glyphs: Vec<Option<Bounds>>,
 }
 
 /// The solid core of `node` when it is painted into a scratch image whose top-left pixel is `origin` and which covers
@@ -153,6 +155,7 @@ pub(crate) fn solid(
         reach: reach?.intersect(area),
         color: [px[0], px[1], px[2], px[3]],
         covering,
+        glyphs: glyphs.to_vec(),
     })
 }
 

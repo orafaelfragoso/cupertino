@@ -509,14 +509,16 @@ fn cost_follows_damage_and_content_not_target_area() {
     assert_eq!(large.node_composite, small.node_composite);
     assert_eq!(large.mask_apply, small.mask_apply);
 
+    // a node the damage cuts is rasterized as in the whole frame, so its pixels come out the same; only the damaged
+    // ones are laid over the frame
     let corner = DamageRegion::Rects(vec![rect(0.0, 0.0, 16.0, 16.0)]);
     let partial = cost_of(3840, 2160, &list, &corner);
     assert!(partial.dirty_pixels <= 17 * 17);
     assert_eq!(partial.clear.bytes, partial.dirty_pixels * 4);
     assert!(large.scratch_images.bytes * 100 < large.clear.bytes);
-    assert_eq!(partial.scratch_images.bytes, partial.dirty_pixels * 4);
+    assert_eq!(partial.scratch_images, large.scratch_images);
+    assert_eq!(partial.masks, large.masks);
     assert_eq!(partial.node_composite.bytes, partial.dirty_pixels * 4);
-    assert_eq!(partial.masks.bytes, partial.dirty_pixels);
 }
 
 fn child(id: u64, parent: u64, bounds: Rect, ops: Vec<PaintOp>) -> PaintNode {
@@ -964,13 +966,17 @@ fn a_full_repaint_costs_in_proportion_to_its_area() {
         let stats = *r.stats();
         assert_eq!(
             (stats.scratch_images.count, stats.node_composite.count),
-            (1, 1),
-            "only the clipped node takes a scratch image; the background is painted directly"
+            (2, 2),
+            "the clipped node and the background's pixels around its glyphs take scratch images; the rest of the \
+             background is written as rows"
         );
+        // the glyphs' rectangle: four glyphs of 8 points, a pixel either side
         let sheet = (440.0 * scale + 4.0) * (280.0 * scale + 4.0) * 4.0;
+        let glyphs = (30.0 * scale + 4.0) * (10.0 * scale + 4.0) * 4.0;
         assert!(
-            stats.scratch_images.bytes as f64 <= sheet,
-            "the scratch image covers the clipped node, not the frame"
+            stats.scratch_images.bytes as f64 <= sheet + glyphs,
+            "the scratch images cover the clipped node and the glyphs, not the frame: {} bytes",
+            stats.scratch_images.bytes
         );
         stats
     };

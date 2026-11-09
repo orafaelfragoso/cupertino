@@ -4,10 +4,14 @@ CupertinoKit rendering: the `DisplayList` of paint nodes core builds for each wi
 runs, clipped and isolated layers, materials already resolved to plain paint), `PaintResources`, `DamageRegion`, and
 the `UiRenderer` trait whose CPU frame (`CpuFrame`, premultiplied RGBA) the window system presents. MPL-2.0. `CpuRenderer` is the CPU backend (tiny-skia, private): it validates a request before touching the image it keeps, repaints
 only the damage, executes clips, group opacity, blur and shadows on isolated
-layers, and caches rasterized glyphs and decoded images under explicit byte budgets. An incremental repaint matches a
-fresh one within a few levels: a group's layer covers the pixels its descendants' blurs and shadows read, but an
-anti-aliased curved or fractional edge cut by a damaged rectangle's border is sampled on a slightly different sub-pixel
-grid.
+layers, and caches rasterized glyphs and decoded images under explicit byte budgets. A frame drawn over the last one
+has the bytes of the same list drawn whole, which a test checks on random lists, changes and damage at scales 1, 1.25,
+1.5 and 2. The rasterizer cuts a path at the edge of the image it draws into, and a curve or slanted edge cut there
+comes out a little differently, so nothing is rasterized into an image the damage sizes: a node's scratch image covers
+all of the node that shows (or, for a node of solid fills, each rectangle of its rim on its own), a group's layer and an
+operation layer all of theirs, and the damage only picks which of their pixels are laid over the frame. Only glyphs are
+blended straight into the frame, each pixel on its own. A small change under a large node that is not solid fills
+therefore rasterizes the whole node, and a frame drawn whole lays every node through a scratch image.
 
 A drop or inner shadow is one coverage byte a pixel until it is tinted: the layer's alpha, shifted, blurred by three box
 passes on each axis (rows in place, columns a row at a time with a running sum per column), then tinted and laid under
@@ -20,17 +24,16 @@ each frame the bytes a fresh renderer gives at that scale; a test checks that, a
 lie on device pixel edges covers whole pixels with nothing half covered beside it, and that text has ink at every scale.
 
 Two fast paths give the same bytes as that general path, which a test checks on random scenes at several scales and
-damages. A node the general path would paint through a scratch image (one that a clip above it or the damage cuts),
-under clips that are all axis-aligned rectangles, whose large fills are solid rectangles or rounded rectangles, has
-pixels its fills and clips cover fully and its other operations (smaller fills, strokes, images, glyph rasters) do not
-reach. Those pixels hold one colour in the scratch image: the renderer writes them as rows, copied when the colour is
-opaque and blended with the scratch image's own integer source-over otherwise, and paints the rest through the scratch
-image with those pixels cut out of the fills, as holes on whole pixels that change no other pixel's coverage. Span
-writes to the frame wait until something else paints there, so layers of one colour each over the same pixels (the
-cleared rectangle, the window's background, a page's background, a translucent group over it) collapse into one write.
-And when the last node whose opaque fill covers a whole damaged rectangle has no group above it, nothing painted before
-it there is painted at all. On a 3840×2160 frame each pass over the pixels costs a few milliseconds of memory traffic,
-so these paths matter most for large damage.
+damages. A node painted through a scratch image, under clips that are all axis-aligned rectangles, whose large fills are
+solid rectangles or rounded rectangles, has pixels its fills and clips cover fully and its other operations (smaller
+fills, strokes, images, glyph rasters) do not reach. Those pixels hold one colour in the scratch image: the renderer
+writes them as rows, copied when the colour is opaque and blended with the scratch image's own integer source-over
+otherwise, and paints the rest through the scratch image with those pixels cut out of the fills, as holes on whole
+pixels that change no other pixel's coverage. Span writes to the frame wait until something else paints there, so layers
+of one colour each over the same pixels (the cleared rectangle, the window's background, a page's background, a
+translucent group over it) collapse into one write. And when the last node whose opaque fill covers a whole damaged
+rectangle has no group above it, nothing painted before it there is painted at all. On a 3840×2160 frame each pass over
+the pixels costs a few milliseconds of memory traffic, so these paths matter most for large damage.
 
 `CpuRenderer::stats` counts what the last frame did (dirty pixels, nodes and groups painted, primitives, scratch and layer
 allocations, clip masks, and each copy site with its bytes: clear, node, group and layer composites, crops, mask

@@ -85,6 +85,7 @@ fn simple_window_presents_frames_with_its_own_decorations_on_weston() {
     let child = Command::new(simple_window_binary())
         .args(["--frames", &FRAMES.to_string()])
         .env_clear()
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env("XDG_RUNTIME_DIR", &runtime.0)
         .env("WAYLAND_DISPLAY", SOCKET)
         .stdout(Stdio::piped())

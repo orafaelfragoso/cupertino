@@ -231,6 +231,7 @@ fn simple_window_presents_frames_with_client_decorations_on_mutter() {
     let process = Command::new(binary)
         .args(["--frames", &FRAMES.to_string()])
         .env_clear()
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env("XDG_RUNTIME_DIR", &runtime.0)
         .env("WAYLAND_DISPLAY", SOCKET)
         .stdin(Stdio::null())
@@ -423,6 +424,7 @@ fn kit_example_presents_frames_on_mutter(
     let trace = runtime.0.join("client-trace");
     let process = Command::new(binary)
         .env_clear()
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env("XDG_RUNTIME_DIR", &runtime.0)
         .env("WAYLAND_DISPLAY", SOCKET)
         .env("WAYLAND_DEBUG", "client")

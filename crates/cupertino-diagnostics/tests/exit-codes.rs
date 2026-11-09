@@ -8,6 +8,7 @@ fn diagnose(args: &[&str]) -> (Option<i32>, serde_json::Value) {
     let output = Command::new(env!("CARGO_BIN_EXE_cupertino-diagnose"))
         .args(args)
         .env_clear()
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env("XDG_SESSION_ID", "cupertino-test-no-such-session")
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env("WAYLAND_DISPLAY", "wayland-gone")

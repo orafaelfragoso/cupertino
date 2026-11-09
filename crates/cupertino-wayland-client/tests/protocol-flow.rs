@@ -3513,6 +3513,7 @@ fn a_program_started_after_the_shell_connection_has_no_wayland_socket() {
     let mut shell = std::process::Command::new(std::env::current_exe().unwrap());
     shell
         .args([NAME, "--exact", "--nocapture"])
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env(SHELL_PROCESS, "1")
         .env("WAYLAND_SOCKET", fd.to_string());
     // SAFETY: fcntl is async-signal-safe; the descriptor stays open in this process until the child has exited

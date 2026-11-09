@@ -2097,6 +2097,7 @@ fn the_screenshot_action_maps_the_overlay_and_a_drag_writes_a_png_of_the_selecti
     let binary = shell_bin_dir().join("cupertino-screenshot");
     server.state.config.screenshot_command = vec![
         "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
@@ -2175,6 +2176,7 @@ fn the_screenshot_toolbar_sits_at_the_bottom_and_return_captures_the_screen() {
     let binary = shell_bin_dir().join("cupertino-screenshot");
     server.state.config.screenshot_command = vec![
         "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
@@ -2256,6 +2258,7 @@ fn escape_on_the_screenshot_toolbar_removes_its_surfaces_and_gives_the_keyboard_
     let binary = shell_bin_dir().join("cupertino-screenshot");
     server.state.config.screenshot_command = vec![
         "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
@@ -2308,6 +2311,7 @@ fn the_screenshot_options_menu_opens_above_the_toolbar_on_its_output() {
     let binary = shell_bin_dir().join("cupertino-screenshot");
     server.state.config.screenshot_command = vec![
         "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];
@@ -2388,6 +2392,7 @@ fn the_clipboard_screenshot_offers_a_png_of_the_output() {
     let binary = shell_bin_dir().join("cupertino-screenshot");
     server.state.config.screenshot_command = vec![
         "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
         binary.display().to_string(),
     ];

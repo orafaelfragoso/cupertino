@@ -240,6 +240,7 @@ mod tests {
         let sleep = std::fs::canonicalize("/usr/bin/sleep").unwrap();
         let mut child = std::process::Command::new(&sleep)
             .arg("30")
+            .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .spawn()
             .unwrap();
         let process = || ProcessHandle::open(child.id()).unwrap();

@@ -54,31 +54,6 @@ fn a_binary_started_by_the_helper_never_opens_a_pack_on_the_default_search_path(
     );
 }
 
-/// Test sources whose spawns may leave the variable unset, each with the reason: what they start never reads an
-/// asset pack.
-const EXEMPT: &[(&str, &str)] = &[
-    (
-        "crates/cupertino-server/tests/asset-isolation.rs",
-        "the examples of this check",
-    ),
-    (
-        "crates/cupertino-diagnostics/",
-        "the diagnostics command draws nothing",
-    ),
-    (
-        "crates/cupertino-layers/",
-        "the layer check reads only Cargo manifests",
-    ),
-    (
-        "crates/cupertino-sessiond/",
-        "the session manager draws nothing",
-    ),
-    (
-        "crates/cupertino-wayland-client/",
-        "the protocol client's test clients and compositors draw no text or icons of ours",
-    ),
-];
-
 /// Every `.rs` file under `dir`, recursively.
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -94,69 +69,121 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The text from `open` (just after an opening parenthesis) to its closing parenthesis.
-fn argument(text: &str) -> &str {
+/// The text from just after an opening bracket (`open`, closed by `close`) to its closing bracket.
+fn bracketed(text: &str, open: char, close: char) -> &str {
     let mut depth = 0;
     for (at, c) in text.char_indices() {
-        match c {
-            '(' => depth += 1,
-            ')' if depth == 0 => return &text[..at],
-            ')' => depth -= 1,
-            _ => {}
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            if depth == 0 {
+                return &text[..at];
+            }
+            depth -= 1;
         }
     }
     text
 }
 
-/// The spawns in `source` that start something other than a system tool named by a literal and do not set the
-/// variable before they start it, each as its line number and argument. The text a spawn is checked in runs from
-/// `Command::new(` to its first `.spawn()`, `.output()` or `.status()`, or to the end of the item it is in (a helper
-/// that returns the command).
+/// What in the text a spawn is checked in says it starts a binary of the workspace: the test binary itself, a binary
+/// Cargo built, or a helper that names one.
+const WORKSPACE_BINARY: [&str; 3] = ["current_exe", "CARGO_BIN_EXE", "_binary("];
+
+/// The spawns in `source` that start a binary of the workspace and do not set the variable (after any `env_clear()`)
+/// before they start it, each
+/// as its line number and what it starts. A spawn starts one unless it names a program by a literal (`sleep`,
+/// `dbus-send`, Cargo itself) and its text names no binary of the workspace either (a `sh` that runs the test binary
+/// does). The text a spawn is checked in runs from `Command::new(` to its first `.spawn()`, `.output()` or `.status()`,
+/// or to the end of the item it is in (a helper that returns the command). A shell process the server starts for a test
+/// through `env` (a `vec!["env", ...]` command) counts as a spawn whose text is the vector.
 fn unset_spawns(source: &str) -> Vec<(usize, String)> {
+    let line_of = |at: usize| source[..at].matches('\n').count() + 1;
     let mut found = Vec::new();
     for constructor in ["Command::new(", "Process::new("] {
         for (at, _) in source.match_indices(constructor) {
             let rest = &source[at + constructor.len()..];
-            let arg = argument(rest).trim();
-            // a system tool (`sleep`, `dbus-send`) or Cargo itself
-            if arg.starts_with('"') || arg == r#"env!("CARGO")"# {
-                continue;
-            }
+            let arg = bracketed(rest, '(', ')').trim();
             let end = [".spawn()", ".output()", ".status()", "\n}"]
                 .iter()
                 .filter_map(|stop| rest.find(stop))
                 .min()
                 .unwrap_or(rest.len());
-            if !rest[..end].contains(SEARCH_PATH) {
-                found.push((source[..at].matches('\n').count() + 1, arg.to_string()));
+            let text = &rest[..end];
+            let literal = arg.starts_with('"') || arg == r#"env!("CARGO")"#;
+            if literal && !WORKSPACE_BINARY.iter().any(|b| text.contains(b)) {
+                continue;
+            }
+            // the variable counts only when no `env_clear()` after it takes it away again
+            let set = text.rfind(SEARCH_PATH);
+            if set.is_none() || text.rfind(".env_clear()") > set {
+                found.push((line_of(at), format!("Command::new({arg})")));
             }
         }
     }
+    for (at, _) in source.match_indices("vec![") {
+        let items = bracketed(&source[at + "vec![".len()..], '[', ']');
+        let first = items.trim_start();
+        if (first.starts_with(r#""env".into()"#) || first.starts_with(r#""env".to_string()"#))
+            && !items.contains(SEARCH_PATH)
+        {
+            found.push((line_of(at), "vec![\"env\", ...]".to_string()));
+        }
+    }
+    found.sort();
     found
+}
+
+/// The part of a production source file that only tests compile: from its first `#[cfg(test)]` module on; all of a
+/// `tests.rs` file.
+fn test_part(path: &Path, source: &str) -> Option<(usize, String)> {
+    if path.file_name().is_some_and(|n| n == "tests.rs") {
+        return Some((0, source.to_string()));
+    }
+    let mut offset = 0;
+    for line in source.split_inclusive('\n') {
+        if line.trim() == "#[cfg(test)]" {
+            let after = source[offset + line.len()..].trim_start();
+            if after.starts_with("mod ") || after.starts_with("pub mod ") {
+                let skipped = source[..offset].matches('\n').count();
+                return Some((skipped, source[offset..].to_string()));
+            }
+        }
+        offset += line.len();
+    }
+    None
 }
 
 #[test]
 fn every_test_spawn_in_the_workspace_sets_the_empty_asset_search_path() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut files = Vec::new();
+    let (mut tests, mut sources) = (Vec::new(), Vec::new());
     for krate in std::fs::read_dir(root.join("crates")).unwrap() {
-        rust_files(&krate.unwrap().path().join("tests"), &mut files);
+        let krate = krate.unwrap().path();
+        rust_files(&krate.join("tests"), &mut tests);
+        rust_files(&krate.join("src"), &mut sources);
     }
-    files.sort();
-    assert!(files.len() > 100, "the scan finds the test sources");
-    let mut unset = Vec::new();
-    for file in files {
-        let name = file
-            .strip_prefix(&root)
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        if EXEMPT.iter().any(|(prefix, _)| name.starts_with(prefix)) {
-            continue;
+    assert!(tests.len() > 100, "the scan finds the test sources");
+    let this = Path::new(file!()).file_name().unwrap();
+    let mut checked: Vec<(PathBuf, usize, String)> = tests
+        .into_iter()
+        .filter(|f| f.file_name() != Some(this))
+        .map(|f| {
+            let source = std::fs::read_to_string(&f).unwrap();
+            (f, 0, source)
+        })
+        .collect();
+    for f in sources {
+        let source = std::fs::read_to_string(&f).unwrap();
+        if let Some((skipped, part)) = test_part(&f, &source) {
+            checked.push((f, skipped, part));
         }
-        let source = std::fs::read_to_string(&file).unwrap();
-        for (line, arg) in unset_spawns(&source) {
-            unset.push(format!("{name}:{line}: Command::new({arg})"));
+    }
+    checked.sort();
+    let mut unset = Vec::new();
+    for (file, skipped, source) in &checked {
+        let name = file.strip_prefix(&root).unwrap().display().to_string();
+        for (line, what) in unset_spawns(source) {
+            unset.push(format!("{name}:{}: {what}", line + skipped));
         }
     }
     assert!(
@@ -172,12 +199,18 @@ fn the_source_check_finds_a_spawn_without_the_variable() {
     let without = "fn f() {\n    let o = Command::new(env!(\"CARGO_BIN_EXE_x\")).env(\"A\", \"b\").output();\n}\n";
     assert_eq!(
         unset_spawns(without),
-        [(2, r#"env!("CARGO_BIN_EXE_x")"#.to_string())]
+        [(2, r#"Command::new(env!("CARGO_BIN_EXE_x"))"#.to_string())]
     );
     let with = "fn f() {\n    let mut c = Command::new(bin());\n    c.env(\"CUPERTINO_ASSET_SEARCH_PATH\", \"\");\n    c.status();\n}\n";
     assert!(unset_spawns(with).is_empty());
     let helper = "fn f() -> Command {\n    let mut c = Process::new(bin());\n    c.env(\"CUPERTINO_ASSET_SEARCH_PATH\", \"\");\n    c\n}\n";
     assert!(unset_spawns(helper).is_empty());
+    let cleared = "fn f() {\n    Command::new(bin()).env(\"CUPERTINO_ASSET_SEARCH_PATH\", \"\").env_clear().status();\n}\n";
+    assert_eq!(
+        unset_spawns(cleared).len(),
+        1,
+        "a later env_clear() takes it away"
+    );
     let late = "fn f() {\n    Command::new(bin()).status();\n    x.env(\"CUPERTINO_ASSET_SEARCH_PATH\", \"\");\n}\n";
     assert_eq!(
         unset_spawns(late).len(),
@@ -185,4 +218,25 @@ fn the_source_check_finds_a_spawn_without_the_variable() {
         "set after the start is too late"
     );
     assert!(unset_spawns("fn f() { Command::new(\"sleep\").spawn(); }").is_empty());
+    // a shell that runs the test binary starts one of the workspace's binaries
+    let shell = "fn f() {\n    Command::new(\"sh\").env(\"EXE\", std::env::current_exe().unwrap()).spawn();\n}\n";
+    assert_eq!(
+        unset_spawns(shell),
+        [(2, "Command::new(\"sh\")".to_string())]
+    );
+    // a shell process the server starts through `env`
+    let process = "fn f() -> P {\n    P { command: vec![\n        \"env\".into(),\n        files_binary().display().to_string(),\n    ] }\n}\n";
+    assert_eq!(
+        unset_spawns(process),
+        [(2, "vec![\"env\", ...]".to_string())]
+    );
+    let isolated = "fn f() -> P {\n    P { command: vec![\"env\".into(), \"CUPERTINO_ASSET_SEARCH_PATH=\".into(), b()] }\n}\n";
+    assert!(unset_spawns(isolated).is_empty());
+    // only what tests compile of a production file is checked
+    let production = "fn run() { Command::new(program()).spawn(); }\n#[cfg(test)]\nmod tests {\n    fn t() { Command::new(std::env::current_exe().unwrap()).status(); }\n}\n";
+    let (skipped, part) = test_part(Path::new("lib.rs"), production).unwrap();
+    assert_eq!(skipped, 1);
+    let found = unset_spawns(&part);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].0 + skipped, 4);
 }

@@ -140,6 +140,7 @@ fn files_process(home: &Path, data_dirs: &Path, bus: &PrivateBus) -> ShellProces
     let env = |name: &str, value: &Path| format!("{name}={}", value.display());
     let command = vec![
         "env".into(),
+        "CUPERTINO_ASSET_SEARCH_PATH=".into(),
         format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
         env("HOME", home),
         env("XDG_CONFIG_HOME", &home.join(".config")),

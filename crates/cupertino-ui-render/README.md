@@ -38,3 +38,6 @@ application, cache fills, retained caches), the rectangles the span path wrote (
 opaque fill (`hidden`), so a timing run can tell a slower frame from a heavier one. The opt-in
 `tests/render_matrix.rs` prints cold, steady and full-repaint timings with those counters for 1, 10 and 100 rows at
 scale 1 and 2; run it with `--release --ignored --nocapture` in an exclusive slot.
+
+Dev builds compile this crate and tiny-skia optimised (the workspace `Cargo.toml`, explained in `CONTRIBUTING.md`), so a
+dev binary or test draws several times faster than unoptimised; debug assertions and overflow checks stay on.

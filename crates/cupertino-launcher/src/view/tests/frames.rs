@@ -752,51 +752,37 @@ fn budget_ms(scale: f64) -> f64 {
     cupertino_ui_test::repaint::FRAME_BUDGET.as_secs_f64() * 1000.0 * scale.max(1.0)
 }
 
-/// How many times an interaction is run before a frame over the budget fails it. Wall time on a shared machine has
-/// outliers from other work; a frame that is too slow is too slow on every run.
-const BUDGET_ATTEMPTS: usize = 3;
-
 /// In an optimised build, every frame of the panel opening and closing, unfolding and folding, typing, and the Dock
-/// opening the browser over 200 applications, drawn at 1x and at 2x, fits [`budget_ms`]. An interaction with a slow
-/// frame is run again, up to [`BUDGET_ATTEMPTS`] times, and fails only if no run fits. Unoptimised builds take several
-/// times as long and measure nothing.
+/// opening the browser over 200 applications, drawn at 1x and at 2x, fits [`budget_ms`]. Each interaction is run once:
+/// a single frame over the budget fails it, the first frame of a window that just opened (its pixels, scratch images and
+/// glyphs made for the first time) included; it is not run again, since a second run on a warmed heap would hide a
+/// first frame that grew slower. It measures wall time, which builds running beside it stretch two to six times (cores
+/// and memory shared), so it is run on an otherwise idle machine. Unoptimised builds take several times as long and
+/// measure nothing.
 #[test]
 fn every_frame_of_the_panel_s_transitions_fits_the_budget_in_an_optimised_build() {
     if cfg!(debug_assertions) {
         eprintln!("frame budgets are held in optimised builds only");
         return;
     }
-    let worst = |run: &Measured| {
-        run.frames
-            .iter()
-            .enumerate()
-            .map(|(i, f)| (i, f.nanos as f64 / 1e6))
-            .fold((0, 0.0_f64), |a, b| if b.1 > a.1 { b } else { a })
-    };
     for scale in [1.0, 2.0] {
         let budget = budget_ms(scale);
-        let mut over: BTreeMap<&'static str, (usize, f64)> = BTreeMap::new();
-        for attempt in 0..BUDGET_ATTEMPTS {
-            let mut runs = interactions(scale, true);
-            runs.push(browser_over_many(200, scale, true).0);
-            let mut slow = BTreeMap::new();
-            for run in &runs {
+        let mut runs = interactions(scale, true);
+        runs.push(browser_over_many(200, scale, true).0);
+        let over: Vec<(&str, usize, f64)> = runs
+            .iter()
+            .flat_map(|run| {
                 assert!(!run.frames.is_empty(), "{} presented no frames", run.name);
-                let (frame, ms) = worst(run);
-                let failed_before = attempt == 0 || over.contains_key(run.name);
-                if ms >= budget && failed_before {
-                    slow.insert(run.name, (frame, ms));
-                }
-            }
-            over = slow;
-            if over.is_empty() {
-                break;
-            }
-        }
+                run.frames
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| (run.name, i, f.nanos as f64 / 1e6))
+                    .filter(|&(_, _, ms)| ms >= budget)
+            })
+            .collect();
         assert!(
             over.is_empty(),
-            "at {scale}x, frames over {budget} ms in each of {BUDGET_ATTEMPTS} runs \
-             (interaction: (frame, ms) of the last run): {over:?}"
+            "at {scale}x, frames over {budget} ms (interaction, frame, ms): {over:?}"
         );
     }
 }

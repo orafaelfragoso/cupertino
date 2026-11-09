@@ -267,7 +267,6 @@ const CORNERS: [(Trigger, &str, &str); 4] = [
     ),
 ];
 
-/// The minimize effects offered: Warp, Scale, Funnel (enum, `plain` is not offered).
 /// When applications show their scroll bars.
 const SCROLL_BARS: [(&str, ScrollBarsName); 3] = [
     ("Automatically", ScrollBarsName::Automatic),
@@ -275,6 +274,7 @@ const SCROLL_BARS: [(&str, ScrollBarsName); 3] = [
     ("Always", ScrollBarsName::Always),
 ];
 
+/// The minimize effects offered: Warp, Scale, Funnel (enum, `plain` is not offered).
 const EFFECTS: [(&str, MinimizeEffectName); 3] = [
     ("Warp", MinimizeEffectName::Warp),
     ("Scale", MinimizeEffectName::Scale),

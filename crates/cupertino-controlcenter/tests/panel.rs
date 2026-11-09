@@ -525,7 +525,7 @@ fn edit_controls_is_glass_as_the_tiles_are() {
             "a glass region per tile and Edit Controls (light {light})"
         );
         assert!(
-            regions.iter().any(|r| *r == capsule),
+            regions.contains(&capsule),
             "Edit Controls is glass (light {light}): {regions:?}"
         );
     }

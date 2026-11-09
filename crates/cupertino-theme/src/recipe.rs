@@ -353,10 +353,12 @@ pub fn curve_coeffs(v: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// The materials of a window's own body: its sidebars, its title bars and its header. A window that is not active draws
-/// them as an active one does, in every appearance and with Reduce Transparency, so it keeps the tint of what lies
-/// behind it and its brightness; what changes is its text, its selection and its window buttons, which their own roles
-/// follow. An explicit [`MaterialOptions::rendition_key`] still reads any variant of the data.
+/// The materials of a window's own body: its sidebars, its title bars and its header. A window that is not active
+/// draws their translucent variants as the data's own inactive variant: an opaque base laid with the desktop tint,
+/// without the backdrop, so it keeps the tint of the wallpaper whatever lies behind it and reads the same over a busy
+/// or a dark scene. Their opaque variants (Reduce Transparency) it draws as an active window does, since the data's
+/// inactive opaque variants are darker than the window; what else changes is its text, its selection and its window
+/// buttons, which their own roles follow. An explicit [`MaterialOptions::rendition_key`] still reads any variant.
 pub const KEPT_WHEN_INACTIVE: [&str; 5] = [
     "Sidebar",
     "InlineSidebar",
@@ -365,10 +367,12 @@ pub const KEPT_WHEN_INACTIVE: [&str; 5] = [
     "Header",
 ];
 
-/// Whether a window that is not active draws `material` (or its `-Opaque` variant) as an active one does.
+/// Whether a window that is not active draws `material` as an active one does: the `-Opaque` variant of a material in
+/// [`KEPT_WHEN_INACTIVE`].
 pub fn kept_when_inactive(material: &str) -> bool {
-    let plain = material.strip_suffix("-Opaque").unwrap_or(material);
-    KEPT_WHEN_INACTIVE.contains(&plain)
+    material
+        .strip_suffix("-Opaque")
+        .is_some_and(|plain| KEPT_WHEN_INACTIVE.contains(&plain))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -745,13 +749,15 @@ mod tests {
         assert!(matches!(r.backdrop.unwrap().ops[..], [ColorOp::Saturate(s)] if near(s, 2.4)));
     }
 
-    /// A window that is not active keeps its body's materials, in every appearance, with and without Reduce
-    /// Transparency and in every interaction: the same backdrop and fills as the active window's, so its sidebar keeps
-    /// the tint of what lies behind it and it grows no darker. The data's own inactive variant is still there for an
-    /// explicit rendition key.
+    /// A window that is not active keeps its body's opaque materials (Reduce Transparency) as an active one draws
+    /// them, in every appearance and interaction, so it grows no darker; their translucent variants draw the data's
+    /// own inactive variant, an opaque base with the desktop tint and no backdrop, not darker than the window's
+    /// background by more than three levels of 255 in the dark appearance.
     #[test]
-    fn an_inactive_window_keeps_its_body_s_materials() {
+    fn an_inactive_window_keeps_its_body_s_opaque_materials_and_tints_the_translucent_ones() {
         let l = lib();
+        let theme = Theme::load().unwrap();
+        let mut translucent = 0;
         for appearance in Appearance::ALL {
             for reduce_transparency in [false, true] {
                 for interaction in [
@@ -772,37 +778,57 @@ mod tests {
                         ) else {
                             continue;
                         };
-                        assert_eq!(
-                            active, inactive,
+                        let what = format!(
                             "{appearance:?} {material} rt={reduce_transparency} {interaction:?}"
                         );
+                        if inactive.opaque {
+                            assert_eq!(active, inactive, "{what}");
+                            continue;
+                        }
+                        assert!(inactive.rendition_key.starts_with("inactive."), "{what}");
+                        assert!(inactive.backdrop.is_none(), "{what}: no backdrop");
+                        let base = &inactive.fills[0];
+                        assert!(
+                            base.rgba[3] == 1.0 && !base.tint_layer,
+                            "{what}: an opaque base"
+                        );
+                        if interaction == Interaction::Normal {
+                            translucent += 1;
+                            assert_eq!(
+                                inactive.uses_tint_layer(),
+                                active.uses_tint_layer(),
+                                "{what}: the desktop tint, where the active one has it"
+                            );
+                            let window =
+                                theme.tokens.color(appearance, "window-background").unwrap();
+                            let luma = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+                            let base = luma([base.rgba[0], base.rgba[1], base.rgba[2]]);
+                            if appearance.is_dark() {
+                                assert!(
+                                    base >= luma([window.r, window.g, window.b]) - 3.0 / 255.0,
+                                    "{what}: {base} is darker than the window"
+                                );
+                            }
+                        }
                     }
                 }
             }
         }
-        let explicit = l
-            .recipe(
-                Appearance::Light,
-                "Sidebar",
-                &MaterialOptions {
-                    rendition_key: Some("inactive.normal".into()),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        assert!(explicit.backdrop.is_none());
-        assert_eq!(explicit.rendition_key, "inactive.normal");
-        assert!(near(explicit.fills[0].rgba[0], 0.941) && near(explicit.fills[0].rgba[3], 1.0));
+        assert_eq!(translucent, 10, "five materials in two appearances");
     }
 
-    /// The materials an inactive window keeps are those of its body; a menu, a selection or a sheet still draws its
-    /// own inactive variant.
+    /// Only the opaque variants of a window's body materials are kept when inactive; a menu, a selection or a sheet
+    /// draws its own inactive variant, as does a translucent body material.
     #[test]
-    fn only_a_window_s_body_materials_are_kept_when_inactive() {
-        assert!(kept_when_inactive("Sidebar") && kept_when_inactive("Sidebar-Opaque"));
-        assert!(kept_when_inactive("Titlebar-Opaque") && kept_when_inactive("InlineSidebar"));
+    fn only_a_window_s_opaque_body_materials_are_kept_when_inactive() {
+        assert!(kept_when_inactive("Sidebar-Opaque") && kept_when_inactive("Titlebar-Opaque"));
+        assert!(kept_when_inactive("Header-Opaque") && kept_when_inactive("InlineSidebar-Opaque"));
         for other in [
+            "Sidebar",
+            "InlineSidebar",
+            "Titlebar",
             "Menu",
+            "Menu-Opaque",
             "Selection",
             "MenuSelection",
             "Sheet",
@@ -812,21 +838,23 @@ mod tests {
             assert!(!kept_when_inactive(other), "{other}");
         }
         let l = lib();
-        let selection = |window| {
+        let inactive = |m| {
             l.recipe(
                 Appearance::Dark,
-                "Selection",
+                m,
                 &MaterialOptions {
-                    window,
+                    window: WindowState::Inactive,
                     ..Default::default()
                 },
             )
             .unwrap()
         };
-        assert_eq!(
-            selection(WindowState::Inactive).rendition_key,
-            "inactive.normal"
-        );
+        assert_eq!(inactive("Selection").rendition_key, "inactive.normal");
+        let sidebar = inactive("Sidebar");
+        assert_eq!(sidebar.rendition_key, "inactive.normal");
+        assert!(sidebar.backdrop.is_none());
+        assert!(near(sidebar.fills[0].rgba[0], 0.1569) && near(sidebar.fills[0].rgba[3], 1.0));
+        assert!(sidebar.fills[1].tint_layer && near(sidebar.fills[1].rgba[3], 0.1));
     }
 
     #[test]

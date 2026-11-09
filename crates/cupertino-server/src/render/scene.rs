@@ -2504,39 +2504,41 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
 
 #[cfg(test)]
 mod tests {
+    /// An inactive window's sidebar is the data's inactive variant, an opaque grey laid with the desktop tint and no
+    /// backdrop, so it keeps the wallpaper's tint whatever lies behind it; with Reduce Transparency it is the active
+    /// window's opaque sidebar, which is no darker than the window.
     #[test]
-    fn an_inactive_window_keeps_its_sidebar_s_material() {
+    fn an_inactive_window_tints_its_sidebar_and_keeps_its_opaque_one() {
         let theme = Theme::load().unwrap();
         for appearance in Appearance::ALL {
-            for reduce_transparency in [false, true] {
-                let sidebar = |window| {
-                    theme
-                        .recipe(
-                            appearance,
-                            "Sidebar",
-                            &super::material_options(reduce_transparency, window),
-                        )
-                        .unwrap()
-                };
-                let (active, inactive) =
-                    (sidebar(WindowState::Active), sidebar(WindowState::Inactive));
-                assert_eq!(
-                    active, inactive,
-                    "{appearance:?} rt={reduce_transparency}: the inactive sidebar is the active one's material"
-                );
-            }
+            let sidebar = |reduce_transparency, window| {
+                theme
+                    .recipe(
+                        appearance,
+                        "Sidebar",
+                        &super::material_options(reduce_transparency, window),
+                    )
+                    .unwrap()
+            };
+            assert_eq!(
+                sidebar(true, WindowState::Active),
+                sidebar(true, WindowState::Inactive),
+                "{appearance:?}: the opaque sidebar stays"
+            );
+            let (active, inactive) = (
+                sidebar(false, WindowState::Active),
+                sidebar(false, WindowState::Inactive),
+            );
+            assert!(
+                active.has_backdrop(),
+                "{appearance:?}: the active sidebar blurs what is behind"
+            );
+            assert!(
+                !inactive.has_backdrop() && inactive.uses_tint_layer(),
+                "{appearance:?}: the inactive one is an opaque grey tinted by the wallpaper"
+            );
+            assert_eq!(inactive.rendition_key, "inactive.normal");
         }
-        let active = theme
-            .recipe(
-                Appearance::Dark,
-                "Sidebar",
-                &super::material_options(false, WindowState::Inactive),
-            )
-            .unwrap();
-        assert!(
-            active.has_backdrop() && active.uses_tint_layer(),
-            "it blurs and tints what is behind, as the active one does"
-        );
     }
 
     use super::super::material::{MaterialElement, MaterialGl};

@@ -46,11 +46,13 @@ flag and its Increase Contrast option.
   by `WindowState` and `Interaction`, or explicitly by `MaterialOptions::rendition_key`. A variant the material does not
   draw differently names the variant it shares, and `Recipe::rendition_key` reports it.
 - **Inactive windows.** The materials of a window's own body (`KEPT_WHEN_INACTIVE`: `Sidebar`, `InlineSidebar`,
-  `Titlebar`, `SeamlessWindowTitlebar`, `Header`, and their `-Opaque` variants) are drawn the same in an inactive
-  window as in an active one, in every appearance, with Reduce Transparency and in every interaction: the sidebar keeps
-  the tint of what lies behind it and the window grows no darker. What an inactive window changes is its labels, its
-  selection and its window buttons, through their own roles. Other materials (menus, selections, sheets) keep their
-  inactive variants, and an explicit `rendition_key` still reads any variant of the data.
+  `Titlebar`, `SeamlessWindowTitlebar`, `Header`) draw their own inactive variant in an inactive window: an opaque base
+  laid with the desktop tint and no backdrop, so the sidebar keeps the wallpaper's tint whatever lies behind the window
+  and reads the same over a busy or a dark scene. Their `-Opaque` variants (Reduce Transparency) are drawn the same in
+  an inactive window as in an active one, in every appearance and interaction, since the data's inactive opaque
+  variants are darker than the window. What else an inactive window changes is its labels, its selection and its
+  window buttons, through their own roles. Other materials (menus, selections, sheets) keep their inactive variants,
+  and an explicit `rendition_key` still reads any variant of the data.
 - **Reduce Transparency.** `reduce_transparency` selects the `-Opaque` variant (mapping). The high-contrast
   appearances only ship opaque variants and fall back to the normal-contrast catalog for materials they do not define.
 - **Hidden state layer.** A few selection materials draw nothing in one state: an empty recipe with a note.

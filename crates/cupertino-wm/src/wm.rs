@@ -91,6 +91,34 @@ impl Wm {
     pub fn key_window(&self) -> Option<WindowId> {
         self.focus.key_window
     }
+
+    /// The main window: the window the person works in, which the key window acts on. Key and main are separate
+    /// states. A window that can be main ([`Window::can_be_main`]) is main while it is key; a utility panel takes the
+    /// keyboard without becoming main, and a sheet or dialog leaves its parent main. Then the main window is the key
+    /// window's top-level parent, or for a panel without one, its application's most recently used window that can be
+    /// main. `None` while no window is key or the application has no window that can be main.
+    pub fn main_window(&self) -> Option<WindowId> {
+        let key = self.focus.key_window?;
+        let mut w = self.windows.get(&key)?;
+        if w.can_be_main() {
+            return Some(key);
+        }
+        // each parent mapped before its child, so the chain is never longer than the windows
+        for _ in 0..self.windows.len() {
+            match w.parent.and_then(|p| self.windows.get(&p)) {
+                Some(p) => w = p,
+                None => break,
+            }
+        }
+        if w.id != key && w.can_be_main() && self.focusable(w.id) {
+            return Some(w.id);
+        }
+        let app = self.apps.get(&self.windows[&key].app)?;
+        app.windows_mru
+            .iter()
+            .copied()
+            .find(|id| self.windows[id].can_be_main() && self.focusable(*id))
+    }
     pub fn front_app(&self) -> Option<AppId> {
         self.focus.front_app
     }

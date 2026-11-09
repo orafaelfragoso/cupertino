@@ -156,7 +156,7 @@ layout
   NodeId(107v1) cupertino_ui_controls::Stack<examples::virtual_list::Message> key=None parent=Some(NodeId(106v1)) children=[NodeId(108v1), NodeId(109v1)] rect=[10,643.48046875 116.05322265625x29.0390625] clip=[0,0 480x563]
   NodeId(108v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(107v1)) children=[] rect=[10,643.48046875 35.71826171875x15.7294921875] clip=[0,0 480x563]
   NodeId(109v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(107v1)) children=[] rect=[10,659.2099609375 116.05322265625x13.3095703125] clip=[0,0 480x563]
-  NodeId(8v1) cupertino_ui_controls::scroll::Bar<examples::virtual_list::Message> key=None parent=Some(NodeId(1v1)) children=[] rect=[464,0 16x563] clip=[none]
+  NodeId(8v1) cupertino_ui_controls::scroll::Bar<examples::virtual_list::Message> key=None parent=Some(NodeId(1v1)) children=[] rect=[463,0 17x563] clip=[none]
   NodeId(9v1) cupertino_ui_controls::Separator key=None parent=Some(NodeId(0v1)) children=[] rect=[0,563 480x1] clip=[none]
   NodeId(10v1) cupertino_ui_controls::Stack<examples::virtual_list::Message> key=None parent=Some(NodeId(0v1)) children=[NodeId(11v1), NodeId(12v1), NodeId(13v1)] rect=[0,564 480x36] clip=[none]
   NodeId(11v1) cupertino_ui_controls::Text key=Some(Str("status")) parent=Some(NodeId(10v1)) children=[] rect=[12,575.34521484375 105.53662109375x13.3095703125] clip=[none]
@@ -427,8 +427,8 @@ display
     Glyphs origin=0,12.59375 font=FontId(0) size=13 count=6 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
   paint 4294967405 parent=Some(4294967403) revision=238 bounds=[10,659.2099609375 0x0] hit=[10,659.2099609375 0x0] clip=None transform=[1.0, 0.0, 0.0, 1.0, 10.0, 659.2099609375]
     Glyphs origin=0,10.65625 font=FontId(0) size=11 count=20 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }
-  paint 4294967304 parent=Some(4294967297) revision=254 bounds=[464,0 16x563] hit=[464,0 16x563] clip=None transform=[1.0, 0.0, 0.0, 1.0, 464.0, 0.0]
-    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 2.0, y: 536.966403380613 }, size: Size { width: 12.0, height: 24.0 } }, radius: 6.0 }, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.5019608 }) }
+  paint 4294967304 parent=Some(4294967297) revision=254 bounds=[463,0 17x563] hit=[463,0 17x563] clip=None transform=[1.0, 0.0, 0.0, 1.0, 463.0, 0.0]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 8.0, y: 536.966403380613 }, size: Size { width: 6.0, height: 24.0 } }, radius: 3.0 }, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.5019608 }) }
   paint 4294967305 parent=Some(4294967296) revision=102 bounds=[0,563 480x1] hit=[0,563 480x1] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 563.0]
     Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 1.0 } }), paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
   paint 4294967306 parent=Some(4294967296) revision=103 bounds=[0,564 480x36] hit=[0,564 480x36] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 564.0]

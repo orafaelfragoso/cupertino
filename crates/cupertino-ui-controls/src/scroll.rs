@@ -93,14 +93,39 @@ pub(crate) fn frame<M: 'static>(
     tracked(content, state, axes, scroller, on_scroll, true)
 }
 
+/// As [`frame`], for a view whose band under raised nodes holds text outside glass, a table's pinned header: the
+/// scroll edge there is the solid one in every appearance, so the text over it stays legible.
+pub(crate) fn pinned<M: 'static>(
+    content: Element<M>,
+    state: ScrollState,
+    axes: (bool, bool),
+    scroller: Scroller,
+    on_scroll: ScrollHandler<M>,
+) -> Element<M> {
+    edged(content, state, axes, scroller, on_scroll, true, true)
+}
+
 /// As [`frame`], with the bars' tracks disabled, as a disabled text box shows them, unless `enabled`.
 pub(crate) fn tracked<M: 'static>(
+    content: Element<M>,
+    state: ScrollState,
+    axes: (bool, bool),
+    scroller: Scroller,
+    on_scroll: ScrollHandler<M>,
+    enabled: bool,
+) -> Element<M> {
+    edged(content, state, axes, scroller, on_scroll, enabled, false)
+}
+
+/// The frame of [`tracked`], its scroll edge solid when `firm` ([`pinned`]).
+fn edged<M: 'static>(
     content: Element<M>,
     state: ScrollState,
     (horizontal, vertical): (bool, bool),
     scroller: Scroller,
     on_scroll: ScrollHandler<M>,
     enabled: bool,
+    firm: bool,
 ) -> Element<M> {
     let scroller = style(scroller);
     let viewport = Element::new(Viewport {
@@ -138,6 +163,7 @@ pub(crate) fn tracked<M: 'static>(
                     kind: Some(Axis::Horizontal),
                     fit: false,
                     edge: false,
+                    firm: false,
                     children: vec![inner, bars.next().expect("one bar per scrolled axis")],
                 });
             }
@@ -147,6 +173,7 @@ pub(crate) fn tracked<M: 'static>(
                 kind: Some(Axis::Vertical),
                 fit: false,
                 edge: vertical,
+                firm,
                 children,
             });
         }
@@ -155,6 +182,7 @@ pub(crate) fn tracked<M: 'static>(
         kind: None,
         fit: false,
         edge: vertical,
+        firm,
         children,
     })
 }
@@ -170,6 +198,7 @@ pub(crate) fn fitted<M: 'static>(
         kind: None,
         fit: true,
         edge: true,
+        firm: false,
         children: vec![
             Element::new(Viewport {
                 content: Some(content),
@@ -199,6 +228,8 @@ pub(crate) struct Frame<M> {
     /// The frame of a view that scrolls vertically: where raised nodes cover its top, it draws the scroll edge there
     /// ([`crate::scroll_edge`]).
     pub(crate) edge: bool,
+    /// The covered band holds text outside glass: the edge there is the solid one ([`pinned`]).
+    pub(crate) firm: bool,
     pub(crate) children: Vec<Element<M>>,
 }
 
@@ -240,7 +271,7 @@ impl<M: 'static> Widget<M> for Frame<M> {
     fn update(&self, old: &Self, _: &mut Self::State) -> Change {
         if self.kind != old.kind || self.fit != old.fit {
             Change::Layout
-        } else if self.edge != old.edge {
+        } else if self.edge != old.edge || self.firm != old.firm {
             Change::Paint
         } else {
             Change::None
@@ -261,7 +292,7 @@ impl<M: 'static> Widget<M> for Frame<M> {
     fn paint(&self, edge: &Self::State, cx: &mut PaintCx<'_>) {
         let top = cx.obscured().top;
         let look = (self.edge && top > 0.0)
-            .then(|| crate::scroll_edge::EdgeLook::of(cx, top))
+            .then(|| crate::scroll_edge::EdgeLook::of(cx, top, self.firm))
             .flatten();
         edge.set(look);
         if look.is_some() {

@@ -356,7 +356,12 @@ fn table_element<M: 'static>(
     // the rows start below the header, which lies over the view's top with what covers it
     let lead = rows.lead;
     let rows = led(Element::new(rows), lead);
-    let body = scroll::frame(
+    // a header over the rows' scrolled top holds text outside glass: the edge under it is solid
+    let body = if table.header_top > 0.0 {
+        scroll::pinned
+    } else {
+        scroll::frame
+    }(
         rows,
         table.scroll,
         (false, true),

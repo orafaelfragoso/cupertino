@@ -4,7 +4,8 @@
 //! The soft edge veils the content with the window background, strong over the upper part of the covered band and
 //! easing out to nothing at its bottom ([`soft_edge_opacity`]), so content fades as it passes under the row. The hard
 //! edge fills the band with the window background and draws a separator along its bottom, so the row reads as a solid
-//! bar: with Reduce Transparency and in high contrast. Where the window system has no raised layer nothing scrolls
+//! bar: with Reduce Transparency and in high contrast. A band that holds text outside glass, a table's pinned header
+//! under the row, is always the hard edge, its header drawing the line along its bottom. Where the window system has no raised layer nothing scrolls
 //! under raised nodes (their scroll containers clip it away) and there is no edge.
 
 use cupertino_geometry::{Point, Rect};
@@ -76,8 +77,9 @@ pub(crate) struct EdgeLook {
 
 impl EdgeLook {
     /// The edge of a node `band` points of whose top raised nodes cover; none where they draw in place, with nothing
-    /// scrolled under them.
-    pub(crate) fn of(cx: &PaintCx<'_>, band: f64) -> Option<Self> {
+    /// scrolled under them. A `firm` band, which holds text outside glass such as a table's pinned header, is solid in
+    /// every appearance, without a separator of its own: what it holds draws the line along its bottom.
+    pub(crate) fn of(cx: &PaintCx<'_>, band: f64, firm: bool) -> Option<Self> {
         if !cx.raised_layer() {
             return None;
         }
@@ -86,7 +88,11 @@ impl EdgeLook {
             window_active: cx.window_active(),
             ..StateVariant::NORMAL
         };
-        let edge = scroll_edge(&theme.preferences);
+        let edge = if firm {
+            ScrollEdge::Hard
+        } else {
+            scroll_edge(&theme.preferences)
+        };
         Some(Self {
             edge,
             background: theme
@@ -94,8 +100,8 @@ impl EdgeLook {
                 .get(ColorRole::WindowBackground, state)
                 .unwrap_or(Color::new(0.0, 0.0, 0.0, 0.0)),
             separator: match edge {
-                ScrollEdge::Hard => theme.colors.get(ColorRole::Separator, state),
-                ScrollEdge::Soft => None,
+                ScrollEdge::Hard if !firm => theme.colors.get(ColorRole::Separator, state),
+                _ => None,
             },
             band,
         })

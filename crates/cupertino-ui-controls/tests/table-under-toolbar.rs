@@ -1,9 +1,11 @@
 //! A table that fills a pane under a toolbar row: its header sits below the row and lies over the rows with it, the
-//! rows start below the header and scroll under both, and the header keeps its clicks.
+//! rows start below the header and scroll under both, and the header keeps its clicks. Over a raised layer the rows
+//! under the row and the header sit on a solid band, so the header's titles stay legible.
 
 mod support;
 
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_ui_controls::scroll_edge::SOFT_EDGE_STOPS;
 use cupertino_ui_controls::{
     unobscured_insets, Column, ColumnWidth, NavigationStack, Selection, SortOrder, TableView, Text,
     TextRole,
@@ -11,6 +13,7 @@ use cupertino_ui_controls::{
 use cupertino_ui_core::{Application, Command, Element, Role, Window};
 use cupertino_ui_layout::ScrollState;
 use cupertino_ui_platform::{DecorationMode, PointerEvent, ScrollSource};
+use cupertino_ui_render::Paint;
 use cupertino_ui_text::{AttributedText, TextStyle};
 use support::{window, Harness};
 
@@ -212,4 +215,44 @@ fn the_header_sits_below_the_row_and_the_rows_below_it_scroll_under_both() {
             );
         }
     }
+}
+
+/// The grey level of the window's last frame, with its raised layer over it, at `(x, y)`.
+fn level(h: &Harness<Under>, x: usize, y: usize) -> u8 {
+    let system = h.rt.window_system();
+    let width = system.frames(h.window).unwrap().last().unwrap().width as usize;
+    let pixels = system.composited(h.window).unwrap().expect("a frame");
+    pixels[(y * width + x) * 4 + 1]
+}
+
+#[test]
+fn over_a_raised_layer_the_rows_under_the_header_sit_on_a_solid_band() {
+    let mut h = opened(true);
+    scrolled(&mut h, 30.0);
+    // no soft veil: it would leave the rows legible under the header's titles
+    assert!(!h.snapshot().display_list.nodes.iter().any(|n| n
+        .ops
+        .iter()
+        .any(|op| matches!(op, cupertino_ui_render::PaintOp::Fill { paint: Paint::Linear { stops, .. }, .. } if stops.len() == SOFT_EDGE_STOPS))));
+    let background = support::color(
+        cupertino_ui_theme::ColorRole::WindowBackground,
+        cupertino_ui_theme::InteractionVariant::Normal,
+        false,
+    );
+    let bg = (background.g * 255.0).round() as u8;
+    // the rows scrolled 30 pt: the first two now lie under the header, the first's text at the header's titles
+    let first = cell(&h, "0.0");
+    assert!(first.max_y() > 52.0 && first.min_y() < 80.0, "{first:?}");
+    // over its text, above the header's titles, only the band shows
+    for y in 53..=57 {
+        for x in first.min_x().floor() as usize..=first.max_x().ceil() as usize {
+            assert_eq!(level(&h, x, y), bg, "the band hides the row at {x},{y}");
+        }
+    }
+    for y in [4, 30, 60, 70] {
+        assert_eq!(level(&h, 200, y), bg, "solid at {y}");
+    }
+    // below the header, the rows show
+    let below = cell(&h, "3.0");
+    assert!(below.min_y() >= 80.0, "{below:?}");
 }

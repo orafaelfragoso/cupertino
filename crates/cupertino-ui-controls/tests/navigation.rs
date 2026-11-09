@@ -533,6 +533,33 @@ fn over_a_raised_layer_the_page_shows_under_the_row_through_a_soft_edge() {
 }
 
 #[test]
+fn an_inactive_window_keeps_its_soft_edge_in_its_inactive_background() {
+    let mut h = Harness::<Behind>::with_layer(support::theme());
+    h.resize(Size::new(600.0, 300.0));
+    scrolled_by(&mut h, 30.0);
+    h.send(cupertino_ui_platform::WindowEvent::Focus(false));
+    let inactive = support::theme().colors.get(
+        ColorRole::WindowBackground,
+        cupertino_ui_theme::StateVariant {
+            window_active: false,
+            ..cupertino_ui_theme::StateVariant::NORMAL
+        },
+    );
+    let edge = fills(&h)
+        .into_iter()
+        .find_map(|(rect, paint)| match paint {
+            Paint::Linear { stops, .. } if stops.len() == SOFT_EDGE_STOPS => Some((rect, stops)),
+            _ => None,
+        })
+        .expect("a soft edge in an inactive window");
+    assert_eq!(edge.0, Rect::new(0.0, 0.0, 600.0, 52.0));
+    assert_eq!(
+        edge.1,
+        soft_edge_stops(inactive.expect("a window background"))
+    );
+}
+
+#[test]
 fn reduce_transparency_sets_the_row_on_a_solid_band() {
     let mut rt = support::theme();
     rt.preferences.reduce_transparency = true;

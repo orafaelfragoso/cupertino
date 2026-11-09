@@ -1856,7 +1856,7 @@ fn launcher_panel(state: &Cupertino, width: i32) -> bool {
 fn the_app_grid_action_opens_the_launcher_s_browser_and_escape_folds_then_closes_it() {
     const ESCAPE: u32 = 1 + 8;
     // the panels' windows: the browser and the search field, each with the room for its shadow
-    const BROWSER: i32 = 842 + 120;
+    const BROWSER: i32 = 844 + 120;
     const SEARCH: i32 = 640 + 120;
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");

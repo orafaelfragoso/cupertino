@@ -371,6 +371,64 @@ fn home_relative(p: &std::path::Path) -> String {
     }
 }
 
+/// The file search as a provider: the folders and files of `index` matching `text`, scored by name alone (the usage
+/// bonus and the section limits come in [`Launcher::compose`]). It reads only the in-memory index, so a host can run it
+/// on any thread; it gives up, answering nothing, once `cancel` says a newer query started.
+pub fn file_sections(
+    index: &FileIndex,
+    text: &str,
+    now: f64,
+    config: &LauncherConfig,
+    cancel: Option<&crate::providers::Cancel>,
+) -> Vec<Section> {
+    let q = Query::new(text);
+    if q.is_empty() || cancel.is_some_and(|c| c.is_cancelled()) {
+        return Vec::new();
+    }
+    let found = index.search(
+        &q,
+        (config.max_files + config.max_folders) * 4,
+        now,
+        &config.weights,
+    );
+    if cancel.is_some_and(|c| c.is_cancelled()) {
+        return Vec::new();
+    }
+    let mut folders = Vec::new();
+    let mut files = Vec::new();
+    for m in found {
+        let e = index.entry(m.index);
+        let item = ResultItem {
+            id: format!("file:{}", e.path.display()),
+            kind: if e.is_dir {
+                ItemKind::Folder
+            } else {
+                ItemKind::File
+            },
+            title: e.name.clone(),
+            subtitle: home_relative(e.path.parent().unwrap_or(&e.path)),
+            icon: None,
+            score: m.score,
+            highlights: m.positions,
+            action: Action::OpenPath(e.path.clone()),
+        };
+        if e.is_dir {
+            folders.push(item);
+        } else {
+            files.push(item);
+        }
+    }
+    [(SectionKind::Folders, folders), (SectionKind::Files, files)]
+        .into_iter()
+        .filter(|(_, items)| !items.is_empty())
+        .map(|(kind, items)| Section {
+            kind,
+            title: kind.title().into(),
+            items,
+        })
+        .collect()
+}
+
 impl Launcher {
     pub fn new(config: LauncherConfig, entries: Vec<DesktopEntry>, frecency: Frecency) -> Self {
         let apps = build_candidates(&entries, config.include_actions);
@@ -419,6 +477,24 @@ impl Launcher {
         self.token_hook = hook;
     }
 
+    /// The application `desktop_id` as a result, for the browser to open as the search would.
+    pub fn app_result(&self, desktop_id: &str) -> Option<ResultItem> {
+        let key = format!("app:{desktop_id}");
+        let c = self.apps.iter().find(|c| c.key == key)?;
+        Some(self.app_item(c, 0.0, Vec::new()))
+    }
+
+    /// The desktop IDs of the applications launched most, the most recent and frequent first: the browser's first row.
+    pub fn recent_apps(&self, limit: usize, now: f64) -> Vec<String> {
+        self.frecency
+            .top(limit * 3, now)
+            .into_iter()
+            .filter_map(|(k, _)| k.strip_prefix("app:").map(str::to_owned))
+            .filter(|id| !id.contains('#') && self.entry(id).is_some())
+            .take(limit)
+            .collect()
+    }
+
     fn app_item(&self, c: &AppCandidate, score: f64, highlights: Vec<usize>) -> ResultItem {
         let e = &self.entries[c.entry];
         match c.action {
@@ -460,6 +536,17 @@ impl Launcher {
 
     /// Results for `text`. `now`: Unix seconds (frecency decay, file recency).
     pub fn query(&self, text: &str, now: f64) -> Results {
+        let provided = match &self.files {
+            Some(index) => file_sections(index, text, now, &self.config, None),
+            None => Vec::new(),
+        };
+        self.compose(text, now, provided)
+    }
+
+    /// The results of the providers that answer at once (the calculator, conversions, applications, the web search),
+    /// ranked together with `provided`, the sections the slower providers gave (the file search,
+    /// [`file_sections`]), which take their usage bonus and their section limits here.
+    pub fn compose(&self, text: &str, now: f64, provided: Vec<Section>) -> Results {
         let q = Query::new(text);
         let mut results = Results {
             query: text.to_string(),
@@ -565,58 +652,24 @@ impl Launcher {
             });
         }
 
-        if let Some(idx) = &self.files {
-            let found = idx.search(
-                &q,
-                (self.config.max_files + self.config.max_folders) * 4,
-                now,
-                &self.config.weights,
-            );
-            let mut folders = Vec::new();
-            let mut files = Vec::new();
-            for m in found {
-                let e = idx.entry(m.index);
-                let key = format!("file:{}", e.path.display());
-                let score = m.score + self.frecency.bonus(&key, &qn, now);
-                let item = ResultItem {
-                    id: key,
-                    kind: if e.is_dir {
-                        ItemKind::Folder
-                    } else {
-                        ItemKind::File
-                    },
-                    title: e.name.clone(),
-                    subtitle: home_relative(e.path.parent().unwrap_or(&e.path)),
-                    icon: None,
-                    score,
-                    highlights: m.positions,
-                    action: Action::OpenPath(e.path.clone()),
-                };
-                if e.is_dir {
-                    folders.push(item);
-                } else {
-                    files.push(item);
-                }
+        sections.extend(provided.into_iter().filter_map(|mut section| {
+            // a provider's matches take the usage bonus here, on the loop, where the history is
+            for item in &mut section.items {
+                item.score += self.frecency.bonus(&item.id, &qn, now);
             }
-            for (kind, mut items, max) in [
-                (SectionKind::Folders, folders, self.config.max_folders),
-                (SectionKind::Files, files, self.config.max_files),
-            ] {
-                items.sort_by(|a, b| {
-                    b.score
-                        .total_cmp(&a.score)
-                        .then_with(|| a.title.cmp(&b.title))
-                });
-                items.truncate(max);
-                if !items.is_empty() {
-                    sections.push(Section {
-                        kind,
-                        title: kind.title().into(),
-                        items,
-                    });
-                }
-            }
-        }
+            let max = match section.kind {
+                SectionKind::Folders => self.config.max_folders,
+                SectionKind::Files => self.config.max_files,
+                _ => usize::MAX,
+            };
+            section.items.sort_by(|a, b| {
+                b.score
+                    .total_cmp(&a.score)
+                    .then_with(|| a.title.cmp(&b.title))
+            });
+            section.items.truncate(max);
+            (!section.items.is_empty()).then_some(section)
+        }));
 
         if let Some(url) = &self.config.web_search_url {
             let target = url.replace("{}", &percent_encode(text.trim()));

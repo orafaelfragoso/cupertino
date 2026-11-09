@@ -14,6 +14,7 @@
 //! the analysis; ranking scores and the remaining row metrics are approximate (authored) and configurable; colours,
 //! type, material and controls come from CupertinoKit's theme.
 
+pub mod browse;
 pub mod calc;
 #[cfg(feature = "app")]
 pub mod control;
@@ -25,8 +26,11 @@ pub mod files;
 pub mod frecency;
 pub mod kit;
 pub mod matcher;
+pub mod motion;
+pub mod nav;
 pub mod panel;
 pub mod preview;
+pub mod providers;
 pub mod view;
 
 pub use desktop::{DesktopAction, DesktopEntry};

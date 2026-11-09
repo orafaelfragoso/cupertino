@@ -660,6 +660,8 @@ impl Cupertino {
         }
         self.outputs[idx].scheduler.called_back();
         self.popups.cleanup();
+        // forget the surfaces on the output that are gone (`wl_surface.enter` keeps one entry per surface on it)
+        self.outputs[idx].output.cleanup();
     }
 
     /// The tail of a frame of output `idx` that failed to draw. The screen still shows the frame before it, so nothing

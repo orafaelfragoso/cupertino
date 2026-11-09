@@ -183,8 +183,12 @@ pub enum Input {
     Activate(usize),
     /// Action `.1` of the result at flat index `.0` was clicked, or pressed by assistive technology.
     RunAction(usize, usize),
-    /// A press outside the panel, or the panel's window lost the keyboard.
+    /// A press outside the panel, or the panel's window was closed.
     Dismiss,
+    /// The panel's window lost the keyboard to another window: the panel closes unless its view options menu, a popup
+    /// of its window, took it. The model decides in the order of the window system's events, so a leave that follows
+    /// the menu's dismissal in one batch still closes the panel.
+    KeyboardLeft,
     /// The pointer moved onto the application at this index of the browser.
     BrowseHover(usize),
     /// The application at this index was pressed, or activated by assistive technology.
@@ -1114,7 +1118,7 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
 }
 
 /// The panel's content: takes the panel's keys before the query field does (which keys follows its [`KeyMode`]), and
-/// closes the panel when its window loses the keyboard.
+/// reports when its window loses the keyboard.
 struct PanelRoot<M> {
     keys: KeyMode,
     alpha: f64,
@@ -1170,12 +1174,9 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
                     _ => Propagation::Continue,
                 }
             }
-            // another window took the keyboard; the view options menu, a popup of this window, takes it while it is
-            // open (and closes itself if the keyboard goes anywhere else then)
-            Event::FocusWithin { gained: false, .. }
-                if !cx.window_active() && self.keys != KeyMode::Menu =>
-            {
-                cx.emit(M::from(Input::Dismiss));
+            // another window took the keyboard: the model knows whether that was the view options menu
+            Event::FocusWithin { gained: false, .. } if !cx.window_active() => {
+                cx.emit(M::from(Input::KeyboardLeft));
                 Propagation::Continue
             }
             _ => Propagation::Continue,

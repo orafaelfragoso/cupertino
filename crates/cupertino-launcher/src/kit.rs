@@ -945,6 +945,11 @@ impl Model {
                 self.outcome(outcome)
             }
             Input::Dismiss => self.intent(Intent::Dismiss),
+            // the view options menu, a popup of the panel's window, holds the keyboard while it is open; when the
+            // compositor dismisses it because something else took the keyboard, the panel's leave comes after the
+            // menu's close and closes the panel
+            Input::KeyboardLeft if self.nav.nested == Some(Nested::ViewOptions) => Vec::new(),
+            Input::KeyboardLeft => self.intent(Intent::Dismiss),
             Input::BrowseHover(index) => {
                 if let Some(b) = self.browser.as_mut() {
                     b.hover(index);

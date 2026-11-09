@@ -1735,6 +1735,68 @@ fn the_panel_stays_open_while_its_view_options_menu_holds_the_keyboard() {
     assert!(!run.model().panel.is_visible());
 }
 
+/// The compositor ends the menu's grab when something else takes the keyboard: the popup is dismissed, the keyboard
+/// comes back to the panel and leaves it at once. The panel's leave comes after the menu closed, so the panel closes;
+/// a menu dismissed by a press outside, which gives the keyboard back to the panel and nothing more, leaves it open.
+#[test]
+fn the_panel_closes_when_the_keyboard_leaves_it_after_its_menu_was_dismissed() {
+    for taken in [false, true] {
+        let mut run = Run::on_layer_surfaces();
+        run.deliver(Message::Browse);
+        let panel = run.panel();
+        run.click(panel, run.centre(browse::OPTIONS_BUTTON));
+        let menu = run.options_menu().expect("the press opened the menu");
+        run.send(panel, WindowEvent::Focus(false));
+        run.send(menu, WindowEvent::Focus(true));
+        assert!(run.model().panel.is_visible());
+        let mut batch = vec![
+            (menu, WindowEvent::PopupDone),
+            (menu, WindowEvent::Focus(false)),
+            (panel, WindowEvent::Focus(true)),
+        ];
+        if taken {
+            batch.push((panel, WindowEvent::Focus(false)));
+        }
+        let system = run.driver.window_system_mut();
+        for (window, event) in batch {
+            system.enqueue_window(window, event).unwrap();
+        }
+        run.settle();
+        assert!(run.options_menu().is_none(), "the menu closed");
+        assert_eq!(
+            run.model().panel.is_visible(),
+            !taken,
+            "the panel closes only when the keyboard went elsewhere (taken: {taken})"
+        );
+    }
+}
+
+/// A window system hands over every event it read at once, and the model hears what they emit in that order before
+/// the view is built again: the menu's close and then the panel's leave, while the panel's window still shows the
+/// menu's keys. The leave is judged after the close, so it closes the panel.
+#[test]
+fn a_leave_after_the_menu_closed_in_one_batch_closes_the_panel() {
+    for taken in [false, true] {
+        let mut model = Model::new(test_launcher(), Box::new(TestHost));
+        kit::update(&mut model, Message::Browse);
+        kit::update(&mut model, Message::Input(Input::ViewOptions));
+        assert_eq!(model.nav.nested, Some(crate::nav::Nested::ViewOptions));
+        // the menu's popup takes the keyboard from the panel's window
+        kit::update(&mut model, Message::Input(Input::KeyboardLeft));
+        assert!(model.panel.is_visible(), "the menu holds the keyboard");
+        kit::update(&mut model, Message::Input(Input::CloseMenu));
+        if taken {
+            kit::update(&mut model, Message::Input(Input::KeyboardLeft));
+        }
+        assert_eq!(model.nav.nested, None);
+        assert_eq!(
+            model.panel.is_visible(),
+            !taken,
+            "the panel closes only when the keyboard left it after the menu (taken: {taken})"
+        );
+    }
+}
+
 /// The view options are drawn as every menu of the shell is: a menu on the menu material, which a desktop with glass
 /// shows as glass under the popup.
 #[test]

@@ -84,10 +84,13 @@ from the application's model and reports changes as messages.
   heading and a selected list item per row. A row is keyed by its item's key, so its focus and accessible object stay
   with it while rows come and go around it. A row's accessory (an eject button) offers a click only with
   `on_accessory`; without it the accessory reads as disabled. A busy row turns an activity indicator in the accessory's
-  place, standing still under Reduce Motion. In a window that is not active the rows' icons take the secondary label
-  colour.
+  place, standing still under Reduce Motion. In a window that is not active every row's icon and label, the selected
+  row's too, takes the secondary label colour and the selection turns to the sidebar's faint neutral selection
+  (`ColorRole::SidebarSelection` resolved inactive), laid over the material so its tint shows; the headings, the
+  geometry and the text stay (`tests/sidebar.rs`).
   `Sidebar::with_look(SidebarLook::Neutral { accent })` draws a list of places instead: taller rows with larger
-  symbols, the selected row filled with a neutral tint, its label semibold and its symbol in the accent colour; the
+  symbols, the selected row filled with the sidebar's neutral selection (`ColorRole::SidebarSelection`), its label
+  semibold and its symbol in the accent colour; the
   other rows' symbols are in the accent colour in the sections `accent` marks and in the secondary label colour in the
   rest. In a window that is not active the selected row's symbol takes the secondary label colour as well, so it still
   stands out from the neutral selection. The default look (`SidebarLook::Accent`, Settings') fills the selected row
@@ -113,7 +116,9 @@ from the application's model and reports changes as messages.
   launcher capsule; it edits and reads as its field does (`tests/bare_field.rs`).
 - **Tiled sidebar.** `TileSidebar` lists a settings window's pages: rows of `TILE_SIDEBAR_ROW_HEIGHT`, a tile before
   each label, in groups set apart by space, under an optional header (a `SearchField`) that does not scroll. The
-  selected row fills with the selected control colour, its label bold. Keys, Tab stop, reporting and assistive
+  selected row fills with the selected control colour, its label bold. In a window that is not active every label, the
+  selected row's too, takes the secondary label colour and the selection turns to the sidebar's faint neutral
+  selection; the tiles keep their colours (`tests/form.rs`). Keys, Tab stop, reporting and assistive
   technology behave as `Sidebar`'s, except that a press or click on the selected row reports it again, so that a
   window showing a page below that row's page can go back to it.
 - **Positions.** A menu item says its place among the menu's items and the menu says how many it holds, separators not

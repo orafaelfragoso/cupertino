@@ -340,9 +340,16 @@ impl<M: 'static> Widget<M> for TileRow<M> {
             window_active: cx.window_active(),
             ..ControlState::default()
         };
+        let active = cx.window_active();
+        // the selection is the accent in an active window and the sidebar's faint neutral selection, laid over its
+        // material, in one that is not
         if self.selected {
-            let fill = look::color(&theme, ColorRole::ControlFill, &state);
-            look::fill(cx, chrome, SELECTION_RADIUS, fill);
+            let role = if active {
+                ColorRole::ControlFill
+            } else {
+                ColorRole::SidebarSelection
+            };
+            look::fill(cx, chrome, SELECTION_RADIUS, look::color(&theme, role, &state));
         }
         let leading = |offset: f64, width: f64| {
             if rtl {
@@ -363,8 +370,13 @@ impl<M: 'static> Widget<M> for TileRow<M> {
             TILE,
         );
         paint_tile(cx, &tile, area);
-        // the label at full strength: the sidebar's labels stand out more than the window's text
-        let color = if self.selected {
+        // the label at full strength: the sidebar's labels stand out more than the window's text; in a window that is
+        // not active every label, the selected row's too, is the secondary label colour (the tiles keep their colours)
+        let color = if !active {
+            theme
+                .colors
+                .get(ColorRole::SecondaryText, StateVariant::NORMAL)
+        } else if self.selected {
             look::color(&theme, ColorRole::ControlText, &state)
         } else {
             theme

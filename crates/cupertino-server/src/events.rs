@@ -154,6 +154,11 @@ impl PointerDevice {
         !std::mem::replace(&mut self.used, true)
     }
 
+    /// A mouse (not a touchpad) that has moved, scrolled or clicked.
+    pub fn is_used_mouse(&self) -> bool {
+        !self.touchpad && self.used
+    }
+
     /// The `Mice` entry of this device, for a used mouse that has a key.
     pub fn mouse_entry(&self, cfg: &PointerSettings) -> Option<crate::quit::MouseEntry> {
         if self.touchpad || !self.used {
@@ -374,6 +379,7 @@ impl Cupertino {
             InputEvent::DeviceRemoved { device } => {
                 if self.pointer_devices.remove(&device.id()).is_some() {
                     self.publish_session_settings();
+                    self.sync_scroll_bars();
                 }
             }
             InputEvent::Keyboard { event } => self.on_keyboard::<B>(event),
@@ -837,6 +843,7 @@ impl Cupertino {
             .is_some_and(|device| !device.touchpad && device.note_use())
         {
             self.publish_session_settings();
+            self.sync_scroll_bars();
         }
     }
 

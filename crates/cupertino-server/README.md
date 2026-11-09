@@ -369,6 +369,7 @@ Only applications with a window are listed, and an application whose last window
 * The appearance changes at run time through `Cupertino::set_appearance` (the `toggle-appearance` action, bindable in `shortcuts.conf` or `compositor.json`, no default chord).
 * `locked` is sent when the lock request is accepted, before the lock screen has its first frame, and `unlocked` when the session opens again. A lock whose client crashed stays locked and sends nothing, and a client taking it over does not send `locked` a second time.
 * The request needs the Session role (a shell process). Any client of the socket may observe the appearance and display options alone through `cupertino_app_effects_v1.get_appearance`, which has no lock state.
+* An appearance observer's `display_options` also carry `always_show_scroll_bars`: set for `show_scroll_bars` `always`, clear for `when-scrolling`, and for `automatic` set while a mouse is connected (a pointing device other than a touchpad that has moved, scrolled or clicked). It is sent again when the setting changes, a mouse is first used or a mouse goes away (`Cupertino::sync_scroll_bars`).
 * A version 2 observer (`cupertino_shell_v1` version 2) also gets `display_options` (a bitfield of reduce motion, reduce transparency, increase contrast and differentiate without colour) after `appearance` at creation and once per change. A version 1 observer never does.
 
 ### X11 applications
@@ -439,6 +440,7 @@ Shortcuts are the `cupertino-input` `ShortcutMap` (defaults approximate, `Super`
 | `trackpad_acceleration` | bool | `true` | pointer acceleration of touchpads; off gives a constant gain by `trackpad_speed` |
 | `natural_scrolling` | bool | `true` | natural scrolling of touchpads; applies live, to the next event of every touchpad. It no longer covers wheels: a file that sets it to `true` and has no `mouse_natural_scrolling` now scrolls wheels the traditional way |
 | `mouse_natural_scrolling` | bool | `false` | natural scrolling of wheels; applies live, to the next event of every mouse |
+| `show_scroll_bars` | `automatic`, `when-scrolling`, `always` | `automatic` | when applications show their scroll bars; `automatic` shows them beside the content while a mouse is connected; applies live |
 | `wallpaper`, `wallpaper_dark` | absolute path | none | the wallpaper image (PNG or JPEG) and the one of the dark appearance (`wallpaper` serves both when only it is set); applies live |
 | `cursor_size` | number | `1.0` | cursor scale, clamped to 1 to 4 |
 | `cursor_fill`, `cursor_outline` | `#rrggbb` or `#rrggbbaa` | `#000000`, `#ffffffff` | cursor colours |
@@ -602,7 +604,7 @@ until its own key changes; a key removed from the file goes back to its default.
 
 | File | Applied at once | At the next start |
 |---|---|---|
-| `compositor.json` | appearance, tracking speeds, acceleration (the pointer devices start over with the new curve), scroll direction, cursor size, colours (the cursors are recoloured) and shake, minimize effect and closing animation (with the window model's minimize timing), hot corner size and dwell, corner radius, key bindings, terminals, screenshot command | `decorations` (windows that open from now on follow it), `menu_bar_height`, `show_menu_bar`, `shell` |
+| `compositor.json` | appearance, tracking speeds, acceleration (the pointer devices start over with the new curve), scroll direction, cursor size, colours (the cursors are recoloured) and shake, minimize effect and closing animation (with the window model's minimize timing), hot corner size and dwell, corner radius, scroll bars (the appearance observers are told), key bindings, terminals, screenshot command | `decorations` (windows that open from now on follow it), `menu_bar_height`, `show_menu_bar`, `shell` |
 | `keyboard.conf` | every key; input sources and the layout keys rebuild the keymap, repeat changes are sent to the clients | — |
 | `power.conf` | every key; the countdown in progress continues with the new timers | — |
 

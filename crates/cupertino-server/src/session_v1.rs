@@ -8,6 +8,7 @@
 //! [`SessionObservers::lock`] where the lock begins and ends.
 
 use cupertino_defaults::accessibility::DisplayOptions;
+use cupertino_defaults::compositor::ScrollBarsName;
 use cupertino_protocols::server::app_effects::cupertino_appearance_v1::{
     self, CupertinoAppearanceV1, DisplayOption as AppearanceOption,
 };
@@ -27,6 +28,8 @@ use crate::state::Cupertino;
 pub struct SessionObservers {
     observers: Vec<CupertinoSessionV1>,
     appearance_observers: Vec<CupertinoAppearanceV1>,
+    /// What the appearance observers were last told of the scroll bars: always shown.
+    always_show_scroll_bars: bool,
 }
 
 /// Whether the connection of `observer` still holds the Session role: an observer whose holder exited is not told.
@@ -53,7 +56,7 @@ impl SessionObservers {
             send_display_options(observer, options);
         }
         for observer in &self.appearance_observers {
-            send_appearance_options(observer, options);
+            send_appearance_options(observer, options, self.always_show_scroll_bars);
         }
     }
 
@@ -116,8 +119,17 @@ fn send_display_options(observer: &CupertinoSessionV1, options: DisplayOptions) 
     observer.display_options(bits);
 }
 
-fn send_appearance_options(observer: &CupertinoAppearanceV1, options: DisplayOptions) {
+/// `display_options` with the bits of `options`, and `always_show_scroll_bars` when the scroll bars stay shown.
+fn send_appearance_options(
+    observer: &CupertinoAppearanceV1,
+    options: DisplayOptions,
+    always_show_scroll_bars: bool,
+) {
     let mut bits = AppearanceOption::empty();
+    bits.set(
+        AppearanceOption::AlwaysShowScrollBars,
+        always_show_scroll_bars,
+    );
     bits.set(AppearanceOption::ReduceMotion, options.reduce_motion);
     bits.set(
         AppearanceOption::ReduceTransparency,
@@ -177,9 +189,39 @@ impl Cupertino {
     ) {
         let observer = init.init(id, ());
         observer.appearance(u32::from(self.config.is_dark()));
-        send_appearance_options(&observer, self.display_options());
+        self.sync_scroll_bars();
+        send_appearance_options(
+            &observer,
+            self.display_options(),
+            self.sessions.always_show_scroll_bars,
+        );
         send_appearance_lock(&observer, self.session_lock.is_active());
         self.sessions.appearance_observers.push(observer);
+    }
+
+    /// Whether applications show their scroll bars beside the content at all times: by the setting, and for an
+    /// automatic one while a mouse is connected (a pointing device other than a touchpad that has moved, scrolled
+    /// or clicked; a keyboard's unused pointer interface does not count).
+    pub fn always_show_scroll_bars(&self) -> bool {
+        match self.config.show_scroll_bars {
+            ScrollBarsName::Always => true,
+            ScrollBarsName::WhenScrolling => false,
+            ScrollBarsName::Automatic => self.pointer_devices.values().any(|d| d.is_used_mouse()),
+        }
+    }
+
+    /// Tell the appearance observers when [`Self::always_show_scroll_bars`] changed: after the setting changes and
+    /// when a mouse is first used or goes away.
+    pub fn sync_scroll_bars(&mut self) {
+        let always = self.always_show_scroll_bars();
+        if always == self.sessions.always_show_scroll_bars {
+            return;
+        }
+        self.sessions.always_show_scroll_bars = always;
+        let options = self.display_options();
+        for observer in &self.sessions.appearance_observers {
+            send_appearance_options(observer, options, always);
+        }
     }
 
     /// Switch the session's appearance: the server's own drawing follows on the next frame and the

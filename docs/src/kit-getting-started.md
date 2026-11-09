@@ -60,6 +60,25 @@ them.
 `cargo test -p cupertino-kit` drives the examples with input on the headless window system and compares their traces and
 tree dumps with files in `crates/cupertino-kit/tests/goldens/`. `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. The timing matrix is ignored in a normal run; run it with `--release --ignored --nocapture`. Test counts change as the toolkit grows; use the command output for the checked-out commit.
 
+## From C
+
+The C SDK is the `cupertino-kit` package: the library `libcupertinokit.so.1`, the header
+`/usr/include/cupertinokit-1/cupertinokit.h` and `cupertinokit.pc`. A C program needs nothing else, and takes every
+path from pkg-config. The ABI's rules (versions, handles, threads, errors) are at the top of the header and in
+`crates/cupertino-ui-abi/README.md`. Today the library runs the headless backend only. With the package installed,
+and `gcc`, `make` and `pkgconf`:
+
+```bash
+cupertino sdk info                 # what is installed, file by file
+cupertino sdk check                # build and run a probe with /usr/bin/cc
+cupertino sdk new --lang c demo    # main.c, a Makefile, demo.desktop and a README
+make -C demo && ./demo/demo        # prints count: 1, count: 2, count: 3
+```
+
+`cupertino sdk new --lang rust NAME` starts a Rust project on the `cupertino-kit` crate of the same release instead. The
+samples in `crates/cupertino-ui-abi/examples/c` build with `make` the same way. From a checkout, `python3
+ci/c-sdk.py` builds the SDK into a staging directory and runs all of the above against it.
+
 ## Accessibility
 
 `app::run` publishes every window's accessibility tree over AT-SPI (`cupertino-ui-atspi`, on AccessKit's Unix

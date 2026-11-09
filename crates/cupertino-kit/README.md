@@ -63,8 +63,8 @@ makes any other part of a window one; `EventCx::move_window` and `EventCx::zoom_
 The keyboard has no move: the compositor's Zoom, Minimize and tile shortcuts and the menu bar's Window menu cover
 it (see `cupertino-ui-controls`).
 
-`ci/capture.sh kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them)
-headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`,
+`ci/capture.sh kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them),
+and `kit/scroll` a scroll view at rest, stretched and with its bar shown, fading and hidden (`--phase`), headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`,
 `kit/virtual-list` and `kit/editor` draw the examples' windows as they open.
 
 The `control-fixtures` test renders every control in each state it has (normal, hover, pressed, disabled, focused,

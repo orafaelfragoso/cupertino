@@ -30,6 +30,7 @@ alone does not show the surfaces as they look.
 |---|---|
 | `files/window`, `files/sidebar` (the sidebar column of the window) | `--view icon\|list`, `--selected NAME`, `--devices removable` (a mounted, a busy and an unmounted device in the sidebar) |
 | `kit/controls` (the row 167a controls sheet), `kit/icons` (with the chevrons along the reading direction and a missing symbol's placeholder) | `--direction ltr\|rtl` |
+| `kit/scroll` (an overlay scroll view: at rest, pulled past its top edge, its bar shown, fading and hidden after a wheel step) | `--direction ltr\|rtl`, `--phase rest\|stretch\|shown\|fading\|hidden` |
 | `overview/all` (the server headless with test windows, `ci/capture-overview.sh`; no `--sheet`) | `--windows N` (1 to 6, default 2) |
 
 The sidebar material is the server's, so a flat fill of the window background stands in for it. The home folder and

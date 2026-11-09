@@ -8,6 +8,10 @@ Contents: [Run it](#run-it), [Run on hardware](#run-on-hardware), [Command line]
 
 ## Run it
 
+Headless `scripts/capture.sh` and `scripts/session.sh` search your user pack (when there is one), then the
+original checkout icon pack. An explicit `CUPERTINO_ASSET_DIR` replaces both; an empty value selects the built-in fallback.
+For nested development runs, set `CUPERTINO_ASSET_DIR="$PWD/data/assets/cupertino"`.
+
 ```bash
 cargo run -p cupertino-server -- --winit                       # nested window (development)
 cargo run -p cupertino-server -- --udev                        # TTY: logind + DRM/KMS + evdev

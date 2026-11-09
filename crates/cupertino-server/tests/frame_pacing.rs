@@ -216,3 +216,76 @@ fn on_the_running_clock_a_window_that_commits_after_every_frame_draws_once_per_r
         "{drawn} frames in {span:?}, the 60 Hz grid has {grid}"
     );
 }
+
+/// Two heads plugged in at 120 Hz and 60 Hz: each is paced by its own mode, and an animation stands at the same point at
+/// the same time on a desktop whose heads both refresh at 60 Hz, however many frames each head drew of it.
+#[test]
+fn an_animation_follows_the_clock_not_the_frames_of_heads_at_120_and_60_hz() {
+    let display = |name: &str| HeadlessDisplay {
+        name: name.into(),
+        size: SIZE,
+        physical_mm: (0, 0),
+    };
+    let desktop = |first_mhz: i32| {
+        let mut d = Desktop::with_displays(&[display("headless-1")], 1.0);
+        let head = d.state.displays.heads[0].id;
+        d.state.head_mode_replaced(
+            head,
+            HeadMode {
+                width: SIZE.0,
+                height: SIZE.1,
+                refresh_mhz: first_mhz,
+            },
+        );
+        headless::add_display_at(&mut d.state, &display("headless-2"), 60_000, &[], Some(1.0))
+            .unwrap();
+        d.at(1000);
+        d
+    };
+    let mut fast = desktop(120_000);
+    let mut slow = desktop(60_000);
+    assert_eq!(
+        fast.state.refresh_of(0),
+        Duration::from_secs_f64(1.0 / 120.0)
+    );
+    assert_eq!(
+        fast.state.refresh_of(1),
+        Duration::from_secs_f64(1.0 / 60.0)
+    );
+    for d in [&mut fast, &mut slow] {
+        d.state.toggle_overview(false);
+        d.at(1001);
+    }
+    let before = [composes(&fast), composes(&slow)];
+    for ms in 1002..1202 {
+        fast.at(ms);
+        // the other desktop's loop runs far less often
+        if ms % 25 == 0 {
+            slow.at(ms);
+        }
+    }
+    slow.at(1201);
+    let progress = |d: &Desktop| {
+        let now = d.state.now();
+        d.state
+            .shell
+            .overview
+            .as_ref()
+            .unwrap()
+            .transition
+            .progress_at(now)
+    };
+    assert_eq!(fast.state.now(), slow.state.now());
+    assert_eq!(progress(&fast), progress(&slow));
+    let drawn = |d: &Desktop, i: usize, idx: usize| composes(d)[idx] - before[i][idx];
+    assert!(
+        drawn(&fast, 0, 0).abs_diff(24) <= 1,
+        "120 Hz head: {}",
+        drawn(&fast, 0, 0)
+    );
+    assert!(
+        drawn(&fast, 0, 1).abs_diff(12) <= 1,
+        "60 Hz head beside it: {}",
+        drawn(&fast, 0, 1)
+    );
+}

@@ -548,8 +548,12 @@ fn split_punctuation(word: &str) -> (&str, &str, &str) {
     (&word[..lead_len], core, &rest[core.len()..])
 }
 
-/// Whether a key names a secret: it contains `pass`, `secret`, `token`, `key`, `cookie` or `auth`, in any case.
+/// Whether a key names a secret: it contains `pass`, `secret`, `token`, `key`, `cookie` or `auth`, in any case. A path
+/// is never a key: `/usr/share/cupertino/theme/tokens.json:` starts the error read from that file, not a secret.
 fn secret_key(key: &str) -> bool {
+    if key.contains('/') {
+        return false;
+    }
     let key = key.to_ascii_lowercase();
     SECRET_KEYS.iter().any(|part| key.contains(part))
 }

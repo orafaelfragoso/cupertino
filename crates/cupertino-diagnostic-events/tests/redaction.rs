@@ -190,6 +190,15 @@ fn the_scrubber_rewrites_private_parts_of_free_text() {
             "Authorization: Bearer [redacted]",
         ),
         ("Cookie: session=xyz", "Cookie: [redacted]"),
+        // a path that names a token or a key is a file, and the error after it stays
+        (
+            "cannot read /usr/share/cupertino/theme/tokens.json: No such file or directory (os error 2)",
+            "cannot read /usr/share/cupertino/theme/tokens.json: No such file or directory (os error 2)",
+        ),
+        (
+            "open /etc/ssh/ssh_host_ed25519_key: Permission denied",
+            "open /etc/ssh/ssh_host_ed25519_key: Permission denied",
+        ),
         (
             "fetch https://example.org/a?q=1 failed",
             "fetch [url] failed",

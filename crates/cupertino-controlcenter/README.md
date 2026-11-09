@@ -124,10 +124,15 @@ slot's position.
 ## Protocols / D-Bus it speaks
 
 The process owns `org.cupertino.ControlPanel1` at `/org/cupertino/ControlPanel1` on the session bus. A second panel cannot take
-the name and exits with failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`).
+the name and exits with failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`, whose `Served`
+publishes the properties). The process's surface roles publish them before every wait of the loop, from whether the
+catcher is open and which output the panel's surfaces were told. A process that ends drops the name, which the menu bar
+takes as not shown.
 
 | Method | Effect |
 |---|---|
+| `Shown` property (`b`) | Whether the panel is shown: from the toggle that opens it until its dismissal starts the fade, whatever dismissed it. `PropertiesChanged` announces every change. The menu bar highlights its control panel item while it is true. |
+| `Output` property (`s`) | The connector name (`wl_output.name`) of the output the shown panel is on, so the menu bar highlights the item on that output's bar; empty while hidden or before the panel's surfaces are told their output. |
 | `Toggle` | Opens the panel (reading every backend first), or starts closing it when it is open. Refused to a Flatpak, a Snap and a caller the bus cannot name (`org.cupertino.Error.FlatpakCaller`, `SnapCaller`, `AnonymousCaller`; `cupertino_peer::check_call`). Any unsandboxed process of the person may call it: the menu bar is a caller, and it is no relation of the panel (the server started both), so it cannot be told apart from another process of the person, as for `org.cupertino.NotificationCenter1`. |
 
 ```
@@ -240,7 +245,7 @@ cargo test -p cupertino-controlcenter --features app
 | Controller unit tests | Switches, mute, lock, Edit Controls and settings, media commands, the detail lists, a refused join, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer, a vanish that hides at once, drops a drag and reads again on reopening. |
 | `tests/panel.rs` | The panel as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`, `light-session`, `wifi-detail`: the 1x frame and the focus and accessibility tree of every control); every tile's frame; badge, opener, circle, media, output and Edit Controls presses; a disabled module; a level drag and release; Escape and a press between the tiles dismissing, or collapsing an open view; the Wi-Fi view's list, join and settings row; Tab, Space and the arrow keys across the tiles; the catcher dismissing on a left or right press only; the tiles staying one glass container too large for its text to follow the backdrop, at rest, in a light session, fading and with a view opening or open; Edit Controls glass as the tiles are, in a dark and a light session. The `layout` unit tests hold the tiles 44 pt from the top of the output and 14 pt from its right edge. |
 | Process unit tests (`src/app.rs`) | The windows per phase (panel over catcher when shown, the panel alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, the detail view opening, closing and reversing, a second Escape while it closes dismissing, with the focus moved at its ends only after the keyboard, Reduce Motion and the light session from the session, and the panel's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a panel that acts; the panel hears when its output goes; a toggle during the fade opens the catcher on the card's output after the active output changed. |
-| `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name; another process (a `dbus-send` the test starts, as the menu bar is to the panel) may toggle, and a connection over anonymous TCP (no process the bus can name) is refused as `AnonymousCaller`. |
+| `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name; another process (a `dbus-send` the test starts, as the menu bar is to the panel) may toggle, and a connection over anonymous TCP (no process the bus can name) is refused as `AnonymousCaller`. `Shown` and `Output` say what the panel published, hidden until then, and each change is announced once with `PropertiesChanged`. |
 
 `cupertino-server`'s `tests/shell_processes.rs` runs the process with `--fake-backends` through output removal: open on an
 output that is unplugged while another remains, then on the last output, then after a display is plugged in again. Each

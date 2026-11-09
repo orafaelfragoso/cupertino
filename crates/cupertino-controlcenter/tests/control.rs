@@ -6,7 +6,7 @@ use cupertino_controlcenter::backend::{
     MediaPlayer, MemoryBluetooth, MemoryBrightness, MemoryMedia, MemorySwitch, MemoryVolume,
     MemoryWifi, RecordingLauncher, RecordingLock, RecordingOverlay,
 };
-use cupertino_controlcenter::control::{serve, BUS_NAME, OBJECT_PATH};
+use cupertino_controlcenter::control::{serve, Presence, BUS_NAME, OBJECT_PATH};
 use cupertino_controlcenter::system::{MprisPlayer, PLAYER_TIMEOUT};
 use cupertino_controlcenter::{
     Backends, Controller, Module, Phase, TileState, VolumeState, WifiStatus,
@@ -95,6 +95,88 @@ fn toggle_opens_and_closes_the_panel_and_a_second_panel_cannot_take_the_name() {
         "{:?}",
         second.err()
     );
+}
+
+/// `Shown` and `Output` say what the panel published, hidden until it publishes, and every change is announced with
+/// `PropertiesChanged`, so the menu bar can follow the panel without asking again and again.
+#[test]
+fn the_properties_say_whether_the_panel_is_shown_and_on_which_output() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let served = serve(bus.builder(), || {}).expect("claims the name");
+    let reader: Connection = block_on(bus.builder().build()).expect("connect");
+    let proxy: zbus::Proxy<'_> = block_on(
+        zbus::proxy::Builder::new(&reader)
+            .destination(BUS_NAME)
+            .unwrap()
+            .path(OBJECT_PATH)
+            .unwrap()
+            .interface("org.cupertino.ControlPanel1")
+            .unwrap()
+            .cache_properties(zbus::proxy::CacheProperties::No)
+            .build(),
+    )
+    .expect("a proxy");
+    let read = || {
+        block_on(async {
+            let shown: bool = proxy.get_property("Shown").await.unwrap();
+            let output: String = proxy.get_property("Output").await.unwrap();
+            (shown, output)
+        })
+    };
+    assert_eq!(read(), (false, String::new()), "hidden until published");
+
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .interface("org.freedesktop.DBus.Properties")
+        .unwrap()
+        .member("PropertiesChanged")
+        .unwrap()
+        .path(OBJECT_PATH)
+        .unwrap()
+        .build();
+    let blocking = zbus::blocking::Connection::from(reader.clone());
+    let mut changes =
+        zbus::blocking::MessageIterator::for_match_rule(rule, &blocking, None).expect("a stream");
+    let next_change =
+        |changes: &mut zbus::blocking::MessageIterator| -> HashMap<String, OwnedValue> {
+            let message = changes.next().unwrap().unwrap();
+            let (_, changed, _): (String, HashMap<String, OwnedValue>, Vec<String>) =
+                message.body().deserialize().unwrap();
+            changed
+        };
+
+    let shown = Presence {
+        shown: true,
+        output: "DP-1".into(),
+    };
+    served.publish(shown.clone()).unwrap();
+    let changed = next_change(&mut changes);
+    assert_eq!(changed["Shown"], OwnedValue::from(true));
+    assert_eq!(
+        changed["Output"],
+        OwnedValue::try_from(Value::from("DP-1")).unwrap()
+    );
+    assert_eq!(read(), (true, "DP-1".into()));
+
+    // nothing changed: nothing is announced; then only the output changes
+    served.publish(shown).unwrap();
+    served
+        .publish(Presence {
+            shown: true,
+            output: "HDMI-A-1".into(),
+        })
+        .unwrap();
+    let changed = next_change(&mut changes);
+    assert_eq!(changed.len(), 1, "{changed:?}");
+    assert_eq!(read(), (true, "HDMI-A-1".into()));
+
+    served.publish(Presence::default()).unwrap();
+    let changed = next_change(&mut changes);
+    assert_eq!(changed["Shown"], OwnedValue::from(false));
+    assert_eq!(read(), (false, String::new()));
 }
 
 /// `Toggle` from another process of the person (a `dbus-send` this test starts, as the menu bar is to the panel: no

@@ -8,8 +8,9 @@ A pack is a directory with a `manifest.json`. The packs are searched in this ord
 
 1. `$CUPERTINO_ASSET_DIR` (when set and not empty)
 2. `$XDG_DATA_HOME/cupertino/assets` (`~/.local/share/cupertino/assets` when unset)
-3. `/usr/share/cupertino/assets`
-4. the built-in fallback
+3. `/usr/share/cupertino/assets/cupertino` (original first-party icons)
+4. `/usr/share/cupertino/assets` (remaining system assets)
+5. the built-in fallback
 
 Resolution is **per asset**: for each logical name the first pack that provides it wins, and a name no pack provides comes from the built-in fallback. Nothing here stops a process: a missing pack, file or name is logged once and drawn as a placeholder. Only invalid JSON or an unsupported `version` makes one pack unusable, and the search goes on with the next.
 
@@ -20,7 +21,13 @@ Resolution is **per asset**: for each logical name the first pack that provides 
 | Cursors | the procedural cursor set of `cupertino-cursor` |
 | Wallpaper | a procedural wallpaper |
 
-The default pack uses Inter, Cupertino's built-in cursors, the host system's freedesktop icon theme and wallpapers chosen for the project. Packs are data and are not part of the source tree.
+The original first-party icon pack lives at `data/assets/cupertino`, under GPL-3.0-or-later. Packaging installs it to
+`/usr/share/cupertino/assets/cupertino`, searched before the remaining system assets. It supplies original SVG artwork,
+PNG renditions from 16 through 1024 pixels, and tintable symbols. The remaining default assets use the embedded font,
+built-in cursors and packaged wallpapers. Third-party packs remain outside the source tree.
+
+For development, set `CUPERTINO_ASSET_DIR="$PWD/data/assets/cupertino"`. Headless session captures use that pack by default;
+set `CUPERTINO_ASSET_DIR=` to capture the built-in fallback. Tests keep their isolated asset search path.
 
 ## Manifest, version 2
 
@@ -60,7 +67,7 @@ Rules:
 
 ## Logical names
 
-A pack uses the logical names the shell looks up: 26 raster icon names (such as `folder.documents` and `document.pdf`), 61 `symbol.*` names, the font roles, 34 cursor names and the wallpaper. The lists are the constants `RASTER_NAMES`, `SYMBOL_NAMES` and `CURSOR_NAMES` in `cupertino-assets` (`crates/cupertino-assets/src/name.rs`). A name no code looks up may be left out.
+A pack uses the logical names the shell looks up: 26 raster icon names (such as `folder.documents` and `document.pdf`), 67 `symbol.*` names, the font roles, 34 cursor names and the wallpaper. The lists are the constants `RASTER_NAMES`, `SYMBOL_NAMES` and `CURSOR_NAMES` in `cupertino-assets` (`crates/cupertino-assets/src/name.rs`). A name no code looks up may be left out.
 
 ## Build your own pack
 

@@ -4,6 +4,7 @@ Comment: The default asset pack of Cupertino. Each component keeps its own licen
  and the font are not covered by the GPL of the Cupertino code.
 
 Files: usr/share/cupertino/assets/manifest.json usr/share/cupertino/assets/icon-map.toml
+ usr/share/cupertino/assets/cupertino/*
 Copyright: Cupertino contributors
 License: GPL-3+
 

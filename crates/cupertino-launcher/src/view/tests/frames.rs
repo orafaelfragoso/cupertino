@@ -636,7 +636,10 @@ fn output_override() -> Option<Size> {
     let (w, h) = value
         .split_once('x')
         .expect("CUPERTINO_REPAINT_OUTPUT is WIDTHxHEIGHT");
-    Some(Size::new(w.trim().parse().unwrap(), h.trim().parse().unwrap()))
+    Some(Size::new(
+        w.trim().parse().unwrap(),
+        h.trim().parse().unwrap(),
+    ))
 }
 
 /// [`SCALES`], or the comma-separated scales of `CUPERTINO_REPAINT_SCALES`.

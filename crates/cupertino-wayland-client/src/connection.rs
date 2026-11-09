@@ -2917,7 +2917,10 @@ mod tests {
     #[test]
     fn a_solid_colour_is_sent_premultiplied_over_the_whole_u32_range() {
         assert_eq!(single_pixel([0.0; 4]), [0; 4], "transparent");
-        assert_eq!(single_pixel([1.0, 0.0, 0.0, 1.0]), [u32::MAX, 0, 0, u32::MAX]);
+        assert_eq!(
+            single_pixel([1.0, 0.0, 0.0, 1.0]),
+            [u32::MAX, 0, 0, u32::MAX]
+        );
         let half = single_pixel([1.0, 0.5, 0.0, 0.5]);
         assert_eq!(half[3], u32::MAX / 2 + 1, "alpha rounds to the nearest");
         assert_eq!(half[0], half[3], "red is premultiplied by the alpha");

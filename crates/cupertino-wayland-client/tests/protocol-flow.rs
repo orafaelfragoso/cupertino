@@ -3858,7 +3858,8 @@ fn a_solid_colour_is_one_pixel_stretched_over_the_configured_size_at_any_scale()
     assert!(matches!(next_seen(&seen), Seen::SolidCommit { buffer: b, .. } if b == buffer));
 
     // another colour is a new pixel, and the one it replaced goes once it is no longer attached
-    conn.present_solid(surface, (1, 1), [0.0, 0.0, 0.0, 0.5]).unwrap();
+    conn.present_solid(surface, (1, 1), [0.0, 0.0, 0.0, 0.5])
+        .unwrap();
     assert_eq!(next_seen(&seen), Seen::Viewport(1001, 700));
     let half = u32::MAX / 2 + 1;
     assert!(matches!(

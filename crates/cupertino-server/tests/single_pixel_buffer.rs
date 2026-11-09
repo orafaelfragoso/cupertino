@@ -351,9 +351,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for Layered {
         {
             layer.ack_configure(serial);
             *state.heard.configured.lock().unwrap() = (width, height);
-            state
-                .viewport
-                .set_destination(width as i32, height as i32);
+            state.viewport.set_destination(width as i32, height as i32);
             state.surface.attach(Some(&state.buffer), 0, 0);
             state.surface.damage_buffer(0, 0, 1, 1);
             state.surface.frame(qh, ());
@@ -498,7 +496,13 @@ fn a_transparent_pixel_over_the_output_shows_nothing_and_takes_the_pointer_every
         "the viewport's size, not the pixel's"
     );
     assert_eq!(samples(&h.screenshot()), before, "nothing shows");
-    for (x, y) in [(1.0, 1.0), (500.0, 350.0), (998.5, 1.0), (1.0, 698.5), (998.5, 698.5)] {
+    for (x, y) in [
+        (1.0, 1.0),
+        (500.0, 350.0),
+        (998.5, 1.0),
+        (1.0, 698.5),
+        (998.5, 698.5),
+    ] {
         assert_eq!(
             h.namespace_under(x, y).as_deref(),
             Some("catcher"),

@@ -16,7 +16,7 @@ use cupertino_protocol_app::{
 };
 use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_platform::{
-    ActivationRequest, Backdrop, Capabilities, ClipboardData, Color, ClipboardKind, ClipboardToken,
+    ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
     ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
     DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent, Keysym,
     MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,

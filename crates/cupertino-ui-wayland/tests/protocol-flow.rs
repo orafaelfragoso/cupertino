@@ -1365,7 +1365,11 @@ fn a_solid_colour_is_one_stretched_pixel_or_where_the_compositor_cannot_a_filled
         app.presenter.request_redraw();
         app.wait_for_draw();
         app.presenter
-            .draw(&mut app.conn, Some(&[Rect::new(0.0, 0.0, 1.0, 1.0)]), |_, _| {})
+            .draw(
+                &mut app.conn,
+                Some(&[Rect::new(0.0, 0.0, 1.0, 1.0)]),
+                |_, _| {},
+            )
             .unwrap();
         app.flush();
         let next = committed.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -1621,9 +1625,9 @@ mod window_system {
     use cupertino_geometry::{Point, Size};
     use cupertino_modifiers::Profile;
     use cupertino_ui_platform::{
-        ClipboardKind, Color, DecorationMode, MaterialRegion, MenuDescription, MouseButton, PlatformEvent,
-        PointerEvent, PresentOutcome, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
-        WindowSystem,
+        ClipboardKind, Color, DecorationMode, MaterialRegion, MenuDescription, MouseButton,
+        PlatformEvent, PointerEvent, PresentOutcome, TouchEvent, WindowEvent, WindowId,
+        WindowRequest, WindowSpec, WindowSystem,
     };
     use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
     use cupertino_ui_wayland::WaylandWindowSystem;

@@ -10,7 +10,7 @@
 
 mod common;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{place, Host, Run};
 use cupertino_files::notice::Notices;
@@ -147,8 +147,7 @@ fn rect_of(run: &Run, key: &str) -> Rect {
     snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect
 }
 
-/// Steps until the window has presented nothing for `quiet` steps in a row, waiting a moment of real time between
-/// steps for the folder's reader, at most `limit` steps.
+/// Steps until the window has presented nothing for `quiet` steps in a row, at most `limit` steps.
 fn until_quiet(run: &mut Run, meter: &mut FrameMeter, quiet: usize, limit: usize) {
     let mut still = 0;
     for _ in 0..limit {
@@ -157,7 +156,19 @@ fn until_quiet(run: &mut Run, meter: &mut FrameMeter, quiet: usize, limit: usize
         if still >= quiet {
             return;
         }
-        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Steps until `done` holds, waiting for a thread (the folder's reader) to wake the runtime whenever the window asks
+/// for no frame; the twenty seconds only guard against a hang.
+fn step_until(run: &mut Run, meter: &mut FrameMeter, done: impl Fn(&Run) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !done(run) {
+        assert!(
+            run.wait_for_progress(deadline),
+            "the window never caught up"
+        );
+        meter.step(&mut run.driver, |_, _| {});
     }
 }
 
@@ -171,8 +182,8 @@ fn interactions(scale: f64) -> Vec<(&'static str, Vec<FrameSample>)> {
     // open the folder of many items from the sidebar
     let big = rect_of(&run, "place-Big");
     meter.step(&mut run.driver, |s, _| click(s, window, big.center()));
+    step_until(&mut run, &mut meter, |run| run.rows().len() > 20);
     until_quiet(&mut run, &mut meter, 30, 2000);
-    assert!(run.rows().len() > 20, "the folder is listed");
     out.push(("open folder", meter.take()));
 
     // select the first row, then move the selection down with the arrow key among the rows in view

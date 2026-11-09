@@ -1,6 +1,6 @@
 # The cupertino command
 
-`cupertino` is the command-line entry point of the desktop. It is built from the `cupertino-cli` crate (`crates/cupertino-cli`). Today it has one subcommand, and it is not part of the packages yet: `packaging/release.py` lists `cupertino-diagnose` but not `cupertino`, so build it from a checkout (`cargo build -p cupertino-cli`).
+`cupertino` is the command-line entry point of the desktop. It is built from the `cupertino-cli` crate (`crates/cupertino-cli`). Today it has the subcommands below, and it is not part of the packages yet: `packaging/release.py` lists `cupertino-diagnose` but not `cupertino`, so build it from a checkout (`cargo build -p cupertino-cli`).
 
 This page describes the command as it is on `main`. For the machine check, see [cupertino-diagnose](diagnose.md), which is a separate program for now.
 
@@ -12,6 +12,10 @@ cupertino help [COMMAND]                    # the help of the commands under COM
 cupertino --version
 cupertino appearance assets check DIR       # read the asset pack in DIR and report its problems
 cupertino --format json appearance assets check DIR
+cupertino diagnose events --since 24h       # the diagnostic events of the last day
+cupertino diagnose events --follow          # and the new ones, until Ctrl-C
+cupertino diagnose events clear --yes       # delete the stored events
+cupertino diagnose export --output FILE     # one JSON file for a bug report
 cupertino --format jsonl help               # JSON lines: one record per line
 ```
 
@@ -22,6 +26,11 @@ cupertino --format jsonl help               # JSON lines: one record per line
 | Command | What it does |
 |---|---|
 | `appearance assets check DIR` | Reads the asset pack in `DIR` (it needs a `manifest.json`) the way the desktop processes do. It reports the pack's problems and what provides each logical name, the pack or the built-in fallback. It replaces `cupertino-assets check DIR`. |
+| `diagnose events [--since DURATION\|TIME] [--component NAME]... [--id PREFIX]... [--severity LEVEL] [--follow]` | Prints the diagnostic events of the user store, `session.log` and the system journal, merged in time order, one line each (an `event` record whose data is the `cupertino.diag.v1` record in the JSON forms); the final data lists the `sources` with their status (`ok`, `empty`, `denied`, `unavailable`, `corrupt`) and the `counts`. `--follow` goes on with the new events until stopped. |
+| `diagnose events clear --yes` | Deletes the stored events and keeps the salt; without `--yes` it fails with `confirmation_required` (exit 2). |
+| `diagnose export --output FILE [--include-logs] [--since DURATION\|TIME]` | Writes one JSON document, mode 0600, with the versions, the diagnostics report, the events and the sources, and with `--include-logs` the scrubbed `server.log`, `server.log.1` and `session.log`. A file that exists is never overwritten (`file_exists`, exit 5). |
+
+[Checking a machine](diagnose.md#diagnostic-events) describes the events, their limits, what they never contain and journal access.
 
 The registry that holds this list is `REGISTRY` in `crates/cupertino-cli/src/lib.rs`. The help, the JSON command tree and the dispatch all come from it.
 
@@ -65,15 +74,15 @@ While a streaming command runs, `Ctrl-C` (SIGINT) and SIGTERM ask it to stop, an
 | Code | `error.kind` | Meaning |
 |---|---|---|
 | 0 | | Success; also a closed standard output, and a command that runs until stopped when a stop ends it. |
-| 2 | `invalid_usage` | The command line is not valid: an unknown command or option, or a missing or wrong value. |
+| 2 | `invalid_usage` | The command line is not valid: an unknown command or option, or a missing or wrong value; also a command that needs a confirmation it did not get (`confirmation_required`). |
 | 3 | `unavailable` | The backend or service the command needs is not running or cannot be reached. Reserved. |
 | 4 | `denied` | The caller is not allowed to do this. Reserved. |
-| 5 | `validation` | What the command checked or read is not valid, for example a pack that cannot be read (`pack_unreadable`, `manifest_invalid`, `font_invalid`). |
-| 6 | `temporary` | A problem that may pass: output that cannot be written (`output_failed`), or a streaming command stopped before it finished (`interrupted`). |
+| 5 | `validation` | What the command checked or read is not valid, for example a pack that cannot be read (`pack_unreadable`, `manifest_invalid`, `font_invalid`), an export file that exists (`file_exists`) or an event store that cannot be cleared (`store_unavailable`, `no_home`). |
+| 6 | `temporary` | A problem that may pass: output that cannot be written (`output_failed`), a streaming command stopped before it finished (`interrupted`), or an export file that cannot be written (`write_failed`). |
 | 7 | `transaction_failed` | A system or package transaction failed. Reserved. |
 | 8 | `unsupported` | This release or this system does not do what was asked: the command groups kept for a later release, `system` and `ai`, answer `not_in_this_release`. |
 
-Only `appearance assets check` exists, so today a command line can end with 0, 2, 5, 6 (output that cannot be written) or 8 (`cupertino system`, `cupertino ai`). Codes 3, 4 and 7 are reserved: they keep their meaning for the commands to come, and no command of this release ends with them.
+With the commands of this release, a command line can end with 0, 2, 5, 6 (output that cannot be written, or an export file that cannot be written: `write_failed`) or 8 (`cupertino system`, `cupertino ai`). Codes 3, 4 and 7 are reserved: they keep their meaning for the commands to come, and no command of this release ends with them.
 
 ## Compatibility
 
@@ -90,7 +99,7 @@ The JSON help, `cupertino --format json help`, lists every command with `path`, 
 
 ## Not there yet
 
-- `cupertino diagnose`: the checks run as `cupertino-diagnose`, a program of its own.
+- `cupertino diagnose` for the checks: they run as `cupertino-diagnose`, a program of its own; `cupertino diagnose events` and `cupertino diagnose export` are here.
 - Shell completions and manual pages.
 - `cupertino --version` prints only the version of the command.
 - `cupertino dev layers` and `cupertino desktop start`. Use `cupertino-layers` and `cupertino-server` for now.

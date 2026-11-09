@@ -12,7 +12,44 @@ cupertino --version
 cupertino appearance assets check <dir>     # replaces `cupertino-assets check <dir>`
 cupertino --format json appearance assets check <dir>
 cupertino --format jsonl help               # JSON lines: a result record and an end record
+cupertino diagnose events [--since 24h] [--component <name>]... [--id <prefix>]... [--severity info|warn|error|fatal] [--follow]
+cupertino diagnose events clear --yes       # delete the user store's events, keep its salt
+cupertino diagnose export --output <file> [--include-logs] [--since <duration|time>]
 ```
+
+## Diagnostic events (`diagnose`)
+
+`src/diagnose_events.rs` reads the diagnostic events with `cupertino_diagnostics::events` (the user store,
+`session.log` and the system journal; [docs/src/diagnose.md](../../docs/src/diagnose.md#diagnostic-events) has the
+record, the limits and the redaction table). It takes its `Sources` from `Context::provided::<Sources>()` when a test
+gives some, else `Sources::system()`. It records no events of its own.
+
+- `diagnose events` is a `Run::Stream`: each event is an `event` whose data is the `cupertino.diag.v1` record, and one
+  human line (time, severity, component, id, message, then `key=value` fields, a value with spaces in JSON quotes). The
+  final data is `{sources, counts}`: each source's `name`, `status` (`ok`, `empty`, `denied`, `unavailable`,
+  `corrupt`), `events`, `corrupt`, `partial`, `path` and `detail`, and `counts` `{events, info, warn, error, fatal}`
+  of what was printed. A denied journal is a `denied`/`journal_denied` warning and corrupt lines a
+  `validation`/`corrupt_lines` one. A wrong `--since` is `invalid_usage`/`invalid_value`.
+- `--follow` (`Sink::follow`) then polls the store and `session.log` every 250 ms (`events::Follow`) and follows the
+  journal with the command `Sources::journal_follow` makes (`journalctl --follow` from the last cursor read). It never
+  blocks in a read or a wait: it `poll`s the child's non-blocking stdout with a timeout of at most 250 ms, reads only
+  what is there, and checks `Sink::stop_requested` between steps. A stop ends it with `reason: "stopped"`, a closed
+  output with exit 0; either way the child is killed and reaped.
+- `diagnose events clear` (`Run::Once`) deletes the store's segments with `Store::clear` (under the store's lock; the
+  salt stays). Without `--yes` it is `invalid_usage`/`confirmation_required`; a store that cannot be cleared is
+  `validation`/`store_unavailable` (`no_home` without a home).
+- `diagnose export` (`Run::Once`) writes one JSON document with `O_EXCL` and mode 0600: `schema`
+  (`cupertino.diag.export.v1`), `created`, `versions` (`cli`, `commit`, `os_image`, `kernel`, from
+  `cupertino-build-info`, the field names a version report uses), `report` (`cupertino_diagnostics::run(&sources, &[])`,
+  its `summary`, fact `value` and `fix` texts through the free-text scrubber), `events` and `sources` (their `path` and
+  `detail` scrubbed). `--include-logs` adds `logs`: `server.log`, `server.log.1` and `session.log` of the state
+  directory, each line through `events::policy` (the store's salt, so hashes match the events', else a random one). A
+  file that exists is `validation`/`file_exists`; one that cannot be written `temporary`/`write_failed`.
+
+`tests/diagnose-events.rs` runs them on a fixture home, a fake journal function and `sh` as a fake
+`journalctl --follow`: the three formats, the filters, the warnings, a follow that prints new store and journal lines
+and ends on a stop from another thread (promptly, its child reaped) and on a closed output, `clear` with and without
+`--yes`, and the export's keys, mode, refusal to overwrite and scrubbed logs.
 
 ## Output
 
@@ -54,11 +91,11 @@ is its final object plus `events` (`[{event, data}]`) and `warnings` (`[{kind, c
 | Exit code | `kind` |
 |---|---|
 | 0 | (success; also a closed stdout, and a follow stream stopped by a signal) |
-| 2 | `invalid_usage` |
+| 2 | `invalid_usage`: also `confirmation_required` |
 | 3 | `unavailable`: the backend or service is not running or cannot be reached (reserved) |
 | 4 | `denied` (reserved) |
-| 5 | `validation` |
-| 6 | `temporary`: also `output_failed` (stdout cannot be written) and `interrupted` (a finite stream stopped) |
+| 5 | `validation`: also `file_exists` (`diagnose export`) |
+| 6 | `temporary`: also `output_failed` (stdout cannot be written), `interrupted` (a finite stream stopped) and `write_failed` (an export file) |
 | 7 | `transaction_failed` (reserved) |
 | 8 | `unsupported`: also `not_in_this_release` for the reserved groups `system` and `ai` |
 
@@ -98,7 +135,7 @@ The help JSON (`cupertino --format json help`) lists, per command, `path`, `summ
 ## Design
 
 `src/lib.rs` holds the registry types and the runner; `src/stream.rs` the output writer, the stream rules and the stop
-flag; each group is a module (`src/appearance.rs`). The crate docs of `stream` state the rules for stream commands.
+flag; each group is a module (`src/appearance.rs`, `src/diagnose_events.rs`). The crate docs of `stream` state the rules for stream commands.
 
 ### The registry
 
@@ -169,7 +206,7 @@ socket interfaces of the services; it never links compositor state.
 
 ## Open issues
 
-- `cupertino diagnose`, `cupertino dev layers` and `cupertino desktop start --backend nested|tty|headless` are not
+- `cupertino diagnose` (the checks), `cupertino dev layers` and `cupertino desktop start --backend nested|tty|headless` are not
   wired yet; `cupertino-diagnose`, `cupertino-layers` and `cupertino-server` stay the entry points until then.
 - `cupertino --version` prints only the CLI version; the commit (from `cupertino-build-info`), the OS image,
   compositor, data and ABI versions follow with `cupertino version`.

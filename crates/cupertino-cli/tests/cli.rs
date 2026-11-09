@@ -145,7 +145,7 @@ fn the_json_help_lists_the_command_tree_under_the_topic() {
         ]
     }]);
     for args in [
-        &["--format", "json", "help"][..],
+        &["--format", "json", "help", "appearance"][..],
         &["--format", "json", "help", "appearance", "assets"],
         &["--format", "json", "appearance", "--help"],
     ] {

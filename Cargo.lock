@@ -1025,7 +1025,9 @@ name = "cupertino-cli"
 version = "0.1.0"
 dependencies = [
  "cupertino-assets",
+ "cupertino-build-info",
  "cupertino-diagnostic-events",
+ "cupertino-diagnostics",
  "libc",
  "serde",
  "serde_json",

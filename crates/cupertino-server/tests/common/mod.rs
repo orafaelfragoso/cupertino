@@ -12,7 +12,7 @@ pub mod fixtures {
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -27,8 +27,8 @@ use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_region, wl_registry, wl_seat,
-    wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_region,
+    wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::ext::session_lock::v1::client::{
@@ -603,6 +603,60 @@ impl Dispatch<zwp_keyboard_shortcuts_inhibitor_v1::ZwpKeyboardShortcutsInhibitor
     }
 }
 
+/// The reply to the `wl_display.sync` of [`roundtrip_while`].
+impl Dispatch<wl_callback::WlCallback, Arc<AtomicBool>> for ClientState {
+    fn event(
+        _: &mut Self,
+        _: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        done: &Arc<AtomicBool>,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            done.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+/// A roundtrip (`wl_display.sync`, then every event up to its reply) that calls `waiting` again and again while the
+/// reply is out. The server answers only when the test dispatches it, so a client thread blocked in a plain roundtrip
+/// could not do what the test asks of it while the test holds the server still.
+fn roundtrip_while(
+    conn: &Connection,
+    queue: &mut wayland_client::EventQueue<ClientState>,
+    client: &mut ClientState,
+    mut waiting: impl FnMut(),
+) -> Result<(), ()> {
+    let done = Arc::new(AtomicBool::new(false));
+    conn.display().sync(&queue.handle(), done.clone());
+    loop {
+        waiting();
+        queue.flush().map_err(drop)?;
+        queue.dispatch_pending(client).map_err(drop)?;
+        if done.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let Some(guard) = queue.prepare_read() else {
+            continue;
+        };
+        let mut readable = libc::pollfd {
+            fd: guard.connection_fd().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one initialised pollfd that lives through the call.
+        if unsafe { libc::poll(&mut readable, 1, 5) } > 0 {
+            match guard.read() {
+                Ok(_) => {}
+                Err(wayland_client::backend::WaylandError::Io(e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => return Err(()),
+            }
+        }
+    }
+}
+
 /// The pointer constraint a client asks for: a lock, or a confine to a surface-local rectangle.
 #[derive(Clone, Copy)]
 pub enum Constraint {
@@ -694,7 +748,9 @@ impl Client {
                 mut lock,
                 mut release,
             } = setup(&mut queue, &mut client, &globals);
-            while !stop2.load(Ordering::SeqCst) {
+            // What `Client::unlock` asks for. The thread looks for it while a roundtrip waits for the server too: a test
+            // that asks and then holds the server still gets its request written all the same.
+            let mut unlock_when_asked = || {
                 if unlock2.swap(false, Ordering::SeqCst) {
                     if let Some(lock) = lock.take() {
                         lock.unlock_and_destroy();
@@ -706,7 +762,10 @@ impl Client {
                         release();
                     }
                 }
-                if queue.roundtrip(&mut client).is_err() {
+            };
+            while !stop2.load(Ordering::SeqCst) {
+                if roundtrip_while(&conn, &mut queue, &mut client, &mut unlock_when_asked).is_err()
+                {
                     break;
                 }
                 client.rounds.tick();

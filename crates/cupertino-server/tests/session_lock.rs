@@ -255,6 +255,9 @@ fn an_unlock_from_a_refused_lock_does_not_open_a_session_whose_locker_crashed() 
     h.wait_until("the second request to be refused", |_| intruder.finished());
 
     // both reach the compositor in the same dispatch: the intruder's unlock request and the holder's crash
+    // long enough for the intruder to start a roundtrip that the server, held still, does not answer: its unlock
+    // is written all the same
+    std::thread::sleep(Duration::from_millis(20));
     intruder.unlock();
     // the server is not dispatched meanwhile, so the unlock waits on the connection for the dispatch that sees the crash
     let deadline = Instant::now() + common::HANG_GUARD;

@@ -5,7 +5,7 @@ Checks the registry itself (fields, enums, duplicates, every source and test_own
 occurs in its source file, and the test_owner of a socket or a binary names it), then compares it with the code: every
 `#[zbus::interface(name = ...)]` outside tests, examples and `#[cfg(test)]` modules, every org.cupertino.* name in the
 sources (test modules included) and every binary target of the workspace has an entry. Every crate that builds a
-`cdylib` has a `c-library` entry, whose name is the soname its build script links with and whose version is the
+`cdylib` and may be published (a test-only crate says `publish = false`) has a `c-library` entry, whose name is the soname its build script links with and whose version is the
 MAJOR.MINOR of the ABI header under the crate's abi/. The Wayland globals are compared at run time, by
 crates/cupertino-server/tests/contracts.rs."""
 import json
@@ -117,9 +117,16 @@ def workspace_libraries(root):
     """{crate: path of its manifest relative to root} of every workspace crate that builds a C shared library."""
     meta = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"], cwd=root))
+    return c_libraries(meta, root)
+
+
+def c_libraries(meta, root):
+    """The crates of cargo metadata `meta` that build a cdylib, apart from the test-only ones (`publish = false`, which
+    cargo metadata gives as an empty registry list): a test fixture's shared object is no C library of the desktop."""
     return {
         package["name"]: Path(package["manifest_path"]).relative_to(root).as_posix()
-        for package in meta["packages"] for target in package["targets"] if "cdylib" in target["crate_types"]
+        for package in meta["packages"] if package.get("publish") != []
+        for target in package["targets"] if "cdylib" in target["crate_types"]
     }
 
 

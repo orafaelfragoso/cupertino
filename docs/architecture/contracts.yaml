@@ -9,7 +9,8 @@
 #   kind        wayland-global | dbus-interface | binary | socket-protocol | c-library
 #   version     advertised version (globals), interface generation (D-Bus: the number in the name, n/a if none), crate
 #               version (binaries), ABI version (C libraries: MAJOR.MINOR of the header under the crate's abi/, and
-#               every crate that builds a cdylib has an entry); `unknown` where it cannot be measured
+#               every crate that builds a cdylib, apart from the test-only ones, has an entry); `unknown` where it
+#               cannot be measured
 #   owner_crate workspace crate that defines it
 #   owner_area  compositor | rendering | design | apps | services | packaging
 #   scope       public: any client or application may use it

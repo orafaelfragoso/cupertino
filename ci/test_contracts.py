@@ -141,6 +141,16 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(problems, ["crates/cupertino-demo/Cargo.toml: cupertino-demo builds a cdylib without a "
                                     "c-library entry in docs/architecture/contracts.yaml"])
 
+    def test_a_test_only_cdylib_needs_no_c_library_entry(self):
+        def package(name, publish, kinds):
+            return {"name": name, "manifest_path": f"/r/crates/{name}/Cargo.toml", "publish": publish,
+                    "targets": [{"crate_types": kinds}]}
+        meta = {"packages": [package("cupertino-ui-abi", None, ["lib", "cdylib"]),
+                             package("cupertino-test-pam-shim", [], ["cdylib"]),
+                             package("cupertino-kit", None, ["lib"])]}
+        self.assertEqual(contracts.c_libraries(meta, Path("/r")),
+                         {"cupertino-ui-abi": "crates/cupertino-ui-abi/Cargo.toml"})
+
     def test_a_c_library_entry_of_a_crate_without_a_cdylib_fails(self):
         problems = library_run(libraries={})
         self.assertEqual(problems, ["docs/architecture/contracts.yaml:21: libdemo.so.1 names cupertino-demo, which "

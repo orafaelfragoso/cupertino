@@ -6,11 +6,20 @@
     "symbol.accessibility": {
       "symbol": "symbols/accessibility.svg"
     },
+    "symbol.accessibility.fill": {
+      "symbol": "symbols/accessibility-fill.svg"
+    },
     "symbol.appearance": {
       "symbol": "symbols/appearance.svg"
     },
+    "symbol.appearance.fill": {
+      "symbol": "symbols/appearance-fill.svg"
+    },
     "symbol.applications": {
       "symbol": "symbols/applications.svg"
+    },
+    "symbol.applications.fill": {
+      "symbol": "symbols/applications-fill.svg"
     },
     "symbol.backward": {
       "symbol": "symbols/backward.svg"
@@ -18,11 +27,20 @@
     "symbol.battery": {
       "symbol": "symbols/battery.svg"
     },
+    "symbol.battery.fill": {
+      "symbol": "symbols/battery-fill.svg"
+    },
     "symbol.bell": {
       "symbol": "symbols/bell.svg"
     },
+    "symbol.bell.fill": {
+      "symbol": "symbols/bell-fill.svg"
+    },
     "symbol.bluetooth": {
       "symbol": "symbols/bluetooth.svg"
+    },
+    "symbol.bluetooth.fill": {
+      "symbol": "symbols/bluetooth-fill.svg"
     },
     "symbol.checkmark": {
       "symbol": "symbols/checkmark.svg"
@@ -51,11 +69,20 @@
     "symbol.computer": {
       "symbol": "symbols/computer.svg"
     },
+    "symbol.computer.fill": {
+      "symbol": "symbols/computer-fill.svg"
+    },
     "symbol.control-panel": {
       "symbol": "symbols/control-panel.svg"
     },
+    "symbol.control-panel.fill": {
+      "symbol": "symbols/control-panel-fill.svg"
+    },
     "symbol.desktop": {
       "symbol": "symbols/desktop.svg"
+    },
+    "symbol.desktop.fill": {
+      "symbol": "symbols/desktop-fill.svg"
     },
     "symbol.dock.hide": {
       "symbol": "symbols/dock-hide.svg"
@@ -63,8 +90,14 @@
     "symbol.document": {
       "symbol": "symbols/document.svg"
     },
+    "symbol.document.fill": {
+      "symbol": "symbols/document-fill.svg"
+    },
     "symbol.download": {
       "symbol": "symbols/download.svg"
+    },
+    "symbol.download.fill": {
+      "symbol": "symbols/download-fill.svg"
     },
     "symbol.eject": {
       "symbol": "symbols/eject.svg"
@@ -75,14 +108,23 @@
     "symbol.externaldrive": {
       "symbol": "symbols/externaldrive.svg"
     },
+    "symbol.externaldrive.fill": {
+      "symbol": "symbols/externaldrive-fill.svg"
+    },
     "symbol.file-sharing": {
       "symbol": "symbols/file-sharing.svg"
     },
     "symbol.film": {
       "symbol": "symbols/film.svg"
     },
+    "symbol.film.fill": {
+      "symbol": "symbols/film-fill.svg"
+    },
     "symbol.flash-drive": {
       "symbol": "symbols/flash-drive.svg"
+    },
+    "symbol.flash-drive.fill": {
+      "symbol": "symbols/flash-drive-fill.svg"
     },
     "symbol.folder": {
       "symbol": "symbols/folder.svg"
@@ -96,8 +138,14 @@
     "symbol.grid": {
       "symbol": "symbols/grid.svg"
     },
+    "symbol.grid.fill": {
+      "symbol": "symbols/grid-fill.svg"
+    },
     "symbol.house": {
       "symbol": "symbols/house.svg"
+    },
+    "symbol.house.fill": {
+      "symbol": "symbols/house-fill.svg"
     },
     "symbol.keyboard": {
       "symbol": "symbols/keyboard.svg"
@@ -108,6 +156,9 @@
     "symbol.keyboard-brightness.off": {
       "symbol": "symbols/keyboard-brightness-off.svg"
     },
+    "symbol.keyboard.fill": {
+      "symbol": "symbols/keyboard-fill.svg"
+    },
     "symbol.list": {
       "symbol": "symbols/list.svg"
     },
@@ -117,11 +168,17 @@
     "symbol.lock-screen": {
       "symbol": "symbols/lock-screen.svg"
     },
+    "symbol.lock-screen.fill": {
+      "symbol": "symbols/lock-screen-fill.svg"
+    },
     "symbol.magnifyingglass": {
       "symbol": "symbols/magnifyingglass.svg"
     },
     "symbol.memory-card": {
       "symbol": "symbols/memory-card.svg"
+    },
+    "symbol.memory-card.fill": {
+      "symbol": "symbols/memory-card-fill.svg"
     },
     "symbol.mic": {
       "symbol": "symbols/mic.svg"
@@ -138,11 +195,20 @@
     "symbol.mouse": {
       "symbol": "symbols/mouse.svg"
     },
+    "symbol.mouse.fill": {
+      "symbol": "symbols/mouse-fill.svg"
+    },
     "symbol.music": {
       "symbol": "symbols/music.svg"
     },
+    "symbol.music.fill": {
+      "symbol": "symbols/music-fill.svg"
+    },
     "symbol.network": {
       "symbol": "symbols/network.svg"
+    },
+    "symbol.network.fill": {
+      "symbol": "symbols/network-fill.svg"
     },
     "symbol.pause": {
       "symbol": "symbols/pause.svg"
@@ -150,17 +216,29 @@
     "symbol.photo": {
       "symbol": "symbols/photo.svg"
     },
+    "symbol.photo.fill": {
+      "symbol": "symbols/photo-fill.svg"
+    },
     "symbol.play": {
       "symbol": "symbols/play.svg"
     },
     "symbol.privacy": {
       "symbol": "symbols/privacy.svg"
     },
+    "symbol.privacy.fill": {
+      "symbol": "symbols/privacy-fill.svg"
+    },
     "symbol.recents": {
       "symbol": "symbols/recents.svg"
     },
+    "symbol.recents.fill": {
+      "symbol": "symbols/recents-fill.svg"
+    },
     "symbol.screen-mirroring": {
       "symbol": "symbols/screen-mirroring.svg"
+    },
+    "symbol.screen-mirroring.fill": {
+      "symbol": "symbols/screen-mirroring-fill.svg"
     },
     "symbol.search": {
       "symbol": "symbols/search.svg"
@@ -177,6 +255,9 @@
     "symbol.speaker.high": {
       "symbol": "symbols/speaker-high.svg"
     },
+    "symbol.speaker.high.fill": {
+      "symbol": "symbols/speaker-high-fill.svg"
+    },
     "symbol.speaker.low": {
       "symbol": "symbols/speaker-low.svg"
     },
@@ -189,17 +270,32 @@
     "symbol.sun": {
       "symbol": "symbols/sun.svg"
     },
+    "symbol.sun.fill": {
+      "symbol": "symbols/sun-fill.svg"
+    },
     "symbol.tag": {
       "symbol": "symbols/tag.svg"
+    },
+    "symbol.tag.fill": {
+      "symbol": "symbols/tag-fill.svg"
     },
     "symbol.trackpad": {
       "symbol": "symbols/trackpad.svg"
     },
+    "symbol.trackpad.fill": {
+      "symbol": "symbols/trackpad-fill.svg"
+    },
     "symbol.trash": {
       "symbol": "symbols/trash.svg"
     },
+    "symbol.trash.fill": {
+      "symbol": "symbols/trash-fill.svg"
+    },
     "symbol.wifi": {
       "symbol": "symbols/wifi.svg"
+    },
+    "symbol.wifi.fill": {
+      "symbol": "symbols/wifi-fill.svg"
     },
     "symbol.xmark.circle": {
       "symbol": "symbols/xmark-circle.svg"

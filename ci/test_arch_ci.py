@@ -89,6 +89,12 @@ class Commands(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), ['pacman -Syu --noconfirm --needed ' + ' '.join(listed('build', 'test'))])
 
+    def test_install_with_an_unknown_group_fails_before_pacman(self):
+        result = self.run_script('install', 'build', 'debian')
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('unknown group: debian', result.stderr)
+        self.assertEqual(self.calls(), [])
+
     def test_user_takes_the_runner_uid_and_exports_the_rust_homes_and_runtime_directory(self):
         result = self.run_script('user')
         self.assertEqual(result.returncode, 0, result.stderr)

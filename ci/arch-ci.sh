@@ -60,7 +60,9 @@ list)
     ;;
 install)
     [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }
-    mapfile -t wanted < <(packages "$@" | awk '!seen[$0]++')
+    # A command substitution, not a process substitution, so that an unknown group stops the script before pacman.
+    list=$(packages "$@" | awk '!seen[$0]++')
+    mapfile -t wanted <<<"$list"
     pacman -Syu --noconfirm --needed "${wanted[@]}"
     ;;
 user)

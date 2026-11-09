@@ -5,6 +5,10 @@ use cupertino_geometry::Size;
 use std::collections::HashMap;
 
 pub use cupertino_theme::glass::FaceTone;
+pub use cupertino_theme::control_sizes::{
+    control_geometry, slider_geometry, switch_geometry, ControlFamily, ControlGeometry, Corners,
+    SliderGeometry, SwitchGeometry,
+};
 pub use cupertino_theme::{Appearance, Color, ControlSize, DesignTokens};
 
 mod adapter;
@@ -219,10 +223,12 @@ impl ColorTokens {
     }
 }
 
-/// Regular-size control geometry, in logical points.
+/// The control geometry of one control size, in logical points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ControlMetrics {
     pub size: ControlSize,
+    /// The compact metrics: tighter heights and room at the three smaller sizes.
+    pub compact: bool,
     pub button_height: f64,
     pub button_inset: f64,
     pub button_radius: f64,
@@ -234,6 +240,35 @@ pub struct ControlMetrics {
     pub switch_thumb_inset: f64,
     /// The smallest pointer and touch target, reached with layout padding.
     pub min_target: Size,
+}
+
+impl ControlMetrics {
+    /// The geometry of `family` at these metrics' size.
+    pub fn geometry(&self, family: ControlFamily) -> ControlGeometry {
+        control_geometry(family, self.size, self.compact)
+    }
+
+    /// These metrics at another size, the buttons', fields' and switch's geometry following it; the minimum target
+    /// and the other values stay.
+    pub fn at_size(self, size: ControlSize, compact: bool) -> Self {
+        let button = control_geometry(ControlFamily::PushButton, size, compact);
+        let field = control_geometry(ControlFamily::TextField, size, compact);
+        let switch = switch_geometry(compact);
+        Self {
+            size,
+            compact,
+            button_height: button.height,
+            button_inset: button.inset,
+            button_radius: button.corners.radius(button.height),
+            field_height: field.height,
+            field_inset: field.inset,
+            field_radius: field.corners.radius(field.height),
+            switch: Size::new(switch.track.0, switch.track.1),
+            switch_thumb: switch.thumb.1,
+            switch_thumb_inset: switch.inset,
+            ..self
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

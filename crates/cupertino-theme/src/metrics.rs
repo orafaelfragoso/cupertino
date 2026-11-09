@@ -16,14 +16,26 @@ pub enum ControlSize {
     Small,
     Mini,
     Large,
+    /// The largest size, for prominent actions; the rows of [`CONTROL_METRICS`] have no value for it.
+    ExtraLarge,
 }
 
 impl ControlSize {
-    pub const ALL: [ControlSize; 4] = [
+    pub const ALL: [ControlSize; 5] = [
         ControlSize::Regular,
         ControlSize::Small,
         ControlSize::Mini,
         ControlSize::Large,
+        ControlSize::ExtraLarge,
+    ];
+
+    /// From the smallest to the largest.
+    pub const ASCENDING: [ControlSize; 5] = [
+        ControlSize::Mini,
+        ControlSize::Small,
+        ControlSize::Regular,
+        ControlSize::Large,
+        ControlSize::ExtraLarge,
     ];
 
     fn index(self) -> usize {
@@ -67,11 +79,11 @@ pub struct ControlMetric {
 
 impl ControlMetric {
     pub fn alignment_height(&self, size: ControlSize) -> Option<f64> {
-        self.heights[size.index()]
+        self.heights.get(size.index()).copied().flatten()
     }
 
     pub fn fixed_width(&self, size: ControlSize) -> Option<f64> {
-        self.widths[size.index()]
+        self.widths.get(size.index()).copied().flatten()
     }
 }
 

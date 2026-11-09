@@ -162,6 +162,7 @@ pub fn theme() -> ThemeTokens {
         colors: ColorTokens::new(entries),
         metrics: ControlMetrics {
             size: ControlSize::Regular,
+            compact: false,
             button_height: 20.0,
             button_inset: 10.0,
             button_radius: 5.0,

@@ -253,3 +253,39 @@ fn the_blink_paints_no_node_again_and_only_the_overlay_changes() {
     // a caret drawn again in the same place is the same paint
     assert_eq!(revisions(&h).get(&overlay), before.get(&overlay));
 }
+
+#[test]
+fn the_blink_damages_only_the_carets_pixels() {
+    for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+        let mut h = focused(10.3, scale);
+        let field = h.rt.find(h.window, &"name".into()).unwrap();
+        let caret = h
+            .snapshot()
+            .display_list
+            .nodes
+            .into_iter()
+            .find(|n| n.id == overlay_id(field))
+            .expect("the caret shows");
+        // the device pixels the caret's bounds touch, and the one more each way any node's damage takes
+        let b = caret.bounds;
+        let (l, t, r, bottom) = (
+            (b.min_x() * scale).floor() as u32 - 1,
+            (b.min_y() * scale).floor() as u32 - 1,
+            (b.max_x() * scale).ceil() as u32 + 1,
+            (b.max_y() * scale).ceil() as u32 + 1,
+        );
+        for ms in [500, 1000, 1500] {
+            at(&mut h, ms);
+            let frames = h.rt.window_system().frames(h.window).unwrap();
+            let frame = frames.last().unwrap();
+            assert!(!frame.damage.is_empty(), "the blink at {ms} ms at {scale}x");
+            for d in &frame.damage {
+                assert!(
+                    d.x >= l && d.y >= t && d.x + d.width <= r && d.y + d.height <= bottom,
+                    "the blink at {ms} ms at {scale}x damaged {d:?} beyond the caret's pixels \
+                     ({l}, {t})–({r}, {bottom})"
+                );
+            }
+        }
+    }
+}

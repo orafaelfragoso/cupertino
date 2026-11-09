@@ -1482,3 +1482,240 @@ fn what_a_node_puts_on_device_pixels_lands_on_them_wherever_a_frame_draws_it() {
     }
     assert_eq!(paints.get(), 1);
 }
+
+/// Asks for an overlay while its label is "caret": a 1-point bar 2 points in, clipped to its own rect. It holds a child.
+struct Caret {
+    label: &'static str,
+    paints: Rc<Cell<u32>>,
+    child: Option<Element<M>>,
+}
+
+impl Widget<M> for Caret {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        self.child.take().into_iter().collect()
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if old.label == self.label {
+            Change::None
+        } else {
+            Change::Paint
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        self.paints.set(self.paints.get() + 1);
+        if self.label == "caret" {
+            cx.overlay();
+        }
+    }
+
+    fn overlay(&self, _: &(), cx: &mut OverlayCx<'_>) {
+        let size = cx.size();
+        cx.clip(Rect::from_origin_size(Point::new(0.0, 0.0), size));
+        cx.fill_pixels(
+            Rect::new(2.0, 1.0, 1.0, size.height - 2.0),
+            Color::new(0.0, 0.0, 1.0, 1.0),
+        );
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// A clipping viewport holding a field that asks for an overlay, with a child inside the field and a sibling after it.
+struct Overlaid {
+    tree: Tree<M>,
+    root: NodeId,
+    field: NodeId,
+    inner: NodeId,
+    after: NodeId,
+    paints: Rc<Cell<u32>>,
+    painter: Painter,
+    env: Environment,
+}
+
+impl Overlaid {
+    fn view(paints: &Rc<Cell<u32>>, label: &'static str) -> Element<M> {
+        Element::new(crate::test_support::group(vec![
+            Element::new(Caret {
+                label,
+                paints: Rc::clone(paints),
+                child: Some(Fixture::view(paints, "inner")),
+            }),
+            Fixture::view(paints, "after"),
+        ]))
+    }
+
+    fn new() -> Self {
+        let paints = Rc::default();
+        let mut tree = Tree::<M>::new(8);
+        let root = tree.reconcile(None, Self::view(&paints, "caret")).unwrap();
+        let [field, after] = tree.get(root).unwrap().children[..] else {
+            unreachable!()
+        };
+        let inner = tree.get(field).unwrap().children[0];
+        let mut env = env();
+        env.scale = 1.5;
+        Self {
+            tree,
+            root,
+            field,
+            inner,
+            after,
+            paints,
+            painter: Painter::default(),
+            env,
+        }
+    }
+
+    /// Paints with the field's top-left corner at `at` in a viewport of 100 × 50 points at the window's corner.
+    fn paint(&mut self, at: Point) -> Painting {
+        let viewport = Rect::new(0.0, 0.0, 100.0, 50.0);
+        let field = Rect::new(at.x, at.y, 60.0, 22.0);
+        let placed = |rect: Rect, clip: Option<Rect>, own_clip: Option<Rect>| Placement {
+            rect,
+            target: rect,
+            clip,
+            own_clip,
+        };
+        let geometry = Geometry::from([
+            (self.root, placed(viewport, None, Some(viewport))),
+            (self.field, placed(field, Some(viewport), None)),
+            (self.inner, placed(field, Some(viewport), None)),
+            (
+                self.after,
+                placed(Rect::new(0.0, 60.0, 100.0, 10.0), Some(viewport), None),
+            ),
+        ]);
+        self.painter.paint(
+            &self.tree,
+            self.root,
+            &geometry,
+            &PaintInput {
+                env: &self.env,
+                focus: None,
+                focus_visible: false,
+                window_active: true,
+                background: WindowBackground::Theme,
+                backdrop: false,
+                materials: false,
+                now: Timestamp(0),
+            },
+        )
+    }
+}
+
+#[test]
+fn an_overlay_comes_after_its_nodes_subtree_inside_its_clips_and_takes_no_hits() {
+    let mut f = Overlaid::new();
+    let caret = f.field;
+    let painting = f.paint(Point::new(10.3, 37.1));
+    let ids: Vec<PaintNodeId> = painting.list.nodes.iter().map(|n| n.id).collect();
+    assert_eq!(
+        ids,
+        [
+            f.root.into(),
+            caret.into(),
+            f.inner.into(),
+            overlay_id(caret),
+            f.after.into(),
+        ],
+        "the overlay closes its node's subtree, under what follows"
+    );
+    let overlay = &painting.list.nodes[3];
+    assert_eq!(
+        overlay.parent,
+        Some(caret.into()),
+        "the clips around its node cut it"
+    );
+    assert_eq!(overlay.transform, Transform::IDENTITY);
+    assert_eq!(
+        overlay.hit.width() * overlay.hit.height(),
+        0.0,
+        "it takes no hits"
+    );
+    assert!(
+        overlay.bounds.max_y() <= 50.0 + CLIP_EDGE,
+        "its bounds stop at the viewport: {:?}",
+        overlay.bounds
+    );
+    let PaintOp::PushClip(Shape::Rect(clip)) = overlay.ops[0] else {
+        panic!("the overlay's own clip first: {:?}", overlay.ops);
+    };
+    let whole = |v: f64| ((v * 1.5) - (v * 1.5).round()).abs() < 1e-9;
+    assert!(
+        [clip.min_x(), clip.min_y(), clip.max_x(), clip.max_y()]
+            .into_iter()
+            .all(whole),
+        "its clip lies on device pixels: {clip:?}"
+    );
+    assert!(
+        clip.min_x() <= 10.3
+            && clip.min_y() <= 37.1
+            && clip.max_x() >= 70.3
+            && clip.max_y() >= 59.1,
+        "and holds the whole node: {clip:?}"
+    );
+}
+
+#[test]
+fn an_overlay_keeps_its_revision_until_what_it_draws_changes_and_goes_with_its_request() {
+    let mut f = Overlaid::new();
+    let caret = f.field;
+    let find = |painting: &Painting, id: PaintNodeId| {
+        painting.list.nodes.iter().find(|n| n.id == id).cloned()
+    };
+    let first = f.paint(Point::new(10.3, 7.1));
+    let paints = f.paints.get();
+    let shown = find(&first, overlay_id(caret)).expect("the overlay");
+    let again = f.paint(Point::new(10.3, 7.1));
+    assert_eq!(
+        find(&again, overlay_id(caret)).unwrap().revision,
+        shown.revision,
+        "drawn again in the same place it is the same paint"
+    );
+    // scrolled, the node keeps its paint and its overlay moves with it
+    let scrolled = f.paint(Point::new(10.3, 2.6));
+    assert_eq!(f.paints.get(), paints, "no node paints again");
+    assert_eq!(
+        find(&scrolled, caret.into()).unwrap().revision,
+        find(&first, caret.into()).unwrap().revision
+    );
+    let moved = find(&scrolled, overlay_id(caret)).unwrap();
+    assert_ne!(moved.revision, shown.revision, "moved, it is new paint");
+    assert!(
+        (moved.bounds.min_y() - (shown.bounds.min_y() - 4.5)).abs() <= 1.0 / 1.5,
+        "it follows the node: {:?} then {:?}",
+        shown.bounds,
+        moved.bounds
+    );
+    // scrolled out of the viewport it draws nothing
+    let out = f.paint(Point::new(10.3, 60.0));
+    assert!(find(&out, overlay_id(caret)).is_none());
+    // a node that paints again without asking has none
+    f.tree
+        .reconcile(Some(f.root), Overlaid::view(&f.paints, "plain"))
+        .unwrap();
+    let plain = f.paint(Point::new(10.3, 7.1));
+    assert!(find(&plain, overlay_id(caret)).is_none());
+    assert_eq!(plain.list.nodes.len(), 4);
+}

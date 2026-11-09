@@ -6,9 +6,23 @@
 # Arch is the only distribution the packages target; the first argument names it so callers read the same everywhere.
 # The source is the committed HEAD (git archive), so untracked or modified files never reach a package. A build
 # container makes the runtime and data packages with makepkg (check() included) on the release source archive and the
-# stable PKGBUILD, then runs namcap; release.py verifies each against the manifest. A second, fresh container of the same base installs them, checks the login-screen account, the unit
-# state, the payload and conffile preservation across a reinstall, then removes them. Packages, file lists and the
-# test log land in DIST_DIR. --test-only skips the build and install-tests the packages already in DIST_DIR. Needs Docker Buildx, Python 3 and git; nothing is installed on the host.
+# stable PKGBUILD, in a Cargo target of its own that is removed afterwards. A second container runs namcap, and
+# release.py verifies each package against the manifest. A fresh container of the plain base installs them, checks the
+# login-screen account, the unit state, the payload and conffile preservation across a reinstall, then removes them.
+# Packages, file lists and the test log land in DIST_DIR. --test-only skips the build and install-tests the packages
+# already in DIST_DIR. Needs Docker Buildx, Python 3 and git; nothing is installed on the host.
+#
+# Build slots (ci/worktree-build.py): the script holds this worktree for its whole run, every slot only while makepkg
+# compiles and tests, one slot while the builder image builds, and none for the source archive, namcap, verification
+# and the install test. A caller that already holds every slot (`locked` around this script) keeps them throughout.
+#
+# Compile cache: CUPERTINO_CONTAINER_CACHE names a per-user directory holding sccache's cache and Cargo's downloads for
+# this build (default ~/.cache/cupertino-build/containers; the empty string, or running on GitHub Actions, turns it
+# off). sccache reuses a compiler output only when the compiler, its arguments, environment and every source file it
+# read hash the same, and the in-container paths never change, so a warm package is the same package. The source is
+# still the clean archive, every crate is still checked, linked and tested, and no Cargo target is ever reused: a
+# makepkg source tree carries the commit time on every file, so Cargo's timestamp checks cannot tell an old target
+# from a new source.
 #
 # --upgrade packages the same build twice, as release 1 in DIST_DIR/rev-1 and as release 2 in DIST_DIR/rev-2 (no
 # second compile), then, in a fresh container, installs release 1, enables the login service, edits login.conf,
@@ -37,8 +51,26 @@ dist=$(cd "$dist" && pwd)
 # Every mode stores active container ids under target/, so cleanup must hold the same lifetime lease.
 if [ -z "${CUPERTINO_BUILD_LOCK_FD:-}" ]; then
     cd "$root"
-    exec python3 ci/worktree-build.py locked -- bash packaging/ci/build-in-container.sh "$distro" "$dist" "$mode"
+    exec python3 ci/worktree-build.py locked --hold none -- bash packaging/ci/build-in-container.sh "$distro" "$dist" "$mode"
 fi
+cd "$root"
+# Run one phase holding `every` build slot or `one`; inside a `locked` that already holds every slot, run it as it is.
+phase() {
+    local hold=$1
+    shift
+    if [ "${CUPERTINO_BUILD_LOCK_HOLD:-}" = none ]; then
+        python3 "$root/ci/worktree-build.py" locked --hold "$hold" -- "$@"
+    else
+        "$@"
+    fi
+}
+if [ -z "${CUPERTINO_CONTAINER_CACHE+set}" ] && [ "${GITHUB_ACTIONS:-}" != true ]; then
+    container_cache="$HOME/.cache/cupertino-build/containers"
+else
+    container_cache=${CUPERTINO_CONTAINER_CACHE:-}
+fi
+# The package build's share of that cache; sccache evicts the least recently used outputs beyond it.
+sccache_size=${CUPERTINO_PACKAGE_SCCACHE_SIZE:-12G}
 # The source copy and the Arch build tree are large; they live under the gitignored target/, not in /tmp.
 mkdir -p "$root/target"
 work=$(mktemp -d "$root/target/container-build.XXXXXX")
@@ -46,12 +78,14 @@ cache_next=
 cache_link=
 active_job=
 restore_ownership=0
+cache_mounts=()
+owned_cache=()
 cleanup() {
     local status=$? cleanup_status=0 container cidfile
     trap - EXIT
     trap "" INT TERM
     # Containers are created stopped and recorded before compilation can start. Only this run's ids are removed.
-    for cidfile in "$work/build.cid" "$work/test.cid"; do
+    for cidfile in "$work/build.cid" "$work/inspect.cid" "$work/test.cid"; do
         if [ -s "$cidfile" ]; then
             container=$(cat "$cidfile")
             if ! docker rm --force "$container" >/dev/null; then
@@ -69,9 +103,8 @@ cleanup() {
     # A forced container stop cannot run its EXIT trap; repair only this run's bind-mounted outputs.
     if [ "$restore_ownership" = 1 ]; then
         if ! docker run --rm --network none -v "$work/src:/src" -v "$dist:/dist" \
-            --mount "type=bind,src=$target,dst=/src/target" \
-            --mount "type=bind,src=$cargo_home,dst=/cargo-home" \
-            "$image_id" chown -R "$(id -u):$(id -g)" /dist /src /cargo-home; then
+            --mount "type=bind,src=$cargo_home,dst=/cargo-home" "${cache_mounts[@]}" \
+            "$image_id" chown -R "$(id -u):$(id -g)" /dist /src /cargo-home "${owned_cache[@]}"; then
             cleanup_status=1
         fi
     fi
@@ -92,10 +125,13 @@ wait_job() {
     return "$status"
 }
 
+# Start a created container and wait for it; HOLD is the build slots it needs, or none.
 start_container() {
-    local container=$1 log=$2
+    local container=$1 log=$2 hold=$3
     if [ -n "$log" ]; then
         docker start --attach "$container" | tee "$log" &
+    elif [ "$hold" != none ]; then
+        phase "$hold" docker start --attach "$container" &
     else
         docker start --attach "$container" &
     fi
@@ -113,17 +149,33 @@ if [ "$mode" != --test-only ]; then
     fi
 fi
 
+owner="$(id -u):$(id -g)"
+# The compile container: everything that compiles or runs tests, under every build slot.
 build_script=$(cat <<EOF
 set -euo pipefail
-trap 'chown -R $(id -u):$(id -g) /dist /src /cargo-home' EXIT
+# Stop sccache (printing its counters, also after a failure) before handing the cache back to the caller.
+trap 'if [ -n "\${SCCACHE_DIR:-}" ]; then su builder -c "sccache --stop-server" || true; fi; chown -R $owner /dist /src /cargo-home\${SCCACHE_DIR:+ /cache}' EXIT
 cd /src
 # Packages are stripped; generating debug information only consumes build storage.
 export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CARGO_PROFILE_RELEASE_DEBUG=0
-upgrade=$upgrade
-chown -R builder /src/arch-build /src/target
-chown builder /cargo-home
+if [ -d /cache/sccache ]; then
+    export RUSTC_WRAPPER=/usr/bin/sccache SCCACHE_DIR=/cache/sccache SCCACHE_CACHE_SIZE=$sccache_size SCCACHE_IDLE_TIMEOUT=0
+    chown -R builder /cache
+fi
+mkdir /src/target
+chown -R builder /src/arch-build /src/target /cargo-home
 su builder -c 'cd /src/arch-build && makepkg --noconfirm'
 df -h /src | tee /dist/disk-after-makepkg.log
+EOF
+)
+
+# The inspection container: namcap, verification and the second release's repackaging compile nothing.
+inspect_script=$(cat <<EOF
+set -euo pipefail
+trap 'chown -R $owner /dist /src' EXIT
+cd /src
+export CARGO_TARGET_DIR=/src/target
+upgrade=$upgrade
 namcap arch-build/PKGBUILD arch-build/*.pkg.tar.zst | tee /dist/namcap.log
 publish() {
     mkdir -p "\$1"
@@ -136,6 +188,7 @@ if [ "\$upgrade" = 1 ]; then
     publish /dist/rev-1
     rm arch-build/*.pkg.tar.zst
     sed -i 's/^pkgrel=1\$/pkgrel=2/' arch-build/PKGBUILD
+    chown -R builder /src/arch-build
     su builder -c 'cd /src/arch-build && makepkg --noconfirm --repackage'
     publish /dist/rev-2
 else
@@ -230,15 +283,22 @@ check 'login enablement removed' absent /etc/systemd/system/multi-user.target.wa
 EOF
 )
 
-# Each worktree owns its Cargo outputs; no global volume can mix incompatible builds.
 if [ "$mode" != --test-only ]; then
-    target_root="$root/target/package-build/$distro"
-    cargo_home="$target_root/cargo-home"
-    mkdir -p "$cargo_home"
+    if [ -n "$container_cache" ]; then
+        mkdir -p "$container_cache/package/sccache" "$container_cache/package/cargo-home"
+        container_cache=$(cd "$container_cache" && pwd)
+        cargo_home="$container_cache/package/cargo-home"
+        cache_mounts=(--mount "type=bind,src=$container_cache/package/sccache,dst=/cache/sccache")
+        owned_cache=(/cache)
+    else
+        # Without the cache, Cargo's downloads stay in this worktree; they are checked against Cargo.lock either way.
+        cargo_home="$root/target/package-build/$distro/cargo-home"
+        mkdir -p "$cargo_home"
+    fi
     image_key=$(sha256sum "$root/packaging/ci/Dockerfile" | cut -c1-16)
     build_image="cupertino-package-builder:$distro-$image_key"
-    # Bound compiler parallelism in both image tool installs and the subsequent workspace build.
-    jobs=${CARGO_BUILD_JOBS:-4}
+    # Bound compiler parallelism in both image tool installs and the workspace build, which holds every build slot.
+    jobs=${CARGO_BUILD_JOBS:-$(nproc)}
     build=(docker buildx build --load --target "$distro" --tag "$build_image" --build-arg "CARGO_BUILD_JOBS=$jobs")
     if [ -n "${CUPERTINO_BUILD_CACHE_DIR:-}" ]; then
         mkdir -p "$CUPERTINO_BUILD_CACHE_DIR/$distro"
@@ -256,7 +316,7 @@ if [ "$mode" != --test-only ]; then
         fi
         build+=(--cache-to "type=local,dest=$cache_next,mode=max")
     fi
-    "${build[@]}" "$root/packaging/ci" &
+    phase one "${build[@]}" "$root/packaging/ci" &
     active_job=$!
     wait_job
     image_id=$(docker image inspect --format '{{.Id}}' "$build_image")
@@ -264,8 +324,6 @@ if [ "$mode" != --test-only ]; then
         echo "builder image has an invalid content identity: $image_id" >&2
         exit 1
     fi
-    target="$target_root/targets/${image_id#sha256:}"
-    mkdir -p "$target"
     if [ -n "$cache_next" ]; then
         if [ ! -f "$cache_next/index.json" ]; then
             echo "builder cache export is incomplete: $cache_next" >&2
@@ -282,25 +340,27 @@ if [ "$mode" != --test-only ]; then
         cache_next=
         # Delete only a generation owned by this cache, after the successful export was atomically published.
         if [[ "$previous" == generation.* && "$previous" != */* ]]; then
-            rm -rf "$cache_root/$previous"
+            rm -rf "${cache_root:?}/${previous:?}"
         fi
     fi
     container=$(docker create --cidfile "$work/build.cid" --name "cupertino-$distro-$(basename "$work")-build" \
         --env "CARGO_BUILD_JOBS=$jobs" --env CARGO_HOME=/cargo-home -v "$work/src:/src" -v "$dist:/dist" \
-        --mount "type=bind,src=$target,dst=/src/target" \
-        --mount "type=bind,src=$cargo_home,dst=/cargo-home" "$image_id" bash -c "$build_script")
+        --mount "type=bind,src=$cargo_home,dst=/cargo-home" "${cache_mounts[@]}" "$image_id" bash -c "$build_script")
     restore_ownership=1
-    start_container "$container" ""
+    start_container "$container" "" every
+    container=$(docker create --cidfile "$work/inspect.cid" --name "cupertino-$distro-$(basename "$work")-inspect" \
+        --network none -v "$work/src:/src" -v "$dist:/dist" "$image_id" bash -c "$inspect_script")
+    start_container "$container" "" none
     restore_ownership=0
 fi
 if [ "$upgrade" = 1 ]; then
     container=$(docker create --cidfile "$work/test.cid" --name "cupertino-$distro-$(basename "$work")-test" \
         -v "$dist:/dist:ro" "$test_image" bash -c "$upgrade_script")
-    start_container "$container" "$dist/upgrade-test-$distro.log"
+    start_container "$container" "$dist/upgrade-test-$distro.log" none
 else
     container=$(docker create --cidfile "$work/test.cid" --name "cupertino-$distro-$(basename "$work")-test" \
         -v "$dist:/dist:ro" "$test_image" bash -c "$test_script")
-    start_container "$container" "$dist/install-test-$distro.log"
+    start_container "$container" "$dist/install-test-$distro.log" none
 fi
 if [ "$mode" = build ]; then
     python3 "$root/packaging/release.py" record-packages "$dist" --commit "$source_commit" ${RELEASE_TAG:+--tag "$RELEASE_TAG"}

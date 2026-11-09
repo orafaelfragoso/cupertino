@@ -106,7 +106,7 @@ python3 ci/worktree-build.py run --profile dev -- cargo clippy --workspace --all
 python3 ci/worktree-build.py run --profile dev -- cargo run -p cupertino-layers
 ```
 
-Run these commands from a linked worktree. The outer wrapper keeps its target private and lets at most two heavy builds run at once across worktrees (`--slots N` changes that), each with a share of the processors; the fixture wrapper prepares integration-test programs before nextest starts. Keep the same profile and environment throughout the target's lifecycle; the repository's contribution guide explains seed preparation and cleanup.
+Run these commands from a linked worktree. The outer wrapper keeps its target private and lets at most four heavy builds run at once across worktrees (`--slots N` changes that), each with a share of the processors; a new dependency or a changed `Cargo.lock` keeps the target, as Cargo rebuilds only what it affects; the fixture wrapper prepares integration-test programs before nextest starts. Keep the same profile and environment throughout the target's lifecycle; the repository's contribution guide explains seed preparation and cleanup.
 
 Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`; CI uses 0.9.151). It runs every test in its own process and kills a test that runs longer than 2 minutes (`.config/nextest.toml`), so a hang fails with the test's name; doctests run separately. Shell and app crates need `--features app` to test their process code; pass the crate selection and features to nextest inside the wrappers above. A killed run can leave a test `dbus-daemon` behind: stop it, never your real session bus.
 

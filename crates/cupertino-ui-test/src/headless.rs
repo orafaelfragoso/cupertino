@@ -41,6 +41,10 @@ struct HeadlessWindow {
     frames: Vec<PresentedFrame>,
     /// The window's pixels, kept up to date with each frame's damage while presented frames keep no pixels.
     buffer: Vec<u8>,
+    /// Its configures say it is activated while it has the keyboard ([`HeadlessWindowSystem::activate_by_keyboard`]).
+    by_keyboard: bool,
+    /// The last focus event queued for it said it has the keyboard.
+    keyboard: bool,
 }
 
 /// A drag the runtime started, as the window system received it.
@@ -174,6 +178,8 @@ impl HeadlessWindowSystem {
                 unacknowledged: Vec::new(),
                 frames: Vec::new(),
                 buffer: Vec::new(),
+                by_keyboard: false,
+                keyboard: false,
             },
         );
         id
@@ -182,8 +188,11 @@ impl HeadlessWindowSystem {
     /// Queues an event for the next [`dispatch`](WindowSystem::dispatch). A window event for a window that does
     /// not exist is an error, so a test cannot deliver input to a stale ID.
     pub fn enqueue(&mut self, event: PlatformEvent) -> Result<(), PlatformError> {
-        if let PlatformEvent::Window { window, .. } = &event {
-            self.window(*window)?;
+        if let PlatformEvent::Window { window, event } = &event {
+            let w = self.window_mut(*window)?;
+            if let WindowEvent::Focus(focused) = event {
+                w.keyboard = *focused;
+            }
         }
         self.queue.push_back(event);
         Ok(())
@@ -197,13 +206,26 @@ impl HeadlessWindowSystem {
         self.enqueue(PlatformEvent::Window { window, event })
     }
 
+    /// Makes `window` a surface whose role's configure has no activated state, such as a desktop shell's layer
+    /// surface: from now its configures say it is activated while it has the keyboard, between a queued
+    /// `WindowEvent::Focus(true)` and `Focus(false)`, whatever states the test passes, as the Wayland window system
+    /// reports such a window.
+    pub fn activate_by_keyboard(&mut self, window: WindowId) -> Result<(), PlatformError> {
+        self.window_mut(window)?.by_keyboard = true;
+        Ok(())
+    }
+
     /// Queues a configure and returns its ID, which the runtime must acknowledge with a presented frame.
     pub fn configure(
         &mut self,
         window: WindowId,
         size: Option<Size>,
-        states: WindowStates,
+        mut states: WindowStates,
     ) -> Result<ConfigureId, PlatformError> {
+        let w = self.window(window)?;
+        if w.by_keyboard {
+            states.activated = w.keyboard;
+        }
         let id = ConfigureId(self.next_configure);
         let wm_capabilities = WmCapabilities {
             window_menu: false,
@@ -725,6 +747,35 @@ mod tests {
         let mut events = Vec::new();
         ws.dispatch(None, &mut events).unwrap();
         events
+    }
+
+    #[test]
+    fn a_window_activated_by_the_keyboard_is_configured_activated_while_it_has_it() {
+        let mut ws = HeadlessWindowSystem::default();
+        let window = ws.create_window(&spec()).unwrap();
+        ws.activate_by_keyboard(window).unwrap();
+        let active = WindowStates {
+            activated: true,
+            ..WindowStates::default()
+        };
+        let activated = |ws: &mut HeadlessWindowSystem| {
+            drain(ws).into_iter().find_map(|e| match e {
+                PlatformEvent::Window {
+                    event: WindowEvent::Configure(c),
+                    ..
+                } => Some(c.states.activated),
+                _ => None,
+            })
+        };
+        ws.configure(window, None, active).unwrap();
+        assert_eq!(activated(&mut ws), Some(false), "no keyboard yet");
+        ws.enqueue_window(window, WindowEvent::Focus(true)).unwrap();
+        ws.configure(window, None, WindowStates::default()).unwrap();
+        assert_eq!(activated(&mut ws), Some(true));
+        ws.enqueue_window(window, WindowEvent::Focus(false))
+            .unwrap();
+        ws.configure(window, None, active).unwrap();
+        assert_eq!(activated(&mut ws), Some(false));
     }
 
     #[test]

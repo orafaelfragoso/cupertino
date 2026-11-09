@@ -98,6 +98,8 @@ elif args[0] == 'start':
             time.sleep(0.01)
     if install and os.environ.get('TEST_INSTALL_FAIL'):
         raise SystemExit(19)
+    if kind == 'upgrade' and os.environ.get('TEST_UPGRADE_FAIL'):
+        raise SystemExit(41)
     if kind == 'build' and os.environ.get('TEST_COMPILE_FAIL'):
         raise SystemExit(31)
     if kind == 'inspect' and os.environ.get('TEST_INSPECT_FAIL'):
@@ -254,6 +256,63 @@ else:
         self.assertFalse(any(command[0] == 'create' and '-test' in command[command.index('--name') + 1]
                              for command in commands if command[0] == 'create'))
 
+    def created(self):
+        """The docker create command of each container, by the kind its name ends with."""
+        return {command[command.index('--name') + 1].rsplit('-', 1)[1]: command
+                for command in self.commands() if command[0] == 'create'}
+
+    def test_upgrade_runs_the_upgrade_test_and_then_the_same_install_test_on_release_2(self):
+        plain = self.run_build([], {}, 'arch')
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        plain_test = self.created()['test']
+        dist = self.root / 'dist'
+        self.assertIn(str(dist) + ':/dist:ro', plain_test)
+        self.assertFalse((dist / 'upgrade-test-arch.log').exists())
+        self.log.unlink()
+        (dist / 'install-test-arch.log').unlink()
+        result = self.run_build(['--upgrade'], {}, 'arch')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = self.commands()
+        self.assertEqual([command[command.index('--name') + 1].rsplit('-', 1)[1] for command in commands
+                          if command[0] == 'create'], ['build', 'inspect', 'upgrade', 'test'])
+        self.assertEqual(sum(command[0] == 'start' for command in commands), 4)
+        created = self.created()
+        upgrade, install = created['upgrade'], created['test']
+        # the upgrade test sees both releases; the install test sees release 2 as the packages of a plain build
+        self.assertIn(str(dist) + ':/dist:ro', upgrade)
+        self.assertIn('install /dist/rev-1\n', upgrade[-1])
+        self.assertIn('install /dist/rev-2\n', upgrade[-1])
+        self.assertIn(str(dist / 'rev-2') + ':/dist:ro', install)
+        self.assertNotIn(str(dist) + ':/dist:ro', install)
+        self.assertEqual(install[-1], plain_test[-1])
+        self.assertNotEqual(install[-1], upgrade[-1])
+        for call in ('cli_checks', 'sdk_checks'):
+            self.assertIn(call, install[-1].splitlines())
+            self.assertNotIn(call, upgrade[-1])
+        abi = [argument for argument in install if argument.endswith(':/abi:ro')]
+        self.assertEqual(len(abi), 1)
+        self.assertTrue(abi[0].endswith('/src/crates/cupertino-ui-abi:/abi:ro'), abi)
+        for container in (upgrade, install):
+            self.assertEqual(container[-4], 'docker.io/library/archlinux@sha256:'
+                             '3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1')
+            self.assertFalse(any('/cache' in argument or '/cargo-home' in argument for argument in container[:-1]))
+        self.assertTrue((dist / 'upgrade-test-arch.log').is_file())
+        self.assertTrue((dist / 'install-test-arch.log').is_file())
+        self.assertFalse(any(command[:2] == ['release', 'record-packages'] for command in commands))
+        self.assertFalse(list((self.root / 'containers').iterdir()))
+
+    def test_a_failed_upgrade_test_ends_the_run_before_the_install_test(self):
+        result = self.run_build(['--upgrade'], {'TEST_UPGRADE_FAIL': '1'}, 'arch')
+        self.assertEqual(result.returncode, 41, result.stderr)
+        self.assertEqual(sorted(self.created()), ['build', 'inspect', 'upgrade'])
+        self.assertFalse(list((self.root / 'containers').iterdir()))
+
+    def test_a_failed_install_test_fails_the_upgrade_run(self):
+        result = self.run_build(['--upgrade'], {'TEST_INSTALL_FAIL': '1'}, 'arch')
+        self.assertEqual(result.returncode, 19, result.stderr)
+        self.assertEqual(sorted(self.created()), ['build', 'inspect', 'test', 'upgrade'])
+        self.assertFalse(list((self.root / 'containers').iterdir()))
+
     def test_test_only_needs_no_image_build_or_cargo_target(self):
         result = self.run_build(['--test-only'], {}, 'arch')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -347,8 +406,9 @@ else:
                         name = command[command.index('--name') + 1].rsplit('-', 1)[1] if command[0] == 'create' else ''
                         sequence.append(command[0] if command[0] != 'buildx' else 'image') if not name else \
                             sequence.append('create ' + name)
+                tests = ['create upgrade', 'start', 'create test', 'start'] if mode else ['create test', 'start']
                 self.assertEqual(sequence, ['hold one', 'image', 'create build', 'hold every', 'start',
-                                            'create inspect', 'start', 'create test', 'start'])
+                                            'create inspect', 'start', *tests])
 
     def test_a_caller_holding_every_slot_runs_each_phase_without_asking_again(self):
         self.guard()
@@ -393,13 +453,13 @@ else:
                 self.assertEqual('type=bind,src=' + str(default / 'cargo-home') + ',dst=/cargo-home' in build, expected)
                 self.assertEqual((default / 'sccache').is_dir(), expected)
 
-    def interrupt_container(self, hold, interruption, expected):
+    def interrupt_container(self, hold, interruption, expected, mode=()):
         containers = self.root / 'containers'
         containers.mkdir()
         unrelated = containers / 'unrelated'
         unrelated.write_text('another build')
         env = dict(self.env, TEST_HOLD=hold, CARGO_BUILD_JOBS='2')
-        with subprocess.Popen(self.command('arch', []), env=env, text=True,
+        with subprocess.Popen(self.command('arch', mode), env=env, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
             deadline = time.monotonic() + 5
             while not (self.root / 'started').exists():
@@ -440,6 +500,11 @@ else:
 
     def test_interrupt_removes_owned_build_and_test_containers(self):
         self.interrupt_container('test', signal.SIGINT, 130)
+
+    def test_interrupt_during_the_upgrade_test_removes_its_container(self):
+        self.interrupt_container('upgrade', signal.SIGINT, 130, ['--upgrade'])
+        self.assertFalse(any(command[0] == 'create' and command[command.index('--name') + 1].endswith('-test')
+                             for command in self.commands()))
 
 
 if __name__ == '__main__':

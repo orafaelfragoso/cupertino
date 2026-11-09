@@ -28,7 +28,9 @@
 # --upgrade packages the same build twice, as release 1 in DIST_DIR/rev-1 and as release 2 in DIST_DIR/rev-2 (no
 # second compile), then, in a fresh container, installs release 1, enables the login service, edits login.conf,
 # upgrades to release 2 and checks that the version rose and that the account, conffile, unit state and payload (the
-# SDK's library and links too) survived.
+# SDK's library and links too) survived. It then runs the install test above, the same script, on release 2 in another
+# fresh container, so one --upgrade run checks everything the plain mode checks on installed packages. The logs are
+# DIST_DIR/upgrade-test-arch.log and DIST_DIR/install-test-arch.log.
 set -euo pipefail
 
 usage="usage: build-in-container.sh arch DIST_DIR [--test-only|--upgrade]"
@@ -87,7 +89,7 @@ cleanup() {
     trap - EXIT
     trap "" INT TERM
     # Containers are created stopped and recorded before compilation can start. Only this run's ids are removed.
-    for cidfile in "$work/build.cid" "$work/inspect.cid" "$work/test.cid"; do
+    for cidfile in "$work/build.cid" "$work/inspect.cid" "$work/upgrade.cid" "$work/test.cid"; do
         if [ -s "$cidfile" ]; then
             container=$(cat "$cidfile")
             if ! docker rm --force "$container" >/dev/null; then
@@ -483,15 +485,22 @@ if [ "$mode" != --test-only ]; then
     start_container "$container" "" none
     restore_ownership=0
 fi
+# Run SCRIPT in a fresh container of the plain base, PACKAGES read-only at /dist and its output in DIST_DIR/LOG. NAME
+# names the container and its id file; further arguments are options of docker create.
+test_container() {
+    local name=$1 packages=$2 script=$3 log=$4
+    shift 4
+    container=$(docker create --cidfile "$work/$name.cid" --name "cupertino-$distro-$(basename "$work")-$name" \
+        -v "$packages:/dist:ro" "$@" "$test_image" bash -c "$script")
+    start_container "$container" "$dist/$log" none
+}
+# The install test reads its packages from /dist: the build's, or release 2 after the upgrade test passed.
+installed=$dist
 if [ "$upgrade" = 1 ]; then
-    container=$(docker create --cidfile "$work/test.cid" --name "cupertino-$distro-$(basename "$work")-test" \
-        -v "$dist:/dist:ro" "$test_image" bash -c "$upgrade_script")
-    start_container "$container" "$dist/upgrade-test-$distro.log" none
-else
-    container=$(docker create --cidfile "$work/test.cid" --name "cupertino-$distro-$(basename "$work")-test" \
-        -v "$dist:/dist:ro" -v "$work/src/crates/cupertino-ui-abi:/abi:ro" "$test_image" bash -c "$test_script")
-    start_container "$container" "$dist/install-test-$distro.log" none
+    test_container upgrade "$dist" "$upgrade_script" "upgrade-test-$distro.log"
+    installed=$dist/rev-2
 fi
+test_container test "$installed" "$test_script" "install-test-$distro.log" -v "$work/src/crates/cupertino-ui-abi:/abi:ro"
 if [ "$mode" = build ]; then
     python3 "$root/packaging/release.py" record-packages "$dist" --commit "$source_commit" ${RELEASE_TAG:+--tag "$RELEASE_TAG"}
 fi

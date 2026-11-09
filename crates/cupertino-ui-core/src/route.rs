@@ -18,6 +18,20 @@ pub(crate) struct Placement {
     pub(crate) clip: Option<Rect>,
     /// The clip this node puts on its descendants.
     pub(crate) own_clip: Option<Rect>,
+    /// Where the node stands to the raised nodes ([`Widget::raised`](crate::Widget::raised)).
+    pub(crate) raised: Raised,
+}
+
+/// Where a node stands to the raised nodes, which lie over the rest of the window and take a point first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Raised {
+    /// Neither raised nor above a raised node.
+    #[default]
+    No,
+    /// Not raised, with a raised node under it.
+    Holds,
+    /// Raised, or under a raised node.
+    In,
 }
 
 impl Placement {
@@ -91,7 +105,8 @@ impl<M: 'static> Route<'_, M> {
     }
 }
 
-/// The path from `root` to the topmost node containing `point`; later siblings paint over earlier ones. Among
+/// The path from `root` to the topmost node containing `point`; raised nodes lie over the rest, and later siblings paint
+/// over earlier ones. Among
 /// siblings, a rect that holds the point wins over a hit target that only reaches it, and of those targets the one
 /// whose rect is nearest wins, the topmost on a tie. A node's subtree comes before the node itself.
 pub(crate) fn hit_test<M: 'static>(
@@ -100,21 +115,25 @@ pub(crate) fn hit_test<M: 'static>(
     geometry: &Geometry,
     point: Point,
 ) -> Option<Vec<NodeId>> {
-    /// How the hit node reaches `point`, and the path up from that node.
+    /// How the hit node reaches `point`, and the path up from that node; with `raised`, only a raised node's.
     fn visit<M: 'static>(
         tree: &Tree<M>,
         id: NodeId,
         geometry: &Geometry,
         point: Point,
+        raised: bool,
     ) -> Option<(Reach, Vec<NodeId>)> {
         let placement = geometry.get(&id)?;
         if placement.clip.is_some_and(|clip| !clip.contains(point)) {
             return None;
         }
+        if raised && placement.raised == Raised::No {
+            return None;
+        }
         let children = tree.get(id).map_or(&[][..], |n| &n.children[..]);
         let mut nearest: Option<(Reach, Vec<NodeId>)> = None;
         for &child in children.iter().rev() {
-            let Some(found) = visit(tree, child, geometry, point) else {
+            let Some(found) = visit(tree, child, geometry, point, raised) else {
                 continue;
             };
             let inside = found.0 == Reach::Rect;
@@ -127,6 +146,8 @@ pub(crate) fn hit_test<M: 'static>(
         }
         let (reach, mut path) = match nearest {
             Some(found) => found,
+            // only a node above a raised one: not hit itself
+            None if raised && placement.raised == Raised::Holds => return None,
             None if placement.rect.contains(point) => {
                 let own = Point::new(
                     point.x - placement.rect.origin.x,
@@ -145,7 +166,11 @@ pub(crate) fn hit_test<M: 'static>(
         path.push(id);
         Some((reach, path))
     }
-    let (_, mut path) = visit(tree, root, geometry, point)?;
+    // the raised nodes lie over the rest of the window: one whose rect holds the point takes it first
+    let (_, mut path) = match visit(tree, root, geometry, point, true) {
+        Some(found) if found.0 == Reach::Rect => found,
+        _ => visit(tree, root, geometry, point, false)?,
+    };
     path.reverse();
     Some(path)
 }

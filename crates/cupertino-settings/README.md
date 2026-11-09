@@ -9,7 +9,9 @@ of back and forward buttons. A page's title shares the toolbar row, after the bu
 sub-pages (Accessibility, Privacy & Security) opens instead with a header card (its tile, title and a one-line
 description) and no title in the toolbar. Its sections are rounded groups of full-width rows; some sections are pages of
 their own, opened from a row with a chevron and gone back from with the toolbar's history, their title in the toolbar
-after the buttons. The top of the
+after the buttons. The page fills the pane on the window background (its groups keep their own fill) and scrolls under
+the toolbar row, starting below it: what passes under the row shows through its glass, veiled by the scroll edge
+(Kit's `NavigationStack` with `under_toolbar`). The top of the
 sidebar and the toolbar are the window's drag region: a drag where no control lies moves the window and a double click
 there zooms it, while the buttons and the search field keep their presses. From the keyboard, the compositor's Zoom shortcut (Super+Ctrl+Z by default) and the menu bar's Window menu
 zoom, minimize and tile the window.

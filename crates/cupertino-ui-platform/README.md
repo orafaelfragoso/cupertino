@@ -4,12 +4,23 @@ CupertinoKit's window-system interface: the `WindowSystem` trait (windows, popup
 input method, activation tokens, drags), its events and `Capabilities`. MPL-2.0. Implemented by `cupertino-ui-wayland` on the desktop and by
 `cupertino-ui-test` headless.
 
+`present_solid(window, Color, configure)` shows a window as one colour without a frame (`Color` is the theme's,
+re-exported): the compositor stretches a single pixel over the window, so a transparent window that only takes input,
+or a uniform scrim, costs nothing per frame at any size or scale. It answers like `present`; the trait's default, and a
+system that cannot, refuse with `PlatformError::Unsupported`, and the caller presents a drawn frame instead.
+
 A popup asks for a place beside an anchor (`PopupSpec`); where the compositor put it, after flipping or sliding it to
 fit, arrives as `WindowEvent::PopupPlaced(rect)`, in its parent's coordinates, before each configure that places it.
 
 The compositor may tell whether the face of a glass material is dark or light: `WindowEvent::GlassTone { region, tone }`
 names the region by its index in the last `WindowRequest::Materials` list, or the window's own backdrop with `None`,
 and `GlassTone::{Appearance, Dark, Light}` picks the colour of the text over it. A system that cannot tell sends none.
+
+With `Capabilities::raised_layer` a window may show a raised layer over its content (`WindowSystem::present_layer`, a
+`RaisedLayer` frame from the window's top edge, as wide as the window): the materials marked `MaterialRegion::raised`
+lie between the two and read the content below them, so content that scrolls under a toolbar row shows through the
+row's glass without covering it. The layer is presented with the window's next `present` and `None` hides it; without
+the capability a layer is `Unsupported`.
 
 `PlatformEvent::ScrollBars` tells how the session wants scroll views to show their bars: `ScrollBars::WhenScrolling`
 (thin bars over the content while it scrolls) or `ScrollBars::Always` (tracks beside it that stay shown). A system

@@ -44,6 +44,17 @@ pub struct Tree {
     pub scale: (f64, f64),
     pub opacity: f32,
     pub clip: Clip,
+    /// The surfaces of the tree this piece draws, when it is a slice of it ([`TreeSlice`]); `None` draws all of it.
+    pub only: Option<TreeSlice>,
+}
+
+/// The surfaces of a tree one piece draws, by the ids of their elements: a tree whose subsurfaces draw backdrops of
+/// their own is drawn in slices with those backdrops between them.
+#[derive(Clone, Debug)]
+pub struct TreeSlice {
+    pub ids: Rc<[smithay::backend::renderer::element::Id]>,
+    /// The protocol id of the slice's first surface, which names its item apart from the other slices of the tree.
+    pub index: u64,
 }
 
 /// CPU pixels to draw, shown through `src` (buffer pixels) at `size` logical points.
@@ -142,6 +153,8 @@ pub struct FrameResources {
     /// The frame these resources belong to: handles name slots of this frame's registries only.
     pub frame: FrameId,
     pub surfaces: Vec<WlSurface>,
+    /// For each of `surfaces`, the slice of its tree the item draws; `None` for all of it.
+    pub slices: Vec<Option<TreeSlice>>,
     pub images: Vec<MemoryRenderBuffer>,
     pub recipes: Vec<Rc<GpuRecipe>>,
     pub glass: Vec<Rc<GlassContainer>>,
@@ -165,6 +178,7 @@ impl Composition {
             resources: FrameResources {
                 frame: id,
                 surfaces: Vec::new(),
+                slices: Vec::new(),
                 images: Vec::new(),
                 recipes: Vec::new(),
                 glass: Vec::new(),
@@ -300,12 +314,17 @@ impl Composition {
                 );
             }
             Piece::Tree(tree) => {
-                let index = tree.surface.id().protocol_id() as u64;
+                // a slice is named by its first surface, so the slices of one tree stay apart
+                let index = tree
+                    .only
+                    .as_ref()
+                    .map_or(tree.surface.id().protocol_id() as u64, |s| s.index);
                 let id = SurfaceId(ResourceKey {
                     slot: self.resources.surfaces.len() as u64,
                     generation: self.id.0,
                 });
                 self.resources.surfaces.push(tree.surface);
+                self.resources.slices.push(tree.only);
                 let device = |p: DevicePoint| {
                     OutputPoint(Point::new(
                         f64::from(p.x) / self.scale,

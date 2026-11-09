@@ -100,7 +100,8 @@ strip while hidden. Each tile is a node at the rectangle `Dock::layout` gives it
 running indicators and the separators under the tiles.
 
 **Displays.** The dock starts on the first output, the main display. Every other output gets an edge strip: a layer surface
-one point deep along the dock's edge (`cupertino-dock-edge`, `src/view/edge.rs`) that draws nothing and holds that output's
+one point deep along the dock's edge (`cupertino-dock-edge`, `src/view/edge.rs`) that draws nothing (`WindowBackground::INPUT_ONLY`,
+one transparent pixel the compositor stretches) and holds that output's
 dock role. When the pointer rests on a strip for 0.4 s (`kit::EDGE_DWELL`), the bar moves to that output and the output it
 left gets a strip. Passing over a strip does not move the bar, and neither does a drag in progress or a locked session. When
 the dock's output goes away the bar moves to the first remaining one. The window list is taken from the bar's role only; the

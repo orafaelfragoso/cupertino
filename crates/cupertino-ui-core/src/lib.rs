@@ -58,7 +58,7 @@ use cupertino_ui_platform::{
 };
 use cupertino_ui_render::{DisplayList, RenderError};
 use cupertino_ui_text::{ImeEvent, TextSystem};
-use cupertino_ui_theme::{Surface, ThemeTokens};
+use cupertino_ui_theme::{Color, Surface, ThemeTokens};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -176,6 +176,21 @@ pub enum WindowBackground {
         radius: f64,
         alpha: f64,
     },
+    /// One colour all over, transparent for a window that only takes input (a catcher of presses around a panel) or
+    /// translucent for one that dims what is under it. The content still lays out and takes input, but paints nothing:
+    /// the window system shows the colour without a frame of the window's size ([`WindowSystem::present_solid`]), so the
+    /// window costs nothing to show however large it is. Where it cannot, the window is drawn like any other, filled
+    /// with the colour under its content.
+    ///
+    /// [`WindowSystem::present_solid`]: cupertino_ui_platform::WindowSystem::present_solid
+    Solid(Color),
+}
+
+impl WindowBackground {
+    /// [`WindowBackground::Solid`] in a transparent colour: a window that shows nothing and only takes input, such as
+    /// one over the whole output that catches the presses around a panel.
+    pub const INPUT_ONLY: WindowBackground =
+        WindowBackground::Solid(Color::new(0.0, 0.0, 0.0, 0.0));
 }
 
 /// The opacity [`WindowBackground::Surface`] shows at `alpha`.

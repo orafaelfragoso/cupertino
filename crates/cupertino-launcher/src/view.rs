@@ -543,7 +543,8 @@ where
         spec: window_spec("Close the launcher", CATCHER_APP_ID, Size::new(1.0, 1.0)),
         shortcuts: CommandRegistry::new(),
         on_close: Some(M::from(Input::Dismiss)),
-        background: WindowBackground::None,
+        // shown without a frame of the output's size: it draws nothing
+        background: WindowBackground::INPUT_ONLY,
         content: Element::new(Catcher),
         popup: None,
         menus: None,

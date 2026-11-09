@@ -5,7 +5,7 @@
 use cupertino_defaults::accessibility::{
     AccessibilitySettings, ColorFilter, DisplayOption, DisplayOptions, SYSTEM_KEYS,
 };
-use cupertino_defaults::compositor::MinimizeEffectName;
+use cupertino_defaults::compositor::{MinimizeEffectName, ScrollBarsName};
 use cupertino_defaults::dock::{ActionTarget, Position, Trigger};
 use cupertino_defaults::keyboard::{FnKey, ModifierProfile};
 use cupertino_defaults::menubar::{HourCycle, ShowDate};
@@ -34,6 +34,7 @@ pub enum ControlId {
     /// A read-only row of a live reading (battery, network devices): it changes nothing.
     Reading,
     Appearance,
+    ShowScrollBars,
     DockSize,
     Magnification,
     DockPosition,
@@ -267,6 +268,13 @@ const CORNERS: [(Trigger, &str, &str); 4] = [
 ];
 
 /// The minimize effects offered: Warp, Scale, Funnel (enum, `plain` is not offered).
+/// When applications show their scroll bars.
+const SCROLL_BARS: [(&str, ScrollBarsName); 3] = [
+    ("Automatically", ScrollBarsName::Automatic),
+    ("When scrolling", ScrollBarsName::WhenScrolling),
+    ("Always", ScrollBarsName::Always),
+];
+
 const EFFECTS: [(&str, MinimizeEffectName); 3] = [
     ("Warp", MinimizeEffectName::Warp),
     ("Scale", MinimizeEffectName::Scale),
@@ -809,15 +817,27 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
     match pane {
         PaneId::Appearance => vec![Section {
             header: None,
-            rows: vec![row(
-                ControlId::Appearance,
-                "Appearance",
-                Control::Segmented {
-                    segments: vec!["Light", "Dark"],
-                    selected: usize::from(session.dark),
-                },
-                Backend::SetAppearance,
-            )],
+            rows: vec![
+                row(
+                    ControlId::Appearance,
+                    "Appearance",
+                    Control::Segmented {
+                        segments: vec!["Light", "Dark"],
+                        selected: usize::from(session.dark),
+                    },
+                    Backend::SetAppearance,
+                ),
+                // automatically: beside the content while a mouse is connected, else over it while it scrolls
+                row(
+                    ControlId::ShowScrollBars,
+                    "Show scroll bars",
+                    popup(
+                        SCROLL_BARS.iter().map(|(l, _)| *l),
+                        index_of(&SCROLL_BARS, settings.show_scroll_bars()),
+                    ),
+                    Backend::Key(File::Compositor, "show_scroll_bars"),
+                ),
+            ],
             footer: None,
         }],
         PaneId::DesktopDock => {
@@ -2304,6 +2324,10 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             settings.compositor.minimize_effect = Some(EFFECTS[index_of(value)].1);
             store(File::Compositor)
         }
+        ControlId::ShowScrollBars => {
+            settings.compositor.show_scroll_bars = Some(SCROLL_BARS[index_of(value)].1);
+            store(File::Compositor)
+        }
         ControlId::AutoHide => {
             settings.dock.autohide = Some(bool_of(value));
             store(File::Dock)
@@ -3234,6 +3258,36 @@ mod tests {
             panic!("a popup")
         };
         assert_eq!(selected, 0, "no corner does anything");
+    }
+
+    #[test]
+    fn show_scroll_bars_starts_automatic_and_writes_the_compositor_file() {
+        let mut s = unset();
+        let Control::Popup { choices, selected } =
+            control(PaneId::Appearance, ControlId::ShowScrollBars, &s)
+        else {
+            panic!("a popup")
+        };
+        assert_eq!(choices, ["Automatically", "When scrolling", "Always"]);
+        assert_eq!(selected, 0);
+        for (i, name) in ScrollBarsName::ALL.into_iter().enumerate() {
+            assert_eq!(
+                change(
+                    ControlId::ShowScrollBars,
+                    Value::Index(i),
+                    &mut s,
+                    &Live::default()
+                ),
+                [Effect::Store(File::Compositor)]
+            );
+            assert_eq!(s.compositor.show_scroll_bars, Some(name));
+            let Control::Popup { selected, .. } =
+                control(PaneId::Appearance, ControlId::ShowScrollBars, &s)
+            else {
+                panic!("a popup")
+            };
+            assert_eq!(selected, i);
+        }
     }
 
     #[test]

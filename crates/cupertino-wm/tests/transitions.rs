@@ -201,3 +201,65 @@ fn a_sheet_is_key_and_its_parent_main() {
     assert_eq!(h.wm.key_window(), Some(sheet));
     assert_eq!(h.wm.main_window(), Some(doc));
 }
+
+/// The output of a full-screen window and of a zoomed one goes away: both come onto the remaining output, the full-screen
+/// one leaving full screen there, and every frame they go back to afterwards is on that output.
+#[test]
+fn windows_of_a_removed_output_keep_their_restore_frames_on_the_remaining_one() {
+    let mut h = H::new();
+    let out2 = OutputId(2);
+    h.cmd(Command::AddOutput {
+        output: out2,
+        rect: Rect::new(1920.0, 0.0, 1280.0, 800.0),
+        usable: Rect::new(1920.0, 24.0, 1280.0, 776.0),
+    });
+    let f = h.map_at("a", Rect::new(2000.0, 100.0, 600.0, 400.0));
+    let z = h.map_at("b", Rect::new(2100.0, 100.0, 600.0, 400.0));
+    for w in [f, z] {
+        h.cmd(Command::MoveWindowToWorkspace {
+            window: w,
+            workspace: h.wm.current_workspace(out2).unwrap(),
+        });
+    }
+    h.cmd(Command::ToggleZoom { window: z });
+    h.cmd(Command::FocusWindow { window: f });
+    fullscreen(&mut h, f, Requester::User);
+    h.settle();
+    assert_eq!(h.state(f), LifecycleState::FullScreen);
+    assert_eq!(h.state(z), LifecycleState::Zoomed);
+
+    let fx = h.cmd(Command::RemoveOutput { output: out2 });
+    assert!(
+        has(&fx, |e| *e
+            == Effect::StartAnimation {
+                window: f,
+                kind: AnimationKind::ExitFullScreen
+            }),
+        "{fx:?}"
+    );
+    h.settle();
+    let on_screen = |h: &H, w: WindowId| {
+        let g = h.wm.window(w).unwrap().geometry();
+        assert!(
+            USABLE.contains(g.origin()) && g.x + g.w <= USABLE.x + USABLE.w + 1e-9,
+            "{w:?} at {g:?}"
+        );
+    };
+    assert_eq!(h.state(f), LifecycleState::Normal);
+    on_screen(&h, f);
+    assert_eq!(h.state(z), LifecycleState::Zoomed);
+    on_screen(&h, z);
+    assert!(h.wm.visible_windows(OUT).contains(&f));
+    h.cmd(Command::ToggleZoom { window: z });
+    h.settle();
+    assert_eq!(h.state(z), LifecycleState::Normal);
+    on_screen(&h, z);
+    // full screen again goes onto the remaining output and comes back to the frame it left
+    let before = h.wm.window(f).unwrap().geometry();
+    fullscreen(&mut h, f, Requester::User);
+    h.settle();
+    assert_eq!(h.wm.window(f).unwrap().geometry(), SCREEN);
+    h.cmd(Command::ExitFullscreen { window: f });
+    h.settle();
+    at_rest(&h, f, LifecycleState::Normal, before);
+}

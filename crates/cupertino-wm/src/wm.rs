@@ -10,7 +10,7 @@ use crate::geometry::Rect;
 use crate::ids::{AppId, OutputId, WindowId};
 use crate::interaction::Interaction;
 use crate::kind;
-use crate::lifecycle::{Lifecycle, LifecycleState, Presentation};
+use crate::lifecycle::{Lifecycle, LifecycleState, Presentation, Resting};
 use crate::tiling::{tile_rect, TileKind};
 use crate::window::{App, Window, WindowLevel};
 use crate::workspace::OutputWorkspaces;
@@ -453,20 +453,37 @@ impl Wm {
             .map(|w| w.id)
             .collect();
         ids.sort();
+        let margin = self.cfg.snap.tiled_margin;
         for wid in ids {
             let w = self.windows.get_mut(&wid).unwrap();
             w.output = dest.id;
             w.workspace = dest_ws;
-            if w.lifecycle.state() == LifecycleState::Normal {
-                let f = w.lifecycle.normal_frame().clamp_into(&dest.usable);
-                w.lifecycle.set_normal_frame(f);
-                out.push(Effect::Place {
-                    window: wid,
-                    rect: f,
-                });
+            // every frame the window can go back to moves with it: the normal frame, and the zoomed, tiled and
+            // full-screen ones fitted to the remaining output
+            let normal = w.lifecycle.normal_frame().clamp_into(&dest.usable);
+            let zoom = best_fit(&self.cfg.zoom, dest.usable, normal, &w.hints());
+            let tile = match w.lifecycle.resting() {
+                Resting::Tiled(kind) => tile_rect(kind, dest.usable, margin),
+                _ => normal,
+            };
+            let changed = w.lifecycle.move_to_output(normal, zoom, tile, dest.rect);
+            // its full-screen workspace went with the output: it leaves full screen on the remaining one rather than
+            // take that output's screen over
+            if w.lifecycle.state().is_fullscreen() && w.lifecycle.exit_fullscreen(now) {
+                self.emit_layout(wid, AnimationKind::ExitFullScreen, out);
+                continue;
             }
+            if !w.lifecycle.state().is_visible() {
+                continue;
+            }
+            if let Some(c) = self.configure_effect(wid, false).filter(|_| changed) {
+                out.push(c);
+            }
+            out.push(Effect::Place {
+                window: wid,
+                rect: self.windows[&wid].geometry(),
+            });
         }
-        let _ = now;
     }
 
     pub(crate) fn ensure_app(&mut self, identity: &str, out: &mut Vec<Effect>) -> AppId {

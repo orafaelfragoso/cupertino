@@ -534,6 +534,26 @@ impl Lifecycle {
         true
     }
 
+    /// The window moved to another output: replace every stored frame at once, `normal` for the normal layout, `zoom` and
+    /// `tile` for the zoomed and tiled layouts and `fullscreen` for full screen, so leaving any of them later lands on
+    /// the new output. The drawn frame jumps to the current one. Returns true when the configured frame changed.
+    pub fn move_to_output(
+        &mut self,
+        normal: Rect,
+        zoom: Rect,
+        tile: Rect,
+        fullscreen: Rect,
+    ) -> bool {
+        let before = self.target_frame();
+        self.normal_frame = normal;
+        self.zoom_frame = zoom;
+        self.tile_frame = tile;
+        self.fs_frame = fullscreen;
+        let after = self.target_frame();
+        self.frame.set_immediately(after);
+        before != after
+    }
+
     /// Zoom over `min(0.35, 181·ln(maxΔ/100 + 1)/750)` s with the `sin²` ease.
     pub fn zoom(&mut self, target: Rect, now: f64) -> bool {
         use LifecycleState::*;

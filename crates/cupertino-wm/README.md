@@ -83,6 +83,9 @@ asking for a window that cannot zoom, or any request for a minimized window) emi
 frame, the workspaces and the key window as they were. Closing is a request to the client (`Effect::RequestClose`),
 which may refuse; when its last window goes, the application stays registered and in front with no key window, and
 whether it then quits is the application's own policy (the toolkit's resident flag), never the window manager's.
+When an output goes away its windows move to the remaining output with every frame they go back to (normal, zoomed,
+tiled, full screen) fitted to it; a full-screen window leaves full screen there, since its full-screen workspace went with
+the output.
 
 Decisions where the behaviour is not known: the resize hit zones (3 pt inside, 4 pt outside, 12 pt corners, 15 pt
 bottom-right) and the title bar's double click (zoom) stay configurable defaults; the drag-to-edge thresholds and the

@@ -1496,10 +1496,11 @@ fn decorations_buttons_title_bar_and_resize_zones_drive_the_window() {
     drop(client);
 }
 
-/// A window control button its window cannot use stays in place, dimmed, and a click on it does nothing: no pressed
-/// look, no minimize, no zoom. Close is never disabled.
+/// A window control button its window cannot use stays in place, dimmed, and is no control: a press on it is the title
+/// bar's, so a drag from it moves the window and a click on it fires nothing (no pressed look, no minimize, no zoom).
+/// Close is never disabled.
 #[test]
-fn a_disabled_window_button_takes_the_click_and_does_nothing() {
+fn a_press_on_a_disabled_window_button_drags_the_title_bar_and_fires_nothing() {
     use cupertino_decorations::ButtonKind;
     use cupertino_geometry::Size;
 
@@ -1510,7 +1511,7 @@ fn a_disabled_window_button_takes_the_click_and_does_nothing() {
         (400, 300),
         [0, 0, 255, 255],
     );
-    let (id, frame) = h.mapped_window(1);
+    let (id, _) = h.mapped_window(1);
     h.state.command(cupertino_wm::Command::SetDisabledControls {
         window: id,
         disabled: cupertino_wm::DisabledControls {
@@ -1520,8 +1521,11 @@ fn a_disabled_window_button_takes_the_click_and_does_nothing() {
     });
     let layout = h.state.decor.decorations().layout(Size::new(400.0, 300.0));
     for kind in [ButtonKind::Minimize, ButtonKind::Zoom] {
+        let frame = h.state.wm.window(id).unwrap().geometry();
         let c = layout.button(kind).center;
-        h.move_to(frame.x + c.x, frame.y + c.y);
+        let (x, y) = (frame.x + c.x, frame.y + c.y);
+        h.advance(1.0);
+        h.move_to(x, y);
         h.press();
         assert_eq!(h.state.decor.pressed, None, "{kind:?}: no pressed look");
         h.release();
@@ -1529,16 +1533,162 @@ fn a_disabled_window_button_takes_the_click_and_does_nothing() {
         assert_eq!(
             h.state.wm.window(id).unwrap().state(),
             LifecycleState::Normal,
-            "{kind:?} does nothing"
+            "{kind:?}: a click does nothing"
         );
         assert_eq!(h.state.wm.window(id).unwrap().geometry(), frame);
+
+        h.advance(1.0);
+        h.move_to(x, y);
+        h.press();
+        assert!(!h.state.wm.is_interacting(), "a press alone is no drag yet");
+        h.move_to(x + 80.0, y + 40.0);
+        assert!(
+            h.state.wm.is_interacting(),
+            "{kind:?}: the press is the title bar's"
+        );
+        h.release();
+        h.advance(3.0);
+        let moved = h.state.wm.window(id).unwrap().geometry();
+        assert!(
+            (moved.x - frame.x - 80.0).abs() < 1.5 && (moved.y - frame.y - 40.0).abs() < 1.5,
+            "{kind:?}: moved {moved:?} from {frame:?}"
+        );
+        assert_eq!(
+            h.state.wm.window(id).unwrap().state(),
+            LifecycleState::Normal,
+            "{kind:?}: the drag fires nothing"
+        );
     }
     // close still works
+    h.advance(1.0);
+    let frame = h.state.wm.window(id).unwrap().geometry();
     let c = layout.button(ButtonKind::Close).center;
     h.move_to(frame.x + c.x, frame.y + c.y);
     h.press();
     assert_eq!(h.state.decor.pressed, Some((id, ButtonKind::Close)));
     h.release();
+    h.wait_until("the client to see close", |_| client.closed());
+}
+
+/// Keeps the trees the server publishes for assistive technology, by window.
+#[derive(Clone, Default)]
+struct PublishedButtons(Arc<Mutex<std::collections::HashMap<u64, accesskit::TreeUpdate>>>);
+
+impl cupertino_server::decor_access::ButtonSink for PublishedButtons {
+    fn publish(
+        &mut self,
+        window: cupertino_wm::WindowId,
+        buttons: &cupertino_server::decor_access::WindowButtons,
+    ) {
+        self.0.lock().unwrap().insert(window.0, buttons.tree());
+    }
+    fn withdraw(&mut self, window: cupertino_wm::WindowId) {
+        self.0.lock().unwrap().remove(&window.0);
+    }
+}
+
+impl PublishedButtons {
+    /// The buttons of `window` in reading order: name, disabled, offers a press.
+    fn buttons(&self, window: cupertino_wm::WindowId) -> Option<Vec<(String, bool, bool)>> {
+        let trees = self.0.lock().unwrap();
+        let tree = trees.get(&window.0)?;
+        let node = |id: accesskit::NodeId| &tree.nodes.iter().find(|(n, _)| *n == id).unwrap().1;
+        let root = node(tree.tree.as_ref().unwrap().root);
+        assert_eq!(root.role(), accesskit::Role::Window);
+        Some(
+            root.children()
+                .iter()
+                .map(|id| {
+                    let b = node(*id);
+                    assert_eq!(b.role(), accesskit::Role::Button);
+                    (
+                        b.label().unwrap_or_default().to_owned(),
+                        b.is_disabled(),
+                        b.supports_action(accesskit::Action::Click),
+                    )
+                })
+                .collect(),
+        )
+    }
+}
+
+/// The window buttons the server draws are published to assistive technology: a window object named by its title with
+/// close, minimize and zoom as push buttons that report a disabled button as disabled, and a press asked of them does
+/// what a click does. A minimized window's buttons are withdrawn.
+#[test]
+fn the_window_buttons_reach_assistive_technology_with_their_names_and_states() {
+    use cupertino_decorations::ButtonKind;
+
+    let Some(mut h) = Harness::new() else { return };
+    let published = PublishedButtons::default();
+    h.state.button_access.set_sink(Box::new(published.clone()));
+    let client = TestClient::spawn_decorated(
+        h.socket_path(),
+        "org.example.deco",
+        (400, 300),
+        [0, 0, 255, 255],
+    );
+    let (id, frame) = h.mapped_window(1);
+    h.step();
+    let enabled = |name: &str| (name.to_owned(), false, true);
+    let disabled = |name: &str| (name.to_owned(), true, false);
+    assert_eq!(
+        published.buttons(id),
+        Some(vec![enabled("Close"), enabled("Minimize"), enabled("Zoom")])
+    );
+    let window = &h.state.button_access.published()[&id];
+    assert_eq!(
+        (
+            window.frame.x(),
+            window.frame.y(),
+            window.frame.width(),
+            window.frame.height()
+        ),
+        (frame.x, frame.y, frame.w, frame.h),
+        "where the window is"
+    );
+
+    h.state.command(cupertino_wm::Command::SetDisabledControls {
+        window: id,
+        disabled: cupertino_wm::DisabledControls {
+            minimize: true,
+            zoom: true,
+        },
+    });
+    h.step();
+    assert_eq!(
+        published.buttons(id),
+        Some(vec![
+            enabled("Close"),
+            disabled("Minimize"),
+            disabled("Zoom")
+        ]),
+        "disabled is reported"
+    );
+    h.state.press_window_button(id, ButtonKind::Minimize);
+    h.state.press_window_button(id, ButtonKind::Zoom);
+    h.advance(1.0);
+    assert_eq!(
+        h.state.wm.window(id).unwrap().state(),
+        LifecycleState::Normal,
+        "a press asked of a disabled button does nothing"
+    );
+
+    h.state.command(cupertino_wm::Command::SetDisabledControls {
+        window: id,
+        disabled: cupertino_wm::DisabledControls::default(),
+    });
+    h.state.press_window_button(id, ButtonKind::Minimize);
+    h.advance(1.0);
+    assert_eq!(
+        published.buttons(id),
+        None,
+        "a minimized window's buttons are withdrawn"
+    );
+    h.state.command(Command::Restore { window: id });
+    h.advance(2.0);
+    assert!(published.buttons(id).is_some(), "restored");
+    h.state.press_window_button(id, ButtonKind::Close);
     h.wait_until("the client to see close", |_| client.closed());
 }
 

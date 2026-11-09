@@ -636,6 +636,8 @@ pub struct Cupertino {
 
     pub wm: Wm,
     pub decor: Decor,
+    /// The window control buttons published to assistive technology; off until a session on the hardware starts it.
+    pub button_access: crate::decor_access::ButtonAccessibility,
     pub fx: Effects,
     pub windows: Vec<WindowEntry>,
     pub outputs: Vec<OutputEntry>,
@@ -944,6 +946,7 @@ impl Cupertino {
             capture,
             wm,
             decor,
+            button_access: Default::default(),
             fx,
             windows: Vec::new(),
             outputs: Vec::new(),
@@ -2046,6 +2049,7 @@ impl Cupertino {
         self.tick_menu_bars(now);
         self.tick_input_timers(now);
         self.tick_overlays(now);
+        self.sync_button_access();
         let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
         self.refresh_shortcut_inhibitors(focus.as_ref());
         self.refresh_pointer_constraints(focus.as_ref());

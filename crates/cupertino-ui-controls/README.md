@@ -140,7 +140,9 @@ from the application's model and reports changes as messages.
   `ScrollView` whose content starts that far down scrolls behind the row. The compositor draws a window's glass and
   materials below everything the window paints, so opaque content scrolled under the row covers the row's glass:
   Files and Settings keep the page below the row. Glyphs recede to the secondary label colour in an inactive window and to the
-  disabled colour when disabled.
+  disabled colour when disabled. Besides symbols a toolbar item may draw a glyph of its own (`ToolbarGlyph`): the
+  back and forward chevrons, `More`'s three dots and `Tag`, a tag outline pointing up and to the trailing side with its
+  hole by the point, mirrored right to left.
 - **Glass.** Each glass surface names a `GlassRole` (`ToolbarGroup`, `SidebarPanel`) and `GlassRole::material` says
   what draws it: the sidebar panel asks for the compositor's sidebar material under the node, with the surface's
   opaque fill where the window cannot show it; a toolbar group is regular glass (`PaintCx::glass`) in one container

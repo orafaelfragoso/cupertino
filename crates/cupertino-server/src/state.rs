@@ -487,6 +487,8 @@ pub struct Cupertino {
     /// `wp_single_pixel_buffer_manager_v1`: one-pixel buffers of a solid colour, stretched by a viewport.
     pub single_pixel_buffer_state: SinglePixelBufferState,
     pub fractional_scale_state: FractionalScaleManagerState,
+    /// The outputs each window is on and the output whose scale it draws at (`displays::surface_output`).
+    pub surface_outputs: crate::displays::surface_output::SurfaceOutputs,
     pub presentation_state: PresentationState,
     /// `wp_content_type_manager_v1`: the kind of content a window says it shows (`WindowEntry::content_type`).
     pub content_type_state: ContentTypeState,
@@ -736,7 +738,7 @@ impl Cupertino {
             )
             .map_err(|e| anyhow::anyhow!("inserting display source: {e}"))?;
 
-        let compositor_state = CompositorState::new::<Self>(&dh);
+        let compositor_state = CompositorState::new_v6::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
         let xdg_dialog_state = XdgDialogState::new::<Self>(&dh);
@@ -858,6 +860,7 @@ impl Cupertino {
             viewporter_state,
             single_pixel_buffer_state,
             fractional_scale_state,
+            surface_outputs: Default::default(),
             presentation_state,
             content_type_state,
             xdg_activation_state,
@@ -1072,7 +1075,7 @@ impl Cupertino {
         self.note_placements();
         self.bring_pointer_onto_outputs();
         self.refocus_lock_keyboard();
-        self.refresh_window_scales();
+        self.refresh_surface_outputs();
         self.request_redraw();
     }
 
@@ -2113,7 +2116,6 @@ impl Cupertino {
 
     pub fn apply_effects(&mut self, effects: Vec<Effect>) {
         let mut redraw = false;
-        let mut placed = Vec::new();
         for fx in effects {
             redraw = true;
             match fx {
@@ -2143,8 +2145,8 @@ impl Cupertino {
                         }
                     }
                 }
-                // a window that moved onto another output draws at that output's scale
-                Effect::Place { window, .. } => placed.push(window),
+                // a window that moved is told its outputs and scale below
+                Effect::Place { .. } => {}
                 Effect::RequestClose { window } => {
                     if let Some(e) = self.entry(window) {
                         e.close();
@@ -2207,9 +2209,8 @@ impl Cupertino {
                 | Effect::SnapPreview { .. } => {}
             }
         }
-        if self.outputs.len() > 1 {
-            self.refresh_scales_of(&placed);
-        }
+        // the outputs each window is on and the scale it draws at follow its frame (`displays::surface_output`)
+        self.refresh_window_outputs(false);
         if redraw {
             self.request_redraw();
             self.refresh_overview_windows();

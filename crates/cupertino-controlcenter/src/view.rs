@@ -16,14 +16,14 @@ use cupertino_kit::core::{
     Element, Event, EventCx, Glass, Key, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx,
     Shortcut, Widget, Window, WindowBackground, WindowKey,
 };
-use cupertino_kit::geometry::{Point, Rect, Size};
+use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, Overflow, SizeSpec,
 };
 use cupertino_kit::platform::{
     DecorationMode, Keysym, Mods, MouseButton, PointerEvent, WindowSpec,
 };
-use cupertino_kit::render::{Paint, PaintOp, Shape};
+use cupertino_kit::render::{GradientStop, Paint, PaintOp, Shape};
 use cupertino_kit::text::{AttributedText, FontWeight, TextStyle};
 use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant};
 
@@ -67,6 +67,18 @@ const IC_TILE: Color = Color::new(0.463, 0.463, 0.463, 1.0);
 const IC_RIM_COLOR: Color = Color::new(0.341, 0.341, 0.341, 1.0);
 const IC_RIM: f64 = 0.5;
 const FALLBACK: Color = Color::new(0.16, 0.16, 0.17, 0.92);
+/// The light a tile lays on its glass: white at these opacities. `GLOW` under the top edge, fading out over
+/// `GLOW_REACH` points; `RIM` along the top, `RIM_SIDE` down the sides, the bottom at `BOTTOM_RIM` of the top's; the
+/// rim `RIM_WIDTH` points wide. The light appearance's glass is light already, so its light is softer.
+const GLOW: f32 = 0.10;
+const GLOW_REACH: f64 = 6.0;
+const RIM: f32 = 0.42;
+const RIM_SIDE: f32 = 0.12;
+const BOTTOM_RIM: f32 = 0.6;
+const RIM_WIDTH: f64 = 0.75;
+const LIGHT_GLOW: f32 = 0.06;
+const LIGHT_RIM: f32 = 0.30;
+const LIGHT_RIM_SIDE: f32 = 0.08;
 /// A switch that is on: a white disc behind its symbol, drawn in the accent colour.
 const ON_FILL: Color = Color::new(1.0, 1.0, 1.0, 1.0);
 /// A switch badge that is off: a light veil.
@@ -296,6 +308,49 @@ fn fill(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, color: Color) {
     cx.push(PaintOp::Fill {
         shape: Shape::RoundedRect { rect, radius },
         paint: Paint::Solid(color),
+    });
+}
+
+/// A tile's light on its glass: a soft glow under its top edge, then a fine bright rim strongest along the top and
+/// bottom and faint down the sides, so a tile reads as a raised piece of glass on any wallpaper.
+fn lift(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, light: bool) {
+    let (glow, rim, side) = if light {
+        (LIGHT_GLOW, LIGHT_RIM, LIGHT_RIM_SIDE)
+    } else {
+        (GLOW, RIM, RIM_SIDE)
+    };
+    let white = |a: f32| Color::new(1.0, 1.0, 1.0, a);
+    let stop = |offset: f32, a: f32| GradientStop {
+        offset,
+        color: white(a),
+    };
+    let reach = (GLOW_REACH / rect.height().max(1.0)) as f32;
+    cx.push(PaintOp::Fill {
+        shape: Shape::RoundedRect { rect, radius },
+        paint: Paint::Linear {
+            start: Point::new(rect.min_x(), rect.min_y()),
+            end: Point::new(rect.min_x(), rect.max_y()),
+            stops: vec![stop(0.0, glow), stop(reach.min(1.0), 0.0), stop(1.0, 0.0)],
+        },
+    });
+    let edge = rect.inset(Insets::uniform(RIM_WIDTH / 2.0));
+    let band = (radius / rect.height().max(1.0)).clamp(0.0, 0.5) as f32;
+    cx.push(PaintOp::Stroke {
+        shape: Shape::RoundedRect {
+            rect: edge,
+            radius: (radius - RIM_WIDTH / 2.0).max(0.0),
+        },
+        width: RIM_WIDTH,
+        paint: Paint::Linear {
+            start: Point::new(rect.min_x(), rect.min_y()),
+            end: Point::new(rect.min_x(), rect.max_y()),
+            stops: vec![
+                stop(0.0, rim),
+                stop(band, side),
+                stop(1.0 - band, side),
+                stop(1.0, rim * BOTTOM_RIM),
+            ],
+        },
     });
 }
 
@@ -619,9 +674,12 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
             .alpha(finite_alpha(self.panel) * alpha);
         if !cx.glass(glass) {
             fill(cx, rect, radius, FALLBACK);
-        } else if self.light {
+            return;
+        }
+        if self.light {
             fill(cx, rect, radius, LIGHT_TINT);
         }
+        lift(cx, rect, radius, self.light);
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {

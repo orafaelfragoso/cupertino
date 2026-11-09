@@ -137,6 +137,7 @@ pub(crate) fn tracked<M: 'static>(
                 inner = Element::new(Frame {
                     kind: Some(Axis::Horizontal),
                     fit: false,
+                    edge: false,
                     children: vec![inner, bars.next().expect("one bar per scrolled axis")],
                 });
             }
@@ -145,6 +146,7 @@ pub(crate) fn tracked<M: 'static>(
             return Element::new(Frame {
                 kind: Some(Axis::Vertical),
                 fit: false,
+                edge: vertical,
                 children,
             });
         }
@@ -152,6 +154,7 @@ pub(crate) fn tracked<M: 'static>(
     Element::new(Frame {
         kind: None,
         fit: false,
+        edge: vertical,
         children,
     })
 }
@@ -166,6 +169,7 @@ pub(crate) fn fitted<M: 'static>(
     Element::new(Frame {
         kind: None,
         fit: true,
+        edge: true,
         children: vec![
             Element::new(Viewport {
                 content: Some(content),
@@ -192,11 +196,14 @@ pub(crate) struct Frame<M> {
     pub(crate) kind: Option<Axis>,
     /// Sized by the viewport's content instead of filling the room.
     pub(crate) fit: bool,
+    /// The frame of a view that scrolls vertically: where raised nodes cover its top, it draws the scroll edge there
+    /// ([`crate::scroll_edge`]).
+    pub(crate) edge: bool,
     pub(crate) children: Vec<Element<M>>,
 }
 
 impl<M: 'static> Widget<M> for Frame<M> {
-    type State = ();
+    type State = Cell<Option<crate::scroll_edge::EdgeLook>>;
 
     fn layout(&self) -> LayoutSpec {
         let kind = match self.kind {
@@ -226,30 +233,49 @@ impl<M: 'static> Widget<M> for Frame<M> {
         std::mem::take(&mut self.children)
     }
 
-    fn state(&self) {}
+    fn state(&self) -> Self::State {
+        Cell::new(None)
+    }
 
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
+    fn update(&self, old: &Self, _: &mut Self::State) -> Change {
         if self.kind != old.kind || self.fit != old.fit {
             Change::Layout
+        } else if self.edge != old.edge {
+            Change::Paint
         } else {
             Change::None
         }
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &Self::State, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
             size: Size::ZERO,
             baseline: None,
         }
     }
 
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+    fn event(&self, _: &mut Self::State, _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
         Propagation::Continue
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    fn paint(&self, edge: &Self::State, cx: &mut PaintCx<'_>) {
+        let top = cx.obscured().top;
+        let look = (self.edge && top > 0.0).then(|| crate::scroll_edge::EdgeLook::of(cx, top));
+        edge.set(look);
+        if look.is_some() {
+            cx.overlay();
+        }
+    }
 
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+    fn semantics(&self, _: &Self::State, _: &mut SemanticsCx<'_>) {}
+
+    /// The scroll edge, over the content and its bars where raised nodes cover them.
+    fn overlay(&self, edge: &Self::State, cx: &mut cupertino_ui_core::OverlayCx<'_>) {
+        if let Some(look) = edge.get() {
+            cx.reach_obscured();
+            look.paint(cx);
+        }
+    }
 }
 
 struct Viewport<M> {
@@ -279,6 +305,8 @@ pub struct ViewportState {
     input_at: f64,
     /// The time the content was last drawn at, in seconds.
     drawn_at: f64,
+    /// How far raised nodes covered the viewport's top at its last paint: a page is what shows below them.
+    obscured: Cell<f64>,
 }
 
 fn seconds(t: Timestamp) -> f64 {
@@ -481,7 +509,7 @@ impl<M: 'static> Viewport<M> {
         {
             return false;
         }
-        let page = (self.state.viewport.height - LINE).max(LINE);
+        let page = (self.state.viewport.height - state.obscured.get() - LINE).max(LINE);
         let at = state.offset;
         let rtl = cx.env().direction == LayoutDirection::Rtl;
         let (forward, back) = if rtl { (LEFT, RIGHT) } else { (RIGHT, LEFT) };
@@ -661,10 +689,14 @@ impl<M: 'static> Widget<M> for Viewport<M> {
         Propagation::Stop
     }
 
-    fn paint(&self, _: &ViewportState, cx: &mut PaintCx<'_>) {
+    fn paint(&self, state: &ViewportState, cx: &mut PaintCx<'_>) {
+        let top = cx.obscured().top;
+        state.obscured.set(top);
         if cx.is_focused() {
             let size = cx.size();
-            paint_focus_ring(cx, Rect::new(0.0, 0.0, size.width, size.height), 0.0);
+            // the ring goes round what shows below raised nodes
+            let top = top.min(size.height);
+            paint_focus_ring(cx, Rect::new(0.0, top, size.width, size.height - top), 0.0);
         }
     }
 
@@ -706,6 +738,8 @@ pub struct BarState {
     hover: bool,
     /// The bar's size and direction at its last paint, for hit-testing.
     painted: Cell<Option<(Size, bool)>>,
+    /// How far raised nodes cover the top of a vertical bar at its last paint: its track starts below them.
+    obscured: Cell<f64>,
 }
 
 /// Where an overlay bar is in its show and fade.
@@ -950,8 +984,10 @@ impl<M: 'static> Widget<M> for Bar<M> {
         let Some(bounds) = cx.bounds() else {
             return Propagation::Continue;
         };
-        let size = bounds.size;
-        let local = |p: Point| Point::new(p.x - bounds.origin.x, p.y - bounds.origin.y);
+        // a vertical bar under raised nodes lies below them: its geometry is that of the part they leave
+        let top = state.obscured.get();
+        let size = Size::new(bounds.size.width, (bounds.size.height - top).max(0.0));
+        let local = |p: Point| Point::new(p.x - bounds.origin.x, p.y - bounds.origin.y - top);
         let rtl = cx.env().direction == LayoutDirection::Rtl;
         match *event {
             Event::AnimationFrame(now) | Event::Wake(now) if self.scroller == Scroller::Overlay => {
@@ -1049,7 +1085,15 @@ impl<M: 'static> Widget<M> for Bar<M> {
 
     fn paint(&self, state: &BarState, cx: &mut PaintCx<'_>) {
         let theme = cx.env().theme.clone();
-        let size = cx.size();
+        let whole = cx.size();
+        let top = match self.axis {
+            Axis::Vertical => cx.obscured().top.clamp(0.0, whole.height),
+            Axis::Horizontal => 0.0,
+        };
+        state.obscured.set(top);
+        // drawn in the part raised nodes leave, moved down past them
+        let size = Size::new(whole.width, whole.height - top);
+        let below = |r: Rect| r.translate(0.0, top);
         let rtl = cx.env().direction == LayoutDirection::Rtl;
         state.painted.set(Some((size, rtl)));
         let normal = ControlState {
@@ -1062,7 +1106,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
             Scroller::Always => {
                 look::fill(
                     cx,
-                    self.strip(size, rtl),
+                    below(self.strip(size, rtl)),
                     0.0,
                     look::color(
                         &theme,
@@ -1093,7 +1137,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
         let color = look::color(&theme, ColorRole::ScrollerThumb, &normal)
             .map(|c| c.with_alpha(c.a * alpha));
         let radius = thumb.width().min(thumb.height()) / 2.0;
-        look::fill(cx, thumb, radius, color);
+        look::fill(cx, below(thumb), radius, color);
     }
 
     fn semantics(&self, _: &BarState, cx: &mut SemanticsCx<'_>) {
@@ -1110,6 +1154,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
     }
 
     fn hit(&self, state: &BarState, point: Point) -> bool {
+        let point = Point::new(point.x, point.y - state.obscured.get());
         match self.scroller {
             Scroller::Always => state
                 .painted

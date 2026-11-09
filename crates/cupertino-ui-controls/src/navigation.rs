@@ -68,6 +68,8 @@ impl<M: Clone + 'static> From<NavigationStack<M>> for Element<M> {
             },
             role: Some(Role::Toolbar),
             drag: true,
+            // over the page, the row draws in the window's raised layer: the page shows through its glass
+            raised: stack.under_toolbar,
             children: std::iter::once(group).chain(stack.toolbar).collect(),
         });
         // under the toolbar the row comes after the page: drawn over it, and the first to take the pointer
@@ -85,11 +87,13 @@ impl<M: Clone + 'static> From<NavigationStack<M>> for Element<M> {
     }
 }
 
-/// A container with a fixed layout and nothing of its own to show; with `drag`, the window's drag region.
+/// A container with a fixed layout and nothing of its own to show; with `drag`, the window's drag region; with
+/// `raised`, in the window's raised layer.
 struct Slot<M> {
     spec: LayoutSpec,
     role: Option<Role>,
     drag: bool,
+    raised: bool,
     children: Vec<Element<M>>,
 }
 
@@ -108,8 +112,16 @@ impl<M: 'static> Widget<M> for Slot<M> {
         DragState::default()
     }
 
-    fn update(&self, _: &Self, _: &mut DragState) -> Change {
-        Change::None
+    fn update(&self, old: &Self, _: &mut DragState) -> Change {
+        if self.raised != old.raised {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn raised(&self, _: &DragState) -> bool {
+        self.raised
     }
 
     fn measure(&self, _: &DragState, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {

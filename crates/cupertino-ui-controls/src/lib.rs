@@ -31,6 +31,7 @@ mod preview;
 mod progress;
 mod rich_text;
 mod scroll;
+pub mod scroll_edge;
 mod shell;
 mod sidebar;
 mod slider;

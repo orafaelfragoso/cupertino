@@ -2117,7 +2117,8 @@ impl Run {
         let Some(field) = snapshot.focus else {
             return false;
         };
-        let paint = cupertino_kit::render::PaintNodeId::from(field);
+        // the caret is drawn in the field's overlay
+        let paint = cupertino_kit::core::overlay_id(field);
         snapshot
             .display_list
             .nodes

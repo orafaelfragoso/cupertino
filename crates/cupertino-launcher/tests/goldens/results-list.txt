@@ -81,7 +81,10 @@ display
   paint 4294967301 parent=Some(4294967299) revision=81 bounds=[94,43 584x64.36] hit=[120,44 558x56] clip=None transform=[1.0, 0.0, 0.0, 1.0, 120.0, 44.0]
     PushClip(Rect(Rect { origin: Point { x: 0.0, y: 11.0 }, size: Size { width: 558.0, height: 34.0 } }))
     Glyphs origin=0,37.36 font=FontId(0) size=26 count=4 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
-    Fill { shape: Rect(Rect { origin: Point { x: 40.0, y: 12.0 }, size: Size { width: 1.0, height: 32.0 } }), paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }) }
+    PopClip
+  paint 5 parent=Some(4294967301) revision=5 bounds=[160,56 1x32] hit=[160,56 0x0] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    PushClip(Rect(Rect { origin: Point { x: 120.0, y: 55.0 }, size: Size { width: 558.0, height: 34.0 } }))
+    Fill { shape: Rect(Rect { origin: Point { x: 160.0, y: 56.0 }, size: Size { width: 1.0, height: 32.0 } }), paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }) }
     PopClip
   paint 4294967303 parent=Some(4294967298) revision=10 bounds=[60,100 640x1] hit=[60,100 640x1] clip=None transform=[1.0, 0.0, 0.0, 1.0, 60.0, 100.0]
     Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 640.0, height: 1.0 } }), paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }

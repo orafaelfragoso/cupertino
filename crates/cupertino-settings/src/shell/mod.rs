@@ -61,14 +61,14 @@ const OVERFLOW_SLACK: f64 = 0.5;
 
 /// Window metrics (§4.1).
 pub mod metrics {
-    /// The default content width before the scale factor and the height.
-    pub const DEFAULT_WIDTH: f64 = 715.0;
+    /// The default content width before the scale factor, and the height.
+    pub const DEFAULT_WIDTH: f64 = 739.0;
     pub const DEFAULT_HEIGHT: f64 = 625.0;
     /// Smallest window height: approximate (the standard panel's minimum content height, by analogy; O6).
     pub const MIN_HEIGHT: f64 = 400.0;
 }
 
-/// The default window size at interface width factor `f`: `(ceil(715 f), 625)`.
+/// The default window size at interface width factor `f`: `(ceil(739 f), 625)`.
 pub fn default_size(f: f64) -> Size {
     Size::new((metrics::DEFAULT_WIDTH * f).ceil(), metrics::DEFAULT_HEIGHT)
 }
@@ -735,6 +735,78 @@ mod tests {
     const HOME: u32 = 0xff50;
     const END: u32 = 0xff57;
 
+    /// The back and forward buttons share one glass capsule over the page, as in the file manager: where the desktop
+    /// draws materials, the form's background is the compositor's too, below the capsule's glass, so no opaque fill of
+    /// the window covers the glass.
+    #[test]
+    fn back_and_forward_share_a_glass_capsule_over_the_compositors_form_background() {
+        use cupertino_kit::platform::WindowRequest;
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+        let capabilities = Capabilities {
+            app_effects: true,
+            ..Capabilities::default()
+        };
+        let (driver, window) = start_hosted(
+            dir.path(),
+            PaneId::Appearance,
+            services,
+            |_| {},
+            capabilities,
+        );
+        let regions = driver
+            .runtime()
+            .window_system()
+            .requests(window)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|request| match request {
+                WindowRequest::Materials(regions) => Some(regions.clone()),
+                _ => None,
+            })
+            .expect("the window asks for materials");
+        let form = regions
+            .iter()
+            .position(|r| r.material == "TextBackground")
+            .unwrap_or_else(|| panic!("the form's background: {regions:?}"));
+        let capsules: Vec<_> = regions
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.glass.is_some() && r.rect.height() == 36.0)
+            .collect();
+        assert_eq!(
+            capsules.len(),
+            1,
+            "one capsule for both buttons: {regions:?}"
+        );
+        let (glass, capsule) = capsules[0];
+        assert!(form < glass, "the glass lies over the form: {regions:?}");
+        assert_eq!(capsule.rect.width(), 73.0, "two 36.5 pt segments");
+        assert_eq!(
+            capsule.rect.center().y,
+            26.0,
+            "in the middle of the 52 pt row"
+        );
+        // both buttons lie in it
+        let snapshot = driver.runtime().snapshot(window).unwrap();
+        for name in ["Back", "Forward"] {
+            let button = snapshot
+                .accessibility
+                .iter()
+                .find(|(_, n)| n.role == Role::Button && n.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("the {name} button"))
+                .1
+                .bounds;
+            assert!(
+                capsule.rect.intersection(&button) == Some(button),
+                "{name} {button:?} in {:?}",
+                capsule.rect
+            );
+        }
+    }
+
     #[test]
     fn the_default_size_follows_the_width_factor() {
         let sizes: Vec<(f64, f64)> = [1.0, 1.1, 1.3]
@@ -742,7 +814,7 @@ mod tests {
             .map(|f| default_size(*f))
             .map(|s| (s.width, s.height))
             .collect();
-        assert_eq!(sizes, [(715.0, 625.0), (787.0, 625.0), (930.0, 625.0)]);
+        assert_eq!(sizes, [(739.0, 625.0), (813.0, 625.0), (961.0, 625.0)]);
     }
 
     #[test]
@@ -855,6 +927,17 @@ mod tests {
         services: Services,
         prepare: impl FnOnce(&mut State),
     ) -> (TestDriver<SettingsApp>, WindowId) {
+        start_hosted(dir, pane, services, prepare, Capabilities::default())
+    }
+
+    /// [`start_state`] on a host with `capabilities`.
+    fn start_hosted(
+        dir: &Path,
+        pane: PaneId,
+        services: Services,
+        prepare: impl FnOnce(&mut State),
+        capabilities: Capabilities,
+    ) -> (TestDriver<SettingsApp>, WindowId) {
         let (wake, woken) = async_channel::bounded(1);
         let (notify, background) = background_channel(move || {
             let _ = wake.try_send(());
@@ -868,11 +951,7 @@ mod tests {
             activation: String::new(),
         });
         let options = runtime_options();
-        let mut driver = TestDriver::new(
-            Capabilities::default(),
-            options,
-            ManualClock::new(Timestamp(0)),
-        );
+        let mut driver = TestDriver::new(capabilities, options, ManualClock::new(Timestamp(0)));
         driver.run_until_idle(budget()).unwrap();
         let window = driver.runtime().windows()[0].1;
         let active = WindowStates {

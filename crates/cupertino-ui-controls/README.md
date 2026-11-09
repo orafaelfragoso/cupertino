@@ -47,7 +47,9 @@ from the application's model and reports changes as messages.
   stop that opens a page: a tile, the label and a trailing chevron; a click, Return, Space or assistive technology's
   Click sends `on_open`, and without it the row reads as disabled. `FormHeader` is the card at the top of a page, its
   large tile over a bold title and a centred description, read as the title described by the description.
-  `FormBackground` fills its room with the colour behind the groups. `SearchField` is a `TextField` drawn as a capsule
+  `FormBackground` fills its room with the colour behind the groups: the compositor draws it
+  (`Surface::TextBackground`) where the desktop can, below the window's glass, so a toolbar's capsules over a form
+  show, and it paints it where the desktop cannot. `SearchField` is a `TextField` drawn as a capsule
   with a magnifying glass; it edits and reads as its field does. `BareField` is a `TextField` with no chrome, its
   text and placeholder at its own size (whole points), for a field standing on a surface drawn around it such as a
   launcher capsule; it edits and reads as its field does (`tests/bare_field.rs`).

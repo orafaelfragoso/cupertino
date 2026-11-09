@@ -3,6 +3,10 @@
 # `ci/goldens.sh` compares; `ci/goldens.sh --update` re-records tests/fixtures/goldens (review the diff).
 # Needs docker. CUPERTINO_GOLDENS_CACHE defaults to target/package-build/goldens in this worktree.
 # Downloads are shared; compiled targets are separated by image content identity.
+# CUPERTINO_CONTAINER_CACHE (default ~/.cache/cupertino-build/containers; empty, or on GitHub Actions, off) adds a
+# per-user sccache and Cargo download directory shared by every worktree. sccache reuses a compiler output only when
+# its compiler, arguments, environment and source files hash the same; the container paths are the same in every
+# worktree. The Cargo target itself stays in this worktree.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,7 +25,22 @@ if [ -z "${CUPERTINO_BUILD_LOCK_FD:-}" ]; then
   exec python3 ci/worktree-build.py locked -- bash ci/goldens.sh "$@"
 fi
 cache="${CUPERTINO_GOLDENS_CACHE:-$root/target/package-build/goldens}"
-mkdir -p "$cache/cargo"
+downloads="$cache/cargo"
+compile_cache=()
+if [ -z "${CUPERTINO_CONTAINER_CACHE+set}" ] && [ "${GITHUB_ACTIONS:-}" != true ]; then
+  container_cache="$HOME/.cache/cupertino-build/containers"
+else
+  container_cache=${CUPERTINO_CONTAINER_CACHE:-}
+fi
+if [ -n "$container_cache" ]; then
+  mkdir -p "$container_cache/goldens/sccache" "$container_cache/goldens/cargo"
+  container_cache=$(cd "$container_cache" && pwd)
+  downloads="$container_cache/goldens/cargo"
+  compile_cache=(--volume "$container_cache/goldens/sccache:/cache/sccache"
+    --env RUSTC_WRAPPER=/usr/bin/sccache --env SCCACHE_DIR=/cache/sccache
+    --env "SCCACHE_CACHE_SIZE=${CUPERTINO_GOLDENS_SCCACHE_SIZE:-6G}" --env SCCACHE_IDLE_TIMEOUT=0)
+fi
+mkdir -p "$cache" "$downloads"
 jobs=()
 if [ -n "${CARGO_BUILD_JOBS:-}" ]; then
   jobs=(--env "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS")
@@ -67,7 +86,7 @@ mkdir -p "$target"
 docker create --cidfile "$cidfile" \
   --user "$(id -u):$(id -g)" \
   --volume "$passwd:/etc/passwd:ro" --volume "$root:/work" \
-  --volume "$cache/cargo:/cache/cargo" --volume "$target:/cache/target" --workdir /work \
+  --volume "$downloads:/cache/cargo" --volume "$target:/cache/target" "${compile_cache[@]}" --workdir /work \
   --env HOME=/tmp --env CARGO_HOME=/cache/cargo --env CARGO_TARGET_DIR=/cache/target \
   --env CARGO_INCREMENTAL=0 --env CARGO_PROFILE_DEV_DEBUG=0 \
   "${jobs[@]}" \

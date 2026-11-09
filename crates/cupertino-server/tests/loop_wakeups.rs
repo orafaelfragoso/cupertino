@@ -43,7 +43,7 @@ fn an_idle_desktop_has_nothing_due_within_a_second() {
 /// What `Cupertino::tick` calls, each audited for how the loop wakes for it (Shared/cupertino/prism/row236-tick-audit.md):
 /// an event, a frame (`animating`), or a deadline in `next_tick_deadline`. A call added to the tick fails this test until
 /// it is audited the same way and listed here; otherwise its time-driven work would run up to a second late.
-const AUDITED: [&str; 24] = [
+const AUDITED: [&str; 25] = [
     "crate::acquire_waits::sweep(",
     "self.apply_effects(",
     // a drag that ended is an event: the drop handler leaves it, and the tick only finishes what it left
@@ -59,6 +59,9 @@ const AUDITED: [&str; 24] = [
     "self.request_redraw(",
     "self.seat.get_keyboard(",
     "self.send_deferred_configures(",
+    // the window buttons for assistive technology follow the windows, which change on events and frames; nothing in it
+    // runs on a clock
+    "self.sync_button_access(",
     "self.tick_display_power(",
     "self.tick_force_quit(",
     "self.tick_hung(",

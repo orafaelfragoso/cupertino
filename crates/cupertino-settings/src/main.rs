@@ -1,6 +1,7 @@
 //! The `cupertino-settings` process: the settings window as a client of the server, on the first sidebar row or the
 //! pane `--pane` names. It exits when the window is closed. See the README.
 
+use cupertino_diagnostic_events as diag;
 use std::process::ExitCode;
 
 use cupertino_settings::{about_app, shell, sidebar, PaneId};
@@ -35,6 +36,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Launch, String> {
 }
 
 fn main() -> ExitCode {
+    diag::init(diag::component!(), "settings", diag::Sink::UserStore);
     let pane = match options(std::env::args().skip(1)) {
         Ok(pane) => pane,
         Err(problem) => {
@@ -60,6 +62,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            diag::exit_error(&e);
             eprintln!("cupertino-settings: {e}");
             ExitCode::FAILURE
         }

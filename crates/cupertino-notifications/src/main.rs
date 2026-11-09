@@ -4,11 +4,13 @@
 
 mod app;
 
+use cupertino_diagnostic_events as diag;
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: cupertino-notifications [--replace]";
 
 fn main() -> ExitCode {
+    diag::init(diag::component!(), "notifications", diag::Sink::UserStore);
     let options = match app::Options::parse(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(arg) => {
@@ -26,6 +28,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     // a failure exit makes the server restart the process
+    diag::exit_error(&e);
     eprintln!("cupertino-notifications: {e}");
     ExitCode::FAILURE
 }

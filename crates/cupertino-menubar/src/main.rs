@@ -4,11 +4,13 @@
 
 mod app;
 
+use cupertino_diagnostic_events as diag;
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: cupertino-menubar";
 
 fn main() -> ExitCode {
+    diag::init(diag::component!(), "menubar", diag::Sink::UserStore);
     if let Some(arg) = std::env::args().nth(1) {
         eprintln!("cupertino-menubar: unknown argument {arg}\n{USAGE}");
         return ExitCode::FAILURE;
@@ -16,6 +18,7 @@ fn main() -> ExitCode {
     // `run` only returns on failure
     let Err(e) = app::run();
     // a failure exit makes the server restart the process
+    diag::exit_error(&e);
     eprintln!("cupertino-menubar: {e}");
     ExitCode::FAILURE
 }

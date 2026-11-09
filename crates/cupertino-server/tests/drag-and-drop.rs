@@ -1065,7 +1065,7 @@ fn a_file_dragged_from_another_client_into_the_file_manager_moves_into_its_folde
             start.1 + (end.1 - start.1) * t,
         ));
     }
-    let end_at = Instant::now() + Duration::from_secs(10);
+    let end_at = Instant::now() + common::HANG_GUARD;
     let moved = |source: &TestClient| {
         let log = source.log();
         log.source.iter().any(|e| e == "action DndAction(Move)")

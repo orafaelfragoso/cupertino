@@ -1127,7 +1127,7 @@ fn a_toplevel_of_the_authentication_prompt_ends_its_connection_and_is_no_window(
     let toplevel = xdg.get_toplevel(&qh, ());
     toplevel.set_title("Authenticate".to_string());
     surface.commit();
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while prompt.conn.protocol_error().is_none() {
         assert!(Instant::now() < end, "the prompt's toplevel was accepted");
         let _ = prompt.conn.flush();

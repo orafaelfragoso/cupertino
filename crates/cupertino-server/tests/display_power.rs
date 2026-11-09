@@ -74,7 +74,7 @@ impl Harness {
         ));
         self.state.screenshot_requests.push(path.clone());
         self.state.request_redraw();
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while !path.exists() {
             assert!(
                 Instant::now() < end,

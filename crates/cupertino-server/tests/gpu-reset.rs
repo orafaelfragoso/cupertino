@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use common::desktop::Desktop;
 use cupertino_server::backend::headless;
@@ -13,7 +13,7 @@ fn screenshot(d: &mut Desktop, name: &str) -> image::RgbaImage {
         std::env::temp_dir().join(format!("cupertino-test-{}-{name}.png", std::process::id()));
     d.state.screenshot_requests.push(path.clone());
     d.state.request_redraw();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::HANG_GUARD;
     while !path.exists() {
         d.pump();
         assert!(Instant::now() < deadline, "the screenshot was not taken");
@@ -37,7 +37,7 @@ fn a_window_closing_after_a_reset_fades_out_from_a_capture_of_the_new_context() 
     assert!(d.state.fx.snapshot_age(id, d.state.now()).is_infinite());
 
     d.clients.clear();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::HANG_GUARD;
     while d.state.wm.windows().count() != 0 {
         d.pump();
         assert!(Instant::now() < deadline, "the window did not close");

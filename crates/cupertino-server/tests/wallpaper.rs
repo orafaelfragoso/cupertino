@@ -218,7 +218,7 @@ fn dark_topped(dir: &Path, name: &str, size: (u32, u32), dark_rows: u32) -> Path
 
 /// Step `d` until every output has a measure under its bar; the measures, in output order.
 fn measures(d: &mut Desktop) -> Vec<u16> {
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     for frame in 1.. {
         d.at(frame * 16);
         let measured: Option<Vec<u16>> = d
@@ -319,7 +319,7 @@ fn an_output_that_is_off_when_its_image_comes_in_holds_nothing_up() {
     d.at(16);
     let second = d.state.outputs[1].id;
     d.state.set_output_power(second, false).unwrap();
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     let mut frame = 2;
     while d.state.overlays.wallpaper.pending() || d.state.animating() {
         d.at(frame * 16);
@@ -359,7 +359,7 @@ fn a_quarter_turned_output_draws_the_image_upright() {
     let shot = dir.path().join("turned.png");
     d.state.screenshot_requests.push(shot.clone());
     d.state.request_redraw();
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     let mut frame = 1000;
     while !shot.exists() {
         d.at(frame * 16);
@@ -442,7 +442,7 @@ fn an_output_whose_new_image_another_output_took_in_is_marked_for_a_frame() {
     d.state.build_output_elements(&mut renderer.renderer, 1);
     d.state.outputs[1].scheduler.called_back();
     assert!(d.state.overlays.wallpaper.pending());
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while d.state.overlays.wallpaper.pending() {
         assert!(Instant::now() < end, "no answer");
         std::thread::sleep(Duration::from_millis(5));

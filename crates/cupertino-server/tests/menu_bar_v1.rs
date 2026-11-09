@@ -738,14 +738,14 @@ fn run_client(
 }
 
 /// A client thread on a connected stream (a privileged client's stream comes from the server itself).
-/// Flush, then read without writing until the server ends the connection: its protocol error, `None` after 10 s or
-/// on an end without one.
+/// Flush, then read without writing until the server ends the connection: its protocol error, `None` after
+/// [`common::HANG_GUARD`] or on an end without one.
 fn read_until_error(
     conn: &Connection,
     queue: &mut EventQueue<ClientState>,
     client: &mut ClientState,
 ) -> Option<(String, u32)> {
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     let _ = conn.flush();
     while Instant::now() < end {
         if let Some(guard) = queue.prepare_read() {
@@ -1646,7 +1646,7 @@ fn a_version_13_bar_never_gets_the_backdrop_lightness() {
 fn a_surface_without_the_layer_role_is_a_role_error() {
     let Some(mut h) = Harness::new() else { return };
     let bar = BarClient::spawn(h.shell_stream(), false);
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while bar.error().is_none() && Instant::now() < end {
         h.step();
     }
@@ -1904,7 +1904,7 @@ fn gtk_clients_are_told_the_bar_is_gone_when_its_output_is() {
 
 impl Harness {
     fn wait_for_shown(&mut self, app: &KitAppClient, shown: &[u32]) {
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while app.menu_bar_shown() != shown && Instant::now() < end {
             self.step();
         }
@@ -2228,7 +2228,7 @@ fn a_bar_gone_with_a_menu_open_does_not_keep_the_next_bar_revealed() {
     });
     h.advance(6.0);
     bar.send(Cmd::SetMenuOpen(true));
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while visible(&h) != 1.0 && Instant::now() < end {
         h.step();
     }
@@ -2279,7 +2279,7 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
 
     // an open menu keeps the bar shown, closing it hides the bar again
     bar.send(Cmd::SetMenuOpen(true));
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while !h
         .state
         .menu_bars
@@ -2298,7 +2298,7 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
         "revealed while a menu is open"
     );
     bar.send(Cmd::SetMenuOpen(false));
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while h
         .state
         .menu_bars
@@ -2478,7 +2478,7 @@ fn the_session_menu_entries_reach_the_session_agent_through_the_server() {
     ] {
         bar.send(Cmd::SessionAction(action));
     }
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while calls.lock().unwrap().len() < 7 && Instant::now() < end {
         h.step();
     }
@@ -2919,7 +2919,7 @@ fn a_name_that_is_gone_before_the_check_gives_no_menus() {
     let gone_name = gone.unique_name().unwrap().to_owned();
     drop(gone);
     let daemon = zbus::blocking::fdo::DBusProxy::new(&own).unwrap();
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while daemon.name_has_owner(gone_name.as_ref().into()).unwrap() {
         assert!(
             Instant::now() < end,
@@ -3644,7 +3644,7 @@ fn a_version_9_bar_gets_none_of_the_version_10_events_or_commands() {
     assert_eq!(new, None);
 
     bar.send(Cmd::WindowCommand(BarCommand::TileLeft));
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while bar.error().is_none() && Instant::now() < end {
         h.step();
     }

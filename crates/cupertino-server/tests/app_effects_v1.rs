@@ -472,7 +472,7 @@ fn assert_posts_error(cmd: Cmd, code: u32) {
         !layer_backdrops(&s.outputs[0].output).is_empty()
     });
     client.send(cmd);
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while client.backdrop_error().is_none() && Instant::now() < end {
         h.step();
     }

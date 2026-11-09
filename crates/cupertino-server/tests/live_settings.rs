@@ -448,7 +448,7 @@ fn the_setters_are_served_on_the_session_bus() {
         );
         unavailable.send(()).unwrap();
         // the name is taken once the service thread is up
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while proxy.get_property::<String>("Appearance").is_err() {
             assert!(Instant::now() < end, "the session interface did not appear");
             std::thread::sleep(Duration::from_millis(20));
@@ -466,7 +466,7 @@ fn the_setters_are_served_on_the_session_bus() {
             .call_method("SetAccessibility", &("zoom", "on"))
             .unwrap_err()
             .to_string();
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         let (mut appearance, mut accessibility) = (
             String::new(),
             std::collections::HashMap::<String, String>::new(),
@@ -536,7 +536,7 @@ fn the_screen_reader_switch_starts_and_stops_the_reader_over_the_session_bus() {
             .cache_properties(zbus::proxy::CacheProperties::No)
             .build()
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         while proxy
             .get_property::<std::collections::HashMap<String, String>>("Accessibility")
             .is_err()
@@ -622,7 +622,7 @@ fn the_session_interface_refuses_a_host_process_that_is_not_the_agent() {
                 .output()
                 .unwrap()
         };
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         loop {
             let probe = call("QuitNextApplication", &[]);
             let stderr = String::from_utf8_lossy(&probe.stderr).to_string();

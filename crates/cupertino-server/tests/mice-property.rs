@@ -121,7 +121,7 @@ fn the_mice_property_lists_the_mice_with_their_resolution_and_follows_the_config
             .cache_properties(zbus::proxy::CacheProperties::No)
             .build()
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now() + common::HANG_GUARD;
         loop {
             let Err(e) = proxy.get_property::<Mice>("Mice") else {
                 break;

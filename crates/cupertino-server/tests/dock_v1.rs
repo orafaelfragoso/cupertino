@@ -881,7 +881,7 @@ fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
 fn a_surface_without_the_layer_role_is_a_role_error() {
     let Some(mut h) = Harness::new() else { return };
     let dock = DockClient::spawn(h.shell_stream(), false);
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while dock.error().is_none() && Instant::now() < end {
         h.step();
     }
@@ -917,7 +917,7 @@ fn an_application_that_is_not_a_shell_process_cannot_be_a_dock_or_end_an_applica
         .unwrap(),
         true,
     );
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while intruder.error().is_none() && Instant::now() < end {
         h.step();
     }
@@ -1082,7 +1082,7 @@ fn an_application_stays_resident_after_its_last_window_until_its_client_disconne
 
     // the process exits: it is resident no longer
     app.commands.send(Cmd::Quit).unwrap();
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while dock.groups().len() < 3 && Instant::now() < end {
         h.advance(0.05);
     }
@@ -1393,7 +1393,7 @@ fn the_launcher_brings_a_running_application_forward_or_learns_it_must_start_it(
 
     // resident without windows: reported, for the launcher to ask it for a window
     maps.commands.send(Cmd::CloseWindow).unwrap();
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + common::HANG_GUARD;
     while h.state.wm.windows().count() != 2 && Instant::now() < end {
         h.advance(0.1);
     }

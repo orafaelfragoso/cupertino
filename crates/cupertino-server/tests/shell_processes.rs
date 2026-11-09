@@ -41,7 +41,6 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 const OUTPUT: (i32, i32) = (1000, 700);
-const TIMEOUT: Duration = Duration::from_secs(15);
 /// The restart throttle of the supervisor.
 const THROTTLE: Duration = Duration::from_secs(1);
 
@@ -101,7 +100,7 @@ impl Server {
         .unwrap();
     }
 
-    /// Step the server until `cond` holds; panics after [`TIMEOUT`].
+    /// Step the server until `cond` holds; panics after [`common::HANG_GUARD`].
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
         let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
@@ -113,7 +112,7 @@ impl Server {
         panic!("timed out waiting for {what}");
     }
 
-    /// Step the server until the file has `count` lines and return them; panics after [`TIMEOUT`].
+    /// Step the server until the file has `count` lines and return them; panics after [`common::HANG_GUARD`].
     fn wait_for_lines(&mut self, file: &Path, count: usize) -> Vec<String> {
         let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
@@ -532,7 +531,7 @@ fn ask_notification_server(bus: &PrivateBus) -> Receiver<(String, String, String
     let address = bus.address.clone();
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         let conn = zbus::block_on(
             zbus::connection::Builder::address(address.as_str())
                 .unwrap()
@@ -1354,7 +1353,7 @@ fn toggle_panel(bus: &PrivateBus) -> Receiver<()> {
     let address = bus.address.clone();
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + common::HANG_GUARD;
         let conn = zbus::block_on(
             zbus::connection::Builder::address(address.as_str())
                 .unwrap()
@@ -2584,7 +2583,7 @@ fn the_network_bluetooth_and_power_daemons_own_their_bus_names() {
         "org.cupertino.Bluetooth1",
         "org.cupertino.Power1",
     ];
-    let end = Instant::now() + TIMEOUT;
+    let end = Instant::now() + common::HANG_GUARD;
     loop {
         let names = bus_names(&bus);
         if wanted.iter().all(|name| names.iter().any(|n| n == name)) {
@@ -2816,7 +2815,7 @@ fn start_server_binary(mode: &str) -> Option<(Daemon, Option<PrivateBus>)> {
             }
         }
     });
-    let end = Instant::now() + TIMEOUT;
+    let end = Instant::now() + common::HANG_GUARD;
     let mut lines: Vec<String> = Vec::new();
     let has = |lines: &[String], text: &str| lines.iter().any(|l| l.contains(text));
     loop {

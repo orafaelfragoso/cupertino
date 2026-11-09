@@ -7,12 +7,12 @@ use std::rc::Rc;
 use cupertino_menu_model::{ActionName, MenuBar};
 
 use cupertino_kit::controls::{
-    Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton, DialogKind, Icon,
-    IconDirection, Image, ImageFit, ImageSource, MenuAnchor, Modal, NavigationStack, OutlineTable,
-    Progress, ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
-    SidebarLook, SidebarSection, SidebarWindow, SortOrder, Spacer, Stack, TableView, Text,
-    TextField, TextRole, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarSearch,
-    ToolbarTitle, TreeItem,
+    unobscured_insets, Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton,
+    DialogKind, Icon, IconDirection, Image, ImageFit, ImageSource, MenuAnchor, Modal,
+    NavigationStack, OutlineTable, Progress, ScrollView, Scroller, SecureField, Selection, Sidebar,
+    SidebarAccessory, SidebarItem, SidebarLook, SidebarSection, SidebarWindow, SortOrder, Spacer,
+    Stack, TableView, Text, TextField, TextRole, ToolbarGlyph, ToolbarGroup, ToolbarItem,
+    ToolbarMenuButton, ToolbarSearch, ToolbarTitle, TreeItem,
 };
 use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground};
 use cupertino_kit::geometry::{Insets, Size};
@@ -395,15 +395,28 @@ fn unlock_sheet(id: u64, unlock: &Unlock) -> Dialog<Message> {
     }
 }
 
+/// How far the toolbar row covers the top of the folder's view, which fills the pane under the row; none with the tab
+/// bar shown, which puts the view below the row and the bar.
+pub(super) fn under_row(win: &BrowserWindow) -> f64 {
+    if win.tab_bar_shown() {
+        0.0
+    } else {
+        unobscured_insets(DecorationMode::Sidebar).top
+    }
+}
+
 fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let history = win.browser.history();
     let folder = match (win.view, win.browser.no_results()) {
         (ViewMode::List, false) => list(session, id, win),
-        (ViewMode::List, true) => no_results(list(session, id, win), list_view::HEADER_HEIGHT),
+        (ViewMode::List, true) => no_results(
+            list(session, id, win),
+            under_row(win) + list_view::HEADER_HEIGHT,
+        ),
         (ViewMode::Icons, false) => icons(session, id, win),
-        (ViewMode::Icons, true) => no_results(icons(session, id, win), 0.0),
+        (ViewMode::Icons, true) => no_results(icons(session, id, win), under_row(win)),
         (ViewMode::Columns, false) => columns::view(session, id, win),
-        (ViewMode::Columns, true) => no_results(columns::view(session, id, win), 0.0),
+        (ViewMode::Columns, true) => no_results(columns::view(session, id, win), under_row(win)),
     };
     // Space on the items opens their preview
     let peek = !disabled_peek(session, win);
@@ -448,7 +461,8 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
         can_go_back: history.back_target().is_some(),
         can_go_forward: history.forward_target().is_some(),
         on_navigate: Some(send(id, Event::Navigate)),
-        under_toolbar: false,
+        // the folder fills the pane and scrolls under the toolbar row; with the tab bar, it lies below the bar
+        under_toolbar: !win.tab_bar_shown(),
     })
     .key("navigation")
     .fill()];
@@ -751,7 +765,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         on_select: Some(send(id, Event::Select)),
         on_activate: Some(send(id, Event::Open)),
         on_row_key: Some(Box::new(list::tab(id, names, selected.cursor()))),
-        header_top: 0.0,
+        header_top: under_row(win),
     };
     let count = table.count;
     let table = Element::from(OutlineTable {
@@ -777,6 +791,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         selection: selected,
         presses,
         band: win.band,
+        lead: under_row(win) + list_view::HEADER_HEIGHT,
         children: vec![table],
     })
     .key("list")
@@ -855,9 +870,15 @@ pub(super) fn shown(win: &BrowserWindow) -> (Vec<usize>, f64) {
     if scroll.viewport.height <= 0.0 {
         return (Vec::new(), 0.0);
     }
+    // the view's content starts with the part the toolbar row covers at rest, and the list's with its header too
+    let lead = under_row(win)
+        + match win.view {
+            ViewMode::List => list_view::HEADER_HEIGHT,
+            _ => 0.0,
+        };
     let (top, bottom) = (
-        scroll.offset.y - SHOWN_MARGIN,
-        scroll.offset.y + scroll.viewport.height + SHOWN_MARGIN,
+        scroll.offset.y - lead - SHOWN_MARGIN,
+        scroll.offset.y - lead + scroll.viewport.height + SHOWN_MARGIN,
     );
     match win.view {
         ViewMode::List => {
@@ -866,7 +887,11 @@ pub(super) fn shown(win: &BrowserWindow) -> (Vec<usize>, f64) {
             let last = ((bottom.max(0.0) / ROW_HEIGHT).ceil() as usize).min(count);
             ((first.min(last)..last).collect(), ROW_ICON)
         }
-        ViewMode::Columns => (win.columns.shown(&win.browser, SHOWN_MARGIN), ROW_ICON),
+        ViewMode::Columns => (
+            win.columns
+                .shown(&win.browser, SHOWN_MARGIN, under_row(win)),
+            ROW_ICON,
+        ),
         ViewMode::Icons => {
             let (params, layout) = icon_layout(win);
             let shown = layout
@@ -924,6 +949,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         scroll: win.scroll,
         selection: shown_selection(win),
         band: win.band,
+        lead: under_row(win),
         name: Box::new(
             move |index, selected| match rename.as_ref().filter(|r| r.0 == index) {
                 Some((_, value, revision, selection)) => {
@@ -932,6 +958,17 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 None => grid::name(names[index].name.clone(), text_size, selected, Some(lines)),
             },
         ),
+    });
+    // the grid starts below the toolbar row, and scrolls under it
+    let content = Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets {
+            top: under_row(win),
+            ..Insets::ZERO
+        },
+        spacing: 0.0,
+        align: Align::Stretch,
+        children: vec![content],
     });
     Element::from(ScrollView {
         content,

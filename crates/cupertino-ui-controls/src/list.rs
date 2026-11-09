@@ -213,6 +213,12 @@ impl<M: 'static> ListView<M> {
     /// The list's element with each row's selection and focus ring drawn `selection_inset` points in from the row's
     /// sides, in place of the standard inset `Element::from` gives.
     pub fn inset_element(self, selection_inset: f64) -> Element<M> {
+        self.under_element(selection_inset, 0.0)
+    }
+
+    /// [`inset_element`](Self::inset_element) for a list that fills a pane under a toolbar row `lead` points tall
+    /// ([`crate::unobscured_insets`]): its rows start below the row and scroll under it.
+    pub fn under_element(self, selection_inset: f64, lead: f64) -> Element<M> {
         let list = self;
         let rows = Rows {
             kind: Kind::List,
@@ -231,10 +237,10 @@ impl<M: 'static> ListView<M> {
             on_row_key: None,
             outline: None,
             selection_inset,
-            lead: 0.0,
+            lead,
         };
         scroll::frame(
-            Element::new(rows),
+            led(Element::new(rows), lead),
             list.scroll,
             (false, true),
             Scroller::Overlay,
@@ -347,24 +353,9 @@ fn table_element<M: 'static>(
             })
             .collect(),
     });
+    // the rows start below the header, which lies over the view's top with what covers it
     let lead = rows.lead;
-    let rows = if lead > 0.0 {
-        // the rows start below the header, which lies over the view's top with what covers it
-        Element::new(crate::Stack {
-            axis: Axis::Vertical,
-            padding: Insets {
-                top: lead,
-                left: 0.0,
-                bottom: 0.0,
-                right: 0.0,
-            },
-            spacing: 0.0,
-            align: Align::Stretch,
-            children: vec![Element::new(rows)],
-        })
-    } else {
-        Element::new(rows)
-    };
+    let rows = led(Element::new(rows), lead);
     let body = scroll::frame(
         rows,
         table.scroll,
@@ -386,6 +377,25 @@ fn table_element<M: 'static>(
         multiple: table.multiple,
         under: table.header_top > 0.0,
         children: vec![header, body],
+    })
+}
+
+/// `rows` `lead` points down a scroll view's content, the part what covers the view's top hides at rest.
+fn led<M: 'static>(rows: Element<M>, lead: f64) -> Element<M> {
+    if lead <= 0.0 {
+        return rows;
+    }
+    Element::new(crate::Stack {
+        axis: Axis::Vertical,
+        padding: Insets {
+            top: lead,
+            left: 0.0,
+            bottom: 0.0,
+            right: 0.0,
+        },
+        spacing: 0.0,
+        align: Align::Stretch,
+        children: vec![rows],
     })
 }
 

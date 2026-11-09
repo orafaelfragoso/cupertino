@@ -72,12 +72,9 @@ impl<M: Clone + 'static> From<NavigationStack<M>> for Element<M> {
             raised: stack.under_toolbar,
             children: std::iter::once(group).chain(stack.toolbar).collect(),
         });
-        // under the toolbar the row comes after the page: drawn over it, and the first to take the pointer
-        let children = if stack.under_toolbar {
-            vec![stack.content.fill(), header]
-        } else {
-            vec![header, stack.content.fill()]
-        };
+        // the row comes first, for the keyboard and assistive technology; raised over the page, it still draws over it
+        // and takes the pointer first
+        let children = vec![header, stack.content.fill()];
         Element::new(Navigator {
             back,
             forward,

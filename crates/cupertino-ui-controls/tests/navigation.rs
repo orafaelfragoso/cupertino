@@ -620,7 +620,8 @@ fn without_a_layer_nothing_scrolls_under_the_row_and_its_glass_stays_under_the_w
 fn the_scroll_bar_paging_and_the_focus_ring_keep_below_the_row() {
     let mut h = Harness::<Behind>::with_layer(support::theme());
     h.resize(Size::new(600.0, 300.0));
-    // the view takes the focus: nothing in it is a Tab stop
+    // past the back button, the view takes the focus: nothing in it is a Tab stop
+    h.tap(TAB);
     h.tap(TAB);
     assert!(h.focused("list") || h.snapshot().focus.is_some());
     h.tap(PAGE_DOWN);

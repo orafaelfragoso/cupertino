@@ -42,6 +42,9 @@ pub enum AppEvent {
     Appearance { dark: bool },
     /// The session's display options; also sent once when the observer is created.
     DisplayOptions(DisplayOptions),
+    /// Whether scroll views keep tracks beside their content that stay shown (`always`) or show thin bars over it
+    /// while it scrolls; sent after every [`AppEvent::DisplayOptions`] of an appearance observer.
+    ScrollBars { always: bool },
     /// Whether the session is locked; also sent once when the observer is created, from version 5. While it is, the
     /// application announces nothing to assistive technology.
     SessionLock { locked: bool },
@@ -318,7 +321,12 @@ impl Dispatch<CupertinoAppearanceV1, Quiet> for State {
             cupertino_appearance_v1::Event::Appearance { dark } => report_appearance(state, dark),
             cupertino_appearance_v1::Event::DisplayOptions { options } => {
                 match options.into_result() {
-                    Ok(bits) => report_display_options(state, bits.bits()),
+                    Ok(bits) => {
+                        report_display_options(state, bits.bits());
+                        state.emit(AppEvent::ScrollBars {
+                            always: bits.contains(DisplayOption::AlwaysShowScrollBars),
+                        });
+                    }
                     Err(_) => state.fail(Error::Protocol("display options with reserved bits")),
                 }
             }

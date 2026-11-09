@@ -547,7 +547,9 @@ fn spawn_server(
                     let observer = mock.appearance.as_ref().unwrap();
                     observer.appearance(0);
                     observer.display_options(
-                        DisplayOption::ReduceTransparency | DisplayOption::IncreaseContrast,
+                        DisplayOption::ReduceTransparency
+                            | DisplayOption::IncreaseContrast
+                            | DisplayOption::AlwaysShowScrollBars,
                     );
                 }
                 Ok(Control::Lock) => {
@@ -692,12 +694,12 @@ fn the_appearance_and_display_options_arrive_at_once_and_on_every_change() {
     let mut changes = Vec::new();
     wait_for(&mut conn, &mut stash, |e| {
         changes.extend(app_event(e));
-        (changes.len() == 2).then_some(())
+        (changes.len() == 3).then_some(())
     });
     control.send(Control::AppearanceChange).unwrap();
     wait_for(&mut conn, &mut stash, |e| {
         changes.extend(app_event(e));
-        (changes.len() == 4).then_some(())
+        (changes.len() == 6).then_some(())
     });
     assert_eq!(
         changes,
@@ -707,12 +709,14 @@ fn the_appearance_and_display_options_arrive_at_once_and_on_every_change() {
                 reduce_motion: true,
                 ..DisplayOptions::default()
             }),
+            AppEvent::ScrollBars { always: false },
             AppEvent::Appearance { dark: false },
             AppEvent::DisplayOptions(DisplayOptions {
                 reduce_transparency: true,
                 increase_contrast: true,
                 ..DisplayOptions::default()
             }),
+            AppEvent::ScrollBars { always: true },
         ]
     );
 }
@@ -742,9 +746,10 @@ fn a_version_5_observer_is_told_the_lock_state_after_the_appearance_and_on_every
         if told {
             assert_eq!(
                 locks,
+                // after the appearance, the display options and the scroll bars
                 [
-                    (2, &AppEvent::SessionLock { locked: false }),
-                    (3, &AppEvent::SessionLock { locked: true })
+                    (3, &AppEvent::SessionLock { locked: false }),
+                    (4, &AppEvent::SessionLock { locked: true })
                 ]
             );
         } else {

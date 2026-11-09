@@ -208,14 +208,12 @@ impl Cupertino {
     }
 
     /// Draw with the current settings; the observers hear of the display options only when they
-    /// differ from `before`.
+    /// differ from `before`, and of the steady caret when it changed.
     fn apply_accessibility(&mut self, before: DisplayOptions) {
         self.apply_minimize_timing();
         let appearance = self.appearance();
         self.decor.set_appearance(appearance);
-        if self.display_options() != before {
-            self.sessions.display_options(self.display_options());
-        }
+        self.tell_display_options(before);
         self.publish_session_settings();
         self.sync_screen_reader();
         self.request_redraw();

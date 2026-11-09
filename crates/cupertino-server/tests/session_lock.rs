@@ -783,3 +783,51 @@ fn an_application_learns_when_to_show_its_scroll_bars() {
         "an older observer was told"
     );
 }
+
+/// An application is told to keep its text caret from blinking while the accessibility setting is on, with the other
+/// display options and when only it changes. An observer below version 9 does not know the bit and is never sent it.
+#[test]
+fn an_application_learns_to_keep_its_text_caret_from_blinking() {
+    use cupertino_defaults::accessibility::{AccessibilitySettings, DisplayOptions};
+    const REDUCE_MOTION: u32 = 1;
+    const STEADY: u32 = 32;
+    let Some(mut h) = Harness::new() else { return };
+    let observer = Client::appearance_observer(h.socket_path(), 9);
+    let old = Client::appearance_observer(h.socket_path(), 8);
+    h.wait_until("the first options", |_| {
+        !observer.display_options().is_empty() && !old.display_options().is_empty()
+    });
+    assert_eq!(observer.display_options(), [0]);
+
+    let steady = AccessibilitySettings {
+        steady_caret: true,
+        ..AccessibilitySettings::default()
+    };
+    h.state.set_accessibility(steady);
+    h.wait_until("the steady caret", |_| {
+        observer.display_options().len() == 2
+    });
+    assert_eq!(observer.display_options()[1], STEADY);
+
+    h.state.set_accessibility(AccessibilitySettings {
+        display: DisplayOptions {
+            reduce_motion: true,
+            ..DisplayOptions::default()
+        },
+        ..steady
+    });
+    h.wait_until("reduce motion", |_| {
+        observer.display_options().len() == 3 && old.display_options().len() == 2
+    });
+    assert_eq!(observer.display_options()[2], REDUCE_MOTION | STEADY);
+    assert_eq!(old.display_options(), [0, REDUCE_MOTION]);
+
+    let late = Client::appearance_observer(h.socket_path(), 9);
+    h.wait_until("the late observer", |_| !late.display_options().is_empty());
+    assert_eq!(late.display_options(), [REDUCE_MOTION | STEADY]);
+
+    h.state.set_accessibility(AccessibilitySettings::default());
+    h.wait_until("all off", |_| observer.display_options().len() == 4);
+    assert_eq!(observer.display_options()[3], 0);
+    assert_eq!(old.display_options(), [0, REDUCE_MOTION, 0]);
+}

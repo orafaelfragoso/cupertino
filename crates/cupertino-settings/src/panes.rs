@@ -1140,12 +1140,6 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     set("reduce_motion"),
                 ),
                 row(
-                    ControlId::SteadyCaret,
-                    "Steady text cursor",
-                    switch(a.steady_caret),
-                    set(cupertino_defaults::accessibility::STEADY_CARET),
-                ),
-                row(
                     ControlId::ReduceTransparency,
                     display_label(DisplayOption::ReduceTransparency),
                     switch(d.reduce_transparency),
@@ -1201,6 +1195,13 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     set("color_filter_intensity"),
                 ));
             }
+            // last, so the rows above keep their places
+            display.push(row(
+                ControlId::SteadyCaret,
+                "Steady text cursor",
+                switch(a.steady_caret),
+                set(cupertino_defaults::accessibility::STEADY_CARET),
+            ));
             let pointer = |k| Backend::Key(File::Compositor, k);
             let cursor = ((settings.compositor.cursor_size.unwrap_or(CURSOR_MIN) - CURSOR_MIN)
                 / (CURSOR_MAX - CURSOR_MIN))

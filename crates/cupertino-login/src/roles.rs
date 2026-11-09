@@ -255,7 +255,8 @@ impl SurfaceRoles for LoginRoles {
             }
             ShellEvent::SessionLock { .. }
             | ShellEvent::MenuBar { .. }
-            | ShellEvent::Dock { .. } => None,
+            | ShellEvent::Dock { .. }
+            | ShellEvent::AppActivation { .. } => None,
         }
     }
 

@@ -78,6 +78,8 @@ pub enum ShellEvent {
     LockRequested { explicit: bool },
     /// The user asked to log out.
     LogOutRequested,
+    /// The answer to [`Session::activate_app`] with this serial.
+    AppActivation { serial: u32, result: AppActivation },
     MenuBar {
         surface: SurfaceId,
         update: Box<MenuBarUpdate>,
@@ -459,8 +461,9 @@ impl Shell {
         // version 10 the menu bar's window list, shortcuts and default-menu commands, version 11 its edit request,
         // version 12 its Help search shortcut, version 13 its force_quit_app request, version 14 its backdrop lightness,
         // version 15 the enabled controls of the active window, version 16 whether it is in full screen,
-        // version 17 the dock's window icons, version 18 the dock's engage event, version 19 its resident applications
-        conn.bind_extension(9..=19, Quiet).map(Shell)
+        // version 17 the dock's window icons, version 18 the dock's engage event, version 19 its resident applications,
+        // version 20 the session object's activate_app
+        conn.bind_extension(9..=20, Quiet).map(Shell)
     }
 
     /// Observe the session: its appearance and display options arrive as
@@ -518,6 +521,33 @@ impl Shell {
 /// A session observer; dropping it stops the events.
 pub struct Session(CupertinoSessionV1);
 
+/// Shell version of `cupertino_session_v1.activate_app`.
+const ACTIVATE_APP_SINCE: u32 = 20;
+
+/// What the server found for [`Session::activate_app`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppActivation {
+    /// The application showed a window and was brought forward, as a click on its dock tile brings it.
+    Activated,
+    /// A process of the application runs but shows no window: it may be asked for one.
+    Resident,
+    /// No process of the application runs.
+    NotRunning,
+}
+
+impl Session {
+    /// Bring the running application of desktop file ID `desktop_id` forward the way the dock's `activate_app` does;
+    /// the answer arrives as [`ShellEvent::AppActivation`] with `serial`. False when the server is older than shell
+    /// version 20 and cannot be asked (nothing is sent).
+    pub fn activate_app(&self, serial: u32, desktop_id: &str) -> bool {
+        if self.0.version() < ACTIVATE_APP_SINCE {
+            return false;
+        }
+        self.0.activate_app(serial, desktop_id.to_owned());
+        true
+    }
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
         self.0.destroy();
@@ -551,6 +581,15 @@ impl Dispatch<CupertinoSessionV1, Quiet> for State {
                 explicit: explicit != 0,
             },
             cupertino_session_v1::Event::LogOutRequested => ShellEvent::LogOutRequested,
+            cupertino_session_v1::Event::AppActivation { serial, result } => {
+                let result = match result.into_result() {
+                    Ok(cupertino_session_v1::Activation::Activated) => AppActivation::Activated,
+                    Ok(cupertino_session_v1::Activation::Resident) => AppActivation::Resident,
+                    // an answer newer than this client knows: it launches as without a window
+                    _ => AppActivation::NotRunning,
+                };
+                ShellEvent::AppActivation { serial, result }
+            }
             _ => return,
         };
         state.emit(event);

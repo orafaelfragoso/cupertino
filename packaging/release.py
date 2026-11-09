@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Cupertino release tool: the one installation manifest behind every package format.
+"""Cupertino release tool: the one installation manifest behind the Arch packages.
 
 Usage:
-  release.py install --format {arch,deb,rpm} --package {runtime,data} --destdir DIR [--bindir DIR]
-  release.py verify --format {arch,deb,rpm} --package {runtime,data} ARTIFACT
+  release.py install [--format arch] --package {runtime,data} --destdir DIR [--bindir DIR]
+  release.py verify [--format arch] --package {runtime,data} ARTIFACT
   release.py check-metadata
   release.py third-party
   release.py source --output DIR
@@ -11,11 +11,11 @@ Usage:
   release.py pkgbuild ARCHIVE OUTPUT
 
 install         copies exactly the manifest's files into DIR with explicit modes (Arch package(), portable tarballs).
-verify          lists a built package (.pkg.tar.zst, .deb, .rpm) and fails unless its files and modes equal the manifest
-                plus the format's own metadata files. It also rejects setuid/setgid bits, wallpapers whose hash differs
+verify          lists a built package (.pkg.tar.zst) and fails unless its files and modes equal the manifest plus
+                pacman's own metadata files. It also rejects setuid/setgid bits, wallpapers whose hash differs
                 from packaging/data/wallpapers.json and executables that hold a home-directory or checkout path.
-check-metadata  compares the deb and rpm asset tables in the crates' Cargo.toml files with the manifest and fails when a licence
-                list (PKGBUILDs, rpm, Debian copyright) misses a licence the package ships.
+check-metadata  fails when THIRD-PARTY-LICENSES is stale, a shipped licence text is missing or a PKGBUILD licence list
+                misses a licence the package ships.
 third-party     regenerates packaging/licenses/THIRD-PARTY-LICENSES with cargo-about (0.9.3, on PATH or $CARGO_ABOUT): the
                 licence texts and NOTICE files of every registry crate in the normal and build closure of the shipped binaries.
 source          writes cupertino-<version>-source.tar.xz from the committed HEAD (git archive: file times are the
@@ -27,7 +27,6 @@ The runtime version is cupertino-server's, the data version cupertino-assets'. N
 """
 import argparse
 import os
-import fnmatch
 import hashlib
 import html
 import io
@@ -38,14 +37,14 @@ import stat
 import subprocess
 import sys
 import tarfile
-import tempfile
 import tomllib
 import json
 import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FORMATS = ('arch', 'deb', 'rpm')
+# Arch is the only package format; --format stays so a recipe can name it.
+FORMATS = ('arch',)
 # The applications among the shipped binaries: each has a desktop entry crates/<app>/data/applications/<app>.desktop.
 APPS = ('cupertino-files', 'cupertino-settings')
 BINARIES = (
@@ -63,8 +62,7 @@ PAM_SERVICES = ('cupertino-login', 'cupertino-session', 'cupertino-greeter', 'cu
 UNITS = ('cupertino-login', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd')
 THEME_FILES = ('tokens.json', 'materials.json', 'animations.json')
 WALLPAPERS = json.loads((ROOT / 'packaging/data/wallpapers.json').read_text())['files']
-NAMES = {'runtime': 'cupertino', 'data': 'cupertino-data'}
-# Licence texts of the crates linked into the binaries, beside the GPL text (arch and rpm; the deb copyright file holds them).
+# Licence texts of the crates linked into the binaries, beside the GPL text.
 LICENSE_TEXTS = (('MPL-2.0', 'crates/cupertino-geometry/LICENSE'), ('MIT', 'crates/cupertino-xkbcommon/LICENSE'),
                  ('libxkbcommon', 'third-party/xkbcommon-rs/LICENSE'), ('smithay', 'third-party/smithay/LICENSE.txt'),
                  ('OFL.txt', 'crates/cupertino-assets/fonts/OFL.txt'))
@@ -80,9 +78,6 @@ THIRD_PARTY = 'packaging/licenses/THIRD-PARTY-LICENSES'
 ABOUT_CONFIG = 'packaging/licenses/about.toml'
 # What the data package ships besides crate code: the pack's own files, the font and the photographs.
 DATA_LICENSES = {'GPL-3.0-or-later', 'OFL-1.1', 'LicenseRef-Unsplash'}
-# Debian copyright file license names -> SPDX.
-DEB_LICENSES = {'GPL-3+': 'GPL-3.0-or-later', 'MPL-2.0': 'MPL-2.0', 'OFL-1.1': 'OFL-1.1', 'Unsplash': 'LicenseRef-Unsplash',
-                'LGPL-2.1+': 'LGPL-2.1-or-later', 'MIT': 'MIT', 'MIT-CMU': 'MIT-CMU', 'BSD-3-Clause': 'BSD-3-Clause'}
 
 
 def applications(root, apps):
@@ -107,7 +102,7 @@ def applications(root, apps):
     return found
 
 
-def runtime(fmt):
+def runtime():
     """(destination, source relative to the checkout or None for a built binary, mode, config) of `cupertino`."""
     f = 'packaging/files'
     files = [(f'usr/bin/{b}', None, 0o755, False) for b in BINARIES]
@@ -135,33 +130,29 @@ def runtime(fmt):
     files += [(f'usr/lib/systemd/system/{u}.service', f'{f}/usr/lib/systemd/system/{u}.service', 0o644, False)
               for u in UNITS]
     files += [(f'usr/share/cupertino/theme/{n}', f'data/theme/{n}', 0o644, False) for n in THEME_FILES]
-    files += [(f'etc/pam.d/{s}', f'packaging/pam/{fmt}/{s}', 0o644, True) for s in PAM_SERVICES]
-    if fmt != 'deb':  # cargo-deb writes usr/share/doc/cupertino/copyright (packaging/debian/cupertino.copyright)
-        files += [('usr/share/licenses/cupertino/LICENSE', 'LICENSE', 0o644, False),
-                  *((f'usr/share/licenses/cupertino/{n}', src, 0o644, False) for n, src in LICENSE_TEXTS)]
-    # Debian keeps licence documents under doc (the copyright file refers to it there).
-    third = 'usr/share/doc/cupertino' if fmt == 'deb' else 'usr/share/licenses/cupertino'
-    files.append((f'{third}/THIRD-PARTY-LICENSES', THIRD_PARTY, 0o644, False))
+    files += [(f'etc/pam.d/{s}', f'packaging/pam/arch/{s}', 0o644, True) for s in PAM_SERVICES]
+    files += [('usr/share/licenses/cupertino/LICENSE', 'LICENSE', 0o644, False),
+              *((f'usr/share/licenses/cupertino/{n}', src, 0o644, False) for n, src in LICENSE_TEXTS),
+              ('usr/share/licenses/cupertino/THIRD-PARTY-LICENSES', THIRD_PARTY, 0o644, False)]
     return files
 
 
-def data(fmt):
+def data():
     """`cupertino-data`: the default asset pack and its per-component licences."""
     a, d, fonts = 'usr/share/cupertino/assets', 'packaging/data', 'crates/cupertino-assets/fonts'
     files = [(f'{a}/{p}', f'{d}/{p}', 0o644, False) for p in ('manifest.json', 'icon-map.toml', 'wallpapers/credits.txt')]
     files += [(f'{a}/fonts/{n}', f'{fonts}/{n}', 0o644, False) for n in ('InterVariable-subset.ttf', 'OFL.txt')]
     files += [(f'{a}/wallpapers/{w["file"]}', f'{d}/wallpapers/{w["file"]}', 0o644, False) for w in WALLPAPERS]
-    if fmt != 'deb':  # Debian has one machine-readable copyright file instead (packaging/debian/cupertino-data.copyright)
-        lic = 'usr/share/licenses/cupertino-data'
-        files += [(f'{lic}/DATA', 'packaging/licenses/DATA', 0o644, False),
-                  (f'{lic}/Unsplash.txt', 'packaging/licenses/Unsplash.txt', 0o644, False),
-                  (f'{lic}/OFL.txt', f'{fonts}/OFL.txt', 0o644, False)]
+    lic = 'usr/share/licenses/cupertino-data'
+    files += [(f'{lic}/DATA', 'packaging/licenses/DATA', 0o644, False),
+              (f'{lic}/Unsplash.txt', 'packaging/licenses/Unsplash.txt', 0o644, False),
+              (f'{lic}/OFL.txt', f'{fonts}/OFL.txt', 0o644, False)]
     return files
 
 
 MANIFESTS = {'runtime': runtime, 'data': data}
-# Files the format tools add themselves; anything else that is not in the manifest fails verification.
-EXTRA = {'arch': {'.PKGINFO', '.BUILDINFO', '.MTREE'}, 'deb': {'usr/share/doc/{}/copyright'}, 'rpm': set()}
+# Files makepkg adds itself; anything else that is not in the manifest fails verification.
+EXTRA = {'.PKGINFO', '.BUILDINFO', '.MTREE'}
 
 
 def fail(msg):
@@ -174,7 +165,7 @@ def version(crate):
 
 def cmd_install(args):
     dest, bindir = Path(args.destdir), Path(args.bindir)
-    for rel, src, mode, _conf in MANIFESTS[args.package](args.format):
+    for rel, src, mode, _conf in MANIFESTS[args.package]():
         source = bindir / Path(rel).name if src is None else ROOT / src
         if not source.is_file():
             fail(f'missing source {source} for /{rel}')
@@ -198,28 +189,15 @@ def tar_entries(raw):
     return found
 
 
-def entries(fmt, path):
-    if fmt == 'arch':
-        return tar_entries(subprocess.run(['zstd', '-dcq', str(path)], capture_output=True, check=True).stdout)
-    if fmt == 'deb':
-        return tar_entries(subprocess.run(['dpkg-deb', '--fsys-tarfile', str(path)], capture_output=True, check=True).stdout)
-    modes = subprocess.run(['rpm', '-qp', '--qf', '[%{FILEMODES:octal} %{FILENAMES}\n]', str(path)],
-                           capture_output=True, text=True, check=True).stdout
-    with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run(f'rpm2cpio "{path}" | cpio -idm --quiet', shell=True, cwd=tmp, check=True)
-        found = {}
-        for line in modes.splitlines():
-            mode, name = line.split(' ', 1)
-            if not stat.S_ISDIR(int(mode, 8)):
-                found[name.lstrip('/')] = (int(mode, 8), (Path(tmp) / name.lstrip('/')).read_bytes())
-        return found
+def entries(path):
+    """{path: (mode, bytes)} of the files in a .pkg.tar.zst."""
+    return tar_entries(subprocess.run(['zstd', '-dcq', str(path)], capture_output=True, check=True).stdout)
 
 
 def cmd_verify(args):
-    found = entries(args.format, Path(args.artifact).resolve())
-    expected = {rel: mode for rel, _src, mode, _c in MANIFESTS[args.package](args.format)}
-    extra = {e.format(NAMES[args.package]) for e in EXTRA[args.format]}
-    problems = [f'unexpected file /{r}' for r in sorted(set(found) - set(expected) - extra)]
+    found = entries(Path(args.artifact).resolve())
+    expected = {rel: mode for rel, _src, mode, _c in MANIFESTS[args.package]()}
+    problems = [f'unexpected file /{r}' for r in sorted(set(found) - set(expected) - EXTRA)]
     problems += [f'missing file /{r}' for r in sorted(set(expected) - set(found))]
     hashes = {f'usr/share/cupertino/assets/wallpapers/{w["file"]}': w['sha256'] for w in WALLPAPERS}
     # A build-tree or home path at the start of a path string; remapped paths (/usr/src/..., /cargo/...) pass.
@@ -335,14 +313,8 @@ def shipped_licenses(package):
 
 
 def declared_licenses(package):
-    """{place: SPDX identifiers} the package's metadata lists, in the PKGBUILDs, the rpm and the Debian copyright file."""
-    crate = 'cupertino-server' if package == 'runtime' else 'cupertino-assets'
-    meta = tomllib.loads((ROOT / 'crates' / crate / 'Cargo.toml').read_text())['package']['metadata']
-    ids = lambda text: set(re.findall(r'[\w.+-]+', re.sub(r'\b(AND|OR|WITH)\b', ' ', text)))
-    found = {f'{crate} rpm License': ids(meta['generate-rpm']['license'])}
-    copyright = ROOT / meta['deb']['license-file'][0].replace('../../', '', 1)
-    names = re.findall(r'^License: (\S+)', copyright.read_text(), re.M)
-    found[f'{copyright.relative_to(ROOT)}'] = {DEB_LICENSES.get(n, n) for n in names}
+    """{place: SPDX identifiers} the package's licence lists in the PKGBUILDs."""
+    found = {}
     for pkgbuild in sorted(ROOT.glob('packaging/arch/*/PKGBUILD')):
         text = pkgbuild.read_text()
         data_block = re.search(r'^package_cupertino-data\(\).*?^\}', text, re.M | re.S)
@@ -358,43 +330,6 @@ def declared_licenses(package):
 def missing_licenses(shipped, declared):
     """['<place> lacks <id>, ...'] for each place whose list does not cover every shipped licence."""
     return [f'{place} lacks {", ".join(sorted(shipped - ids))}' for place, ids in sorted(declared.items()) if shipped - ids]
-
-
-def crate_license_problems(copyright_text, crates, paths):
-    """['<file> is <id>, ...'] for each of `paths` in a crate {directory: Cargo.toml licence} with one licence that the
-    last matching Files paragraph of the Debian copyright file gives another; protocol XML files keep their own."""
-    paragraphs = []
-    for block in re.split(r'\n\s*\n', copyright_text):
-        files = re.search(r'^Files:(.*(?:\n .*)*)', block, re.M)
-        lic = re.search(r'^License: (.+)', block, re.M)
-        if files and lic:
-            paragraphs.append((files[1].split(), DEB_LICENSES.get(lic[1].strip(), lic[1].strip())))
-    problems = []
-    for path in sorted(paths):
-        parts = path.split('/')
-        lic = crates.get(parts[1]) if len(parts) > 2 and parts[0] == 'crates' else None
-        if lic is None or not re.fullmatch(r'[\w.+-]+', lic) or fnmatch.fnmatchcase(path, 'crates/*/protocols/*.xml'):
-            continue
-        got = next((l for files, l in reversed(paragraphs) if any(fnmatch.fnmatchcase(path, f) for f in files)), None)
-        if got != lic:
-            problems.append(f'{path} is {lic} as its crate, the Debian copyright file gives it {got}')
-    return problems
-
-
-def tracked_crate_files():
-    """The files git tracks under crates/."""
-    out = subprocess.run(['git', 'ls-files', 'crates'], cwd=ROOT, capture_output=True, text=True, check=True).stdout
-    return out.splitlines()
-
-
-def workspace_crate_licenses():
-    """{crate directory: the licence its Cargo.toml declares} of the workspace crates."""
-    workspace = tomllib.loads((ROOT / 'Cargo.toml').read_text())['workspace']['package']['license']
-    found = {}
-    for manifest in sorted(ROOT.glob('crates/*/Cargo.toml')):
-        lic = tomllib.loads(manifest.read_text())['package'].get('license')
-        found[manifest.parent.name] = workspace if isinstance(lic, dict) else lic
-    return {name: lic for name, lic in found.items() if lic}
 
 
 def cmd_third_party(_args):
@@ -477,36 +412,11 @@ def cmd_check_metadata(_args):
     problems = third_party_problems()
     problems += [f'licence text {src} for /usr/share/licenses/cupertino/{n} does not exist'
                 for n, src in LICENSE_TEXTS if not (ROOT / src).is_file()]
-    problems += crate_license_problems((ROOT / 'packaging/debian/cupertino.copyright').read_text(), workspace_crate_licenses(),
-                                       tracked_crate_files())
     for package in MANIFESTS:
         problems += [f'{package} licence: {m}' for m in missing_licenses(shipped_licenses(package), declared_licenses(package))]
-    for crate, package in (('cupertino-server', 'runtime'), ('cupertino-assets', 'data')):
-        meta = tomllib.loads((ROOT / 'crates' / crate / 'Cargo.toml').read_text())['package']['metadata']
-        for fmt, table in (('deb', meta['deb']), ('rpm', meta['generate-rpm'])):
-            manifest = MANIFESTS[package](fmt)
-            got = {}
-            for a in table['assets']:
-                src, dst, mode = (a[0], a[1], a[2]) if fmt == 'deb' else (a['source'], a['dest'], a['mode'])
-                got[dst.lstrip('/')] = (src, int(mode, 8), a.get('config') == 'noreplace' if fmt == 'rpm' else None)
-            want = {}
-            for rel, src, mode, conf in manifest:
-                if src is None:
-                    src = f'target/release/{Path(rel).name}'
-                elif fmt == 'deb':
-                    src = f'../../{src}'  # cargo-deb resolves sources from the crate directory
-                want[rel] = (src, mode, conf if fmt == 'rpm' else None)
-            for rel in sorted(set(got) | set(want)):
-                if got.get(rel) != want.get(rel):
-                    problems.append(f'{crate} {fmt} /{rel}: Cargo.toml {got.get(rel)}, manifest {want.get(rel)}')
-            if fmt == 'deb':
-                conf_files = sorted(c.lstrip('/') for c in table.get('conf-files', []))
-                want_conf = sorted(rel for rel, _s, _m, conf in manifest if conf)
-                if conf_files != want_conf:
-                    problems.append(f'{crate} deb conf-files {conf_files}, manifest {want_conf}')
     if problems:
-        fail('package metadata differs from the manifest:\n  ' + '\n  '.join(problems))
-    print('deb and rpm metadata match the manifest')
+        fail('package metadata is incomplete:\n  ' + '\n  '.join(problems))
+    print('package licence lists and third-party notices are complete')
 
 
 def git(*a):
@@ -631,7 +541,7 @@ def main():
     sub = p.add_subparsers(dest='command', required=True)
     for name in ('install', 'verify'):
         c = sub.add_parser(name)
-        c.add_argument('--format', choices=FORMATS, required=True)
+        c.add_argument('--format', choices=FORMATS, default='arch')
         c.add_argument('--package', choices=MANIFESTS, required=True)
     sub.choices['install'].add_argument('--destdir', required=True)
     sub.choices['install'].add_argument('--bindir', default=str(ROOT / 'target/release'))

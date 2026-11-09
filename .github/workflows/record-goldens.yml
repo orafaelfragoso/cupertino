@@ -1,0 +1,56 @@
+name: Record goldens
+
+# Re-records the golden baselines on the pinned renderer of ci/goldens/Dockerfile with `ci/goldens.sh --update`, checks
+# that the new baselines compare, and uploads them as the artifact `goldens`. A maintainer reviews the images and commits
+# them to crates/cupertino-server/tests/fixtures/goldens. Run it from the Actions tab on the branch that changes the
+# renderer (the image digest or the archive date) or a scene; the `goldens` job of CI fails until the commit lands.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: record-goldens-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  record:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free unused runner SDKs before the image build
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: ./.github/actions/golden-image
+        id: image
+      - name: Re-record in the pinned image
+        env:
+          CUPERTINO_GOLDENS_IMAGE: ${{ steps.image.outputs.image }}
+        run: ci/goldens.sh --update
+      - name: The new baselines compare
+        env:
+          CUPERTINO_GOLDENS_IMAGE: ${{ steps.image.outputs.image }}
+        run: ci/goldens.sh
+      - name: Changed baselines
+        run: |
+          {
+            echo '### Re-recorded goldens'
+            echo
+            echo "Renderer: $(cat crates/cupertino-server/tests/fixtures/goldens/renderer.txt)"
+            echo
+            echo '```'
+            git status --short -- crates/cupertino-server/tests/fixtures/goldens
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goldens
+          path: crates/cupertino-server/tests/fixtures/goldens/
+          if-no-files-found: error
+          retention-days: 14

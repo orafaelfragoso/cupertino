@@ -852,6 +852,8 @@ fn other_buttons_and_the_pointer_moving_over_the_catcher_do_not() {
     assert_eq!(run.heard(), []);
 }
 
+/// The catcher takes the output's size and is shown as one transparent colour without a frame: the compositor
+/// stretches one pixel over the output, so it costs no frame of the output's size, and it still takes the presses.
 #[test]
 fn the_catcher_covers_the_output_and_draws_nothing() {
     let shown = view::catcher::<()>(|_| ());
@@ -861,5 +863,14 @@ fn the_catcher_covers_the_output_and_draws_nothing() {
         Size::ZERO,
         "the layer surface takes the output's size"
     );
-    assert_eq!(shown.background, WindowBackground::None);
+    assert_eq!(shown.spec.input_region, None, "all of it takes input");
+    assert_eq!(shown.background, WindowBackground::INPUT_ONLY);
+
+    let run = Run::catcher();
+    let system = run.driver.runtime().window_system();
+    assert!(system.frames(run.window).unwrap().is_empty(), "no frame");
+    let solids = system.solids(run.window).unwrap();
+    assert_eq!(solids.len(), 1);
+    assert_eq!(solids[0].color.a, 0.0, "transparent");
+    assert!(solids[0].acknowledged.is_some(), "it answers the configure");
 }

@@ -136,7 +136,12 @@ fn line(width: f64, s: f64) -> Stroke {
 
 /// Fill the whole of `pixmap` with the scrim at `opacity` (0 to 1, as it fades).
 pub fn draw_scrim(pixmap: &mut Pixmap, palette: &Palette, opacity: f64) {
-    pixmap.fill(skia(with_alpha(palette.scrim, opacity)));
+    pixmap.fill(skia(scrim_color(palette, opacity)));
+}
+
+/// The colour the scrim shows all over at `opacity` (0 to 1) of its own.
+pub fn scrim_color(palette: &Palette, opacity: f64) -> Rgba {
+    with_alpha(palette.scrim, opacity)
 }
 
 /// Draws the panel; it keeps the fonts and the symbol between frames.

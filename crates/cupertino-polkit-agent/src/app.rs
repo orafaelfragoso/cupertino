@@ -17,7 +17,7 @@ use cupertino_polkit_agent::model::{Agent, Effect, Key};
 use cupertino_polkit_agent::panel::{
     Command, Content, Control, Frames, Panel, PanelKey, Status, View, PADDING, WIDTH,
 };
-use cupertino_polkit_agent::render::{draw_scrim, Painter, Palette};
+use cupertino_polkit_agent::render::{scrim_color, Painter, Palette};
 use cupertino_polkit_agent::surfaces;
 use cupertino_polkit_agent::users::{self, display_names};
 use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver};
@@ -687,9 +687,11 @@ impl App {
                 match presenter.poll(&self.conn)? {
                     Ready::Idle => break,
                     Ready::ScaleChanged(_) => {}
-                    Ready::Draw => presenter.draw(&mut self.conn, None, |pixmap, _| {
-                        draw_scrim(pixmap, &palette, opacity)
-                    })?,
+                    // one colour over the output: the compositor stretches one pixel of it, so the fade costs no
+                    // frame of the output's size
+                    Ready::Draw => {
+                        presenter.draw_solid(&mut self.conn, scrim_color(&palette, opacity))?
+                    }
                 }
             }
         }

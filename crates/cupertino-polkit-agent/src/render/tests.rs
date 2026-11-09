@@ -91,6 +91,12 @@ fn every_appearance_has_the_prompts_colours_and_the_scrim_darkens_more_in_dark_a
     let palette = Palette::from_tokens(&tokens, Appearance::Light).unwrap();
     draw_scrim(&mut pm, &palette, 0.5);
     assert_eq!(pm.pixel(2, 2).unwrap().alpha(), 58);
+    let shown = scrim_color(&palette, 0.5);
+    assert_eq!(
+        (shown[..3].to_vec(), shown[3]),
+        (palette.scrim[..3].to_vec(), palette.scrim[3] * 0.5),
+        "the colour shown without a frame is the one drawn"
+    );
 }
 
 #[test]

@@ -102,14 +102,14 @@ fn an_extra_argument_and_an_unknown_option_are_invalid_usage() {
 }
 
 #[test]
-fn a_format_other_than_human_or_json_is_refused_before_the_command_runs() {
-    let out = cupertino(&["--format", "jsonl", "frobnicate"]);
+fn a_format_other_than_human_json_or_jsonl_is_refused_before_the_command_runs() {
+    let out = cupertino(&["--format", "yaml", "frobnicate"]);
     assert_eq!(
         out,
         Output {
             code: 2,
             stdout: String::new(),
-            stderr: "cupertino: --format takes human or json, not `jsonl`\n".into(),
+            stderr: "cupertino: --format takes human, json or jsonl, not `yaml`\n".into(),
         }
     );
 }
@@ -120,7 +120,29 @@ fn the_json_help_lists_the_command_tree_under_the_topic() {
         "path": "appearance assets check",
         "summary": "Reads the asset pack in <dir> as the desktop processes do and reports its problems and what \
                     provides each logical name, the pack or the built-in fallback",
-        "args": [{"name": "dir", "help": "the pack directory, with its manifest.json", "kind": "positional"}]
+        "args": [{
+            "name": "dir", "help": "the pack directory, with its manifest.json", "kind": "positional",
+            "values": [], "repeat": false, "hint": "dir"
+        }],
+        "stability": "stable",
+        "streams": false,
+        "description": "Reads the pack in <dir> the way the desktop processes read it at start: the manifest, then \
+                        every file it names. It lists the problems found inside the pack (unknown manifest keys, \
+                        missing or unreadable files), which are reported but do not fail the check, and for each \
+                        logical name whether the pack or the built-in fallback provides it.\n\nA pack that cannot \
+                        be read at all fails with exit code 5: a missing directory or manifest (pack_unreadable), a \
+                        manifest that is not valid (manifest_invalid) or a font that cannot be loaded (font_invalid). \
+                        It replaces `cupertino-assets check <dir>`.",
+        "examples": [
+            {
+                "command": "cupertino appearance assets check ~/.local/share/cupertino/assets",
+                "description": "Check the pack installed for the current user."
+            },
+            {
+                "command": "cupertino --format json appearance assets check ./my-pack",
+                "description": "Report the pack in ./my-pack as one JSON envelope."
+            }
+        ]
     }]);
     for args in [
         &["--format", "json", "help"][..],
@@ -147,7 +169,7 @@ fn no_arguments_print_the_help() {
     assert_eq!(out.stdout, cupertino(&["help"]).stdout);
     assert!(
         out.stdout.starts_with(
-            "usage: cupertino [--format human|json] <command> [<arguments>]\n       \
+            "usage: cupertino [--format <human|json|jsonl>] <command> [<arguments>]\n       \
              cupertino help [<command>]\n       cupertino --version\n\ncommands:\n  \
              appearance assets check <dir>\n"
         ),
@@ -226,4 +248,264 @@ fn a_pack_that_cannot_be_read_is_a_validation_failure_with_exit_code_5() {
             &json!("pack_unreadable")
         )
     );
+}
+
+mod parsing {
+    //! The argument rules of the registry, on a test registry.
+
+    use cupertino_cli::{
+        Arg, Args, Command, Context, Failure, Group, Output, Reply, Run, Runner, Stability,
+    };
+    use serde_json::{json, Value};
+
+    /// Echoes what it parsed.
+    fn echo(args: &Args, cx: &Context) -> Result<Reply, Failure> {
+        let data = json!({
+            "shell": args.value("shell"),
+            "areas": args.values("area"),
+            "files": args.values("file"),
+            "strict": args.flag("strict"),
+            "root": cx.root(),
+        });
+        Ok(Reply::new(&data, ""))
+    }
+
+    const ARGS: &[Arg] = &[
+        Arg::option("shell", "a shell").values(&["bash", "zsh", "fish"]),
+        Arg::option("area", "an area").repeat(),
+        Arg::flag("strict", "strict"),
+        Arg::positional("file", "files").repeat(),
+    ];
+
+    const COMMANDS: &[Command] = &[
+        Command {
+            path: &["t", "echo"],
+            summary: "s",
+            description: "d",
+            examples: &[("cupertino t echo a", "x")],
+            stability: Stability::Stable,
+            args: ARGS,
+            run: Run::Once(echo),
+        },
+        Command {
+            path: &["t"],
+            summary: "s",
+            description: "d",
+            examples: &[("cupertino t", "x")],
+            stability: Stability::Stable,
+            args: &[Arg::flag("strict", "strict")],
+            run: Run::Once(echo),
+        },
+        Command {
+            path: &["t", "pick"],
+            summary: "s",
+            description: "d",
+            examples: &[("cupertino t pick bash", "x")],
+            stability: Stability::Stable,
+            args: &[Arg::positional("shell", "a shell").values(&["bash", "zsh"])],
+            run: Run::Once(echo),
+        },
+    ];
+
+    const TEST: &[Group] = &[Group {
+        name: "t",
+        summary: "s",
+        description: "d",
+        commands: &[COMMANDS],
+    }];
+
+    fn run(words: &[&str]) -> Output {
+        let args: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+        Runner::new(TEST)
+            .context(Context::isolated("/fixture"))
+            .run(&args, "r1")
+    }
+
+    /// Runs `words` in JSON form; `--format` goes first, as anything after a `--` is the command's.
+    fn data(words: &[&str]) -> Value {
+        let words = [&["--format", "json"][..], words].concat();
+        let out = run(&words);
+        assert_eq!(
+            (out.code, out.stderr.as_str()),
+            (0, ""),
+            "{words:?}: {}",
+            out.stdout
+        );
+        serde_json::from_str::<Value>(&out.stdout).unwrap()["data"].clone()
+    }
+
+    fn refused(words: &[&str]) -> (u8, String, String) {
+        let words = [&["--format", "json"][..], words].concat();
+        let out = run(&words);
+        let v: Value = serde_json::from_str(&out.stdout).unwrap();
+        (
+            out.code,
+            v["error"]["code"].as_str().unwrap().to_string(),
+            v["error"]["message"].as_str().unwrap().to_string(),
+        )
+    }
+
+    #[test]
+    fn repeatable_options_and_a_repeatable_positional_collect_every_value_in_order() {
+        let d = data(&[
+            "t",
+            "echo",
+            "a",
+            "--area",
+            "gpu",
+            "b",
+            "--area=logs",
+            "--strict",
+            "c",
+            "--strict",
+        ]);
+        assert_eq!(d["areas"], json!(["gpu", "logs"]));
+        assert_eq!(d["files"], json!(["a", "b", "c"]));
+        assert_eq!(d["strict"], true);
+        assert_eq!(d["shell"], Value::Null);
+        assert_eq!(
+            d["root"], "/fixture",
+            "the command reads the runner's context"
+        );
+    }
+
+    #[test]
+    fn a_value_list_is_enforced_for_options_and_positional_arguments() {
+        assert_eq!(data(&["t", "echo", "a", "--shell", "zsh"])["shell"], "zsh");
+        assert_eq!(
+            refused(&["t", "echo", "a", "--shell", "tcsh"]),
+            (
+                2,
+                "invalid_value".into(),
+                "--shell takes bash, zsh or fish, not `tcsh`".into()
+            )
+        );
+        assert_eq!(
+            refused(&["t", "pick", "fish"]),
+            (
+                2,
+                "invalid_value".into(),
+                "<shell> takes bash or zsh, not `fish`".into()
+            )
+        );
+    }
+
+    #[test]
+    fn a_single_option_given_twice_and_a_flag_with_a_value_are_refused() {
+        assert_eq!(
+            refused(&["t", "echo", "a", "--shell", "zsh", "--shell=bash"]),
+            (
+                2,
+                "repeated_option".into(),
+                "--shell is given more than once".into()
+            )
+        );
+        assert_eq!(
+            refused(&["t", "echo", "a", "--strict=yes"]),
+            (
+                2,
+                "unexpected_value".into(),
+                "--strict takes no value".into()
+            )
+        );
+        assert_eq!(refused(&["t", "echo", "a", "--area"]).1, "missing_value");
+        assert_eq!(refused(&["t", "echo"]).1, "missing_argument");
+    }
+
+    #[test]
+    fn after_a_double_dash_every_word_is_a_positional_argument() {
+        let out = run(&["t", "echo", "--", "--format", "json", "--help", "-x"]);
+        assert_eq!((out.code, out.stderr.as_str()), (0, ""), "{}", out.stdout);
+        let d = data(&["t", "echo", "--strict", "--", "--strict", "--"]);
+        assert_eq!(d["files"], json!(["--strict", "--"]));
+    }
+
+    #[test]
+    fn the_longest_command_path_wins() {
+        assert_eq!(data(&["t", "echo", "x"])["files"], json!(["x"]));
+        let short = run(&["--format", "json", "t", "--strict"]);
+        let v: Value = serde_json::from_str(&short.stdout).unwrap();
+        assert_eq!((short.code, &v["command"]), (0, &json!("t")));
+    }
+
+    #[test]
+    fn a_reserved_group_is_unsupported_in_this_release() {
+        for words in [
+            &["system", "update", "check"][..],
+            &["ai"],
+            &["help", "system"],
+        ] {
+            let out = cupertino_cli::run(
+                &words
+                    .iter()
+                    .map(|w| w.to_string())
+                    .chain(["--format".into(), "json".into()])
+                    .collect::<Vec<_>>(),
+                "r1",
+            );
+            assert_eq!(out.code, 8, "{words:?}");
+            let v: Value = serde_json::from_str(&out.stdout).unwrap();
+            assert_eq!(
+                (&v["error"]["kind"], &v["error"]["code"]),
+                (&json!("unsupported"), &json!("not_in_this_release")),
+                "{words:?}"
+            );
+        }
+        let human = cupertino_cli::run(&["system".to_string()], "r1");
+        assert_eq!(
+            human.stderr,
+            "cupertino: `cupertino system` (system updates and recovery) is not in this release\n"
+        );
+    }
+
+    #[test]
+    fn an_option_before_any_command_is_an_unknown_option() {
+        let out = cupertino_cli::run(&["--verbose".to_string()], "r1");
+        assert_eq!(
+            (out.code, out.stderr.as_str()),
+            (
+                2,
+                "cupertino: unknown option `--verbose`; see `cupertino help`\n"
+            )
+        );
+    }
+
+    #[test]
+    fn the_help_of_one_command_shows_its_description_and_examples() {
+        let out = cupertino_cli::run(
+            &[
+                "help".into(),
+                "appearance".into(),
+                "assets".into(),
+                "check".into(),
+            ],
+            "r1",
+        );
+        assert_eq!(out.code, 0);
+        assert!(
+            out.stdout
+                .contains("\n      Reads the pack in <dir> the way"),
+            "{}",
+            out.stdout
+        );
+        assert!(
+            out.stdout.contains(
+                "      examples:\n        cupertino appearance assets check ~/.local/share/cupertino/assets\n"
+            ),
+            "{}",
+            out.stdout
+        );
+        // a topic above the command lists it without the long text
+        let group = cupertino_cli::run(&["help".into(), "appearance".into()], "r1");
+        assert!(!group.stdout.contains("examples:"), "{}", group.stdout);
+        // a repeatable option shows as such
+        let test = run(&["help", "t", "echo"]);
+        assert!(
+            test.stdout.contains(
+                "  t echo [--shell <bash|zsh|fish>] [--area <area>]... [--strict] <file>...\n"
+            ),
+            "{}",
+            test.stdout
+        );
+    }
 }

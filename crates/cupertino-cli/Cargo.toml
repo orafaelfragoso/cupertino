@@ -3,7 +3,7 @@ name = "cupertino-cli"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "The `cupertino` command: a typed registry of subcommands with help, version and human or JSON output"
+description = "The `cupertino` command: a typed registry of subcommands that the help, completions and manual pages come from, with human, JSON and JSON lines output"
 
 [package.metadata.cupertino]
 layer = "tools"
@@ -17,6 +17,7 @@ path = "src/bin/cupertino.rs"
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 

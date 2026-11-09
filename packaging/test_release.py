@@ -394,8 +394,8 @@ GIT_RECIPE = Path(__file__).resolve().parent / 'arch/cupertino-git/PKGBUILD'
 
 class TestPamShimTest(unittest.TestCase):
     """The tests' PAM shim (`cupertino-test-pam-shim`, which replaces `pam_start`, `connect` and `syslog` in a process that
-    loads it) and its helper never reach a package: the packages build only the binaries, neither crate is in their
-    dependencies, and no manifest installs either."""
+    loads it) and its helper never reach a package: the packages build only the binaries and the shipped libraries,
+    neither crate is in their dependencies, and no manifest installs either."""
 
     TEST_CRATES = ('cupertino-test-pam-shim', 'cupertino-test-pam')
 
@@ -413,14 +413,22 @@ class TestPamShimTest(unittest.TestCase):
             self.assertNotIn(crate, linked)
             self.assertNotIn(crate, release.BINARIES)
 
-    def test_the_packages_build_only_the_binaries(self):
+    def test_the_packages_build_only_the_binaries_and_the_shipped_libraries(self):
         for recipe in (release.ROOT / 'packaging/arch').glob('*/PKGBUILD'):
-            builds = [line for line in recipe.read_text().splitlines() if 'cargo build' in line]
+            builds = [line.split() for line in recipe.read_text().splitlines() if 'cargo build' in line]
             self.assertTrue(builds, recipe)
-            for line in builds:
-                self.assertIn('--bins', line, recipe)
-                self.assertNotIn('--all-targets', line, recipe)
-                self.assertNotIn('--lib', line, recipe)
+            self.assertTrue(any('--bins' in words for words in builds), recipe)
+            for words in builds:
+                self.assertNotIn('--all-targets', words, recipe)
+                if '--lib' in words:
+                    # a library build names its one shipped crate, never the workspace
+                    self.assertNotIn('--workspace', words, recipe)
+                    self.assertEqual(words.count('-p'), 1, recipe)
+                    crate = words[words.index('-p') + 1]
+                    self.assertIn(crate, release.LIBRARIES, recipe)
+                    self.assertNotIn(crate, self.TEST_CRATES, recipe)
+                else:
+                    self.assertIn('--bins', words, recipe)
 
     def test_the_shim_is_a_test_only_library(self):
         manifest = (release.ROOT / 'crates/cupertino-test-pam-shim/Cargo.toml').read_text()

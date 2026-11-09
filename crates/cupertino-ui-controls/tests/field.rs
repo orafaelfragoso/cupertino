@@ -241,6 +241,31 @@ fn return_submits_and_text_the_application_sets_itself_replaces_the_field() {
     assert_eq!(h.model().text, "B");
 }
 
+/// Assistive technology reads the committed text and the caret and selection (in bytes of the value) as they change
+/// through the input method and the keyboard; a composition shows in neither.
+#[test]
+fn assistive_technology_follows_the_committed_text_and_caret_and_never_the_composition() {
+    let mut h = focused_name();
+    h.type_text("ab");
+    h.send(batch(Some("ni"), None, true));
+    let (value, text) = editing(&h);
+    assert_eq!(value, "ab");
+    assert_eq!((text.caret, text.selection), (2, 2..2));
+
+    h.send(batch(None, Some("你好"), true));
+    let (value, text) = editing(&h);
+    assert_eq!(value, "ab你好");
+    assert_eq!((text.caret, text.selection), (8, 8..8));
+
+    h.press_key(LEFT.0, LEFT.1, true, false, Mods::SHIFT);
+    let (_, text) = editing(&h);
+    assert_eq!(
+        (text.caret, text.selection),
+        (5, 5..8),
+        "one character back"
+    );
+}
+
 #[test]
 fn the_input_method_composes_without_reporting_and_commits_once() {
     let mut h = focused_name();

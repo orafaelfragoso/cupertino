@@ -131,10 +131,11 @@ pub struct OsImage {
 pub const OS_RELEASE_FILES: [&str; 2] = ["etc/os-release", "usr/lib/os-release"];
 
 impl OsImage {
-    /// Reads the `KEY=value` lines of an `os-release` text. Blank lines and lines starting with `#` are skipped, as are
-    /// lines without `=`. A value may be in double quotes (where `\"`, `\\`, `\$` and `` \` `` stand for the character
-    /// after the backslash) or single quotes (taken literally); an unquoted value is taken as it is, up to the end of
-    /// the line. A later line for the same key wins, and an empty value counts as not set.
+    /// Reads the `KEY=value` lines of an `os-release` text, with the shell quoting the format allows. Blank lines and
+    /// lines starting with `#` are skipped, as are lines without `=`. A value may be in double quotes (where `\"`,
+    /// `\\`, `\$` and `` \` `` stand for the character after the backslash, and any other backslash is kept) or single
+    /// quotes (taken literally); in an unquoted value a backslash stands for the character after it. A later line for
+    /// the same key wins, and an empty value counts as not set.
     pub fn parse(text: &str) -> Self {
         let mut image = Self::default();
         for line in text.lines() {
@@ -191,7 +192,18 @@ fn unquote(value: &str) -> String {
             }
             out
         }
-        _ => value.to_string(),
+        // unquoted, as the shell reads it: `\x` is `x`
+        _ => {
+            let mut out = String::with_capacity(value.len());
+            let mut chars = value.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => out.extend(chars.next()),
+                    c => out.push(c),
+                }
+            }
+            out
+        }
     }
 }
 

@@ -42,6 +42,14 @@ fn an_unknown_escape_keeps_its_backslash_and_a_lone_quote_is_part_of_the_value()
 }
 
 #[test]
+fn an_unquoted_value_takes_the_character_after_a_backslash() {
+    let image = OsImage::parse("NAME=Cupertino\\ Desktop\nID=a\\$b\\\\c\nVERSION_ID=trailing\\\n");
+    assert_eq!(image.name.as_deref(), Some("Cupertino Desktop"));
+    assert_eq!(image.id.as_deref(), Some("a$b\\c"));
+    assert_eq!(image.version_id.as_deref(), Some("trailing"));
+}
+
+#[test]
 fn a_missing_file_is_not_found_and_the_usr_lib_file_stands_in_for_etc() {
     let root = tempfile::tempdir().unwrap();
     let err = read_os_image(root.path()).unwrap_err();

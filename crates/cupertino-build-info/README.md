@@ -15,8 +15,8 @@ What a Cupertino build is and what it runs on. Layer: `foundation`. Licence: MPL
 | `kernel()`, `kernel_in(root)` | The running kernel's release from `proc/sys/kernel/osrelease`, or `None`. |
 
 The parser follows the `os-release` format: blank lines and `#` comments are skipped, a value may be in double quotes
-(with `\"`, `\\`, `\$` and `` \` `` escapes) or single quotes (literal), a later line for the same key wins, and an
-empty value counts as not set.
+(with `\"`, `\\`, `\$` and `` \` `` escapes) or single quotes (literal), a backslash in an unquoted value stands for the
+character after it, a later line for the same key wins, and an empty value counts as not set.
 
 ## Where the commit comes from
 

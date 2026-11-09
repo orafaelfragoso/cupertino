@@ -3,6 +3,8 @@ import contextlib
 import fcntl
 import importlib.util
 import os
+import re
+import shutil
 from pathlib import Path
 import select
 import subprocess
@@ -28,7 +30,7 @@ class WorktreeBuildTest(unittest.TestCase):
 
     def metadata(self, directory, owner, **fields):
         directory.mkdir(parents=True)
-        BUILD.write_marker(directory, {"schema": 1, "owner": str(owner), "fingerprint": "host", "successful": False,
+        BUILD.write_marker(directory, {"schema": BUILD.SCHEMA, "owner": str(owner), "fingerprint": "host", "successful": False,
                                        "created": time.time(), **fields})
 
     def test_guard_only_allows_primary_checkout_but_managed_targets_do_not(self):
@@ -63,8 +65,8 @@ class WorktreeBuildTest(unittest.TestCase):
             return "Cargo.toml" if command[0] == "git" else "toolchain-one"
         with patch.object(BUILD, "output", side_effect=version):
             identity = BUILD.fingerprint(self.root, "dev", {})
-            for name in ("CUPERTINO_THEME_DIR", "CUPERTINO_SPEC_DIR", "CUPERTINO_INSTALL_PREFIX",
-                         "CUPERTINO_BUILD_COMMIT", "RUSTFLAGS", "LIBCLANG_PATH", "PATH", "HOME",
+            for name in ("CUPERTINO_THEME_DIR", "CUPERTINO_ADMIN_GROUPS", "CUPERTINO_INSTALL_PREFIX",
+                         "CUPERTINO_BUILD_COMMIT", "RUSTFLAGS", "RUSTDOCFLAGS", "RUSTC_WRAPPER", "RUSTC", "LIBCLANG_PATH", "PATH", "HOME",
                          "CARGO_PROFILE_DEV_OPT_LEVEL", "CARGO_ENCODED_RUSTFLAGS", "RUSTUP_TOOLCHAIN",
                          "CC", "CC_x86_64_unknown_linux_gnu", "TARGET_CFLAGS", "PKG_CONFIG_PATH",
                          "BINDGEN_EXTRA_CLANG_ARGS_x86_64_unknown_linux_gnu", "CMAKE_TOOLCHAIN_FILE",
@@ -118,6 +120,201 @@ class WorktreeBuildTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "external build directories"):
                 BUILD.fingerprint(self.root, "dev", {})
 
+    def workspace(self):
+        """A small workspace: root manifest with a profile, a member, a lock file, a toolchain file and a Cargo config."""
+        files = {
+            "Cargo.toml": '[workspace]\nmembers = ["crates/a"]\n\n[profile.dev]\ndebug = "line-tables-only"\n',
+            "Cargo.lock": "version = 4\n",
+            "crates/a/Cargo.toml": '[package]\nname = "a"\nversion = "0.1.0"\n\n[dependencies]\n',
+            "crates/a/src/lib.rs": "",
+            "rust-toolchain.toml": '[toolchain]\nchannel = "1.0.0"\n',
+            ".cargo/config.toml": "[build]\nincremental = false\n",
+        }
+        for name, contents in files.items():
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / name).write_text(contents)
+        tracked = "\0".join(files)
+        return lambda command, root: tracked if command[0] == "git" else "toolchain"
+
+    def edit(self, name, old, new):
+        path = self.root / name
+        self.assertIn(old, path.read_text())
+        path.write_text(path.read_text().replace(old, new))
+
+    def test_dependencies_and_lock_file_never_change_the_fingerprint(self):
+        with patch.object(BUILD, "output", side_effect=self.workspace()):
+            identity = BUILD.fingerprint(self.root, "dev", {})
+            self.edit("crates/a/Cargo.toml", "[dependencies]\n", '[dependencies]\nserde = "1"\n')
+            self.edit("Cargo.lock", "version = 4\n", 'version = 4\n\n[[package]]\nname = "serde"\nversion = "1.0.0"\n')
+            self.edit("Cargo.toml", 'members = ["crates/a"]', 'members = ["crates/a"]\n[workspace.dependencies]\nlog = "0.4"')
+            self.edit("Cargo.toml", "[profile.dev]", "[workspace.lints.rust]\nunsafe_code = \"deny\"\n\n[profile.dev]")
+            self.assertEqual(identity, BUILD.fingerprint(self.root, "dev", {}))
+
+    def test_toolchain_profile_config_and_compiler_flags_change_the_fingerprint(self):
+        changes = (("rust-toolchain.toml", '"1.0.0"', '"1.1.0"'),
+                   ("Cargo.toml", 'debug = "line-tables-only"', "debug = 0"),
+                   ("Cargo.toml", "[profile.dev]", "[profile.release]\nlto = true\n\n[profile.dev]"),
+                   (".cargo/config.toml", "incremental = false", 'incremental = false\nrustflags = ["-Ctarget-cpu=native"]'))
+        for name, old, new in changes:
+            with self.subTest(name=name, new=new):
+                with patch.object(BUILD, "output", side_effect=self.workspace()):
+                    identity = BUILD.fingerprint(self.root, "dev", {})
+                    self.edit(name, old, new)
+                    self.assertNotEqual(identity, BUILD.fingerprint(self.root, "dev", {}))
+        with patch.object(BUILD, "output", side_effect=self.workspace()):
+            identity = BUILD.fingerprint(self.root, "dev", {})
+            for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER", "CARGO_PROFILE_DEV_DEBUG"):
+                with self.subTest(name=name):
+                    self.assertNotEqual(identity, BUILD.fingerprint(self.root, "dev", {name: "-Copt-level=1"}))
+
+    def test_runtime_and_test_only_variables_never_change_the_fingerprint(self):
+        with patch.object(BUILD, "output", side_effect=self.workspace()):
+            identity = BUILD.fingerprint(self.root, "dev", {})
+            for name in ("CUPERTINO_UPDATE_GOLDENS", "CUPERTINO_REPAINT_TRACE", "CUPERTINO_REPAINT_LOG", "CUPERTINO_SPEC_DIR",
+                         "CUPERTINO_GOLDENS_REQUIRED", "CUPERTINO_ASSET_SEARCH_PATH", "CUPERTINO_TEST_CLOCK",
+                         "CUPERTINO_BUILD_LOCK_HOLD", "CUPERTINO_BUILD_LOCK_ROOT", "RUST_LOG", "RUST_BACKTRACE",
+                         "RUST_LIB_BACKTRACE", "RUST_MIN_STACK", "CARGO_TERM_COLOR", "CARGO_TERM_PROGRESS_WHEN"):
+                with self.subTest(name=name):
+                    self.assertEqual(identity, BUILD.fingerprint(self.root, "dev", {name: "1"}))
+
+    def test_every_compile_time_project_variable_is_fingerprinted(self):
+        """A CUPERTINO_ variable a build script or env!/option_env! reads changes what is compiled, so it is a build
+        input; one a build script sets for the compiler (cargo:rustc-env) is derived from the others."""
+        repository = SCRIPT.parent.parent
+        tracked = subprocess.run(["git", "ls-files", "-z", "--", "*.rs"], cwd=repository, capture_output=True,
+                                 check=True, text=True).stdout.split("\0")
+        read, derived = set(), set()
+        for name in filter(None, tracked):
+            text = (repository / name).read_text()
+            read |= set(re.findall(r'\b(?:option_)?env!\(\s*"(CUPERTINO_[A-Z0-9_]+)"', text))
+            derived |= set(re.findall(r"rustc-env=(CUPERTINO_[A-Z0-9_]+)=", text))
+            path = Path(name)
+            if path.name == "build.rs" or path.parent.name == "build":
+                read |= set(re.findall(r'"(CUPERTINO_[A-Z0-9_]+)"', text))
+        self.assertEqual(read - derived, set(BUILD.PROJECT_BUILD_VARIABLES))
+
+    def test_older_schema_markers_are_kept_only_while_every_input_is_unchanged(self):
+        target, seed = self.root / "target", self.state / "seeds" / "old"
+        self.metadata(target, self.root, schema=1, fingerprint="legacy-one", successful=True, created=5)
+        with self.assertRaisesRegex(ValueError, "older worktree-build.py from other inputs; cleanup --target"):
+            BUILD.prepare(self.root, self.state, "new", None, (), lambda: "legacy-two")
+        with self.assertRaisesRegex(ValueError, "older worktree-build.py"):
+            BUILD.prepare(self.root, self.state, "new", None, ())
+        self.assertEqual(BUILD.read_marker(target, str(self.root))["schema"], 1)
+        metadata = BUILD.prepare(self.root, self.state, "new", None, (), lambda: "legacy-one")
+        self.assertEqual(metadata, {"schema": BUILD.SCHEMA, "owner": str(self.root), "fingerprint": "new",
+                                    "successful": True, "created": 5})
+        self.assertEqual(BUILD.read_marker(target, str(self.root)), metadata)
+        shutil.rmtree(target)
+        self.metadata(seed, self.state, schema=1, fingerprint="legacy-one")
+        with patch.object(BUILD, "disk_room"), patch.object(BUILD, "clone") as clone:
+            with self.assertRaisesRegex(ValueError, "seed old: made by an older worktree-build.py.*refresh-seed"):
+                BUILD.prepare(self.root, self.state, "new", "old", (), lambda: "legacy-two")
+            clone.assert_not_called()
+            clone.side_effect = lambda source, destination, root, leases: destination.mkdir()
+            BUILD.prepare(self.root, self.state, "new", "old", (), lambda: "legacy-one")
+        self.assertEqual(BUILD.read_marker(target, str(self.root))["schema"], BUILD.SCHEMA)
+        self.assertEqual(BUILD.read_marker(target, str(self.root))["fingerprint"], "new")
+
+    def test_legacy_fingerprint_still_hashes_manifests_so_only_identical_inputs_match(self):
+        with patch.object(BUILD, "output", side_effect=self.workspace()):
+            legacy = BUILD.legacy_fingerprint(self.root, "dev", {"CUPERTINO_SPEC_DIR": "a"})
+            self.assertNotEqual(legacy, BUILD.fingerprint(self.root, "dev", {"CUPERTINO_SPEC_DIR": "a"}))
+            self.assertNotEqual(legacy, BUILD.legacy_fingerprint(self.root, "dev", {"CUPERTINO_SPEC_DIR": "b"}))
+            self.edit("Cargo.lock", "version = 4", "version = 3")
+            self.assertNotEqual(legacy, BUILD.legacy_fingerprint(self.root, "dev", {"CUPERTINO_SPEC_DIR": "a"}))
+
+    def successful_target(self, contents="new build"):
+        target = self.root / "target"
+        self.metadata(target, self.root, fingerprint="host", successful=True)
+        (target / "artifact").write_text(contents)
+        return target
+
+    def test_refresh_replaces_the_seed_of_the_same_name_in_one_step(self):
+        self.require_reflinks()
+        seed = self.state / "seeds" / "parity-dev"
+        self.metadata(seed, self.state, fingerprint="host", successful=True, created=time.time())
+        (seed / "artifact").write_text("old build")
+        self.successful_target()
+        with self.assertRaisesRegex(ValueError, "seed parity-dev exists; refresh-seed replaces it"):
+            BUILD.promote(self.root, self.state, "host", "parity-dev", 12, ())
+        observed = []
+        real_clone, real_exchange = BUILD.clone, BUILD.exchange
+        def clone(source, destination, root, leases):
+            # While the copy is written, the seed's name still holds the whole previous seed.
+            observed.append((destination.name, (seed / "artifact").read_text(), BUILD.read_marker(seed, str(self.state))))
+            real_clone(source, destination, root, leases)
+        def exchange(first, second):
+            observed.append(("exchange", first.name, second.name))
+            real_exchange(first, second)
+        with patch.object(BUILD, "disk_room"), patch.object(BUILD, "clone", clone), \
+                patch.object(BUILD, "exchange", exchange), BUILD.acquire(self.root / "locks", 1, True) as lease:
+            BUILD.promote(self.root, self.state, "host", "parity-dev", 12, lease, replace=True)
+        self.assertEqual([entry[0] for entry in observed], [".parity-dev.new", "exchange"])
+        self.assertEqual(observed[0][1], "old build")
+        self.assertEqual(observed[1][1:], (".parity-dev.new", "parity-dev"))
+        self.assertEqual((seed / "artifact").read_text(), "new build")
+        self.assertEqual(sorted(path.name for path in seed.parent.iterdir()), ["parity-dev"])
+        metadata = BUILD.read_marker(seed, str(self.state))
+        self.assertEqual((metadata["schema"], metadata["successful"]), (BUILD.SCHEMA, True))
+
+    def test_refresh_creates_a_missing_seed_and_still_bounds_other_names_and_size(self):
+        self.require_reflinks()
+        self.successful_target()
+        with patch.object(BUILD, "disk_room"), BUILD.acquire(self.root / "locks", 1, True) as lease:
+            BUILD.promote(self.root, self.state, "host", "parity-dev", 12, lease, replace=True)
+            self.assertEqual((self.state / "seeds" / "parity-dev" / "artifact").read_text(), "new build")
+            with self.assertRaisesRegex(ValueError, "at most 1 seed"):
+                BUILD.promote(self.root, self.state, "host", "another", 12, lease, replace=True)
+            with self.assertRaisesRegex(ValueError, "budget"):
+                BUILD.promote(self.root, self.state, "host", "parity-dev", 0, lease, replace=True)
+        with self.assertRaisesRegex(ValueError, "successful run with matching inputs"):
+            BUILD.promote(self.root, self.state, "other-inputs", "parity-dev", 12, (), replace=True)
+
+    def test_a_failed_refresh_keeps_the_previous_seed_and_leaves_no_staging_copy(self):
+        self.require_reflinks()
+        seed = self.state / "seeds" / "parity-dev"
+        self.metadata(seed, self.state, fingerprint="host", successful=True)
+        (seed / "artifact").write_text("old build")
+        self.successful_target()
+        for failure in ("clone", "exchange"):
+            with self.subTest(failure=failure), patch.object(BUILD, "disk_room"), \
+                    BUILD.acquire(self.root / "locks", 1, True) as lease:
+                if failure == "clone":
+                    patcher = patch.object(BUILD, "child", return_value=1)
+                else:
+                    patcher = patch.object(BUILD, "exchange", side_effect=OSError(22, "unsupported"))
+                with patcher, self.assertRaises((ValueError, OSError)):
+                    BUILD.promote(self.root, self.state, "host", "parity-dev", 12, lease, replace=True)
+                self.assertEqual((seed / "artifact").read_text(), "old build")
+                self.assertEqual([path.name for path in seed.parent.iterdir()], ["parity-dev"])
+
+    def test_a_staging_copy_left_by_a_killed_refresh_is_removed_and_never_counts_as_a_seed(self):
+        self.require_reflinks()
+        seeds = self.state / "seeds"
+        (seeds / ".parity-dev.new" / "partial").mkdir(parents=True)
+        self.successful_target()
+        with patch.object(BUILD, "disk_room"), BUILD.acquire(self.root / "locks", 1, True) as lease:
+            BUILD.promote(self.root, self.state, "host", "parity-dev", 12, lease)
+        self.assertEqual([path.name for path in seeds.iterdir()], ["parity-dev"])
+        (seeds / ".another.new").mkdir()
+        (seeds / ".link.new").symlink_to(self.root / "target", target_is_directory=True)
+        BUILD.cleanup(self.root, self.state, False, True)
+        self.assertEqual([path.name for path in seeds.iterdir()], ["parity-dev"])
+        self.assertTrue((self.root / "target" / "artifact").exists())
+
+    def test_exchange_swaps_two_directories(self):
+        first, second = self.root / "first", self.root / "second"
+        first.mkdir()
+        second.mkdir()
+        (first / "one").touch()
+        (second / "two").touch()
+        BUILD.exchange(first, second)
+        self.assertEqual([path.name for path in first.iterdir()], ["two"])
+        self.assertEqual([path.name for path in second.iterdir()], ["one"])
+        with self.assertRaisesRegex(OSError, "cannot swap"):
+            BUILD.exchange(first, self.root / "missing")
+
     def test_incompatible_or_expired_seed_refuses_before_clone(self):
         source = self.state / "seeds" / "host"
         self.metadata(source, self.state, fingerprint="container", created=0)
@@ -143,7 +340,7 @@ class WorktreeBuildTest(unittest.TestCase):
         self.metadata(target, self.root, fingerprint="host", successful=False)
         with self.assertRaisesRegex(ValueError, "successful run"):
             BUILD.promote(self.root, self.state, "host", "host", 12, ())
-        BUILD.write_marker(target, {"schema": 1, "owner": str(self.root), "fingerprint": "host", "successful": True,
+        BUILD.write_marker(target, {"schema": BUILD.SCHEMA, "owner": str(self.root), "fingerprint": "host", "successful": True,
                                     "created": time.time()})
         with self.assertRaisesRegex(ValueError, "budget"):
             BUILD.promote(self.root, self.state, "host", "host", 0, ())
@@ -166,7 +363,7 @@ class WorktreeBuildTest(unittest.TestCase):
         target.mkdir()
         with self.assertRaises(FileNotFoundError):
             BUILD.cleanup(self.root, self.state, True, False)
-        BUILD.write_marker(target, {"schema": 1, "owner": "other-worktree"})
+        BUILD.write_marker(target, {"schema": BUILD.SCHEMA, "owner": "other-worktree"})
         with self.assertRaisesRegex(ValueError, "ownership"):
             BUILD.cleanup(self.root, self.state, True, False)
         target.rename(self.root / "outside")
@@ -438,6 +635,7 @@ class WorktreeBuildTest(unittest.TestCase):
                     ("cleanup", "--target"): False,
                     ("prepare", "--profile", "dev", "--seed", "host"): True,
                     ("promote", "--profile", "dev", "--name", "host", "--max-seed-gib", "12"): True,
+                    ("refresh-seed", "--profile", "dev", "--name", "host", "--max-seed-gib", "12"): True,
                     ("cleanup", "--target", "--expired-seeds"): True,
                     ("cleanup", "--expired-seeds"): True,
                     ("locked", "--", "true"): True}
@@ -456,10 +654,64 @@ class WorktreeBuildTest(unittest.TestCase):
                     patch.object(BUILD, "promote"), patch.object(BUILD, "cleanup"), patch.object(BUILD, "write_marker"), \
                     patch.dict(os.environ, {}, clear=True), patch.object(sys, "argv", [str(SCRIPT), *arguments]):
                 BUILD.main()
-                self.assertEqual(seen, [(self.root / ".cache" / "cupertino-build", 2, whole)])
+                self.assertEqual(seen, [(self.root / ".cache" / "cupertino-build", 4, whole)])
+
+    def run_locked(self, arguments, environment):
+        """Run `locked` with the slot queue and worktree lease recorded; return (slot requests, leases, child env)."""
+        requests, leases = [], []
+        @contextlib.contextmanager
+        def acquire(directory, slots, exclusive):
+            requests.append(exclusive)
+            yield (101,)
+        @contextlib.contextmanager
+        def worktree_lease(directory, root):
+            leases.append(root)
+            yield 100
+        with patch.object(BUILD, "acquire", acquire), patch.object(BUILD, "worktree_lease", worktree_lease), \
+                patch.object(BUILD, "repository", return_value=self.state), \
+                patch.object(BUILD.Path, "cwd", return_value=self.root), \
+                patch.object(BUILD.Path, "home", return_value=self.root), patch.object(BUILD, "disk_room"), \
+                patch.object(BUILD, "child", return_value=0) as child, patch.dict(os.environ, environment, clear=True), \
+                patch.object(sys, "argv", [str(SCRIPT), "locked", *arguments, "--", "true"]):
+            BUILD.main()
+        return requests, leases, child.call_args
+
+    def test_locked_holds_every_slot_one_or_only_the_worktree(self):
+        for hold, requests in ((None, [True]), ("every", [True]), ("one", [False]), ("none", [])):
+            with self.subTest(hold=hold):
+                seen, leases, call = self.run_locked(["--hold", hold] if hold else [], {})
+                self.assertEqual(seen, requests)
+                self.assertEqual(leases, [self.root])
+                self.assertEqual(call.args[3], (100, 101) if requests else (100,))
+                self.assertEqual(call.args[2]["CUPERTINO_BUILD_LOCK_HOLD"], hold or "every")
+                self.assertEqual(call.args[2]["CUPERTINO_BUILD_LOCK_ROOT"], str(self.root))
+
+    def test_a_phase_inside_a_worktree_only_hold_takes_slots_without_the_worktree_lease(self):
+        parent = {"CUPERTINO_BUILD_LOCK_FD": "100", "CUPERTINO_BUILD_LOCK_HOLD": "none",
+                  "CUPERTINO_BUILD_LOCK_ROOT": str(self.root)}
+        for hold, requests in (("every", [True]), ("one", [False])):
+            with self.subTest(hold=hold):
+                seen, leases, call = self.run_locked(["--hold", hold], parent)
+                self.assertEqual((seen, leases), (requests, []))
+                self.assertEqual(call.args[3], (101,))
+                self.assertEqual(call.args[2]["CUPERTINO_BUILD_LOCK_HOLD"], hold)
+        refusals = ((["--hold", "none"], parent, "already holds this worktree"),
+                    ([], {**parent, "CUPERTINO_BUILD_LOCK_HOLD": "every"}, "nested"),
+                    ([], {**parent, "CUPERTINO_BUILD_LOCK_HOLD": "one"}, "nested"),
+                    ([], {**parent, "CUPERTINO_BUILD_LOCK_ROOT": "/another/worktree"}, "nested"),
+                    ([], {"CUPERTINO_BUILD_LOCK_FD": "100"}, "nested"))
+        for arguments, environment, message in refusals:
+            with self.subTest(arguments=arguments, environment=environment), self.assertRaisesRegex(ValueError, message):
+                self.run_locked(arguments, environment)
+        for action in (["run", "--profile", "dev", "--", "cargo", "build"], ["prepare", "--profile", "dev"]):
+            with self.subTest(action=action), patch.object(BUILD, "repository", return_value=self.state), \
+                    patch.object(BUILD.Path, "cwd", return_value=self.root), patch.dict(os.environ, parent, clear=True), \
+                    patch.object(sys, "argv", [str(SCRIPT), *action]), self.assertRaisesRegex(ValueError, "nested"):
+                BUILD.main()
 
     def test_slot_count_comes_from_the_flag_then_the_environment(self):
-        self.assertEqual(BUILD.slot_count(None), 2)
+        self.assertEqual(BUILD.slot_count(None), 4)
+        self.assertEqual(BUILD.slot_count(""), 4)
         self.assertEqual(BUILD.slot_count("5"), 5)
         for invalid in ("0", "17", "-1", "two"):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "build slots"):
@@ -470,7 +722,7 @@ class WorktreeBuildTest(unittest.TestCase):
         def fingerprint(root, profile, environ):
             identities.append(dict(environ))
             return "host"
-        for flags, environment, jobs in (([], {}, "8"), (["--slots", "4"], {}, "4"), ([], {"CUPERTINO_BUILD_SLOTS": "3"}, "5"),
+        for flags, environment, jobs in (([], {}, "4"), (["--slots", "2"], {}, "8"), ([], {"CUPERTINO_BUILD_SLOTS": "3"}, "5"),
                                          (["--slots", "1"], {"CUPERTINO_BUILD_SLOTS": "2"}, "16")):
             command = [str(SCRIPT), "run", "--profile", "dev", *flags, "--", "cargo", "build"]
             with self.subTest(flags=flags, environment=environment), \

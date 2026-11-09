@@ -2,15 +2,17 @@
 """Keep Cargo targets private to a worktree and bound how many expensive local builds run at once.
 
 Run from the worktree root. All cooperating worktrees share per-user build slots: `run`, a plain
-`prepare` and `cleanup --target` take one of N slots (--slots or CUPERTINO_BUILD_SLOTS, default 2)
-and give their child about 1/N of the processors; seed and package operations take every slot.
-One operation at a time uses a worktree's target. The child inherits its locks, so killing this wrapper does not
-release a running build.
-Seeds are explicitly promoted snapshots, never arbitrary target directories.
+`prepare` and `cleanup --target` take one of N slots (--slots or CUPERTINO_BUILD_SLOTS, default 4)
+and give their child about 1/N of the processors; seed operations and `locked` take every slot, and
+`locked --hold one|none` lets a package script take them per phase. One operation at a time uses a
+worktree's target. The child inherits its locks, so killing this wrapper does not release a running build.
+Seeds are explicitly promoted snapshots, never arbitrary target directories; `refresh-seed` replaces one in place.
 """
 import argparse
 import contextlib
+import ctypes
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -24,7 +26,7 @@ import subprocess
 import sys
 import time
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import TypedDict, cast
 
 # Reserve room for the desktop and other work before starting a protected operation.
@@ -33,8 +35,14 @@ DISK_FLOOR = 30 * 1024**3
 SEED_LIMIT = 1
 SEED_AGE = 7 * 24 * 60 * 60
 MARKER = ".cupertino-build.json"
-# How many shared operations run at once unless --slots or the variable below says otherwise.
-DEFAULT_SLOTS = 2
+# The marker and fingerprint layout. Schema 1 also hashed every manifest and Cargo.lock; its markers are still accepted
+# while their inputs are exactly unchanged (legacy_fingerprint), and refused with "re-prepare" otherwise.
+SCHEMA = 2
+# A seed being written or replaced lives under this prefix, which no seed name can start with.
+STAGING = "."
+# How many shared operations run at once unless --slots or the variable below says otherwise. With 16 processors each
+# slot's child gets 4 jobs, so at most 16 compilers or linkers run at once (CONTRIBUTING.md has the memory budget).
+DEFAULT_SLOTS = 4
 SLOTS_VARIABLE = "CUPERTINO_BUILD_SLOTS"
 # An exclusive operation takes every slot up to this bound, whatever N each caller chose.
 MAX_SLOTS = 16
@@ -45,18 +53,41 @@ TICKET = re.compile(r"[0-9]{20}-[0-9]+-(whole|shared)")
 # Parallelism caps given to a shared operation's child: they change how fast it runs, never what it produces.
 JOB_VARIABLES = ("CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS", "RUST_TEST_THREADS")
 UNFINGERPRINTED = frozenset({"CARGO_TARGET_DIR", "CUPERTINO_BUILD_LOCK_FD", SLOTS_VARIABLE, *JOB_VARIABLES})
-# Match compiler/build-tool inputs without tying snapshots to a terminal, credential or agent session.
+# The build environment in the fingerprint: variables the compiler, Cargo, a build script or a compile-time env!/option_env!
+# reads. A variable only a test or a running program reads (CUPERTINO_UPDATE_GOLDENS, CUPERTINO_REPAINT_*,
+# CUPERTINO_SPEC_DIR, RUST_LOG, RUST_BACKTRACE, ...) is a runtime input and stays out, so setting it never refuses a seed
+# or a target. The project's own compile-time variables are listed by name; test-worktree-build.py fails when a build
+# script or env!/option_env! reads a CUPERTINO_ variable missing here.
+PROJECT_BUILD_VARIABLES = frozenset({
+    "CUPERTINO_THEME_DIR", "CUPERTINO_INSTALL_PREFIX", "CUPERTINO_BUILD_COMMIT", "CUPERTINO_ADMIN_GROUPS",
+})
 BUILD_ENV_NAMES = frozenset({
     "PATH", "HOME", "CC", "CXX", "CPP", "AS", "AR", "LD", "NM", "RANLIB", "STRIP", "OBJCOPY", "OBJDUMP",
     "CFLAGS", "CXXFLAGS", "CPPFLAGS", "ASFLAGS", "ARFLAGS", "LDFLAGS", "LIBRARY_PATH", "LD_LIBRARY_PATH",
     "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIBCLANG_PATH", "CLANG_PATH", "LLVM_CONFIG_PATH",
     "MAKE", "MAKEFLAGS", "MFLAGS", "CMAKE", "HOST", "TARGET", "OPT_LEVEL", "DEBUG", "PROFILE", "NUM_JOBS",
+    *PROJECT_BUILD_VARIABLES,
 })
 BUILD_ENV_PREFIXES = (
+    "CARGO_", "RUSTC", "RUSTDOC", "RUSTFLAGS", "RUSTUP_", "SCCACHE_", "PKG_CONFIG", "BINDGEN_", "CMAKE_", "LLVM_",
+    "CLANG_", "CC_", "CXX_", "CPP_", "AS_", "AR_", "LD_", "NM_", "RANLIB_", "STRIP_",
+    "CFLAGS_", "CXXFLAGS_", "CPPFLAGS_", "ASFLAGS_", "ARFLAGS_", "LDFLAGS_", "HOST_", "TARGET_",
+)
+# Cargo variables that change only its terminal output.
+RUNTIME_PREFIXES = ("CARGO_TERM_",)
+# Schema 1's environment scope, kept only to recognise its markers (legacy_fingerprint).
+LEGACY_ENV_PREFIXES = (
     "CARGO_", "RUST", "CUPERTINO_", "SCCACHE_", "PKG_CONFIG", "BINDGEN_", "CMAKE_", "LLVM_", "CLANG_",
     "CC_", "CXX_", "CPP_", "AS_", "AR_", "LD_", "NM_", "RANLIB_", "STRIP_",
     "CFLAGS_", "CXXFLAGS_", "CPPFLAGS_", "ASFLAGS_", "ARFLAGS_", "LDFLAGS_", "HOST_", "TARGET_",
 )
+# What a `locked` child holds: "every" slot, "one", or "none" (the worktree lease alone). Only a child holding none may
+# call `locked` again, from the same worktree, to take slots for one phase.
+HOLD_VARIABLE = "CUPERTINO_BUILD_LOCK_HOLD"
+HOLDS = ("every", "one", "none")
+# Swap two directory entries in one step (renameat2), so a seed's name always holds a whole seed.
+AT_FDCWD = -100
+RENAME_EXCHANGE = 2
 
 
 class Metadata(TypedDict):
@@ -249,16 +280,9 @@ def disk_room(path: Path) -> None:
         raise ValueError(f"{path}: {free / 1024**3:.1f} GiB free; require {DISK_FLOOR / 1024**3:.0f} GiB")
 
 
-def fingerprint(root: Path, profile: str, environ: dict[str, str]) -> str:
-    """Conservatively match host, toolchain, profiles, config and known build environment inputs.
-
-    Cargo still validates source/dependency freshness after a snapshot is cloned.
-    Hash values rather than recording potentially private environment contents.
-    """
-    tracked = output(["git", "ls-files", "-z"], root).split("\0")
-    inputs = {name: (root / name).read_text() for name in tracked
-              if name and (Path(name).name in {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml"}
-                           or name.startswith(".cargo/"))}
+def cargo_configs(root: Path, environ: dict[str, str], tracked: list[str]) -> dict[str, str]:
+    """Every Cargo configuration file a build here reads: tracked ones, the worktree's and its parents', and CARGO_HOME's."""
+    inputs = {name: (root / name).read_text() for name in tracked if name.startswith(".cargo/")}
     cargo_home = Path(environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
     for directory in [cargo_home, root / ".cargo", *[parent / ".cargo" for parent in root.parents]]:
         for name in ("config", "config.toml"):
@@ -271,22 +295,76 @@ def fingerprint(root: Path, profile: str, environ: dict[str, str]) -> str:
             configuration = tomllib.loads(contents)
             if "build-dir" in configuration.get("build", {}) or "include" in configuration:
                 raise ValueError(f"{name}: external build directories and config includes are unsupported")
+    return inputs
+
+
+def build_environment(environ: dict[str, str]) -> dict[str, str]:
+    """The build inputs among the environment variables (see PROJECT_BUILD_VARIABLES for the rule)."""
     environment = {key: value for key, value in environ.items()
                    if (key in BUILD_ENV_NAMES or key.startswith(BUILD_ENV_PREFIXES))
+                   and not key.startswith(RUNTIME_PREFIXES) and key not in UNFINGERPRINTED}
+    environment["CARGO_INCREMENTAL"] = "0"
+    return environment
+
+
+def host_identity(root: Path, environ: dict[str, str]) -> dict[str, str]:
+    return {"rustc": output([environ.get("RUSTC", "rustc"), "-vV"], root), "cargo": output(["cargo", "-vV"], root),
+            "host": platform.platform(), "os": Path("/etc/os-release").read_text()}
+
+
+def fingerprint(root: Path, profile: str, environ: dict[str, str]) -> str:
+    """Match what can make a reused target wrong, or worthless, without Cargo noticing it crate by crate.
+
+    Hashed: the rust-toolchain files, every Cargo configuration file, the root manifest's [profile] tables, the profile
+    name, `rustc -vV` and `cargo -vV`, the host and OS, and the build environment (build_environment).
+    Not hashed: the manifests' packages and dependencies, Cargo.lock, [workspace.lints] (it changes diagnostics, not
+    code) and the sources. Cargo checks each crate's freshness against those after a clone and rebuilds only what
+    changed, so a branch that adds a dependency keeps its target and can still start from the seed.
+    Values are hashed, never recorded, as the environment may hold private paths.
+    """
+    tracked = output(["git", "ls-files", "-z"], root).split("\0")
+    inputs = {name: (root / name).read_text() for name in tracked
+              if name and Path(name).name in {"rust-toolchain", "rust-toolchain.toml"}}
+    inputs.update(cargo_configs(root, environ, tracked))
+    manifest = root / "Cargo.toml"
+    profiles = tomllib.loads(manifest.read_text()).get("profile", {}) if manifest.exists() else {}
+    identity = {"schema": SCHEMA, "profile": profile, "profiles": profiles, "environment": build_environment(environ),
+                "inputs": inputs, **host_identity(root, environ)}
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
+def legacy_fingerprint(root: Path, profile: str, environ: dict[str, str]) -> str:
+    """Schema 1's fingerprint of the same inputs: it also hashed every manifest and Cargo.lock and a wider environment.
+
+    A schema 1 marker whose value still matches was made from exactly these inputs, which include everything schema 2
+    hashes, so the target or seed is reused as it is. Remove this once no schema 1 seed or target is left.
+    """
+    tracked = output(["git", "ls-files", "-z"], root).split("\0")
+    inputs = {name: (root / name).read_text() for name in tracked
+              if name and Path(name).name in {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml"}}
+    inputs.update(cargo_configs(root, environ, tracked))
+    environment = {key: value for key, value in environ.items()
+                   if (key in BUILD_ENV_NAMES - PROJECT_BUILD_VARIABLES or key.startswith(LEGACY_ENV_PREFIXES))
                    and key not in UNFINGERPRINTED
                    and not key.startswith("CUPERTINO_TEST_FIXTURE_")}
     environment["CARGO_INCREMENTAL"] = "0"
     identity = {"schema": 1, "profile": profile, "environment": environment, "inputs": inputs,
-                "rustc": output([environ.get("RUSTC", "rustc"), "-vV"], root), "cargo": output(["cargo", "-vV"], root),
-                "host": platform.platform(), "os": Path("/etc/os-release").read_text()}
+                **host_identity(root, environ)}
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
+def matches(metadata: Metadata, identity: str, legacy: Callable[[], str] | None) -> bool:
+    """Whether a marker was made from these inputs; a schema 1 one is compared with schema 1's fingerprint."""
+    if metadata["schema"] == SCHEMA:
+        return metadata["fingerprint"] == identity
+    return legacy is not None and metadata["fingerprint"] == legacy()
 
 
 def read_marker(directory: Path, owner: str) -> Metadata:
     if directory.is_symlink() or not directory.is_dir() or (directory / MARKER).is_symlink():
         raise ValueError(f"{directory}: refusing an unmanaged directory or symlink")
     metadata = json.loads((directory / MARKER).read_text())
-    if not isinstance(metadata, dict) or metadata.get("owner") != owner or metadata.get("schema") != 1:
+    if not isinstance(metadata, dict) or metadata.get("owner") != owner or metadata.get("schema") not in (1, SCHEMA):
         raise ValueError(f"{directory}: ownership marker does not match")
     if not isinstance(metadata.get("fingerprint"), str) or type(metadata.get("successful")) is not bool \
             or not isinstance(metadata.get("created"), (int, float)):
@@ -361,14 +439,23 @@ def seed_directory(state: Path) -> Path:
     return seeds
 
 
-def prepare(root: Path, state: Path, identity: str, seed: str | None, leases: tuple[int, ...]) -> Metadata:
+def prepare(root: Path, state: Path, identity: str, seed: str | None, leases: tuple[int, ...],
+            legacy: Callable[[], str] | None = None) -> Metadata:
     target = root / "target"
     if target.exists() or target.is_symlink():
         metadata = read_marker(target, str(root))
-        if metadata.get("fingerprint") != identity:
-            raise ValueError("target build inputs changed; cleanup --target, then prepare again")
+        if not matches(metadata, identity, legacy):
+            if metadata["schema"] != SCHEMA:
+                raise ValueError("target was prepared by an older worktree-build.py from other inputs; "
+                                 "cleanup --target, then prepare again")
+            raise ValueError("target toolchain, profile, Cargo configuration or build environment changed; "
+                             "cleanup --target, then prepare again")
         if seed is not None:
             raise ValueError("a seed can only be applied to an absent target")
+        if metadata["schema"] != SCHEMA:
+            metadata = Metadata(schema=SCHEMA, owner=metadata["owner"], fingerprint=identity,
+                                successful=metadata["successful"], created=metadata["created"])
+            write_marker(target, metadata)
         return metadata
     disk_room(root)
     if seed is None:
@@ -376,12 +463,15 @@ def prepare(root: Path, state: Path, identity: str, seed: str | None, leases: tu
     else:
         source = seed_directory(state) / seed
         metadata = read_marker(source, str(state))
-        if metadata.get("fingerprint") != identity:
+        if not matches(metadata, identity, legacy):
+            if metadata["schema"] != SCHEMA:
+                raise ValueError(f"seed {seed}: made by an older worktree-build.py from other inputs; "
+                                 "refresh-seed it, or prepare without --seed")
             raise ValueError(f"seed {seed}: incompatible toolchain, profile, configuration or environment")
         if time.time() - metadata["created"] >= SEED_AGE:
             raise ValueError(f"seed {seed}: expired; cleanup --expired-seeds")
         clone(source, target, root, leases)
-    metadata = Metadata(schema=1, owner=str(root), fingerprint=identity, successful=False, created=time.time())
+    metadata = Metadata(schema=SCHEMA, owner=str(root), fingerprint=identity, successful=False, created=time.time())
     write_marker(target, metadata)
     print(f"worktree-build: prepared {target}", flush=True)
     return metadata
@@ -413,23 +503,64 @@ def cargo_command(command: list[str], profile: str) -> list[str]:
     return command[:insertion] + [option, profile] + command[insertion:]
 
 
-def promote(root: Path, state: Path, identity: str, name: str, max_seed_gib: int, leases: tuple[int, ...]) -> None:
+def exchange(first: Path, second: Path) -> None:
+    """Swap two existing directory entries atomically: a reader of either name sees one whole directory or the other."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.renameat2(AT_FDCWD, os.fsencode(first), AT_FDCWD, os.fsencode(second), RENAME_EXCHANGE) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, f"cannot swap {first} and {second}: {os.strerror(error)}")
+
+
+def remove_staging(seeds: Path) -> None:
+    """Remove what a killed promotion left under a staging name. Only called while holding every slot."""
+    for entry in seeds.iterdir():
+        if entry.name.startswith(STAGING):
+            if entry.is_symlink() or not entry.is_dir():
+                entry.unlink()
+            else:
+                shutil.rmtree(entry)
+            print(f"worktree-build: removed unfinished seed {entry.name}", flush=True)
+
+
+def promote(root: Path, state: Path, identity: str, name: str, max_seed_gib: int, leases: tuple[int, ...],
+            replace: bool = False, legacy: Callable[[], str] | None = None) -> None:
+    """Snapshot this worktree's successful target as seed `name`; with `replace`, swap it for the seed of that name.
+
+    The copy is made and marked under a staging name, then takes the seed's name in one rename (or one exchange with
+    the previous seed, which is removed afterwards), so no reader ever finds a half-written seed under the name.
+    """
     target = root / "target"
     metadata = read_marker(target, str(root))
-    if metadata.get("fingerprint") != identity or metadata.get("successful") is not True:
+    if not matches(metadata, identity, legacy) or metadata.get("successful") is not True:
         raise ValueError("only a target from a successful run with matching inputs can be promoted")
     seeds = seed_directory(state)
     seeds.mkdir(parents=True, exist_ok=True)
-    if len(list(seeds.iterdir())) >= SEED_LIMIT:
+    remove_staging(seeds)
+    destination = seeds / name
+    if destination.exists() or destination.is_symlink():
+        if not replace:
+            raise ValueError(f"seed {name} exists; refresh-seed replaces it")
+        read_marker(destination, str(state))
+    if len([entry for entry in seeds.iterdir() if entry.name != name]) >= SEED_LIMIT:
         raise ValueError(f"at most {SEED_LIMIT} seeds; cleanup --expired-seeds before promoting")
     size = sum(path.lstat().st_size for path in target.rglob("*")
                if path.is_file() and path.relative_to(target).parts[0] != "package-build")
     if max_seed_gib <= 0 or size > max_seed_gib * 1024**3:
         raise ValueError(f"target exceeds the positive --max-seed-gib budget ({max_seed_gib})")
     disk_room(seeds)
-    destination = seeds / name
-    clone(target, destination, root, leases)
-    write_marker(destination, Metadata(schema=1, owner=str(state), fingerprint=identity, successful=True, created=time.time()))
+    staging = seeds / f"{STAGING}{name}.new"
+    clone(target, staging, root, leases)
+    try:
+        write_marker(staging, Metadata(schema=SCHEMA, owner=str(state), fingerprint=identity, successful=True,
+                                       created=time.time()))
+        if destination.exists():
+            exchange(staging, destination)
+            print(f"worktree-build: replaced seed {name}", flush=True)
+        else:
+            staging.rename(destination)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
     print(f"worktree-build: promoted {destination}", flush=True)
 
 
@@ -441,6 +572,7 @@ def cleanup(root: Path, state: Path, target: bool, expired: bool) -> None:
         print(f"worktree-build: removed {directory}", flush=True)
     seeds = seed_directory(state) if expired else None
     if seeds is not None and seeds.exists():
+        remove_staging(seeds)
         for directory in seeds.iterdir():
             metadata = read_marker(directory, str(state))
             if time.time() - metadata["created"] >= SEED_AGE:
@@ -452,13 +584,41 @@ def interrupted(signum: int, frame: object) -> None:
     raise InterruptedError(f"received signal {signum}")
 
 
+def run_locked(command: list[str], root: Path, environ: dict[str, str], locks: Path, slots: int, hold: str) -> int:
+    """Run a package or container script holding this worktree's lease and `hold` slots.
+
+    Called from inside a `locked --hold none` child of the same worktree, it takes only the slots: the parent keeps
+    the worktree lease for its whole run, so a script can hold every slot for its compile and none while it waits on
+    the network or inspects packages.
+    """
+    nested = "CUPERTINO_BUILD_LOCK_FD" in environ
+    if nested and (environ.get(HOLD_VARIABLE) != "none" or environ.get("CUPERTINO_BUILD_LOCK_ROOT") != str(root)):
+        raise ValueError("nested worktree-build invocations would deadlock; wrap the outermost command only")
+    if nested and hold == "none":
+        raise ValueError("a locked --hold none command already holds this worktree")
+    with contextlib.ExitStack() as held:
+        leases: tuple[int, ...] = () if nested else (held.enter_context(worktree_lease(locks, root)),)
+        if hold != "none":
+            leases += held.enter_context(acquire(locks, slots, hold == "every"))
+        disk_room(root)
+        if "CARGO_TARGET_DIR" in environ:
+            destination = Path(environ["CARGO_TARGET_DIR"]).resolve()
+            while not destination.exists():
+                destination = destination.parent
+            disk_room(destination)
+        environment = {**environ, "CARGO_INCREMENTAL": "0", HOLD_VARIABLE: hold, "CUPERTINO_BUILD_LOCK_ROOT": str(root)}
+        status = child(command, root, environment, leases)
+        return status if status >= 0 else 128 - status
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
     shared = argparse.ArgumentParser(add_help=False)
     shared.add_argument("--slots", help=f"build slots shared by all worktrees (default ${SLOTS_VARIABLE} or {DEFAULT_SLOTS})")
-    for action in ("prepare", "run", "promote"):
-        sub = commands.add_parser(action, parents=[shared])
+    for action in ("prepare", "run", "promote", "refresh-seed"):
+        sub = commands.add_parser(action, parents=[shared], help={
+            "refresh-seed": "replace seed NAME with this worktree's successful target, atomically"}.get(action))
         sub.add_argument("--profile", required=True)
         if action == "prepare":
             sub.add_argument("--seed")
@@ -468,7 +628,9 @@ def main() -> int:
             sub.add_argument("--name", required=True)
             sub.add_argument("--max-seed-gib", type=int, required=True)
     locked = commands.add_parser("locked", parents=[shared],
-                                 help="hold every build slot around any command; preserve its target layout")
+                                 help="hold the worktree and every build slot (or --hold one|none) around any command; "
+                                      "preserve its target layout")
+    locked.add_argument("--hold", choices=HOLDS, default="every")
     locked.add_argument("command", nargs=argparse.REMAINDER)
     clean = commands.add_parser("cleanup", parents=[shared])
     clean.add_argument("--target", action="store_true")
@@ -482,27 +644,18 @@ def main() -> int:
     root = Path.cwd().resolve()
     state = repository(root, args.action == "locked") / "cupertino-build"
     environ = dict(os.environ)
-    if "CUPERTINO_BUILD_LOCK_FD" in environ:
-        raise ValueError("nested worktree-build invocations would deadlock; wrap the outermost command only")
     slots = slot_count(args.slots if args.slots is not None else environ.get(SLOTS_VARIABLE))
     locks = Path.home() / ".cache" / "cupertino-build"
-    # Shared operations touch only this worktree's target; seeds and package/container builds need every slot.
-    whole = (args.action in {"locked", "promote"} or (args.action == "prepare" and args.seed is not None)
-             or (args.action == "cleanup" and args.expired_seeds))
     if args.action == "locked":
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
         if not command:
             parser.error("locked requires a command")
-        with worktree_lease(locks, root) as own, acquire(locks, slots, whole) as slot_leases:
-            leases = (own, *slot_leases)
-            disk_room(root)
-            if "CARGO_TARGET_DIR" in environ:
-                destination = Path(environ["CARGO_TARGET_DIR"]).resolve()
-                while not destination.exists():
-                    destination = destination.parent
-                disk_room(destination)
-            status = child(command, root, {**environ, "CARGO_INCREMENTAL": "0"}, leases)
-            return status if status >= 0 else 128 - status
+        return run_locked(command, root, environ, locks, slots, args.hold)
+    if "CUPERTINO_BUILD_LOCK_FD" in environ:
+        raise ValueError("nested worktree-build invocations would deadlock; wrap the outermost command only")
+    # Shared operations touch only this worktree's target; seed operations need every slot.
+    whole = (args.action in {"promote", "refresh-seed"} or (args.action == "prepare" and args.seed is not None)
+             or (args.action == "cleanup" and args.expired_seeds))
     if any(name in environ for name in ("CARGO_BUILD_BUILD_DIR", "CARGO_BUILD_TARGET_DIR")):
         raise ValueError("remove Cargo build/target directory overrides")
     if "CARGO_TARGET_DIR" in environ and Path(environ["CARGO_TARGET_DIR"]).resolve() != root / "target":
@@ -514,14 +667,15 @@ def main() -> int:
             cleanup(root, state, args.target, args.expired_seeds)
             return 0
         identity = fingerprint(root, args.profile, environ)
+        legacy = functools.cache(functools.partial(legacy_fingerprint, root, args.profile, environ))
         if args.action == "prepare":
-            prepare(root, state, identity, args.seed, leases)
-        elif args.action == "promote":
-            promote(root, state, identity, args.name, args.max_seed_gib, leases)
+            prepare(root, state, identity, args.seed, leases, legacy)
+        elif args.action in {"promote", "refresh-seed"}:
+            promote(root, state, identity, args.name, args.max_seed_gib, leases, args.action == "refresh-seed", legacy)
         else:
             command = args.command[1:] if args.command[:1] == ["--"] else args.command
             command = cargo_command(command, args.profile)
-            metadata = prepare(root, state, identity, None, leases)
+            metadata = prepare(root, state, identity, None, leases, legacy)
             disk_room(root)
             metadata["successful"] = False
             write_marker(root / "target", metadata)

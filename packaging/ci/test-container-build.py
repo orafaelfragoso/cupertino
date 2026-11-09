@@ -159,6 +159,8 @@ else:
         self.assertIn('export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target', build_run[-1])
         self.assertIn('\nmkdir /src/target\n', build_run[-1])
         self.assertIn(' /dist /src /cargo-home${SCCACHE_DIR:+ /cache}\' EXIT', build_run[-1])
+        self.assertIn('trap \'if [ -n "${SCCACHE_DIR:-}" ]; then su builder -c "sccache --stop-server" || true; fi; chown',
+                      build_run[-1])
         self.assertIn('CARGO_BUILD_JOBS=' + self.processors, build_run)
         self.assertIn('CARGO_HOME=/cargo-home', build_run)
         cargo_home = self.root / 'target/package-build/arch/cargo-home'
@@ -365,7 +367,6 @@ else:
         self.assertIn('type=bind,src=' + str(cache / 'package/cargo-home') + ',dst=/cargo-home', build)
         self.assertIn('if [ -d /cache/sccache ]; then\n    export RUSTC_WRAPPER=/usr/bin/sccache SCCACHE_DIR=/cache/sccache '
                       'SCCACHE_CACHE_SIZE=12G', build[-1])
-        self.assertIn("su builder -c 'sccache --stop-server'", build[-1])
         self.assertIn("su builder -c 'cd /src/arch-build && makepkg --noconfirm'", build[-1])
         for kind in ('inspect', 'test'):
             self.assertFalse(any('/cache' in argument or '/cargo-home' in argument for argument in creates[kind][:-1]), kind)

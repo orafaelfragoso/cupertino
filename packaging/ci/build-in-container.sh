@@ -153,7 +153,8 @@ owner="$(id -u):$(id -g)"
 # The compile container: everything that compiles or runs tests, under every build slot.
 build_script=$(cat <<EOF
 set -euo pipefail
-trap 'chown -R $owner /dist /src /cargo-home\${SCCACHE_DIR:+ /cache}' EXIT
+# Stop sccache (printing its counters, also after a failure) before handing the cache back to the caller.
+trap 'if [ -n "\${SCCACHE_DIR:-}" ]; then su builder -c "sccache --stop-server" || true; fi; chown -R $owner /dist /src /cargo-home\${SCCACHE_DIR:+ /cache}' EXIT
 cd /src
 # Packages are stripped; generating debug information only consumes build storage.
 export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CARGO_PROFILE_RELEASE_DEBUG=0
@@ -165,7 +166,6 @@ mkdir /src/target
 chown -R builder /src/arch-build /src/target /cargo-home
 su builder -c 'cd /src/arch-build && makepkg --noconfirm'
 df -h /src | tee /dist/disk-after-makepkg.log
-if [ -n "\${SCCACHE_DIR:-}" ]; then su builder -c 'sccache --stop-server'; fi
 EOF
 )
 

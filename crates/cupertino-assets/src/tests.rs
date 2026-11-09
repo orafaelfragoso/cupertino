@@ -76,6 +76,72 @@ fn the_original_pack_explicitly_provides_every_contract_icon() {
     }
 }
 
+/// Every `"symbol.<name>"` string literal in the workspace's production sources (`crates/*/src`), with the file it
+/// is in. Asset file names (`symbol.svg`) are not logical names.
+fn requested_symbols() -> Vec<(String, PathBuf)> {
+    fn walk(dir: &Path, found: &mut Vec<(String, PathBuf)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = fs::read_to_string(&path).unwrap();
+                for (at, _) in text.match_indices("\"symbol.") {
+                    let rest = &text[at + 1..];
+                    let end = rest
+                        .find(|c: char| !(c.is_ascii_alphanumeric() || ".-_".contains(c)))
+                        .unwrap_or(rest.len());
+                    let name = &rest[..end];
+                    if rest[end..].starts_with('"')
+                        && name.len() > "symbol.".len()
+                        && !name.ends_with(".svg")
+                    {
+                        found.push((name.to_string(), path.clone()));
+                    }
+                }
+            }
+        }
+    }
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut found = Vec::new();
+    for krate in fs::read_dir(&crates).unwrap() {
+        let src = krate.unwrap().path().join("src");
+        if src.is_dir() {
+            walk(&src, &mut found);
+        }
+    }
+    found
+}
+
+#[test]
+fn every_symbol_the_code_requests_is_in_the_contract_and_the_original_pack() {
+    let requested = requested_symbols();
+    let distinct: std::collections::BTreeSet<_> =
+        requested.iter().map(|(n, _)| n.as_str()).collect();
+    // a scan of the wrong directory would find nothing and prove nothing
+    assert!(
+        distinct.len() >= SYMBOL_NAMES.len() / 2,
+        "only {} names found",
+        distinct.len()
+    );
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/assets/cupertino");
+    let assets = Assets::open(&root).expect("the original pack has no problems");
+    for (n, file) in &requested {
+        assert!(
+            SYMBOL_NAMES.contains(&n.as_str()),
+            "{n} ({}) is not in SYMBOL_NAMES",
+            file.display()
+        );
+        assert!(
+            sources(&assets, n, 24)
+                .iter()
+                .any(|s| matches!(s, IconSource::Symbol(_))),
+            "{n} ({}) is not in the original pack",
+            file.display()
+        );
+    }
+}
+
 fn sources(a: &Assets, n: &str, px: u32) -> Vec<IconSource> {
     // the packs' own sources: the built-in host-theme names that end every list have an empty pack path
     a.icon_sources(&name(n), px)

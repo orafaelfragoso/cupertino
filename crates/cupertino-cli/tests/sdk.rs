@@ -630,3 +630,23 @@ fn new_into_a_directory_it_cannot_write_is_denied() {
     assert_eq!(envelope["error"]["code"], "not_writable");
     assert_eq!(fs::read_dir(&locked).unwrap().count(), 0);
 }
+
+#[test]
+fn a_library_whose_offsets_overflow_is_unreadable() {
+    let root = tempfile::tempdir().unwrap();
+    install_sdk(root.path());
+    // the string table's offset is the largest there is, so its soname's offset overflows
+    let mut library = elf("libcupertinokit.so.1");
+    let sections = u64::from_le_bytes(library[0x28..0x30].try_into().unwrap()) as usize;
+    library[sections + 64 + 0x18..sections + 64 + 0x20].copy_from_slice(&u64::MAX.to_le_bytes());
+    fs::write(
+        root.path().join("usr/lib/libcupertinokit.so.1.0.0"),
+        library,
+    )
+    .unwrap();
+    let out = run_in(root.path(), &["--format", "json", "sdk", "info"]);
+    assert_eq!(out.code, 0);
+    let data = &json(&out)["data"];
+    assert_eq!(data["parts"][1]["status"], "unreadable");
+    assert_eq!(data["parts"][1]["detail"], "its offsets are not valid");
+}

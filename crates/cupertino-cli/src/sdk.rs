@@ -328,7 +328,12 @@ fn elf_soname(path: &Path) -> Result<Option<String>, String> {
     if shentsize < 64 || shnum > 4096 {
         return Err("its section headers are not valid".into());
     }
-    let section = |index: u64| read(shoff + index * shentsize, 64);
+    // every offset comes from the file, so each sum is checked: a corrupt file is an error, never an overflow
+    let sum = |base: u64, offset: u64| {
+        base.checked_add(offset)
+            .ok_or_else(|| "its offsets are not valid".to_string())
+    };
+    let section = |index: u64| read(sum(shoff, index * shentsize)?, 64);
     for index in 0..shnum {
         let s = section(index)?;
         const SHT_DYNAMIC: u32 = 6;
@@ -351,7 +356,7 @@ fn elf_soname(path: &Path) -> Result<Option<String>, String> {
                     if at >= str_size {
                         return Err("its soname is outside the string table".into());
                     }
-                    let bytes = read(str_offset + at, (str_size - at).min(4096) as usize)?;
+                    let bytes = read(sum(str_offset, at)?, (str_size - at).min(4096) as usize)?;
                     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
                     return String::from_utf8(bytes[..end].to_vec())
                         .map(Some)

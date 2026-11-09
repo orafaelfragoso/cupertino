@@ -1039,6 +1039,10 @@ pub struct TableView<M> {
     /// keyboard is on: a message takes the key, `None` lets it go on, so Tab moves the focus to the next control. A key
     /// on a column header never comes here.
     pub on_row_key: Option<RowKeyHandler<M>>,
+    /// How far a toolbar row over the table covers its top, for a table that fills a pane under the row
+    /// ([`NavigationStack::under_toolbar`], [`unobscured_insets`]); 0 for none. The header then sits below the row and
+    /// draws with it, raised, and the rows start below the header and scroll under both.
+    pub header_top: f64,
 }
 
 /// A [`TableView`] whose rows form an outline, as a [`TreeView`]'s do: each row's first cell comes after its indent and

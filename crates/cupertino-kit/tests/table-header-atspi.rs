@@ -115,6 +115,7 @@ impl Application for Files {
                 on_select: None,
                 on_activate: None,
                 on_row_key: None,
+                header_top: 0.0,
             }),
             menus: None,
         }]

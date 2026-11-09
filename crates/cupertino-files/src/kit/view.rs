@@ -751,6 +751,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         on_select: Some(send(id, Event::Select)),
         on_activate: Some(send(id, Event::Open)),
         on_row_key: Some(Box::new(list::tab(id, names, selected.cursor()))),
+        header_top: 0.0,
     };
     let count = table.count;
     let table = Element::from(OutlineTable {

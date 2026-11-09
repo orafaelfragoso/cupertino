@@ -888,6 +888,7 @@ fixtures! {
             on_select: Some(Box::new(|_| Message::Nothing)),
             on_activate: None,
             on_row_key: None,
+            header_top: 0.0,
         }
         .into()
     };

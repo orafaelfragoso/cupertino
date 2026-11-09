@@ -702,7 +702,8 @@ fn backdrop_material_pass_matches_the_cpu_reference() {
 
 /// The GLES glass pass against the CPU model of `cupertino-glass`: a rounded glass panel over the procedural wallpaper,
 /// whose colours change slowly enough that every blur level of it is the wallpaper itself, must match it within the
-/// error of the half-scale capture, in each appearance and with each accessibility recipe.
+/// error of the half-scale capture, in each appearance and with each accessibility recipe, for the regular style and
+/// the large-panel one, whose face saturates and caps its lightness.
 #[test]
 fn glass_pass_matches_the_cpu_model() {
     use cupertino_defaults::accessibility::DisplayOptions;
@@ -725,12 +726,16 @@ fn glass_pass_matches_the_cpu_model() {
         increase_contrast: ic,
         ..DisplayOptions::default()
     };
-    for (dark, display) in [
-        (false, options(false, false)),
-        (true, options(false, false)),
-        (true, options(true, false)),
-        (false, options(false, true)),
+    for (dark, display, style) in [
+        (false, options(false, false), GlassStyle::Regular),
+        (true, options(false, false), GlassStyle::Regular),
+        (true, options(true, false), GlassStyle::Regular),
+        (false, options(false, true), GlassStyle::Regular),
+        (false, options(false, false), GlassStyle::LargePanel),
+        (true, options(false, false), GlassStyle::LargePanel),
+        (true, options(true, false), GlassStyle::LargePanel),
     ] {
+        let large = style == GlassStyle::LargePanel;
         let appearance = if dark {
             Appearance::Dark
         } else {
@@ -740,11 +745,24 @@ fn glass_pass_matches_the_cpu_model() {
             let mut h = Harness::with_config(|c| c.appearance = appearance)?;
             h.state.cursor_status = CursorImageStatus::Hidden;
             h.state.accessibility.settings.display = display;
-            let client = with_panel.then(|| TestClient::spawn_with(h.socket_path(), panel));
-            if client.is_some() {
+            let client = with_panel.then(|| TestClient::spawn_at(h.socket_path(), panel, 10));
+            if let Some(client) = &client {
                 h.wait_until("the glass backdrop", |s| {
                     !layer_backdrops(&s.outputs[0].output).is_empty()
                 });
+                if large {
+                    client.send(Cmd::SetGlass(
+                        cupertino_backdrop_v1::GlassStyle::LargePanel,
+                        0,
+                        0.0,
+                    ));
+                    client.send(Cmd::Commit);
+                    h.wait_until("the large-panel glass", |s| {
+                        layer_backdrops(&s.outputs[0].output)
+                            .iter()
+                            .any(|b| b.glass.is_some_and(|g| g.style == style))
+                    });
+                }
             }
             for _ in 0..3 {
                 h.step();
@@ -760,7 +778,7 @@ fn glass_pass_matches_the_cpu_model() {
             let p = wall.get_pixel(x, y);
             [0, 1, 2].map(|c| p[c] as f32 / 255.0)
         };
-        let mode = cupertino_server::accessibility::glass_mode(dark, GlassStyle::Regular, display);
+        let mode = cupertino_server::accessibility::glass_mode(dark, style, display);
         let (x0, y0) = (panel.margin_left as f32, panel.margin_top as f32);
         let container = Container::new(
             vec![GlassShape::new([x0, y0, 400.0, 160.0], 24.0)],
@@ -773,6 +791,10 @@ fn glass_pass_matches_the_cpu_model() {
             for x in panel.margin_left - 4..panel.margin_left + 404 {
                 let p = [x as f32 + 0.5, y as f32 + 0.5];
                 let (c, cov) = container.shade(p, &|_, q| at(q[0], q[1]));
+                if large && cov == 0.0 {
+                    // the large panel's shadow falls outside its shape
+                    continue;
+                }
                 let under = at(p[0], p[1]);
                 let got = gpu.get_pixel(x as u32, y as u32);
                 for i in 0..3 {
@@ -788,12 +810,15 @@ fn glass_pass_matches_the_cpu_model() {
             }
         }
         let mean = sum / n as f64;
-        eprintln!("glass dark={dark} {display:?}: mean abs diff {mean:.3}, max {max}");
+        eprintln!("glass {style:?} dark={dark} {display:?}: mean abs diff {mean:.3}, max {max}");
         assert!(
             mean < 1.0 && max <= 8,
-            "glass dark={dark} {display:?}: GLES vs CPU mean {mean:.3} max {max}"
+            "glass {style:?} dark={dark} {display:?}: GLES vs CPU mean {mean:.3} max {max}"
         );
         assert!(changed > 400 * 160 / 2, "the glass pass ran");
+        if large {
+            continue;
+        }
         // the rim light lies along the light's axis: the top and the bottom edge lit, the sides not (measured on dark
         // glass at rest, where the light shows most)
         if !dark || display.reduce_transparency || display.increase_contrast {

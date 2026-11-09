@@ -84,8 +84,7 @@ const BAR_INSETS: Insets = Insets {
 };
 
 pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<Message> {
-    let browser = &win.browser;
-    let title = window_title(browser.dir(), &session.places);
+    let title = win.title(session);
     let state = win.menu_state(session);
     let bar = crate::menu_bar::menu_bar(&state);
     let disabled = BrowserWindow::disabled(&state);
@@ -221,24 +220,23 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         .iter()
         .map(|s| s.title.as_deref() == Some(PlaceGroup::Favorites.title()))
         .collect();
-    // the Tags section, once an item listed carries a tag: the colour tags first, in their order, then the others
+    // the Tags section, always there and empty until an item listed carries a tag: the colour tags first, in their
+    // order, then the others
     let tags = sidebar_tags(session);
-    if !tags.is_empty() {
-        sections.push(SidebarSection {
-            title: Some(TAGS_TITLE.into()),
-            items: tags
-                .iter()
-                .map(|name| SidebarItem {
-                    key: Key::from(format!("sidebar-tag/{name}")),
-                    label: name.clone(),
-                    icon: Some(TAG_SYMBOL.into()),
-                    description: None,
-                    accessory: None,
-                    busy: false,
-                })
-                .collect(),
-        });
-    }
+    sections.push(SidebarSection {
+        title: Some(TAGS_TITLE.into()),
+        items: tags
+            .iter()
+            .map(|name| SidebarItem {
+                key: Key::from(format!("sidebar-tag/{name}")),
+                label: name.clone(),
+                icon: Some(TAG_SYMBOL.into()),
+                description: None,
+                accessory: None,
+                busy: false,
+            })
+            .collect(),
+    });
     // a place about to spring open under a drag flashes as the selected one
     let flashing = win.springing.flashing().map(PathBuf::as_path);
     let selected = shown
@@ -588,13 +586,17 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
         label: String::new(),
         items: vec![
             item(None, "symbol.share", "Share", None, None),
-            item(
-                Some(popup_key(Popup::Tags)),
-                "symbol.tag",
-                "Tags",
-                popup(Popup::Tags),
-                Some(expanded(Popup::Tags) || win.tag_editor.is_some()),
-            ),
+            // an authored tag: the host's symbol themes may have none, and stand a different glyph in for it
+            ToolbarItem {
+                glyph: ToolbarGlyph::Tag,
+                ..item(
+                    Some(popup_key(Popup::Tags)),
+                    "",
+                    "Tags",
+                    popup(Popup::Tags),
+                    Some(expanded(Popup::Tags) || win.tag_editor.is_some()),
+                )
+            },
             ToolbarItem {
                 glyph: ToolbarGlyph::More,
                 ..item(
@@ -611,7 +613,7 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
     };
     vec![
         Element::new(ToolbarTitle {
-            text: window_title(win.browser.dir(), &session.places),
+            text: win.title(session),
         })
         .key("title"),
         Element::from(view_modes),

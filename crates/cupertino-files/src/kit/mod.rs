@@ -1936,6 +1936,16 @@ impl Session {
 }
 
 impl BrowserWindow {
+    /// The window's title: its folder's name, or in the column view the folder selected in the last column, whose
+    /// items the column after it shows.
+    pub(super) fn title(&self, session: &Session) -> String {
+        let child = (self.view == ViewMode::Columns)
+            .then(|| self.columns.chain(&self.browser).child)
+            .flatten();
+        let dir = child.as_deref().unwrap_or(self.browser.dir());
+        crate::places::window_title(dir, &session.places)
+    }
+
     /// After each event: the column view follows the folder and the selection, the preview window follows a single
     /// selected item and closes once its items are gone, and the texts previewed are read.
     fn follow_view(&mut self, session: &Session) {

@@ -109,15 +109,40 @@ fn right_goes_into_the_selected_folder_and_left_comes_back() {
     );
 
     run.key(LEFT, None);
-    run.wait_until(|run| run.title() == "Documents");
+    let previewed = |run: &Run| {
+        run.named(Role::Group)
+            .iter()
+            .any(|g| g.starts_with("Preview of"))
+    };
+    run.wait_until(|run| !previewed(run));
     assert_eq!(
         columns(&run),
         ["Documents", "Notes"],
         "the folder left stays selected"
     );
+    assert_eq!(run.title(), "Notes", "the title is the folder selected");
     // no Left past the folder the chain starts at
     run.key(LEFT, None);
+    assert_eq!(columns(&run), ["Documents", "Notes"]);
+    assert_eq!(run.title(), "Notes");
+}
+
+#[test]
+fn the_title_follows_the_folder_selected_in_a_column() {
+    let mut run = run();
     assert_eq!(run.title(), "Documents");
+    click_text(&mut run, "Notes");
+    run.wait_until(|run| run.title() == "Notes");
+    // the toolbar's title, in its row, follows the window's
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    assert!(snapshot.accessibility.iter().any(|(_, n)| {
+        n.role == Role::StaticText && n.name.as_deref() == Some("Notes") && n.bounds.max_y() <= 52.0
+    }));
+
+    // a file selected in the first column: its folder is the title again
+    click_text(&mut run, "b.txt");
+    run.wait_until(|run| run.title() == "Documents");
+    assert_eq!(columns(&run), ["Documents"]);
 }
 
 #[test]

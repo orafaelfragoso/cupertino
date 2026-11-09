@@ -87,7 +87,7 @@ pub enum BusEvent {
 }
 
 /// Records `power.suspend.failed`: the idle policy's system sleep did not happen, for `reason` (`no_system_bus`,
-/// `watcher_stopped`, `logind_refused`), with logind's answer when it gave one.
+/// `watcher_stopped`, `logind_refused`), with the name of logind's error when it gave one ([`error_name`]).
 fn suspend_failed(reason: &'static str, error: Option<&str>) {
     let mut event = diag::event(
         Severity::Error,
@@ -99,6 +99,18 @@ fn suspend_failed(reason: &'static str, error: Option<&str>) {
         event = event.field("error", Value::Public(error));
     }
     event.emit();
+}
+
+/// What an event keeps of a failed call to logind: the D-Bus error's name, else the kind of failure. Never logind's
+/// text: a refusal for an inhibitor names the program and the user that hold it and the reason they gave.
+fn error_name(error: &zbus::Error) -> String {
+    match error {
+        zbus::Error::MethodError(name, _, _) => name.to_string(),
+        zbus::Error::FDO(error) => zbus::DBusError::name(error.as_ref()).to_string(),
+        zbus::Error::InputOutput(_) => "io".to_owned(),
+        zbus::Error::Variant(_) => "reply".to_owned(),
+        _ => "bus".to_owned(),
+    }
 }
 
 /// What the main loop asks of the bus.
@@ -438,7 +450,7 @@ mod bus {
                         BusRequest::Suspend => {
                             if let Err(e) = conn.call_method(Some(LOGIND), LOGIND_PATH, Some(LOGIND_MANAGER), "Suspend", &false) {
                                 tracing::warn!(error = %e, "logind refused to put the system to sleep");
-                                super::suspend_failed("logind_refused", Some(&e.to_string()));
+                                super::suspend_failed("logind_refused", Some(&super::error_name(&e)));
                             }
                         }
                         BusRequest::HoldSleep => {
@@ -480,7 +492,7 @@ mod bus {
                 )
                 .field("what", Value::Public("sleep"))
                 .field("mode", Value::Public("delay"))
-                .field("error", Value::Public(&e.to_string()))
+                .field("error", Value::Public(&super::error_name(&e)))
                 .emit();
                 None
             }
@@ -651,7 +663,11 @@ mod tests {
         assert!(hearing.recv_timeout(Duration::from_millis(300)).is_err());
     }
 
-    /// logind as the watcher sees it: the manager object with no inhibitor blocking anything, and no sleep delay given.
+    /// How logind refuses for an inhibitor: it names the program and the user that hold it and their reason.
+    const INHIBITED: &str = "Operation inhibited by \"Mail\" (PID 4242 \"mail\", user mallory), reason is \"Sending taxes.pdf\".";
+
+    /// logind as the watcher sees it: the manager object with no inhibitor blocking anything, no sleep delay given, and
+    /// a sleep refused for an inhibitor.
     struct Logind;
 
     #[zbus::interface(name = "org.freedesktop.login1.Manager")]
@@ -668,14 +684,17 @@ mod tests {
             _why: &str,
             _mode: &str,
         ) -> zbus::fdo::Result<zbus::zvariant::OwnedFd> {
-            Err(zbus::fdo::Error::AccessDenied(
-                "no delay in this test".into(),
-            ))
+            Err(zbus::fdo::Error::AccessDenied(INHIBITED.into()))
+        }
+
+        fn suspend(&self, _interactive: bool) -> zbus::fdo::Result<()> {
+            Err(zbus::fdo::Error::AccessDenied(INHIBITED.into()))
         }
     }
 
-    /// logind refuses the sleep delay the watcher takes as it starts (`power.inhibit.failed`) and has no `Suspend`, so the
-    /// idle policy's sleep fails (`power.suspend.failed`); without a bus the sleep fails before it is asked for.
+    /// logind refuses the sleep delay the watcher takes as it starts (`power.inhibit.failed`) and the idle policy's sleep
+    /// (`power.suspend.failed`), each for an inhibitor: the events keep the error's name, not logind's text with the
+    /// user, the program and its reason. Without a bus the sleep fails before it is asked for.
     #[test]
     fn a_refused_sleep_delay_and_a_failed_suspend_are_recorded() {
         use cupertino_diagnostic_events::{self as diag, Record};
@@ -719,16 +738,25 @@ mod tests {
         assert_eq!(suspends[0].fields.get("reason").unwrap(), "no_system_bus");
         assert!(suspends[0].fields.get("error").is_none());
         assert_eq!(suspends[1].fields.get("reason").unwrap(), "logind_refused");
-        let error = suspends[1].fields.get("error").unwrap().as_str().unwrap();
-        assert!(error.contains("UnknownMethod"), "{error}");
+        assert_eq!(
+            suspends[1].fields.get("error").unwrap(),
+            "org.freedesktop.DBus.Error.AccessDenied"
+        );
         assert!(suspends.iter().all(|r| r.severity == diag::Severity::Error));
         let inhibits = recorded("power.inhibit.failed");
         assert_eq!(inhibits.len(), 1, "{inhibits:?}");
         assert_eq!(inhibits[0].severity, diag::Severity::Warn);
         assert_eq!(inhibits[0].fields.get("what").unwrap(), "sleep");
         assert_eq!(inhibits[0].fields.get("mode").unwrap(), "delay");
-        let error = inhibits[0].fields.get("error").unwrap().as_str().unwrap();
-        assert!(error.contains("no delay in this test"), "{error}");
+        assert_eq!(
+            inhibits[0].fields.get("error").unwrap(),
+            "org.freedesktop.DBus.Error.AccessDenied"
+        );
+        for line in diag::recent() {
+            for private in ["mallory", "taxes"] {
+                assert!(!line.contains(private), "{private} in {line}");
+            }
+        }
     }
 
     #[test]

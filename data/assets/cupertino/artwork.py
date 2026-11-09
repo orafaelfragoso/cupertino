@@ -432,7 +432,7 @@ class Artwork:
             return result
         arrow = 'M174 826V609C174 435 284 344 467 344H571V209C571 190 583 184 598 197L883 435C901 450 901 468 883 483L598 720C583 733 571 726 571 708V571H467C381 571 328 609 328 693V826C328 846 314 860 294 860H208C188 860 174 846 174 826Z'
         result = self.shadow(path(arrow,'#253e5f'),y=12,strength=.26)
-        result += path(arrow,'url(#paper)','stroke="#3f6386" stroke-width="38" stroke-linejoin="round"' if self.small else 'stroke="#7396b7" stroke-width="9" stroke-linejoin="round"')
+        result += path(arrow,'url(#paper)','stroke="#3f6386" stroke-width="38" stroke-linejoin="round"' if self.small else 'stroke="#5b7fa4" stroke-width="13" stroke-linejoin="round"')
         result += path(arrow,'url(#glass)','opacity=".22" filter="url(#glass-bevel)"')
         return group(result,'transform="translate(-77 -80) scale(1.15)"')
 

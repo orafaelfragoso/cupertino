@@ -26,6 +26,8 @@ pub enum Toggle {
     NotificationCentre,
     /// The panel of `cupertino-launcher`.
     Launcher,
+    /// The application browser of `cupertino-launcher`.
+    Applications,
     /// The panel of `cupertino-controlcenter`.
     ControlPanel,
 }
@@ -107,6 +109,13 @@ impl Request {
                 "/org/cupertino/Launcher1",
                 "org.cupertino.Launcher1",
                 "Toggle",
+                Body::Empty,
+            ),
+            Request::Toggle(Toggle::Applications) => (
+                "org.cupertino.Launcher1",
+                "/org/cupertino/Launcher1",
+                "org.cupertino.Launcher1",
+                "ToggleApplications",
                 Body::Empty,
             ),
             Request::Toggle(Toggle::ControlPanel) => (
@@ -870,6 +879,12 @@ impl crate::state::Cupertino {
     /// Ask the launcher process to show or hide its panel.
     pub fn toggle_launcher(&mut self) {
         self.shell_call(Request::Toggle(Toggle::Launcher));
+    }
+
+    /// Ask the launcher process to show or hide its application browser (the app-grid action: its shortcut, the
+    /// Dock's hot corner or gesture).
+    pub fn toggle_applications(&mut self) {
+        self.shell_call(Request::Toggle(Toggle::Applications));
     }
 
     /// Ask the control panel process to show or hide its panel.

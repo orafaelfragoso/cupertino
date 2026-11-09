@@ -1835,59 +1835,72 @@ fn the_dock_process_opens_a_menu_above_what_was_clicked_inside_the_output() {
     );
 }
 
-/// The application grid is the dock process's alone: the forwarded action makes it map a keyboard-exclusive overlay
-/// surface over the output, the menu bar included, above the dock bar, and draw its panel; Escape, delivered to that
-/// surface, collapses the panel to its search field, and a second Escape removes it after the exit animation.
+/// The launcher's layer whose window is `width` points wide (the panel; its catcher covers the output and its hidden
+/// window is a point).
+fn launcher_panel(state: &Cupertino, width: i32) -> bool {
+    let Some(output) = state.outputs.first() else {
+        return false;
+    };
+    let map = layer_map_for_output(&output.output);
+    let found = map
+        .layers()
+        .filter(|l| l.namespace() == "cupertino-launcher")
+        .filter_map(|l| map.layer_geometry(l))
+        .any(|g| g.size.w == width);
+    found
+}
+
+/// The app-grid action opens the launcher process's application browser (the server calls it on the session bus), a
+/// panel wider than the search field's; Escape folds it into the search field, and a second Escape closes it.
 #[test]
-fn the_dock_process_opens_the_app_grid_on_the_action_and_escape_closes_it() {
+fn the_app_grid_action_opens_the_launcher_s_browser_and_escape_folds_then_closes_it() {
     const ESCAPE: u32 = 1 + 8;
-    const GRID: &str = "cupertino-dock-app-grid";
+    // the panels' windows: the browser and the search field, each with the room for its shadow
+    const BROWSER: i32 = 842 + 120;
+    const SEARCH: i32 = 640 + 120;
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let Some(mut server) = Server::start(
-        vec![
-            real_process("cupertino-dock", &bus),
-            real_process("cupertino-menubar", &bus),
-        ],
-        true,
-    ) else {
+    let empty = TempDir::new("launcher-browser-no-host-data");
+    let mut launcher = real_process_without_host_data("cupertino-launcher", &bus, &empty.0);
+    launcher.command.push("--no-files".into());
+    let Some(mut server) = Server::start(vec![launcher], true) else {
         return;
     };
-    let output = server
-        .state
-        .outputs
-        .first()
-        .expect("the headless output")
-        .id;
-    server.wait_until("the dock and the menu bar to register", |s| {
-        s.dock_rect(output).is_some() && s.menu_bars.has_bar(output)
-    });
-    let bar = server.state.config.shell.menu_bar_height;
-    server.wait_until("the usable area to lose the dock zone", |s| {
-        s.usable_area(output).h < f64::from(OUTPUT.1) - bar
-    });
+    // the server asks the launcher on the session bus, the test's own
+    server.state.dbus = Some(
+        cupertino_server::dbus::DbusHandle::start_on(Some(bus.address.clone()), || {})
+            .expect("the control bus worker"),
+    );
+    let connection = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .build(),
+    )
+    .expect("connect to the test bus");
+    let owned = || {
+        zbus::block_on(connection.call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "NameHasOwner",
+            &"org.cupertino.Launcher1",
+        ))
+        .ok()
+        .and_then(|reply| reply.body().deserialize::<bool>().ok())
+        .unwrap_or(false)
+    };
+    server.wait_until(
+        "the launcher to map its hidden window and own its name",
+        |s| committed_buffer(s, "cupertino-launcher").is_some() && owned(),
+    );
     server.state.execute_plan(ActionPlan {
         commands: Vec::new(),
         ops: vec![ShellOp::ToggleAppGrid],
     });
-    // the panel and its search field are drawn whatever the host's desktop entries; the entry fades them in over 0.25 s
-    server.wait_until("the grid to be drawn", |s| {
-        committed_buffer(s, GRID)
-            .is_some_and(|(bytes, data)| opaque_brightness(&bytes, &data).len() >= 40)
-    });
-    let geometry = layer_geometry(&server.state, GRID).expect("the grid is mapped");
-    assert_eq!(
-        (geometry.loc.x, geometry.loc.y, geometry.size.w),
-        (0, 0, OUTPUT.0),
-        "the grid covers the menu bar, full width"
-    );
-    assert!(
-        geometry.size.h < OUTPUT.1,
-        "and stops above the dock bar: {geometry:?}"
-    );
-    for _ in 0..2 {
+    server.wait_until("the browser to open", |s| launcher_panel(s, BROWSER));
+    let escape = |server: &mut Server| {
         server
             .state
             .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Pressed, 0);
@@ -1896,9 +1909,14 @@ fn the_dock_process_opens_the_app_grid_on_the_action_and_escape_closes_it() {
             .state
             .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Released, 0);
         server.step();
-    }
-    server.wait_until("the grid to leave and go", |s| {
-        committed_buffer(s, GRID).is_none()
+    };
+    escape(&mut server);
+    server.wait_until("the browser to fold into the search field", |s| {
+        launcher_panel(s, SEARCH) && !launcher_panel(s, BROWSER)
+    });
+    escape(&mut server);
+    server.wait_until("the panel to close", |s| {
+        !launcher_panel(s, SEARCH) && !launcher_panel(s, BROWSER)
     });
 }
 

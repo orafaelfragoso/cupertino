@@ -1405,15 +1405,11 @@ fn the_auto_hide_shortcut_reaches_the_dock() {
     );
 }
 
-/// The app-grid action (shortcut, hot corner or gesture) is a `ShellOp` the server only forwards:
-/// every dock gets `toggle_app_grid` in a group of its own, and the server keeps nothing of it.
+/// The app-grid action (shortcut, hot corner or gesture) opens the launcher's application browser: the server asks
+/// the launcher on the session bus, and the dock hears nothing of it.
 #[test]
-fn the_app_grid_action_reaches_the_dock_as_a_toggle() {
+fn the_app_grid_action_goes_to_the_launcher_not_the_dock() {
     let Some(mut h) = Harness::new() else { return };
-    h.state.execute_plan(ActionPlan {
-        commands: Vec::new(),
-        ops: vec![ShellOp::ToggleAppGrid],
-    });
     let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     for _ in 0..2 {
@@ -1422,20 +1418,17 @@ fn the_app_grid_action_reaches_the_dock_as_a_toggle() {
             ops: vec![ShellOp::ToggleAppGrid],
         });
     }
-    h.wait_for_groups(&dock, 3);
+    // a later event shows whether anything came before it
+    h.state.docks.toggle_auto_hide();
+    h.wait_for_groups(&dock, 2);
     assert_eq!(
         dock.groups()[1],
-        vec![DockEvent::ToggleAppGrid, DockEvent::Done]
-    );
-    assert_eq!(
-        dock.groups()[2],
-        vec![DockEvent::ToggleAppGrid, DockEvent::Done],
-        "a second action is forwarded too: the dock decides whether it opens or closes"
+        vec![DockEvent::ToggleAutoHide, DockEvent::Done]
     );
     assert_eq!(dock.error(), None);
 }
 
-/// The Force Quit action is a `ShellOp` the server only forwards, like the app grid: the dock draws the dialog.
+/// The Force Quit action is a `ShellOp` the server only forwards: the dock draws the dialog.
 #[test]
 fn the_force_quit_action_opens_the_dialog_in_the_dock() {
     let Some(mut h) = Harness::new() else { return };

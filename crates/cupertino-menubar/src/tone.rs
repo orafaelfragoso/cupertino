@@ -10,13 +10,18 @@ pub type Rgba = [f32; 4];
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MenuPalette {
     pub text: Rgba,
+    /// What a disabled row's text, mark and arrow keep of the text's opacity: a quarter of full strength in all, half
+    /// with Increase Contrast ([`MenuPalette::high_contrast`]).
     pub disabled_alpha: f32,
     /// Fill behind the open title in the bar.
     pub bar_highlight: Rgba,
     /// Fill of the highlighted popup row and the text on it.
     pub row_highlight: Rgba,
     pub row_highlight_text: Rgba,
+    /// The search field's box, and the line between groups of rows unless Increase Contrast strengthens it.
     pub separator: Rgba,
+    /// The line between groups of rows.
+    pub rule: Rgba,
     /// The screen capture indicator: indigo, (99, 97, 241) dark and (84, 82, 204) light.
     pub screen_capture: Rgba,
 }
@@ -26,26 +31,48 @@ impl MenuPalette {
         if dark {
             Self {
                 text: [0.97, 0.97, 0.98, 0.95],
-                disabled_alpha: 0.4,
+                disabled_alpha: DISABLED_ALPHA,
                 bar_highlight: [1.0, 1.0, 1.0, 0.2],
                 row_highlight: [0.04, 0.45, 1.0, 1.0],
                 row_highlight_text: [1.0, 1.0, 1.0, 1.0],
                 separator: [1.0, 1.0, 1.0, 0.16],
+                rule: [1.0, 1.0, 1.0, 0.16],
                 screen_capture: [99.0 / 255.0, 97.0 / 255.0, 241.0 / 255.0, 1.0],
             }
         } else {
             Self {
                 text: [0.05, 0.05, 0.06, 0.92],
-                disabled_alpha: 0.4,
+                disabled_alpha: DISABLED_ALPHA,
                 bar_highlight: [0.0, 0.0, 0.0, 0.13],
                 row_highlight: [0.04, 0.45, 1.0, 1.0],
                 row_highlight_text: [1.0, 1.0, 1.0, 1.0],
                 separator: [0.0, 0.0, 0.0, 0.13],
+                rule: [0.0, 0.0, 0.0, 0.13],
                 screen_capture: [84.0 / 255.0, 82.0 / 255.0, 204.0 / 255.0, 1.0],
             }
         }
     }
+
+    /// The palette with Increase Contrast: disabled rows keep half the text's strength, readable yet apart from the
+    /// enabled ones, and the lines between groups of rows are stronger.
+    pub fn high_contrast(self) -> Self {
+        let mut rule = self.rule;
+        rule[3] = HIGH_CONTRAST_RULE_ALPHA;
+        Self {
+            disabled_alpha: HIGH_CONTRAST_DISABLED_ALPHA,
+            rule,
+            ..self
+        }
+    }
 }
+
+/// A disabled popup row's share of the text's opacity: with the text at 92–95 %, its text, mark and arrow end at about
+/// a quarter, the disabled text of the rest of the desktop.
+pub const DISABLED_ALPHA: f32 = 0.26;
+/// The same with Increase Contrast: about half.
+pub const HIGH_CONTRAST_DISABLED_ALPHA: f32 = 0.53;
+/// The line between groups of rows with Increase Contrast.
+pub const HIGH_CONTRAST_RULE_ALPHA: f32 = 0.47;
 
 /// Lightness of the wallpaper under the bar (CIE L*/100 in thousandths) at and above which the bar's text is dark.
 /// approximate.
@@ -381,6 +408,26 @@ mod tests {
         assert_eq!(spread_under(&bands, 400.0, 380.0, 420.0), Some(20));
         assert_eq!(spread_under(&bands, 400.0, -5.0, 0.0), Some(0));
         assert_eq!(spread_under(&[], 400.0, 10.0, 90.0), None);
+    }
+
+    /// A disabled popup row (its text, mark and arrow) shows about a quarter of the text's strength, as disabled text
+    /// does elsewhere, and about half with Increase Contrast; both stay well apart from the enabled rows, and Increase
+    /// Contrast strengthens the lines between groups.
+    #[test]
+    fn disabled_rows_recede_and_high_contrast_keeps_them_readable() {
+        for dark in [false, true] {
+            let normal = MenuPalette::new(dark);
+            let contrast = normal.high_contrast();
+            let shown = |p: MenuPalette| p.text[3] * p.disabled_alpha;
+            assert!((shown(normal) - 0.25).abs() < 0.02, "dark {dark}");
+            assert!((shown(contrast) - 0.5).abs() < 0.02, "dark {dark}");
+            assert!(contrast.rule[3] > normal.rule[3] * 2.0, "dark {dark}");
+            assert_eq!(
+                contrast.separator, normal.separator,
+                "the field's box stays"
+            );
+            assert_eq!(contrast.text, normal.text);
+        }
     }
 
     #[test]

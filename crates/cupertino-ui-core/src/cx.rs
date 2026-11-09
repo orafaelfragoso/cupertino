@@ -5,7 +5,7 @@ use crate::paint::NodeMaterial;
 use crate::route::Placement;
 use crate::widget::Change;
 use crate::{Environment, Key, NodeId, Phase, WindowKey};
-use cupertino_geometry::{Point, Rect, Size};
+use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{CursorShape, GlassRegion, GlassStyle, Timestamp};
 use cupertino_ui_render::{
@@ -351,6 +351,11 @@ pub struct PaintCx<'a> {
     pub(crate) lays_material: &'a mut bool,
     /// The ops [`PaintCx::fill_pixels`] and [`PaintCx::clip_pixels`] pushed, by index.
     pub(crate) pixels: &'a mut Vec<usize>,
+    /// How far raised nodes cover the node's edges ([`PaintCx::obscured`]).
+    pub(crate) obscured: Insets,
+    pub(crate) reads_obscured: &'a mut bool,
+    /// The window system draws raised nodes in a layer of their own, with their glass ([`PaintCx::raised_layer`]).
+    pub(crate) layer: bool,
 }
 
 impl PaintCx<'_> {
@@ -419,6 +424,21 @@ impl PaintCx<'_> {
     pub fn visible(&mut self) -> Rect {
         *self.reads_visible = true;
         self.visible
+    }
+
+    /// Whether the window system draws the window's raised nodes ([`Widget::raised`](crate::Widget::raised)) in a layer
+    /// over the rest of it, with the glass they ask for between the two, so what lies under them shows through their
+    /// glass. Without it they draw in place and paint their own fills.
+    pub fn raised_layer(&self) -> bool {
+        self.layer
+    }
+
+    /// How far the window's raised nodes ([`Widget::raised`](crate::Widget::raised)), such as a toolbar row over a page
+    /// that scrolls under it, cover the node's edges: what the node draws there lies under them. Zero for a raised node
+    /// itself and its subtree. The node paints again when it changes.
+    pub fn obscured(&mut self) -> Insets {
+        *self.reads_obscured = true;
+        self.obscured
     }
 
     /// Delivers [`Event::AnimationFrame`](crate::Event::AnimationFrame) to this node on the next frame, for what
@@ -863,6 +883,10 @@ pub struct OverlayCx<'a> {
     pub(crate) ops: &'a mut Vec<PaintOp>,
     /// What the overlay is clipped to, in window coordinates.
     pub(crate) clip: &'a mut Option<Rect>,
+    /// How far raised nodes cover the node's edges.
+    pub(crate) obscured: Insets,
+    /// The overlay draws under raised nodes too ([`OverlayCx::reach_obscured`]).
+    pub(crate) reach_obscured: &'a mut bool,
 }
 
 impl OverlayCx<'_> {
@@ -886,6 +910,45 @@ impl OverlayCx<'_> {
         self.ops.push(PaintOp::Fill {
             shape: cupertino_ui_render::Shape::Rect(pixel_fill(at, self.env.scale)),
             paint: cupertino_ui_render::Paint::Solid(color),
+        });
+    }
+
+    /// How far the window's raised nodes cover the node's edges ([`PaintCx::obscured`]).
+    pub fn obscured(&self) -> Insets {
+        self.obscured
+    }
+
+    /// An overlay is cut from the part of the window raised nodes cover, as a caret is under a toolbar row; this one
+    /// draws there too, as the edge of a page that scrolls under the row does.
+    pub fn reach_obscured(&mut self) {
+        *self.reach_obscured = true;
+    }
+
+    /// Fills `rect` (node coordinates) with `paint`, a gradient's points in node coordinates too.
+    pub fn fill(&mut self, rect: Rect, paint: cupertino_ui_render::Paint) {
+        use cupertino_ui_render::Paint;
+        let (dx, dy) = (self.origin.x, self.origin.y);
+        let moved = |p: Point| Point::new(p.x + dx, p.y + dy);
+        let paint = match paint {
+            Paint::Linear { start, end, stops } => Paint::Linear {
+                start: moved(start),
+                end: moved(end),
+                stops,
+            },
+            Paint::Radial {
+                center,
+                radius,
+                stops,
+            } => Paint::Radial {
+                center: moved(center),
+                radius,
+                stops,
+            },
+            solid => solid,
+        };
+        self.ops.push(PaintOp::Fill {
+            shape: cupertino_ui_render::Shape::Rect(rect.translate(dx, dy)),
+            paint,
         });
     }
 

@@ -114,6 +114,8 @@ impl Fixture {
                 backdrop: false,
                 materials: false,
                 now: Timestamp(0),
+                raised: &[],
+                layer: false,
             },
         )
     }
@@ -219,6 +221,8 @@ fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_sub
             backdrop: false,
             materials: false,
             now: Timestamp(0),
+            raised: &[],
+            layer: false,
         },
     );
     let [scroller, content] = &list.list.nodes[..] else {
@@ -367,6 +371,8 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
             backdrop: false,
             materials: false,
             now: Timestamp(0),
+            raised: &[],
+            layer: false,
         },
     );
     let node = &painting.list.nodes[0];
@@ -470,6 +476,8 @@ fn an_image_a_node_draws_travels_with_the_list_and_stays_when_the_node_is_reused
                 backdrop: false,
                 materials: false,
                 now: Timestamp(0),
+                raised: &[],
+                layer: false,
             },
         )
     };
@@ -584,6 +592,8 @@ fn a_node_s_material_is_cut_to_what_shows_and_capped_per_window_and_a_refused_on
                 backdrop: false,
                 materials,
                 now: Timestamp(0),
+                raised: &[],
+                layer: false,
             },
         )
     };
@@ -614,6 +624,7 @@ fn a_node_s_material_is_cut_to_what_shows_and_capped_per_window_and_a_refused_on
             rect: Rect::new(10.0, 0.0, 80.0, 5.0),
             radius: 6.0,
             alpha: 0.5,
+            raised: false,
         },
         "the popover's material, in window coordinates, cut by the viewport"
     );
@@ -747,6 +758,8 @@ fn glass_nodes_join_their_container_with_round_ends() {
             backdrop: false,
             materials: true,
             now: Timestamp(0),
+            raised: &[],
+            layer: false,
         },
     );
     let glass = GlassRegion {
@@ -763,6 +776,7 @@ fn glass_nodes_join_their_container_with_round_ends() {
                 radius: 18.0,
                 alpha: 1.0,
                 glass: Some(glass),
+                raised: false,
             },
             MaterialRegion {
                 material: "ClearGlass".into(),
@@ -770,6 +784,7 @@ fn glass_nodes_join_their_container_with_round_ends() {
                 radius: 18.0,
                 alpha: 1.0,
                 glass: Some(glass),
+                raised: false,
             },
         ],
         "both capsules, in the same container, opaque for an alpha that is not finite"
@@ -953,6 +968,8 @@ fn text_on_glass_takes_the_matrix_of_its_face_and_text_beside_it_keeps_the_theme
                 backdrop: false,
                 materials: true,
                 now: Timestamp(0),
+                raised: &[],
+                layer: false,
             },
         );
         let of = |id: NodeId| {
@@ -1068,6 +1085,8 @@ fn text_drawn_after_a_glass_node_and_inside_it_lies_on_that_glass() {
                 backdrop: false,
                 materials: true,
                 now: Timestamp(0),
+                raised: &[],
+                layer: false,
             },
         );
         let of = |id: NodeId| {
@@ -1148,6 +1167,8 @@ fn text_on_a_window_of_glass_takes_the_windows_tone() {
                 backdrop,
                 materials: true,
                 now: Timestamp(0),
+                raised: &[],
+                layer: false,
             },
         );
         fills(&painting.list.nodes[0])[0]
@@ -1294,6 +1315,8 @@ fn probed(beneath: Beneath, background: WindowBackground, shown: bool) -> bool {
             backdrop: shown,
             materials: shown,
             now: Timestamp(0),
+            raised: &[],
+            layer: false,
         },
     );
     seen.get().expect("the probe painted")
@@ -1421,6 +1444,8 @@ fn what_a_node_puts_on_device_pixels_lands_on_them_wherever_a_frame_draws_it() {
                 backdrop: false,
                 materials: false,
                 now: Timestamp(0),
+                raised: &[],
+                layer: false,
             },
         );
         let node = &painting.list.nodes[0];
@@ -1619,6 +1644,8 @@ impl Overlaid {
                 backdrop: false,
                 materials: false,
                 now: Timestamp(0),
+                raised: &[],
+                layer: false,
             },
         )
     }

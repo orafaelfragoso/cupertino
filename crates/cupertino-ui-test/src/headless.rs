@@ -45,6 +45,21 @@ struct HeadlessWindow {
     by_keyboard: bool,
     /// The last focus event queued for it said it has the keyboard.
     keyboard: bool,
+    /// Every raised layer presented over it, in order; `None` hid the layer.
+    layers: Vec<Option<PresentedLayer>>,
+}
+
+/// A raised layer as the window system received it ([`WindowSystem::present_layer`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentedLayer {
+    /// Its height in points, from the window's top edge.
+    pub height: u32,
+    pub width: u32,
+    /// Its height in pixels.
+    pub pixel_height: u32,
+    pub stride: u32,
+    pub pixels: Vec<u8>,
+    pub damage: Vec<cupertino_ui_render::PixelRect>,
 }
 
 /// A drag the runtime started, as the window system received it.
@@ -180,6 +195,7 @@ impl HeadlessWindowSystem {
                 buffer: Vec::new(),
                 by_keyboard: false,
                 keyboard: false,
+                layers: Vec::new(),
             },
         );
         id
@@ -349,6 +365,38 @@ impl HeadlessWindowSystem {
 
     pub fn unacknowledged(&self, window: WindowId) -> Result<&[ConfigureId], PlatformError> {
         Ok(&self.window(window)?.unacknowledged)
+    }
+
+    /// Every raised layer presented over `window`, in order; `None` hid it. Only with
+    /// [`Capabilities::raised_layer`].
+    pub fn layers(&self, window: WindowId) -> Result<&[Option<PresentedLayer>], PlatformError> {
+        Ok(&self.window(window)?.layers)
+    }
+
+    /// The pixels of `window`'s last frame with its raised layer drawn over them, as a compositor shows them (without
+    /// the materials between the two, which only a compositor draws). `None` before a frame that keeps its pixels.
+    pub fn composited(&self, window: WindowId) -> Result<Option<Vec<u8>>, PlatformError> {
+        let w = self.window(window)?;
+        let Some(frame) = w.frames.last().filter(|f| !f.pixels.is_empty()) else {
+            return Ok(None);
+        };
+        let mut out = frame.pixels.clone();
+        if let Some(Some(layer)) = w.layers.last() {
+            let row = (frame.width.min(layer.width) * 4) as usize;
+            let main_stride = out.len() / frame.height.max(1) as usize;
+            for y in 0..layer.pixel_height.min(frame.height) as usize {
+                let src = &layer.pixels[y * layer.stride as usize..][..row];
+                let dst = &mut out[y * main_stride..][..row];
+                for (d, s) in dst.chunks_mut(4).zip(src.chunks(4)) {
+                    // premultiplied: the layer over the content
+                    let a = u32::from(s[3]);
+                    for c in 0..4 {
+                        d[c] = (u32::from(s[c]) + u32::from(d[c]) * (255 - a) / 255).min(255) as u8;
+                    }
+                }
+            }
+        }
+        Ok(Some(out))
     }
 
     pub fn frames(&self, window: WindowId) -> Result<&[PresentedFrame], PlatformError> {
@@ -681,6 +729,30 @@ impl WindowSystem for HeadlessWindowSystem {
             acknowledged: configure,
             shown: false,
         });
+        Ok(PresentOutcome::Presented)
+    }
+
+    fn present_layer(
+        &mut self,
+        window: WindowId,
+        layer: Option<cupertino_ui_platform::RaisedLayer<'_>>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        if layer.is_some() && !self.capabilities.raised_layer {
+            return Err(PlatformError::Unsupported);
+        }
+        let accepting = self.accepting_frames;
+        let w = self.window_mut(window)?;
+        if !accepting {
+            return Ok(PresentOutcome::NotReady);
+        }
+        w.layers.push(layer.map(|l| PresentedLayer {
+            height: l.height,
+            width: l.frame.width,
+            pixel_height: l.frame.height,
+            stride: l.frame.stride,
+            pixels: l.frame.pixels.clone(),
+            damage: l.frame.damage.clone(),
+        }));
         Ok(PresentOutcome::Presented)
     }
 

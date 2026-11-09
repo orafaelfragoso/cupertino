@@ -1759,6 +1759,7 @@ mod window_system {
                     radius: 4.0,
                     alpha: 1.0,
                     glass: None,
+                    raised: false,
                 })
                 .collect::<Vec<_>>()
         };

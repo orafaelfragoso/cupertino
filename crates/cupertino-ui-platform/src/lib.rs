@@ -33,6 +33,9 @@ pub struct Capabilities {
     pub activation: bool,
     /// The desktop's optional public effects protocol (materials, blur); without it materials use their fallback.
     pub app_effects: bool,
+    /// A window may show a raised layer above its content ([`WindowSystem::present_layer`]), with the materials of its
+    /// raised regions ([`MaterialRegion::raised`]) between the two, reading what of the content lies below them.
+    pub raised_layer: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -184,6 +187,8 @@ pub struct Backdrop {
 /// A material of the theme data (`materials.json`) the compositor draws under one part of a window: `rect` in the
 /// window's coordinates with its corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque).
 /// With `glass`, the compositor draws glass there instead, and `material` names what a compositor without glass draws.
+/// A `raised` region lies above the window's content, under its raised layer ([`WindowSystem::present_layer`]), and
+/// reads the content below it; the others lie under all of the window's content.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MaterialRegion {
     pub material: String,
@@ -191,6 +196,15 @@ pub struct MaterialRegion {
     pub radius: f64,
     pub alpha: f64,
     pub glass: Option<GlassRegion>,
+    pub raised: bool,
+}
+
+/// The raised layer of a window ([`WindowSystem::present_layer`]): a frame drawn over the window's content from its top
+/// edge, as wide as the window and `height` whole points tall, at the window's scale.
+#[derive(Clone, Copy, Debug)]
+pub struct RaisedLayer<'a> {
+    pub frame: &'a CpuFrame,
+    pub height: u32,
 }
 
 /// The look of a glass region.
@@ -693,6 +707,22 @@ pub trait WindowSystem {
         frame: &CpuFrame,
         configure: Option<ConfigureId>,
     ) -> Result<PresentOutcome, PlatformError>;
+    /// Shows `layer` over the window's content with the window's next [`present`](WindowSystem::present), or hides it
+    /// then with `None`: the window's raised materials ([`MaterialRegion::raised`]) lie between the two. Like a present
+    /// it copies the frame's damage, plus whatever the buffer it is drawn into missed. `NotReady` keeps nothing: the
+    /// window presents neither this frame nor its content's until the layer can be drawn again. Needs
+    /// [`Capabilities::raised_layer`].
+    fn present_layer(
+        &mut self,
+        window: WindowId,
+        layer: Option<RaisedLayer<'_>>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        let _ = window;
+        match layer {
+            Some(_) => Err(PlatformError::Unsupported),
+            None => Ok(PresentOutcome::Presented),
+        }
+    }
     /// Waits up to `timeout` (`None`: until something happens) and appends what happened to `events`.
     fn dispatch(
         &mut self,

@@ -62,6 +62,18 @@ pub trait Widget<M>: 'static {
     /// ([`PaintCx::overlay`]), without painting the node again: a caret that blinks. Placed on whole device pixels of
     /// the window ([`OverlayCx`]).
     fn overlay(&self, _state: &Self::State, _cx: &mut OverlayCx<'_>) {}
+    /// Whether the node and its subtree draw in the window's raised layer: over everything else of the window, with
+    /// the glass they ask for between the two, so what the rest of the window draws under them shows through their
+    /// glass and does not cover it (a toolbar row over a page that scrolls under it). The layer runs from the
+    /// window's top edge; the part of the window a raised node covers is obscured for the rest of it
+    /// ([`PaintCx::obscured`]): scroll containers reveal what they scroll to below it and overlays such as a caret are
+    /// cut from it. Where the window system has no raised layer
+    /// ([`Capabilities::raised_layer`](cupertino_ui_platform::Capabilities)) the nodes draw in place, over what comes
+    /// before them, and paint their own fills for the materials they ask for. A widget whose answer changes returns
+    /// [`Change::Layout`] from its update.
+    fn raised(&self, _state: &Self::State) -> bool {
+        false
+    }
 }
 
 /// An immutable description of one widget and its children.
@@ -159,6 +171,7 @@ pub(crate) trait AnyWidget<M> {
     fn hit(&self, state: &dyn Any, point: Point) -> bool;
     fn target(&self, state: &dyn Any, env: &Environment) -> Size;
     fn overlay(&self, state: &dyn Any, cx: &mut OverlayCx<'_>);
+    fn raised(&self, state: &dyn Any) -> bool;
 }
 
 const STATE: &str = "a node's state is the one its widget type created";
@@ -231,5 +244,9 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn overlay(&self, state: &dyn Any, cx: &mut OverlayCx<'_>) {
         Widget::overlay(self, state.downcast_ref().expect(STATE), cx)
+    }
+
+    fn raised(&self, state: &dyn Any) -> bool {
+        Widget::raised(self, state.downcast_ref().expect(STATE))
     }
 }

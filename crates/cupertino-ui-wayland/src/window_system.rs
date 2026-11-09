@@ -20,8 +20,8 @@ use cupertino_ui_platform::{
     ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
     DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent, Keysym,
     MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
-    ScrollBars, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec,
-    WindowSystem,
+    RaisedLayer, ScrollBars, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest,
+    WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -112,6 +112,18 @@ struct Window {
     input_region: Option<Option<Vec<Rect>>>,
     /// The surface has the keyboard focus, between its `wl_keyboard.enter` and `leave`.
     keyboard: bool,
+    /// The subsurface the window's raised layer and raised materials are drawn in, once it showed one.
+    layer: Option<LayerSurface>,
+}
+
+/// The subsurface of a window's raised layer ([`WindowSystem::present_layer`]): at the window's top left corner, as wide
+/// as the window, over its content, and taking no input.
+struct LayerSurface {
+    surface: SurfaceId,
+    /// Damage of layer frames that were not shown, carried into the next.
+    carried: Vec<PixelRect>,
+    /// The pixel size of the layer frame shown last.
+    shown: Option<(u32, u32)>,
 }
 
 /// A toplevel's menus as the runtime asked for them, and their publication.
@@ -141,6 +153,13 @@ struct ShownBackdrop {
 struct ShownMaterial {
     material: Material,
     region: MaterialRegion,
+}
+
+/// Whether the backdrops of a window's raised regions can be drawn above its content, in a subsurface: the transport
+/// makes subsurfaces and the desktop draws their backdrops.
+fn layers_drawn(conn: &Connection, effects: Option<&AppEffects>) -> bool {
+    conn.capabilities().contains(Capability::Subsurface)
+        && effects.is_some_and(AppEffects::draws_subsurface_backdrops)
 }
 
 /// Gives `backdrop` its look: glass for `glass`, or for a glass material name of the theme, on its own; otherwise the
@@ -503,6 +522,7 @@ impl WaylandWindowSystem {
             menus: None,
             input_region: None,
             keyboard: false,
+            layer: None,
         });
         id
     }
@@ -665,6 +685,19 @@ impl WaylandWindowSystem {
         }
         let mut shown = std::mem::take(&mut self.window_mut(window)?.materials);
         shown.truncate(regions.len());
+        // a region moved between the content and the raised layer is made again on the other surface
+        if let Some(moved) = shown
+            .iter()
+            .zip(&regions)
+            .position(|(old, new)| old.region.raised != new.raised)
+        {
+            shown.truncate(moved);
+        }
+        let layer = if regions.iter().any(|r| r.raised) {
+            Some(self.layer_surface(window)?)
+        } else {
+            None
+        };
         let result = (|| {
             for (i, region) in regions.into_iter().enumerate() {
                 if let Some(old) = shown.get_mut(i) {
@@ -684,8 +717,12 @@ impl WaylandWindowSystem {
                     continue;
                 }
                 let (effects, _) = self.effects.as_ref().ok_or(PlatformError::Unsupported)?;
+                let on = match (region.raised, layer) {
+                    (true, Some(layer)) => layer,
+                    _ => surface,
+                };
                 let material = effects
-                    .backdrop(&self.conn, surface)
+                    .backdrop(&self.conn, on)
                     .map_err(|e| PlatformError::Protocol(e.to_string()))?;
                 set_look(&material, &region.material, region.glass).map_err(protocol)?;
                 material.set_alpha(region.alpha).map_err(protocol)?;
@@ -702,6 +739,25 @@ impl WaylandWindowSystem {
         }
         self.window_mut(window)?.materials = shown;
         result
+    }
+
+    /// The subsurface of `window`'s raised layer, made the first time it is needed. Its shapes and frames are in the
+    /// window's coordinates, as it lies at the window's top left corner.
+    fn layer_surface(&mut self, window: WindowId) -> Result<SurfaceId, PlatformError> {
+        if !layers_drawn(&self.conn, self.effects.as_ref().map(|(e, _)| e)) {
+            return Err(PlatformError::Unsupported);
+        }
+        let w = self.window(window)?;
+        if let Some(layer) = &w.layer {
+            return Ok(layer.surface);
+        }
+        let surface = self.conn.subsurface(w.surface).map_err(platform_error)?;
+        self.window_mut(window)?.layer = Some(LayerSurface {
+            surface,
+            carried: Vec::new(),
+            shown: None,
+        });
+        Ok(surface)
     }
 
     /// The window at `i` may draw again; whether the frame it asked for meanwhile is due now.
@@ -1094,6 +1150,7 @@ impl WindowSystem for WaylandWindowSystem {
             server_decorations: has(Capability::ServerDecoration),
             activation: has(Capability::Activation),
             app_effects: self.effects.is_some(),
+            raised_layer: layers_drawn(&self.conn, self.effects.as_ref().map(|(e, _)| e)),
         }
     }
 
@@ -1475,6 +1532,55 @@ impl WindowSystem for WaylandWindowSystem {
             Err(stall) => {
                 self.carry(window, damage, frame)?;
                 self.window_mut(window)?.stalled = stall;
+                Ok(PresentOutcome::NotReady)
+            }
+        }
+    }
+
+    /// The layer's subsurface commits now, synchronized: what it shows applies with the window's next commit.
+    fn present_layer(
+        &mut self,
+        window: WindowId,
+        layer: Option<RaisedLayer<'_>>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        let Some(layer) = layer else {
+            if let Some(shown) = self.window_mut(window)?.layer.as_mut() {
+                if shown.shown.take().is_some() {
+                    shown.carried.clear();
+                    let surface = shown.surface;
+                    self.conn
+                        .unmap_subsurface(surface)
+                        .map_err(platform_error)?;
+                }
+            }
+            return Ok(PresentOutcome::Presented);
+        };
+        let surface = self.layer_surface(window)?;
+        let width = self.window(window)?.size.0;
+        let size = (width, layer.height);
+        self.conn
+            .place_subsurface(surface, (0, 0), size)
+            .map_err(platform_error)?;
+        let frame = layer.frame;
+        let state = self.window_mut(window)?.layer.as_mut().expect("made above");
+        let resized = state.shown != Some((frame.width, frame.height));
+        let mut damage = std::mem::take(&mut state.carried);
+        damage.extend(frame.damage.iter().map(|r| PixelRect {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+        }));
+        match copy_and_present(&mut self.conn, surface, size, frame, &damage, resized)? {
+            Ok(()) => {
+                let state = self.window_mut(window)?.layer.as_mut().expect("made above");
+                state.shown = Some((frame.width, frame.height));
+                Ok(PresentOutcome::Presented)
+            }
+            Err(_) => {
+                let state = self.window_mut(window)?.layer.as_mut().expect("made above");
+                state.carried.extend(damage);
+                bound(&mut state.carried, frame.width, frame.height);
                 Ok(PresentOutcome::NotReady)
             }
         }

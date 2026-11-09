@@ -1496,6 +1496,52 @@ fn decorations_buttons_title_bar_and_resize_zones_drive_the_window() {
     drop(client);
 }
 
+/// A window control button its window cannot use stays in place, dimmed, and a click on it does nothing: no pressed
+/// look, no minimize, no zoom. Close is never disabled.
+#[test]
+fn a_disabled_window_button_takes_the_click_and_does_nothing() {
+    use cupertino_decorations::ButtonKind;
+    use cupertino_geometry::Size;
+
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_decorated(
+        h.socket_path(),
+        "org.example.deco",
+        (400, 300),
+        [0, 0, 255, 255],
+    );
+    let (id, frame) = h.mapped_window(1);
+    h.state.command(cupertino_wm::Command::SetDisabledControls {
+        window: id,
+        disabled: cupertino_wm::DisabledControls {
+            minimize: true,
+            zoom: true,
+        },
+    });
+    let layout = h.state.decor.decorations().layout(Size::new(400.0, 300.0));
+    for kind in [ButtonKind::Minimize, ButtonKind::Zoom] {
+        let c = layout.button(kind).center;
+        h.move_to(frame.x + c.x, frame.y + c.y);
+        h.press();
+        assert_eq!(h.state.decor.pressed, None, "{kind:?}: no pressed look");
+        h.release();
+        h.advance(1.0);
+        assert_eq!(
+            h.state.wm.window(id).unwrap().state(),
+            LifecycleState::Normal,
+            "{kind:?} does nothing"
+        );
+        assert_eq!(h.state.wm.window(id).unwrap().geometry(), frame);
+    }
+    // close still works
+    let c = layout.button(ButtonKind::Close).center;
+    h.move_to(frame.x + c.x, frame.y + c.y);
+    h.press();
+    assert_eq!(h.state.decor.pressed, Some((id, ButtonKind::Close)));
+    h.release();
+    h.wait_until("the client to see close", |_| client.closed());
+}
+
 #[test]
 fn clients_that_ask_for_client_side_decorations_keep_them() {
     let Some(mut h) = Harness::new() else { return };

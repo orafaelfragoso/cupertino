@@ -49,6 +49,7 @@ impl Application for Shell {
                 can_go_back: false,
                 can_go_forward: false,
                 on_navigate: None,
+                under_toolbar: false,
             }),
         }))
     }

@@ -52,6 +52,7 @@ impl<M: Clone + 'static> From<NavigationStack<M>> for Element<M> {
             spec: LayoutSpec {
                 width: SizeSpec::Fill,
                 height: SizeSpec::Fixed(TOOLBAR_ROW),
+                align_self: Some(Align::Start),
                 insets: Insets {
                     top: 0.0,
                     left: TOOLBAR_EDGE,
@@ -69,10 +70,17 @@ impl<M: Clone + 'static> From<NavigationStack<M>> for Element<M> {
             drag: true,
             children: std::iter::once(group).chain(stack.toolbar).collect(),
         });
+        // under the toolbar the row comes after the page: drawn over it, and the first to take the pointer
+        let children = if stack.under_toolbar {
+            vec![stack.content.fill(), header]
+        } else {
+            vec![header, stack.content.fill()]
+        };
         Element::new(Navigator {
             back,
             forward,
-            children: vec![header, stack.content.fill()],
+            under: stack.under_toolbar,
+            children,
         })
     }
 }
@@ -129,6 +137,8 @@ impl<M: 'static> Widget<M> for Slot<M> {
 struct Navigator<M> {
     back: Option<M>,
     forward: Option<M>,
+    /// The page fills the pane under the row.
+    under: bool,
     children: Vec<Element<M>>,
 }
 
@@ -136,16 +146,21 @@ impl<M: Clone + 'static> Widget<M> for Navigator<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
-        LayoutSpec {
-            width: SizeSpec::Fill,
-            height: SizeSpec::Fill,
-            flex: Flex::grow(1.0),
-            ..LayoutSpec::new(ContainerKind::Stack {
+        let kind = if self.under {
+            ContainerKind::Overlay
+        } else {
+            ContainerKind::Stack {
                 axis: Axis::Vertical,
                 spacing: 0.0,
                 align: Align::Stretch,
                 justify: Justify::Start,
-            })
+            }
+        };
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            flex: Flex::grow(1.0),
+            ..LayoutSpec::new(kind)
         }
     }
 
@@ -155,8 +170,12 @@ impl<M: Clone + 'static> Widget<M> for Navigator<M> {
 
     fn state(&self) {}
 
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.under != old.under {
+            Change::Layout
+        } else {
+            Change::None
+        }
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {

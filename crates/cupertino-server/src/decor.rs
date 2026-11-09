@@ -10,8 +10,8 @@ use std::hash::{Hash, Hasher};
 
 use cupertino_assets::{AssetError, Assets};
 use cupertino_decorations::{
-    ButtonKind, DecorationConfig, DecorationState, Decorations, DoubleClickAction, Edge, Hit,
-    ResizeEdge, ShadowParams, TitlebarStyle,
+    button_presence, ButtonKind, Capabilities, DecorationConfig, DecorationState, Decorations,
+    DoubleClickAction, Edge, FrameKind, Hit, ResizeEdge, ShadowParams, TitlebarStyle,
 };
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::{Appearance, Theme};
@@ -176,6 +176,20 @@ pub fn resize_cursor(edge: ResizeEdge, x: AxisFreedom, y: AxisFreedom) -> Option
     }
 }
 
+/// Which of close, minimize and zoom take clicks, from the window's capabilities: a window can always be closed, so its
+/// group always exists and keeps a button it cannot use in place, dimmed ([`button_presence`]).
+pub fn button_enabled(can_minimize: bool, can_zoom: bool) -> [bool; 3] {
+    button_presence(
+        FrameKind::Titled,
+        Capabilities {
+            closable: true,
+            minimizable: can_minimize,
+            resizable: can_zoom,
+        },
+    )
+    .map(|p| p.enabled())
+}
+
 impl Decor {
     pub fn new(appearance: Appearance, assets: &Assets) -> Result<Self, AssetError> {
         Ok(Self {
@@ -336,7 +350,7 @@ impl Decor {
             active: input.active,
             group_hovered: self.hover_group == Some(input.id),
             pressed: self.pressed.filter(|(w, _)| *w == input.id).map(|(_, k)| k),
-            enabled: [true, input.can_minimize, input.can_zoom],
+            enabled: button_enabled(input.can_minimize, input.can_zoom),
             title: input.title.to_string(),
             resizable: input.resizable,
         }
@@ -356,6 +370,7 @@ impl Decor {
                 state.active as u64,
                 state.group_hovered as u64,
                 pressed,
+                state.enabled[0] as u64,
                 state.enabled[1] as u64,
                 state.enabled[2] as u64,
                 appearance,
@@ -582,6 +597,26 @@ mod tests {
     }
 
     #[test]
+    fn a_button_that_changes_state_draws_the_title_bar_again() {
+        let mut d = decor(Appearance::Light);
+        d.buffers(&input(1, 400.0));
+        for (can_minimize, can_zoom) in [(false, true), (false, false), (true, false), (true, true)]
+        {
+            let before = d.renders;
+            d.buffers(&DecorInput {
+                can_minimize,
+                can_zoom,
+                ..input(1, 400.0)
+            });
+            assert_eq!(
+                d.renders,
+                before + 1,
+                "minimize {can_minimize}, zoom {can_zoom}"
+            );
+        }
+    }
+
+    #[test]
     fn insets_follow_the_titlebar_height() {
         let d = decor(Appearance::Light);
         assert_eq!(d.insets(TitlebarStyle::Standard).top, 32.0);
@@ -609,7 +644,7 @@ mod tests {
             "under the title bar"
         );
         assert_eq!(d.sheet_top(TitlebarStyle::Unified), Some(52.0));
-        assert_eq!(d.sheet_top(TitlebarStyle::UnifiedCompact), Some(38.0));
+        assert_eq!(d.sheet_top(TitlebarStyle::UnifiedCompact), Some(40.0));
         assert_eq!(d.sheet_top(TitlebarStyle::Sidebar), Some(52.0));
     }
 
@@ -618,7 +653,7 @@ mod tests {
         let mut d = decor(Appearance::Dark);
         for (style, row) in [
             (TitlebarStyle::Sidebar, 52),
-            (TitlebarStyle::UnifiedCompact, 38),
+            (TitlebarStyle::UnifiedCompact, 40),
         ] {
             let input = DecorInput {
                 style,
@@ -631,10 +666,13 @@ mod tests {
                 .layout(Size::new(content.0, content.1))
                 .button(ButtonKind::Zoom)
                 .center;
-            assert_eq!(
-                (zoom.x, zoom.y),
-                (f64::from(row) / 2.0 + 46.0, f64::from(row) / 2.0)
-            );
+            // the compact row's group starts 12 pt in, a point nearer the edge than its middle
+            let first = if style == TitlebarStyle::UnifiedCompact {
+                19.0
+            } else {
+                f64::from(row) / 2.0
+            };
+            assert_eq!((zoom.x, zoom.y), (first + 46.0, f64::from(row) / 2.0));
             assert_eq!(
                 d.hit_test(style, content, (zoom.x, zoom.y), true),
                 Hit::Button(ButtonKind::Zoom)

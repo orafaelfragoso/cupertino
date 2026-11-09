@@ -21,7 +21,7 @@ shadow, minimize progress).
 | `workspace` | per-output workspaces, sticky and full-screen workspaces, MRU reordering, gesture switching with rubber band, app assignment |
 | `zoom` | best-fit sizing from min/max size, content hint and usable area |
 | `tiling` | tile kinds, hot zones, tile rectangles with optional margins |
-| `wm` | `Wm`: owns apps, windows, outputs, focus, workspaces and the pointer interaction state |
+| `wm` | `Wm`: owns apps, windows, outputs, focus, workspaces and the pointer interaction state; `key_window` (the keyboard) and `main_window` (the window the person works in) are separate: a utility panel (floating level) takes the keyboard without becoming main, a sheet or dialog leaves its top-level parent main (`Window::can_be_main`) |
 | `window` | `App`, `Window`, `WindowLevel`, `Assignment`, `DisabledControls` (the controls an application disabled on its window: `Window::can_minimize` and `can_zoom`, which also needs a size that is not fixed; `minimize_window` and the zoom leg of `toggle_zoom` refuse them for every caller, `tile_window` refuses the fill tile where zoom is refused (half and quarter tiles stay) and a move does not offer its zone, while an unzoom, a restore and Hide still work; `fullscreen_window` refuses a full screen the person asks for (`Requester::User`: shortcut, menu) where zoom is refused, and keeps the client's own request (`Requester::Client`) and every exit; `toggle_zoom` of a full-screen window leaves full screen, so the zoom button and the Zoom command leave full screen whatever the window's controls) |
 | `menu_bar` | menu bar presentation per output: dimming, auto-hide with a reveal dwell, where a full-screen window's title bar shows below a revealed bar (`fullscreen_titlebar`), the area the bar reserves (the menu bar process draws the content) |
 | `command`, `config` | `Command` in, `Effect` out; every tunable value, with its evidence label |
@@ -52,7 +52,7 @@ the delay), dock hot-zone avoidance off, tiling animations on, tiled border off,
 | open / close transform per `MapParams::kind` | plain none; document grow-in 0.2 s; utility fade-out 0.15 s; alert pop-in 0.4 s / scale-down-and-out 0.15 s; app-modal grow-in / fade-out; `sin²` ease |
 | kind from protocol facts | modal → app-modal before utility → utility, else plain; documents and alerts have no protocol signal |
 | sheet (modal child) | 0.26 s linear time; slides 32 pt down into place eased `sin²`, alpha `min(2p, 1)`; close slides back up, alpha `1 − p` |
-| sheet placement | centred on the parent, snapped to whole points; top at the bottom of the parent's title bar (`snap.titlebar_height`, 32 pt, the titled window's bar), or of the toolbar row the parent's client draws when it says so at map (`MapParams.sheet_top`: 52 pt, 38 pt compact) |
+| sheet placement | centred on the parent, snapped to whole points; top at the bottom of the parent's title bar (`snap.titlebar_height`, 32 pt, the titled window's bar), or of the toolbar row the parent's client draws when it says so at map (`MapParams.sheet_top`: 52 pt, 40 pt compact) |
 | modal panel without a parent | centred horizontally, top a quarter of the free height below the usable top; the next panel of the app 66 pt right and down, kept on screen |
 | other child windows | centred on the parent, kept inside the usable area |
 | zoom / unzoom | `min(0.35, 181·ln(maxΔ/100 + 1)/750)` s, `sin²` ease |
@@ -73,6 +73,23 @@ the delay), dock hot-zone avoidance off, tiling animations on, tiled border off,
 | double click on a resize edge | on (`snap.snap_size_on_double_click`); clicked edges go to the usable edges, Alt adds the opposite ones; size limits kept, not in full screen |
 | window levels | normal 0, floating 3 (utility panels), modal panel 8; a child takes its parent's level; new and raised windows stay inside their level |
 | sheet dimming of the parent | `Wm::sheet_dimming`: how far the sheet is shown, `p` while it opens and `1 − p` while it closes |
+
+### Close, minimize, zoom and full screen
+
+They are distinct operations, and each keeps the frame to go back to: a minimized window restores to the state and
+frame it left (zoomed included), unzoom returns to the frame before the zoom, and leaving full screen returns to the
+state before it (a zoomed window comes back zoomed, then unzooms to its first frame). A refused full screen (the person
+asking for a window that cannot zoom, or any request for a minimized window) emits nothing and leaves the state, the
+frame, the workspaces and the key window as they were. Closing is a request to the client (`Effect::RequestClose`),
+which may refuse; when its last window goes, the application stays registered and in front with no key window, and
+whether it then quits is the application's own policy (the toolkit's resident flag), never the window manager's.
+When an output goes away its windows move to the remaining output with every frame they go back to (normal, zoomed,
+tiled, full screen) fitted to it; a full-screen window leaves full screen there, since its full-screen workspace went with
+the output.
+
+Decisions where the behaviour is not known: the resize hit zones (3 pt inside, 4 pt outside, 12 pt corners, 15 pt
+bottom-right) and the title bar's double click (zoom) stay configurable defaults; the drag-to-edge thresholds and the
+snapping preview timing are the values of the table above; a window that refuses to move is not modelled.
 
 ### Focus on map
 
@@ -95,5 +112,6 @@ A window that maps (`MapParams.activation`) takes the keyboard when the composit
 ## Tests
 
 Unit tests per module, plus integration tests in `tests/` that drive the public command API: lifecycle, focus (switcher keys, the hidden counter, Q and H, the activation rule, attention), interaction
-(size snapping), magnetic edges, workspaces, and window kinds (`tests/kinds.rs`: sheets, modal panels and their cascade,
+(size snapping), magnetic edges, workspaces, transitions (`tests/transitions.rs`: restore geometry through each transition and nested ones, a refused full screen,
+closing the last window, key versus main), and window kinds (`tests/kinds.rs`: sheets, modal panels and their cascade,
 plain and utility children, window levels, sheet dimming).

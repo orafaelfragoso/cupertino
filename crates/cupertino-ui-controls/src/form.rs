@@ -18,7 +18,7 @@ use cupertino_ui_render::{GradientStop, Paint, PaintOp, Shape};
 use cupertino_ui_text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, Wrap,
 };
-use cupertino_ui_theme::{Color, ColorRole, StateVariant, ThemeTokens};
+use cupertino_ui_theme::{Color, ColorRole, StateVariant, Surface, ThemeTokens};
 
 /// A tile's corner radius and its symbol's size, as shares of the tile's side.
 const TILE_RADIUS: f64 = 0.225;
@@ -785,6 +785,11 @@ impl<M: 'static> Widget<M> for Background<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        // where the desktop can, the compositor draws the colour, under the window's glass: a toolbar's capsules over
+        // the form then show, which an opaque fill of the window's own would cover
+        if cx.material(Surface::TextBackground, 0.0, 1.0) {
+            return;
+        }
         let theme = cx.env().theme.clone();
         let size = cx.size();
         let color = theme

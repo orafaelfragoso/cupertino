@@ -117,6 +117,7 @@ impl Application for Browser {
             can_go_back: false,
             can_go_forward: true,
             on_navigate: Some(Box::new(Message::Navigate)),
+            under_toolbar: false,
         }))
     }
 }

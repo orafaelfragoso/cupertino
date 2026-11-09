@@ -932,6 +932,7 @@ fixtures! {
         can_go_back: look.enabled,
         can_go_forward: false,
         on_navigate: Some(Box::new(|_| Message::Nothing)),
+        under_toolbar: false,
     }.into();
     dialog: "dialog", SHEET, &[State::Normal, State::Hover, State::Pressed, State::Focused], |_| Modal {
         content: body("Document"),

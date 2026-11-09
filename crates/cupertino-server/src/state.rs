@@ -380,6 +380,20 @@ impl WindowEntry {
         }
         true
     }
+
+    /// Tell an activated window again that it is activated, with a configure of the same state; nothing for a window
+    /// that is not activated or has not had its first configure. A client that drew itself as inactive when the
+    /// keyboard left draws as the window in use again.
+    pub fn restate_activated(&self) -> bool {
+        let t = &self.toplevel;
+        let activated =
+            t.with_pending_state(|st| st.states.contains(xdg_toplevel::State::Activated));
+        if !activated || !t.is_initial_configure_sent() {
+            return false;
+        }
+        t.send_configure();
+        true
+    }
 }
 
 /// One output with its render state.
@@ -2313,7 +2327,7 @@ impl Cupertino {
     }
 
     /// The surface whose tree `surface` is in: the parent of a subsurface, the surface a popup chain grows from.
-    fn shell_surface_root(&self, surface: &WlSurface) -> WlSurface {
+    pub(crate) fn shell_surface_root(&self, surface: &WlSurface) -> WlSurface {
         let top = |s: &WlSurface| {
             let mut top = s.clone();
             while let Some(parent) = smithay::wayland::compositor::get_parent(&top) {

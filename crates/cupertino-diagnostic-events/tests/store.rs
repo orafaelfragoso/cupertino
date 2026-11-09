@@ -204,6 +204,12 @@ fn eight_threads_and_four_processes_write_whole_lines_within_the_cap() {
             std::process::Command::new(std::env::current_exe().unwrap())
                 .env("CUPERTINO_ASSET_SEARCH_PATH", "")
                 .args(["--exact", "concurrent_writer_child", "--test-threads", "1"])
+                // a store and a journal of the test's own, should the child record anything of its own
+                .env("XDG_STATE_HOME", tmp.path().join("state"))
+                .env(
+                    cupertino_diagnostic_events::journal::SOCKET_ENV,
+                    tmp.path().join("no-journal"),
+                )
                 .env(WRITERS_DIR, &dir)
                 .env(WRITER_ID, id.to_string())
                 .spawn()
@@ -513,4 +519,78 @@ fn a_write_to_an_open_lock_file_does_not_block_another_store() {
     a.append(&line(1, 0, 300)).unwrap();
     b.append(&line(2, 0, 300)).unwrap();
     assert_eq!(store::read(tmp.path()).unwrap().records.len(), 2);
+}
+
+#[test]
+fn a_line_a_crash_cut_off_stays_a_line_of_its_own() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("events");
+    let store = Store::open(&dir, Limits::default()).unwrap();
+    store.append(&line(1, 1, 300)).unwrap();
+    let segment = store::segments(&dir).unwrap()[0].path.clone();
+    // the process ended in the middle of its write
+    let cut = line(1, 2, 300);
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&segment)
+        .unwrap()
+        .write_all(&cut[..100])
+        .unwrap();
+    store.append(&line(2, 1, 300)).unwrap();
+    let contents = store::read(&dir).unwrap();
+    let counts: Vec<(u32, u64)> = contents
+        .records
+        .iter()
+        .map(|r| (r.record.pid, r.record.count))
+        .collect();
+    assert_eq!(counts, [(1, 1), (2, 1)], "the next line is whole");
+    assert_eq!((contents.corrupt, contents.partial), (1, 0));
+}
+
+/// Sets the modification time of `path` to `secs` after the epoch.
+fn touch(path: &Path, secs: u64) {
+    File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+        .unwrap();
+}
+
+#[test]
+fn segments_keep_the_order_of_their_numbers_whatever_their_times_say() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    // a clock that went back between writes: numbers and times disagree
+    for (seq, secs) in [(1, 300), (2, 100), (3, 200)] {
+        let path = dir.join(format!("events-0f1e2d3c-{seq:08}.jsonl"));
+        fs::write(&path, b"").unwrap();
+        touch(&path, secs);
+    }
+    let fatal = dir.join("fatal-0f1e2d3c-77.jsonl");
+    fs::write(&fatal, b"").unwrap();
+    touch(&fatal, 150);
+    let order: Vec<String> = names(dir).into_iter().map(|(name, _)| name).collect();
+    assert_eq!(
+        order,
+        [
+            "fatal-0f1e2d3c-77.jsonl",
+            "events-0f1e2d3c-00000001.jsonl",
+            "events-0f1e2d3c-00000002.jsonl",
+            "events-0f1e2d3c-00000003.jsonl",
+        ]
+    );
+    // many of both, times scattered: one order, the numbers' (a sort given no consistent order may panic)
+    for seq in 4..40u64 {
+        let path = dir.join(format!("events-0f1e2d3c-{seq:08}.jsonl"));
+        fs::write(&path, b"").unwrap();
+        touch(&path, (seq * 7919) % 500);
+        let fatal = dir.join(format!("fatal-0f1e2d3c-{seq}.jsonl"));
+        fs::write(&fatal, b"").unwrap();
+        touch(&fatal, (seq * 104_729) % 500);
+    }
+    let all = store::segments(dir).unwrap();
+    let seqs: Vec<u64> = all.iter().filter_map(|s| s.seq).collect();
+    assert!(seqs.windows(2).all(|w| w[0] < w[1]), "{seqs:?}");
+    assert_eq!(all.len(), 3 + 1 + 36 * 2);
 }

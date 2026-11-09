@@ -233,12 +233,21 @@ impl Store {
             }
         };
         let file = OpenOptions::new()
+            .read(true)
             .append(true)
             .create(true)
             .mode(0o600)
             .open(&path)
             .map_err(|e| Unavailable::of(&e))?;
         let before = file.metadata().map(|m| m.len()).unwrap_or(len);
+        // a line a crash cut off stays a line of its own: the next one starts after a newline
+        let whole;
+        let line = if ends_open(&file, before) {
+            whole = [b"\n", line].concat();
+            &whole[..]
+        } else {
+            line
+        };
         match (self.write)(&file, line) {
             Ok(n) if n == line.len() => {}
             Ok(_) => {
@@ -304,6 +313,13 @@ impl Store {
         }
         Ok(deleted)
     }
+}
+
+/// Whether the `len` bytes of `file` end without a newline: the last line was cut off.
+fn ends_open(file: &File, len: u64) -> bool {
+    use std::os::unix::fs::FileExt;
+    let mut last = [0u8; 1];
+    len > 0 && file.read_exact_at(&mut last, len - 1).is_ok() && last[0] != b'\n'
 }
 
 fn remove(path: &Path) -> bool {
@@ -388,7 +404,8 @@ pub fn check_dir(dir: &Path) -> Result<(), Unavailable> {
     Ok(())
 }
 
-/// The segments in `dir`, oldest first: `fatal-` files by time, `events-` segments by number.
+/// The segments in `dir`, oldest first: `events-` segments by number, and each `fatal-` file, by time, before the first
+/// segment written after it.
 pub fn segments(dir: &Path) -> io::Result<Vec<Segment>> {
     let mut out = Vec::new();
     for entry in fs::read_dir(dir)? {
@@ -422,14 +439,25 @@ pub fn segments(dir: &Path) -> io::Result<Vec<Segment>> {
             modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
         });
     }
-    out.sort_by(|a, b| match (a.seq, b.seq) {
-        (Some(x), Some(y)) => x.cmp(&y),
-        _ => a
-            .modified
+    // one order for both kinds, whatever the clock did between the writes: segment numbers only grow, times may not
+    let (mut events, mut fatal): (Vec<Segment>, Vec<Segment>) =
+        out.into_iter().partition(|s| s.seq.is_some());
+    events.sort_by_key(|s| s.seq);
+    fatal.sort_by(|a, b| {
+        a.modified
             .cmp(&b.modified)
-            .then_with(|| a.path.cmp(&b.path)),
+            .then_with(|| a.path.cmp(&b.path))
     });
-    Ok(out)
+    let mut fatal = fatal.into_iter().peekable();
+    let mut ordered = Vec::with_capacity(events.len() + fatal.len());
+    for segment in events {
+        while let Some(f) = fatal.next_if(|f| f.modified < segment.modified) {
+            ordered.push(f);
+        }
+        ordered.push(segment);
+    }
+    ordered.extend(fatal);
+    Ok(ordered)
 }
 
 /// One record read back, with its line as written.

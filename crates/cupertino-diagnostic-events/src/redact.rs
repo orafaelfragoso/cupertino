@@ -69,21 +69,52 @@ impl Salt {
     }
 
     /// The salt in `path`, made (mode 0600) when there is none. A file of another size is replaced.
+    ///
+    /// A new salt is written whole under another name and then linked to `path`, so a reader never sees part of one,
+    /// and of processes that make one at the same time every one keeps the salt linked first.
     pub fn load_or_create(path: &Path) -> io::Result<Self> {
-        if let Ok(bytes) = fs::read(path) {
-            if let Ok(bytes) = <[u8; 16]>::try_from(bytes.as_slice()) {
-                return Ok(Salt(bytes));
-            }
+        if let Some(salt) = Salt::read(path) {
+            return Ok(salt);
         }
         let salt = Salt::random();
-        let mut file = OpenOptions::new()
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let fresh = path.with_file_name(format!(
+            ".{name}.{}.{}",
+            std::process::id(),
+            salt.hash(&name)
+        ));
+        let written = OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o600)
-            .open(path)?;
-        file.write_all(&salt.0)?;
-        Ok(salt)
+            .open(&fresh)
+            .and_then(|mut file| file.write_all(&salt.0));
+        if let Err(e) = written {
+            let _ = fs::remove_file(&fresh);
+            return Err(e);
+        }
+        let linked = fs::hard_link(&fresh, path);
+        let result = match linked {
+            Ok(()) => Ok(salt),
+            // another process made one first: keep it, unless it is broken
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => match Salt::read(path) {
+                Some(theirs) => Ok(theirs),
+                None => fs::rename(&fresh, path).map(|()| salt),
+            },
+            // a file system without links: replace whatever is there
+            Err(_) => fs::rename(&fresh, path).map(|()| salt),
+        };
+        let _ = fs::remove_file(&fresh);
+        result
+    }
+
+    /// The salt in `path`, when it holds one.
+    fn read(path: &Path) -> Option<Self> {
+        let bytes = fs::read(path).ok()?;
+        <[u8; 16]>::try_from(bytes.as_slice()).ok().map(Salt)
     }
 
     /// The stable hash of `text` under this salt: 8 hexadecimal digits.

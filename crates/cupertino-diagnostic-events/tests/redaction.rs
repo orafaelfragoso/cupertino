@@ -237,6 +237,41 @@ fn a_hash_is_stable_under_one_salt_and_differs_under_another() {
     );
 }
 
+#[test]
+fn processes_that_make_the_salt_at_the_same_time_all_keep_the_same_one() {
+    for _ in 0..20 {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("salt");
+        let start = std::sync::Barrier::new(8);
+        let salts: Vec<Salt> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        Salt::load_or_create(&path).unwrap()
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let kept = Salt::load_or_create(&path).unwrap();
+        assert!(salts.iter().all(|s| *s == kept));
+        // nothing but the salt is left
+        let names: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["salt"]);
+    }
+    // a broken salt is replaced, and the new one kept
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("salt");
+    std::fs::write(&path, b"short").unwrap();
+    let made = Salt::load_or_create(&path).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap().len(), 16);
+    assert_eq!(Salt::load_or_create(&path).unwrap(), made);
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 

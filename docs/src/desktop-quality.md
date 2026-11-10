@@ -1,12 +1,14 @@
 # Desktop quality and open issues
 
-Updated 2026-11-10. This is the installed-session quality backlog for the macOS-style desktop experience Cupertino targets. These issues block calling the affected interactions finished, even where their implementation or automated tests already exist. See the [roadmap](roadmap.md#desktop-quality-acceptance) for the acceptance gate.
+Updated 2026-11-10. This is the installed-session quality backlog for the desktop experience Cupertino targets. These issues block calling the affected interactions finished, even where their implementation or automated tests already exist. See the [roadmap](roadmap.md#desktop-quality-acceptance) for the acceptance gate.
 
 ## Evidence and status
 
 The review used the maintainer's recording `2026-11-10 00-31-22.mp4` (3:52.53, 1920×1080 at 60 fps) of an Arch Linux Cupertino session. The installed runtime and compositor reported base commit `0582a36c`; the portal had the screenshare hotfix installed separately. Timestamps below are positions in that recording, not wall-clock times. The recording and extracted screenshots are local review artifacts, not files shipped with this book.
 
-All 29 entries below are **open**. **Observed** means a visible symptom was found in the recording; **reported** means the maintainer reported it and a focused reproduction remains necessary; **follow-up** means source or running-service inspection adds evidence. A cursor shape does not prove a click reached another window. Without physical input timestamps the video cannot establish repeat latency, right-button delivery or submenu latency. It also cannot establish search matching correctness, accessibility compliance or which material shader ran.
+DQ-30 comes from a separate maintainer report and live installed-session inspection on the same date, with runtime base commit `0582a36c`; it is not a finding from the recording.
+
+All 30 entries below are **open**. **Observed** means a visible symptom was found in the recording; **reported** means the maintainer reported it and a focused reproduction remains necessary; **follow-up** means source or running-service inspection adds evidence. A cursor shape does not prove a click reached another window. Without physical input timestamps the video cannot establish repeat latency, right-button delivery or submenu latency. It also cannot establish search matching correctness, accessibility compliance or which material shader ran.
 
 **P1** affects task completion, input reliability, readable controls or core desktop behavior. **P2** affects presentation, consistency or discoverability. These priorities are the next-work recommendation, not a claim that other release criteria are satisfied. The original recording is compressed and downscaled relative to its captured 4K source; fine seams and physical cursor size need verification at native scale.
 
@@ -64,6 +66,18 @@ All 29 entries below are **open**. **Observed** means a visible symptom was foun
 | DQ-28 | P2 | **Bluetooth devices are difficult to identify.** Observed address-only Nearby Devices list around 02:34. Unnamed peripherals may legitimately have no friendly name. | Resolve names when available, label discovery/pairing/connection states and provide clear actions and errors. Use an understandable fallback for anonymous devices. |
 | DQ-29 | P2 | **Wallpaper chooser lacks useful visual previews.** Observed text-heavy current/choice rows at 00:29–00:53. | Provide a current-image preview and selectable thumbnails, retain accessible names and show loading/errors for missing or unreadable images. |
 
+## Launcher application discovery
+
+| ID | Priority | Issue and evidence | Required acceptance |
+|---|---|---|---|
+| DQ-30 | P1 | **Applications installed during a session remain absent from the launcher.** Reported after installing `chatgpt-desktop`; follow-up confirmed a valid, visible desktop entry and startup-only application indexing. | Search and the application browser reflect desktop-entry additions, changes, atomic replacements and removals in the active XDG directories without a launcher restart or logout. Preserve visibility rules, user-over-system precedence, the active query and responsive input. Add regression coverage and verify package install/update/removal in an installed session. |
+
+To reproduce, start Cupertino and its launcher, install an application that provides a desktop entry, then reopen launcher search and the application browser and search for it. The reported case used `chatgpt-desktop` `26.1103.60933-1` on Arch Linux in the installed TTY session, at 3840×2160 with scale 2. The package already supplied `/usr/share/applications/chatgpt.desktop`, `/usr/bin/chatgpt` and `/usr/share/pixmaps/chatgpt.png`; no user override hid the entry. `desktop-file-validate` found no errors, and GLib resolved it as visible.
+
+Source inspection at `0582a36c` found that `crates/cupertino-launcher/src/app.rs` constructs the model with `Launcher::from_system(config)` at startup. `crates/cupertino-launcher/src/engine.rs` indexes the XDG application directories there; `set_entries` has no production caller, and no runtime catalogue watcher or refresh is wired into the launcher.
+
+Workaround performed: terminate only the affected session's `cupertino-launcher` with SIGTERM and let the compositor supervisor restart it, forcing a fresh scan. The replacement process was verified in the server log; the compositor and open applications stayed running. With multiple sessions, identify the launcher belonging to the affected compositor before restarting it. This workaround does not close DQ-30.
+
 ## Closed screen-capture regression
 
 **CAP-01 — OBS black capture after selecting a source: fixed in `fe28a392`.** PipeWire rejected buffer allocation with `Invalid argument`: Cupertino offered `MemFd` as a fixed integer while OBS's shared-memory fallback offered a mask of supported types. The producer now offers a flags choice so negotiation intersects the supported bits. The test consumer offers an OBS-style `MemPtr | MemFd | DmaBuf` mask.
@@ -72,6 +86,6 @@ Validation recorded before merge: the consumer failed to stream with the old pro
 
 ## Completion gate
 
-Implement the P1 fixes before broad visual polish, while keeping related rendering and interaction work together. Each item needs a focused regression test where practical and an installed-session reproduction of its acceptance checks on an exact candidate commit. Use representative light/dark backgrounds, integer/fractional scaling, native and XWayland applications and the relevant accessibility settings. Compare material and animation behavior against an explicitly chosen reference; neither existing glass code nor this recording alone establishes macOS fidelity.
+Implement the P1 fixes before broad visual polish, while keeping related rendering and interaction work together. Each item needs a focused regression test where practical and an installed-session reproduction of its acceptance checks on an exact candidate commit. Use representative light/dark backgrounds, integer/fractional scaling, native and XWayland applications and the relevant accessibility settings. Compare material and animation behavior against an explicitly chosen reference; neither existing glass code nor this recording alone establishes the intended desktop fidelity.
 
 Keep this list open until evidence is recorded per ID. Resolving CAP-01 does not resolve the other entries or complete the daily-driver gate. No additional must-have feature inventory beyond the recording findings and the maintainer's reports has been inferred.

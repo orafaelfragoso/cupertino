@@ -1,6 +1,6 @@
 # Roadmap
 
-Phase assessment recorded on 2026-11-09 against merged commit `5a4f015f`; desktop quality reassessed on 2026-11-10 from an installed-session recording and maintainer reports. Phases 1–3 have recorded completion audits. Phases 4–6 remain incomplete. Phase 7 has not started. Hardware acceptance is a separate gate and remains open. The [desktop quality backlog](desktop-quality.md) records 29 open issues and the closed OBS capture regression; implementation coverage below is not installed-session acceptance.
+Phase assessment recorded on 2026-11-09 against merged commit `5a4f015f`; desktop quality reassessed on 2026-11-10 from an installed-session recording and maintainer reports. Phases 1–3 have recorded completion audits. Phases 4–6 remain incomplete. Phase 7 has not started. Hardware acceptance is a separate gate and remains open. The [desktop quality backlog](desktop-quality.md) records 30 open issues and the closed OBS capture regression; implementation coverage below is not installed-session acceptance.
 
 This assessment compares the phase criteria, merged source, tests, packaging and issue checklists. Existing test results belong to their recorded commits. Reading a test here does not mean it ran again, and code coverage does not replace a hardware run.
 
@@ -68,7 +68,7 @@ The earlier menu/Control Center fixes and glass implementations listed above do 
 
 Still required:
 
-- Resolve and verify the [29 desktop quality issues](desktop-quality.md): window/input/menu behavior (DQ-01–09), materials/motion/scrolling (DQ-10–14), Control Center/notifications/dock behavior (DQ-15–20), Files/Trash/preview (DQ-21–27), and Settings presentation (DQ-28–29).
+- Resolve and verify the [30 desktop quality issues](desktop-quality.md): window/input/menu behavior (DQ-01–09), materials/motion/scrolling (DQ-10–14), Control Center/notifications/dock behavior (DQ-15–20), Files/Trash/preview (DQ-21–27), Settings presentation (DQ-28–29), and discovery of applications installed during the session (DQ-30).
 - Preserve the OBS buffer-negotiation fix in `fe28a392`. The locally rebuilt portal produced the review recording after the fix; browser sharing and the remaining output, performance and package checks are still required.
 
 - Verify in an installed session and on hardware:
@@ -128,7 +128,7 @@ NetworkManager and BlueZ are the shipped ISO and installed-system backends. Cupe
 
 ## Desktop quality acceptance
 
-Open, assessed 2026-11-10. The [complete backlog](desktop-quality.md) distinguishes recording evidence, maintainer reports and follow-up inspection, with priorities and acceptance checks for all 29 items. It includes titlebar long-press maximization, cursor scaling, the inverted Delay until repeat setting (key repeat works), slow submenus, missing context-menu behavior, sidebar bounds and leaks, unreadable or incorrect Control Center state, Edit Controls dismissal, the dock's bottom-edge gap, notification wording/dismissal, Trash emptying, preview activation/flashing/placement, thick scrollbars and material/motion inconsistencies. It also records the additional Files toolbar/title, sidebar clipping, submenu placement, Applications, Bluetooth naming and wallpaper-preview findings.
+Open, assessed 2026-11-10. The [complete backlog](desktop-quality.md) distinguishes recording evidence, maintainer reports and follow-up inspection, with priorities and acceptance checks for all 30 items. It includes titlebar long-press maximization, cursor scaling, the inverted Delay until repeat setting (key repeat works), slow submenus, missing context-menu behavior, sidebar bounds and leaks, unreadable or incorrect Control Center state, Edit Controls dismissal, the dock's bottom-edge gap, notification wording/dismissal, Trash emptying, preview activation/flashing/placement, thick scrollbars and material/motion inconsistencies. It also records the additional Files toolbar/title, sidebar clipping, submenu placement, Applications, Bluetooth naming and wallpaper-preview findings, plus startup-only launcher indexing that hides applications installed during the session (DQ-30).
 
 P1 items are the next functional acceptance work; P2 items remain part of the intended desktop experience. A fix needs focused automated coverage where practical and an installed-session check at an exact candidate commit. Do not close these items from existing feature tests, a headless screenshot or the presence of a glass recipe alone. The OBS black-capture regression CAP-01 is fixed; that does not close this gate.
 

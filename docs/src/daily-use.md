@@ -103,7 +103,7 @@ To investigate a reset with an AI assistant:
 
 ## Known limits
 
-The 2026-11-10 installed-session review found or recorded 29 open interaction and presentation issues. See [Desktop quality and open issues](desktop-quality.md) for the complete list, evidence status and acceptance checks. In particular, menu pointer ownership, sidebar bounds, Control Center readability/connectivity, Trash emptying, quick preview, input/cursor behavior and glass/scrollbar consistency are not accepted as finished. Some entries are maintainer reports still awaiting focused reproduction.
+The 2026-11-10 installed-session review and follow-up inspection found or recorded 30 open interaction and presentation issues. See [Desktop quality and open issues](desktop-quality.md) for the complete list, evidence status and acceptance checks. In particular, menu pointer ownership, sidebar bounds, Control Center readability/connectivity, Trash emptying, quick preview, input/cursor behavior and glass/scrollbar consistency are not accepted as finished. Newly installed applications also remain absent from the launcher until its process restarts (DQ-30); the backlog records the workaround. Some entries are maintainer reports still awaiting focused reproduction.
 
 The server's README has the full list under "Daily-driver known limits". The ones to expect in a first week:
 

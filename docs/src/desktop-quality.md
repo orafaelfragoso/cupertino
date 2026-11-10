@@ -8,7 +8,9 @@ The review used the maintainer's recording `2026-11-10 00-31-22.mp4` (3:52.53, 1
 
 DQ-30 comes from a separate maintainer report and live installed-session inspection on the same date, with runtime base commit `0582a36c`; it is not a finding from the recording.
 
-All 30 entries below are **open**. **Observed** means a visible symptom was found in the recording; **reported** means the maintainer reported it and a focused reproduction remains necessary; **follow-up** means source or running-service inspection adds evidence. A cursor shape does not prove a click reached another window. Without physical input timestamps the video cannot establish repeat latency, right-button delivery or submenu latency. It also cannot establish search matching correctness, accessibility compliance or which material shader ran.
+DQ-31 is a separate maintainer test on the same date: ChatGPT Desktop lacked Cupertino's titlebar and could not be moved by dragging. Follow-up process inspection identified the application's X11 backend; the decoration and move-request causes remain unconfirmed.
+
+All 31 entries below are **open**. **Observed** means a visible symptom was found in the recording; **reported** means the maintainer reported it and a focused reproduction remains necessary; **follow-up** means source or running-service inspection adds evidence. A cursor shape does not prove a click reached another window. Without physical input timestamps the video cannot establish repeat latency, right-button delivery or submenu latency. It also cannot establish search matching correctness, accessibility compliance or which material shader ran.
 
 **P1** affects task completion, input reliability, readable controls or core desktop behavior. **P2** affects presentation, consistency or discoverability. These priorities are the next-work recommendation, not a claim that other release criteria are satisfied. The original recording is compressed and downscaled relative to its captured 4K source; fine seams and physical cursor size need verification at native scale.
 
@@ -77,6 +79,16 @@ To reproduce, start Cupertino and its launcher, install an application that prov
 Source inspection at `0582a36c` found that `crates/cupertino-launcher/src/app.rs` constructs the model with `Launcher::from_system(config)` at startup. `crates/cupertino-launcher/src/engine.rs` indexes the XDG application directories there; `set_entries` has no production caller, and no runtime catalogue watcher or refresh is wired into the launcher.
 
 Workaround performed: terminate only the affected session's `cupertino-launcher` with SIGTERM and let the compositor supervisor restart it, forcing a fresh scan. The replacement process was verified in the server log; the compositor and open applications stayed running. With multiple sessions, identify the launcher belonging to the affected compositor before restarting it. This workaround does not close DQ-30.
+
+## Electron window titlebars and dragging
+
+| ID | Priority | Issue and evidence | Required acceptance |
+|---|---|---|---|
+| DQ-31 | P1 | **Electron applications lack Cupertino's titlebar and cannot be moved by dragging.** Reported and tested by the maintainer with ChatGPT Desktop on 2026-11-10. Follow-up found `--ozone-platform=x11` in its running processes, identifying the XWayland path. Other Electron applications and native Wayland remain unverified. | Affected Electron windows show the intended Cupertino titlebar and window controls and move continuously when dragged by the titlebar. Releasing the pointer ends the move without triggering window controls or dragging application content. Verify ChatGPT Desktop in an installed session and exercise XWayland and native Wayland separately, including maximize/restore and output scaling. |
+
+To reproduce, launch ChatGPT Desktop in the installed Cupertino session, inspect the top of its normal window, then press and drag where the titlebar should allow movement. The maintainer found no Cupertino titlebar and could not move the window by dragging. Expected: the window has Cupertino's titlebar and a usable drag region that moves it until release.
+
+The reported case used `chatgpt-desktop` `26.1103.60933-1` with installed Cupertino `0.1.0-1`, runtime base commit `0582a36c`, and a 3840×2160 display at scale 2. Process inspection confirms that this run uses the X11 backend through XWayland; it does not establish native Wayland behavior or the root cause. No workaround has been verified. Keep DQ-31 open until the reported application passes an installed-session titlebar and dragging check at an exact candidate commit.
 
 ## Closed screen-capture regression
 

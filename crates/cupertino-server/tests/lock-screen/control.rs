@@ -153,15 +153,15 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
             .process_input_event(common::absolute::key(28, pressed));
         session.server.step();
     }
-    assert_eq!(
-        local.ok(&mut session.server, json!({"op":"status"}))["phase"],
-        0
-    );
     session
         .server
         .wait_until("the denied consent panel to close", |s| {
             panel_rect(s).is_none()
         });
+    assert_eq!(
+        local.ok(&mut session.server, json!({"op":"status"}))["phase"],
+        0
+    );
     local.ok(
         &mut session.server,
         json!({"op":"request","output":"headless-1","capabilities":15}),

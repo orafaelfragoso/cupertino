@@ -40,11 +40,13 @@ pub enum ShellRole {
     Prompt,
     /// See and bind the data control globals ([`crate::data_control`]).
     DataControl,
+    /// Discover desktop-control sessions. This does not grant observation, capture or input authority.
+    DesktopControl,
 }
 
 impl ShellRole {
-    const fn bit(self) -> u8 {
-        1 << self as u8
+    const fn bit(self) -> u16 {
+        1 << self as u16
     }
 }
 
@@ -63,7 +65,7 @@ impl From<ShellRoleName> for ShellRole {
 
 /// The roles one connection holds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ClientCapabilitySet(u8);
+pub struct ClientCapabilitySet(u16);
 
 impl ClientCapabilitySet {
     /// The set of a client of the public socket.
@@ -285,6 +287,35 @@ fn program_of(client: &Client) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_role_has_a_distinct_bit_including_desktop_control() {
+        let roles = [
+            ShellRole::Session,
+            ShellRole::MenuBar,
+            ShellRole::Dock,
+            ShellRole::WindowManager,
+            ShellRole::SessionLock,
+            ShellRole::Capture,
+            ShellRole::Prompt,
+            ShellRole::DataControl,
+            ShellRole::DesktopControl,
+        ];
+        for role in roles {
+            let only = ClientCapabilitySet::of([role]);
+            for other in roles {
+                assert_eq!(
+                    only.contains(other),
+                    role == other,
+                    "{role:?} versus {other:?}"
+                );
+            }
+        }
+        let control = ClientCapabilitySet::of([ShellRole::DesktopControl]);
+        assert!(!control.holds_shell_role());
+        assert!(!control.contains(ShellRole::Capture));
+        assert!(!control.contains(ShellRole::Prompt));
+    }
 
     #[test]
     fn a_set_holds_exactly_its_roles() {

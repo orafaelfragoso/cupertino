@@ -325,6 +325,215 @@ impl ShellClient {
     }
 }
 
+/// The controller's ninth capability is separate from every existing shell and capture role.
+#[test]
+fn desktop_control_is_private_and_grants_no_other_role() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut controller = h.shell(&[ShellRole::DesktopControl]);
+    let cr = controller.get_registry();
+    let mut public = h.public();
+    let pr = public.get_registry();
+    let mut dock = h.shell(&[ShellRole::Dock]);
+    let dr = dock.get_registry();
+    h.settle(&mut [&mut controller, &mut public, &mut dock]);
+    let (name, version) = offered(&controller, cr, "cupertino_control_v1").unwrap();
+    assert_eq!(version, 1);
+    for interface in [
+        "cupertino_shell_v1",
+        "ext_image_copy_capture_manager_v1",
+        "ext_output_image_capture_source_manager_v1",
+        "ext_session_lock_manager_v1",
+        "cupertino_screenshot_v1",
+    ] {
+        assert_eq!(offered(&controller, cr, interface), None, "{interface}");
+    }
+    assert_eq!(offered(&public, pr, "cupertino_control_v1"), None);
+    assert_eq!(offered(&dock, dr, "cupertino_control_v1"), None);
+    public.bind(pr, name, "cupertino_control_v1", 1);
+    dock.bind(dr, name, "cupertino_control_v1", 1);
+    h.settle(&mut [&mut public, &mut dock]);
+    assert_eq!(public.error(), Some((DISPLAY, INVALID_OBJECT)));
+    assert_eq!(dock.error(), Some((DISPLAY, INVALID_OBJECT)));
+    assert!(public.closed && dock.closed);
+    assert_eq!(controller.error(), None);
+}
+
+fn control_manager(h: &mut Harness, wire: &mut Wire) -> u32 {
+    let registry = wire.get_registry();
+    h.settle(&mut [&mut *wire]);
+    let (name, _) = offered(wire, registry, "cupertino_control_v1").unwrap();
+    let manager = wire.bind(registry, name, "cupertino_control_v1", 1);
+    h.settle(&mut [&mut *wire]);
+    assert_eq!(
+        wire.error(),
+        None,
+        "the controller bound while its holder was alive"
+    );
+    manager
+}
+
+fn control_session(h: &mut Harness, wire: &mut Wire, manager: u32) -> (u32, [u32; 2]) {
+    let session = wire.new_id();
+    wire.send(manager, 1, &[Arg::Uint(session)]);
+    h.settle(&mut [&mut *wire]);
+    let created = wire
+        .events
+        .iter()
+        .find(|e| e.object == session && e.opcode == 0)
+        .expect("created event for the inactive session");
+    let epoch = [
+        u32::from_ne_bytes(created.payload[0..4].try_into().unwrap()),
+        u32::from_ne_bytes(created.payload[4..8].try_into().unwrap()),
+    ];
+    assert_ne!(epoch, [0, 0]);
+    assert_eq!(
+        &created.payload[8..12],
+        &0u32.to_ne_bytes(),
+        "no available operations"
+    );
+    let status = wire
+        .events
+        .iter()
+        .find(|e| e.object == session && e.opcode == 1)
+        .unwrap();
+    assert_eq!(
+        status.payload,
+        [0u32.to_ne_bytes(), 0u32.to_ne_bytes()].concat()
+    );
+    (session, epoch)
+}
+
+#[test]
+fn control_discovery_is_inactive_and_refuses_another_runs_epoch() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut wire = h.shell(&[ShellRole::DesktopControl]);
+    let manager = control_manager(&mut h, &mut wire);
+    let (session, epoch) = control_session(&mut h, &mut wire, manager);
+    wire.send(
+        session,
+        1,
+        &[Arg::Uint(11), Arg::Uint(epoch[0]), Arg::Uint(epoch[1])],
+    );
+    wire.send(
+        session,
+        1,
+        &[Arg::Uint(12), Arg::Uint(epoch[0] ^ 1), Arg::Uint(epoch[1])],
+    );
+    h.settle(&mut [&mut wire]);
+    let replies: Vec<_> = wire.events.iter().filter(|e| e.object == session).collect();
+    assert_eq!(replies.len(), 4);
+    assert_eq!(replies[2].opcode, 1, "the current run receives status");
+    assert_eq!(
+        replies[2].payload,
+        [11u32.to_ne_bytes(), 0u32.to_ne_bytes()].concat()
+    );
+    assert_eq!(
+        replies[3].opcode, 2,
+        "another epoch receives only a refusal"
+    );
+    assert_eq!(
+        replies[3].payload,
+        [12u32.to_ne_bytes(), 0u32.to_ne_bytes()].concat()
+    );
+    assert_eq!(wire.error(), None);
+}
+
+#[test]
+fn destroying_a_control_session_releases_its_slot_but_not_its_epoch() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut wire = h.shell(&[ShellRole::DesktopControl]);
+    let manager = control_manager(&mut h, &mut wire);
+    let (first, old_epoch) = control_session(&mut h, &mut wire, manager);
+    wire.send(first, 0, &[]);
+    let (second, epoch) = control_session(&mut h, &mut wire, manager);
+    assert_ne!(old_epoch, epoch);
+    wire.send(
+        second,
+        1,
+        &[
+            Arg::Uint(1),
+            Arg::Uint(old_epoch[0]),
+            Arg::Uint(old_epoch[1]),
+        ],
+    );
+    h.settle(&mut [&mut wire]);
+    assert!(wire
+        .events
+        .iter()
+        .any(|e| e.object == second && e.opcode == 2));
+    assert_eq!(wire.error(), None);
+}
+
+#[test]
+fn control_session_limit_applies_across_manager_bindings() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut wire = h.shell(&[ShellRole::DesktopControl]);
+    let first_manager = control_manager(&mut h, &mut wire);
+    let second_manager = control_manager(&mut h, &mut wire);
+    let _ = control_session(&mut h, &mut wire, first_manager);
+    let extra = wire.new_id();
+    wire.send(second_manager, 1, &[Arg::Uint(extra)]);
+    h.settle(&mut [&mut wire]);
+    assert_eq!(wire.error(), Some((second_manager, 1)));
+    assert_eq!(wire.events_of(extra), 0);
+    assert!(wire.closed);
+}
+
+#[test]
+fn control_requests_recheck_the_live_holder_on_managers_and_sessions() {
+    for query in [false, true] {
+        let Some(mut h) = Harness::new() else { return };
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let mut wire = h.held_shell(&[ShellRole::DesktopControl], &child);
+        let manager = control_manager(&mut h, &mut wire);
+        let (session, epoch) = if query {
+            control_session(&mut h, &mut wire, manager)
+        } else {
+            (0, [0, 0])
+        };
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let target = if query {
+            wire.send(
+                session,
+                1,
+                &[Arg::Uint(1), Arg::Uint(epoch[0]), Arg::Uint(epoch[1])],
+            );
+            session
+        } else {
+            let session = wire.new_id();
+            wire.send(manager, 1, &[Arg::Uint(session)]);
+            manager
+        };
+        h.settle(&mut [&mut wire]);
+        assert_eq!(wire.error(), Some((target, PERMISSION)));
+        assert!(wire.closed);
+        if query {
+            assert_eq!(
+                wire.events_of(session),
+                2,
+                "no status after the holder exits"
+            );
+        }
+    }
+}
+
+#[test]
+fn control_query_serial_zero_cannot_be_confused_with_initial_status() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut wire = h.shell(&[ShellRole::DesktopControl]);
+    let manager = control_manager(&mut h, &mut wire);
+    let (session, epoch) = control_session(&mut h, &mut wire, manager);
+    wire.send(
+        session,
+        1,
+        &[Arg::Uint(0), Arg::Uint(epoch[0]), Arg::Uint(epoch[1])],
+    );
+    h.settle(&mut [&mut wire]);
+    assert_eq!(wire.error(), Some((session, 1)));
+    assert!(wire.closed);
+}
+
 /// SEC-01: a client of the public socket is not offered the shell global, cannot bind it by the name another client
 /// sees, and a request on an object id it guessed is a protocol error that ends its connection.
 #[test]

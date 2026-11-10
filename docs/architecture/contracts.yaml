@@ -498,6 +498,18 @@
   test_owner: crates/cupertino-server/tests/app_effects_v1.rs
   source: crates/cupertino-server/src/app_effects_v1.rs
   source_match: Cupertino, CupertinoAppEffectsV1
+- name: cupertino_control_v1
+  kind: wayland-global
+  version: 1
+  owner_crate: cupertino-server
+  owner_area: compositor
+  scope: shell-private
+  role: DesktopControl
+  advertised: always
+  test_owner: crates/cupertino-server/tests/shell_roles.rs
+  source: crates/cupertino-server/src/control.rs
+  source_match: create_global::<Cupertino, CupertinoControlV1, ()>
+  note: Discovery only; no consent, capture or input request exists in version 1. Only the DesktopControl capability sees the global; one inactive session per connection across manager bindings, server-assigned nonzero epochs, stale-epoch refusal and request-time holder checks. The role is not configurable and grants none of the shell, capture or prompt roles.
 - name: cupertino_shell_v1
   kind: wayland-global
   version: 21

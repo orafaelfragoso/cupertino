@@ -14,6 +14,7 @@ pub mod capture;
 pub mod cli;
 pub mod clipboard;
 pub mod config;
+pub mod control;
 pub mod cursor;
 pub mod data_control;
 pub mod dbus;

@@ -1037,6 +1037,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-control-model"
+version = "0.1.0"
+
+[[package]]
 name = "cupertino-controlcenter"
 version = "0.1.0"
 dependencies = [
@@ -1721,6 +1725,7 @@ dependencies = [
  "cupertino-animation",
  "cupertino-assets",
  "cupertino-build-info",
+ "cupertino-control-model",
  "cupertino-cursor",
  "cupertino-decorations",
  "cupertino-defaults",

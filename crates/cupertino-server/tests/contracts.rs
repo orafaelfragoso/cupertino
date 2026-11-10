@@ -45,7 +45,7 @@ fn registry() -> String {
         .expect("the contracts registry")
 }
 
-const ROLES: [ShellRole; 7] = [
+const ROLES: [ShellRole; 9] = [
     ShellRole::Session,
     ShellRole::MenuBar,
     ShellRole::Dock,
@@ -53,6 +53,8 @@ const ROLES: [ShellRole; 7] = [
     ShellRole::Capture,
     ShellRole::SessionLock,
     ShellRole::DataControl,
+    ShellRole::Prompt,
+    ShellRole::DesktopControl,
 ];
 
 const DMABUF: &str = "zwp_linux_dmabuf_v1";

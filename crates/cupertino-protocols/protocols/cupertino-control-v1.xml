@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cupertino_control_v1">
+  <copyright>
+    SPDX-License-Identifier: MIT OR Apache-2.0
+  </copyright>
+  <description summary="private desktop-control session discovery">
+    The server offers this preview interface only on a connection it created for a desktop controller.
+    Binding it or creating a session grants no observation, capture or input authority. Version 1 is the
+    discovery boundary only: it advertises no available operations and has no grant or input request.
+    Consent, capture and input will be added in later interface versions after their enforcement is complete.
+  </description>
+  <interface name="cupertino_control_v1" version="1">
+    <enum name="error">
+      <entry name="permission" value="2" summary="the connection no longer holds the controller capability"/>
+      <entry name="session_exists" value="1" summary="the connection already has a live control session"/>
+      <entry name="exhausted" value="3" summary="the server cannot assign another unique run epoch"/>
+    </enum>
+    <request name="destroy" type="destructor">
+      <description summary="release this manager">
+        Existing session objects remain alive. This does not cancel or destroy them.
+      </description>
+    </request>
+    <request name="get_session">
+      <description summary="create an inactive session">
+        At most one session may be live for a connection, across all its manager bindings. Destroying it allows
+        another session with a fresh epoch. The server immediately sends created, then status with serial zero.
+        The manager's capability is checked again for every request. No consent or mutation is implied.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_control_session_v1"/>
+    </request>
+  </interface>
+  <interface name="cupertino_control_session_v1" version="1">
+    <enum name="phase">
+      <entry name="inactive" value="0"/>
+    </enum>
+    <enum name="refusal">
+      <entry name="stale_epoch" value="0" summary="the request names another run epoch"/>
+    </enum>
+    <request name="destroy" type="destructor">
+      <description summary="end this session and invalidate its epoch"/>
+    </request>
+    <request name="query">
+      <description summary="query the status of this exact run">
+        serial is the caller's correlation value and must be nonzero; it is echoed unchanged in the reply.
+        An epoch other than the one in created is refused without reporting session state. Querying has no
+        side effect. The controller capability must still be held when the request is processed.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="epoch_hi" type="uint"/>
+      <arg name="epoch_lo" type="uint"/>
+    </request>
+    <enum name="error">
+      <entry name="permission" value="2" summary="the connection no longer holds the controller capability"/>
+      <entry name="invalid_serial" value="1" summary="serial zero is reserved for the initial status"/>
+    </enum>
+    <event name="created">
+      <description summary="the server-assigned nonzero run epoch">
+        The epoch combines epoch_hi as the upper 32 bits and epoch_lo as the lower 32 bits. It is unique within this server's lifetime; a client must
+        also bind its handles to the identity of the live compositor and this connection. available is zero
+        in version 1: discovery does not promise operations that the implementation cannot enforce yet.
+      </description>
+      <arg name="epoch_hi" type="uint"/>
+      <arg name="epoch_lo" type="uint"/>
+      <arg name="available" type="uint"/>
+    </event>
+    <event name="status">
+      <description summary="status without desktop content">
+        Sent initially with serial zero, then in answer to a successful query. Version 1 is always inactive.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="phase" type="uint" enum="phase"/>
+    </event>
+    <event name="refused">
+      <arg name="serial" type="uint"/>
+      <arg name="reason" type="uint" enum="refusal"/>
+    </event>
+  </interface>
+</protocol>

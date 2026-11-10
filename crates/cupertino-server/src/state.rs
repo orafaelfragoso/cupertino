@@ -638,6 +638,8 @@ pub struct Cupertino {
     pub xwayland: Option<crate::xwayland::XWayland>,
     /// Screen capture for the screenshot process: its globals, sessions and pending frames.
     pub capture: crate::capture::Capture,
+    /// Private desktop-control discovery; no grants or mutation in protocol version 1.
+    pub control: crate::control::Control,
 
     pub wm: Wm,
     pub decor: Decor,
@@ -816,6 +818,7 @@ impl Cupertino {
         let shell_v1 = ShellV1Global::new(&dh);
         let app_effects_v1 = AppEffectsV1Global::new(&dh);
         let capture = crate::capture::Capture::new(&dh);
+        let control = crate::control::Control::new(&dh);
         let scroll_counts = ScrollObservers::new(&dh);
         let supervisor = Supervisor::new(&config.shell_processes, std::time::Instant::now());
         let menu_bars = MenuBars::new(config.shell.menu_bar_height);
@@ -951,6 +954,7 @@ impl Cupertino {
             supervision_wakeups: Default::default(),
             xwayland: None,
             capture,
+            control,
             wm,
             decor,
             button_access: Default::default(),

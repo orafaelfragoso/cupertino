@@ -93,6 +93,18 @@ The first objective is a shorter observe, reproduce, change and verify loop for 
 by an in-tree Rust adapter; the compositor owns desktop policy and input routing, without an LLM client or provider
 credentials.
 
+### Implementation status
+
+The first implementation adds a dependency-free `cupertino-control-model` for grant state and aggregate input
+ownership, and version 1 private control discovery in `cupertino-protocols` and `cupertino-server`.
+The server assigns fresh run epochs, permits one inactive session per controller connection and rechecks its
+live holder. The controller capability is not configurable and does not include capture or existing shell roles.
+
+This version advertises zero available operations. Consent UI, live input/capture grants, Kit semantic publication,
+the Rust controller/MCP bridge and the updater remain to be implemented. The input ownership model is tested
+separately and is not yet connected to the physical input path. This is the first foundation, not an enabled
+desktop-control feature.
+
 ### Dependency boundary
 
 The control implementation belongs to Cupertino. Add no external desktop-control library, accessibility framework,

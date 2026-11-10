@@ -1067,11 +1067,11 @@ pub fn desktop_control<M: Clone + 'static>(
         .take(64)
         .collect();
     let info = if phase == 2 {
-        "Physical input pauses control. Ctrl+Alt+Escape stops it.".to_owned()
+        "Physical input pauses input control. Ctrl+Alt+Escape stops it.".to_owned()
     } else if phase == 3 {
         "Control is paused. Resume continues the approved control; Stop ends it.".to_owned()
     } else {
-        format!("Allow the desktop controller to {} on {}. Physical input pauses control. Ctrl+Alt+Escape stops it.", rights.join(", "), display)
+        format!("Allow the desktop controller to {} on {}. Physical input pauses input control. Ctrl+Alt+Escape stops it.", rights.join(", "), display)
     };
     let mut children = vec![
         icon_disc(frames.icon),

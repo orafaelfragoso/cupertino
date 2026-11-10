@@ -687,7 +687,7 @@ impl Application for SessionApp {
             }
         }
         if app.lock.is_none() && app.panel.is_none() && !app.logging_out {
-            if let Some(control) = &app.desktop_control {
+            if let Some(control) = app.desktop_control.as_ref().filter(|c| c.phase == 1) {
                 windows.push(view::desktop_control(
                     WindowKey(Key::from("desktop-control")),
                     &control.output,

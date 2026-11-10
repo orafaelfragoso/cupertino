@@ -2289,7 +2289,7 @@ impl Cupertino {
             .as_ref()
             .is_some_and(|s| self.control_sensitive_focus(s))
         {
-            self.suspend_controls();
+            self.suspend_controls(crate::control::PauseReason::ProtectedFocus);
         }
         let allowed = if self.session_lock.is_active() {
             surface.as_ref().is_some_and(|s| self.is_lock_surface(s))
@@ -2327,7 +2327,7 @@ impl Cupertino {
     /// shown only the prompt can take it, and an open menu of another surface is closed as it does.
     pub fn layer_keyboard_exclusivity(&mut self, surface: &WlSurface, exclusive: bool) {
         if exclusive && self.control_sensitive_focus(surface) {
-            self.suspend_controls();
+            self.suspend_controls(crate::control::PauseReason::ProtectedFocus);
         }
         if !exclusive && self.released_layer.as_ref() == Some(surface) {
             // the layer let go after a press outside it: its next claim is a new one

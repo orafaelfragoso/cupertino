@@ -40,6 +40,13 @@ const USER_SERIALS: usize = 32;
 /// Operations implemented by version 3, adding semantic actions to version 2 input/capture.
 const AVAILABLE: u32 = 31;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PauseReason {
+    PhysicalInput,
+    ProtectedFocus,
+    AuthenticationPrompt,
+}
+
 pub struct Control {
     _global: GlobalId,
     _authority: GlobalId,
@@ -196,11 +203,18 @@ impl Cupertino {
         self.stop_captures();
         self.refresh_semantics();
     }
-    pub(crate) fn suspend_controls(&mut self) {
+    pub(crate) fn suspend_controls(&mut self, reason: PauseReason) {
         let mut changed = false;
         for i in 0..self.control.runs.len() {
             let epoch = self.control.runs[i].model.epoch();
-            if self.control.runs[i].model.phase() == Phase::Active {
+            let input_control = [Operation::Pointer, Operation::Keyboard, Operation::Semantic]
+                .into_iter()
+                .any(|op| capabilities(self.control.runs[i].capabilities).allows(op));
+            // Viewing and screen capture can coexist with the person using the desktop, like a screen share.
+            if self.control.runs[i].model.phase() == Phase::Active
+                && (reason != PauseReason::PhysicalInput || input_control)
+            {
+                tracing::info!(epoch = epoch.get(), ?reason, "desktop control paused");
                 changed = true;
                 let _ = self.control.runs[i].model.suspend(epoch);
                 self.control.runs[i].consent_since = Instant::now();
@@ -253,7 +267,7 @@ impl Cupertino {
             }
             if self.control.runs[i].model.phase() == Phase::Active {
                 if self.prompt_shown() {
-                    self.suspend_controls();
+                    self.suspend_controls(PauseReason::AuthenticationPrompt);
                     break;
                 }
                 let output = self.control.runs[i]

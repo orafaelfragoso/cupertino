@@ -92,6 +92,57 @@ fn named<'a>(window: &'a Value, name: &str) -> &'a Value {
         .find(|n| n["name"] == name)
         .unwrap_or_else(|| panic!("missing {name}: {window}"))
 }
+
+#[test]
+fn rust_mcp_can_request_a_new_grant_after_stopping_the_previous_epoch() {
+    let Some(mut session) = Session::start() else {
+        return;
+    };
+    start_controller(&mut session);
+    let mut mcp = Mcp::connect(&mut session);
+    mcp.rpc(&mut session.server, "initialize", json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"reuse-test","version":"1"}}));
+    let first = mcp.ok(&mut session.server, "status", json!({}));
+    let epoch = first["epoch"].clone();
+    mcp.ok(
+        &mut session.server,
+        "request_control",
+        json!({"output":"headless-1","capabilities":["observe","capture"]}),
+    );
+    session
+        .server
+        .wait_until("initial consent", |s| panel_rect(s).is_some());
+    let (x, y, _, _) = panel_rect(&session.server.state).unwrap();
+    click(&mut session.server, x + 345.0, y + 196.0);
+    mcp.ok(
+        &mut session.server,
+        "wait",
+        json!({"epoch":epoch,"phase":2,"timeout_ms":5000}),
+    );
+    mcp.ok(&mut session.server, "stop", json!({"epoch":epoch}));
+    let next = mcp.ok(&mut session.server, "status", json!({}));
+    assert_eq!(next["phase"], 0);
+    assert_ne!(next["epoch"], epoch);
+    mcp.ok(
+        &mut session.server,
+        "request_control",
+        json!({"output":"headless-1","capabilities":["observe"]}),
+    );
+    session
+        .server
+        .wait_until("fresh consent for the new epoch", |s| {
+            panel_rect(s).is_some()
+        });
+    // A fresh run still needs the person; it never inherits the earlier grant.
+    assert!(mcp.tool(
+        &mut session.server,
+        "observe",
+        json!({"epoch":next["epoch"]})
+    )["isError"]
+        .as_bool()
+        .unwrap());
+    mcp.ok(&mut session.server, "stop", json!({"epoch":next["epoch"]}));
+}
+
 #[test]
 fn rust_mcp_controls_real_kit_nodes_with_consent_stale_checks_and_protected_values() {
     let Some(mut session) = Session::start() else {

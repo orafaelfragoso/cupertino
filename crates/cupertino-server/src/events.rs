@@ -358,13 +358,21 @@ impl Cupertino {
         let was_physical = self.control.physical_input;
         // A release may finish the physical gesture that just approved consent. New gestures take over.
         let takeover = match &event {
-            InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. } => false,
+            InputEvent::DeviceAdded { .. }
+            | InputEvent::DeviceRemoved { .. }
+            | InputEvent::TouchUp { .. }
+            | InputEvent::TouchCancel { .. }
+            | InputEvent::TouchFrame { .. }
+            | InputEvent::GestureSwipeEnd { .. }
+            | InputEvent::GesturePinchEnd { .. }
+            | InputEvent::GestureHoldEnd { .. } => false,
             InputEvent::Keyboard { event } => event.state() == KeyState::Pressed,
             InputEvent::PointerButton { event } => event.state() == ButtonState::Pressed,
+            InputEvent::PointerMotion { event } => event.delta_x() != 0.0 || event.delta_y() != 0.0,
             _ => true,
         };
         if takeover {
-            self.suspend_controls();
+            self.suspend_controls(crate::control::PauseReason::PhysicalInput);
         }
         self.control.physical_input = true;
         if !matches!(

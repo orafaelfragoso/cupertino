@@ -102,8 +102,10 @@ focused. Approval requires a fresh physical-input serial delivered to the regist
 request. Injected input cannot approve consent, reach session/authentication surfaces or invoke reserved session
 shortcuts or menu-bar power actions.
 
-New physical gestures pause input and capture; a release may finish the gesture that approved consent. Resume
-requires another explicit native response. Ctrl+Alt+Escape stops control. Lock, session deactivation, loss of the
+New physical gestures pause runs with pointer, keyboard or semantic-action rights; observation/capture-only runs
+continue while the person uses the desktop. Releases and trailing touch/gesture frames complete existing gestures. Resume
+requires another explicit native response. The consent panel closes after the decision; no permanent active or paused
+panel is shown. Ctrl+Alt+Escape stops control. Lock, session deactivation, loss of the
 authority/controller and local peer exit revoke the run and release only its owned input. Capture excludes
 consent surfaces and authentication prompts. Capture sources belong to one approved epoch, and denied or revoked
 sources cannot acquire a later grant. Geometry revisions reject stale input coordinates. Bounded outcome history

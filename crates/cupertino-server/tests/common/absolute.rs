@@ -41,7 +41,7 @@ impl InputBackend for Backend {
     type KeyboardKeyEvent = Key;
     type PointerAxisEvent = UnusedEvent;
     type PointerButtonEvent = Button;
-    type PointerMotionEvent = UnusedEvent;
+    type PointerMotionEvent = Relative;
     type PointerMotionAbsoluteEvent = Absolute;
     type GestureSwipeBeginEvent = UnusedEvent;
     type GestureSwipeUpdateEvent = UnusedEvent;
@@ -55,13 +55,59 @@ impl InputBackend for Backend {
     type TouchUpEvent = UnusedEvent;
     type TouchMotionEvent = UnusedEvent;
     type TouchCancelEvent = UnusedEvent;
-    type TouchFrameEvent = UnusedEvent;
+    type TouchFrameEvent = Frame;
     type TabletToolAxisEvent = UnusedEvent;
     type TabletToolProximityEvent = UnusedEvent;
     type TabletToolTipEvent = UnusedEvent;
     type TabletToolButtonEvent = UnusedEvent;
     type SwitchToggleEvent = UnusedEvent;
     type SpecialEvent = UnusedEvent;
+}
+
+pub struct Relative {
+    dx: f64,
+    dy: f64,
+}
+impl Event<Backend> for Relative {
+    fn time(&self) -> u64 {
+        0
+    }
+    fn device(&self) -> Device {
+        Device
+    }
+}
+impl smithay::backend::input::PointerMotionEvent<Backend> for Relative {
+    fn delta_x(&self) -> f64 {
+        self.dx
+    }
+    fn delta_y(&self) -> f64 {
+        self.dy
+    }
+    fn delta_x_unaccel(&self) -> f64 {
+        self.dx
+    }
+    fn delta_y_unaccel(&self) -> f64 {
+        self.dy
+    }
+}
+pub fn relative(dx: f64, dy: f64) -> InputEvent<Backend> {
+    InputEvent::PointerMotion {
+        event: Relative { dx, dy },
+    }
+}
+
+pub struct Frame;
+impl Event<Backend> for Frame {
+    fn time(&self) -> u64 {
+        0
+    }
+    fn device(&self) -> Device {
+        Device
+    }
+}
+impl smithay::backend::input::TouchFrameEvent<Backend> for Frame {}
+pub fn frame() -> InputEvent<Backend> {
+    InputEvent::TouchFrame { event: Frame }
 }
 
 /// A position as a share of the device's range, 0 to 1 along each axis.

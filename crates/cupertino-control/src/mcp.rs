@@ -301,6 +301,11 @@ impl Native {
             self.epoch(epoch)?;
         }
         let mut result = self.command(command)?;
+        if matches!(&call, Call::Stop { .. }) {
+            // A stopped epoch cannot request another grant. The next task needs a fresh private session.
+            self.lease.lock().unwrap().close();
+            self.reader = None;
+        }
         if let Call::Observe {
             window,
             role,

@@ -1,6 +1,8 @@
 //! The shipped Rust controller and native Kit consent UI run together under an isolated session.
 #[path = "semantics.rs"]
 mod semantics;
+#[path = "stability.rs"]
+mod stability;
 use super::*;
 use serde_json::{json, Value};
 use smithay::desktop::layer_map_for_output;
@@ -37,6 +39,14 @@ impl Local {
         }
     }
     fn call(&mut self, server: &mut Server, command: Value) -> Value {
+        self.call_while(server, command, |_| {})
+    }
+    fn call_while(
+        &mut self,
+        server: &mut Server,
+        command: Value,
+        mut step: impl FnMut(&mut Cupertino),
+    ) -> Value {
         serde_json::to_writer(&mut self.input, &command).unwrap();
         self.input.write_all(b"\n").unwrap();
         self.input.flush().unwrap();
@@ -46,7 +56,15 @@ impl Local {
             output.read_line(&mut line).unwrap();
             (output, line)
         });
-        server.wait_until("a native local response", |_| read.is_finished());
+        let deadline = Instant::now() + common::HANG_GUARD;
+        while !read.is_finished() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for native response: {command}"
+            );
+            step(&mut server.state);
+            server.step();
+        }
         let (output, line) = read.join().unwrap();
         self.output = Some(output);
         serde_json::from_str(&line)
@@ -177,9 +195,27 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
     );
     session
         .server
-        .wait_until("the compact active control panel", |s| {
-            panel_rect(s).is_some_and(|(_, _, _, h)| h == 128.0)
+        .wait_until("consent to close after approval", |s| {
+            panel_rect(s).is_none()
         });
+    session.server.run_for(Duration::from_millis(800));
+    assert_eq!(
+        local.ok(&mut session.server, json!({"op":"status"}))["phase"],
+        2
+    );
+    // A trailing touch frame completes a gesture; it is not a new takeover.
+    session
+        .server
+        .state
+        .process_input_event(common::absolute::frame());
+    session
+        .server
+        .state
+        .process_input_event(common::absolute::relative(0.0, 0.0));
+    assert_eq!(
+        local.ok(&mut session.server, json!({"op":"status"}))["phase"],
+        2
+    );
     local.ok(
         &mut session.server,
         json!({"op":"move","x":point.0,"y":point.1}),
@@ -270,11 +306,24 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
         &mut session.server,
         json!({"op":"wait","phase":2,"timeout_ms":5000}),
     );
-    session.server.wait_until("the active stop panel", |s| {
-        panel_rect(s).is_some_and(|(_, _, _, h)| h == 128.0)
-    });
-    let (x, y, _, _) = panel_rect(&session.server.state).unwrap();
-    click(&mut session.server, x + 345.0, y + 96.0);
+    session
+        .server
+        .wait_until("no permanent control panel", |s| panel_rect(s).is_none());
+    // The reserved physical shortcut remains available without a status panel.
+    for code in [29, 56, 1] {
+        session
+            .server
+            .state
+            .process_input_event(common::absolute::key(code, true));
+        session.server.step();
+    }
+    for code in [1, 56, 29] {
+        session
+            .server
+            .state
+            .process_input_event(common::absolute::key(code, false));
+        session.server.step();
+    }
     next.ok(
         &mut session.server,
         json!({"op":"wait","phase":4,"timeout_ms":5000}),

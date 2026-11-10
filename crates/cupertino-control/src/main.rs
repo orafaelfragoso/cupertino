@@ -138,6 +138,22 @@ struct ClientRun<'a> {
     next: u32,
 }
 impl ClientRun<'_> {
+    // Semantic publications and window animation advance the input token without changing the captured output.
+    // Core output metadata also covers transforms and pixel modes absent from the version-3 geometry event.
+    fn capture_layout(&self) -> Result<(Value, cupertino_wayland_client::OutputInfo), String> {
+        let mut geometry = self.remote.geometry.clone();
+        geometry
+            .as_object_mut()
+            .ok_or("output geometry is unavailable")?
+            .remove("revision");
+        let output = self
+            .conn
+            .outputs()
+            .into_iter()
+            .find(|o| Some(o.id) == self.remote.output)
+            .ok_or("output disappeared during capture")?;
+        Ok((geometry, output))
+    }
     fn pump(&mut self, timeout: Option<Duration>) -> Result<(), String> {
         if self.inbox.closed.load(Ordering::SeqCst) {
             return Err("local client disconnected".into());
@@ -287,7 +303,7 @@ impl ClientRun<'_> {
                 if self.remote.phase != 2 {
                     return Err("desktop control is not active".into());
                 }
-                let revision = self.remote.revision;
+                let layout = self.capture_layout()?;
                 let mut frame =
                     capturer.start(self.conn, self.remote.output.ok_or("no granted output")?)?;
                 let deadline = Instant::now() + REPLY_TIMEOUT;
@@ -312,7 +328,7 @@ impl ClientRun<'_> {
                 if self.remote.phase != 2 || frame.progress().2 {
                     return Err("capture grant ended".into());
                 }
-                if self.remote.revision != revision {
+                if self.capture_layout()? != layout {
                     return Err("output geometry changed during capture; observe again".into());
                 }
                 let (w, h, png) = frame.png()?;

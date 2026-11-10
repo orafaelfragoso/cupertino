@@ -1,4 +1,33 @@
 use super::*;
+
+#[test]
+fn stopping_releases_the_native_connection_so_the_next_task_gets_a_fresh_epoch() {
+    use std::io::BufRead;
+    let (socket, peer) = UnixStream::pair().unwrap();
+    let mut native = native();
+    native.reader = Some(BufReader::new(socket.try_clone().unwrap()));
+    native.lease.lock().unwrap().socket = Some(socket);
+    let server = std::thread::spawn(move || {
+        let mut peer = BufReader::new(peer);
+        for (op, phase) in [("status", 2), ("stop", 4)] {
+            let mut line = String::new();
+            peer.read_line(&mut line).unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["op"], op);
+            writeln!(
+                peer.get_mut(),
+                "{}",
+                json!({"ok":true,"data":{"epoch":7,"phase":phase}})
+            )
+            .unwrap();
+        }
+    });
+    let stopped = native.call(Call::Stop { epoch: "7".into() }).unwrap();
+    assert_eq!(stopped["structuredContent"]["phase"], 4);
+    assert!(native.reader.is_none());
+    assert!(native.lease.lock().unwrap().socket.is_none());
+    server.join().unwrap();
+}
+
 fn native() -> Native {
     Native {
         session: "test".into(),

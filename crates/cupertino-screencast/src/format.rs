@@ -269,9 +269,16 @@ pub fn buffers(format: &Format) -> Vec<u8> {
             int(spa::sys::SPA_PARAM_BUFFERS_blocks, 1),
             int(spa::sys::SPA_PARAM_BUFFERS_size, format.frame_len() as i32),
             int(spa::sys::SPA_PARAM_BUFFERS_stride, format.stride() as i32),
-            int(
+            Property::new(
                 spa::sys::SPA_PARAM_BUFFERS_dataType,
-                1 << spa::sys::SPA_DATA_MemFd,
+                // Consumers may offer several memory types; negotiate their common bits.
+                Value::Choice(ChoiceValue::Int(Choice(
+                    ChoiceFlags::empty(),
+                    ChoiceEnum::Flags {
+                        default: 1 << spa::sys::SPA_DATA_MemFd,
+                        flags: vec![1 << spa::sys::SPA_DATA_MemFd],
+                    },
+                ))),
             ),
         ],
     })

@@ -215,6 +215,20 @@ fn consume(
                 height: info.size().height,
             });
             let metas = [
+                // OBS accepts any of these memory types in its shared-memory fallback.
+                // A producer must intersect the mask rather than compare it as a fixed integer.
+                serialize(spa::pod::Object {
+                    type_: SpaTypes::ObjectParamBuffers.as_raw(),
+                    id: spa::param::ParamType::Buffers.as_raw(),
+                    properties: vec![spa::pod::Property::new(
+                        spa::sys::SPA_PARAM_BUFFERS_dataType,
+                        Value::Int(
+                            (1 << spa::sys::SPA_DATA_MemPtr)
+                                | (1 << spa::sys::SPA_DATA_MemFd)
+                                | (1 << spa::sys::SPA_DATA_DmaBuf),
+                        ),
+                    )],
+                }),
                 meta(
                     spa::sys::SPA_META_Header,
                     size_of::<spa::sys::spa_meta_header>(),

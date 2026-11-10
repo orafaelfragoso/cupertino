@@ -161,6 +161,9 @@ Start the bridge with an explicit selected display:
 cupertino-control --mcp "$WAYLAND_DISPLAY"
 ```
 
+Omit the display argument to select the host's `WAYLAND_DISPLAY`; a missing environment value is an error,
+so it never attaches to an arbitrary runtime socket. This mode lets an installed MCP registration follow the next login.
+
 The bridge implements MCP stdio versions 2025-06-18 and 2025-11-25 (initialization), plus
 [2026-07-28 per-request discovery](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning).
 It exposes twelve tools: status, request_control, observe, action, capture, move, button, key, scroll, wait, resume
@@ -176,8 +179,17 @@ After installing the updated controller in an updated session, register its abso
 [Codex MCP host](https://learn.chatgpt.com/docs/extend/mcp?surface=cli):
 
 ```bash
-codex mcp add cupertino --env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" -- /usr/bin/cupertino-control --mcp "$WAYLAND_DISPLAY"
+codex mcp add cupertino -- /usr/bin/cupertino-control --mcp
 codex mcp get cupertino
+```
+
+Forward the host session variables in its MCP configuration:
+
+```toml
+[mcp_servers.cupertino]
+command = "/usr/bin/cupertino-control"
+args = ["--mcp"]
+env_vars = ["XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"]
 ```
 
 For a development candidate, use a stable staged binary path outside the disposable managed target.

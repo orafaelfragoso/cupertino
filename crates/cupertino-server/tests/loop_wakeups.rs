@@ -43,7 +43,7 @@ fn an_idle_desktop_has_nothing_due_within_a_second() {
 /// What `Cupertino::tick` calls, each audited for how the loop wakes for it (Shared/cupertino/prism/row236-tick-audit.md):
 /// an event, a frame (`animating`), or a deadline in `next_tick_deadline`. A call added to the tick fails this test until
 /// it is audited the same way and listed here; otherwise its time-driven work would run up to a second late.
-const AUDITED: [&str; 26] = [
+const AUDITED: [&str; 27] = [
     "crate::acquire_waits::sweep(",
     "self.apply_effects(",
     // a drag that ended is an event: the drop handler leaves it, and the tick only finishes what it left
@@ -55,6 +55,8 @@ const AUDITED: [&str; 26] = [
     "self.now(",
     // the cursor, a drag icon and an input method's popup move with events (pointer motion, a new cursor, a drag, the
     // text cursor, an output change), and the cursor's shake growth animates, which draws frames
+    // grant lifetime, roles and geometry follow events/frames; pending native replies wake at control_deadline
+    "self.refresh_control(",
     "self.refresh_loose_surface_outputs(",
     "self.refresh_pointer_constraints(",
     "self.refresh_shortcut_inhibitors(",

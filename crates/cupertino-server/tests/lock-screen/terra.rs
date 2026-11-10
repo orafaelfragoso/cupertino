@@ -42,7 +42,7 @@ fn terra_controls_kit_through_the_native_rust_mcp_bridge() {
         .wait_until("the native controller", |_| socket.exists());
     let output = File::create(&evidence).unwrap();
     let errors = File::create(evidence.with_extension("stderr")).unwrap();
-    let args = serde_json::to_string(&vec!["--mcp", &display]).unwrap();
+    let args = serde_json::to_string(&vec!["--mcp"]).unwrap();
     let prompt="This is an isolated Cupertino integration fixture. Use only the cupertino MCP tools. Do not use shell, files, browser or other tools. Read status and request semantic and capture capabilities on output headless-1. The test harness will click the real native consent panel using genuine fixture backend input. Wait for active phase, observe Counter, find its + button, click it exactly once with its observed publication revision, and verify the new count is 1 in the tool observation. Capture the output and inspect its image to confirm Counter shows 1. Finally stop this epoch and report the observed count. Do not retry a mutation without inspecting state. Do not request user input; the fixture supplies consent.";
     let mut model = App(std::process::Command::new(codex)
         .args([
@@ -66,7 +66,7 @@ fn terra_controls_kit_through_the_native_rust_mcp_bridge() {
             "-c",
             &format!("mcp_servers.cupertino.args={args}"),
             "-c",
-            "mcp_servers.cupertino.env_vars=[\"XDG_RUNTIME_DIR\"]",
+            "mcp_servers.cupertino.env_vars=[\"XDG_RUNTIME_DIR\",\"WAYLAND_DISPLAY\"]",
             "-c",
             "mcp_servers.cupertino.tool_timeout_sec=45",
             "-c",
@@ -74,6 +74,8 @@ fn terra_controls_kit_through_the_native_rust_mcp_bridge() {
             prompt,
         ])
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+        .env("WAYLAND_DISPLAY", &display)
+        .envs(common::events::isolated_vars())
         .current_dir(&session.fixture.root)
         .stdin(Stdio::null())
         .stdout(output)

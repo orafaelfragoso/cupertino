@@ -180,11 +180,14 @@ impl ClientRun<'_> {
         self.until(Instant::now() + timeout, |r| {
             r.reply.is_some_and(|(s, _)| s == serial)
         })?;
-        self.remote
-            .reply
-            .unwrap()
-            .1
-            .map_err(|r| format!("request refused ({r})"))
+        self.remote.reply.unwrap().1.map_err(|r| {
+            // cupertino_control_session_v1.refusal.unknown_outcome must never invite a blind mutation retry.
+            if r == 10 {
+                "request outcome is unknown; observe before retrying".into()
+            } else {
+                format!("request refused ({r})")
+            }
+        })
     }
     fn execute(&mut self, request: Request, capturer: &capture::Capturer) -> Result<Value, String> {
         self.pump(Some(Duration::ZERO))?;
@@ -497,9 +500,12 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let result=match args.as_slice(){
     [serve_arg]if serve_arg=="--serve"=>serve(),
+    [flag]if flag=="--mcp"=>std::env::var("WAYLAND_DISPLAY")
+        .map_err(|_|"WAYLAND_DISPLAY is missing; use --mcp DISPLAY_NAME to select a session".to_owned())
+        .and_then(|session|mcp::serve(&session)),
     [flag,session]if flag=="--mcp"=>mcp::serve(session),
     [flag,session]if flag=="--session"=>frontend(session.clone()),
-    _=>Err("usage: cupertino-control --session WAYLAND_DISPLAY (JSON lines), --mcp WAYLAND_DISPLAY (MCP stdio), or --serve (compositor-owned)".into()),
+    _=>Err("usage: cupertino-control --session WAYLAND_DISPLAY (JSON lines), --mcp [WAYLAND_DISPLAY] (MCP stdio; defaults to the host session), or --serve (compositor-owned)".into()),
 };
     if let Err(error) = result {
         eprintln!("cupertino-control: {error}");

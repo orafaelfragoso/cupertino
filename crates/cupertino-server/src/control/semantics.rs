@@ -217,6 +217,20 @@ impl Cupertino {
             }
         }
     }
+    /// Pending native replies have a real deadline even while every output is idle.
+    pub(crate) fn control_deadline(&self) -> Option<f64> {
+        self.control
+            .semantics
+            .pending
+            .iter()
+            .map(|p| p.deadline)
+            .min()
+            .map(|at| {
+                // The loop schedules model time; native timeouts retain their wall-time duration with --time-scale.
+                self.now()
+                    + at.saturating_duration_since(Instant::now()).as_secs_f64() * self.time_scale
+            })
+    }
     pub(super) fn refresh_semantics(&mut self) {
         let active = self.semantic_run();
         let mut layout = Vec::new();

@@ -448,6 +448,16 @@ fn shell_bin_dir() -> &'static Path {
     })
 }
 
+/// A process-private home keeps installed desktop preferences out of the shell fixtures.
+fn process_home() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let path = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("shell-process-home-{}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    })
+}
 /// A real shell process on the private bus: `env` puts the bus address in its environment, which
 /// the supervisor then passes on with `WAYLAND_DISPLAY`. The empty `CUPERTINO_ASSET_SEARCH_PATH` gives it the
 /// built-in assets alone, like the test process, whatever asset packs the machine has installed. The test PAM shim
@@ -456,6 +466,14 @@ fn real_process(binary: &str, bus: &PrivateBus) -> ShellProcess {
     let path = shell_bin_dir().join(binary);
     let mut command = vec![
         "env".into(),
+        format!("HOME={}", process_home().display()),
+        format!(
+            "XDG_CONFIG_HOME={}",
+            process_home().join("config").display()
+        ),
+        format!("XDG_DATA_HOME={}", process_home().join("data").display()),
+        format!("XDG_CACHE_HOME={}", process_home().join("cache").display()),
+        format!("CUPERTINO_SPEC_DIR={}", common::spawn::spec_dir().display()),
         format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
         "CUPERTINO_ASSET_SEARCH_PATH=".into(),
     ];
@@ -2992,9 +3010,19 @@ fn start_server_binary(mode: &str) -> Option<(Daemon, Option<PrivateBus>)> {
     let address = bus
         .as_ref()
         .map_or("unix:path=/nonexistent", |bus| bus.address.as_str());
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cupertino-server"));
+    let conf = config.file("compositor.json");
+    std::fs::write(&conf, b"{\"shell\":[]}").unwrap();
+    let mut command =
+        common::spawn::cleared(env!("CARGO_BIN_EXE_cupertino-server"), process_home());
     command
         .args([mode, "--size", "800x600"])
+        .env(cupertino_server::config::CONFIG_ENV, &conf)
+        .env("RUST_LOG", "info")
+        .env(
+            "XDG_RUNTIME_DIR",
+            std::env::var_os("XDG_RUNTIME_DIR").unwrap(),
+        )
+        .pam_isolated(cupertino_test_pam::shared())
         .env("XDG_CONFIG_HOME", &config.0)
         .env("XDG_STATE_HOME", config.0.join("state"))
         .env("DBUS_SESSION_BUS_ADDRESS", address)
@@ -3003,6 +3031,11 @@ fn start_server_binary(mode: &str) -> Option<(Daemon, Option<PrivateBus>)> {
         .stderr(Stdio::piped());
     if mode == "--winit" {
         command.env("WAYLAND_DEBUG", "client");
+        for name in ["WAYLAND_DISPLAY", "DISPLAY"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
     }
     let mut server = Daemon(command.spawn().expect("the server starts"));
     let stderr = std::io::BufReader::new(server.0.stderr.take().unwrap());

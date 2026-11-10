@@ -43,7 +43,6 @@ struct Diagnostics {
     /// `journal-<pid>` beside it: a socket this process binds once and keeps open, which no one reads.
     journal: PathBuf,
     socket: UnixDatagram,
-    short_socket_dir: Option<tempfile::TempDir>,
 }
 
 static DIAGNOSTICS: OnceLock<Diagnostics> = OnceLock::new();
@@ -58,18 +57,28 @@ fn diagnostics() -> &'static Diagnostics {
         const SOCKET_PATH_BYTES: usize = 108;
         let candidate = dir.join(format!("journal-{}", std::process::id()));
         // Only the socket uses /tmp when a worktree path is long; diagnostic data stays in the managed target.
-        let short_socket_dir = (candidate.as_os_str().len() >= SOCKET_PATH_BYTES).then(|| {
-            use std::os::unix::fs::PermissionsExt;
-            let dir = tempfile::Builder::new()
-                .prefix("cup-diag-")
-                .tempdir_in("/tmp")
-                .unwrap();
-            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-            dir
-        });
-        let journal = short_socket_dir
-            .as_ref()
-            .map_or(candidate, |dir| dir.path().join("journal"));
+        let journal = if candidate.as_os_str().len() >= SOCKET_PATH_BYTES {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            // The fixture lease owns this short directory, so it survives individual test children and is
+            // removed with the run. Dead-process sockets are swept just as they are under a short target path.
+            let session = std::env::var_os("CUPERTINO_TEST_FIXTURE_SESSION")
+                .expect("long worktree paths require ci/build-test-fixtures.py");
+            let short = PathBuf::from(session).join("diagnostic-journals");
+            match std::fs::DirBuilder::new().mode(0o700).create(&short) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => panic!("create diagnostic socket directory: {e}"),
+            }
+            let meta = std::fs::symlink_metadata(&short).unwrap();
+            assert!(
+                meta.is_dir() && meta.permissions().mode() & 0o077 == 0,
+                "diagnostic socket directory must be private"
+            );
+            remove_stale_journals(&short);
+            short.join(format!("journal-{}", std::process::id()))
+        } else {
+            candidate
+        };
         // a socket of an earlier process with the same id
         let _ = std::fs::remove_file(&journal);
         let socket = UnixDatagram::bind(&journal).unwrap();
@@ -79,9 +88,6 @@ fn diagnostics() -> &'static Diagnostics {
         extern "C" fn remove_journal() {
             if let Some(diagnostics) = DIAGNOSTICS.get() {
                 let _ = std::fs::remove_file(&diagnostics.journal);
-                if let Some(dir) = &diagnostics.short_socket_dir {
-                    let _ = std::fs::remove_dir(dir.path());
-                }
             }
         }
         // SAFETY: `atexit` keeps a plain function pointer; `remove_journal` only removes a file.
@@ -92,7 +98,6 @@ fn diagnostics() -> &'static Diagnostics {
             state,
             journal,
             socket,
-            short_socket_dir,
         }
     })
 }

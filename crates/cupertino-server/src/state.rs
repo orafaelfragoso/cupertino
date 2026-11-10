@@ -2097,11 +2097,12 @@ impl Cupertino {
     /// The earliest model time at which [`Cupertino::tick`] has time-driven work that no event and no frame brings
     /// about: a ping or the pong timeout, a promised SIGKILL, the idle countdowns, the end of the wait for lock
     /// surfaces, a hot corner's dwell, the menu bar edge's reveal or hide, a stale menu edit, and the keyboard filters'
-    /// repeat, slow keys and mouse keys. Animation is not here: it draws frames ([`Cupertino::animating`]).
+    /// repeat, slow keys and mouse keys, and pending native-control action replies. Animation is not here: it draws frames ([`Cupertino::animating`]).
     pub fn next_tick_deadline(&self) -> Option<f64> {
         let filters = &self.key_filters;
         let ms = |t: u64| t as f64 / 1000.0;
         [
+            self.control_deadline(),
             self.hung.next_deadline(),
             self.force_quits.next_deadline(),
             self.display_power_deadline(),

@@ -35,10 +35,11 @@ impl Mcp {
         let program = common::fixtures::artifact("cupertino-control", "bin", "cupertino-control");
         let mut command = common::spawn::cleared(&program, &session.fixture.root.join("home"));
         let mut child = command
-            .args([
-                "--mcp",
+            .args(["--mcp"])
+            .env(
+                "WAYLAND_DISPLAY",
                 session.server.state.socket_name.as_deref().unwrap(),
-            ])
+            )
             .env(
                 "XDG_RUNTIME_DIR",
                 std::env::var_os("XDG_RUNTIME_DIR").unwrap(),
@@ -97,7 +98,7 @@ fn rust_mcp_controls_real_kit_nodes_with_consent_stale_checks_and_protected_valu
         return;
     };
     let (_third_party, _) = session.server.application();
-    let _counter = application(&session, "counter");
+    let counter_app = application(&session, "counter");
     let _forms = application(&session, "forms");
     session.server.wait_until("the real Kit examples", |s| {
         s.windows.iter().filter(|e| e.mapped).count() == 3
@@ -203,6 +204,34 @@ fn rust_mcp_controls_real_kit_nodes_with_consent_stale_checks_and_protected_valu
             json!({"epoch":epoch,"x":20,"y":20,"geometry_revision":observed["geometry_revision"]})
         )["isError"],
         true
+    );
+    // A stopped fixture app cannot complete its accepted action. The compositor must expire it even with no input.
+    let fresh = mcp.ok(&mut session.server, "observe", json!({"epoch":epoch}));
+    let counter = window(&fresh, "org.cupertino.examples.Counter");
+    let plus = named(counter, "+");
+    // Safety: this unreaped Child owns the exact fixture PID; it cannot have been reused.
+    assert_eq!(
+        unsafe { libc::kill(counter_app.0.id() as libc::pid_t, libc::SIGSTOP) },
+        0
+    );
+    let began = Instant::now();
+    let timed=mcp.tool(&mut session.server,"action",json!({"epoch":epoch,"window":counter["handle"],"revision":counter["snapshot"]["revision"],"node":plus["id"],"action":"click"}));
+    // Safety: the same owned fixture child is resumed before the remaining interactions.
+    assert_eq!(
+        unsafe { libc::kill(counter_app.0.id() as libc::pid_t, libc::SIGCONT) },
+        0
+    );
+    assert_eq!(timed["isError"], true, "{timed}");
+    assert!(
+        timed["structuredContent"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown"),
+        "{timed}"
+    );
+    assert!(
+        began.elapsed() < Duration::from_secs(7),
+        "native action deadline did not wake the loop"
     );
     session
         .server

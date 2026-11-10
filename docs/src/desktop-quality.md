@@ -8,9 +8,11 @@ The review used the maintainer's recording `2026-11-10 00-31-22.mp4` (3:52.53, 1
 
 DQ-30 comes from a separate maintainer report and live installed-session inspection on the same date, with runtime base commit `0582a36c`; it is not a finding from the recording.
 
-DQ-31 is a separate maintainer test on the same date: ChatGPT Desktop lacked Cupertino's titlebar and could not be moved by dragging. Follow-up process inspection identified the application's X11 backend; the decoration and move-request causes remain unconfirmed.
+DQ-31 is a separate maintainer test on the same date: ChatGPT Desktop lacked Cupertino's titlebar and could not be moved by dragging through XWayland. A subsequent native Wayland launch sent a valid move request, and the maintainer confirmed that dragging works. The application explicitly requests client-side decorations; the remaining titlebar policy and XWayland move failure stay open.
 
-All 31 entries below are **open**. **Observed** means a visible symptom was found in the recording; **reported** means the maintainer reported it and a focused reproduction remains necessary; **follow-up** means source or running-service inspection adds evidence. A cursor shape does not prove a click reached another window. Without physical input timestamps the video cannot establish repeat latency, right-button delivery or submenu latency. It also cannot establish search matching correctness, accessibility compliance or which material shader ran.
+DQ-32 comes from a subsequent maintainer report and a live D-Bus trace: selecting Open ChatGPT in the menu-bar status icon sent an obsolete menu item ID. A second ChatGPT icon during the Wayland test belonged to its separate test instance and disappeared when that instance ended; duplicate icons are not established as a separate defect.
+
+All 32 entries below are **open**. **Observed** means a visible symptom was found in the recording; **reported** means the maintainer reported it and a focused reproduction remains necessary; **follow-up** means source or running-service inspection adds evidence. A cursor shape does not prove a click reached another window. Without physical input timestamps the video cannot establish repeat latency, right-button delivery or submenu latency. It also cannot establish search matching correctness, accessibility compliance or which material shader ran.
 
 **P1** affects task completion, input reliability, readable controls or core desktop behavior. **P2** affects presentation, consistency or discoverability. These priorities are the next-work recommendation, not a claim that other release criteria are satisfied. The original recording is compressed and downscaled relative to its captured 4K source; fine seams and physical cursor size need verification at native scale.
 
@@ -84,11 +86,31 @@ Workaround performed: terminate only the affected session's `cupertino-launcher`
 
 | ID | Priority | Issue and evidence | Required acceptance |
 |---|---|---|---|
-| DQ-31 | P1 | **Electron applications lack Cupertino's titlebar and cannot be moved by dragging.** Reported and tested by the maintainer with ChatGPT Desktop on 2026-11-10. Follow-up found `--ozone-platform=x11` in its running processes, identifying the XWayland path. Other Electron applications and native Wayland remain unverified. | Affected Electron windows show the intended Cupertino titlebar and window controls and move continuously when dragged by the titlebar. Releasing the pointer ends the move without triggering window controls or dragging application content. Verify ChatGPT Desktop in an installed session and exercise XWayland and native Wayland separately, including maximize/restore and output scaling. |
+| DQ-31 | P1 | **Electron windows use their own titlebars; ChatGPT cannot be dragged through XWayland.** Reported and tested by the maintainer on 2026-11-10. Native Wayland dragging subsequently passed in a separate profile; the client still requests its own decorations. Other Electron applications remain unverified. | Resolve the intended titlebar and window-control policy for affected Electron windows and fix dragging through XWayland. Preserve working native Wayland movement, client controls and application drag regions. Verify both backends separately, including release, maximize/restore and output scaling, without duplicate titlebars or overlapping controls. |
 
 To reproduce, launch ChatGPT Desktop in the installed Cupertino session, inspect the top of its normal window, then press and drag where the titlebar should allow movement. The maintainer found no Cupertino titlebar and could not move the window by dragging. Expected: the window has Cupertino's titlebar and a usable drag region that moves it until release.
 
-The reported case used `chatgpt-desktop` `26.1103.60933-1` with installed Cupertino `0.1.0-1`, runtime base commit `0582a36c`, and a 3840×2160 display at scale 2. Process inspection confirms that this run uses the X11 backend through XWayland; it does not establish native Wayland behavior or the root cause. No workaround has been verified. Keep DQ-31 open until the reported application passes an installed-session titlebar and dragging check at an exact candidate commit.
+The reported case used `chatgpt-desktop` `26.1103.60933-1` with installed Cupertino `0.1.0-1`, runtime base commit `0582a36c`, and a 3840×2160 display at scale 2. Process inspection identified the original run's X11 backend through XWayland. A separate profile launched with `--ozone-platform=wayland` created a native Wayland toplevel and sent `xdg_toplevel.move` with the serial of a still-held left-button press. The maintainer confirmed that this test window moves when its top bar is dragged. This verifies a workaround for ChatGPT dragging; it does not establish compatibility for all Electron applications or diagnose the XWayland failure.
+
+For future launches, the installed `/usr/bin/chatgpt` wrapper reads `~/.config/chatgpt-flags.conf`, with one flag per line. It does not read `~/.config/electron-flags.conf`. The verified backend flag is now saved in the app-specific file:
+
+```text
+--ozone-platform=wayland
+```
+
+Quit the existing ChatGPT process and reopen the application for the flag to take effect. An already running process retains its backend. This workaround does not require disabling the sandbox or GPU acceleration.
+
+The titlebar is a separate compatibility question. The native Wayland trace shows the application requesting `zxdg_toplevel_decoration_v1.set_mode(1)` (client-side), with Cupertino answering `configure(1)`. The packaged application selects a hidden native titlebar with a client titlebar overlay on Linux; [Electron documents this customization](https://www.electronjs.org/docs/latest/tutorial/custom-title-bar). Cupertino's `XdgDecorationHandler::request_mode` in `crates/cupertino-server/src/handlers.rs` honors that client-side request. Forcing Wayland therefore does not request Cupertino's server-side titlebar. Keep DQ-31 open for the titlebar policy and the original XWayland dragging failure.
+
+## Menu-bar status-item actions
+
+| ID | Priority | Issue and evidence | Required acceptance |
+|---|---|---|---|
+| DQ-32 | P1 | **ChatGPT's menu-bar status menu shows actions that do nothing.** The maintainer could neither reopen the window nor quit from the menu. A live trace captured Cupertino sending `clicked` for item 3 while the application's current menu revision 18 used 137 for Open ChatGPT and 139 for Quit. | Status menus follow layout/property changes and refresh before opening when needed. Displayed rows and dispatched actions use the same current menu IDs and exporter. Verify Open and Quit after application state changes, including menu replacement, and verify cleanup when an instance exits. |
+
+To reproduce, start ChatGPT Desktop, use it until its exported status menu changes, then open its menu-bar icon's menu and choose Open ChatGPT or Quit. The reported menu remained visible but its actions had no effect. The captured Open event used an ID absent from the current layout, explaining that failure. Quit was reported by the maintainer; it was not invoked during inspection because it would terminate the active application.
+
+In `crates/cupertino-menubar/src/worker.rs`, `follow_status_item` reloads the menu when the status item's icon, title, status or tooltip changes. `sni::item_changes` does not follow the menu's own `LayoutUpdated` or `ItemsPropertiesUpdated` signals. `crates/cupertino-menubar/src/routing.rs` also ignores `AboutToShow` for status menus. Consequently, a DBusMenu replacement can leave the visible menu and its activation IDs stale even while the status icon remains valid. This path uses D-Bus and is separate from the X11/Wayland backend selection in DQ-31. No permanent fix has been applied.
 
 ## Closed screen-capture regression
 

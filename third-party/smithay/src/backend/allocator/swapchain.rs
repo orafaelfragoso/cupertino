@@ -16,6 +16,26 @@ use super::dmabuf::{AsDmabuf, Dmabuf};
 
 pub const SLOT_CAP: usize = 4;
 
+/// Advance a used buffer's age, preserving zero for a buffer never submitted.
+/// Return false on overflow so the caller discards the stale slot. Use compare/exchange rather than the deprecated
+/// `fetch_update` or its newer replacement to retain the vendored crate's declared Rust compatibility.
+fn advance_age(age: &AtomicU8) -> bool {
+    let mut current = age.load(Ordering::SeqCst);
+    loop {
+        let next = if current == 0 {
+            0
+        } else if let Some(next) = current.checked_add(1) {
+            next
+        } else {
+            return false;
+        };
+        match age.compare_exchange_weak(current, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
 /// Swapchain handling a fixed set of re-usable buffers e.g. for scan-out.
 ///
 /// ## How am I supposed to use this?
@@ -204,17 +224,8 @@ where
         slot.0.age.store(1, Ordering::SeqCst);
         for other_slot in &mut self.slots {
             if !Arc::ptr_eq(other_slot, &slot.0) && other_slot.buffer.is_some() {
-                let res = other_slot
-                    .age
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |age| {
-                        if age > 0 {
-                            age.checked_add(1)
-                        } else {
-                            Some(0)
-                        }
-                    });
                 // If the age overflows the slot was not used for a long time. Lets clear it
-                if res.is_err() {
+                if !advance_age(&other_slot.age) {
                     *other_slot = Default::default();
                 }
             }
@@ -262,5 +273,24 @@ where
     /// Get allowed modifiers
     pub fn modifiers(&self) -> &[Modifier] {
         &self.modifiers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buffer_age_preserves_unused_buffers_and_rejects_overflow() {
+        for initial in 0..=u8::MAX {
+            let age = AtomicU8::new(initial);
+            assert_eq!(advance_age(&age), initial != u8::MAX);
+            let expected = match initial {
+                0 => 0,
+                u8::MAX => u8::MAX,
+                used => used + 1,
+            };
+            assert_eq!(age.load(Ordering::SeqCst), expected);
+        }
     }
 }

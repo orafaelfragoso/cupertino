@@ -14,6 +14,10 @@ name the protocol object that set a selection.
 
 ### Bugfixes
 
+Remove four unused tracing imports, cast the SIGBUS handler through a pointer before its integer representation,
+and advance swapchain buffer ages with compare/exchange instead of deprecated `fetch_update`. Age zero and overflow
+handling and sequentially consistent ordering are preserved without raising the declared Rust version.
+
 Removing a `wl_shm` buffer destruction hook removed another hook of that buffer instead of the given one. A
 client that destroyed its `xdg_toplevel_icon_v1` and then a buffer it had added to it got the `no_buffer`
 protocol error and was disconnected.

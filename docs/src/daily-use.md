@@ -49,7 +49,7 @@ To change a shortcut, add a `chord = action` line to `~/.config/cupertino/shortc
 | `Super+Shift+5` | the toolbar |
 | `Super+Ctrl+Shift+3`, `Super+Ctrl+Shift+4` | the screen or a selection, to the clipboard |
 
-Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets `location` to `documents`, `pictures`, `clipboard` or a directory. The toolbar writes the file back. On the overlay, Escape cancels, Space switches to picking a window, the arrow keys make and move a selection (Alt with an arrow resizes it) and Return captures. The screenshot tool has no built-in video recorder. External recorders can use the ScreenCast portal: in OBS choose Screen Capture (PipeWire), then select a display or window. The OBS black-capture buffer-negotiation regression is fixed in `17c33c42`; the local recording verified desktop frames after replacing the portal. See [Portals](portals.md#screen-sharing) for scope and remaining limitations.
+Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets `location` to `documents`, `pictures`, `clipboard` or a directory. The toolbar writes the file back. On the overlay, Escape cancels, Space switches to picking a window, the arrow keys make and move a selection (Alt with an arrow resizes it) and Return captures. The screenshot tool has no built-in video recorder. External recorders can use the ScreenCast portal: in OBS choose Screen Capture (PipeWire), then select a display or window. The OBS black-capture buffer-negotiation regression is fixed in `fe28a392`; the local recording verified desktop frames after replacing the portal. See [Portals](portals.md#screen-sharing) for scope and remaining limitations.
 
 ## Saved passwords
 

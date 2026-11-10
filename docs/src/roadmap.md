@@ -69,7 +69,7 @@ The earlier menu/Control Center fixes and glass implementations listed above do 
 Still required:
 
 - Resolve and verify the [29 desktop quality issues](desktop-quality.md): window/input/menu behavior (DQ-01–09), materials/motion/scrolling (DQ-10–14), Control Center/notifications/dock behavior (DQ-15–20), Files/Trash/preview (DQ-21–27), and Settings presentation (DQ-28–29).
-- Preserve the OBS buffer-negotiation fix in `17c33c42`. The locally rebuilt portal produced the review recording after the fix; browser sharing and the remaining output, performance and package checks are still required.
+- Preserve the OBS buffer-negotiation fix in `fe28a392`. The locally rebuilt portal produced the review recording after the fix; browser sharing and the remaining output, performance and package checks are still required.
 
 - Verify in an installed session and on hardware:
   - browser file choosing and screen sharing through the portals;

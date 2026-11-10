@@ -11,6 +11,12 @@ Short rules for any agent (and any person) who edits this repository. Details li
 5. **Names.** Crates are `cupertino-*`, files are kebab-case, user-visible terms are the project's own (overview, workspaces, launcher, control panel, file manager).
 6. **Scope.** One purpose per change, no drive-by renames or reformatting, no new documents unless asked.
 
+## Git identity and attribution
+
+- Use the user's configured Git author and committer identity. Do not override it with an assistant or service identity.
+- Do not add `Co-authored-by` trailers or other assistant attribution to commit messages.
+- Rewrite existing authors or committers only when the user explicitly requests it.
+
 ## Build and test
 
 For build/install-only work, use the managed wrapper with `cargo build --locked -p PACKAGE --bin BINARY` and only the

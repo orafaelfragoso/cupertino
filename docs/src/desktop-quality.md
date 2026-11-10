@@ -66,7 +66,7 @@ All 29 entries below are **open**. **Observed** means a visible symptom was foun
 
 ## Closed screen-capture regression
 
-**CAP-01 — OBS black capture after selecting a source: fixed in `17c33c42`.** PipeWire rejected buffer allocation with `Invalid argument`: Cupertino offered `MemFd` as a fixed integer while OBS's shared-memory fallback offered a mask of supported types. The producer now offers a flags choice so negotiation intersects the supported bits. The test consumer offers an OBS-style `MemPtr | MemFd | DmaBuf` mask.
+**CAP-01 — OBS black capture after selecting a source: fixed in `fe28a392`.** PipeWire rejected buffer allocation with `Invalid argument`: Cupertino offered `MemFd` as a fixed integer while OBS's shared-memory fallback offered a mask of supported types. The producer now offers a flags choice so negotiation intersects the supported bits. The test consumer offers an OBS-style `MemPtr | MemFd | DmaBuf` mask.
 
 Validation recorded before merge: the consumer failed to stream with the old producer and passed with the fix; eight unit tests, the stream and resize integration tests, Clippy, formatting and layer checks passed. Only `cupertino-portal` was rebuilt and installed for the local trial, then restarted. The supplied recording contains desktop frames after that replacement. This closes the observed OBS black-frame regression, not all browser/screen-share, audio, output-transform, performance or packaging acceptance checks. The local binary replacement is not a new versioned Arch package and can be overwritten by a package update.
 

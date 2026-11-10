@@ -64,7 +64,7 @@ Implemented:
 - The window buttons the server draws, the revealed title bar of a full-screen window included, are exposed to assistive technology through AccessKit, with presses accepted only while a button is shown, enabled and unlocked.
 - A popup grab ends whenever the keyboard moves outside it: to a layer surface such as the launcher or the Control Center, the lock screen, the authentication prompt or another window.
 
-The earlier menu/Control Center fixes and glass implementations listed above do not close the newly observed or reported failures: dropdown cursor ownership, Control Center contrast and service compatibility, inconsistent materials and interaction motion, sidebar bounds and Files toolbar/search layout remain open. Notifications, dock behavior, Trash, preview, cursor sizing and input timing also need the checks recorded below.
+The earlier menu/Control Center fixes and glass implementations listed above do not close the newly observed or reported failures: dropdown cursor ownership, Control Center contrast and service compatibility, inconsistent materials and interaction motion, sidebar bounds and Files toolbar/search layout remain open. Notifications, dock behavior, Trash, preview, cursor sizing and the inverted Delay until repeat setting also need the checks recorded below. Key repeat itself works, as clarified by the maintainer.
 
 Still required:
 
@@ -128,7 +128,7 @@ NetworkManager and BlueZ are the shipped ISO and installed-system backends. Cupe
 
 ## Desktop quality acceptance
 
-Open, assessed 2026-11-10. The [complete backlog](desktop-quality.md) distinguishes recording evidence, maintainer reports and follow-up inspection, with priorities and acceptance checks for all 29 items. It includes titlebar long-press maximization, cursor scaling, keyboard repeat, slow submenus, missing context-menu behavior, sidebar bounds and leaks, unreadable or incorrect Control Center state, Edit Controls dismissal, the dock's bottom-edge gap, notification wording/dismissal, Trash emptying, preview activation/flashing/placement, thick scrollbars and material/motion inconsistencies. It also records the additional Files toolbar/title, sidebar clipping, submenu placement, Applications, Bluetooth naming and wallpaper-preview findings.
+Open, assessed 2026-11-10. The [complete backlog](desktop-quality.md) distinguishes recording evidence, maintainer reports and follow-up inspection, with priorities and acceptance checks for all 29 items. It includes titlebar long-press maximization, cursor scaling, the inverted Delay until repeat setting (key repeat works), slow submenus, missing context-menu behavior, sidebar bounds and leaks, unreadable or incorrect Control Center state, Edit Controls dismissal, the dock's bottom-edge gap, notification wording/dismissal, Trash emptying, preview activation/flashing/placement, thick scrollbars and material/motion inconsistencies. It also records the additional Files toolbar/title, sidebar clipping, submenu placement, Applications, Bluetooth naming and wallpaper-preview findings.
 
 P1 items are the next functional acceptance work; P2 items remain part of the intended desktop experience. A fix needs focused automated coverage where practical and an installed-session check at an exact candidate commit. Do not close these items from existing feature tests, a headless screenshot or the presence of a glass recipe alone. The OBS black-capture regression CAP-01 is fixed; that does not close this gate.
 

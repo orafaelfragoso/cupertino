@@ -78,6 +78,36 @@ fn panel_rect(state: &Cupertino) -> Option<(f64, f64, f64, f64)> {
         f64::from(geometry.size.h),
     ))
 }
+fn start_controller(session: &mut Session) {
+    use std::os::unix::fs::MetadataExt;
+    let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap())
+        .join("cupertino")
+        .join(format!(
+            "control-{}.sock",
+            session.server.state.socket_name.as_deref().unwrap()
+        ));
+    let identity = || {
+        std::fs::metadata(&socket)
+            .ok()
+            .map(|m| (m.ino(), m.ctime(), m.ctime_nsec()))
+    };
+    // Earlier fixture processes can leave a socket behind. Wait for this controller's bind without consuming a peer.
+    let previous = identity();
+    let program = common::fixtures::artifact("cupertino-control", "bin", "cupertino-control");
+    session.server.state.supervisor.add_built_ins(
+        [(
+            cupertino_server::config::BuiltIn::DesktopControl,
+            Some(program),
+        )],
+        Instant::now(),
+    );
+    start_shell_supervision(&session.server.state, &session.server.event_loop).unwrap();
+    session
+        .server
+        .wait_until("the new native controller socket", |_| {
+            identity().is_some_and(|current| Some(current) != previous)
+        });
+}
 fn click(server: &mut Server, x: f64, y: f64) {
     server.state.process_input_event(common::absolute::motion(
         x / f64::from(OUTPUT.0),
@@ -96,25 +126,7 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
         return;
     };
     let (application, point) = session.server.application();
-    let program = common::fixtures::artifact("cupertino-control", "bin", "cupertino-control");
-    session.server.state.supervisor.add_built_ins(
-        [(
-            cupertino_server::config::BuiltIn::DesktopControl,
-            Some(program),
-        )],
-        Instant::now(),
-    );
-    start_shell_supervision(&session.server.state, &session.server.event_loop).unwrap();
-    let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap());
-    let socket = runtime.join("cupertino").join(format!(
-        "control-{}.sock",
-        session.server.state.socket_name.as_deref().unwrap()
-    ));
-    session
-        .server
-        .wait_until("the native controller socket", |_| {
-            UnixStream::connect(&socket).is_ok()
-        });
+    start_controller(&mut session);
     let mut local = Local::connect(&mut session);
     assert_eq!(
         local.ok(&mut session.server, json!({"op":"hello","version":1}))["schema"],

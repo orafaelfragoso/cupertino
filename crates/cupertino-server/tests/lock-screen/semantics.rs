@@ -103,24 +103,7 @@ fn rust_mcp_controls_real_kit_nodes_with_consent_stale_checks_and_protected_valu
     session.server.wait_until("the real Kit examples", |s| {
         s.windows.iter().filter(|e| e.mapped).count() == 3
     });
-    let program = common::fixtures::artifact("cupertino-control", "bin", "cupertino-control");
-    session.server.state.supervisor.add_built_ins(
-        [(
-            cupertino_server::config::BuiltIn::DesktopControl,
-            Some(program),
-        )],
-        Instant::now(),
-    );
-    start_shell_supervision(&session.server.state, &session.server.event_loop).unwrap();
-    let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap())
-        .join("cupertino")
-        .join(format!(
-            "control-{}.sock",
-            session.server.state.socket_name.as_deref().unwrap()
-        ));
-    session
-        .server
-        .wait_until("the native controller", |_| socket.exists());
+    start_controller(&mut session);
     let mut mcp = Mcp::connect(&mut session);
     assert_eq!(mcp.rpc(&mut session.server,"initialize",json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"integration-test","version":"1"}}))["protocolVersion"],"2025-11-25");
     assert_eq!(

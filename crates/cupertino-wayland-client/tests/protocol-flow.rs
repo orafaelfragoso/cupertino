@@ -3750,6 +3750,71 @@ mod layer {
         }
     }
 
+    /// An extension can handle its reply without adding a core Event to Connection's event vector.
+    #[test]
+    fn an_already_received_extension_reply_ends_wait_without_another_event() {
+        use super::{spawn_compositor, Arc, Duration, Globals, Instant, UnixStream};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Reply(Arc<AtomicBool>);
+        impl Dispatch<ZwlrLayerSurfaceV1, Reply> for State {
+            fn event(
+                _: &mut State,
+                _: &ZwlrLayerSurfaceV1,
+                event: zwlr_layer_surface_v1::Event,
+                reply: &Reply,
+                _: &WlConnection,
+                _: &QueueHandle<State>,
+            ) {
+                if matches!(event, zwlr_layer_surface_v1::Event::Configure { .. }) {
+                    reply.0.store(true, Ordering::SeqCst);
+                }
+            }
+        }
+        let (client, server) = UnixStream::pair().unwrap();
+        let readable = client.try_clone().unwrap();
+        let (_control, _seen) = spawn_compositor(
+            server,
+            Globals {
+                layer_shell: true,
+                ..Globals::core()
+            },
+        );
+        let mut conn = Connection::from_stream(client).unwrap();
+        conn.roundtrip().unwrap();
+        conn.wait(Some(Duration::ZERO)).unwrap();
+        let layers = Layers::bind(&mut conn);
+        let received = Arc::new(AtomicBool::new(false));
+        let surface = conn.external_surface(|wl, qh, _| {
+            LayerRole(layers.0.get_layer_surface(
+                wl,
+                None,
+                Layer::Top,
+                "quiet-extension".into(),
+                qh,
+                Reply(received.clone()),
+            ))
+        });
+        conn.wl_surface(surface).unwrap().commit();
+        conn.flush().unwrap();
+        let mut fds = [rustix::event::PollFd::new(
+            &readable,
+            rustix::event::PollFlags::IN,
+        )];
+        rustix::event::poll(
+            &mut fds,
+            Some(&rustix::event::Timespec {
+                tv_sec: 2,
+                tv_nsec: 0,
+            }),
+        )
+        .unwrap();
+        assert!(fds[0].revents().contains(rustix::event::PollFlags::IN));
+        let started = Instant::now();
+        assert!(conn.wait(Some(Duration::from_secs(2))).unwrap().is_empty());
+        assert!(received.load(Ordering::SeqCst));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
     impl Dispatch<ZwlrLayerShellV1, ShellData> for State {
         fn event(
             _: &mut State,

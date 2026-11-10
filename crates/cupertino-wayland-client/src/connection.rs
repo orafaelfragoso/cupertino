@@ -1416,7 +1416,7 @@ impl Connection {
         self.conn.display().sync(&self.queue.handle(), done.clone());
         let mut woken = false;
         while !done.0.load(Ordering::SeqCst) {
-            woken |= self.block(None)?;
+            woken |= self.block(None)?.1;
             self.queue.dispatch_pending(&mut self.state)?;
         }
         // a wake read meanwhile is kept for the next wait
@@ -1572,13 +1572,13 @@ impl Connection {
     pub fn wait(&mut self, timeout: Option<Duration>) -> Result<Vec<Event>, Error> {
         // read what arrived while the caller was busy first: a key released meanwhile ends its repeat before the
         // repeats due since are counted
-        let woken = self.block(Some(Duration::ZERO))?;
+        let (read, woken) = self.block(Some(Duration::ZERO))?;
         self.queue.dispatch_pending(&mut self.state)?;
         self.state.repeat_keys(Instant::now());
         self.animate_cursor()?;
         self.state.pump_reads();
         self.update_scales()?;
-        if self.state.events.is_empty() && self.state.fault.is_none() && !woken {
+        if self.state.events.is_empty() && self.state.fault.is_none() && !read && !woken {
             // a key repeat, the next image of an animated cursor or a clipboard read giving up earlier than the
             // caller's timeout ends the wait first
             let now = Instant::now();
@@ -1632,22 +1632,25 @@ impl Connection {
         }
     }
 
-    /// Poll the connection and the wake channel once and read what is ready; true when a [`Waker`] woke the loop.
-    fn block(&mut self, timeout: Option<Duration>) -> Result<bool, Error> {
+    /// Poll once; report dispatched or read events separately from a [`Waker`] waking the loop.
+    fn block(&mut self, timeout: Option<Duration>) -> Result<(bool, bool), Error> {
+        let mut dispatched = 0;
         let guard = loop {
             match self.queue.prepare_read() {
                 Some(guard) => break guard,
                 None => {
-                    self.queue.dispatch_pending(&mut self.state)?;
+                    dispatched += self.queue.dispatch_pending(&mut self.state)?;
                 }
             }
         };
         // another thread reading the connection for a queue of its own may have read events for this queue since
         // the last dispatch; with the read prepared it reads no more without this one, so what is dispatched now is
         // all that arrived, and the wait does not block when it found something
-        let timeout = match self.queue.dispatch_pending(&mut self.state)? {
-            0 => timeout,
-            _ => Some(Duration::ZERO),
+        dispatched += self.queue.dispatch_pending(&mut self.state)?;
+        let timeout = if dispatched == 0 {
+            timeout
+        } else {
+            Some(Duration::ZERO)
         };
         self.flush()?;
         let timespec = timeout.map(|d| rustix::event::Timespec {
@@ -1699,7 +1702,7 @@ impl Connection {
                 }
             }
         }
-        Ok(wake_ready)
+        Ok((connection_ready || dispatched > 0, wake_ready))
     }
 }
 

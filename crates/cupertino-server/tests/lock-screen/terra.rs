@@ -19,14 +19,7 @@ fn terra_controls_kit_through_the_native_rust_mcp_bridge() {
         .server
         .wait_until("Counter to map", |s| s.windows.iter().any(|e| e.mapped));
     let program = common::fixtures::artifact("cupertino-control", "bin", "cupertino-control");
-    session.server.state.supervisor.add_built_ins(
-        [(
-            cupertino_server::config::BuiltIn::DesktopControl,
-            Some(program.clone()),
-        )],
-        Instant::now(),
-    );
-    start_shell_supervision(&session.server.state, &session.server.event_loop).unwrap();
+    start_controller(&mut session);
     let display = session
         .server
         .state
@@ -34,12 +27,6 @@ fn terra_controls_kit_through_the_native_rust_mcp_bridge() {
         .as_deref()
         .unwrap()
         .to_owned();
-    let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap())
-        .join("cupertino")
-        .join(format!("control-{display}.sock"));
-    session
-        .server
-        .wait_until("the native controller", |_| socket.exists());
     let output = File::create(&evidence).unwrap();
     let errors = File::create(evidence.with_extension("stderr")).unwrap();
     let args = serde_json::to_string(&vec!["--mcp"]).unwrap();

@@ -9,6 +9,7 @@ description = "The public Cupertino protocols on the transport's queue: appearan
 layer = "transport"
 
 [dependencies]
+cupertino-semantics = { path = "../cupertino-semantics" }
 cupertino-app-protocols = { path = "../cupertino-app-protocols", features = ["client"] }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }

@@ -133,16 +133,74 @@ Keep that process connected across commands, since separate invocations do not s
 {"op":"stop"}
 ```
 
-Capability bits are observe 1, capture 2, pointer 4 and keyboard 8. Keys use evdev codes; coordinates and scrolling
+Capability bits are observe 1, capture 2, pointer 4, keyboard 8 and semantic actions 16. Semantic actions also require observe. Keys use evdev codes; coordinates and scrolling
 use logical points relative to the approved output. Capture returns an upright PNG as base64 with its geometry.
 `status` reports epoch and phase: inactive 0, consent 1, active 2, paused 3, revoked 4. `resume` opens fresh consent.
 Closing the local connection ends its run. The local protocol accepts typed operations, not shell commands or
 arbitrary file paths.
 
-Window-scoped grants, Kit semantic publication, the Rust MCP adapter and deployment automation remain later stages.
-This implementation adds no external control framework or runtime dependency. Server changes take effect at the
-next planned installed-session start; test the new server and session agent nested or headless without restarting
-the current desktop.
+Version 3 adds Kit semantics and a Rust MCP stdio bridge in the same executable. Public
+`cupertino_semantics_v1` publishers may describe only their own Wayland surfaces; they gain no control authority.
+The compositor requests snapshots only while a matching output has an active observe grant. Lock, protected
+surfaces, authentication prompts and the consent authority are excluded. Kit exports its existing runtime tree:
+stable generational node IDs, roles, names, states, logical bounds, supported actions and list/table positions.
+Password values carry only a protected marker and expose no actions. Text is bounded at UTF-8 boundaries and
+explicitly marked when truncated. Complete publication replacement removes old nodes; surface/window destruction
+invalidates its handles. Third-party windows have compositor metadata with no Kit snapshot.
+
+Native `observe` returns output-scoped windows and complete publication revisions.
+`action` takes `window`, `revision`, `node`, `action` and optional typed `data`.
+Both the compositor and the owning Kit runtime recheck the live revision and action before dispatch.
+Completion follows the runtime update and publication; uncertain/time-limited outcomes require observation before
+retry. No action is replayed automatically. Version 3 also invalidates input coordinate revisions when published
+state or visible window layout changes. Optional `revision` on local pointer requests enforces the caller's token.
+
+Start the bridge with an explicit selected display:
+
+```bash
+cupertino-control --mcp "$WAYLAND_DISPLAY"
+```
+
+The bridge implements MCP stdio versions 2025-06-18 and 2025-11-25 (initialization), plus
+[2026-07-28 per-request discovery](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning).
+It exposes twelve tools: status, request_control, observe, action, capture, move, button, key, scroll, wait, resume
+and stop. Status lists output names without exposing their content. Request only the needed capabilities, await
+native consent, and pass the resulting epoch to each subsequent call. Observe accepts window, exact role and name
+substring filters, reports truncation, and supplies output-relative bounds. Opaque identifiers and publication
+revisions are decimal strings, preserving all 64 bits. Geometry revisions remain numbers. Action returns its
+outcome and a fresh observation; capture returns PNG image content with geometry, without duplicating base64 in
+text. Cancellation and stdin EOF close the native lease and release owned input. Queues, messages, images,
+publication sizes, waits and stalled stdout writes have explicit bounds. Tool discovery works offline.
+
+After installing the updated controller in an updated session, register its absolute path with the
+[Codex MCP host](https://learn.chatgpt.com/docs/extend/mcp?surface=cli):
+
+```bash
+codex mcp add cupertino --env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" -- /usr/bin/cupertino-control --mcp "$WAYLAND_DISPLAY"
+codex mcp get cupertino
+```
+
+For a development candidate, use a stable staged binary path outside the disposable managed target.
+Choose `gpt-6.1-terra` in the host; this bridge requires no API client or new credential.
+A host connection refresh is separate from restarting Cupertino. Host MCP tool approval and native desktop consent
+are separate gates. If the host has approval policy `never`, explicitly approve this selected server's tools in
+its MCP settings before requesting control; the compositor still requires fresh native consent.
+The opt-in model acceptance test scopes `default_tools_approval_mode = "approve"` to its isolated fixture server.
+
+The real Counter and Forms examples are tested through the shipped Rust MCP adapter, supervised controller and
+native Kit consent panel on private headless sessions. Those tests assert button state changes, Unicode field
+updates, stale-action/coordinate rejection, protected values, image content and cancellation.
+Run the optional model acceptance test only with an installed, authenticated Codex CLI:
+set `CUPERTINO_TERRA_CODEX` to its absolute path and `CUPERTINO_TERRA_EVIDENCE` to a retained JSONL receipt path,
+then use the fixture wrapper with `cargo nextest run --run-ignored only -E 'test(terra_controls_kit)'`.
+It selects `gpt-6.1-terra`, approves only its isolated MCP server, supplies genuine fixture backend consent,
+and checks the actual semantic tool result after a single mutation, image capture and stop.
+It uses the host's existing account, so it is excluded from ordinary CI.
+
+Window-scoped grants, CLI registry convenience commands and deployment automation remain future work.
+No external control framework, MCP SDK or third-party runtime dependency is added. Server changes take effect at
+the next planned installed-session start. The current installed compositor cannot acquire a new protocol without
+that activation; builds and isolated tests do not restart it.
 
 ### Dependency boundary
 
@@ -177,7 +235,7 @@ it is not a prerequisite for Terra to operate Cupertino.
 
 ### Source changes
 
-The following are proposed changes, not descriptions of shipped interfaces:
+The following records the architecture and remaining integration roadmap; the implemented output-scoped interfaces are described above.
 
 | Area | Native change |
 | --- | --- |

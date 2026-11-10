@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cupertino_semantics_v1">
+  <copyright>SPDX-License-Identifier: MIT OR Apache-2.0</copyright>
+  <interface name="cupertino_semantics_v1" version="1">
+    <description summary="publish only the client's own native semantic tree">
+      This public interface grants no observation or desktop control. Only the compositor may subscribe an
+      explicitly consented output's eligible surfaces. Publications are bounded immutable sealed JSON memfds.
+      Epochs bind subscriptions to the exact live control run; inactive publications are discarded.
+    </description>
+    <enum name="error"><entry name="invalid_surface" value="0"/><entry name="invalid_payload" value="1"/></enum>
+    <request name="destroy" type="destructor"/>
+    <request name="get_surface"><arg name="id" type="new_id" interface="cupertino_semantic_surface_v1"/><arg name="surface" type="object" interface="wl_surface"/></request>
+  </interface>
+  <interface name="cupertino_semantic_surface_v1" version="1">
+    <description summary="a surface-owned publication and supported actions">
+      One publisher per wl_surface. Each active interest starts a new epoch and requires a full snapshot.
+      The snapshot revision increases for any change, including removals and focus. Node identities are local
+      to this surface's lifetime. Values of protected nodes and actions on those nodes are never published.
+      The compositor validates scope, epoch, publication revision and supported actions before forwarding.
+      The application revalidates the target before routing the action through its native runtime.
+    </description>
+    <request name="destroy" type="destructor"/>
+    <request name="publish"><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/><arg name="payload" type="fd"/><arg name="length" type="uint"/></request>
+    <request name="unavailable"><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/></request>
+    <request name="complete"><arg name="payload" type="fd"/><arg name="length" type="uint"/></request>
+    <event name="interest"><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/><arg name="active" type="uint"/></event>
+    <event name="perform"><arg name="payload" type="fd"/><arg name="length" type="uint"/></event>
+  </interface>
+</protocol>

@@ -1,5 +1,6 @@
 //! Native desktop-control grants, trusted session consent and input routing. Version 1 remains discovery-only.
 mod input;
+mod semantics;
 use crate::authorization::{authorized, require, ShellRole};
 use crate::state::Cupertino;
 use cupertino_control_model::{
@@ -26,8 +27,8 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// Current version; old clients keep discovery only.
-const VERSION: u32 = 2;
+/// Current version; version 1 keeps discovery only and version 2 retains its input/capture ABI.
+const VERSION: u32 = 3;
 /// At most one session per private connection, across manager bindings.
 const MAX_SESSIONS_PER_CONNECTION: usize = 1;
 /// Number of completed request outcomes retained to suppress retries.
@@ -36,8 +37,8 @@ const REPLY_HISTORY: usize = 64;
 const CONSENT_FRESHNESS: Duration = Duration::from_secs(3);
 /// Bound serial provenance storage while the person interacts with consent.
 const USER_SERIALS: usize = 32;
-/// Operations implemented by version 2 (observe, capture, pointer, keyboard).
-const AVAILABLE: u32 = 15;
+/// Operations implemented by version 3, adding semantic actions to version 2 input/capture.
+const AVAILABLE: u32 = 31;
 
 pub struct Control {
     _global: GlobalId,
@@ -51,6 +52,7 @@ pub struct Control {
     pub(crate) dispatching: bool,
     pub(crate) physical_input: bool,
     injected_clients: Vec<ClientId>,
+    semantics: semantics::SemanticState,
 }
 pub struct SessionData {
     epoch: Option<Epoch>,
@@ -95,6 +97,7 @@ impl Control {
             dispatching: false,
             physical_input: false,
             injected_clients: Vec::new(),
+            semantics: semantics::SemanticState::new(display),
         }
     }
     fn allocate_epoch(&mut self) -> Option<Epoch> {
@@ -126,6 +129,7 @@ fn capabilities(bits: u32) -> Capabilities {
             (2, Operation::Capture),
             (4, Operation::Pointer),
             (8, Operation::Keyboard),
+            (16, Operation::Semantic),
         ]
         .into_iter()
         .filter_map(|(bit, op)| (bits & bit != 0).then_some(op)),
@@ -190,6 +194,7 @@ impl Cupertino {
         self.control_cleanup_input(epoch);
         self.control_changed(index, 0);
         self.stop_captures();
+        self.refresh_semantics();
     }
     pub(crate) fn suspend_controls(&mut self) {
         let mut changed = false;
@@ -205,6 +210,7 @@ impl Cupertino {
         }
         if changed {
             self.stop_captures();
+            self.refresh_semantics();
         }
     }
     /// Called each loop and before requests/copies: a held descriptor never outlives the actual processes or grant.
@@ -268,6 +274,7 @@ impl Cupertino {
                 }
             }
         }
+        self.refresh_semantics();
     }
     /// Other session panels pause control; the consent panel itself may still be committing its old focus after approval.
     pub(crate) fn control_sensitive_focus(&self, surface: &WlSurface) -> bool {
@@ -352,7 +359,11 @@ impl Cupertino {
         if !self.control.authority_alive() {
             return Err(session::Refusal::NoAuthority);
         }
-        if bits == 0 || bits & !AVAILABLE != 0 {
+        if bits == 0
+            || bits & !AVAILABLE != 0
+            || (bits & 16 != 0 && bits & 1 == 0)
+            || (self.control.runs[index].resource.version() < 3 && bits & 16 != 0)
+        {
             return Err(session::Refusal::Unsupported);
         }
         if self.control.runs.iter().enumerate().any(|(i, r)| {
@@ -518,7 +529,13 @@ impl Dispatch<CupertinoControlV1, ()> for Cupertino {
                 r.created(
                     (epoch.get() >> 32) as u32,
                     epoch.get() as u32,
-                    if r.version() >= 2 { AVAILABLE } else { 0 },
+                    if r.version() >= 3 {
+                        AVAILABLE
+                    } else if r.version() == 2 {
+                        15
+                    } else {
+                        0
+                    },
                 );
                 r.status(0, session::Phase::Inactive);
                 state.control.runs.push(Run {
@@ -622,6 +639,17 @@ impl Dispatch<CupertinoControlSessionV1, SessionData> for Cupertino {
                 epoch_lo,
                 ..
             }
+            | session::Request::Observe {
+                serial,
+                epoch_hi,
+                epoch_lo,
+            }
+            | session::Request::Perform {
+                serial,
+                epoch_hi,
+                epoch_lo,
+                ..
+            }
             | session::Request::Resume {
                 serial,
                 epoch_hi,
@@ -634,6 +662,14 @@ impl Dispatch<CupertinoControlSessionV1, SessionData> for Cupertino {
             return;
         };
         let result = match request {
+            session::Request::Observe { .. } => state.control_observe(i, serial),
+            session::Request::Perform {
+                payload, length, ..
+            } => match state.control_perform(i, serial, payload, length) {
+                Ok(true) => return,
+                Ok(false) => Ok(()),
+                Err(e) => Err(e),
+            },
             session::Request::Start {
                 output,
                 capabilities,

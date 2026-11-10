@@ -1054,6 +1054,7 @@ pub fn desktop_control<M: Clone + 'static>(
         (2, "capture the display"),
         (4, "use the pointer"),
         (8, "use the keyboard"),
+        (16, "use native controls"),
     ]
     .into_iter()
     .filter_map(|(bit, label)| (capabilities & bit != 0).then_some(label))

@@ -187,6 +187,8 @@ struct WindowState<M> {
     accessibility: BTreeMap<NodeId, AccessibilityNode>,
     /// The node of `accessibility` assistive technology is told holds the focus.
     accessibility_focus: Option<NodeId>,
+    semantic_revision: u64,
+    semantic_snapshot: Option<cupertino_semantics::Snapshot>,
     /// The adapter holds this window's whole tree, so a diff is enough.
     accessible: bool,
     focusable: Vec<NodeId>,
@@ -296,6 +298,11 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     timers: BTreeMap<(Timestamp, u64), A::Message>,
     /// The order of the next [`Command::After`].
     next_timer: u64,
+    semantic_finishing: Vec<(
+        WindowId,
+        cupertino_semantics::ActionCall,
+        cupertino_semantics::Outcome,
+    )>,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -339,6 +346,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             on_presented: Vec::new(),
             timers: BTreeMap::new(),
             next_timer: 0,
+            semantic_finishing: Vec::new(),
         };
         for command in commands {
             runtime.command(command);
@@ -462,6 +470,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             || self.view_dirty
             || self.executor.has_ready()
             || self.accessibility_behind()
+            || self.semantics_behind()
             || self
                 .windows
                 .iter()
@@ -488,6 +497,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             self.platform_event(event)?;
         }
         self.assistive_actions();
+        self.semantic_actions();
         self.messages.extend(self.executor.run_ready());
         while let Some(message) = self.messages.pop_front() {
             for command in A::update(&mut self.model, message) {
@@ -814,6 +824,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             geometry: Geometry::new(),
             accessibility: BTreeMap::new(),
             accessibility_focus: None,
+            semantic_revision: 0,
+            semantic_snapshot: None,
             accessible: false,
             focusable: Vec::new(),
             roving_groups: Vec::new(),
@@ -1783,6 +1795,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
         }
         self.sync_accessibility();
+        self.sync_semantics();
         self.send_presented();
         Ok(())
     }
@@ -2669,6 +2682,7 @@ fn sync_menus<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>, menus: 
 }
 
 mod drops;
+mod semantics;
 
 #[cfg(test)]
 mod tests;

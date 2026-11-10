@@ -337,7 +337,7 @@ fn desktop_control_is_private_and_grants_no_other_role() {
     let dr = dock.get_registry();
     h.settle(&mut [&mut controller, &mut public, &mut dock]);
     let (name, version) = offered(&controller, cr, "cupertino_control_v1").unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     assert!(offered(&controller, cr, "ext_image_copy_capture_manager_v1").is_some());
     assert!(offered(
         &controller,

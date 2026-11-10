@@ -953,6 +953,7 @@ name = "cupertino-app-protocols"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
+ "cupertino-semantics",
  "wayland-backend",
  "wayland-client",
  "wayland-scanner",
@@ -1041,6 +1042,7 @@ name = "cupertino-control"
 version = "0.1.0"
 dependencies = [
  "cupertino-peer",
+ "cupertino-semantics",
  "cupertino-shell-client",
  "cupertino-wayland-client",
  "image",
@@ -1646,6 +1648,7 @@ dependencies = [
  "cupertino-app-protocols",
  "cupertino-defaults",
  "cupertino-geometry",
+ "cupertino-semantics",
  "cupertino-wayland-client",
  "wayland-client",
  "wayland-protocols",
@@ -1729,6 +1732,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-semantics"
+version = "0.1.0"
+dependencies = [
+ "rustix 1.1.6",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cupertino-server"
 version = "0.1.0"
 dependencies = [
@@ -1764,6 +1776,7 @@ dependencies = [
  "cupertino-scene",
  "cupertino-screencast",
  "cupertino-seat",
+ "cupertino-semantics",
  "cupertino-stage",
  "cupertino-test-bus",
  "cupertino-test-pam",
@@ -1853,6 +1866,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-protocol-app",
  "cupertino-protocols",
+ "cupertino-semantics",
  "cupertino-wayland-client",
  "wayland-client",
  "wayland-protocols",
@@ -1976,6 +1990,7 @@ dependencies = [
  "async-task",
  "cupertino-geometry",
  "cupertino-menu-model",
+ "cupertino-semantics",
  "cupertino-ui-layout",
  "cupertino-ui-platform",
  "cupertino-ui-render",
@@ -2015,6 +2030,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-menu-model",
  "cupertino-modifiers",
+ "cupertino-semantics",
  "cupertino-ui-render",
  "cupertino-ui-text",
 ]

@@ -7,6 +7,7 @@
 // sccache key on, so an edited protocol regenerates the bindings.
 const _: &[u8] = include_bytes!("../protocols/cupertino-app-effects-v1.xml");
 const _: &[u8] = include_bytes!("../protocols/cupertino-scroll-v1.xml");
+const _: &[u8] = include_bytes!("../protocols/cupertino-semantics-v1.xml");
 
 #[cfg(feature = "client")]
 pub mod client {
@@ -20,6 +21,18 @@ pub mod client {
         unused_imports,
         missing_docs
     )]
+
+    /// Native surface-owned semantic publications.
+    pub mod semantics {
+        use wayland_client;
+        use wayland_client::protocol::*;
+        pub mod __interfaces {
+            use wayland_client::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-semantics-v1.xml");
+        }
+        use self::__interfaces::*;
+        wayland_scanner::generate_client_code!("protocols/cupertino-semantics-v1.xml");
+    }
 
     /// Bindings of `protocols/cupertino-scroll-v1.xml`.
     pub mod scroll {
@@ -62,6 +75,18 @@ pub mod server {
         unused_imports,
         missing_docs
     )]
+
+    /// Native surface-owned semantic publications.
+    pub mod semantics {
+        use wayland_server;
+        use wayland_server::protocol::*;
+        pub mod __interfaces {
+            use wayland_server::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-semantics-v1.xml");
+        }
+        use self::__interfaces::*;
+        wayland_scanner::generate_server_code!("protocols/cupertino-semantics-v1.xml");
+    }
 
     /// Bindings of `protocols/cupertino-scroll-v1.xml`.
     pub mod scroll {

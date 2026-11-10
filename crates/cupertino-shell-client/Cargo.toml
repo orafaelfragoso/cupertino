@@ -9,6 +9,7 @@ description = "The privileged protocols of the Cupertino shell processes on the 
 layer = "transport"
 
 [dependencies]
+cupertino-semantics = { path = "../cupertino-semantics" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app" }

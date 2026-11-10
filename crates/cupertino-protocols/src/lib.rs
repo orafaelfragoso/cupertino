@@ -62,7 +62,7 @@ pub mod client {
         wayland_scanner::generate_client_code!("protocols/cupertino-control-v1.xml");
     }
 
-    pub use cupertino_app_protocols::client::{app_effects, scroll};
+    pub use cupertino_app_protocols::client::{app_effects, scroll, semantics};
 }
 
 #[cfg(feature = "server")]
@@ -117,5 +117,5 @@ pub mod server {
         wayland_scanner::generate_server_code!("protocols/cupertino-control-v1.xml");
     }
 
-    pub use cupertino_app_protocols::server::{app_effects, scroll};
+    pub use cupertino_app_protocols::server::{app_effects, scroll, semantics};
 }

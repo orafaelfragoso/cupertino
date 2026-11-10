@@ -647,7 +647,26 @@ pub enum PlatformError {
     Protocol(String),
 }
 
+pub use cupertino_semantics as semantics;
+
 pub trait WindowSystem {
+    /// Native semantics are opt-in per surface and require compositor consent.
+    fn semantics_active(&self, _window: WindowId) -> bool {
+        false
+    }
+    fn publish_semantics(&mut self, _window: WindowId, _snapshot: &semantics::Snapshot) {}
+    fn semantic_requests(&mut self) -> Vec<(WindowId, semantics::ActionCall)> {
+        Vec::new()
+    }
+    fn semantic_finished(
+        &mut self,
+        _window: WindowId,
+        _call: &semantics::ActionCall,
+        _outcome: semantics::Outcome,
+        _revision: u64,
+    ) {
+    }
+
     fn capabilities(&self) -> Capabilities;
     fn create_window(&mut self, spec: &WindowSpec) -> Result<WindowId, PlatformError>;
     fn create_popup(

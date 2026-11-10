@@ -1,4 +1,6 @@
 //! The shipped Rust controller and native Kit consent UI run together under an isolated session.
+#[path = "semantics.rs"]
+mod semantics;
 use super::*;
 use serde_json::{json, Value};
 use smithay::desktop::layer_map_for_output;

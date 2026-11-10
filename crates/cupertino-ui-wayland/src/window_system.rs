@@ -1,7 +1,7 @@
 //! CupertinoKit's [`WindowSystem`] on the transport: one [`Connection`], its windows and popups, and the renderer's
 //! frames copied into the transport's buffers.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Wake, Waker};
@@ -269,6 +269,8 @@ impl Wake for WakeHandle {
 /// The Wayland window system. Physical modifier keys become logical ones through `profile`.
 pub struct WaylandWindowSystem {
     conn: Connection,
+    semantics: Option<cupertino_protocol_app::Semantics>,
+    semantic_surfaces: HashMap<WindowId, cupertino_protocol_app::SemanticSurface>,
     profile: Profile,
     windows: Vec<Window>,
     next_window: u32,
@@ -392,8 +394,11 @@ impl WaylandWindowSystem {
             let observer = effects.appearance(&conn);
             (effects, observer)
         });
+        let semantics = cupertino_protocol_app::Semantics::bind(&mut conn);
         let mut system = WaylandWindowSystem {
             conn,
+            semantics,
+            semantic_surfaces: HashMap::new(),
             profile,
             windows: Vec::new(),
             next_window: 0,
@@ -502,6 +507,13 @@ impl WaylandWindowSystem {
     ) -> WindowId {
         self.next_window += 1;
         let id = WindowId(self.next_window);
+        if let Some(publisher) = self
+            .semantics
+            .as_ref()
+            .and_then(|s| s.surface(&self.conn, surface).ok())
+        {
+            self.semantic_surfaces.insert(id, publisher);
+        }
         self.windows.push(Window {
             id,
             surface,
@@ -817,6 +829,11 @@ impl WaylandWindowSystem {
 
     /// The window system's events for one transport event; none for a surface that is not a window here.
     fn translate(&mut self, event: Event, out: &mut Vec<PlatformEvent>) {
+        if matches!(&event, Event::Extension(e) if e.downcast_ref::<cupertino_protocol_app::SemanticWake>().is_some())
+        {
+            out.push(PlatformEvent::Wake);
+            return;
+        }
         let on = |windows: &[Window], surface: SurfaceId| {
             windows.iter().position(|w| w.surface == surface)
         };
@@ -1138,6 +1155,40 @@ impl WaylandWindowSystem {
 }
 
 impl WindowSystem for WaylandWindowSystem {
+    fn semantics_active(&self, window: WindowId) -> bool {
+        self.semantic_surfaces
+            .get(&window)
+            .is_some_and(|s| s.active())
+    }
+    fn publish_semantics(
+        &mut self,
+        window: WindowId,
+        snapshot: &cupertino_ui_platform::semantics::Snapshot,
+    ) {
+        if let Some(s) = self.semantic_surfaces.get(&window) {
+            s.publish(snapshot);
+        }
+    }
+    fn semantic_requests(
+        &mut self,
+    ) -> Vec<(WindowId, cupertino_ui_platform::semantics::ActionCall)> {
+        self.semantic_surfaces
+            .iter()
+            .flat_map(|(w, s)| s.requests().into_iter().map(|r| (*w, r)))
+            .collect()
+    }
+    fn semantic_finished(
+        &mut self,
+        window: WindowId,
+        call: &cupertino_ui_platform::semantics::ActionCall,
+        outcome: cupertino_ui_platform::semantics::Outcome,
+        revision: u64,
+    ) {
+        if let Some(s) = self.semantic_surfaces.get(&window) {
+            s.complete(call, outcome, revision);
+        }
+    }
+
     fn capabilities(&self) -> Capabilities {
         let has = |c| self.conn.capabilities().contains(c);
         Capabilities {
@@ -1218,6 +1269,7 @@ impl WindowSystem for WaylandWindowSystem {
     }
 
     fn destroy(&mut self, window: WindowId) {
+        self.semantic_surfaces.remove(&window);
         let Ok(surface) = self.window(window).map(|w| w.surface) else {
             return;
         };

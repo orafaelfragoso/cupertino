@@ -8,9 +8,10 @@
     capture or input authority. Version 1 remains discovery-only. Version 2 requests explicit output-scoped
     consent from the private session authority. Fresh physical input on its registered surface is required
     to approve or resume. Physical input suspends control; lock, disconnect and stop revoke it. Output capture
-    uses ext-image-copy-capture, with sources bound to the exact approved run epoch.
+    uses ext-image-copy-capture, with sources bound to the exact approved run epoch. Version 3 adds consented native
+    semantic observation and actions, with sealed bounded publications owned by each application surface.
   </description>
-  <interface name="cupertino_control_v1" version="2">
+  <interface name="cupertino_control_v1" version="3">
     <enum name="error">
       <entry name="permission" value="2" summary="the connection no longer holds the controller capability"/>
       <entry name="session_exists" value="1" summary="the connection already has a live control session"/>
@@ -30,7 +31,7 @@
       <arg name="id" type="new_id" interface="cupertino_control_session_v1"/>
     </request>
   </interface>
-  <interface name="cupertino_control_session_v1" version="2">
+  <interface name="cupertino_control_session_v1" version="3">
     <enum name="phase">
       <entry name="inactive" value="0"/>
       <entry name="awaiting_consent" value="1" since="2"/>
@@ -93,6 +94,7 @@
     <enum name="capability" bitfield="true" since="2">
       <entry name="observe" value="1"/><entry name="capture" value="2"/>
       <entry name="pointer" value="4"/><entry name="keyboard" value="8"/>
+      <entry name="semantic" value="16" since="3"/>
     </enum>
     <enum name="key_state" since="2"><entry name="released" value="0"/><entry name="pressed" value="1"/></enum>
     <request name="start" since="2">
@@ -139,6 +141,24 @@
       <description summary="the request was dispatched, not proof that the application acted"/>
       <arg name="serial" type="uint"/>
     </event>
+    <request name="observe" since="3">
+      <description summary="a complete consented observation with authoritative window transforms">
+        Includes third-party window metadata without claiming semantic support. Native snapshots are surface-owned,
+        bounded and versioned. Protected session and authentication surfaces are excluded.
+      </description>
+      <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
+    </request>
+    <request name="perform" since="3">
+      <description summary="route one supported action to its exact publication revision">
+        Requires observe and semantic consent. Payload is a sealed bounded Invocation. Completion reports the
+        native runtime's result; applications may finish after a timeout, so uncertain outcomes must not be replayed.
+      </description>
+      <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
+      <arg name="payload" type="fd"/><arg name="length" type="uint"/>
+    </request>
+    <event name="observation" since="3"><arg name="serial" type="uint"/><arg name="payload" type="fd"/><arg name="length" type="uint"/></event>
+    <event name="action_finished" since="3"><arg name="serial" type="uint"/><arg name="payload" type="fd"/><arg name="length" type="uint"/></event>
+    <event name="semantic_changed" since="3"><arg name="revision_hi" type="uint"/><arg name="revision_lo" type="uint"/></event>
   </interface>
 
   <interface name="cupertino_control_authority_v1" version="1">

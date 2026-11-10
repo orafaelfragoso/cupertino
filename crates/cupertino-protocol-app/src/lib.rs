@@ -15,6 +15,8 @@ mod backdrop;
 mod effects;
 mod error;
 mod scroll;
+mod semantics;
+pub use semantics::{SemanticSurface, SemanticWake, Semantics};
 
 pub use backdrop::{Backdrop, BackdropId, BackdropTone, GlassStyle};
 pub use effects::{

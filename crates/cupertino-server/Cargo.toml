@@ -31,6 +31,7 @@ udev = [
 dbus = []
 
 [dependencies]
+cupertino-semantics = { path = "../cupertino-semantics" }
 cupertino-control-model = { path = "../cupertino-control-model" }
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-assets = { path = "../cupertino-assets" }

@@ -7,6 +7,7 @@ use cupertino_protocols::client::control::cupertino_control_session_v1::{
 };
 use cupertino_protocols::client::control::cupertino_control_v1::CupertinoControlV1;
 use cupertino_wayland_client::{Connection, OutputId, State, SurfaceId};
+use std::os::fd::AsFd;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -43,6 +44,20 @@ pub enum ControlEvent {
         serial: u32,
         reason: u32,
     },
+    Observation {
+        epoch: u64,
+        serial: u32,
+        data: cupertino_semantics::Observation,
+    },
+    ActionFinished {
+        epoch: u64,
+        serial: u32,
+        reply: cupertino_semantics::ActionReply,
+    },
+    SemanticChanged {
+        epoch: u64,
+        revision: u64,
+    },
     ConsentRequested {
         epoch: u64,
         capabilities: u32,
@@ -64,7 +79,7 @@ pub struct ControlSession {
 pub struct ControlAuthority(CupertinoControlAuthorityV1);
 impl DesktopControl {
     pub fn bind(conn: &mut Connection) -> Option<Self> {
-        conn.bind_extension(2..=2, Quiet).map(Self)
+        conn.bind_extension(3..=3, Quiet).map(Self)
     }
     pub fn session(&self, conn: &Connection) -> ControlSession {
         let epoch = Arc::new(AtomicU64::new(0));
@@ -147,6 +162,20 @@ impl ControlSession {
     pub fn resume(&self, serial: u32) {
         let (h, l) = self.parts();
         self.proxy.resume(serial, h, l);
+    }
+    pub fn observe(&self, serial: u32) {
+        let (h, l) = self.parts();
+        self.proxy.observe(serial, h, l);
+    }
+    pub fn perform(
+        &self,
+        serial: u32,
+        call: &cupertino_semantics::Invocation,
+    ) -> Result<(), std::io::Error> {
+        let (file, len) = cupertino_semantics::seal(call, cupertino_semantics::MAX_FRAME)?;
+        let (h, l) = self.parts();
+        self.proxy.perform(serial, h, l, file.as_fd(), len);
+        Ok(())
     }
     pub fn stop(&self) {
         self.proxy.stop();
@@ -238,6 +267,47 @@ impl Dispatch<CupertinoControlSessionV1, RunData> for State {
                 height,
                 scale,
                 name,
+            },
+            session::Event::Observation {
+                serial,
+                payload,
+                length,
+            } => {
+                let Ok(data) = cupertino_semantics::read(
+                    payload,
+                    length,
+                    cupertino_semantics::MAX_OBSERVATION,
+                ) else {
+                    return;
+                };
+                ControlEvent::Observation {
+                    epoch,
+                    serial,
+                    data,
+                }
+            }
+            session::Event::ActionFinished {
+                serial,
+                payload,
+                length,
+            } => {
+                let Ok(reply) =
+                    cupertino_semantics::read(payload, length, cupertino_semantics::MAX_FRAME)
+                else {
+                    return;
+                };
+                ControlEvent::ActionFinished {
+                    epoch,
+                    serial,
+                    reply,
+                }
+            }
+            session::Event::SemanticChanged {
+                revision_hi,
+                revision_lo,
+            } => ControlEvent::SemanticChanged {
+                epoch,
+                revision: (u64::from(revision_hi) << 32) | u64::from(revision_lo),
             },
             session::Event::Completed { serial } => ControlEvent::Completed { epoch, serial },
             session::Event::Refused { serial, reason } => ControlEvent::Refused {

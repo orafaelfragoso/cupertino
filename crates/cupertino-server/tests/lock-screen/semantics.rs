@@ -1,0 +1,237 @@
+//! The real Kit examples, compositor, native consent authority and shipped MCP bridge, without touching the login session.
+use super::*;
+#[path = "terra.rs"]
+mod terra;
+
+struct App(Child);
+impl Drop for App {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+fn application(session: &Session, example: &str) -> App {
+    let program = common::fixtures::artifact("cupertino-kit", "example", example);
+    let mut command = common::spawn::cleared(&program, &session.fixture.root.join("home"));
+    App(command
+        .env(
+            "XDG_RUNTIME_DIR",
+            std::env::var_os("XDG_RUNTIME_DIR").unwrap(),
+        )
+        .env(
+            "WAYLAND_DISPLAY",
+            session.server.state.socket_name.as_deref().unwrap(),
+        )
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap())
+}
+struct Mcp {
+    local: Local,
+    id: u64,
+}
+impl Mcp {
+    fn connect(session: &mut Session) -> Self {
+        let program = common::fixtures::artifact("cupertino-control", "bin", "cupertino-control");
+        let mut command = common::spawn::cleared(&program, &session.fixture.root.join("home"));
+        let mut child = command
+            .args([
+                "--mcp",
+                session.server.state.socket_name.as_deref().unwrap(),
+            ])
+            .env(
+                "XDG_RUNTIME_DIR",
+                std::env::var_os("XDG_RUNTIME_DIR").unwrap(),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let local = Local {
+            input: child.stdin.take().unwrap(),
+            output: Some(BufReader::new(child.stdout.take().unwrap())),
+            child,
+        };
+        Self { local, id: 0 }
+    }
+    fn rpc(&mut self, server: &mut Server, method: &str, params: Value) -> Value {
+        self.id += 1;
+        let response = self.local.call(
+            server,
+            json!({"jsonrpc":"2.0","id":self.id,"method":method,"params":params}),
+        );
+        assert_eq!(response["id"], self.id);
+        assert!(response.get("error").is_none(), "{response}");
+        response["result"].clone()
+    }
+    fn tool(&mut self, server: &mut Server, name: &str, args: Value) -> Value {
+        self.rpc(server, "tools/call", json!({"name":name,"arguments":args}))
+    }
+    #[track_caller]
+    fn ok(&mut self, server: &mut Server, name: &str, args: Value) -> Value {
+        let response = self.tool(server, name, args);
+        assert_eq!(response["isError"], false, "{response}");
+        response["structuredContent"].clone()
+    }
+}
+fn window<'a>(observation: &'a Value, app_id: &str) -> &'a Value {
+    observation["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["app_id"] == app_id)
+        .unwrap_or_else(|| panic!("missing {app_id}: {observation}"))
+}
+fn named<'a>(window: &'a Value, name: &str) -> &'a Value {
+    window["snapshot"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == name)
+        .unwrap_or_else(|| panic!("missing {name}: {window}"))
+}
+#[test]
+fn rust_mcp_controls_real_kit_nodes_with_consent_stale_checks_and_protected_values() {
+    let Some(mut session) = Session::start() else {
+        return;
+    };
+    let (_third_party, _) = session.server.application();
+    let _counter = application(&session, "counter");
+    let _forms = application(&session, "forms");
+    session.server.wait_until("the real Kit examples", |s| {
+        s.windows.iter().filter(|e| e.mapped).count() == 3
+    });
+    let program = common::fixtures::artifact("cupertino-control", "bin", "cupertino-control");
+    session.server.state.supervisor.add_built_ins(
+        [(
+            cupertino_server::config::BuiltIn::DesktopControl,
+            Some(program),
+        )],
+        Instant::now(),
+    );
+    start_shell_supervision(&session.server.state, &session.server.event_loop).unwrap();
+    let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap())
+        .join("cupertino")
+        .join(format!(
+            "control-{}.sock",
+            session.server.state.socket_name.as_deref().unwrap()
+        ));
+    session
+        .server
+        .wait_until("the native controller", |_| socket.exists());
+    let mut mcp = Mcp::connect(&mut session);
+    assert_eq!(mcp.rpc(&mut session.server,"initialize",json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"integration-test","version":"1"}}))["protocolVersion"],"2025-11-25");
+    assert_eq!(
+        mcp.rpc(&mut session.server, "tools/list", json!({}))["tools"]
+            .as_array()
+            .unwrap()
+            .len(),
+        12
+    );
+    let initial = mcp.ok(&mut session.server, "status", json!({}));
+    let epoch = initial["epoch"].clone();
+    assert_eq!(initial["outputs"], json!(["headless-1"]));
+    assert_eq!(
+        mcp.tool(&mut session.server, "observe", json!({"epoch":epoch}))["isError"],
+        true
+    );
+    mcp.ok(
+        &mut session.server,
+        "request_control",
+        json!({"output":"headless-1","capabilities":["semantic","capture","pointer","keyboard"]}),
+    );
+    session.server.wait_until("native semantic consent", |s| {
+        panel_rect(s).is_some_and(|(_, _, _, h)| h == 228.0)
+    });
+    assert_eq!(
+        mcp.tool(&mut session.server, "observe", json!({"epoch":epoch}))["isError"],
+        true
+    );
+    let (x, y, _, _) = panel_rect(&session.server.state).unwrap();
+    click(&mut session.server, x + 345.0, y + 196.0);
+    mcp.ok(
+        &mut session.server,
+        "wait",
+        json!({"epoch":epoch,"phase":2,"timeout_ms":5000}),
+    );
+    session.server.run_for(Duration::from_millis(500));
+    let observed = mcp.ok(&mut session.server, "observe", json!({"epoch":epoch}));
+    assert!(window(&observed, APP_ID)["snapshot"].is_null());
+    assert!(!observed.to_string().contains("desktop-control-consent"));
+    let counter = window(&observed, "org.cupertino.examples.Counter");
+    named(counter, "0");
+    let button = named(counter, "+");
+    let action = json!({"epoch":epoch,"window":counter["handle"],"revision":counter["snapshot"]["revision"],"node":button["id"],"action":"click"});
+    let changed = mcp.ok(&mut session.server, "action", action.clone());
+    assert_eq!(changed["action"]["outcome"], "applied");
+    named(
+        window(&changed["observation"], "org.cupertino.examples.Counter"),
+        "1",
+    );
+    assert_eq!(
+        mcp.tool(&mut session.server, "action", action)["isError"],
+        true
+    );
+    let forms = window(&observed, "org.cupertino.examples.Forms");
+    let password = named(forms, "Password");
+    assert_eq!(password["value"], json!({"kind":"protected"}));
+    assert_eq!(password["actions"], json!([]));
+    assert_eq!(mcp.tool(&mut session.server,"action",json!({"epoch":epoch,"window":forms["handle"],"revision":forms["snapshot"]["revision"],"node":password["id"],"action":"set-value","data":{"kind":"text","value":"secret"}}))["isError"],true);
+    let name = named(forms, "Name");
+    let changed=mcp.ok(&mut session.server,"action",json!({"epoch":epoch,"window":forms["handle"],"revision":forms["snapshot"]["revision"],"node":name["id"],"action":"set-value","data":{"kind":"text","value":"Terra ✓"}}));
+    assert_eq!(
+        named(
+            window(&changed["observation"], "org.cupertino.examples.Forms"),
+            "Name"
+        )["value"]["text"],
+        "Terra ✓"
+    );
+    let image = mcp.tool(&mut session.server, "capture", json!({"epoch":epoch}));
+    assert_eq!(image["isError"], false, "{image}");
+    assert_eq!(image["content"][1]["mimeType"], "image/png");
+    assert!(image["content"][1]["data"]
+        .as_str()
+        .unwrap()
+        .starts_with("iVBORw0KGgo"));
+    assert!(image["structuredContent"].get("data").is_none());
+    // The counter mutation invalidates the previous observation's coordinate token.
+    assert_eq!(
+        mcp.tool(
+            &mut session.server,
+            "move",
+            json!({"epoch":epoch,"x":20,"y":20,"geometry_revision":observed["geometry_revision"]})
+        )["isError"],
+        true
+    );
+    session
+        .server
+        .state
+        .process_input_event(common::absolute::motion(0.1, 0.9));
+    mcp.ok(
+        &mut session.server,
+        "wait",
+        json!({"epoch":epoch,"phase":3,"timeout_ms":5000}),
+    );
+    assert_eq!(
+        mcp.tool(&mut session.server, "observe", json!({"epoch":epoch}))["isError"],
+        true
+    );
+    // A matching MCP cancellation interrupts the blocking native wait and revokes its lease.
+    mcp.id += 1;
+    for request in [
+        json!({"jsonrpc":"2.0","id":mcp.id,"method":"tools/call","params":{"name":"wait","arguments":{"epoch":epoch,"phase":2,"timeout_ms":30000}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":mcp.id}}),
+    ] {
+        serde_json::to_writer(&mut mcp.local.input, &request).unwrap();
+        mcp.local.input.write_all(b"\n").unwrap();
+        mcp.local.input.flush().unwrap();
+        session.server.run_for(Duration::from_millis(100));
+    }
+    session
+        .server
+        .wait_until("cancelled MCP grant to close", |s| panel_rect(s).is_none());
+    let next = mcp.ok(&mut session.server, "status", json!({}));
+    assert_ne!(next["epoch"], epoch);
+    assert_eq!(next["phase"], 0);
+}

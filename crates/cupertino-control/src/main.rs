@@ -1,5 +1,6 @@
 mod capture;
 mod ipc;
+mod mcp;
 use cupertino_shell_client::{ControlEvent, ControlSession, DesktopControl};
 use cupertino_wayland_client::{Connection, Event, OutputId};
 use serde::Deserialize;
@@ -29,10 +30,12 @@ enum Request {
     Move {
         x: f64,
         y: f64,
+        revision: Option<u32>,
     },
     Button {
         code: u32,
         pressed: bool,
+        revision: Option<u32>,
     },
     Key {
         code: u32,
@@ -41,8 +44,17 @@ enum Request {
     Scroll {
         horizontal: f64,
         vertical: f64,
+        revision: Option<u32>,
     },
     Capture,
+    Observe,
+    Action {
+        window: u64,
+        revision: u64,
+        node: u64,
+        action: cupertino_semantics::Action,
+        data: Option<cupertino_semantics::Data>,
+    },
     Stop,
     Resume,
     Wait {
@@ -59,6 +71,8 @@ struct Remote {
     output: Option<OutputId>,
     geometry: Value,
     reply: Option<(u32, Result<(), u32>)>,
+    observation: Option<(u32, cupertino_semantics::Observation)>,
+    action_reply: Option<(u32, cupertino_semantics::ActionReply)>,
 }
 impl Remote {
     fn observe(&mut self, events: Vec<Event>, run: &ControlSession) {
@@ -90,6 +104,16 @@ impl Remote {
                     self.revision = *revision;
                     self.geometry = json!({"revision":revision,"x":x,"y":y,"width":width,"height":height,"scale":scale,"name":name});
                 }
+                ControlEvent::Observation {
+                    epoch,
+                    serial,
+                    data,
+                } if *epoch == run.epoch() => self.observation = Some((*serial, data.clone())),
+                ControlEvent::ActionFinished {
+                    epoch,
+                    serial,
+                    reply,
+                } if *epoch == run.epoch() => self.action_reply = Some((*serial, reply.clone())),
                 ControlEvent::Completed { epoch, serial } if *epoch == run.epoch() => {
                     self.reply = Some((*serial, Ok(())))
                 }
@@ -150,7 +174,10 @@ impl ClientRun<'_> {
         Ok(s)
     }
     fn ack(&mut self, serial: u32) -> Result<(), String> {
-        self.until(Instant::now() + REPLY_TIMEOUT, |r| {
+        self.ack_timeout(serial, REPLY_TIMEOUT)
+    }
+    fn ack_timeout(&mut self, serial: u32, timeout: Duration) -> Result<(), String> {
+        self.until(Instant::now() + timeout, |r| {
             r.reply.is_some_and(|(s, _)| s == serial)
         })?;
         self.remote
@@ -163,10 +190,62 @@ impl ClientRun<'_> {
         self.pump(Some(Duration::ZERO))?;
         match request {
             Request::Hello { version: 1 } => Ok(
-                json!({"schema":"cupertino.control.v1","protocol":2,"state":self.remote.snapshot()}),
+                json!({"schema":"cupertino.control.v1","protocol":3,"state":self.remote.snapshot()}),
             ),
             Request::Hello { .. } => Err("unsupported local protocol version".into()),
-            Request::Status => Ok(self.remote.snapshot()),
+            Request::Status => {
+                let mut state = self.remote.snapshot();
+                state["outputs"] = json!(self
+                    .conn
+                    .outputs()
+                    .iter()
+                    .filter_map(|o| o.name.clone())
+                    .collect::<Vec<_>>());
+                Ok(state)
+            }
+            Request::Observe => {
+                let serial = self.serial()?;
+                self.remote.reply = None;
+                self.session.observe(serial);
+                self.ack(serial)?;
+                self.remote
+                    .observation
+                    .as_ref()
+                    .filter(|(s, _)| *s == serial)
+                    .map(|(_, o)| serde_json::to_value(o).unwrap())
+                    .ok_or("observation did not arrive".into())
+            }
+            Request::Action {
+                window,
+                revision,
+                node,
+                action,
+                data,
+            } => {
+                let serial = self.serial()?;
+                self.remote.reply = None;
+                self.session
+                    .perform(
+                        serial,
+                        &cupertino_semantics::Invocation {
+                            window,
+                            revision,
+                            node,
+                            action,
+                            data,
+                        },
+                    )
+                    .map_err(|_| "invalid semantic action")?;
+                self.ack_timeout(serial, REPLY_TIMEOUT + Duration::from_secs(1))?;
+                let reply = self
+                    .remote
+                    .action_reply
+                    .as_ref()
+                    .filter(|(s, _)| *s == serial)
+                    .map(|(_, r)| r)
+                    .ok_or("action outcome is unknown; observe before retrying")?;
+                serde_json::to_value(reply).map_err(|_| "invalid semantic result".into())
+            }
             Request::Start {
                 output,
                 capabilities,
@@ -250,15 +329,26 @@ impl ClientRun<'_> {
                 self.remote.reply = None;
                 let revision = self.remote.revision;
                 match request {
-                    Request::Move { x, y } => self.session.motion(s, revision, x, y),
-                    Request::Button { code, pressed } => {
-                        self.session.button(s, revision, code, pressed)
-                    }
+                    Request::Move {
+                        x,
+                        y,
+                        revision: expected,
+                    } => self.session.motion(s, expected.unwrap_or(revision), x, y),
+                    Request::Button {
+                        code,
+                        pressed,
+                        revision: expected,
+                    } => self
+                        .session
+                        .button(s, expected.unwrap_or(revision), code, pressed),
                     Request::Key { code, pressed } => self.session.key(s, revision, code, pressed),
                     Request::Scroll {
                         horizontal,
                         vertical,
-                    } => self.session.axis(s, revision, horizontal, vertical),
+                        revision: expected,
+                    } => self
+                        .session
+                        .axis(s, expected.unwrap_or(revision), horizontal, vertical),
                     _ => unreachable!(),
                 }
                 self.ack(s)?;
@@ -407,8 +497,9 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let result=match args.as_slice(){
     [serve_arg]if serve_arg=="--serve"=>serve(),
+    [flag,session]if flag=="--mcp"=>mcp::serve(session),
     [flag,session]if flag=="--session"=>frontend(session.clone()),
-    _=>Err("usage: cupertino-control --session WAYLAND_DISPLAY; commands are newline-delimited JSON on stdin".into()),
+    _=>Err("usage: cupertino-control --session WAYLAND_DISPLAY (JSON lines), --mcp WAYLAND_DISPLAY (MCP stdio), or --serve (compositor-owned)".into()),
 };
     if let Err(error) = result {
         eprintln!("cupertino-control: {error}");

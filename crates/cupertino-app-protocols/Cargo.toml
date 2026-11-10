@@ -13,6 +13,7 @@ client = ["dep:wayland-client"]
 server = ["dep:wayland-server"]
 
 [dependencies]
+cupertino-semantics = { path = "../cupertino-semantics" }
 bitflags = "2"
 wayland-backend = "0.3"
 wayland-scanner = "0.31"

@@ -40,6 +40,25 @@ python3 ci/worktree-build.py run --profile dev -- cargo run -p cupertino-layers
 - Tests run with the built-in font and never depend on a pack installed in your home directory; set `CUPERTINO_ASSET_DIR` only to try another pack.
 - CI runs the tests a second time as the Arch package's `check()` does: binaries compiled with `CUPERTINO_THEME_DIR=/usr/share/cupertino/theme` (a directory that does not exist while testing) and `CUPERTINO_SPEC_DIR` pointing at the checkout. With a fresh managed target, reproduce it with `CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CUPERTINO_SPEC_DIR="$PWD/data/theme" python3 ci/worktree-build.py run --profile dev -- python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --workspace --all-features`. A test that starts a Cupertino binary with a cleared environment builds it with `common::spawn::cleared` (`crates/cupertino-server/tests/common/spawn.rs`), which always sets `CUPERTINO_SPEC_DIR` and the empty asset search path (`CUPERTINO_ASSET_SEARCH_PATH=`, the built-in assets alone); every other test spawn sets that path itself (`crates/cupertino-server/tests/asset-isolation.rs` checks the sources); a nightly workflow runs the whole Arch container build (`packaging/ci/build-in-container.sh arch DIST --upgrade`: `check()`, the upgrade test from one package release to the next, and the same install test the release build runs) without publishing.
 
+## Installed-session development
+
+- When working inside the maintainer's Cupertino session, build only the affected package/binary and required
+  consumers with production features. Validate implementation changes in a separate, scoped test step.
+- Apply a compatible candidate by replacing and restarting only the affected application or supervised shell
+  component when its work can be preserved. Keep a rollback copy, record exact artifact hashes and source state,
+  and verify both the replacement and the changed interaction. Follow `docs/src/building.md#installed-session-iteration`.
+- Identify the target through its live compositor/socket, parent process and process start time. Never use a
+  name-wide kill: nested sessions may run the same binaries. Preserve trusted installed paths and ownership.
+- A component restart can lose its transient state; defer it while the component has active work or a screen share.
+  Login, authentication, system daemons and the session manager need their own scoped service-update plan.
+- Test server changes nested or headless and leave activation in the installed desktop for a planned session restart.
+  Do not restart the active compositor or session as part of ordinary iteration.
+- Implement desktop control in-tree in Rust through Cupertino-owned protocols and the existing Wayland/Smithay
+  infrastructure. Add no third-party control framework, MCP SDK, or native runtime library for this integration.
+  Reuse Kit's own semantic model; retain existing accessibility integrations without making automation depend on them.
+- Desktop automation work follows `docs/src/building.md#desktop-automation-development-strategy`; use semantic actions
+  for navigation, actual input for input-routing tests, and observable results to verify completion.
+
 ## Scripted edits
 
 Change files with a script only through `python3 ci/replace.py [--regex] [--count N] OLD NEW FILE...`. It exits 1, names the file and writes nothing when a file does not hold OLD (with `--count`, exactly N times), so an edit whose pattern drifted cannot pass silently. It prints the changed lines; read them back. Its tests: `python3 -I ci/test_replace.py`.

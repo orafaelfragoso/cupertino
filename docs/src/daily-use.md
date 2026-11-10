@@ -49,7 +49,7 @@ To change a shortcut, add a `chord = action` line to `~/.config/cupertino/shortc
 | `Super+Shift+5` | the toolbar |
 | `Super+Ctrl+Shift+3`, `Super+Ctrl+Shift+4` | the screen or a selection, to the clipboard |
 
-Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets `location` to `documents`, `pictures`, `clipboard` or a directory. The toolbar writes the file back. On the overlay, Escape cancels, Space switches to picking a window, the arrow keys make and move a selection (Alt with an arrow resizes it) and Return captures. Screen recording is not implemented.
+Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets `location` to `documents`, `pictures`, `clipboard` or a directory. The toolbar writes the file back. On the overlay, Escape cancels, Space switches to picking a window, the arrow keys make and move a selection (Alt with an arrow resizes it) and Return captures. The screenshot tool has no built-in video recorder. External recorders can use the ScreenCast portal: in OBS choose Screen Capture (PipeWire), then select a display or window. The OBS black-capture buffer-negotiation regression is fixed in `17c33c42`; the local recording verified desktop frames after replacing the portal. See [Portals](portals.md#screen-sharing) for scope and remaining limitations.
 
 ## Saved passwords
 
@@ -102,6 +102,8 @@ To investigate a reset with an AI assistant:
 - **After a panic, an abort, a fault, or a lost rendering context with no new renderer.** On a display the server first makes a new renderer and the windows stay ([A GPU reset](#a-gpu-reset)). The login screen comes back within seconds. `session.log` has the reason and `server.log.1` (after the next login) the backtrace.
 
 ## Known limits
+
+The 2026-11-10 installed-session review found or recorded 29 open interaction and presentation issues. See [Desktop quality and open issues](desktop-quality.md) for the complete list, evidence status and acceptance checks. In particular, menu pointer ownership, sidebar bounds, Control Center readability/connectivity, Trash emptying, quick preview, input/cursor behavior and glass/scrollbar consistency are not accepted as finished. Some entries are maintainer reports still awaiting focused reproduction.
 
 The server's README has the full list under "Daily-driver known limits". The ones to expect in a first week:
 

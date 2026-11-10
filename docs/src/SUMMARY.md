@@ -16,3 +16,4 @@
 - [Architecture](architecture.md)
 - [Asset packs](asset-packs.md)
 - [Roadmap](roadmap.md)
+- [Desktop quality and open issues](desktop-quality.md)

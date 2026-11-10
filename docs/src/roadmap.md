@@ -1,6 +1,6 @@
 # Roadmap
 
-Assessed on 2026-11-09 against merged commit `5a4f015f`. Phases 1–3 have recorded completion audits. Phases 4–6 remain incomplete. Phase 7 has not started. Hardware acceptance is a separate gate and remains open.
+Phase assessment recorded on 2026-11-09 against merged commit `5a4f015f`; desktop quality reassessed on 2026-11-10 from an installed-session recording and maintainer reports. Phases 1–3 have recorded completion audits. Phases 4–6 remain incomplete. Phase 7 has not started. Hardware acceptance is a separate gate and remains open. The [desktop quality backlog](desktop-quality.md) records 29 open issues and the closed OBS capture regression; implementation coverage below is not installed-session acceptance.
 
 This assessment compares the phase criteria, merged source, tests, packaging and issue checklists. Existing test results belong to their recorded commits. Reading a test here does not mean it ran again, and code coverage does not replace a hardware run.
 
@@ -48,7 +48,7 @@ GPU rendering and per-node GPU resource retirement belong to the deferred render
 
 ## Phase 4: apps and portals
 
-In progress, WP-08, WP-09 and WP-10. Updated on 2026-11-09. The implementation work is complete; the phase stays open until the installed-session and hardware checks below have run and the maintainer has decided the open items.
+In progress, WP-08, WP-09 and WP-10. Updated on 2026-11-10. The Kit migration and feature implementations listed below exist, but the installed session has functional and presentation gaps. The implementation is not complete for daily use: the [desktop quality backlog](desktop-quality.md) and the installed-session and hardware checks below remain acceptance requirements.
 
 Implemented:
 
@@ -64,7 +64,12 @@ Implemented:
 - The window buttons the server draws, the revealed title bar of a full-screen window included, are exposed to assistive technology through AccessKit, with presses accepted only while a button is shown, enabled and unlocked.
 - A popup grab ends whenever the keyboard moves outside it: to a layer surface such as the launcher or the Control Center, the lock screen, the authentication prompt or another window.
 
+The earlier menu/Control Center fixes and glass implementations listed above do not close the newly observed or reported failures: dropdown cursor ownership, Control Center contrast and service compatibility, inconsistent materials and interaction motion, sidebar bounds and Files toolbar/search layout remain open. Notifications, dock behavior, Trash, preview, cursor sizing and input timing also need the checks recorded below.
+
 Still required:
+
+- Resolve and verify the [29 desktop quality issues](desktop-quality.md): window/input/menu behavior (DQ-01–09), materials/motion/scrolling (DQ-10–14), Control Center/notifications/dock behavior (DQ-15–20), Files/Trash/preview (DQ-21–27), and Settings presentation (DQ-28–29).
+- Preserve the OBS buffer-negotiation fix in `17c33c42`. The locally rebuilt portal produced the review recording after the fix; browser sharing and the remaining output, performance and package checks are still required.
 
 - Verify in an installed session and on hardware:
   - browser file choosing and screen sharing through the portals;
@@ -121,11 +126,17 @@ Still required:
 
 NetworkManager and BlueZ are the shipped ISO and installed-system backends. Cupertino's network and Bluetooth daemons remain available for development; they do not establish replacement parity. See [Architecture](architecture.md), [Displays and GPUs](displays-and-gpus.md) and [Signed updates and rollback](updates-and-rollback.md).
 
+## Desktop quality acceptance
+
+Open, assessed 2026-11-10. The [complete backlog](desktop-quality.md) distinguishes recording evidence, maintainer reports and follow-up inspection, with priorities and acceptance checks for all 29 items. It includes titlebar long-press maximization, cursor scaling, keyboard repeat, slow submenus, missing context-menu behavior, sidebar bounds and leaks, unreadable or incorrect Control Center state, Edit Controls dismissal, the dock's bottom-edge gap, notification wording/dismissal, Trash emptying, preview activation/flashing/placement, thick scrollbars and material/motion inconsistencies. It also records the additional Files toolbar/title, sidebar clipping, submenu placement, Applications, Bluetooth naming and wallpaper-preview findings.
+
+P1 items are the next functional acceptance work; P2 items remain part of the intended desktop experience. A fix needs focused automated coverage where practical and an installed-session check at an exact candidate commit. Do not close these items from existing feature tests, a headless screenshot or the presence of a glass recipe alone. The OBS black-capture regression CAP-01 is fixed; that does not close this gate.
+
 ## Daily-driver acceptance
 
 Open. None of the ten recorded hardware acceptance criteria has complete evidence. VM checks cover parts of login, graphics, keyboard layouts, X11 and service integration. They do not close the hardware gate.
 
-Required evidence includes login with VT and suspend cycles, an eight-hour application soak, NVIDIA presentation, GPU-reset recovery, browser portals, audio device switching, mixed-scale Wayland and X11 clipboard use, keyboard layouts, network and Bluetooth, and five working days without a compositor crash or session loss. Run the [release checklist](release-checklist.md) against one exact candidate and record blocked checks explicitly.
+Required evidence includes login with VT and suspend cycles, an eight-hour application soak, NVIDIA presentation, GPU-reset recovery, browser portals, audio device switching, mixed-scale Wayland and X11 clipboard use, keyboard layouts, network and Bluetooth, and five working days without a compositor crash or session loss. The desktop quality acceptance gate above must also pass. Run the [release checklist](release-checklist.md) against one exact candidate and record blocked checks explicitly.
 
 ## Phase 7: AI and voice
 

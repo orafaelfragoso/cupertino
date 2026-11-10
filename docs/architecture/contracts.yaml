@@ -498,9 +498,19 @@
   test_owner: crates/cupertino-server/tests/app_effects_v1.rs
   source: crates/cupertino-server/src/app_effects_v1.rs
   source_match: Cupertino, CupertinoAppEffectsV1
+- name: cupertino.control.v1
+  kind: socket-protocol
+  version: 1
+  owner_crate: cupertino-control
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-server/tests/lock-screen/control.rs
+  source: crates/cupertino-control/src/main.rs
+  source_match: cupertino.control.v1
+  note: Bounded sequential JSON lines over a mode-0600 session socket. Same-user peer identity and exact process lifetime are checked; each connection gets a fresh inactive run and native consent remains mandatory.
 - name: cupertino_control_v1
   kind: wayland-global
-  version: 1
+  version: 2
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private
@@ -509,7 +519,19 @@
   test_owner: crates/cupertino-server/tests/shell_roles.rs
   source: crates/cupertino-server/src/control.rs
   source_match: create_global::<Cupertino, CupertinoControlV1, ()>
-  note: Discovery only; no consent, capture or input request exists in version 1. Only the DesktopControl capability sees the global; one inactive session per connection across manager bindings, server-assigned nonzero epochs, stale-epoch refusal and request-time holder checks. The role is not configurable and grants none of the shell, capture or prompt roles.
+  note: Version 1 stays discovery-only. Version 2 requests explicit output-scoped native consent, publishes granted geometry, routes bounded input with deduplicated outcomes and gates output capture by the exact run epoch. Physical input suspends; lock, disconnect and stop revoke. The role is not configurable.
+- name: cupertino_control_authority_v1
+  kind: wayland-global
+  version: 1
+  owner_crate: cupertino-server
+  owner_area: compositor
+  scope: shell-private
+  role: SessionLock
+  advertised: always
+  test_owner: crates/cupertino-server/tests/capture/control.rs
+  source: crates/cupertino-server/src/control.rs
+  source_match: create_global::<Cupertino, CupertinoControlAuthorityV1, ()>
+  note: The native session agent registers its own consent surface. Approval and resumption require a fresh physical serial delivered to that surface after the request; synthetic input cannot approve.
 - name: cupertino_shell_v1
   kind: wayland-global
   version: 21
@@ -538,7 +560,7 @@
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private
-  role: Capture
+  role: Capture DesktopControl
   advertised: always
   test_owner: crates/cupertino-server/tests/capture.rs
   source: crates/cupertino-server/src/capture/mod.rs
@@ -560,7 +582,7 @@
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private
-  role: Capture
+  role: Capture DesktopControl
   advertised: always
   test_owner: crates/cupertino-server/tests/capture.rs
   source: crates/cupertino-server/src/capture/mod.rs
@@ -1148,6 +1170,15 @@
   scope: shell-private
   test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-osd/src/main.rs
+- name: cupertino-control
+  kind: binary
+  version: 0.1.0
+  shipped: yes
+  owner_crate: cupertino-control
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-control/src/main.rs
+  source: crates/cupertino-control/src/main.rs
 - name: cupertino-polkit-agent
   kind: binary
   version: 0.1.0

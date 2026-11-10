@@ -355,6 +355,18 @@ impl Cupertino {
     }
 
     pub fn process_input_event<B: InputBackend>(&mut self, event: InputEvent<B>) {
+        let was_physical = self.control.physical_input;
+        // A release may finish the physical gesture that just approved consent. New gestures take over.
+        let takeover = match &event {
+            InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. } => false,
+            InputEvent::Keyboard { event } => event.state() == KeyState::Pressed,
+            InputEvent::PointerButton { event } => event.state() == ButtonState::Pressed,
+            _ => true,
+        };
+        if takeover {
+            self.suspend_controls();
+        }
+        self.control.physical_input = true;
         if !matches!(
             event,
             InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. }
@@ -386,10 +398,12 @@ impl Cupertino {
             InputEvent::PointerMotion { event } => self.on_pointer_motion::<B>(event),
             InputEvent::PointerMotionAbsolute { event } => {
                 let Some((id, pixels)) = self.absolute_device_space() else {
+                    self.control.physical_input = was_physical;
                     return;
                 };
                 let at = event.position_transformed(pixels);
                 let Some(pos) = self.output_pixels_to_global(id, (at.x, at.y)) else {
+                    self.control.physical_input = was_physical;
                     return;
                 };
                 self.pointer_moved_to(pos, event.time_msec(), None);
@@ -443,6 +457,7 @@ impl Cupertino {
             }
             _ => {}
         }
+        self.control.physical_input = was_physical;
     }
 
     fn on_keyboard<B: InputBackend>(&mut self, evt: B::KeyboardKeyEvent) {
@@ -462,6 +477,12 @@ impl Cupertino {
         let serial = SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
         let pressed = state == KeyState::Pressed;
+        if !self
+            .control_physical_transition(cupertino_control_model::Input::Key(code.raw()), pressed)
+        {
+            return;
+        }
+        self.control_user_input(serial.into(), keyboard.current_focus());
         if keyboard.pressed_keys().contains(&code) == pressed {
             return;
         }
@@ -493,7 +514,9 @@ impl Cupertino {
             // Super+Alt+S goes to the screen reader (the worker's at the login screen) before anything else sees it, while the
             // session is locked too: it is the one shortcut that acts at the lock screen, so the reader can be turned on to
             // unlock; the router turns every other one off then
-            route = if st.screen_reader_key(code.raw(), sym, &mods, pressed) {
+            route = if !st.control.dispatching
+                && st.screen_reader_key(code.raw(), sym, &mods, pressed)
+            {
                 KeyRoute::Plan(crate::input::ActionPlan::default())
             } else {
                 st.route_key(&okey, pressed, false, &ctx)
@@ -554,6 +577,28 @@ impl Cupertino {
     ) -> KeyRoute {
         let sym = key.sym;
         let modifier_key = crate::overlays::is_modifier_sym(sym);
+        if pressed && sym == keysyms::KEY_Escape && key.mods.ctrl && key.mods.alt {
+            if self.control.physical_input {
+                self.revoke_controls(cupertino_control_model::Revocation::Stopped);
+            }
+            if self.control.physical_input || self.control.dispatching {
+                self.key_router.swallow(sym);
+                return KeyRoute::Plan(ActionPlan::default());
+            }
+        }
+        if pressed
+            && self.control.dispatching
+            && self.key_router.control_reserved(&KeyEvent {
+                sym,
+                pressed,
+                mods: key.mods,
+                repeat,
+                shifted: None,
+            })
+        {
+            self.key_router.swallow(sym);
+            return KeyRoute::Plan(ActionPlan::default());
+        }
         // 0. Escape ends a client's drag; the client never sees the key
         if pressed && !repeat && sym == keysyms::KEY_Escape && self.client_drag.is_some() {
             self.key_router.swallow(sym);
@@ -1035,6 +1080,12 @@ impl Cupertino {
     /// is consumed too; every other press and release goes to `pointer.button`, whose implicit grab keeps a client's
     /// release with the client that got the press.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
+        if !self.control_physical_transition(
+            cupertino_control_model::Input::Button(button),
+            state == ButtonState::Pressed,
+        ) {
+            return;
+        }
         self.as_input(|s| s.handle_pointer_button(button, state, time));
         // a release that ended a drag without a drop sends its icon back
         self.drag_ended();
@@ -1045,6 +1096,7 @@ impl Cupertino {
         let serial = SERIAL_COUNTER.next_serial();
         let pos = self.pointer.current_location();
         let pointer = self.pointer.clone();
+        self.control_user_input(serial.into(), pointer.current_focus());
         let now = self.now();
         if state == ButtonState::Pressed {
             self.last_user_event = Some(now);

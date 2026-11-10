@@ -1115,6 +1115,12 @@ impl KeyRouter {
         })
     }
 
+    /// Desktop controllers cannot trigger reserved session actions or log out through a binding.
+    pub fn control_reserved(&self, event: &KeyEvent) -> bool {
+        self.lookup(event)
+            .is_some_and(|action| action.is_reserved() || matches!(action, Action::LogOut))
+    }
+
     /// Route a key press or release.
     pub fn key(&mut self, ev: KeyEvent, ctx: &ActionContext) -> KeyOutcome {
         let sym = normalize_sym(ev.sym);

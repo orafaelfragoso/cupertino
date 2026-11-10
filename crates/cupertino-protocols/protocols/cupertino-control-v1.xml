@@ -3,13 +3,14 @@
   <copyright>
     SPDX-License-Identifier: MIT OR Apache-2.0
   </copyright>
-  <description summary="private desktop-control session discovery">
-    The server offers this preview interface only on a connection it created for a desktop controller.
-    Binding it or creating a session grants no observation, capture or input authority. Version 1 is the
-    discovery boundary only: it advertises no available operations and has no grant or input request.
-    Consent, capture and input will be added in later interface versions after their enforcement is complete.
+  <description summary="native scoped desktop control and trusted session consent">
+    Only the compositor-created controller connection sees the manager. Binding it grants no observation,
+    capture or input authority. Version 1 remains discovery-only. Version 2 requests explicit output-scoped
+    consent from the private session authority. Fresh physical input on its registered surface is required
+    to approve or resume. Physical input suspends control; lock, disconnect and stop revoke it. Output capture
+    uses ext-image-copy-capture, with sources bound to the exact approved run epoch.
   </description>
-  <interface name="cupertino_control_v1" version="1">
+  <interface name="cupertino_control_v1" version="2">
     <enum name="error">
       <entry name="permission" value="2" summary="the connection no longer holds the controller capability"/>
       <entry name="session_exists" value="1" summary="the connection already has a live control session"/>
@@ -29,12 +30,26 @@
       <arg name="id" type="new_id" interface="cupertino_control_session_v1"/>
     </request>
   </interface>
-  <interface name="cupertino_control_session_v1" version="1">
+  <interface name="cupertino_control_session_v1" version="2">
     <enum name="phase">
       <entry name="inactive" value="0"/>
+      <entry name="awaiting_consent" value="1" since="2"/>
+      <entry name="active" value="2" since="2"/>
+      <entry name="suspended" value="3" since="2"/>
+      <entry name="revoked" value="4" since="2"/>
     </enum>
     <enum name="refusal">
       <entry name="stale_epoch" value="0" summary="the request names another run epoch"/>
+      <entry name="not_granted" value="1" since="2"/>
+      <entry name="denied" value="2" since="2"/>
+      <entry name="stale_geometry" value="3" since="2"/>
+      <entry name="outside_scope" value="4" since="2"/>
+      <entry name="unsupported" value="5" since="2"/>
+      <entry name="blocked" value="6" since="2"/>
+      <entry name="no_authority" value="7" since="2"/>
+      <entry name="busy" value="8" since="2"/>
+      <entry name="invalid_input" value="9" since="2"/>
+      <entry name="unknown_outcome" value="10" since="2"/>
     </enum>
     <request name="destroy" type="destructor">
       <description summary="end this session and invalidate its epoch"/>
@@ -70,9 +85,82 @@
       <arg name="serial" type="uint"/>
       <arg name="phase" type="uint" enum="phase"/>
     </event>
+
     <event name="refused">
       <arg name="serial" type="uint"/>
       <arg name="reason" type="uint" enum="refusal"/>
+    </event>
+    <enum name="capability" bitfield="true" since="2">
+      <entry name="observe" value="1"/><entry name="capture" value="2"/>
+      <entry name="pointer" value="4"/><entry name="keyboard" value="8"/>
+    </enum>
+    <enum name="key_state" since="2"><entry name="released" value="0"/><entry name="pressed" value="1"/></enum>
+    <request name="start" since="2">
+      <description summary="ask the trusted session agent for control of one output">
+        Capabilities are explicit, nonempty and limited to this version's capability bits. Only one run may await
+        consent or be active at a time. No desktop content is sent before consent. Serial must be nonzero.
+      </description>
+      <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
+      <arg name="output" type="object" interface="wl_output"/><arg name="capabilities" type="uint" enum="capability"/>
+    </request>
+    <request name="motion" since="2">
+      <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
+      <arg name="revision" type="uint"/><arg name="x" type="fixed"/><arg name="y" type="fixed"/>
+    </request>
+    <request name="button" since="2">
+      <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
+      <arg name="revision" type="uint"/><arg name="code" type="uint"/><arg name="state" type="uint" enum="key_state"/>
+    </request>
+    <request name="key" since="2">
+      <description summary="deliver a Linux evdev key through the normal keyboard router">
+        The server owns held state and timestamps. Reserved session and power actions are not available.
+      </description>
+      <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
+      <arg name="revision" type="uint"/><arg name="code" type="uint"/><arg name="state" type="uint" enum="key_state"/>
+    </request>
+    <request name="axis" since="2">
+      <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
+      <arg name="revision" type="uint"/><arg name="horizontal" type="fixed"/><arg name="vertical" type="fixed"/>
+    </request>
+    <request name="stop" since="2"><description summary="revoke this run; cleanup is safe to repeat"/></request>
+    <request name="resume" since="2">
+      <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
+    </request>
+    <event name="geometry" since="2">
+      <description summary="the granted output's current logical rectangle">
+        This event is followed by status. A changed rectangle, scale or transform advances revision and invalidates
+        input using the earlier revision. Capture uses the same output, upright in buffer pixels.
+      </description>
+      <arg name="revision" type="uint"/><arg name="x" type="int"/><arg name="y" type="int"/>
+      <arg name="width" type="int"/><arg name="height" type="int"/><arg name="scale" type="fixed"/>
+      <arg name="name" type="string"/>
+    </event>
+    <event name="completed" since="2">
+      <description summary="the request was dispatched, not proof that the application acted"/>
+      <arg name="serial" type="uint"/>
+    </event>
+  </interface>
+
+  <interface name="cupertino_control_authority_v1" version="1">
+    <description summary="the supervised session agent's consent authority">
+      Offered only to the session-lock role. One authority may be bound at once. Its loss revokes all runs.
+      Consent must name a registered surface and a fresh physical input serial delivered to that surface.
+      The controller cannot bind this interface or approve its own request.
+    </description>
+    <enum name="error"><entry name="permission" value="2"/><entry name="busy" value="1"/></enum>
+    <request name="destroy" type="destructor"/>
+    <request name="set_surface"><arg name="surface" type="object" interface="wl_surface"/></request>
+    <request name="answer">
+      <arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
+      <arg name="allow" type="uint"/><arg name="serial" type="uint"/>
+    </request>
+    <request name="stop"><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/></request>
+    <event name="requested">
+      <arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
+      <arg name="capabilities" type="uint"/><arg name="output_name" type="string"/><arg name="resuming" type="uint"/>
+    </event>
+    <event name="changed">
+      <arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/><arg name="phase" type="uint"/>
     </event>
   </interface>
 </protocol>

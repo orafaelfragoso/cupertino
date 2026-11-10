@@ -682,6 +682,7 @@ pub fn run(
     handle
         .insert_source(notifier, move |event, &mut (), state| match event {
             SessionEvent::PauseSession => {
+                state.revoke_controls(cupertino_control_model::Revocation::SessionDeactivated);
                 tracing::info!("session paused");
                 input::close_all(&session_inputs, state);
                 if let Some(u) = udev(state) {

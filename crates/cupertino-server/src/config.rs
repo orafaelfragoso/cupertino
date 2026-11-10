@@ -51,19 +51,26 @@ pub enum BuiltIn {
     Portal,
     /// The polkit authentication agent, which draws the authentication prompt.
     PolkitAgent,
+    /// The native local desktop controller; each run still needs session consent.
+    DesktopControl,
 }
 
 /// The bus name the portal's backend owns once it serves.
 pub const PORTAL_BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cupertino";
 
 impl BuiltIn {
-    pub const ALL: [BuiltIn; 2] = [BuiltIn::Portal, BuiltIn::PolkitAgent];
+    pub const ALL: [BuiltIn; 3] = [
+        BuiltIn::Portal,
+        BuiltIn::PolkitAgent,
+        BuiltIn::DesktopControl,
+    ];
 
     /// Name in log lines.
     pub const fn name(self) -> &'static str {
         match self {
             BuiltIn::Portal => "portal",
             BuiltIn::PolkitAgent => "polkit-agent",
+            BuiltIn::DesktopControl => "desktop-control",
         }
     }
 
@@ -71,6 +78,7 @@ impl BuiltIn {
         match self {
             BuiltIn::Portal => "cupertino-portal",
             BuiltIn::PolkitAgent => "cupertino-polkit-agent",
+            BuiltIn::DesktopControl => "cupertino-control",
         }
     }
 
@@ -79,6 +87,7 @@ impl BuiltIn {
         match self {
             BuiltIn::Portal => ShellRole::Capture,
             BuiltIn::PolkitAgent => ShellRole::Prompt,
+            BuiltIn::DesktopControl => ShellRole::DesktopControl,
         }
     }
 
@@ -102,7 +111,11 @@ impl BuiltIn {
     pub fn process(self, program: &Path) -> ShellProcess {
         ShellProcess {
             name: self.name().to_string(),
-            command: vec![program.display().to_string()],
+            command: if self == BuiltIn::DesktopControl {
+                vec![program.display().to_string(), "--serve".into()]
+            } else {
+                vec![program.display().to_string()]
+            },
             roles: vec![self.role()],
         }
     }

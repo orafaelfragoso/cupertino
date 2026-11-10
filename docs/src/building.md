@@ -95,15 +95,54 @@ credentials.
 
 ### Implementation status
 
-The first implementation adds a dependency-free `cupertino-control-model` for grant state and aggregate input
-ownership, and version 1 private control discovery in `cupertino-protocols` and `cupertino-server`.
-The server assigns fresh run epochs, permits one inactive session per controller connection and rechecks its
-live holder. The controller capability is not configurable and does not include capture or existing shell roles.
+The dependency-free `cupertino-control-model` owns grant state and aggregate input ownership. Private protocol
+version 1 stays discovery-only. Version 2 implements explicit output-scoped observation, capture, pointer and
+keyboard grants. Cupertino's own Kit consent panel lists the rights and display and starts with Don't Allow
+focused. Approval requires a fresh physical-input serial delivered to the registered consent surface after the
+request. Injected input cannot approve consent, reach session/authentication surfaces or invoke reserved session
+shortcuts or menu-bar power actions.
 
-This version advertises zero available operations. Consent UI, live input/capture grants, Kit semantic publication,
-the Rust controller/MCP bridge and the updater remain to be implemented. The input ownership model is tested
-separately and is not yet connected to the physical input path. This is the first foundation, not an enabled
-desktop-control feature.
+New physical gestures pause input and capture; a release may finish the gesture that approved consent. Resume
+requires another explicit native response. Ctrl+Alt+Escape stops control. Lock, session deactivation, loss of the
+authority/controller and local peer exit revoke the run and release only its owned input. Capture excludes
+consent surfaces and authentication prompts. Capture sources belong to one approved epoch, and denied or revoked
+sources cannot acquire a later grant. Geometry revisions reject stale input coordinates. Bounded outcome history
+suppresses duplicate mutations; evicted outcomes are unknown and never replayed.
+
+The compositor supervises the in-tree Rust `cupertino-control --serve` process on its private connection. Its socket
+is `$XDG_RUNTIME_DIR/cupertino/control-WAYLAND_DISPLAY.sock`, mode 0600 in a private directory. Each local connection
+gets a fresh inactive run and negotiates `{"op":"hello","version":1}`. The controller checks the same-user peer and
+holds its exact process descriptor: a copied socket cannot preserve a dead peer's grant. Commands, queues, capture
+allocations and deadlines are bounded. The controller sleeps on native transport/accept wakeups when idle.
+
+In a development session, pass `--dev-shell --control-program /absolute/path/to/cupertino-control` to the new server
+and run the matching login process with its existing Session and SessionLock roles. Run
+`cupertino-control --session WAYLAND_DISPLAY` and send sequential JSON lines on stdin; it negotiates the handshake.
+Keep that process connected across commands, since separate invocations do not share consent:
+
+```json
+{"op":"request","output":"headless-1","capabilities":15}
+{"op":"wait","phase":2,"timeout_ms":30000}
+{"op":"move","x":200,"y":200}
+{"op":"button","code":272,"pressed":true}
+{"op":"button","code":272,"pressed":false}
+{"op":"key","code":30,"pressed":true}
+{"op":"key","code":30,"pressed":false}
+{"op":"scroll","horizontal":0,"vertical":40}
+{"op":"capture"}
+{"op":"stop"}
+```
+
+Capability bits are observe 1, capture 2, pointer 4 and keyboard 8. Keys use evdev codes; coordinates and scrolling
+use logical points relative to the approved output. Capture returns an upright PNG as base64 with its geometry.
+`status` reports epoch and phase: inactive 0, consent 1, active 2, paused 3, revoked 4. `resume` opens fresh consent.
+Closing the local connection ends its run. The local protocol accepts typed operations, not shell commands or
+arbitrary file paths.
+
+Window-scoped grants, Kit semantic publication, the Rust MCP adapter and deployment automation remain later stages.
+This implementation adds no external control framework or runtime dependency. Server changes take effect at the
+next planned installed-session start; test the new server and session agent nested or headless without restarting
+the current desktop.
 
 ### Dependency boundary
 

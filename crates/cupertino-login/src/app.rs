@@ -103,6 +103,14 @@ struct Lock {
     confirmed: bool,
 }
 
+/// The controller consent and status panel.
+struct DesktopControlPanel {
+    epoch: u64,
+    output: String,
+    capabilities: u32,
+    phase: u32,
+}
+
 /// The confirmation panel on screen.
 struct PanelState {
     panel: Panel,
@@ -163,6 +171,8 @@ pub struct SessionApp {
     /// `SwitchToLoginWindow` is waiting for the server to confirm the lock.
     switch_pending: bool,
     panel: Option<PanelState>,
+    desktop_control: Option<DesktopControlPanel>,
+    control_wish: Rc<RefCell<roles::ControlWish>>,
     /// A confirmed log-out is running: the power button panel does not show over it.
     logging_out: bool,
     /// The applications are being quit before a confirmed action.
@@ -209,6 +219,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let shell = Shell::bind(conn).ok_or("the server lacks cupertino_shell_v1")?;
     let (session, session_state, early) = shell.observe(conn)?;
     let lock_manager = SessionLockManager::bind(conn);
+    let authority = cupertino_shell_client::ControlAuthority::bind(conn);
     let idle_notifier = IdleNotifier::bind(conn);
     let (bus, bus_messages) = async_channel::unbounded::<Bus>();
     let send = |bus: &async_channel::Sender<Bus>| {
@@ -345,13 +356,15 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         let _ = heard.send_blocking(Heard::LockRequested { explicit: false });
     }
     let wish = Rc::new(RefCell::new(LockWish::default()));
+    let control_wish = Rc::new(RefCell::new(roles::ControlWish::default()));
     let mut roles = LoginRoles::new(
         layer_shell,
         lock_manager,
         Some(session_state),
         Rc::clone(&wish),
         heard,
-    );
+    )
+    .with_control(authority, Rc::clone(&control_wish));
     // what the server said before the roles listened: a lock request that came with the connection
     for event in early {
         if let Event::Extension(event) = event {
@@ -392,6 +405,8 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             lock: None,
             switch_pending: false,
             panel: None,
+            desktop_control: None,
+            control_wish,
             logging_out: false,
             quitting: None,
             restore_path,
@@ -671,6 +686,17 @@ impl Application for SessionApp {
                 ));
             }
         }
+        if app.lock.is_none() && app.panel.is_none() && !app.logging_out {
+            if let Some(control) = &app.desktop_control {
+                windows.push(view::desktop_control(
+                    WindowKey(Key::from("desktop-control")),
+                    &control.output,
+                    control.capabilities,
+                    control.phase,
+                    Message::Input,
+                ));
+            }
+        }
         if let Some(panel) = &app.panel {
             windows.push(view::panel(
                 WindowKey(Key::from("panel")),
@@ -802,6 +828,44 @@ impl SessionApp {
                     lock.screen.set_reduce_motion(on);
                 }
             }
+            Heard::DesktopControl(event) => {
+                use cupertino_shell_client::ControlEvent;
+                match event {
+                    ControlEvent::ConsentRequested {
+                        epoch,
+                        capabilities,
+                        output,
+                        ..
+                    } => {
+                        if self.lock.is_some() || self.panel.is_some() || self.logging_out {
+                            self.control_wish.borrow_mut().action = Some((epoch, false, false));
+                        } else {
+                            self.control_wish.borrow_mut().phase = 1;
+                            self.control_wish.borrow_mut().output = output.clone();
+                            self.desktop_control = Some(DesktopControlPanel {
+                                epoch,
+                                capabilities,
+                                output,
+                                phase: 1,
+                            });
+                        }
+                    }
+                    ControlEvent::ConsentChanged { epoch, phase }
+                        if self
+                            .desktop_control
+                            .as_ref()
+                            .is_some_and(|c| c.epoch == epoch) =>
+                    {
+                        self.control_wish.borrow_mut().phase = phase;
+                        if matches!(phase, 0 | 4) {
+                            self.desktop_control = None;
+                        } else if let Some(c) = &mut self.desktop_control {
+                            c.phase = phase;
+                        }
+                    }
+                    _ => {}
+                }
+            }
             Heard::NoLock => return Err("the server lacks ext_session_lock_manager_v1".into()),
         }
         Ok(())
@@ -810,6 +874,12 @@ impl SessionApp {
     /// What the person did on the lock screen or a panel.
     fn input(&mut self, now: f64, input: Input) -> Result<()> {
         match input {
+            Input::DesktopControl { allow, stop } => {
+                if let Some(control) = &self.desktop_control {
+                    self.control_wish.borrow_mut().action = Some((control.epoch, allow, stop));
+                }
+                return Ok(());
+            }
             Input::Decide(decision) if self.panel.is_some() => return self.decide(decision),
             Input::Reopen(on) => {
                 // the panel's checkbox; the power-button panel has none and keeps the saved choice

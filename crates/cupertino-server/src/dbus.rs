@@ -920,6 +920,7 @@ impl crate::state::Cupertino {
     /// the session bus is the way only while no lock screen is connected, so a process that took `org.cupertino.Login1`
     /// before the login process did cannot make the lock go missing.
     pub fn lock_session(&mut self) {
+        self.revoke_controls(cupertino_control_model::Revocation::Locked);
         if !self.sessions.lock_requested(false) {
             self.shell_call(Request::Lock);
         }
@@ -927,6 +928,7 @@ impl crate::state::Cupertino {
 
     /// Ask the login process to lock the session because the person asked for it.
     pub fn lock_session_now(&mut self) {
+        self.revoke_controls(cupertino_control_model::Revocation::Locked);
         if !self.sessions.lock_requested(true) {
             self.shell_call(Request::LockNow);
         }

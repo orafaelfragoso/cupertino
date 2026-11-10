@@ -1037,6 +1037,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-control"
+version = "0.1.0"
+dependencies = [
+ "cupertino-peer",
+ "cupertino-shell-client",
+ "cupertino-wayland-client",
+ "image",
+ "libc",
+ "rustix 1.1.6",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "wayland-client",
+ "wayland-protocols",
+]
+
+[[package]]
 name = "cupertino-control-model"
 version = "0.1.0"
 

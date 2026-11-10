@@ -191,6 +191,8 @@ pub enum Input {
     Decide(Decision),
     /// The confirmation panel's "Reopen windows" checkbox was set to this, by a click, Space or assistive technology.
     Reopen(bool),
+    /// A choice on the native desktop-control consent/status panel.
+    DesktopControl { allow: bool, stop: bool },
     /// A button or key of the interrupt panel.
     Interrupt(Choice),
 }
@@ -998,6 +1000,146 @@ pub fn panel<M: Clone + 'static>(
         Size::new(frames.width, frames.height),
         content,
         map(Input::Decide(Decision::Cancel)),
+    )
+}
+
+pub const CONTROL_APP_ID: &str = "org.cupertino.login.desktop-control";
+/// Consent panel height, leaving room for all requested rights and the stop shortcut.
+pub const CONTROL_HEIGHT: f64 = 228.0;
+/// Status keeps Stop in a stable position; a new consent request shows the full rights.
+pub fn control_height(phase: u32) -> f64 {
+    if phase == 1 {
+        CONTROL_HEIGHT
+    } else {
+        interrupt::HEIGHT
+    }
+}
+
+/// A native consent/status panel. Allow has no default-key binding; cancellation initially has the focus.
+pub fn desktop_control<M: Clone + 'static>(
+    key: WindowKey,
+    output: &str,
+    capabilities: u32,
+    phase: u32,
+    map: fn(Input) -> M,
+) -> Window<M> {
+    // The information block expands above the ordinary interrupt-panel buttons.
+    const CONTROL_INFO_HEIGHT: f64 = 118.0;
+    // Button baseline leaves the same bottom margin as other session panels.
+    const CONTROL_BUTTON_TOP: f64 = 183.0;
+    let mut frames = interrupt::Frames::new();
+    if phase == 1 {
+        frames.info = Rect::new(
+            frames.info.x(),
+            frames.info.y(),
+            frames.info.width(),
+            CONTROL_INFO_HEIGHT,
+        );
+        for button in &mut frames.buttons {
+            button.frame = Rect::new(
+                button.frame.x(),
+                CONTROL_BUTTON_TOP,
+                button.frame.width(),
+                button.frame.height(),
+            );
+        }
+    }
+    let title = match phase {
+        2 => "Desktop control is active",
+        3 => "Desktop control is paused",
+        _ => "Allow desktop control?",
+    };
+    let rights: Vec<_> = [
+        (1, "inspect the display"),
+        (2, "capture the display"),
+        (4, "use the pointer"),
+        (8, "use the keyboard"),
+    ]
+    .into_iter()
+    .filter_map(|(bit, label)| (capabilities & bit != 0).then_some(label))
+    .collect();
+    let display: String = output
+        .chars()
+        .filter(|c| {
+            !c.is_control() && !matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .take(64)
+        .collect();
+    let info = if phase == 2 {
+        "Physical input pauses control. Ctrl+Alt+Escape stops it.".to_owned()
+    } else if phase == 3 {
+        "Control is paused. Resume continues the approved control; Stop ends it.".to_owned()
+    } else {
+        format!("Allow the desktop controller to {} on {}. Physical input pauses control. Ctrl+Alt+Escape stops it.", rights.join(", "), display)
+    };
+    let mut children = vec![
+        icon_disc(frames.icon),
+        Element::new(Place::text(
+            frames.title,
+            vec![panel_text(title, TextRole::Body, FontWeight::BOLD, false)],
+        )),
+        Element::new(Place::text(
+            frames.info,
+            vec![panel_text(
+                &info,
+                TextRole::Caption,
+                FontWeight::REGULAR,
+                true,
+            )],
+        )),
+    ];
+    for (index, button) in frames.buttons.iter().enumerate() {
+        if phase == 2 && index == 0 {
+            continue;
+        }
+        let (label, allow, stop) = match (phase, index) {
+            (2, _) => ("Stop Control", false, true),
+            (3, 0) => ("Resume", true, false),
+            (3, _) => ("Stop Control", false, true),
+            (_, 0) => ("Don't Allow", false, false),
+            _ => ("Allow", true, false),
+        };
+        children.push(
+            Element::new(Place {
+                initial: index == usize::from(phase != 1),
+                ..Place::filled(
+                    button.frame,
+                    vec![Element::new(Button {
+                        label: label.to_owned(),
+                        role: ButtonRole::Normal,
+                        style: ButtonStyle::Bordered,
+                        enabled: true,
+                        busy: false,
+                        on_press: Some(map(Input::DesktopControl { allow, stop })),
+                    })],
+                )
+            })
+            .key(label),
+        );
+    }
+    let cancel = map(Input::DesktopControl {
+        allow: false,
+        stop: phase != 1,
+    });
+    let close = cancel.clone();
+    let content = Element::new(Backdrop {
+        wallpaper: false,
+        hidden: false,
+        on_activity: None,
+        keys: Box::new(move |sym, _| (sym == ESCAPE).then(|| cancel.clone())),
+        label: title.to_owned(),
+        description: None,
+        role: Role::AlertDialog,
+        modal: phase == 1,
+        children,
+    });
+    panel_window(
+        key,
+        CONTROL_APP_ID,
+        title,
+        Size::new(interrupt::WIDTH, control_height(phase)),
+        content,
+        close,
     )
 }
 

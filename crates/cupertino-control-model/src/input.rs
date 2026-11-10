@@ -94,6 +94,13 @@ impl InputOwners {
         releases
     }
 
+    /// Whether a source is in a pointer gesture that another controller must leave alone.
+    pub fn has_buttons(&self, source: InputSource) -> bool {
+        self.owners
+            .iter()
+            .any(|(input, owners)| matches!(input, Input::Button(_)) && owners.contains(&source))
+    }
+
     pub fn held_count(&self) -> usize {
         self.held
     }

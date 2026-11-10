@@ -39,6 +39,9 @@ pub struct Cli {
     /// apply.
     #[arg(long)]
     pub dev_shell: bool,
+    /// Development-only native controller, supervised on its private Wayland connection.
+    #[arg(long, requires = "dev_shell", value_name = "PATH")]
+    pub control_program: Option<PathBuf>,
     /// Output size in pixels, e.g. 1280x800 (nested window / headless output).
     #[arg(long, value_parser = parse_size, default_value = "1280x800")]
     pub size: (u32, u32),
@@ -724,6 +727,12 @@ pub fn run(cli: Cli) -> Result<()> {
     if mode == Mode::Udev && !login_screen {
         let programs = BuiltIn::ALL.map(|b| (b, b.installed()));
         state.supervisor.add_built_ins(programs, Instant::now());
+    }
+    if let Some(program) = &cli.control_program {
+        state.supervisor.add_built_ins(
+            [(BuiltIn::DesktopControl, Some(program.clone()))],
+            Instant::now(),
+        );
     }
     start_shell_supervision(&state, &event_loop)?;
     state.overlays.hold_modifiers = cli.hold_modifiers;

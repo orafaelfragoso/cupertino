@@ -1,0 +1,24 @@
+[package]
+name = "cupertino-control"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The native desktop controller: scoped session consent, input and capture over local Rust IPC"
+
+[package.metadata.cupertino]
+layer = "shell"
+
+[dependencies]
+cupertino-shell-client = { path = "../cupertino-shell-client" }
+cupertino-wayland-client = { path = "../cupertino-wayland-client" }
+cupertino-peer = { path = "../cupertino-peer" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+libc = "0.2"
+rustix = { version = "1", features = ["fs", "process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+
+[dev-dependencies]
+tempfile = "3"

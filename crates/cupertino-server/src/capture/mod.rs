@@ -47,6 +47,9 @@ const VERSION: u32 = 1;
 fn privileged(client: &Client) -> bool {
     authorized(client, ShellRole::Capture)
 }
+fn capture_client(client: &Client) -> bool {
+    privileged(client) || authorized(client, ShellRole::DesktopControl)
+}
 
 /// What an `ext_image_capture_source_v1` captures; `None` when the output or window was already gone when the source
 /// was created, so its sessions stop at once.
@@ -54,6 +57,8 @@ fn privileged(client: &Client) -> bool {
 pub enum Source {
     Output(Option<WeakOutput>),
     Toplevel(Option<ForeignToplevelWeakHandle>),
+    /// A controller's output source is bound to its granted run epoch, never to a later grant.
+    ControlledOutput(Option<WeakOutput>, u64),
 }
 
 /// Where a source is drawn right now: the output it is rendered with and its size in buffer pixels.
@@ -99,6 +104,7 @@ impl Cupertino {
     /// output is copied as black, a window frame waits for the unlock and the window feeds are not refreshed, so no
     /// buffer shows the lock screen or what it covers.
     pub fn process_captures(&mut self, renderer: &mut GlesRenderer, idx: usize) {
+        self.refresh_control();
         self.stop_captures();
         if !self.session_lock.is_active() {
             self.refresh_window_feeds();
@@ -106,10 +112,22 @@ impl Cupertino {
         self.copy_frames(renderer, idx);
     }
 
+    pub(super) fn capture_source_allowed(&self, client: &Client, source: &Source) -> bool {
+        if privileged(client) {
+            return true;
+        }
+        match source {
+            Source::ControlledOutput(Some(output), epoch) => output
+                .upgrade()
+                .is_some_and(|o| self.control_capture_allowed(client, &o, *epoch)),
+            _ => false,
+        }
+    }
+
     /// Where `source` is drawn, `None` once its output or window is gone.
     fn placement(&self, source: &Source) -> Option<Placement> {
         match source {
-            Source::Output(weak) => {
+            Source::Output(weak) | Source::ControlledOutput(weak, _) => {
                 let output = weak.as_ref()?.upgrade()?;
                 let idx = self.outputs.iter().position(|o| o.output == output)?;
                 // the output as it is shown: a quarter-turned output has its mode on its side
@@ -164,14 +182,14 @@ impl GlobalDispatch<ExtOutputImageCaptureSourceManagerV1, ()> for Cupertino {
     }
 
     fn can_view(client: Client, _: &()) -> bool {
-        privileged(&client)
+        capture_client(&client)
     }
 }
 
 impl Dispatch<ExtOutputImageCaptureSourceManagerV1, ()> for Cupertino {
     fn request(
-        _: &mut Self,
-        _: &Client,
+        state: &mut Self,
+        client: &Client,
         _: &ExtOutputImageCaptureSourceManagerV1,
         request: output_manager::Request,
         _: &(),
@@ -180,10 +198,18 @@ impl Dispatch<ExtOutputImageCaptureSourceManagerV1, ()> for Cupertino {
     ) {
         match request {
             output_manager::Request::CreateSource { source, output } => {
-                init.init(
-                    source,
-                    Source::Output(Output::from_resource(&output).map(|o| o.downgrade())),
-                );
+                state.refresh_control();
+                let output = Output::from_resource(&output);
+                let value = if privileged(client) {
+                    Source::Output(output.map(|o| o.downgrade()))
+                } else if let Some((output, epoch)) =
+                    output.and_then(|o| state.control_capture_epoch(client, &o).map(|e| (o, e)))
+                {
+                    Source::ControlledOutput(Some(output.downgrade()), epoch)
+                } else {
+                    Source::ControlledOutput(None, 0)
+                };
+                init.init(source, value);
             }
             output_manager::Request::Destroy => {}
             _ => unreachable!(

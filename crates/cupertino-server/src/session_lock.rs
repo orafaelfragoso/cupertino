@@ -237,6 +237,7 @@ delegate_session_lock!(Cupertino);
 impl Cupertino {
     /// Hide everything and wait for the first locked frames.
     fn begin_session_lock(&mut self, locker: SessionLocker, takeover: bool) {
+        self.revoke_controls(cupertino_control_model::Revocation::Locked);
         let now = self.now();
         let was_active = self.session_lock.is_active();
         self.session_lock.state = LockState::Pending {
@@ -251,6 +252,7 @@ impl Cupertino {
     /// drags of other clients end, the pointer and keyboard leave them, the outputs wait for their first locked frames,
     /// and on a new lock every toplevel is deactivated and the session's observers learn it is locked.
     fn seal_session(&mut self, was_active: bool) {
+        self.revoke_controls(cupertino_control_model::Revocation::Locked);
         let now = self.now();
         // a popup grab left over would eat the first click on the lock screen as an outside press
         self.end_popup_grab(

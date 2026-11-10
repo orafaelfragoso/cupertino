@@ -7,7 +7,9 @@
 //! `Event::Extension`, in order with the transport's own events; the session's appearance and display options arrive
 //! as the [`cupertino_protocol_app::AppEvent`] an application's observer reports.
 
+mod control;
 mod dock;
+pub use control::{ControlAuthority, ControlEvent, ControlSession, DesktopControl};
 mod error;
 mod menu_bar;
 mod roles;

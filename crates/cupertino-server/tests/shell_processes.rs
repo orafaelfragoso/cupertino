@@ -370,6 +370,7 @@ fn the_built_in_processes_run_with_exactly_their_roles() {
     };
     let built_ins = vec![
         (BuiltIn::Portal, Some(program("cupertino-portal"))),
+        (BuiltIn::DesktopControl, Some(program("cupertino-control"))),
         (
             BuiltIn::PolkitAgent,
             Some(program("cupertino-polkit-agent")),
@@ -380,6 +381,11 @@ fn the_built_in_processes_run_with_exactly_their_roles() {
     let mut server = Server::start_with_built_ins(vec![dock], false, built_ins).unwrap();
     for (built_in, log, role) in [
         (BuiltIn::Portal, "cupertino-portal.log", ShellRole::Capture),
+        (
+            BuiltIn::DesktopControl,
+            "cupertino-control.log",
+            ShellRole::DesktopControl,
+        ),
         (
             BuiltIn::PolkitAgent,
             "cupertino-polkit-agent.log",

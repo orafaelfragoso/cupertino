@@ -13,9 +13,9 @@ use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::WindowSpec;
 use cupertino_login::view::{GREETER_APP_ID, INTERRUPT_APP_ID, LOCK_APP_ID, PANEL_APP_ID};
 use cupertino_shell_client::{
-    Anchor, Error as ShellError, KeyboardInteractivity, Layer, LayerShell, LayerSurface,
-    LayerSurfaceConfig, Margin, SessionChange, SessionLock, SessionLockManager, SessionState,
-    ShellEvent,
+    Anchor, ControlAuthority, ControlEvent, Error as ShellError, KeyboardInteractivity, Layer,
+    LayerShell, LayerSurface, LayerSurfaceConfig, Margin, SessionChange, SessionLock,
+    SessionLockManager, SessionState, ShellEvent,
 };
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles};
 use cupertino_wayland_client::{
@@ -47,6 +47,7 @@ pub enum Heard {
     ReduceMotion(bool),
     /// The session lock cannot be taken: the server lacks the protocol.
     NoLock,
+    DesktopControl(ControlEvent),
 }
 
 /// The session lock as the application and the roles share it.
@@ -56,6 +57,13 @@ pub struct LockWish {
     pub wanted: bool,
     /// The generation of the lock the roles hold; its answer is the one that counts.
     pub generation: Option<u32>,
+}
+
+#[derive(Default)]
+pub struct ControlWish {
+    pub phase: u32,
+    pub output: String,
+    pub action: Option<(u64, bool, bool)>,
 }
 
 enum Role {
@@ -72,6 +80,10 @@ pub struct LoginRoles {
     surfaces: HashMap<SurfaceId, Role>,
     caps_lock: Option<bool>,
     heard: async_channel::Sender<Heard>,
+    authority: Option<ControlAuthority>,
+    control_wish: Rc<RefCell<ControlWish>>,
+    control_surface: Option<SurfaceId>,
+    control_phase: Option<u32>,
 }
 
 /// The outputs `conn` has described, by registry name, with their size.
@@ -121,7 +133,21 @@ impl LoginRoles {
             surfaces: HashMap::new(),
             caps_lock: None,
             heard,
+            authority: None,
+            control_wish: Rc::new(RefCell::new(ControlWish::default())),
+            control_surface: None,
+            control_phase: None,
         }
+    }
+
+    pub fn with_control(
+        mut self,
+        authority: Option<ControlAuthority>,
+        wish: Rc<RefCell<ControlWish>>,
+    ) -> Self {
+        self.authority = authority;
+        self.control_wish = wish;
+        self
     }
 
     fn send(&self, heard: Heard) {
@@ -193,6 +219,46 @@ impl SurfaceRoles for LoginRoles {
                 },
             ));
         }
+        if spec.app_id == cupertino_login::view::CONTROL_APP_ID {
+            let target = self.control_wish.borrow().output.clone();
+            let output = conn
+                .outputs()
+                .into_iter()
+                .find(|o| o.name.as_deref() == Some(target.as_str()))
+                .or_else(|| conn.outputs().into_iter().find(|o| o.geometry.is_some()))
+                .map(|o| o.id);
+            let pending = self.control_wish.borrow().phase == 1;
+            let result = self
+                .layer(
+                    conn,
+                    &LayerSurfaceConfig {
+                        namespace: "desktop-control-consent".into(),
+                        output,
+                        layer: Layer::Overlay,
+                        anchor: if pending {
+                            Anchor::empty()
+                        } else {
+                            Anchor::Top | Anchor::Right
+                        },
+                        size: (spec.size.width as u32, spec.size.height as u32),
+                        margin: Margin::default(),
+                        exclusive_zone: -1,
+                        keyboard: if pending {
+                            KeyboardInteractivity::Exclusive
+                        } else {
+                            KeyboardInteractivity::OnDemand
+                        },
+                    },
+                )
+                .and_then(|surface| {
+                    if let Some(authority) = &self.authority {
+                        authority.set_surface(conn, surface)?;
+                    }
+                    self.control_surface = Some(surface);
+                    Ok(surface)
+                });
+            return Some(result);
+        }
         if spec.app_id == PANEL_APP_ID || spec.app_id == INTERRUPT_APP_ID {
             // the panels show on the first output the server has described
             let output = conn
@@ -219,6 +285,9 @@ impl SurfaceRoles for LoginRoles {
     }
 
     fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
+        if let Some(control) = event.downcast_ref::<ControlEvent>() {
+            self.send(Heard::DesktopControl(control.clone()));
+        }
         if let Some(SessionChange::DisplayOptions(options)) =
             self.session.as_mut().and_then(|s| s.apply(event))
         {
@@ -261,6 +330,10 @@ impl SurfaceRoles for LoginRoles {
     }
 
     fn destroyed(&mut self, surface: SurfaceId) {
+        if self.control_surface == Some(surface) {
+            self.control_surface = None;
+            self.control_phase = None;
+        }
         self.surfaces.remove(&surface);
     }
 
@@ -271,6 +344,44 @@ impl SurfaceRoles for LoginRoles {
     /// Follow the application's wish: lock before its first lock surface (also with no output at all), and unlock once
     /// it no longer wants the lock and its lock surfaces are destroyed. Pass Caps Lock on when it changes.
     fn prepare(&mut self, conn: &mut Connection) {
+        let phase = self.control_wish.borrow().phase;
+        let pending = phase == 1;
+        if self.control_phase != Some(phase) {
+            if let Some(Role::Layer(layer)) =
+                self.control_surface.and_then(|s| self.surfaces.get_mut(&s))
+            {
+                layer.set_keyboard_interactivity(if pending {
+                    KeyboardInteractivity::Exclusive
+                } else {
+                    KeyboardInteractivity::OnDemand
+                });
+                layer.set_placement(
+                    if pending {
+                        Anchor::empty()
+                    } else {
+                        Anchor::Top | Anchor::Right
+                    },
+                    (
+                        cupertino_login::interrupt::WIDTH as u32,
+                        cupertino_login::view::control_height(phase) as u32,
+                    ),
+                );
+            }
+            if let Some(surface) = self.control_surface.and_then(|s| conn.wl_surface(s).ok()) {
+                // Layer placement and interactivity are double-buffered; apply them even without another repaint.
+                surface.commit();
+                self.control_phase = Some(phase);
+            }
+        }
+        if let Some((epoch, allow, stop)) = self.control_wish.borrow_mut().action.take() {
+            if let Some(authority) = &self.authority {
+                if stop {
+                    authority.stop(epoch);
+                } else {
+                    authority.answer(epoch, allow, conn.input_serial().unwrap_or(0));
+                }
+            }
+        }
         let caps_lock = conn.modifiers().caps_lock;
         if self.caps_lock != Some(caps_lock) {
             self.caps_lock = Some(caps_lock);

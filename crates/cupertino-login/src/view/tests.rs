@@ -43,6 +43,7 @@ enum Surface {
     Picker,
     Panel { kind: Kind, reopen: bool },
     Interrupt,
+    DesktopControl(u32),
 }
 
 thread_local! {
@@ -239,6 +240,9 @@ impl Application for Shown {
                 |input| input,
             )],
             Surface::Interrupt => vec![interrupt(key, "Notes", |input| input)],
+            Surface::DesktopControl(phase) => {
+                vec![desktop_control(key, "headless-1", 15, phase, |input| input)]
+            }
         }
     }
 }
@@ -864,6 +868,35 @@ fn the_power_button_panel_has_no_checkbox_and_its_letters_choose() {
 }
 
 #[test]
+fn native_control_requires_an_explicit_allow_and_provides_pause_and_stop() {
+    let mut run = Run::new(Surface::DesktopControl(1));
+    assert_eq!(run.focused().unwrap().name.as_deref(), Some("Don't Allow"));
+    run.key(RETURN, None);
+    assert!(!run
+        .model()
+        .handled
+        .iter()
+        .any(|m| m.contains("allow: true")));
+    run.key(TAB, None);
+    assert_eq!(run.focused().unwrap().name.as_deref(), Some("Allow"));
+    run.key(SPACE, Some(' '));
+    assert!(run
+        .model()
+        .handled
+        .iter()
+        .any(|m| m == "DesktopControl { allow: true, stop: false }"));
+    for phase in [2, 3] {
+        let mut run = Run::new(Surface::DesktopControl(phase));
+        run.key(ESCAPE, None);
+        assert!(run
+            .model()
+            .handled
+            .iter()
+            .any(|m| m == "DesktopControl { allow: false, stop: true }"));
+    }
+}
+
+#[test]
 fn the_interrupt_panel_focuses_cancel_and_return_does_not_force_quit() {
     let mut run = Run::new(Surface::Interrupt);
     let focused = run.focused().expect("a focused button");
@@ -943,6 +976,13 @@ fn pictures_for_review() {
         "panel-log-out-unchecked",
     );
     look(&mut Run::new(Surface::Interrupt), "interrupt");
+    for (phase, name) in [
+        (1, "control-consent"),
+        (2, "control-active"),
+        (3, "control-paused"),
+    ] {
+        look(&mut Run::new(Surface::DesktopControl(phase)), name);
+    }
     look(&mut Run::new(Surface::Picker), "greeter-picker");
 }
 

@@ -131,11 +131,18 @@ macro_rules! ignore_events {
     )*};
 }
 
+#[path = "capture/control.rs"]
+mod desktop_control;
+
 // ---- the application: one toplevel, red above blue -------------------------------------------------
 
 #[derive(Default)]
 struct App {
     shm: Option<wl_shm::WlShm>,
+    control_window: Option<cupertino_wm::WindowId>,
+    control_serial: u32,
+    control_keys: Vec<(u32, bool)>,
+    control_request: Option<(u64, u32, bool)>,
     /// Keeps the shm file of the attached buffer open.
     _file: Option<std::fs::File>,
     _window: Option<(
@@ -211,6 +218,15 @@ fn mapped_app_named(
     title: Option<&str>,
 ) -> (TestClient<App>, cupertino_wm::Rect) {
     let stream = UnixStream::connect(h.socket_path()).unwrap();
+    mapped_app_stream(h, stream, app_id, title)
+}
+
+fn mapped_app_stream(
+    h: &mut Harness,
+    stream: UnixStream,
+    app_id: &str,
+    title: Option<&str>,
+) -> (TestClient<App>, cupertino_wm::Rect) {
     let mut app = TestClient::connect(h, stream, App::default());
     let qh = app.qh();
     app.state.shm = Some(app.globals.bind(&qh, 1..=1, ()).unwrap());
@@ -226,9 +242,25 @@ fn mapped_app_named(
     surface.commit();
     app.state._window = Some((wm_base, xdg, toplevel));
     h.clients_until(&mut [&mut app], "the toplevel to be mapped", |s| {
-        s.wm.key_window()
-            .is_some_and(|w| s.entry(w).is_some_and(|e| e.mapped))
+        s.wm.windows().any(|w| {
+            s.entry(w.id).is_some_and(|e| e.mapped)
+                && s.wm.app(w.app).is_some_and(|app| app.identity == app_id)
+        })
     });
+    let id = h
+        .state
+        .wm
+        .windows()
+        .find(|w| {
+            h.state
+                .wm
+                .app(w.app)
+                .is_some_and(|app| app.identity == app_id)
+        })
+        .unwrap()
+        .id;
+    h.state
+        .command(cupertino_wm::Command::FocusWindow { window: id });
     let time = h.state.now() + 5.0;
     common::set_time_with(&mut h.state, time, |state| {
         app.pump();
@@ -273,6 +305,7 @@ struct Capturer {
     )>,
     /// Every title the handles were sent, in order.
     titles: Vec<String>,
+    control_seen: desktop_control::Seen,
     session: SessionSeen,
     frame: FrameSeen,
     /// The window feed's last complete group, and the group being received.

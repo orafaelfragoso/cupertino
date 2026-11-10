@@ -2044,6 +2044,7 @@ impl Cupertino {
 
     /// Advance the model to now and apply the resulting effects.
     pub fn tick(&mut self) {
+        self.refresh_control();
         self.forget_gone_processes();
         let now = self.now();
         self.tick_session_lock();
@@ -2283,6 +2284,12 @@ impl Cupertino {
     /// authentication prompt is shown only the prompt. A popup grab whose chain `surface` is outside of ends first, its
     /// menus dismissed ([`Cupertino::end_popup_grab_for_focus`]).
     pub fn set_keyboard_focus(&mut self, surface: Option<WlSurface>) {
+        if surface
+            .as_ref()
+            .is_some_and(|s| self.control_sensitive_focus(s))
+        {
+            self.suspend_controls();
+        }
         let allowed = if self.session_lock.is_active() {
             surface.as_ref().is_some_and(|s| self.is_lock_surface(s))
         } else {
@@ -2318,6 +2325,9 @@ impl Cupertino {
     /// claim under the lock, which holds the keyboard, and gets it back at the unlock. While the authentication prompt is
     /// shown only the prompt can take it, and an open menu of another surface is closed as it does.
     pub fn layer_keyboard_exclusivity(&mut self, surface: &WlSurface, exclusive: bool) {
+        if exclusive && self.control_sensitive_focus(surface) {
+            self.suspend_controls();
+        }
         if !exclusive && self.released_layer.as_ref() == Some(surface) {
             // the layer let go after a press outside it: its next claim is a new one
             self.released_layer = None;

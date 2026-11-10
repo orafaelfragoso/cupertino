@@ -10,6 +10,8 @@
 //! (`cupertino-test-pam`), never from the machine's. Tests skip (pass) when no EGL device is available.
 
 mod common;
+#[path = "lock-screen/control.rs"]
+mod desktop_control;
 
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;

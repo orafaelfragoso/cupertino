@@ -1664,6 +1664,11 @@ impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
                 state.menu_bar_force_quit_app(&app_id)
             }
             cupertino_menu_bar_v1::Request::SessionAction { action } => {
+                if action != WEnum::Value(SessionAction::RefreshCapabilities)
+                    && !state.control_session_action_allowed(client)
+                {
+                    return;
+                }
                 let request = match action {
                     WEnum::Value(SessionAction::Sleep) => Some(DbusRequest::Sleep),
                     WEnum::Value(SessionAction::Restart) => Some(DbusRequest::Restart),

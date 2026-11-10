@@ -43,6 +43,7 @@ struct Diagnostics {
     /// `journal-<pid>` beside it: a socket this process binds once and keeps open, which no one reads.
     journal: PathBuf,
     socket: UnixDatagram,
+    short_socket_dir: Option<tempfile::TempDir>,
 }
 
 static DIAGNOSTICS: OnceLock<Diagnostics> = OnceLock::new();
@@ -53,7 +54,22 @@ fn diagnostics() -> &'static Diagnostics {
         let state = dir.join("state");
         std::fs::create_dir_all(&state).unwrap();
         remove_stale_journals(&dir);
-        let journal = dir.join(format!("journal-{}", std::process::id()));
+        // Linux pathname sockets need the terminating NUL within sun_path's 108 bytes.
+        const SOCKET_PATH_BYTES: usize = 108;
+        let candidate = dir.join(format!("journal-{}", std::process::id()));
+        // Only the socket uses /tmp when a worktree path is long; diagnostic data stays in the managed target.
+        let short_socket_dir = (candidate.as_os_str().len() >= SOCKET_PATH_BYTES).then(|| {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::Builder::new()
+                .prefix("cup-diag-")
+                .tempdir_in("/tmp")
+                .unwrap();
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            dir
+        });
+        let journal = short_socket_dir
+            .as_ref()
+            .map_or(candidate, |dir| dir.path().join("journal"));
         // a socket of an earlier process with the same id
         let _ = std::fs::remove_file(&journal);
         let socket = UnixDatagram::bind(&journal).unwrap();
@@ -63,6 +79,9 @@ fn diagnostics() -> &'static Diagnostics {
         extern "C" fn remove_journal() {
             if let Some(diagnostics) = DIAGNOSTICS.get() {
                 let _ = std::fs::remove_file(&diagnostics.journal);
+                if let Some(dir) = &diagnostics.short_socket_dir {
+                    let _ = std::fs::remove_dir(dir.path());
+                }
             }
         }
         // SAFETY: `atexit` keeps a plain function pointer; `remove_journal` only removes a file.
@@ -73,6 +92,7 @@ fn diagnostics() -> &'static Diagnostics {
             state,
             journal,
             socket,
+            short_socket_dir,
         }
     })
 }

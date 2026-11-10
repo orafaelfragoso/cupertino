@@ -33,8 +33,7 @@ use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHand
 use smithay::utils::Rectangle;
 use smithay::wayland::shm::{with_buffer_contents_mut, BufferAccessError};
 
-use super::{privileged, Placement, Source};
-use crate::authorization::{authorized, ShellRole};
+use super::{capture_client, Placement, Source};
 use crate::render::scene::capture_window;
 use crate::state::Cupertino;
 
@@ -262,7 +261,11 @@ impl Cupertino {
             last: None,
             stopped: false,
         };
-        match self.placement(&session.source) {
+        let allowed = session
+            .resource
+            .client()
+            .is_some_and(|c| self.capture_source_allowed(&c, &session.source));
+        match self.placement(&session.source).filter(|_| allowed) {
             Some(p) => session.send_constraints(p.size),
             None => session.stop(),
         }
@@ -273,13 +276,25 @@ impl Cupertino {
     /// Stop the copy sessions whose connection no longer holds the Capture role (its process exited). Frames waiting
     /// on a stopped session fail.
     pub(crate) fn stop_captures(&mut self) {
+        let allowed: Vec<_> = self
+            .capture
+            .copy
+            .sessions
+            .iter()
+            .map(|s| {
+                s.resource
+                    .client()
+                    .is_some_and(|c| self.capture_source_allowed(&c, &s.source))
+            })
+            .collect();
         let copy = &mut self.capture.copy;
         let mut ended = Vec::new();
-        for session in copy.sessions.iter_mut().filter(|s| !s.stopped) {
-            let holds = session
-                .resource
-                .client()
-                .is_some_and(|c| authorized(&c, ShellRole::Capture));
+        for (session, holds) in copy
+            .sessions
+            .iter_mut()
+            .zip(allowed)
+            .filter(|(s, _)| !s.stopped)
+        {
             if !holds {
                 session.stop();
                 ended.push(session.id);
@@ -480,7 +495,7 @@ impl GlobalDispatch<ExtImageCopyCaptureManagerV1, ()> for Cupertino {
     }
 
     fn can_view(client: Client, _: &()) -> bool {
-        privileged(&client)
+        capture_client(&client)
     }
 }
 
@@ -589,7 +604,7 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, SessionId> for Cupertino {
 impl Dispatch<ExtImageCopyCaptureFrameV1, SessionId> for Cupertino {
     fn request(
         state: &mut Self,
-        client: &Client,
+        _client: &Client,
         resource: &ExtImageCopyCaptureFrameV1,
         request: frame::Request,
         _: &SessionId,
@@ -599,9 +614,8 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, SessionId> for Cupertino {
         if matches!(request, frame::Request::Destroy) {
             return;
         }
-        if !authorized(client, ShellRole::Capture) {
-            state.stop_captures();
-        }
+        state.refresh_control();
+        state.stop_captures();
         let copy = &mut state.capture.copy;
         let f = copy.frame_mut(resource);
         if f.state != FrameState::Open {

@@ -1397,6 +1397,9 @@ pub fn capture_window(
     margin: f64,
     shadow: bool,
 ) -> Option<(smithay::backend::renderer::gles::GlesTexture, Rect)> {
+    if p.for_capture && crate::control::protected_surface(entry.surface()) {
+        return None;
+    }
     let area = Rect::new(
         natural.x - margin,
         natural.y - margin,
@@ -1692,7 +1695,10 @@ fn layer_elements(
     let covered = layer == Layer::Top && top_layer_covered(p.wm, p.shell, p.output_id);
     // later surfaces are drawn on top of earlier ones
     for surface in crate::authorization::layers_stacked(&map, layer).rev() {
-        if p.for_capture && crate::authorization::is_prompt(surface.wl_surface()) {
+        if p.for_capture
+            && (crate::authorization::is_prompt(surface.wl_surface())
+                || crate::control::protected_surface(surface.wl_surface()))
+        {
             continue;
         }
         if covered && gives_way(surface, p.menu_bars) {
@@ -2345,6 +2351,9 @@ fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
         let Some(entry) = p.windows.iter().find(|w| w.id == *id) else {
             continue;
         };
+        if p.for_capture && crate::control::protected_surface(entry.surface()) {
+            continue;
+        }
         let geo = entry.window.geometry();
         let ins = entry.insets();
         let frame = pw.frame;
@@ -2420,6 +2429,9 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             let Some(entry) = p.windows.iter().find(|w| w.id == id) else {
                 continue;
             };
+            if p.for_capture && crate::control::protected_surface(entry.surface()) {
+                continue;
+            }
             let Some((mut plan, pres)) = plan_for(p.wm, entry, slide, p.now, p.fx, p.display)
             else {
                 continue;

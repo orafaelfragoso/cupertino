@@ -38,9 +38,9 @@ pub struct Backend;
 
 impl InputBackend for Backend {
     type Device = Device;
-    type KeyboardKeyEvent = UnusedEvent;
+    type KeyboardKeyEvent = Key;
     type PointerAxisEvent = UnusedEvent;
-    type PointerButtonEvent = UnusedEvent;
+    type PointerButtonEvent = Button;
     type PointerMotionEvent = UnusedEvent;
     type PointerMotionAbsoluteEvent = Absolute;
     type GestureSwipeBeginEvent = UnusedEvent;
@@ -99,6 +99,67 @@ impl AbsolutePositionEvent<Backend> for Absolute {
 }
 
 impl PointerMotionAbsoluteEvent<Backend> for Absolute {}
+
+pub struct Key {
+    pub code: u32,
+    pub pressed: bool,
+}
+impl Event<Backend> for Key {
+    fn time(&self) -> u64 {
+        0
+    }
+    fn device(&self) -> Device {
+        Device
+    }
+}
+impl smithay::backend::input::KeyboardKeyEvent<Backend> for Key {
+    fn key_code(&self) -> smithay::input::keyboard::Keycode {
+        smithay::input::keyboard::Keycode::new(self.code + 8)
+    }
+    fn state(&self) -> smithay::backend::input::KeyState {
+        if self.pressed {
+            smithay::backend::input::KeyState::Pressed
+        } else {
+            smithay::backend::input::KeyState::Released
+        }
+    }
+    fn count(&self) -> u32 {
+        u32::from(self.pressed)
+    }
+}
+pub fn key(code: u32, pressed: bool) -> InputEvent<Backend> {
+    InputEvent::Keyboard {
+        event: Key { code, pressed },
+    }
+}
+pub struct Button {
+    pub pressed: bool,
+}
+impl Event<Backend> for Button {
+    fn time(&self) -> u64 {
+        0
+    }
+    fn device(&self) -> Device {
+        Device
+    }
+}
+impl smithay::backend::input::PointerButtonEvent<Backend> for Button {
+    fn button_code(&self) -> u32 {
+        272
+    }
+    fn state(&self) -> smithay::backend::input::ButtonState {
+        if self.pressed {
+            smithay::backend::input::ButtonState::Pressed
+        } else {
+            smithay::backend::input::ButtonState::Released
+        }
+    }
+}
+pub fn button(pressed: bool) -> InputEvent<Backend> {
+    InputEvent::PointerButton {
+        event: Button { pressed },
+    }
+}
 
 /// The device's motion to `x`, `y` (shares of its range).
 pub fn motion(x: f64, y: f64) -> InputEvent<Backend> {

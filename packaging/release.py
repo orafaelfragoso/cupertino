@@ -61,7 +61,7 @@ APPS = ('cupertino-files', 'cupertino-settings')
 BINARIES = (
     'cupertino-server',
     'cupertino-dock', 'cupertino-menubar', 'cupertino-launcher', 'cupertino-notifications', 'cupertino-controlcenter',
-    'cupertino-osd', 'cupertino-screenshot', 'cupertino-windowmanager', 'cupertino-login', 'cupertino-polkit-agent',
+    'cupertino-osd', 'cupertino-screenshot', 'cupertino-control', 'cupertino-windowmanager', 'cupertino-login', 'cupertino-polkit-agent',
     'cupertino-portal',
     *APPS,
     'cupertino-sessiond', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd',

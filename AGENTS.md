@@ -13,6 +13,11 @@ Short rules for any agent (and any person) who edits this repository. Details li
 
 ## Build and test
 
+For build/install-only work, use the managed wrapper with `cargo build --locked -p PACKAGE --bin BINARY` and only the
+production features the binary needs (usually `--features app`). Do not add test execution, `--tests`, `--all-targets`
+or the test-fixture wrapper to an ordinary development build. Validation of implementation changes is a separate,
+scoped test step; package selection on the fixture wrapper and on its child command are independent.
+
 ```bash
 export PATH=$HOME/.cargo/bin:$PATH
 python3 ci/worktree-build.py run --profile dev -- cargo build --workspace

@@ -7,7 +7,33 @@
 - A Wayland terminal such as `foot` to start inside the session.
 - Some crates link system libraries (for example the session manager links libpam); each crate's README lists what it needs.
 
-Build output is large. Keep several GB free for the target directory.
+Build output is large. The managed build wrapper requires at least 30 GiB free before starting.
+
+## Development builds without tests
+
+For a local build or binary replacement, build only the package and binary being changed. For example, the portal's
+`app` feature includes its production screen-sharing dependency without enabling every workspace test feature:
+
+```bash
+python3 ci/worktree-build.py run --profile dev -- cargo build --locked -p cupertino-portal --features app --bin cupertino-portal
+python3 ci/worktree-build.py run --profile dev -- cargo build --locked -p cupertino-server --bin cupertino-server
+```
+
+These commands compile the selected binary and its dependencies, without test harnesses, examples or benchmarks.
+Ordinary `cargo build` does not compile test harnesses either. Do not add `--all-targets`, `--tests`, `cargo test`,
+`cargo nextest`, or `ci/build-test-fixtures.py` to a build-only operation. The fixture wrapper explicitly uses
+`--all-targets` to prepare a test run; it is not a development build shortcut. `--all-features` alone does not select
+test targets, but can enable optional test-support dependencies, so prefer the production features needed by the package.
+
+Run regression tests separately when validating implementation changes. Scope them to the affected behavior and packages;
+the workspace test and packaging gates remain separate checks. In particular, when using the fixture wrapper for a
+package-specific test run, pass its repeated `--package` options for all required fixture packages as well as selecting
+the tests in the child command; a package filter only on nextest does not narrow the wrapper's preparation.
+
+Keep the same managed target, profile and build environment during an active development task so Cargo can reuse
+unchanged artifacts. Switching between dev and release, preparing a fresh worktree target or cleaning it forces more
+compilation. Incremental compilation is disabled by this repository's configuration; shared downloads are not a shared
+compiled target. Follow the repository's `CONTRIBUTING.md` instructions for managed seeds and cleanup.
 
 ## Try it in one minute (nested)
 

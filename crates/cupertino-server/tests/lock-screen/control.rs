@@ -4,6 +4,7 @@ mod semantics;
 #[path = "stability.rs"]
 mod stability;
 use super::*;
+use cupertino_defaults::desktop_control as remembered;
 use serde_json::{json, Value};
 use smithay::desktop::layer_map_for_output;
 use std::io::{BufRead, BufReader, Write};
@@ -138,13 +139,55 @@ fn click(server: &mut Server, x: f64, y: f64) {
         server.step();
     }
 }
+/// The session's remembered answers: a file in the fixture's settings folder, which the server watches.
+struct Remembered {
+    path: PathBuf,
+}
+impl Remembered {
+    fn watched(session: &mut Session) -> Self {
+        let dir = session.fixture.root.join("config").join("cupertino");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(remembered::DESKTOP_CONTROL_FILE);
+        session.server.state.start_settings_watch(
+            cupertino_server::config::SettingsFiles::default(),
+            cupertino_server::live::SettingsPaths {
+                desktop_control: Some(path.clone()),
+                ..Default::default()
+            },
+        );
+        Self { path }
+    }
+    fn decision(&self, service: remembered::Service) -> Option<remembered::Decision> {
+        let (conf, _) = remembered::DesktopControlConf::load(&self.path).unwrap();
+        conf.decision(service, &this_program())
+    }
+    /// Remove the app's answers, as the settings application does, and wait until the server read the change.
+    fn forget(&self, server: &mut Server) {
+        let before = server.state.live.reloads;
+        remembered::DesktopControlConf::update(&self.path, |conf| {
+            for service in remembered::Service::ALL {
+                conf.forget(service, &this_program());
+            }
+            Ok(())
+        })
+        .unwrap();
+        server.wait_until("the removed answers to be read", |s| {
+            s.live.reloads > before
+        });
+    }
+}
+/// The app of the runs: the program that started the bridge, this test.
+fn this_program() -> remembered::App {
+    remembered::App::Executable(std::env::current_exe().unwrap())
+}
 #[test]
-fn native_controller_and_session_consent_support_granted_input_capture_resume_and_disconnect() {
+fn native_controller_and_session_consent_remember_the_answer_and_share_the_desktop() {
     let Some(mut session) = Session::start() else {
         return;
     };
     let (application, point) = session.server.application();
     start_controller(&mut session);
+    let store = Remembered::watched(&mut session);
     let mut local = Local::connect(&mut session);
     assert_eq!(
         local.ok(&mut session.server, json!({"op":"hello","version":1}))["schema"],
@@ -163,7 +206,7 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
     session
         .server
         .wait_until("the native consent panel", |s| panel_rect(s).is_some());
-    // Return cannot approve the initially focused Don't Allow button.
+    // Return activates the initially focused Don't Allow: the person's refusal is remembered.
     for pressed in [true, false] {
         session
             .server
@@ -180,13 +223,33 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
         local.ok(&mut session.server, json!({"op":"status"}))["phase"],
         0
     );
+    for service in remembered::Service::ALL {
+        assert_eq!(store.decision(service), Some(remembered::Decision::Deny));
+    }
+    // A remembered refusal is not asked again, and tells where the person can change it.
+    let refused = local.call(
+        &mut session.server,
+        json!({"op":"request","output":"headless-1","capabilities":15}),
+    );
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("Settings › Privacy › Desktop Control"),
+        "{refused}"
+    );
+    session.server.run_for(Duration::from_millis(200));
+    assert!(panel_rect(&session.server.state).is_none());
+    // Removed in Settings, the app is asked again.
+    store.forget(&mut session.server);
     local.ok(
         &mut session.server,
         json!({"op":"request","output":"headless-1","capabilities":15}),
     );
-    session
-        .server
-        .wait_until("fresh native consent", |s| panel_rect(s).is_some());
+    session.server.wait_until("consent asked again", |s| {
+        panel_rect(s).is_some_and(|(x, _, _, h)| x > 100.0 && x < 300.0 && h == 228.0)
+    });
     let (x, y, _, _) = panel_rect(&session.server.state).unwrap();
     click(&mut session.server, x + 345.0, y + 196.0);
     local.ok(
@@ -198,20 +261,10 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
         .wait_until("consent to close after approval", |s| {
             panel_rect(s).is_none()
         });
+    for service in remembered::Service::ALL {
+        assert_eq!(store.decision(service), Some(remembered::Decision::Allow));
+    }
     session.server.run_for(Duration::from_millis(800));
-    assert_eq!(
-        local.ok(&mut session.server, json!({"op":"status"}))["phase"],
-        2
-    );
-    // A trailing touch frame completes a gesture; it is not a new takeover.
-    session
-        .server
-        .state
-        .process_input_event(common::absolute::frame());
-    session
-        .server
-        .state
-        .process_input_event(common::absolute::relative(0.0, 0.0));
     assert_eq!(
         local.ok(&mut session.server, json!({"op":"status"}))["phase"],
         2
@@ -239,7 +292,7 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
     assert_eq!(image["mime_type"], "image/png");
     assert_eq!(image["width"], OUTPUT.0);
     assert!(image["data"].as_str().unwrap().starts_with("iVBORw0KGgo"));
-    // A physical takeover releases only owned input and stops capture.
+    // The person uses the desktop at the same time: the run goes on, holding what it pressed.
     local.ok(
         &mut session.server,
         json!({"op":"key","code":42,"pressed":true}),
@@ -248,25 +301,32 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
         .server
         .state
         .process_input_event(common::absolute::motion(0.1, 0.9));
-    local.ok(
-        &mut session.server,
-        json!({"op":"wait","phase":3,"timeout_ms":5000}),
+    for pressed in [true, false] {
+        session
+            .server
+            .state
+            .process_input_event(common::absolute::key(48, pressed));
+    }
+    session
+        .server
+        .state
+        .process_input_event(common::absolute::frame());
+    session.server.run_for(Duration::from_millis(200));
+    assert_eq!(
+        local.ok(&mut session.server, json!({"op":"status"}))["phase"],
+        2
     );
     session.server.sync(&application);
-    assert!(application.keys().contains(&(42, false)));
-    assert_eq!(
-        local.call(&mut session.server, json!({"op":"capture"}))["ok"],
-        false
-    );
+    assert!(!application.keys().contains(&(42, false)));
+    let image = local.ok(&mut session.server, json!({"op":"capture"}));
+    assert_eq!(image["width"], OUTPUT.0);
+    // Resuming a run that is not suspended asks nobody.
     local.ok(&mut session.server, json!({"op":"resume"}));
-    session.server.wait_until("the resumed consent panel", |s| {
-        panel_rect(s).is_some_and(|(x, _, _, h)| x > 100.0 && x < 300.0 && h == 228.0)
-    });
-    let (x, y, _, _) = panel_rect(&session.server.state).unwrap();
-    click(&mut session.server, x + 345.0, y + 196.0);
+    session.server.run_for(Duration::from_millis(200));
+    assert!(panel_rect(&session.server.state).is_none());
     local.ok(
         &mut session.server,
-        json!({"op":"wait","phase":2,"timeout_ms":5000}),
+        json!({"op":"key","code":42,"pressed":false}),
     );
     let epoch = local.ok(&mut session.server, json!({"op":"status"}))["epoch"].clone();
     // Disconnect while a state wait is pending; the peer, not its deadline, must end the run.
@@ -281,10 +341,9 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
     drop(local);
     session
         .server
-        .wait_until("the control panel to close after peer exit", |s| {
-            panel_rect(s).is_none()
-        });
+        .wait_until("the run to end after peer exit", |s| !s.control_capturing());
     assert!(disconnected.elapsed() < Duration::from_secs(10));
+    // The next bridge of the same app starts at once, without a panel.
     let mut next = Local::connect(&mut session);
     let state = next.ok(&mut session.server, json!({"op":"status"}));
     assert_eq!(state["phase"], 0);
@@ -297,19 +356,13 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
         &mut session.server,
         json!({"op":"request","output":"headless-1","capabilities":15}),
     );
-    session.server.wait_until("another consent panel", |s| {
-        panel_rect(s).is_some_and(|(_, _, _, h)| h == 228.0)
-    });
-    let (x, y, _, _) = panel_rect(&session.server.state).unwrap();
-    click(&mut session.server, x + 345.0, y + 196.0);
     next.ok(
         &mut session.server,
         json!({"op":"wait","phase":2,"timeout_ms":5000}),
     );
-    session
-        .server
-        .wait_until("no permanent control panel", |s| panel_rect(s).is_none());
-    // The reserved physical shortcut remains available without a status panel.
+    session.server.run_for(Duration::from_millis(300));
+    assert!(panel_rect(&session.server.state).is_none());
+    // The reserved physical shortcut ends the run and leaves the person's answer as it is.
     for code in [29, 56, 1] {
         session
             .server
@@ -328,4 +381,7 @@ fn native_controller_and_session_consent_support_granted_input_capture_resume_an
         &mut session.server,
         json!({"op":"wait","phase":4,"timeout_ms":5000}),
     );
+    for service in remembered::Service::ALL {
+        assert_eq!(store.decision(service), Some(remembered::Decision::Allow));
+    }
 }

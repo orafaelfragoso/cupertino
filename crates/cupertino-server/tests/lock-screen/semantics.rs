@@ -1,5 +1,6 @@
 //! The real Kit examples, compositor, native consent authority and shipped MCP bridge, without touching the login session.
 use super::*;
+use cupertino_defaults::desktop_control as remembered;
 #[path = "terra.rs"]
 mod terra;
 
@@ -94,11 +95,12 @@ fn named<'a>(window: &'a Value, name: &str) -> &'a Value {
 }
 
 #[test]
-fn rust_mcp_can_request_a_new_grant_after_stopping_the_previous_epoch() {
+fn rust_mcp_remembers_the_answer_and_a_new_run_after_stopping_starts_at_once() {
     let Some(mut session) = Session::start() else {
         return;
     };
     start_controller(&mut session);
+    let store = Remembered::watched(&mut session);
     let mut mcp = Mcp::connect(&mut session);
     mcp.rpc(&mut session.server, "initialize", json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"reuse-test","version":"1"}}));
     let first = mcp.ok(&mut session.server, "status", json!({}));
@@ -118,28 +120,37 @@ fn rust_mcp_can_request_a_new_grant_after_stopping_the_previous_epoch() {
         "wait",
         json!({"epoch":epoch,"phase":2,"timeout_ms":5000}),
     );
+    for service in remembered::Service::ALL {
+        assert_eq!(store.decision(service), Some(remembered::Decision::Allow));
+    }
     mcp.ok(&mut session.server, "stop", json!({"epoch":epoch}));
     let next = mcp.ok(&mut session.server, "status", json!({}));
     assert_eq!(next["phase"], 0);
     assert_ne!(next["epoch"], epoch);
+    // The old epoch's grant is gone with its run.
+    assert!(
+        mcp.tool(&mut session.server, "observe", json!({"epoch":epoch}))["isError"]
+            .as_bool()
+            .unwrap()
+    );
+    // The app's remembered answer starts the next run without asking.
     mcp.ok(
         &mut session.server,
         "request_control",
         json!({"output":"headless-1","capabilities":["observe"]}),
     );
-    session
-        .server
-        .wait_until("fresh consent for the new epoch", |s| {
-            panel_rect(s).is_some()
-        });
-    // A fresh run still needs the person; it never inherits the earlier grant.
-    assert!(mcp.tool(
+    mcp.ok(
+        &mut session.server,
+        "wait",
+        json!({"epoch":next["epoch"],"phase":2,"timeout_ms":5000}),
+    );
+    session.server.run_for(Duration::from_millis(300));
+    assert!(panel_rect(&session.server.state).is_none());
+    mcp.ok(
         &mut session.server,
         "observe",
-        json!({"epoch":next["epoch"]})
-    )["isError"]
-        .as_bool()
-        .unwrap());
+        json!({"epoch":next["epoch"]}),
+    );
     mcp.ok(&mut session.server, "stop", json!({"epoch":next["epoch"]}));
 }
 
@@ -267,23 +278,18 @@ fn rust_mcp_controls_real_kit_nodes_with_consent_stale_checks_and_protected_valu
         began.elapsed() < Duration::from_secs(7),
         "native action deadline did not wake the loop"
     );
+    // The person's own input does not pause the run.
     session
         .server
         .state
         .process_input_event(common::absolute::motion(0.1, 0.9));
-    mcp.ok(
-        &mut session.server,
-        "wait",
-        json!({"epoch":epoch,"phase":3,"timeout_ms":5000}),
-    );
-    assert_eq!(
-        mcp.tool(&mut session.server, "observe", json!({"epoch":epoch}))["isError"],
-        true
-    );
+    session.server.run_for(Duration::from_millis(200));
+    assert_eq!(mcp.ok(&mut session.server, "status", json!({}))["phase"], 2);
+    mcp.ok(&mut session.server, "observe", json!({"epoch":epoch}));
     // A matching MCP cancellation interrupts the blocking native wait and revokes its lease.
     mcp.id += 1;
     for request in [
-        json!({"jsonrpc":"2.0","id":mcp.id,"method":"tools/call","params":{"name":"wait","arguments":{"epoch":epoch,"phase":2,"timeout_ms":30000}}}),
+        json!({"jsonrpc":"2.0","id":mcp.id,"method":"tools/call","params":{"name":"wait","arguments":{"epoch":epoch,"phase":4,"timeout_ms":30000}}}),
         json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":mcp.id}}),
     ] {
         serde_json::to_writer(&mut mcp.local.input, &request).unwrap();
@@ -293,7 +299,7 @@ fn rust_mcp_controls_real_kit_nodes_with_consent_stale_checks_and_protected_valu
     }
     session
         .server
-        .wait_until("cancelled MCP grant to close", |s| panel_rect(s).is_none());
+        .wait_until("the cancelled MCP grant to end", |s| !s.control_capturing());
     let next = mcp.ok(&mut session.server, "status", json!({}));
     assert_ne!(next["epoch"], epoch);
     assert_eq!(next["phase"], 0);

@@ -97,17 +97,35 @@ credentials.
 
 The dependency-free `cupertino-control-model` owns grant state and aggregate input ownership. Private protocol
 version 1 stays discovery-only. Version 2 implements explicit output-scoped observation, capture, pointer and
-keyboard grants. Cupertino's own Kit consent panel lists the rights and display and starts with Don't Allow
-focused. Approval requires a fresh physical-input serial delivered to the registered consent surface after the
-request. Injected input cannot approve consent, reach session/authentication surfaces or invoke reserved session
-shortcuts or menu-bar power actions.
+keyboard grants. Version 4 asks the person once per app and remembers the answer.
 
-New physical gestures pause runs with pointer, keyboard or semantic-action rights; observation/capture-only runs
-continue while the person uses the desktop. Releases and trailing touch/gesture frames complete existing gestures. Resume
-requires another explicit native response. The consent panel closes after the decision; no permanent active or paused
-panel is shown. Ctrl+Alt+Escape stops control. Lock, session deactivation, loss of the
-authority/controller and local peer exit revoke the run and release only its owned input. Capture excludes
-consent surfaces and authentication prompts. Capture sources belong to one approved epoch, and denied or revoked
+Each request comes from an app. The controller names the process on the other end of its local socket (the agent's
+bridge) by process id and start time; the compositor checks the start time and walks up to 32 parents to the first
+connected display client. An application client whose windows name one desktop entry makes that entry the app, so a
+terminal holds the permission for the agents run inside it; otherwise the app is the executable of the bridge's
+parent. A requester whose process is gone or was replaced is refused as unidentified. Observe, semantic actions,
+pointer and keyboard need the app's Desktop Control service; capture needs its Screen Capture service. The answers
+live in `desktop-control.conf`, which Settings › Privacy edits and the compositor watches. A service turned off
+refuses the request at once (`denied`), with no panel. All needed services turned on start the run at once, with no
+panel and no consent authority needed. Otherwise Cupertino's own Kit consent panel names the app (its name and icon,
+or the program's name and path) and the services, starts with Don't Allow focused and mentions Settings › Privacy.
+Allow and Don't Allow need a fresh physical-input serial delivered to the registered consent surface after the
+request, and are remembered for the services asked; closing the panel answers this run only. An app whose name a
+line cannot hold, or a file that cannot be written, gets an answer for this run only, which is logged. A request that
+needs the person while no consent panel is connected is refused with `no_authority`. Turning a service off or
+removing the app in Settings revokes a run that uses it; turning one on starts nothing. Injected input cannot
+approve consent, reach session/authentication surfaces or invoke reserved session shortcuts or menu-bar power
+actions.
+
+The person and the run use the desktop at the same time: physical input never pauses or revokes a run, and each
+source's presses are its own, so a key or button both hold is released only when the last of them lets go. The
+authentication prompt, or a protected session panel taking the keyboard, suspends the run; it resumes by itself when
+that closes, and `resume` only resumes it sooner, never asking again. The consent panel closes after the decision;
+no permanent status panel is shown, and the menu bar's capture indicator shows while an active run may capture.
+Ctrl+Alt+Escape stops control without changing what the person decided. Lock, session deactivation, loss of the
+controller and local peer exit revoke the run and release only its owned input; after the unlock the next request
+of an allowed app starts at once. Loss of the consent panel revokes only a run waiting for its answer. Capture
+excludes consent surfaces and authentication prompts. Capture sources belong to one approved epoch, and denied or revoked
 sources cannot acquire a later grant. Geometry revisions reject stale input coordinates. Bounded outcome history
 suppresses duplicate mutations; evicted outcomes are unknown and never replayed.
 
@@ -120,7 +138,8 @@ allocations and deadlines are bounded. The controller sleeps on native transport
 In a development session, pass `--dev-shell --control-program /absolute/path/to/cupertino-control` to the new server
 and run the matching login process with its existing Session and SessionLock roles. Run
 `cupertino-control --session WAYLAND_DISPLAY` and send sequential JSON lines on stdin; it negotiates the handshake.
-Keep that process connected across commands, since separate invocations do not share consent:
+Keep that process connected across commands: closing it ends its run. Each invocation is its own run, and an app
+the person allowed starts again at once:
 
 ```json
 {"op":"request","output":"headless-1","capabilities":15}
@@ -137,7 +156,10 @@ Keep that process connected across commands, since separate invocations do not s
 
 Capability bits are observe 1, capture 2, pointer 4, keyboard 8 and semantic actions 16. Semantic actions also require observe. Keys use evdev codes; coordinates and scrolling
 use logical points relative to the approved output. Capture returns an upright PNG as base64 with its geometry.
-`status` reports epoch and phase: inactive 0, consent 1, active 2, paused 3, revoked 4. `resume` opens fresh consent.
+`status` reports epoch and phase: inactive 0, consent 1, active 2, suspended 3, revoked 4. A suspended run resumes by
+itself; `resume` never asks again. A refusal names its reason; `denied` points the person to Settings › Privacy ›
+Desktop Control or Screen Capture. The local protocol stays at version 3 for older bridges; the controller names its
+peer to the compositor itself.
 Closing the local connection ends its run. The local protocol accepts typed operations, not shell commands or
 arbitrary file paths.
 
@@ -170,7 +192,8 @@ The bridge implements MCP stdio versions 2025-06-18 and 2025-11-25 (initializati
 [2026-07-28 per-request discovery](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning).
 It exposes twelve tools: status, request_control, observe, action, capture, move, button, key, scroll, wait, resume
 and stop. Status lists output names without exposing their content. Request only the needed capabilities, await
-native consent, and pass the resulting epoch to each subsequent call. Observe accepts window, exact role and name
+phase 2 (at once for an app the person allowed, after the native panel otherwise), and pass the resulting epoch to
+each subsequent call. After a denial the agent tells the person where to turn the app on instead of asking again. Observe accepts window, exact role and name
 substring filters, reports truncation, and supplies output-relative bounds. Opaque identifiers and publication
 revisions are decimal strings, preserving all 64 bits. Geometry revisions remain numbers. Action returns its
 outcome and a fresh observation; capture returns PNG image content with geometry, without duplicating base64 in
@@ -189,7 +212,7 @@ Choose `gpt-6.1-terra` in the host; this bridge requires no API client or new cr
 A host connection refresh is separate from restarting Cupertino. Host MCP tool approval and native desktop consent
 are separate gates. The project Codex configuration approves this one server's tools
 (`default_tools_approval_mode = "approve"`), which a host with approval policy `never` needs; the compositor still
-requires fresh native consent.
+asks the person natively the first time the app requests control.
 The opt-in model acceptance test scopes `default_tools_approval_mode = "approve"` to its isolated fixture server.
 
 The real Counter and Forms examples are tested through the shipped Rust MCP adapter, supervised controller and
@@ -335,18 +358,20 @@ specific output or window and capabilities. The session agent receives picker me
 connection; ungranted content is not forwarded to the controller or MCP. The controller is never its own consent
 authority. The compositor creates the grant only from a fresh genuine-user interaction on that consent surface;
 injected input and semantic actions cannot authorize, extend or confirm their own grant. Bind the grant to the
-controller's live process handle, private Wayland connection, local MCP connection and one run epoch. Do not persist
-a grant across process restart, reconnect, lock or logout. A reserved physical shortcut revokes control even when
-the controller is stalled. Show active-control status and a stop action through the menu bar; the reserved compositor
-shortcut must remain available when the menu bar or session agent is unresponsive. Loss of the grant authority
-revokes control.
+controller's live process handle, private Wayland connection, local MCP connection and one run epoch. A run never
+outlives process restart, reconnect, lock or logout; what persists is the person's answer for the app, in
+`desktop-control.conf`, which lets the app's next run start without the panel. A reserved physical shortcut revokes
+control even when the controller is stalled, and leaves the answers as they are. The menu bar shows the capture
+indicator while a run may capture; the reserved compositor shortcut must remain available when the menu bar or
+session agent is unresponsive. Loss of the grant authority revokes only runs waiting for its answer.
 
-The states are `inactive -> awaiting-consent -> active`, with `active -> suspended -> active` for an explicit resume,
-and `active|suspended -> revoked` for termination. Denial or cancellation returns to inactive.
-Lock, session deactivation/VT switch, controller or local-tool disconnect, and explicit stop move active or suspended
-to revoked before any further action is handled. Showing an authentication prompt suspends control and input delivery; invalidate
-pending operations and require an explicit person-driven resume after it closes. A new run after revocation needs
-a new consent interaction. Fixture tests receive a test-owned grant on a private connection, never through a
+The states are `inactive -> awaiting-consent -> active`, or `inactive -> active` when the app's remembered answers
+allow every service it needs, with `active -> suspended -> active` while the authentication prompt or a protected
+session panel is up, and `active|suspended -> revoked` for termination. Denial or cancellation returns to inactive.
+Lock, session deactivation/VT switch, controller or local-tool disconnect, explicit stop and a service the person
+turned off move active or suspended to revoked before any further action is handled. Showing an authentication
+prompt suspends control and input delivery and invalidates pending operations; the run resumes by itself after it
+closes. A new run after revocation asks the person again only when the app's answer is not remembered. Fixture tests receive a test-owned grant on a private connection, never through a
 production flag that makes every client privileged.
 
 | Operation family | Required behavior |
@@ -401,8 +426,10 @@ refresh, that is separate from restarting the desktop.
 Calling the existing input functions alone is insufficient. The current keyboard handler tracks aggregate pressed
 keys, so the server needs a source ledger before controller disconnect cleanup can preserve a physical key held by
 the person. Track physical and injected presses separately, send aggregate transitions to the existing router, and
-remember which target received each press. Cancel or release controller-owned state before transferring focus to a
-lock or authentication surface; cleanup must not send a synthetic release into the newly protected surface.
+remember which target received each press. The person's input never pauses or revokes a run: both sources press
+and release at once, and the aggregate release goes out only when the last owner lets go. Cancel or release
+controller-owned state before transferring focus to a lock or authentication surface; cleanup must not send a
+synthetic release into the newly protected surface.
 
 Define key codes explicitly as Linux evdev codes on the wire, converting once at the existing keyboard boundary.
 Use compositor-generated monotonic timestamps and preserve event order. A pointer target is in output/window logical

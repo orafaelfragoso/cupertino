@@ -6,7 +6,7 @@
 //! across both columns. The window holds the grid 8 points in from its edges, with the Edit Controls capsule centred
 //! 16 points below the grid.
 
-use cupertino_geometry::{Rect, Size};
+use cupertino_geometry::{Point, Rect, Size};
 
 use crate::model::{Detail, Module};
 
@@ -38,6 +38,25 @@ pub const WINDOW: Size = Size::new(
     GRID_WIDTH + 2.0 * INSET,
     GRID_HEIGHT + EDIT_GAP + EDIT_SIZE.height + 2.0 * INSET,
 );
+/// How far the soft shadow around the modules reaches from their edge.
+pub const SHADOW_REACH: f64 = 130.0;
+/// The transparent margin the shadow is drawn in, left of the window's content and below it: the shadow's reach less
+/// the [`INSET`] the window already keeps around the grid. Above the grid the margin only reaches up to the top of the
+/// output (the bar is at least this tall), and to the right of it to the output's edge.
+pub const SHADOW_LEFT: f64 = SHADOW_REACH - INSET;
+pub const SHADOW_BOTTOM: f64 = SHADOW_REACH - INSET;
+pub const SHADOW_TOP: f64 = 24.0;
+pub const SHADOW_RIGHT: f64 = EDGE_MARGIN as f64;
+/// Size of the surface: the window with the shadow's margin around it.
+pub const SURFACE: Size = Size::new(
+    SHADOW_LEFT + WINDOW.width + SHADOW_RIGHT,
+    SHADOW_TOP + WINDOW.height + SHADOW_BOTTOM,
+);
+/// Where the window's own corner lies in the surface.
+pub const WINDOW_ORIGIN: Point = Point::new(SHADOW_LEFT, SHADOW_TOP);
+/// Where the grid's corner lies in the surface.
+pub const GRID_ORIGIN: Point = Point::new(SHADOW_LEFT + INSET, SHADOW_TOP + INSET);
+
 /// Distance of the window from the right edge of the output and below the menu bar; the tiles sit [`INSET`] further
 /// in, so under the theme's 24 pt bar the first row of tiles starts 44 pt from the top of the output.
 pub const EDGE_MARGIN: i32 = 6;

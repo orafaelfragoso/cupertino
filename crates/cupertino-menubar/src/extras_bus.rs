@@ -639,6 +639,13 @@ async fn act(
                 .set_property("WirelessEnabled", *on)
                 .await?)
         }
+        ExtraAction::ToggleWifiList => Ok(()),
+        ExtraAction::ScanWifi => {
+            proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
+                .await?
+                .call("Scan", &())
+                .await
+        }
         ExtraAction::JoinNetwork(ssid) => {
             proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
                 .await?

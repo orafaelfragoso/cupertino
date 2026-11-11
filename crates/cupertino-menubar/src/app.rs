@@ -53,6 +53,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
+/// How long the Wi-Fi panel says it is looking for networks after a scan it asked for, if none is listed by then.
+const WIFI_SCAN_TIME: Duration = Duration::from_secs(8);
 /// Role of the surfaces for the server (`wlr-layer-shell` namespace).
 const NAMESPACE: &str = "cupertino-menubar";
 
@@ -372,6 +374,8 @@ pub struct App {
     icons: Rc<RowIcons>,
     data_dirs: Vec<PathBuf>,
     start: Instant,
+    /// When the Wi-Fi panel's "looking for networks" state ends, while a scan it asked for is under way.
+    wifi_scan_until: Option<Instant>,
     clock: ClockSettings,
     /// `menubar.conf` as last read, the last good values of the next read.
     conf: MenuBarSettings,
@@ -547,6 +551,7 @@ pub fn run() -> Result<std::convert::Infallible> {
             icons: Rc::new(RowIcons::new(ThemeIcons::new(&assets))),
             data_dirs: cupertino_defaults::data_dirs(),
             start: Instant::now(),
+            wifi_scan_until: None,
             clock: conf.clock,
             conf,
             next_clock: f64::NEG_INFINITY,
@@ -1017,7 +1022,20 @@ impl App {
                 Ok(extras) => {
                     // the session agent went away: the system menu's session items would do nothing, so it closes
                     let agent_gone = self.shared.extras.loses_session(&extras);
+                    let (list_open, scanning) = (
+                        self.shared.extras.wifi_list_open,
+                        self.shared.extras.wifi_scanning,
+                    );
                     self.shared.extras = extras;
+                    // what the panel keeps itself outlives a reading; a list that arrived ends the scan
+                    self.shared.extras.wifi_list_open = list_open;
+                    let listed = self
+                        .shared
+                        .extras
+                        .wifi
+                        .as_ref()
+                        .is_some_and(|w| !w.networks.is_empty());
+                    self.shared.extras.wifi_scanning = scanning && !listed;
                     if agent_gone {
                         for i in 0..self.bars.len() {
                             if let Some(outcome) =
@@ -1086,6 +1104,15 @@ impl App {
         }
         let now = self.now();
         let mut next = Duration::from_secs_f64((self.next_clock - unix).max(0.0));
+        if let Some(until) = self.wifi_scan_until {
+            if Instant::now() >= until {
+                self.wifi_scan_until = None;
+                self.shared.extras.wifi_scanning = false;
+                commands.extend(self.refresh());
+            } else {
+                next = next.min(until.saturating_duration_since(Instant::now()));
+            }
+        }
         for i in 0..self.bars.len() {
             if self.bars[i]
                 .controller
@@ -1260,7 +1287,19 @@ impl App {
                 Action::Extra(ExtraAction::Session(action)) => {
                     self.menu_bar(bar, |m| m.session_action(client_session_action(action)));
                 }
+                Action::Extra(ExtraAction::ToggleWifiList) => {
+                    self.shared.extras.wifi_list_open = !self.shared.extras.wifi_list_open;
+                    commands.extend(self.refresh());
+                }
                 Action::Extra(action) => {
+                    if matches!(
+                        action,
+                        ExtraAction::ScanWifi | ExtraAction::SetWifiEnabled(true)
+                    ) {
+                        self.shared.extras.wifi_scanning = true;
+                        self.wifi_scan_until = Some(Instant::now() + WIFI_SCAN_TIME);
+                        commands.extend(self.refresh());
+                    }
                     if let Err(e) = self.services.extras.act(action) {
                         return fail(e);
                     }

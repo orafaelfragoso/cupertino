@@ -7,10 +7,10 @@ use crate::controller::{Level, MenuController};
 use crate::fallback::HELP_SEARCH;
 use crate::feed::{Shared, StatusIcon, SCREEN_CAPTURE_SLOT};
 use crate::geom::{self, Point as BarPoint};
-use crate::item::{MenuItem, ShortcutGlyphs, Toggle};
+use crate::item::{MenuItem, PanelRow, ShortcutGlyphs, Toggle};
 use crate::layout::{
-    BarMetrics, MenuMetrics, PopupRow, Slot, SlotKey, TextMeasure, PRIVACY_DOT_PT, STATUS_ICON_PT,
-    SYSTEM_MARK_PT,
+    panel, BarMetrics, MenuMetrics, PopupRow, Slot, SlotKey, TextMeasure, PRIVACY_DOT_PT,
+    STATUS_ICON_PT, SYSTEM_MARK_PT,
 };
 use crate::popups;
 use crate::tone::{BarTone, Halo, MenuPalette, Rgba};
@@ -439,6 +439,7 @@ fn menu<M: Clone + 'static>(
                 expanded: row.item.has_submenu.then(|| next == Some(row.item.id)),
                 icons: Rc::clone(scene.icons),
                 key_width: layout.shortcut_key_width,
+                panel: layout.panel,
                 field: field.clone().filter(|_| row.item.id == HELP_SEARCH),
                 metrics: metrics.clone(),
                 font: scene.font,
@@ -454,7 +455,11 @@ fn menu<M: Clone + 'static>(
         on_close: None,
         background: WindowBackground::Surface {
             surface: Surface::Menu,
-            radius: POPUP_RADIUS,
+            radius: if layout.panel {
+                panel::RADIUS
+            } else {
+                POPUP_RADIUS
+            },
             alpha: 1.0,
         },
         content: Element::new(Root {
@@ -1106,6 +1111,8 @@ struct RowNode<M> {
     icons: Rc<RowIcons>,
     /// The width of the column the shortcuts' keys stand in.
     key_width: f64,
+    /// The row belongs to a status panel.
+    panel: bool,
     /// The search field, in the Help menu's search row.
     field: Option<Field>,
     metrics: MenuMetrics,
@@ -1113,7 +1120,215 @@ struct RowNode<M> {
     input: fn(Input) -> M,
 }
 
+/// Opacity of the secondary text of a status panel: its headings, notes and the disclosure's label.
+const PANEL_SECONDARY: f32 = 0.6;
+const PANEL_DISCLOSURE: f32 = 0.75;
+/// Size of the panel's headings.
+const PANEL_HEADING_PT: f32 = 12.0;
+/// Edge of the wireless mark in the joined network's disc.
+const PANEL_MARK_PT: f64 = 14.0;
+/// A signal mark's arc radii, the half-angle they span and their stroke.
+const SIGNAL_RADII: [f64; 3] = [4.5, 8.0, 11.5];
+const SIGNAL_HALF_ANGLE: f64 = std::f64::consts::FRAC_PI_4;
+const SIGNAL_STROKE: f64 = 1.6;
+const SIGNAL_DIM: f32 = 0.3;
+/// Size of a lock: its width, its body's height and the shackle's height above the body.
+const LOCK_WIDTH: f64 = 8.5;
+const LOCK_BODY: f64 = 6.5;
+const LOCK_SHACKLE: f64 = 6.0;
+
+/// A stroke along an arc of `radius` about `centre`, `half_angle` either side of straight up.
+fn arc(cx: &mut PaintCx<'_>, centre: Point, radius: f64, half_angle: f64, width: f64, c: Rgba) {
+    const STEPS: usize = 12;
+    let points: Vec<Point> = (0..=STEPS)
+        .map(|i| {
+            let a = -half_angle + 2.0 * half_angle * i as f64 / STEPS as f64;
+            Point::new(centre.x + radius * a.sin(), centre.y - radius * a.cos())
+        })
+        .collect();
+    polyline(cx, &points, width, c);
+}
+
+/// A padlock with its top-left corner at `at`.
+fn lock(cx: &mut PaintCx<'_>, at: Point, c: Rgba) {
+    let body = Rect::new(at.x, at.y + LOCK_SHACKLE, LOCK_WIDTH, LOCK_BODY);
+    fill(cx, body, 1.6, c);
+    let radius = (LOCK_WIDTH - 3.0) / 2.0;
+    let centre = Point::new(at.x + LOCK_WIDTH / 2.0, at.y + 0.7 + radius);
+    let mut points = vec![Point::new(centre.x - radius, at.y + LOCK_SHACKLE)];
+    for i in 0..=10 {
+        let a = std::f64::consts::PI * i as f64 / 10.0;
+        points.push(Point::new(
+            centre.x - radius * a.cos(),
+            centre.y - radius * a.sin(),
+        ));
+    }
+    points.push(Point::new(centre.x + radius, at.y + LOCK_SHACKLE));
+    polyline(cx, &points, 1.4, c);
+}
+
+/// A signal mark `strength` of 3 bars strong, its base point at `base`; `c` is the full colour.
+fn signal(cx: &mut PaintCx<'_>, base: Point, strength: u8, c: Rgba) {
+    circle(cx, base, 1.4, c);
+    for (i, radius) in SIGNAL_RADII.into_iter().enumerate() {
+        let on = i < usize::from(strength);
+        let c = if on { c } else { faded(c, SIGNAL_DIM) };
+        arc(cx, base, radius, SIGNAL_HALF_ANGLE, SIGNAL_STROKE, c);
+    }
+}
+
 impl<M> RowNode<M> {
+    /// A row of a status panel.
+    fn paint_panel(&self, cx: &mut PaintCx<'_>, row: &PanelRow, palette: &MenuPalette) {
+        let size = cx.size();
+        let middle = size.height / 2.0;
+        let accent = cx
+            .env()
+            .theme
+            .colors
+            .get(ColorRole::SelectedControlFill, StateVariant::NORMAL)
+            .map_or(palette.row_highlight, |c| [c.r, c.g, c.b, c.a]);
+        let text_c = palette.text;
+        let secondary = |a: f32| faded(text_c, a);
+        let heading_font = BarFont {
+            size: PANEL_HEADING_PT,
+            ..self.font
+        };
+        let x = panel::TEXT_INSET;
+        if self.hot {
+            let rect = Rect::new(
+                ROW_HIGHLIGHT_INSET,
+                0.0,
+                size.width - 2.0 * ROW_HIGHLIGHT_INSET,
+                size.height,
+            );
+            fill(cx, rect, ROW_HIGHLIGHT_RADIUS, palette.bar_highlight);
+        }
+        match row {
+            PanelRow::Header { title, on } => {
+                text(cx, &self.font, title, x, 0.0, size.height, true, text_c);
+                let track = Rect::new(
+                    size.width - panel::SWITCH_INSET - panel::SWITCH_WIDTH,
+                    middle - panel::SWITCH_HEIGHT / 2.0,
+                    panel::SWITCH_WIDTH,
+                    panel::SWITCH_HEIGHT,
+                );
+                let off = faded(text_c, 0.22);
+                fill(
+                    cx,
+                    track,
+                    panel::SWITCH_HEIGHT / 2.0,
+                    if *on { accent } else { off },
+                );
+                let inset = (panel::SWITCH_HEIGHT - panel::KNOB_HEIGHT) / 2.0;
+                let knob_x = if *on {
+                    track.max_x() - inset - panel::KNOB_WIDTH
+                } else {
+                    track.x() + inset
+                };
+                let knob = Rect::new(
+                    knob_x,
+                    track.y() + inset,
+                    panel::KNOB_WIDTH,
+                    panel::KNOB_HEIGHT,
+                );
+                fill(cx, knob, panel::KNOB_HEIGHT / 2.0, [1.0, 1.0, 1.0, 1.0]);
+            }
+            PanelRow::Section { title } => {
+                text(
+                    cx,
+                    &heading_font,
+                    title,
+                    x,
+                    0.0,
+                    size.height,
+                    true,
+                    secondary(PANEL_SECONDARY),
+                );
+            }
+            PanelRow::Current { name, secured } => {
+                let disc = Point::new(panel::DISC_INSET + panel::DISC / 2.0, middle);
+                circle(cx, disc, panel::DISC / 2.0, accent);
+                let mark = MenuItem {
+                    icon_name: Some("symbol.wifi".to_owned()),
+                    ..MenuItem::default()
+                };
+                if let Some(icon) = self.icons.row_icon(&mark, row_icon_px(cx.env().scale)) {
+                    image(cx, &icon.tinted([1.0, 1.0, 1.0, 1.0]), disc, PANEL_MARK_PT);
+                }
+                let name_x = panel::DISC_INSET + panel::DISC + panel::DISC_GAP;
+                text(
+                    cx,
+                    &self.font,
+                    name,
+                    name_x,
+                    0.0,
+                    size.height,
+                    false,
+                    text_c,
+                );
+                if *secured {
+                    let at = Point::new(
+                        size.width - panel::LOCK_INSET - LOCK_WIDTH,
+                        middle - (LOCK_SHACKLE + LOCK_BODY) / 2.0,
+                    );
+                    lock(cx, at, secondary(PANEL_DISCLOSURE));
+                }
+            }
+            PanelRow::Disclosure { title, expanded } => {
+                let c = secondary(PANEL_DISCLOSURE);
+                text(cx, &self.font, title, x, 0.0, size.height, false, c);
+                let at = size.width - panel::LOCK_INSET + 2.0;
+                let chevron = if *expanded {
+                    [
+                        Point::new(at - 5.0, middle - 2.5),
+                        Point::new(at, middle + 2.5),
+                        Point::new(at + 5.0, middle - 2.5),
+                    ]
+                } else {
+                    [
+                        Point::new(at - 2.5, middle - 5.0),
+                        Point::new(at + 2.5, middle),
+                        Point::new(at - 2.5, middle + 5.0),
+                    ]
+                };
+                polyline(cx, &chevron, 1.6, c);
+            }
+            PanelRow::Network {
+                name,
+                secured,
+                strength,
+            } => {
+                text(cx, &self.font, name, x, 0.0, size.height, false, text_c);
+                let signal_x = size.width - panel::LOCK_INSET + 1.0 - SIGNAL_RADII[2] * 0.7;
+                let base = Point::new(signal_x, middle + SIGNAL_RADII[2] * 0.4);
+                signal(cx, base, *strength, secondary(PANEL_DISCLOSURE));
+                if *secured {
+                    let at = Point::new(
+                        signal_x - SIGNAL_RADII[2] * 0.75 - 9.0 - LOCK_WIDTH,
+                        middle - (LOCK_SHACKLE + LOCK_BODY) / 2.0,
+                    );
+                    lock(cx, at, secondary(PANEL_DISCLOSURE));
+                }
+            }
+            PanelRow::Note { text: note } => {
+                text(
+                    cx,
+                    &self.font,
+                    note,
+                    x,
+                    0.0,
+                    size.height,
+                    false,
+                    secondary(PANEL_SECONDARY),
+                );
+            }
+            PanelRow::Link { title } => {
+                text(cx, &self.font, title, x, 0.0, size.height, false, text_c);
+            }
+        }
+    }
+
     /// The shortcut at the right end of the row's `width`: the key in its column, the modifier glyphs right-aligned
     /// just before it. Returns where the modifier glyphs begin.
     fn shortcut(&self, cx: &mut PaintCx<'_>, sc: &ShortcutGlyphs, width: f64, c: Rgba) -> f64 {
@@ -1220,6 +1435,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
             || self.expanded != old.expanded
             || self.place != old.place
             || self.key_width != old.key_width
+            || self.panel != old.panel
             || self.field != old.field
             || self.metrics != old.metrics
             || self.font != old.font
@@ -1257,6 +1473,20 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 .as_ref()
                 .map(|sc| self.shortcut(cx, sc, size.width, faded_text));
             self.field(cx, field, &palette, chord_left);
+            return;
+        }
+        if let Some(row) = &item.panel {
+            self.paint_panel(cx, row, &palette);
+            return;
+        }
+        if item.separator && self.panel {
+            let rect = Rect::new(
+                panel::SEPARATOR_INSET,
+                size.height / 2.0 - 0.5,
+                size.width - 2.0 * panel::SEPARATOR_INSET,
+                1.0,
+            );
+            fill(cx, rect, 0.0, palette.rule);
             return;
         }
         if item.separator {

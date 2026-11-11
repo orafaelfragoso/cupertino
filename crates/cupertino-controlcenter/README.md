@@ -40,7 +40,7 @@ symbols of the asset directory (`symbol.*`), loaded by the kit.
 
 ## How it works
 
-**Windows.** `view::panel` is one transparent window of 308 x 500 pt (`layout::WINDOW`) with no background of its own.
+**Windows.** `view::panel` is one transparent surface (`layout::SURFACE`) with no background of its own: the 308 x 500 pt window (`layout::WINDOW`) inside a transparent margin of 122 pt left and below it (24 pt above, to the output's edge on the right) where the soft shadow around the tiles is drawn, a darkening of about 9 % at the tiles' edge that fades out over 130 pt. Only the window's rectangle takes input, and nothing while the panel fades out.
 Each tile asks the compositor for regular glass under its own outline (`PaintCx::glass`): capsules and circles with round
 ends, the media tile and an open detail view with 32 pt corners, the display and sound tiles with 24 pt corners. The tiles
 join one glass container with an 8 pt blend, less than the 12 pt between them, so tiles at rest stay apart and a growing
@@ -190,16 +190,16 @@ the menu bar.
 | Grid | two columns of 140 pt and six rows of 64 pt, 12 pt apart: 292 x 444 pt (`layout`) |
 | Tiles | Wi-Fi, Bluetooth and the microphone capsules down the left column; now playing (140 x 140) beside the first two; dock hiding and lock screen circles beside the microphone; mute and keyboard brightness circles, then the focus capsule; display, then sound across both columns (`layout::frame`) |
 | Corners | capsules and circles round, now playing and an open view 32 pt, display and sound 24 pt |
-| Window | 308 x 500 pt: the grid 8 pt in, Edit Controls (94 x 24) centred 16 pt below it; 6 pt from the right edge and 12 pt below the bar (the tiles 44 pt from the top) |
+| Window | 308 x 500 pt: the grid 8 pt in, Edit Controls (94 x 24) centred 16 pt below it; 6 pt from the right edge and 12 pt below the bar (the tiles 44 pt from the top); the surface adds the shadow's margin (`layout::SURFACE`) |
 | Capsule content | 36 pt badge 14 pt in; text from 56 pt; 13 pt semibold title, 11 pt state |
 | Level | 4 pt track centred 42 pt below the tile's top; display track 36 to 254 pt, sound 33 to 213 pt; 26 pt output button centred at 265 pt |
 | Media tile | 40 pt artwork 14 pt in; buttons centred at 30, 70 and 110 pt across and 111 pt down |
-| Glass | regular, one container, 8 pt blend; light session tint black 0.27 |
+| Glass | regular, one container, 8 pt blend; in a light session black 0.27 over the glass so it reads as the dark glass does; the rim and glow are the same in both sessions |
 | Reduce Transparency | tiles grey 0.114, panel grey 0.302 with 40 pt corners and 8 pt padding |
 | Increase Contrast | tiles grey 0.463, 0.5 pt rim grey 0.341 |
 | Detail view | 64 pt header, 28 pt heading, 32 pt rows (at most 9), 9 pt separator, 32 pt settings row, 8 pt bottom (`layout::detail`) |
 | Detail motion | critically damped spring, response 0.35 s, settled at 0.6 s; content hands over at halfway; Reduce Motion: 0.2 s linear cross-fade (`motion`) |
-| Fade-out | 0.238 s, linear alpha on the glass and the content |
+| Fade | in over 0.23 s on a critically damped curve, with no scale or movement; out over 0.18 s, ease-out; with Reduce Motion both are instant; input stops at the start of the fade-out |
 | Lifecycle | hidden, shown, hiding, hidden; a toggle while hiding reopens; the output going hides at once |
 | Volume writes | linear 0 to 1, mute below 0.001, throttle 16.7 ms with the latest value kept |
 | Level keys | a sixteenth per arrow step |
@@ -240,7 +240,7 @@ cargo test -p cupertino-controlcenter --features app
 | Test | Proves |
 |---|---|
 | Model, layout and motion unit tests | The readings behind the tiles, every tile's cell and outline with no two tiles touching, the detail view's size and morph, the spring without overshoot, a reversal from where the motion was, the Reduce Motion fade and the content hand-over. |
-| Lifecycle unit tests | Full opacity, the linear fade over 0.238 s, reopening while hiding, hiding at once from any phase, at literal instants. |
+| Lifecycle unit tests | Full opacity, the fade, reopening while hiding, hiding at once from any phase, at literal instants. |
 | Backend unit tests | The dock hiding file, the microphone and the session outputs against `cupertino-pipewire`'s fake `wpctl`, the ALSA and session volume, and the stand-ins. |
 | Controller unit tests | Switches, mute, lock, Edit Controls and settings, media commands, the detail lists, a refused join, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer, a vanish that hides at once, drops a drag and reads again on reopening. |
 | `tests/panel.rs` | The panel as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`, `light-session`, `wifi-detail`: the 1x frame and the focus and accessibility tree of every control); every tile's frame; badge, opener, circle, media, output and Edit Controls presses; a disabled module; a level drag and release; Escape and a press between the tiles dismissing, or collapsing an open view; the Wi-Fi view's list, join and settings row; Tab, Space and the arrow keys across the tiles; the catcher dismissing on a left or right press only; the tiles staying one glass container too large for its text to follow the backdrop, at rest, in a light session, fading and with a view opening or open; Edit Controls glass as the tiles are, in a dark and a light session. The `layout` unit tests hold the tiles 44 pt from the top of the output and 14 pt from its right edge. |

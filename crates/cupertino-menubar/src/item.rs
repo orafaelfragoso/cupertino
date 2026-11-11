@@ -252,6 +252,37 @@ pub enum Origin {
     Exporter,
 }
 
+/// What a row of a status panel is: a panel is a menu laid out in its own style (fixed width, taller rows, a switch,
+/// discs and signal marks) rather than as a list of text rows.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PanelRow {
+    /// The title row with a switch at its trailing end.
+    Header { title: String, on: bool },
+    /// A small heading over the rows below it.
+    Section { title: String },
+    /// The network the machine is joined to: an accent disc with the wireless mark, the name and a lock when secured.
+    Current { name: String, secured: bool },
+    /// A row that shows or hides the list below it; a click leaves the panel open.
+    Disclosure { title: String, expanded: bool },
+    /// A network of the list: the name, a lock when secured and the signal strength, 0 to 3 bars.
+    Network {
+        name: String,
+        secured: bool,
+        strength: u8,
+    },
+    /// A line of plain secondary text: a state such as no networks.
+    Note { text: String },
+    /// A plain text row that opens something.
+    Link { title: String },
+}
+
+impl PanelRow {
+    /// Whether choosing the row leaves the panel open: the switch and the disclosure.
+    pub fn keeps_open(&self) -> bool {
+        matches!(self, Self::Header { .. } | Self::Disclosure { .. })
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MenuItem {
     pub id: ItemId,
@@ -280,6 +311,9 @@ pub struct MenuItem {
     pub detail: Option<String>,
     /// The item shown in this one's place while Alt is held, with its own id; only the bar's own items have one.
     pub alternate: Option<Box<MenuItem>>,
+    /// The row of a status panel this item is, drawn in the panel's style; `None` for the rows of a plain menu. A menu
+    /// whose children have one is laid out as a panel.
+    pub panel: Option<PanelRow>,
 }
 
 impl MenuItem {

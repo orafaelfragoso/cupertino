@@ -161,6 +161,16 @@ impl Controller {
         self.lifecycle.opacity(now)
     }
 
+    /// Whether the panel is still fading in at `now`.
+    pub fn opening(&self, now: f64) -> bool {
+        self.lifecycle.opening(now)
+    }
+
+    /// With Reduce Motion the panel opens and closes without a fade.
+    pub fn set_reduce_motion(&mut self, on: bool) {
+        self.lifecycle.set_reduce_motion(on);
+    }
+
     /// Open the panel and read every backend, or dismiss it when it is shown (the `Toggle` call).
     pub fn toggle(&mut self, now: f64) {
         let was_shown = self.lifecycle.phase(now) == Phase::Shown;

@@ -10,7 +10,7 @@ use cupertino_controlcenter::backend::{
 };
 use cupertino_controlcenter::control;
 use cupertino_controlcenter::controller::{Backends, Controller};
-use cupertino_controlcenter::layout::{BAR_MARGIN, EDGE_MARGIN};
+use cupertino_controlcenter::layout::{BAR_MARGIN, SHADOW_TOP};
 use cupertino_controlcenter::lifecycle::Phase;
 use cupertino_controlcenter::model::{Device, Network, Output, VolumeState, WifiStatus};
 use cupertino_controlcenter::motion::Expansion;
@@ -305,8 +305,10 @@ impl PanelRoles {
                     spec.size.height.ceil() as u32,
                 ),
                 margin: Margin {
-                    top: self.menu_bar + BAR_MARGIN,
-                    right: EDGE_MARGIN,
+                    // the surface reaches up past the window by the shadow's margin, never above the output
+                    top: (self.menu_bar + BAR_MARGIN - SHADOW_TOP as i32).max(0),
+                    // and to the output's edge: the window's own margin is part of the surface
+                    right: 0,
                     ..Margin::default()
                 },
                 exclusive_zone: -1,
@@ -591,6 +593,7 @@ impl Panel {
         Presentation {
             alpha: self.controller.opacity(now),
             light: self.light,
+            input: self.controller.phase(now) == Phase::Shown,
             detail: self.expansion.map(|e| Opened {
                 detail: e.detail,
                 progress: e.progress(now),
@@ -619,6 +622,7 @@ fn schedule(model: &mut Panel) -> Vec<Command<Message>> {
         .next_wakeup(now)
         .map(Duration::from_secs_f64);
     let animating = model.controller.phase(now) == Phase::Hiding
+        || model.controller.opening(now)
         || (model.moving && model.controller.phase(now) == Phase::Shown);
     let wait = if animating {
         Some(next.map_or(FRAME, |next| next.min(FRAME)))
@@ -641,6 +645,8 @@ fn start(
     appearance: SystemAppearance,
 ) -> (Panel, Vec<Command<Message>>) {
     let first = listen(&requests);
+    let mut controller = controller;
+    controller.set_reduce_motion(appearance.reduce_motion);
     let model = Panel {
         controller,
         requests,
@@ -698,7 +704,10 @@ impl Application for Panel {
                         model.reset();
                     }
                     Request::Appearance { dark } => model.light = !dark,
-                    Request::ReduceMotion(on) => model.reduce_motion = on,
+                    Request::ReduceMotion(on) => {
+                        model.reduce_motion = on;
+                        model.controller.set_reduce_motion(on);
+                    }
                 }
                 let mut commands = schedule(model);
                 commands.push(listen(&model.requests));

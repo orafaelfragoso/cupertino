@@ -114,18 +114,29 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
         } => Some(Action::SystemMenuOpening {
             refresh_capabilities: cx.shared.extras.session.is_some(),
         }),
+        // the Wi-Fi panel asks the network service for a fresh scan as it opens
+        Effect::AboutToShow {
+            slot: SlotKey::Status(id),
+            item: ItemId(0),
+        } if ExtraKind::from_slot_id(&id) == Some(ExtraKind::Wifi) => {
+            Some(Action::Extra(ExtraAction::ScanWifi))
+        }
         Effect::AboutToShow { .. } => None,
         Effect::Activate {
             slot: SlotKey::Status(id),
             item,
         } if ExtraKind::from_slot_id(&id).is_some() => {
             let kind = ExtraKind::from_slot_id(&id)?;
-            cx.shared
-                .extras
-                .menu(kind)
-                .action(item)
-                .cloned()
-                .map(Action::Extra)
+            match cx.shared.extras.menu(kind).action(item)? {
+                ExtraAction::System(SystemAction::WifiSettings) => {
+                    Some(Action::Launch(Launch::Program(vec![
+                        SETTINGS_PROGRAM.to_owned(),
+                        "--pane".to_owned(),
+                        "wifi".to_owned(),
+                    ])))
+                }
+                action => Some(Action::Extra(action.clone())),
+            }
         }
         Effect::Activate {
             slot: SlotKey::Status(id),

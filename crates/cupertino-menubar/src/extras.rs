@@ -10,7 +10,7 @@
 //!   icon name (freedesktop symbolic names) and the signal and charge bounds between icons.
 
 use crate::fallback::Chords;
-use crate::item::{plain_text, ItemId, MenuItem, Toggle};
+use crate::item::{plain_text, ItemId, MenuItem, PanelRow, Toggle};
 use crate::layout::SlotKey;
 use crate::recent::{RecentItems, RECENT_LIMIT};
 
@@ -142,6 +142,10 @@ pub struct Extras {
     pub lock_without_agent: bool,
     /// The panels of other processes that the bar's items open, while they are open.
     pub panels: OpenPanels,
+    /// What the bar itself keeps of the Wi-Fi panel, not read from a service: whether the list of other networks is
+    /// shown, and whether a scan the panel asked for is still under way.
+    pub wifi_list_open: bool,
+    pub wifi_scanning: bool,
 }
 
 /// The panels other processes show for the bar's items: the control panel and the notification centre's list. Each is
@@ -174,6 +178,10 @@ impl OpenPanels {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExtraAction {
     SetWifiEnabled(bool),
+    /// Show or hide the list of other networks in the Wi-Fi panel; the bar carries it out itself.
+    ToggleWifiList,
+    /// Ask the network service to scan again.
+    ScanWifi,
     /// Join a network without a passphrase (open, or with saved credentials).
     JoinNetwork(String),
     SetBluetoothPowered(bool),
@@ -191,6 +199,8 @@ pub enum ExtraAction {
 /// What an entry of the system menu that needs no session agent does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SystemAction {
+    /// Open the Wi-Fi pane of the settings.
+    WifiSettings,
     /// Open the About This Computer window of the control panel.
     About,
     /// Start the control panel.
@@ -459,7 +469,7 @@ impl Extras {
         match kind {
             ExtraKind::Wifi => {
                 if let Some(wifi) = &self.wifi {
-                    wifi_menu(&mut menu, wifi);
+                    wifi_menu(&mut menu, wifi, self.wifi_list_open, self.wifi_scanning);
                 }
             }
             ExtraKind::Battery => {
@@ -680,50 +690,171 @@ pub fn recent_items(recent: &RecentItems) -> ExtraMenu {
     menu
 }
 
-fn wifi_menu(menu: &mut ExtraMenu, wifi: &WifiState) {
-    menu.row(
+/// The most networks the panel lists.
+const MAX_PANEL_NETWORKS: usize = 8;
+
+/// Row ids of the Wi-Fi panel, fixed so the highlighted row stays the same when the rows around it change.
+const WIFI_HEADER: i32 = 1;
+const WIFI_RULE_AFTER_HEADER: i32 = 2;
+const WIFI_SECTION: i32 = 3;
+const WIFI_CURRENT: i32 = 4;
+const WIFI_RULE_AFTER_CURRENT: i32 = 5;
+const WIFI_DISCLOSURE: i32 = 6;
+const WIFI_NOTE: i32 = 7;
+const WIFI_RULE_BEFORE_SETTINGS: i32 = 8;
+const WIFI_SETTINGS: i32 = 9;
+/// The first id of the list's networks.
+const WIFI_NETWORKS: i32 = 100;
+
+/// The strength, 0 (not reported) to 3 bars, of a signal in dBm.
+fn signal_bars(dbm: Option<i32>) -> u8 {
+    match dbm {
+        None => 0,
+        Some(d) if d >= -55 => 3,
+        Some(d) if d >= -67 => 2,
+        Some(_) => 1,
+    }
+}
+
+/// Whether joining the network asks for a passphrase or a certificate.
+fn is_secured(security: &str) -> bool {
+    security != OPEN && security != OWE
+}
+
+/// The Wi-Fi panel: the title with its switch, the network joined, the list of other networks (hidden until the row
+/// above it is opened, and while Wi-Fi is off) and the row that opens the settings.
+fn wifi_menu(menu: &mut ExtraMenu, wifi: &WifiState, list_open: bool, scanning: bool) {
+    let panel_row = |menu: &mut ExtraMenu,
+                     id: i32,
+                     label: &str,
+                     enabled: bool,
+                     toggle: Toggle,
+                     panel: PanelRow,
+                     action: Option<ExtraAction>| {
+        menu.push(ItemId(id), label, enabled, toggle, action).panel = Some(panel);
+    };
+    panel_row(
+        menu,
+        WIFI_HEADER,
         "Wi-Fi",
         true,
         Toggle::Check(wifi.enabled),
+        PanelRow::Header {
+            title: "Wi-Fi".to_owned(),
+            on: wifi.enabled,
+        },
         Some(ExtraAction::SetWifiEnabled(!wifi.enabled)),
     );
-    if !wifi.enabled {
-        return;
-    }
-    let sections: [(&str, &str, bool); 2] = [
-        ("Known Network", "Known Networks", true),
-        ("Other Network", "Other Networks", false),
-    ];
-    for (singular, plural, known) in sections {
-        let mut networks: Vec<&WifiNetwork> = wifi
-            .networks
-            .iter()
-            .filter(|n| n.known == known && !n.ssid.is_empty())
-            .collect();
-        if networks.is_empty() {
-            continue;
-        }
-        // stable, ascending by name
-        networks.sort_by(|a, b| a.ssid.cmp(&b.ssid));
-        menu.separator();
-        menu.header(if networks.len() == 1 {
-            singular
-        } else {
-            plural
-        });
-        for network in networks {
-            // without a passphrase prompt in the bar, only networks that need none can be joined from here
-            let joinable = network.known || network.security == OPEN || network.security == OWE;
-            let action = (joinable && !network.connected)
-                .then(|| ExtraAction::JoinNetwork(network.ssid.clone()));
-            menu.row(
-                &network.ssid,
-                joinable,
-                Toggle::Check(network.connected),
-                action,
+    menu.rows.push(MenuItem::separator(WIFI_RULE_AFTER_HEADER));
+    if wifi.enabled {
+        let named = |n: &&WifiNetwork| !n.ssid.is_empty();
+        if let Some(current) = wifi.networks.iter().filter(named).find(|n| n.connected) {
+            panel_row(
+                menu,
+                WIFI_SECTION,
+                "Joined network",
+                false,
+                Toggle::None,
+                PanelRow::Section {
+                    title: "Joined network".to_owned(),
+                },
+                None,
             );
+            panel_row(
+                menu,
+                WIFI_CURRENT,
+                &current.ssid,
+                false,
+                Toggle::None,
+                PanelRow::Current {
+                    name: current.ssid.clone(),
+                    secured: is_secured(&current.security),
+                },
+                None,
+            );
+            menu.rows.push(MenuItem::separator(WIFI_RULE_AFTER_CURRENT));
+        }
+        panel_row(
+            menu,
+            WIFI_DISCLOSURE,
+            "Other networks",
+            true,
+            Toggle::None,
+            PanelRow::Disclosure {
+                title: "Other networks".to_owned(),
+                expanded: list_open,
+            },
+            Some(ExtraAction::ToggleWifiList),
+        );
+        if list_open {
+            let mut others: Vec<&WifiNetwork> = wifi
+                .networks
+                .iter()
+                .filter(named)
+                .filter(|n| !n.connected)
+                .collect();
+            // the strongest first, then by name
+            others.sort_by(|a, b| {
+                signal_bars(b.signal_dbm)
+                    .cmp(&signal_bars(a.signal_dbm))
+                    .then_with(|| a.ssid.cmp(&b.ssid))
+            });
+            others.dedup_by(|a, b| a.ssid == b.ssid);
+            if others.is_empty() {
+                let text = if scanning {
+                    "Looking for networks\u{2026}"
+                } else {
+                    "No networks found"
+                };
+                panel_row(
+                    menu,
+                    WIFI_NOTE,
+                    text,
+                    false,
+                    Toggle::None,
+                    PanelRow::Note {
+                        text: text.to_owned(),
+                    },
+                    None,
+                );
+            }
+            for (i, network) in others.into_iter().take(MAX_PANEL_NETWORKS).enumerate() {
+                let secured = is_secured(&network.security);
+                // without a passphrase prompt in the bar, a network that needs one is finished in the settings
+                let action = if network.known || !secured {
+                    ExtraAction::JoinNetwork(network.ssid.clone())
+                } else {
+                    ExtraAction::System(SystemAction::WifiSettings)
+                };
+                panel_row(
+                    menu,
+                    WIFI_NETWORKS + i as i32,
+                    &network.ssid,
+                    true,
+                    Toggle::None,
+                    PanelRow::Network {
+                        name: network.ssid.clone(),
+                        secured,
+                        strength: signal_bars(network.signal_dbm),
+                    },
+                    Some(action),
+                );
+            }
         }
     }
+    menu.rows
+        .push(MenuItem::separator(WIFI_RULE_BEFORE_SETTINGS));
+    panel_row(
+        menu,
+        WIFI_SETTINGS,
+        "Wi-Fi Settings\u{2026}",
+        true,
+        Toggle::None,
+        PanelRow::Link {
+            title: "Wi-Fi Settings\u{2026}".to_owned(),
+        },
+        Some(ExtraAction::System(SystemAction::WifiSettings)),
+    );
 }
 
 fn battery_menu(menu: &mut ExtraMenu, battery: &BatteryState) {

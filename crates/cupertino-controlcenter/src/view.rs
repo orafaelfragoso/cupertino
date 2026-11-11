@@ -30,7 +30,10 @@ use cupertino_kit::text::{
 };
 use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant};
 
-use crate::layout::{self, detail as rows, Outline, INSET, LARGE_RADIUS, WINDOW};
+use crate::layout::{
+    self, detail as rows, Outline, GRID_ORIGIN, GRID_WIDTH, INSET, LARGE_RADIUS, SHADOW_REACH,
+    SURFACE, WINDOW, WINDOW_ORIGIN,
+};
 use crate::model::{Controls, Detail, MediaCommand, Module, Reading, Slider, TileState};
 use crate::motion::{visibility, Visibility};
 
@@ -72,16 +75,13 @@ const IC_RIM: f64 = 0.5;
 const FALLBACK: Color = Color::new(0.16, 0.16, 0.17, 0.92);
 /// The light a tile lays on its glass: white at these opacities. `GLOW` under the top edge, fading out over
 /// `GLOW_REACH` points; `RIM` along the top, `RIM_SIDE` down the sides, the bottom at `BOTTOM_RIM` of the top's; the
-/// rim `RIM_WIDTH` points wide. The light appearance's glass is light already, so its light is softer.
+/// rim `RIM_WIDTH` points wide.
 const GLOW: f32 = 0.10;
 const GLOW_REACH: f64 = 6.0;
 const RIM: f32 = 0.42;
 const RIM_SIDE: f32 = 0.12;
 const BOTTOM_RIM: f32 = 0.6;
 const RIM_WIDTH: f64 = 0.75;
-const LIGHT_GLOW: f32 = 0.06;
-const LIGHT_RIM: f32 = 0.30;
-const LIGHT_RIM_SIDE: f32 = 0.08;
 /// A switch that is on: a white disc behind its symbol, drawn in the accent colour.
 const ON_FILL: Color = Color::new(1.0, 1.0, 1.0, 1.0);
 /// A switch badge that is off: a light veil.
@@ -106,16 +106,17 @@ const SEPARATOR: Color = Color::new(1.0, 1.0, 1.0, 0.16);
 /// its caption size (11), the Edit Controls label in the body size medium, a detail's heading in the caption size
 /// semibold, its rows in the body size.
 const TITLE_WEIGHT: u16 = 600;
-const LINE_WEIGHT: u16 = 400;
+const LINE_WEIGHT: u16 = 500;
 const EDIT_WEIGHT: u16 = 500;
 const ROW_WEIGHT: u16 = 400;
 
 /// How strongly the labels of a tile are drawn over its glass, as the opacity of the label colour: a title somewhat
-/// below full white, its second line clearly dimmer, so the state reads as a quieter line under the name. The slider
+/// below full white, its second line in full white at a medium weight, so the state reads as the brighter line under
+/// the name. The slider
 /// tiles' titles and the Edit Controls label are drawn in full white. Increase Contrast draws every label in the
 /// theme's own colours.
 const TITLE_STRENGTH: f32 = 0.85;
-const LINE_STRENGTH: f32 = 0.70;
+const LINE_STRENGTH: f32 = 1.0;
 
 /// A capsule's badge: its diameter, its inset from the capsule's leading and top edges, and where the text starts.
 const BADGE: f64 = 36.0;
@@ -208,6 +209,8 @@ pub struct Presentation {
     pub alpha: f64,
     /// The session is in the light appearance: the tiles tint their glass dark.
     pub light: bool,
+    /// The panel takes input: false while it fades out.
+    pub input: bool,
     /// A detail view opening, open or closing.
     pub detail: Option<Opened>,
 }
@@ -217,6 +220,7 @@ impl Presentation {
     pub const SHOWN: Presentation = Presentation {
         alpha: 1.0,
         light: false,
+        input: true,
         detail: None,
     };
 }
@@ -477,14 +481,57 @@ fn fill(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, color: Color) {
     });
 }
 
+/// Darkening at a distance from the modules' edge, in points: the share of black laid over the backdrop. It starts
+/// at about 9 % at the edge and fades out over [`SHADOW_REACH`].
+const SHADOW_PROFILE: [(f64, f64); 5] = [
+    (0.0, 0.090),
+    (30.0, 0.067),
+    (60.0, 0.027),
+    (90.0, 0.011),
+    (SHADOW_REACH, 0.0),
+];
+/// The shadow is drawn as bands this wide, each a ring around the modules' outline.
+const SHADOW_BAND: f64 = 5.0;
+
+/// The darkening `distance` points from the edge.
+fn shadow_at(distance: f64) -> f64 {
+    let d = distance.max(0.0);
+    for pair in SHADOW_PROFILE.windows(2) {
+        let ((d0, a0), (d1, a1)) = (pair[0], pair[1]);
+        if d <= d1 {
+            return a0 + (a1 - a0) * ((d - d0) / (d1 - d0)).clamp(0.0, 1.0);
+        }
+    }
+    0.0
+}
+
+/// A soft shadow around `rect` (rounded at [`LARGE_RADIUS`]): concentric bands outside the outline, so the modules
+/// themselves are not darkened.
+fn shadow(cx: &mut PaintCx<'_>, rect: Rect) {
+    let bands = (SHADOW_REACH / SHADOW_BAND).ceil() as usize;
+    for i in (0..bands).rev() {
+        let inner = i as f64 * SHADOW_BAND;
+        let middle = inner + SHADOW_BAND / 2.0;
+        let alpha = shadow_at(middle) as f32;
+        if alpha <= 0.0 {
+            continue;
+        }
+        let centre = rect.outset(middle);
+        cx.push(PaintOp::Stroke {
+            shape: Shape::RoundedRect {
+                rect: centre,
+                radius: LARGE_RADIUS + middle,
+            },
+            width: SHADOW_BAND,
+            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, alpha)),
+        });
+    }
+}
+
 /// A tile's light on its glass: a soft glow under its top edge, then a fine bright rim strongest along the top and
 /// bottom and faint down the sides, so a tile reads as a raised piece of glass on any wallpaper.
-fn lift(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, light: bool) {
-    let (glow, rim, side) = if light {
-        (LIGHT_GLOW, LIGHT_RIM, LIGHT_RIM_SIDE)
-    } else {
-        (GLOW, RIM, RIM_SIDE)
-    };
+fn lift(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
+    let (glow, rim, side) = (GLOW, RIM, RIM_SIDE);
     let white = |a: f32| Color::new(1.0, 1.0, 1.0, a);
     let stop = |offset: f32, a: f32| GradientStop {
         offset,
@@ -663,6 +710,8 @@ struct Board<M> {
     /// Height of the tiles the opaque panel of Reduce Transparency goes around: the grid and Edit Controls, or an open
     /// detail view.
     height: f64,
+    /// The outline of what the soft shadow goes around, relative to the grid's corner.
+    shadow: Rect,
     on_outside: M,
     children: Vec<Element<M>>,
 }
@@ -675,7 +724,7 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
             overflow: Overflow::Visible,
             ..spec(
                 ContainerKind::Absolute,
-                Rect::from_origin_size(Point::ZERO, WINDOW),
+                Rect::from_origin_size(Point::ZERO, SURFACE),
             )
         }
     }
@@ -687,7 +736,7 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.alpha != old.alpha || self.height != old.height {
+        if self.alpha != old.alpha || self.height != old.height || self.shadow != old.shadow {
             Change::Paint
         } else {
             Change::None
@@ -696,7 +745,7 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
-            size: WINDOW,
+            size: SURFACE,
             baseline: None,
         }
     }
@@ -724,8 +773,15 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
             cx.set_group(alpha as f32, Vec::new());
         }
         if reduce_transparency(cx) {
-            let group = Rect::new(0.0, 0.0, WINDOW.width, self.height + 2.0 * INSET);
+            let group = Rect::new(
+                WINDOW_ORIGIN.x,
+                WINDOW_ORIGIN.y,
+                WINDOW.width,
+                self.height + 2.0 * INSET,
+            );
             fill(cx, group, layout::GROUP_RADIUS, RT_GROUP);
+        } else if !increase_contrast(cx) {
+            shadow(cx, self.shadow.translate(GRID_ORIGIN.x, GRID_ORIGIN.y));
         }
     }
 
@@ -845,7 +901,7 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
         if self.light {
             fill(cx, rect, radius, LIGHT_TINT);
         }
-        lift(cx, rect, radius, self.light);
+        lift(cx, rect, radius);
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
@@ -1498,7 +1554,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
         alpha: f64,
         children: Vec<Element<M>>,
     ) -> Element<M> {
-        let frame = frame.translate(INSET, INSET);
+        let frame = frame.translate(GRID_ORIGIN.x, GRID_ORIGIN.y);
         Element::new(GlassTile {
             label: label.to_owned(),
             frame,
@@ -2084,7 +2140,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
     fn edit(&self, alpha: f64) -> Element<M> {
         let frame = layout::edit_frame();
         let origin = frame.origin;
-        let origin = Point::new(origin.x + INSET, origin.y + INSET);
+        let origin = Point::new(origin.x + GRID_ORIGIN.x, origin.y + GRID_ORIGIN.y);
         let size = frame.size;
         self.tile(
             "Edit Controls",
@@ -2123,6 +2179,12 @@ impl<M: Clone + 'static> Builder<'_, M> {
         })
     }
 
+    /// What the soft shadow goes around: the grid with the Edit Controls capsule, going to the open detail view's
+    /// outline as it opens. It fades with the panel.
+    fn shadow(&self) -> Rect {
+        Rect::new(0.0, 0.0, GRID_WIDTH, self.height())
+    }
+
     /// Every tile, with the detail view opening, open or closing.
     fn board(&self) -> Vec<Element<M>> {
         let opened = self.presentation.detail;
@@ -2144,7 +2206,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
                 continue;
             }
             let frame = layout::frame(module);
-            let origin = Point::new(frame.x() + INSET, frame.y() + INSET);
+            let origin = Point::new(frame.x() + GRID_ORIGIN.x, frame.y() + GRID_ORIGIN.y);
             let content = self.content(module, origin);
             children.push(
                 self.tile(
@@ -2174,7 +2236,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
         let rows = self.row_count(detail);
         let open = layout::detail_frame(rows);
         let tile_frame = layout::frame(module);
-        let at = |frame: Rect| Point::new(frame.x() + INSET, frame.y() + INSET);
+        let at = |frame: Rect| Point::new(frame.x() + GRID_ORIGIN.x, frame.y() + GRID_ORIGIN.y);
         let faded = |alpha: f64, children: Vec<Element<M>>| {
             if alpha >= 1.0 {
                 children
@@ -2392,12 +2454,17 @@ pub fn panel<M: Clone + 'static>(
         spec: WindowSpec {
             title: TITLE.to_owned(),
             app_id: APP_ID.to_owned(),
-            size: WINDOW,
+            size: SURFACE,
             min_size: None,
             max_size: None,
             decorations: DecorationMode::None,
             foreign_parent: None,
-            input_region: None,
+            // only the modules take input: not the shadow's margin, and nothing while the panel fades out
+            input_region: Some(if presentation.input {
+                vec![Rect::from_origin_size(WINDOW_ORIGIN, WINDOW)]
+            } else {
+                Vec::new()
+            }),
         },
         shortcuts: CommandRegistry::new().with(
             Shortcut {
@@ -2411,6 +2478,7 @@ pub fn panel<M: Clone + 'static>(
         content: Element::new(Board {
             alpha: presentation.alpha,
             height: builder.height(),
+            shadow: builder.shadow(),
             on_outside: to(away(Via::Pointer)),
             children: builder.board(),
         }),

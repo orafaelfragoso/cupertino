@@ -567,6 +567,18 @@ impl MenuController {
     /// Chooses `item`, the selected row of `level`: its row flashes, then the choice is made and the menus close.
     fn choose(&mut self, level: usize, item: ItemId, now: f64, out: &mut Outcome) {
         let activation = self.activation(item);
+        // the switch and the disclosure of a status panel act at once and leave the panel open
+        if self
+            .levels
+            .get(level)
+            .and_then(|l| l.menu.find(item))
+            .is_some_and(|i| i.panel.as_ref().is_some_and(|p| p.keeps_open()))
+        {
+            out.effects.extend(activation);
+            self.mode = Mode::Sticky;
+            out.effects.push(Effect::Redraw);
+            return;
+        }
         let row = self.levels.get(level).and_then(|l| l.selected);
         let Some(row) = row.filter(|_| self.cfg.flash_choice && self.flash.is_none()) else {
             out.effects.extend(activation);

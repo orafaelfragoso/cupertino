@@ -356,6 +356,8 @@ pub struct PopupLayout {
     pub placed_left: bool,
     /// The width of the column the shortcuts' keys stand in, right of their modifier glyphs.
     pub shortcut_key_width: f64,
+    /// A status panel: its rows are laid out and drawn in the panel's style.
+    pub panel: bool,
 }
 
 impl PopupLayout {
@@ -394,6 +396,9 @@ pub fn layout_popup(
     measure: &dyn TextMeasure,
 ) -> PopupLayout {
     let children = menu.visible_children();
+    if children.iter().any(|c| c.panel.is_some()) {
+        return layout_panel(menu, anchor, screen, m);
+    }
     let any_mark = children
         .iter()
         .any(|c| c.toggle != crate::item::Toggle::None);
@@ -518,6 +523,107 @@ pub fn layout_popup(
         scroll,
         placed_left,
         shortcut_key_width: key_w,
+        panel: false,
+    }
+}
+
+/// Sizes of a status panel, in points.
+pub mod panel {
+    /// The panel's width.
+    pub const WIDTH: f64 = 308.5;
+    /// Space between the bar and the panel.
+    pub const GAP: f64 = 1.5;
+    /// Corner radius.
+    pub const RADIUS: f64 = 14.0;
+    /// The row with the title and the switch.
+    pub const HEADER: f64 = 41.5;
+    /// A heading over the rows below it, and the row of the network joined.
+    pub const SECTION: f64 = 24.0;
+    pub const CURRENT: f64 = 40.0;
+    /// The row that shows or hides the list, a network of the list, and a line of plain text.
+    pub const DISCLOSURE: f64 = 32.0;
+    pub const NETWORK: f64 = 32.0;
+    pub const NOTE: f64 = 32.0;
+    /// A plain text row that opens something.
+    pub const LINK: f64 = 33.5;
+    /// A dividing line, and its distance from the panel's sides.
+    pub const SEPARATOR: f64 = 1.0;
+    pub const SEPARATOR_INSET: f64 = 14.5;
+    /// From the panel's edge to the text of its rows.
+    pub const TEXT_INSET: f64 = 15.0;
+    /// The switch of the header: its size and its distance from the trailing edge.
+    pub const SWITCH_WIDTH: f64 = 54.0;
+    pub const SWITCH_HEIGHT: f64 = 24.0;
+    pub const SWITCH_INSET: f64 = 14.0;
+    /// The knob of the switch.
+    pub const KNOB_WIDTH: f64 = 32.0;
+    pub const KNOB_HEIGHT: f64 = 20.0;
+    /// The disc of the joined network, and where its name starts after it.
+    pub const DISC: f64 = 26.0;
+    pub const DISC_INSET: f64 = 14.5;
+    pub const DISC_GAP: f64 = 9.0;
+    /// From the trailing edge to the end of a lock.
+    pub const LOCK_INSET: f64 = 16.5;
+}
+
+/// The height of a panel row.
+fn panel_height(item: &MenuItem) -> f64 {
+    use crate::item::PanelRow;
+    if item.separator {
+        return panel::SEPARATOR;
+    }
+    match &item.panel {
+        Some(PanelRow::Header { .. }) | None => panel::HEADER,
+        Some(PanelRow::Section { .. }) => panel::SECTION,
+        Some(PanelRow::Current { .. }) => panel::CURRENT,
+        Some(PanelRow::Disclosure { .. }) => panel::DISCLOSURE,
+        Some(PanelRow::Network { .. }) => panel::NETWORK,
+        Some(PanelRow::Note { .. }) => panel::NOTE,
+        Some(PanelRow::Link { .. }) => panel::LINK,
+    }
+}
+
+/// Lay out `menu` as a status panel: a fixed width, its trailing edge level with the item's, a little below the bar.
+fn layout_panel(menu: &MenuItem, anchor: Anchor, screen: Rect, m: &MenuMetrics) -> PopupLayout {
+    let children = menu.visible_children();
+    let w = panel::WIDTH;
+    let content_h: f64 = children.iter().map(|c| panel_height(c)).sum();
+    let (right, top) = match anchor {
+        Anchor::BelowSlot(slot) => (slot.right(), slot.bottom() + panel::GAP),
+        Anchor::BesideRow { row, parent } => (parent.right() + w, row.y),
+    };
+    let x = (right - w)
+        .min(screen.right() - m.screen_margin - w)
+        .max(screen.x + m.screen_margin);
+    let room = (screen.bottom() - m.screen_margin - top).max(0.0);
+    let h = content_h.min(room);
+    let mut y = top;
+    let rows = children
+        .iter()
+        .map(|c| {
+            let rh = panel_height(c);
+            let rect = Rect::new(x, y, w, rh);
+            y += rh;
+            let mut item = (*c).clone();
+            item.children = Vec::new();
+            PopupRow {
+                item,
+                rect,
+                shortcut: None,
+                detail: None,
+                label_x: panel::TEXT_INSET,
+            }
+        })
+        .collect();
+    PopupLayout {
+        rect: Rect::new(x, top, w, h),
+        rows,
+        clipped: content_h > h,
+        content_height: content_h,
+        scroll: 0.0,
+        placed_left: false,
+        shortcut_key_width: 0.0,
+        panel: true,
     }
 }
 

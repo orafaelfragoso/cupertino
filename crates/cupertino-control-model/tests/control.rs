@@ -281,3 +281,38 @@ fn ownership_limit_never_prevents_release_or_inserts_a_partial_press() {
     assert_eq!(owners.set(controller, key, true), Ok(None));
     assert_eq!(owners.held_count(), MAX_HELD_INPUTS);
 }
+
+#[test]
+fn runs_hold_input_like_separate_devices_and_one_revoke_releases_only_its_own() {
+    let physical = InputSource::Physical(1);
+    let (a, b) = (
+        InputSource::Controller(epoch(1)),
+        InputSource::Controller(epoch(2)),
+    );
+    let mut owners = InputOwners::default();
+    let (shift, letter, left) = (Input::Key(42), Input::Key(30), Input::Button(272));
+    assert_eq!(
+        owners.set(a, shift, true),
+        Ok(Some(Transition::Press(shift)))
+    );
+    assert_eq!(
+        owners.set(b, letter, true),
+        Ok(Some(Transition::Press(letter)))
+    );
+    assert_eq!(owners.set(b, left, true), Ok(Some(Transition::Press(left))));
+    // a key both runs and the person hold stays down until the last of them lets go
+    assert_eq!(owners.set(b, shift, true), Ok(None));
+    assert_eq!(owners.set(physical, shift, true), Ok(None));
+    assert!(owners.has_buttons(b) && !owners.has_buttons(a));
+    assert_eq!(owners.release_source(a), vec![]);
+    assert_eq!(owners.set(physical, shift, false), Ok(None));
+    assert_eq!(
+        owners.release_source(b),
+        vec![
+            Transition::Release(letter),
+            Transition::Release(shift),
+            Transition::Release(left)
+        ]
+    );
+    assert_eq!(owners.held_count(), 0);
+}

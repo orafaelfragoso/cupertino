@@ -8,7 +8,7 @@ use cupertino_semantics as wire;
 use smithay::desktop::{layer_map_for_output, PopupManager};
 use std::os::fd::{AsFd, OwnedFd};
 
-/// One native action may be outstanding per controller, with no automatic replay after timeout.
+/// One native action may be outstanding per run and per publication, with no automatic replay after timeout.
 const ACTION_TIMEOUT: Duration = Duration::from_secs(5);
 /// Each connection may publish at most this many live native surfaces.
 const MAX_PUBLISHERS: usize = 64;
@@ -20,16 +20,21 @@ pub(super) struct SemanticState {
     pubs: Vec<Publication>,
     pending: Vec<Pending>,
     layout: Vec<wire::Window>,
+    /// The epoch publications are subscribed under while any run observes, shared by the runs that see them; a fresh
+    /// one is taken each time observation starts after no run observed, so no run sees what was published before.
+    subscription: Option<u64>,
 }
 struct Publication {
     resource: CupertinoSemanticSurfaceV1,
     surface: WlSurface,
     handle: u64,
+    /// The subscription the publication is under while a run sees it.
     epoch: Option<u64>,
     snapshot: Option<wire::Snapshot>,
 }
 struct Pending {
     id: u64,
+    /// The subscription the action was sent under.
     epoch: u64,
     serial: u32,
     source: CupertinoSemanticSurfaceV1,
@@ -46,6 +51,7 @@ impl SemanticState {
             pubs: Vec::new(),
             pending: Vec::new(),
             layout: Vec::new(),
+            subscription: None,
         }
     }
 }
@@ -53,18 +59,22 @@ fn split(n: u64) -> (u32, u32) {
     ((n >> 32) as u32, n as u32)
 }
 impl Cupertino {
-    fn semantic_run(&self) -> Option<usize> {
+    /// The runs that observe: active with the observe capability, in run order.
+    fn semantic_runs(&self) -> Vec<usize> {
         if self.session_lock.is_active() || self.login_screen || self.prompt_shown() {
-            return None;
+            return Vec::new();
         }
-        self.control.runs.iter().position(|r| {
-            r.resource.version() >= 3
-                && r.model.phase() == Phase::Active
-                && r.capabilities & 1 != 0
-                && r.resource
-                    .client()
-                    .is_some_and(|c| authorized(&c, ShellRole::DesktopControl))
-        })
+        (0..self.control.runs.len())
+            .filter(|&i| {
+                let r = &self.control.runs[i];
+                r.resource.version() >= 3
+                    && r.model.phase() == Phase::Active
+                    && r.capabilities & 1 != 0
+                    && r.resource
+                        .client()
+                        .is_some_and(|c| authorized(&c, ShellRole::DesktopControl))
+            })
+            .collect()
     }
     fn semantic_root_meta(
         &self,
@@ -201,8 +211,12 @@ impl Cupertino {
             .revision
             .checked_add(1)
             .expect("semantic revision exhausted");
-        if let Some(i) = self.semantic_run() {
-            let (h, l) = split(self.control.semantics.revision);
+        let (h, l) = split(self.control.semantics.revision);
+        for i in self.semantic_runs() {
+            // a run revoked meanwhile, as by an exhausted revision below, no longer observes
+            if self.control.runs[i].model.phase() != Phase::Active {
+                continue;
+            }
             self.control.runs[i].resource.semantic_changed(h, l);
             if let Some(revision) = self.control.runs[i].revision.checked_add(1) {
                 self.control.runs[i].revision = revision;
@@ -228,9 +242,15 @@ impl Cupertino {
             })
     }
     pub(super) fn refresh_semantics(&mut self) {
-        let active = self.semantic_run();
+        let active = self.semantic_runs();
+        if active.is_empty() {
+            self.control.semantics.subscription = None;
+        } else if self.control.semantics.subscription.is_none() {
+            self.control.semantics.subscription = self.control.allocate_epoch().map(Epoch::get);
+        }
+        let subscription = self.control.semantics.subscription;
         let mut layout = Vec::new();
-        if let Some(i) = active {
+        for &i in &active {
             for entry in &self.windows {
                 if let Some(m) = entry
                     .id
@@ -259,9 +279,7 @@ impl Cupertino {
             .pubs
             .iter()
             .map(|p| {
-                active
-                    .filter(|i| self.semantic_meta(p, *i).is_some())
-                    .map(|i| self.control.runs[i].model.epoch().get())
+                subscription.filter(|_| active.iter().any(|&i| self.semantic_meta(p, i).is_some()))
             })
             .collect();
         let mut changed = false;
@@ -279,15 +297,15 @@ impl Cupertino {
         }
         let pending = std::mem::take(&mut self.control.semantics.pending);
         for p in pending {
-            let valid = active.is_some_and(|i| {
-                self.control.runs[i].model.epoch().get() == p.epoch
-                    && self.control.runs[i].resource == p.controller
-            }) && self
-                .control
-                .semantics
-                .pubs
+            let valid = active
                 .iter()
-                .any(|s| s.resource == p.source && s.epoch == Some(p.epoch));
+                .any(|&i| self.control.runs[i].resource == p.controller)
+                && self
+                    .control
+                    .semantics
+                    .pubs
+                    .iter()
+                    .any(|s| s.resource == p.source && s.epoch == Some(p.epoch));
             if valid && Instant::now() < p.deadline {
                 self.control.semantics.pending.push(p);
                 continue;
@@ -307,7 +325,7 @@ impl Cupertino {
         index: usize,
         serial: u32,
     ) -> Result<(), session::Refusal> {
-        if self.semantic_run() != Some(index) {
+        if !self.semantic_runs().contains(&index) {
             return Err(session::Refusal::NotGranted);
         }
         let mut windows = Vec::new();
@@ -322,10 +340,13 @@ impl Cupertino {
                 return Err(session::Refusal::Unsupported);
             };
             if let Some(mut meta) = self.semantic_root_meta(entry.surface(), index, handle) {
-                if let Some(p) = self.control.semantics.pubs.iter().find(|p| {
-                    p.surface == *entry.surface()
-                        && p.epoch == Some(self.control.runs[index].model.epoch().get())
-                }) {
+                if let Some(p) = self
+                    .control
+                    .semantics
+                    .pubs
+                    .iter()
+                    .find(|p| p.surface == *entry.surface() && p.epoch.is_some())
+                {
                     meta.snapshot = p.snapshot.clone();
                 }
                 windows.push(meta);
@@ -376,7 +397,8 @@ impl Cupertino {
         fd: OwnedFd,
         len: u32,
     ) -> Result<bool, session::Refusal> {
-        if self.semantic_run() != Some(index) || self.control.runs[index].capabilities & 16 == 0 {
+        if !self.semantic_runs().contains(&index) || self.control.runs[index].capabilities & 16 == 0
+        {
             return Err(session::Refusal::NotGranted);
         }
         let call: wire::Invocation =
@@ -410,13 +432,20 @@ impl Cupertino {
         if !snapshot.permits(call.node, call.action, call.data.as_ref()) {
             return Err(session::Refusal::Blocked);
         }
-        if !self.control.semantics.pending.is_empty() {
+        let controller = &self.control.runs[index].resource;
+        if self
+            .control
+            .semantics
+            .pending
+            .iter()
+            .any(|q| q.controller == *controller || q.source == p.resource)
+        {
             return Err(session::Refusal::Busy);
         }
+        let epoch = p.epoch.ok_or(session::Refusal::OutsideScope)?;
         let id = self.control.semantics.next_action;
         self.control.semantics.next_action =
             id.checked_add(1).ok_or(session::Refusal::Unsupported)?;
-        let epoch = self.control.runs[index].model.epoch().get();
         let action = wire::ActionCall {
             id,
             epoch,

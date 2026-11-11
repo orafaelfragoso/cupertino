@@ -16,9 +16,23 @@ struct Local {
     output: Option<BufReader<ChildStdout>>,
 }
 impl Local {
+    /// A bridge the test starts: its app is the test's own program.
     fn connect(session: &mut Session) -> Self {
         let program = common::fixtures::artifact("cupertino-control", "bin", "cupertino-control");
-        let mut command = common::spawn::cleared(&program, &session.fixture.root.join("home"));
+        let command = common::spawn::cleared(&program, &session.fixture.root.join("home"));
+        Self::spawn(session, command)
+    }
+    /// A bridge a shell started, so its app is the shell's program, another than [`Self::connect`]'s; and that app.
+    fn through_shell(session: &mut Session) -> (Self, remembered::App) {
+        let program = common::fixtures::artifact("cupertino-control", "bin", "cupertino-control");
+        let mut command = common::spawn::cleared("sh", &session.fixture.root.join("home"));
+        // a command after the bridge keeps the shell as its parent instead of replacing the shell by it
+        command.args(["-c", "\"$0\" \"$@\"; exit $?"]).arg(program);
+        let local = Self::spawn(session, command);
+        let shell = std::fs::read_link(format!("/proc/{}/exe", local.child.id())).unwrap();
+        (local, remembered::App::Executable(shell))
+    }
+    fn spawn(session: &mut Session, mut command: std::process::Command) -> Self {
         let mut child = command
             .args([
                 "--session",
@@ -46,11 +60,24 @@ impl Local {
         &mut self,
         server: &mut Server,
         command: Value,
-        mut step: impl FnMut(&mut Cupertino),
+        step: impl FnMut(&mut Cupertino),
     ) -> Value {
-        serde_json::to_writer(&mut self.input, &command).unwrap();
+        self.send(&command);
+        self.receive_while(server, &command, step)
+    }
+    /// Send `command` without waiting for its response.
+    fn send(&mut self, command: &Value) {
+        serde_json::to_writer(&mut self.input, command).unwrap();
         self.input.write_all(b"\n").unwrap();
         self.input.flush().unwrap();
+    }
+    /// The response to the `command` sent last.
+    fn receive_while(
+        &mut self,
+        server: &mut Server,
+        command: &Value,
+        mut step: impl FnMut(&mut Cupertino),
+    ) -> Value {
         let mut output = self.output.take().unwrap();
         let read = std::thread::spawn(move || {
             let mut line = String::new();
@@ -160,6 +187,19 @@ impl Remembered {
     fn decision(&self, service: remembered::Service) -> Option<remembered::Decision> {
         let (conf, _) = remembered::DesktopControlConf::load(&self.path).unwrap();
         conf.decision(service, &this_program())
+    }
+    /// Allow every service for `app`, as the settings application does, and wait until the server read the change.
+    fn allow(&self, server: &mut Server, app: &remembered::App) {
+        let before = server.state.live.reloads;
+        remembered::DesktopControlConf::update(&self.path, |conf| {
+            for service in remembered::Service::ALL {
+                conf.set(service, app, remembered::Decision::Allow)
+                    .map_err(std::io::Error::other)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        server.wait_until("the allowed app to be read", |s| s.live.reloads > before);
     }
     /// Remove the app's answers, as the settings application does, and wait until the server read the change.
     fn forget(&self, server: &mut Server) {
@@ -384,4 +424,88 @@ fn native_controller_and_session_consent_remember_the_answer_and_share_the_deskt
     for service in remembered::Service::ALL {
         assert_eq!(store.decision(service), Some(remembered::Decision::Allow));
     }
+}
+
+#[test]
+fn two_bridges_of_different_apps_are_served_at_once_and_each_run_ends_alone() {
+    let Some(mut session) = Session::start() else {
+        return;
+    };
+    let (application, point) = session.server.application();
+    start_controller(&mut session);
+    let store = Remembered::watched(&mut session);
+    let mut first = Local::connect(&mut session);
+    let (mut second, shell) = Local::through_shell(&mut session);
+    assert_ne!(shell, this_program());
+    store.allow(&mut session.server, &this_program());
+    store.allow(&mut session.server, &shell);
+    let server = &mut session.server;
+    for local in [&mut first, &mut second] {
+        local.ok(server, json!({"op":"hello","version":1}));
+    }
+    let (a, b) = (
+        first.ok(server, json!({"op":"status"})),
+        second.ok(server, json!({"op":"status"})),
+    );
+    assert_ne!(a["epoch"], b["epoch"], "each bridge has a run of its own");
+    // both apps are allowed: each run is active at once, without a panel
+    for local in [&mut first, &mut second] {
+        local.ok(
+            server,
+            json!({"op":"request","output":"headless-1","capabilities":15}),
+        );
+        local.ok(server, json!({"op":"wait","phase":2,"timeout_ms":5000}));
+    }
+    assert!(panel_rect(&server.state).is_none());
+    // one bridge's long wait does not hold up the other
+    let wait = json!({"op":"wait","phase":3,"timeout_ms":3000});
+    first.send(&wait);
+    let asked = Instant::now();
+    second.ok(server, json!({"op":"move","x":point.0,"y":point.1}));
+    for pressed in [true, false] {
+        second.ok(server, json!({"op":"button","code":272,"pressed":pressed}));
+    }
+    assert_eq!(second.ok(server, json!({"op":"status"}))["phase"], 2);
+    assert!(
+        asked.elapsed() < Duration::from_secs(3),
+        "the second bridge was served while the first waited"
+    );
+    let waited = first.receive_while(server, &wait, |_| {});
+    assert_eq!(waited["error"], "operation timed out", "{waited}");
+    // input interleaves like two devices: what one run holds stays down until that run lets go or ends
+    first.ok(server, json!({"op":"key","code":42,"pressed":true}));
+    for pressed in [true, false] {
+        second.ok(server, json!({"op":"key","code":30,"pressed":pressed}));
+    }
+    server.sync(&application);
+    assert!(application.keys().contains(&(30, false)));
+    assert!(!application.keys().contains(&(42, false)));
+    // each run observes and captures for itself
+    for local in [&mut first, &mut second] {
+        let observed = local.ok(server, json!({"op":"observe"}));
+        assert!(observed["windows"].is_array(), "{observed}");
+        let image = local.ok(server, json!({"op":"capture"}));
+        assert_eq!(image["mime_type"], "image/png");
+        assert_eq!(image["width"], OUTPUT.0);
+    }
+    // stopping the first run releases its key and leaves the second running
+    assert_eq!(first.ok(server, json!({"op":"stop"}))["phase"], 4);
+    server.sync(&application);
+    assert!(application.keys().ends_with(&[(42, false)]));
+    let state = second.ok(server, json!({"op":"status"}));
+    assert_eq!(state["phase"], 2);
+    assert_eq!(state["epoch"], b["epoch"]);
+    let image = second.ok(server, json!({"op":"capture"}));
+    assert!(image["data"].as_str().unwrap().starts_with("iVBORw0KGgo"));
+    for pressed in [true, false] {
+        second.ok(server, json!({"op":"key","code":48,"pressed":pressed}));
+    }
+    server.sync(&application);
+    assert!(application.keys().ends_with(&[(48, true), (48, false)]));
+    assert!(server.state.control_capturing());
+    // the second bridge leaving ends the last run
+    drop(second);
+    server.wait_until("the second run to end with its bridge", |s| {
+        !s.control_capturing()
+    });
 }

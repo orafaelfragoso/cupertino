@@ -12,12 +12,13 @@
     sealed bounded publications owned by each application surface. Version 4 names the app each run comes from:
     the person's remembered answer for that app decides a request at once, and the session authority asks only
     for services the app has no answer for. Physical input never suspends a run; an authentication prompt
-    suspends it until the prompt closes.
+    suspends it until the prompt closes. Version 5 lets one controller connection serve several runs at once, one
+    per local peer, each with its own epoch, held input and captures.
   </description>
-  <interface name="cupertino_control_v1" version="4">
+  <interface name="cupertino_control_v1" version="5">
     <enum name="error">
       <entry name="permission" value="2" summary="the connection no longer holds the controller capability"/>
-      <entry name="session_exists" value="1" summary="the connection already has a live control session"/>
+      <entry name="session_exists" value="1" summary="the connection already has as many live sessions as allowed"/>
       <entry name="exhausted" value="3" summary="the server cannot assign another unique run epoch"/>
     </enum>
     <request name="destroy" type="destructor">
@@ -27,14 +28,15 @@
     </request>
     <request name="get_session">
       <description summary="create an inactive session">
-        At most one session may be live for a connection, across all its manager bindings. Destroying it allows
-        another session with a fresh epoch. The server immediately sends created, then status with serial zero.
+        At most one session may be live for a connection, across all its manager bindings; from version 5 at
+        most eight, created through a manager bound at version 5. Destroying one allows another session with a
+        fresh epoch. The server immediately sends created, then status with serial zero.
         The manager's capability is checked again for every request. No consent or mutation is implied.
       </description>
       <arg name="id" type="new_id" interface="cupertino_control_session_v1"/>
     </request>
   </interface>
-  <interface name="cupertino_control_session_v1" version="4">
+  <interface name="cupertino_control_session_v1" version="5">
     <enum name="phase">
       <entry name="inactive" value="0"/>
       <entry name="awaiting_consent" value="1" since="2"/>
@@ -104,8 +106,11 @@
     <enum name="key_state" since="2"><entry name="released" value="0"/><entry name="pressed" value="1"/></enum>
     <request name="start" since="2">
       <description summary="ask for control of one output">
-        Capabilities are explicit, nonempty and limited to this version's capability bits. Only one run may await
-        consent or be active at a time. No desktop content is sent before consent. Serial must be nonzero.
+        Capabilities are explicit, nonempty and limited to this version's capability bits. Before version 5 only
+        one run may await consent or be active at a time, and a request beside another is refused with busy. From
+        version 5 runs are independent: several may be active at once, each holding its own keys and buttons, and
+        a run that must ask the person waits in the awaiting_consent phase until the runs asked before it are
+        answered. No desktop content is sent before consent. Serial must be nonzero.
         From version 4 a run must be identified first (unidentified otherwise). Observe, semantic, pointer and
         keyboard need the app's desktop-control service, capture its screen-capture service. A service the person
         turned off for the app refuses the request with denied. When every needed service is allowed the run is
@@ -185,6 +190,14 @@
       </description>
       <arg name="pid" type="uint"/><arg name="start_hi" type="uint"/><arg name="start_lo" type="uint"/>
     </request>
+    <request name="select_capture" since="5">
+      <description summary="make the next output capture source this run's">
+        The next ext_output_image_capture_source_v1 this connection creates belongs to this run: it captures only
+        while this run is active with the capture capability on that output, and stops with this run alone. A
+        later select_capture on any session of the connection replaces the selection. Without a selection a
+        source belongs to the first run of the connection that may capture that output.
+      </description>
+    </request>
   </interface>
 
   <interface name="cupertino_control_authority_v1" version="2">
@@ -192,7 +205,8 @@
       Offered only to the session-lock role. One authority may be bound at once. Its loss revokes the runs
       awaiting its answer; a run an app's remembered answers started needs no authority.
       Consent must name a registered surface and a fresh physical input serial delivered to that surface.
-      The controller cannot bind this interface or approve its own request.
+      The controller cannot bind this interface or approve its own request. Requests come one at a time: the
+      next requested event follows only once the earlier request was answered or ended.
     </description>
     <enum name="error"><entry name="permission" value="2"/><entry name="busy" value="1"/></enum>
     <request name="destroy" type="destructor"/>

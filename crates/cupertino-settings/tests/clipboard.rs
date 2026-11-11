@@ -42,6 +42,7 @@ impl Fixture {
             system_accessibility: None,
             data_control: Some(dir.path().join("data-control.conf")),
             screen_sharing: None,
+            desktop_control: None,
             notifications: None,
             screen_reader: None,
         };

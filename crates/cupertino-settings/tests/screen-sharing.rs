@@ -38,6 +38,7 @@ fn paths(dir: &std::path::Path) -> Paths {
         data_control: None,
         screen_sharing: Some(dir.join("screen-sharing.conf")),
         notifications: None,
+        desktop_control: None,
         screen_reader: None,
     }
 }

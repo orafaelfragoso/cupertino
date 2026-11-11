@@ -44,6 +44,7 @@ fn settings(dir: &std::path::Path) -> Settings {
         system_accessibility: None,
         data_control: None,
         screen_sharing: None,
+        desktop_control: None,
         notifications: None,
         screen_reader: None,
     };

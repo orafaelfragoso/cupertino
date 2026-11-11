@@ -234,6 +234,28 @@ fn control(row: &Row, name: &str, open: Option<ControlId>) -> Option<Element<Mes
                 .map(|(i, title)| button(title, enabled, commit(Value::Index(i))))
                 .collect(),
         }),
+        Control::ButtonAndSwitch { title, on } => Element::new(Stack {
+            axis: Axis::Horizontal,
+            padding: Insets::ZERO,
+            spacing: ROW_GAP,
+            align: Align::Center,
+            children: vec![
+                // the buttons of every row read alike; each is described by the name of its row's switch
+                Element::new(Described {
+                    description: name.to_owned(),
+                    child: vec![button(title, enabled, commit(Value::Index(0)))],
+                }),
+                Element::new(
+                    Toggle {
+                        label: name.to_owned(),
+                        on: *on,
+                        enabled,
+                        on_toggle: Some(Box::new(move |on| commit(Value::Bool(on)))),
+                    }
+                    .small(),
+                ),
+            ],
+        }),
         Control::Text { value } => styled(value, TextRole::Body, true)?,
         Control::Preview { title, note, .. } => {
             let lines = text(title, TextRole::Body)
@@ -314,6 +336,57 @@ impl<M: 'static> Widget<M> for Label<M> {
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// `child` described to assistive technology by `description`, after its own: a row's button by the row's name. It is
+/// no node of its own.
+struct Described<M> {
+    description: String,
+    child: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for Described<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Stack {
+            axis: Axis::Horizontal,
+            spacing: 0.0,
+            align: Align::Center,
+            justify: Justify::Start,
+        })
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.child)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if old.description == self.description {
+            Change::None
+        } else {
+            Change::Paint
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.describe_content(self.description.clone());
+    }
 }
 
 fn row(row: &Row, names: &Names, open: Option<ControlId>) -> Element<Message> {
@@ -535,6 +608,7 @@ mod tests {
             display_height: 1080.0,
             clipboard: Default::default(),
             screen_sharing: Default::default(),
+            desktop_control: Default::default(),
             notifications: Default::default(),
         }
     }
@@ -618,6 +692,7 @@ mod tests {
             display_height: 1080.0,
             clipboard: Default::default(),
             screen_sharing: Default::default(),
+            desktop_control: Default::default(),
             notifications: Default::default(),
         };
         let session = crate::panes::Session {

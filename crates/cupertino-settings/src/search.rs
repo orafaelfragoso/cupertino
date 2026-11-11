@@ -232,6 +232,26 @@ mod tests {
     }
 
     #[test]
+    fn the_apps_that_control_or_capture_the_screen_are_found_and_open_their_pages() {
+        use crate::pages::{of_hit, SubPage};
+        for (query, sub) in [
+            ("desktop control", SubPage::DesktopControl),
+            ("screen capture", SubPage::ScreenCapture),
+        ] {
+            let hits = search(query, &[]);
+            assert_eq!(
+                (hits[0].pane, hits[0].subtitle(), hits[0].rank),
+                (PaneId::Privacy, Some(sub.title()), Rank::Section),
+                "{query}"
+            );
+            assert_eq!(of_hit(&hits[0]).sub, Some(sub), "{query} opens its page");
+        }
+        for query in ["automation", "screenshot", "remote control"] {
+            assert_eq!(panes(query)[0].0, PaneId::Privacy, "{query}");
+        }
+    }
+
+    #[test]
     fn every_section_of_every_pane_is_found_by_its_title() {
         for p in &PANES {
             for (i, section) in p.sections.iter().enumerate() {

@@ -3,6 +3,8 @@
 //! other page shows its title in the toolbar row instead. The sections a sub-page holds leave the pane's page, which
 //! shows a row for each sub-page where the first of them stood. The back and forward history holds pages.
 
+use cupertino_defaults::desktop_control::Service;
+
 use crate::pane::{Enclosure, PaneId};
 use crate::panes::Section;
 use crate::search::Hit;
@@ -40,10 +42,12 @@ pub enum SubPage {
     HotCorners,
     ClipboardAccess,
     ScreenSharing,
+    DesktopControl,
+    ScreenCapture,
 }
 
 impl SubPage {
-    pub const ALL: [SubPage; 8] = [
+    pub const ALL: [SubPage; 10] = [
         SubPage::Display,
         SubPage::LoginScreen,
         SubPage::ScreenReader,
@@ -52,6 +56,8 @@ impl SubPage {
         SubPage::HotCorners,
         SubPage::ClipboardAccess,
         SubPage::ScreenSharing,
+        SubPage::DesktopControl,
+        SubPage::ScreenCapture,
     ];
 
     /// The pane it opens from.
@@ -63,7 +69,10 @@ impl SubPage {
             | SubPage::Pointer
             | SubPage::Keyboard => PaneId::Accessibility,
             SubPage::HotCorners => PaneId::DesktopDock,
-            SubPage::ClipboardAccess | SubPage::ScreenSharing => PaneId::Privacy,
+            SubPage::ClipboardAccess
+            | SubPage::ScreenSharing
+            | SubPage::DesktopControl
+            | SubPage::ScreenCapture => PaneId::Privacy,
         }
     }
 
@@ -78,6 +87,8 @@ impl SubPage {
             SubPage::HotCorners => "Hot Corners",
             SubPage::ClipboardAccess => "Clipboard Access",
             SubPage::ScreenSharing => "Screen Sharing",
+            SubPage::DesktopControl => crate::desktop_control::title(Service::Control),
+            SubPage::ScreenCapture => crate::desktop_control::title(Service::Capture),
         }
     }
 
@@ -92,6 +103,8 @@ impl SubPage {
             SubPage::HotCorners => "symbol.grid.fill",
             SubPage::ClipboardAccess => "symbol.document.fill",
             SubPage::ScreenSharing => "symbol.screen-mirroring.fill",
+            SubPage::DesktopControl => "symbol.desktop.fill",
+            SubPage::ScreenCapture => "symbol.photo.fill",
         }
     }
 
@@ -151,7 +164,9 @@ pub fn description(pane: PaneId, has_battery: Option<bool>) -> &'static str {
         PaneId::LockScreen => {
             "Choose when the display turns off and when your password is asked for."
         }
-        PaneId::Privacy => "Control which apps may read the clipboard or share your screen.",
+        PaneId::Privacy => {
+            "Choose which apps may use the clipboard, see your screen or control the desktop."
+        }
         PaneId::Keyboard => "Set key repeat, the modifier keys and what the fn key does.",
         PaneId::Mouse => "Set the pointer's speed and the way scrolling moves.",
         PaneId::Trackpad => "Set the pointer's speed and the way scrolling moves on the trackpad.",

@@ -134,7 +134,8 @@ credentials.
 
 The dependency-free `cupertino-control-model` owns grant state and aggregate input ownership. Private protocol
 version 1 stays discovery-only. Version 2 implements explicit output-scoped observation, capture, pointer and
-keyboard grants. Version 4 asks the person once per app and remembers the answer.
+keyboard grants. Version 4 asks the person once per app and remembers the answer. Version 5 lets the controller hold
+a run for each agent it serves, on its one connection.
 
 Each request comes from an app. The controller names the process on the other end of its local socket (the agent's
 bridge) by process id and start time; the compositor checks the start time and walks up to 32 parents to the first
@@ -162,15 +163,28 @@ no permanent status panel is shown, and the menu bar's capture indicator shows w
 Ctrl+Alt+Escape stops control without changing what the person decided. Lock, session deactivation, loss of the
 controller and local peer exit revoke the run and release only its owned input; after the unlock the next request
 of an allowed app starts at once. Loss of the consent panel revokes only a run waiting for its answer. Capture
-excludes consent surfaces and authentication prompts. Capture sources belong to one approved epoch, and denied or revoked
-sources cannot acquire a later grant. Geometry revisions reject stale input coordinates. Bounded outcome history
+excludes consent surfaces and authentication prompts. Capture sources belong to one approved epoch (the controller
+selects its run for each source it creates), and denied or revoked sources cannot acquire a later grant.
+
+Several agents work at once, each through its own bridge and run. Each run has its own epoch, app, phase, refusals,
+geometry revision, captures and waits, and its requests act on its own epoch only. Their input interleaves like
+input from separate devices: each run's held keys and buttons are its own, released when that run ends, without
+touching another run's or the person's. A stop, a revocation or a bridge leaving ends that run alone. Runs whose app
+needs the person's answer are asked one at a time on the consent panel, in the order they asked; a later one waits
+in the awaiting-consent phase until its turn. The compositor allows eight sessions on the controller's connection
+(`MAX_RUNS_PER_CONTROLLER` in `cupertino-control-model`), the controller serves as many local connections, and a further
+connection is answered at once with an error saying the controller is full, which the bridge reports. Geometry revisions reject stale input coordinates. Bounded outcome history
 suppresses duplicate mutations; evicted outcomes are unknown and never replayed.
 
 The compositor supervises the in-tree Rust `cupertino-control --serve` process on its private connection. Its socket
 is `$XDG_RUNTIME_DIR/cupertino/control-WAYLAND_DISPLAY.sock`, mode 0600 in a private directory. Each local connection
 gets a fresh inactive run and negotiates `{"op":"hello","version":1}`. The controller checks the same-user peer and
 holds its exact process descriptor: a copied socket cannot preserve a dead peer's grant. Commands, queues, capture
-allocations and deadlines are bounded. The controller sleeps on native transport/accept wakeups when idle.
+allocations and deadlines are bounded per peer: each peer has one command in flight, and a second command before the
+response disconnects it. The controller's loop never waits on one peer: replies, phase waits and capture frames are
+pending operations with deadlines, multiplexed on the Wayland connection and the peers' wakeups, and each peer's
+responses are written (and its capture encoded) on a thread of its own. The controller sleeps on native
+transport/accept wakeups when idle.
 
 In a development session, pass `--dev-shell --control-program /absolute/path/to/cupertino-control` to the new server
 and run the matching login process with its existing Session and SessionLock roles. Run

@@ -74,6 +74,30 @@ fn start_time(stat: &str) -> Option<u64> {
     after_name.split_whitespace().nth(19)?.parse().ok()
 }
 
+/// Bytes of `/proc/<pid>/stat` read at most. The line is a few hundred bytes (its command name is at most 64), so this
+/// bounds the read of a process the caller did not choose.
+const STAT_LIMIT: u64 = 4096;
+
+/// The parent process id (field 4) and the start time (field 22) of process `pid`, from a bounded read of
+/// `/proc/<pid>/stat`; `None` when the process is gone or the line is not one.
+pub fn parent_and_start(pid: u32) -> Option<(u32, u64)> {
+    use std::io::Read;
+    let mut stat = String::new();
+    std::fs::File::open(format!("/proc/{pid}/stat"))
+        .ok()?
+        .take(STAT_LIMIT)
+        .read_to_string(&mut stat)
+        .ok()?;
+    parent_and_start_of(&stat)
+}
+
+/// Fields 4 and 22 of a `/proc/<pid>/stat` line, counted from the last `)` like [`start_time`].
+fn parent_and_start_of(stat: &str) -> Option<(u32, u64)> {
+    let after_name = &stat[stat.rfind(')')? + 1..];
+    let parent = after_name.split_whitespace().nth(1)?.parse().ok()?;
+    Some((parent, start_time(stat)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,6 +111,17 @@ mod tests {
     #[test]
     fn a_line_cut_short_has_no_start_time() {
         assert_eq!(start_time("4242 (x) S 1 2"), None);
+        assert_eq!(parent_and_start_of("4242 (x) S 1 2"), None);
+    }
+
+    #[test]
+    fn the_parent_is_field_4_and_this_process_has_its_own() {
+        let stat = "4242 (a (b) 3 c) S 17 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000 10";
+        assert_eq!(parent_and_start_of(stat), Some((17, 987654)));
+        let (parent, start) = parent_and_start(std::process::id()).unwrap();
+        assert_eq!(parent, std::os::unix::process::parent_id());
+        assert!(start > 0);
+        assert_eq!(parent_and_start(0), None);
     }
 
     #[test]

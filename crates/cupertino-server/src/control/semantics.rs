@@ -54,11 +54,7 @@ fn split(n: u64) -> (u32, u32) {
 }
 impl Cupertino {
     fn semantic_run(&self) -> Option<usize> {
-        if self.session_lock.is_active()
-            || self.login_screen
-            || self.prompt_shown()
-            || !self.control.authority_alive()
-        {
+        if self.session_lock.is_active() || self.login_screen || self.prompt_shown() {
             return None;
         }
         self.control.runs.iter().position(|r| {

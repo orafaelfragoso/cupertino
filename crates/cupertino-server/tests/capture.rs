@@ -142,7 +142,11 @@ struct App {
     control_window: Option<cupertino_wm::WindowId>,
     control_serial: u32,
     control_keys: Vec<(u32, bool)>,
+    /// The pointer buttons the window got, in order.
+    control_buttons: Vec<(u32, bool)>,
     control_request: Option<(u64, u32, bool)>,
+    /// The app the last consent request named: epoch, desktop entry or not, identity, name, services, remembered.
+    control_app: Option<(u64, bool, String, String, u32, bool)>,
     /// Keeps the shm file of the attached buffer open.
     _file: Option<std::fs::File>,
     _window: Option<(

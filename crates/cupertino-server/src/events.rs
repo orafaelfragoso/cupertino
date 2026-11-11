@@ -355,25 +355,8 @@ impl Cupertino {
     }
 
     pub fn process_input_event<B: InputBackend>(&mut self, event: InputEvent<B>) {
+        // The person's input never pauses desktop control: both use the desktop at once, each source's presses its own.
         let was_physical = self.control.physical_input;
-        // A release may finish the physical gesture that just approved consent. New gestures take over.
-        let takeover = match &event {
-            InputEvent::DeviceAdded { .. }
-            | InputEvent::DeviceRemoved { .. }
-            | InputEvent::TouchUp { .. }
-            | InputEvent::TouchCancel { .. }
-            | InputEvent::TouchFrame { .. }
-            | InputEvent::GestureSwipeEnd { .. }
-            | InputEvent::GesturePinchEnd { .. }
-            | InputEvent::GestureHoldEnd { .. } => false,
-            InputEvent::Keyboard { event } => event.state() == KeyState::Pressed,
-            InputEvent::PointerButton { event } => event.state() == ButtonState::Pressed,
-            InputEvent::PointerMotion { event } => event.delta_x() != 0.0 || event.delta_y() != 0.0,
-            _ => true,
-        };
-        if takeover {
-            self.suspend_controls(crate::control::PauseReason::PhysicalInput);
-        }
         self.control.physical_input = true;
         if !matches!(
             event,

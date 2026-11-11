@@ -2,6 +2,8 @@
 use super::*;
 #[path = "control-boundaries.rs"]
 mod boundaries;
+#[path = "control-permissions.rs"]
+mod permissions;
 use cupertino_protocols::client::control::{
     cupertino_control_authority_v1::{self as authority, CupertinoControlAuthorityV1 as Authority},
     cupertino_control_session_v1::{self as session, CupertinoControlSessionV1 as Session},
@@ -9,7 +11,7 @@ use cupertino_protocols::client::control::{
 };
 use cupertino_server::authorization::ShellRole;
 use cupertino_server::shell_connection::shell_process_connection;
-use wayland_client::protocol::{wl_keyboard, wl_seat};
+use wayland_client::protocol::{wl_keyboard, wl_pointer, wl_seat};
 
 #[derive(Default)]
 pub(super) struct Seen {
@@ -54,19 +56,39 @@ impl Dispatch<Authority, ()> for App {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let authority::Event::Requested {
-            epoch_hi,
-            epoch_lo,
-            capabilities,
-            resuming,
-            ..
-        } = e
-        {
-            s.control_request = Some((
-                (u64::from(epoch_hi) << 32) | u64::from(epoch_lo),
+        match e {
+            authority::Event::Requested {
+                epoch_hi,
+                epoch_lo,
                 capabilities,
-                resuming != 0,
-            ));
+                resuming,
+                ..
+            } => {
+                s.control_request = Some((
+                    (u64::from(epoch_hi) << 32) | u64::from(epoch_lo),
+                    capabilities,
+                    resuming != 0,
+                ))
+            }
+            authority::Event::App {
+                epoch_hi,
+                epoch_lo,
+                kind,
+                identity,
+                name,
+                services,
+                remembered,
+            } => {
+                s.control_app = Some((
+                    (u64::from(epoch_hi) << 32) | u64::from(epoch_lo),
+                    kind == wayland_client::WEnum::Value(authority::AppKind::Desktop),
+                    identity,
+                    name,
+                    services,
+                    remembered != 0,
+                ))
+            }
+            _ => {}
         }
     }
 }
@@ -91,6 +113,23 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
         }
     }
 }
+impl Dispatch<wl_pointer::WlPointer, ()> for App {
+    fn event(
+        s: &mut Self,
+        _: &wl_pointer::WlPointer,
+        e: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_pointer::Event::Button { button, state, .. } = e {
+            s.control_buttons.push((
+                button,
+                state == wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed),
+            ));
+        }
+    }
+}
 
 struct Controller {
     client: TestClient<Capturer>,
@@ -101,13 +140,24 @@ struct Controller {
     next: u32,
 }
 impl Controller {
+    /// A version 2 controller, which names no app: it is asked every time.
     fn new(h: &mut Harness) -> Self {
+        Self::bound(h, 2)
+    }
+    /// A version 4 controller that names `bridge` as the process it serves.
+    fn named(h: &mut Harness, bridge: &permissions::Bridge) -> Self {
+        let c = Self::bound(h, 4);
+        c.session
+            .identify(bridge.pid, (bridge.start >> 32) as u32, bridge.start as u32);
+        c
+    }
+    fn bound(h: &mut Harness, version: u32) -> Self {
         let stream =
             shell_process_connection(&h.state.display_handle, &[ShellRole::DesktopControl])
                 .unwrap();
         let mut c = TestClient::connect(h, stream, Capturer::default());
         let qh = c.qh();
-        let manager: Manager = c.globals.bind(&qh, 2..=2, ()).unwrap();
+        let manager: Manager = c.globals.bind(&qh, version..=version, ()).unwrap();
         let session = manager.get_session(&qh, ());
         let output = c.globals.bind(&qh, 1..=4, ()).unwrap();
         h.pump_until(&mut c, "the run epoch", |s| s.control_seen.epoch != 0);
@@ -178,6 +228,27 @@ impl Controller {
         );
         self.ack(h, n)
     }
+    fn button(
+        &mut self,
+        h: &mut Harness,
+        code: u32,
+        pressed: bool,
+    ) -> Result<(), session::Refusal> {
+        let n = self.serial();
+        self.session.button(
+            n,
+            self.hi,
+            self.lo,
+            self.client.state.control_seen.revision,
+            code,
+            if pressed {
+                session::KeyState::Pressed
+            } else {
+                session::KeyState::Released
+            },
+        );
+        self.ack(h, n)
+    }
     fn phase(&mut self, h: &mut Harness, phase: u32) {
         h.pump_until(&mut self.client, "the control phase", |s| {
             s.control_seen.phase == phase
@@ -215,7 +286,7 @@ fn authority(h: &mut Harness) -> (TestClient<App>, Authority) {
     let (mut app, _) = mapped_app_stream(h, stream, "org.example.consent", None);
     app.state.control_window = h.state.wm.key_window();
     let qh = app.qh();
-    let authority: Authority = app.globals.bind(&qh, 1..=1, ()).unwrap();
+    let authority: Authority = app.globals.bind(&qh, 2..=2, ()).unwrap();
     let surface = app
         .state
         ._window
@@ -231,6 +302,17 @@ fn authority(h: &mut Harness) -> (TestClient<App>, Authority) {
     (app, authority)
 }
 fn approve(h: &mut Harness, app: &mut TestClient<App>, authority: &Authority, c: &mut Controller) {
+    answer(h, app, authority, c, 1);
+    c.phase(h, 2);
+}
+/// Answer the pending request of `c` with `allow`, given by a physical key on the consent surface.
+fn answer(
+    h: &mut Harness,
+    app: &mut TestClient<App>,
+    authority: &Authority,
+    c: &mut Controller,
+    allow: u32,
+) {
     h.pump_until(app, "the native consent request", |s| {
         s.control_request.is_some()
     });
@@ -243,9 +325,8 @@ fn approve(h: &mut Harness, app: &mut TestClient<App>, authority: &Authority, c:
             .process_input_event(common::absolute::key(57, pressed));
     }
     h.pump_until(app, "a physical consent serial", |s| s.control_serial != 0);
-    authority.answer(c.hi, c.lo, 1, app.state.control_serial);
+    authority.answer(c.hi, c.lo, allow, app.state.control_serial);
     app.pump();
-    c.phase(h, 2);
 }
 
 #[test]
@@ -297,29 +378,52 @@ fn native_consent_rejects_forged_serials_and_grants_scoped_input_and_capture() {
     assert!(c.client.state.frame.failed.is_none());
     assert!(capture.pixels().contains(&RED));
     first_frame.destroy();
-    // A waiting frame stops as soon as physical input takes over, and no held key sticks.
+    // The person's input never pauses the run: both keep using the desktop, and a key both hold is released only when
+    // the last of them lets go.
     assert_eq!(c.key(&mut h, 42, true), Ok(()));
-    c.client.request_frame(&capture);
-    h.idle(&mut c.client, 3);
     h.state
         .process_input_event(common::absolute::motion(0.1, 0.1));
-    c.phase(&mut h, 3);
-    h.pump_until(&mut c.client, "capture stopped on suspension", |s| {
-        s.session.stopped
+    for pressed in [true, false] {
+        h.state
+            .process_input_event(common::absolute::key(42, pressed));
+    }
+    h.state.process_input_event(common::absolute::key(30, true));
+    let during = c.client.session(&mut h, &source, false);
+    c.client.request_frame(&during);
+    h.state.request_redraw();
+    h.pump_until(&mut c.client, "a capture during physical input", |s| {
+        s.frame.ready
     });
-    h.pump_until(&mut target, "owned key released", |s| {
+    assert_eq!(c.client.state.control_seen.phase, 2);
+    assert_eq!(c.key(&mut h, 48, true), Ok(()));
+    assert_eq!(c.key(&mut h, 48, false), Ok(()));
+    h.state
+        .process_input_event(common::absolute::key(30, false));
+    h.pump_until(&mut target, "the interleaved keys", |s| {
+        s.control_keys.contains(&(30, false))
+    });
+    assert!(
+        !target.state.control_keys.contains(&(42, false)),
+        "the run still holds 42: {:?}",
+        target.state.control_keys
+    );
+    assert_eq!(c.key(&mut h, 42, false), Ok(()));
+    h.pump_until(&mut target, "the run's own release", |s| {
         s.control_keys.contains(&(42, false))
     });
-    assert_eq!(c.key(&mut h, 30, true), Err(session::Refusal::NotGranted));
-    authority.answer(c.hi, c.lo, 1, app.state.control_serial);
-    app.pump();
-    h.idle(&mut c.client, 3);
-    assert_eq!(c.client.state.control_seen.phase, 3);
-    app.state.control_serial = 0;
-    approve(&mut h, &mut app, &authority, &mut c);
-    // A stopped capture session stays stopped, while a new capture session is allowed.
-    assert!(c.client.state.session.stopped);
-    let _fresh = c.client.session(&mut h, &source, false);
+    assert_eq!(
+        target.state.control_keys,
+        [
+            (30, true),
+            (30, false),
+            (42, true),
+            (30, true),
+            (48, true),
+            (48, false),
+            (30, false),
+            (42, false)
+        ]
+    );
     h.state.lock_session_now();
     c.phase(&mut h, 4);
     c.stopped_source(&mut h, &source);
@@ -346,10 +450,16 @@ fn denial_and_authority_loss_are_terminal_and_capabilities_are_enforced() {
         |s| s.frame.ready,
     );
     assert!(!capture.pixels().contains(&RED));
+    // An active run does not depend on the panel that asked for it; a run that must ask needs one.
     authority.destroy();
     app.pump();
+    h.idle(&mut c.client, 5);
+    assert_eq!(c.client.state.control_seen.phase, 2);
+    c.session.stop();
     c.phase(&mut h, 4);
-    assert_eq!(c.start(&mut h, 15), Err(session::Refusal::NoAuthority));
+    let mut next = Controller::new(&mut h);
+    assert_eq!(next.start(&mut h, 15), Err(session::Refusal::NoAuthority));
+    assert_eq!(next.client.state.control_seen.phase, 0);
 }
 
 #[test]

@@ -55,7 +55,8 @@ elsewhere. Events are coalesced until a burst is quiet for `watch::COALESCE` (50
 whose contents changed since the last report is reported once. A write of the same contents, other files and the
 temporary files report nothing. After a notification error (an overflowing queue) every file is compared again, so a
 change in that window is not lost. The parents of the watched directories are watched too: a settings directory that is
-removed and created again is watched again. A panic in the callback ends the watch and is written to stderr. The callback runs on the watcher's thread: the server forwards it to a calloop channel,
+removed and created again is watched again. A file is read without waiting for a writer, so a FIFO put at a watched
+path reads as empty instead of holding the watch. A panic in the callback ends the watch and is written to stderr. The callback runs on the watcher's thread: the server forwards it to a calloop channel,
 a shell process to its client's waker.
 
 Only the compositor reads and writes `displays.conf` and `accessibility.conf`. It sends the display options to the shell

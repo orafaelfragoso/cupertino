@@ -13,7 +13,8 @@ pub struct MenuPalette {
     /// What a disabled row's text, mark and arrow keep of the text's opacity: a quarter of full strength in all, half
     /// with Increase Contrast ([`MenuPalette::high_contrast`]).
     pub disabled_alpha: f32,
-    /// Fill behind the open title in the bar.
+    /// Fill behind the open title in the bar: a veil over what is under it, dark under dark text and light under light
+    /// text.
     pub bar_highlight: Rgba,
     /// Fill of the highlighted popup row and the text on it.
     pub row_highlight: Rgba,
@@ -32,22 +33,22 @@ impl MenuPalette {
             Self {
                 text: [0.97, 0.97, 0.98, 0.95],
                 disabled_alpha: DISABLED_ALPHA,
-                bar_highlight: [1.0, 1.0, 1.0, 0.2],
+                bar_highlight: [1.0, 1.0, 1.0, 0.1],
                 row_highlight: [0.04, 0.45, 1.0, 1.0],
                 row_highlight_text: [1.0, 1.0, 1.0, 1.0],
                 separator: [1.0, 1.0, 1.0, 0.16],
-                rule: [1.0, 1.0, 1.0, 0.16],
+                rule: [1.0, 1.0, 1.0, 0.125],
                 screen_capture: [99.0 / 255.0, 97.0 / 255.0, 241.0 / 255.0, 1.0],
             }
         } else {
             Self {
                 text: [0.05, 0.05, 0.06, 0.92],
                 disabled_alpha: DISABLED_ALPHA,
-                bar_highlight: [0.0, 0.0, 0.0, 0.13],
+                bar_highlight: [0.0, 0.0, 0.0, 0.07],
                 row_highlight: [0.04, 0.45, 1.0, 1.0],
                 row_highlight_text: [1.0, 1.0, 1.0, 1.0],
                 separator: [0.0, 0.0, 0.0, 0.13],
-                rule: [0.0, 0.0, 0.0, 0.13],
+                rule: [0.0, 0.0, 0.0, 0.11],
                 screen_capture: [84.0 / 255.0, 82.0 / 255.0, 204.0 / 255.0, 1.0],
             }
         }

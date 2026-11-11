@@ -39,7 +39,7 @@ use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderError, RenderRequest, UiRenderer,
 };
 use cupertino_ui_text::TextSystem;
-use cupertino_ui_theme::{Color, ThemeTokens};
+use cupertino_ui_theme::{Color, Surface, ThemeTokens};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -231,6 +231,8 @@ struct WindowState<M> {
     popups: Vec<(WindowKey, Rect)>,
     /// A drag from any application over the window.
     drop: Option<drops::DropState>,
+    /// The popup closed and is fading out; it takes no input and the view no longer holds it.
+    fade: Option<fade::Fade>,
 }
 
 struct PopupState<M> {
@@ -465,6 +467,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             .flat_map(|w| w.wakes.values())
             .copied()
             .chain(timer)
+            .chain(self.next_fade_end())
             .min()
     }
 
@@ -500,6 +503,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
 
     fn turn(&mut self) -> Result<(), UiError> {
         self.wake_due();
+        self.advance_fades();
         for event in std::mem::take(&mut self.events) {
             self.platform_event(event)?;
         }
@@ -638,7 +642,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             self.tree.unmount(root);
         }
         if let Some(adapter) = &mut self.options.accessibility {
-            adapter.window_closed(w.id);
+            if w.fade.is_none() {
+                adapter.window_closed(w.id);
+            }
         }
         self.system.destroy(w.id);
     }
@@ -656,6 +662,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             timing.updated(self.options.clock.now());
         }
         let mut old: Vec<WindowState<A::Message>> = std::mem::take(&mut self.windows);
+        let before: Vec<WindowKey> = old.iter().map(|w| w.key.clone()).collect();
         let (mut popups, toplevels): (Vec<_>, Vec<_>) = A::view(&self.model)
             .into_iter()
             .partition(|w| w.popup.is_some());
@@ -755,6 +762,20 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if std::mem::take(&mut self.touch_opened) {
             self.touch_taken();
         }
+        // a menu the view opened that the last one did not have: the menus that close with it go at once
+        let reopened = self.windows.iter().any(|w| {
+            w.fade.is_none()
+                && w.popup.is_some()
+                && matches!(
+                    w.background,
+                    WindowBackground::Surface {
+                        surface: Surface::Menu,
+                        ..
+                    }
+                )
+                && !before.contains(&w.key)
+        });
+        let mut old = self.fade_closed(old, reopened);
         // popups go before their parents, the latest first, as the protocol destroys them
         old.reverse();
         old.sort_by_key(|w| w.popup.is_none());
@@ -863,6 +884,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             opening_touch: None,
             popups: Vec::new(),
             drop: None,
+            fade: None,
         }
     }
 
@@ -877,7 +899,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     ) -> Result<Option<WindowState<A::Message>>, UiError> {
         let mut existing = old
             .iter()
-            .position(|w| w.key == key && w.popup.is_some())
+            .position(|w| w.key == key && w.popup.is_some() && w.fade.is_none())
             .map(|i| old.remove(i));
         let parent = self
             .windows
@@ -1000,6 +1022,24 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let Some(i) = self.windows.iter().position(|w| w.id == window) else {
             return Ok(());
         };
+        // a closing menu hears nothing of the user, nor of the compositor dismissing it
+        if self.windows[i].fade.is_some()
+            && matches!(
+                event,
+                WindowEvent::Pointer(..)
+                    | WindowEvent::Touch(..)
+                    | WindowEvent::Key(..)
+                    | WindowEvent::Focus(_)
+                    | WindowEvent::Ime(_)
+                    | WindowEvent::PopupDone
+                    | WindowEvent::PopupPlaced(_)
+                    | WindowEvent::CloseRequested
+                    | WindowEvent::MenuActivated(_)
+                    | WindowEvent::Drop(_)
+            )
+        {
+            return Ok(());
+        }
         let Some(i) = self.ungrabbed_input(i, &event) else {
             return Ok(());
         };
@@ -1221,7 +1261,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let opened: Vec<usize> = (0..self.windows.len())
             .filter(|&j| {
                 let w = &self.windows[j];
-                w.popup.is_some() && w.opening_press == Some(start)
+                w.popup.is_some() && w.fade.is_none() && w.opening_press == Some(start)
             })
             .collect();
         let outside = Point::new(-f64::from(u16::MAX), -f64::from(u16::MAX));
@@ -1526,7 +1566,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         (0..self.windows.len())
             .filter(|&j| {
                 let w = &self.windows[j];
-                w.popup.is_some() && w.opening_touch == Some((t.id, t.start))
+                w.popup.is_some() && w.fade.is_none() && w.opening_touch == Some((t.id, t.start))
             })
             .filter_map(|j| self.origin_in(j, i).map(|origin| (j, origin)))
             .collect()
@@ -1836,7 +1876,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     /// Moves each open popup whose anchor moved or whose content changed size, once the parents are laid out.
     fn follow_anchors(&mut self) {
         for i in 0..self.windows.len() {
-            let Some(state) = &self.windows[i].popup else {
+            let Some(state) = self.windows[i]
+                .popup
+                .as_ref()
+                .filter(|_| self.windows[i].fade.is_none())
+            else {
                 continue;
             };
             let Some(placed) = self
@@ -2094,7 +2138,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let effects = capabilities.app_effects;
         let layered = capabilities.raised_layer;
         let paint = |w: &mut WindowState<A::Message>, tree: &Tree<A::Message>| {
-            w.painter.paint(
+            let mut painting = w.painter.paint(
                 tree,
                 root,
                 &w.geometry,
@@ -2110,7 +2154,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     raised: &w.raised,
                     layer: layered,
                 },
-            )
+            );
+            if let Some(fade) = w.fade {
+                fade::dim(&mut painting.list, fade.opacity);
+            }
+            painting
         };
         let mut painting = paint(w, &self.tree);
         // the shapes take effect with the frame's commit, so the frame presents in full
@@ -2248,6 +2296,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.accessible = false;
                 continue;
             }
+            if w.fade.is_some() {
+                continue;
+            }
             let Some(root) = w.root else { continue };
             if w.accessible || !w.prepared {
                 continue;
@@ -2272,9 +2323,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     fn accessibility_behind(&self) -> bool {
         self.options.accessibility.as_ref().is_some_and(|adapter| {
             let active = adapter.is_active();
-            self.windows
-                .iter()
-                .any(|w| w.root.is_some() && w.prepared && w.accessible != active)
+            self.windows.iter().any(|w| {
+                w.fade.is_none() && w.root.is_some() && w.prepared && w.accessible != active
+            })
         })
     }
 
@@ -2330,7 +2381,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
 
     /// The windows the application has open, in its view's order.
     pub fn windows(&self) -> Vec<(WindowKey, WindowId)> {
-        self.windows.iter().map(|w| (w.key.clone(), w.id)).collect()
+        self.windows
+            .iter()
+            .filter(|w| w.fade.is_none())
+            .map(|w| (w.key.clone(), w.id))
+            .collect()
     }
 
     /// The node under `point` in `window`, from the last layout.
@@ -2704,6 +2759,7 @@ fn sync_menus<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>, menus: 
 }
 
 mod drops;
+mod fade;
 mod semantics;
 mod ungrabbed;
 

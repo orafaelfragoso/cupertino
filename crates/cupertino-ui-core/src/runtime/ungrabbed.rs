@@ -17,7 +17,7 @@ mod tests;
 
 /// Whether `w` is a popup that wanted a grab and opened without one.
 fn ungrabbed<M>(w: &WindowState<M>) -> bool {
-    w.popup.as_ref().is_some_and(|p| p.ungrabbed)
+    w.fade.is_none() && w.popup.as_ref().is_some_and(|p| p.ungrabbed)
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {

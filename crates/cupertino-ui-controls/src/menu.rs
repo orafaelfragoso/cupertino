@@ -52,7 +52,7 @@ const RETURN: Keysym = Keysym(0xff0d);
 const SPACE: Keysym = Keysym(0x20);
 
 /// The panel's corner radius.
-const PANEL_RADIUS: f64 = 10.0;
+const PANEL_RADIUS: f64 = 11.5;
 /// The panel's own edge, drawn only over the opaque fill a window without the compositor's material paints.
 const EDGE: f64 = 1.0;
 /// Above the first row and below the last.
@@ -60,15 +60,15 @@ const PADDING_Y: f64 = 5.0;
 const ROW_HEIGHT: f64 = 24.0;
 const SEPARATOR_HEIGHT: f64 = 11.0;
 /// From the leading edge to the labels of a menu without check marks.
-const LABEL_LEADING: f64 = 15.0;
+const LABEL_LEADING: f64 = 16.5;
 /// From the leading edge to the labels of a menu with a check mark on any row: the marks get a column of their own.
-const MARKED_LABEL_LEADING: f64 = 31.0;
+const MARKED_LABEL_LEADING: f64 = 30.5;
 /// From the leading edge to the middle of a check mark.
 const MARK_CENTRE: f64 = 17.0;
 /// From the trailing edge to the end of a shortcut or a submenu's chevron.
 const TRAILING: f64 = 20.0;
 /// From the trailing edge to the end of a separator line; it starts under the labels.
-const SEPARATOR_TRAILING: f64 = 15.0;
+const SEPARATOR_TRAILING: f64 = 16.5;
 /// A separator line over the glass in the dark appearance: white at 14 %.
 const GLASS_SEPARATOR_DARK: Color = Color {
     r: 1.0,
@@ -89,11 +89,18 @@ const MIN_WIDTH: f64 = 120.0;
 /// The least room between a row's label and the shortcuts and chevrons of a menu that has any.
 const SHORTCUT_GAP: f64 = 23.0;
 /// Between a highlight and the panel's sides.
-const HIGHLIGHT_INSET: f64 = 5.0;
-const HIGHLIGHT_RADIUS: f64 = 4.0;
+const HIGHLIGHT_INSET: f64 = 5.5;
+const HIGHLIGHT_RADIUS: f64 = 6.75;
+/// The share of the label's opacity a shortcut keeps on an enabled row, and on a disabled one (whose label is dimmed
+/// already).
+const SHORTCUT_ALPHA: f32 = 0.28;
+const DISABLED_SHORTCUT_ALPHA: f32 = 0.7;
+/// How long the highlight of a chosen row stays off, then on, before the choice is sent, in seconds.
+const FLASH_OFF: f64 = 0.034;
+const FLASH_ON: f64 = 0.067;
 const SYMBOL: f64 = 10.0;
-/// How far a submenu overlaps the menu it opens from.
-const SUBMENU_OVERLAP: f64 = 2.0;
+/// How far a submenu overlaps the menu it opens from: the highlight's right edge.
+const SUBMENU_OVERLAP: f64 = 5.5;
 /// Between a pop-up button and its menu.
 const GAP: f64 = 4.0;
 /// The most a menu takes; a taller one is cut off.
@@ -139,6 +146,85 @@ impl Columns {
                 .any(|item| matches!(item, MenuItem::Shortcut { .. } | MenuItem::Submenu { .. })),
         }
     }
+}
+
+/// A row that was chosen, flashing before its messages are sent: its highlight is off for [`FLASH_OFF`], then on for
+/// [`FLASH_ON`]. The menu hears nothing else meanwhile.
+struct Flash<M> {
+    /// The row's place among the menu's items.
+    row: usize,
+    start: Timestamp,
+    /// The panel sends the messages, not the row: the choice was made on the panel.
+    by_panel: bool,
+    then: Vec<M>,
+}
+
+/// What a menu level's panel and rows share: the choice flashing now, if any.
+type Flashing<M> = Rc<RefCell<Option<Flash<M>>>>;
+
+impl<M> Flash<M> {
+    fn ends(&self) -> Timestamp {
+        after(self.start, FLASH_OFF + FLASH_ON)
+    }
+
+    /// The row's highlight shows: not in the first moments of the flash.
+    fn lit(&self, now: Timestamp) -> bool {
+        now >= after(self.start, FLASH_OFF)
+    }
+}
+
+/// Starts the flash of row `row` that sends `then` when it ends, or sends them at once with Reduce Motion or while
+/// another choice flashes.
+fn choose<M: Clone>(
+    flash: &Flashing<M>,
+    row: usize,
+    by_panel: bool,
+    then: Vec<M>,
+    cx: &mut EventCx<'_, M>,
+) {
+    if flash.borrow().is_some() {
+        return;
+    }
+    if cx.env().theme.preferences.reduce_motion {
+        for message in then {
+            cx.emit(message);
+        }
+        return;
+    }
+    let start = cx.now();
+    *flash.borrow_mut() = Some(Flash {
+        row,
+        start,
+        by_panel,
+        then,
+    });
+    cx.wake_at(after(start, FLASH_OFF));
+    cx.request_paint();
+}
+
+/// A wake of the node that started the flash: sends the choice once the flash is over, else waits for its end.
+/// Whether the wake was the flash's.
+fn flash_woke<M: Clone>(
+    flash: &Flashing<M>,
+    mine: impl Fn(&Flash<M>) -> bool,
+    now: Timestamp,
+    cx: &mut EventCx<'_, M>,
+) -> bool {
+    let mut slot = flash.borrow_mut();
+    let Some(current) = slot.as_ref().filter(|f| mine(f)) else {
+        return false;
+    };
+    if now >= current.ends() {
+        if let Some(done) = slot.take() {
+            for message in done.then {
+                cx.emit(message);
+            }
+        }
+    } else {
+        cx.wake_at(current.ends());
+        cx.request_paint();
+    }
+    true
 }
 
 /// The key of the window of the submenu `depth` levels below the menu in `key`.
@@ -206,6 +292,7 @@ impl<M: Clone + 'static> Menu<M> {
             };
             let back = (depth > 0).then(|| on_open(open[..depth - 1].to_vec()));
             let typing = Rc::new(RefCell::new(TypeAhead::default()));
+            let flash: Flashing<M> = Rc::new(RefCell::new(None));
             let panel = Panel {
                 label: label.clone(),
                 rows: items
@@ -226,6 +313,7 @@ impl<M: Clone + 'static> Menu<M> {
                 start: current.filter(|_| depth == 0 && over),
                 at_pointer: depth == 0 && at_pointer,
                 typing: Rc::clone(&typing),
+                flash: Rc::clone(&flash),
                 children: rows(
                     &items,
                     path,
@@ -234,6 +322,7 @@ impl<M: Clone + 'static> Menu<M> {
                     &on_open,
                     &on_close,
                     &typing,
+                    &flash,
                 ),
             };
             let key = level_key(&key, depth);
@@ -290,6 +379,7 @@ fn rows<M: Clone + 'static>(
     on_open: &Handler<Vec<usize>, M>,
     on_close: &M,
     typing: &Rc<RefCell<TypeAhead>>,
+    flash: &Flashing<M>,
 ) -> Vec<Element<M>> {
     let columns = Columns::of(items);
     let labels: Rc<[String]> = items
@@ -374,6 +464,8 @@ fn rows<M: Clone + 'static>(
                 columns,
                 labels: Rc::clone(&labels),
                 typing: Rc::clone(typing),
+                flash: Rc::clone(flash),
+                index,
                 position,
                 place,
                 current: current == Some(index),
@@ -488,6 +580,8 @@ struct Panel<M> {
     at_pointer: bool,
     /// What was typed to find a row, which the rows share.
     typing: Rc<RefCell<TypeAhead>>,
+    /// The choice flashing now.
+    flash: Flashing<M>,
     children: Vec<Element<M>>,
 }
 
@@ -729,8 +823,15 @@ impl<M: Clone + 'static> Panel<M> {
                     on_close,
                 }),
             ) => {
-                cx.emit(on_select.clone());
-                cx.emit(on_close.clone());
+                if let Some(row) = row {
+                    choose(
+                        &self.flash,
+                        row,
+                        true,
+                        vec![on_select.clone(), on_close.clone()],
+                        cx,
+                    );
+                }
             }
             (_, Some(RowAction::Open { on_open, .. })) if self.open.map(|(i, _)| i) != row => {
                 state.pending = None;
@@ -785,6 +886,18 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
 
     fn event(&self, state: &mut PanelState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         state.opened.get_or_insert(cx.now());
+        // a choice that flashes is made: the menu takes no more of the pointer or the keys
+        if cx.phase() == Phase::Capture
+            && self.flash.borrow().is_some()
+            && matches!(
+                event,
+                Event::Pointer(PointerEvent::Button { .. } | PointerEvent::Motion { .. }, _)
+                    | Event::Touch(..)
+                    | Event::Key(..)
+            )
+        {
+            return Propagation::Stop;
+        }
         // the panel follows the pointer over all its rows: as they hear it, or over its own padding
         let mine = cx.phase() == Phase::Capture || cx.node() == cx.target();
         match *event {
@@ -816,7 +929,9 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
                 return Propagation::Stop;
             }
             Event::Wake(now) if cx.node() == cx.target() => {
-                self.woke(state, now, cx);
+                if !flash_woke(&self.flash, |f| f.by_panel, now, cx) {
+                    self.woke(state, now, cx);
+                }
                 return Propagation::Stop;
             }
             // a finger is the pointer while it is down: put down on a row it presses it, moved it points, lifted it
@@ -929,6 +1044,10 @@ struct Row<M> {
     labels: Rc<[String]>,
     /// What was typed so far, shared by the menu's rows.
     typing: Rc<RefCell<TypeAhead>>,
+    /// The choice flashing now, which this row's may be.
+    flash: Flashing<M>,
+    /// This row's place among all the menu's items.
+    index: usize,
     /// This row's place among them, if enabled.
     position: usize,
     /// This row's place among all the menu's rows, separators not counted, which a screen reader reads out.
@@ -962,10 +1081,13 @@ impl<M: Clone + 'static> Row<M> {
             RowAction::Select {
                 on_select,
                 on_close,
-            } => {
-                cx.emit(on_select.clone());
-                cx.emit(on_close.clone());
-            }
+            } => choose(
+                &self.flash,
+                self.index,
+                false,
+                vec![on_select.clone(), on_close.clone()],
+                cx,
+            ),
             RowAction::Open { on_open, .. } => cx.emit(on_open.clone()),
         }
     }
@@ -1109,6 +1231,18 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
                 cx.request_paint();
             }
             Event::Focus { .. } if cx.node() == cx.target() => cx.request_paint(),
+            Event::Wake(now)
+                if cx.node() == cx.target()
+                    && flash_woke(
+                        &self.flash,
+                        |f| !f.by_panel && f.row == self.index,
+                        *now,
+                        cx,
+                    ) =>
+            {
+                return Propagation::Stop;
+            }
+            Event::AnimationFrame(_) if cx.node() == cx.target() => cx.request_paint(),
             Event::Key(key, _)
                 if self.enabled
                     && key.pressed
@@ -1141,8 +1275,15 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
         let env = cx.env().clone();
         let theme = &env.theme;
         let size = cx.size();
-        let highlighted = self.enabled
+        let mut highlighted = self.enabled
             && (self.open() || cx.is_focused() && self.selected(state, cx.focus_visible()));
+        // a choice flashes: its row's highlight goes off, then on again, until the choice is sent
+        if let Some(flash) = self.flash.borrow().as_ref() {
+            cx.request_animation_frame();
+            if flash.row == self.index {
+                highlighted = flash.lit(cx.now());
+            }
+        }
         if highlighted {
             let rect = Rect::new(
                 HIGHLIGHT_INSET,
@@ -1185,12 +1326,16 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
         }
         if let Some(shortcut) = self.shortcut.as_deref().and_then(|s| look::label(&env, s)) {
             // the keys keep to the trailing edge, in the secondary colour unless the row is highlighted or disabled
-            let keys = if !self.enabled || highlighted {
-                color
-            } else {
-                theme
-                    .colors
-                    .get(ColorRole::SecondaryText, StateVariant::NORMAL)
+            let keys = match (self.enabled, highlighted) {
+                (_, true) => color,
+                (true, false) => color.map(|c| Color {
+                    a: c.a * SHORTCUT_ALPHA,
+                    ..c
+                }),
+                (false, false) => color.map(|c| Color {
+                    a: c.a * DISABLED_SHORTCUT_ALPHA,
+                    ..c
+                }),
             };
             let width = shortcut.size().width;
             let row = Rect::new(0.0, 0.0, size.width, size.height);

@@ -255,9 +255,13 @@ t; a toolbar group is regular glass (`PaintCx::glass`) in one container
   description; the application binds the keys itself.
   The panel has a 10 pt corner. A row is 24 pt tall and a separator 11 pt. Labels start 15 pt in, or 31 pt when any row of the menu is checked
   (the check mark is centred 17 pt in); the keys and a submenu's chevron end 20 pt from the trailing edge. A
-  separator runs from the label column to 15 pt short of the trailing edge, translucent over the glass and the
+  separator runs from the label column to 16.5 pt short of the trailing edge, translucent over the glass and the
   theme's separator colour over the opaque fill and with Increase Contrast. Over the glass the compositor draws the
   panel's edge; over the opaque fill the panel strokes its own.
+  A chosen row's highlight goes off for 0.034 s and on for 0.067 s before its messages are sent (at once with Reduce
+  Motion), and the menu takes no input meanwhile; the menu then fades out when the application stops declaring it
+  (`cupertino-ui-core`'s runtime). Rows are 24 pt, labels 16.5 pt in, the highlight inset 5.5 pt with a 6.75 pt corner,
+  the panel's corner 11.5 pt, a submenu overlaps its menu by 5.5 pt, and shortcuts take 0.28 of the label's strength.
 - **Popovers.** A popover is glass with a 16 pt corner, like a menu: the compositor draws its body and edge, and
   over the opaque fill (no material) it strokes its own edge.
 - **Pickers.** `PullDownButton` is titled with what it does and opens a menu of actions below itself on the press,

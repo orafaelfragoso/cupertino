@@ -36,6 +36,8 @@ impl TextMeasure for MonoMeasure {
 
 /// Edge of a status item icon in points. approximate.
 pub const STATUS_ICON_PT: f64 = 16.0;
+/// Edge of the system menu's mark in points: the grid it is drawn on, so its strokes fall on whole pixels.
+pub const SYSTEM_MARK_PT: f64 = 16.0;
 /// Diameter of the privacy indicator dot attached to a menu-bar item (6 pt).
 pub const PRIVACY_DOT_PT: f64 = 6.0;
 
@@ -46,10 +48,14 @@ pub struct BarMetrics {
     pub height: f64,
     /// Space between the output edge and the first / last slot.
     pub edge_inset: f64,
-    /// Horizontal padding inside a title slot (each side).
+    /// Horizontal padding inside a title slot (each side): half the space between two titles.
     pub title_padding: f64,
-    /// Horizontal padding around a status item icon (each side).
+    /// Horizontal padding around a status item icon (each side): half the space between two icons.
     pub status_padding: f64,
+    /// How far the highlight of a title or the system mark reaches past its slot on each side.
+    pub title_highlight_overhang: f64,
+    /// How far the highlight of a status item reaches past its slot on each side.
+    pub status_highlight_overhang: f64,
     /// Width of the system menu slot.
     pub system_width: f64,
     /// Width of the control panel slot.
@@ -58,7 +64,7 @@ pub struct BarMetrics {
     pub clock_padding: f64,
     /// Smallest gap kept between the menus and the status area before items are dropped.
     pub min_gap: f64,
-    /// Corner radius of the selection highlight. 4 pt (continuous corners).
+    /// Corner radius of the selection highlight: a capsule when it is at least half the highlight's height.
     pub selection_corner_radius: f64,
     /// Vertical inset of the selection highlight inside the bar.
     pub selection_inset_y: f64,
@@ -69,13 +75,15 @@ impl Default for BarMetrics {
         Self {
             height: 24.0,
             edge_inset: 6.0,
-            title_padding: 8.0,
-            status_padding: 5.0,
-            system_width: 28.0,
-            control_panel_width: 28.0,
+            title_padding: 10.875,
+            status_padding: 10.0,
+            title_highlight_overhang: 3.875,
+            status_highlight_overhang: 2.5,
+            system_width: SYSTEM_MARK_PT + 2.0 * 10.875,
+            control_panel_width: 32.0,
             clock_padding: 8.0,
             min_gap: 24.0,
-            selection_corner_radius: 4.0,
+            selection_corner_radius: 11.0,
             selection_inset_y: 1.0,
         }
     }
@@ -270,12 +278,17 @@ pub fn layout_bar(
 pub struct MenuMetrics {
     pub row_height: f64,
     pub separator_height: f64,
+    /// From the menu's edge to the labels, and to the ends of the separator lines.
     pub padding_x: f64,
     pub padding_y: f64,
-    /// Column reserved for check / radio marks.
+    /// From the menu's trailing edge to the end of a shortcut or a submenu's chevron.
+    pub trailing_inset: f64,
+    /// Column reserved for check / radio marks, counted from `padding_x`, when any item has one.
     pub mark_column: f64,
-    /// Column reserved for icons when any item has one.
+    /// Column an icon takes before the label of its row.
     pub icon_column: f64,
+    /// Height of the row of the Help search field, which holds the field with room above and below.
+    pub search_row_height: f64,
     /// Gap between the label and the shortcut text.
     pub shortcut_gap: f64,
     /// Width reserved for the submenu arrow.
@@ -296,19 +309,21 @@ pub struct MenuMetrics {
 impl Default for MenuMetrics {
     fn default() -> Self {
         Self {
-            row_height: 22.0,
-            separator_height: 9.0,
-            padding_x: 10.0,
+            row_height: 24.0,
+            separator_height: 11.0,
+            padding_x: 16.5,
             padding_y: 5.0,
-            mark_column: 18.0,
-            icon_column: 22.0,
+            trailing_inset: 20.0,
+            mark_column: 14.0,
+            icon_column: 23.0,
+            search_row_height: 35.0,
             shortcut_gap: 24.0,
-            arrow_width: 14.0,
+            arrow_width: 10.0,
             min_width: 120.0,
             screen_margin: 4.0,
-            submenu_overlap: 2.0,
+            submenu_overlap: 5.5,
             detail_gap: 8.0,
-            search_width: 320.0,
+            search_width: 361.0,
             shortcut_style: ShortcutStyle::Glyphs,
         }
     }
@@ -323,6 +338,9 @@ pub struct PopupRow {
     pub shortcut: Option<ShortcutGlyphs>,
     /// The secondary text, cut at its end with an ellipsis to the room left between the label and the shortcut.
     pub detail: Option<String>,
+    /// Where the label starts, from the menu's leading edge: after the mark column when any row has a mark, and after
+    /// the icon column on a row that has an icon (the rows without one are not indented).
+    pub label_x: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -376,15 +394,18 @@ pub fn layout_popup(
     measure: &dyn TextMeasure,
 ) -> PopupLayout {
     let children = menu.visible_children();
-    let any_icon = children
-        .iter()
-        .any(|c| c.icon_name.is_some() || c.icon_data.is_some());
     let any_mark = children
         .iter()
         .any(|c| c.toggle != crate::item::Toggle::None);
-    let lead = m.padding_x
-        + if any_mark { m.mark_column } else { 0.0 }
-        + if any_icon { m.icon_column } else { 0.0 };
+    let base = m.padding_x + if any_mark { m.mark_column } else { 0.0 };
+    // a row with an icon starts its label after the icon column; the rows without one are not indented
+    let lead_of = |c: &MenuItem| {
+        base + if c.icon_name.is_some() || c.icon_data.is_some() {
+            m.icon_column
+        } else {
+            0.0
+        }
+    };
     let mut label_w: f64 = 0.0;
     let mut modifiers_w: f64 = 0.0;
     let mut key_w: f64 = 0.0;
@@ -397,7 +418,7 @@ pub fn layout_popup(
         if c.separator {
             continue;
         }
-        label_w = label_w.max(measure.width(&c.label, false));
+        label_w = label_w.max(lead_of(c) - base + measure.width(&c.label, false));
         if let Some(s) = &c.shortcut {
             let glyphs = s.shown(m.shortcut_style);
             modifiers_w = modifiers_w.max(measure.width(&glyphs.modifiers, false));
@@ -405,7 +426,7 @@ pub fn layout_popup(
         }
         any_arrow |= c.has_submenu;
     }
-    let trailing = m.padding_x
+    let trailing = m.trailing_inset
         + if modifiers_w + key_w > 0.0 {
             m.shortcut_gap + modifiers_w + key_w
         } else {
@@ -413,20 +434,19 @@ pub fn layout_popup(
         }
         + if any_arrow { m.arrow_width } else { 0.0 };
     let has_field = children.iter().any(|c| c.id == HELP_SEARCH);
-    let w = (lead + label_w + trailing)
+    let w = (base + label_w + trailing)
         .max(m.min_width)
         .max(if has_field { m.search_width } else { 0.0 });
-    let content_h: f64 = 2.0 * m.padding_y
-        + children
-            .iter()
-            .map(|c| {
-                if c.separator {
-                    m.separator_height
-                } else {
-                    m.row_height
-                }
-            })
-            .sum::<f64>();
+    let height_of = |c: &MenuItem| {
+        if c.separator {
+            m.separator_height
+        } else if c.id == HELP_SEARCH {
+            m.search_row_height
+        } else {
+            m.row_height
+        }
+    };
+    let content_h: f64 = 2.0 * m.padding_y + children.iter().map(|c| height_of(c)).sum::<f64>();
 
     let (mut x, anchor_y, placed_left) = match anchor {
         Anchor::BelowSlot(slot) => (slot.x, slot.bottom(), false),
@@ -460,11 +480,8 @@ pub fn layout_popup(
     let rows = children
         .iter()
         .map(|c| {
-            let rh = if c.separator {
-                m.separator_height
-            } else {
-                m.row_height
-            };
+            let rh = height_of(c);
+            let lead = lead_of(c);
             let r = Rect::new(x, ry, w, rh);
             ry += rh;
             let mut item = (*c).clone();
@@ -481,10 +498,11 @@ pub fn layout_popup(
                     - m.detail_gap
                     - chord
                     - arrow
-                    - m.padding_x;
+                    - m.trailing_inset;
                 fit_tail(detail, room, measure)
             });
             PopupRow {
+                label_x: lead,
                 shortcut,
                 detail,
                 item,

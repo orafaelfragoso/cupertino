@@ -187,6 +187,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
     pub(super) fn sync_semantics(&mut self) {
         for w in &mut self.windows {
+            if w.fade.is_some() {
+                continue;
+            }
             if !self.system.semantics_active(w.id) {
                 w.semantic_snapshot = None;
                 continue;

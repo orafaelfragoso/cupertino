@@ -16,7 +16,7 @@ use crate::geom::{Point, Rect};
 use crate::item::{ItemId, MenuItem};
 use crate::layout::{
     layout_bar, layout_popup, Anchor, BarContent, BarLayout, BarMetrics, MenuMetrics, PopupLayout,
-    SlotKey, TextMeasure,
+    Slot, SlotKey, TextMeasure, SYSTEM_MARK_PT,
 };
 use crate::search::{self, Match};
 use cupertino_menu_model::tracking::{
@@ -25,6 +25,10 @@ use cupertino_menu_model::tracking::{
 use cupertino_typeahead::TypeAhead;
 use cupertino_ui_text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
 use std::time::Instant;
+
+/// How long the highlight of a chosen row stays off, then on, before the choice is made, in seconds.
+pub const FLASH_OFF: f64 = 0.034;
+pub const FLASH_ON: f64 = 0.067;
 
 /// Identifier of the synthetic root item of the app menu.
 pub const APP_MENU_ROOT: ItemId = ItemId(i32::MIN);
@@ -92,6 +96,8 @@ pub struct ControllerConfig {
     pub click_outside_passthrough: bool,
     /// Hovering another title while a menu is open switches to it.
     pub hover_switch: bool,
+    /// A chosen row flashes ([`FLASH_OFF`], [`FLASH_ON`]) before the choice is made; off, it is made at once.
+    pub flash_choice: bool,
 }
 
 impl Default for ControllerConfig {
@@ -103,6 +109,7 @@ impl Default for ControllerConfig {
             release_on_title_keeps_open: true,
             click_outside_passthrough: false,
             hover_switch: true,
+            flash_choice: true,
         }
     }
 }
@@ -135,6 +142,27 @@ impl Level {
         self.selected
             .and_then(|i| self.layout.rows.get(i))
             .map(|r| &r.item)
+    }
+}
+
+/// A chosen row flashing before the choice is made.
+#[derive(Clone, Debug)]
+struct Flash {
+    level: usize,
+    /// The row's index in its level's layout.
+    row: usize,
+    /// What choosing it does.
+    activation: Option<Effect>,
+    start: f64,
+}
+
+impl Flash {
+    fn lights(&self) -> f64 {
+        self.start + FLASH_OFF
+    }
+
+    fn ends(&self) -> f64 {
+        self.start + FLASH_OFF + FLASH_ON
     }
 }
 
@@ -186,6 +214,8 @@ pub struct MenuController {
     help_awaits_keyboard: bool,
     /// Alt is held: the open menus show the alternates of their items.
     alt: bool,
+    /// The row chosen and flashing, until its choice is made and the menus close.
+    flash: Option<Flash>,
 }
 
 impl MenuController {
@@ -220,6 +250,7 @@ impl MenuController {
             hits: Vec::new(),
             help_awaits_keyboard: false,
             alt: false,
+            flash: None,
         };
         c.relayout();
         c
@@ -263,10 +294,21 @@ impl MenuController {
 
     /// Time of the next pending timer, if any.
     pub fn next_deadline(&self) -> Option<f64> {
-        match (self.pending.map(|p| p.due), self.aim.deadline()) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        let flash = self.flash.as_ref().map(|f| {
+            if self
+                .levels
+                .get(f.level)
+                .is_some_and(|l| l.selected.is_none())
+            {
+                f.lights()
+            } else {
+                f.ends()
+            }
+        });
+        [self.pending.map(|p| p.due), self.aim.deadline(), flash]
+            .into_iter()
+            .flatten()
+            .reduce(f64::min)
     }
 
     // ---- content -------------------------------------------------------------------------
@@ -377,6 +419,22 @@ impl MenuController {
         out
     }
 
+    /// What a slot's menu hangs from: the slot's rectangle, moved so the menu's labels line up with the slot's text (a
+    /// title, or the system menu's mark).
+    fn menu_anchor(&self, slot: &Slot) -> Rect {
+        let text_x = match slot.key {
+            SlotKey::AppMenu | SlotKey::Menu(_) => slot.rect.x + self.bar_metrics.title_padding,
+            SlotKey::System => slot.rect.x + (slot.rect.w - SYSTEM_MARK_PT) / 2.0,
+            _ => return slot.rect,
+        };
+        Rect::new(
+            text_x - self.menu_metrics.padding_x,
+            slot.rect.y,
+            slot.rect.w,
+            slot.rect.h,
+        )
+    }
+
     /// The popup of `menu`, with its items' alternates in their place while Alt is held.
     fn popup(&self, menu: &MenuItem, anchor: Anchor, scroll: f64) -> PopupLayout {
         let shown;
@@ -404,7 +462,7 @@ impl MenuController {
             self.levels.clear();
             return;
         };
-        let Some(slot_rect) = self.layout.slot(&key).map(|s| s.rect) else {
+        let Some(slot_rect) = self.layout.slot(&key).map(|s| self.menu_anchor(s)) else {
             self.levels.clear();
             return;
         };
@@ -485,7 +543,7 @@ impl MenuController {
         let Some(root) = self.root_item(&key) else {
             return;
         };
-        let Some(slot_rect) = self.layout.slot(&key).map(|s| s.rect) else {
+        let Some(slot_rect) = self.layout.slot(&key).map(|s| self.menu_anchor(s)) else {
             return;
         };
         let layout = self.popup(&root, Anchor::BelowSlot(slot_rect), 0.0);
@@ -506,7 +564,51 @@ impl MenuController {
         out.effects.push(Effect::Redraw);
     }
 
+    /// Chooses `item`, the selected row of `level`: its row flashes, then the choice is made and the menus close.
+    fn choose(&mut self, level: usize, item: ItemId, now: f64, out: &mut Outcome) {
+        let activation = self.activation(item);
+        let row = self.levels.get(level).and_then(|l| l.selected);
+        let Some(row) = row.filter(|_| self.cfg.flash_choice && self.flash.is_none()) else {
+            out.effects.extend(activation);
+            self.close_all(out);
+            return;
+        };
+        self.levels[level].selected = None;
+        self.flash = Some(Flash {
+            level,
+            row,
+            activation,
+            start: now,
+        });
+        self.pending = None;
+        self.tracking = None;
+        self.aim.reset();
+        self.mode = Mode::Sticky;
+        out.effects.push(Effect::Redraw);
+    }
+
+    /// The flash's next step: the row lights again, then the choice is made and the menus close.
+    fn flash_step(&mut self, now: f64, out: &mut Outcome) {
+        let Some(flash) = self.flash.clone() else {
+            return;
+        };
+        if now >= flash.ends() {
+            self.close_all(out);
+        } else if now >= flash.lights() {
+            if let Some(level) = self.levels.get_mut(flash.level) {
+                if level.selected.is_none() {
+                    level.selected = Some(flash.row);
+                    out.effects.push(Effect::Redraw);
+                }
+            }
+        }
+    }
+
     fn close_all(&mut self, out: &mut Outcome) {
+        // a choice made is not lost with the menus
+        if let Some(flash) = self.flash.take() {
+            out.effects.extend(flash.activation);
+        }
         let had = self.is_open() || self.mode != Mode::Idle;
         self.levels.clear();
         self.open_slot = None;
@@ -598,6 +700,10 @@ impl MenuController {
     pub fn pointer_move(&mut self, pos: Point, now: f64) -> Outcome {
         self.last_pointer = Some(pos);
         let mut out = Outcome::default();
+        if self.flash.is_some() {
+            out.consumed = true;
+            return out;
+        }
         if !self.is_open() {
             return out;
         }
@@ -681,6 +787,10 @@ impl MenuController {
     pub fn pointer_press(&mut self, pos: Point, now: f64) -> Outcome {
         self.last_pointer = Some(pos);
         let mut out = Outcome::default();
+        if self.flash.is_some() {
+            out.consumed = true;
+            return out;
+        }
         let hit = self.hit(pos);
         if !self.is_open() {
             match hit {
@@ -746,6 +856,10 @@ impl MenuController {
     pub fn pointer_release(&mut self, pos: Point, now: f64) -> Outcome {
         self.last_pointer = Some(pos);
         let mut out = Outcome::default();
+        if self.flash.is_some() {
+            out.consumed = true;
+            return out;
+        }
         let hit = self.hit(pos);
         if let Some(button) = self.pressed_button.take() {
             if hit == Hit::Slot && self.hit_slot.as_ref() == Some(&button) {
@@ -780,8 +894,11 @@ impl MenuController {
         };
         match (release, item) {
             (Release::Choose, Some(item)) => {
-                out.effects.extend(self.activation(item));
-                self.close_all(&mut out);
+                let level = match hit {
+                    Hit::Popup { level, .. } => level,
+                    _ => self.levels.len() - 1,
+                };
+                self.choose(level, item, now, &mut out);
             }
             (Release::Close, _) => self.close_all(&mut out),
             _ => self.mode = Mode::Sticky,
@@ -792,6 +909,10 @@ impl MenuController {
     /// Advance timers (submenu open / close, the end of the way into a submenu).
     pub fn tick(&mut self, now: f64) -> Outcome {
         let mut out = Outcome::default();
+        if self.flash.is_some() {
+            self.flash_step(now, &mut out);
+            return out;
+        }
         if self.aim.expired(now) {
             self.pointer_rested(now, &mut out);
         }
@@ -839,6 +960,12 @@ impl MenuController {
     }
 
     pub fn key(&mut self, key: Key, now: f64) -> Outcome {
+        if self.flash.is_some() {
+            return Outcome {
+                consumed: true,
+                ..Default::default()
+            };
+        }
         match self.mode {
             Mode::Idle => Outcome::default(),
             Mode::TitleFocus => self.key_title_focus(key),
@@ -1026,8 +1153,7 @@ impl MenuController {
                     if item.has_submenu {
                         self.open_submenu(level, true, &mut out);
                     } else {
-                        out.effects.extend(self.activation(item.id));
-                        self.close_all(&mut out);
+                        self.choose(level, item.id, now, &mut out);
                     }
                 }
             }

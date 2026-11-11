@@ -344,7 +344,14 @@ pub fn load_icon(path: &Path, px: u32) -> Option<IconImage> {
     if path.extension().and_then(|e| e.to_str()) == Some("svg") {
         return render_svg(&data, px);
     }
-    let img = image::load_from_memory(&data).ok()?.to_rgba8();
+    decode_png(&data, px)
+}
+
+/// Decode encoded PNG bytes, as a menu item sends its icon inline: at the picture's own size, resampled to `px` when it
+/// is larger.
+pub fn decode_png(data: &[u8], px: u32) -> Option<IconImage> {
+    let px = px.max(1);
+    let img = image::load_from_memory(data).ok()?.to_rgba8();
     let img = if img.width() > px * 2 || img.height() > px * 2 {
         image::imageops::resize(&img, px, px, image::imageops::FilterType::Triangle)
     } else {

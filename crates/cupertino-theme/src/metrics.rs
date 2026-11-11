@@ -42,7 +42,7 @@ pub struct ShapeTokens {
     pub window_corner_radius: f64,
     /// small (compact) window corner radius 10 pt.
     pub window_corner_radius_small: f64,
-    /// layer archive 4 with a continuous curve.
+    /// Corner radius of the highlight behind a pressed menu bar title: a capsule in the bar's height.
     pub menu_bar_selection_corner_radius: f64,
     /// window rim is one pixel wide (window rim colour).
     pub window_rim_width_px: f64,
@@ -56,7 +56,7 @@ impl Default for ShapeTokens {
         Self {
             window_corner_radius: WINDOW_CORNER_RADIUS_REGULAR,
             window_corner_radius_small: WINDOW_CORNER_RADIUS_SMALL,
-            menu_bar_selection_corner_radius: 4.0,
+            menu_bar_selection_corner_radius: 11.0,
             window_rim_width_px: 1.0,
             menu_bar_height: 24.0,
         }

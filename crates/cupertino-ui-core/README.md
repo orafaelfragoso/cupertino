@@ -49,6 +49,11 @@ all on one thread.
   lifts and each popup it opened hears it lift there, outside it, as a mouse release elsewhere does. A cancelled touch
   ends the interaction in those popups too, and another finger put down in one while it is held goes nowhere. The unit
   tests follow a finger through the same popups as the button.
+- **Closing menus.** A popup on the menu surface that the view stops declaring fades out instead of vanishing: the
+  runtime keeps its window, clears its input region, takes it out of the accessibility tree and shows it at the
+  opacity `(1 - t/0.236 s)³` (the compositor's material fades with it), then destroys it. It hears nothing meanwhile,
+  and a popup declared under its key is a new window. Only a menu's first level fades, and only when no other menu
+  opens in the same view; a submenu that closes under an open menu goes at once, and Reduce Motion closes at once.
 - **Scroll timing.** `Runtime::with_scroll_timing(sink)` follows every pointer scroll event to the screen: the window
   system's timestamp, when its handlers ran, the model update and view it caused (`None` when it changed no model),
   when the first frame after it was handed to the window system and when the compositor showed that frame

@@ -299,8 +299,15 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
 - **.** Behaviour of the design: bar structure, press-drag-release and
   click-sticky interaction, hover switching, keyboard navigation, type-ahead. The per-output presentation (dimmed inactive
   output, auto-hide in full screen) lives in `cupertino-wm::menu_bar`.
-- **.** The selection highlight is a 4 pt continuous-corner rounded rectangle
-  (`BarMetrics::selection_corner_radius`).
+- **.** The selection highlight of a pressed title is a capsule 22 pt tall, reaching 14.75 pt past the title's text on
+  each side (`BarMetrics::selection_corner_radius`, `title_highlight_overhang`), in a veil of the text's tone: dark at 7 %
+  under dark text, light at 10 % under light text. Titles are 21.75 pt apart and status icons 20 pt. A menu hangs from the
+  bar so that its labels line up with the title's text (the menu's edge 16.5 pt left of it), its rows are 24 pt and its
+  separators 11 pt, its highlight is inset 5.5 pt with a 6.75 pt corner and its corner is 11.5 pt. A row with an
+  icon (an inline picture or a themed name) draws it in the icon column before the label, a symbol in the label's
+  colour, white on the highlight; shortcuts take 0.28 of the label's strength. A chosen row's highlight goes off for
+  0.034 s and on for 0.067 s before the choice is made and the menus close (not with Reduce Motion); the menus then
+  fade out, which the toolkit's runtime does.
 - **Clock.** The parts, the two-space join with a date and one space without, the unset-key reads, the
   1 s / 60 s tick 0.1 s after the boundary, the `remainder(t, 2) > 0` flash phase and its punctuation space are as designed. The
   English patterns stand in for the locale's skeleton step, and the hour cycle is a setting (/ approximate: no

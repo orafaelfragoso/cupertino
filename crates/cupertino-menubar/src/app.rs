@@ -25,7 +25,9 @@ use cupertino_menubar::layout::{BarMetrics, SlotKey};
 use cupertino_menubar::recent::RecentSources;
 use cupertino_menubar::routing::{self, menu_key, Action, Context};
 use cupertino_menubar::tone::BarTone;
-use cupertino_menubar::view::{self, BarFont, BarId, BarPointer, BarScene, Input, KitMeasure};
+use cupertino_menubar::view::{
+    self, BarFont, BarId, BarPointer, BarScene, Input, KitMeasure, RowIcons,
+};
 use cupertino_menubar::wakeup::Wakeup;
 use cupertino_menubar::worker::{self, Worker};
 use cupertino_modifiers::{Modifier, Physical, Profile};
@@ -367,7 +369,7 @@ pub struct App {
     metrics: BarMetrics,
     height: f64,
     display: DisplayOptions,
-    icons: ThemeIcons,
+    icons: Rc<RowIcons>,
     data_dirs: Vec<PathBuf>,
     start: Instant,
     clock: ClockSettings,
@@ -542,7 +544,7 @@ pub fn run() -> Result<std::convert::Infallible> {
             height: metrics.height,
             metrics,
             display: observed.display,
-            icons: ThemeIcons::new(&assets),
+            icons: Rc::new(RowIcons::new(ThemeIcons::new(&assets))),
             data_dirs: cupertino_defaults::data_dirs(),
             start: Instant::now(),
             clock: conf.clock,
@@ -669,6 +671,7 @@ impl App {
         );
         controller.bar_metrics = self.metrics.clone();
         controller.menu_metrics.shortcut_style = self.shared.chords.style();
+        controller.cfg.flash_choice = !self.display.reduce_motion;
         self.surfaces.borrow_mut().bars.push(BarSurface {
             bar: id,
             output,
@@ -796,6 +799,7 @@ impl App {
                 self.display = display;
                 for bar in &mut self.bars {
                     bar.tone = BarTone::fresh(bar.backdrop_lightness, display);
+                    bar.controller.cfg.flash_choice = !display.reduce_motion;
                 }
                 Vec::new()
             }
@@ -991,7 +995,7 @@ impl App {
                 worker::Event::LayoutFailed { source } => self.shared.layout_failed(&source),
                 worker::Event::StatusUpdated { item, menu } => {
                     let px = status_icon_px(ICON_SCALE);
-                    let icons = &mut self.icons;
+                    let icons = &self.icons;
                     let icon = status_icon(&item, px, |name, px| icons.load(name, px))
                         .map(|pixmap| view::icon_image(&pixmap));
                     self.shared.set_status(StatusState {
@@ -1357,6 +1361,7 @@ impl Application for App {
                         spread: &bar.backdrop_spread,
                         size: Size::new(f64::from(bar.width), app.height),
                         open_panels: &open_panels,
+                        icons: &app.icons,
                     },
                     Message::Input,
                 )

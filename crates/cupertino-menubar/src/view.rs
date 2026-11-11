@@ -7,12 +7,14 @@ use crate::controller::{Level, MenuController};
 use crate::fallback::HELP_SEARCH;
 use crate::feed::{Shared, StatusIcon, SCREEN_CAPTURE_SLOT};
 use crate::geom::{self, Point as BarPoint};
-use crate::item::{ShortcutGlyphs, Toggle};
+use crate::item::{MenuItem, ShortcutGlyphs, Toggle};
 use crate::layout::{
     BarMetrics, MenuMetrics, PopupRow, Slot, SlotKey, TextMeasure, PRIVACY_DOT_PT, STATUS_ICON_PT,
+    SYSTEM_MARK_PT,
 };
 use crate::popups;
 use crate::tone::{BarTone, Halo, MenuPalette, Rgba};
+use cupertino_icons::ThemeIcons;
 use cupertino_kit::core::{
     next_resource_id, AccessibleStates, AccessibleValue, Action, Change, Checked, CommandRegistry,
     Element, Environment, Event, EventCx, IconImage, Key, MeasureCx, PaintCx, Phase, Popup,
@@ -27,9 +29,13 @@ use cupertino_kit::render::{
 use cupertino_kit::text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle, TextSystem,
 };
-use cupertino_kit::theme::{Appearance, Color, Surface};
+use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant, Surface};
+use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
 use tiny_skia::Pixmap;
 
@@ -37,31 +43,42 @@ use tiny_skia::Pixmap;
 pub const BAR_APP_ID: &str = "cupertino-menubar.bar-";
 /// What assistive technology calls a bar.
 const BAR_TITLE: &str = "Menu Bar";
-/// Corner radius of a popup menu in points. approximate.
-pub const POPUP_RADIUS: f64 = 8.0;
-/// Edge of the system menu's mark in points: the grid it is drawn on, so its strokes fall on whole pixels.
-const SYSTEM_MARK_PT: f64 = 16.0;
-/// Opacity factor of a row's shortcut and of its secondary text. approximate.
-const FADED_ALPHA: f32 = 0.65;
+/// Corner radius of a popup menu in points.
+pub const POPUP_RADIUS: f64 = 11.5;
+/// The share of the label's opacity a row's shortcut keeps, on an enabled row and on a disabled one (whose label is
+/// dimmed already).
+const SHORTCUT_ALPHA: f32 = 0.28;
+const DISABLED_SHORTCUT_ALPHA: f32 = 0.7;
+/// Opacity factor of a row's secondary text. approximate.
+const DETAIL_ALPHA: f32 = 0.65;
+/// Edge of a row's icon in points.
+const ROW_ICON_PT: f64 = 14.0;
 /// Opacity factor of a status item's dot, drawn when it has no icon. approximate.
 const DOT_ALPHA: f32 = 0.7;
 /// Opacity factor of an item symbol whose radio is off or has no link. approximate (the design does not say).
 const DIMMED_ALPHA: f32 = 0.4;
-/// Inset of the search field's box in its row, vertically, in points. approximate.
+/// The search field's capsule: its height, its distance from the top of its row and from the menu's sides, in points.
+const FIELD_HEIGHT: f64 = 24.0;
+const FIELD_TOP: f64 = 5.0;
+const FIELD_INSET_X: f64 = 10.5;
+/// Inset of the field's caret and selection from the field's top and bottom, in points. approximate.
 const FIELD_INSET_Y: f64 = 2.0;
-/// Corner radius of the search field's box in points. approximate.
-const FIELD_RADIUS: f64 = 5.0;
+/// The field's fill in the dark and in the light appearance: opaque.
+const FIELD_FILL_DARK: Rgba = [34.0 / 255.0, 34.0 / 255.0, 34.0 / 255.0, 1.0];
+const FIELD_FILL_LIGHT: Rgba = [1.0, 1.0, 1.0, 1.0];
 /// Space between the search field's box and its text in points. approximate.
-const FIELD_TEXT_INSET: f64 = 6.0;
+const FIELD_TEXT_INSET: f64 = 12.0;
 /// Space between the search field's box and the chord after it in points. approximate.
 const FIELD_CHORD_GAP: f64 = 8.0;
 /// Width of the search field's caret in points. approximate.
 const CARET_WIDTH: f64 = 1.0;
 /// Opacity factor of the row highlight colour behind the field's selected text. approximate.
 const FIELD_SELECTION_ALPHA: f32 = 0.35;
-/// Inset of a row's highlight from the menu's sides, and its corner radius, in points. approximate.
-const ROW_HIGHLIGHT_INSET: f64 = 4.0;
-const ROW_HIGHLIGHT_RADIUS: f64 = 4.0;
+/// Inset of a row's highlight from the menu's sides, and its corner radius, in points.
+const ROW_HIGHLIGHT_INSET: f64 = 5.5;
+const ROW_HIGHLIGHT_RADIUS: f64 = 6.75;
+/// Half the width of the submenu chevron in points.
+const CHEVRON_HALF_WIDTH: f64 = 1.8;
 /// Stroke widths of the check mark and the submenu chevron in points. approximate.
 const CHECK_STROKE: f64 = 1.6;
 const CHEVRON_STROKE: f64 = 1.4;
@@ -182,6 +199,8 @@ pub struct BarScene<'a> {
     /// The items whose panel, shown by another process, is open on this bar's output
     /// ([`crate::extras::OpenPanels::open_on`]): drawn highlighted as an open menu's title is.
     pub open_panels: &'a [SlotKey],
+    /// The icons of menu rows.
+    pub icons: &'a Rc<RowIcons>,
 }
 
 /// The bar's window and one popup per open menu level.
@@ -395,11 +414,6 @@ fn menu<M: Clone + 'static>(
     let next = levels.get(level + 1).map(|l| l.menu.id);
     let layout = &open.layout;
     let metrics = scene.controller.menu_metrics.clone();
-    let any_mark = layout.rows.iter().any(|r| r.item.toggle != Toggle::None);
-    let any_icon = layout
-        .rows
-        .iter()
-        .any(|r| r.item.icon_name.is_some() || r.item.icon_data.is_some());
     let field = scene.controller.search_field().map(|f| Field {
         text: f.text().to_owned(),
         caret: f.caret(),
@@ -423,9 +437,7 @@ fn menu<M: Clone + 'static>(
                 origin: BarPoint::new(rect.x, rect.y),
                 hot: open.selected == Some(i) && row.item.enabled,
                 expanded: row.item.has_submenu.then(|| next == Some(row.item.id)),
-                text_x: metrics.padding_x
-                    + if any_mark { metrics.mark_column } else { 0.0 }
-                    + if any_icon { metrics.icon_column } else { 0.0 },
+                icons: Rc::clone(scene.icons),
                 key_width: layout.shortcut_key_width,
                 field: field.clone().filter(|_| row.item.id == HELP_SEARCH),
                 metrics: metrics.clone(),
@@ -597,6 +609,134 @@ pub fn icon_image(pixmap: &Pixmap) -> IconImage {
             format: PixelFormat::Rgba8Premultiplied,
             pixels: Arc::from(pixmap.data()),
         },
+    }
+}
+
+/// Device pixels of a row's icon at `scale` device pixels per point.
+fn row_icon_px(scale: f64) -> u32 {
+    (ROW_ICON_PT * scale).ceil().max(1.0) as u32
+}
+
+/// An icon of a menu row, loaded.
+#[derive(Clone, Debug)]
+pub struct RowIcon {
+    image: IconImage,
+    /// Grey strokes only: a symbol, which takes the colour of the row's text. A coloured icon keeps its own.
+    template: bool,
+}
+
+/// Whether every visible pixel of the premultiplied `pixels` is grey, within a small margin.
+fn is_template(pixels: &[u8]) -> bool {
+    pixels.as_chunks::<4>().0.iter().all(|px| {
+        let a = u32::from(px[3]);
+        a == 0 || {
+            let plain = |c: u8| (u32::from(c) * 255 / a).min(255);
+            let (r, g, b) = (plain(px[0]), plain(px[1]), plain(px[2]));
+            r.max(g).max(b) - r.min(g).min(b) <= 24
+        }
+    })
+}
+
+impl RowIcon {
+    fn new(pixmap: &Pixmap) -> Self {
+        Self {
+            template: is_template(pixmap.data()),
+            image: icon_image(pixmap),
+        }
+    }
+
+    /// The icon in `c` when it is a symbol, else as it is.
+    fn tinted(&self, c: Rgba) -> IconImage {
+        if !self.template {
+            return self.image.clone();
+        }
+        type Tints = Mutex<HashMap<(u64, [u8; 4]), IconImage>>;
+        static TINTS: OnceLock<Tints> = OnceLock::new();
+        let key = (
+            self.image.id.0,
+            c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8),
+        );
+        let mut tints = TINTS
+            .get_or_init(Tints::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        tints
+            .entry(key)
+            .or_insert_with(|| {
+                let mut tinted = self.image.clone();
+                let strength = c[3].clamp(0.0, 1.0);
+                let pixels: Vec<u8> = self
+                    .image
+                    .image
+                    .pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|px| {
+                        let a = f32::from(px[3]) / 255.0 * strength;
+                        let part = |v: f32| (v.clamp(0.0, 1.0) * a * 255.0).round() as u8;
+                        [
+                            part(c[0]),
+                            part(c[1]),
+                            part(c[2]),
+                            (a * 255.0).round() as u8,
+                        ]
+                    })
+                    .collect();
+                tinted.id = next_resource_id();
+                tinted.image.pixels = Arc::from(pixels);
+                tinted
+            })
+            .clone()
+    }
+}
+
+/// The icons of menu rows and of status items, loaded from the icon themes or decoded from what the item sent, once per
+/// icon and size.
+pub struct RowIcons {
+    themed: RefCell<ThemeIcons>,
+    loaded: RefCell<HashMap<(u64, u32), Option<RowIcon>>>,
+}
+
+impl RowIcons {
+    pub fn new(themed: ThemeIcons) -> Self {
+        Self {
+            themed: RefCell::new(themed),
+            loaded: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// The themed icon `name` at `px` device pixels.
+    pub fn load(&self, name: &str, px: u32) -> Option<Pixmap> {
+        self.themed.borrow_mut().load(name, px)
+    }
+
+    /// The icon of `item` at `px` device pixels: what it sent inline, else its themed name; `None` without one.
+    fn row_icon(&self, item: &MenuItem, px: u32) -> Option<RowIcon> {
+        if item.icon_name.is_none() && item.icon_data.is_none() {
+            return None;
+        }
+        let mut hasher = DefaultHasher::new();
+        item.icon_data.hash(&mut hasher);
+        item.icon_name.hash(&mut hasher);
+        let key = (hasher.finish(), px);
+        self.loaded
+            .borrow_mut()
+            .entry(key)
+            .or_insert_with(|| {
+                let from_data = item.icon_data.as_deref().and_then(|data| {
+                    let icon = cupertino_icons::decode_png(data, px)?;
+                    let size = tiny_skia::IntSize::from_wh(icon.width, icon.height)?;
+                    Pixmap::from_vec(icon.rgba, size)
+                });
+                from_data
+                    .or_else(|| {
+                        let name = item.icon_name.as_deref()?;
+                        self.load(name, px)
+                    })
+                    .map(|pixmap| RowIcon::new(&pixmap))
+            })
+            .clone()
     }
 }
 
@@ -821,18 +961,25 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
         let size = cx.size();
         let m = &self.metrics;
         if self.highlighted {
+            // a capsule that reaches past the slot's padding, over the room between two slots
+            let overhang = match self.slot.key {
+                SlotKey::System | SlotKey::AppMenu | SlotKey::Menu(_) => m.title_highlight_overhang,
+                _ => m.status_highlight_overhang,
+            };
+            let height = size.height - 2.0 * m.selection_inset_y;
             let rect = Rect::new(
-                0.0,
+                -overhang,
                 m.selection_inset_y,
-                size.width,
-                size.height - 2.0 * m.selection_inset_y,
+                size.width + 2.0 * overhang,
+                height,
             );
+            let radius = m.selection_corner_radius.min(height / 2.0);
             // over a busy wallpaper the highlight lies on a backing of the halo's tone, so it shows as a shape of its
             // own wherever the picture under it is as light (or as dark) as the highlight is
             if let Some(backing) = self.halo.and_then(|h| h.pill_backing(palette.text)) {
-                fill(cx, rect, m.selection_corner_radius, backing);
+                fill(cx, rect, radius, backing);
             }
-            fill(cx, rect, m.selection_corner_radius, palette.bar_highlight);
+            fill(cx, rect, radius, palette.bar_highlight);
         }
         // over a busy wallpaper the text and symbols keep a halo of the opposite tone, so they read where the picture
         // under them is as light or as dark as they are; a calm wallpaper and a solid bar need none (over measured
@@ -955,8 +1102,8 @@ struct RowNode<M> {
     hot: bool,
     /// Whether the row's submenu is open; `None` for a row without one.
     expanded: Option<bool>,
-    /// Where the label starts, after the mark and icon columns the menu has.
-    text_x: f64,
+    /// Where the rows' icons come from.
+    icons: Rc<RowIcons>,
     /// The width of the column the shortcuts' keys stand in.
     key_width: f64,
     /// The search field, in the Help menu's search row.
@@ -971,7 +1118,7 @@ impl<M> RowNode<M> {
     /// just before it. Returns where the modifier glyphs begin.
     fn shortcut(&self, cx: &mut PaintCx<'_>, sc: &ShortcutGlyphs, width: f64, c: Rgba) -> f64 {
         let height = cx.size().height;
-        let key_x = width - self.metrics.padding_x - self.key_width;
+        let key_x = width - self.metrics.trailing_inset - self.key_width;
         text(cx, &self.font, &sc.key, key_x, 0.0, height, false, c);
         let modifiers_x = key_x - self::width(cx, &self.font, &sc.modifiers);
         text(
@@ -997,16 +1144,15 @@ impl<M> RowNode<M> {
         chord_left: Option<f64>,
     ) {
         let size = cx.size();
-        let m = &self.metrics;
-        let left = m.padding_x;
-        let right = chord_left.map_or(size.width - m.padding_x, |x| x - FIELD_CHORD_GAP);
-        let frame = Rect::new(
-            left,
-            FIELD_INSET_Y,
-            right - left,
-            size.height - 2.0 * FIELD_INSET_Y,
-        );
-        fill(cx, frame, FIELD_RADIUS, palette.separator);
+        let left = FIELD_INSET_X;
+        let right = chord_left.map_or(size.width - FIELD_INSET_X, |x| x - FIELD_CHORD_GAP);
+        let frame = Rect::new(left, FIELD_TOP, right - left, FIELD_HEIGHT);
+        let backing = if dark(cx.env()) {
+            FIELD_FILL_DARK
+        } else {
+            FIELD_FILL_LIGHT
+        };
+        fill(cx, frame, FIELD_HEIGHT / 2.0, backing);
         let x = frame.min_x() + FIELD_TEXT_INSET;
         if field.text.is_empty() {
             let dimmed = faded(palette.text, palette.disabled_alpha);
@@ -1015,8 +1161,8 @@ impl<M> RowNode<M> {
                 &self.font,
                 &self.row.item.label,
                 x,
-                0.0,
-                size.height,
+                frame.min_y(),
+                FIELD_HEIGHT,
                 false,
                 dimmed,
             );
@@ -1043,8 +1189,8 @@ impl<M> RowNode<M> {
             &self.font,
             &field.text,
             x,
-            0.0,
-            size.height,
+            frame.min_y(),
+            FIELD_HEIGHT,
             false,
             palette.text,
         );
@@ -1073,7 +1219,6 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
             || self.hot != old.hot
             || self.expanded != old.expanded
             || self.place != old.place
-            || self.text_x != old.text_x
             || self.key_width != old.key_width
             || self.field != old.field
             || self.metrics != old.metrics
@@ -1105,7 +1250,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         let m = &self.metrics;
         let item = &self.row.item;
         if let Some(field) = &self.field {
-            let faded_text = faded(palette.text, FADED_ALPHA);
+            let faded_text = faded(palette.text, SHORTCUT_ALPHA);
             let chord_left = self
                 .row
                 .shortcut
@@ -1115,12 +1260,12 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
             return;
         }
         if item.separator {
-            let line = 1.0 / cx.env().scale.max(1.0);
+            // a point thick, from the labels' column to the same distance from the trailing edge
             let rect = Rect::new(
-                m.padding_x,
+                self.row.label_x,
                 size.height / 2.0 - 0.5,
-                size.width - 2.0 * m.padding_x,
-                line,
+                size.width - self.row.label_x - m.padding_x,
+                1.0,
             );
             fill(cx, rect, 0.0, palette.rule);
             return;
@@ -1132,7 +1277,13 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 size.width - 2.0 * ROW_HIGHLIGHT_INSET,
                 size.height,
             );
-            fill(cx, rect, ROW_HIGHLIGHT_RADIUS, palette.row_highlight);
+            let accent = cx
+                .env()
+                .theme
+                .colors
+                .get(ColorRole::SelectedControlFill, StateVariant::NORMAL)
+                .map_or(palette.row_highlight, |c| [c.r, c.g, c.b, c.a]);
+            fill(cx, rect, ROW_HIGHLIGHT_RADIUS, accent);
         }
         let base = if self.hot {
             palette.row_highlight_text
@@ -1149,16 +1300,11 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         );
         let middle = size.height / 2.0;
         if item.toggle.is_marked() {
+            // the mark stands in the column before the labels, centred on the labels' edge of a menu without marks
             let x = m.padding_x;
             match item.toggle {
-                Toggle::Radio(_) => circle(
-                    cx,
-                    Point::new(x + m.mark_column * 0.35, middle),
-                    RADIO_DOT_RADIUS,
-                    c,
-                ),
+                Toggle::Radio(_) => circle(cx, Point::new(x, middle), RADIO_DOT_RADIUS, c),
                 _ => {
-                    let x = x + m.mark_column * 0.3;
                     let check = [
                         Point::new(x - 4.0, middle),
                         Point::new(x - 1.2, middle + 3.2),
@@ -1168,18 +1314,23 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 }
             }
         }
+        if let Some(icon) = self.icons.row_icon(item, row_icon_px(cx.env().scale)) {
+            let origin = self.row.label_x - m.icon_column;
+            let centre = Point::new(origin + ROW_ICON_PT / 2.0, middle);
+            image(cx, &icon.tinted(c), centre, ROW_ICON_PT);
+        }
         text(
             cx,
             &self.font,
             &item.label,
-            self.text_x,
+            self.row.label_x,
             0.0,
             size.height,
             false,
             c,
         );
         if let Some(detail) = &self.row.detail {
-            let x = self.text_x + width(cx, &self.font, &item.label) + m.detail_gap;
+            let x = self.row.label_x + width(cx, &self.font, &item.label) + m.detail_gap;
             text(
                 cx,
                 &self.font,
@@ -1188,7 +1339,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 0.0,
                 size.height,
                 false,
-                faded(c, FADED_ALPHA),
+                faded(c, DETAIL_ALPHA),
             );
         }
         if let Some(sc) = &self.row.shortcut {
@@ -1197,14 +1348,20 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
             } else {
                 size.width
             };
-            self.shortcut(cx, sc, room, faded(c, FADED_ALPHA));
+            // white on the highlight; else a share of the label's strength, less on a disabled row
+            let keys = match (item.enabled, self.hot) {
+                (_, true) => c,
+                (true, false) => faded(c, SHORTCUT_ALPHA),
+                (false, false) => faded(c, DISABLED_SHORTCUT_ALPHA),
+            };
+            self.shortcut(cx, sc, room, keys);
         }
         if item.has_submenu {
-            let x = size.width - m.padding_x - m.arrow_width * 0.35;
+            let x = size.width - m.trailing_inset - CHEVRON_HALF_WIDTH;
             let chevron = [
-                Point::new(x - 1.8, middle - 3.6),
-                Point::new(x + 1.8, middle),
-                Point::new(x - 1.8, middle + 3.6),
+                Point::new(x - CHEVRON_HALF_WIDTH, middle - 3.6),
+                Point::new(x + CHEVRON_HALF_WIDTH, middle),
+                Point::new(x - CHEVRON_HALF_WIDTH, middle + 3.6),
             ];
             polyline(cx, &chevron, CHEVRON_STROKE, c);
         }

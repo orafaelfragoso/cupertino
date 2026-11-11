@@ -231,6 +231,17 @@ fn mapped_app_stream(
     app_id: &str,
     title: Option<&str>,
 ) -> (TestClient<App>, cupertino_wm::Rect) {
+    mapped_app_beside(h, stream, app_id, title, &mut [])
+}
+
+/// [`mapped_app_stream`] while `others` keep answering the server, as the pings a new key window brings.
+fn mapped_app_beside(
+    h: &mut Harness,
+    stream: UnixStream,
+    app_id: &str,
+    title: Option<&str>,
+    others: &mut [&mut dyn Pump],
+) -> (TestClient<App>, cupertino_wm::Rect) {
     let mut app = TestClient::connect(h, stream, App::default());
     let qh = app.qh();
     app.state.shm = Some(app.globals.bind(&qh, 1..=1, ()).unwrap());
@@ -268,8 +279,10 @@ fn mapped_app_stream(
     let time = h.state.now() + 5.0;
     common::set_time_with(&mut h.state, time, |state| {
         app.pump();
+        others.iter_mut().for_each(|c| c.pump());
         headless::step(state, &mut h.event_loop, Duration::from_millis(2)).unwrap();
         app.pump();
+        others.iter_mut().for_each(|c| c.pump());
     });
     h.state.tick();
     let id = h.state.wm.key_window().unwrap();

@@ -41,6 +41,25 @@ struct Pending {
     controller: CupertinoControlSessionV1,
     deadline: Instant,
 }
+/// Where one window of a run's layout lies on the run's output: the rectangle input coordinates computed from an
+/// observation fall in. Titles, focus and published content are not part of it, so they leave input revisions alone.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Placement {
+    handle: u64,
+    origin: [f64; 2],
+    size: [f64; 2],
+    scale: [f64; 2],
+}
+impl Placement {
+    fn of(meta: &wire::Window, size: [f64; 2]) -> Self {
+        Self {
+            handle: meta.handle,
+            origin: meta.origin,
+            size,
+            scale: meta.scale,
+        }
+    }
+}
 impl SemanticState {
     pub fn new(display: &DisplayHandle) -> Self {
         Self {
@@ -82,6 +101,16 @@ impl Cupertino {
         index: usize,
         handle: u64,
     ) -> Option<wire::Window> {
+        self.semantic_root_placed(surface, index, handle)
+            .map(|(meta, _)| meta)
+    }
+    /// [`Self::semantic_root_meta`] with the window's size on the output, in logical points.
+    fn semantic_root_placed(
+        &self,
+        surface: &WlSurface,
+        index: usize,
+        handle: u64,
+    ) -> Option<(wire::Window, [f64; 2])> {
         if protected_surface(surface)
             || crate::authorization::is_prompt(surface)
             || surface
@@ -151,7 +180,7 @@ impl Cupertino {
             let geometry = entry.window.geometry();
             let ins = entry.insets();
             let window = self.wm.window(id)?;
-            return Some(wire::Window {
+            let meta = wire::Window {
                 handle,
                 app_id: self
                     .wm
@@ -168,7 +197,8 @@ impl Cupertino {
                 scale: [wplan.scale_x, wplan.scale_y],
                 focused,
                 snapshot: None,
-            });
+            };
+            return Some((meta, [wplan.visual.w, wplan.visual.h]));
         }
         let map = layer_map_for_output(&output);
         let layer = map.layers().find(|l| l.wl_surface() == surface)?;
@@ -176,7 +206,7 @@ impl Cupertino {
         if layer.bbox().size.w == 0 || layer.bbox().size.h == 0 {
             return None;
         }
-        Some(wire::Window {
+        let meta = wire::Window {
             handle,
             app_id: layer.namespace().chars().take(wire::MAX_TEXT).collect(),
             title: layer.namespace().chars().take(wire::MAX_TEXT).collect(),
@@ -187,23 +217,34 @@ impl Cupertino {
             scale: [1.0, 1.0],
             focused,
             snapshot: None,
-        })
+        };
+        Some((meta, [f64::from(g.size.w), f64::from(g.size.h)]))
     }
     fn semantic_meta(&self, p: &Publication, index: usize) -> Option<wire::Window> {
+        self.semantic_placed(p, index).map(|(meta, _)| meta)
+    }
+    /// [`Self::semantic_meta`] with the surface's size on the output, in logical points.
+    fn semantic_placed(&self, p: &Publication, index: usize) -> Option<(wire::Window, [f64; 2])> {
         if !p.surface.is_alive() {
             return None;
         }
         let root = self.shell_surface_root(&p.surface);
-        let mut meta = self.semantic_root_meta(&root, index, p.handle)?;
+        let (mut meta, mut size) = self.semantic_root_placed(&root, index, p.handle)?;
         if root != p.surface {
             let (popup, offset) = PopupManager::popups_for_surface(&root)
                 .find(|(popup, _)| popup.wl_surface() == &p.surface)?;
             let g = popup.geometry();
             meta.origin[0] += f64::from(offset.x - g.loc.x) * meta.scale[0];
             meta.origin[1] += f64::from(offset.y - g.loc.y) * meta.scale[1];
+            size = [
+                f64::from(g.size.w) * meta.scale[0],
+                f64::from(g.size.h) * meta.scale[1],
+            ];
         }
-        Some(meta)
+        Some((meta, size))
     }
+    /// Tell the observing runs that what they observe changed. Their geometry revisions stay: a new title, focus or
+    /// publication leaves input coordinates where they were ([`Placement`]).
     fn semantics_changed(&mut self) {
         self.control.semantics.revision = self
             .control
@@ -213,18 +254,7 @@ impl Cupertino {
             .expect("semantic revision exhausted");
         let (h, l) = split(self.control.semantics.revision);
         for i in self.semantic_runs() {
-            // a run revoked meanwhile, as by an exhausted revision below, no longer observes
-            if self.control.runs[i].model.phase() != Phase::Active {
-                continue;
-            }
             self.control.runs[i].resource.semantic_changed(h, l);
-            if let Some(revision) = self.control.runs[i].revision.checked_add(1) {
-                self.control.runs[i].revision = revision;
-                self.control_geometry(i);
-                self.control_changed(i, 0);
-            } else {
-                self.control_revoke(i, Revocation::Stopped);
-            }
         }
     }
     /// Pending native replies have a real deadline even while every output is idle.
@@ -250,28 +280,45 @@ impl Cupertino {
         }
         let subscription = self.control.semantics.subscription;
         let mut layout = Vec::new();
+        let mut placements = Vec::with_capacity(active.len());
         for &i in &active {
-            for entry in &self.windows {
-                if let Some(m) = entry
-                    .id
-                    .0
-                    .checked_mul(2)
-                    .and_then(|h| self.semantic_root_meta(entry.surface(), i, h))
-                {
+            let mut placed = Vec::new();
+            // toplevels in stacking order, so a restack moves the run's input revision on
+            for &id in self.wm.stacking_order() {
+                if let Some((m, size)) = self.entry(id).and_then(|entry| {
+                    let handle = entry.id.0.checked_mul(2)?;
+                    self.semantic_root_placed(entry.surface(), i, handle)
+                }) {
+                    placed.push(Placement::of(&m, size));
                     layout.push(m);
                 }
             }
             for p in &self.control.semantics.pubs {
                 if !self.windows.iter().any(|w| w.surface() == &p.surface) {
-                    if let Some(m) = self.semantic_meta(p, i) {
+                    if let Some((m, size)) = self.semantic_placed(p, i) {
+                        placed.push(Placement::of(&m, size));
                         layout.push(m);
                     }
                 }
             }
+            placements.push(placed);
         }
         if layout != self.control.semantics.layout {
             self.control.semantics.layout = layout;
             self.semantics_changed();
+        }
+        // Only where windows lie moves input revisions on: coordinates an agent computed from an observation point at
+        // the same place while titles, focus and published content change.
+        for (&i, placed) in active.iter().zip(placements) {
+            let run = &mut self.control.runs[i];
+            // a run revoked meanwhile, as by an exhausted revision, no longer observes
+            if run.model.phase() != Phase::Active || run.placements.as_ref() == Some(&placed) {
+                continue;
+            }
+            // the first layout a run sees is the one its first revision stands for
+            if run.placements.replace(placed).is_some() {
+                self.control_advance(i);
+            }
         }
         let epochs: Vec<_> = self
             .control

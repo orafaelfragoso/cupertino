@@ -61,7 +61,8 @@ fn readonly_control_survives_physical_input_and_capture_survives_semantic_churn(
         local.ok(&mut session.server, json!({"op":"status"}))["geometry"]["revision"].clone();
     let mut n = 0;
     let image = local.call_while(&mut session.server, json!({"op":"capture"}), |s| {
-        // Focus publications change the input token while display geometry and pixel mapping stay fixed.
+        // Raising windows restacks them, which changes the input token while display geometry and pixel mapping stay
+        // fixed.
         s.command(cupertino_wm::Command::FocusWindow {
             window: windows[n % windows.len()],
         });
@@ -74,7 +75,7 @@ fn readonly_control_survives_physical_input_and_capture_survives_semantic_churn(
         local.ok(&mut session.server, json!({"op":"status"}))["geometry"]["revision"].clone();
     assert_ne!(
         before, after,
-        "the capture must overlap real semantic invalidations"
+        "the capture must overlap real input-token invalidations"
     );
     // A 180-degree output transform changes pixel mapping even with unchanged logical dimensions.
     let mut rotated = false;

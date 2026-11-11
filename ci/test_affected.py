@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from affected import Package, affected, checks, main
+from affected import Fixtures, Package, affected, checks, fixture_packages, fixture_use, main, workspace
 
 
 class AffectedTests(unittest.TestCase):
@@ -88,18 +88,24 @@ class AffectedTests(unittest.TestCase):
         ):
             with self.subTest(check=check), patch.object(sys, "argv", ["affected.py", "run", check]), \
                     patch.dict(os.environ, {"CUPERTINO_CI_PACKAGES": '["core","app"]'}), \
-                    patch("affected.workspace") as workspace, \
+                    patch("affected.workspace", return_value=self.packages) as workspace, \
                     patch("affected.subprocess.run", return_value=SimpleNamespace(returncode=17)) as run:
                 self.assertEqual(main(), 17)
                 run.assert_called_once_with(command, check=False, pass_fds=())
-                workspace.assert_not_called()
+                # Only tests look artifacts up; none of these packages does, so no preparation wraps them.
+                self.assertEqual(workspace.called, check == "tests")
 
     def test_resource_lease_reaches_each_check_process(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cargo = root / "cargo"
             # Every descriptor in the list, as the wrapper passes a worktree lock and one or more slots.
-            cargo.write_text('#!' + sys.executable + '\nimport os, sys\n'
+            # Tests read the workspace first to find the packages that look artifacts up: none here.
+            cargo.write_text('#!' + sys.executable + '\nimport json, os, sys\n'
+                             + 'if sys.argv[1] == "metadata":\n'
+                             + f'    print(json.dumps({{"workspace_root": {str(root)!r}, "packages": [], '
+                             + '"workspace_members": []}))\n'
+                             + '    raise SystemExit\n'
                              + 'for d in os.environ["CUPERTINO_BUILD_LOCK_FD"].split(","):\n'
                              + '    os.write(int(d), (sys.argv[1] + "\\n").encode())\n')
             cargo.chmod(0o700)
@@ -118,17 +124,16 @@ class AffectedTests(unittest.TestCase):
                     self.assertEqual(stream.read(), b"clippy\nnextest\ntest\n")
 
     def test_fixture_and_test_commands_use_the_same_expanded_package_union(self) -> None:
-        packages = self.packages + [
-            Package("cupertino-kit", "crates/cupertino-kit", frozenset(), True),
-            Package("cupertino-wayland-client", "crates/cupertino-wayland-client", frozenset(), True),
-            Package("cupertino-ui-abi", "crates/cupertino-ui-abi", frozenset(), False),
-        ]
+        packages = self.fixture_workspace()
         for selected, expected in (
-            (["cupertino-server"], ["app", "cupertino-kit", "cupertino-server", "cupertino-wayland-client"]),
+            (["cupertino-server"], ["app", "cupertino-kit", "cupertino-server", "cupertino-test-pam-shim",
+                                    "cupertino-wayland-client", "login"]),
             (["cupertino-wayland-client"], ["cupertino-kit", "cupertino-wayland-client"]),
             (["cupertino-ui-abi"], ["cupertino-ui-abi"]),
+            (["login"], ["cupertino-test-pam-shim", "login"]),
             (["unrelated", "cupertino-server"],
-             ["app", "cupertino-kit", "cupertino-server", "cupertino-wayland-client", "unrelated"]),
+             ["app", "cupertino-kit", "cupertino-server", "cupertino-test-pam-shim", "cupertino-wayland-client",
+              "login", "unrelated"]),
         ):
             with self.subTest(selected=selected), patch.object(sys, "argv", ["affected.py", "run", "tests"]), \
                     patch.dict(os.environ, {"CUPERTINO_CI_PACKAGES": json.dumps(selected)}), \
@@ -143,6 +148,65 @@ class AffectedTests(unittest.TestCase):
                 self.assertEqual(command[3:split], [value for package in expected for value in ("--package", package)])
                 self.assertEqual(command[split + 1:], ["cargo", "nextest", "run", "--all-features", "--no-fail-fast", "--timings",
                                                      *[value for package in expected for value in ("-p", package)]])
+
+    def fixture_workspace(self) -> list[Package]:
+        own = Fixtures(tests=True)
+        return [p for p in self.packages if p.name != "cupertino-server"] + [
+            Package("cupertino-server", "crates/cupertino-server", frozenset({"test-pam"}), True,
+                    Fixtures(tests=True, providers=frozenset({"app"}))),
+            Package("cupertino-kit", "crates/cupertino-kit", frozenset(), True),
+            Package("cupertino-wayland-client", "crates/cupertino-wayland-client", frozenset(), True,
+                    Fixtures(tests=True, providers=frozenset({"cupertino-wayland-client"}))),
+            Package("cupertino-ui-abi", "crates/cupertino-ui-abi", frozenset(), False, own),
+            # A library that looks the shim up for the tests of every package depending on it.
+            Package("test-pam", "crates/test-pam", frozenset(), False,
+                    Fixtures(tests=True, library=True, providers=frozenset({"cupertino-test-pam-shim"}))),
+            Package("cupertino-test-pam-shim", "crates/cupertino-test-pam-shim", frozenset(), False),
+            Package("login", "crates/login", frozenset({"auth"}), True),
+            Package("auth", "crates/auth", frozenset({"test-pam"}), False),
+        ]
+
+    def test_artifacts_named_by_a_dependency_library_are_prepared_for_its_dependents(self) -> None:
+        # The shim reached only through the library: missing it fails every PAM test with a missing fixture.
+        packages = self.fixture_workspace()
+        for selected in (["login"], ["auth"], ["test-pam"]):
+            with self.subTest(selected=selected):
+                self.assertIn("cupertino-test-pam-shim", fixture_packages(packages, selected))
+
+    def test_packages_that_look_no_artifact_up_run_without_preparation(self) -> None:
+        packages = self.fixture_workspace()
+        self.assertIsNone(fixture_packages(packages, ["core", "app", "unrelated"]))
+        # A test fixture's own tests in another package do not make its dependents consumers.
+        self.assertIsNone(fixture_packages(packages + [
+            Package("kit-user", "crates/kit-user", frozenset({"cupertino-wayland-client"}), False)], ["kit-user"]))
+
+    def test_fixture_use_reads_the_helper_include_and_named_lookups(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "src").mkdir()
+            (root / "tests").mkdir()
+            include = 'include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../ci/test-fixtures.rs"));\n'
+            (root / "tests" / "run.rs").write_text(include + 'fn f() { fixtures::artifact(\n    "files", "bin", "x"); '
+                                                   'artifact(name, "bin", name); contains("fixtures::artifact("); }\n')
+            self.assertEqual(fixture_use(root), Fixtures(tests=True, library=False, providers=frozenset({"files"})))
+            (root / "src" / "lib.rs").write_text(include)
+            self.assertEqual(fixture_use(root), Fixtures(tests=True, library=True, providers=frozenset({"files"})))
+
+    def test_workspace_fixture_consumers_get_every_artifact_they_look_up(self) -> None:
+        packages = {package.name: package for package in workspace()}
+        consumers = [name for name, package in packages.items() if package.fixtures.tests]
+        self.assertTrue({"cupertino-server", "cupertino-wayland-client", "cupertino-test-pam"} <= set(consumers))
+        for name in sorted(packages):
+            prepared = fixture_packages(list(packages.values()), [name])
+            with self.subTest(package=name):
+                if name in consumers:
+                    self.assertIsNotNone(prepared)
+                if prepared is not None:
+                    for provider in packages[name].fixtures.providers & packages.keys():
+                        self.assertIn(provider, prepared)
+        for name in ("cupertino-login", "cupertino-sessiond", "cupertino-server"):
+            with self.subTest(package=name):
+                self.assertIn("cupertino-test-pam-shim", fixture_packages(list(packages.values()), [name]))
 
     def test_empty_selection_cannot_run_the_default_workspace(self) -> None:
         with patch.object(sys, "argv", ["affected.py", "run", "tests"]), \

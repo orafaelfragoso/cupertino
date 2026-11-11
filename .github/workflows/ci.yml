@@ -434,7 +434,8 @@ jobs:
       - name: Install Nextest 0.9.151
         run: *install-nextest
       - name: simple-window on Weston
-        run: python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked -p cupertino-wayland-client --run-ignored only --no-fail-fast
+        # The example is the only fixture: prepared from this package alone, not the whole workspace.
+        run: python3 ci/build-test-fixtures.py --locked --package cupertino-wayland-client -- cargo nextest run --locked -p cupertino-wayland-client --run-ignored only --no-fail-fast
 
   # The headless golden scenes. Their baselines are valid only on the renderer of ci/goldens/Dockerfile (an Arch image
   # pinned by digest, with every package from one Arch Linux Archive date), so the job runs ci/goldens.sh, which fails on

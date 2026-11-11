@@ -5,8 +5,23 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
+
+
+# Every test that looks up a prepared artifact includes this helper; ci/build-test-fixtures.py supplies the artifacts.
+FIXTURE_HELPER = "ci/test-fixtures.rs"
+# A lookup that names the package it needs, as in `artifact("cupertino-files", "bin", "cupertino-files")`.
+FIXTURE_LOOKUP = re.compile(r'\bartifact\(\s*"([A-Za-z0-9_-]+)"')
+
+
+@dataclass(frozen=True)
+class Fixtures:
+    """How a package's sources use prepared artifacts."""
+    tests: bool = False  # its sources include the fixture helper
+    library: bool = False  # its library includes it, so its dependents' tests look artifacts up through it
+    providers: frozenset[str] = frozenset()  # packages whose artifacts its lookups name
 
 
 @dataclass(frozen=True)
@@ -15,6 +30,19 @@ class Package:
     directory: str
     dependencies: frozenset[str]
     executable: bool
+    fixtures: Fixtures = Fixtures()
+
+
+def fixture_use(directory: Path) -> Fixtures:
+    tests = library = False
+    providers: set[str] = set()
+    for path in sorted(directory.rglob("*.rs")):
+        text = path.read_text(errors="replace")
+        if FIXTURE_HELPER in text:
+            tests = True
+            library = library or path.relative_to(directory).parts[0] == "src"
+        providers.update(FIXTURE_LOOKUP.findall(text))
+    return Fixtures(tests, library, frozenset(providers))
 
 
 def workspace() -> list[Package]:
@@ -35,6 +63,7 @@ def workspace() -> list[Package]:
             if d.get("path") in paths or d["name"] in names
         ),
         any(set(t["kind"]) & {"bin", "example"} for t in p["targets"]),
+        fixture_use(Path(p["manifest_path"]).parent),
     ) for p in packages]
 
 
@@ -107,14 +136,41 @@ def changed_paths(base: str, head: str) -> list[str]:
     ]).decode().split("\0") if p]
 
 
-def fixture_packages(packages: list[Package], selected: list[str]) -> list[str]:
-    """Match the test package graph to the executables its integration fixtures launch."""
+def fixture_packages(packages: list[Package], selected: list[str]) -> list[str] | None:
+    """The selection with every package whose artifacts its tests look up, or None when no test looks one up.
+
+    Tests and fixture preparation take the same package set, so both builds unify features alike.
+    """
+    by_name = {package.name: package for package in packages}
+    executables = {package.name for package in packages if package.executable}
     expanded = set(selected)
-    if "cupertino-server" in expanded:
-        expanded.update(package.name for package in packages if package.executable)
-    if "cupertino-wayland-client" in expanded:
-        expanded.add("cupertino-kit")
-    return sorted(expanded)
+    pending = sorted(expanded)
+    consumers = False
+    while pending:
+        package = by_name.get(pending.pop())
+        if package is None:
+            continue
+        reached, stack = set(), list(package.dependencies)
+        while stack:
+            dependency = by_name.get(stack.pop())
+            if dependency is not None and dependency.name not in reached:
+                reached.add(dependency.name)
+                stack.extend(dependency.dependencies)
+        libraries = [by_name[name] for name in sorted(reached) if by_name[name].fixtures.library]
+        if not (package.fixtures.tests or libraries):
+            continue
+        consumers = True
+        wanted = set(package.fixtures.providers).union(*(library.fixtures.providers for library in libraries))
+        # These look artifacts up by computed names: the compositor's tests launch every shell component and client,
+        # and the transport's compositor tests launch Kit examples.
+        if package.name == "cupertino-server":
+            wanted |= executables
+        if package.name == "cupertino-wayland-client":
+            wanted.add("cupertino-kit")
+        for name in sorted((wanted & by_name.keys()) - expanded):
+            expanded.add(name)
+            pending.append(name)
+    return sorted(expanded) if consumers else None
 
 
 def main() -> int:
@@ -137,10 +193,9 @@ def main() -> int:
         packages = json.loads(os.environ["CUPERTINO_CI_PACKAGES"])
         if not isinstance(packages, list) or not packages or not all(isinstance(p, str) and p for p in packages):
             parser.error("CUPERTINO_CI_PACKAGES must be a non-empty JSON array of package names")
-        prepare_fixtures = args.check == "tests" and bool(
-            set(packages) & {"cupertino-server", "cupertino-wayland-client", "cupertino-ui-abi"})
-        if prepare_fixtures:
-            packages = fixture_packages(workspace(), packages)
+        prepared = fixture_packages(workspace(), packages) if args.check == "tests" else None
+        if prepared is not None:
+            packages = prepared
         cargo_checks = {
             "clippy": ["clippy", "--all-targets", "--all-features", "--timings"],
             "tests": ["nextest", "run", "--all-features", "--no-fail-fast", "--timings"],
@@ -151,7 +206,7 @@ def main() -> int:
             command.extend(["-p", package])
         if args.check == "clippy":
             command.extend(["--", "-D", "warnings"])
-        elif prepare_fixtures:
+        elif prepared is not None:
             fixture_options = [option for package in packages for option in ("--package", package)]
             command = [sys.executable, str(Path(__file__).resolve().with_name("build-test-fixtures.py")),
                        "--locked", *fixture_options, "--", *command]

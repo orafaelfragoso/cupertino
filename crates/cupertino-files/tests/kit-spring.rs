@@ -391,7 +391,14 @@ fn a_drop_keeps_the_folder_the_drag_opened() {
     drag_to(&mut run, Point::new(table.center().x, table.max_y() - 20.0));
     let window = run.window;
     assert!(run.driver.window_system_mut().drag_drop(window).unwrap());
-    run.settle();
+    // the move runs on a worker thread, which reports the drop finished once it is done
+    run.wait_until(|run| {
+        run.driver
+            .runtime()
+            .window_system()
+            .incoming_drag(token)
+            .is_some_and(|drag| drag.finished.is_some())
+    });
     let incoming = run.driver.runtime().window_system().incoming_drag(token);
     assert_eq!(
         incoming.unwrap().finished,

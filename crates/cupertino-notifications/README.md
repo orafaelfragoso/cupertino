@@ -46,10 +46,10 @@ surface, ends the process with a failure status so the server restarts it.
   dismisses, and a drag to the right swipes the banner away. Every action first fetches an `xdg_activation_v1` token, which goes
   out as `ActivationToken` before `ActionInvoked`. While the list is open the surface takes the keyboard and Escape, or a press
   outside the header, the cards and the Clear menu, closes it. In the list the pointer over a card, or the keyboard on it
-  or in it with its focus ring showing, reveals its close button and its action buttons (the card grows to show them); the
+  or in it with its focus ring showing, reveals its close circle, a chevron in the age's place (it unfolds the card or expands its group) and the pill of its first action over its bottom-trailing corner (the card does not grow); an unfolded card shows its other actions in a row; the
   two are kept apart, so the pointer moving elsewhere never takes the buttons from under the keyboard and Tab goes on from
   the card into them; a banner shows its buttons always and its
-  close button while hovered. A click (or Return, Space or assistive technology's click) on a collapsed group of more than
+  close button while hovered. The whole list slides in from the right edge as one piece and out again on a critically damped spring (rate 21 rad/s, 370 pt, about 0.4 s); a reversal goes on from where it is, input stops as a close begins, and Reduce Motion makes it instant. A cleared card blurs, shrinks and fades over 0.13 s, then the cards below rise into the gap on a critically damped spring (Reduce Motion clears at once). A click (or Return, Space or assistive technology's click) on a collapsed group of more than
   one notification expands it: a header row with the application, Show Less and a clear button for the group, then each
   card on its own, 6 pt apart; the cards move out of the stack with a spring of 0.35 s perceptual duration and no bounce,
   their text fading in as they arrive, and Show Less moves them back. The header's clear button is a circle with a cross
@@ -113,7 +113,7 @@ surface, ends the process with a failure status so the server restarts it.
 - **Do not disturb.** Banners are suppressed and notifications kept in the centre. Critical urgency bypasses it
   (`critical_bypasses_dnd`), and `Until(t) ends by itself.
 - **Drawing.** Kit controls on a card the `view` module paints: regular glass under the card (`PaintCx::glass`, cut to the
-  part the list shows), a 0.5 pt separator outline, 18 pt corners and a drop shadow drawn only outside it, faded as one
+  part the list shows), a 0.5 pt separator outline, 18 pt corners and a wide dark halo (standard deviation 32 pt, peak 0.45 black, the surface holds its 96 pt reach) drawn only outside it, faded as one
   layer with its content. A collapsed group's front card and the sheets peeking below it join one glass container with a
   hard edge, so they read as one shape; each sheet's shadow, darkening and outline stay off the front card. The list keeps its glass
   within what one window shows (`MAX_MATERIALS`, counted over the part in view): every card keeps its glass, and the
@@ -125,7 +125,7 @@ surface, ends the process with a failure status so the server restarts it.
   right ("now", "5m ago", "2h ago", "3d ago", 11 pt secondary), the summary semibold in up to `SUMMARY_LINES` (2) lines
   short of the age, the body in the label colour in up to `BODY_LINES` (4) lines with bold, italic and link markup
   (`RichText`, links are `xdg-open`ed), up to 3 action buttons (pills, sharing the row when their labels do not fit) and an
-  18 pt close button centred on the top-leading corner, clear of the icon. A card is at least 58 pt tall. Text wraps at word boundaries and keeps the body's
+  20 pt close button centred on the card's corner curve, clear of the icon; a collapsed group's grows into a 64.5 pt "Clear All" capsule under the pointer or the keyboard and clears the group. A card is at least 58 pt tall. Text wraps at word boundaries and keeps the body's
   line breaks; text past the limit ends in an ellipsis and links past the cut are dropped. A centre card whose body is
   cut has a disclosure button beside its summary that unfolds the body to `UNFOLDED_BODY_LINES` (20); banners stay folded
   (the centre holds the whole message). Card heights come from `view::CardMetrics`, which measures the text with the
@@ -233,7 +233,7 @@ The model's calls, for a host of its own (all take `now`):
 | shadow opacity 0.20 / 0.25, radius 4, no offset; vibrant rim; 1 pt white inner rim | |
 | alerts skip the timer (critical urgency → alert mapping is ours) | |
 | top inset (menu bar + 16 pt), right margin 16 pt (Dock at the bottom) | |
-| centre header: a 44 pt row without a panel, 5 pt above the first card; title "Notification Centre" bold 19 pt 3 pt in from the cards' leading edge; an 18 pt clear button at their trailing edge, growing into "Clear All"; the open list replaces the banners on screen | |
+| centre header: a 33 pt row without a panel, 5 pt above the first card; title "Notification Centre" bold 19 pt 2.5 pt in from the cards' leading edge; a 20 pt clear button at their trailing edge, growing into "Clear All"; the open list replaces the banners on screen | |
 | card: 18 pt corners, regular glass, icon 13 pt from the leading edge and 14 pt before the text, 16 pt trailing, 12 pt top and bottom, at least 58 pt tall; age 11 pt at the top right in 56 pt of room | |
 | expanded group: a 30 pt header row (application 15 pt semibold, Show Less, clear), cards 6 pt apart; a spring of perceptual duration 0.35 s, no bounce | |
 | Clear menu scopes: "Banners Only" (keeps pinned; offered only with both pinned and other notifications in the list) and "All Notifications" (always); panel metrics item 22, edge padding 5, minimum width 150, radius 6, row highlight radius 4 | |

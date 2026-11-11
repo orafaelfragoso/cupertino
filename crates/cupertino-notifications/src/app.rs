@@ -290,11 +290,13 @@ impl Notifications {
         let now = self.server.now();
         let wakeup = {
             let mut c = self.server.center();
+            // cleared cards that have left go from the model now
+            self.ui.finish_removals(&mut c, now);
             c.tick(now);
             c.next_wakeup(now)
         };
-        // a group of the centre expanding or collapsing needs every frame
-        let wakeup = if self.ui.centre_open && self.ui.is_animating(now) {
+        // the centre sliding, a group expanding or collapsing, a card leaving or the cards rising need every frame
+        let wakeup = if self.ui.is_animating(now) {
             Some(Wakeup::Frame)
         } else {
             wakeup
@@ -322,7 +324,7 @@ impl Notifications {
         };
         let c = self.server.center();
         let n = c.shown(c.get(id)?).into_owned();
-        let window = if self.ui.centre_open {
+        let window = if self.ui.centre_shown(self.server.now()) {
             centre_key()
         } else {
             let width = c.config.layout.width;
@@ -371,7 +373,7 @@ impl Notifications {
             Pending::Activate(id) => {
                 c.activate(id, token, now);
                 // a click on a card of the centre closes it, now that its window gave the token
-                self.ui = Ui::default();
+                self.ui.close_centre(now, c.config.motion.reduce_motion);
             }
             Pending::Invoke(id, key) => {
                 c.invoke_action(id, &key, token, now);
@@ -486,9 +488,13 @@ impl Application for Notifications {
                 match note {
                     Note::Changed => {}
                     Note::Toggle => {
-                        model.ui = Ui {
-                            centre_open: !model.ui.centre_open,
-                            ..Ui::default()
+                        let now = model.server.now();
+                        let reduce = model.server.center().config.motion.reduce_motion;
+                        if model.ui.centre_open {
+                            model.ui.close_centre(now, reduce);
+                        } else {
+                            // a centre sliding out turns round from where it is
+                            model.ui.open_centre(now, reduce);
                         }
                     }
                     Note::Lock(locked) => {

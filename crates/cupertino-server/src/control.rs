@@ -755,7 +755,7 @@ impl Cupertino {
                 r.resource.client().as_ref() == Some(client)
                     && r.model.epoch().get() == epoch
                     && r.model.phase() == Phase::Active
-                    && r.capabilities & 2 != 0
+                    && capabilities(r.capabilities).allows(Operation::Capture)
                     && r.output.as_ref().and_then(WeakOutput::upgrade).as_ref() == Some(output)
                     && self.control_output_geometry(output).is_some()
             })
@@ -763,10 +763,10 @@ impl Cupertino {
     /// Whether an active run may take images of the screen: the menu bar shows the capture indicator for it, as for
     /// any other capture, for as long as the run can capture.
     pub fn control_capturing(&self) -> bool {
-        self.control
-            .runs
-            .iter()
-            .any(|r| r.model.phase() == Phase::Active && r.capabilities & 2 != 0)
+        self.control.runs.iter().any(|r| {
+            r.model.phase() == Phase::Active
+                && capabilities(r.capabilities).allows(Operation::Capture)
+        })
     }
     /// The run a new output capture source of `client` belongs to: the run that selected it (spending the selection),
     /// else the first of the client's runs that may capture `output`. `None` makes a source that never captures.
@@ -1213,7 +1213,7 @@ impl Dispatch<CupertinoControlAuthorityV1, ()> for Cupertino {
                     if state.session_lock.is_active() || state.prompt_shown() {
                         return;
                     }
-                    if state.control.runs[i].capabilities & 4 != 0
+                    if capabilities(state.control.runs[i].capabilities).allows(Operation::Pointer)
                         && state
                             .control
                             .owners

@@ -150,8 +150,13 @@
     </request>
     <event name="geometry" since="2">
       <description summary="the granted output's current logical rectangle">
-        This event is followed by status. A changed rectangle, scale or transform advances revision and invalidates
-        input using the earlier revision. Capture uses the same output, upright in buffer pixels.
+        This event is followed by status. It is sent again each time revision advances; input carrying an earlier
+        revision is refused with stale_geometry. A changed rectangle, scale or transform of the output advances
+        revision. While the run observes (version 3 and the observe capability), so does a change in where the
+        windows its observations list lie on this output: a window's origin, size or scale, a window appearing in
+        or leaving that list, or a change in their stacking order. A changed title, focus, app id or published
+        snapshot leaves revision as it is and is announced by semantic_changed alone. Capture uses the same output,
+        upright in buffer pixels.
       </description>
       <arg name="revision" type="uint"/><arg name="x" type="int"/><arg name="y" type="int"/>
       <arg name="width" type="int"/><arg name="height" type="int"/><arg name="scale" type="fixed"/>

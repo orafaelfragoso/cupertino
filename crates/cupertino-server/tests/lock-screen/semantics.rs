@@ -255,15 +255,14 @@ fn rust_mcp_controls_real_kit_nodes_with_consent_stale_checks_and_protected_valu
         part["region"],
         json!({"x":8.0,"y":4.0,"width":64.0,"height":32.0})
     );
-    // The counter mutation invalidates the previous observation's coordinate token.
-    assert_eq!(
-        mcp.tool(
-            &mut session.server,
-            "move",
-            json!({"epoch":epoch,"x":20,"y":20,"geometry_revision":observed["geometry_revision"]})
-        )["isError"],
-        true
+    // The counter and form mutations changed published content, not where any window lies: the first observation's
+    // coordinate token still holds.
+    let moved = mcp.tool(
+        &mut session.server,
+        "move",
+        json!({"epoch":epoch,"x":20,"y":20,"geometry_revision":observed["geometry_revision"]}),
     );
+    assert_eq!(moved["isError"], false, "{moved}");
     // A stopped fixture app cannot complete its accepted action. The compositor must expire it even with no input.
     let fresh = mcp.ok(&mut session.server, "observe", json!({"epoch":epoch}));
     let counter = window(&fresh, "org.cupertino.examples.Counter");

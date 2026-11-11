@@ -132,7 +132,11 @@ struct Run {
     grant: Option<Grant>,
     capabilities: u32,
     geometry: Option<Geometry>,
+    /// Advances when input coordinates computed earlier could point somewhere else: the output's geometry changed or,
+    /// while the run observes, where its windows lie ([`semantics::Placement`]).
     revision: u32,
+    /// Where the run's observed windows lie as last compared, in stacking order; none before the run first observes.
+    placements: Option<Vec<semantics::Placement>>,
     last_serial: u32,
     consent_since: Instant,
     replies: VecDeque<(u32, Result<(), session::Refusal>)>,
@@ -282,6 +286,17 @@ impl Cupertino {
             run.resource.status(serial, session::Phase::Inactive);
         }
     }
+    /// Advance run `index`'s geometry revision, so input computed from what it saw before is refused, and send it the
+    /// new revision; a run whose revisions are exhausted is stopped.
+    fn control_advance(&mut self, index: usize) {
+        if let Some(revision) = self.control.runs[index].revision.checked_add(1) {
+            self.control.runs[index].revision = revision;
+            self.control_geometry(index);
+            self.control_changed(index, 0);
+        } else {
+            self.control_revoke(index, Revocation::Stopped);
+        }
+    }
     fn control_geometry(&self, index: usize) {
         let r = &self.control.runs[index];
         if let (Some(g), Some(o)) = (&r.geometry, r.output.as_ref().and_then(WeakOutput::upgrade)) {
@@ -388,14 +403,8 @@ impl Cupertino {
                     .and_then(WeakOutput::upgrade);
                 if let Some(geometry) = output.and_then(|o| self.control_output_geometry(&o)) {
                     if self.control.runs[i].geometry.as_ref() != Some(&geometry) {
-                        if let Some(revision) = self.control.runs[i].revision.checked_add(1) {
-                            self.control.runs[i].revision = revision;
-                            self.control.runs[i].geometry = Some(geometry);
-                            self.control_geometry(i);
-                            self.control_changed(i, 0);
-                        } else {
-                            self.control_revoke(i, Revocation::Stopped);
-                        }
+                        self.control.runs[i].geometry = Some(geometry);
+                        self.control_advance(i);
                     }
                 }
             }
@@ -568,6 +577,7 @@ impl Cupertino {
         run.capabilities = bits;
         run.geometry = Some(geometry);
         run.revision = 1;
+        run.placements = None;
         run.asked = asked;
         run.consent_shown = false;
         // what is needed and not asked is allowed by the app's remembered answers
@@ -875,6 +885,7 @@ impl Dispatch<CupertinoControlV1, ()> for Cupertino {
                     capabilities: 0,
                     geometry: None,
                     revision: 0,
+                    placements: None,
                     last_serial: 0,
                     consent_since: Instant::now(),
                     replies: VecDeque::new(),

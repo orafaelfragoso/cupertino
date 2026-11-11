@@ -20,6 +20,8 @@ pub(super) struct Seen {
     epoch: u64,
     phase: u32,
     revision: u32,
+    /// The last semantic revision announced to an observing run.
+    semantic: u64,
     completed: Vec<u32>,
     refused: Vec<(u32, session::Refusal)>,
 }
@@ -41,6 +43,10 @@ impl Dispatch<Session, ()> for Capturer {
             } => s.epoch = (u64::from(epoch_hi) << 32) | u64::from(epoch_lo),
             session::Event::Status { phase, .. } => s.phase = phase.into(),
             session::Event::Geometry { revision, .. } => s.revision = revision,
+            session::Event::SemanticChanged {
+                revision_hi,
+                revision_lo,
+            } => s.semantic = (u64::from(revision_hi) << 32) | u64::from(revision_lo),
             session::Event::Completed { serial } => s.completed.push(serial),
             session::Event::Refused { serial, reason } => {
                 s.refused.push((serial, reason.into_result().unwrap()))

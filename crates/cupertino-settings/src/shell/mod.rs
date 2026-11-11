@@ -712,6 +712,7 @@ impl Application for SettingsApp {
 #[cfg(test)]
 mod tests {
     mod layout;
+    mod privacy;
     mod repaint;
     mod semantics;
 
@@ -920,6 +921,7 @@ mod tests {
             data_control: Some(dir.join("data-control.conf")),
             screen_sharing: None,
             notifications: Some(dir.join("notifications.conf")),
+            desktop_control: Some(dir.join("desktop-control.conf")),
             // shown as installed; Settings never starts it
             screen_reader: Some(std::path::PathBuf::from("/usr/bin/orca")),
         }

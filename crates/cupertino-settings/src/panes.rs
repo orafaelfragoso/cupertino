@@ -6,6 +6,7 @@ use cupertino_defaults::accessibility::{
     AccessibilitySettings, ColorFilter, DisplayOption, DisplayOptions, SYSTEM_KEYS,
 };
 use cupertino_defaults::compositor::{MinimizeEffectName, ScrollBarsName};
+use cupertino_defaults::desktop_control::{App, Decision, Service};
 use cupertino_defaults::dock::{ActionTarget, Position, Trigger};
 use cupertino_defaults::keyboard::{FnKey, ModifierProfile};
 use cupertino_defaults::menubar::{HourCycle, ShowDate};
@@ -20,6 +21,7 @@ use cupertino_assets::WallpaperFile;
 use crate::about;
 use crate::clipboard::{self, State};
 use crate::controls::{Control, Tile, Value, MUTE_BELOW};
+use crate::desktop_control;
 use crate::live::{
     display_name, duration_text, BatteryState, Bluetooth, Live, LoginScreen, Mouse, Reading, Wifi,
 };
@@ -121,6 +123,9 @@ pub enum ControlId {
     ClipboardAdd,
     /// A grant of `screen-sharing.conf`, by index: Forget.
     ScreenSharingGrant(usize),
+    /// An app of `desktop-control.conf` for a service, by index among that service's: its switch (on allows, off
+    /// denies) and Forget.
+    DesktopControlApp(Service, usize),
     /// Whether notifications show on the lock screen, for every application without its own choice.
     NotificationsLockScreen,
     /// How much of a notification shows, for every application without its own choice.
@@ -193,6 +198,17 @@ pub enum Effect {
     /// ([`Settings::forget_grant`](crate::settings::Settings::forget_grant)): the portal adds to the file while the
     /// pane is open, so the pane's own list is never written back.
     ForgetGrant(String),
+    /// Record this answer of an app in `desktop-control.conf`, as the file holds it now
+    /// ([`Settings::decide_app`](crate::settings::Settings::decide_app)): the compositor adds to the file while the
+    /// pane is open, so the pane's own list is never written back.
+    DecideApp {
+        service: Service,
+        app: App,
+        decision: Decision,
+    },
+    /// Take the answer of an app out of `desktop-control.conf`, so it asks again
+    /// ([`Settings::forget_app`](crate::settings::Settings::forget_app)).
+    ForgetApp { service: Service, app: App },
     /// The change is refused for this reason; nothing changed.
     Refuse(String),
 }
@@ -335,7 +351,8 @@ fn row(id: ControlId, label: impl Into<String>, control: Control, backend: Backe
 }
 
 /// Clipboard Access (the entries of `data-control.conf`, the lines that allow nothing, and the add buttons), then
-/// Screen Sharing (the grants of `screen-sharing.conf`).
+/// Screen Sharing (the grants of `screen-sharing.conf`), then Desktop Control and Screen Capture (the answers of
+/// `desktop-control.conf`).
 fn privacy_sections(settings: &Settings, live: &Live) -> Vec<Section> {
     let list = &settings.clipboard;
     let backend = Backend::Key(File::DataControl, "allow");
@@ -409,7 +426,62 @@ fn privacy_sections(settings: &Settings, live: &Live) -> Vec<Section> {
             footer: Some(CLIPBOARD_FOOTER.to_string()),
         },
         screen_sharing_section(settings, live),
+        desktop_control_section(Service::Control, settings, live),
+        desktop_control_section(Service::Capture, settings, live),
     ]
+}
+
+/// Desktop Control or Screen Capture: each app that asked for `service`, in the order the file lists them, with its
+/// switch (on: allowed, off: denied) and Forget.
+fn desktop_control_section(service: Service, settings: &Settings, live: &Live) -> Section {
+    let answers = &settings.desktop_control;
+    let backend = Backend::Key(File::DesktopControl, "allow");
+    let none = || Control::Text {
+        value: String::new(),
+    };
+    let mut rows = Vec::new();
+    if let Some(e) = &answers.unreadable {
+        rows.push(Row {
+            error: Some(e.clone()),
+            ..row(ControlId::Reading, CLIPBOARD_UNREADABLE, none(), backend)
+        });
+    }
+    for (i, entry) in answers.conf.service(service).enumerate() {
+        let shown = desktop_control::identity(&entry.app, &live.apps);
+        rows.push(Row {
+            icon: Some(shown.icon.unwrap_or_default()),
+            detail: shown.detail,
+            // nothing may be written over a file that is refused
+            disabled: answers
+                .unreadable
+                .as_ref()
+                .map(|_| CLIPBOARD_UNREADABLE.to_string()),
+            ..row(
+                ControlId::DesktopControlApp(service, i),
+                shown.name,
+                Control::ButtonAndSwitch {
+                    title: "Forget".to_string(),
+                    on: entry.decision == Decision::Allow,
+                },
+                backend,
+            )
+        });
+    }
+    let (empty, footer) = match service {
+        Service::Control => (DESKTOP_CONTROL_EMPTY, DESKTOP_CONTROL_FOOTER),
+        Service::Capture => (SCREEN_CAPTURE_EMPTY, SCREEN_CAPTURE_FOOTER),
+    };
+    if rows.is_empty() {
+        rows.push(Row {
+            detail: Some(empty.to_string()),
+            ..row(ControlId::Reading, "No applications", none(), backend)
+        });
+    }
+    Section {
+        header: header(desktop_control::title(service)),
+        rows,
+        footer: Some(footer.to_string()),
+    }
 }
 
 /// Screen Sharing: each app that may share a display again without asking, with Forget.
@@ -455,6 +527,18 @@ const CLIPBOARD_UNREADABLE: &str = "The list can't be read";
 /// The footer of Screen Sharing: what a remembered app can do, and what Forget does.
 const SCREEN_SHARING_FOOTER: &str =
     "These apps can share the display shown without asking you again. Forget one to be asked next time.";
+/// The footer of Desktop Control: what an app that is on can do, and what its switch and Forget do.
+const DESKTOP_CONTROL_FOOTER: &str =
+    "Apps that are on can see your windows and their controls and use the pointer and \
+     keyboard. Turning one off stops it at once; Forget one to be asked next time.";
+/// The footer of Screen Capture: what an app that is on can do, and what its switch and Forget do.
+const SCREEN_CAPTURE_FOOTER: &str =
+    "Apps that are on can take pictures of your screen. Turning one off stops it at \
+     once; Forget one to be asked next time.";
+/// The second line of an empty Desktop Control list: when an app shows there.
+const DESKTOP_CONTROL_EMPTY: &str = "Apps show here after they ask to control the desktop.";
+/// The second line of an empty Screen Capture list: when an app shows there.
+const SCREEN_CAPTURE_EMPTY: &str = "Apps show here after they ask to capture the screen.";
 /// One line of footer: what an allowed application can do (wording approximate).
 const CLIPBOARD_FOOTER: &str = "These apps can read and change what you copy, at any time.";
 
@@ -2727,6 +2811,38 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             settings.screen_sharing.conf.revoke(&id);
             vec![Effect::ForgetGrant(id)]
         }
+        // the row shows the change at once; the file gets it through the effect, and the compositor ends a session the
+        // app no longer may hold
+        ControlId::DesktopControlApp(service, i) => {
+            let answers = &mut settings.desktop_control;
+            if answers.unreadable.is_some() {
+                return vec![Effect::Refuse(CLIPBOARD_UNREADABLE.to_string())];
+            }
+            let Some(app) = answers.conf.service(service).nth(i).map(|e| e.app.clone()) else {
+                return Vec::new();
+            };
+            match value {
+                Value::Bool(on) => {
+                    let decision = if on { Decision::Allow } else { Decision::Deny };
+                    // an app read from the file can always be written back; a line that cannot hold it is refused
+                    if answers.conf.set(service, &app, decision).is_err() {
+                        return vec![Effect::Refuse(
+                            "This app's answer can't be saved.".to_string(),
+                        )];
+                    }
+                    vec![Effect::DecideApp {
+                        service,
+                        app,
+                        decision,
+                    }]
+                }
+                Value::Index(0) => {
+                    answers.conf.forget(service, &app);
+                    vec![Effect::ForgetApp { service, app }]
+                }
+                _ => Vec::new(),
+            }
+        }
         ControlId::MouseNatural => {
             settings.compositor.mouse_natural_scrolling = Some(bool_of(value));
             store(File::Compositor)
@@ -2760,6 +2876,7 @@ mod tests {
             display_height: 1080.0,
             clipboard: crate::clipboard::List::default(),
             screen_sharing: crate::screen_sharing::Grants::default(),
+            desktop_control: crate::desktop_control::Answers::default(),
             notifications: cupertino_defaults::notifications::NotificationSettings::default(),
         }
     }
@@ -3208,6 +3325,9 @@ mod tests {
                     Control::Tiles { tiles, .. } => (0..tiles.len()).map(Value::Index).collect(),
                     Control::Preview { .. } => Vec::new(),
                     Control::Button { .. } => vec![Value::Index(0)],
+                    Control::ButtonAndSwitch { .. } => {
+                        vec![Value::Index(0), Value::Bool(false), Value::Bool(true)]
+                    }
                     Control::Slider { stops: Some(n), .. } => (0..*n).map(Value::Index).collect(),
                     Control::Slider { stops: None, .. } | Control::Level { .. } => vec![
                         Value::Fraction(0.0),

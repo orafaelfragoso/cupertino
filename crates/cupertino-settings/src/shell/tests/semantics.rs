@@ -200,7 +200,12 @@ fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state()
         (
             PaneId::Privacy,
             "Privacy & Security",
-            &["Button \"Clipboard Access\" focusable"],
+            &[
+                "Button \"Clipboard Access\" focusable",
+                "Button \"Screen Sharing\" focusable",
+                "Button \"Desktop Control\" focusable",
+                "Button \"Screen Capture\" focusable",
+            ],
         ),
         (
             PaneId::Keyboard,
@@ -248,7 +253,7 @@ fn sub_page_chrome(pane: &str, title: &str) -> [String; 6] {
 #[test]
 fn each_sub_page_reads_its_controls_by_role_name_value_and_state() {
     let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
-    let pages: [(PaneId, &str, SubPage, &[&str]); 5] = [
+    let pages: [(PaneId, &str, SubPage, &[&str]); 7] = [
         (
             PaneId::Accessibility,
             "Accessibility",
@@ -304,6 +309,26 @@ fn each_sub_page_reads_its_controls_by_role_name_value_and_state() {
                 "Button \"Add App…\" focusable",
                 "Button \"Browse…\" focusable",
                 "StaticText \"These apps can read and change what you copy, at any time.\"",
+            ],
+        ),
+        (
+            PaneId::Privacy,
+            "Privacy & Security",
+            SubPage::DesktopControl,
+            &[
+                "StaticText \"No applications\"",
+                "StaticText \"Apps show here after they ask to control the desktop.\"",
+                "StaticText \"Apps that are on can see your windows and their controls and use the pointer and keyboard. Turning one off stops it at once; Forget one to be asked next time.\"",
+            ],
+        ),
+        (
+            PaneId::Privacy,
+            "Privacy & Security",
+            SubPage::ScreenCapture,
+            &[
+                "StaticText \"No applications\"",
+                "StaticText \"Apps show here after they ask to capture the screen.\"",
+                "StaticText \"Apps that are on can take pictures of your screen. Turning one off stops it at once; Forget one to be asked next time.\"",
             ],
         ),
     ];

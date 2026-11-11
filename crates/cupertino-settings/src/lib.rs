@@ -11,6 +11,7 @@ pub mod agent;
 pub mod bluez;
 pub mod clipboard;
 pub mod controls;
+pub mod desktop_control;
 pub mod geom;
 pub mod hardware;
 pub mod history;

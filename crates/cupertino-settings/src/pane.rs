@@ -261,7 +261,7 @@ pub const PANES: [Pane; 18] = [
         "symbol.privacy.fill",
         Enclosure::Blue,
         Tier::File,
-        &["Clipboard Access"],
+        &["Clipboard Access", "Desktop Control", "Screen Capture"],
         &[
             "clipboard",
             "copy",
@@ -269,6 +269,10 @@ pub const PANES: [Pane; 18] = [
             "clipboard manager",
             "clipboard history",
             "data control",
+            "automation",
+            "remote control",
+            "agent",
+            "screenshot",
         ],
     ),
     pane(

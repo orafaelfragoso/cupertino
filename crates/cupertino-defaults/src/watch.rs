@@ -50,11 +50,21 @@ enum Msg {
 
 /// The contents of `path` as the watcher compares them: `None` when the file does not exist.
 fn snapshot(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = match std::fs::OpenOptions::new()
+        .read(true)
+        // without O_NONBLOCK a FIFO put at a watched path would block the open until a writer came
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(Some(bytes))
 }
 
 /// The directory a file is watched through.
@@ -240,6 +250,27 @@ mod tests {
         });
         assert_eq!(received, Ok(WatchEvent::Changed(vec![path])));
         assert_eq!(reports(&rx, WINDOW), vec![]);
+    }
+
+    #[test]
+    fn a_fifo_at_a_watched_path_does_not_block_the_watch() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("desktop-control.conf");
+        let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        // Safety: `name` is a NUL-terminated path that outlives the call.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (done_tx, done_rx) = mpsc::channel();
+        let watched = path.clone();
+        std::thread::spawn(move || {
+            let started = ConfigWatcher::new(vec![watched], |_| ()).map(drop);
+            let _ = done_tx.send(started.map_err(|e| e.to_string()));
+        });
+        assert_eq!(
+            done_rx.recv_timeout(WINDOW),
+            Ok(Ok(())),
+            "a FIFO without a writer reads as empty"
+        );
+        assert_eq!(snapshot(&path).unwrap(), Some(Vec::new()));
     }
 
     #[test]

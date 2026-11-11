@@ -146,6 +146,9 @@ pub struct State {
     /// An activation token another start of Settings handed over, for the window to raise itself with.
     pub(crate) activation: Option<String>,
     _files: Option<ConfigWatcher>,
+    /// Watches `desktop-control.conf`, which the compositor writes when an app first asks, on its own: a file that
+    /// can't be read stops no other file's watch.
+    _answers: Option<ConfigWatcher>,
 }
 
 impl State {
@@ -190,6 +193,14 @@ impl State {
                 None
             }
         };
+        let answers = paths.desktop_control.clone().and_then(|path| {
+            let to_loop = notify.clone();
+            ConfigWatcher::new(vec![path], move |event| to_loop(Background::Files(event)))
+                .inspect_err(|e| {
+                    eprintln!("cupertino-settings: cannot watch desktop-control.conf: {e}; the Privacy pane shows its changes when it opens")
+                })
+                .ok()
+        });
         let display = settings.accessibility.display;
         let screen_reader_installed = paths.screen_reader.is_some();
         let mut state = State {
@@ -227,6 +238,7 @@ impl State {
             login_saving: false,
             activation: None,
             _files: files,
+            _answers: answers,
         };
         state.sync_accessibility();
         state.enter_pane(None, pane)?;
@@ -354,6 +366,7 @@ impl State {
         if to == PaneId::Privacy {
             self.settings.reload_clipboard(&self.paths);
             self.settings.reload_screen_sharing(&self.paths);
+            self.settings.reload_desktop_control(&self.paths);
         }
         if matches!(to, PaneId::Privacy | PaneId::Notifications) {
             let (locale, visibility) = (
@@ -523,6 +536,16 @@ impl State {
                 }
                 Effect::Refuse(reason) => Err(reason),
                 Effect::ForgetGrant(grant) => self.settings.forget_grant(&self.paths, &grant),
+                Effect::DecideApp {
+                    service,
+                    app,
+                    decision,
+                } => self
+                    .settings
+                    .decide_app(&self.paths, service, &app, decision),
+                Effect::ForgetApp { service, app } => {
+                    self.settings.forget_app(&self.paths, service, &app)
+                }
                 Effect::Store(file) => {
                     let stored = self
                         .settings
@@ -880,9 +903,17 @@ impl State {
                     self.errors.push((ControlId::LoginScreen, e));
                 }
             }
-            Background::Files(WatchEvent::Changed(_)) => {
+            Background::Files(WatchEvent::Changed(changed)) => {
                 if let Err(e) = self.settings.reload(&self.paths) {
                     eprintln!("cupertino-settings: the settings could not be read again: {e}");
+                }
+                if self
+                    .paths
+                    .desktop_control
+                    .as_ref()
+                    .is_some_and(|p| changed.contains(p))
+                {
+                    self.settings.reload_desktop_control(&self.paths);
                 }
                 self.sync_accessibility();
             }

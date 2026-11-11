@@ -12,6 +12,7 @@ use cupertino_defaults::accessibility::{
 use cupertino_defaults::compositor::{CompositorSettings, MinimizeEffectName, ScrollBarsName};
 use cupertino_defaults::conf::Problem;
 use cupertino_defaults::data_control::DataControlConf;
+use cupertino_defaults::desktop_control::{App, Decision, DesktopControlConf, Service};
 use cupertino_defaults::dock::{sanitize_large_size, sanitize_tile_size, DockSettings, Position};
 use cupertino_defaults::keyboard::KeyboardSettings;
 use cupertino_defaults::menubar::{ClockSettings, MenuBarSettings};
@@ -20,7 +21,7 @@ use cupertino_defaults::power::PowerSettings;
 use cupertino_defaults::screen_sharing::ScreenSharingConf;
 use cupertino_defaults::system::read_root_file;
 
-use crate::{clipboard, mapping, screen_sharing};
+use crate::{clipboard, desktop_control, mapping, screen_sharing};
 
 /// A settings file the panes write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -41,10 +42,13 @@ pub enum File {
     ScreenSharing,
     /// `notifications.conf`, read by the notification centre: what notifications show on the lock screen.
     Notifications,
+    /// `desktop-control.conf`, read and written by the window server: the apps that may operate the desktop or take
+    /// images of the screen.
+    DesktopControl,
 }
 
 impl File {
-    pub const ALL: [File; 8] = [
+    pub const ALL: [File; 9] = [
         File::Dock,
         File::Compositor,
         File::MenuBar,
@@ -53,15 +57,18 @@ impl File {
         File::DataControl,
         File::ScreenSharing,
         File::Notifications,
+        File::DesktopControl,
     ];
 
     /// The process that applies the file.
     pub fn owner(self) -> &'static str {
         match self {
             File::Dock => "the dock",
-            File::Compositor | File::Keyboard | File::Power | File::DataControl => {
-                "the window server"
-            }
+            File::Compositor
+            | File::Keyboard
+            | File::Power
+            | File::DataControl
+            | File::DesktopControl => "the window server",
             File::MenuBar => "the menu bar",
             File::ScreenSharing => "the portal",
             File::Notifications => "the notification centre",
@@ -70,7 +77,7 @@ impl File {
 
     /// Whether the owning process applies a change of the file while it runs. All of them do (the live settings of
     /// the server's `live` module, the dock's, the menu bar's and the notification centre's watchers; the portal reads its
-    /// file at each restore).
+    /// file at each restore; the server follows `desktop-control.conf` and ends a session its app may no longer hold).
     pub fn reloads(self) -> bool {
         true
     }
@@ -92,6 +99,7 @@ pub struct Paths {
     pub data_control: Option<PathBuf>,
     pub screen_sharing: Option<PathBuf>,
     pub notifications: Option<PathBuf>,
+    pub desktop_control: Option<PathBuf>,
     /// The installed screen reader (`installed_screen_reader`), which the session's compositor runs; `None` without one.
     /// Settings only shows whether there is one: it never starts it.
     pub screen_reader: Option<PathBuf>,
@@ -110,6 +118,7 @@ impl Paths {
             data_control: DataControlConf::path(),
             screen_sharing: ScreenSharingConf::path(),
             notifications: NotificationSettings::path(),
+            desktop_control: DesktopControlConf::path(),
             screen_reader: cupertino_defaults::accessibility::installed_screen_reader(),
         }
     }
@@ -124,6 +133,7 @@ impl Paths {
             File::DataControl => self.data_control.as_ref(),
             File::ScreenSharing => self.screen_sharing.as_ref(),
             File::Notifications => self.notifications.as_ref(),
+            File::DesktopControl => self.desktop_control.as_ref(),
         }
     }
 }
@@ -143,6 +153,9 @@ pub struct Settings {
     pub screen_sharing: screen_sharing::Grants,
     /// `notifications.conf`: the lock screen's policy, by default and by application.
     pub notifications: NotificationSettings,
+    /// `desktop-control.conf`, empty without a path. A [`Settings::reload`] keeps it as the pane shows it, so that a
+    /// committed row names the app it showed; [`Settings::reload_desktop_control`] reads it again.
+    pub desktop_control: desktop_control::Answers,
     /// The height of the output the dock sits on: its default tile size depends on it (`default_tile_size`).
     pub display_height: f64,
 }
@@ -272,6 +285,11 @@ impl Settings {
             )?,
             None => NotificationSettings::default(),
         };
+        // a row commits by its place in the list shown: the list read again could hold another app there
+        let desktop_control = match last_good {
+            Some(last) => last.desktop_control.clone(),
+            None => load_desktop_control(paths),
+        };
         Ok(Settings {
             dock,
             compositor,
@@ -282,6 +300,7 @@ impl Settings {
             clipboard,
             screen_sharing,
             notifications,
+            desktop_control,
             display_height,
         })
     }
@@ -395,6 +414,58 @@ impl Settings {
         forgotten
     }
 
+    /// Read `desktop-control.conf` again: when the Privacy pane shows, when the file changes and after each change the
+    /// pane makes. The compositor adds an app to it the first time the app asks.
+    pub fn reload_desktop_control(&mut self, paths: &Paths) {
+        self.desktop_control = load_desktop_control(paths);
+    }
+
+    /// Record `decision` for `app` and `service` in `desktop-control.conf` and read the file again. The file is read
+    /// and written under its lock ([`DesktopControlConf::update`]) and only that app's answer changes, while the file
+    /// still holds it: an app removed meanwhile stays removed and asks again. `Err` is the sentence the pane shows;
+    /// nothing was written. Either way the pane then shows the file as it is.
+    pub fn decide_app(
+        &mut self,
+        paths: &Paths,
+        service: Service,
+        app: &App,
+        decision: Decision,
+    ) -> Result<(), String> {
+        self.change_desktop_control(paths, |conf| {
+            if conf.decision(service, app).is_some() {
+                conf.set(service, app, decision).map_err(io::Error::other)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Take the answer of `app` for `service` out of `desktop-control.conf`, so the app asks again at its next
+    /// request, and read the file again; as [`Settings::decide_app`], only that answer goes.
+    pub fn forget_app(&mut self, paths: &Paths, service: Service, app: &App) -> Result<(), String> {
+        self.change_desktop_control(paths, |conf| {
+            conf.forget(service, app);
+            Ok(())
+        })
+    }
+
+    fn change_desktop_control(
+        &mut self,
+        paths: &Paths,
+        change: impl FnOnce(&mut DesktopControlConf) -> io::Result<()>,
+    ) -> Result<(), String> {
+        let path = paths
+            .desktop_control
+            .as_deref()
+            .ok_or_else(|| StoreError::NoPath(File::DesktopControl).to_string())?;
+        let changed = DesktopControlConf::update(path, change).map_err(|e| {
+            eprintln!("cupertino-settings: desktop-control.conf could not be changed: {e}");
+            StoreError::Io(File::DesktopControl, e).to_string()
+        });
+        // the pane showed the change at once; it shows the file as it is, so a change not made shows undone
+        self.reload_desktop_control(paths);
+        changed
+    }
+
     /// Let `program` use the clipboard: its entry ([`clipboard::entry_for`], so a link becomes its file) is added and
     /// the file written. `Err` is the sentence the chooser shows; nothing changed.
     pub fn allow_clipboard(
@@ -462,6 +533,11 @@ impl Settings {
             File::ScreenSharing => Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "screen-sharing.conf is changed one grant at a time",
+            )),
+            // the compositor adds answers while Settings runs, so the list read earlier is never written back whole
+            File::DesktopControl => Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "desktop-control.conf is changed one answer at a time",
             )),
         };
         stored.map_err(|e| {
@@ -547,6 +623,15 @@ impl Settings {
     pub fn repeat_interval_ms(&self) -> u32 {
         self.keyboard.repeat_interval_ms.unwrap_or(83)
     }
+}
+
+/// `desktop-control.conf` as the pane shows it; no answer without a path.
+fn load_desktop_control(paths: &Paths) -> desktop_control::Answers {
+    paths
+        .desktop_control
+        .as_deref()
+        .map(desktop_control::Answers::load)
+        .unwrap_or_default()
 }
 
 /// The machine's accessibility defaults in `path` (`SYSTEM_ACCESSIBILITY`) as the login screen reads them: `None`

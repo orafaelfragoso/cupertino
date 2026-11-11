@@ -51,6 +51,11 @@ pub enum Control {
     Buttons {
         titles: Vec<String>,
     },
+    /// A push button, then a switch: a press of the button commits `Value::Index(0)`, the switch its new state.
+    ButtonAndSwitch {
+        title: String,
+        on: bool,
+    },
     /// A value that is only shown.
     Text {
         value: String,

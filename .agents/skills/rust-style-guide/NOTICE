@@ -1,0 +1,18 @@
+Attribution for the adapted text in SKILL.md and references/
+
+Original work: Rust Style Guide
+Author and publisher: Google, Google Style Guides
+Source: https://google.github.io/styleguide/rustguide.html
+Source revision: 110139e6e9b1d1d6803fc0b2dbca1d2be979a024
+Snapshot date: 2026-11-11
+License: Creative Commons Attribution 3.0 Unported (CC-BY-3.0)
+License URI: https://creativecommons.org/licenses/by/3.0/
+The complete license text is included in license.txt.
+
+Changes: Reorganized and paraphrased as a standalone, generically named Rust
+style skill. Organized rules, exceptions, rationale, and labeled bad/good
+examples into local topic references with a short skill entry point. Generalized
+codebase-specific policies into conditional integration rules. Removed
+operational dependencies on the source website and external style guides.
+
+This notice supplies attribution only. It does not imply endorsement.

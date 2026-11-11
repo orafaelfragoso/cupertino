@@ -1,0 +1,5 @@
+interface:
+  display_name: "Cupertino Desktop"
+  short_description: "Operate and test the live Cupertino desktop"
+policy:
+  allow_implicit_invocation: true

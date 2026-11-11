@@ -37,16 +37,16 @@ cover every topic.
 
 | When working on | Read |
 | --- | --- |
-| Modules, file layout, imports, and re-exports | [Code organization](references/code-organization.md) |
-| Formatter settings, literals, and formatting opt-outs | [Formatting](references/formatting.md) |
-| Ownership, borrowing, cloning, and shared pointers | [Ownership and borrowing](references/ownership-and-borrowing.md) |
-| Parameters, iterators, conversions, booleans, and errors | [Function interfaces](references/function-interfaces.md) |
-| Newtypes, aliases, tuples, and named fields | [Types](references/types.md) |
-| Trait selection, derives, dispatch, extensions, and defaults | [Traits](references/traits.md) |
-| Mutex poison and host concurrency choices | [Concurrency](references/concurrency.md) |
-| Macros, ordinary abstractions, and code generation | [Macros](references/macros.md) |
-| Method names, lifetimes, constructors, getters, and setters | [Naming](references/naming.md) |
-| Public contracts, examples, panic cases, and safety docs | [Documentation](references/documentation.md) |
-| Unsafe, stable features, API evolution, attributes, and initialization | [Language features and APIs](references/language-features-and-apis.md) |
-| Inference, matching, assertions, iteration, panics, and strings | [Implementation](references/implementation.md) |
-| Integrated builds, platform policies, and test harnesses | [Platform integration](references/platform-integration.md) |
+| Modules, file layout, imports, and re-exports | [Code organization](guides/code-organization.md) |
+| Formatter settings, literals, and formatting opt-outs | [Formatting](guides/formatting.md) |
+| Ownership, borrowing, cloning, and shared pointers | [Ownership and borrowing](guides/ownership-and-borrowing.md) |
+| Parameters, iterators, conversions, booleans, and errors | [Function interfaces](guides/function-interfaces.md) |
+| Newtypes, aliases, tuples, and named fields | [Types](guides/types.md) |
+| Trait selection, derives, dispatch, extensions, and defaults | [Traits](guides/traits.md) |
+| Mutex poison and host concurrency choices | [Concurrency](guides/concurrency.md) |
+| Macros, ordinary abstractions, and code generation | [Macros](guides/macros.md) |
+| Method names, lifetimes, constructors, getters, and setters | [Naming](guides/naming.md) |
+| Public contracts, examples, panic cases, and safety docs | [Documentation](guides/documentation.md) |
+| Unsafe, stable features, API evolution, attributes, and initialization | [Language features and APIs](guides/language-features-and-apis.md) |
+| Inference, matching, assertions, iteration, panics, and strings | [Implementation](guides/implementation.md) |
+| Integrated builds, platform policies, and test harnesses | [Platform integration](guides/platform-integration.md) |

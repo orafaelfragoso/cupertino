@@ -7,7 +7,7 @@ description: Control and test the live Cupertino desktop from inside its session
 
 Use the Cupertino MCP exposed by the host. The compositor owns permission and input routing; this skill works with either Codex or Claude Code and requires no provider SDK. Discover the host's actual tools before calling them: names below are MCP tool names, commonly exposed as `mcp__cupertino__NAME`. Do not assume a particular JavaScript wrapper exists.
 
-If tools are absent, the bridge cannot connect, or you need to install this skill elsewhere, read [connection.md](references/connection.md). Prefer this native MCP for Cupertino desktop interaction. A shell command or direct app-state edit cannot demonstrate that a desktop interaction worked.
+If tools are absent or the bridge cannot connect, read [connection.md](guides/connection.md). Prefer this native MCP for Cupertino desktop interaction. A shell command or direct app-state edit cannot demonstrate that a desktop interaction worked.
 
 ## Select the session and obtain consent
 
@@ -79,4 +79,4 @@ At completion, verify an observable result: the intended app/value/state after t
 
 ## Testing changes inside Cupertino
 
-When editing Cupertino itself, follow the checkout's `AGENTS.md` and installed-session strategy in `docs/src/building.md`. Build only affected binaries and necessary consumers; test implementation separately. Replacing an application/controller is different from replacing the compositor: preserve work, trusted paths, exact process identity and rollback artifacts. Test server changes nested/headless and stage for the next planned login. Never restart the active compositor/session just to enable a tool or finish a test. Report which fixes are active and which are only staged.
+When editing Cupertino itself, follow the checkout's root agent instructions and the installed-session strategy in `docs/src/building.md`. Build only affected binaries and necessary consumers; test implementation separately. Replacing an application/controller is different from replacing the compositor: preserve work, trusted paths, exact process identity and rollback artifacts. Test server changes nested/headless and stage for the next planned login. Never restart the active compositor/session just to enable a tool or finish a test. Report which fixes are active and which are only staged.

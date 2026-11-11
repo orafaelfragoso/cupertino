@@ -1,0 +1,6 @@
+interface:
+  display_name: "Codebase Review"
+  short_description: "Review Cupertino code with evidence and a limited budget"
+  default_prompt: "Use $review-codebase to review this checkout and report the most important supported problems within a focused review budget."
+policy:
+  allow_implicit_invocation: true

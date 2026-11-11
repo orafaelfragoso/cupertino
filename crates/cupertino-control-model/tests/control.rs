@@ -316,3 +316,24 @@ fn runs_hold_input_like_separate_devices_and_one_revoke_releases_only_its_own() 
     );
     assert_eq!(owners.held_count(), 0);
 }
+
+#[test]
+fn holds_names_only_the_sources_holding_an_input_down() {
+    let a = InputSource::Controller(epoch(1));
+    let b = InputSource::Controller(epoch(2));
+    let button = Input::Button(272);
+    let mut owners = InputOwners::default();
+    assert!(!owners.holds(a, button));
+    owners.set(a, button, true).unwrap();
+    owners.set(b, button, true).unwrap();
+    assert!(owners.holds(a, button) && owners.holds(b, button));
+    assert!(
+        !owners.holds(a, Input::Key(272)),
+        "a key and a button with one code are apart"
+    );
+    owners.set(a, button, false).unwrap();
+    assert!(!owners.holds(a, button));
+    assert!(owners.holds(b, button), "b still holds it");
+    owners.release_source(b);
+    assert!(!owners.holds(b, button));
+}

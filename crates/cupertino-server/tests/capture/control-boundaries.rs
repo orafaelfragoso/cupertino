@@ -343,3 +343,137 @@ fn injected_reserved_keys_cannot_stop_lock_or_power_the_session() {
             .process_input_event(common::absolute::key(code, false));
     }
 }
+
+/// Reconfigure the output so its geometry revision advances past `revision`.
+fn revise_geometry(h: &mut Harness, c: &mut Controller, revision: u32) {
+    let id = h.state.outputs[0].id;
+    let mode = h.state.outputs[0].output.current_mode().unwrap();
+    let position = h.state.outputs[0].output.current_location();
+    h.state.configure_output(
+        id,
+        mode,
+        1.0,
+        smithay::utils::Transform::Normal,
+        (position.x + 40, position.y),
+    );
+    h.pump_until(&mut c.client, "a revised geometry", |s| {
+        s.control_seen.revision > revision
+    });
+}
+
+/// `button` or `key` request `code` in `state` carrying `revision`.
+fn send_input(
+    h: &mut Harness,
+    c: &mut Controller,
+    button: bool,
+    revision: u32,
+    code: u32,
+    state: session::KeyState,
+) -> Result<(), session::Refusal> {
+    let n = c.serial();
+    if button {
+        c.session.button(n, c.hi, c.lo, revision, code, state);
+    } else {
+        c.session.key(n, c.hi, c.lo, revision, code, state);
+    }
+    c.ack(h, n)
+}
+
+/// A click can change the layout it was made against (one that closes a menu), so the release of a button the run
+/// holds goes through with the revision of the press. Anything else carrying that revision is still refused.
+#[test]
+fn a_held_button_is_released_with_the_revision_of_its_press() {
+    use session::KeyState::{Pressed, Released};
+    let Some(mut h) = Harness::new() else { return };
+    // the panel first, so the window the run clicks is above it
+    let (mut app, authority) = authority(&mut h);
+    let (mut target, frame) = mapped_app_named(&mut h, "org.example.controlled", None);
+    let qh = target.qh();
+    let seat: wl_seat::WlSeat = target.globals.bind(&qh, 1..=7, ()).unwrap();
+    let _pointer = seat.get_pointer(&qh, ());
+    h.idle(&mut target, 3);
+    let mut c = Controller::new(&mut h);
+    c.start(&mut h, 15).unwrap();
+    approve(&mut h, &mut app, &authority, &mut c);
+    c.motion(&mut h, frame.x + frame.w / 2.0, frame.y + frame.h / 2.0)
+        .unwrap();
+    h.idle(&mut target, 3);
+    target.state.control_buttons.clear();
+    let pressed_at = c.client.state.control_seen.revision;
+    c.button(&mut h, 272, true).unwrap();
+    revise_geometry(&mut h, &mut c, pressed_at);
+
+    assert_eq!(
+        send_input(&mut h, &mut c, true, pressed_at, 273, Pressed),
+        Err(session::Refusal::StaleGeometry),
+        "a press needs the current revision"
+    );
+    assert_eq!(
+        send_input(&mut h, &mut c, true, pressed_at, 273, Released),
+        Err(session::Refusal::StaleGeometry),
+        "a button the run does not hold is not released through an old revision"
+    );
+    assert_eq!(
+        send_input(&mut h, &mut c, true, pressed_at, 272, Released),
+        Ok(())
+    );
+    h.pump_until(&mut target, "the release", |s| s.control_buttons.len() == 2);
+    assert_eq!(target.state.control_buttons, [(272, true), (272, false)]);
+    assert_eq!(
+        send_input(&mut h, &mut c, true, pressed_at, 272, Released),
+        Err(session::Refusal::StaleGeometry),
+        "once released, the button is not held any more"
+    );
+    assert_eq!(c.client.state.control_seen.phase, 2);
+}
+
+/// The same for a key: a key can open or close a window, so the release of a key the run holds goes through with the
+/// revision of its press.
+#[test]
+fn a_held_key_is_released_with_the_revision_of_its_press() {
+    use session::KeyState::{Pressed, Released};
+    let Some(mut h) = Harness::new() else { return };
+    let (mut target, _) = mapped_app_named(&mut h, "org.example.controlled", None);
+    let qh = target.qh();
+    let seat: wl_seat::WlSeat = target.globals.bind(&qh, 1..=7, ()).unwrap();
+    let _keyboard = seat.get_keyboard(&qh, ());
+    h.idle(&mut target, 3);
+    let target_id = h.state.wm.key_window().unwrap();
+    let (mut app, authority) = authority(&mut h);
+    let mut c = Controller::new(&mut h);
+    c.start(&mut h, 15).unwrap();
+    approve(&mut h, &mut app, &authority, &mut c);
+    h.state
+        .command(cupertino_wm::Command::FocusWindow { window: target_id });
+    let pressed_at = c.client.state.control_seen.revision;
+    c.key(&mut h, 30, true).unwrap();
+    revise_geometry(&mut h, &mut c, pressed_at);
+
+    assert_eq!(
+        send_input(&mut h, &mut c, false, pressed_at, 31, Pressed),
+        Err(session::Refusal::StaleGeometry),
+        "a press needs the current revision"
+    );
+    assert_eq!(
+        send_input(&mut h, &mut c, false, pressed_at, 31, Released),
+        Err(session::Refusal::StaleGeometry),
+        "a key the run does not hold is not released through an old revision"
+    );
+    assert_eq!(
+        send_input(&mut h, &mut c, false, pressed_at, 30, Released),
+        Ok(())
+    );
+    h.pump_until(&mut target, "the release", |s| {
+        s.control_keys.contains(&(30, false))
+    });
+    assert_eq!(
+        target
+            .state
+            .control_keys
+            .iter()
+            .filter(|(code, _)| *code == 30)
+            .collect::<Vec<_>>(),
+        [&(30, true), &(30, false)]
+    );
+    assert_eq!(c.client.state.control_seen.phase, 2);
+}

@@ -74,7 +74,7 @@ fn refusal(code: u32) -> String {
         0 => "request refused (stale_epoch): this run ended; read status".into(),
         1 => "request refused (not_granted): the run is not active or lacks this capability".into(),
         2 => "request refused (denied): the person turned this off for the app the request comes from; they can turn it on in Settings › Privacy › Desktop Control or Screen Capture".into(),
-        3 => "request refused (stale_geometry): observe again for the current geometry revision".into(),
+        3 => "request refused (stale_geometry): the layout or the window's published snapshot changed since the revision given; observe again for the current one".into(),
         4 => "request refused (outside_scope): the target is outside the granted output".into(),
         5 => "request refused (unsupported): this capability set or operation is not available".into(),
         6 => "request refused (blocked): the session is locked, an authentication prompt is shown, or the target is protected".into(),

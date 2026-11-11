@@ -163,8 +163,6 @@ impl Cupertino {
         code: u32,
         pressed: WEnum<session::KeyState>,
     ) -> Result<(), session::Refusal> {
-        self.control_check_input(index, revision, Operation::Pointer)?;
-        self.control_pointer_here(index)?;
         if !(272..=279).contains(&code) {
             return Err(session::Refusal::InvalidInput);
         }
@@ -174,6 +172,12 @@ impl Cupertino {
             _ => return Err(session::Refusal::InvalidInput),
         };
         let source = InputSource::Controller(self.control.runs[index].model.epoch());
+        if self.control_releases_held(index, source, Input::Button(code), pressed) {
+            self.control_check_grant(index, Operation::Pointer)?;
+        } else {
+            self.control_check_input(index, revision, Operation::Pointer)?;
+            self.control_pointer_here(index)?;
+        }
         let transition = self
             .control
             .owners
@@ -202,8 +206,6 @@ impl Cupertino {
         code: u32,
         pressed: WEnum<session::KeyState>,
     ) -> Result<(), session::Refusal> {
-        self.control_check_input(index, revision, Operation::Keyboard)?;
-        self.control_keyboard_here(index)?;
         if code == 0 || code > MAX_KEY_CODE {
             return Err(session::Refusal::InvalidInput);
         }
@@ -213,6 +215,12 @@ impl Cupertino {
             _ => return Err(session::Refusal::InvalidInput),
         };
         let source = InputSource::Controller(self.control.runs[index].model.epoch());
+        if self.control_releases_held(index, source, Input::Key(code + 8), pressed) {
+            self.control_check_grant(index, Operation::Keyboard)?;
+        } else {
+            self.control_check_input(index, revision, Operation::Keyboard)?;
+            self.control_keyboard_here(index)?;
+        }
         let transition = self
             .control
             .owners
@@ -233,6 +241,22 @@ impl Cupertino {
             self.control.dispatching = false;
         }
         Ok(())
+    }
+    /// Whether this is the release of an input run `index` holds down. Such a release needs only the grant: the press
+    /// may itself have changed the layout (a click that closes a menu) or moved the keyboard focus, and refusing the
+    /// release would leave the input held. A run that is suspended or ends has its held input released already.
+    fn control_releases_held(
+        &self,
+        index: usize,
+        source: InputSource,
+        input: Input,
+        pressed: bool,
+    ) -> bool {
+        debug_assert_eq!(
+            source,
+            InputSource::Controller(self.control.runs[index].model.epoch())
+        );
+        !pressed && self.control.owners.holds(source, input)
     }
     pub(super) fn control_axis(
         &mut self,

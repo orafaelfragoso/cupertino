@@ -48,7 +48,7 @@
       <entry name="stale_epoch" value="0" summary="the request names another run epoch"/>
       <entry name="not_granted" value="1" since="2"/>
       <entry name="denied" value="2" since="2"/>
-      <entry name="stale_geometry" value="3" since="2"/>
+      <entry name="stale_geometry" value="3" since="2" summary="an earlier geometry revision, or for perform an earlier publication revision"/>
       <entry name="outside_scope" value="4" since="2"/>
       <entry name="unsupported" value="5" since="2"/>
       <entry name="blocked" value="6" since="2"/>
@@ -128,12 +128,18 @@
       <arg name="revision" type="uint"/><arg name="x" type="fixed"/><arg name="y" type="fixed"/>
     </request>
     <request name="button" since="2">
+      <description summary="press or release a pointer button where the pointer is">
+        The release of a button this run holds needs only the grant: it is delivered whatever revision it carries
+        and wherever the pointer is, since the press may itself have changed the layout.
+      </description>
       <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
       <arg name="revision" type="uint"/><arg name="code" type="uint"/><arg name="state" type="uint" enum="key_state"/>
     </request>
     <request name="key" since="2">
       <description summary="deliver a Linux evdev key through the normal keyboard router">
-        The server owns held state and timestamps. Reserved session and power actions are not available.
+        The server owns held state and timestamps. Reserved session and power actions are not available. The
+        release of a key this run holds needs only the grant, whatever revision it carries and wherever the keyboard
+        focus went.
       </description>
       <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
       <arg name="revision" type="uint"/><arg name="code" type="uint"/><arg name="state" type="uint" enum="key_state"/>

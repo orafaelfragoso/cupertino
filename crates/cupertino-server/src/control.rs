@@ -739,17 +739,26 @@ impl Cupertino {
             run.remembered = run.remembered.union(asked);
         }
     }
-    fn control_check_input(
+    /// Whether the active grant of run `index` covers `operation`.
+    fn control_check_grant(
         &self,
         index: usize,
-        revision: u32,
         operation: Operation,
     ) -> Result<(), session::Refusal> {
         let r = &self.control.runs[index];
         let grant = r.grant.ok_or(session::Refusal::NotGranted)?;
         r.model
             .authorize(r.model.epoch(), grant.scope, operation)
-            .map_err(|_| session::Refusal::NotGranted)?;
+            .map_err(|_| session::Refusal::NotGranted)
+    }
+    fn control_check_input(
+        &self,
+        index: usize,
+        revision: u32,
+        operation: Operation,
+    ) -> Result<(), session::Refusal> {
+        self.control_check_grant(index, operation)?;
+        let r = &self.control.runs[index];
         if r.revision != revision {
             return Err(session::Refusal::StaleGeometry);
         }

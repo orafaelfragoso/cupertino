@@ -803,6 +803,67 @@ fn a_menu_an_assistive_action_shows_before_any_input_opens_without_a_grab_and_it
     );
 }
 
+/// The y of the terminal's tile on the bar: larger while an auto-hidden bar is out of sight.
+fn terminal_y(run: &mut Run) -> f64 {
+    let bar = run.bar();
+    run.bounds(bar, Role::Button, "Terminal").y()
+}
+
+/// Where the popup `window` is placed now: its first placement, or the last place it was moved to.
+fn placed_at(run: &mut Run, window: WindowId) -> Rect {
+    let system = run.driver.window_system_mut();
+    system
+        .requests(window)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            WindowRequest::Reposition(spec) => Some(spec.anchor_rect),
+            _ => None,
+        })
+        .or_else(|| system.placement(window).unwrap().map(|p| p.anchor_rect))
+        .expect("a popup")
+}
+
+#[test]
+fn a_menu_shown_on_an_auto_hidden_bar_slides_the_bar_in_and_follows_its_tile() {
+    let (mut run, reader) = untouched();
+    let shown = terminal_y(&mut run);
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::ToggleAutoHide],
+    });
+    for _ in 0..4 {
+        run.advance(0.5);
+    }
+    let hidden = terminal_y(&mut run);
+    assert!(hidden > shown, "the bar slid out: {hidden} > {shown}");
+    let bar = run.bar();
+    let menu = show_menu(&mut run, &reader, bar);
+    for _ in 0..4 {
+        run.advance(0.5);
+    }
+    assert_eq!(terminal_y(&mut run), shown, "the bar slid in for its menu");
+    let tile = run.bounds(bar, Role::Button, "Terminal");
+    assert_eq!(
+        placed_at(&mut run, menu),
+        tile,
+        "the menu is placed against the tile where it is drawn"
+    );
+    let quit = node(&run, menu, Role::MenuItem, "Quit");
+    run.driver.ask(&reader, quit, Action::Click, None);
+    run.settle();
+    for _ in 0..4 {
+        run.advance(0.5);
+    }
+    assert_eq!(open_menu(&run, bar), None);
+    assert_eq!(
+        terminal_y(&mut run),
+        hidden,
+        "and slides out again once the menu closed"
+    );
+}
+
 #[test]
 fn a_press_on_the_bar_closes_a_menu_shown_without_a_grab_and_launches_nothing() {
     let (mut run, reader) = untouched();

@@ -1915,8 +1915,8 @@ impl Model {
         if self.locked || self.force_quit.is_some() || self.overview_keyboard().is_some() {
             self.engaged = false;
         }
-        // an auto-hidden bar shows while it has the keyboard
-        self.session.dock.keep_shown = self.engaged || self.stack.is_some();
+        // an auto-hidden bar shows while it has the keyboard or one of its menus or stacks is open
+        self.session.dock.keep_shown = self.engaged || self.stack.is_some() || self.menu.is_some();
         if let Some(screen) = self.screen() {
             self.session.dock.pointer_moved(self.pointer, screen, now);
         }

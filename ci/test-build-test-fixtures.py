@@ -4,10 +4,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 
 SCRIPT = Path(__file__).with_name('build-test-fixtures.py')
@@ -105,6 +107,123 @@ class Artifacts(unittest.TestCase):
                 for stream in (lease, slot):
                     stream.seek(0)
                     self.assertEqual(stream.read(), b'cargo\ntests\n')
+
+
+# A model of Cargo's feature unification: an artifact's contents follow the package and feature selection of the
+# command that built it. A test command rebuilds and relinks it when its own selection differs, then checks the
+# stamp the preparation recorded, as ci/test-fixtures.rs does.
+MODEL_CARGO = """
+import json, os, sys
+from pathlib import Path
+arguments = sys.argv[1:]
+artifact = Path(os.environ['MODEL_ARTIFACT'])
+end = arguments.index('--') if '--' in arguments else len(arguments)
+options = arguments[:end]
+packages = sorted(value for flag, value in zip(options, options[1:]) if flag in ('-p', '--package'))
+unit = json.dumps([packages or ['workspace'], '--all-features' in options])
+with open(os.environ['MODEL_LOG'], 'a') as log:
+    log.write(json.dumps(arguments) + '\\n')
+if not artifact.exists() or artifact.read_text() != unit:
+    previous = artifact.stat().st_mtime_ns if artifact.exists() else 0
+    artifact.write_text(unit)
+    os.utime(artifact, ns=(previous + 10**9, previous + 10**9))
+if arguments[:2] == ['nextest', 'run']:
+    key = os.environ['MODEL_KEY']
+    stamp = artifact.stat()
+    if os.environ[key + '_STAMP'] != f'{stamp.st_size}:{stamp.st_mtime_ns}':
+        sys.exit('fixture changed after preparation: ' + str(artifact))
+    sys.exit(0)
+print(json.dumps({'reason': 'compiler-artifact', 'manifest_path': os.environ['MODEL_MANIFEST'],
+                  'profile': {'test': False}, 'target': {'kind': ['example'], 'crate_types': ['bin'],
+                  'name': 'simple-window'}, 'executable': str(artifact), 'filenames': [str(artifact)]}))
+"""
+
+
+class Selection(unittest.TestCase):
+    def run_model(self, wrapper, child):
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory)
+            cargo = scratch / 'cargo'
+            cargo.write_text('#!' + sys.executable + '\n' + MODEL_CARGO)
+            cargo.chmod(0o700)
+            log = scratch / 'log'
+            env = dict(os.environ, CARGO=str(cargo), MODEL_ARTIFACT=str(scratch / 'simple-window'), MODEL_LOG=str(log),
+                       MODEL_KEY=fixtures.artifact_key('cupertino-wayland-client', 'example', 'simple-window'),
+                       MODEL_MANIFEST=str(fixtures.ROOT / 'crates' / 'cupertino-wayland-client' / 'Cargo.toml'))
+            result = subprocess.run([sys.executable, str(SCRIPT), *wrapper, '--', str(cargo), *child], env=env,
+                                    text=True, capture_output=True)
+            return result, [json.loads(line) for line in log.read_text().splitlines()]
+
+    def test_a_package_test_command_finds_the_fixtures_it_builds_unchanged(self):
+        # The transport's compositor job: fixtures for the workspace, tests of one package with its own features.
+        child = ['nextest', 'run', '--locked', '-p', 'cupertino-wayland-client', '--run-ignored', 'only',
+                 '--no-fail-fast']
+        for wrapper in (['--locked'], ['--locked', '--package', 'cupertino-wayland-client'],
+                        ['--locked', '--package', 'cupertino-kit', '--package', 'cupertino-wayland-client']):
+            with self.subTest(wrapper=wrapper):
+                result, calls = self.run_model(wrapper, child)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(calls[-2], ['test', '--no-run', '--message-format=json-render-diagnostics', '--locked',
+                                             '--package', 'cupertino-wayland-client'])
+                self.assertEqual(calls[-1], child)
+
+    def test_the_test_command_build_is_prepared_last_with_its_own_options(self):
+        builds, command = fixtures.preparation([
+            '--frozen', '--release', '--', 'cargo', '--locked', 'nextest', 'run', '--release', '-pcupertino-kit',
+            '--package=cupertino-server', '--exclude', 'x', '-F', 'app', '--features=a,b', '--no-default-features',
+            '--test', 'goldens', '-P', 'ci', '--profile', 'ci', '-E', 'package(cupertino-kit)', '--timings',
+            '--target-dir', 'out', '--', '--include-ignored', '-p', 'ignored'])
+        cargo = os.environ.get('CARGO', 'cargo')
+        self.assertEqual(command[0], 'cargo')
+        self.assertEqual(builds, [
+            [cargo, 'build', '--all-features', '--all-targets', '--timings', '--message-format=json-render-diagnostics',
+             '--workspace', '--frozen', '--locked', '--release', '--target-dir', 'out'],
+            [cargo, 'test', '--no-run', '--message-format=json-render-diagnostics', '--locked', '--release',
+             '--package', 'cupertino-kit', '--package', 'cupertino-server', '--exclude', 'x', '--features', 'app',
+             '--features', 'a,b', '--no-default-features', '--test', 'goldens', '--target-dir', 'out', '--frozen'],
+        ])
+        builds, _ = fixtures.preparation(['--', 'cargo', 'test', '--profile', 'ci', '--', '--profile'])
+        self.assertEqual(builds[1][4:], ['--profile', 'ci'])
+        self.assertEqual(builds[0][-2:], ['--profile', 'ci'])
+        builds, _ = fixtures.preparation(['--profile', 'dev', '--', 'cargo', 'nextest', 'run', '--cargo-profile', 'dev'])
+        self.assertEqual(builds[1][4:], ['--profile', 'dev'])
+
+    def test_a_profile_target_or_directory_the_test_command_does_not_build_is_refused(self):
+        for wrapper, child in (
+            (['--release'], ['nextest', 'run', '--workspace']),
+            (['--profile', 'dev'], ['nextest', 'run', '--release']),
+            (['--profile', 'ci'], ['test', '--cargo-profile', 'ci']),
+            (['--target', 'aarch64-unknown-linux-gnu'], ['test']),
+            (['--target-dir', 'a'], ['test', '--target-dir', 'b']),
+        ):
+            with self.subTest(wrapper=wrapper, child=child), self.assertRaises(SystemExit), \
+                    unittest.mock.patch('sys.stderr'):
+                fixtures.preparation([*wrapper, '--', 'cargo', *child])
+
+    def test_a_cargo_command_whose_build_cannot_be_reproduced_is_refused(self):
+        for child in (['build'], ['nextest', 'list'], ['+nightly', 'test'], ['test', '--doc'],
+                      ['test', '--config', 'profile.dev.opt-level=1'], ['nextest', 'run', '--manifest-path', 'x'],
+                      ['test', '-Zbuild-std'], ['test', '--package']):
+            with self.subTest(child=child), self.assertRaises(SystemExit), unittest.mock.patch('sys.stderr'):
+                fixtures.preparation(['--', 'cargo', *child])
+
+    def test_every_tracked_invocation_prepares_its_test_command(self):
+        sources = [*sorted((fixtures.ROOT / '.github' / 'workflows').glob('*.yml')),
+                   *sorted((fixtures.ROOT / 'ci').glob('*.sh')),
+                   *sorted((fixtures.ROOT / 'packaging').glob('**/PKGBUILD'))]
+        found = 0
+        for source in sources:
+            text = source.read_text().replace('\\\n', ' ')
+            for line in text.splitlines():
+                if 'ci/build-test-fixtures.py' not in line or line.lstrip().startswith('#'):
+                    continue
+                words = shlex.split(line[line.index('ci/build-test-fixtures.py'):].split('>')[0])
+                with self.subTest(source=source.name, command=' '.join(words)):
+                    builds, command = fixtures.preparation(words[1:])
+                    found += 1
+                    self.assertEqual(Path(command[0]).name, 'cargo')
+                    self.assertEqual(builds[-1][1:3], ['test', '--no-run'])
+        self.assertGreaterEqual(found, 3)
 
 
 if __name__ == '__main__':

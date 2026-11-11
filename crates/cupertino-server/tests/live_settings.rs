@@ -457,19 +457,10 @@ fn the_setters_are_served_on_the_session_bus() {
             .call_method("SetAccessibility", &("zoom", "on"))
             .unwrap_err()
             .to_string();
-        let end = Instant::now() + common::HANG_GUARD;
-        let (mut appearance, mut accessibility) = (
-            String::new(),
-            std::collections::HashMap::<String, String>::new(),
-        );
-        while Instant::now() < end
-            && (appearance != "dark"
-                || accessibility.get("reduce_transparency").map(String::as_str) != Some("on"))
-        {
-            appearance = proxy.get_property("Appearance").unwrap();
-            accessibility = proxy.get_property("Accessibility").unwrap();
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        // read once, at once: a property already says what a setter that returned set
+        let appearance: String = proxy.get_property("Appearance").unwrap();
+        let accessibility: std::collections::HashMap<String, String> =
+            proxy.get_property("Accessibility").unwrap();
         (before, auto, bad, appearance, accessibility)
     });
     first_read.recv_timeout(common::HANG_GUARD).unwrap();
@@ -491,6 +482,72 @@ fn the_setters_are_served_on_the_session_bus() {
         Path::new(&h.path("compositor.json")).exists(),
         "the appearance was stored"
     );
+}
+
+/// A caller that reads the properties right after each of its setter calls returned reads what it set, every time,
+/// although the bus thread emits the change signals later.
+#[test]
+fn a_property_read_after_its_setter_returned_has_the_new_value() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: no dbus-daemon");
+        return;
+    };
+    let Some(mut h) = Harness::new() else { return };
+    h.state
+        .use_accessibility_store(h.path("accessibility.conf"))
+        .unwrap();
+    let address = bus.address.clone();
+    let client = std::thread::spawn(move || {
+        let conn = zbus::blocking::connection::Builder::address(address.as_str())
+            .unwrap()
+            .build()
+            .unwrap();
+        let proxy = zbus::blocking::proxy::Builder::<zbus::blocking::Proxy<'_>>::new(&conn)
+            .destination("org.cupertino.Session1")
+            .unwrap()
+            .path("/org/cupertino/Session1")
+            .unwrap()
+            .interface("org.cupertino.Session1")
+            .unwrap()
+            .cache_properties(zbus::proxy::CacheProperties::No)
+            .build()
+            .unwrap();
+        let end = Instant::now() + common::HANG_GUARD;
+        while proxy.get_property::<String>("Appearance").is_err() {
+            assert!(Instant::now() < end, "the session interface did not appear");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut stale = Vec::new();
+        for round in 0..40 {
+            let (motion, appearance) = if round % 2 == 0 {
+                ("on", "dark")
+            } else {
+                ("off", "light")
+            };
+            proxy
+                .call_method("SetAccessibility", &("reduce_motion", motion))
+                .unwrap();
+            let held: std::collections::HashMap<String, String> =
+                proxy.get_property("Accessibility").unwrap();
+            if held["reduce_motion"] != motion {
+                stale.push(format!(
+                    "round {round}: reduce_motion {}",
+                    held["reduce_motion"]
+                ));
+            }
+            proxy.call_method("SetAppearance", &(appearance,)).unwrap();
+            let held: String = proxy.get_property("Appearance").unwrap();
+            if held != appearance {
+                stale.push(format!("round {round}: appearance {held}"));
+            }
+        }
+        stale
+    });
+    cupertino_server::quit::start_session_service_on(&mut h.state, Some(bus.address.clone()));
+    while !client.is_finished() {
+        h.step();
+    }
+    assert_eq!(client.join().unwrap(), Vec::<String>::new());
 }
 
 /// What Settings' Screen reader switch calls, over a private bus: `SetAccessibility("screen_reader", ...)` starts the

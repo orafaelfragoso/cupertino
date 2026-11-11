@@ -58,6 +58,8 @@ pub struct Quit {
     quitting: Option<Quitting>,
     /// What the bus thread is to emit; `None` until it runs.
     pub(crate) signals: Option<async_channel::Sender<BusOut>>,
+    /// What the session interface's properties read, shared with the bus thread; `None` until it runs.
+    pub(crate) properties: Option<Arc<Mutex<SessionSettings>>>,
 }
 
 /// What the compositor tells the bus thread.
@@ -369,12 +371,19 @@ impl Cupertino {
 
     /// Tell the session interface that the appearance or the accessibility settings changed; called by every path
     /// that changes them.
+    ///
+    /// The properties change here, on the compositor's thread, before a setter call that changed them replies: a
+    /// caller that reads a property after its call returned reads what it set. Only the change signals wait for the
+    /// bus thread.
     pub fn publish_session_settings(&self) {
+        let now = self.session_settings();
+        if let Some(properties) = &self.quit.properties {
+            *properties
+                .lock()
+                .expect("no thread panics while holding the settings") = now.clone();
+        }
         if let Some(signals) = &self.quit.signals {
-            if signals
-                .try_send(BusOut::Settings(self.session_settings()))
-                .is_err()
-            {
+            if signals.try_send(BusOut::Settings(now)).is_err() {
                 tracing::warn!(
                     "the session bus thread has stopped: the settings properties are not updated"
                 );
@@ -489,7 +498,7 @@ impl Cupertino {
 
 struct Session1 {
     calls: std::sync::Mutex<channel::Sender<Call>>,
-    /// What the properties read; the bus thread updates it from [`BusOut::Settings`].
+    /// What the properties read; the compositor updates it in [`Cupertino::publish_session_settings`].
     settings: Arc<Mutex<SessionSettings>>,
 }
 
@@ -705,6 +714,9 @@ pub fn start_session_service_on(state: &mut Cupertino, address: Option<String>) 
     let (signals, signals_rx) = async_channel::unbounded::<BusOut>();
     state.quit.signals = Some(signals);
     let settings = Arc::new(Mutex::new(state.session_settings()));
+    state.quit.properties = Some(Arc::clone(&settings));
+    // the values the change signals were last emitted for
+    let mut emitted = state.session_settings();
     let spawned = std::thread::Builder::new().name("cupertino-session".into()).spawn(move || {
         let served = zbus::block_on(async {
             let iface = Session1 { calls: std::sync::Mutex::new(calls), settings: Arc::clone(&settings) };
@@ -715,7 +727,7 @@ pub fn start_session_service_on(state: &mut Cupertino, address: Option<String>) 
                 match out {
                     BusOut::ApplicationQuit(app_id) => Session1::application_quit(&emitter, &app_id).await?,
                     BusOut::Settings(now) => {
-                        let before = std::mem::replace(&mut *settings.lock().expect("no thread panics while holding the settings"), now.clone());
+                        let before = std::mem::replace(&mut emitted, now.clone());
                         let iface = served.get().await;
                         if before.appearance != now.appearance {
                             iface.appearance_changed(&emitter).await?;
@@ -737,5 +749,47 @@ pub fn start_session_service_on(state: &mut Cupertino, address: Option<String>) 
     });
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "cannot start the session interface thread");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The properties hold what a setter set when it returns, before the bus thread has taken the change: here no bus
+    /// thread runs at all, so the bus can only answer from what the setter itself wrote.
+    #[test]
+    fn a_setter_has_written_the_properties_when_it_returns() {
+        let event_loop: smithay::reexports::calloop::EventLoop<'static, Cupertino> =
+            smithay::reexports::calloop::EventLoop::try_new().unwrap();
+        let mut state = Cupertino::new(
+            smithay::reexports::wayland_server::Display::new().unwrap(),
+            event_loop.handle(),
+            event_loop.get_signal(),
+            crate::config::Config::default(),
+            true,
+            &cupertino_assets::Assets::builtin(),
+        )
+        .unwrap();
+        let (tx, rx) = async_channel::unbounded();
+        state.quit.signals = Some(tx);
+        let properties = Arc::new(Mutex::new(state.session_settings()));
+        state.quit.properties = Some(Arc::clone(&properties));
+        let read = |key: &str| properties.lock().unwrap().accessibility.get(key).cloned();
+        assert_eq!(read("reduce_motion").as_deref(), Some("off"));
+
+        state
+            .set_session_accessibility("reduce_motion", "on")
+            .unwrap();
+        assert_eq!(read("reduce_motion").as_deref(), Some("on"));
+        assert!(
+            matches!(rx.try_recv(), Ok(BusOut::Settings(now)) if now == *properties.lock().unwrap()),
+            "the bus thread is still told, to emit the change signals"
+        );
+
+        state
+            .set_session_accessibility("reduce_motion", "off")
+            .unwrap();
+        assert_eq!(read("reduce_motion").as_deref(), Some("off"));
     }
 }

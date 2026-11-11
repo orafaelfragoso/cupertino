@@ -19,19 +19,20 @@ the library and reports them in the `cupertino` command's forms. Without `--grap
 71 crates, 291 internal dependencies, 3 exceptions, 0 problems
 ```
 
-It exits with failure on any problem, in both modes; lists it among the pre-finish checks.
+It exits with failure on any problem, in both modes, except that `--graph` does not fail on an out-of-date snapshot
+(below), since its output is how the snapshot is made again. It is one of the checks to run before finishing a change.
 
 `--graph` prints a DOT graph with one cluster per layer. Comment lines above it give the crate count per layer, every
 forbidden edge with its kind and its exception (tracking, area, reason) or `violation`, stale exceptions and denied
 paths. Build and dev edges are labelled, exceptions drawn orange and dashed, violations red. `graph/layers.dot` is a committed
-snapshot, and `tests/graph-snapshots.rs` fails when it differs from the workspace; regenerate it after a dependency or
-layer change:
+snapshot. The check without `--graph`, `cupertino dev layers` and `tests/graph-snapshots.rs` all fail when it differs
+from the workspace, with the problem `stale_graph`; regenerate it after a dependency or layer change:
 
 ```sh
 cargo run -q -p cupertino-layers -- --graph > crates/cupertino-layers/graph/layers.dot
 ```
 
-The test leaves out the two count lines (`// N crates, M internal dependencies` and `// per layer: ...`). A branch
+The comparison leaves out the two count lines (`// N crates, M internal dependencies` and `// per layer: ...`). A branch
 keeps main's count lines as they are, and the merge queue regenerates the snapshot after each merge, so two branches
 that each add a crate do not conflict on them.
 

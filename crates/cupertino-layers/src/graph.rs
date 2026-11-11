@@ -2,6 +2,21 @@ use crate::{allows, exception, Dep, Edge, Exception, Kind, Layer, Rules};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 
+/// The committed DOT snapshot of the layers, relative to the workspace root.
+pub const GRAPH_SNAPSHOT: &str = "crates/cupertino-layers/graph/layers.dot";
+
+/// `graph` without its two count lines, which change with every dependency: a snapshot is compared without them.
+pub fn without_counts(graph: &str) -> String {
+    graph
+        .lines()
+        .filter(|l| {
+            !(l.starts_with("// per layer: ")
+                || l.starts_with("// ") && l.ends_with(" internal dependencies"))
+        })
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
 /// For every crate in a `denied` source layer, the shortest dependency chain to each crate of a layer it must not
 /// reach, as crate names from source to target.
 pub fn denied_paths(edges: &[Edge], denied: &[(Layer, &[Layer])]) -> Vec<Vec<String>> {

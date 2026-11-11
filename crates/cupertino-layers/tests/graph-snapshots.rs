@@ -1,18 +1,10 @@
+//! The committed graph is compared without its two count lines (`// N crates, M internal dependencies` and
+//! `// per layer: ...`). The merge queue regenerates them after each merge, so a branch that adds a crate or a
+//! dependency does not commit them and two such branches do not conflict on them.
+
 use std::process::Command;
 
-/// The graph without its two count lines (`// N crates, M internal dependencies` and `// per layer: ...`). The merge
-/// queue regenerates them after each merge, so a branch that adds a crate or a dependency does not commit them and two
-/// such branches do not conflict on them.
-fn without_counts(graph: &str) -> String {
-    graph
-        .lines()
-        .filter(|l| {
-            !(l.starts_with("// per layer: ")
-                || l.starts_with("// ") && l.ends_with(" internal dependencies"))
-        })
-        .map(|l| format!("{l}\n"))
-        .collect()
-}
+use cupertino_layers::without_counts;
 
 #[test]
 fn committed_graph_matches_the_workspace() {

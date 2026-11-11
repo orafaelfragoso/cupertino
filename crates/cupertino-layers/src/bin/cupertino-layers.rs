@@ -22,7 +22,13 @@ fn main() -> ExitCode {
 
     let here = std::env::current_dir().expect("the working directory");
     let findings = cupertino_layers::check_workspace(&here).unwrap_or_else(|e| panic!("{e}"));
-    for p in findings.all_problems() {
+    // printing the graph is how the snapshot is made again, so an out-of-date one does not fail that run
+    let problems: Vec<_> = if graph {
+        findings.problems_printing_the_graph().collect()
+    } else {
+        findings.all_problems().collect()
+    };
+    for p in &problems {
         eprintln!("{p}");
     }
     if graph {
@@ -30,7 +36,7 @@ fn main() -> ExitCode {
     } else {
         println!("{}", findings.summary());
     }
-    if findings.is_clean() {
+    if problems.is_empty() {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

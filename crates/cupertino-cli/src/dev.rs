@@ -108,12 +108,19 @@ fn layers(args: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure> 
             Failure::new(FailureKind::Validation, "metadata_failed", e.to_string())
         }
     })?;
-    let data = layers_data(&root, &findings, args.flag("graph"));
-    for p in findings.all_problems() {
+    let graph = args.flag("graph");
+    // printing the graph is how its committed snapshot is made again, so an out-of-date one does not fail that run
+    let problems: Vec<&Problem> = if graph {
+        findings.problems_printing_the_graph().collect()
+    } else {
+        findings.all_problems().collect()
+    };
+    let data = layers_data(&root, &findings, graph, &problems);
+    for p in &problems {
         sink.event("problem", &problem_data(p), &p.to_string())?;
     }
-    if !findings.is_clean() {
-        let count = findings.problems.len() + findings.closure.len();
+    if !problems.is_empty() {
+        let count = problems.len();
         return Err(Failure::new(
             FailureKind::Validation,
             "layer_violations",
@@ -132,7 +139,12 @@ fn layers(args: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure> 
     Ok(Reply::new(&data, human))
 }
 
-fn layers_data<'a>(root: &'a Path, findings: &'a Findings, graph: bool) -> LayersData<'a> {
+fn layers_data<'a>(
+    root: &'a Path,
+    findings: &'a Findings,
+    graph: bool,
+    problems: &[&'a Problem],
+) -> LayersData<'a> {
     LayersData {
         root,
         crates: findings.layers.len(),
@@ -144,7 +156,7 @@ fn layers_data<'a>(root: &'a Path, findings: &'a Findings, graph: bool) -> Layer
             .map(|(layer, crates)| (layer.name(), crates))
             .collect(),
         dot: graph.then(|| findings.dot()),
-        problems: findings.all_problems().map(problem_data).collect(),
+        problems: problems.iter().copied().map(problem_data).collect(),
     }
 }
 

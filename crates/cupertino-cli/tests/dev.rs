@@ -6,7 +6,7 @@ mod support;
 use std::path::{Path, PathBuf};
 
 use cupertino_cli::{Context, Output, Runner, REGISTRY};
-use cupertino_layers::{Policy, DENIED_PATHS, RULES};
+use cupertino_layers::{Policy, DENIED_PATHS, GRAPH_SNAPSHOT, RULES};
 use serde_json::{json, Value};
 use support::{args, envelope, kinds, records};
 
@@ -409,4 +409,39 @@ fn manual_into_a_file_is_exit_6_write_failed() {
     let v: Value = envelope(&out);
     assert_eq!(v["error"]["kind"], "temporary");
     assert_eq!(v["error"]["code"], "write_failed");
+}
+
+#[test]
+fn an_out_of_date_graph_snapshot_fails_the_check_but_not_the_run_that_prints_the_graph() {
+    let c = Checkout::new(&[("app", "kit")]);
+    let snapshot = c.root().join(GRAPH_SNAPSHOT);
+    std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+    std::fs::write(
+        &snapshot,
+        "// cupertino-layers --graph\ndigraph \"layers\" {\n}\n",
+    )
+    .unwrap();
+
+    let out = c.run(&["--format", "json", "dev", "layers"]);
+    assert_eq!(out.code, 5, "{}", out.stdout);
+    let v = envelope(&out);
+    assert_eq!(v["error"]["code"], "layer_violations");
+    assert_eq!(
+        v["data"]["problems"],
+        json!([{
+            "kind": "stale_graph",
+            "from": "cupertino-layers",
+            "to": null,
+            "detail": format!(
+                "{GRAPH_SNAPSHOT} is out of date: cargo run -q -p cupertino-layers -- --graph > {GRAPH_SNAPSHOT}"
+            ),
+        }])
+    );
+
+    let out = c.run(&["dev", "layers", "--graph"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    std::fs::write(&snapshot, &out.stdout).unwrap();
+    let out = c.run(&["--format", "json", "dev", "layers"]);
+    assert_eq!(out.code, 0, "{}", out.stdout);
+    assert_eq!(envelope(&out)["data"]["problems"], json!([]));
 }

@@ -9,8 +9,9 @@ use std::process::Command;
 use serde_json::Value;
 
 use crate::{
-    check, closure, denied_crate_paths, dot, edges, licence_problems, Dep, Edge, Exception, Kind,
-    Layer, Problem, Rules, DENIED_CRATES, DENIED_PATHS, EXCEPTIONS, RULES,
+    check, closure, denied_crate_paths, dot, edges, licence_problems, without_counts, Dep, Edge,
+    Exception, Kind, Layer, Problem, Rules, DENIED_CRATES, DENIED_PATHS, EXCEPTIONS,
+    GRAPH_SNAPSHOT, RULES,
 };
 
 /// What a workspace is checked against.
@@ -70,15 +71,25 @@ pub struct Findings {
     pub problems: Vec<Problem>,
     /// The licence closure problems of the MPL-2.0 crates, sorted.
     pub closure: Vec<Problem>,
+    /// [`Problem::StaleGraph`] when the workspace has a committed graph snapshot that no longer matches it.
+    pub snapshot: Vec<Problem>,
 }
 
 impl Findings {
     pub fn is_clean(&self) -> bool {
-        self.problems.is_empty() && self.closure.is_empty()
+        self.all_problems().next().is_none()
     }
 
-    /// Every problem: [`Findings::problems`], then [`Findings::closure`].
+    /// Every problem: [`Findings::problems`], [`Findings::closure`], then [`Findings::snapshot`].
     pub fn all_problems(&self) -> impl Iterator<Item = &Problem> {
+        self.problems
+            .iter()
+            .chain(&self.closure)
+            .chain(&self.snapshot)
+    }
+
+    /// The problems of a run that prints the graph: every one but an out-of-date snapshot, which that run makes again.
+    pub fn problems_printing_the_graph(&self) -> impl Iterator<Item = &Problem> {
         self.problems.iter().chain(&self.closure)
     }
 
@@ -89,7 +100,7 @@ impl Findings {
             self.layers.len(),
             self.edges.len(),
             self.policy.exceptions.len(),
-            self.problems.len() + self.closure.len()
+            self.all_problems().count()
         )
     }
 
@@ -143,13 +154,24 @@ pub fn check_workspace_with(
     let resolved = metadata(root, cargo, &["--all-features", "--locked", "--offline"])?;
     let closure =
         closure::check_roots(&resolved, policy.mpl_roots).map_err(LayersError::Manifest)?;
-    Ok(Findings {
+    let mut findings = Findings {
         policy: *policy,
         layers,
         edges,
         problems,
         closure,
-    })
+        snapshot: Vec::new(),
+    };
+    // a workspace without the snapshot (another checkout's layout, a test workspace) has nothing to keep current
+    let committed = members["workspace_root"]
+        .as_str()
+        .and_then(|r| std::fs::read_to_string(Path::new(r).join(GRAPH_SNAPSHOT)).ok());
+    if committed.is_some_and(|c| without_counts(&c) != without_counts(&findings.dot())) {
+        findings
+            .snapshot
+            .push(Problem::StaleGraph(GRAPH_SNAPSHOT.to_owned()));
+    }
+    Ok(findings)
 }
 
 fn metadata(root: &Path, cargo: &dyn Fn() -> Command, args: &[&str]) -> Result<Value, LayersError> {

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use cupertino_layers::{
-    check_workspace_with, Layer, LayersError, Policy, Problem, DENIED_PATHS, RULES,
+    check_workspace_with, Layer, LayersError, Policy, Problem, DENIED_PATHS, GRAPH_SNAPSHOT, RULES,
 };
 
 /// The repository's rules, with `kit` as the one crate that must be MPL-2.0.
@@ -93,6 +93,20 @@ impl Fixture {
             policy,
         )
     }
+}
+
+/// `app` depending on `kit`, which the layers allow, and `cupertino-layers`, the crate whose folder holds the graph
+/// snapshot.
+const WITH_SNAPSHOT_CRATE: &[Krate] = &[
+    ("kit", "foundation", "MPL-2.0", &[]),
+    ("app", "apps", "GPL-3.0-or-later", &["kit"]),
+    ("cupertino-layers", "tools", "GPL-3.0-or-later", &[]),
+];
+
+fn write_snapshot(root: &Path, graph: &str) {
+    let path = root.join(GRAPH_SNAPSHOT);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, graph).unwrap();
 }
 
 fn write_crate(dir: &Path, manifest: &str) {
@@ -230,4 +244,57 @@ fn a_missing_root_a_crate_without_a_layer_and_no_cargo_are_reported() {
     };
     let result = check_workspace_with(w.root(), &no_cargo, &POLICY);
     assert!(matches!(result, Err(LayersError::Cargo(_))), "{result:?}");
+}
+
+#[test]
+fn a_snapshot_that_differs_only_in_its_counts_is_current() {
+    let w = Fixture::new("snapshot-current", WITH_SNAPSHOT_CRATE, &[]);
+    let graph = w.check(&POLICY).unwrap().dot();
+    let recounted = graph
+        .lines()
+        .map(|l| match l {
+            l if l.ends_with(" internal dependencies") => "// 9 crates, 99 internal dependencies",
+            l if l.starts_with("// per layer: ") => "// per layer: apps 9",
+            l => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_ne!(recounted, graph, "the graph has both count lines");
+    write_snapshot(w.root(), &recounted);
+    let findings = w.check(&POLICY).unwrap();
+    assert!(findings.is_clean(), "{:?}", texts(findings.all_problems()));
+}
+
+#[test]
+fn a_snapshot_that_lost_an_edge_is_out_of_date_except_for_the_run_that_prints_the_graph() {
+    let w = Fixture::new("snapshot-stale", WITH_SNAPSHOT_CRATE, &[]);
+    let graph = w.check(&POLICY).unwrap().dot();
+    let edge = "\"app\" -> \"kit\"";
+    let stale: String = graph
+        .lines()
+        .filter(|l| !l.contains(edge))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_ne!(stale, graph, "the graph has the edge");
+    write_snapshot(w.root(), &stale);
+
+    let findings = w.check(&POLICY).unwrap();
+    assert!(!findings.is_clean());
+    assert_eq!(
+        texts(findings.all_problems()),
+        [format!(
+            "{GRAPH_SNAPSHOT} is out of date: cargo run -q -p cupertino-layers -- --graph > {GRAPH_SNAPSHOT}"
+        )]
+    );
+    assert_eq!(findings.snapshot[0].kind(), "stale_graph");
+    assert!(
+        findings.summary().ends_with(", 1 problems"),
+        "{}",
+        findings.summary()
+    );
+    assert_eq!(findings.problems_printing_the_graph().count(), 0);
+
+    write_snapshot(w.root(), &graph);
+    assert!(w.check(&POLICY).unwrap().is_clean());
 }

@@ -13,7 +13,7 @@ mod graph;
 mod workspace;
 
 pub use closure::REQUIRED_MPL_ROOTS;
-pub use graph::{denied_crate_paths, denied_paths, dot};
+pub use graph::{denied_crate_paths, denied_paths, dot, without_counts, GRAPH_SNAPSHOT};
 pub use workspace::{check_workspace, check_workspace_with, Findings, LayersError, Policy, POLICY};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -417,6 +417,9 @@ pub enum Problem {
         version: String,
         licence: String,
     },
+    /// The committed DOT snapshot of the layers, at this path relative to the workspace root, no longer matches the
+    /// workspace.
+    StaleGraph(String),
 }
 
 impl Problem {
@@ -431,6 +434,7 @@ impl Problem {
             Problem::MissingMplRoot(_) => "missing_mpl_root",
             Problem::NonMplRoot(..) => "non_mpl_root",
             Problem::UnapprovedLicence { .. } => "unapproved_licence",
+            Problem::StaleGraph(_) => "stale_graph",
         }
     }
 
@@ -445,6 +449,7 @@ impl Problem {
             | Problem::MissingMplRoot(name)
             | Problem::NonMplRoot(name, _) => name,
             Problem::UnapprovedLicence { root, .. } => root,
+            Problem::StaleGraph(_) => "cupertino-layers",
         }
     }
 
@@ -458,7 +463,8 @@ impl Problem {
             Problem::UnapprovedLicence { package, .. } => Some(package),
             Problem::MissingLicenceText(_)
             | Problem::MissingMplRoot(_)
-            | Problem::NonMplRoot(..) => None,
+            | Problem::NonMplRoot(..)
+            | Problem::StaleGraph(_) => None,
         }
     }
 }
@@ -503,6 +509,10 @@ impl fmt::Display for Problem {
             } => write!(
                 f,
                 "{root} MPL closure: {package} {version} has unapproved licence {licence}"
+            ),
+            Problem::StaleGraph(path) => write!(
+                f,
+                "{path} is out of date: cargo run -q -p cupertino-layers -- --graph > {path}"
             ),
         }
     }

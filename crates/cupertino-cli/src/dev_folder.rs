@@ -59,7 +59,7 @@ const COMMANDS: &[Command] = &[
                 "Through sudo: let only the dock and the menu bar start from the folder.",
             ),
             (
-                "cupertino dev-folder enable --folder /home/me/cupertino-dev",
+                "cupertino dev-folder enable --folder ~/cupertino-dev",
                 "Through sudo: use another folder.",
             ),
         ],

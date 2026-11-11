@@ -1,7 +1,8 @@
 //! Popups the window system could not open as asked. A popup that wants a grab opens without one when the window system
-//! has had no input event for the grab to answer ([`WindowSystem::can_grab`]), as for a menu an assistive action opens
-//! before anyone touched the application; the runtime then does what the grab would have. A popup the window system
-//! refuses outright stays closed: its application hears it dismissed, and the runtime goes on.
+//! has had no input event for the grab to answer and no desktop-control action that brought one
+//! ([`WindowSystem::can_grab`]), as for a menu an assistive action opens before anyone touched the application; the
+//! runtime then does what the grab would have. A popup the window system refuses outright stays closed: its application
+//! hears it dismissed, and the runtime goes on.
 
 use super::{Runtime, WindowState};
 use crate::{Application, UiError, WindowKey};
@@ -23,7 +24,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     /// Whether a popup that `wants` a grab takes one, opened from `parent`: only while the window system can grab, and
     /// only from a window or a popup that holds a grab itself, as the protocol allows a grab nowhere else.
     pub(super) fn popup_grabs(&self, wants: bool, parent: &WindowState<A::Message>) -> bool {
-        wants && self.system.can_grab() && parent.popup.as_ref().is_none_or(|p| p.placed.grab)
+        wants
+            && self.system.can_grab(parent.id)
+            && parent.popup.as_ref().is_none_or(|p| p.placed.grab)
     }
 
     /// The window system refused popup `key` of window `parent` with `error`. A lost connection still ends the

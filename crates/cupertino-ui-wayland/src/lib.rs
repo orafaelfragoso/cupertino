@@ -7,6 +7,7 @@
 //! transport; [`SurfaceRoles`] lets the application give its windows roles from protocols the window system does not
 //! speak. It binds no protocol beyond the transport's standard set.
 
+mod action_grab;
 pub mod clipboard;
 mod convert;
 mod damage;

@@ -5,7 +5,9 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Wake, Waker};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use crate::action_grab::ActionGrabs;
 
 use cupertino_geometry::{Rect, Size};
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
@@ -271,6 +273,8 @@ pub struct WaylandWindowSystem {
     conn: Connection,
     semantics: Option<cupertino_protocol_app::Semantics>,
     semantic_surfaces: HashMap<WindowId, cupertino_protocol_app::SemanticSurface>,
+    /// The desktop-control actions that came with a grab serial, while a popup of their window may still grab with it.
+    action_grabs: ActionGrabs,
     profile: Profile,
     windows: Vec<Window>,
     next_window: u32,
@@ -399,6 +403,7 @@ impl WaylandWindowSystem {
             conn,
             semantics,
             semantic_surfaces: HashMap::new(),
+            action_grabs: ActionGrabs::default(),
             profile,
             windows: Vec::new(),
             next_window: 0,
@@ -489,6 +494,22 @@ impl WaylandWindowSystem {
             .iter_mut()
             .find(|w| w.id == id)
             .ok_or(PlatformError::UnknownWindow(id))
+    }
+
+    /// The window `id` hangs from: itself, or the window its popup chain opened from.
+    fn root(&self, mut id: WindowId) -> WindowId {
+        while let Some(parent) = self.window(id).ok().and_then(|w| w.parent) {
+            id = parent;
+        }
+        id
+    }
+
+    /// The grab serial of a desktop-control action on the window `parent` hangs from, while a popup of `parent` may
+    /// grab with it: a spent one only for a popup of a popup.
+    fn action_grab(&self, parent: WindowId) -> Option<u32> {
+        let root = self.root(parent);
+        self.action_grabs
+            .usable(root, root != parent, Instant::now())
     }
 
     fn toplevel(&self, id: WindowId) -> Result<Toplevel, PlatformError> {
@@ -1172,9 +1193,21 @@ impl WindowSystem for WaylandWindowSystem {
     fn semantic_requests(
         &mut self,
     ) -> Vec<(WindowId, cupertino_ui_platform::semantics::ActionCall)> {
-        self.semantic_surfaces
+        let requests: Vec<_> = self
+            .semantic_surfaces
             .iter()
             .flat_map(|(w, s)| s.requests().into_iter().map(|r| (*w, r)))
+            .collect();
+        requests
+            .into_iter()
+            .map(|(window, request)| {
+                if let Some(serial) = request.grab_serial {
+                    let root = self.root(window);
+                    self.action_grabs
+                        .record(window, root, request.call.id, serial);
+                }
+                (window, request.call)
+            })
             .collect()
     }
     fn semantic_finished(
@@ -1184,6 +1217,10 @@ impl WindowSystem for WaylandWindowSystem {
         outcome: cupertino_ui_platform::semantics::Outcome,
         revision: u64,
     ) {
+        // answered as applied, the action's work may still show a popup a moment later; any other answer ends the grab
+        let applied = outcome == cupertino_ui_platform::semantics::Outcome::Applied;
+        self.action_grabs
+            .answered(window, call.id, applied, Instant::now());
         if let Some(s) = self.semantic_surfaces.get(&window) {
             s.complete(call, outcome, revision);
         }
@@ -1250,8 +1287,8 @@ impl WindowSystem for WaylandWindowSystem {
         Ok(id)
     }
 
-    fn can_grab(&self) -> bool {
-        self.conn.input_serial().is_some()
+    fn can_grab(&self, parent: WindowId) -> bool {
+        self.conn.input_serial().is_some() || self.action_grab(parent).is_some()
     }
 
     fn create_popup(
@@ -1260,10 +1297,22 @@ impl WindowSystem for WaylandWindowSystem {
         spec: &PopupSpec,
     ) -> Result<WindowId, PlatformError> {
         let surface = self.window(parent)?.surface;
-        let popup = self
-            .conn
-            .popup(surface, &convert::placement(spec))
-            .map_err(platform_error)?;
+        let placement = convert::placement(spec);
+        // a menu a desktop-control action shows grabs with the serial the action came with, not a stale or missing one
+        let action = self.action_grab(parent).filter(|_| spec.grab);
+        let popup = match action {
+            Some(serial) => self
+                .conn
+                .popup_with_grab_serial(surface, &placement, serial),
+            None => self.conn.popup(surface, &placement),
+        }
+        .map_err(platform_error)?;
+        // the compositor takes it once, for the menu that opens from a window; the menu's own popups grow its grab
+        if let Some(serial) =
+            action.filter(|_| self.window(parent).is_ok_and(|w| w.parent.is_none()))
+        {
+            self.action_grabs.spend(serial);
+        }
         Ok(self.add(
             popup.surface(),
             Kind::Popup(popup),
@@ -1274,6 +1323,7 @@ impl WindowSystem for WaylandWindowSystem {
 
     fn destroy(&mut self, window: WindowId) {
         self.semantic_surfaces.remove(&window);
+        self.action_grabs.forget(window);
         let Ok(surface) = self.window(window).map(|w| w.surface) else {
             return;
         };

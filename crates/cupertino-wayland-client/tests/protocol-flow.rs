@@ -2875,6 +2875,77 @@ fn a_grab_before_any_input_is_refused_leaving_nothing_and_one_after_a_click_answ
     assert_eq!(grab, click);
 }
 
+/// A serial the compositor handed out for a grab (as with a desktop-control action) grabs before any input, and after a
+/// click it still answers that serial, not the click's; a popup that asks for no grab sends none.
+#[test]
+fn a_grab_with_a_handed_out_serial_needs_no_input_and_answers_that_serial() {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    present(&mut conn, w.surface(), (320, 240));
+    next_seen(&seen);
+    next_seen(&seen);
+    let placement = |grab: bool| PopupPlacement {
+        anchor_rect: Rect::new(10.0, 20.0, 30.0, 8.0),
+        size: (50, 50),
+        anchor: Anchor::BottomLeft,
+        gravity: Gravity::BottomRight,
+        constraint_adjustment: ConstraintAdjustment::FlipY,
+        offset: (0, 0),
+        reactive: false,
+        parent_size: None,
+        grab,
+    };
+    let grabs = |conn: &mut Connection| {
+        conn.flush().unwrap();
+        let mut grabs = Vec::new();
+        // the positioner, then the grab if any: a roundtrip marks the end of what the popup sent
+        conn.roundtrip().unwrap();
+        while let Ok(seen) = seen.try_recv() {
+            if let Seen::Grab(serial) = seen {
+                grabs.push(serial);
+            }
+        }
+        grabs
+    };
+    assert_eq!(conn.input_serial(), None);
+    let menu = conn
+        .popup_with_grab_serial(w.surface(), &placement(true), 4242)
+        .unwrap();
+    assert_eq!(grabs(&mut conn), [4242], "no input needed");
+    conn.destroy(menu.surface()).unwrap();
+    let tooltip = conn
+        .popup_with_grab_serial(w.surface(), &placement(false), 4243)
+        .unwrap();
+    assert_eq!(
+        grabs(&mut conn),
+        [0u32; 0],
+        "a popup without a grab sends none"
+    );
+    conn.destroy(tooltip.surface()).unwrap();
+    control.send(Control::Click { x: 3.0, y: 4.0 }).unwrap();
+    wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Pointer {
+            event: PointerEvent::Button { .. },
+            ..
+        } => Some(()),
+        _ => None,
+    });
+    let click = conn.input_serial().unwrap();
+    assert_ne!(click, 4244);
+    conn.popup_with_grab_serial(w.surface(), &placement(true), 4244)
+        .unwrap();
+    assert_eq!(
+        grabs(&mut conn),
+        [4244],
+        "the handed-out serial, not the click's"
+    );
+}
+
 #[test]
 fn pointer_and_key_input_arrive_typed_on_the_focused_window() {
     let (mut conn, control, _seen) = connect(Globals {

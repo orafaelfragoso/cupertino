@@ -13,10 +13,15 @@ use cupertino_app_protocols::server::app_effects::cupertino_backdrop_v1::{
 };
 use cupertino_app_protocols::server::scroll::cupertino_pointer_scroll_v1::CupertinoPointerScrollV1;
 use cupertino_app_protocols::server::scroll::cupertino_scroll_v1::{self, CupertinoScrollV1};
+use cupertino_app_protocols::server::semantics::cupertino_semantic_surface_v1::CupertinoSemanticSurfaceV1;
+use cupertino_app_protocols::server::semantics::cupertino_semantics_v1::{
+    self, CupertinoSemanticsV1,
+};
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_geometry::Rect;
 use cupertino_protocol_app::{
-    AppEffects, AppEvent, BackdropId, BackdropTone, GlassStyle, ScrollCounts, WindowControls,
+    AppEffects, AppEvent, BackdropId, BackdropTone, GlassStyle, ScrollCounts, Semantics,
+    WindowControls,
 };
 use cupertino_wayland_client::{
     BufferFormat, Connection, Decorations, Error, Event, PointerEvent, SurfaceId, Toplevel,
@@ -78,6 +83,13 @@ enum Control {
     ScrollToplevel,
     /// Ask the toplevel to close.
     CloseToplevel,
+    /// Show the publication interest under `epoch` when given, then route an action under `call_epoch`, after a grab
+    /// serial when one is given and the publication's version has it.
+    Act {
+        epoch: Option<u64>,
+        call_epoch: u64,
+        grab: Option<u32>,
+    },
 }
 
 /// A request the server saw that the commit record does not cover.
@@ -122,6 +134,7 @@ struct Mock {
     scroll: Option<CupertinoPointerScrollV1>,
     shown: Option<WlBuffer>,
     toplevel: Option<ToplevelState>,
+    publication: Option<CupertinoSemanticSurfaceV1>,
 }
 
 struct Data;
@@ -146,7 +159,8 @@ plain_global!(
     XdgWmBase,
     ZxdgDecorationManagerV1,
     CupertinoAppEffectsV1,
-    CupertinoScrollV1
+    CupertinoScrollV1,
+    CupertinoSemanticsV1
 );
 
 /// Objects whose requests the server ignores.
@@ -163,8 +177,25 @@ ignore_requests!(
     WlOutput: (),
     WlPointer: (),
     CupertinoAppearanceV1: (),
-    CupertinoPointerScrollV1: ()
+    CupertinoPointerScrollV1: (),
+    CupertinoSemanticSurfaceV1: ()
 );
+
+impl Dispatch<CupertinoSemanticsV1, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoSemanticsV1,
+        request: cupertino_semantics_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let cupertino_semantics_v1::Request::GetSurface { id, .. } = request {
+            state.publication = Some(init.init(id, ()));
+        }
+    }
+}
 
 impl Dispatch<WlCompositor, ()> for Mock {
     fn request(
@@ -506,11 +537,12 @@ impl Dispatch<CupertinoBackdropV1, Arc<Mutex<BackdropState>>> for Mock {
     }
 }
 
-/// Run the server, with the app effects global at `effects_version`, on a thread until the test drops the control
-/// channel.
+/// Run the server, with the app effects global at `effects_version` and the semantics global at `semantics_version`, on
+/// a thread until the test drops the control channel.
 fn spawn_server(
     stream: UnixStream,
     effects_version: u32,
+    semantics_version: u32,
 ) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
     let (committed_tx, committed_rx) = channel();
@@ -526,6 +558,7 @@ fn spawn_server(
         dh.create_global::<Mock, ZxdgDecorationManagerV1, _>(1, ());
         dh.create_global::<Mock, CupertinoAppEffectsV1, _>(effects_version, ());
         dh.create_global::<Mock, CupertinoScrollV1, _>(1, ());
+        dh.create_global::<Mock, CupertinoSemanticsV1, _>(semantics_version, ());
         let mut mock = Mock {
             committed: committed_tx,
             seen: seen_tx,
@@ -536,6 +569,7 @@ fn spawn_server(
             scroll: None,
             shown: None,
             toplevel: None,
+            publication: None,
         };
         display
             .handle()
@@ -590,6 +624,30 @@ fn spawn_server(
                     pointer.frame();
                 }
                 Ok(Control::CloseToplevel) => mock.toplevel.as_ref().unwrap().toplevel.close(),
+                Ok(Control::Act {
+                    epoch,
+                    call_epoch,
+                    grab,
+                }) => {
+                    let publication = mock.publication.as_ref().unwrap();
+                    if let Some(epoch) = epoch {
+                        publication.interest((epoch >> 32) as u32, epoch as u32, 1);
+                    }
+                    if let Some(serial) = grab.filter(|_| publication.version() >= 2) {
+                        publication.grab_serial(serial);
+                    }
+                    let call = cupertino_semantics::ActionCall {
+                        id: 7,
+                        epoch: call_epoch,
+                        revision: 1,
+                        node: 2,
+                        action: cupertino_semantics::Action::ShowMenu,
+                        data: None,
+                    };
+                    let (file, len) =
+                        cupertino_semantics::seal(&call, cupertino_semantics::MAX_FRAME).unwrap();
+                    publication.perform(std::os::fd::AsFd::as_fd(&file), len);
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
             }
@@ -619,8 +677,23 @@ fn connect_at(
     Receiver<Committed>,
     Receiver<Seen>,
 ) {
+    connect_with(effects_version, 2)
+}
+
+/// [`connect`] to a server that offers `cupertino_app_effects_v1` at `effects_version` and `cupertino_semantics_v1` at
+/// `semantics_version`.
+fn connect_with(
+    effects_version: u32,
+    semantics_version: u32,
+) -> (
+    Connection,
+    Sender<Control>,
+    Receiver<Committed>,
+    Receiver<Seen>,
+) {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
-    let (control, committed, seen) = spawn_server(server_stream, effects_version);
+    let (control, committed, seen) =
+        spawn_server(server_stream, effects_version, semantics_version);
     (
         Connection::from_stream(client_stream).unwrap(),
         control,
@@ -1060,5 +1133,60 @@ fn subsurface_backdrops_draw_from_version_11() {
             draws,
             "version {version}"
         );
+    }
+}
+
+/// From version 2 an action comes with the serial its menu may grab with, sent right before it; an older server sends
+/// none, and a serial goes only with the action right after it, even one the publication drops.
+#[test]
+fn an_action_carries_the_grab_serial_sent_right_before_it_from_version_2() {
+    for (version, expected) in [(2, Some(4242)), (1, None)] {
+        let (mut conn, control, _committed, _seen) = connect_with(1, version);
+        let semantics = Semantics::bind(&mut conn).unwrap();
+        let window = window(&mut conn);
+        let publication = semantics.surface(&conn, window.surface()).unwrap();
+        conn.roundtrip().unwrap();
+        control
+            .send(Control::Act {
+                epoch: Some(3),
+                call_epoch: 3,
+                grab: Some(4242),
+            })
+            .unwrap();
+        let mut stash = Stash::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut requests = Vec::new();
+        while requests.is_empty() && Instant::now() < deadline {
+            stash.extend(conn.wait(Some(Duration::from_millis(20))).unwrap());
+            requests = publication.requests();
+        }
+        assert_eq!(requests.len(), 1, "version {version}");
+        assert_eq!(requests[0].call.id, 7);
+        assert_eq!(requests[0].grab_serial, expected, "version {version}");
+
+        // an action of another epoch is dropped with its serial; the next one comes without any
+        control
+            .send(Control::Act {
+                epoch: Some(4),
+                call_epoch: 3,
+                grab: Some(4243),
+            })
+            .unwrap();
+        control
+            .send(Control::Act {
+                epoch: None,
+                call_epoch: 4,
+                grab: None,
+            })
+            .unwrap();
+        let mut requests = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while requests.is_empty() && Instant::now() < deadline {
+            stash.extend(conn.wait(Some(Duration::from_millis(20))).unwrap());
+            requests = publication.requests();
+        }
+        assert_eq!(requests.len(), 1, "version {version}");
+        assert_eq!(requests[0].call.epoch, 4);
+        assert_eq!(requests[0].grab_serial, None, "version {version}");
     }
 }

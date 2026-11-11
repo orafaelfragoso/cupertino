@@ -701,6 +701,27 @@ impl Connection {
     /// [`Event::PopupConfigure`]. A grab needs an input event to answer: before one ([`Connection::input_serial`] is
     /// `None`) the popup is [`Error::PermissionDenied`] and nothing is made, and the connection goes on.
     pub fn popup(&mut self, parent: SurfaceId, placement: &PopupPlacement) -> Result<Popup, Error> {
+        self.make_popup(parent, placement, None)
+    }
+
+    /// [`Connection::popup`] whose grab, when `placement.grab` asks for one, answers `serial`: a serial the compositor
+    /// handed out for a grab of this connection's (as with an action it routed here) rather than the latest input
+    /// event's, which may be none yet or long past.
+    pub fn popup_with_grab_serial(
+        &mut self,
+        parent: SurfaceId,
+        placement: &PopupPlacement,
+        serial: u32,
+    ) -> Result<Popup, Error> {
+        self.make_popup(parent, placement, Some(serial))
+    }
+
+    fn make_popup(
+        &mut self,
+        parent: SurfaceId,
+        placement: &PopupPlacement,
+        serial: Option<u32>,
+    ) -> Result<Popup, Error> {
         let qh = self.queue.handle();
         let s = &mut self.state;
         let parent_xdg = match &s.surface(parent)?.role {
@@ -713,7 +734,8 @@ impl Connection {
         // refused before any object is made, so a refusal leaves nothing behind
         let grab_serial = if placement.grab {
             Some(
-                s.last_serial
+                serial
+                    .or(s.last_serial)
                     .ok_or(Error::PermissionDenied("a popup grab"))?,
             )
         } else {

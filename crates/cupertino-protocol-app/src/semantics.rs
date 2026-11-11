@@ -9,6 +9,8 @@ use std::os::fd::AsFd;
 use std::sync::{Arc, Mutex};
 use wayland_client::{Connection as WlConnection, Dispatch, QueueHandle};
 
+/// The newest protocol version spoken: version 2 hands an action a serial its popup may grab with.
+const VERSION: u32 = 2;
 #[derive(Clone, Debug)]
 pub struct SemanticWake;
 #[derive(Default)]
@@ -16,7 +18,17 @@ struct Inner {
     epoch: u64,
     active: bool,
     sent: Option<(u64, u64)>,
-    requests: Vec<ActionCall>,
+    requests: Vec<SemanticRequest>,
+    /// The grab serial announced for the perform that comes next.
+    grab_serial: Option<u32>,
+}
+/// An action the compositor routed to a publication.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SemanticRequest {
+    pub call: ActionCall,
+    /// The serial a popup the action opens may grab with, while the action is handled (from version 2 of the
+    /// protocol); `None` from an older compositor.
+    pub grab_serial: Option<u32>,
 }
 #[derive(Clone)]
 struct Shared(Arc<Mutex<Inner>>);
@@ -27,7 +39,7 @@ pub struct SemanticSurface {
 }
 impl Semantics {
     pub fn bind(conn: &mut Connection) -> Option<Self> {
-        conn.bind_extension(1..=1, crate::Quiet).map(Self)
+        conn.bind_extension(1..=VERSION, crate::Quiet).map(Self)
     }
     pub fn surface(
         &self,
@@ -52,7 +64,7 @@ impl SemanticSurface {
     pub fn active(&self) -> bool {
         self.inner.0.lock().unwrap().active
     }
-    pub fn requests(&self) -> Vec<ActionCall> {
+    pub fn requests(&self) -> Vec<SemanticRequest> {
         let mut s = self.inner.0.lock().unwrap();
         if !s.active {
             s.requests.clear();
@@ -132,13 +144,21 @@ impl Dispatch<CupertinoSemanticSurfaceV1, Shared> for State {
                 s.active = active != 0;
                 s.sent = None;
                 s.requests.clear();
+                s.grab_serial = None;
+            }
+            cupertino_semantic_surface_v1::Event::GrabSerial { serial } => {
+                s.grab_serial = Some(serial);
+                // it belongs to the perform that follows
+                return;
             }
             cupertino_semantic_surface_v1::Event::Perform { payload, length } => {
+                // a serial goes only with the perform right after it, even one that is dropped
+                let grab_serial = s.grab_serial.take();
                 if let Ok(call) =
                     cupertino_semantics::read::<ActionCall>(payload, length, MAX_FRAME)
                 {
                     if s.active && call.epoch == s.epoch && s.requests.is_empty() {
-                        s.requests.push(call);
+                        s.requests.push(SemanticRequest { call, grab_serial });
                     }
                 }
             }

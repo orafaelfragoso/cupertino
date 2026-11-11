@@ -387,6 +387,11 @@ pub(crate) struct FakeSystem {
     pub(crate) published: Vec<(WindowId, cupertino_semantics::Snapshot)>,
     /// The actions desktop control asks for, handed to the runtime at its next turn.
     pub(crate) semantic_calls: Vec<(WindowId, cupertino_semantics::ActionCall)>,
+    /// The actions come with a grab of their own, as from a compositor that hands one out: a popup of the action's
+    /// window may grab while the action is handled, input or not.
+    pub(crate) action_grabs: bool,
+    /// The actions being handled that came with a grab: their window and call.
+    granted: Vec<(WindowId, u64)>,
     /// How each action asked for ended, in order.
     pub(crate) semantic_outcomes: Vec<(WindowId, u64, cupertino_semantics::Outcome)>,
     /// Every popup opened: its id, its parent and where it was placed.
@@ -424,6 +429,20 @@ impl FakeSystem {
         WindowId((self.created.len() + self.popups_created.len()) as u32 + 1)
     }
 
+    /// The window `window` hangs from: itself, or the window its popup chain opened from.
+    fn root(&self, mut window: WindowId) -> WindowId {
+        while let Some((_, parent, _)) = self.popups_created.iter().find(|(id, ..)| *id == window) {
+            window = *parent;
+        }
+        window
+    }
+
+    /// Whether an action being handled on the window `parent` hangs from came with a grab.
+    fn action_grab(&self, parent: WindowId) -> bool {
+        let root = self.root(parent);
+        self.granted.iter().any(|(w, _)| self.root(*w) == root)
+    }
+
     /// A buffer comes free: a stalled window gets a frame only if the runtime asked for one while it waited.
     pub(crate) fn release(&mut self, window: WindowId) {
         if self.stalled.take() == Some(window) && std::mem::take(&mut self.frame_wanted) {
@@ -441,8 +460,8 @@ impl WindowSystem for FakeSystem {
         }
     }
 
-    fn can_grab(&self) -> bool {
-        !self.no_input
+    fn can_grab(&self, parent: WindowId) -> bool {
+        !self.no_input || self.action_grab(parent)
     }
 
     fn semantics_active(&self, _: WindowId) -> bool {
@@ -455,7 +474,12 @@ impl WindowSystem for FakeSystem {
     }
 
     fn semantic_requests(&mut self) -> Vec<(WindowId, cupertino_semantics::ActionCall)> {
-        std::mem::take(&mut self.semantic_calls)
+        let calls = std::mem::take(&mut self.semantic_calls);
+        if self.action_grabs {
+            self.granted
+                .extend(calls.iter().map(|(window, call)| (*window, call.id)));
+        }
+        calls
     }
 
     fn semantic_finished(
@@ -466,6 +490,7 @@ impl WindowSystem for FakeSystem {
         _: u64,
     ) {
         self.semantic_outcomes.push((window, call.id, outcome));
+        self.granted.retain(|g| *g != (window, call.id));
     }
 
     fn create_window(&mut self, spec: &WindowSpec) -> Result<WindowId, PlatformError> {
@@ -482,7 +507,7 @@ impl WindowSystem for FakeSystem {
         if !self.popups {
             return Err(PlatformError::Unsupported);
         }
-        if spec.grab && self.no_input {
+        if spec.grab && self.no_input && !self.action_grab(parent) {
             return Err(PlatformError::Protocol(
                 "a popup grab needs a user input event first".into(),
             ));

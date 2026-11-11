@@ -1,5 +1,6 @@
 use cupertino_geometry::Point;
 use cupertino_geometry::Size;
+use cupertino_ui_platform::semantics;
 use cupertino_ui_platform::{
     ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
     Configure, ConfigureId, CursorShape, DragRequest, DragToken, DropAction, DropAnswer, DropEvent,
@@ -162,6 +163,24 @@ impl Wake for Woken {
     }
 }
 
+/// Desktop control as the window system sees it: whether it watches the windows, what they publish and the actions it
+/// routes to them.
+#[derive(Debug, Default)]
+struct DesktopControl {
+    watching: bool,
+    published: HashMap<WindowId, semantics::Snapshot>,
+    /// Actions routed and not yet handed to the runtime, with whether each came with a grab serial.
+    calls: Vec<(WindowId, semantics::ActionCall, bool)>,
+    next_call: u64,
+    /// The grab serials of actions, while a popup may grab with them: their window, their call, and whether the action
+    /// was answered (as applied; any other answer ends the grab).
+    granted: Vec<(WindowId, u64, bool)>,
+    /// How each action ended, by call.
+    outcomes: Vec<(u64, semantics::Outcome)>,
+    /// The popups that grabbed with an action's grab serial.
+    grabbed: Vec<WindowId>,
+}
+
 /// A window system with no display. Windows live in memory, every request is kept for inspection, presented
 /// frames are kept until the window is destroyed, and the only events are the ones the test enqueues. Its waker
 /// does not dispatch anything; a test waits for it with [`HeadlessWindowSystem::wait_for_wake`].
@@ -185,6 +204,8 @@ pub struct HeadlessWindowSystem {
     solid_colors: bool,
     /// Whether an input event a popup grab can answer has come: a button, a touch, a key or the keyboard.
     input: bool,
+    /// Desktop control: what it watches and the actions it routes ([`HeadlessWindowSystem::observe_semantics`]).
+    control: DesktopControl,
     pub(crate) dispatch_one: bool,
     woken: Arc<Woken>,
 }
@@ -212,6 +233,7 @@ impl HeadlessWindowSystem {
             keep_pixels: true,
             solid_colors: true,
             input: true,
+            control: DesktopControl::default(),
             dispatch_one: false,
             woken: Arc::default(),
         }
@@ -316,6 +338,81 @@ impl HeadlessWindowSystem {
     /// refuses it without a serial, until a button, a touch, a key or the keyboard comes to a window.
     pub fn set_no_input_yet(&mut self) {
         self.input = false;
+    }
+
+    /// Desktop control starts watching every window: from the runtime's next turn each publishes its semantics.
+    pub fn observe_semantics(&mut self) {
+        self.control.watching = true;
+        self.queue.push_back(PlatformEvent::Wake);
+    }
+
+    /// What `window` published last while desktop control watched it.
+    pub fn published(&self, window: WindowId) -> Option<&semantics::Snapshot> {
+        self.control.published.get(&window)
+    }
+
+    /// Desktop control routes `action` on `node` of `window`'s latest publication to the runtime's next turn; returns
+    /// the call, whose end [`HeadlessWindowSystem::outcome`] tells. With `grab` the action comes with a grab serial, as
+    /// from a compositor that hands one out: a popup of the window may grab while the action is handled, as one opened
+    /// by a press would, input or not. Without it, as from an older compositor, a popup grabs only after input.
+    pub fn perform(
+        &mut self,
+        window: WindowId,
+        node: u64,
+        action: semantics::Action,
+        data: Option<semantics::Data>,
+        grab: bool,
+    ) -> u64 {
+        self.control.next_call += 1;
+        let id = self.control.next_call;
+        let call = semantics::ActionCall {
+            id,
+            epoch: 1,
+            revision: self.published(window).map_or(0, |s| s.revision),
+            node,
+            action,
+            data,
+        };
+        self.control.calls.push((window, call, grab));
+        self.queue.push_back(PlatformEvent::Wake);
+        id
+    }
+
+    /// How the action `call` ended, once the runtime answered it.
+    pub fn outcome(&self, call: u64) -> Option<semantics::Outcome> {
+        self.control
+            .outcomes
+            .iter()
+            .find(|(id, _)| *id == call)
+            .map(|(_, outcome)| *outcome)
+    }
+
+    /// Whether popup `window` took its grab with an action's grab serial rather than an input event's.
+    pub fn grabbed_by_action(&self, window: WindowId) -> bool {
+        self.control.grabbed.contains(&window)
+    }
+
+    /// The window `window` hangs from: itself, or the window its popup chain opened from.
+    fn root(&self, mut window: WindowId) -> WindowId {
+        while let Some(parent) = self.windows.get(&window).and_then(|w| w.parent) {
+            window = parent;
+        }
+        window
+    }
+
+    /// Whether an action being handled on the window `parent` hangs from came with a grab serial.
+    fn action_grab(&self, parent: WindowId) -> bool {
+        let root = self.root(parent);
+        self.control
+            .granted
+            .iter()
+            .any(|(window, ..)| self.root(*window) == root)
+    }
+
+    /// The moment after an applied answer passes, as the compositor counts it: the grab serials of answered actions are
+    /// good no more. Until then a popup the action's work shows a little later (a folder's stack once listed) grabs.
+    pub fn expire_answered_action_grabs(&mut self) {
+        self.control.granted.retain(|(.., answered)| !answered);
     }
 
     /// Makes `window` a surface whose role's configure has no activated state, such as a desktop shell's layer
@@ -629,8 +726,46 @@ impl WindowSystem for HeadlessWindowSystem {
         Ok(self.open(spec.clone(), None))
     }
 
-    fn can_grab(&self) -> bool {
-        self.input
+    fn semantics_active(&self, window: WindowId) -> bool {
+        self.control.watching && self.windows.contains_key(&window)
+    }
+
+    fn publish_semantics(&mut self, window: WindowId, snapshot: &semantics::Snapshot) {
+        self.control.published.insert(window, snapshot.clone());
+    }
+
+    fn semantic_requests(&mut self) -> Vec<(WindowId, semantics::ActionCall)> {
+        std::mem::take(&mut self.control.calls)
+            .into_iter()
+            .map(|(window, call, grab)| {
+                if grab {
+                    self.control.granted.push((window, call.id, false));
+                }
+                (window, call)
+            })
+            .collect()
+    }
+
+    fn semantic_finished(
+        &mut self,
+        window: WindowId,
+        call: &semantics::ActionCall,
+        outcome: semantics::Outcome,
+        _revision: u64,
+    ) {
+        let applied = outcome == semantics::Outcome::Applied;
+        self.control.granted.retain_mut(|(w, id, answered)| {
+            if (*w, *id) != (window, call.id) {
+                return true;
+            }
+            *answered = true;
+            applied
+        });
+        self.control.outcomes.push((call.id, outcome));
+    }
+
+    fn can_grab(&self, parent: WindowId) -> bool {
+        self.input || self.action_grab(parent)
     }
 
     fn create_popup(
@@ -638,8 +773,9 @@ impl WindowSystem for HeadlessWindowSystem {
         parent: WindowId,
         spec: &PopupSpec,
     ) -> Result<WindowId, PlatformError> {
+        let by_action = spec.grab && self.action_grab(parent);
         let opener = self.window(parent)?;
-        if spec.grab && !self.input {
+        if spec.grab && !self.input && !by_action {
             return Err(PlatformError::Protocol(
                 "a popup grab needs a user input event first".into(),
             ));
@@ -662,6 +798,23 @@ impl WindowSystem for HeadlessWindowSystem {
         };
         let id = self.open(window, Some(parent));
         self.window_mut(id)?.placement = Some(spec.clone());
+        if by_action {
+            self.control.grabbed.push(id);
+            // the compositor takes the serial once, for the menu that opens from a window
+            if self.window(parent)?.parent.is_none() {
+                let root = self.root(parent);
+                let used = self
+                    .control
+                    .granted
+                    .iter()
+                    .position(|(w, ..)| self.root(*w) == root);
+                if let Some(i) = used {
+                    self.control.granted.remove(i);
+                }
+            }
+            // and gives the grabbing popup the keyboard, whose enter event leaves the client a serial
+            self.input = true;
+        }
         Ok(id)
     }
 
@@ -678,7 +831,9 @@ impl WindowSystem for HeadlessWindowSystem {
         }
         for id in &gone {
             self.windows.remove(id);
+            self.control.published.remove(id);
         }
+        self.control.granted.retain(|(w, ..)| !gone.contains(w));
         self.queue.retain(
             |event| !matches!(event, PlatformEvent::Window { window: w, .. } if gone.contains(w)),
         );

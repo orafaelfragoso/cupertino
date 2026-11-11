@@ -668,11 +668,14 @@ pub trait WindowSystem {
     }
 
     fn capabilities(&self) -> Capabilities;
-    /// Whether a popup opened now can take a grab: the window system has had a user input event (a press, a touch, a
-    /// key, the keyboard coming to a window) for the grab to answer. Before that, as for a menu an assistive action
-    /// opens in a shell component nobody has touched yet, a grab would be refused, so the runtime opens the popup
-    /// without one and closes it itself.
-    fn can_grab(&self) -> bool {
+    /// Whether a popup of `parent` opened now can take a grab: the window system has had a user input event (a press, a
+    /// touch, a key, the keyboard coming to a window) for the grab to answer, or a desktop-control action on `parent`'s
+    /// window came with a grab of its own and is being handled (from [`WindowSystem::semantic_requests`] to
+    /// [`WindowSystem::semantic_finished`], and a moment after an applied answer). Otherwise, as for a menu an
+    /// assistive action opens in a shell component nobody has touched yet, a grab would be refused, so the runtime
+    /// opens the popup without one and closes it itself.
+    fn can_grab(&self, parent: WindowId) -> bool {
+        let _ = parent;
         true
     }
     fn create_window(&mut self, spec: &WindowSpec) -> Result<WindowId, PlatformError>;

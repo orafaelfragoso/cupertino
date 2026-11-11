@@ -376,6 +376,25 @@ fn a_menu_shown_before_any_input_opens_without_a_grab_and_its_submenu_too() {
     );
 }
 
+/// From a window system whose actions come with a grab of their own, a menu an action shows before any input grabs as
+/// one a press opened would, and so does the submenu a later action opens; presses are then the compositor's to judge.
+#[test]
+fn a_menu_an_action_with_its_own_grab_shows_before_any_input_grabs_and_its_submenu_too() {
+    let mut desk = Desk::new(false, true);
+    desk.rt.window_system_mut().action_grabs = true;
+    desk.open_menu();
+    assert_eq!(desk.grabs(), [true]);
+    let outcome = desk.act("menu", "More", wire::Action::Expand);
+    assert_eq!(outcome, Some(wire::Outcome::Applied));
+    assert!(desk.id("submenu").is_some(), "the submenu opened");
+    assert_eq!(desk.grabs(), [true, true]);
+    assert!(desk.errors.borrow().is_empty(), "{:?}", desk.errors);
+    let from = desk.rt.model().heard.len();
+    desk.button("main", OPENER, true);
+    assert_eq!(desk.heard_since(from), ["Opener pressed"]);
+    assert!(desk.id("menu").is_some());
+}
+
 #[test]
 fn a_press_outside_an_ungrabbed_menu_closes_it_and_goes_no_further() {
     let mut desk = Desk::new(false, true);

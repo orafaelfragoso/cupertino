@@ -490,6 +490,101 @@ fn a_run_turned_off_in_settings_stays_ended_and_a_fresh_session_on_the_connectio
 }
 
 #[test]
+fn a_run_ended_by_the_consent_panel_leaving_is_followed_by_a_fresh_run_on_a_fresh_session() {
+    let Some(mut h) = Harness::new() else { return };
+    let (mut app, panel) = authority(&mut h);
+    let bridge = Bridge::spawn();
+    // nothing remembered: the app is asked
+    let _store = Store::read_by(&mut h, &this_program(), &[]);
+    let mut c = Controller::named(&mut h, &bridge);
+    assert_eq!(c.start(&mut h, 15), Ok(()));
+    c.phase(&mut h, 1);
+    let first = c.client.state.control_seen.epoch;
+    // the panel's process goes away while it asks: the run waiting for its answer ends
+    panel.destroy();
+    h.idle(&mut app, 3);
+    c.phase(&mut h, 4);
+    assert_eq!(
+        c.start(&mut h, 15),
+        Err(session::Refusal::StaleEpoch),
+        "the ended run is not started again, and nothing says busy"
+    );
+    // a fresh session has a fresh run; without a panel nobody can be asked yet
+    c.renew(&mut h, &bridge);
+    let fresh = c.client.state.control_seen.epoch;
+    assert_ne!(fresh, first);
+    assert_eq!(c.start(&mut h, 15), Err(session::Refusal::NoAuthority));
+    assert_eq!(c.client.state.control_seen.phase, 0);
+    // the panel is back: the fresh run is asked on it
+    let (mut app, _authority) = authority(&mut h);
+    assert_eq!(c.start(&mut h, 15), Ok(()));
+    c.phase(&mut h, 1);
+    h.pump_until(&mut app, "the fresh run's request", |s| {
+        s.control_request.is_some()
+    });
+    assert_eq!(app.state.control_request.unwrap().0, fresh);
+}
+
+#[test]
+fn a_run_ended_by_its_output_going_away_is_followed_by_a_fresh_run_on_another_output() {
+    let Some(mut h) = Harness::new() else { return };
+    let bridge = Bridge::spawn();
+    let _store = Store::read_by(&mut h, &this_program(), &ALLOW_ALL);
+    let mut c = Controller::named(&mut h, &bridge);
+    let first_output = c.output.clone();
+    let second = headless::HeadlessDisplay {
+        name: "headless-2".into(),
+        size: (800, 600),
+        physical_mm: (0, 0),
+    };
+    let head = headless::add_display(&mut h.state, &second, Some(1.0)).unwrap();
+    let qh = c.client.qh();
+    let outputs = |c: &Controller| {
+        let globals = c.client.globals.contents().clone_list();
+        globals
+            .into_iter()
+            .filter(|g| g.interface == "wl_output")
+            .collect::<Vec<_>>()
+    };
+    for _ in 0..100 {
+        if outputs(&c).len() == 2 {
+            break;
+        }
+        h.idle(&mut c.client, 1);
+    }
+    let mut both = outputs(&c);
+    assert_eq!(both.len(), 2, "the second output's global is seen");
+    let added = both.pop().unwrap();
+    c.output = c
+        .client
+        .globals
+        .registry()
+        .bind(added.name, added.version.min(4), &qh, ());
+    assert_eq!(c.start(&mut h, 15), Ok(()));
+    c.phase(&mut h, 2);
+    let first = c.client.state.control_seen.epoch;
+    // the granted output is unplugged: the run ends
+    headless::remove_display(&mut h.state, head).unwrap();
+    c.phase(&mut h, 4);
+    assert_eq!(
+        c.start(&mut h, 15),
+        Err(session::Refusal::OutsideScope),
+        "the output that went away is out of reach"
+    );
+    c.output = first_output;
+    assert_eq!(
+        c.start(&mut h, 15),
+        Err(session::Refusal::StaleEpoch),
+        "the ended run is not started again, also on the output that is left, and nothing says busy"
+    );
+    // a fresh session has a fresh run, which starts at once on the output that is left
+    c.renew(&mut h, &bridge);
+    assert_ne!(c.client.state.control_seen.epoch, first);
+    assert_eq!(c.start(&mut h, 15), Ok(()));
+    c.phase(&mut h, 2);
+}
+
+#[test]
 fn the_person_input_never_pauses_a_run_and_the_prompt_suspends_it_until_it_closes() {
     let Some(mut h) = Harness::new() else { return };
     let (mut target, _) = mapped_app_named(&mut h, "org.example.controlled", None);

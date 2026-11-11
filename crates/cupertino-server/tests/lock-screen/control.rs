@@ -628,3 +628,58 @@ fn a_request_after_the_run_ended_starts_a_fresh_run_and_a_repeated_one_keeps_it(
         asked["epoch"]
     );
 }
+
+#[test]
+fn a_run_ended_by_its_output_going_away_is_followed_by_a_fresh_run_on_another_output() {
+    let Some(mut session) = Session::start() else {
+        return;
+    };
+    start_controller(&mut session);
+    let store = Remembered::watched(&mut session);
+    let mut local = Local::connect(&mut session);
+    local.ok(&mut session.server, json!({"op":"hello","version":1}));
+    store.allow(&mut session.server, &this_program());
+    let second = headless::HeadlessDisplay {
+        name: "headless-2".into(),
+        size: (800, 600),
+        physical_mm: (0, 0),
+    };
+    let head = headless::add_display(&mut session.server.state, &second, Some(1.0)).unwrap();
+    // the controller learns of the output once its name arrives
+    let deadline = Instant::now() + common::HANG_GUARD;
+    while !local.ok(&mut session.server, json!({"op":"status"}))["outputs"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("headless-2"))
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the second output never reached the controller"
+        );
+        session.server.run_for(Duration::from_millis(20));
+    }
+    let first = local.ok(
+        &mut session.server,
+        json!({"op":"request","output":"headless-2","capabilities":15}),
+    );
+    assert_eq!(first["phase"], 2, "{first}");
+    // the granted output is unplugged: the run ends
+    headless::remove_display(&mut session.server.state, head).unwrap();
+    local.ok(
+        &mut session.server,
+        json!({"op":"wait","phase":4,"timeout_ms":5000}),
+    );
+    let gone = local.call(
+        &mut session.server,
+        json!({"op":"request","output":"headless-2","capabilities":15}),
+    );
+    assert_eq!(gone["error"], "output is not present", "{gone}");
+    // the next request, for the output that is left, starts a fresh run at once instead of busy
+    let next = local.ok(
+        &mut session.server,
+        json!({"op":"request","output":"headless-1","capabilities":15}),
+    );
+    assert_eq!(next["phase"], 2, "{next}");
+    assert_ne!(next["epoch"], first["epoch"]);
+    local.ok(&mut session.server, json!({"op":"capture"}));
+}

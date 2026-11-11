@@ -1044,6 +1044,7 @@ dependencies = [
 name = "cupertino-control"
 version = "0.1.0"
 dependencies = [
+ "cupertino-control-model",
  "cupertino-peer",
  "cupertino-semantics",
  "cupertino-shell-client",

@@ -1,20 +1,23 @@
 mod capture;
 mod ipc;
 mod mcp;
+mod mux;
+use cupertino_control_model::MAX_RUNS_PER_CONTROLLER;
 use cupertino_shell_client::{ControlEvent, ControlSession, DesktopControl};
-use cupertino_wayland_client::{Connection, Event, OutputId};
+use cupertino_wayland_client::{Connection, Event, OutputId, OutputInfo};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{self, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Default deadline for compositor replies and first-frame capture.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Maximum explicit state wait; a disconnected peer always cancels it earlier.
 const MAX_WAIT_MS: u64 = 30_000;
+/// The control protocol version from which the compositor serves several runs on one connection.
+const CONCURRENT_RUNS: u32 = 5;
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case", deny_unknown_fields)]
 enum Request {
@@ -62,313 +65,6 @@ enum Request {
         timeout_ms: u64,
     },
 }
-#[derive(Default)]
-struct Remote {
-    epoch: u64,
-    available: u32,
-    phase: u32,
-    revision: u32,
-    output: Option<OutputId>,
-    geometry: Value,
-    reply: Option<(u32, Result<(), u32>)>,
-    observation: Option<(u32, cupertino_semantics::Observation)>,
-    action_reply: Option<(u32, cupertino_semantics::ActionReply)>,
-}
-impl Remote {
-    fn observe(&mut self, events: Vec<Event>, run: &ControlSession) {
-        for event in events {
-            let Event::Extension(event) = event else {
-                continue;
-            };
-            let Some(event) = event.downcast_ref::<ControlEvent>() else {
-                continue;
-            };
-            match event {
-                ControlEvent::Created { epoch, available } if *epoch == run.epoch() => {
-                    self.epoch = *epoch;
-                    self.available = *available;
-                }
-                ControlEvent::Status { epoch, phase, .. } if *epoch == run.epoch() => {
-                    self.phase = *phase
-                }
-                ControlEvent::Geometry {
-                    epoch,
-                    revision,
-                    x,
-                    y,
-                    width,
-                    height,
-                    scale,
-                    name,
-                } if *epoch == run.epoch() => {
-                    self.revision = *revision;
-                    self.geometry = json!({"revision":revision,"x":x,"y":y,"width":width,"height":height,"scale":scale,"name":name});
-                }
-                ControlEvent::Observation {
-                    epoch,
-                    serial,
-                    data,
-                } if *epoch == run.epoch() => self.observation = Some((*serial, data.clone())),
-                ControlEvent::ActionFinished {
-                    epoch,
-                    serial,
-                    reply,
-                } if *epoch == run.epoch() => self.action_reply = Some((*serial, reply.clone())),
-                ControlEvent::Completed { epoch, serial } if *epoch == run.epoch() => {
-                    self.reply = Some((*serial, Ok(())))
-                }
-                ControlEvent::Refused {
-                    epoch,
-                    serial,
-                    reason,
-                } if *epoch == run.epoch() => self.reply = Some((*serial, Err(*reason))),
-                _ => {}
-            }
-        }
-    }
-    fn snapshot(&self) -> Value {
-        json!({"epoch":self.epoch,"available":self.available,"phase":self.phase,"geometry":self.geometry})
-    }
-}
-struct ClientRun<'a> {
-    conn: &'a mut Connection,
-    session: ControlSession,
-    inbox: ipc::Inbox,
-    remote: Remote,
-    next: u32,
-}
-impl ClientRun<'_> {
-    // Semantic publications and window animation advance the input token without changing the captured output.
-    // Core output metadata also covers transforms and pixel modes absent from the version-3 geometry event.
-    fn capture_layout(&self) -> Result<(Value, cupertino_wayland_client::OutputInfo), String> {
-        let mut geometry = self.remote.geometry.clone();
-        geometry
-            .as_object_mut()
-            .ok_or("output geometry is unavailable")?
-            .remove("revision");
-        let output = self
-            .conn
-            .outputs()
-            .into_iter()
-            .find(|o| Some(o.id) == self.remote.output)
-            .ok_or("output disappeared during capture")?;
-        Ok((geometry, output))
-    }
-    fn pump(&mut self, timeout: Option<Duration>) -> Result<(), String> {
-        if self.inbox.closed.load(Ordering::SeqCst) {
-            return Err("local client disconnected".into());
-        }
-        let events = self
-            .conn
-            .wait(timeout)
-            .map_err(|_| "Wayland connection ended")?;
-        self.remote.observe(events, &self.session);
-        if self.inbox.closed.load(Ordering::SeqCst) {
-            return Err("local client disconnected".into());
-        }
-        Ok(())
-    }
-    fn until(
-        &mut self,
-        deadline: Instant,
-        mut ready: impl FnMut(&Remote) -> bool,
-    ) -> Result<(), String> {
-        while !ready(&self.remote) {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .ok_or("operation timed out")?;
-            self.pump(Some(remaining))?;
-        }
-        Ok(())
-    }
-    fn serial(&mut self) -> Result<u32, String> {
-        let s = self.next;
-        self.next = self
-            .next
-            .checked_add(1)
-            .ok_or("request identifiers exhausted")?;
-        Ok(s)
-    }
-    fn ack(&mut self, serial: u32) -> Result<(), String> {
-        self.ack_timeout(serial, REPLY_TIMEOUT)
-    }
-    fn ack_timeout(&mut self, serial: u32, timeout: Duration) -> Result<(), String> {
-        self.until(Instant::now() + timeout, |r| {
-            r.reply.is_some_and(|(s, _)| s == serial)
-        })?;
-        self.remote.reply.unwrap().1.map_err(refusal)
-    }
-    fn execute(&mut self, request: Request, capturer: &capture::Capturer) -> Result<Value, String> {
-        self.pump(Some(Duration::ZERO))?;
-        match request {
-            Request::Hello { version: 1 } => Ok(
-                json!({"schema":"cupertino.control.v1","protocol":3,"state":self.remote.snapshot()}),
-            ),
-            Request::Hello { .. } => Err("unsupported local protocol version".into()),
-            Request::Status => {
-                let mut state = self.remote.snapshot();
-                state["outputs"] = json!(self
-                    .conn
-                    .outputs()
-                    .iter()
-                    .filter_map(|o| o.name.clone())
-                    .collect::<Vec<_>>());
-                Ok(state)
-            }
-            Request::Observe => {
-                let serial = self.serial()?;
-                self.remote.reply = None;
-                self.session.observe(serial);
-                self.ack(serial)?;
-                self.remote
-                    .observation
-                    .as_ref()
-                    .filter(|(s, _)| *s == serial)
-                    .map(|(_, o)| serde_json::to_value(o).unwrap())
-                    .ok_or("observation did not arrive".into())
-            }
-            Request::Action {
-                window,
-                revision,
-                node,
-                action,
-                data,
-            } => {
-                let serial = self.serial()?;
-                self.remote.reply = None;
-                self.session
-                    .perform(
-                        serial,
-                        &cupertino_semantics::Invocation {
-                            window,
-                            revision,
-                            node,
-                            action,
-                            data,
-                        },
-                    )
-                    .map_err(|_| "invalid semantic action")?;
-                self.ack_timeout(serial, REPLY_TIMEOUT + Duration::from_secs(1))?;
-                let reply = self
-                    .remote
-                    .action_reply
-                    .as_ref()
-                    .filter(|(s, _)| *s == serial)
-                    .map(|(_, r)| r)
-                    .ok_or("action outcome is unknown; observe before retrying")?;
-                serde_json::to_value(reply).map_err(|_| "invalid semantic result".into())
-            }
-            Request::Start {
-                output,
-                capabilities,
-            } => {
-                let o = self
-                    .conn
-                    .outputs()
-                    .into_iter()
-                    .find(|o| o.name.as_deref() == Some(output.as_str()))
-                    .ok_or("output is not present")?
-                    .id;
-                let s = self.serial()?;
-                self.remote.reply = None;
-                self.session
-                    .start(self.conn, s, o, capabilities)
-                    .map_err(|_| "output disappeared")?;
-                self.ack(s)?;
-                self.remote.output = Some(o);
-                Ok(self.remote.snapshot())
-            }
-            Request::Wait { phase, timeout_ms } => {
-                if timeout_ms > MAX_WAIT_MS {
-                    return Err("state wait exceeds deadline limit".into());
-                }
-                self.until(Instant::now() + Duration::from_millis(timeout_ms), |r| {
-                    r.phase == phase
-                })?;
-                Ok(self.remote.snapshot())
-            }
-            Request::Stop => {
-                self.session.stop();
-                self.until(Instant::now() + REPLY_TIMEOUT, |r| r.phase == 4)?;
-                Ok(self.remote.snapshot())
-            }
-            Request::Capture => {
-                if self.remote.phase != 2 {
-                    return Err("desktop control is not active".into());
-                }
-                let layout = self.capture_layout()?;
-                let mut frame =
-                    capturer.start(self.conn, self.remote.output.ok_or("no granted output")?)?;
-                let deadline = Instant::now() + REPLY_TIMEOUT;
-                while !frame.progress().0 && !frame.progress().2 {
-                    self.pump(Some(
-                        deadline
-                            .checked_duration_since(Instant::now())
-                            .ok_or("capture timed out")?,
-                    ))?;
-                }
-                if frame.progress().2 {
-                    return Err("capture grant is unavailable".into());
-                }
-                capturer.prepare(self.conn, &mut frame)?;
-                while !frame.progress().1 && !frame.progress().2 {
-                    self.pump(Some(
-                        deadline
-                            .checked_duration_since(Instant::now())
-                            .ok_or("capture timed out")?,
-                    ))?;
-                }
-                if self.remote.phase != 2 || frame.progress().2 {
-                    return Err("capture grant ended".into());
-                }
-                if self.capture_layout()? != layout {
-                    return Err("output geometry changed during capture; observe again".into());
-                }
-                let (w, h, png) = frame.png()?;
-                Ok(
-                    json!({"mime_type":"image/png","width":w,"height":h,"geometry":self.remote.geometry,"data":base64(&png)}),
-                )
-            }
-            Request::Resume => {
-                let s = self.serial()?;
-                self.remote.reply = None;
-                self.session.resume(s);
-                self.ack(s)?;
-                Ok(self.remote.snapshot())
-            }
-            request => {
-                let s = self.serial()?;
-                self.remote.reply = None;
-                let revision = self.remote.revision;
-                match request {
-                    Request::Move {
-                        x,
-                        y,
-                        revision: expected,
-                    } => self.session.motion(s, expected.unwrap_or(revision), x, y),
-                    Request::Button {
-                        code,
-                        pressed,
-                        revision: expected,
-                    } => self
-                        .session
-                        .button(s, expected.unwrap_or(revision), code, pressed),
-                    Request::Key { code, pressed } => self.session.key(s, revision, code, pressed),
-                    Request::Scroll {
-                        horizontal,
-                        vertical,
-                        revision: expected,
-                    } => self
-                        .session
-                        .axis(s, expected.unwrap_or(revision), horizontal, vertical),
-                    _ => unreachable!(),
-                }
-                self.ack(s)?;
-                Ok(self.remote.snapshot())
-            }
-        }
-    }
-}
 /// What a refusal of `cupertino_control_session_v1` tells the local client, with what to do about it.
 fn refusal(code: u32) -> String {
     match code {
@@ -411,6 +107,113 @@ fn base64(bytes: &[u8]) -> String {
     }
     out
 }
+/// The compositor over the controller's one Wayland connection.
+struct Wayland {
+    conn: Connection,
+    control: DesktopControl,
+    capturer: capture::Capturer,
+}
+impl mux::Desktop for Wayland {
+    type Session = ControlSession;
+    type Frame = capture::Capture;
+    fn capacity(&self) -> usize {
+        if self.control.version() >= CONCURRENT_RUNS {
+            MAX_RUNS_PER_CONTROLLER
+        } else {
+            1
+        }
+    }
+    fn open(&mut self) -> ControlSession {
+        self.control.session(&self.conn)
+    }
+    fn epoch(&self, session: &ControlSession) -> u64 {
+        session.epoch()
+    }
+    fn identify(&mut self, session: &ControlSession, peer: Option<(u32, u64)>) {
+        if let Some((pid, start)) = peer.filter(|_| session.names_apps()) {
+            session.identify(pid, start);
+        }
+    }
+    fn send(
+        &mut self,
+        session: &ControlSession,
+        serial: u32,
+        command: mux::Command,
+    ) -> Result<(), String> {
+        use mux::Command;
+        match command {
+            Command::Start {
+                output,
+                capabilities,
+            } => session
+                .start(&self.conn, serial, output, capabilities)
+                .map_err(|_| "output disappeared")?,
+            Command::Motion { revision, x, y } => session.motion(serial, revision, x, y),
+            Command::Button {
+                revision,
+                code,
+                pressed,
+            } => session.button(serial, revision, code, pressed),
+            Command::Key {
+                revision,
+                code,
+                pressed,
+            } => session.key(serial, revision, code, pressed),
+            Command::Axis {
+                revision,
+                horizontal,
+                vertical,
+            } => session.axis(serial, revision, horizontal, vertical),
+            Command::Observe => session.observe(serial),
+            Command::Perform(invocation) => session
+                .perform(serial, &invocation)
+                .map_err(|_| "invalid semantic action")?,
+            Command::Resume => session.resume(serial),
+        }
+        Ok(())
+    }
+    fn stop(&mut self, session: &ControlSession) {
+        session.stop();
+    }
+    fn close(&mut self, session: ControlSession) {
+        drop(session);
+        let _ = self.conn.flush();
+    }
+    fn outputs(&self) -> Vec<OutputInfo> {
+        self.conn.outputs()
+    }
+    fn capture(
+        &mut self,
+        session: &ControlSession,
+        output: OutputId,
+    ) -> Result<capture::Capture, String> {
+        // the source the capture creates next belongs to this run, not to another the controller serves
+        session.select_capture();
+        self.capturer.start(&self.conn, output)
+    }
+    fn progress(&self, frame: &capture::Capture) -> (bool, bool, bool) {
+        frame.progress()
+    }
+    fn prepare(&mut self, frame: &mut capture::Capture) -> Result<(), String> {
+        self.capturer.prepare(&self.conn, frame)
+    }
+    fn pixels(&mut self, frame: capture::Capture) -> Result<capture::Pixels, String> {
+        frame.pixels()
+    }
+    fn wait(&mut self, timeout: Option<Duration>) -> Result<Vec<ControlEvent>, String> {
+        let events = self
+            .conn
+            .wait(timeout)
+            .map_err(|_| "Wayland connection ended")?;
+        Ok(events
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::Extension(event) => event.downcast_ref::<ControlEvent>().cloned(),
+                _ => None,
+            })
+            .collect())
+    }
+}
 fn serve() -> Result<(), String> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -420,77 +223,33 @@ fn serve() -> Result<(), String> {
     let mut conn = Connection::connect().map_err(|_| "cannot connect to Wayland")?;
     let control =
         DesktopControl::bind(&mut conn).ok_or("native desktop-control protocol is unavailable")?;
-    let capture =
+    let capturer =
         capture::Capturer::bind(&mut conn).ok_or("native capture protocol is unavailable")?;
+    let mut desktop = Wayland {
+        conn,
+        control,
+        capturer,
+    };
+    let capacity = mux::Desktop::capacity(&desktop);
     let accepting = listener.socket.try_clone().map_err(|e| e.to_string())?;
-    let (pending, accepted) = std::sync::mpsc::sync_channel(1);
-    let wake = conn.waker();
+    // new peers wait here only until the loop takes them; one more than the loop serves is turned away at once
+    let (pending, accepted) = std::sync::mpsc::sync_channel(capacity);
+    let waker = desktop.conn.waker();
+    let wake: ipc::Wake = std::sync::Arc::new(move || waker.wake());
+    let accept_wake = wake.clone();
     std::thread::spawn(move || {
         for stream in accepting.incoming() {
             match pending.try_send(stream) {
-                Ok(()) => wake.wake(),
-                Err(std::sync::mpsc::TrySendError::Full(_)) => {}
-                Err(_) => break,
+                Ok(()) => accept_wake(),
+                Err(std::sync::mpsc::TrySendError::Full(Ok(stream))) => {
+                    ipc::refuse(stream, &mux::turned_away(capacity))
+                }
+                Err(std::sync::mpsc::TrySendError::Full(Err(_))) => {}
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
             }
         }
     });
-    loop {
-        let mut stream = match accepted.try_recv() {
-            Ok(stream) => stream.map_err(|e| e.to_string())?,
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                conn.wait(None).map_err(|_| "Wayland connection ended")?;
-                continue;
-            }
-            Err(_) => return Err("local listener ended".into()),
-        };
-        let inbox = match ipc::read_peer(&stream, conn.waker()) {
-            Ok(inbox) => inbox,
-            Err(_) => continue,
-        };
-        let session = control.session(&conn);
-        let mut run = ClientRun {
-            conn: &mut conn,
-            session,
-            inbox,
-            remote: Remote::default(),
-            next: 1,
-        };
-        let result = (|| -> Result<(), String> {
-            run.until(Instant::now() + REPLY_TIMEOUT, |r| r.epoch != 0)?;
-            // without a name the compositor refuses the run: it never decides for an app it cannot tell
-            if let Some((pid, start)) = run.inbox.peer.filter(|_| run.session.names_apps()) {
-                run.session.identify(pid, start);
-            }
-            let mut hello = false;
-            loop {
-                if let Ok(line) = run.inbox.commands.try_recv() {
-                    let request = serde_json::from_slice::<Request>(&line);
-                    let result = match request {
-                        Ok(Request::Hello { version: 1 }) => {
-                            hello = true;
-                            run.execute(Request::Hello { version: 1 }, &capture)
-                        }
-                        Ok(_) if !hello => Err("local protocol handshake required".into()),
-                        Ok(request) => run.execute(request, &capture),
-                        Err(_) => Err("invalid local command".into()),
-                    };
-                    let value = match result {
-                        Ok(data) => json!({"ok":true,"data":data}),
-                        Err(error) => json!({"ok":false,"error":error}),
-                    };
-                    run.inbox.pending.store(false, Ordering::SeqCst);
-                    ipc::write_json(&mut stream, &value).map_err(|_| "local response failed")?;
-                } else {
-                    run.pump(None)?;
-                }
-            }
-        })();
-        let _ = result;
-        run.session.stop();
-        drop(run);
-        let _ = conn.flush();
-        let _ = stream.shutdown(std::net::Shutdown::Both);
-    }
+    mux::run(&mut desktop, &accepted, &wake)
 }
 fn frontend(session: String) -> Result<(), String> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
@@ -506,7 +265,11 @@ fn frontend(session: String) -> Result<(), String> {
     let greeting: Value =
         serde_json::from_slice(&greeting).map_err(|_| "invalid native handshake")?;
     if greeting["ok"] != true {
-        return Err("native handshake refused".into());
+        // a controller that serves as many clients as it can says so instead of the greeting
+        return Err(greeting["error"]
+            .as_str()
+            .unwrap_or("native handshake refused")
+            .to_owned());
     }
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();

@@ -160,9 +160,15 @@ fn the_agent_is_told_the_person_decides_once_per_app_and_where_to_change_it() {
         "Settings › Privacy › Desktop Control or Screen Capture",
         "never pauses control",
         "resumes by itself",
+        "each in a run of its own",
     ] {
         assert!(INSTRUCTIONS.contains(text), "instructions lack {text:?}");
     }
+    let bound = cupertino_control_model::MAX_RUNS_PER_CONTROLLER;
+    assert!(
+        INSTRUCTIONS.contains(&format!("serves at most {bound} agents at once")),
+        "the instructions name the controller's bound"
+    );
     assert!(
         !INSTRUCTIONS.contains("pauses control;"),
         "physical input no longer pauses a run"
@@ -182,6 +188,8 @@ fn the_agent_is_told_the_person_decides_once_per_app_and_where_to_change_it() {
     assert!(description("request_control").contains("Settings › Privacy"));
     assert!(description("request_control").contains("remembers the answer"));
     assert!(description("resume").contains("never asks the person again"));
+    assert!(description("request_control").contains("waits its turn in phase 1"));
+    assert!(description("stop").contains("other agents' runs go on"));
 }
 #[test]
 fn a_remembered_refusal_reaches_the_agent_with_where_the_person_can_change_it() {

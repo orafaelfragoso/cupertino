@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 86 crates, 417 internal dependencies
+// 86 crates, 422 internal dependencies
 // per layer: foundation 22, models 9, platform 9, protocol 4, transport 3, render 3, ui 13, core 1, shell 12, services 4, apps 2, tools 4
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
@@ -139,9 +139,12 @@ digraph "layers" {
   "cupertino-capture" -> "cupertino-assets";
   "cupertino-cli" -> "cupertino-assets";
   "cupertino-cli" -> "cupertino-build-info";
+  "cupertino-cli" -> "cupertino-defaults";
   "cupertino-cli" -> "cupertino-diagnostic-events";
   "cupertino-cli" -> "cupertino-diagnostics";
   "cupertino-cli" -> "cupertino-layers";
+  "cupertino-cli" -> "cupertino-test-bus" [label="dev"];
+  "cupertino-control" -> "cupertino-control-model";
   "cupertino-control" -> "cupertino-peer";
   "cupertino-control" -> "cupertino-semantics";
   "cupertino-control" -> "cupertino-shell-client";
@@ -259,10 +262,12 @@ digraph "layers" {
   "cupertino-launcher" -> "cupertino-ui-wayland";
   "cupertino-launcher" -> "cupertino-wayland-client";
   "cupertino-login" -> "cupertino-apps";
+  "cupertino-login" -> "cupertino-assets";
   "cupertino-login" -> "cupertino-assets" [label="dev"];
   "cupertino-login" -> "cupertino-defaults";
   "cupertino-login" -> "cupertino-diagnostic-events";
   "cupertino-login" -> "cupertino-geometry";
+  "cupertino-login" -> "cupertino-icons";
   "cupertino-login" -> "cupertino-kit";
   "cupertino-login" -> "cupertino-login-ipc";
   "cupertino-login" -> "cupertino-modifiers";

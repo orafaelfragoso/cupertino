@@ -1,13 +1,14 @@
 ---
 name: cupertino-live-dev
-description: Try a change to a Cupertino shell component (dock, menu bar, launcher, notifications, control panel, OSD, window manager) inside the running Cupertino session without root, through the development folder and `cupertino shell restart`, then verify it with desktop control and roll back. Use when developing from inside the installed desktop.
+description: Try a change to a Cupertino shell component (dock, menu bar, launcher, notifications, control panel, OSD, window manager) inside the running Cupertino session without root, through the development folder and `cupertino shell restart`, verify it with desktop control, keep a build that passes and roll back one that fails. Use when developing from inside the installed desktop.
 ---
 
 # Developing Cupertino from inside its session
 
 The installed server may start some shell components from a development folder instead of `/usr/bin`. Root enables the
 folder once; after that you build a component in your worktree, copy it into the folder, restart that one component
-and look at the result, all as the session's own user. The full reference is `docs/src/building.md`, section
+and look at the result, all as the session's own user. A build that passes its check stays running until a package
+contains the change. The full reference is `docs/src/building.md`, section
 "Installed-session iteration".
 
 Never restart the server or the session, never run `sudo` yourself, never edit `/etc`, and never select a process by
@@ -53,24 +54,31 @@ swapped. [components.md](guides/components.md) lists what a restart of each comp
 
 ## 2. Build it in your worktree
 
-Follow the repository's build rules (managed wrapper, scoped to the binary, production features):
+A build that passes stays running (step 6), so build it as the package does: the release profile, scoped to the binary,
+production features, and the installed theme directory (without it the binary reads the theme from your worktree,
+which may be gone later). The wrapper sets the profile itself (it refuses `--release`), and a worktree's target keeps
+one profile and build environment: use a worktree for release builds, or `cleanup --target` before switching.
 
 ```bash
 export PATH=$HOME/.cargo/bin:$PATH
-python3 ci/worktree-build.py run --profile dev -- cargo build --locked -p cupertino-dock --bin cupertino-dock --features app
+CUPERTINO_THEME_DIR=/usr/share/cupertino/theme \
+  python3 ci/worktree-build.py run --profile release -- cargo build --locked -p cupertino-dock --bin cupertino-dock --features app
 ```
 
-Validate the change with its scoped tests separately. The build must speak the running server's protocols: if your
-change touches a protocol or the server, the component waits for a new server at the next session start.
+The binary is `target/release/cupertino-dock`. Validate the change with its scoped tests separately. The build must
+speak the running server's protocols: if your change touches a protocol or the server, the component waits for a new
+server at the next session start.
 
 ## 3. Copy it into the folder
 
-Stage the copy and rename it into place; never write into a file a running process may be executing. Record the hash.
+Stage the copy and rename it into place; never write into a file a running process may be executing. Record the
+source commit (and whether the tree had uncommitted changes) and the file's hash.
 
 ```bash
 dev=$(cupertino --format json shell list | python3 -c 'import json,sys; print([p for p in json.load(sys.stdin)["data"]["processes"] if p["name"]=="dock"][0]["dev_program"])')
-install -m 0755 target/debug/cupertino-dock "$(dirname "$dev")/.cupertino-dock.new"
+install -m 0755 target/release/cupertino-dock "$(dirname "$dev")/.cupertino-dock.new"
 mv -f "$(dirname "$dev")/.cupertino-dock.new" "$dev"
+git rev-parse HEAD; git status --short
 sha256sum "$dev"
 ```
 
@@ -87,7 +95,7 @@ cupertino shell restart dock
 
 It returns once the new process runs: `pid`, start time, `program` and `SOURCE` `development folder`. If the source
 says `installed`, the file failed a check: fix its mode or owner and restart again. Exit 6 `not_started` means the
-process did not start again; go back (step 6) at once.
+process did not start again; roll back (step 6) at once.
 
 ## 5. Verify in the session
 
@@ -97,12 +105,16 @@ permission based: the person decides once per app in Cupertino's native panel, a
 again. Never approve on their behalf. Compare with what the installed build did; `cupertino shell list` confirms the
 pid and program you are looking at.
 
-## 6. Go back
+## 6. Keep it or roll back
 
-```bash
-cupertino shell use-installed dock
-```
+- **It passes its live check:** leave it running from the folder. Report the component, the source commit (and any
+  uncommitted changes), the file's hash and that it runs from the development folder.
+- **It fails:** roll back at once with `cupertino shell use-installed dock`. It removes the folder's file and restarts
+  the component on its installed program.
+- **An installed package contains the change:** roll back the same way; from then on the package's program runs.
 
-It removes the folder's file and restarts the component on its installed program. Do this after the check, after a
-failed candidate, and before you hand off, unless the person asked to keep the build running. Report the source
-revision, the hash and the state you left the component in.
+After a package install, a change that lies only in a supervised process (any name `cupertino shell list` shows,
+including `portal`, `polkit-agent` and `desktop-control`, which never start from the folder) takes effect with
+`cupertino shell restart NAME`; no new login. Defer it while the process is in use (see
+[components.md](guides/components.md)). Only a change to the server, or to what it links, needs a new login, which
+the person decides on.

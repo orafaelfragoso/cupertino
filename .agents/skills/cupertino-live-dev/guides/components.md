@@ -29,7 +29,18 @@ These never start from the development folder:
 
 Work on them nested or headless: `cupertino desktop start --backend nested --spawn foot` from inside the session, or
 the integration tests and `crates/cupertino-server/scripts/capture.sh` for offscreen captures. Their changes reach the
-installed desktop through a planned package update and a session restart, which the person decides on. If an
+installed desktop through a package update, which the person decides on. After it, a process the server supervises
+(`login`, `portal`, `polkit-agent`, `desktop-control`) runs the new program from `cupertino shell restart NAME`:
+
+| Name | Defer the restart while | What is lost |
+| --- | --- | --- |
+| `login` | the session is locked | what the lock screen and session agent held only in memory |
+| `portal` | a screen share or a portal request is active | active screen-sharing sessions and outstanding requests |
+| `polkit-agent` | an authentication prompt is open | the open prompt |
+| `desktop-control` | an agent run you or someone else still needs is active | every run, yours included |
+
+Only the server (and what it links) and the session manager need a new login; the system daemons follow their
+system service units. If an
 investigation truly needs a manual replacement, follow `docs/src/building.md` ("Components that are not eligible"):
 identify the process through the server's runtime record, its parent and start time, keep a rollback copy, stage and
 rename with the required owner and mode, and record the override.

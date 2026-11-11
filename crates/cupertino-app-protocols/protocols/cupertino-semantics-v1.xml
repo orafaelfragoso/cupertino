@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <protocol name="cupertino_semantics_v1">
   <copyright>SPDX-License-Identifier: MIT OR Apache-2.0</copyright>
-  <interface name="cupertino_semantics_v1" version="1">
+  <interface name="cupertino_semantics_v1" version="2">
     <description summary="publish only the client's own native semantic tree">
       This public interface grants no observation or desktop control. Only the compositor may subscribe an
       explicitly consented output's eligible surfaces. Publications are bounded immutable sealed JSON memfds.
@@ -11,7 +11,7 @@
     <request name="destroy" type="destructor"/>
     <request name="get_surface"><arg name="id" type="new_id" interface="cupertino_semantic_surface_v1"/><arg name="surface" type="object" interface="wl_surface"/></request>
   </interface>
-  <interface name="cupertino_semantic_surface_v1" version="1">
+  <interface name="cupertino_semantic_surface_v1" version="2">
     <description summary="a surface-owned publication and supported actions">
       One publisher per wl_surface. Each active interest starts a new epoch and requires a full snapshot.
       The snapshot revision increases for any change, including removals and focus. Node identities are local
@@ -25,5 +25,18 @@
     <request name="complete"><arg name="payload" type="fd"/><arg name="length" type="uint"/></request>
     <event name="interest"><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/><arg name="active" type="uint"/></event>
     <event name="perform"><arg name="payload" type="fd"/><arg name="length" type="uint"/></event>
+    <event name="grab_serial" since="2">
+      <description summary="the serial a popup opened for the next action may grab with">
+        Sent right before the perform event it belongs to. The client may pass the serial once to xdg_popup.grab,
+        for a popup of the window this surface belongs to, while it handles that action, so a menu the action shows
+        takes the keyboard and closes on a click elsewhere as one a press opened would. The serial is valid while the
+        action is handled and for one second after the client answers it as applied, so a popup the action's work
+        shows a little later still grabs; an answer of any other outcome, the action timing out or being withdrawn,
+        and the session locking end it at once. It is not an input serial and is refused by every other request
+        that takes one, such as moves, resizes, drags and activation tokens. A client that has no popup to open
+        ignores it.
+      </description>
+      <arg name="serial" type="uint"/>
+    </event>
   </interface>
 </protocol>

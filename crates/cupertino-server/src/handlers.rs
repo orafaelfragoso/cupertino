@@ -24,7 +24,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::backend::protocol::ProtocolError;
 use smithay::reexports::wayland_server::backend::DisconnectReason;
 use smithay::reexports::wayland_server::{Client, Resource};
-use smithay::utils::{Logical, Point, Rectangle, Serial};
+use smithay::utils::{Logical, Point, Rectangle, Serial, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     add_blocker, add_pre_commit_hook, get_parent, is_sync_subsurface, with_states, BufferAssignment, CompositorClientState, CompositorHandler,
@@ -60,6 +60,7 @@ use smithay::{
 
 use crate::acquire_waits::{self, Admission, Kind};
 use crate::clipboard::Snapshot;
+use crate::control::ActionGrab;
 use crate::menu_bar::cut_text;
 use crate::policy;
 use crate::state::{ClientState, Cupertino, PointerMode, WindowEntry};
@@ -533,6 +534,10 @@ impl Cupertino {
         let Some(seat) = Seat::<Cupertino>::from_resource(seat) else {
             return false;
         };
+        // an action's grab serial stands for no press
+        if self.is_action_grab_serial(serial) {
+            return false;
+        }
         let on_window = |focus: Option<WlSurface>| {
             focus.is_some_and(|mut surface| {
                 while let Some(parent) = get_parent(&surface) {
@@ -590,6 +595,8 @@ impl XdgActivationHandler for Cupertino {
     /// A token that names an application starts that application's launch bounce.
     fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
         let valid = match &data.serial {
+            // an action's grab serial is no input event
+            Some((serial, _)) if self.is_action_grab_serial(*serial) => false,
             Some((serial, seat)) => {
                 let keyboard = self.seat.get_keyboard().unwrap();
                 Seat::from_resource(seat) == Some(self.seat.clone())
@@ -822,7 +829,7 @@ impl XdgShellHandler for Cupertino {
         if self.session_lock.is_active() {
             return;
         }
-        let kind = PopupKind::Xdg(surface);
+        let kind = PopupKind::Xdg(surface.clone());
         let Some(root) = find_popup_root_surface(&kind).ok() else {
             return;
         };
@@ -830,6 +837,35 @@ impl XdgShellHandler for Cupertino {
         if self.prompt_shown() && !crate::authorization::is_prompt(&root) {
             return;
         }
+        // A popup that grows the grabbed chain grabs as the chain does. Otherwise an action's grab serial opens a new
+        // chain once, for the client and window the action went to: the seat then holds that chain under a serial of
+        // its own, which no client is given, so neither the action's serial nor that one stands for a press.
+        let (serial, private, enter) = match self.growing_popup_grab(&kind) {
+            Some((held, true)) => (held, true, SERIAL_COUNTER.next_serial()),
+            Some((_, false)) => (serial, false, serial),
+            None => match root
+                .client()
+                .map(|c| self.take_action_grab(&c.id(), &root, serial))
+            {
+                Some(ActionGrab::Granted) => {
+                    // as a press elsewhere would, the action first ends the grab another chain holds
+                    if self.popup_grab_root().is_some() {
+                        let time = std::time::Duration::from(self.clock.now()).as_millis() as u32;
+                        self.end_popup_grab(SERIAL_COUNTER.next_serial(), time);
+                    }
+                    let held = SERIAL_COUNTER.next_serial();
+                    (held, true, SERIAL_COUNTER.next_serial())
+                }
+                Some(ActionGrab::Refused) => {
+                    tracing::debug!(
+                        "popup grab refused: a spent, expired or foreign action serial"
+                    );
+                    surface.send_popup_done();
+                    return;
+                }
+                Some(ActionGrab::NotAction) | None => (serial, false, serial),
+            },
+        };
         if let Ok(mut grab) = self.popups.grab_popup(root.clone(), kind, &seat, serial) {
             if let Some(keyboard) = seat.get_keyboard() {
                 if keyboard.is_grabbed()
@@ -839,7 +875,7 @@ impl XdgShellHandler for Cupertino {
                     grab.ungrab(PopupUngrabStrategy::All);
                     return;
                 }
-                keyboard.set_focus(self, grab.current_grab(), serial);
+                keyboard.set_focus(self, grab.current_grab(), enter);
                 keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
             }
             if let Some(pointer) = seat.get_pointer() {
@@ -853,7 +889,7 @@ impl XdgShellHandler for Cupertino {
                 }
                 pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
             }
-            self.popup_grab = Some(crate::popup_grab::ActivePopupGrab::new(grab, root));
+            self.popup_grab = Some(crate::popup_grab::ActivePopupGrab::new(grab, root, private));
             self.refocus_pointer();
         }
     }

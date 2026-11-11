@@ -2,7 +2,7 @@
 //! goes to that popup), and a press anywhere else dismisses the whole chain and is consumed, so it never reaches the
 //! window or shell surface under it. The keyboard stays with the popup until the grab ends.
 
-use smithay::desktop::{find_popup_root_surface, PopupGrab, PopupUngrabStrategy};
+use smithay::desktop::{find_popup_root_surface, PopupGrab, PopupKind, PopupUngrabStrategy};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Serial, SERIAL_COUNTER};
 use smithay::wayland::compositor::get_parent;
@@ -13,11 +13,18 @@ use crate::state::Cupertino;
 pub struct ActivePopupGrab {
     grab: PopupGrab<Cupertino>,
     root: WlSurface,
+    /// The grab began with an action's grab serial: the seat holds it under a serial no client was given, so no request
+    /// can pass for the press of an implicit grab with it, and the popups the chain grows keep that serial.
+    private: bool,
 }
 
 impl ActivePopupGrab {
-    pub fn new(grab: PopupGrab<Cupertino>, root: WlSurface) -> Self {
-        Self { grab, root }
+    pub fn new(grab: PopupGrab<Cupertino>, root: WlSurface, private: bool) -> Self {
+        Self {
+            grab,
+            root,
+            private,
+        }
     }
 }
 
@@ -44,6 +51,18 @@ impl Cupertino {
             self.popup_grab = None;
         }
         self.popup_grab.as_mut()
+    }
+
+    /// When `popup` grows the chain of the live grab (its parent is the grab's topmost popup): the serial the seat
+    /// holds the grab under and whether that serial is private ([`ActivePopupGrab::private`]).
+    pub(crate) fn growing_popup_grab(&mut self, popup: &PopupKind) -> Option<(Serial, bool)> {
+        let PopupKind::Xdg(xdg) = popup else {
+            return None;
+        };
+        let parent = xdg.get_parent_surface()?;
+        let active = self.live_popup_grab()?;
+        (active.grab.current_grab().as_ref() == Some(&parent))
+            .then(|| (active.grab.serial(), active.private))
     }
 
     /// The surface whose popups hold the grab, while the grab is active.

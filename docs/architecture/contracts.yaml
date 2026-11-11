@@ -510,7 +510,7 @@
   note: Bounded sequential JSON lines over a mode-0600 session socket. Same-user peer identity and exact process lifetime are checked; each connection gets a fresh inactive run. Up to eight connections are served at once, each with one command in flight and its own run; a further connection is answered at once with an error saying the controller is full. The controller names the peer process (id and start time) to the compositor, which decides each request from the app's remembered answers and asks natively only for undecided services. The local wire protocol stays at 3, so older bridges keep working.
 - name: cupertino_semantics_v1
   kind: wayland-global
-  version: 1
+  version: 2
   owner_crate: cupertino-server
   owner_area: compositor
   scope: public
@@ -519,7 +519,7 @@
   test_owner: crates/cupertino-server/tests/lock-screen/semantics.rs
   source: crates/cupertino-server/src/control/semantics.rs
   source_match: create_global::<Cupertino, CupertinoSemanticsV1, ()>
-  note: Surface-owned sealed semantic publications. Publishing grants no control; only active scoped observation enables interest, and native actions require separate consent and current publication revisions.
+  note: Surface-owned sealed semantic publications. Publishing grants no control; only active scoped observation enables interest, and native actions require separate consent and current publication revisions. Version 2 sends a grab serial before each action: one popup grab of the action's window tree by its own client, while the action is handled and one second after an applied answer; moves, resizes, drags and activation tokens refuse it, and the grab it starts is held under a serial no client is given.
 - name: cupertino_control_v1
   kind: wayland-global
   version: 5

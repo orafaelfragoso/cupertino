@@ -2,6 +2,8 @@
 use super::*;
 #[path = "control-boundaries.rs"]
 mod boundaries;
+#[path = "control-grab.rs"]
+mod grab;
 #[path = "control-permissions.rs"]
 mod permissions;
 #[path = "control-runs.rs"]

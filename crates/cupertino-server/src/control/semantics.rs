@@ -6,12 +6,21 @@ use cupertino_protocols::server::semantics::{
 };
 use cupertino_semantics as wire;
 use smithay::desktop::{layer_map_for_output, PopupManager};
+use smithay::utils::{Serial, SERIAL_COUNTER};
 use std::os::fd::{AsFd, OwnedFd};
 
 /// One native action may be outstanding per run and per publication, with no automatic replay after timeout.
 const ACTION_TIMEOUT: Duration = Duration::from_secs(5);
 /// Each connection may publish at most this many live native surfaces.
 const MAX_PUBLISHERS: usize = 64;
+/// The publisher version from which an action comes with a serial its popup may grab with.
+const GRAB_SERIAL_VERSION: u32 = 2;
+/// How many of the latest action grab serials are remembered after their action ends, so that a request taking an input
+/// serial (a move, a resize, an activation token, a second grab) still knows them for what they are.
+const SPENT_GRAB_SERIALS: usize = 64;
+/// How long an action's grab serial stays good after the application answers the action as applied, so that a popup
+/// the action's work shows a little later (a folder's stack once it is listed) still grabs.
+const ANSWERED_GRAB_GRACE: Duration = Duration::from_secs(1);
 pub(super) struct SemanticState {
     _global: GlobalId,
     next: u64,
@@ -23,6 +32,33 @@ pub(super) struct SemanticState {
     /// The epoch publications are subscribed under while any run observes, shared by the runs that see them; a fresh
     /// one is taken each time observation starts after no run observed, so no run sees what was published before.
     subscription: Option<u64>,
+    /// Every action grab serial handed out lately, the latest last, live or not: none is ever an input serial.
+    grab_serials: VecDeque<Serial>,
+    /// The grab serials still good.
+    grants: Vec<GrabGrant>,
+}
+/// The popup grab an action's publisher may take while it handles the action: once, with `serial`, for a popup whose
+/// chain hangs from `root`, from its own connection. It goes when it is used, when the run that asked for the action
+/// stops observing, when the application answers the action as anything but applied, and at `deadline`: the action's
+/// own until it is answered, [`ANSWERED_GRAB_GRACE`] after an applied answer.
+struct GrabGrant {
+    serial: Serial,
+    /// The action it came with.
+    action: u64,
+    client: ClientId,
+    root: WlSurface,
+    controller: CupertinoControlSessionV1,
+    deadline: Instant,
+}
+/// What an action grab serial allows a popup grab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ActionGrab {
+    /// The serial is not one an action handed out.
+    NotAction,
+    /// The action's grant: it is used up now.
+    Granted,
+    /// An action's serial, but spent, expired, withdrawn or for another client or window.
+    Refused,
 }
 struct Publication {
     resource: CupertinoSemanticSurfaceV1,
@@ -63,7 +99,8 @@ impl Placement {
 impl SemanticState {
     pub fn new(display: &DisplayHandle) -> Self {
         Self {
-            _global: display.create_global::<Cupertino, CupertinoSemanticsV1, ()>(1, ()),
+            _global: display
+                .create_global::<Cupertino, CupertinoSemanticsV1, ()>(GRAB_SERIAL_VERSION, ()),
             next: 1,
             next_action: 1,
             revision: 1,
@@ -71,6 +108,8 @@ impl SemanticState {
             pending: Vec::new(),
             layout: Vec::new(),
             subscription: None,
+            grab_serials: VecDeque::new(),
+            grants: Vec::new(),
         }
     }
 }
@@ -357,6 +396,8 @@ impl Cupertino {
                 self.control.semantics.pending.push(p);
                 continue;
             }
+            // a withdrawn or timed-out action takes its grab serial with it
+            self.control.semantics.grants.retain(|g| g.action != p.id);
             if let Some(i) = self
                 .control
                 .runs
@@ -366,6 +407,7 @@ impl Cupertino {
                 self.control_finish(i, p.serial, Err(session::Refusal::UnknownOutcome));
             }
         }
+        self.expire_action_grabs();
     }
     pub(super) fn control_observe(
         &mut self,
@@ -512,16 +554,102 @@ impl Cupertino {
                 self.control.injected_clients.push(client.id());
             }
         }
+        let controller = self.control.runs[index].resource.clone();
+        let deadline = Instant::now() + ACTION_TIMEOUT;
+        // a menu the action shows grabs as one a press opened would, with a serial good for that alone
+        if let Some(client) = source
+            .client()
+            .filter(|_| source.version() >= GRAB_SERIAL_VERSION)
+        {
+            let serial = SERIAL_COUNTER.next_serial();
+            let root = self.shell_surface_root(&self.control.semantics.pubs[pi].surface);
+            let semantics = &mut self.control.semantics;
+            if semantics.grab_serials.len() == SPENT_GRAB_SERIALS {
+                semantics.grab_serials.pop_front();
+            }
+            semantics.grab_serials.push_back(serial);
+            semantics.grants.push(GrabGrant {
+                serial,
+                action: id,
+                client: client.id(),
+                root,
+                controller: controller.clone(),
+                deadline,
+            });
+            source.grab_serial(serial.into());
+        }
         source.perform(file.as_fd(), len);
         self.control.semantics.pending.push(Pending {
             id,
             epoch,
             serial,
             source,
-            controller: self.control.runs[index].resource.clone(),
-            deadline: Instant::now() + ACTION_TIMEOUT,
+            controller,
+            deadline,
         });
         Ok(true)
+    }
+
+    /// The action `action` was answered with `outcome`: an applied one leaves its grab serial good a moment longer, for
+    /// the popup its work may still show; any other takes it away.
+    fn action_answered(&mut self, action: u64, outcome: wire::Outcome) {
+        let grants = &mut self.control.semantics.grants;
+        if outcome == wire::Outcome::Applied {
+            let until = Instant::now() + ANSWERED_GRAB_GRACE;
+            for g in grants.iter_mut().filter(|g| g.action == action) {
+                g.deadline = g.deadline.min(until);
+            }
+        } else {
+            grants.retain(|g| g.action != action);
+        }
+    }
+
+    /// Drop the grab serials no longer good: expired, of a window gone, or of a run that no longer observes (a lock,
+    /// the login screen, the authentication prompt or the run's end withdraws them at once).
+    fn expire_action_grabs(&mut self) {
+        let runs: Vec<_> = self
+            .semantic_runs()
+            .into_iter()
+            .map(|i| self.control.runs[i].resource.clone())
+            .collect();
+        let now = Instant::now();
+        self.control
+            .semantics
+            .grants
+            .retain(|g| now < g.deadline && g.root.is_alive() && runs.contains(&g.controller));
+    }
+
+    /// Whether `serial` is one an action handed out for a popup grab, live or spent: it is never an input serial, so a
+    /// move, a resize, a drag or an activation token that names it is refused.
+    pub(crate) fn is_action_grab_serial(&self, serial: Serial) -> bool {
+        self.control.semantics.grab_serials.contains(&serial)
+    }
+
+    /// A popup grab of `client` for a popup chain hanging from `root` that names `serial`. An action's serial is
+    /// [`ActionGrab::Granted`] once, while its grant lasts ([`GrabGrant`]), to the client that publishes the action's
+    /// window and for a popup of that window; any other use of it is [`ActionGrab::Refused`].
+    pub(crate) fn take_action_grab(
+        &mut self,
+        client: &ClientId,
+        root: &WlSurface,
+        serial: Serial,
+    ) -> ActionGrab {
+        if !self.is_action_grab_serial(serial) {
+            return ActionGrab::NotAction;
+        }
+        self.expire_action_grabs();
+        let root = self.shell_surface_root(root);
+        let grants = &mut self.control.semantics.grants;
+        match grants
+            .iter()
+            .position(|g| g.serial == serial && g.client == *client && g.root == root)
+        {
+            Some(i) => {
+                grants.remove(i);
+                ActionGrab::Granted
+            }
+            None => ActionGrab::Refused,
+        }
     }
 }
 impl GlobalDispatch<CupertinoSemanticsV1, ()> for Cupertino {
@@ -665,6 +793,12 @@ impl Dispatch<CupertinoSemanticSurfaceV1, ()> for Cupertino {
                         .snapshot
                         .as_ref()
                         .is_some_and(|s| s.revision == reply.revision);
+                let outcome = if valid_revision {
+                    reply.outcome
+                } else {
+                    wire::Outcome::Stale
+                };
+                state.action_answered(p.id, outcome);
                 if let Some(run) = state
                     .control
                     .runs

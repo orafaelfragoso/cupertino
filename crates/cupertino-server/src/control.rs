@@ -28,6 +28,7 @@ use cupertino_protocols::server::control::cupertino_control_session_v1::{
 use cupertino_protocols::server::control::cupertino_control_v1::{
     self as manager, CupertinoControlV1,
 };
+pub(crate) use semantics::ActionGrab;
 use smithay::output::{Output, WeakOutput};
 use smithay::reexports::wayland_server::backend::{ClientId, GlobalId};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;

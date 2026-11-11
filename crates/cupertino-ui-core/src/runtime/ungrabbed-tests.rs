@@ -2,7 +2,7 @@
 //! close it; a popup the window system refuses leaves the application running.
 
 use super::super::Runtime;
-use crate::test_support::{options, spec, FakeSystem};
+use crate::test_support::{options, spec, FakeAdapter, FakeSystem};
 use crate::{
     Action, Application, Change, Command, CommandRegistry, Element, Event, EventCx, MeasureCx,
     PaintCx, Popup, PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
@@ -190,8 +190,14 @@ struct Desk {
 impl Desk {
     /// `input` says whether the window system has had an input event; `popups` whether it opens popups at all.
     fn new(input: bool, popups: bool) -> Self {
+        Self::with_adapter(input, popups, None)
+    }
+
+    /// [`Desk::new`] with `adapter` as its assistive technology's.
+    fn with_adapter(input: bool, popups: bool, adapter: Option<FakeAdapter>) -> Self {
         let errors: Rc<RefCell<Vec<(WindowId, String)>>> = Rc::default();
         let mut options = options(&Rc::default());
+        options.accessibility = adapter.map(|a| Box::new(a) as _);
         let reported = Rc::clone(&errors);
         options.on_window_error = Some(Box::new(move |window, error| {
             reported.borrow_mut().push((window, format!("{error:?}")));
@@ -342,6 +348,16 @@ impl Desk {
         self.rt.model().heard[from..].to_vec()
     }
 
+    /// Whether window `key` shows the ring of the focus it has or takes.
+    fn ring(&self, key: &str) -> bool {
+        let id = self.id(key).unwrap_or_else(|| panic!("no window {key}"));
+        self.rt
+            .windows
+            .iter()
+            .find(|w| w.id == id)
+            .is_some_and(|w| w.focus.visible())
+    }
+
     /// The menu shown by desktop control.
     fn open_menu(&mut self) {
         let outcome = self.act("main", "Opener", wire::Action::ShowMenu);
@@ -486,4 +502,53 @@ fn a_popup_the_window_system_refuses_is_dismissed_reported_and_answered_unavaila
     assert_eq!(desk.heard_since(from), ["keep"]);
     assert_eq!(desk.errors.borrow().len(), 2);
     assert_eq!(desk.id("menu"), None);
+}
+
+/// A menu an action shows selects as one the Menu key opens does, whether the last input was a press or a key: it is
+/// opened without the pointer.
+#[test]
+fn a_menu_an_action_shows_shows_its_selection_whatever_input_came_before() {
+    let away = Point::new(150.0, 80.0);
+    let mut pressed = Desk::new(true, true);
+    pressed.button("main", away, true);
+    pressed.button("main", away, false);
+    pressed.open_menu();
+    assert!(pressed.ring("menu"), "after a press");
+
+    let mut typed = Desk::new(true, true);
+    typed.key("main");
+    typed.open_menu();
+    assert!(typed.ring("menu"), "after a key");
+
+    // the same for an action a screen reader asks for
+    let adapter = FakeAdapter::default();
+    adapter.active.set(true);
+    let mut read = Desk::with_adapter(true, true, Some(adapter.clone()));
+    read.button("main", away, true);
+    read.button("main", away, false);
+    let main = read.id("main").unwrap();
+    let opener = read
+        .rt
+        .windows
+        .iter()
+        .find(|w| w.id == main)
+        .and_then(|w| {
+            w.accessibility
+                .iter()
+                .find(|(_, n)| n.name.as_deref() == Some("Opener"))
+                .map(|(id, _)| *id)
+        })
+        .expect("the opener is published");
+    adapter.actions.borrow_mut().push(crate::ActionRequest {
+        target: opener,
+        action: Action::ShowMenu,
+        data: None,
+    });
+    read.rt
+        .window_system_mut()
+        .queue
+        .push_back(PlatformEvent::Wake);
+    read.settle();
+    assert!(read.id("menu").is_some(), "the menu opened");
+    assert!(read.ring("menu"), "after a press, for a screen reader");
 }

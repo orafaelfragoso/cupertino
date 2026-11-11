@@ -1777,14 +1777,15 @@ fn show_options(run: &mut Run, grab: bool) -> WindowId {
     menu
 }
 
-/// The view options desktop control shows before any input grab with the action's serial: the keyboard walks
-/// them and Escape closes them, and a press elsewhere, which the compositor answers by ending the grab, does too.
+/// The view options desktop control shows before any input grab with the action's serial: they open with their first
+/// row selected, as from the Menu key, the keyboard walks them and Escape closes them, and a press elsewhere, which the
+/// compositor answers by ending the grab, does too.
 #[test]
 fn the_view_options_desktop_control_shows_grab_and_close_on_escape_or_a_press_elsewhere() {
     let mut run = controlled_browser();
     let menu = show_options(&mut run, true);
     run.send(menu, WindowEvent::Focus(true));
-    run.menu_key("Down", DOWN_CODE, DOWN);
+    // from the selected first row, one Down reaches the second
     run.menu_key("Down", DOWN_CODE, DOWN);
     run.menu_key("Return", RETURN_CODE, RETURN);
     assert!(run.options_menu().is_none(), "Return chose");

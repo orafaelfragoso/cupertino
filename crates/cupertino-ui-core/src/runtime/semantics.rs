@@ -160,6 +160,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                             action: a,
                             data,
                         };
+                        // whatever came last, a menu the action opens shows its selection, as one the Menu key
+                        // opens does
+                        self.keyboard = true;
                         let mut effects = Effects::default();
                         route(
                             &mut self.tree,

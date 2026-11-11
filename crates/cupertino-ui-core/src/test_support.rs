@@ -726,6 +726,8 @@ pub(crate) struct FakeAdapter {
     pub(crate) locked: Rc<RefCell<Vec<bool>>>,
     /// Each title it was told and the number of updates it held then.
     pub(crate) titles: Rc<RefCell<Vec<(WindowId, String, usize)>>>,
+    /// The actions its assistive technology asks for, handed over at the next drain.
+    pub(crate) actions: Rc<RefCell<Vec<ActionRequest>>>,
 }
 
 impl AccessibilityAdapter for FakeAdapter {
@@ -739,7 +741,9 @@ impl AccessibilityAdapter for FakeAdapter {
         self.updates.borrow_mut().push(update.clone());
     }
 
-    fn drain_actions(&mut self, _: &mut Vec<ActionRequest>) {}
+    fn drain_actions(&mut self, out: &mut Vec<ActionRequest>) {
+        out.append(&mut self.actions.borrow_mut());
+    }
 
     fn window_closed(&mut self, window: WindowId) {
         self.closed.borrow_mut().push(window);

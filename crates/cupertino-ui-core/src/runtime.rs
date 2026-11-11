@@ -270,7 +270,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     view_dirty: bool,
     /// Parents whose popups wait for their first layout to find the anchor.
     awaiting_layout: Vec<WindowKey>,
-    /// Whether the last press was a key: a popup opened by it shows its focus.
+    /// Whether the last press was a key or an action assistive technology or desktop control asked for: a popup opened
+    /// by it shows its focus.
     keyboard: bool,
     /// When the pointer button held down went down, on the runtime's clock, until it comes up: a popup opened meanwhile
     /// was opened by that press.
@@ -1687,6 +1688,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             if !self.tree.contains(target) {
                 continue;
             }
+            // whatever came last, a menu the action opens shows its selection, as one the Menu key opens does
+            self.keyboard = true;
             let mut effects = Effects::default();
             route(&mut self.tree, &self.windows[i], now, &mut effects)
                 .notify(target, &Event::Action(request));

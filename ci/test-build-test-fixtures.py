@@ -86,28 +86,6 @@ class Artifacts(unittest.TestCase):
                                     env=dict(os.environ, CARGO=str(cargo)), capture_output=True)
             self.assertEqual(result.returncode, 31, result.stderr)
 
-    def test_resource_lease_reaches_cargo_and_test_children(self):
-        with tempfile.TemporaryDirectory() as directory:
-            scratch = Path(directory)
-            cargo = scratch / 'cargo'
-            message = self.message('cupertino-testclient', 'bin', 'cupertino-testclient', str(cargo), [], False)
-            # Every descriptor in the list, as the wrapper passes a worktree lock and one or more slots.
-            each = 'for d in os.environ["CUPERTINO_BUILD_LOCK_FD"].split(","): os.write(int(d), b"{}\\n")\n'
-            cargo.write_text('#!' + sys.executable + '\nimport os\n' + each.format('cargo')
-                             + f'print({json.dumps(message)!r})\n')
-            cargo.chmod(0o700)
-            child = 'import os\n' + each.format('tests')
-            with (scratch / 'lease').open('w+b') as lease, (scratch / 'slot').open('w+b') as slot:
-                descriptors = (lease.fileno(), slot.fileno())
-                result = subprocess.run([sys.executable, str(SCRIPT), '--locked', '--', sys.executable, '-c', child],
-                                        env=dict(os.environ, CARGO=str(cargo),
-                                                 CUPERTINO_BUILD_LOCK_FD=','.join(map(str, descriptors))),
-                                        pass_fds=descriptors, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                for stream in (lease, slot):
-                    stream.seek(0)
-                    self.assertEqual(stream.read(), b'cargo\ntests\n')
-
 
 # A model of Cargo's feature unification: an artifact's contents follow the package and feature selection of the
 # command that built it. A test command rebuilds and relinks it when its own selection differs, then checks the

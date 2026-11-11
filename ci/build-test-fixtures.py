@@ -195,10 +195,10 @@ def preparation(argv: list[str]) -> tuple[list[list[str]], list[str]]:
     return builds, command
 
 
-def compile_artifacts(build: list[str], inherited: tuple[int, ...]) -> tuple[int, list[dict]]:
+def compile_artifacts(build: list[str]) -> tuple[int, list[dict]]:
     # Stream diagnostics through stderr, retaining only artifact messages rather than a potentially large build log.
     messages = []
-    with subprocess.Popen(build, cwd=ROOT, stdout=subprocess.PIPE, text=True, pass_fds=inherited) as cargo:
+    with subprocess.Popen(build, cwd=ROOT, stdout=subprocess.PIPE, text=True) as cargo:
         for line in cargo.stdout:
             message = json.loads(line)
             if message.get('reason') == 'compiler-artifact':
@@ -210,13 +210,9 @@ def compile_artifacts(build: list[str], inherited: tuple[int, ...]) -> tuple[int
 def main() -> int:
     builds, command = preparation(sys.argv[1:])
     os.environ["CARGO_INCREMENTAL"] = "0"
-    lease = os.environ.get('CUPERTINO_BUILD_LOCK_FD')
-    inherited = () if lease is None else tuple(map(int, lease.split(',')))
-    for descriptor in inherited:
-        os.fstat(descriptor)
     messages = []
     for build in builds:
-        status, built = compile_artifacts(build, inherited)
+        status, built = compile_artifacts(build)
         if status:
             return status
         messages.extend(built)
@@ -225,7 +221,7 @@ def main() -> int:
         raise ValueError('Cargo produced no workspace fixture artifacts')
     with tempfile.TemporaryDirectory(prefix='cupertino-test-fixtures-') as directory:
         return subprocess.run(command, cwd=ROOT,
-                              env=fixture_environment(artifacts, Path(directory)), pass_fds=inherited).returncode
+                              env=fixture_environment(artifacts, Path(directory))).returncode
 
 
 if __name__ == '__main__':

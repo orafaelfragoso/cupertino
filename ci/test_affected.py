@@ -91,37 +91,9 @@ class AffectedTests(unittest.TestCase):
                     patch("affected.workspace", return_value=self.packages) as workspace, \
                     patch("affected.subprocess.run", return_value=SimpleNamespace(returncode=17)) as run:
                 self.assertEqual(main(), 17)
-                run.assert_called_once_with(command, check=False, pass_fds=())
+                run.assert_called_once_with(command, check=False)
                 # Only tests look artifacts up; none of these packages does, so no preparation wraps them.
                 self.assertEqual(workspace.called, check == "tests")
-
-    def test_resource_lease_reaches_each_check_process(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cargo = root / "cargo"
-            # Every descriptor in the list, as the wrapper passes a worktree lock and one or more slots.
-            # Tests read the workspace first to find the packages that look artifacts up: none here.
-            cargo.write_text('#!' + sys.executable + '\nimport json, os, sys\n'
-                             + 'if sys.argv[1] == "metadata":\n'
-                             + f'    print(json.dumps({{"workspace_root": {str(root)!r}, "packages": [], '
-                             + '"workspace_members": []}))\n'
-                             + '    raise SystemExit\n'
-                             + 'for d in os.environ["CUPERTINO_BUILD_LOCK_FD"].split(","):\n'
-                             + '    os.write(int(d), (sys.argv[1] + "\\n").encode())\n')
-            cargo.chmod(0o700)
-            script = Path(__file__).resolve().with_name("affected.py")
-            with (root / "lease").open("w+b") as lease, (root / "slot").open("w+b") as slot:
-                descriptors = (lease.fileno(), slot.fileno())
-                env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", CUPERTINO_CI_PACKAGES='["core"]',
-                           CUPERTINO_BUILD_LOCK_FD=",".join(map(str, descriptors)))
-                for check in ("clippy", "tests", "doctests"):
-                    with self.subTest(check=check):
-                        result = subprocess.run([sys.executable, str(script), "run", check], env=env,
-                                                pass_fds=descriptors, capture_output=True, text=True)
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                for stream in (lease, slot):
-                    stream.seek(0)
-                    self.assertEqual(stream.read(), b"clippy\nnextest\ntest\n")
 
     def test_fixture_and_test_commands_use_the_same_expanded_package_union(self) -> None:
         packages = self.fixture_workspace()

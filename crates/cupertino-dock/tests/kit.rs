@@ -23,7 +23,8 @@ use cupertino_dock::view::{
 use cupertino_dock::{Dock, DockConfig};
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{
-    next_resource_id, Application, Command, Key, PlaceholderIcons, Role, RuntimeOptions, Window,
+    next_resource_id, Action, Application, Command, Key, NodeId, PlaceholderIcons, Role,
+    RuntimeOptions, Window,
 };
 use cupertino_kit::geometry::{Point, Rect};
 use cupertino_kit::layout::LayoutDirection;
@@ -35,7 +36,9 @@ use cupertino_kit::render::{CpuConfig, CpuRenderer, ImageResource, PixelFormat};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_theme::Theme;
-use cupertino_ui_test::{semantic_outline, unannounced, whole_tree, ManualClock, TestDriver};
+use cupertino_ui_test::{
+    semantic_outline, unannounced, whole_tree, AssistiveTechnology, ManualClock, TestDriver,
+};
 use cupertino_wm::geometry::Rect as WmRect;
 
 const EDITOR: &str = "org.example.Editor";
@@ -118,6 +121,8 @@ thread_local! {
     static BACKGROUND: RefCell<Option<Vec<IconKey>>> = const { RefCell::new(None) };
     /// The next run's host shows these folders as stacks.
     static FOLDERS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    /// The next run's windows are read by this assistive technology.
+    static READER: RefCell<Option<AssistiveTechnology>> = const { RefCell::new(None) };
 }
 
 struct FakeHost(Rc<RefCell<Record>>);
@@ -397,7 +402,7 @@ impl Run {
                     GlyphRaster::new(Arc::clone(&glyphs)),
                 ))
             }),
-            accessibility: None,
+            accessibility: READER.take().map(|reader| reader.adapter()),
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
@@ -728,6 +733,92 @@ fn a_secondary_click_opens_the_tiles_menu_whose_items_reach_the_server() {
         "{:?}",
         run.requests()
     );
+}
+
+/// The dock read by an assistive technology, before anything gave it an input event.
+fn untouched() -> (Run, AssistiveTechnology) {
+    let reader = AssistiveTechnology::new();
+    READER.set(Some(reader.clone()));
+    let mut run = Run::start();
+    run.driver.window_system_mut().set_no_input_yet();
+    (run, reader)
+}
+
+/// The node of `window` with `role` named `name`.
+fn node(run: &Run, window: WindowId, role: Role, name: &str) -> NodeId {
+    let snapshot = run.driver.runtime().snapshot(window).unwrap();
+    snapshot
+        .accessibility
+        .iter()
+        .find(|(_, n)| n.role == role && n.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("no {role:?} named {name}"))
+        .0
+}
+
+/// The open menu, if any.
+fn open_menu(run: &Run, bar: WindowId) -> Option<WindowId> {
+    run.driver
+        .runtime()
+        .windows()
+        .into_iter()
+        .map(|(_, id)| id)
+        .find(|&id| {
+            id != bar
+                && run
+                    .driver
+                    .runtime()
+                    .snapshot(id)
+                    .is_some_and(|s| s.accessibility.iter().any(|(_, n)| n.role == Role::Menu))
+        })
+}
+
+/// The reader shows the menu of the terminal's tile.
+fn show_menu(run: &mut Run, reader: &AssistiveTechnology, bar: WindowId) -> WindowId {
+    let tile = node(run, bar, Role::Button, "Terminal");
+    run.driver.ask(reader, tile, Action::ShowMenu, None);
+    run.settle();
+    open_menu(run, bar).expect("the menu opened")
+}
+
+#[test]
+fn a_menu_an_assistive_action_shows_before_any_input_opens_without_a_grab_and_its_items_act() {
+    let (mut run, reader) = untouched();
+    let bar = run.bar();
+    let menu = show_menu(&mut run, &reader, bar);
+    let placed = run.driver.window_system_mut().placement(menu).unwrap();
+    assert_eq!(placed.map(|p| p.grab), Some(false));
+    let quit = node(&run, menu, Role::MenuItem, "Quit");
+    run.driver.ask(&reader, quit, Action::Click, None);
+    run.settle();
+    assert!(
+        run.requests()
+            .contains(&(1, Request::App(TERMINAL.to_owned(), kit::AppAction::Quit))),
+        "{:?}",
+        run.requests()
+    );
+    assert_eq!(
+        open_menu(&run, bar),
+        None,
+        "choosing an item closes the menu"
+    );
+}
+
+#[test]
+fn a_press_on_the_bar_closes_a_menu_shown_without_a_grab_and_launches_nothing() {
+    let (mut run, reader) = untouched();
+    let bar = run.bar();
+    show_menu(&mut run, &reader, bar);
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.click(bar, editor);
+    assert_eq!(open_menu(&run, bar), None);
+    assert!(
+        run.record.borrow().spawned.is_empty(),
+        "the press that closed the menu opened nothing: {:?}",
+        run.record.borrow().spawned
+    );
+    // the next click is the bar's again
+    run.click(bar, editor);
+    assert_eq!(run.record.borrow().spawned.len(), 1);
 }
 
 #[test]

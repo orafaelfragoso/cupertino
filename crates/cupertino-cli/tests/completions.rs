@@ -234,7 +234,10 @@ fn bash_completes_commands_options_and_values() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     assert_eq!(bash_offers(d, REGISTRY, "cupertino dia"), ["diagnose"]);
-    assert_eq!(bash_offers(d, REGISTRY, "cupertino de"), ["desktop", "dev"]);
+    assert_eq!(
+        bash_offers(d, REGISTRY, "cupertino de"),
+        ["desktop", "dev", "dev-folder"]
+    );
     assert_eq!(
         bash_offers(d, REGISTRY, "cupertino --format json desk"),
         ["desktop"]
@@ -373,7 +376,10 @@ fn zsh_completes_commands_options_and_values() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     assert_eq!(zsh_offers(d, REGISTRY, "cupertino dia"), ["diagnose"]);
-    assert_eq!(zsh_offers(d, REGISTRY, "cupertino de"), ["desktop", "dev"]);
+    assert_eq!(
+        zsh_offers(d, REGISTRY, "cupertino de"),
+        ["desktop", "dev", "dev-folder"]
+    );
     assert_eq!(
         zsh_offers(d, REGISTRY, "cupertino --format json desk"),
         ["desktop"]

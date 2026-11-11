@@ -919,7 +919,8 @@ mod tests {
         assert_eq!(s.next_deadline(), None, "no start is ever due");
     }
 
-    /// A program at `path` that runs `setup` (a `trap`), appends `who` and its arguments to `log`, then runs `then`
+    /// A program at `path` that exports each `CUPERTINO_ASSET_SEARCH_PATH=…` argument it is given, runs `setup` (a
+    /// `trap`), appends `who` and its arguments to `log`, then runs `then`
     /// (`exit 0`, `exec sleep 60`…). It is written beside `path` and renamed into place, so no start sees it half made.
     fn script_with(path: &Path, setup: &str, who: &str, log: &Path, then: &str) {
         use std::os::unix::fs::PermissionsExt;
@@ -927,7 +928,8 @@ mod tests {
         std::fs::write(
             &staged,
             format!(
-                "#!/bin/sh\n{setup}\necho {who} \"$@\" >> {}\n{then}\n",
+                "#!/bin/sh\nfor a in \"$@\"; do case $a in CUPERTINO_ASSET_SEARCH_PATH=*) export \"$a\";; esac; done\n\
+                 {setup}\necho {who} \"$@\" >> {}\n{then}\n",
                 log.display()
             ),
         )
@@ -941,11 +943,15 @@ mod tests {
         script_with(path, ":", who, log, then);
     }
 
-    /// A process named `dock` running `program` with the argument `--bar`, holding `roles`.
+    /// A process named `dock` running `program` with the empty asset search path as its argument, which the
+    /// [`script_with`] programs export, holding `roles`.
     fn dock(program: &Path, roles: Vec<crate::authorization::ShellRole>) -> ShellProcess {
         ShellProcess {
             name: "dock".into(),
-            command: vec![program.display().to_string(), "--bar".into()],
+            command: vec![
+                program.display().to_string(),
+                "CUPERTINO_ASSET_SEARCH_PATH=".into(),
+            ],
             roles,
         }
     }
@@ -1000,7 +1006,13 @@ mod tests {
         poll_until(&mut s, |s| {
             s.processes()[0].state == ProcessState::Running && lines(&log).len() == 2
         });
-        assert_eq!(lines(&log), ["installed --bar", "development --bar"]);
+        assert_eq!(
+            lines(&log),
+            [
+                "installed CUPERTINO_ASSET_SEARCH_PATH=",
+                "development CUPERTINO_ASSET_SEARCH_PATH="
+            ]
+        );
         let info = &s.processes()[0];
         assert!(info.from_dev_folder);
         assert_eq!(info.program, Some(dev.join("cupertino-dock")));
@@ -1061,7 +1073,7 @@ mod tests {
         }));
         poll_until(&mut s, |_| !lines(&log).is_empty());
         assert_eq!(s.processes()[0].state, ProcessState::Running);
-        assert_eq!(lines(&log), ["installed --bar"]);
+        assert_eq!(lines(&log), ["installed CUPERTINO_ASSET_SEARCH_PATH="]);
     }
 
     /// The answers a restart got so far.
@@ -1136,7 +1148,13 @@ mod tests {
         assert_eq!(info.program, Some(dev.join("cupertino-dock")));
         assert_eq!(s.processes()[0], info);
         poll_until(&mut s, |_| lines(&log).len() == 2);
-        assert_eq!(lines(&log), ["installed --bar", "development --bar"]);
+        assert_eq!(
+            lines(&log),
+            [
+                "installed CUPERTINO_ASSET_SEARCH_PATH=",
+                "development CUPERTINO_ASSET_SEARCH_PATH="
+            ]
+        );
 
         // back to the installed program: the file goes, and a restart starts the installed one
         std::fs::remove_file(dev.join("cupertino-dock")).unwrap();
@@ -1145,7 +1163,10 @@ mod tests {
         assert!(!info.from_dev_folder);
         assert_eq!(info.program, Some(program));
         poll_until(&mut s, |_| lines(&log).len() == 3);
-        assert_eq!(lines(&log).last().unwrap(), "installed --bar");
+        assert_eq!(
+            lines(&log).last().unwrap(),
+            "installed CUPERTINO_ASSET_SEARCH_PATH="
+        );
     }
 
     #[test]
@@ -1189,7 +1210,13 @@ mod tests {
         let info = answer(&mut s, &rx).unwrap();
         assert_eq!(info.state, ProcessState::Running);
         poll_until(&mut s, |_| lines(&log).len() == 2);
-        assert_eq!(lines(&log), ["installed --bar", "again --bar"]);
+        assert_eq!(
+            lines(&log),
+            [
+                "installed CUPERTINO_ASSET_SEARCH_PATH=",
+                "again CUPERTINO_ASSET_SEARCH_PATH="
+            ]
+        );
 
         let rx = restart(&mut s, "nope");
         assert_eq!(

@@ -795,7 +795,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
             if let Some(caret) = drawn.and_then(|at| lines.caret_rect(at)) {
                 state.marks.caret(
                     field::caret_bar(caret.translate(inset, inset), env.scale),
-                    color(ColorRole::Text),
+                    color(ColorRole::DefaultButtonFill),
                 );
             }
         }

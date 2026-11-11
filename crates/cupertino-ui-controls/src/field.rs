@@ -465,7 +465,7 @@ fn paint_text(
     if focused && look.window_active && shown.selection.is_empty() && shown.caret_drawn {
         marks.caret(
             caret_bar(caret.translate(origin.x, origin.y), env.scale),
-            color(ColorRole::Text),
+            color(ColorRole::DefaultButtonFill),
         );
     }
     marks.finish(cx);

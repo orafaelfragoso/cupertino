@@ -159,7 +159,7 @@ approximated. They await the control fixture review. RGBA values are straight 8-
 | `switch-thumb-disabled` | [248,248,248,255] | [180,180,180,255] | approximated dedicated disabled thumb |
 | `secondary-selected-control-text` | `control-text` | `control-text` | Existing foreground for neutral selection |
 | `selected-text` | `text` | `text` | Existing foreground over translucent text selection |
-| `control-focus-indicator` | `keyboard-focus-indicator` | [37,173,255,255] | Existing focus RGB with full alpha for control rings; dark alpha approximated |
+| `control-focus-indicator` | `keyboard-focus-indicator` | [26,169,255,127] (dark) | Focus ring colour, half transparent in both appearances |
 | `tool-tip` (dark only) | Existing entry | [40,40,40,255] | approximated opaque completion of the dark tooltip pair |
 
 Names in the Light and Dark columns mean exact copies of that appearance's existing values, not runtime aliases.

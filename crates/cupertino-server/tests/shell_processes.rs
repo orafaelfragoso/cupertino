@@ -271,6 +271,99 @@ fn a_process_that_exits_successfully_is_not_restarted() {
     assert_eq!(read_lines(&done), vec!["run"]);
 }
 
+/// A supervised process as the session interface sends it.
+type Record = (String, String, u32, u64, u64, String, bool, String, String);
+
+/// `RestartShellProcess` over the session bus ends the process and starts it again at once, even though it ends with
+/// status 0 on SIGTERM, and answers with the new process; `ListShellProcesses` lists it.
+#[test]
+fn a_shell_process_is_listed_and_restarted_through_the_session_interface() {
+    let Some(bus) = PrivateBus::start() else {
+        return;
+    };
+    let dir = TempDir::new("restart");
+    let log = dir.file("log");
+    // SIGTERM ends it with status 0, which alone would leave it stopped
+    let script = r#"echo $$ >> "$1"; trap 'exit 0' TERM; while :; do sleep 0.05; done"#;
+    let mut server = Server::start(vec![stand_in("dock", script, &log)], false).unwrap();
+    cupertino_server::quit::start_session_service_on(&mut server.state, Some(bus.address.clone()));
+    let first: u32 = server.wait_for_lines(&log, 1)[0].parse().unwrap();
+
+    let address = bus.address.clone();
+    let client = std::thread::spawn(move || {
+        let conn = zbus::blocking::connection::Builder::address(address.as_str())
+            .unwrap()
+            .build()
+            .unwrap();
+        let end = Instant::now() + common::HANG_GUARD;
+        let listed = loop {
+            match call_session(&conn, "ListShellProcesses", &()) {
+                Ok(reply) => break reply.body().deserialize::<Vec<Record>>().unwrap(),
+                Err(e) => {
+                    assert!(
+                        Instant::now() < end,
+                        "the session interface did not appear: {e}"
+                    );
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        };
+        let restarted: Record = call_session(&conn, "RestartShellProcess", &("dock",))
+            .unwrap()
+            .body()
+            .deserialize()
+            .unwrap();
+        let unknown = call_session(&conn, "RestartShellProcess", &("nope",)).unwrap_err();
+        (listed, restarted, unknown.to_string())
+    });
+    let end = Instant::now() + common::HANG_GUARD;
+    while !client.is_finished() {
+        assert!(Instant::now() < end, "the client did not finish");
+        server.step();
+    }
+    let (listed, restarted, unknown) = client.join().unwrap();
+
+    assert_eq!(listed.len(), 1);
+    let (name, state, pid, ticks, started, program, from_dev, installed, dev_program) = &listed[0];
+    assert_eq!(
+        (name.as_str(), state.as_str(), *pid),
+        ("dock", "running", first)
+    );
+    assert!(*ticks > 0 && *started > 0);
+    assert_eq!(
+        (program.as_str(), *from_dev, installed.as_str()),
+        ("env", false, "env")
+    );
+    assert_eq!(dev_program, "", "no development folder");
+
+    let second: u32 = server.wait_for_lines(&log, 2)[1].parse().unwrap();
+    assert_ne!(first, second);
+    assert_eq!(restarted.0, "dock");
+    assert_eq!(restarted.1, "running");
+    assert_eq!(restarted.2, second, "the answer names the new process");
+    assert!(restarted.3 >= *ticks);
+    assert!(
+        unknown.contains("InvalidArgs") || unknown.contains("no shell process"),
+        "{unknown}"
+    );
+    assert_eq!(server.state.supervisor.pid_of("dock"), Some(second));
+}
+
+/// Call `method` of the server's session interface with `body`.
+fn call_session<B: serde::Serialize + zbus::zvariant::DynamicType>(
+    conn: &zbus::blocking::Connection,
+    method: &str,
+    body: &B,
+) -> zbus::Result<zbus::Message> {
+    conn.call_method(
+        Some("org.cupertino.Session1"),
+        "/org/cupertino/Session1",
+        Some("org.cupertino.Session1"),
+        method,
+        body,
+    )
+}
+
 /// The process of the Wayland client `client`, as the server identified it.
 fn pid_of_client(client: &smithay::reexports::wayland_server::Client) -> Option<u32> {
     let data = client.get_data::<cupertino_server::state::ClientState>()?;

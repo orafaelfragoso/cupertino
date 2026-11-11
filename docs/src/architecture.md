@@ -96,7 +96,7 @@ Three checks keep it complete:
 ## Known limits
 
 - X11 programs need `xwayland-satellite` (0.8 or later) and `Xwayland` installed; without them the session serves Wayland clients only. Drag and drop between X11 and Wayland programs and per-output scales for X11 windows depend on the satellite (it uses one scale for all X11 windows), and none of it has been tested with real applications on hardware.
-- `org.cupertino.Session1` authorizes mutating calls by process identity. Settings changes require the trusted Settings executable, the supervised session agent or the server. Application quitting requires the session agent or server. This does not make arbitrary same-user code a security boundary (see `SECURITY.md`).
+- `org.cupertino.Session1` authorizes mutating calls by process identity. Settings changes require the trusted Settings executable, the supervised session agent or the server. Application quitting requires the session agent or server. Listing and restarting the supervised shell processes requires an unsandboxed process of the session's own user. This does not make arbitrary same-user code a security boundary (see `SECURITY.md`).
 - VM evidence covers the TTY backend. The full real-hardware acceptance matrix remains open; see [Roadmap](roadmap.md).
 - Audio is not owned: applications use PipeWire. The volume overlay, the control panel and the Sound pane change the default
   PipeWire sink through `cupertino-pipewire` (WirePlumber's `wpctl`), and the ALSA mixer only when no PipeWire daemon answers.

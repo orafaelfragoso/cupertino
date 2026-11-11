@@ -43,6 +43,22 @@ pub fn authorize(
     }
 }
 
+/// Whether `caller`, whose connection the bus daemon gave the user id `caller_uid`, may manage the session's shell
+/// processes (list them, restart one): an unsandboxed process of the user the server runs as, `own_uid`. Root and
+/// other users are refused, and so are a Flatpak, a Snap and a process whose sandbox cannot be checked.
+pub fn authorize_session_user(
+    caller: &Caller,
+    caller_uid: Option<u32>,
+    own_uid: u32,
+) -> Result<(), Denial> {
+    caller.unsandboxed()?;
+    if caller_uid == Some(own_uid) {
+        Ok(())
+    } else {
+        Err(Denial::Untrusted)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::fd::OwnedFd;
@@ -159,6 +175,43 @@ mod tests {
         assert!(matches!(caller, Caller::Unclassified(_)), "{caller:?}");
         assert_eq!(allowed, Ok(()));
         assert_eq!(refused, Err(Denial::Untrusted));
+    }
+
+    #[test]
+    fn only_an_unsandboxed_process_of_the_sessions_own_user_manages_the_shell_processes() {
+        let me = 1000;
+        let host = process(None, "/usr/bin/cupertino");
+        assert_eq!(authorize_session_user(&host, Some(me), me), Ok(()));
+        assert_eq!(
+            authorize_session_user(&host, Some(0), me),
+            Err(Denial::Untrusted),
+            "root on the session's bus"
+        );
+        assert_eq!(
+            authorize_session_user(&host, Some(me + 1), me),
+            Err(Denial::Untrusted),
+            "another user"
+        );
+        assert_eq!(
+            authorize_session_user(&host, None, me),
+            Err(Denial::Untrusted),
+            "no user id from the bus"
+        );
+        for sandbox in [Sandbox::Flatpak, Sandbox::Snap] {
+            assert_eq!(
+                authorize_session_user(&process(Some(sandbox), "/usr/bin/cupertino"), Some(me), me),
+                Err(Denial::Sandboxed(sandbox))
+            );
+        }
+        let unclassified = Caller::Unclassified(ProcessHandle::from_pidfd(own_pidfd()).unwrap());
+        assert_eq!(
+            authorize_session_user(&unclassified, Some(me), me),
+            Err(Denial::Untrusted)
+        );
+        assert_eq!(
+            authorize_session_user(&Caller::Anonymous, Some(me), me),
+            Err(Denial::Anonymous)
+        );
     }
 
     #[test]

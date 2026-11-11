@@ -23,6 +23,7 @@
 //! | `wallpaper`, `wallpaper_dark` | absolute path of a PNG or JPEG: the wallpaper, and the one of the dark appearance (else `wallpaper` is used) |
 //! | `shell` | list of `{"name": …, "command": [program, args…], "roles": […]}`, commands not empty; `roles` (optional, default `["session"]`) lists what the server lets the process do: `session`, `menu_bar`, `dock`, `window_manager` |
 //! | `screenshot` | the screenshot command, not empty |
+//! | `dev_folder` | `{"path": …, "components": [names…]}`: an absolute directory without `..` and the names of the shell processes that may start from it ([`DevFolder`]); only the system file sets it |
 
 use std::collections::BTreeMap;
 use std::io;
@@ -143,6 +144,25 @@ impl ShellRoleName {
     pub fn from_name(name: &str) -> Option<ShellRoleName> {
         Self::ALL.into_iter().find(|r| r.name() == name)
     }
+
+    /// Whether a process holding this role may still start from the development folder: the roles of the session's
+    /// own chrome. The lock screen's and data control's may not, nor may any role added later.
+    pub fn allows_dev_folder(self) -> bool {
+        matches!(
+            self,
+            ShellRoleName::Session
+                | ShellRoleName::MenuBar
+                | ShellRoleName::Dock
+                | ShellRoleName::WindowManager
+        )
+    }
+}
+
+impl ShellEntry {
+    /// Whether the development folder may apply to this process: every role it holds [`ShellRoleName::allows_dev_folder`].
+    pub fn may_start_from_dev_folder(&self) -> bool {
+        self.roles.iter().all(|r| r.allows_dev_folder())
+    }
 }
 
 /// A shell process the server starts and keeps alive.
@@ -154,6 +174,17 @@ pub struct ShellEntry {
     pub command: Vec<String>,
     /// What the server lets the process do on its connection; a process the file gives no roles observes the session.
     pub roles: Vec<ShellRoleName>,
+}
+
+/// The development folder of the system file: the shell processes named in `components` start the program of the same
+/// file name from `path` when one is there, instead of the installed one. The server decides which names it accepts and
+/// checks the folder and each file before every start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DevFolder {
+    /// An absolute directory without `..`.
+    pub path: String,
+    /// Names of shell processes, each once and none empty.
+    pub components: Vec<String>,
 }
 
 /// Everything in `compositor.json`; `None` is a key the file does not set.
@@ -193,6 +224,7 @@ pub struct CompositorSettings {
     pub wallpaper_folders: Option<Vec<String>>,
     pub shell: Option<Vec<ShellEntry>>,
     pub screenshot: Option<Vec<String>>,
+    pub dev_folder: Option<DevFolder>,
 }
 
 /// Smallest and largest resolution a mouse can be given, in dots per inch.
@@ -328,6 +360,43 @@ fn absolute_path(v: &Value) -> Result<String, String> {
     } else {
         Err(format!("{text:?} is not an absolute path"))
     }
+}
+
+/// The `dev_folder` object: an absolute `path` without `..` and a list of distinct, non-empty `components`.
+fn dev_folder(v: &Value) -> Result<DevFolder, String> {
+    let obj = v
+        .as_object()
+        .ok_or_else(|| format!("expected {{\"path\": …, \"components\": […]}}, got {v}"))?;
+    let path = absolute_path(
+        obj.get("path")
+            .ok_or("the development folder needs a path")?,
+    )?;
+    if Path::new(&path)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!("{path:?} goes up with `..`"));
+    }
+    let components = strings(
+        obj.get("components")
+            .ok_or("the development folder needs a list of components")?,
+    )?;
+    for (i, name) in components.iter().enumerate() {
+        if name.is_empty() {
+            return Err("a component name is empty".to_string());
+        }
+        if components[..i].contains(name) {
+            return Err(format!("the component {name:?} is listed twice"));
+        }
+    }
+    Ok(DevFolder { path, components })
+}
+
+fn dev_folder_value(folder: &DevFolder) -> Value {
+    let mut m = Map::new();
+    m.insert("path".into(), Value::String(folder.path.clone()));
+    m.insert("components".into(), strings_value(&folder.components));
+    Value::Object(m)
 }
 
 fn number_value(n: &f64) -> Value {
@@ -487,6 +556,7 @@ const KEYS: &[JsonKey] = &[
         }),
         |l: &Vec<String>| strings_value(l)
     ),
+    json_key!(dev_folder, dev_folder, dev_folder_value),
 ];
 
 /// The top-level object of `text`; `{}` for an empty file.
@@ -803,6 +873,37 @@ mod tests {
             r#"{"mouse_speed":"fast"}"#,
         ] {
             assert_eq!(CompositorSettings::parse(bad, None).1.len(), 1, "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_development_folder_is_an_absolute_path_and_a_list_of_distinct_names() {
+        let (s, problems) = CompositorSettings::parse(
+            r#"{"dev_folder":{"path":"/home/me/.local/lib/cupertino/dev","components":["dock","menubar"]}}"#,
+            None,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            s.dev_folder,
+            Some(DevFolder {
+                path: "/home/me/.local/lib/cupertino/dev".into(),
+                components: vec!["dock".into(), "menubar".into()],
+            })
+        );
+        for bad in [
+            r#"{"dev_folder":"/home/me/dev"}"#,
+            r#"{"dev_folder":{"components":["dock"]}}"#,
+            r#"{"dev_folder":{"path":"dev","components":["dock"]}}"#,
+            r#"{"dev_folder":{"path":"/home/me/../root","components":["dock"]}}"#,
+            r#"{"dev_folder":{"path":"/home/me/dev"}}"#,
+            r#"{"dev_folder":{"path":"/home/me/dev","components":"dock"}}"#,
+            r#"{"dev_folder":{"path":"/home/me/dev","components":[""]}}"#,
+            r#"{"dev_folder":{"path":"/home/me/dev","components":["dock","dock"]}}"#,
+        ] {
+            let (s, problems) = CompositorSettings::parse(bad, None);
+            assert_eq!(s.dev_folder, None, "{bad}");
+            assert_eq!(problems.len(), 1, "{bad}");
+            assert_eq!(problems[0].key, "dev_folder", "{bad}");
         }
     }
 

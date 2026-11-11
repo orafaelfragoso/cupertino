@@ -1014,10 +1014,11 @@ mod tests {
         use crate::authorization::ShellRole;
         let (base, installed, dev) = folders();
         let log = base.path().join("starts");
-        let program = installed.join("cupertino-login");
+        // a stand-in program: what keeps it from the folder is its role, never its name
+        let program = installed.join("lock-screen");
         script(&program, "installed", &log, "exec sleep 60");
         script(
-            &dev.join("cupertino-login"),
+            &dev.join("lock-screen"),
             "development",
             &log,
             "exec sleep 60",

@@ -28,7 +28,7 @@ pub fn page_date(source_date_epoch: Option<&OsStr>) -> String {
 }
 
 /// `YYYY-MM-DD` of a day number since 1970-01-01, in the proleptic Gregorian calendar.
-fn civil_date(days: i64) -> String {
+pub(crate) fn civil_date(days: i64) -> String {
     // shift the era to start on 0000-03-01, so a leap day is the last day of its year
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -244,7 +244,13 @@ fn main_page(registry: &[Group], date: &str) -> String {
          .TP\n.B SOURCE_DATE_EPOCH\n\
          The date \\fBdev manual\\fR writes into the pages.\n\
          .TP\n.B CARGO\n\
-         The Cargo \\fBdev layers\\fR runs; else \\fBcargo\\fR on \\fBPATH\\fR, which no other command searches.\n",
+         The Cargo \\fBdev layers\\fR runs; else \\fBcargo\\fR on \\fBPATH\\fR, which no other command searches.\n\
+         .TP\n.B DBUS_SESSION_BUS_ADDRESS\n\
+         The session bus the \\fBshell\\fR commands reach the desktop's server on; else the \\fIbus\\fR socket in \
+         \\fB$XDG_RUNTIME_DIR\\fR.\n\
+         .TP\n\\fBSUDO_UID\\fR, \\fBSUDO_GID\\fR\n\
+         The account \\fBdev\\-folder enable\\fR creates the development folder for and whose home holds the \
+         default one.\n",
     );
     out.push_str(
         ".SH FILES\n\
@@ -252,6 +258,9 @@ fn main_page(registry: &[Group], date: &str) -> String {
          The build record of the runtime package: its package name, version, commit and source date.\n\
          .TP\n.I /usr/share/cupertino/assets/build-info.json\n\
          The build record of the data package.\n\
+         .TP\n.I /etc/cupertino/compositor.json\n\
+         The system configuration of the desktop's server, whose \\fBdev_folder\\fR key \\fBdev\\-folder\\fR \
+         sets and removes.\n\
          .TP\n.I $XDG_RUNTIME_DIR/cupertino/server\\-NAME.json\n\
          Written by the compositor of the Wayland display \\fINAME\\fR while it runs: its version, commit, process, \
          backend and renderer.\n",

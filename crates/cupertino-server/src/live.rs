@@ -9,7 +9,7 @@
 //!
 //! | File | Applied at once | At the next start |
 //! |---|---|---|
-//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, scroll bars, key bindings, terminals | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `shell`, `screenshot` (privileged processes: read at start) |
+//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, scroll bars, key bindings, terminals; `dev_folder` of the system file, read again through its root-only check, for each shell process's next start | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `shell`, `screenshot` (privileged processes: read at start) |
 //! | `keyboard.conf` | every key: repeat, caps lock, filters, rewrite, accent picker, input sources and layouts (the keymap is rebuilt) | — |
 //! | `power.conf` | every key (the countdown in progress continues with the new timers) | — |
 //! | `/etc/cupertino/accessibility.conf` | its keys, for an account without an `accessibility.conf` of its own and the login screen (`crate::accessibility`) | — |
@@ -189,8 +189,33 @@ impl Cupertino {
             self.live.files.compositor.clone(),
         );
         self.apply_compositor_layers((&system_before, &user_before), (&system_after, &user_after));
+        if system && system_before.dev_folder != system_after.dev_folder {
+            self.reload_dev_folder(path);
+        }
         self.live.reloads += 1;
         tracing::info!(path = %path.display(), "configuration reloaded");
+    }
+
+    /// Read the development folder of the system file at `path` again, through the check that only root could have
+    /// written the file, and give it to the supervisor for each shell process's next start. A file that fails the check
+    /// leaves the folder as it was.
+    fn reload_dev_folder(&mut self, path: &std::path::Path) {
+        let declared = match crate::config::read_system_file(path) {
+            Ok(text) => text.and_then(|text| CompositorSettings::parse(&text, None).0.dev_folder),
+            Err(e) => {
+                tracing::error!(path = %path.display(), error = %e, "the development folder of the changed system configuration is refused: it stays as it was");
+                return;
+            }
+        };
+        let folder = declared.map(|f| crate::config::DevFolder {
+            path: f.path.into(),
+            components: f.components,
+        });
+        if folder.is_none() {
+            tracing::info!("the development folder is gone: every shell process starts its installed program from its next start");
+        }
+        self.supervisor.set_dev_folder(folder.as_ref());
+        self.config.dev_folder = folder;
     }
 
     /// Apply the keys whose value differs between `before` and `after`, the values the user's `compositor.json` held

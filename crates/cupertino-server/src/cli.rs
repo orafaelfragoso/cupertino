@@ -469,7 +469,7 @@ const UNWATCHED_POLL: Duration = Duration::from_millis(100);
 
 /// Start due processes, reap exited ones, and arm what wakes the next pass: a pidfd per running child, readable when it
 /// exits, and a timer at the earliest restart. While every child runs, nothing wakes the loop for them.
-fn supervise(state: &mut Cupertino) {
+pub(crate) fn supervise(state: &mut Cupertino) {
     let socket = state
         .socket_name
         .clone()

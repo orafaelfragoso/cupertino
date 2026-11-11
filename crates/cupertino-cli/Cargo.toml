@@ -18,6 +18,7 @@ path = "src/bin/cupertino.rs"
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-build-info = { path = "../cupertino-build-info" }
+cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-diagnostics = { path = "../cupertino-diagnostics" }
 cupertino-layers = { path = "../cupertino-layers" }
@@ -25,6 +26,8 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [dev-dependencies]
+cupertino-test-bus = { path = "../cupertino-test-bus" }
 tempfile = "3"

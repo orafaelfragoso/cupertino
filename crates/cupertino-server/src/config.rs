@@ -177,6 +177,113 @@ pub fn may_run_built_in(file: (u32, u32), bin: (u32, u32), root_owner: u32, user
         && (file.0 == 0 || (root_owner == user && file.0 == user))
 }
 
+/// The roles a shell process may hold and still start from the development folder: the session's own chrome (the menu
+/// bar, the dock, the window manager and the processes that only follow the session). A process holding any other role
+/// (the lock screen and login, capture, the authentication prompt, data control, desktop control, or a role added
+/// later) always starts its installed program: this is a list of what is allowed, not of what is refused.
+pub const DEV_FOLDER_ROLES: [ShellRole; 4] = [
+    ShellRole::Session,
+    ShellRole::MenuBar,
+    ShellRole::Dock,
+    ShellRole::WindowManager,
+];
+
+/// Whether a shell process with `roles` may start from the development folder: all of its roles are
+/// [`DEV_FOLDER_ROLES`].
+pub fn may_start_from_dev_folder(roles: &[ShellRole]) -> bool {
+    roles.iter().all(|role| DEV_FOLDER_ROLES.contains(role))
+}
+
+/// The development folder the system file declares (`dev_folder`): the shell processes named in `components` that
+/// [`may_start_from_dev_folder`] start `<path>/<file name of their program>` instead of the installed program, when that
+/// file passes [`dev_folder_program`] at the start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DevFolder {
+    pub path: PathBuf,
+    pub components: Vec<String>,
+}
+
+impl DevFolder {
+    /// The names of `processes` that may start from the folder, and a warning for each name of `components` that is
+    /// not one of them (no such process, or one holding a role outside [`DEV_FOLDER_ROLES`]).
+    pub fn eligible(&self, processes: &[ShellProcess]) -> (Vec<String>, Vec<String>) {
+        let mut eligible = Vec::new();
+        let mut warnings = Vec::new();
+        for name in &self.components {
+            match processes.iter().find(|p| &p.name == name) {
+                Some(p) if may_start_from_dev_folder(&p.roles) => eligible.push(name.clone()),
+                Some(p) => warnings.push(format!(
+                    "dev_folder: {name}: a process holding {:?} always starts its installed program",
+                    p.roles
+                        .iter()
+                        .filter(|r| !DEV_FOLDER_ROLES.contains(r))
+                        .collect::<Vec<_>>()
+                )),
+                None => warnings.push(format!("dev_folder: {name}: no shell process has this name")),
+            }
+        }
+        (eligible, warnings)
+    }
+}
+
+/// Whether a file in the development folder may start for `user`, from the `(owner, st_mode)` of the file and of the
+/// folder: the folder is a directory and the file a regular file (no link), each owned by the user or root and
+/// writable by no group or other user, and the file has an execute bit. The reason comes back otherwise.
+pub fn may_start_dev_program(
+    file: (u32, u32),
+    folder: (u32, u32),
+    user: u32,
+) -> Result<(), String> {
+    let owned = |owner: u32| owner == user || owner == 0;
+    let unshared = |mode: u32| mode & 0o022 == 0;
+    let kind = |mode: u32| mode & libc::S_IFMT;
+    if kind(folder.1) != libc::S_IFDIR {
+        return Err("the development folder is not a directory".into());
+    }
+    if !owned(folder.0) || !unshared(folder.1) {
+        return Err(
+            "the development folder belongs to another user, or its group or others can write it"
+                .into(),
+        );
+    }
+    if kind(file.1) != libc::S_IFREG {
+        return Err("it is not a regular file".into());
+    }
+    if !owned(file.0) || !unshared(file.1) {
+        return Err("it belongs to another user, or its group or others can write it".into());
+    }
+    if file.1 & 0o111 == 0 {
+        return Err("it is not executable".into());
+    }
+    Ok(())
+}
+
+/// The program `<folder>/<file name of installed>` when it may start for `user` ([`may_start_dev_program`], and the user
+/// may execute it); `Ok(None)` when the folder or the file is not there, the reason when the file is there and refused.
+pub fn dev_folder_program(
+    folder: &Path,
+    installed: &str,
+    user: u32,
+) -> Result<Option<PathBuf>, String> {
+    use std::os::unix::fs::MetadataExt;
+    let Some(file_name) = Path::new(installed).file_name() else {
+        return Ok(None);
+    };
+    let program = folder.join(file_name);
+    let file = match std::fs::symlink_metadata(&program) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", program.display())),
+    };
+    let dir =
+        std::fs::symlink_metadata(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    may_start_dev_program((file.uid(), file.mode()), (dir.uid(), dir.mode()), user)
+        .map_err(|reason| format!("{}: {reason}", program.display()))?;
+    rustix::fs::access(&program, rustix::fs::Access::EXEC_OK)
+        .map_err(|e| format!("{}: not executable: {e}", program.display()))?;
+    Ok(Some(program))
+}
+
 /// Whether the server runs the login screen: its configuration is the login screen's file, or logind made its session
 /// one of class `greeter`.
 pub fn login_screen(
@@ -386,6 +493,8 @@ pub struct Config {
     pub screenshot_command: Vec<String>,
     /// `--dev-shell`: a checkout or nested run, where the programs of the session are found by name.
     pub dev_shell: bool,
+    /// The development folder some shell processes may start from (`dev_folder`); only the system file sets it.
+    pub dev_folder: Option<DevFolder>,
     pub wallpaper: WallpaperSettings,
     /// Cascade step of new windows without a position, right and down (points). 29 pt
     /// (the design's horizontal and vertical cascade amounts).
@@ -540,6 +649,7 @@ impl Default for Config {
                 .to_vec(),
             screenshot_command: vec![INSTALLED_SCREENSHOT.to_string()],
             dev_shell: false,
+            dev_folder: None,
             cascade_step: 29.0,
             default_window_fraction: 0.6,
             keyboard: crate::kbd::KeyboardSettings::default(),
@@ -834,8 +944,8 @@ impl Config {
         problems
     }
 
-    /// Apply the `shell` and `screenshot` keys of a file by what its layer is trusted with. Returns what is refused;
-    /// the rest of the file applies.
+    /// Apply the `shell`, `screenshot` and `dev_folder` keys of a file by what its layer is trusted with. Returns what
+    /// is refused; the rest of the file applies.
     pub fn apply_privileged(&mut self, f: &CompositorSettings, trust: LayerTrust) -> Vec<String> {
         let mut problems = Vec::new();
         if let Some(list) = &f.shell {
@@ -912,6 +1022,20 @@ impl Config {
                 )),
                 LayerTrust::User => problems.push(
                     "screenshot: only the system configuration sets the screenshot process"
+                        .to_string(),
+                ),
+            }
+        }
+        if let Some(folder) = &f.dev_folder {
+            match trust {
+                LayerTrust::System | LayerTrust::Dev => {
+                    self.dev_folder = Some(DevFolder {
+                        path: PathBuf::from(&folder.path),
+                        components: folder.components.clone(),
+                    });
+                }
+                LayerTrust::User => problems.push(
+                    "dev_folder: only the system configuration sets the development folder"
                         .to_string(),
                 ),
             }
@@ -1430,6 +1554,278 @@ mod tests {
         assert!(check_built_in(&program)
             .unwrap_err()
             .contains("not root's alone"));
+    }
+
+    const DEV_FOLDER: &str =
+        r#"{"dev_folder":{"path":"/home/me/.local/lib/cupertino/dev","components":["dock"]}}"#;
+
+    #[test]
+    fn only_the_system_file_declares_the_development_folder() {
+        let mut c = system_config();
+        assert_eq!(c.dev_folder, None, "no folder unless one is declared");
+        assert!(c
+            .apply_privileged(&settings(DEV_FOLDER), LayerTrust::System)
+            .is_empty());
+        let declared = Some(DevFolder {
+            path: "/home/me/.local/lib/cupertino/dev".into(),
+            components: vec!["dock".into()],
+        });
+        assert_eq!(c.dev_folder, declared);
+
+        let widened =
+            r#"{"dev_folder":{"path":"/tmp/evil","components":["dock","menubar","login"]}}"#;
+        let problems = c.apply_privileged(&settings(widened), LayerTrust::User);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].contains("only the system configuration"),
+            "{problems:?}"
+        );
+        assert_eq!(
+            c.dev_folder, declared,
+            "the user file neither moves nor widens it"
+        );
+
+        let mut c = system_config();
+        c.apply_privileged(&settings(DEV_FOLDER), LayerTrust::User);
+        assert_eq!(c.dev_folder, None, "the user file cannot enable it");
+
+        let mut dev = Config::default();
+        assert!(dev
+            .apply_privileged(&settings(DEV_FOLDER), LayerTrust::Dev)
+            .is_empty());
+        assert!(
+            dev.dev_folder.is_some(),
+            "a development run trusts every file"
+        );
+    }
+
+    #[test]
+    fn only_processes_whose_roles_are_all_chrome_roles_may_start_from_the_development_folder() {
+        let packaged = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .ancestors()
+                .nth(2)
+                .unwrap()
+                .join("packaging/files/etc/cupertino/compositor.json"),
+        )
+        .unwrap();
+        let mut c = Config::default();
+        assert!(c
+            .apply_privileged(&settings(&packaged), LayerTrust::System)
+            .is_empty());
+        c.shell_processes.push(ShellProcess {
+            name: "clipboard".into(),
+            command: vec!["/usr/bin/clipboard-manager".into()],
+            roles: vec![ShellRole::Session, ShellRole::DataControl],
+        });
+        let folder = DevFolder {
+            path: "/home/me/dev".into(),
+            components: [
+                "dock",
+                "menubar",
+                "launcher",
+                "notifications",
+                "controlcenter",
+                "osd",
+                "windowmanager",
+                "login",
+                "clipboard",
+                "portal",
+                "polkit-agent",
+                "desktop-control",
+                "nonexistent",
+            ]
+            .map(String::from)
+            .to_vec(),
+        };
+        let (eligible, warnings) = folder.eligible(&c.shell_processes);
+        assert_eq!(
+            eligible,
+            [
+                "dock",
+                "menubar",
+                "launcher",
+                "notifications",
+                "controlcenter",
+                "osd",
+                "windowmanager"
+            ]
+        );
+        assert_eq!(warnings.len(), 6, "{warnings:?}");
+        assert!(warnings[0].contains("login") && warnings[0].contains("SessionLock"));
+        assert!(warnings[1].contains("clipboard") && warnings[1].contains("DataControl"));
+
+        for role in [
+            ShellRole::SessionLock,
+            ShellRole::Capture,
+            ShellRole::Prompt,
+            ShellRole::DataControl,
+            ShellRole::DesktopControl,
+        ] {
+            assert!(
+                !may_start_from_dev_folder(&[ShellRole::Session, role]),
+                "{role:?}"
+            );
+        }
+        for b in BuiltIn::ALL {
+            assert!(!may_start_from_dev_folder(&[b.role()]), "{b:?}");
+        }
+        assert!(may_start_from_dev_folder(&[]));
+        assert!(may_start_from_dev_folder(&DEV_FOLDER_ROLES));
+        // the file's role names agree, so the root setup command offers exactly the processes the server accepts
+        for name in cupertino_defaults::compositor::ShellRoleName::ALL {
+            assert_eq!(
+                name.allows_dev_folder(),
+                DEV_FOLDER_ROLES.contains(&ShellRole::from(name)),
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_development_program_starts_only_from_a_file_nobody_else_can_change() {
+        let (root, me, other) = (0, 1000, 1001);
+        let file = |owner: u32, mode: u32| (owner, libc::S_IFREG | mode);
+        let dir = |owner: u32, mode: u32| (owner, libc::S_IFDIR | mode);
+        let link = (me, libc::S_IFLNK | 0o777);
+        let cases = [
+            (
+                file(me, 0o755),
+                dir(me, 0o700),
+                true,
+                "the user's file in the user's folder",
+            ),
+            (file(root, 0o755), dir(me, 0o700), true, "root's file"),
+            (file(me, 0o700), dir(root, 0o755), true, "root's folder"),
+            (
+                file(other, 0o755),
+                dir(me, 0o700),
+                false,
+                "another user's file",
+            ),
+            (
+                file(me, 0o755),
+                dir(other, 0o700),
+                false,
+                "another user's folder",
+            ),
+            (
+                file(me, 0o775),
+                dir(me, 0o700),
+                false,
+                "a group-writable file",
+            ),
+            (
+                file(me, 0o757),
+                dir(me, 0o700),
+                false,
+                "a file others can write",
+            ),
+            (
+                file(me, 0o755),
+                dir(me, 0o770),
+                false,
+                "a group-writable folder",
+            ),
+            (
+                file(me, 0o755),
+                dir(me, 0o707),
+                false,
+                "a folder others can write",
+            ),
+            (
+                file(me, 0o644),
+                dir(me, 0o700),
+                false,
+                "a file without an execute bit",
+            ),
+            (link, dir(me, 0o700), false, "a link"),
+            (dir(me, 0o755), dir(me, 0o700), false, "a directory"),
+            (file(me, 0o755), link, false, "a folder that is a link"),
+        ];
+        for (file, folder, allowed, case) in cases {
+            assert_eq!(
+                may_start_dev_program(file, folder, me).is_ok(),
+                allowed,
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_development_program_that_is_missing_a_link_or_shared_is_not_started() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path, mode: u32| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+        };
+        let me = rustix::process::getuid().as_raw();
+        let base = tempfile::tempdir().unwrap();
+        let folder = base.path().join("dev");
+        let installed = "/usr/bin/cupertino-dock";
+        assert_eq!(
+            dev_folder_program(&folder, installed, me),
+            Ok(None),
+            "no folder"
+        );
+        std::fs::create_dir(&folder).unwrap();
+        mode(&folder, 0o700);
+        assert_eq!(
+            dev_folder_program(&folder, installed, me),
+            Ok(None),
+            "no file"
+        );
+
+        let program = folder.join("cupertino-dock");
+        std::fs::write(&program, "#!/bin/sh\n").unwrap();
+        mode(&program, 0o755);
+        assert_eq!(
+            dev_folder_program(&folder, installed, me),
+            Ok(Some(program.clone()))
+        );
+        assert_eq!(
+            dev_folder_program(&folder, "cupertino-dock", me),
+            Ok(Some(program.clone())),
+            "a development run's program by name"
+        );
+
+        mode(&program, 0o644);
+        assert!(dev_folder_program(&folder, installed, me)
+            .unwrap_err()
+            .contains("not executable"));
+        mode(&program, 0o775);
+        assert!(dev_folder_program(&folder, installed, me)
+            .unwrap_err()
+            .contains("group or others"));
+        mode(&program, 0o755);
+        mode(&folder, 0o777);
+        assert!(dev_folder_program(&folder, installed, me)
+            .unwrap_err()
+            .contains("development folder"));
+        mode(&folder, 0o700);
+
+        std::fs::remove_file(&program).unwrap();
+        let elsewhere = base.path().join("cupertino-dock");
+        std::fs::write(&elsewhere, "#!/bin/sh\n").unwrap();
+        mode(&elsewhere, 0o755);
+        std::os::unix::fs::symlink(&elsewhere, &program).unwrap();
+        assert!(dev_folder_program(&folder, installed, me)
+            .unwrap_err()
+            .contains("not a regular file"));
+
+        std::fs::remove_file(&program).unwrap();
+        let linked = base.path().join("linked");
+        std::os::unix::fs::symlink(&folder, &linked).unwrap();
+        std::fs::write(&program, "#!/bin/sh\n").unwrap();
+        mode(&program, 0o755);
+        assert!(dev_folder_program(&linked, installed, me)
+            .unwrap_err()
+            .contains("not a directory"));
+        if me != 0 {
+            assert!(
+                dev_folder_program(&folder, installed, me + 1).is_err(),
+                "another user's session does not start it"
+            );
+        }
     }
 
     #[test]

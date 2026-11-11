@@ -1,0 +1,5 @@
+interface:
+  display_name: "Cupertino Live Development"
+  short_description: "Try a shell component build in the running session"
+policy:
+  allow_implicit_invocation: true

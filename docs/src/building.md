@@ -43,47 +43,84 @@ and restarting the session are separate operations; neither is the default for a
 | Changed component | Development loop | Effect on the running session |
 | --- | --- | --- |
 | A setting supported by the live watcher | Change the setting and observe its applied value | No process restart; `shell`, `screenshot` and menu-bar geometry remain startup settings |
-| Files or Settings | Build its binary with `--features app`, validate in a fixture, then reopen only the affected application | Its windows close during replacement; preserve navigation and pending work first |
-| Launcher, menu bar, control panel or OSD | Build the selected binary, then replace and restart that supervised process | A short interruption of that component; other applications stay connected |
-| Dock, notifications or window manager | Test separately first, then replace only that supervised process | Transient state can be lost: overview/switcher, queued notifications or window placement |
-| Portal | Build only `cupertino-portal` with `--features app`; replace when no request or share is active | Restarting the portal ends its active screen-sharing sessions and outstanding requests |
-| Login, session manager, authentication agents, network/Bluetooth/power daemons | Use private backends, a nested session or a VM before a planned service update | These can affect authentication, connectivity or device state; they are not ordinary shell reloads |
+| Files or Settings | Regular applications: build the binary with `--features app` in the worktree and run that build directly; no installed file is replaced | Quit the installed copy first when the change concerns its single instance; preserve navigation and pending work |
+| Dock, menu bar, launcher, notifications, control panel, OSD or window manager | The development folder loop below, as the session's own user | A short interruption of that component; transient state can be lost (overview/switcher, queued notifications, window placement, open panels) |
+| Portal | Build only `cupertino-portal` with `--features app`; test it nested or headless and leave it for a planned package update | Restarting the portal ends its active screen-sharing sessions and outstanding requests |
+| Login, lock screen, session manager, authentication agents, desktop control, network/Bluetooth/power daemons | Use private backends, a nested session or a VM before a planned package update | These can affect authentication, connectivity or device state; they never start from the development folder |
 | Server, its linked libraries or vendored Smithay | Build the server and exercise it nested or headless | A new server binary takes effect in the installed desktop at its next session start |
 | A library shared by applications | Rebuild the consuming binaries needed to test the change | Rust libraries are linked into each consumer; copying a library alone does not update them |
 
-For each implementation change:
+### The development folder
 
-1. Identify the affected package, consumer binaries and regression checks. `ci/affected.py` already computes a
-   conservative dependent-package selection for CI; its server-fixture expansion is not a reason to build the
-   workspace for every local binary replacement. Begin with the focused regression, then run the applicable
-   dependent checks before handoff.
-2. Use a linked worktree, the managed `dev` target and the production features shown above. Reuse a compatible
-   managed seed when one is available; keep the profile and fingerprinted build environment stable. Finish the task
-   with the required managed cleanup. Record build and validation time before claiming a cache improvement.
-3. Reproduce and verify with `cupertino-ui-test`, the accessibility tests, surface captures or a private nested
-   session as appropriate. Keep the fixture home, XDG directories and buses separate from the installed session.
-4. Identify the installed session by its runtime record under `$XDG_RUNTIME_DIR/cupertino/server-<socket>.json`,
-   verify the live server process and its start time, and identify the affected child of that server. Do not select a
-   process by name alone: another nested session may run the same program, and runtime records can be stale.
-5. Check compatibility with that running server's protocols and configuration. Record the source revision, dirty
-   diff when present, build features, artifact hash, installed path, previous hash and target process identity. The
-   development build's embedded commit can lag Git HEAD; `cupertino version` does not inventory every shell binary.
-6. Keep a rollback copy, stage the new executable beside the installed destination and atomically rename it into
-   place with the required owner and mode. Do not truncate an executing file. Installed privileged programs must
-   remain at their trusted paths; do not redirect the live desktop to a worktree or enable `--dev-shell` there.
-   A direct development replacement is a local override of a package-owned file: record it and restore or reconcile
-   it at the next package update.
-7. Restart only the identified component. A supervised process is restarted after failure or signal death, but an
-   exit with status zero leaves it stopped. Verify the actual exit and the replacement's new PID, parent, executable,
-   expected bus name or role, and readiness; sending a signal or receiving a queued D-Bus reply is not proof.
-   Keep a process handle where available, or recheck its start time before signalling to avoid PID reuse.
-8. Exercise the changed interaction in the installed session, compare its observable result and diagnostics, and
-   confirm that the server and unrelated applications stayed alive. Roll back a failed candidate and verify the
-   restored process. Do not interrupt active work or screen sharing to run this check.
+Root declares the folder once, and from then on the session's user tries builds of the eligible shell processes
+without root:
 
-This is executable replacement followed by a component restart, with the component's own interruption made explicit.
-It cannot replace code inside an already running server. Server changes accumulate for the next planned session
-restart; nested testing lets development continue meanwhile.
+```bash
+sudo cupertino dev-folder enable                      # ~/.local/lib/cupertino/dev, every eligible process
+sudo cupertino dev-folder enable --components dock,menubar
+```
+
+This sets the `dev_folder` key of `/etc/cupertino/compositor.json` (see [The shell processes](#the-shell-processes))
+and creates the folder with mode 0700 for the user who ran `sudo`. Eligible processes are those whose roles are all
+among `session`, `menu_bar`, `dock` and `window_manager`: in the packaged configuration `dock`, `menubar`, `launcher`,
+`notifications`, `controlcenter`, `osd` and `windowmanager`. `login` (the lock screen and the session agent), the
+portal, the authentication agent, desktop control, a data-control client and the server itself are never eligible.
+A server that supports the key reads it again when the file changes; it applies from each process's next start.
+`sudo cupertino dev-folder disable` removes the key and leaves the folder's files in place.
+
+At every start of an eligible process the server looks for `<folder>/<file name of its installed program>`, for
+example `~/.local/lib/cupertino/dev/cupertino-dock`. It starts that file, with the same arguments, environment and
+roles, only when it is a regular file (not a link) owned by the user or root that neither its group nor others can
+write and that the user can execute, in a folder with the same owner and permission rules; otherwise it starts the
+installed program and logs why. Its log names the program and the source of every start.
+
+### The loop
+
+1. Find the component's name and program with `cupertino shell list`: the `NAME` column is the name the commands
+   take, `installed` is the program, and `dev_program` (in `--format json`) is the file the folder would provide. The
+   crate is the program's name: `cupertino-dock` is `crates/cupertino-dock`.
+2. Build it in a linked worktree through the managed wrapper with its production features, the binary alone:
+
+   ```bash
+   python3 ci/worktree-build.py run --profile dev -- cargo build --locked -p cupertino-dock --bin cupertino-dock --features app
+   ```
+
+   Validate the change separately with the scoped tests, as for any implementation change. The build must speak the
+   running server's protocols: a change that also needs a new server waits for the next session start.
+3. Copy it into the folder by a staged write and an atomic rename, never by truncating a file a process may be
+   running:
+
+   ```bash
+   dev=~/.local/lib/cupertino/dev
+   install -m 0755 target/debug/cupertino-dock "$dev/.cupertino-dock.new"
+   mv -f "$dev/.cupertino-dock.new" "$dev/cupertino-dock"
+   ```
+
+   Record the source revision, the dirty diff and the artifact's hash (`sha256sum`).
+4. `cupertino shell restart dock`. The server ends the process (SIGTERM, then SIGKILL after 5 s), starts it again at
+   once whatever its exit status, and the command prints the new pid, its start time, the program and whether it is
+   the development folder's. `cupertino shell list` shows the same at any time. A start that fails is reported, and
+   the server keeps retrying after its throttle; going back (step 6) is the rollback.
+5. Verify the changed interaction in the session through desktop control (the `cupertino-desktop` skill) or by hand,
+   and confirm that the server and the other processes stayed alive. Defer a restart while the component has active
+   work or a screen share.
+6. `cupertino shell use-installed dock` removes the folder's file and restarts the process on its installed program.
+
+Only the user's own session runs the folder's files: the server checks them against the user it runs as, so another
+account's session, root's files aside, never starts them. The folder takes no part in package updates; empty it or
+run `dev-folder disable` when the work is done.
+
+### Components that are not eligible
+
+The server, the login process, the session manager, the authentication agent, the portal, desktop control and the
+system daemons are not swapped in a running session. Build them, exercise them nested or headless (`cupertino desktop
+start --backend nested|headless`, the integration tests) or in a VM, and take them into the installed desktop through
+a planned package update and session restart. When a manual replacement is unavoidable for an investigation, follow
+the same identity rules as above: find the process through the server's runtime record under
+`$XDG_RUNTIME_DIR/cupertino/server-<socket>.json`, its parent and start time, never by name alone (another nested
+session may run the same program); keep a rollback copy, stage the new executable beside the installed one and rename
+it into place with the required owner and mode, and record it as a local override of a package-owned file to
+reconcile at the next package update. Never redirect the live desktop to a worktree or enable `--dev-shell` there.
 
 ## Desktop automation development strategy
 
@@ -508,6 +545,8 @@ cargo build --release -p cupertino-menubar --features app
 ```
 
 The server starts and restarts the processes listed under the `"shell"` key of `/etc/cupertino/compositor.json` (the packages install one that starts the whole desktop), for example `[{"name": "dock", "command": ["/usr/bin/cupertino-dock"], "roles": ["session", "dock"]}]`. A process that has roles must be a program under `/usr`; the user file `~/.config/cupertino/compositor.json` can remove or reorder the entries but not add a process with roles, and a checkout or nested run that needs other programs starts the server with `--dev-shell`. A process that exits with failure is restarted at most once per second. The optional `roles` list is what the server lets the process do on its connection: `session`, `menu_bar`, `dock`, `window_manager`, `session_lock`, `clipboard` (data control without an entry in the person's `data-control.conf`); the default is `["session"]`, and a process asks for no role it does not hold. The roles end with the process.
+
+The system file may also declare a development folder, `"dev_folder": {"path": "/home/me/.local/lib/cupertino/dev", "components": ["dock", "menubar"]}`: an absolute directory and the names of the processes that may start from it (`sudo cupertino dev-folder enable` writes it). Only the system file sets it; the user file can neither declare nor widen it. A name whose process holds a role other than `session`, `menu_bar`, `dock` or `window_manager`, or that names no process of the shell list, is ignored with a warning, and the built-in processes never start from it. At every start of a named process the server starts `<path>/<file name of its program>` instead of the installed program when that file passes its checks ([Installed-session iteration](#the-development-folder)). `cupertino shell list` shows what each process runs, `cupertino shell restart NAME` ends one and starts it again at once, and `cupertino shell use-installed NAME` goes back to the installed program. Without the key everything starts from its installed program.
 
 ## Backends
 

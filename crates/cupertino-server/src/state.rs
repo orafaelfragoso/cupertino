@@ -820,7 +820,8 @@ impl Cupertino {
         let capture = crate::capture::Capture::new(&dh);
         let control = crate::control::Control::new(&dh);
         let scroll_counts = ScrollObservers::new(&dh);
-        let supervisor = Supervisor::new(&config.shell_processes, std::time::Instant::now());
+        let mut supervisor = Supervisor::new(&config.shell_processes, std::time::Instant::now());
+        supervisor.set_dev_folder(config.dev_folder.as_ref());
         let menu_bars = MenuBars::new(config.shell.menu_bar_height);
 
         let overlays = Overlays::new(&config, &decor.decorations().config.typography, assets)?;

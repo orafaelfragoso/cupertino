@@ -9,7 +9,8 @@
 //! Every mutating method checks its caller ([`crate::caller`]): the process behind the connection, from the bus
 //! daemon's `ProcessFD`. `QuitNextApplication` and `ForceQuitApplication` are for the session agent the server
 //! supervises; `SetAppearance` and `SetAccessibility` for the settings application (a known program under `/usr`) and
-//! that agent. A caller without a process descriptor, a Flatpak or a Snap is refused, with an error name of its own
+//! that agent; `ListShellProcesses` and `RestartShellProcess` for any unsandboxed process of the user the server runs as
+//! (the `cupertino shell` commands), by the user id the bus daemon gives for the connection. A caller without a process descriptor, a Flatpak or a Snap is refused, with an error name of its own
 //! (`org.cupertino.Session1.Error.AnonymousCaller`, `.FlatpakCaller`, `.SnapCaller`; `.UntrustedCaller` for any other
 //! process), and every refusal is logged. The properties are open to every caller.
 //!
@@ -20,6 +21,8 @@
 //! | `ApplicationQuit(s app_id) signal | the last toplevel of the application being quit went away |
 //! | `SetAppearance(s appearance)` | `light` or `dark`: stored as `appearance` in `compositor.json`, then applied at once; `auto` is refused with `NotSupported` (no time-of-day or location backend), anything else with `InvalidArgs`; a failed store, or no settings directory to store in, changes nothing (`Failed`) |
 //! | `SetAccessibility(s key, s value)` | one key of `accessibility.conf` with a value as the file writes it (`reduce_motion` `on`, `color_filter` `tint 0.5`, ...): applied and stored like the key actions; an unknown key or bad value is `InvalidArgs` |
+//! | `ListShellProcesses -> a(ssuttsbss)` | every process the server supervises, in start order, as `(name, state, pid, start_ticks, started, program, from_dev_folder, installed, dev_program)`: `state` is `running`, `stopping`, `waiting` or `stopped`; `pid`, `start_ticks` (field 22 of `/proc/PID/stat`), `started` (seconds since 1970) are 0 and `program` empty while it does not run; `from_dev_folder` says the program is the development folder's; `installed` is the configured program and `dev_program` the development folder's file it would start, empty when the folder does not apply. Only an unsandboxed process of the session's own user may call it |
+//! | `RestartShellProcess(s name) -> (ssuttsbss)` | ends the process (SIGTERM, then SIGKILL after `crate::supervisor::RESTART_STOP_GRACE`) and starts it again at once, the development folder resolved again; answers once it runs, with the same record. An unknown name is `InvalidArgs`, a start that failed `Failed`. Only an unsandboxed process of the session's own user may call it |
 //! | `Appearance` property `s` | `light` or `dark`, the session's appearance (with `PropertiesChanged`) |
 //! | `Accessibility` property `a{ss}` | every key of `accessibility.conf` with its value (with `PropertiesChanged`) |
 //! | `Mice` property `a(ssub)` | read-only: the connected mice that have moved, scrolled or clicked (no touchpads, no keyboard's unused pointer interface), each as `(key, name, dpi, stored)`: the `mouse_dpi` key of `compositor.json` (`vendor:product:name`, hex ids), the device name, the resolution in use (the stored one, else the hardware database's, else 1000) and whether it is the stored one; changes with `PropertiesChanged` on a mouse's first use or removal and on a change of `mouse_dpi` |
@@ -36,6 +39,7 @@ use zbus::object_server::SignalEmitter;
 use crate::authorization::ShellRole;
 use crate::caller::{identify, Caller, Denial, Need, Sandbox};
 use crate::state::Cupertino;
+use crate::supervisor::{ProcessInfo, RestartError};
 use cupertino_wm::{AppId, Command};
 
 pub const BUS_NAME: &str = "org.cupertino.Session1";
@@ -111,6 +115,43 @@ pub enum Call {
         Caller,
         async_channel::Sender<Result<(), Reject>>,
     ),
+    /// The caller and the user id the bus gave for its connection.
+    ListShellProcesses(
+        Caller,
+        Option<u32>,
+        async_channel::Sender<Result<Vec<ProcessInfo>, Reject>>,
+    ),
+    /// The process to restart, the caller and the user id the bus gave for its connection.
+    RestartShellProcess(
+        String,
+        Caller,
+        Option<u32>,
+        async_channel::Sender<Result<ProcessInfo, Reject>>,
+    ),
+}
+
+/// A supervised process on the bus: name, state, pid, start ticks, start time in seconds since 1970, program, from the
+/// development folder, installed program, development folder's file (see the table above).
+pub type ShellProcessRecord = (String, String, u32, u64, u64, String, bool, String, String);
+
+/// The bus record of `info`; what is unknown is 0 or empty.
+pub fn shell_process_record(info: &ProcessInfo) -> ShellProcessRecord {
+    let text =
+        |path: Option<&std::path::Path>| path.map(|p| p.display().to_string()).unwrap_or_default();
+    let ticks = info.start_ticks.unwrap_or(0);
+    (
+        info.name.clone(),
+        info.state.name().to_string(),
+        info.pid.unwrap_or(0),
+        ticks,
+        info.start_ticks
+            .and_then(crate::supervisor::started_unix)
+            .unwrap_or(0),
+        text(info.program.as_deref()),
+        info.from_dev_folder,
+        info.installed.display().to_string(),
+        text(info.dev_program.as_deref()),
+    )
 }
 
 impl Cupertino {
@@ -222,6 +263,43 @@ impl Cupertino {
             );
         }
         decision
+    }
+
+    /// Judge the caller of a method on the shell processes ([`crate::caller::authorize_session_user`]); a refusal is
+    /// logged with the caller's process and kind.
+    pub fn authorize_session_user_call(
+        &self,
+        method: &'static str,
+        caller: &Caller,
+        user: Option<u32>,
+    ) -> Result<(), Denial> {
+        let own = rustix::process::getuid().as_raw();
+        let decision = crate::caller::authorize_session_user(caller, user, own);
+        if let Err(denial) = decision {
+            tracing::warn!(
+                method,
+                pid = caller.pid(),
+                user,
+                ?denial,
+                "session interface: the caller is refused"
+            );
+        }
+        decision
+    }
+
+    /// Restart the supervised process `name` ([`crate::supervisor::Supervisor::request_restart`]) and run the
+    /// supervision at once, so a process that is not running starts now and one that is late to end is killed on time.
+    /// `reply` gets the process once it runs, or why not.
+    pub fn restart_shell_process(&mut self, name: &str, reply: crate::supervisor::RestartReply) {
+        if self.socket_name.is_none() {
+            reply(Err(RestartError::NotStarted(
+                "the server has no socket for its shell processes".into(),
+            )));
+            return;
+        }
+        self.supervisor
+            .request_restart(name, std::time::Instant::now(), reply);
+        crate::cli::supervise(self);
     }
 
     /// `ForceQuitApplication` from the bus: only for the session agent.
@@ -364,6 +442,37 @@ impl Cupertino {
                     });
                 let _ = reply.try_send(answer);
             }
+            Call::ListShellProcesses(caller, user, reply) => {
+                let answer = self
+                    .authorize_session_user_call("ListShellProcesses", &caller, user)
+                    .map(|()| self.supervisor.processes())
+                    .map_err(Reject::Caller);
+                let _ = reply.try_send(answer);
+            }
+            Call::RestartShellProcess(name, caller, user, reply) => {
+                if let Err(denial) =
+                    self.authorize_session_user_call("RestartShellProcess", &caller, user)
+                {
+                    let _ = reply.try_send(Err(Reject::Caller(denial)));
+                    return;
+                }
+                self.restart_shell_process(
+                    &name,
+                    Box::new(move |result| {
+                        let answer = result.map_err(|e| {
+                            Reject::Refusal(match e {
+                                RestartError::Unknown(name) => Refusal::InvalidArgs(format!(
+                                    "no shell process is named {name:?}"
+                                )),
+                                RestartError::NotStarted(reason) => Refusal::Failed(format!(
+                                    "the process ended but did not start again ({reason}); it is tried again later"
+                                )),
+                            })
+                        });
+                        let _ = reply.try_send(answer);
+                    }),
+                );
+            }
             Call::SetAccessibility(key, value, caller, reply) => {
                 let answer = self
                     .authorize_call("SetAccessibility", &caller, Need::SettingsClient)
@@ -450,6 +559,29 @@ async fn caller_of(header: &zbus::message::Header<'_>, connection: &zbus::Connec
     }
 }
 
+/// The caller of a method and the user id the bus daemon gives for its connection, from one answer of the daemon.
+async fn caller_and_user_of(
+    header: &zbus::message::Header<'_>,
+    connection: &zbus::Connection,
+) -> (Caller, Option<u32>) {
+    let Some(sender) = header.sender() else {
+        return (Caller::Anonymous, None);
+    };
+    let Ok(proxy) = zbus::fdo::DBusProxy::new(connection).await else {
+        return (Caller::Anonymous, None);
+    };
+    match proxy
+        .get_connection_credentials(sender.clone().into())
+        .await
+    {
+        Ok(credentials) => (
+            Caller::from_credentials(&credentials, std::path::Path::new("/proc")),
+            credentials.unix_user_id(),
+        ),
+        Err(_) => (Caller::Anonymous, None),
+    }
+}
+
 #[zbus::interface(name = "org.cupertino.Session1")]
 impl Session1 {
     async fn quit_next_application(
@@ -492,6 +624,31 @@ impl Session1 {
         let caller = caller_of(&header, connection).await;
         self.ask(|tx| Call::SetAccessibility(key, value, caller, tx))
             .await
+    }
+
+    async fn list_shell_processes(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<Vec<ShellProcessRecord>, CallError> {
+        let (caller, user) = caller_and_user_of(&header, connection).await;
+        let processes = self
+            .ask(|tx| Call::ListShellProcesses(caller, user, tx))
+            .await?;
+        Ok(processes.iter().map(shell_process_record).collect())
+    }
+
+    async fn restart_shell_process(
+        &self,
+        name: String,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<ShellProcessRecord, CallError> {
+        let (caller, user) = caller_and_user_of(&header, connection).await;
+        let process = self
+            .ask(|tx| Call::RestartShellProcess(name, caller, user, tx))
+            .await?;
+        Ok(shell_process_record(&process))
     }
 
     #[zbus(property)]

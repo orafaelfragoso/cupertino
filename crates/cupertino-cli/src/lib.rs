@@ -19,14 +19,17 @@ mod appearance;
 pub mod completions;
 mod desktop;
 mod dev;
+mod dev_folder;
 mod diagnose;
 mod diagnose_events;
 pub mod manual;
 mod sdk;
+mod shell;
 pub mod stream;
 mod version;
 
 pub use desktop::StopGrace;
+pub use dev_folder::EffectiveUser;
 pub use stream::{Closed, Sink, StopFlag};
 
 use serde::{Serialize, Serializer};
@@ -49,7 +52,9 @@ pub const REGISTRY: &[Group] = &[
     appearance::GROUP,
     diagnose::GROUP,
     desktop::GROUP,
+    shell::GROUP,
     dev::GROUP,
+    dev_folder::GROUP,
     sdk::GROUP,
     version::GROUP,
     completions::GROUP,

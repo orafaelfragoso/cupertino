@@ -141,6 +141,7 @@ Changes on `main` since `v0.1.0-rc4`.
 ### Command line
 
 - The `cupertino` command: a typed registry with help, version and JSON output, and one subcommand, `appearance assets check`, which replaces `cupertino-assets check`. Exit codes 2 to 8 name the kind of failure.
+- A development folder for working on the desktop from inside its session: `sudo cupertino dev-folder enable` declares it once in `/etc/cupertino/compositor.json`, and the dock, menu bar, launcher, notifications, control panel, OSD and window manager then start a build placed there instead of their installed program. `cupertino shell list` shows what each shell process runs, `cupertino shell restart NAME` ends one and starts it again at once, and `cupertino shell use-installed NAME` goes back. The lock screen, capture, the authentication prompt, data control and desktop control never start from the folder.
 
 ### CupertinoKit
 

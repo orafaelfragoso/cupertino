@@ -667,7 +667,7 @@
   test_owner: crates/cupertino-server/tests/quit.rs
   source: crates/cupertino-server/src/quit.rs
   source_match: "org.cupertino.Session1"
-  note: methods are caller-checked
+  note: methods are caller-checked; ListShellProcesses and RestartShellProcess (the cupertino shell commands) answer only an unsandboxed process of the session's own user
 - name: org.cupertino.Launcher1
   kind: dbus-interface
   version: 1

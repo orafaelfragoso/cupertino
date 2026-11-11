@@ -64,11 +64,42 @@ pub enum ControlEvent {
         output: String,
         resuming: bool,
     },
+    /// The app the next [`ControlEvent::ConsentRequested`] of `epoch` asks for (authority version 2).
+    ConsentApp {
+        epoch: u64,
+        app: ConsentApp,
+    },
     ConsentChanged {
         epoch: u64,
         phase: u32,
     },
 }
+/// The app a consent request names, as the compositor found it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsentApp {
+    /// The desktop entry id (`desktop`), else the absolute path of the executable.
+    pub identity: String,
+    /// Whether `identity` is a desktop entry id.
+    pub desktop: bool,
+    /// The entry's name, or the executable's file name.
+    pub name: String,
+    /// The services asked: desktop control 1, screen capture 2.
+    pub services: u32,
+    /// Whether the answer is remembered for the app.
+    pub remembered: bool,
+}
+
+/// The person's answer on the consent panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConsentAnswer {
+    /// Allow the run, and remember allow for the app.
+    Allow,
+    /// Refuse the run, and remember deny for the app.
+    Deny,
+    /// Refuse this run only: the panel was dismissed or could not be shown.
+    Dismiss,
+}
+
 struct Quiet;
 struct RunData(Arc<AtomicU64>);
 pub struct DesktopControl(CupertinoControlV1);
@@ -78,8 +109,9 @@ pub struct ControlSession {
 }
 pub struct ControlAuthority(CupertinoControlAuthorityV1);
 impl DesktopControl {
+    /// Version 3 runs are asked every time; version 4 runs name their app ([`ControlSession::identify`]).
     pub fn bind(conn: &mut Connection) -> Option<Self> {
-        conn.bind_extension(3..=3, Quiet).map(Self)
+        conn.bind_extension(3..=4, Quiet).map(Self)
     }
     pub fn session(&self, conn: &Connection) -> ControlSession {
         let epoch = Arc::new(AtomicU64::new(0));
@@ -97,6 +129,16 @@ impl Drop for DesktopControl {
 impl ControlSession {
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::Relaxed)
+    }
+    /// Whether the compositor takes the app a run comes from: version 4 needs it before `start`.
+    pub fn names_apps(&self) -> bool {
+        use wayland_client::Proxy;
+        self.proxy.version() >= 4
+    }
+    /// Name the local process this run serves: its id and start time in clock ticks since boot. Only before `start`,
+    /// once, and only when [`Self::names_apps`].
+    pub fn identify(&self, pid: u32, start: u64) {
+        self.proxy.identify(pid, (start >> 32) as u32, start as u32);
     }
     fn parts(&self) -> (u32, u32) {
         let e = self.epoch();
@@ -187,8 +229,9 @@ impl Drop for ControlSession {
     }
 }
 impl ControlAuthority {
+    /// Version 2 names the app each request is for and remembers the answer.
     pub fn bind(conn: &mut Connection) -> Option<Self> {
-        conn.bind_extension(1..=1, Quiet).map(Self)
+        conn.bind_extension(1..=2, Quiet).map(Self)
     }
     pub fn set_surface(
         &self,
@@ -198,9 +241,17 @@ impl ControlAuthority {
         self.0.set_surface(&conn.wl_surface(surface)?);
         Ok(())
     }
-    pub fn answer(&self, epoch: u64, allow: bool, serial: u32) {
+    /// Answer the request of `epoch`, `serial` being the input the person gave the panel.
+    pub fn answer(&self, epoch: u64, answer: ConsentAnswer, serial: u32) {
+        use wayland_client::Proxy;
+        let allow = match answer {
+            ConsentAnswer::Allow => 1,
+            // version 1 knows no remembered refusal
+            ConsentAnswer::Deny if self.0.version() >= 2 => 2,
+            ConsentAnswer::Deny | ConsentAnswer::Dismiss => 0,
+        };
         self.0
-            .answer((epoch >> 32) as u32, epoch as u32, u32::from(allow), serial);
+            .answer((epoch >> 32) as u32, epoch as u32, allow, serial);
     }
     pub fn stop(&self, epoch: u64) {
         self.0.stop((epoch >> 32) as u32, epoch as u32);
@@ -352,6 +403,24 @@ impl Dispatch<CupertinoControlAuthorityV1, Quiet> for State {
             } => ControlEvent::ConsentChanged {
                 epoch: (u64::from(epoch_hi) << 32) | u64::from(epoch_lo),
                 phase,
+            },
+            authority::Event::App {
+                epoch_hi,
+                epoch_lo,
+                kind,
+                identity,
+                name,
+                services,
+                remembered,
+            } => ControlEvent::ConsentApp {
+                epoch: (u64::from(epoch_hi) << 32) | u64::from(epoch_lo),
+                app: ConsentApp {
+                    identity,
+                    desktop: kind == WEnum::Value(authority::AppKind::Desktop),
+                    name,
+                    services,
+                    remembered: remembered != 0,
+                },
             },
             _ => return,
         };

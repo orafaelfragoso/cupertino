@@ -7,11 +7,14 @@
     Only the compositor-created controller connection sees the manager. Binding it grants no observation,
     capture or input authority. Version 1 remains discovery-only. Version 2 requests explicit output-scoped
     consent from the private session authority. Fresh physical input on its registered surface is required
-    to approve or resume. Physical input suspends control; lock, disconnect and stop revoke it. Output capture
-    uses ext-image-copy-capture, with sources bound to the exact approved run epoch. Version 3 adds consented native
-    semantic observation and actions, with sealed bounded publications owned by each application surface.
+    to approve. Lock, disconnect and stop revoke a run. Output capture uses ext-image-copy-capture, with sources
+    bound to the exact approved run epoch. Version 3 adds consented native semantic observation and actions, with
+    sealed bounded publications owned by each application surface. Version 4 names the app each run comes from:
+    the person's remembered answer for that app decides a request at once, and the session authority asks only
+    for services the app has no answer for. Physical input never suspends a run; an authentication prompt
+    suspends it until the prompt closes.
   </description>
-  <interface name="cupertino_control_v1" version="3">
+  <interface name="cupertino_control_v1" version="4">
     <enum name="error">
       <entry name="permission" value="2" summary="the connection no longer holds the controller capability"/>
       <entry name="session_exists" value="1" summary="the connection already has a live control session"/>
@@ -31,7 +34,7 @@
       <arg name="id" type="new_id" interface="cupertino_control_session_v1"/>
     </request>
   </interface>
-  <interface name="cupertino_control_session_v1" version="3">
+  <interface name="cupertino_control_session_v1" version="4">
     <enum name="phase">
       <entry name="inactive" value="0"/>
       <entry name="awaiting_consent" value="1" since="2"/>
@@ -51,6 +54,7 @@
       <entry name="busy" value="8" since="2"/>
       <entry name="invalid_input" value="9" since="2"/>
       <entry name="unknown_outcome" value="10" since="2"/>
+      <entry name="unidentified" value="11" since="4" summary="the app the run comes from cannot be named"/>
     </enum>
     <request name="destroy" type="destructor">
       <description summary="end this session and invalidate its epoch"/>
@@ -68,6 +72,7 @@
     <enum name="error">
       <entry name="permission" value="2" summary="the connection no longer holds the controller capability"/>
       <entry name="invalid_serial" value="1" summary="serial zero is reserved for the initial status"/>
+      <entry name="identity" value="3" summary="identify was sent twice, or after start" since="4"/>
     </enum>
     <event name="created">
       <description summary="the server-assigned nonzero run epoch">
@@ -98,9 +103,14 @@
     </enum>
     <enum name="key_state" since="2"><entry name="released" value="0"/><entry name="pressed" value="1"/></enum>
     <request name="start" since="2">
-      <description summary="ask the trusted session agent for control of one output">
+      <description summary="ask for control of one output">
         Capabilities are explicit, nonempty and limited to this version's capability bits. Only one run may await
         consent or be active at a time. No desktop content is sent before consent. Serial must be nonzero.
+        From version 4 a run must be identified first (unidentified otherwise). Observe, semantic, pointer and
+        keyboard need the app's desktop-control service, capture its screen-capture service. A service the person
+        turned off for the app refuses the request with denied. When every needed service is allowed the run is
+        active before completed; otherwise the session authority asks the person and the run awaits consent.
+        A version 2 or 3 run is asked every time and its answer is not remembered.
       </description>
       <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
       <arg name="output" type="object" interface="wl_output"/><arg name="capabilities" type="uint" enum="capability"/>
@@ -126,6 +136,11 @@
     </request>
     <request name="stop" since="2"><description summary="revoke this run; cleanup is safe to repeat"/></request>
     <request name="resume" since="2">
+      <description summary="continue a suspended run">
+        A run suspended while an authentication prompt or a protected session panel held the keyboard resumes by
+        itself when it closes. This request resumes it at once when nothing blocks it any more; it is refused with
+        blocked otherwise. It never asks the person again.
+      </description>
       <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
     </request>
     <event name="geometry" since="2">
@@ -159,11 +174,23 @@
     <event name="observation" since="3"><arg name="serial" type="uint"/><arg name="payload" type="fd"/><arg name="length" type="uint"/></event>
     <event name="action_finished" since="3"><arg name="serial" type="uint"/><arg name="payload" type="fd"/><arg name="length" type="uint"/></event>
     <event name="semantic_changed" since="3"><arg name="revision_hi" type="uint"/><arg name="revision_lo" type="uint"/></event>
+    <request name="identify" since="4">
+      <description summary="name the process the run is for">
+        The controller names the local process it serves: its process id and its start time in clock ticks since
+        boot (field 22 of /proc/PID/stat), start_hi holding the upper 32 bits. Sent at most once, before start.
+        The compositor checks that the process still has that start time, then finds its app: the nearest ancestor
+        that is a connected application client whose windows name one desktop entry, else the executable of the
+        process's parent. A process it cannot name makes start refuse with unidentified. On a run that already
+        ended, as when the session locked, it is ignored.
+      </description>
+      <arg name="pid" type="uint"/><arg name="start_hi" type="uint"/><arg name="start_lo" type="uint"/>
+    </request>
   </interface>
 
-  <interface name="cupertino_control_authority_v1" version="1">
+  <interface name="cupertino_control_authority_v1" version="2">
     <description summary="the supervised session agent's consent authority">
-      Offered only to the session-lock role. One authority may be bound at once. Its loss revokes all runs.
+      Offered only to the session-lock role. One authority may be bound at once. Its loss revokes the runs
+      awaiting its answer; a run an app's remembered answers started needs no authority.
       Consent must name a registered surface and a fresh physical input serial delivered to that surface.
       The controller cannot bind this interface or approve its own request.
     </description>
@@ -171,6 +198,12 @@
     <request name="destroy" type="destructor"/>
     <request name="set_surface"><arg name="surface" type="object" interface="wl_surface"/></request>
     <request name="answer">
+      <description summary="the person's answer to a request">
+        allow 1 approves the run and, from version 2, remembers allow for each asked service of its app. allow 2
+        (version 2) refuses the run and remembers deny for each asked service. Both need a fresh physical input
+        serial on the registered surface; a deny without one refuses this run only. allow 0 refuses this run only
+        and remembers nothing (the panel was dismissed or could not be shown).
+      </description>
       <arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
       <arg name="allow" type="uint"/><arg name="serial" type="uint"/>
     </request>
@@ -181,6 +214,21 @@
     </event>
     <event name="changed">
       <arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/><arg name="phase" type="uint"/>
+    </event>
+    <enum name="app_kind" since="2">
+      <entry name="desktop" value="1" summary="identity is a desktop entry id"/>
+      <entry name="executable" value="2" summary="identity is an absolute executable path"/>
+    </enum>
+    <event name="app" since="2">
+      <description summary="the app the next requested event asks for">
+        Sent right before requested for a run that names its app. name is the desktop entry's name, or the
+        executable's file name. services holds the services asked (desktop control 1, screen capture 2), only
+        those the app has no remembered answer for. remembered is 1 when the answer will be remembered for the
+        app, 0 when it applies to this run only.
+      </description>
+      <arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
+      <arg name="kind" type="uint" enum="app_kind"/><arg name="identity" type="string"/>
+      <arg name="name" type="string"/><arg name="services" type="uint"/><arg name="remembered" type="uint"/>
     </event>
   </interface>
 </protocol>

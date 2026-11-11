@@ -23,6 +23,7 @@ use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
 use cupertino_wayland_client::{Connection, Error as WaylandError, ExtensionEvent, SurfaceId};
 use std::collections::HashMap;
 use std::error::Error;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -105,6 +106,10 @@ struct NotificationRoles {
     centre: Option<SurfaceId>,
     /// Tells the bus whether the list is open and on which output.
     publisher: CentrePublisher,
+    /// Whether the application wants the keyboard for the list: set while it is open, cleared as a close begins.
+    wants_keys: Arc<AtomicBool>,
+    /// The keyboard was let go from the list's surface, which a close does at once.
+    keys_released: bool,
 }
 
 /// What the bus says of the centre's list: open while its surface exists, on the output of the given connector name
@@ -176,6 +181,8 @@ impl SurfaceRoles for NotificationRoles {
         self.layers.insert(surface, layer);
         if spec.title == CENTRE_TITLE {
             self.centre = Some(surface);
+            // a new surface asks for the keyboard
+            self.keys_released = false;
         }
         Some(Ok(surface))
     }
@@ -214,11 +221,24 @@ impl SurfaceRoles for NotificationRoles {
         self.layers.remove(&surface);
         if self.centre == Some(surface) {
             self.centre = None;
+            self.keys_released = false;
         }
     }
 
     /// Tell the bus whether the centre's list is open and on which output, when that changed.
     fn prepare(&mut self, conn: &mut Connection) {
+        // a list on its way out lets the keyboard go to the window that had it; the next commit applies it
+        if let Some(layer) = self.centre.and_then(|surface| self.layers.get(&surface)) {
+            let wanted = self.wants_keys.load(Ordering::Relaxed);
+            if wanted == self.keys_released {
+                layer.set_keyboard_interactivity(if wanted {
+                    KeyboardInteractivity::Exclusive
+                } else {
+                    KeyboardInteractivity::None
+                });
+                self.keys_released = !wanted;
+            }
+        }
         let output = self.centre.and_then(|surface| {
             let on = conn.surface_outputs(surface).ok()?.into_iter().next()?;
             conn.outputs().into_iter().find(|o| o.id == on)?.name
@@ -246,6 +266,8 @@ pub struct Notifications {
     timer: u64,
     /// Measures the cards with the windows' text system; set once the runtime has its options.
     metrics: Option<CardMetrics>,
+    /// Tells the roles whether the list wants the keyboard (it is open, not closing).
+    wants_keys: Arc<AtomicBool>,
     /// Follows `notifications.conf`; `None` when it cannot, and the file then applies at the next start.
     _policy_watch: Option<ConfigWatcher>,
 }
@@ -304,6 +326,8 @@ impl Notifications {
         if let Err(e) = self.server.flush_events() {
             eprintln!("cupertino-notifications: cannot send the signals: {e}");
         }
+        self.wants_keys
+            .store(self.ui.centre_open, Ordering::Relaxed);
         self.timer += 1;
         let wait = match wakeup {
             Some(Wakeup::Frame) => FRAME,
@@ -458,6 +482,7 @@ fn start(options: &Options) -> Result<(Notifications, Vec<Command<Message>>)> {
             sender,
             timer: 0,
             metrics: None,
+            wants_keys: Arc::new(AtomicBool::new(false)),
             _policy_watch: policy_watch,
         },
         vec![first],
@@ -569,6 +594,8 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         notes: sender,
         centre: None,
         publisher,
+        wants_keys: Arc::clone(&start.0.wants_keys),
+        keys_released: false,
     });
     cupertino_kit::app::run_on_with::<Notifications>(system, move |options| {
         let (mut model, commands) = start;

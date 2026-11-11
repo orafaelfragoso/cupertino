@@ -137,6 +137,10 @@ pub const BOTTOM_MARGIN: f64 = 16.0;
 /// How far left of the cards the centre takes input, and how tall (more than any output) its region is.
 const CENTRE_EDGE: f64 = 28.0;
 const CENTRE_REGION_HEIGHT: f64 = 32768.0;
+/// A card's halo fades out over this many points as the card goes under the header or past the list's bottom edge.
+const HALO_FADE: f64 = 40.0;
+/// The height of the layer the halos are drawn in, more than any output.
+const HALO_LAYER_HEIGHT: f64 = 8192.0;
 /// The Clear menu's width and row height.
 pub const MENU_WIDTH: f64 = 180.0;
 pub const MENU_ROW: f64 = 28.0;
@@ -1271,6 +1275,7 @@ fn centre_window<M: Clone + 'static>(
                     disclosure,
                     map,
                 ),
+                shadow: false,
                 ..Card::plain(n.id, rect, true, map)
             }
         };
@@ -1287,6 +1292,7 @@ fn centre_window<M: Clone + 'static>(
                     brightness: behind.brightness,
                     container,
                     cover: Some(cover),
+                    shadow: false,
                     ..Card::plain(front.id, behind.rect, true, map)
                 };
                 if let Some(p) = ui.leaving(front.id, now) {
@@ -1452,6 +1458,36 @@ fn centre_window<M: Clone + 'static>(
             || (rect.max_y() > scroll.offset.y - MIN_CARD_HEIGHT
                 && rect.min_y() < scroll.offset.y + scroll.viewport.height + MIN_CARD_HEIGHT)
     };
+    // the halos of the cards in view, under the list: fully strong while a card is in view, fading as it goes under the
+    // header or past the bottom edge
+    let list_top = layout.top_inset + HEADER_HEIGHT;
+    let slide = ui.slide.offset(now);
+    let halos: Vec<Element<M>> = cards
+        .iter()
+        .filter_map(|piece| match piece {
+            Piece::Card(c) if c.opacity > 0.0 => Some(c),
+            _ => None,
+        })
+        .filter_map(|c| {
+            let top = list_top + c.rect.y() - scroll.offset.y;
+            let bottom = top + c.rect.height();
+            let viewport = scroll.viewport.height;
+            let above = ((bottom - list_top) / HALO_FADE).clamp(0.0, 1.0);
+            let below = if viewport > 0.0 {
+                ((list_top + viewport - top) / HALO_FADE).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let visible = above.min(below) * c.opacity;
+            (visible > 0.0).then(|| {
+                Element::new(Halo {
+                    rect: Rect::new(c.rect.x() + slide, top, c.rect.width(), c.rect.height()),
+                    opacity: visible,
+                })
+                .key(format!("halo-{}", c.id))
+            })
+        })
+        .collect();
     let cards = glass_within_budget(cards, in_view);
     let list = Element::from(ScrollView {
         content: Element::new(Layer {
@@ -1471,16 +1507,24 @@ fn centre_window<M: Clone + 'static>(
     .key("list");
     // the whole column slides as one piece: it starts this far from the window's left edge, and what is past the
     // right edge is off the output
-    let slide = ui.slide.offset(now);
-    let mut children = vec![Element::new(Column {
-        insets: Insets {
-            top: layout.top_inset,
-            bottom: BOTTOM_MARGIN,
-            left: slide,
-            right: 0.0,
-        },
-        children: vec![header, list],
-    })];
+    let mut children = vec![
+        Element::new(Layer {
+            size: Size::new(width + slide, HALO_LAYER_HEIGHT),
+            role: None,
+            count: 0,
+            children: halos,
+        })
+        .key("halos"),
+        Element::new(Column {
+            insets: Insets {
+                top: layout.top_inset,
+                bottom: BOTTOM_MARGIN,
+                left: slide,
+                right: 0.0,
+            },
+            children: vec![header, list],
+        }),
+    ];
 
     if ui.menu_open && !scopes.is_empty() {
         let rows = scopes
@@ -2298,6 +2342,9 @@ struct Card<M> {
     gap: Gap,
     /// How blurred the card is while it leaves, as a blur radius.
     blur: f64,
+    /// The card paints its own halo. The centre's cards do not: their halos are drawn under the whole list, where the
+    /// scroll view's edges do not cut them ([`Halo`]).
+    shadow: bool,
     map: fn(Input) -> M,
     children: Vec<Element<M>>,
 }
@@ -2328,6 +2375,7 @@ impl<M> Card<M> {
                 height: 0.0,
             },
             blur: 0.0,
+            shadow: true,
             map,
             children: Vec::new(),
         }
@@ -2425,6 +2473,89 @@ struct CardState {
     armed: bool,
 }
 
+/// A card's halo, drawn only outside `rect` (rounded by `radius`): from an opaque copy of its shape that the clip hides.
+fn paint_halo(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, fill: Color, shadow: Effect) {
+    let mut ring = rounded_path(rect.outset(SHADOW_REACH), 0.0);
+    ring.extend(rounded_path(rect, radius));
+    cx.push(PaintOp::PushClip(Shape::Path {
+        verbs: ring,
+        fill_rule: FillRule::EvenOdd,
+    }));
+    cx.push(PaintOp::PushLayer {
+        opacity: 1.0,
+        effects: vec![shadow],
+    });
+    cx.push(PaintOp::Fill {
+        shape: Shape::RoundedRect { rect, radius },
+        paint: Paint::Solid(fill),
+    });
+    cx.push(PaintOp::PopLayer);
+    cx.push(PaintOp::PopClip);
+}
+
+/// The halo of a card of the centre, in the layer under the whole list: the scroll view clips what it holds at its
+/// edges, which would cut a halo at the list's top and bottom, while this layer is cut only by the surface.
+struct Halo {
+    rect: Rect,
+    opacity: f64,
+}
+
+impl<M: 'static> Widget<M> for Halo {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.rect.width()),
+            height: SizeSpec::Fixed(self.rect.height()),
+            position: self.rect.origin,
+            overflow: Overflow::Visible,
+            ..LayoutSpec::new(ContainerKind::Absolute)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.rect != old.rect {
+            Change::Layout
+        } else if self.opacity != old.opacity {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let theme = cx.env().theme.clone();
+        let Some(fill) = theme.surface(Surface::Popover).fill else {
+            return;
+        };
+        let rect = Rect::new(0.0, 0.0, self.rect.width(), self.rect.height());
+        cx.set_group(self.opacity.clamp(0.0, 1.0) as f32, Vec::new());
+        paint_halo(
+            cx,
+            rect,
+            CORNER_RADIUS.min(rect.height() / 2.0),
+            fill,
+            Effect::DropShadow {
+                offset: Point::ZERO,
+                blur: SHADOW_BLUR,
+                color: Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA),
+            },
+        );
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
 /// `rect` with its corners rounded by `radius`, as a path of four quarter circles.
 fn rounded_path(rect: Rect, radius: f64) -> Vec<PathVerb> {
     // a quarter circle's control points sit this far along its tangents, as a fraction of the radius
@@ -2503,6 +2634,7 @@ impl<M: 'static> Widget<M> for Card<M> {
             || self.revealed != old.revealed
             || self.gap != old.gap
             || self.blur != old.blur
+            || self.shadow != old.shadow
         {
             Change::Paint
         } else {
@@ -2629,22 +2761,9 @@ impl<M: 'static> Widget<M> for Card<M> {
             // the compositor draws the glass under the card: the shadow is drawn only outside the card, from an
             // opaque copy of its shape the clip hides, and the text casts none
             cx.set_group(opacity as f32, blur);
-            let mut ring = rounded_path(rect.outset(SHADOW_REACH), 0.0);
-            ring.extend(rounded_path(rect, radius));
-            cx.push(PaintOp::PushClip(Shape::Path {
-                verbs: ring,
-                fill_rule: FillRule::EvenOdd,
-            }));
-            cx.push(PaintOp::PushLayer {
-                opacity: 1.0,
-                effects: vec![shadow],
-            });
-            cx.push(PaintOp::Fill {
-                shape: shape.clone(),
-                paint: Paint::Solid(fill),
-            });
-            cx.push(PaintOp::PopLayer);
-            cx.push(PaintOp::PopClip);
+            if self.shadow {
+                paint_halo(cx, rect, radius, fill, shadow);
+            }
             // a sheet deeper in its group is a little darker
             if self.brightness < 0.0 {
                 cx.push(PaintOp::Fill {
@@ -2654,7 +2773,9 @@ impl<M: 'static> Widget<M> for Card<M> {
             }
         } else {
             let mut effects = blur;
-            effects.push(shadow);
+            if self.shadow {
+                effects.push(shadow);
+            }
             cx.set_group(opacity as f32, effects);
             let darken = (1.0 + self.brightness).clamp(0.0, 1.0) as f32;
             let fill = Color::new(fill.r * darken, fill.g * darken, fill.b * darken, fill.a);

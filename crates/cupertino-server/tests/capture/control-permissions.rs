@@ -442,6 +442,54 @@ fn turning_a_service_off_ends_the_run_and_turning_one_on_starts_nothing() {
 }
 
 #[test]
+fn a_run_turned_off_in_settings_stays_ended_and_a_fresh_session_on_the_connection_starts_again() {
+    let Some(mut h) = Harness::new() else { return };
+    let (mut app, _authority) = authority(&mut h);
+    let bridge = Bridge::spawn();
+    let program = this_program();
+    let store = Store::watched_by(&mut h, &program, &ALLOW_ALL);
+    let mut c = Controller::named(&mut h, &bridge);
+    assert_eq!(c.start(&mut h, 15), Ok(()));
+    c.phase(&mut h, 2);
+    let first = c.client.state.control_seen.epoch;
+    assert_eq!(
+        c.start(&mut h, 15),
+        Err(session::Refusal::Busy),
+        "a run that started is not started again"
+    );
+    store.change_seen(&mut h, &mut c, |conf| {
+        conf.set(Service::Control, &program, Decision::Deny)
+            .unwrap()
+    });
+    c.phase(&mut h, 4);
+    // turned off: the ended run's session is refused with denied, never with busy or stale_epoch
+    assert_eq!(c.start(&mut h, 15), Err(session::Refusal::Denied));
+    store.change_seen(&mut h, &mut c, |conf| {
+        conf.set(Service::Control, &program, Decision::Allow)
+            .unwrap()
+    });
+    // turned on again: the ended run stays ended
+    assert_eq!(c.start(&mut h, 15), Err(session::Refusal::StaleEpoch));
+    assert_eq!(c.client.state.control_seen.phase, 4);
+    // a fresh session on the same connection has a fresh run, which starts at once without a panel
+    c.renew(&mut h, &bridge);
+    assert_ne!(c.client.state.control_seen.epoch, first);
+    assert_eq!(c.start(&mut h, 15), Ok(()));
+    c.phase(&mut h, 2);
+    h.idle(&mut app, 5);
+    assert!(app.state.control_request.is_none(), "nobody was asked");
+    // turned off again: the fresh session of the ended run is refused with denied
+    store.change_seen(&mut h, &mut c, |conf| {
+        conf.set(Service::Control, &program, Decision::Deny)
+            .unwrap()
+    });
+    c.phase(&mut h, 4);
+    c.renew(&mut h, &bridge);
+    assert_eq!(c.start(&mut h, 15), Err(session::Refusal::Denied));
+    assert_eq!(c.client.state.control_seen.phase, 0);
+}
+
+#[test]
 fn the_person_input_never_pauses_a_run_and_the_prompt_suspends_it_until_it_closes() {
     let Some(mut h) = Harness::new() else { return };
     let (mut target, _) = mapped_app_named(&mut h, "org.example.controlled", None);

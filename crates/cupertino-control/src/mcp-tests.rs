@@ -243,6 +243,18 @@ fn answering(
     capture_regions: bool,
     answers: Vec<Value>,
 ) -> (Native, std::thread::JoinHandle<Vec<Value>>) {
+    let status = json!({"epoch":7,"phase":2});
+    replying(
+        capture_regions,
+        std::iter::once(status).chain(answers).collect(),
+    )
+}
+/// A bridge connected to a controller that answers each request with the next of `answers`, and the requests it got
+/// once the bridge is gone.
+fn replying(
+    capture_regions: bool,
+    answers: Vec<Value>,
+) -> (Native, std::thread::JoinHandle<Vec<Value>>) {
     use std::io::BufRead;
     let (socket, peer) = UnixStream::pair().unwrap();
     let mut native = native();
@@ -252,8 +264,7 @@ fn answering(
     let server = std::thread::spawn(move || {
         let mut peer = BufReader::new(peer);
         let mut asked = Vec::new();
-        let status = json!({"epoch":7,"phase":2});
-        for answer in std::iter::once(status).chain(answers) {
+        for answer in answers {
             let mut line = String::new();
             if peer.read_line(&mut line).unwrap() == 0 {
                 break;
@@ -438,4 +449,122 @@ fn a_controller_from_before_regions_would_ignore_the_field() {
         "an older controller accepts the request and returns the whole output, so the bridge must not send it"
     );
     assert!(serde_json::from_str::<Before>(r#"{"op":"stop"}"#).is_ok());
+}
+
+#[test]
+fn a_call_naming_a_replaced_epoch_never_reaches_the_new_run() {
+    // a later request_control replaced run 7 by run 8
+    let (mut native, server) = replying(false, vec![json!({"epoch":8,"phase":2})]);
+    let error = native
+        .call(Call::Key {
+            epoch: "7".into(),
+            code: 30,
+            pressed: true,
+        })
+        .unwrap_err();
+    assert_eq!(error, STALE_EPOCH);
+    assert!(error.contains("stale epoch") && error.contains("nothing was done"));
+    close(native);
+    assert_eq!(
+        server.join().unwrap(),
+        [json!({"op":"status"})],
+        "nothing but status was asked"
+    );
+}
+
+#[test]
+fn a_call_naming_an_ended_run_is_refused_except_waiting_and_stopping() {
+    let ended = json!({"epoch":7,"phase":4});
+    let (mut native, server) = replying(
+        false,
+        vec![
+            ended.clone(),
+            ended.clone(),
+            ended.clone(),
+            ended.clone(),
+            ended.clone(),
+            ended,
+        ],
+    );
+    for call in [
+        Call::Observe {
+            epoch: "7".into(),
+            window: None,
+            role: None,
+            name: None,
+            max_nodes: None,
+        },
+        Call::Resume { epoch: "7".into() },
+    ] {
+        assert_eq!(native.call(call).unwrap_err(), REVOKED);
+    }
+    assert!(REVOKED.contains("request_control"));
+    let waited = native
+        .call(Call::Wait {
+            epoch: "7".into(),
+            phase: 4,
+            timeout_ms: 10,
+        })
+        .unwrap();
+    assert_eq!(waited["structuredContent"]["phase"], 4);
+    let stopped = native.call(Call::Stop { epoch: "7".into() }).unwrap();
+    assert_eq!(stopped["structuredContent"]["phase"], 4);
+    let asked = server.join().unwrap();
+    let ops: Vec<_> = asked.iter().map(|r| r["op"].clone()).collect();
+    assert_eq!(
+        ops,
+        ["status", "status", "status", "wait", "status", "stop"],
+        "only the wait and the stop reached the controller"
+    );
+}
+
+#[test]
+fn request_control_after_the_run_ended_asks_the_controller_for_a_fresh_run_without_a_stop() {
+    let (mut native, server) = replying(false, vec![json!({"epoch":8,"phase":2})]);
+    let mut protocol = Protocol::default();
+    let started = protocol
+        .handle(
+            modern(
+                "tools/call",
+                json!({"name":"request_control","arguments":{"output":"headless-1","capabilities":["semantic"]}}),
+            ),
+            &mut native,
+        )
+        .unwrap();
+    assert_eq!(started["result"]["isError"], false, "{started}");
+    assert_eq!(started["result"]["structuredContent"]["epoch"], "8");
+    // the connection stays: the controller replaced the ended run on it
+    assert!(native.reader.is_some());
+    close(native);
+    assert_eq!(
+        server.join().unwrap(),
+        [json!({"op":"request","output":"headless-1","capabilities":17})]
+    );
+}
+
+#[test]
+fn the_agent_is_told_requests_may_be_repeated_and_start_fresh_after_the_run_ended() {
+    for text in [
+        "request_control is safe to repeat",
+        "returns that run and its epoch",
+        "another output or more capabilities ends that run",
+        "starts a fresh run with a new epoch, without stopping first",
+        "refused and does nothing",
+    ] {
+        assert!(INSTRUCTIONS.contains(text), "instructions lack {text:?}");
+    }
+    let tools = tools();
+    let description = |name: &str| {
+        tools["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap()["description"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert!(description("request_control").contains("no stop needed"));
+    assert!(description("stop").contains("A later request_control starts a fresh run"));
 }

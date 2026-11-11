@@ -528,18 +528,6 @@ impl Cupertino {
             }
             Identity::Unnamed => None,
         };
-        // a run of an older version stands alone; newer runs are independent of each other
-        let concurrent = |r: &Run| r.resource.version() >= CONCURRENT_RUNS;
-        if self.control.runs.iter().enumerate().any(|(i, r)| {
-            i != index
-                && (!concurrent(r) || !concurrent(&self.control.runs[index]))
-                && matches!(
-                    r.model.phase(),
-                    Phase::Active | Phase::AwaitingConsent | Phase::Suspended
-                )
-        }) {
-            return Err(session::Refusal::Busy);
-        }
         let geometry = self
             .control_output_geometry(&output)
             .ok_or(session::Refusal::OutsideScope)?;
@@ -564,6 +552,23 @@ impl Cupertino {
             Verdict::Allowed => Services::NONE,
             Verdict::Ask(asked) => asked,
         };
+        // after the person's refusal, which neither a run that ended nor another run hides: a run that ended stays
+        // ended, and a fresh session has a fresh run, asked for in its own right
+        if self.control.runs[index].model.phase() == Phase::Revoked {
+            return Err(session::Refusal::StaleEpoch);
+        }
+        // a run of an older version stands alone; newer runs are independent of each other
+        let concurrent = |r: &Run| r.resource.version() >= CONCURRENT_RUNS;
+        if self.control.runs.iter().enumerate().any(|(i, r)| {
+            i != index
+                && (!concurrent(r) || !concurrent(&self.control.runs[index]))
+                && matches!(
+                    r.model.phase(),
+                    Phase::Active | Phase::AwaitingConsent | Phase::Suspended
+                )
+        }) {
+            return Err(session::Refusal::Busy);
+        }
         if !asked.is_empty() && !self.control.authority_alive() {
             return Err(session::Refusal::NoAuthority);
         }

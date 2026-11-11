@@ -116,6 +116,9 @@
         turned off for the app refuses the request with denied. When every needed service is allowed the run is
         active before completed; otherwise the session authority asks the person and the run awaits consent.
         A version 2 or 3 run is asked every time and its answer is not remembered.
+        A run that was revoked stays revoked: start on its session is refused with stale_epoch (busy from older
+        servers), and a client destroys the session and gets another for a fresh run. denied comes before
+        stale_epoch and busy.
       </description>
       <arg name="serial" type="uint"/><arg name="epoch_hi" type="uint"/><arg name="epoch_lo" type="uint"/>
       <arg name="output" type="object" interface="wl_output"/><arg name="capabilities" type="uint" enum="capability"/>

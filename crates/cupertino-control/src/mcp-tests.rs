@@ -153,3 +153,77 @@ fn cancellation_closes_only_the_current_native_lease() {
     assert!(lease.socket.is_none());
     assert_eq!(peer.read(&mut [0]).unwrap(), 0);
 }
+#[test]
+fn the_agent_is_told_the_person_decides_once_per_app_and_where_to_change_it() {
+    for text in [
+        "once per app",
+        "Settings › Privacy › Desktop Control or Screen Capture",
+        "never pauses control",
+        "resumes by itself",
+    ] {
+        assert!(INSTRUCTIONS.contains(text), "instructions lack {text:?}");
+    }
+    assert!(
+        !INSTRUCTIONS.contains("pauses control;"),
+        "physical input no longer pauses a run"
+    );
+    let tools = tools();
+    let description = |name: &str| {
+        tools["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap()["description"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert!(description("request_control").contains("Settings › Privacy"));
+    assert!(description("request_control").contains("remembers the answer"));
+    assert!(description("resume").contains("never asks the person again"));
+}
+#[test]
+fn a_remembered_refusal_reaches_the_agent_with_where_the_person_can_change_it() {
+    use std::io::BufRead;
+    let (socket, peer) = UnixStream::pair().unwrap();
+    let mut native = native();
+    native.reader = Some(BufReader::new(socket.try_clone().unwrap()));
+    native.lease.lock().unwrap().socket = Some(socket);
+    let server = std::thread::spawn(move || {
+        let mut peer = BufReader::new(peer);
+        let mut line = String::new();
+        peer.read_line(&mut line).unwrap();
+        let request: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["op"], "request");
+        assert_eq!(request["capabilities"], 3);
+        writeln!(
+            peer.get_mut(),
+            "{}",
+            json!({"ok":false,"error":crate::refusal(2)})
+        )
+        .unwrap();
+    });
+    let mut protocol = Protocol::default();
+    let refused = protocol
+        .handle(
+            modern(
+                "tools/call",
+                json!({"name":"request_control","arguments":{"output":"headless-1","capabilities":["observe","capture"]}}),
+            ),
+            &mut native,
+        )
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    let error = refused["result"]["structuredContent"]["error"]
+        .as_str()
+        .unwrap();
+    assert!(error.contains("(denied)"), "{error}");
+    assert!(
+        error.contains("Settings › Privacy › Desktop Control or Screen Capture"),
+        "{error}"
+    );
+    // a refusal leaves the connection to the controller open for the next request
+    assert!(native.reader.is_some());
+}

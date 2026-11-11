@@ -39,3 +39,14 @@ fn path_traversal_symlinks_and_shared_directories_are_refused() {
     std::fs::set_permissions(runtime.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(Listener::bind(runtime.path(), "wayland-1").is_err());
 }
+#[test]
+fn the_peer_start_time_is_field_22_of_its_process() {
+    assert_eq!(
+        start_of(
+            "4242 (a (b) c) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000"
+        ),
+        Some(987654)
+    );
+    assert_eq!(start_of("4242 (x) S 1 2"), None);
+    assert!(start_time(std::process::id()).is_some_and(|start| start > 0));
+}

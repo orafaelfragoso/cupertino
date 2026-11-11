@@ -1,6 +1,6 @@
 # Desktop quality and open issues
 
-Updated 2026-11-10. This is the installed-session quality backlog for the desktop experience Cupertino targets. These issues block calling the affected interactions finished, even where their implementation or automated tests already exist. See the [roadmap](roadmap.md#desktop-quality-acceptance) for the acceptance gate.
+Updated 2026-11-11. This is the installed-session quality backlog for the desktop experience Cupertino targets. These issues block calling the affected interactions finished, even where their implementation or automated tests already exist. See the [roadmap](roadmap.md#desktop-quality-acceptance) for the acceptance gate.
 
 ## Evidence and status
 
@@ -8,11 +8,11 @@ The review used the maintainer's recording `2026-11-10 00-31-22.mp4` (3:52.53, 1
 
 DQ-30 comes from a separate maintainer report and live installed-session inspection on the same date, with runtime base commit `0582a36c`; it is not a finding from the recording.
 
-DQ-31 is a separate maintainer test on the same date: ChatGPT Desktop lacked Cupertino's titlebar and could not be moved by dragging through XWayland. A subsequent native Wayland launch sent a valid move request, and the maintainer confirmed that dragging works. The application explicitly requests client-side decorations; the remaining titlebar policy and XWayland move failure stay open.
+DQ-31 is a separate maintainer test on the same date: ChatGPT Desktop lacked Cupertino's titlebar and could not be moved by dragging through XWayland. A subsequent native Wayland launch sent a valid move request, and the maintainer confirmed that dragging works. The application explicitly requests client-side decorations. On 2026-11-11 the maintainer decided that such applications keep their own titlebar, which closes DQ-31; the XWayland move failure continues as DQ-33.
 
 DQ-32 comes from a subsequent maintainer report and a live D-Bus trace: selecting Open ChatGPT in the menu-bar status icon sent an obsolete menu item ID. A second ChatGPT icon during the Wayland test belonged to its separate test instance and disappeared when that instance ended; duplicate icons are not established as a separate defect.
 
-All 32 entries below are **open**. **Observed** means a visible symptom was found in the recording; **reported** means the maintainer reported it and a focused reproduction remains necessary; **follow-up** means source or running-service inspection adds evidence. A cursor shape does not prove a click reached another window. Without physical input timestamps the video cannot establish repeat latency, right-button delivery or submenu latency. It also cannot establish search matching correctness, accessibility compliance or which material shader ran.
+The 32 entries in the tables below (DQ-01 to DQ-30, DQ-32 and DQ-33) are **open**; DQ-31 is closed under [Closed Electron titlebar policy](#closed-electron-titlebar-policy). **Observed** means a visible symptom was found in the recording; **reported** means the maintainer reported it and a focused reproduction remains necessary; **follow-up** means source or running-service inspection adds evidence. A cursor shape does not prove a click reached another window. Without physical input timestamps the video cannot establish repeat latency, right-button delivery or submenu latency. It also cannot establish search matching correctness, accessibility compliance or which material shader ran.
 
 **P1** affects task completion, input reliability, readable controls or core desktop behavior. **P2** affects presentation, consistency or discoverability. These priorities are the next-work recommendation, not a claim that other release criteria are satisfied. The original recording is compressed and downscaled relative to its captured 4K source; fine seams and physical cursor size need verification at native scale.
 
@@ -82,13 +82,13 @@ Source inspection at `0582a36c` found that `crates/cupertino-launcher/src/app.rs
 
 Workaround performed: terminate only the affected session's `cupertino-launcher` with SIGTERM and let the compositor supervisor restart it, forcing a fresh scan. The replacement process was verified in the server log; the compositor and open applications stayed running. With multiple sessions, identify the launcher belonging to the affected compositor before restarting it. This workaround does not close DQ-30.
 
-## Electron window titlebars and dragging
+## Electron window dragging through XWayland
 
 | ID | Priority | Issue and evidence | Required acceptance |
 |---|---|---|---|
-| DQ-31 | P1 | **Electron windows use their own titlebars; ChatGPT cannot be dragged through XWayland.** Reported and tested by the maintainer on 2026-11-10. Native Wayland dragging subsequently passed in a separate profile; the client still requests its own decorations. Other Electron applications remain unverified. | Resolve the intended titlebar and window-control policy for affected Electron windows and fix dragging through XWayland. Preserve working native Wayland movement, client controls and application drag regions. Verify both backends separately, including release, maximize/restore and output scaling, without duplicate titlebars or overlapping controls. |
+| DQ-33 | P1 | **ChatGPT cannot be dragged through XWayland.** Reported and tested by the maintainer on 2026-11-10, originally as part of DQ-31. Native Wayland dragging subsequently passed in a separate profile. Other Electron applications remain unverified. | Fix dragging through XWayland for windows that draw their own titlebar. Preserve working native Wayland movement, client controls and application drag regions. Verify both backends separately, including release, maximize/restore and output scaling. |
 
-To reproduce, launch ChatGPT Desktop in the installed Cupertino session, inspect the top of its normal window, then press and drag where the titlebar should allow movement. The maintainer found no Cupertino titlebar and could not move the window by dragging. Expected: the window has Cupertino's titlebar and a usable drag region that moves it until release.
+To reproduce, launch ChatGPT Desktop under its X11 backend in the installed Cupertino session, then press and drag in its own top bar. The maintainer could not move the window. Expected: the drag region moves the window until release.
 
 The reported case used `chatgpt-desktop` `26.1103.60933-1` with installed Cupertino `0.1.0-1`, runtime base commit `0582a36c`, and a 3840×2160 display at scale 2. Process inspection identified the original run's X11 backend through XWayland. A separate profile launched with `--ozone-platform=wayland` created a native Wayland toplevel and sent `xdg_toplevel.move` with the serial of a still-held left-button press. The maintainer confirmed that this test window moves when its top bar is dragged. This verifies a workaround for ChatGPT dragging; it does not establish compatibility for all Electron applications or diagnose the XWayland failure.
 
@@ -100,8 +100,6 @@ For future launches, the installed `/usr/bin/chatgpt` wrapper reads `~/.config/c
 
 Quit the existing ChatGPT process and reopen the application for the flag to take effect. An already running process retains its backend. This workaround does not require disabling the sandbox or GPU acceleration.
 
-The titlebar is a separate compatibility question. The native Wayland trace shows the application requesting `zxdg_toplevel_decoration_v1.set_mode(1)` (client-side), with Cupertino answering `configure(1)`. The packaged application selects a hidden native titlebar with a client titlebar overlay on Linux; [Electron documents this customization](https://www.electronjs.org/docs/latest/tutorial/custom-title-bar). Cupertino's `XdgDecorationHandler::request_mode` in `crates/cupertino-server/src/handlers.rs` honors that client-side request. Forcing Wayland therefore does not request Cupertino's server-side titlebar. Keep DQ-31 open for the titlebar policy and the original XWayland dragging failure.
-
 ## Menu-bar status-item actions
 
 | ID | Priority | Issue and evidence | Required acceptance |
@@ -110,7 +108,15 @@ The titlebar is a separate compatibility question. The native Wayland trace show
 
 To reproduce, start ChatGPT Desktop, use it until its exported status menu changes, then open its menu-bar icon's menu and choose Open ChatGPT or Quit. The reported menu remained visible but its actions had no effect. The captured Open event used an ID absent from the current layout, explaining that failure. Quit was reported by the maintainer; it was not invoked during inspection because it would terminate the active application.
 
-In `crates/cupertino-menubar/src/worker.rs`, `follow_status_item` reloads the menu when the status item's icon, title, status or tooltip changes. `sni::item_changes` does not follow the menu's own `LayoutUpdated` or `ItemsPropertiesUpdated` signals. `crates/cupertino-menubar/src/routing.rs` also ignores `AboutToShow` for status menus. Consequently, a DBusMenu replacement can leave the visible menu and its activation IDs stale even while the status icon remains valid. This path uses D-Bus and is separate from the X11/Wayland backend selection in DQ-31. No permanent fix has been applied.
+In `crates/cupertino-menubar/src/worker.rs`, `follow_status_item` reloads the menu when the status item's icon, title, status or tooltip changes. `sni::item_changes` does not follow the menu's own `LayoutUpdated` or `ItemsPropertiesUpdated` signals. `crates/cupertino-menubar/src/routing.rs` also ignores `AboutToShow` for status menus. Consequently, a DBusMenu replacement can leave the visible menu and its activation IDs stale even while the status icon remains valid. This path uses D-Bus and is separate from the X11/Wayland backend selection in DQ-33. No permanent fix has been applied.
+
+## Closed Electron titlebar policy
+
+**DQ-31 — Electron windows use their own titlebars: closed by decision on 2026-11-11.** A window whose client asks for client-side decorations keeps its own titlebar and window controls. Cupertino draws its titlebar and controls only for windows that ask for server-side decorations or make no request. It does not force its titlebar onto such a window or lay its controls over the client's content.
+
+These applications turn off the native frame (Electron's `titleBarStyle: "hidden"` with `titleBarOverlay`), draw their own window controls and lay out their header around them. A forced titlebar would stack two titlebars, and overlaid controls would duplicate the client's controls or cover its content, both of which the acceptance excluded. Electron's Linux build gives the compositor no description of that layout, so Cupertino cannot place its controls to fit it. Applications that want Cupertino's controls over their content request the unified titlebar style of `cupertino_app_effects_v1`.
+
+Evidence: the native Wayland trace of ChatGPT Desktop shows `zxdg_toplevel_decoration_v1.set_mode(1)` (client-side) answered by `configure(1)`. Claude Desktop `5.1231.2` (Electron 45), running as a native Wayland client, creates its main window with `titleBarStyle: "hidden"` and `titleBarOverlay: true` and shows its own titlebar in the same way. `XdgDecorationHandler::request_mode` in `crates/cupertino-server/src/handlers.rs` honors the request, and the server test `clients_that_ask_for_client_side_decorations_keep_them` in `crates/cupertino-server/tests/headless.rs` covers it. The XWayland dragging failure from the original report remains open as DQ-33.
 
 ## Closed screen-capture regression
 

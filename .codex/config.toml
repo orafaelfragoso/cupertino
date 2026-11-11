@@ -1,0 +1,7 @@
+# Desktop control bridge for agents working in this checkout. It inherits the session's display and runtime
+# directory, so it always targets the desktop the host runs in; the compositor still asks for native consent.
+[mcp_servers.cupertino]
+command = "/usr/bin/cupertino-control"
+args = ["--mcp"]
+env_vars = ["XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"]
+default_tools_approval_mode = "approve"

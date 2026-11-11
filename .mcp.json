@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "cupertino": {
+      "type": "stdio",
+      "command": "/usr/bin/cupertino-control",
+      "args": [
+        "--mcp"
+      ],
+      "env": {}
+    }
+  }
+}

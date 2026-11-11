@@ -177,28 +177,19 @@ outcome and a fresh observation; capture returns PNG image content with geometry
 text. Cancellation and stdin EOF close the native lease and release owned input. Queues, messages, images,
 publication sizes, waits and stalled stdout writes have explicit bounds. Tool discovery works offline.
 
-After installing the updated controller in an updated session, register its absolute path with the
-[Codex MCP host](https://learn.chatgpt.com/docs/extend/mcp?surface=cli):
-
-```bash
-codex mcp add cupertino -- /usr/bin/cupertino-control --mcp
-codex mcp get cupertino
-```
-
-Forward the host session variables in its MCP configuration:
-
-```toml
-[mcp_servers.cupertino]
-command = "/usr/bin/cupertino-control"
-args = ["--mcp"]
-env_vars = ["XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"]
-```
+The checkout registers the installed controller for agent hosts working in it, and only there:
+`.codex/config.toml` for the [Codex MCP host](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) (loaded once
+the checkout is a trusted project) and `.mcp.json` for Claude Code (approved once when it asks). Both run
+`/usr/bin/cupertino-control --mcp` and pass the host's `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY` through, so the
+bridge follows the session the host runs in. Do not add a user-wide registration as well. Check the result from the
+checkout with `codex mcp get cupertino` or `claude mcp get cupertino`.
 
 For a development candidate, use a stable staged binary path outside the disposable managed target.
 Choose `gpt-6.1-terra` in the host; this bridge requires no API client or new credential.
 A host connection refresh is separate from restarting Cupertino. Host MCP tool approval and native desktop consent
-are separate gates. If the host has approval policy `never`, explicitly approve this selected server's tools in
-its MCP settings before requesting control; the compositor still requires fresh native consent.
+are separate gates. The project Codex configuration approves this one server's tools
+(`default_tools_approval_mode = "approve"`), which a host with approval policy `never` needs; the compositor still
+requires fresh native consent.
 The opt-in model acceptance test scopes `default_tools_approval_mode = "approve"` to its isolated fixture server.
 
 The real Counter and Forms examples are tested through the shipped Rust MCP adapter, supervised controller and

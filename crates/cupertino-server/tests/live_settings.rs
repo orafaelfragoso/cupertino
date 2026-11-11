@@ -56,6 +56,7 @@ impl Harness {
             power: Some(dir.path().join("power.conf")),
             system_accessibility: Some(dir.path().join("system-accessibility.conf")),
             data_control: Some(dir.path().join("data-control.conf")),
+            desktop_control: Some(dir.path().join("desktop-control.conf")),
         };
         state.start_settings_watch(SettingsFiles::default(), paths);
         Some(Harness {

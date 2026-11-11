@@ -63,7 +63,8 @@ pub struct LockWish {
 pub struct ControlWish {
     pub phase: u32,
     pub output: String,
-    pub action: Option<(u64, bool, bool)>,
+    /// The person's answer to the request of a run.
+    pub action: Option<(u64, cupertino_login::view::ControlChoice)>,
 }
 
 enum Role {
@@ -373,13 +374,16 @@ impl SurfaceRoles for LoginRoles {
                 self.control_phase = Some(phase);
             }
         }
-        if let Some((epoch, allow, stop)) = self.control_wish.borrow_mut().action.take() {
+        if let Some((epoch, choice)) = self.control_wish.borrow_mut().action.take() {
             if let Some(authority) = &self.authority {
-                if stop {
-                    authority.stop(epoch);
-                } else {
-                    authority.answer(epoch, allow, conn.input_serial().unwrap_or(0));
-                }
+                use cupertino_login::view::ControlChoice;
+                use cupertino_shell_client::ConsentAnswer;
+                let answer = match choice {
+                    ControlChoice::Allow => ConsentAnswer::Allow,
+                    ControlChoice::DontAllow => ConsentAnswer::Deny,
+                    ControlChoice::Dismiss => ConsentAnswer::Dismiss,
+                };
+                authority.answer(epoch, answer, conn.input_serial().unwrap_or(0));
             }
         }
         let caps_lock = conn.modifiers().caps_lock;

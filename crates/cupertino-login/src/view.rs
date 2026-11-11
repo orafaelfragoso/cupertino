@@ -16,8 +16,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use cupertino_kit::controls::{
-    Button, ButtonRole, ButtonStyle, Canvas, CheckBox, Image, ImageFit, Menu as KitMenu,
-    MenuAnchor, MenuItem, SecureField, Text, TextChange, TextField, TextRole,
+    Button, ButtonRole, ButtonStyle, Canvas, CheckBox, Image, ImageFit, ImageSource,
+    Menu as KitMenu, MenuAnchor, MenuItem, SecureField, Text, TextChange, TextField, TextRole,
 };
 use cupertino_kit::core::{
     Checked, CommandRegistry, Element, Key, Live, Role, Window, WindowBackground, WindowKey,
@@ -191,8 +191,8 @@ pub enum Input {
     Decide(Decision),
     /// The confirmation panel's "Reopen windows" checkbox was set to this, by a click, Space or assistive technology.
     Reopen(bool),
-    /// A choice on the native desktop-control consent/status panel.
-    DesktopControl { allow: bool, stop: bool },
+    /// A choice on the native desktop-control consent panel.
+    DesktopControl(ControlChoice),
     /// A button or key of the interrupt panel.
     Interrupt(Choice),
 }
@@ -1004,7 +1004,7 @@ pub fn panel<M: Clone + 'static>(
 }
 
 pub const CONTROL_APP_ID: &str = "org.cupertino.login.desktop-control";
-/// Consent panel height, leaving room for all requested rights and the stop shortcut.
+/// Consent panel height, leaving room for the app, the requested rights and the stop shortcut.
 pub const CONTROL_HEIGHT: f64 = 228.0;
 /// Status keeps Stop in a stable position; a new consent request shows the full rights.
 pub fn control_height(phase: u32) -> f64 {
@@ -1014,13 +1014,149 @@ pub fn control_height(phase: u32) -> f64 {
         interrupt::HEIGHT
     }
 }
+/// Characters of an app's name the panel shows; a longer name is cut with an ellipsis.
+const CONTROL_NAME_CHARS: usize = 48;
+/// Characters of an executable's path the panel shows; a longer path keeps its end, which names the program.
+const CONTROL_PATH_CHARS: usize = 120;
+/// Characters of an output's name the panel shows.
+const CONTROL_OUTPUT_CHARS: usize = 64;
+/// Service bits of an app's request: desktop control and screen capture.
+const SERVICE_CONTROL: u32 = 1;
+const SERVICE_CAPTURE: u32 = 2;
 
-/// A native consent/status panel. Allow has no default-key binding; cancellation initially has the focus.
+/// What the consent panel asks the person.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ControlRequest {
+    /// The output the run would control.
+    pub output: String,
+    /// The capability bits the run asks for: observe 1, capture 2, pointer 4, keyboard 8, native controls 16.
+    pub capabilities: u32,
+    /// The app asking; `None` for a controller that does not name it, whose answer holds for this run only.
+    pub app: Option<RequestingApp>,
+}
+
+/// The app a consent request comes from.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RequestingApp {
+    /// The desktop entry's name, or the executable's file name.
+    pub name: String,
+    /// The desktop entry id, or the executable's absolute path.
+    pub identity: String,
+    /// Whether `identity` is a desktop entry id.
+    pub desktop: bool,
+    /// The services asked: desktop control 1, screen capture 2.
+    pub services: u32,
+    /// Whether the answer is remembered for the app.
+    pub remembered: bool,
+    /// The app's icon at the sizes there are; none draws the plain disc.
+    pub icon: Vec<ImageSource>,
+}
+
+/// The person's choice on the consent panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlChoice {
+    /// Allow, remembered for the app.
+    Allow,
+    /// Don't Allow, remembered for the app.
+    DontAllow,
+    /// The panel was closed without a choice (Escape): this request only.
+    Dismiss,
+}
+
+/// `text` without control or bidirectional formatting characters, cut at `chars` characters with an ellipsis; `keep_end`
+/// keeps the end instead of the start.
+fn clean(text: &str, chars: usize, keep_end: bool) -> String {
+    let kept: Vec<char> = text
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .collect();
+    if kept.len() <= chars {
+        return kept.into_iter().collect();
+    }
+    if keep_end {
+        std::iter::once('\u{2026}')
+            .chain(kept[kept.len() + 1 - chars..].iter().copied())
+            .collect()
+    } else {
+        kept[..chars - 1]
+            .iter()
+            .copied()
+            .chain(std::iter::once('\u{2026}'))
+            .collect()
+    }
+}
+
+/// The title and the information text of the consent panel for `request`.
+pub fn control_text(request: &ControlRequest) -> (String, String) {
+    let services = request.app.as_ref().map_or_else(
+        || {
+            let mut services = 0;
+            if request.capabilities & !2 != 0 {
+                services |= SERVICE_CONTROL;
+            }
+            if request.capabilities & 2 != 0 {
+                services |= SERVICE_CAPTURE;
+            }
+            services
+        },
+        |app| app.services,
+    );
+    let rights: Vec<_> = [
+        (1, SERVICE_CONTROL, "inspect the display"),
+        (2, SERVICE_CAPTURE, "capture the display"),
+        (4, SERVICE_CONTROL, "use the pointer"),
+        (8, SERVICE_CONTROL, "use the keyboard"),
+        (16, SERVICE_CONTROL, "use native controls"),
+    ]
+    .into_iter()
+    .filter(|(bit, service, _)| request.capabilities & bit != 0 && services & service != 0)
+    .map(|(_, _, label)| label)
+    .collect();
+    let display = clean(&request.output, CONTROL_OUTPUT_CHARS, false);
+    let Some(app) = &request.app else {
+        return (
+            "Allow desktop control?".to_owned(),
+            format!(
+                "Allow the desktop controller to {} on {display}. This choice applies to this request only. \
+                 Ctrl+Alt+Escape stops it.",
+                rights.join(", ")
+            ),
+        );
+    };
+    let name = clean(&app.name, CONTROL_NAME_CHARS, false);
+    let wants = match (
+        services & SERVICE_CONTROL != 0,
+        services & SERVICE_CAPTURE != 0,
+    ) {
+        (true, true) => "control and capture the desktop",
+        (false, true) => "capture the screen",
+        _ => "control the desktop",
+    };
+    let title = format!("Allow \u{201c}{name}\u{201d} to {wants}?");
+    let mut info = format!("It will be able to {} on {display}.", rights.join(", "));
+    if !app.desktop {
+        info.push_str(&format!(
+            " The program is {}.",
+            clean(&app.identity, CONTROL_PATH_CHARS, true)
+        ));
+    }
+    info.push_str(if app.remembered {
+        " Your choice is remembered for this app; change it any time in Settings \u{203a} Privacy."
+    } else {
+        " This choice applies to this request only."
+    });
+    info.push_str(" Ctrl+Alt+Escape stops control.");
+    (title, info)
+}
+
+/// The native consent panel: the app asking, the rights and the display, Don't Allow and Allow. Neither has a
+/// default-key binding; Don't Allow initially has the focus, and Escape closes the panel without a choice.
 pub fn desktop_control<M: Clone + 'static>(
     key: WindowKey,
-    output: &str,
-    capabilities: u32,
-    phase: u32,
+    request: &ControlRequest,
     map: fn(Input) -> M,
 ) -> Window<M> {
     // The information block expands above the ordinary interrupt-panel buttons.
@@ -1028,56 +1164,39 @@ pub fn desktop_control<M: Clone + 'static>(
     // Button baseline leaves the same bottom margin as other session panels.
     const CONTROL_BUTTON_TOP: f64 = 183.0;
     let mut frames = interrupt::Frames::new();
-    if phase == 1 {
-        frames.info = Rect::new(
-            frames.info.x(),
-            frames.info.y(),
-            frames.info.width(),
-            CONTROL_INFO_HEIGHT,
+    frames.info = Rect::new(
+        frames.info.x(),
+        frames.info.y(),
+        frames.info.width(),
+        CONTROL_INFO_HEIGHT,
+    );
+    for button in &mut frames.buttons {
+        button.frame = Rect::new(
+            button.frame.x(),
+            CONTROL_BUTTON_TOP,
+            button.frame.width(),
+            button.frame.height(),
         );
-        for button in &mut frames.buttons {
-            button.frame = Rect::new(
-                button.frame.x(),
-                CONTROL_BUTTON_TOP,
-                button.frame.width(),
-                button.frame.height(),
-            );
-        }
     }
-    let title = match phase {
-        2 => "Desktop control is active",
-        3 => "Desktop control is paused",
-        _ => "Allow desktop control?",
-    };
-    let rights: Vec<_> = [
-        (1, "inspect the display"),
-        (2, "capture the display"),
-        (4, "use the pointer"),
-        (8, "use the keyboard"),
-        (16, "use native controls"),
-    ]
-    .into_iter()
-    .filter_map(|(bit, label)| (capabilities & bit != 0).then_some(label))
-    .collect();
-    let display: String = output
-        .chars()
-        .filter(|c| {
-            !c.is_control() && !matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-        })
-        .take(64)
-        .collect();
-    let info = if phase == 2 {
-        "Physical input pauses input control. Ctrl+Alt+Escape stops it.".to_owned()
-    } else if phase == 3 {
-        "Control is paused. Resume continues the approved control; Stop ends it.".to_owned()
-    } else {
-        format!("Allow the desktop controller to {} on {}. Physical input pauses input control. Ctrl+Alt+Escape stops it.", rights.join(", "), display)
+    let (title, info) = control_text(request);
+    let icon = match request.app.as_ref().filter(|a| !a.icon.is_empty()) {
+        Some(app) => Element::new(Place::new(
+            frames.icon,
+            vec![Element::new(Image {
+                sources: app.icon.clone(),
+                size: frames.icon.size,
+                fit: ImageFit::Contain,
+                radius: 0.0,
+                label: None,
+            })],
+        )),
+        None => icon_disc(frames.icon),
     };
     let mut children = vec![
-        icon_disc(frames.icon),
+        icon,
         Element::new(Place::text(
             frames.title,
-            vec![panel_text(title, TextRole::Body, FontWeight::BOLD, false)],
+            vec![panel_text(&title, TextRole::Body, FontWeight::BOLD, false)],
         )),
         Element::new(Place::text(
             frames.info,
@@ -1090,19 +1209,14 @@ pub fn desktop_control<M: Clone + 'static>(
         )),
     ];
     for (index, button) in frames.buttons.iter().enumerate() {
-        if phase == 2 && index == 0 {
-            continue;
-        }
-        let (label, allow, stop) = match (phase, index) {
-            (2, _) => ("Stop Control", false, true),
-            (3, 0) => ("Resume", true, false),
-            (3, _) => ("Stop Control", false, true),
-            (_, 0) => ("Don't Allow", false, false),
-            _ => ("Allow", true, false),
+        let (label, choice) = if index == 0 {
+            ("Don't Allow", ControlChoice::DontAllow)
+        } else {
+            ("Allow", ControlChoice::Allow)
         };
         children.push(
             Element::new(Place {
-                initial: index == usize::from(phase != 1),
+                initial: index == 0,
                 ..Place::filled(
                     button.frame,
                     vec![Element::new(Button {
@@ -1111,34 +1225,31 @@ pub fn desktop_control<M: Clone + 'static>(
                         style: ButtonStyle::Bordered,
                         enabled: true,
                         busy: false,
-                        on_press: Some(map(Input::DesktopControl { allow, stop })),
+                        on_press: Some(map(Input::DesktopControl(choice))),
                     })],
                 )
             })
             .key(label),
         );
     }
-    let cancel = map(Input::DesktopControl {
-        allow: false,
-        stop: phase != 1,
-    });
+    let cancel = map(Input::DesktopControl(ControlChoice::Dismiss));
     let close = cancel.clone();
     let content = Element::new(Backdrop {
         wallpaper: false,
         hidden: false,
         on_activity: None,
         keys: Box::new(move |sym, _| (sym == ESCAPE).then(|| cancel.clone())),
-        label: title.to_owned(),
+        label: title.clone(),
         description: None,
         role: Role::AlertDialog,
-        modal: phase == 1,
+        modal: true,
         children,
     });
     panel_window(
         key,
         CONTROL_APP_ID,
-        title,
-        Size::new(interrupt::WIDTH, control_height(phase)),
+        &title,
+        Size::new(interrupt::WIDTH, CONTROL_HEIGHT),
         content,
         close,
     )

@@ -196,14 +196,7 @@ impl ClientRun<'_> {
         self.until(Instant::now() + timeout, |r| {
             r.reply.is_some_and(|(s, _)| s == serial)
         })?;
-        self.remote.reply.unwrap().1.map_err(|r| {
-            // cupertino_control_session_v1.refusal.unknown_outcome must never invite a blind mutation retry.
-            if r == 10 {
-                "request outcome is unknown; observe before retrying".into()
-            } else {
-                format!("request refused ({r})")
-            }
-        })
+        self.remote.reply.unwrap().1.map_err(refusal)
     }
     fn execute(&mut self, request: Request, capturer: &capture::Capturer) -> Result<Value, String> {
         self.pump(Some(Duration::ZERO))?;
@@ -376,6 +369,25 @@ impl ClientRun<'_> {
         }
     }
 }
+/// What a refusal of `cupertino_control_session_v1` tells the local client, with what to do about it.
+fn refusal(code: u32) -> String {
+    match code {
+        0 => "request refused (stale_epoch): this run ended; read status".into(),
+        1 => "request refused (not_granted): the run is not active or lacks this capability".into(),
+        2 => "request refused (denied): the person turned this off for the app the request comes from; they can turn it on in Settings › Privacy › Desktop Control or Screen Capture".into(),
+        3 => "request refused (stale_geometry): observe again for the current geometry revision".into(),
+        4 => "request refused (outside_scope): the target is outside the granted output".into(),
+        5 => "request refused (unsupported): this capability set or operation is not available".into(),
+        6 => "request refused (blocked): the session is locked, an authentication prompt is shown, or the target is protected".into(),
+        7 => "request refused (no_authority): the person must be asked, and no consent panel is available".into(),
+        8 => "request refused (busy): another run is in progress".into(),
+        9 => "request refused (invalid_input)".into(),
+        // unknown_outcome must never invite a blind mutation retry
+        10 => "request outcome is unknown; observe before retrying".into(),
+        11 => "request refused (unidentified): the app this request comes from cannot be named".into(),
+        _ => format!("request refused ({code})"),
+    }
+}
 fn base64(bytes: &[u8]) -> String {
     // Standard PNG response base64 alphabet, with RFC 4648 padding below.
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -445,6 +457,10 @@ fn serve() -> Result<(), String> {
         };
         let result = (|| -> Result<(), String> {
             run.until(Instant::now() + REPLY_TIMEOUT, |r| r.epoch != 0)?;
+            // without a name the compositor refuses the run: it never decides for an app it cannot tell
+            if let Some((pid, start)) = run.inbox.peer.filter(|_| run.session.names_apps()) {
+                run.session.identify(pid, start);
+            }
             let mut hello = false;
             loop {
                 if let Ok(line) = run.inbox.commands.try_recv() {
@@ -551,5 +567,19 @@ mod tests {
         )
         .is_err());
         assert!(serde_json::from_str::<Request>(r#"{"op":"exec","command":"bad"}"#).is_err());
+    }
+    #[test]
+    fn refusals_name_their_reason_and_what_to_do() {
+        assert!(refusal(2).contains("Settings › Privacy › Desktop Control or Screen Capture"));
+        assert!(refusal(7).contains("no consent panel"));
+        assert!(refusal(11).contains("(unidentified)"));
+        assert!(
+            !refusal(10).contains("refused"),
+            "an unknown outcome is no refusal: the mutation may have happened"
+        );
+        assert_eq!(refusal(99), "request refused (99)");
+        for code in 0..=11 {
+            assert!(!refusal(code).is_empty());
+        }
     }
 }

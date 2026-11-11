@@ -1384,6 +1384,7 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
+ "cupertino-icons",
  "cupertino-kit",
  "cupertino-login-ipc",
  "cupertino-modifiers",

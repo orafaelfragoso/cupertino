@@ -17,7 +17,7 @@ The in-tree Rust bridge runs as `/usr/bin/cupertino-control --mcp`. With no posi
 
 The bridge is registered for this checkout only, in tracked project files; do not add a user-wide registration, which would also expose it in unrelated projects and duplicate the project entry.
 
-- **Codex** reads `.codex/config.toml` once the checkout is a trusted project. It forwards `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY` from the host and pre-approves this one server's tools; the compositor still asks for native consent. Check it with `codex mcp get cupertino` from the checkout.
+- **Codex** reads `.codex/config.toml` once the checkout is a trusted project. It forwards `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY` from the host and pre-approves this one server's tools; the compositor still asks the person natively the first time the app requests control. Check it with `codex mcp get cupertino` from the checkout.
 - **Claude Code** reads `.mcp.json`. Approve the project server once when Claude Code asks (or through `/mcp`); check it with `claude mcp get cupertino` from the checkout. Launch Claude Code from the same desktop environment so its stdio child inherits the current session variables.
 
 Each git worktree carries the same files; a host may ask to trust or approve each worktree path separately. Preserve unrelated settings when editing either file. Select the user's chosen model independently of the bridge.
@@ -37,10 +37,12 @@ Invoke it as `$cupertino-desktop` in Codex or `/cupertino-desktop` in Claude Cod
 ## Diagnose connection failures
 
 - Missing tools: check registration, host discovery/approvals, binary path and inherited session environment. A skill supplies instructions; it cannot manufacture tools the host does not expose.
-- Native handshake/version failure: confirm matching installed controller and compositor support protocol v3. Stage server updates for the next login; do not restart the current session.
-- Failed native response after a controller update: read status to reconnect, then obtain fresh consent. Never replay an uncertain mutation.
+- Native handshake/version failure: confirm matching installed controller and compositor support protocol v3. Remembered permissions need a compositor with control protocol 4; an older one asks the person on every request. Stage server updates for the next login; do not restart the current session.
+- Failed native response after a controller update: read status to reconnect, then request control again. Never replay an uncertain mutation.
+- Refused with `denied`: the person turned the app off. Do not retry; tell them they can turn it on in Settings › Privacy › Desktop Control or Screen Capture. Refused with `unidentified`: the bridge's process could not be named (it exited or was replaced); reconnect from a live host process.
+- Asked again for an app the person allowed: the app is the window the bridge runs under, or the program that started it. A host started from another terminal or launcher is another app.
 - Another host cannot obtain native status while the current host works: the controller serves one connected native peer at a time. Finish the owning task and stop its grant before switching hosts. Do not disconnect someone else’s active control task. A legacy bridge can retain the socket even after Stop and block new peers.
 - Revoked epoch that remains stuck across status: an old already-running MCP process can retain the pre-fix lease behavior. Refresh only that host's MCP connection, then call status. Replacing the disk binary does not update an existing process. Do not kill all matching processes or restart the desktop.
-- Repeated pauses: inspect phase and whether genuine physical input or protected focus intervened. Read-only coexistence depends on the running compositor version. The absence of a permanent panel is expected. Request a fresh native resume only when the person wants to continue.
+- Repeated suspensions: phase 3 comes only from an authentication prompt or a protected session panel holding the keyboard, and ends by itself when it closes. Physical input never pauses a run on a current compositor; an older running one may still pause until the next planned login. The absence of a permanent panel is expected.
 
 Authoritative host references: [Codex skills](https://learn.chatgpt.com/docs/build-skills), [Claude Code skills](https://code.claude.com/docs/en/skills), [Claude Code MCP](https://code.claude.com/docs/en/mcp). Live tool schemas and Cupertino's source define the actual desktop API.

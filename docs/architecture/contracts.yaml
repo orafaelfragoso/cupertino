@@ -507,7 +507,7 @@
   test_owner: crates/cupertino-server/tests/lock-screen/control.rs
   source: crates/cupertino-control/src/main.rs
   source_match: cupertino.control.v1
-  note: Bounded sequential JSON lines over a mode-0600 session socket. Same-user peer identity and exact process lifetime are checked; each connection gets a fresh inactive run and native consent remains mandatory.
+  note: Bounded sequential JSON lines over a mode-0600 session socket. Same-user peer identity and exact process lifetime are checked; each connection gets a fresh inactive run. The controller names the peer process (id and start time) to the compositor, which decides each request from the app's remembered answers and asks natively only for undecided services. The local wire protocol stays at 3, so older bridges keep working.
 - name: cupertino_semantics_v1
   kind: wayland-global
   version: 1
@@ -522,7 +522,7 @@
   note: Surface-owned sealed semantic publications. Publishing grants no control; only active scoped observation enables interest, and native actions require separate consent and current publication revisions.
 - name: cupertino_control_v1
   kind: wayland-global
-  version: 3
+  version: 4
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private
@@ -531,10 +531,10 @@
   test_owner: crates/cupertino-server/tests/shell_roles.rs
   source: crates/cupertino-server/src/control.rs
   source_match: create_global::<Cupertino, CupertinoControlV1, ()>
-  note: Version 1 stays discovery-only. Version 2 requests explicit output-scoped native consent, publishes granted geometry, routes bounded input with deduplicated outcomes and gates output capture by the exact run epoch. Physical input suspends; lock, disconnect and stop revoke. The role is not configurable. Version 3 adds bounded native semantic observation and consented actions, with authoritative surface transforms, exact publication revisions and asynchronous outcomes.
+  note: Version 1 stays discovery-only. Version 2 requests explicit output-scoped native consent, publishes granted geometry, routes bounded input with deduplicated outcomes and gates output capture by the exact run epoch. Lock, disconnect and stop revoke; the authentication prompt or a protected session panel suspends until it closes, and physical input never pauses a run. The role is not configurable. Version 3 adds bounded native semantic observation and consented actions, with authoritative surface transforms, exact publication revisions and asynchronous outcomes. Version 4 adds identify: the controller names its peer process, the compositor resolves its app (desktop entry of the window it runs under, else its parent's executable) and decides start from desktop-control.conf, refusing denied or unidentified requests and starting allowed ones without the panel.
 - name: cupertino_control_authority_v1
   kind: wayland-global
-  version: 1
+  version: 2
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private
@@ -543,7 +543,7 @@
   test_owner: crates/cupertino-server/tests/capture/control.rs
   source: crates/cupertino-server/src/control.rs
   source_match: create_global::<Cupertino, CupertinoControlAuthorityV1, ()>
-  note: The native session agent registers its own consent surface. Approval and resumption require a fresh physical serial delivered to that surface after the request; synthetic input cannot approve.
+  note: The native session agent registers its own consent surface. Allow and a remembered Don't Allow require a fresh physical serial delivered to that surface after the request; synthetic input cannot approve. Version 2 names the requesting app and its services before each request and remembers the person's answer in desktop-control.conf; its loss revokes only runs awaiting an answer.
 - name: cupertino_shell_v1
   kind: wayland-global
   version: 21

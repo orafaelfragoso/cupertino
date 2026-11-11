@@ -9,7 +9,9 @@
 
 mod control;
 mod dock;
-pub use control::{ControlAuthority, ControlEvent, ControlSession, DesktopControl};
+pub use control::{
+    ConsentAnswer, ConsentApp, ControlAuthority, ControlEvent, ControlSession, DesktopControl,
+};
 mod error;
 mod menu_bar;
 mod roles;

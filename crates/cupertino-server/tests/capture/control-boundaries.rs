@@ -85,15 +85,52 @@ fn geometry_changes_invalidate_input_and_old_capture_sources_never_acquire_a_new
 }
 
 #[test]
-fn a_pointer_grant_cannot_take_over_a_physical_drag() {
+fn a_pointer_grant_and_a_physical_drag_share_the_button_without_ending_each_other() {
     let Some(mut h) = Harness::new() else { return };
+    // the panel first, so the window the person and the run click is above it
     let (mut app, authority) = authority(&mut h);
+    let (mut target, frame) = mapped_app_named(&mut h, "org.example.controlled", None);
+    let qh = target.qh();
+    let seat: wl_seat::WlSeat = target.globals.bind(&qh, 1..=7, ()).unwrap();
+    let _pointer = seat.get_pointer(&qh, ());
+    h.idle(&mut target, 3);
     let mut c = Controller::new(&mut h);
+    let (x, y) = (frame.x + frame.w / 2.0, frame.y + frame.h / 2.0);
+    h.state.process_input_event(common::absolute::motion(
+        x / f64::from(OUTPUT.0),
+        y / f64::from(OUTPUT.1),
+    ));
+    // a run may start while the person drags; only its approval waits for the drag to end
     h.state.process_input_event(common::absolute::button(true));
-    assert_eq!(c.start(&mut h, 15), Err(session::Refusal::Busy));
+    assert_eq!(c.start(&mut h, 15), Ok(()));
     h.state.process_input_event(common::absolute::button(false));
-    c.start(&mut h, 15).unwrap();
     approve(&mut h, &mut app, &authority, &mut c);
+    h.state.process_input_event(common::absolute::motion(
+        x / f64::from(OUTPUT.0),
+        y / f64::from(OUTPUT.1),
+    ));
+    h.idle(&mut target, 3);
+    target.state.control_buttons.clear();
+    h.state.process_input_event(common::absolute::button(true));
+    assert_eq!(c.button(&mut h, 272, true), Ok(()));
+    assert_eq!(c.button(&mut h, 272, false), Ok(()));
+    h.idle(&mut target, 3);
+    assert_eq!(
+        target.state.control_buttons,
+        [(272, true)],
+        "the run's press and release leave the person's drag held"
+    );
+    h.state.process_input_event(common::absolute::button(false));
+    assert_eq!(c.button(&mut h, 272, true), Ok(()));
+    assert_eq!(c.button(&mut h, 272, false), Ok(()));
+    h.pump_until(&mut target, "the run's own click", |s| {
+        s.control_buttons.len() == 4
+    });
+    assert_eq!(
+        target.state.control_buttons,
+        [(272, true), (272, false), (272, true), (272, false)]
+    );
+    assert_eq!(c.client.state.control_seen.phase, 2);
 }
 
 #[test]

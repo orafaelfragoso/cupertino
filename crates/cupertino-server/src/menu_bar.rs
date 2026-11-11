@@ -1102,9 +1102,10 @@ impl Cupertino {
         }
     }
 
-    /// Tell the bars of version 3 or later whether a capture session runs, each one when that changed for it.
+    /// Tell the bars of version 3 or later whether a capture session runs or a desktop-control run may capture, each one
+    /// when that changed for it.
     pub fn refresh_capture_indicator(&mut self) {
-        let active = self.capture_running();
+        let active = self.capture_running() || self.control_capturing();
         for bar in self
             .menu_bars
             .bars

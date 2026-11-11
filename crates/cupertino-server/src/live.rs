@@ -1,4 +1,5 @@
-//! Live settings: the server watches `compositor.json`, `keyboard.conf`, `power.conf` and `data-control.conf` (`cupertino_defaults::watch`) and
+//! Live settings: the server watches `compositor.json`, `keyboard.conf`, `power.conf`, `data-control.conf` and
+//! `desktop-control.conf` (`cupertino_defaults::watch`) and
 //! applies what changed while it runs. Each change re-reads only the changed file, with the last values read as the last
 //! good ones (a line or key that is wrong keeps its value and is logged), and applies only the keys whose value differs
 //! from the last read, so a setting changed at run time another way (the `toggle-appearance` key action, the
@@ -14,6 +15,7 @@
 //! | `power.conf` | every key (the countdown in progress continues with the new timers) | — |
 //! | `/etc/cupertino/accessibility.conf` | its keys, for an account without an `accessibility.conf` of its own and the login screen (`crate::accessibility`) | — |
 //! | `data-control.conf` | the allowed applications; a client no longer allowed is disconnected (`crate::data_control`) | — |
+//! | `desktop-control.conf` | each app's remembered desktop control and capture answers; a run whose app lost a service it uses is revoked (`crate::control`) | — |
 
 use std::path::PathBuf;
 
@@ -38,11 +40,13 @@ pub struct SettingsPaths {
     pub system_accessibility: Option<PathBuf>,
     /// The applications allowed to use data control (`crate::data_control`).
     pub data_control: Option<PathBuf>,
+    /// Each app's remembered desktop control and capture answers (`crate::control`).
+    pub desktop_control: Option<PathBuf>,
 }
 
 impl SettingsPaths {
     /// The paths of the environment (`$CUPERTINO_SERVER_CONFIG`, `$CUPERTINO_KEYBOARD_CONFIG`, `$CUPERTINO_POWER_CONF`,
-    /// `$CUPERTINO_DATA_CONTROL_CONF`, else the settings directory).
+    /// `$CUPERTINO_DATA_CONTROL_CONF`, `$CUPERTINO_DESKTOP_CONTROL_CONF`, else the settings directory).
     pub fn from_env() -> Self {
         Self {
             compositor: CompositorSettings::path(),
@@ -57,6 +61,7 @@ impl SettingsPaths {
                     .then(|| path.to_path_buf())
             },
             data_control: cupertino_defaults::data_control::DataControlConf::path(),
+            desktop_control: cupertino_defaults::desktop_control::DesktopControlConf::path(),
         }
     }
 }
@@ -80,6 +85,9 @@ impl Cupertino {
         if let Some(path) = &paths.data_control {
             self.reload_data_control(path);
         }
+        if let Some(path) = &paths.desktop_control {
+            self.reload_desktop_control(path);
+        }
         let watched: Vec<PathBuf> = [
             paths.compositor,
             paths.system,
@@ -87,6 +95,7 @@ impl Cupertino {
             paths.power,
             paths.system_accessibility,
             paths.data_control,
+            paths.desktop_control,
         ]
         .into_iter()
         .flatten()
@@ -141,6 +150,9 @@ impl Cupertino {
                 self.live.reloads += 1;
             } else if self.live.paths.data_control.as_ref() == Some(&path) {
                 self.reload_data_control(&path);
+                self.live.reloads += 1;
+            } else if self.live.paths.desktop_control.as_ref() == Some(&path) {
+                self.reload_desktop_control(&path);
                 self.live.reloads += 1;
             }
         }

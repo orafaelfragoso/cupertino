@@ -520,9 +520,7 @@ cargo test --release -p cupertino-files --features app --test kit-repaint -- --i
 ```
 
 `CUPERTINO_REPAINT_DIR=DIR` also writes `files-<scale>x.md` and `files-<scale>x.csv` (one line per frame) there, and
-`CUPERTINO_REPAINT_SCALES=2,1` measures other scales. Under `ci/worktree-build.py`, which keys its target on the
-`CUPERTINO_*` variables, build with `--no-run` and run the test binary it names under `python3 ci/worktree-build.py
-locked -- env CUPERTINO_REPAINT_DIR=DIR BINARY --ignored --nocapture --exact repaint_budget_report`.
+`CUPERTINO_REPAINT_SCALES=2,1` measures other scales. Build with `--no-run` to get the test binary and run it directly: `CUPERTINO_REPAINT_DIR=DIR BINARY --ignored --nocapture --exact repaint_budget_report`.
 [What runs on CupertinoKit](../../docs/src/apps-on-kit.md#frame-time) has the last results.
 
 ## Open issues

@@ -43,12 +43,7 @@ need_bytes=$((need_gb * 1024 * 1024 * 1024))
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 if [ -n "$packages" ]; then packages=$(cd "$packages" && pwd); fi
-if [ -z "${CUPERTINO_BUILD_LOCK_FD:-}" ]; then
-    args=("$out")
-    if [ -n "$packages" ]; then args+=(--packages "$packages"); fi
-    cd "$root"
-    exec python3 ci/worktree-build.py locked -- bash scripts/build-iso.sh "${args[@]}"
-fi
+cd "$root"
 free_bytes=$(df -B1 --output=avail "$out" | tail -1 | tr -dc 0-9)
 if [ "$free_bytes" -lt "$need_bytes" ]; then
     echo "only $free_bytes bytes free in $out; the build needs $need_gb GiB (floor $floor_gb GiB + 18 GiB)" >&2

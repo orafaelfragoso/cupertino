@@ -13,10 +13,6 @@
 # read-only at /abi) against /usr. Packages, file lists and the test log land in DIST_DIR. --test-only skips the build
 # and install-tests the packages already in DIST_DIR. Needs Docker Buildx, Python 3 and git; nothing is installed on the host.
 #
-# Build slots (ci/worktree-build.py): the script holds this worktree for its whole run, every slot only while makepkg
-# compiles and tests, one slot while the builder image builds, and none for the source archive, namcap, verification
-# and the install test. A caller that already holds every slot (`locked` around this script) keeps them throughout.
-#
 # Compile cache: CUPERTINO_CONTAINER_CACHE names a per-user directory holding sccache's cache and Cargo's downloads for
 # this build (default ~/.cache/cupertino-build/containers; the empty string, or running on GitHub Actions, turns it
 # off). sccache reuses a compiler output only when the compiler, its arguments, environment and every source file it
@@ -52,22 +48,7 @@ fi
 test_image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1
 mkdir -p "$dist"
 dist=$(cd "$dist" && pwd)
-# Every mode stores active container ids under target/, so cleanup must hold the same lifetime lease.
-if [ -z "${CUPERTINO_BUILD_LOCK_FD:-}" ]; then
-    cd "$root"
-    exec python3 ci/worktree-build.py locked --hold none -- bash packaging/ci/build-in-container.sh "$distro" "$dist" "$mode"
-fi
 cd "$root"
-# Run one phase holding `every` build slot or `one`; inside a `locked` that already holds every slot, run it as it is.
-phase() {
-    local hold=$1
-    shift
-    if [ "${CUPERTINO_BUILD_LOCK_HOLD:-}" = none ]; then
-        python3 "$root/ci/worktree-build.py" locked --hold "$hold" -- "$@"
-    else
-        "$@"
-    fi
-}
 if [ -z "${CUPERTINO_CONTAINER_CACHE+set}" ] && [ "${GITHUB_ACTIONS:-}" != true ]; then
     container_cache="$HOME/.cache/cupertino-build/containers"
 else
@@ -129,13 +110,11 @@ wait_job() {
     return "$status"
 }
 
-# Start a created container and wait for it; HOLD is the build slots it needs, or none.
+# Start a created container and wait for it.
 start_container() {
-    local container=$1 log=$2 hold=$3
+    local container=$1 log=$2
     if [ -n "$log" ]; then
         docker start --attach "$container" | tee "$log" &
-    elif [ "$hold" != none ]; then
-        phase "$hold" docker start --attach "$container" &
     else
         docker start --attach "$container" &
     fi
@@ -154,7 +133,7 @@ if [ "$mode" != --test-only ]; then
 fi
 
 owner="$(id -u):$(id -g)"
-# The compile container: everything that compiles or runs tests, under every build slot.
+# The compile container: everything that compiles or runs tests.
 build_script=$(cat <<EOF
 set -euo pipefail
 # Stop sccache (printing its counters, also after a failure) before handing the cache back to the caller.
@@ -429,7 +408,7 @@ if [ "$mode" != --test-only ]; then
     fi
     image_key=$(sha256sum "$root/packaging/ci/Dockerfile" | cut -c1-16)
     build_image="cupertino-package-builder:$distro-$image_key"
-    # Bound compiler parallelism in both image tool installs and the workspace build, which holds every build slot.
+    # Bound compiler parallelism in both image tool installs and the workspace build.
     jobs=${CARGO_BUILD_JOBS:-$(nproc)}
     build=(docker buildx build --load --target "$distro" --tag "$build_image" --build-arg "CARGO_BUILD_JOBS=$jobs")
     if [ -n "${CUPERTINO_BUILD_CACHE_DIR:-}" ]; then
@@ -448,7 +427,7 @@ if [ "$mode" != --test-only ]; then
         fi
         build+=(--cache-to "type=local,dest=$cache_next,mode=max")
     fi
-    phase one "${build[@]}" "$root/packaging/ci" &
+    "${build[@]}" "$root/packaging/ci" &
     active_job=$!
     wait_job
     image_id=$(docker image inspect --format '{{.Id}}' "$build_image")
@@ -479,10 +458,10 @@ if [ "$mode" != --test-only ]; then
         --env "CARGO_BUILD_JOBS=$jobs" --env CARGO_HOME=/cargo-home -v "$work/src:/src" -v "$dist:/dist" \
         --mount "type=bind,src=$cargo_home,dst=/cargo-home" "${cache_mounts[@]}" "$image_id" bash -c "$build_script")
     restore_ownership=1
-    start_container "$container" "" every
+    start_container "$container" ""
     container=$(docker create --cidfile "$work/inspect.cid" --name "cupertino-$distro-$(basename "$work")-inspect" \
         --network none -v "$work/src:/src" -v "$dist:/dist" "$image_id" bash -c "$inspect_script")
-    start_container "$container" "" none
+    start_container "$container" ""
     restore_ownership=0
 fi
 # Run SCRIPT in a fresh container of the plain base, PACKAGES read-only at /dist and its output in DIST_DIR/LOG. NAME
@@ -492,7 +471,7 @@ test_container() {
     shift 4
     container=$(docker create --cidfile "$work/$name.cid" --name "cupertino-$distro-$(basename "$work")-$name" \
         -v "$packages:/dist:ro" "$@" "$test_image" bash -c "$script")
-    start_container "$container" "$dist/$log" none
+    start_container "$container" "$dist/$log"
 }
 # The install test reads its packages from /dist: the build's, or release 2 after the upgrade test passed.
 installed=$dist

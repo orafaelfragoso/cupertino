@@ -170,8 +170,7 @@ class UpdateStatusTest(unittest.TestCase):
                               'exit 0; fi\n'
                               f'[ "$1" = start ] || exit 0\ncat "{update_log}"\nexit {status}\n')
             docker.chmod(0o755)
-            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CARGO_BUILD_JOBS="4",
-                       CUPERTINO_BUILD_LOCK_FD="test-lease")
+            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CARGO_BUILD_JOBS="4")
             env.pop("CUPERTINO_GOLDENS_CACHE", None)
             env.pop("CUPERTINO_GOLDENS_IMAGE", None)
             env.pop("CUPERTINO_GOLDENS_SCCACHE_SIZE", None)
@@ -252,7 +251,7 @@ class UpdateStatusTest(unittest.TestCase):
         result = self.run_update(101, None, ids)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_compile_cache_shares_sccache_and_downloads_but_keeps_the_target_per_worktree(self):
+    def test_compile_cache_shares_sccache_and_downloads_but_keeps_the_target_per_checkout(self):
         ids = ("sha256:" + "a" * 64, "sha256:" + "b" * 64)
         for container_cache in ("{root}/container-cache", "default"):
             with self.subTest(container_cache=container_cache):
@@ -265,22 +264,6 @@ class UpdateStatusTest(unittest.TestCase):
         result = self.run_update(101, None, ("sha256:../../escape",))
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("invalid content identity", result.stderr)
-
-    def test_unleased_operation_enters_outer_resource_guard(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            root = Path(scratch)
-            (root / "ci").mkdir()
-            source = Path(__file__).resolve().parent / "goldens.sh"
-            script = root / "ci/goldens.sh"
-            script.write_bytes(source.read_bytes())
-            arguments = root / "arguments.json"
-            (root / "ci/worktree-build.py").write_text(
-                f'import json, sys; from pathlib import Path; Path({str(arguments)!r}).write_text(json.dumps(sys.argv[1:])); raise SystemExit(42)\n')
-            env = dict(os.environ)
-            env.pop("CUPERTINO_BUILD_LOCK_FD", None)
-            result = subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 42, result.stderr)
-            self.assertEqual(json.loads(arguments.read_text()), ["locked", "--", "bash", "ci/goldens.sh", "--update"])
 
     def test_term_removes_container_while_attachment_ignores_signal(self):
         with tempfile.TemporaryDirectory(prefix="cupertino-golden-signal-", dir=Path.home()) as scratch:
@@ -304,7 +287,7 @@ class UpdateStatusTest(unittest.TestCase):
                               + ' while not removed.exists(): time.sleep(0.01)\n')
             docker.chmod(0o755)
             env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", CUPERTINO_GOLDENS_IMAGE="prebuilt",
-                       CUPERTINO_BUILD_LOCK_FD="test-lease", HOME=str(root / "home"), CUPERTINO_CONTAINER_CACHE="")
+                       HOME=str(root / "home"), CUPERTINO_CONTAINER_CACHE="")
             env.pop("CUPERTINO_GOLDENS_CACHE", None)
             process = subprocess.Popen(["bash", str(root / "ci/goldens.sh")], env=env,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)

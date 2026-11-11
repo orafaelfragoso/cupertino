@@ -5,7 +5,7 @@ description: Review the Cupertino checkout, a branch, a diff, a crate or a subsy
 
 # Cupertino codebase review
 
-Find the most important supported problems within a bounded review. Keep the result short, practical and in the user's language. Review without editing unless the user also asks for fixes; fixing is a separate phase that follows the root agent instructions (worktree, build wrapper, finishing checks).
+Find the most important supported problems within a bounded review. Keep the result short, practical and in the user's language. Review without editing unless the user also asks for fixes; fixing is a separate phase that follows the root agent instructions (build and finishing checks).
 
 ## Choose the scope
 
@@ -41,13 +41,13 @@ cargo fmt --check
 git diff --check BASE
 ```
 
-Compile only when a check settles a finding or the user asks, scoped to the affected packages, through the managed wrapper and never with raw Cargo. Check `df -h /home` first and do not start below 30 GiB free:
+Compile only when a check settles a finding or the user asks, scoped to the affected packages, with plain Cargo. Check `df -h /home` first; a build needs tens of GiB free:
 
 ```bash
 export PATH=$HOME/.cargo/bin:$PATH
-python3 ci/worktree-build.py run --profile dev -- cargo run -p cupertino-layers
-python3 ci/worktree-build.py run --profile dev -- cargo clippy -p CRATE --all-targets
-python3 ci/worktree-build.py run --profile dev -- python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked -p CRATE --all-features -E 'test(NAME)'
+cargo run -p cupertino-layers
+cargo clippy -p CRATE --all-targets
+python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked -p CRATE --all-features -E 'test(NAME)'
 ```
 
 `cargo-deny` is the dependency gate in CI; report it as not run when it is not installed rather than installing it. Set command timeouts within the remaining budget. A test that skips because a host tool is absent is not a pass; separate environment failures from defects. Never run anything that installs, deploys, restarts the running compositor or session, touches the real session bus, or captures with the real `HOME`.

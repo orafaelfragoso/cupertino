@@ -30,7 +30,7 @@ third-party packs stay outside it.
 Its full-colour app tiles use layered frosted glass. System objects remain free-standing: sky-blue folders with
 recessed marks, folded white documents with small printed type hints, neutral ribbed bins, a display and overlay badges.
 The parametric artwork has separate 16- and 32-pixel optical editions; any lettering is outlined geometry.
-To regenerate it, build the `cupertino-icons` example `render-artwork` through `ci/worktree-build.py`, then run
+To regenerate it, build the `cupertino-icons` example `render-artwork` with `cargo build --locked -p cupertino-icons --example render-artwork`, then run
 `python3 -B data/assets/cupertino/generate.py`. That example uses the shell's native SVG loader for every PNG rendition,
 so the raster source preferred by manifest version 2 has the same lighting and filter support as the source SVG.
 

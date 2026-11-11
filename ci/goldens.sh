@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Runs the headless golden tests in the pinned image, the only renderer their baselines are valid on.
 # `ci/goldens.sh` compares; `ci/goldens.sh --update` re-records tests/fixtures/goldens (review the diff).
-# Needs docker. CUPERTINO_GOLDENS_CACHE defaults to target/package-build/goldens in this worktree.
+# Needs docker. CUPERTINO_GOLDENS_CACHE defaults to target/package-build/goldens in this checkout.
 # Downloads are shared; compiled targets are separated by image content identity.
 # CUPERTINO_CONTAINER_CACHE (default ~/.cache/cupertino-build/containers; empty, or on GitHub Actions, off) adds a
-# per-user sccache and Cargo download directory shared by every worktree. sccache reuses a compiler output only when
+# per-user sccache and Cargo download directory shared by every checkout. sccache reuses a compiler output only when
 # its compiler, arguments, environment and source files hash the same; the container paths are the same in every
-# worktree. The Cargo target itself stays in this worktree.
+# checkout. The Cargo target itself stays in this checkout.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,11 +19,7 @@ elif [ "$#" -ne 0 ]; then
   exit 2
 fi
 
-# Serialize image builds and tests together; a caller that already owns the lease keeps it.
-if [ -z "${CUPERTINO_BUILD_LOCK_FD:-}" ]; then
-  cd "$root"
-  exec python3 ci/worktree-build.py locked -- bash ci/goldens.sh "$@"
-fi
+cd "$root"
 cache="${CUPERTINO_GOLDENS_CACHE:-$root/target/package-build/goldens}"
 downloads="$cache/cargo"
 compile_cache=()

@@ -4,7 +4,7 @@ Original first-party artwork created for Cupertino contributors, 2026.
 Licensed under GPL-3.0-or-later; see LICENSE.
 
 The SVG files are generated from the parametric constructions in `artwork.py`.
-Build the native renderer with `python3 ci/worktree-build.py run --profile dev -- cargo build --locked -p cupertino-icons --example render-artwork`,
+Build the native renderer with `cargo build --locked -p cupertino-icons --example render-artwork`,
 then run `python3 -B data/assets/cupertino/generate.py` from the checkout. The PNG renditions
 use the shell's image loader; `--renderer PATH` selects a renderer built in another profile.
 Apps share an 824-unit continuous-curvature tile on a 1024-unit canvas, frosted glass foregrounds,

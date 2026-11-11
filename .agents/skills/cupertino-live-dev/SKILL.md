@@ -6,7 +6,7 @@ description: Try a change to a Cupertino shell component (dock, menu bar, launch
 # Developing Cupertino from inside its session
 
 The installed server may start some shell components from a development folder instead of `/usr/bin`. Root enables the
-folder once; after that you build a component in your worktree, copy it into the folder, restart that one component
+folder once; after that you build a component with Cargo, copy it into the folder, restart that one component
 and look at the result, all as the session's own user. A build that passes its check stays running until a package
 contains the change. The full reference is `docs/src/building.md`, section
 "Installed-session iteration".
@@ -49,20 +49,19 @@ In the packaged configuration:
 Not eligible, whatever the configuration says: `login` (lock screen, session agent), the portal, the authentication
 agent, desktop control, data-control clients, the session manager, the system daemons and the server itself. For those,
 and for any change that also needs a new server, follow [non-eligible components](guides/components.md#not-eligible).
-Files and Settings are regular applications: build them in the worktree and run that build directly; nothing is
+Files and Settings are regular applications: build them with Cargo and run that build directly; nothing is
 swapped. [components.md](guides/components.md) lists what a restart of each component loses.
 
-## 2. Build it in your worktree
+## 2. Build it
 
 A build that passes stays running (step 6), so build it as the package does: the release profile, scoped to the binary,
-production features, and the installed theme directory (without it the binary reads the theme from your worktree,
-which may be gone later). The wrapper sets the profile itself (it refuses `--release`), and a worktree's target keeps
-one profile and build environment: use a worktree for release builds, or `cleanup --target` before switching.
+production features, and the installed theme directory (without it the binary reads the theme from the checkout,
+which may be gone later).
 
 ```bash
 export PATH=$HOME/.cargo/bin:$PATH
 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme \
-  python3 ci/worktree-build.py run --profile release -- cargo build --locked -p cupertino-dock --bin cupertino-dock --features app
+  cargo build --release --locked -p cupertino-dock --bin cupertino-dock --features app
 ```
 
 The binary is `target/release/cupertino-dock`. Validate the change with its scoped tests separately. The build must

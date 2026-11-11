@@ -116,7 +116,6 @@ jobs:
       - run: python3 -I ci/test_c_sdk.py
       - run: python3 -I ci/test_goldens_log.py
       - run: python3 -I ci/test-build-test-fixtures.py
-      - run: python3 -I ci/test-worktree-build.py
       - run: python3 -I packaging/ci/test-container-build.py
       - run: python3 -I ci/gate.py .
       # The Wayland globals are compared with the registry by crates/cupertino-server/tests/contracts.rs (nextest below).

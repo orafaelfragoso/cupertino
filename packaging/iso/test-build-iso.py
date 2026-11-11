@@ -154,7 +154,7 @@ out.mkdir()
         self.key.write_text('public-key')
         self.out = self.base / 'out'
         self.env = {**os.environ, 'HOME': str(self.base / 'home'), 'PATH': str(self.bin) + ':' + os.environ['PATH'],
-                    'CUPERTINO_BUILD_LOCK_FD': '1', 'CUPERTINO_KEYRING_KEY': str(self.key), 'TEST_STATE': str(self.state)}
+                    'CUPERTINO_KEYRING_KEY': str(self.key), 'TEST_STATE': str(self.state)}
         for key in ('TEST_STALL', 'TEST_START_STATUS', 'TEST_RM_FAILURE', 'TEST_CLEANUP_FAILURE', 'TEST_MUTATE_SOURCE', 'TEST_ADVANCE_HEAD'):
             self.env.pop(key, None)
 

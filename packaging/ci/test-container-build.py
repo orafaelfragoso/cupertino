@@ -121,9 +121,9 @@ else:
         self.cache = self.root / 'cache'
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
                         TEST_ROOT=str(self.root), TEST_LOG=str(self.log), HOME=str(self.root / 'home'),
-                        CUPERTINO_BUILD_CACHE_DIR=str(self.cache), CUPERTINO_BUILD_LOCK_FD='test-lease',
+                        CUPERTINO_BUILD_CACHE_DIR=str(self.cache),
                         CUPERTINO_CONTAINER_CACHE='')
-        for name in ('CARGO_BUILD_JOBS', 'CUPERTINO_BUILD_LOCK_HOLD', 'GITHUB_ACTIONS', 'CUPERTINO_PACKAGE_SCCACHE_SIZE'):
+        for name in ('CARGO_BUILD_JOBS', 'GITHUB_ACTIONS', 'CUPERTINO_PACKAGE_SCCACHE_SIZE'):
             self.env.pop(name, None)
         self.processors = str(len(os.sched_getaffinity(0)))
 
@@ -321,21 +321,6 @@ else:
         self.assertFalse((self.root / 'target/package-build').exists())
         self.assertFalse(self.cache.exists())
 
-    def test_test_only_acquires_lease_before_creating_container_control_files(self):
-        guard = self.root / 'ci/worktree-build.py'
-        guard.parent.mkdir()
-        guard.write_text('import json, os, sys\n'
-                         + 'with open(os.environ["TEST_LOG"], "a") as log:\n'
-                         + ' log.write(json.dumps(["guard", *sys.argv[1:]]) + "\\n")\n'
-                         + 'raise SystemExit(42)\n')
-        result = self.run_build(['--test-only'], {'CUPERTINO_BUILD_LOCK_FD': ''}, 'arch')
-        self.assertEqual(result.returncode, 42, result.stderr)
-        self.assertEqual(self.commands(), [['guard', 'locked', '--hold', 'none', '--', 'bash',
-                                           'packaging/ci/build-in-container.sh', 'arch', str(self.root / 'dist'),
-                                           '--test-only']])
-        self.assertFalse((self.root / 'target').exists())
-        self.assertFalse((self.root / 'containers').exists())
-
     def test_only_arch_is_packaged(self):
         for distro in ('debian', 'fedora'):
             result = self.run_build([], {}, distro)
@@ -380,41 +365,6 @@ else:
         result = self.run_build([], {'TEST_INSTALL_FAIL': '1', 'TEST_REMOVE_FAIL': '1'}, 'arch')
         self.assertEqual(result.returncode, 19)
         self.assertIn('cannot remove owned container', result.stderr)
-
-    def guard(self):
-        """A stand-in ci/worktree-build.py that records each phase's hold and then runs the phase."""
-        guard = self.root / 'ci/worktree-build.py'
-        guard.parent.mkdir(exist_ok=True)
-        guard.write_text('import json, os, sys\n'
-                         'with open(os.environ["TEST_LOG"], "a") as log:\n'
-                         '    log.write(json.dumps(["guard", *sys.argv[1:4]]) + "\\n")\n'
-                         'assert sys.argv[1:3] == ["locked", "--hold"] and sys.argv[4] == "--", sys.argv\n'
-                         'os.execvp(sys.argv[5], sys.argv[5:])\n')
-
-    def test_only_the_compile_holds_every_slot_and_the_image_build_one(self):
-        self.guard()
-        for mode in ([], ['--upgrade']):
-            with self.subTest(mode=mode):
-                self.log.unlink(missing_ok=True)
-                result = self.run_build(mode, {'CUPERTINO_BUILD_LOCK_HOLD': 'none'}, 'arch')
-                self.assertEqual(result.returncode, 0, result.stderr)
-                sequence = []
-                for command in self.commands():
-                    if command[0] == 'guard':
-                        sequence.append('hold ' + command[3])
-                    elif command[0] in ('start', 'create') or command[:2] == ['buildx', 'build']:
-                        name = command[command.index('--name') + 1].rsplit('-', 1)[1] if command[0] == 'create' else ''
-                        sequence.append(command[0] if command[0] != 'buildx' else 'image') if not name else \
-                            sequence.append('create ' + name)
-                tests = ['create upgrade', 'start', 'create test', 'start'] if mode else ['create test', 'start']
-                self.assertEqual(sequence, ['hold one', 'image', 'create build', 'hold every', 'start',
-                                            'create inspect', 'start', *tests])
-
-    def test_a_caller_holding_every_slot_runs_each_phase_without_asking_again(self):
-        self.guard()
-        result = self.run_build([], {'CUPERTINO_BUILD_LOCK_HOLD': 'every'}, 'arch')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(any(command[0] == 'guard' for command in self.commands()))
 
     def test_the_compile_cache_mounts_sccache_and_shared_downloads_into_the_compile_only(self):
         cache = self.root / 'container-cache'

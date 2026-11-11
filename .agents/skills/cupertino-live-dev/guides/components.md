@@ -48,5 +48,5 @@ rename with the required owner and mode, and record the override.
 ## Regular applications
 
 Files (`cupertino-files`) and Settings (`cupertino-settings`) are applications, not supervised components. Build them
-with `--features app` in the worktree and run `target/debug/cupertino-files` (or `-settings`) directly. When the change
+with `--features app` and run `target/debug/cupertino-files` (or `-settings`) directly. When the change
 concerns how the application starts or its single instance, quit the installed copy first; nothing in `/usr` changes.

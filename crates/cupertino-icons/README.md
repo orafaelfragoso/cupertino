@@ -58,7 +58,7 @@ theme searched. A theme's stock icon names (`folder`, `audio-volume-high-symboli
 
 The `render-artwork` example takes an SVG path, an output PNG path and a pixel size. It uses `load_icon`, including
 its native SVG filters and premultiplied pixel handling, so the first-party pack generator can bake exactly the
-renditions the shell renders. Build it with `python3 ci/worktree-build.py run --profile dev -- cargo build --locked -p cupertino-icons --example render-artwork`;
+renditions the shell renders. Build it with `cargo build --locked -p cupertino-icons --example render-artwork`;
 then run `python3 -B data/assets/cupertino/generate.py`. The generator leaves logical names and raster sizes unchanged.
 
 ## Open issues

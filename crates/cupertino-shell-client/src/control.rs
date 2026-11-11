@@ -109,9 +109,15 @@ pub struct ControlSession {
 }
 pub struct ControlAuthority(CupertinoControlAuthorityV1);
 impl DesktopControl {
-    /// Version 3 runs are asked every time; version 4 runs name their app ([`ControlSession::identify`]).
+    /// Version 3 runs are asked every time; version 4 runs name their app ([`ControlSession::identify`]); from version 5
+    /// one connection serves several runs at once.
     pub fn bind(conn: &mut Connection) -> Option<Self> {
-        conn.bind_extension(3..=4, Quiet).map(Self)
+        conn.bind_extension(3..=5, Quiet).map(Self)
+    }
+    /// The bound version: from 5 the compositor allows several live sessions on one connection.
+    pub fn version(&self) -> u32 {
+        use wayland_client::Proxy;
+        self.0.version()
     }
     pub fn session(&self, conn: &Connection) -> ControlSession {
         let epoch = Arc::new(AtomicU64::new(0));
@@ -218,6 +224,14 @@ impl ControlSession {
         let (h, l) = self.parts();
         self.proxy.perform(serial, h, l, file.as_fd(), len);
         Ok(())
+    }
+    /// Make the next output capture source this connection creates belong to this run (version 5); before version 5
+    /// a source belongs to the connection's one run anyway.
+    pub fn select_capture(&self) {
+        use wayland_client::Proxy;
+        if self.proxy.version() >= 5 {
+            self.proxy.select_capture();
+        }
     }
     pub fn stop(&self) {
         self.proxy.stop();

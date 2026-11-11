@@ -310,6 +310,8 @@ struct Capturer {
     /// Every title the handles were sent, in order.
     titles: Vec<String>,
     control_seen: desktop_control::Seen,
+    /// What each run of a connection holding several sessions was told, by the session's slot.
+    control_runs: Vec<desktop_control::Seen>,
     session: SessionSeen,
     frame: FrameSeen,
     /// The window feed's last complete group, and the group being received.

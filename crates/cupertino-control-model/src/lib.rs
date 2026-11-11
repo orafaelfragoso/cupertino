@@ -14,6 +14,10 @@ pub use input::{Input, InputOwners, InputSource, OwnershipError, Transition, MAX
 
 use std::num::NonZeroU64;
 
+/// How many runs one controller serves at once, one per connected agent: the controller turns away a further agent
+/// with an error, and the compositor allows this many live sessions on the controller's connection.
+pub const MAX_RUNS_PER_CONTROLLER: usize = 8;
+
 /// One server-assigned run identity. A new connection or run must receive a fresh epoch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Epoch(NonZeroU64);

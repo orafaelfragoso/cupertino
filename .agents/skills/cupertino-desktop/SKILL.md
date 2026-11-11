@@ -25,7 +25,7 @@ If tools are absent or the bridge cannot connect, read [connection.md](guides/co
 4. The person decides once per app, and Cupertino remembers it. The app is the window your bridge runs under (for example the terminal) or, without one, the program that started the bridge. **Desktop Control** covers `observe`, `semantic`, `pointer` and `keyboard`; **Screen Capture** covers `capture`.
    - An app the person allowed starts at once: the run is in phase 2 without a panel.
    - An app the person turned off is refused with `denied`. Do not repeat the request; tell the person they can turn the app on in **Settings › Privacy › Desktop Control** or **Screen Capture**.
-   - Otherwise Cupertino's native panel names the app and asks. Tell the person to click **Allow**. The default focus is **Don't Allow**: do not prescribe a blind Tab/Enter sequence. Their answer is remembered for the services asked.
+   - Otherwise Cupertino's native panel names the app and asks. Tell the person to click **Allow**. The default focus is **Don't Allow**: do not prescribe a blind Tab/Enter sequence. Their answer is remembered for the services asked. The panel asks about one request at a time: while it asks about another agent's app, your run waits in phase 1 until its turn comes.
 
    Host tool approval and the native decision are separate. Never synthesize consent, edit the remembered answers or change policy to approve yourself, or use a test consent fixture in the real desktop.
 5. Save the returned epoch as a string. Call `wait` with that epoch, `phase: 2`, and `timeout_ms` at most 30000. Check status after a timeout instead of assuming consent. Continue bounded waits while the person is answering; if they decline, stop requesting. A message saying they approved is not proof that phase 2 was reached.
@@ -38,7 +38,7 @@ If tools are absent or the bridge cannot connect, read [connection.md](guides/co
 | 3 | Suspended while an authentication prompt or protected session panel is up; stop mutations and `wait` for phase 2. It resumes by itself when that closes; `resume` never asks the person again. |
 | 4 | Revoked; this epoch is finished. Read fresh status and request again for another task: an allowed app starts at once. |
 
-Keep one MCP connection throughout the task. The current controller serves one connected native peer at a time: finish and stop the current run before switching between Claude, Codex or an auxiliary client. Do not keep a spare status client connected. All subsequent scoped calls require that epoch. Do not convert epochs, window handles, node IDs or publication revisions to numbers: these opaque decimal strings preserve 64-bit identity.
+Keep one MCP connection throughout the task: closing it ends your run. Several agents (Claude, Codex or an auxiliary client) may work in the same session at once, each bridge on a run of its own with its own epoch, phase, held input and captures; another agent's run never changes yours, and your `stop` ends only yours. The session's controller serves up to eight bridges at once; when it is full, calls fail with an error saying so. Then try again later, and do not stop or disconnect another agent's work to make room. Do not keep a spare status client connected, since it holds one of those places. All subsequent scoped calls require that epoch. Do not convert epochs, window handles, node IDs or publication revisions to numbers: these opaque decimal strings preserve 64-bit identity.
 
 ## Operate Kit apps through semantics
 
@@ -72,7 +72,7 @@ Third-party apps may have window metadata but no Kit snapshot. Use `capture` and
 
 ## Sharing the desktop, uncertainty and completion
 
-The person keeps using the desktop while you work: their pointer and keyboard input never pauses or revokes your run, and a key or button you both hold stays down until the last of you releases it. Because the screen can change under you, observe again before acting on an earlier observation, and do not fight the person for the pointer: if they are clearly working in your target, wait and observe.
+The person keeps using the desktop while you work: their pointer and keyboard input never pauses or revokes your run, and a key or button you both hold stays down until the last of you releases it. Other agents' runs share the desktop the same way: each run's held keys and buttons are its own and are released when that run ends. Because the screen can change under you, observe again before acting on an earlier observation, and do not fight the person for the pointer: if they are clearly working in your target, wait and observe.
 
 Protected focus and authentication prompts suspend the run (phase 3) until they close; lock/session deactivation, controller loss or peer exit revoke it, and after an unlock an allowed app's next request starts at once. Turning the app off in Settings › Privacy also revokes it. The consent panel disappears after the decision; no permanent notification is expected, though the menu bar's capture indicator shows while a run may capture. The person's **Ctrl+Alt+Escape** shortcut stops control and leaves their remembered answer as it is. These protections are not defects to bypass. Authentication and session surfaces, reserved shortcuts and power actions remain outside automation authority.
 

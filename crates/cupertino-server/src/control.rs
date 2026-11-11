@@ -5,6 +5,9 @@
 //! and only an app with an undecided service is asked on the consent panel, whose answer is remembered. A change to the
 //! file that turns off a service a run uses revokes the run. Physical input never pauses a run: the person and the
 //! controller use the desktop together, each source's held keys and buttons tracked apart ([`InputOwners`]).
+//!
+//! From version 5 one controller connection holds a session per agent it serves, each run with its own epoch, held
+//! input and capture sources. Runs that need the person's answer are asked one at a time, in the order they asked.
 mod identity;
 mod input;
 mod semantics;
@@ -13,6 +16,7 @@ use crate::state::Cupertino;
 use cupertino_control_model::permission::{self, Services, Verdict};
 use cupertino_control_model::{
     Capabilities, Epoch, Grant, Handle, InputOwners, Operation, Phase, Revocation, Scope, Session,
+    MAX_RUNS_PER_CONTROLLER,
 };
 use cupertino_defaults::desktop_control::{App, Decision, DesktopControlConf, Service};
 use cupertino_protocols::server::control::cupertino_control_authority_v1::{
@@ -39,13 +43,16 @@ use std::time::{Duration, Instant};
 
 /// Current version; version 1 keeps discovery only, version 2 retains its input/capture ABI and version 3 its
 /// semantic ABI, asked on every run.
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
+/// The version from which one connection holds several sessions and their runs are independent.
+const CONCURRENT_RUNS: u32 = 5;
 /// Version of the consent authority; version 2 shows the app asking and remembers the answer.
 const AUTHORITY_VERSION: u32 = 2;
 /// The `allow` of an authority answer that refuses the run and remembers deny (version 2).
 const ANSWER_DENY: u32 = 2;
-/// At most one session per private connection, across manager bindings.
-const MAX_SESSIONS_PER_CONNECTION: usize = 1;
+/// Sessions a private connection may hold, across manager bindings, when it creates one through a manager older than
+/// [`CONCURRENT_RUNS`]; a newer manager allows [`MAX_RUNS_PER_CONTROLLER`].
+const SESSIONS_BEFORE_CONCURRENT_RUNS: usize = 1;
 /// Number of completed request outcomes retained to suppress retries.
 const REPLY_HISTORY: usize = 64;
 /// Fresh physical input must have reached the consent surface within this interval.
@@ -134,6 +141,10 @@ struct Run {
     remembered: Services,
     /// Services the person is asked for while the run awaits consent.
     asked: Services,
+    /// Whether the consent authority was sent this run's request; a run awaiting consent waits its turn until then.
+    consent_shown: bool,
+    /// Whether the next output capture source of the run's connection belongs to this run (`select_capture`).
+    capture_selected: bool,
     /// Why the run is suspended, while it is.
     paused: Option<PauseReason>,
 }
@@ -229,7 +240,31 @@ impl Cupertino {
     }
     fn control_changed(&mut self, index: usize, serial: u32) {
         self.control_status(index, serial);
+        self.control_ask_next();
         self.refresh_capture_indicator();
+    }
+    /// Ask the person for the run that has waited longest, unless the consent panel already shows a request: the panel
+    /// asks one request at a time.
+    fn control_ask_next(&mut self) {
+        let runs = &self.control.runs;
+        let awaiting = |r: &&Run| r.model.phase() == Phase::AwaitingConsent;
+        if runs.iter().filter(awaiting).any(|r| r.consent_shown) {
+            return;
+        }
+        let Some(index) = runs
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| awaiting(r))
+            .min_by_key(|(_, r)| r.consent_since)
+            .map(|(i, _)| i)
+        else {
+            return;
+        };
+        let run = &mut self.control.runs[index];
+        run.consent_shown = true;
+        // the person's answer must come after the panel asked, not after the run started waiting
+        run.consent_since = Instant::now();
+        self.control_ask(index);
     }
     fn control_status(&self, index: usize, serial: u32) {
         let run = &self.control.runs[index];
@@ -484,8 +519,11 @@ impl Cupertino {
             }
             Identity::Unnamed => None,
         };
+        // a run of an older version stands alone; newer runs are independent of each other
+        let concurrent = |r: &Run| r.resource.version() >= CONCURRENT_RUNS;
         if self.control.runs.iter().enumerate().any(|(i, r)| {
             i != index
+                && (!concurrent(r) || !concurrent(&self.control.runs[index]))
                 && matches!(
                     r.model.phase(),
                     Phase::Active | Phase::AwaitingConsent | Phase::Suspended
@@ -531,6 +569,7 @@ impl Cupertino {
         run.geometry = Some(geometry);
         run.revision = 1;
         run.asked = asked;
+        run.consent_shown = false;
         // what is needed and not asked is allowed by the app's remembered answers
         run.remembered = needed.iter().filter(|s| !asked.contains(*s)).collect();
         if asked.is_empty() {
@@ -539,9 +578,8 @@ impl Cupertino {
                 .map_err(|_| session::Refusal::Busy)?;
             tracing::info!(epoch = epoch.get(), app = ?requester.map(|r| r.app), "desktop control allowed by the remembered answer");
             self.control_geometry(index);
-        } else {
-            self.control_ask(index);
         }
+        // a run that must ask is asked now, or once the requests before it are answered ([`Self::control_ask_next`])
         self.control_changed(index, 0);
         Ok(())
     }
@@ -730,7 +768,25 @@ impl Cupertino {
             .iter()
             .any(|r| r.model.phase() == Phase::Active && r.capabilities & 2 != 0)
     }
-    pub(crate) fn control_capture_epoch(&self, client: &Client, output: &Output) -> Option<u64> {
+    /// The run a new output capture source of `client` belongs to: the run that selected it (spending the selection),
+    /// else the first of the client's runs that may capture `output`. `None` makes a source that never captures.
+    pub(crate) fn control_capture_epoch(
+        &mut self,
+        client: &Client,
+        output: &Output,
+    ) -> Option<u64> {
+        let selected = self
+            .control
+            .runs
+            .iter_mut()
+            .find(|r| r.capture_selected && r.resource.client().as_ref() == Some(client));
+        if let Some(run) = selected {
+            run.capture_selected = false;
+            let epoch = run.model.epoch().get();
+            return self
+                .control_capture_allowed(client, output, epoch)
+                .then_some(epoch);
+        }
         self.control.runs.iter().find_map(|r| {
             let epoch = r.model.epoch().get();
             self.control_capture_allowed(client, output, epoch)
@@ -771,6 +827,11 @@ impl Dispatch<CupertinoControlV1, ()> for Cupertino {
                     init.init(id, SessionData { epoch: None });
                     return;
                 }
+                let allowed = if resource.version() >= CONCURRENT_RUNS {
+                    MAX_RUNS_PER_CONTROLLER
+                } else {
+                    SESSIONS_BEFORE_CONCURRENT_RUNS
+                };
                 if state
                     .control
                     .runs
@@ -779,10 +840,13 @@ impl Dispatch<CupertinoControlV1, ()> for Cupertino {
                         r.resource.is_alive() && r.resource.client().as_ref() == Some(client)
                     })
                     .count()
-                    >= MAX_SESSIONS_PER_CONNECTION
+                    >= allowed
                 {
                     init.init(id, SessionData { epoch: None });
-                    resource.post_error(manager::Error::SessionExists, "a session already exists");
+                    resource.post_error(
+                        manager::Error::SessionExists,
+                        "the connection has as many sessions as allowed",
+                    );
                     return;
                 }
                 let Some(epoch) = state.control.allocate_epoch() else {
@@ -817,6 +881,8 @@ impl Dispatch<CupertinoControlV1, ()> for Cupertino {
                     identity: Identity::Unnamed,
                     remembered: Services::NONE,
                     asked: Services::NONE,
+                    consent_shown: false,
+                    capture_selected: false,
                     paused: None,
                 });
             }
@@ -914,6 +980,15 @@ impl Dispatch<CupertinoControlSessionV1, SessionData> for Cupertino {
                     Identity::Unidentified
                 }
             };
+            return;
+        }
+        if matches!(request, session::Request::SelectCapture) {
+            // the selection is the connection's: the last run to select owns its next source
+            for run in &mut state.control.runs {
+                if run.resource.client().as_ref() == Some(client) {
+                    run.capture_selected = run.resource == *resource;
+                }
+            }
             return;
         }
         if matches!(request, session::Request::Stop) {
@@ -1127,7 +1202,10 @@ impl Dispatch<CupertinoControlAuthorityV1, ()> for Cupertino {
                 else {
                     return;
                 };
-                if state.control.runs[i].model.phase() != Phase::AwaitingConsent {
+                // a run still waiting its turn was not asked: nothing can answer it yet
+                if state.control.runs[i].model.phase() != Phase::AwaitingConsent
+                    || !state.control.runs[i].consent_shown
+                {
                     return;
                 }
                 let e = state.control.runs[i].model.epoch();

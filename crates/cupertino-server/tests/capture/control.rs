@@ -4,6 +4,8 @@ use super::*;
 mod boundaries;
 #[path = "control-permissions.rs"]
 mod permissions;
+#[path = "control-runs.rs"]
+mod runs;
 use cupertino_protocols::client::control::{
     cupertino_control_authority_v1::{self as authority, CupertinoControlAuthorityV1 as Authority},
     cupertino_control_session_v1::{self as session, CupertinoControlSessionV1 as Session},

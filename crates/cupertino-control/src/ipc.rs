@@ -1,9 +1,12 @@
 //! Bounded local framing. The socket is not a grant: the compositor decides each run from the app the peer runs under,
 //! named by the peer's process id and start time ([`Inbox::peer`]).
+//!
+//! Each peer has a reader and a writer thread of its own, so the controller's loop never blocks on a peer: a peer may
+//! have one command in flight, and its response is written while the loop serves the other peers.
 #[cfg(test)]
 #[path = "ipc-tests.rs"]
 mod tests;
-use cupertino_wayland_client::Waker;
+use serde_json::{json, Value};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -11,7 +14,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    mpsc::{self, Receiver},
+    mpsc::{self, Receiver, SyncSender, TrySendError},
     Arc,
 };
 use std::time::Duration;
@@ -26,6 +29,20 @@ const PEER_CHECK: Duration = Duration::from_millis(250);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Bytes of `/proc/<pid>/stat` read at most; the line is a few hundred bytes.
 const STAT_LIMIT: u64 = 4096;
+/// Responses waiting for a peer's writer beyond the one it writes: a peer has one command in flight, so a second
+/// response waits only while the first is still written to a peer that sent its next command early.
+const RESPONSE_QUEUE: usize = 1;
+
+/// Makes the controller's loop look at its peers again.
+pub type Wake = Arc<dyn Fn() + Send + Sync>;
+
+/// A response for a peer's writer.
+pub enum Reply {
+    /// Known now.
+    Now(Result<Value, String>),
+    /// Worked out on the writer, off the controller's loop, as encoding a capture.
+    Later(Box<dyn FnOnce() -> Result<Value, String> + Send>),
+}
 
 pub struct Listener {
     pub socket: UnixListener,
@@ -106,13 +123,33 @@ impl Drop for Listener {
 }
 pub struct Inbox {
     pub commands: Receiver<Vec<u8>>,
+    /// Set once the peer exited, closed its end, broke the framing or stopped reading.
     pub closed: Arc<AtomicBool>,
-    pub pending: Arc<AtomicBool>,
     /// The peer's process id and start time in clock ticks since boot; `None` when it could not be read while the
     /// process was the one connected, and the compositor then refuses the run.
     pub peer: Option<(u32, u64)>,
+    replies: SyncSender<Reply>,
+    stream: UnixStream,
 }
-pub fn read_peer(stream: &UnixStream, waker: Waker) -> io::Result<Inbox> {
+impl Inbox {
+    /// Hand the response to the peer's writer. An error means the peer does not wait for responses in turn and is to
+    /// be disconnected.
+    pub fn respond(&self, reply: Reply) -> Result<(), &'static str> {
+        match self.replies.try_send(reply) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err("local client does not read its responses"),
+            Err(TrySendError::Disconnected(_)) => Err("local client disconnected"),
+        }
+    }
+}
+impl Drop for Inbox {
+    fn drop(&mut self) {
+        // ends both threads, also a writer in the middle of a response
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
+}
+/// The peer's user id, which must be the controller's own.
+fn same_user(stream: &UnixStream) -> io::Result<()> {
     let mut credentials = libc::ucred {
         pid: 0,
         uid: 0,
@@ -136,6 +173,23 @@ pub fn read_peer(stream: &UnixStream, waker: Waker) -> io::Result<Inbox> {
     if credentials.uid != unsafe { libc::getuid() } {
         return Err(io::Error::other("controller peer has another uid"));
     }
+    Ok(())
+}
+/// Tell a peer of the controller's own user at once why it is not served, then close it.
+pub fn refuse(stream: UnixStream, error: &str) {
+    if same_user(&stream).is_err() {
+        return;
+    }
+    // a fresh connection's buffer takes the one line: this never waits on the peer
+    let mut stream = stream;
+    if stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_ok() {
+        let _ = write_json(&mut stream, &json!({"ok":false,"error":error}));
+    }
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+}
+/// Check a new peer and start its reader and writer. `wake` is called when a command arrives or the peer is gone.
+pub fn read_peer(stream: &UnixStream, wake: Wake) -> io::Result<Inbox> {
+    same_user(stream)?;
     let peer = cupertino_peer::ProcessHandle::of_peer(stream)?;
     let identity = start_time(peer.pid)
         // the start read names the connected process only while its pidfd shows it running
@@ -149,8 +203,10 @@ pub fn read_peer(stream: &UnixStream, waker: Waker) -> io::Result<Inbox> {
     reader.set_read_timeout(Some(PEER_CHECK))?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     let (tx, commands) = mpsc::sync_channel(1);
+    let (replies, responses) = mpsc::sync_channel::<Reply>(RESPONSE_QUEUE);
     let done = closed.clone();
     let busy = pending.clone();
+    let waker = wake.clone();
     std::thread::spawn(move || {
         let mut line = Vec::new();
         let mut bytes = [0; 4096];
@@ -172,7 +228,7 @@ pub fn read_peer(stream: &UnixStream, waker: Waker) -> io::Result<Inbox> {
                             {
                                 break 'read;
                             }
-                            waker.wake();
+                            waker();
                         }
                     }
                 }
@@ -188,13 +244,36 @@ pub fn read_peer(stream: &UnixStream, waker: Waker) -> io::Result<Inbox> {
         }
         done.store(true, Ordering::SeqCst);
         let _ = reader.shutdown(std::net::Shutdown::Both);
-        waker.wake();
+        waker();
+    });
+    let mut writer = stream.try_clone()?;
+    let (failed, idle) = (closed.clone(), pending);
+    std::thread::spawn(move || {
+        for reply in responses {
+            let result = match reply {
+                Reply::Now(result) => result,
+                Reply::Later(work) => work(),
+            };
+            let value = match result {
+                Ok(data) => json!({"ok":true,"data":data}),
+                Err(error) => json!({"ok":false,"error":error}),
+            };
+            // the peer may send its next command as soon as it has read this response
+            idle.store(false, Ordering::SeqCst);
+            if write_json(&mut writer, &value).is_err() {
+                failed.store(true, Ordering::SeqCst);
+                let _ = writer.shutdown(std::net::Shutdown::Both);
+                wake();
+                break;
+            }
+        }
     });
     Ok(Inbox {
         commands,
         closed,
-        pending,
         peer: identity,
+        replies,
+        stream: stream.try_clone()?,
     })
 }
 /// Field 22 of `/proc/<pid>/stat`, the process's start time, from a bounded read. The command name in field 2 may hold

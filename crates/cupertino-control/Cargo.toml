@@ -9,6 +9,7 @@ description = "The native desktop controller: scoped session consent, input and 
 layer = "shell"
 
 [dependencies]
+cupertino-control-model = { path = "../cupertino-control-model" }
 cupertino-semantics = { path = "../cupertino-semantics" }
 cupertino-shell-client = { path = "../cupertino-shell-client" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }

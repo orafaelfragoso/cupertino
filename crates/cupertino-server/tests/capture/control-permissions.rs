@@ -47,18 +47,22 @@ impl Drop for Bridge {
 }
 
 /// The app every bridge of these tests belongs to unless a window says otherwise: the program that started it.
-fn this_program() -> remembered::App {
+pub(super) fn this_program() -> remembered::App {
     remembered::App::Executable(std::env::current_exe().unwrap())
 }
 
 /// A remembered-answers file in a folder of the test's own, which the server reads instead of the person's.
-struct Store {
+pub(super) struct Store {
     dir: tempfile::TempDir,
 }
 
 impl Store {
     /// A file holding `answers` for `app`, read by the server once.
-    fn read_by(h: &mut Harness, app: &remembered::App, answers: &[(Service, Decision)]) -> Self {
+    pub(super) fn read_by(
+        h: &mut Harness,
+        app: &remembered::App,
+        answers: &[(Service, Decision)],
+    ) -> Self {
         let store = Self::holding(app, answers);
         h.state.reload_desktop_control(&store.path());
         store
@@ -91,12 +95,12 @@ impl Store {
         store
     }
 
-    fn path(&self) -> PathBuf {
+    pub(super) fn path(&self) -> PathBuf {
         self.dir.path().join(remembered::DESKTOP_CONTROL_FILE)
     }
 
     /// Change the file as the settings application does.
-    fn change(&self, change: impl FnOnce(&mut DesktopControlConf)) {
+    pub(super) fn change(&self, change: impl FnOnce(&mut DesktopControlConf)) {
         DesktopControlConf::update(&self.path(), |conf| {
             change(conf);
             Ok(())
@@ -126,7 +130,7 @@ impl Store {
 }
 
 /// Every service allowed.
-const ALLOW_ALL: [(Service, Decision); 2] = [
+pub(super) const ALLOW_ALL: [(Service, Decision); 2] = [
     (Service::Control, Decision::Allow),
     (Service::Capture, Decision::Allow),
 ];

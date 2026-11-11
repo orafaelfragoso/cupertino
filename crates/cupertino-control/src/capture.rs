@@ -117,15 +117,40 @@ impl Capture {
         let p = self.state.0.lock().unwrap();
         (p.constraints, p.ready, p.failed)
     }
-    pub fn png(&mut self) -> Result<(u32, u32, Vec<u8>), String> {
+    /// The copied frame, which outlives the capture's protocol objects.
+    pub fn pixels(mut self) -> Result<Pixels, String> {
         let p = self.state.0.lock().unwrap();
         if !p.ready || p.failed {
             return Err("capture did not complete".into());
         }
-        let (w, h) = self.buffer_size.ok_or("capture size is unavailable")?;
         drop(p);
-        let mut bytes = vec![0; (w as usize) * (h as usize) * 4];
-        let file = self.file.as_mut().ok_or("capture buffer is unavailable")?;
+        let (width, height) = self.buffer_size.ok_or("capture size is unavailable")?;
+        let file = self.file.take().ok_or("capture buffer is unavailable")?;
+        Ok(Pixels {
+            width,
+            height,
+            file,
+        })
+    }
+}
+/// A copied frame: `width` × `height` pixels of 32-bit blue, green, red and alpha in `file`.
+pub struct Pixels {
+    pub width: u32,
+    pub height: u32,
+    pub file: std::fs::File,
+}
+impl Pixels {
+    /// The frame upright as a PNG image, with its size. Encoding takes long for a large output: it runs off the
+    /// controller's loop.
+    pub fn png(mut self) -> Result<(u32, u32, Vec<u8>), String> {
+        let (w, h) = (self.width, self.height);
+        let size = (w as usize)
+            .checked_mul(h as usize)
+            .and_then(|p| p.checked_mul(4))
+            .filter(|n| *n <= MAX_CAPTURE_BYTES)
+            .ok_or("capture exceeds memory limit")?;
+        let mut bytes = vec![0; size];
+        let file = &mut self.file;
         file.seek(SeekFrom::Start(0))
             .and_then(|_| file.read_exact(&mut bytes))
             .map_err(|e| e.to_string())?;

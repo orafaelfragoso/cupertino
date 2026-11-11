@@ -7,6 +7,7 @@ pub mod atomic;
 pub mod compositor;
 pub mod conf;
 pub mod data_control;
+pub mod desktop_control;
 pub mod displays;
 pub mod dock;
 pub mod keyboard;

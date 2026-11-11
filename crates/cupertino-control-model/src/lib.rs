@@ -3,8 +3,12 @@
 //! The server validates the requesting connection and genuine-user consent before calling the grant transitions.
 //! This model checks epochs, state, scope and capability narrowing; it cannot establish a caller's identity.
 //! [`InputOwners`] tracks aggregate input transitions so removing a controller preserves another source's press.
+//! [`identity`] finds the app a request comes from and [`permission`] decides a request from what the person
+//! remembered for that app.
 
+pub mod identity;
 mod input;
+pub mod permission;
 
 pub use input::{Input, InputOwners, InputSource, OwnershipError, Transition, MAX_HELD_INPUTS};
 
@@ -100,6 +104,8 @@ pub enum Revocation {
     ControllerDisconnected,
     AuthorityDisconnected,
     Stopped,
+    /// The person turned off or removed a service the run uses.
+    Withdrawn,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

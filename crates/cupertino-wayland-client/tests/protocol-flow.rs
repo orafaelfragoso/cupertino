@@ -298,6 +298,8 @@ enum Seen {
         y: i32,
     },
     Move(u32),
+    /// A popup took a grab answering this serial.
+    Grab(u32),
     Resize {
         serial: u32,
         edge: xdg_toplevel::ResizeEdge,
@@ -976,6 +978,10 @@ impl Dispatch<XdgPopup, ()> for Mock {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
+        if let xdg_popup::Request::Grab { serial, .. } = request {
+            state.seen.send(Seen::Grab(serial)).unwrap();
+            return;
+        }
         if let xdg_popup::Request::Reposition { positioner, token } = request {
             let p = *positioner
                 .data::<Mutex<PositionerState>>()
@@ -2799,6 +2805,74 @@ fn a_popup_is_drawn_where_and_as_large_as_the_compositor_placed_it() {
         conn.scale(popup.surface()),
         Err(Error::UnknownSurface)
     ));
+}
+
+#[test]
+fn a_grab_before_any_input_is_refused_leaving_nothing_and_one_after_a_click_answers_it() {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    present(&mut conn, w.surface(), (320, 240));
+    next_seen(&seen);
+    next_seen(&seen);
+    let placement = |grab: bool, size: (u32, u32)| PopupPlacement {
+        anchor_rect: Rect::new(10.0, 20.0, 30.0, 8.0),
+        size,
+        anchor: Anchor::BottomLeft,
+        gravity: Gravity::BottomRight,
+        constraint_adjustment: ConstraintAdjustment::FlipY,
+        offset: (0, 0),
+        reactive: false,
+        parent_size: None,
+        grab,
+    };
+    assert_eq!(conn.input_serial(), None);
+    assert!(matches!(
+        conn.popup(w.surface(), &placement(true, (50, 50))),
+        Err(Error::PermissionDenied(_))
+    ));
+    // the refusal made nothing: the compositor first hears of the popup that opens without a grab, which maps
+    let popup = conn
+        .popup(w.surface(), &placement(false, (120, 90)))
+        .unwrap();
+    conn.flush().unwrap();
+    assert!(
+        matches!(next_seen(&seen), Seen::Positioner(p) if p.size == (120, 90)),
+        "the refused popup left a positioner"
+    );
+    let placed = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::PopupConfigure {
+            popup: p,
+            configure,
+        } if *p == popup => Some(*configure),
+        _ => None,
+    });
+    present(&mut conn, popup.surface(), (1, 1));
+    assert_eq!(next_seen(&seen), Seen::Ack(placed.serial));
+    assert!(matches!(next_seen(&seen), Seen::Commit { .. }));
+    conn.destroy(popup.surface()).unwrap();
+    // a click gives the grab its serial
+    control.send(Control::Click { x: 3.0, y: 4.0 }).unwrap();
+    wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Pointer {
+            event: PointerEvent::Button { .. },
+            ..
+        } => Some(()),
+        _ => None,
+    });
+    let click = conn.input_serial().unwrap();
+    conn.popup(w.surface(), &placement(true, (50, 50))).unwrap();
+    conn.flush().unwrap();
+    let grab = loop {
+        if let Seen::Grab(serial) = next_seen(&seen) {
+            break serial;
+        }
+    };
+    assert_eq!(grab, click);
 }
 
 #[test]

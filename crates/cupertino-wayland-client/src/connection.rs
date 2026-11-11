@@ -698,7 +698,8 @@ impl Connection {
     }
 
     /// Create a popup of `parent` (a window or popup). It maps with its first presented buffer, after its first
-    /// [`Event::PopupConfigure`].
+    /// [`Event::PopupConfigure`]. A grab needs an input event to answer: before one ([`Connection::input_serial`] is
+    /// `None`) the popup is [`Error::PermissionDenied`] and nothing is made, and the connection goes on.
     pub fn popup(&mut self, parent: SurfaceId, placement: &PopupPlacement) -> Result<Popup, Error> {
         let qh = self.queue.handle();
         let s = &mut self.state;
@@ -709,7 +710,7 @@ impl Connection {
                 return Err(Error::Protocol("a subsurface takes no popups"));
             }
         };
-        let positioner = positioner(&s.wm_base, &qh, placement, s.surface(parent)?.serials)?;
+        // refused before any object is made, so a refusal leaves nothing behind
         let grab_serial = if placement.grab {
             Some(
                 s.last_serial
@@ -718,6 +719,7 @@ impl Connection {
         } else {
             None
         };
+        let positioner = positioner(&s.wm_base, &qh, placement, s.surface(parent)?.serials)?;
         let id = s.next_id();
         let wl = s.compositor.create_surface(&qh, id);
         let xdg = s.wm_base.get_xdg_surface(&wl, &qh, id);

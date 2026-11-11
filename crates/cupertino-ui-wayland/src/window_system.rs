@@ -1250,6 +1250,10 @@ impl WindowSystem for WaylandWindowSystem {
         Ok(id)
     }
 
+    fn can_grab(&self) -> bool {
+        self.conn.input_serial().is_some()
+    }
+
     fn create_popup(
         &mut self,
         parent: WindowId,

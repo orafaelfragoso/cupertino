@@ -4,8 +4,8 @@ use cupertino_ui_platform::{
     ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
     Configure, ConfigureId, CursorShape, DragRequest, DragToken, DropAction, DropAnswer, DropEvent,
     DropToken, MenuDescription, Mods, PlatformError, PlatformEvent, PointerEvent, PopupSpec,
-    PresentOutcome, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowStates,
-    WindowSystem, WmCapabilities,
+    PresentOutcome, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
+    WindowStates, WindowSystem, WmCapabilities,
 };
 use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -183,6 +183,8 @@ pub struct HeadlessWindowSystem {
     keep_pixels: bool,
     /// Whether a window can be shown as one colour without a frame.
     solid_colors: bool,
+    /// Whether an input event a popup grab can answer has come: a button, a touch, a key or the keyboard.
+    input: bool,
     pub(crate) dispatch_one: bool,
     woken: Arc<Woken>,
 }
@@ -209,6 +211,7 @@ impl HeadlessWindowSystem {
             accepting_frames: true,
             keep_pixels: true,
             solid_colors: true,
+            input: true,
             dispatch_one: false,
             woken: Arc::default(),
         }
@@ -287,6 +290,15 @@ impl HeadlessWindowSystem {
             if let WindowEvent::Focus(focused) = event {
                 w.keyboard = *focused;
             }
+            if matches!(
+                event,
+                WindowEvent::Pointer(PointerEvent::Button { .. }, _)
+                    | WindowEvent::Touch(TouchEvent::Down { .. } | TouchEvent::Up { .. }, _)
+                    | WindowEvent::Key(..)
+                    | WindowEvent::Focus(true)
+            ) {
+                self.input = true;
+            }
         }
         self.queue.push_back(event);
         Ok(())
@@ -298,6 +310,12 @@ impl HeadlessWindowSystem {
         event: WindowEvent,
     ) -> Result<(), PlatformError> {
         self.enqueue(PlatformEvent::Window { window, event })
+    }
+
+    /// Starts over with no input event, as a Wayland client before its first: a popup grab is refused, as the client
+    /// refuses it without a serial, until a button, a touch, a key or the keyboard comes to a window.
+    pub fn set_no_input_yet(&mut self) {
+        self.input = false;
     }
 
     /// Makes `window` a surface whose role's configure has no activated state, such as a desktop shell's layer
@@ -611,12 +629,27 @@ impl WindowSystem for HeadlessWindowSystem {
         Ok(self.open(spec.clone(), None))
     }
 
+    fn can_grab(&self) -> bool {
+        self.input
+    }
+
     fn create_popup(
         &mut self,
         parent: WindowId,
         spec: &PopupSpec,
     ) -> Result<WindowId, PlatformError> {
-        self.window(parent)?;
+        let opener = self.window(parent)?;
+        if spec.grab && !self.input {
+            return Err(PlatformError::Protocol(
+                "a popup grab needs a user input event first".into(),
+            ));
+        }
+        // the protocol ends a client whose grabbing popup opens from a popup without a grab
+        if spec.grab && opener.placement.as_ref().is_some_and(|p| !p.grab) {
+            return Err(PlatformError::Protocol(
+                "a grabbing popup of a popup without a grab".into(),
+            ));
+        }
         let window = WindowSpec {
             title: String::new(),
             app_id: self.window(parent)?.spec.app_id.clone(),

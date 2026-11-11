@@ -69,8 +69,9 @@ pub struct RuntimeOptions {
     pub renderers: RendererFactory,
     pub accessibility: Option<Box<dyn AccessibilityAdapter>>,
     pub clock: Arc<dyn Clock>,
-    /// Hears about a window that could not be laid out, rendered or presented. The window keeps running and draws
-    /// whole again after its next configure; the application does not end.
+    /// Hears about a window that could not be laid out, rendered or presented, and about a popup the window system would
+    /// not open (against its parent). The window keeps running and draws whole again after its next configure; the
+    /// popup stays closed; the application does not end.
     pub on_window_error: Option<WindowErrorHandler>,
 }
 
@@ -240,6 +241,8 @@ struct PopupState<M> {
     on_dismiss: M,
     /// Where the popup was last placed, so it moves only when its anchor or size changes.
     placed: PopupSpec,
+    /// Wanted a grab and opened without one ([`WindowSystem::can_grab`]): the runtime closes it as the grab would have.
+    ungrabbed: bool,
 }
 
 /// The touch held down first ([`Runtime`]'s `touch`).
@@ -303,6 +306,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
         cupertino_semantics::ActionCall,
         cupertino_semantics::Outcome,
     )>,
+    /// Popups the window system refused, kept closed until the view stops declaring them.
+    refused_popups: Vec<WindowKey>,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -347,6 +352,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             timers: BTreeMap::new(),
             next_timer: 0,
             semantic_finishing: Vec::new(),
+            refused_popups: Vec::new(),
         };
         for command in commands {
             runtime.command(command);
@@ -713,6 +719,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.repaint();
             self.windows.push(w);
         }
+        // a refused popup no longer declared may be asked for again
+        self.refused_popups
+            .retain(|key| popups.iter().any(|w| &w.key == key));
         // each popup after its parent, which may be a popup declared later; one without an open parent stays closed
         while let Some(i) = popups.iter().position(|w| {
             w.popup
@@ -730,6 +739,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 menus: _,
             } = popups.remove(i);
             let popup = popup.expect("partitioned as a popup");
+            if self.refused_popups.contains(&key) {
+                continue;
+            }
             if let Some(mut w) = self.popup(key, spec, popup, content, &mut old)? {
                 w.shortcuts = shortcuts;
                 w.on_close = on_close;
@@ -899,7 +911,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.root = Some(root);
             return Ok(Some(w));
         }
-        let Some(placed) = place(&self.tree, parent, &popup.anchor, popup.grab, size) else {
+        let grab = self.popup_grabs(popup.grab, parent);
+        let Some(placed) = place(&self.tree, parent, &popup.anchor, grab, size) else {
             // a parent laid out without the anchor waits for the next view; retrying at once would never settle
             if parent.geometry.is_empty() && !self.awaiting_layout.contains(&popup.parent) {
                 self.awaiting_layout.push(popup.parent);
@@ -910,8 +923,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let id = match self.system.create_popup(parent.id, &placed) {
             Ok(id) => id,
             Err(e) => {
+                let parent = parent.id;
                 self.tree.unmount(root);
-                return Err(UiError::Platform(e));
+                self.popup_refused(key, parent, popup.on_dismiss, e)?;
+                return Ok(None);
             }
         };
         let mut w = self.new_window(key, id, spec);
@@ -926,6 +941,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             anchor: popup.anchor,
             size,
             on_dismiss: popup.on_dismiss,
+            ungrabbed: popup.grab && !placed.grab,
             placed,
         });
         w.root = Some(root);
@@ -981,6 +997,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
         };
         let Some(i) = self.windows.iter().position(|w| w.id == window) else {
+            return Ok(());
+        };
+        let Some(i) = self.ungrabbed_input(i, &event) else {
             return Ok(());
         };
         match &event {
@@ -2683,6 +2702,7 @@ fn sync_menus<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>, menus: 
 
 mod drops;
 mod semantics;
+mod ungrabbed;
 
 #[cfg(test)]
 mod tests;

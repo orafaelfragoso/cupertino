@@ -379,6 +379,16 @@ pub(crate) struct FakeSystem {
     pub(crate) drops_finished: Vec<(DropToken, Option<DropAction>)>,
     /// Opens popups; without it every popup is refused.
     pub(crate) popups: bool,
+    /// Has had no input event yet: a popup grab is refused, as a Wayland client without a serial refuses it.
+    pub(crate) no_input: bool,
+    /// Publishes every window's semantics, as while desktop control watches them.
+    pub(crate) semantics: bool,
+    /// The latest semantics published of each window.
+    pub(crate) published: Vec<(WindowId, cupertino_semantics::Snapshot)>,
+    /// The actions desktop control asks for, handed to the runtime at its next turn.
+    pub(crate) semantic_calls: Vec<(WindowId, cupertino_semantics::ActionCall)>,
+    /// How each action asked for ended, in order.
+    pub(crate) semantic_outcomes: Vec<(WindowId, u64, cupertino_semantics::Outcome)>,
     /// Every popup opened: its id, its parent and where it was placed.
     pub(crate) popups_created: Vec<(WindowId, WindowId, PopupSpec)>,
     /// Shows raised layers ([`WindowSystem::present_layer`]).
@@ -431,6 +441,33 @@ impl WindowSystem for FakeSystem {
         }
     }
 
+    fn can_grab(&self) -> bool {
+        !self.no_input
+    }
+
+    fn semantics_active(&self, _: WindowId) -> bool {
+        self.semantics
+    }
+
+    fn publish_semantics(&mut self, window: WindowId, snapshot: &cupertino_semantics::Snapshot) {
+        self.published.retain(|(w, _)| *w != window);
+        self.published.push((window, snapshot.clone()));
+    }
+
+    fn semantic_requests(&mut self) -> Vec<(WindowId, cupertino_semantics::ActionCall)> {
+        std::mem::take(&mut self.semantic_calls)
+    }
+
+    fn semantic_finished(
+        &mut self,
+        window: WindowId,
+        call: &cupertino_semantics::ActionCall,
+        outcome: cupertino_semantics::Outcome,
+        _: u64,
+    ) {
+        self.semantic_outcomes.push((window, call.id, outcome));
+    }
+
     fn create_window(&mut self, spec: &WindowSpec) -> Result<WindowId, PlatformError> {
         let id = self.next_id();
         self.created.push((id, spec.clone()));
@@ -445,6 +482,20 @@ impl WindowSystem for FakeSystem {
         if !self.popups {
             return Err(PlatformError::Unsupported);
         }
+        if spec.grab && self.no_input {
+            return Err(PlatformError::Protocol(
+                "a popup grab needs a user input event first".into(),
+            ));
+        }
+        // the protocol ends a client whose grabbing popup opens from a popup without a grab
+        let ungrabbed_parent = self
+            .popups_created
+            .iter()
+            .any(|(id, _, placed)| *id == parent && !placed.grab);
+        assert!(
+            !(spec.grab && ungrabbed_parent),
+            "a grabbing popup opened from popup {parent:?}, which holds no grab"
+        );
         let id = self.next_id();
         self.popups_created.push((id, parent, spec.clone()));
         Ok(id)

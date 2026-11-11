@@ -29,8 +29,8 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    Capabilities, KeyEvent, Keysym, MaterialRegion, Mods, MouseButton, PointerEvent, Timestamp,
-    WindowEvent, WindowId, WindowRequest, WindowStates,
+    semantics, Capabilities, KeyEvent, Keysym, MaterialRegion, Mods, MouseButton, PointerEvent,
+    Timestamp, WindowEvent, WindowId, WindowRequest, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer, ImageResource, PixelFormat};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
@@ -880,6 +880,196 @@ fn a_press_on_the_bar_closes_a_menu_shown_without_a_grab_and_launches_nothing() 
     // the next click is the bar's again
     run.click(bar, editor);
     assert_eq!(run.record.borrow().spawned.len(), 1);
+}
+
+/// The dock watched by desktop control, before anything gave it an input event.
+fn controlled() -> Run {
+    watched(Run::start())
+}
+
+/// `run` watched by desktop control, before anything gave it an input event.
+fn watched(mut run: Run) -> Run {
+    let system = run.driver.window_system_mut();
+    system.set_no_input_yet();
+    system.observe_semantics();
+    run.settle();
+    run
+}
+
+/// Desktop control asks for `action` on the node of `window` with `role` named `name`, with a grab serial when `grab`
+/// (a compositor that hands one out) or without (an older one); how the action ended.
+fn perform(
+    run: &mut Run,
+    window: WindowId,
+    (role, name): (&str, &str),
+    action: semantics::Action,
+    grab: bool,
+) -> Option<semantics::Outcome> {
+    let system = run.driver.window_system_mut();
+    let node = system
+        .published(window)
+        .and_then(|s| {
+            s.nodes
+                .iter()
+                .find(|n| n.role == role && n.name.as_deref() == Some(name))
+        })
+        .unwrap_or_else(|| panic!("no {role} named {name} published"))
+        .id;
+    let call = system.perform(window, node, action, None, grab);
+    run.settle();
+    run.driver.window_system_mut().outcome(call)
+}
+
+/// Desktop control shows the terminal tile's menu, the action coming with a grab serial.
+fn show_menu_grabbing(run: &mut Run, bar: WindowId) -> WindowId {
+    let outcome = perform(
+        run,
+        bar,
+        ("button", "Terminal"),
+        semantics::Action::ShowMenu,
+        true,
+    );
+    assert_eq!(outcome, Some(semantics::Outcome::Applied));
+    let menu = open_menu(run, bar).expect("the menu opened");
+    let system = run.driver.window_system_mut();
+    assert_eq!(system.placement(menu).unwrap().map(|p| p.grab), Some(true));
+    assert!(
+        system.grabbed_by_action(menu),
+        "it grabbed with the action's serial"
+    );
+    menu
+}
+
+#[test]
+fn a_menu_desktop_control_shows_before_any_input_grabs_and_escape_closes_it() {
+    let mut run = controlled();
+    let bar = run.bar();
+    let menu = show_menu_grabbing(&mut run, bar);
+    // the grab gives the menu the keyboard: the arrows walk its items and Escape closes it
+    run.send_to(menu, WindowEvent::Focus(true));
+    run.key(menu, DOWN);
+    let first = run.focused(menu).expect("an item has the focus");
+    run.key(menu, DOWN);
+    let second = run.focused(menu).expect("an item has the focus");
+    assert_ne!(first, second, "the arrows move through the items");
+    run.key(menu, ESCAPE);
+    assert_eq!(open_menu(&run, bar), None, "Escape closes it");
+    assert!(run.record.borrow().spawned.is_empty());
+}
+
+#[test]
+fn a_menu_desktop_control_shows_closes_when_the_compositor_ends_its_grab_and_an_item_still_acts() {
+    let mut run = controlled();
+    let bar = run.bar();
+    // a press anywhere outside it, in another application too: the compositor dismisses the grabbing menu
+    let menu = show_menu_grabbing(&mut run, bar);
+    run.send_to(menu, WindowEvent::PopupDone);
+    assert_eq!(open_menu(&run, bar), None);
+    // shown again, its item acts through desktop control as through a click
+    let menu = show_menu_grabbing(&mut run, bar);
+    let outcome = perform(
+        &mut run,
+        menu,
+        ("menu-item", "Quit"),
+        semantics::Action::Click,
+        true,
+    );
+    assert_eq!(outcome, Some(semantics::Outcome::Applied));
+    assert!(
+        run.requests()
+            .contains(&(1, Request::App(TERMINAL.to_owned(), kit::AppAction::Quit))),
+        "{:?}",
+        run.requests()
+    );
+    assert_eq!(open_menu(&run, bar), None);
+}
+
+/// From a compositor that hands out no grab serial, a menu shown before any input still opens without a grab.
+#[test]
+fn without_a_grab_serial_a_menu_desktop_control_shows_before_any_input_opens_without_a_grab() {
+    let mut run = controlled();
+    let bar = run.bar();
+    let outcome = perform(
+        &mut run,
+        bar,
+        ("button", "Terminal"),
+        semantics::Action::ShowMenu,
+        false,
+    );
+    assert_eq!(outcome, Some(semantics::Outcome::Applied));
+    let menu = open_menu(&run, bar).expect("the menu opened");
+    let system = run.driver.window_system_mut();
+    assert_eq!(system.placement(menu).unwrap().map(|p| p.grab), Some(false));
+    assert!(!system.grabbed_by_action(menu));
+}
+
+/// The downloads stack of two files, its folder listed only once [`end_listings`] says so, watched by desktop control
+/// before anything gave it an input event.
+fn controlled_stack() -> Run {
+    let run = watched(stack_run(2));
+    run.record.borrow_mut().hold_listings = true;
+    run
+}
+
+/// Every folder listing still running ends.
+fn end_listings(run: &mut Run) {
+    let listings = std::mem::take(&mut run.record.borrow_mut().listings);
+    for listed in listings {
+        let _ = listed.send_blocking(());
+    }
+    run.settle();
+    run.advance(0.5);
+}
+
+/// A click desktop control sends to the downloads tile opens the stack once its folder is listed, after the click was
+/// answered: the stack still grabs with the click's serial, so Escape and a press elsewhere close it.
+#[test]
+fn the_stack_a_desktop_control_click_opens_grabs_once_its_folder_is_listed() {
+    let mut run = controlled_stack();
+    let bar = run.bar();
+    let tile = ("button", "Downloads");
+    let outcome = perform(&mut run, bar, tile, semantics::Action::Click, true);
+    assert_eq!(outcome, Some(semantics::Outcome::Applied));
+    assert!(stack_window(&run).is_none(), "the folder is still listed");
+    end_listings(&mut run);
+    let stack = stack_window(&run).expect("the stack opened");
+    let system = run.driver.window_system_mut();
+    assert_eq!(system.placement(stack).unwrap().map(|p| p.grab), Some(true));
+    assert!(system.grabbed_by_action(stack));
+    run.send_to(stack, WindowEvent::Focus(true));
+    run.key(stack, ESCAPE);
+    run.settle();
+    assert!(stack_window(&run).is_none(), "Escape closes it");
+
+    // shown again: a press elsewhere, which the compositor answers by dismissing it, closes it too
+    perform(&mut run, bar, tile, semantics::Action::Click, true);
+    end_listings(&mut run);
+    let stack = stack_window(&run).expect("the stack opened again");
+    assert!(run.driver.window_system_mut().grabbed_by_action(stack));
+    run.send_to(stack, WindowEvent::PopupDone);
+    run.settle();
+    assert!(stack_window(&run).is_none());
+}
+
+/// A stack listed once the moment after the answer passed has no action serial left: the grab it would take is the
+/// input's, and before any input there is none, so it opens without one.
+#[test]
+fn a_stack_listed_after_the_answer_s_moment_passed_opens_without_the_action_s_grab() {
+    let mut run = controlled_stack();
+    let bar = run.bar();
+    let tile = ("button", "Downloads");
+    perform(&mut run, bar, tile, semantics::Action::Click, true);
+    run.driver
+        .window_system_mut()
+        .expire_answered_action_grabs();
+    end_listings(&mut run);
+    let stack = stack_window(&run).expect("the stack opened");
+    let system = run.driver.window_system_mut();
+    assert!(!system.grabbed_by_action(stack));
+    assert_eq!(
+        system.placement(stack).unwrap().map(|p| p.grab),
+        Some(false)
+    );
 }
 
 #[test]

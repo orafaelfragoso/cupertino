@@ -22,8 +22,8 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::Point;
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent,
-    WindowId, WindowStates,
+    semantics, Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp,
+    WindowEvent, WindowId, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
@@ -1738,6 +1738,80 @@ fn the_view_options_open_in_a_popup_below_their_button() {
     let second = run.rect_in(menu, 1u64);
     assert!(first.y() > 0.0, "{first:?}");
     assert!(second.max_y() < spec.size.height, "{second:?} in {spec:?}");
+}
+
+/// The browser watched by desktop control, before anything gave the launcher an input event.
+fn controlled_browser() -> Run {
+    let mut run = Run::new();
+    run.deliver(Message::Browse);
+    let system = run.driver.window_system_mut();
+    system.set_no_input_yet();
+    system.observe_semantics();
+    run.settle();
+    run
+}
+
+/// Desktop control shows the view options, with a grab serial when `grab` (a compositor that hands one out) or
+/// without (an older one); the menu, which grabs with the serial when it came.
+fn show_options(run: &mut Run, grab: bool) -> WindowId {
+    let panel = run.panel();
+    let system = run.driver.window_system_mut();
+    let node = system
+        .published(panel)
+        .and_then(|s| {
+            s.nodes
+                .iter()
+                .find(|n| n.name.as_deref() == Some(browse::VIEW_OPTIONS))
+        })
+        .expect("the view options button is published")
+        .id;
+    let call = system.perform(panel, node, semantics::Action::ShowMenu, None, grab);
+    run.settle();
+    let system = run.driver.window_system_mut();
+    assert_eq!(system.outcome(call), Some(semantics::Outcome::Applied));
+    let menu = run.options_menu().expect("the view options opened");
+    let system = run.driver.window_system_mut();
+    let spec = system.placement(menu).unwrap().expect("placed");
+    assert_eq!(spec.grab, grab);
+    assert_eq!(system.grabbed_by_action(menu), grab);
+    menu
+}
+
+/// The view options desktop control shows before any input grab with the action's serial: the keyboard walks
+/// them and Escape closes them, and a press elsewhere, which the compositor answers by ending the grab, does too.
+#[test]
+fn the_view_options_desktop_control_shows_grab_and_close_on_escape_or_a_press_elsewhere() {
+    let mut run = controlled_browser();
+    let menu = show_options(&mut run, true);
+    run.send(menu, WindowEvent::Focus(true));
+    run.menu_key("Down", DOWN_CODE, DOWN);
+    run.menu_key("Down", DOWN_CODE, DOWN);
+    run.menu_key("Return", RETURN_CODE, RETURN);
+    assert!(run.options_menu().is_none(), "Return chose");
+    assert_eq!(
+        run.model().browser.as_ref().unwrap().arrangement(),
+        Arrangement::List
+    );
+
+    let menu = show_options(&mut run, true);
+    run.send(menu, WindowEvent::Focus(true));
+    run.menu_key("Escape", ESCAPE_CODE, ESCAPE);
+    assert!(run.options_menu().is_none(), "Escape closed it");
+
+    let menu = show_options(&mut run, true);
+    run.send(menu, WindowEvent::PopupDone);
+    assert!(
+        run.options_menu().is_none(),
+        "the end of the grab closed it"
+    );
+}
+
+/// From a compositor that hands out no grab serial, the view options desktop control shows before any input open
+/// without a grab, as before.
+#[test]
+fn without_a_grab_serial_the_view_options_desktop_control_shows_open_without_a_grab() {
+    let mut run = controlled_browser();
+    show_options(&mut run, false);
 }
 
 /// On layer surfaces the keyboard leaves the panel for the menu's popup when it opens, and comes back when it

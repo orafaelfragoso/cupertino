@@ -14,7 +14,8 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    Capabilities, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId, WindowStates,
+    semantics, Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp,
+    WindowEvent, WindowId, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
@@ -34,6 +35,12 @@ const BAR: BarId = BarId(1);
 const OUTPUT: Rect = Rect::new(0.0, 0.0, 1024.0, 600.0);
 const FILE: i32 = 1;
 const NEW_FOLDER: i32 = 11;
+const EDIT: i32 = 2;
+const FIND: i32 = 21;
+/// Key codes the bar reads as menu keys.
+const ESCAPE: u32 = 1;
+const DOWN: u32 = 108;
+const RIGHT: u32 = 106;
 
 fn theme() -> Theme {
     Theme::from_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme")).unwrap()
@@ -66,7 +73,14 @@ fn content() -> BarContent {
                     MenuItem::new(14, "Show Hidden").with_toggle(Toggle::Check(true)),
                 ],
             ),
-            MenuItem::submenu(2, "Edit", vec![MenuItem::new(20, "Undo")]),
+            MenuItem::submenu(
+                EDIT,
+                "Edit",
+                vec![
+                    MenuItem::new(20, "Undo"),
+                    MenuItem::submenu(FIND, "Find", vec![MenuItem::new(22, "Find Next")]),
+                ],
+            ),
         ],
         status: vec![],
         clock: "Tue 10:42".into(),
@@ -129,10 +143,24 @@ impl Application for Bar {
     }
 
     fn update(model: &mut Model, input: Input) -> Vec<Command<Input>> {
-        let Input::Pointer { pointer, .. } = input else {
-            return Vec::new();
-        };
         let c = &mut model.controller;
+        let pointer = match input {
+            Input::Pointer { pointer, .. } => pointer,
+            // keys and the end of the grab reach the controller as they do in the menu bar
+            Input::Key { key, .. } if key.pressed => {
+                if let Some(key) = cupertino_menubar::routing::menu_key(key.code) {
+                    let outcome = c.key(key, 0.0);
+                    model.effects.extend(outcome.effects);
+                }
+                return Vec::new();
+            }
+            Input::Dismissed(_) => {
+                let outcome = c.close();
+                model.effects.extend(outcome.effects);
+                return Vec::new();
+            }
+            Input::Key { .. } | Input::Closed(_) => return Vec::new(),
+        };
         let outcome = match pointer {
             BarPointer::Move(p) => c.pointer_move(p, 0.0),
             BarPointer::Press(p) => c.pointer_press(p, 0.0),
@@ -332,6 +360,68 @@ impl Run {
         self.driver
             .ask(reader, target, cupertino_kit::core::Action::Click, None);
         self.settle();
+    }
+
+    /// A bar watched by desktop control, before anything gave it an input event.
+    fn controlled() -> Self {
+        let mut run = Self::start();
+        let system = run.driver.window_system_mut();
+        system.set_no_input_yet();
+        system.observe_semantics();
+        run.settle();
+        run
+    }
+
+    /// Desktop control clicks what window `key` publishes as `name`, with a grab serial when `grab` (a compositor that
+    /// hands one out) or without (an older one); how the click ended.
+    fn perform_click(&mut self, key: &str, name: &str, grab: bool) -> Option<semantics::Outcome> {
+        let window = self
+            .window(key)
+            .unwrap_or_else(|| panic!("no window {key}"));
+        let system = self.driver.window_system_mut();
+        let node = system
+            .published(window)
+            .and_then(|s| s.nodes.iter().find(|n| n.name.as_deref() == Some(name)))
+            .unwrap_or_else(|| panic!("{key} publishes nothing named {name}"))
+            .id;
+        let call = system.perform(window, node, semantics::Action::Click, None, grab);
+        self.settle();
+        self.driver.window_system_mut().outcome(call)
+    }
+
+    /// Whether window `key` is a popup that grabs, and whether it grabbed with an action's serial.
+    fn grabs(&mut self, key: &str) -> (bool, bool) {
+        let window = self
+            .window(key)
+            .unwrap_or_else(|| panic!("no window {key}"));
+        let system = self.driver.window_system_mut();
+        let grab = system.placement(window).unwrap().is_some_and(|p| p.grab);
+        (grab, system.grabbed_by_action(window))
+    }
+
+    /// Presses and releases the key with `code` in window `key`.
+    fn key(&mut self, key: &str, code: u32) {
+        let window = self
+            .window(key)
+            .unwrap_or_else(|| panic!("no window {key}"));
+        for pressed in [true, false] {
+            let event = KeyEvent {
+                code,
+                keysym: Keysym(0),
+                text: None,
+                pressed,
+                repeat: false,
+                mods: Mods::NONE,
+            };
+            let system = self.driver.window_system_mut();
+            if !system.windows().contains(&window) {
+                break;
+            }
+            system
+                .enqueue_window(window, WindowEvent::Key(event, Timestamp(0)))
+                .unwrap();
+            self.settle();
+        }
     }
 
     fn open_file(&mut self) {
@@ -778,4 +868,66 @@ fn the_item_of_an_open_panel_is_highlighted_and_expanded() {
         (true, false),
         "only the clock changes"
     );
+}
+
+/// A menu desktop control opens before any input grabs with the click's serial: the keyboard walks it and opens its
+/// submenu, which grabs as part of the same chain, and Escape closes one level at a time.
+#[test]
+fn a_menu_desktop_control_opens_grabs_and_the_keyboard_walks_it_into_its_submenu() {
+    let mut run = Run::controlled();
+    let outcome = run.perform_click("bar-1", "Edit", true);
+    assert_eq!(outcome, Some(semantics::Outcome::Applied));
+    assert!(run.model().controller.is_open(), "Edit opens");
+    assert_eq!(run.grabs("menu-1-0"), (true, true));
+    let menu = run.window("menu-1-0").unwrap();
+    run.driver
+        .window_system_mut()
+        .enqueue_window(menu, WindowEvent::Focus(true))
+        .unwrap();
+    run.settle();
+    run.key("menu-1-0", DOWN);
+    run.key("menu-1-0", DOWN);
+    let edit = &run.model().controller.levels()[0];
+    assert_eq!(
+        edit.selected,
+        edit.layout.index_of(ItemId(FIND)),
+        "the arrows reach Find"
+    );
+    run.key("menu-1-0", RIGHT);
+    assert!(run.grabs("menu-1-1").0, "the submenu grabs too");
+    run.key("menu-1-1", ESCAPE);
+    assert_eq!(run.window("menu-1-1"), None, "Escape closes the submenu");
+    assert!(run.window("menu-1-0").is_some());
+    run.key("menu-1-0", ESCAPE);
+    assert_eq!(run.window("menu-1-0"), None, "and then the menu");
+}
+
+/// A submenu desktop control opens from a menu it opened grabs with its own click's serial; when the compositor ends
+/// the grab, after a press in another application, every level closes.
+#[test]
+fn a_submenu_desktop_control_opens_grabs_and_the_end_of_the_grab_closes_every_level() {
+    let mut run = Run::controlled();
+    run.perform_click("bar-1", "Edit", true);
+    let outcome = run.perform_click("menu-1-0", "Find", true);
+    assert_eq!(outcome, Some(semantics::Outcome::Applied));
+    assert_eq!(run.grabs("menu-1-1"), (true, true));
+    let submenu = run.window("menu-1-1").unwrap();
+    run.driver
+        .window_system_mut()
+        .enqueue_window(submenu, WindowEvent::PopupDone)
+        .unwrap();
+    run.settle();
+    assert!(!run.model().controller.is_open());
+    assert_eq!(run.window("menu-1-0"), None);
+    assert_eq!(run.window("menu-1-1"), None);
+}
+
+/// From a compositor that hands out no grab serial, a menu desktop control opens before any input opens without a
+/// grab, as before.
+#[test]
+fn without_a_grab_serial_a_menu_desktop_control_opens_opens_without_a_grab() {
+    let mut run = Run::controlled();
+    run.perform_click("bar-1", "File", false);
+    assert!(run.model().controller.is_open());
+    assert_eq!(run.grabs("menu-1-0"), (false, false));
 }

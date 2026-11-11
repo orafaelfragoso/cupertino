@@ -3,6 +3,7 @@
 //! session bus.
 
 use crate::{Arg, Args, Command, Context, Failure, FailureKind, Group, Reply, Run, Stability};
+use cupertino_diagnostics::dev_builds::older_than_installed;
 use serde::Serialize;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -39,6 +40,13 @@ const COMMANDS: &[Command] = &[
                       pid), the program that runs and whether that is the development folder's. installed is the \
                       program of the configuration, and dev_program the file of the development folder the process \
                       starts when it is there (null when the folder does not apply to it).\n\n\
+                      dev_program_older_than_installed is true when that file is there and was last modified before \
+                      the installed program (a package's files keep their build time): the folder holds a build \
+                      older than the installed package, which it keeps replacing at every start. SOURCE then says \
+                      `development folder (older than installed)`, or `(older build in development folder)` after \
+                      another source; `cupertino shell use-installed NAME` goes back to the installed program. It is \
+                      false when either file is missing, its times cannot be read or are equal, or the installed \
+                      program is not an absolute path.\n\n\
                       Without a session bus the command fails with exit code 3 (no_session_bus), without a desktop \
                       server on it also with 3 (no_server), and with a server that has no such interface with exit code \
                       8 (not_supported). A caller the server refuses fails with exit code 4 (refused).",
@@ -126,6 +134,9 @@ struct Process {
     from_dev_folder: bool,
     installed: String,
     dev_program: Option<String>,
+    /// The development folder's file is there and was last modified before the installed program: it starts instead
+    /// of a newer installed program ([`older_than_installed`]).
+    dev_program_older_than_installed: bool,
 }
 
 impl From<Record> for Process {
@@ -141,17 +152,33 @@ impl From<Record> for Process {
             from_dev_folder: r.6,
             installed: r.7,
             dev_program: text(r.8),
+            dev_program_older_than_installed: false,
         }
     }
 }
 
 impl Process {
-    /// `development folder` or `installed`, while it runs.
-    fn source(&self) -> &'static str {
-        match (&self.program, self.from_dev_folder) {
+    /// Compares the development folder's file with the installed program, as this process sees both files.
+    fn compared(mut self) -> Self {
+        self.dev_program_older_than_installed = self
+            .dev_program
+            .as_deref()
+            .is_some_and(|dev| older_than_installed(Path::new(dev), Path::new(&self.installed)));
+        self
+    }
+
+    /// `development folder` or `installed` while it runs, else `-`; with a note when the development folder's file is
+    /// older than the installed program.
+    fn source(&self) -> String {
+        let source = match (&self.program, self.from_dev_folder) {
             (None, _) => "-",
             (Some(_), true) => "development folder",
             (Some(_), false) => "installed",
+        };
+        match (self.dev_program_older_than_installed, source) {
+            (false, _) => source.to_owned(),
+            (true, "development folder") => format!("{source} (older than installed)"),
+            (true, _) => format!("{source} (older build in development folder)"),
         }
     }
 
@@ -303,12 +330,15 @@ fn refusal(method: &str, e: zbus::Error) -> Failure {
 
 fn processes(cx: &Context) -> Result<Vec<Process>, Failure> {
     let records: Vec<Record> = call(cx, "ListShellProcesses", &())?;
-    Ok(records.into_iter().map(Process::from).collect())
+    Ok(records
+        .into_iter()
+        .map(|r| Process::from(r).compared())
+        .collect())
 }
 
 fn restart_process(cx: &Context, name: &str) -> Result<Process, Failure> {
     let record: Record = call(cx, "RestartShellProcess", &(name,))?;
-    Ok(Process::from(record))
+    Ok(Process::from(record).compared())
 }
 
 #[derive(Serialize)]
@@ -324,19 +354,24 @@ fn list(_: &Args, cx: &Context) -> Result<Reply, Failure> {
         .max()
         .unwrap_or(4)
         .max(4);
+    let sources: Vec<String> = processes.iter().map(Process::source).collect();
+    let source_width = sources
+        .iter()
+        .map(|s| s.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max("development folder".len());
     let mut human = format!(
-        "{:width$}  {:8}  {:>7}  {:18}  PROGRAM\n",
+        "{:width$}  {:8}  {:>7}  {:source_width$}  PROGRAM\n",
         "NAME", "STATE", "PID", "SOURCE"
     );
-    for p in &processes {
+    for (p, source) in processes.iter().zip(&sources) {
         let pid = p.pid.map_or_else(|| "-".to_owned(), |pid| pid.to_string());
         let program = p.program.as_deref().unwrap_or(&p.installed);
         let _ = writeln!(
             human,
-            "{:width$}  {:8}  {pid:>7}  {:18}  {program}",
-            p.name,
-            p.state,
-            p.source()
+            "{:width$}  {:8}  {pid:>7}  {source:source_width$}  {program}",
+            p.name, p.state,
         );
     }
     Ok(Reply::new(&Listed { processes }, human))
@@ -422,5 +457,39 @@ mod tests {
             (p.pid, p.started, p.program, p.dev_program),
             (None, None, None, None)
         );
+    }
+
+    #[test]
+    fn an_older_development_build_is_noted_after_the_source() {
+        let process = |program: &str, from_dev_folder: bool| {
+            let mut p = Process::from((
+                "osd".into(),
+                "running".into(),
+                7,
+                1,
+                1,
+                program.into(),
+                from_dev_folder,
+                "/usr/bin/cupertino-osd".into(),
+                "/dev-folder/cupertino-osd".into(),
+            ));
+            p.dev_program_older_than_installed = true;
+            p
+        };
+        assert_eq!(
+            process("/dev-folder/cupertino-osd", true).source(),
+            "development folder (older than installed)"
+        );
+        assert_eq!(
+            process("/usr/bin/cupertino-osd", false).source(),
+            "installed (older build in development folder)"
+        );
+        assert_eq!(
+            process("", false).source(),
+            "- (older build in development folder)"
+        );
+        let mut current = process("/dev-folder/cupertino-osd", true);
+        current.dev_program_older_than_installed = false;
+        assert_eq!(current.source(), "development folder");
     }
 }

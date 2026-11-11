@@ -1145,6 +1145,7 @@ dependencies = [
 name = "cupertino-diagnostics"
 version = "0.1.0"
 dependencies = [
+ "cupertino-defaults",
  "cupertino-devices",
  "cupertino-diagnostic-events",
  "libc",

@@ -112,9 +112,12 @@ pid and program you are looking at.
 - **It fails:** roll back at once with `cupertino shell use-installed dock`. It removes the folder's file and restarts
   the component on its installed program.
 - **An installed package contains the change:** roll back the same way; from then on the package's program runs.
+  A build left behind keeps replacing newer packages: `cupertino shell list` marks it
+  `development folder (older than installed)` (`dev_program_older_than_installed` in JSON) once a package built
+  after it is installed, and `cupertino diagnose --area shell` warns with the command to run.
 
 After a package install, a change that lies only in a supervised process (any name `cupertino shell list` shows,
 including `portal`, `polkit-agent` and `desktop-control`, which never start from the folder) takes effect with
 `cupertino shell restart NAME`; no new login. Defer it while the process is in use (see
-[components.md](guides/components.md)). Only a change to the server, or to what it links, needs a new login, which
-the person decides on.
+[components.md](guides/components.md)). Only a change to the server (or what it links) or to the session manager
+needs a new login, which the person decides on.

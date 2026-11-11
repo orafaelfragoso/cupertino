@@ -4,11 +4,12 @@ use std::fs;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
+use cupertino_defaults::compositor::CompositorSettings;
 use cupertino_devices::preflight;
 
 use cupertino_diagnostic_events::Severity;
 
-use crate::{events, Area, Check, Scope, Sources, Status, Unit};
+use crate::{dev_builds, events, Area, Check, Scope, Sources, Status, Unit};
 
 /// The longest log line a check quotes.
 const QUOTE_LIMIT: usize = 300;
@@ -512,6 +513,107 @@ fn unit(
             format!("{name} is {state}: {without}"),
         ),
     }
+}
+
+/// The system configuration, the one file that may declare the development folder.
+const SYSTEM_CONFIG: &str = "/etc/cupertino/compositor.json";
+
+pub fn shell(sources: &Sources) -> Vec<Check> {
+    vec![dev_folder(sources)]
+}
+
+/// Whether a build in the development folder is older than the installed program it starts instead of, for each
+/// process of the system file's shell list that the folder applies to, as the server decides it: named in the folder's
+/// components, with only roles that may start from the folder.
+fn dev_folder(sources: &Sources) -> Check {
+    const ID: &str = "shell.dev_folder";
+    let Ok(text) = fs::read_to_string(sources.installed(SYSTEM_CONFIG)) else {
+        return Check::new(
+            ID,
+            Area::Shell,
+            Status::Skip,
+            format!("no system configuration ({SYSTEM_CONFIG})"),
+        );
+    };
+    let settings = CompositorSettings::parse(&text, None).0;
+    let Some(folder) = settings.dev_folder else {
+        return Check::new(
+            ID,
+            Area::Shell,
+            Status::Skip,
+            "no development folder is declared: every shell process starts its installed program",
+        );
+    };
+    let entries = settings.shell.unwrap_or_default();
+    let mut builds = Vec::new();
+    let mut older = Vec::new();
+    for name in &folder.components {
+        let Some(installed) = entries
+            .iter()
+            .find(|e| &e.name == name && e.may_start_from_dev_folder())
+            .map(|e| e.command[0].as_str())
+        else {
+            continue;
+        };
+        let Some(file_name) = Path::new(installed).file_name() else {
+            continue;
+        };
+        let build = Path::new(&folder.path).join(file_name);
+        let found = sources.installed(&folder.path).join(file_name);
+        if fs::symlink_metadata(&found).is_err() {
+            continue;
+        }
+        // a program the system file names by a relative path is found on the server's PATH: not compared
+        let is_older = Path::new(installed).is_absolute()
+            && dev_builds::older_than_installed(&found, &sources.installed(installed));
+        if is_older {
+            older.push((name.as_str(), build, installed));
+        } else {
+            builds.push((name.as_str(), build));
+        }
+    }
+    let mut check = if older.is_empty() {
+        Check::new(
+            ID,
+            Area::Shell,
+            Status::Ok,
+            if builds.is_empty() {
+                "the development folder holds no build".to_owned()
+            } else {
+                "no build in the development folder is older than its installed program".to_owned()
+            },
+        )
+    } else {
+        let names: Vec<&str> = older.iter().map(|(name, ..)| *name).collect();
+        let commands: Vec<String> = names
+            .iter()
+            .map(|name| format!("`cupertino shell use-installed {name}`"))
+            .collect();
+        Check::new(
+            ID,
+            Area::Shell,
+            Status::Warn,
+            format!(
+                "the development folder's build of {} is older than the installed program and starts instead of it",
+                names.join(", ")
+            ),
+        )
+        .fix(format!(
+            "{} removes the older build and restarts the process on its installed program",
+            commands.join(", ")
+        ))
+    };
+    check = check.fact("folder", folder.path.clone());
+    for (name, build, installed) in &older {
+        check = check.fact(
+            "older",
+            format!("{name}: {} is older than {installed}", build.display()),
+        );
+    }
+    for (name, build) in &builds {
+        check = check.fact("build", format!("{name}: {}", build.display()));
+    }
+    check
 }
 
 pub fn crash(sources: &Sources) -> Vec<Check> {

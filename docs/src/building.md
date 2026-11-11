@@ -116,7 +116,10 @@ installed program and logs why. Its log names the program and the source of ever
 
 Only the user's own session runs the folder's files: the server checks them against the user it runs as, so another
 account's session, root's files aside, never starts them. The folder takes no part in package updates: a file left in
-it keeps starting instead of a newer installed program.
+it keeps starting instead of a newer installed program. `cupertino shell list` marks such a file
+`development folder (older than installed)` (`dev_program_older_than_installed` in JSON) when it was last modified
+before the installed program, whose package files keep their build time, and `cupertino diagnose` warns about it
+(`shell.dev_folder`) with the `use-installed` command to run.
 
 After a package install, a change that lies only in a supervised process (a name `cupertino shell list` shows, the
 built-in `portal`, `polkit-agent` and `desktop-control` included) takes effect with `cupertino shell restart NAME`,

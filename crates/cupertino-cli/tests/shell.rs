@@ -24,6 +24,8 @@ enum StandInError {
 /// The server's shell process interface, with a dock that may start from `dev` and a login process that may not.
 struct StandIn {
     dev: PathBuf,
+    /// Where the launcher's installed program is.
+    bin: PathBuf,
     /// The names restarted, and whether the dock's development file was there at each restart.
     restarts: Arc<Mutex<Vec<(String, bool)>>>,
 }
@@ -76,6 +78,17 @@ impl StandIn {
                 "/usr/bin/cupertino-osd".into(),
                 self.dev.join("cupertino-osd").display().to_string(),
             ),
+            (
+                "launcher".into(),
+                "running".into(),
+                44,
+                98_800,
+                1_794_398_405,
+                self.dev.join("cupertino-launcher").display().to_string(),
+                true,
+                self.bin.join("cupertino-launcher").display().to_string(),
+                self.dev.join("cupertino-launcher").display().to_string(),
+            ),
         ]
     }
 
@@ -98,6 +111,7 @@ struct Session {
     bus: PrivateBus,
     _connection: zbus::blocking::Connection,
     dev: tempfile::TempDir,
+    bin: tempfile::TempDir,
     restarts: Arc<Mutex<Vec<(String, bool)>>>,
 }
 
@@ -105,6 +119,7 @@ impl Session {
     fn start() -> Option<Session> {
         let bus = PrivateBus::start()?;
         let dev = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
         let restarts = Arc::new(Mutex::new(Vec::new()));
         let connection = zbus::blocking::connection::Builder::address(bus.address.as_str())
             .unwrap()
@@ -112,6 +127,7 @@ impl Session {
                 "/org/cupertino/Session1",
                 StandIn {
                     dev: dev.path().to_owned(),
+                    bin: bin.path().to_owned(),
                     restarts: Arc::clone(&restarts),
                 },
             )
@@ -124,6 +140,7 @@ impl Session {
             bus,
             _connection: connection,
             dev,
+            bin,
             restarts,
         })
     }
@@ -149,7 +166,7 @@ fn the_list_shows_each_process_with_its_program_and_where_it_comes_from() {
     let out = s.run(&["shell", "list"]);
     assert_eq!(out.code, 0, "{}", out.stderr);
     let lines: Vec<&str> = out.stdout.lines().collect();
-    assert_eq!(lines.len(), 4, "{}", out.stdout);
+    assert_eq!(lines.len(), 5, "{}", out.stdout);
     assert!(lines[0].starts_with("NAME"));
     assert!(
         lines[1].contains("dock")
@@ -170,7 +187,7 @@ fn the_list_shows_each_process_with_its_program_and_where_it_comes_from() {
 
     let v = envelope(&s.run(&["--format", "json", "shell", "list"]));
     let processes = v["data"]["processes"].as_array().unwrap();
-    assert_eq!(processes.len(), 3);
+    assert_eq!(processes.len(), 4);
     let dock = &processes[0];
     assert_eq!(dock["name"], "dock");
     assert_eq!(dock["pid"], 41);
@@ -178,6 +195,10 @@ fn the_list_shows_each_process_with_its_program_and_where_it_comes_from() {
     assert_eq!(dock["started"], 1_794_398_405u64);
     assert_eq!(dock["from_dev_folder"], true);
     assert_eq!(dock["installed"], "/usr/bin/cupertino-dock");
+    assert_eq!(
+        dock["dev_program_older_than_installed"], false,
+        "no development file"
+    );
     assert_eq!(processes[1]["dev_program"], serde_json::Value::Null);
     let osd = &processes[2];
     assert_eq!(
@@ -188,6 +209,90 @@ fn the_list_shows_each_process_with_its_program_and_where_it_comes_from() {
             &serde_json::Value::Null
         )
     );
+}
+
+/// A file at `path` modified `seconds` after a fixed time.
+fn file_at(path: &Path, seconds: u64) {
+    let f = std::fs::File::create(path).unwrap();
+    f.set_modified(
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_794_398_405 + seconds),
+    )
+    .unwrap();
+}
+
+/// The launcher's line of the table and its `dev_program_older_than_installed`.
+fn launcher(s: &Session) -> (String, serde_json::Value) {
+    let out = s.run(&["shell", "list"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let line = out
+        .stdout
+        .lines()
+        .find(|l| l.starts_with("launcher"))
+        .unwrap()
+        .to_owned();
+    let v = envelope(&s.run(&["--format", "json", "shell", "list"]));
+    let older = v["data"]["processes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "launcher")
+        .unwrap()["dev_program_older_than_installed"]
+        .clone();
+    (line, older)
+}
+
+#[test]
+fn a_development_build_older_than_the_installed_program_is_marked() {
+    let Some(s) = Session::start() else { return };
+    let dev = s.dev().join("cupertino-launcher");
+    let installed = s.bin.path().join("cupertino-launcher");
+
+    // neither file, then only one of them: nothing to compare
+    let (line, older) = launcher(&s);
+    assert_eq!(older, false);
+    assert!(!line.contains("(older"), "{line}");
+    file_at(&dev, 0);
+    assert_eq!(launcher(&s).1, false, "no installed program");
+    std::fs::remove_file(&dev).unwrap();
+    file_at(&installed, 60);
+    assert_eq!(launcher(&s).1, false, "no development file");
+
+    // a package built after the development file was copied
+    file_at(&dev, 0);
+    let (line, older) = launcher(&s);
+    assert_eq!(older, true);
+    assert!(
+        line.contains("development folder (older than installed)"),
+        "{line}"
+    );
+
+    // the same time, then a newer development file
+    file_at(&dev, 60);
+    assert_eq!(launcher(&s).1, false, "equal times");
+    file_at(&dev, 120);
+    let (line, older) = launcher(&s);
+    assert_eq!(older, false);
+    assert!(
+        line.contains("development folder") && !line.contains("(older"),
+        "{line}"
+    );
+}
+
+#[test]
+fn an_installed_program_whose_metadata_cannot_be_read_marks_nothing() {
+    let Some(s) = Session::start() else { return };
+    file_at(&s.dev().join("cupertino-launcher"), 0);
+    // the stand-in names bin/cupertino-launcher; a regular file in place of bin makes its metadata unreadable
+    let bin = s.bin.path().to_owned();
+    std::fs::remove_dir(&bin).unwrap();
+    file_at(&bin, 60);
+    assert!(std::fs::metadata(bin.join("cupertino-launcher"))
+        .is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound));
+    let (line, older) = launcher(&s);
+    assert_eq!(older, false);
+    assert!(!line.contains("(older"), "{line}");
+    std::fs::remove_file(&bin).unwrap();
+    std::fs::create_dir(&bin).unwrap();
 }
 
 #[test]

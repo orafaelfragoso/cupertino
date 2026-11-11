@@ -817,7 +817,7 @@ fn every_area_still_runs_with_the_events_area_last() {
     let names: Vec<&str> = Area::ALL.iter().map(|a| a.name()).collect();
     assert_eq!(
         names,
-        ["gpu", "session", "portals", "services", "crash", "logs", "events"]
+        ["gpu", "session", "portals", "services", "shell", "crash", "logs", "events"]
     );
     assert_eq!(Area::from_name("events"), Some(Area::Events));
 }

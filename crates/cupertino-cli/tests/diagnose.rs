@@ -178,6 +178,47 @@ fn an_unknown_area_is_invalid_usage() {
 }
 
 #[test]
+fn the_shell_area_warns_about_a_development_build_older_than_its_installed_program() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = |path: &str, seconds: u64| {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::UNIX_EPOCH
+                    + std::time::Duration::from_secs(1_794_398_405 + seconds),
+            )
+            .unwrap();
+    };
+    let s = sources(dir.path(), &[]);
+    std::fs::create_dir_all(dir.path().join("etc/cupertino")).unwrap();
+    std::fs::write(
+        dir.path().join("etc/cupertino/compositor.json"),
+        r#"{"shell": [{"name": "osd", "command": ["/usr/bin/cupertino-osd"]}],
+            "dev_folder": {"path": "/home/me/dev", "components": ["osd"]}}"#,
+    )
+    .unwrap();
+    file("usr/bin/cupertino-osd", 60);
+    file("home/me/dev/cupertino-osd", 0);
+    let out = diagnose(&s, &["--format", "json", "diagnose", "--area", "shell"]);
+    let check = &envelope(&out)["data"]["checks"][0];
+    assert_eq!(
+        (&check["id"], &check["area"], &check["status"]),
+        (&json!("shell.dev_folder"), &json!("shell"), &json!("warn")),
+        "{check}"
+    );
+    assert!(check["fix"]
+        .as_str()
+        .unwrap()
+        .contains("`cupertino shell use-installed osd`"));
+
+    file("home/me/dev/cupertino-osd", 120);
+    let out = diagnose(&s, &["--format", "json", "diagnose", "--area", "shell"]);
+    assert_eq!(envelope(&out)["data"]["checks"][0]["status"], "ok");
+}
+
+#[test]
 fn without_provided_sources_the_context_is_the_machine() {
     // an isolated context: no variables, so no session, and a root without installed files
     let dir = tempfile::tempdir().unwrap();

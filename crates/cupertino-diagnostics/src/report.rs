@@ -19,6 +19,9 @@ pub enum Area {
     Portals,
     /// The system and user services of the desktop.
     Services,
+    /// The programs of the shell processes: builds in the development folder that start instead of a newer installed
+    /// program.
+    Shell,
     /// How the last sessions ended, and the panic or fatal signal the server logged.
     Crash,
     /// Where the logs are.
@@ -28,11 +31,12 @@ pub enum Area {
 }
 
 impl Area {
-    pub const ALL: [Area; 7] = [
+    pub const ALL: [Area; 8] = [
         Area::Gpu,
         Area::Session,
         Area::Portals,
         Area::Services,
+        Area::Shell,
         Area::Crash,
         Area::Logs,
         Area::Events,
@@ -44,6 +48,7 @@ impl Area {
             Area::Session => "session",
             Area::Portals => "portals",
             Area::Services => "services",
+            Area::Shell => "shell",
             Area::Crash => "crash",
             Area::Logs => "logs",
             Area::Events => "events",

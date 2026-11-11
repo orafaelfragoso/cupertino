@@ -3,7 +3,7 @@ name = "cupertino-diagnostics"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Typed diagnostics of a Cupertino installation and session (GPU and driver, session, portals, services, the last crash, logs), as text or JSON"
+description = "Typed diagnostics of a Cupertino installation and session (GPU and driver, session, portals, services, development builds of the shell processes, the last crash, logs), as text or JSON"
 
 [package.metadata.cupertino]
 layer = "tools"
@@ -17,6 +17,7 @@ path = "src/bin/cupertino-diagnose.rs"
 
 [dependencies]
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
+cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-devices = { path = "../cupertino-devices" }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }

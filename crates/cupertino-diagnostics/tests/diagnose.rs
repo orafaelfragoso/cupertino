@@ -489,3 +489,112 @@ fn the_json_form_names_every_field() {
         })
     );
 }
+
+/// The packaged shell list's dock and lock screen, and a development folder for the dock, the menu bar and the lock
+/// screen (which may not start from it).
+const DEV_FOLDER_CONFIG: &str = r#"{
+  "shell": [
+    {"name": "dock", "command": ["/usr/bin/cupertino-dock"], "roles": ["session", "dock"]},
+    {"name": "menubar", "command": ["/usr/bin/cupertino-menubar"], "roles": ["session", "menu_bar"]},
+    {"name": "login", "command": ["/usr/bin/cupertino-login"], "roles": ["session", "session_lock"]}
+  ],
+  "dev_folder": {"path": "/home/me/dev", "components": ["dock", "menubar", "login"]}
+}"#;
+
+impl Fixture {
+    /// The file at `path` below the root, modified `seconds` after a fixed time.
+    fn file_at(&self, path: &str, seconds: u64) {
+        self.file(path, "program");
+        let path = self
+            .dir
+            .path()
+            .join("root")
+            .join(path.trim_start_matches('/'));
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::UNIX_EPOCH
+                    + std::time::Duration::from_secs(1_794_398_405 + seconds),
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn a_development_build_older_than_its_installed_program_warns_with_the_command_that_removes_it() {
+    let fixture = Fixture::new();
+    fixture.file("/etc/cupertino/compositor.json", DEV_FOLDER_CONFIG);
+    for program in ["dock", "menubar", "login"] {
+        fixture.file_at(&format!("/usr/bin/cupertino-{program}"), 60);
+    }
+    fixture.file_at("/home/me/dev/cupertino-dock", 0);
+    fixture.file_at("/home/me/dev/cupertino-menubar", 120);
+    // the lock screen never starts from the folder, so its file is not looked at
+    fixture.file_at("/home/me/dev/cupertino-login", 0);
+    let checks = fixture.run(Area::Shell);
+    let check = find(&checks, "shell.dev_folder");
+    assert_eq!(check.status, Status::Warn);
+    assert!(check.summary.contains("dock"), "{}", check.summary);
+    assert!(!check.summary.contains("menubar"), "{}", check.summary);
+    assert_eq!(fact(check, "folder"), "/home/me/dev");
+    assert_eq!(
+        fact(check, "older"),
+        "dock: /home/me/dev/cupertino-dock is older than /usr/bin/cupertino-dock"
+    );
+    assert_eq!(
+        fact(check, "build"),
+        "menubar: /home/me/dev/cupertino-menubar"
+    );
+    assert!(!check.facts.iter().any(|f| f.value.contains("login")));
+    assert!(
+        check
+            .fix
+            .as_deref()
+            .unwrap()
+            .starts_with("`cupertino shell use-installed dock` removes"),
+        "{:?}",
+        check.fix
+    );
+}
+
+#[test]
+fn development_builds_as_new_as_their_programs_or_without_one_are_ok() {
+    let fixture = Fixture::new();
+    fixture.file("/etc/cupertino/compositor.json", DEV_FOLDER_CONFIG);
+    let check = || find(&fixture.run(Area::Shell), "shell.dev_folder").clone();
+    assert_eq!(
+        (check().status, check().summary),
+        (
+            Status::Ok,
+            "the development folder holds no build".to_owned()
+        )
+    );
+
+    // a build without an installed program, and one of the same time as its program
+    fixture.file_at("/home/me/dev/cupertino-dock", 0);
+    fixture.file_at("/home/me/dev/cupertino-menubar", 60);
+    fixture.file_at("/usr/bin/cupertino-menubar", 60);
+    let ok = check();
+    assert_eq!(ok.status, Status::Ok, "{ok:?}");
+    assert_eq!(ok.fix, None);
+    assert_eq!(
+        ok.facts.iter().filter(|f| f.key == "build").count(),
+        2,
+        "{ok:?}"
+    );
+}
+
+#[test]
+fn without_a_declared_development_folder_the_shell_check_is_skipped() {
+    let fixture = Fixture::new();
+    let skip = |fixture: &Fixture| find(&fixture.run(Area::Shell), "shell.dev_folder").status;
+    assert_eq!(skip(&fixture), Status::Skip, "no system file");
+    fixture.file(
+        "/etc/cupertino/compositor.json",
+        r#"{"shell": [{"name": "dock", "command": ["/usr/bin/cupertino-dock"]}]}"#,
+    );
+    fixture.file_at("/usr/bin/cupertino-dock", 60);
+    assert_eq!(skip(&fixture), Status::Skip, "no dev_folder key");
+}

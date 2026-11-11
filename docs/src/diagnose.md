@@ -1,6 +1,6 @@
 # Checking a machine with cupertino-diagnose
 
-`cupertino-diagnose` checks this machine and the session it runs in for what Cupertino needs: the GPU and its driver, the session, the desktop portal, the services, how the last sessions ended, where the logs are, and the errors the desktop recorded in the last day. It changes nothing and opens no device. It reads sysfs, installed files, the session's logs, the [diagnostic events](#diagnostic-events) and the states of systemd units. It runs as your user, from the session or from a text console; the checks that need a session are skipped outside one.
+`cupertino-diagnose` checks this machine and the session it runs in for what Cupertino needs: the GPU and its driver, the session, the desktop portal, the services, the development folder's builds of the shell processes, how the last sessions ended, where the logs are, and the errors the desktop recorded in the last day. It changes nothing and opens no device. It reads sysfs, installed files, the session's logs, the [diagnostic events](#diagnostic-events) and the states of systemd units. It runs as your user, from the session or from a text console; the checks that need a session are skipped outside one.
 
 This page describes the checks as they are on `main` today. They run as `cupertino diagnose`, a command of [the cupertino command](cupertino-command.md), and as `cupertino-diagnose`, the program it replaces. `cupertino-diagnose` still works; in the text form it prints one line on standard error naming `cupertino diagnose`, and its `--json` output is unchanged. It will be removed in a later release. The same group reads the diagnostic events with `cupertino diagnose events` and writes a bug report file with `cupertino diagnose export`.
 
@@ -20,7 +20,7 @@ cupertino-diagnose --json                            # the program it replaces: 
 | Flag | Meaning |
 |---|---|
 | `--json` | Print the report as JSON. |
-| `--area AREA` | Run only this area. Repeat it for more. `AREA` is `gpu`, `session`, `portals`, `services`, `crash`, `logs` or `events`. With no `--area`, every area runs, in that order. |
+| `--area AREA` | Run only this area. Repeat it for more. `AREA` is `gpu`, `session`, `portals`, `services`, `shell`, `crash`, `logs` or `events`. With no `--area`, every area runs, in that order. |
 | `-h`, `--help` | Print the usage and exit 0. |
 
 ## Exit codes
@@ -66,7 +66,7 @@ warn  portals.conf        no cupertino-portals.conf: xdg-desktop-portal picks th
 |---|---|
 | `schema` | The version of the JSON form, 1 today. It changes when a field is removed or changes meaning. |
 | `checks[].id` | A stable dotted name such as `gpu.driver`. |
-| `checks[].area` | `gpu`, `session`, `portals`, `services`, `crash`, `logs` or `events`. A new area may be added within schema 1. |
+| `checks[].area` | `gpu`, `session`, `portals`, `services`, `shell`, `crash`, `logs` or `events`. A new area may be added within schema 1. |
 | `checks[].status` | `skip`, `ok`, `warn` or `fail`. |
 | `checks[].summary` | One line for a person. |
 | `checks[].facts` | A list of `key` and `value` pairs. Left out when empty. A key can repeat (`note`, `also`). |
@@ -88,6 +88,7 @@ warn  portals.conf        no cupertino-portals.conf: xdg-desktop-portal picks th
 | `portals.service` | `xdg-desktop-portal.service` (user) is active. Runs only in a session. |
 | `services.login`, `services.network`, `services.power`, `services.bluetooth` | The system units `cupertino-login`, `cupertino-netd`, `cupertino-powerd` and `cupertino-btd`. |
 | `services.session_target`, `services.pipewire` | The user units `cupertino-session.target` and `pipewire.service`. Run only in a session. |
+| `shell.dev_folder` | The builds in the development folder that `/etc/cupertino/compositor.json` declares (`dev_folder`), for each process of its shell list the folder applies to. `warn` when a build was last modified before the installed program it starts instead of: the installed package was built after the build was copied (its files keep their build time), and the older build replaces its program at every start. The fix names `cupertino shell use-installed NAME` for each. `ok` otherwise, `skip` without the file or the key. Facts: `folder`, one `older` per such build and one `build` per other build. It needs no session or running server. |
 | `crash.gpu_reset` | The GPU resets the server recorded in `session.log`. `warn` when there was one, `ok` when there was none. Facts: `resets`, `remade` (how many ended with a new renderer, as `N of M`), `last_time`, `last_gpu`, `last_reason` and `last_outcome`. The fix says how to investigate: give the JSON form and the `server.log` lines of that time to an AI assistant or the driver's bug tracker (see [A GPU reset](daily-use.md#a-gpu-reset)). |
 | `crash.last` | How the last session in `session.log` ended. `warn` when it was not a normal end or a stop by the session. Facts name how many ended badly, the last bad end, and the first panic or fatal-signal line of `server.log` and `server.log.1`. |
 | `logs.paths` | Where `session.log`, `server.log` and `server.log.1` are, with their sizes, and the journal command for the login unit. |

@@ -1,10 +1,12 @@
 //! Typed diagnostics of a Cupertino installation and the session it runs in: the GPU and its driver, the session, the
-//! desktop portal, the services, how the last sessions ended, where the logs are and the recent diagnostic events. Every
-//! check reads files, asks systemd for unit states and reads the journal; nothing is changed and no device is opened.
-//! [`run`] takes its inputs as [`Sources`], so the tests run it against a fixture tree. [`events`] reads the diagnostic
-//! events back.
+//! desktop portal, the services, the development folder's builds of the shell processes, how the last sessions ended,
+//! where the logs are and the recent diagnostic events. Every check reads files, asks systemd for unit states and reads
+//! the journal; nothing is changed and no device is opened. [`run`] takes its inputs as [`Sources`], so the tests run it
+//! against a fixture tree. [`events`] reads the diagnostic events back; [`dev_builds`] compares a development build
+//! with its installed program.
 
 mod checks;
+pub mod dev_builds;
 pub mod events;
 pub mod report;
 
@@ -141,6 +143,7 @@ pub fn run(sources: &Sources, areas: &[Area]) -> Report {
             Area::Session => checks::session(sources),
             Area::Portals => checks::portals(sources),
             Area::Services => checks::services(sources),
+            Area::Shell => checks::shell(sources),
             Area::Crash => checks::crash(sources),
             Area::Logs => checks::logs(sources),
             Area::Events => checks::events(sources),

@@ -41,6 +41,7 @@ const fn area_name(area: Area) -> &'static str {
         Area::Session => "session",
         Area::Portals => "portals",
         Area::Services => "services",
+        Area::Shell => "shell",
         Area::Crash => "crash",
         Area::Logs => "logs",
         Area::Events => "events",
@@ -49,10 +50,11 @@ const fn area_name(area: Area) -> &'static str {
 
 pub(crate) const COMMANDS: &[Command] = &[Command {
     path: &["diagnose"],
-    summary: "Checks the GPU and its driver, the session, the portals, the services, the last crash, the logs and \
-              the errors recorded in the last day, and reports each check's status and what to do about it",
+    summary: "Checks the GPU and its driver, the session, the portals, the services, the development folder's \
+              builds, the last crash, the logs and the errors recorded in the last day, and reports each check's \
+              status and what to do about it",
     description: "Runs the checks of the areas given with --area, or of every area, in the order gpu, session, \
-                  portals, services, crash, logs, events. Each check has a stable dotted id (gpu.driver), a status \
+                  portals, services, shell, crash, logs, events. Each check has a stable dotted id (gpu.driver), a status \
                   (skip, ok, warn or fail), a summary, the facts it found and, for warn and fail, a fix. Checks that need a \
                   session are skipped outside one.\n\n\
                   The command exits 0 once the checks ran, whatever they found; with --strict a check that fails \

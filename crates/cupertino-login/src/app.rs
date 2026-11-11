@@ -35,7 +35,8 @@ use cupertino_login::probe;
 use cupertino_login::restore::{self, Applications, SessionMark, Taken};
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Clock, Field, Input, Metrics, Screen, LOCKED_TITLE, LOCK_APP_ID,
+    self, Clock, ControlChoice, ControlRequest, Field, Input, Metrics, RequestingApp, Screen,
+    LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::{session, upower};
 use cupertino_modifiers::Profile;
@@ -103,13 +104,15 @@ struct Lock {
     confirmed: bool,
 }
 
-/// The controller consent and status panel.
+/// The controller consent panel.
 struct DesktopControlPanel {
     epoch: u64,
-    output: String,
-    capabilities: u32,
+    request: ControlRequest,
     phase: u32,
 }
+
+/// Device pixels of the app icon renditions the consent panel loads: its 64 pt icon at scales 1 and 2.
+const CONTROL_ICON_PX: [u32; 2] = [64, 128];
 
 /// The confirmation panel on screen.
 struct PanelState {
@@ -172,6 +175,8 @@ pub struct SessionApp {
     switch_pending: bool,
     panel: Option<PanelState>,
     desktop_control: Option<DesktopControlPanel>,
+    /// The app the next consent request of this epoch names (authority version 2).
+    control_app: Option<(u64, cupertino_shell_client::ConsentApp)>,
     control_wish: Rc<RefCell<roles::ControlWish>>,
     /// A confirmed log-out is running: the power button panel does not show over it.
     logging_out: bool,
@@ -406,6 +411,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             switch_pending: false,
             panel: None,
             desktop_control: None,
+            control_app: None,
             control_wish,
             logging_out: false,
             quitting: None,
@@ -690,9 +696,7 @@ impl Application for SessionApp {
             if let Some(control) = app.desktop_control.as_ref().filter(|c| c.phase == 1) {
                 windows.push(view::desktop_control(
                     WindowKey(Key::from("desktop-control")),
-                    &control.output,
-                    control.capabilities,
-                    control.phase,
+                    &control.request,
                     Message::Input,
                 ));
             }
@@ -831,21 +835,34 @@ impl SessionApp {
             Heard::DesktopControl(event) => {
                 use cupertino_shell_client::ControlEvent;
                 match event {
+                    ControlEvent::ConsentApp { epoch, app } => {
+                        self.control_app = Some((epoch, app))
+                    }
                     ControlEvent::ConsentRequested {
                         epoch,
                         capabilities,
                         output,
                         ..
                     } => {
+                        let app = self
+                            .control_app
+                            .take()
+                            .filter(|(e, _)| *e == epoch)
+                            .map(|(_, app)| requesting_app(app));
                         if self.lock.is_some() || self.panel.is_some() || self.logging_out {
-                            self.control_wish.borrow_mut().action = Some((epoch, false, false));
+                            // nobody can answer now: this request is refused, nothing is remembered
+                            self.control_wish.borrow_mut().action =
+                                Some((epoch, ControlChoice::Dismiss));
                         } else {
                             self.control_wish.borrow_mut().phase = 1;
                             self.control_wish.borrow_mut().output = output.clone();
                             self.desktop_control = Some(DesktopControlPanel {
                                 epoch,
-                                capabilities,
-                                output,
+                                request: ControlRequest {
+                                    output,
+                                    capabilities,
+                                    app,
+                                },
                                 phase: 1,
                             });
                         }
@@ -874,9 +891,9 @@ impl SessionApp {
     /// What the person did on the lock screen or a panel.
     fn input(&mut self, now: f64, input: Input) -> Result<()> {
         match input {
-            Input::DesktopControl { allow, stop } => {
+            Input::DesktopControl(choice) => {
                 if let Some(control) = &self.desktop_control {
-                    self.control_wish.borrow_mut().action = Some((control.epoch, allow, stop));
+                    self.control_wish.borrow_mut().action = Some((control.epoch, choice));
                 }
                 return Ok(());
             }
@@ -1358,5 +1375,37 @@ impl SessionApp {
             Effect::ShowPanel => self.show_panel(now, Kind::PowerButton)?,
         }
         Ok(())
+    }
+}
+
+/// The consent panel's view of the app `app`, with its icon from its desktop entry when it has one.
+fn requesting_app(app: cupertino_shell_client::ConsentApp) -> RequestingApp {
+    let icon = if app.desktop {
+        let mut icons = cupertino_icons::ThemeIcons::new(&cupertino_assets::Assets::discover());
+        CONTROL_ICON_PX
+            .iter()
+            .filter_map(|&px| icons.load_for_entry(&app.identity, px))
+            .map(|pixmap| cupertino_kit::controls::ImageSource {
+                id: cupertino_kit::core::next_resource_id(),
+                image: cupertino_kit::render::ImageResource {
+                    revision: 1,
+                    width: pixmap.width(),
+                    height: pixmap.height(),
+                    stride: pixmap.width() * 4,
+                    format: cupertino_kit::render::PixelFormat::Rgba8Premultiplied,
+                    pixels: pixmap.take().into(),
+                },
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    RequestingApp {
+        name: app.name,
+        identity: app.identity,
+        desktop: app.desktop,
+        services: app.services,
+        remembered: app.remembered,
+        icon,
     }
 }

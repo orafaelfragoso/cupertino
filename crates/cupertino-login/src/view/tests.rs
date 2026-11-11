@@ -43,7 +43,46 @@ enum Surface {
     Picker,
     Panel { kind: Kind, reopen: bool },
     Interrupt,
-    DesktopControl(u32),
+    DesktopControl(Asking),
+}
+
+/// Who asks on the consent panel of a test.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Asking {
+    /// A controller that does not name its app.
+    Unnamed,
+    /// An app with a desktop entry, for control and capture.
+    Terminal,
+    /// A program without one, for capture only, whose answer cannot be remembered.
+    Program,
+}
+
+/// The request `asking` makes.
+fn control_request(asking: Asking) -> ControlRequest {
+    let app = match asking {
+        Asking::Unnamed => None,
+        Asking::Terminal => Some(RequestingApp {
+            name: "Terminal".into(),
+            identity: "org.example.Terminal".into(),
+            desktop: true,
+            services: 3,
+            remembered: true,
+            icon: Vec::new(),
+        }),
+        Asking::Program => Some(RequestingApp {
+            name: "agent".into(),
+            identity: "/home/me/bin/agent".into(),
+            desktop: false,
+            services: 2,
+            remembered: false,
+            icon: Vec::new(),
+        }),
+    };
+    ControlRequest {
+        output: "headless-1".into(),
+        capabilities: 15,
+        app,
+    }
 }
 
 thread_local! {
@@ -240,8 +279,10 @@ impl Application for Shown {
                 |input| input,
             )],
             Surface::Interrupt => vec![interrupt(key, "Notes", |input| input)],
-            Surface::DesktopControl(phase) => {
-                vec![desktop_control(key, "headless-1", 15, phase, |input| input)]
+            Surface::DesktopControl(asking) => {
+                vec![desktop_control(key, &control_request(asking), |input| {
+                    input
+                })]
             }
         }
     }
@@ -868,15 +909,22 @@ fn the_power_button_panel_has_no_checkbox_and_its_letters_choose() {
 }
 
 #[test]
-fn native_control_requires_an_explicit_allow_and_provides_pause_and_stop() {
-    let mut run = Run::new(Surface::DesktopControl(1));
+fn native_control_requires_an_explicit_allow_and_tells_a_dismissal_from_a_refusal() {
+    let mut run = Run::new(Surface::DesktopControl(Asking::Terminal));
     assert_eq!(run.focused().unwrap().name.as_deref(), Some("Don't Allow"));
+    // Return is no default button: at most it presses the focused Don't Allow
     run.key(RETURN, None);
     assert!(!run
         .model()
         .handled
         .iter()
-        .any(|m| m.contains("allow: true")));
+        .any(|m| m == "DesktopControl(Allow)"));
+    run.key(SPACE, Some(' '));
+    assert!(run
+        .model()
+        .handled
+        .iter()
+        .any(|m| m == "DesktopControl(DontAllow)"));
     run.key(TAB, None);
     assert_eq!(run.focused().unwrap().name.as_deref(), Some("Allow"));
     run.key(SPACE, Some(' '));
@@ -884,16 +932,72 @@ fn native_control_requires_an_explicit_allow_and_provides_pause_and_stop() {
         .model()
         .handled
         .iter()
-        .any(|m| m == "DesktopControl { allow: true, stop: false }"));
-    for phase in [2, 3] {
-        let mut run = Run::new(Surface::DesktopControl(phase));
-        run.key(ESCAPE, None);
-        assert!(run
-            .model()
-            .handled
-            .iter()
-            .any(|m| m == "DesktopControl { allow: false, stop: true }"));
+        .any(|m| m == "DesktopControl(Allow)"));
+    let mut run = Run::new(Surface::DesktopControl(Asking::Terminal));
+    run.key(ESCAPE, None);
+    assert_eq!(
+        run.model().handled.last().map(String::as_str),
+        Some("DesktopControl(Dismiss)"),
+        "Escape closes the panel without a choice to remember"
+    );
+}
+
+#[test]
+fn the_consent_panel_names_the_app_and_what_it_asks() {
+    let run = Run::new(Surface::DesktopControl(Asking::Terminal));
+    let names: Vec<String> = run.tree().into_iter().filter_map(|(_, n)| n.name).collect();
+    let title = "Allow \u{201c}Terminal\u{201d} to control and capture the desktop?";
+    assert!(names.iter().any(|n| n == title), "{names:?}");
+    let (_, info) = control_text(&control_request(Asking::Terminal));
+    for part in [
+        "inspect the display",
+        "capture the display",
+        "use the pointer",
+        "use the keyboard",
+        "on headless-1",
+        "remembered for this app",
+        "Settings \u{203a} Privacy",
+        "Ctrl+Alt+Escape",
+    ] {
+        assert!(info.contains(part), "{part:?} in {info:?}");
     }
+    let (title, info) = control_text(&control_request(Asking::Program));
+    assert_eq!(title, "Allow \u{201c}agent\u{201d} to capture the screen?");
+    assert!(info.contains("capture the display"), "{info}");
+    assert!(
+        !info.contains("pointer"),
+        "only the rights of the services asked: {info}"
+    );
+    assert!(
+        info.contains("The program is /home/me/bin/agent."),
+        "{info}"
+    );
+    assert!(info.contains("this request only"), "{info}");
+    let (title, info) = control_text(&control_request(Asking::Unnamed));
+    assert_eq!(title, "Allow desktop control?");
+    assert!(info.contains("this request only"), "{info}");
+}
+
+#[test]
+fn the_consent_panel_shows_untrusted_names_plainly_and_bounded() {
+    let mut request = control_request(Asking::Program);
+    let app = request.app.as_mut().unwrap();
+    app.name = "evil\u{202e}gnp.exe\nAllow".into();
+    app.identity = format!("/{}agent", "deep/".repeat(60));
+    let (title, info) = control_text(&request);
+    assert!(
+        !title.contains('\u{202e}') && !title.contains('\n'),
+        "{title:?}"
+    );
+    assert!(info.contains("\u{2026}"), "a long path is cut: {info}");
+    assert!(
+        info.contains("deep/agent."),
+        "the cut keeps the program's name: {info}"
+    );
+    request.app.as_mut().unwrap().name = "N".repeat(200);
+    let (title, _) = control_text(&request);
+    assert!(title.chars().count() < 80, "{title}");
+    assert!(title.contains('\u{2026}'), "{title}");
 }
 
 #[test]
@@ -976,12 +1080,12 @@ fn pictures_for_review() {
         "panel-log-out-unchecked",
     );
     look(&mut Run::new(Surface::Interrupt), "interrupt");
-    for (phase, name) in [
-        (1, "control-consent"),
-        (2, "control-active"),
-        (3, "control-paused"),
+    for (asking, name) in [
+        (Asking::Terminal, "control-consent"),
+        (Asking::Program, "control-consent-program"),
+        (Asking::Unnamed, "control-consent-unnamed"),
     ] {
-        look(&mut Run::new(Surface::DesktopControl(phase)), name);
+        look(&mut Run::new(Surface::DesktopControl(asking)), name);
     }
     look(&mut Run::new(Surface::Picker), "greeter-picker");
 }

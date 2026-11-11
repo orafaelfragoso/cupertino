@@ -190,16 +190,25 @@ impl Remembered {
     }
     /// Allow every service for `app`, as the settings application does, and wait until the server read the change.
     fn allow(&self, server: &mut Server, app: &remembered::App) {
+        self.decide(server, app, remembered::Decision::Allow);
+    }
+    /// Turn every service off for `app`, as the settings application does, and wait until the server read the change.
+    fn turn_off(&self, server: &mut Server, app: &remembered::App) {
+        self.decide(server, app, remembered::Decision::Deny);
+    }
+    fn decide(&self, server: &mut Server, app: &remembered::App, decision: remembered::Decision) {
         let before = server.state.live.reloads;
         remembered::DesktopControlConf::update(&self.path, |conf| {
             for service in remembered::Service::ALL {
-                conf.set(service, app, remembered::Decision::Allow)
+                conf.set(service, app, decision)
                     .map_err(std::io::Error::other)?;
             }
             Ok(())
         })
         .unwrap();
-        server.wait_until("the allowed app to be read", |s| s.live.reloads > before);
+        server.wait_until("the changed answers to be read", |s| {
+            s.live.reloads > before
+        });
     }
     /// Remove the app's answers, as the settings application does, and wait until the server read the change.
     fn forget(&self, server: &mut Server) {
@@ -531,4 +540,146 @@ fn two_bridges_of_different_apps_are_served_at_once_and_each_run_ends_alone() {
     server.wait_until("the second run to end with its bridge", |s| {
         !s.control_capturing()
     });
+}
+
+#[test]
+fn a_request_after_the_run_ended_starts_a_fresh_run_and_a_repeated_one_keeps_it() {
+    let Some(mut session) = Session::start() else {
+        return;
+    };
+    start_controller(&mut session);
+    let store = Remembered::watched(&mut session);
+    let mut local = Local::connect(&mut session);
+    local.ok(&mut session.server, json!({"op":"hello","version":1}));
+    store.allow(&mut session.server, &this_program());
+    let request = json!({"op":"request","output":"headless-1","capabilities":15});
+    let wait = |phase| json!({"op":"wait","phase":phase,"timeout_ms":5000});
+    let first = local.ok(&mut session.server, request.clone());
+    assert_eq!(first["phase"], 2, "{first}");
+    // asked again for no more than it has: the same run
+    for capabilities in [15, 1] {
+        let again = local.ok(
+            &mut session.server,
+            json!({"op":"request","output":"headless-1","capabilities":capabilities}),
+        );
+        assert_eq!(again["epoch"], first["epoch"]);
+        assert_eq!(again["phase"], 2);
+    }
+    // the person turns the app off in Settings: the run ends, and the app is refused with denied, never busy
+    store.turn_off(&mut session.server, &this_program());
+    local.ok(&mut session.server, wait(4));
+    for _ in 0..2 {
+        let refused = local.call(&mut session.server, request.clone());
+        let error = refused["error"].as_str().unwrap();
+        assert!(error.contains("(denied)"), "{refused}");
+        assert!(!error.contains("busy"), "{refused}");
+    }
+    // turned on again: the next request starts a fresh run at once, without a stop and without a panel
+    store.allow(&mut session.server, &this_program());
+    let second = local.ok(&mut session.server, request.clone());
+    assert_eq!(second["phase"], 2, "{second}");
+    assert_ne!(second["epoch"], first["epoch"]);
+    session.server.run_for(Duration::from_millis(200));
+    assert!(panel_rect(&session.server.state).is_none());
+    // the reserved shortcut ends it; the next request starts another
+    for code in [29, 56, 1] {
+        session
+            .server
+            .state
+            .process_input_event(common::absolute::key(code, true));
+        session.server.step();
+    }
+    for code in [1, 56, 29] {
+        session
+            .server
+            .state
+            .process_input_event(common::absolute::key(code, false));
+        session.server.step();
+    }
+    local.ok(&mut session.server, wait(4));
+    let third = local.ok(&mut session.server, request.clone());
+    assert_eq!(third["phase"], 2, "{third}");
+    assert_ne!(third["epoch"], second["epoch"]);
+    // a stop ends it as well
+    assert_eq!(
+        local.ok(&mut session.server, json!({"op":"stop"}))["phase"],
+        4
+    );
+    let fourth = local.ok(&mut session.server, request.clone());
+    assert_eq!(fourth["phase"], 2, "{fourth}");
+    assert_ne!(fourth["epoch"], third["epoch"]);
+    // the app's answers removed in Settings: the run ends, and the next request asks the person
+    store.forget(&mut session.server);
+    local.ok(&mut session.server, wait(4));
+    let asked = local.ok(&mut session.server, request.clone());
+    assert_ne!(asked["epoch"], fourth["epoch"]);
+    assert_eq!(asked["phase"], 1, "{asked}");
+    session
+        .server
+        .wait_until("the native consent panel", |s| panel_rect(s).is_some());
+    // asked again while the person is asked: the same pending run, on the one panel
+    let again = local.ok(&mut session.server, request);
+    assert_eq!(again["epoch"], asked["epoch"]);
+    assert_eq!(again["phase"], 1);
+    session.server.run_for(Duration::from_millis(200));
+    assert!(panel_rect(&session.server.state).is_some());
+    assert_eq!(
+        local.ok(&mut session.server, json!({"op":"status"}))["epoch"],
+        asked["epoch"]
+    );
+}
+
+#[test]
+fn a_run_ended_by_its_output_going_away_is_followed_by_a_fresh_run_on_another_output() {
+    let Some(mut session) = Session::start() else {
+        return;
+    };
+    start_controller(&mut session);
+    let store = Remembered::watched(&mut session);
+    let mut local = Local::connect(&mut session);
+    local.ok(&mut session.server, json!({"op":"hello","version":1}));
+    store.allow(&mut session.server, &this_program());
+    let second = headless::HeadlessDisplay {
+        name: "headless-2".into(),
+        size: (800, 600),
+        physical_mm: (0, 0),
+    };
+    let head = headless::add_display(&mut session.server.state, &second, Some(1.0)).unwrap();
+    // the controller learns of the output once its name arrives
+    let deadline = Instant::now() + common::HANG_GUARD;
+    while !local.ok(&mut session.server, json!({"op":"status"}))["outputs"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("headless-2"))
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the second output never reached the controller"
+        );
+        session.server.run_for(Duration::from_millis(20));
+    }
+    let first = local.ok(
+        &mut session.server,
+        json!({"op":"request","output":"headless-2","capabilities":15}),
+    );
+    assert_eq!(first["phase"], 2, "{first}");
+    // the granted output is unplugged: the run ends
+    headless::remove_display(&mut session.server.state, head).unwrap();
+    local.ok(
+        &mut session.server,
+        json!({"op":"wait","phase":4,"timeout_ms":5000}),
+    );
+    let gone = local.call(
+        &mut session.server,
+        json!({"op":"request","output":"headless-2","capabilities":15}),
+    );
+    assert_eq!(gone["error"], "output is not present", "{gone}");
+    // the next request, for the output that is left, starts a fresh run at once instead of busy
+    let next = local.ok(
+        &mut session.server,
+        json!({"op":"request","output":"headless-1","capabilities":15}),
+    );
+    assert_eq!(next["phase"], 2, "{next}");
+    assert_ne!(next["epoch"], first["epoch"]);
+    local.ok(&mut session.server, json!({"op":"capture"}));
 }

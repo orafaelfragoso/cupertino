@@ -179,6 +179,23 @@ impl Controller {
             next: 1,
         }
     }
+    /// Replace the session by a fresh one on the same connection, named for `bridge`, as the controller does once a
+    /// run ended: the old session goes first, as a version 4 connection holds one.
+    fn renew(&mut self, h: &mut Harness, bridge: &permissions::Bridge) {
+        let ended = self.client.state.control_seen.epoch;
+        self.session.destroy();
+        let qh = self.client.qh();
+        let manager: Manager = self.client.globals.bind(&qh, 4..=4, ()).unwrap();
+        self.session = manager.get_session(&qh, ());
+        manager.destroy();
+        self.session
+            .identify(bridge.pid, (bridge.start >> 32) as u32, bridge.start as u32);
+        h.pump_until(&mut self.client, "the fresh run epoch", |s| {
+            s.control_seen.epoch != ended
+        });
+        let epoch = self.client.state.control_seen.epoch;
+        (self.hi, self.lo) = ((epoch >> 32) as u32, epoch as u32);
+    }
     fn serial(&mut self) -> u32 {
         let n = self.next;
         self.next += 1;

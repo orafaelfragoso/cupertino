@@ -29,14 +29,15 @@ If tools are absent or the bridge cannot connect, read [connection.md](guides/co
 
    Host tool approval and the native decision are separate. Never synthesize consent, edit the remembered answers or change policy to approve yourself, or use a test consent fixture in the real desktop.
 5. Save the returned epoch as a string. Call `wait` with that epoch, `phase: 2`, and `timeout_ms` at most 30000. Check status after a timeout instead of assuming consent. Continue bounded waits while the person is answering; if they decline, stop requesting. A message saying they approved is not proof that phase 2 was reached.
+6. `request_control` is safe to repeat. While your run awaits the answer, is active or is suspended on the same output with no more capabilities, it returns that run and its epoch. Another output or more capabilities ends that run, releasing its held input, and starts a new one with a new epoch; the person is asked only for services the app is not yet allowed. Once your run ended (turned off in Settings, lock, Ctrl+Alt+Escape, its output removed, or `stop`), it starts a fresh run with a new epoch. Always use the epoch the latest call returned: a call naming an ended or replaced epoch is refused and does nothing.
 
 | Phase | Meaning and next action |
 | --- | --- |
 | 0 | Inactive; a new task needs `request_control`. |
-| 1 | The person is being asked; wait, without repeating requests. |
+| 1 | The person is being asked; `wait`. Repeating the same request returns this same run and epoch, and asks nobody twice. |
 | 2 | Active; perform granted operations. |
 | 3 | Suspended while an authentication prompt or protected session panel is up; stop mutations and `wait` for phase 2. It resumes by itself when that closes; `resume` never asks the person again. |
-| 4 | Revoked; this epoch is finished. Read fresh status and request again for another task: an allowed app starts at once. |
+| 4 | Revoked; this epoch is finished, and calls naming it are refused without acting. Call `request_control` again, without `stop` first: it starts a fresh run with a new epoch. An allowed app starts at once; an app turned off is refused with `denied`. |
 
 Keep one MCP connection throughout the task: closing it ends your run. Several agents (Claude, Codex or an auxiliary client) may work in the same session at once, each bridge on a run of its own with its own epoch, phase, held input and captures; another agent's run never changes yours, and your `stop` ends only yours. The session's controller serves up to eight bridges at once; when it is full, calls fail with an error saying so. Then try again later, and do not stop or disconnect another agent's work to make room. Do not keep a spare status client connected, since it holds one of those places. All subsequent scoped calls require that epoch. Do not convert epochs, window handles, node IDs or publication revisions to numbers: these opaque decimal strings preserve 64-bit identity.
 

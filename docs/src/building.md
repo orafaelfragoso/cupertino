@@ -223,6 +223,13 @@ the person allowed starts again at once:
 {"op":"stop"}
 ```
 
+A request may be repeated: while the run awaits consent, is active or is suspended on the same output with no more
+capabilities, it answers with that run as it is. Another output or more capabilities ends that run, releasing its
+input, and the controller starts a new one on a fresh session, asking the person only for services the app is not yet
+allowed. Once the run ended, for whatever reason, the next request starts a fresh run with a new epoch the same way,
+without a `stop` first. The compositor keeps an ended run ended: a start on its session is refused with `stale_epoch`,
+after `denied` (a service the person turned off) and before `busy`.
+
 Capability bits are observe 1, capture 2, pointer 4, keyboard 8 and semantic actions 16. Semantic actions also require observe. Keys use evdev codes; coordinates and scrolling
 use logical points relative to the approved output. Capture returns an upright PNG as base64 with its geometry: without a
 region, the whole output at one image pixel per logical point (downscaled with a sharp cubic filter, never enlarged);
@@ -269,7 +276,8 @@ The bridge implements MCP stdio versions 2025-06-18 and 2025-11-25 (initializati
 It exposes twelve tools: status, request_control, observe, action, capture, move, button, key, scroll, wait, resume
 and stop. Status lists output names without exposing their content. Request only the needed capabilities, await
 phase 2 (at once for an app the person allowed, after the native panel otherwise), and pass the resulting epoch to
-each subsequent call. After a denial the agent tells the person where to turn the app on instead of asking again. Observe accepts window, exact role and name
+each subsequent call. request_control may be repeated as the local request may; the bridge refuses a call naming an
+epoch other than its current run's, or a run that ended (except `wait` and `stop`), before anything reaches it. After a denial the agent tells the person where to turn the app on instead of asking again. Observe accepts window, exact role and name
 substring filters, reports truncation, and supplies output-relative bounds. Opaque identifiers and publication
 revisions are decimal strings, preserving all 64 bits. Geometry revisions remain numbers. Action returns its
 outcome and a fresh observation; capture returns PNG image content with geometry and the logical region the image

@@ -2,6 +2,12 @@
 //! compositor connection. Nothing waits for a peer or the compositor inside the loop: a request whose answer comes
 //! later (a reply, a phase, a captured frame) is a pending operation with a deadline, and the loop sleeps until a
 //! compositor event, a peer's command or the nearest deadline. Each peer has at most one command in flight.
+//!
+//! A peer asks for control as often as it likes. Its run awaiting the person's answer, active or suspended on the same
+//! output with at least the capabilities asked for is answered as it is, epoch and all. Once that run ended for any
+//! reason, or when the request needs another output or more capabilities, the peer's session is ended and replaced by
+//! a fresh one, whose new run is asked for instead: a compositor keeps a run that ended ended, and gives a session one
+//! epoch for good.
 #[cfg(test)]
 #[path = "mux-tests.rs"]
 mod tests;
@@ -93,6 +99,8 @@ struct Remote {
     phase: u32,
     revision: u32,
     output: Option<OutputId>,
+    /// The capability bits the run was started with.
+    capabilities: u32,
     geometry: Value,
     reply: Option<(u32, Result<(), u32>)>,
     observation: Option<(u32, cupertino_semantics::Observation)>,
@@ -154,6 +162,13 @@ impl Remote {
     fn snapshot(&self) -> Value {
         json!({"epoch":self.epoch,"available":self.available,"phase":self.phase,"geometry":self.geometry})
     }
+    /// Whether the run already answers a request for `capabilities` on `output`: it awaits the person's answer, is
+    /// active or is suspended, on that output, started with every one of those capabilities.
+    fn covers(&self, output: OutputId, capabilities: u32) -> bool {
+        matches!(self.phase, 1..=3)
+            && self.output == Some(output)
+            && capabilities & !self.capabilities == 0
+    }
 }
 
 /// What a peer's command waits for.
@@ -166,6 +181,19 @@ enum Pending<F> {
     },
     /// The run's phase becoming `phase`.
     Phase { phase: u32, deadline: Instant },
+    /// A fresh session in place of the peer's current one, whose run is then started on `output`. The loop replaces
+    /// the session ([`renew`]), which turns this into [`Pending::Open`].
+    Renew {
+        output: OutputId,
+        capabilities: u32,
+        deadline: Instant,
+    },
+    /// The session's epoch, after which its run is started on `output`.
+    Open {
+        output: OutputId,
+        capabilities: u32,
+        deadline: Instant,
+    },
     /// A frame of the granted output, taken while the output keeps `layout`, of `region` or the whole output.
     Capture {
         frame: F,
@@ -180,6 +208,8 @@ impl<F> Pending<F> {
         match self {
             Self::Reply { deadline, .. }
             | Self::Phase { deadline, .. }
+            | Self::Renew { deadline, .. }
+            | Self::Open { deadline, .. }
             | Self::Capture { deadline, .. } => *deadline,
         }
     }
@@ -189,7 +219,8 @@ enum Then {
     Snapshot,
     Observation,
     Action,
-    Started(OutputId),
+    /// The run started on this output with these capability bits.
+    Started(OutputId, u32),
 }
 /// Where a pending operation stands.
 enum Progress<F> {
@@ -203,8 +234,10 @@ struct Peer<D: Desktop> {
     remote: Remote,
     next: u32,
     hello: bool,
-    /// Until the compositor named the run's epoch, by this deadline.
+    /// Until the compositor named the first session's epoch, by this deadline: the peer is served only after it.
     opening: Option<Instant>,
+    /// Whether the compositor was told which process the current session serves.
+    named: bool,
     pending: Option<Pending<D::Frame>>,
 }
 impl<D: Desktop> Peer<D> {
@@ -284,6 +317,7 @@ pub fn run<D: Desktop>(
                         next: 1,
                         hello: false,
                         opening: Some(Instant::now() + REPLY_TIMEOUT),
+                        named: false,
                         pending: None,
                     });
                 }
@@ -294,6 +328,13 @@ pub fn run<D: Desktop>(
         let mut i = 0;
         while i < peers.len() {
             if step(desktop, &mut peers[i]).is_ok() {
+                if matches!(peers[i].pending, Some(Pending::Renew { .. })) {
+                    // in place, so the peers keep their order
+                    let peer = peers.swap_remove(i);
+                    peers.push(renew(desktop, peer));
+                    let last = peers.len() - 1;
+                    peers.swap(i, last);
+                }
                 i += 1;
                 continue;
             }
@@ -317,23 +358,50 @@ pub fn run<D: Desktop>(
     }
 }
 
-/// Move one peer on: name its run once the epoch is known, settle its pending operation, then take its next command.
-/// An error disconnects the peer.
+/// End the peer's session and its run, which releases the input the run holds, and open a fresh session for the run
+/// its pending [`Pending::Renew`] asks for. The old session is gone before the next is asked for: a compositor allows a
+/// connection only so many.
+fn renew<D: Desktop>(desktop: &mut D, mut peer: Peer<D>) -> Peer<D> {
+    desktop.stop(&peer.session);
+    desktop.close(peer.session);
+    peer.session = desktop.open();
+    peer.remote = Remote::default();
+    peer.named = false;
+    if let Some(Pending::Renew {
+        output,
+        capabilities,
+        deadline,
+    }) = peer.pending.take()
+    {
+        peer.pending = Some(Pending::Open {
+            output,
+            capabilities,
+            deadline,
+        });
+    }
+    peer
+}
+
+/// Move one peer on: name its session's process once the epoch is known, settle its pending operation, then take its
+/// next command. An error disconnects the peer.
 fn step<D: Desktop>(desktop: &mut D, peer: &mut Peer<D>) -> Result<(), String> {
     if peer.inbox.closed.load(Ordering::SeqCst) {
         return Err("local client disconnected".into());
     }
-    if let Some(deadline) = peer.opening {
-        if peer.remote.epoch == 0 {
+    if !peer.named {
+        if peer.remote.epoch != 0 {
+            peer.opening = None;
+            peer.named = true;
+            // without a name the compositor refuses the run: it never decides for an app it cannot tell
+            desktop.identify(&peer.session, peer.inbox.peer);
+        } else if let Some(deadline) = peer.opening {
             return if Instant::now() >= deadline {
                 Err("the run epoch did not arrive".into())
             } else {
                 Ok(())
             };
         }
-        peer.opening = None;
-        // without a name the compositor refuses the run: it never decides for an app it cannot tell
-        desktop.identify(&peer.session, peer.inbox.peer);
+        // a session opened in place of an ended one: its pending start waits for the epoch ([`Pending::Open`])
     }
     loop {
         if let Some(pending) = peer.pending.take() {
@@ -428,16 +496,26 @@ fn execute<D: Desktop>(
                 .find(|o| o.name.as_deref() == Some(output.as_str()))
                 .ok_or("output is not present")?
                 .id;
-            let serial = peer.serial()?;
-            desktop.send(
-                &peer.session,
-                serial,
-                Command::Start {
+            let deadline = Instant::now() + REPLY_TIMEOUT;
+            if peer.remote.covers(output, capabilities) {
+                // asked again: the run that already answers it goes on, nobody is asked twice
+                done(peer.remote.snapshot())
+            } else if peer.remote.phase == 0 && peer.named {
+                start(desktop, peer, output, capabilities).map(Progress::Waiting)
+            } else if peer.remote.phase == 0 {
+                Ok(Progress::Waiting(Pending::Open {
                     output,
                     capabilities,
-                },
-            )?;
-            reply(serial, Then::Started(output), REPLY_TIMEOUT)
+                    deadline,
+                }))
+            } else {
+                // the run ended, or the request needs another output or more capabilities: a fresh run replaces it
+                Ok(Progress::Waiting(Pending::Renew {
+                    output,
+                    capabilities,
+                    deadline,
+                }))
+            }
         }
         Request::Wait { phase, timeout_ms } => {
             if timeout_ms > MAX_WAIT_MS {
@@ -528,6 +606,29 @@ fn execute<D: Desktop>(
     }
 }
 
+/// Ask the compositor to start the run of the peer's current session on `output`.
+fn start<D: Desktop>(
+    desktop: &mut D,
+    peer: &mut Peer<D>,
+    output: OutputId,
+    capabilities: u32,
+) -> Result<Pending<D::Frame>, String> {
+    let serial = peer.serial()?;
+    desktop.send(
+        &peer.session,
+        serial,
+        Command::Start {
+            output,
+            capabilities,
+        },
+    )?;
+    Ok(Pending::Reply {
+        serial,
+        deadline: Instant::now() + REPLY_TIMEOUT,
+        then: Then::Started(output, capabilities),
+    })
+}
+
 /// Settle `pending` when what it waits for arrived or its deadline passed.
 fn advance<D: Desktop>(
     desktop: &mut D,
@@ -559,8 +660,9 @@ fn advance<D: Desktop>(
             let remote = &mut peer.remote;
             let value = match then {
                 Then::Snapshot => Ok(remote.snapshot()),
-                Then::Started(output) => {
+                Then::Started(output, capabilities) => {
                     remote.output = Some(output);
+                    remote.capabilities = capabilities;
                     Ok(remote.snapshot())
                 }
                 Then::Observation => remote
@@ -579,6 +681,31 @@ fn advance<D: Desktop>(
                     }),
             };
             Progress::Done(Reply::Now(value))
+        }
+        // the loop replaces the session before this peer is stepped again
+        pending @ Pending::Renew { .. } => Progress::Waiting(pending),
+        Pending::Open {
+            output,
+            capabilities,
+            deadline,
+        } => {
+            if !peer.named {
+                return if late {
+                    failed(
+                        "the new run's epoch did not arrive; read status and request control again",
+                    )
+                } else {
+                    Progress::Waiting(Pending::Open {
+                        output,
+                        capabilities,
+                        deadline,
+                    })
+                };
+            }
+            match start(desktop, peer, output, capabilities) {
+                Ok(pending) => Progress::Waiting(pending),
+                Err(error) => failed(&error),
+            }
         }
         Pending::Phase { phase, deadline } => {
             if peer.remote.phase == phase {

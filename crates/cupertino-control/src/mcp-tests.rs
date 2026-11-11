@@ -33,6 +33,7 @@ fn native() -> Native {
         session: "test".into(),
         reader: None,
         lease: Arc::new(Mutex::new(Lease::default())),
+        capture_regions: false,
     }
 }
 fn modern(method: &str, params: Value) -> Value {
@@ -234,4 +235,207 @@ fn a_remembered_refusal_reaches_the_agent_with_where_the_person_can_change_it() 
     );
     // a refusal leaves the connection to the controller open for the next request
     assert!(native.reader.is_some());
+}
+
+/// A bridge connected to a controller that answers each request with the next of `answers` (a status for epoch 7 comes
+/// first on its own), and the requests it got once the bridge is gone.
+fn answering(
+    capture_regions: bool,
+    answers: Vec<Value>,
+) -> (Native, std::thread::JoinHandle<Vec<Value>>) {
+    use std::io::BufRead;
+    let (socket, peer) = UnixStream::pair().unwrap();
+    let mut native = native();
+    native.capture_regions = capture_regions;
+    native.reader = Some(BufReader::new(socket.try_clone().unwrap()));
+    native.lease.lock().unwrap().socket = Some(socket);
+    let server = std::thread::spawn(move || {
+        let mut peer = BufReader::new(peer);
+        let mut asked = Vec::new();
+        let status = json!({"epoch":7,"phase":2});
+        for answer in std::iter::once(status).chain(answers) {
+            let mut line = String::new();
+            if peer.read_line(&mut line).unwrap() == 0 {
+                break;
+            }
+            asked.push(serde_json::from_str::<Value>(&line).unwrap());
+            writeln!(peer.get_mut(), "{}", json!({"ok":true,"data":answer})).unwrap();
+        }
+        // whatever else the bridge sends before it is gone
+        let mut line = String::new();
+        while peer.read_line(&mut line).unwrap_or(0) > 0 {
+            asked.push(serde_json::from_str::<Value>(&line).unwrap());
+            line.clear();
+        }
+        asked
+    });
+    (native, server)
+}
+fn close(native: Native) {
+    native.lease.lock().unwrap().close();
+}
+const GEOMETRY: &str =
+    r#"{"revision":3,"x":0,"y":0,"width":2560,"height":1440,"scale":1.5,"name":"DP-1"}"#;
+
+#[test]
+fn a_region_capture_passes_the_region_and_reports_the_rectangle_the_image_covers() {
+    let region = json!({"x":10.2,"y":0.1,"width":10.0,"height":10.0});
+    let covered = json!({"x":10.0,"y":0.0,"width":10.666666666666666,"height":10.666666666666666});
+    let geometry: Value = serde_json::from_str(GEOMETRY).unwrap();
+    let (mut native, server) = answering(
+        true,
+        vec![
+            json!({"mime_type":"image/png","width":16,"height":16,"region":covered,"geometry":geometry,"data":"iVBORw0KGgo="}),
+        ],
+    );
+    let region_arg: Region = serde_json::from_value(region.clone()).unwrap();
+    let image = native
+        .call(Call::Capture {
+            epoch: "7".into(),
+            region: Some(region_arg),
+        })
+        .unwrap();
+    close(native);
+    let asked = server.join().unwrap();
+    assert_eq!(asked[1], json!({"op":"capture","region":region}));
+    assert_eq!(image["structuredContent"]["region"], covered);
+    assert_eq!(image["structuredContent"]["width"], 16);
+    assert!(image["structuredContent"].get("data").is_none());
+    assert_eq!(image["content"][1]["type"], "image");
+    let text: Value = serde_json::from_str(image["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(text["region"], covered, "the text content says it too");
+}
+
+#[test]
+fn an_old_controller_is_never_sent_a_region_it_would_ignore() {
+    let (mut native, server) = answering(false, vec![]);
+    let error = native
+        .call(Call::Capture {
+            epoch: "7".into(),
+            region: Some(Region {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            }),
+        })
+        .unwrap_err();
+    assert_eq!(error, OLD_CONTROLLER);
+    assert!(error.contains("next login") && error.contains("without a region"));
+    close(native);
+    let asked = server.join().unwrap();
+    assert_eq!(asked, [json!({"op":"status"})], "no capture was asked for");
+}
+
+#[test]
+fn a_whole_capture_from_an_old_controller_covers_its_geometry() {
+    let geometry: Value = serde_json::from_str(GEOMETRY).unwrap();
+    let (mut native, server) = answering(
+        false,
+        vec![
+            json!({"mime_type":"image/png","width":3840,"height":2160,"geometry":geometry,"data":"iVBORw0KGgo="}),
+        ],
+    );
+    let image = native
+        .call(Call::Capture {
+            epoch: "7".into(),
+            region: None,
+        })
+        .unwrap();
+    close(native);
+    assert_eq!(server.join().unwrap()[1], json!({"op":"capture"}));
+    let result = &image["structuredContent"];
+    // image pixel (px, py) still maps through region: 3840 pixels over 2560 points
+    assert_eq!(
+        result["region"],
+        json!({"x":0.0,"y":0.0,"width":2560.0,"height":1440.0})
+    );
+    assert_eq!(result["width"], 3840);
+}
+
+#[test]
+fn a_result_without_a_region_for_a_region_request_is_refused() {
+    let mut result = json!({"width":3840,"height":2160,"geometry":{"width":2560,"height":1440}});
+    assert_eq!(covered(&mut result, true).unwrap_err(), OLD_CONTROLLER);
+    let mut ours =
+        json!({"width":60,"height":60,"region":{"x":1.0,"y":2.0,"width":40.0,"height":40.0}});
+    let before = ours.clone();
+    covered(&mut ours, true).unwrap();
+    assert_eq!(ours, before);
+    assert!(covered(&mut json!({"width":1}), false).is_err());
+}
+
+#[test]
+fn an_image_over_the_limit_asks_for_a_smaller_region() {
+    let (mut native, server) = answering(
+        true,
+        vec![
+            json!({"mime_type":"image/png","width":1,"height":1,"region":{"x":0.0,"y":0.0,"width":1.0,"height":1.0},"geometry":{},"data":"A".repeat(MAX_IMAGE + 1)}),
+        ],
+    );
+    let error = native
+        .call(Call::Capture {
+            epoch: "7".into(),
+            region: None,
+        })
+        .unwrap_err();
+    close(native);
+    server.join().unwrap();
+    assert!(error.contains("smaller region"), "{error}");
+}
+
+#[test]
+fn the_capture_tool_takes_a_strict_region_and_explains_the_mapping() {
+    let tools = tools();
+    let capture = tools["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "capture")
+        .unwrap()
+        .clone();
+    let mapping = "(region.x + px * region.width / width, region.y + py * region.height / height)";
+    assert!(capture["description"].as_str().unwrap().contains(mapping));
+    assert!(INSTRUCTIONS.contains(mapping));
+    assert!(INSTRUCTIONS.contains("same logical points as move"));
+    let region = &capture["inputSchema"]["properties"]["region"];
+    assert_eq!(region["additionalProperties"], false);
+    assert_eq!(region["required"], json!(["x", "y", "width", "height"]));
+    assert_eq!(capture["inputSchema"]["required"], json!(["epoch"]));
+    // the bridge parses exactly that shape
+    let mut protocol = Protocol::default();
+    let mut native = native();
+    for region in [
+        json!({"x":0,"y":0,"width":10}),
+        json!({"x":0,"y":0,"width":10,"height":10,"scale":2}),
+        json!("0,0,10,10"),
+    ] {
+        let call = modern(
+            "tools/call",
+            json!({"name":"capture","arguments":{"epoch":"7","region":region}}),
+        );
+        assert_eq!(
+            protocol.handle(call, &mut native).unwrap()["error"]["code"],
+            -32602,
+            "{region}"
+        );
+    }
+    assert!(native.reader.is_none());
+}
+
+#[test]
+fn a_controller_from_before_regions_would_ignore_the_field() {
+    // the native request parser of a controller from before regions, as it was: capture took no fields
+    #[derive(Deserialize, Debug)]
+    #[serde(tag = "op", rename_all = "kebab-case", deny_unknown_fields)]
+    enum Before {
+        Capture,
+        Stop,
+    }
+    let asked = r#"{"op":"capture","region":{"x":0,"y":0,"width":10,"height":10}}"#;
+    assert!(
+        matches!(serde_json::from_str::<Before>(asked), Ok(Before::Capture)),
+        "an older controller accepts the request and returns the whole output, so the bridge must not send it"
+    );
+    assert!(serde_json::from_str::<Before>(r#"{"op":"stop"}"#).is_ok());
 }

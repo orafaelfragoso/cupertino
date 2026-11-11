@@ -241,6 +241,20 @@ fn rust_mcp_controls_real_kit_nodes_with_consent_stale_checks_and_protected_valu
         .unwrap()
         .starts_with("iVBORw0KGgo"));
     assert!(image["structuredContent"].get("data").is_none());
+    // the shipped bridge learns at its handshake that the controller takes regions
+    let part = mcp.ok(
+        &mut session.server,
+        "capture",
+        json!({"epoch":epoch,"region":{"x":8,"y":4,"width":64,"height":32}}),
+    );
+    assert_eq!(
+        (part["width"].as_u64(), part["height"].as_u64()),
+        (Some(64), Some(32))
+    );
+    assert_eq!(
+        part["region"],
+        json!({"x":8.0,"y":4.0,"width":64.0,"height":32.0})
+    );
     // The counter mutation invalidates the previous observation's coordinate token.
     assert_eq!(
         mcp.tool(

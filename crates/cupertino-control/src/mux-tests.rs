@@ -23,6 +23,9 @@ struct Log {
 
 struct Fake {
     capacity: usize,
+    /// The device pixels of the frames the output gives, red on the left half and green on the bottom half; without
+    /// it, the compositor takes no images.
+    frame: Option<(u32, u32)>,
     next_epoch: u64,
     phases: Vec<(u64, u32)>,
     events: Vec<ControlEvent>,
@@ -92,7 +95,7 @@ impl Desktop for Fake {
                 y: 0,
                 width: 800,
                 height: 600,
-                scale: 1.0,
+                scale: self.frame.map_or(1.0, |(w, _)| f64::from(w) / 800.0),
                 name: OUTPUT.into(),
             });
         } else if phase != 2 {
@@ -129,16 +132,40 @@ impl Desktop for Fake {
         }]
     }
     fn capture(&mut self, _: &u64, _: OutputId) -> Result<(), String> {
-        Err("this compositor takes no images".into())
+        self.frame
+            .map(|_| ())
+            .ok_or("this compositor takes no images".into())
     }
     fn progress(&self, _: &()) -> (bool, bool, bool) {
-        (false, false, true)
+        if self.frame.is_some() {
+            (true, true, false)
+        } else {
+            (false, false, true)
+        }
     }
     fn prepare(&mut self, _: &mut ()) -> Result<(), String> {
-        Err("this compositor takes no images".into())
+        self.frame
+            .map(|_| ())
+            .ok_or("this compositor takes no images".into())
     }
     fn pixels(&mut self, _: ()) -> Result<Pixels, String> {
-        Err("this compositor takes no images".into())
+        let (width, height) = self.frame.ok_or("this compositor takes no images")?;
+        let mut bytes = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                let red = if x < width / 2 { 255 } else { 0 };
+                let green = if y < height / 2 { 0 } else { 255 };
+                bytes.extend_from_slice(&[0, green, red, 255]);
+            }
+        }
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(&bytes).unwrap();
+        Ok(Pixels {
+            width,
+            height,
+            upright: true,
+            file,
+        })
     }
     fn wait(&mut self, timeout: Option<Duration>) -> Result<Vec<ControlEvent>, String> {
         if self.events.is_empty() {
@@ -161,6 +188,10 @@ struct Controller {
 }
 impl Controller {
     fn start(capacity: usize) -> Self {
+        Self::with_frames(capacity, None)
+    }
+    /// A controller whose output gives frames of `frame` device pixels.
+    fn with_frames(capacity: usize, frame: Option<(u32, u32)>) -> Self {
         let (woke, woken) = mpsc::channel();
         let woke: Mutex<Sender<()>> = Mutex::new(woke);
         let wake: Wake = Arc::new(move || {
@@ -170,6 +201,7 @@ impl Controller {
         let (connect, incoming) = mpsc::sync_channel(MAX_RUNS_PER_CONTROLLER + 1);
         let mut fake = Fake {
             capacity,
+            frame,
             next_epoch: 1,
             phases: Vec::new(),
             events: Vec::new(),
@@ -400,4 +432,87 @@ fn a_peer_must_greet_first_and_may_send_only_typed_commands() {
         peer.call(json!({"op":"capture"}))["error"],
         "desktop control is not active"
     );
+}
+
+/// The PNG image of a capture response.
+fn decoded(capture: &Value) -> image::RgbaImage {
+    let text = capture["data"].as_str().unwrap().as_bytes();
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => c - b'A',
+        b'a'..=b'z' => c - b'a' + 26,
+        b'0'..=b'9' => c - b'0' + 52,
+        b'+' => 62,
+        _ => 63,
+    };
+    let mut png = Vec::new();
+    for chunk in text.chunks(4) {
+        let n = chunk.iter().filter(|c| **c != b'=').count();
+        let bits = chunk.iter().fold(0u32, |acc, c| {
+            (acc << 6) | u32::from(if *c == b'=' { 0 } else { value(*c) })
+        });
+        png.extend_from_slice(&bits.to_be_bytes()[1..n]);
+    }
+    image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+        .unwrap()
+        .to_rgba8()
+}
+
+#[test]
+fn a_capture_is_the_logical_size_by_default_and_a_sharp_region_on_request() {
+    // an 800×600 output at scale 1.5
+    let controller = Controller::with_frames(MAX_RUNS_PER_CONTROLLER, Some((1200, 900)));
+    let mut peer = controller.connect();
+    let hello = peer.ok(json!({"op":"hello","version":1}));
+    assert_eq!(
+        hello["capture_regions"], true,
+        "a bridge learns regions are understood"
+    );
+    peer.start();
+    let whole = peer.ok(json!({"op":"capture"}));
+    assert_eq!(
+        (whole["width"].clone(), whole["height"].clone()),
+        (json!(800), json!(600))
+    );
+    assert_eq!(
+        whole["region"],
+        json!({"x":0.0,"y":0.0,"width":800.0,"height":600.0})
+    );
+    assert_eq!(whole["geometry"]["scale"], 1.5);
+    let image = decoded(&whole);
+    assert_eq!(image.dimensions(), (800, 600));
+    assert_eq!(image.get_pixel(100, 100).0, [255, 0, 0, 255]);
+    assert_eq!(image.get_pixel(700, 500).0, [0, 255, 0, 255]);
+    // 40 points around the centre at the device density
+    let part = peer.ok(json!({"op":"capture","region":{"x":380,"y":280,"width":40,"height":40}}));
+    assert_eq!(
+        (part["width"].clone(), part["height"].clone()),
+        (json!(60), json!(60))
+    );
+    assert_eq!(
+        part["region"],
+        json!({"x":380.0,"y":280.0,"width":40.0,"height":40.0})
+    );
+    let image = decoded(&part);
+    assert_eq!(image.get_pixel(29, 29).0, [255, 0, 0, 255]);
+    assert_eq!(image.get_pixel(30, 30).0, [0, 255, 0, 255]);
+    // a region outside the output is refused before anything is captured, and the run goes on
+    let outside =
+        peer.call(json!({"op":"capture","region":{"x":790,"y":0,"width":20,"height":20}}));
+    assert_eq!(outside["ok"], false);
+    assert!(
+        outside["error"]
+            .as_str()
+            .unwrap()
+            .contains("inside the granted output"),
+        "{outside}"
+    );
+    for bad in [
+        json!({"op":"capture","region":{"x":0,"y":0,"width":0,"height":20}}),
+        json!({"op":"capture","region":{"x":0,"y":0,"width":10}}),
+        json!({"op":"capture","region":{"x":0,"y":0,"width":10,"height":10,"scale":2}}),
+        json!({"op":"capture","area":{"x":0,"y":0,"width":10,"height":10}}),
+    ] {
+        assert_eq!(peer.call(bad.clone())["ok"], false, "{bad}");
+    }
+    assert_eq!(peer.ok(json!({"op":"status"}))["phase"], 2);
 }

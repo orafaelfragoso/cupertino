@@ -360,6 +360,29 @@ fn native_controller_and_session_consent_remember_the_answer_and_share_the_deskt
     assert!(!application.keys().contains(&(42, false)));
     let image = local.ok(&mut session.server, json!({"op":"capture"}));
     assert_eq!(image["width"], OUTPUT.0);
+    assert_eq!(
+        image["region"],
+        json!({"x":0.0,"y":0.0,"width":f64::from(OUTPUT.0),"height":f64::from(OUTPUT.1)})
+    );
+    // A region is that rectangle of the output, and the result says which logical rectangle the image covers.
+    let part = local.ok(
+        &mut session.server,
+        json!({"op":"capture","region":{"x":10,"y":20,"width":100,"height":50}}),
+    );
+    assert_eq!(
+        (part["width"].as_u64(), part["height"].as_u64()),
+        (Some(100), Some(50))
+    );
+    assert_eq!(
+        part["region"],
+        json!({"x":10.0,"y":20.0,"width":100.0,"height":50.0})
+    );
+    assert!(part["data"].as_str().unwrap().starts_with("iVBORw0KGgo"));
+    let outside = local.call(
+        &mut session.server,
+        json!({"op":"capture","region":{"x":f64::from(OUTPUT.0) - 10.0,"y":0,"width":20,"height":20}}),
+    );
+    assert_eq!(outside["ok"], false, "{outside}");
     // Resuming a run that is not suspended asks nobody.
     local.ok(&mut session.server, json!({"op":"resume"}));
     session.server.run_for(Duration::from_millis(200));

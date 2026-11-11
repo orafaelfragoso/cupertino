@@ -5,7 +5,7 @@
 #[cfg(test)]
 #[path = "mux-tests.rs"]
 mod tests;
-use crate::capture::Pixels;
+use crate::capture::{self, Pixels, Region};
 use crate::ipc::{self, Reply, Wake};
 use crate::{base64, refusal, Request, MAX_WAIT_MS, REPLY_TIMEOUT};
 use cupertino_control_model::MAX_RUNS_PER_CONTROLLER;
@@ -166,11 +166,12 @@ enum Pending<F> {
     },
     /// The run's phase becoming `phase`.
     Phase { phase: u32, deadline: Instant },
-    /// A frame of the granted output, taken while the output keeps `layout`.
+    /// A frame of the granted output, taken while the output keeps `layout`, of `region` or the whole output.
     Capture {
         frame: F,
         prepared: bool,
-        layout: (Value, OutputInfo),
+        layout: Box<(Value, OutputInfo)>,
+        region: Option<Region>,
         deadline: Instant,
     },
 }
@@ -234,6 +235,18 @@ impl<D: Desktop> Peer<D> {
             .find(|o| Some(o.id) == self.remote.output)
             .ok_or("output disappeared during capture")?;
         Ok((geometry, output))
+    }
+    /// The granted output's size in logical points.
+    fn logical_size(&self) -> Result<(u32, u32), String> {
+        let side = |key: &str| {
+            self.remote.geometry[key]
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .filter(|v| *v > 0)
+        };
+        side("width")
+            .zip(side("height"))
+            .ok_or_else(|| "output geometry is unavailable".to_owned())
     }
 }
 
@@ -367,8 +380,10 @@ fn execute<D: Desktop>(
         }))
     };
     match request {
+        // capture_regions: a capture takes a region and reports the logical rectangle its image covers; a bridge
+        // checks it, because a controller from before ignores the region and returns the whole output
         Request::Hello { version: 1 } => done(
-            json!({"schema":"cupertino.control.v1","protocol":3,"state":peer.remote.snapshot()}),
+            json!({"schema":"cupertino.control.v1","protocol":3,"capture_regions":true,"state":peer.remote.snapshot()}),
         ),
         Request::Hello { .. } => Err("unsupported local protocol version".into()),
         Request::Status => {
@@ -440,17 +455,21 @@ fn execute<D: Desktop>(
                 deadline: Instant::now() + REPLY_TIMEOUT,
             }))
         }
-        Request::Capture => {
+        Request::Capture { region } => {
             if peer.remote.phase != 2 {
                 return Err("desktop control is not active".into());
             }
-            let layout = peer.capture_layout(desktop)?;
+            if let Some(region) = &region {
+                region.check(peer.logical_size()?)?;
+            }
+            let layout = Box::new(peer.capture_layout(desktop)?);
             let output = peer.remote.output.ok_or("no granted output")?;
             let frame = desktop.capture(&peer.session, output)?;
             Ok(Progress::Waiting(Pending::Capture {
                 frame,
                 prepared: false,
                 layout,
+                region,
                 deadline: Instant::now() + REPLY_TIMEOUT,
             }))
         }
@@ -574,6 +593,7 @@ fn advance<D: Desktop>(
             mut frame,
             mut prepared,
             layout,
+            region,
             deadline,
         } => {
             let (constraints, ready, broken) = desktop.progress(&frame);
@@ -598,6 +618,7 @@ fn advance<D: Desktop>(
                         frame,
                         prepared,
                         layout,
+                        region,
                         deadline,
                     })
                 };
@@ -606,7 +627,7 @@ fn advance<D: Desktop>(
                 return failed("capture grant ended");
             }
             match peer.capture_layout(desktop) {
-                Ok(now) if now == layout => {}
+                Ok(now) if now == *layout => {}
                 Ok(_) => return failed("output geometry changed during capture; observe again"),
                 Err(error) => return failed(&error),
             }
@@ -614,11 +635,23 @@ fn advance<D: Desktop>(
                 Ok(pixels) => pixels,
                 Err(error) => return failed(&error),
             };
+            if !pixels.upright {
+                return failed(capture::NOT_UPRIGHT);
+            }
+            // the layout is unchanged since the request, so the region checked then still fits
+            let plan = match peer
+                .logical_size()
+                .and_then(|output| capture::plan((pixels.width, pixels.height), output, region))
+            {
+                Ok(plan) => plan,
+                Err(error) => return failed(&error),
+            };
             let geometry = peer.remote.geometry.clone();
             Progress::Done(Reply::Later(Box::new(move || {
-                let (w, h, png) = pixels.png()?;
+                let png = pixels.png(&plan)?;
+                let (width, height) = plan.size;
                 Ok(
-                    json!({"mime_type":"image/png","width":w,"height":h,"geometry":geometry,"data":base64(&png)}),
+                    json!({"mime_type":"image/png","width":width,"height":height,"region":plan.region,"geometry":geometry,"data":base64(&png)}),
                 )
             })))
         }

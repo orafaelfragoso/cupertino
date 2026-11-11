@@ -202,11 +202,19 @@ the person allowed starts again at once:
 {"op":"key","code":30,"pressed":false}
 {"op":"scroll","horizontal":0,"vertical":40}
 {"op":"capture"}
+{"op":"capture","region":{"x":100,"y":80,"width":320,"height":200}}
 {"op":"stop"}
 ```
 
 Capability bits are observe 1, capture 2, pointer 4, keyboard 8 and semantic actions 16. Semantic actions also require observe. Keys use evdev codes; coordinates and scrolling
-use logical points relative to the approved output. Capture returns an upright PNG as base64 with its geometry.
+use logical points relative to the approved output. Capture returns an upright PNG as base64 with its geometry: without a
+region, the whole output at one image pixel per logical point (downscaled with a sharp cubic filter, never enlarged);
+with `region` (logical points relative to the output, entirely inside it, else refused), that rectangle at the output's
+device pixels. The result's `width` and `height` are the image's pixels and `region` the logical rectangle it covers,
+its edges moved outward to whole device pixels: image pixel `(px, py)` is the logical point
+`(region.x + px * region.width / width, region.y + py * region.height / height)`. A frame the compositor did not deliver
+upright is refused rather than mis-mapped. The hello reply's `capture_regions: true` says the controller takes regions; a
+controller from before it ignores the field and returns the whole output, so the bridge does not send it a region.
 `status` reports epoch and phase: inactive 0, consent 1, active 2, suspended 3, revoked 4. A suspended run resumes by
 itself; `resume` never asks again. A refusal names its reason; `denied` points the person to Settings › Privacy ›
 Desktop Control or Screen Capture. The local protocol stays at version 3 for older bridges; the controller names its
@@ -247,8 +255,9 @@ phase 2 (at once for an app the person allowed, after the native panel otherwise
 each subsequent call. After a denial the agent tells the person where to turn the app on instead of asking again. Observe accepts window, exact role and name
 substring filters, reports truncation, and supplies output-relative bounds. Opaque identifiers and publication
 revisions are decimal strings, preserving all 64 bits. Geometry revisions remain numbers. Action returns its
-outcome and a fresh observation; capture returns PNG image content with geometry, without duplicating base64 in
-text. Cancellation and stdin EOF close the native lease and release owned input. Queues, messages, images,
+outcome and a fresh observation; capture returns PNG image content with geometry and the logical region the image
+covers (the whole output at logical size, or an optional region at device pixels), without duplicating base64 in
+text; an image over 16 MiB is refused with a request for a smaller region. Cancellation and stdin EOF close the native lease and release owned input. Queues, messages, images,
 publication sizes, waits and stalled stdout writes have explicit bounds. Tool discovery works offline.
 
 The checkout registers the installed controller for agent hosts working in it, and only there:

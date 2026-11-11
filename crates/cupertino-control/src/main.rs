@@ -49,7 +49,10 @@ enum Request {
         vertical: f64,
         revision: Option<u32>,
     },
-    Capture,
+    /// A frame of the granted output: the whole output at its logical size, or `region` at its device pixels.
+    Capture {
+        region: Option<capture::Region>,
+    },
     Observe,
     Action {
         window: u64,

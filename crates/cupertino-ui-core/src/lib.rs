@@ -157,6 +157,10 @@ pub enum PopupAnchor {
     /// `offset` (`x` toward the trailing side), sliding to fit and never flipping: a pop-up button's menu, its chosen
     /// item over the button.
     Over { key: Key, offset: Point },
+    /// Above the parent's node with this key, `gap` apart, with the popup's leading edge at the middle of the node's
+    /// top edge moved by `dx` toward the trailing side: a callout that stands off to one side of what it points at.
+    /// It flips below the node when there is no room above.
+    Above { key: Key, gap: f64, dx: f64 },
 }
 
 /// What a window paints under its content.

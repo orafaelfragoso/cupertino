@@ -64,14 +64,14 @@ pub const AUTOHIDE_SPEED_MS: f64 = 60.0;
 
 /// Gap between neighbouring tiles, as a fraction of the tile size: 4 pt between 64 pt tiles.
 pub const TILE_GAP_RATIO: f64 = 4.0 / 64.0;
-/// Padding between the bar's edge and its tiles, as a fraction of the tile size: 10.5 pt around 64 pt tiles, an
-/// 85 pt deep bar.
-pub const BAR_PADDING_RATIO: f64 = 10.5 / 64.0;
+/// Padding between the bar's edge and its tiles, as a fraction of the tile size: 10 pt around 64 pt tiles, an
+/// 84 pt deep bar.
+pub const BAR_PADDING_RATIO: f64 = 10.0 / 64.0;
 /// Extent of a separator's slot along the bar, as a fraction of the tile size: 26 pt at 64, so with the gaps either
 /// side the tiles around it stand 34 pt apart.
 pub const SEPARATOR_RATIO: f64 = 26.0 / 64.0;
 /// Padding between the tiles and the bar's edge on the screen-edge side, as a fraction of the tile size: 10 pt at
-/// 64, so the tiles sit half a point nearer the screen edge than the middle of the bar (11 pt on the other side).
+/// 64, the same as on the other side.
 pub const BAR_EDGE_PADDING_RATIO: f64 = 10.0 / 64.0;
 /// Gap between the bar and the screen edge, in points.
 pub const EDGE_MARGIN: f64 = 5.0;
@@ -99,8 +99,8 @@ pub struct DockConfig {
     /// Extent of a separator's slot along the dock axis as a fraction of the tile size (26 pt at 64): with the gaps
     /// on both sides the tiles either side of it stand 34 pt apart, the line in the middle.
     pub separator_ratio: f64,
-    /// Padding between the bar's edge and the tiles as a fraction of the tile size (10.5 pt at 64, so the bar is
-    /// 85 pt deep).
+    /// Padding between the bar's edge and the tiles as a fraction of the tile size (10 pt at 64, so the bar is
+    /// 84 pt deep).
     pub padding_ratio: f64,
     /// Padding between the tiles and the bar's edge on the screen-edge side as a fraction of the tile size (10 pt at
     /// 64); the rest of the bar's depth is on the other side.
@@ -121,11 +121,9 @@ pub struct DockConfig {
     pub launch_animation: bool,
     /// Hide the dock when the pointer is away (default off).
     pub autohide: bool,
-    /// Seconds before a hidden dock is revealed (default 0.15 s).
+    /// Seconds before a hidden dock is revealed (default 0.2 s).
     pub autohide_delay: f64,
-    /// Show/hide duration in seconds. The default 0.24 is the formula
-    /// evaluated for the default dock; see [`crate::autohide::autohide_duration_ms`] for the
-    /// state-dependent value.
+    /// Show/hide duration in seconds. The default is 0.22 s.
     pub autohide_duration: f64,
     /// Multiplier of the auto-hide speed (default 1.0).
     pub autohide_time_modifier: f64,
@@ -165,8 +163,8 @@ impl Default for DockConfig {
             minimize_effect: MinimizeEffect::WarpMinimize,
             launch_animation: true,
             autohide: false,
-            autohide_delay: 0.15,
-            autohide_duration: 0.24,
+            autohide_delay: 0.2,
+            autohide_duration: 0.22,
             autohide_time_modifier: 1.0,
             distance_top: 6.0,
             distance_bottom: 10.0,

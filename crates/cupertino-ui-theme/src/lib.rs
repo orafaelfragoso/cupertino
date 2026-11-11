@@ -343,6 +343,12 @@ pub enum Surface {
     /// A running indicator under a Dock tile in the dark appearance, which lightens what lies behind it; elsewhere it
     /// asks for no material and the dot paints itself.
     DockIndicator,
+    /// The Dock's bar itself: the same as [`Surface::Dock`], except that in the light appearance it stays dark and
+    /// clear, a light lift over a blurred backdrop, instead of turning pale.
+    DockBar,
+    /// The name over a Dock tile: a translucent veil over a blurred backdrop, light or dark by appearance; opaque with
+    /// reduced transparency and in high contrast.
+    Tooltip,
     /// A window's own background drawn by the compositor, so glass over it in the window reads the window rather than
     /// the desktop; opaque, so kept with reduced transparency and in high contrast.
     WindowBackground,
@@ -371,6 +377,10 @@ pub struct ThemeTokens {
     pub motion: Motion,
 }
 
+/// The material name of the Dock bar's translucent body in the light appearance (`materials.json`).
+pub const DOCK_BAR_MATERIAL: &str = "DockBar";
+/// The material name of the name label over a Dock tile (`materials.json`).
+pub const TOOLTIP_MATERIAL: &str = "TooltipLabel";
 /// The material name of regular glass: the compositor draws glass rather than a recipe of the design tokens.
 pub const GLASS_MATERIAL: &str = "Glass";
 /// The material name of clear glass.
@@ -392,6 +402,13 @@ impl ThemeTokens {
             Surface::Switcher => ("Switcher", false),
             Surface::Dock if prefs.reduce_transparency => ("Dock", true),
             Surface::Dock => (GLASS_MATERIAL, true),
+            Surface::DockBar
+                if !prefs.reduce_transparency && !prefs.appearance.is_dark() && !opaque =>
+            {
+                (DOCK_BAR_MATERIAL, true)
+            }
+            Surface::DockBar => return self.surface(Surface::Dock),
+            Surface::Tooltip => (TOOLTIP_MATERIAL, false),
             Surface::DockIndicator => (
                 "RunningIndicator",
                 prefs.appearance.is_dark() && !prefs.appearance.is_high_contrast(),

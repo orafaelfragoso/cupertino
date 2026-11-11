@@ -1,45 +1,76 @@
 //! The name of the tile under the pointer, over it: a popup of the bar shown as soon as the pointer is on a tile, a
-//! capsule with the name and a pointer under it towards the tile. It takes neither the pointer nor the keyboard.
+//! capsule on a translucent veil with the name (and, for an application that runs without windows, a dimmer line under
+//! it) and a pointer under it towards the tile. At the bottom of the output it stands over the bar, the pointer's tip a
+//! little above the bar's top edge. It takes neither the pointer nor the keyboard.
 
 use cupertino_kit::core::{
     Change, CommandRegistry, Element, Event, EventCx, Key, MeasureCx, PaintCx, Popup, PopupAnchor,
     Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
-use cupertino_kit::geometry::{Point, Size};
-use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured};
+use cupertino_kit::geometry::{Insets, Point, Rect, Size};
+use cupertino_kit::layout::{
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured,
+};
 use cupertino_kit::platform::{DecorationMode, WindowSpec};
 use cupertino_kit::render::{FillRule, Paint, PaintOp, PathVerb, Shape};
-use cupertino_kit::theme::Color;
+use cupertino_kit::theme::{Color, Surface};
 
+use super::bar::LABEL_ANCHOR;
 use super::paint;
 use super::Input;
 use crate::config::Orientation;
 
-/// The capsule's height, the space either side of the name, and the name's size and weight.
-pub const HEIGHT: f64 = 25.0;
-pub const PADDING: f64 = 13.0;
+/// The capsule's height with one line and with two, the space either side of the text, and the name's size and weight.
+pub const HEIGHT: f64 = 26.0;
+pub const TWO_LINE_HEIGHT: f64 = 36.0;
+pub const PADDING: f64 = 12.0;
 pub const FONT_PT: f64 = 13.0;
 const WEIGHT: u16 = 400;
+/// The second line's size, and how far its centre line is below the first line's.
+pub const STATUS_FONT_PT: f64 = 11.0;
+const STATUS_DROP: f64 = 14.0;
+/// The share of the name's colour the second line keeps.
+const STATUS_SHARE: f32 = 0.6;
+/// The capsule's corner radius: half a one-line capsule, and a two-line capsule keeps it.
+pub const RADIUS: f64 = 13.0;
 /// The pointer under the capsule: its width at the capsule and its depth.
 pub const POINTER_WIDTH: f64 = 16.0;
 pub const POINTER_DEPTH: f64 = 6.5;
-/// How far the pointer's tip stands off the tile.
+/// How far the pointer's tip stands off what it points over: the bar's top edge.
 pub const GAP: f64 = 3.0;
-/// The capsule's fill and its fine outline, and the name's colour, in the light and the dark appearance.
+/// The veil over the blurred backdrop the pointer is painted in (the capsule's own is the compositor's material), in
+/// the light and the dark appearance.
+const VEIL: [Color; 2] = [
+    Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 0.5,
+    },
+    Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 0.12,
+    },
+];
+/// The capsule's fill where the session shows no material (Reduce Transparency, Increase Contrast, no desktop
+/// effects), in the light and the dark appearance.
 const FILL: [Color; 2] = [
     Color {
         r: 0.96,
         g: 0.96,
         b: 0.96,
-        a: 0.88,
+        a: 0.96,
     },
     Color {
         r: 0.16,
         g: 0.16,
         b: 0.17,
-        a: 0.86,
+        a: 0.96,
     },
 ];
+/// The fine outline of the capsule, and the name's colour, in the light and the dark appearance.
 const OUTLINE: [Color; 2] = [
     Color {
         r: 0.0,
@@ -62,10 +93,10 @@ const TEXT: [Color; 2] = [
         a: 0.85,
     },
     Color {
-        r: 1.0,
-        g: 1.0,
-        b: 1.0,
-        a: 0.92,
+        r: 0.976,
+        g: 0.949,
+        b: 0.945,
+        a: 1.0,
     },
 ];
 const OUTLINE_WIDTH: f64 = 0.5;
@@ -74,32 +105,43 @@ pub fn key() -> WindowKey {
     WindowKey(Key::from("tile-label"))
 }
 
-/// The label of tile `tile` (`TileId.0`), named `name`, over it in the bar's window `parent`.
-pub fn window<M: Clone + 'static>(
-    parent: WindowKey,
-    tile: u64,
-    name: &str,
-    orientation: Orientation,
-    input: fn(Input) -> M,
-) -> Window<M> {
-    let anchor = Key::from(format!("tile-{tile}"));
-    let anchor = match orientation {
-        // over the tile: below has no room at the bottom of the output, so the popup flips
+/// What the label shows.
+pub struct LabelView<'a> {
+    /// The bar's window, which the label is a popup of.
+    pub parent: WindowKey,
+    /// The tile it names (`TileId.0`).
+    pub tile: u64,
+    pub name: &'a str,
+    /// A second, dimmer line under the name.
+    pub status: Option<&'a str>,
+    pub orientation: Orientation,
+}
+
+/// The label of a tile.
+pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) -> Window<M> {
+    let anchor = match view.orientation {
+        // over the bar: below has no room at the bottom of the output, so the popup flips
         Orientation::Bottom => PopupAnchor::Below {
-            key: anchor,
+            key: Key::from(LABEL_ANCHOR),
             gap: GAP,
         },
         Orientation::Left | Orientation::Right => PopupAnchor::Beside {
-            key: anchor,
+            key: Key::from(format!("tile-{}", view.tile)),
             offset: Point::new(GAP, 0.0),
         },
+    };
+    let pointer = view.orientation == Orientation::Bottom;
+    let height = if view.status.is_some() {
+        TWO_LINE_HEIGHT
+    } else {
+        HEIGHT
     };
     Window {
         key: key(),
         spec: WindowSpec {
-            title: name.to_owned(),
+            title: view.name.to_owned(),
             app_id: String::new(),
-            size: Size::new(600.0, HEIGHT + POINTER_DEPTH),
+            size: Size::new(600.0, height + POINTER_DEPTH),
             min_size: None,
             max_size: None,
             decorations: DecorationMode::None,
@@ -110,11 +152,16 @@ pub fn window<M: Clone + 'static>(
         on_close: None,
         background: WindowBackground::None,
         content: Element::new(LabelNode {
-            name: name.to_owned(),
-            pointer: orientation == Orientation::Bottom,
+            pointer,
+            children: vec![Element::new(Body {
+                name: view.name.to_owned(),
+                status: view.status.map(str::to_owned),
+                pointer,
+            })
+            .key("body")],
         }),
         popup: Some(Popup {
-            parent,
+            parent: view.parent,
             anchor,
             grab: false,
             on_dismiss: input(Input::LabelGone),
@@ -123,11 +170,34 @@ pub fn window<M: Clone + 'static>(
     }
 }
 
-/// The outline of the capsule `w` × [`HEIGHT`] with, when `pointer`, the pointer under its middle.
-fn outline(w: f64, pointer: bool) -> Vec<PathVerb> {
-    let r = HEIGHT / 2.0;
+/// The path of the pointer under a capsule `w` wide and `h` tall: its sides curve in to a rounded tip. It starts a
+/// little inside the capsule so no seam shows where they meet.
+fn pointer_path(w: f64, h: f64) -> Vec<PathVerb> {
+    let (mid, half) = (w / 2.0, POINTER_WIDTH / 2.0);
+    let (top, tip) = (h - 0.5, h + POINTER_DEPTH);
+    vec![
+        PathVerb::MoveTo(Point::new(mid - half, top)),
+        PathVerb::LineTo(Point::new(mid + half, top)),
+        PathVerb::CubicTo(
+            Point::new(mid + half * 0.45, h),
+            Point::new(mid + 1.5, tip),
+            Point::new(mid, tip),
+        ),
+        PathVerb::CubicTo(
+            Point::new(mid - 1.5, tip),
+            Point::new(mid - half * 0.45, h),
+            Point::new(mid - half, top),
+        ),
+        PathVerb::Close,
+    ]
+}
+
+/// The outline of a capsule `w` × `h` with, when `pointer`, the pointer under its middle: the shape painted where
+/// there is no material.
+fn outline(w: f64, h: f64, pointer: bool) -> Vec<PathVerb> {
+    let r = RADIUS;
     let k = 0.552_284_75 * r;
-    let (l, t, b) = (0.0, 0.0, HEIGHT);
+    let (l, t, b) = (0.0, 0.0, h);
     let right = w;
     let mid = w / 2.0;
     let half = POINTER_WIDTH / 2.0;
@@ -136,17 +206,17 @@ fn outline(w: f64, pointer: bool) -> Vec<PathVerb> {
         PathVerb::LineTo(Point::new(right - r, t)),
         PathVerb::CubicTo(
             Point::new(right - r + k, t),
-            Point::new(right, b - r - k),
+            Point::new(right, t + r - k),
             Point::new(right, t + r),
         ),
+        PathVerb::LineTo(Point::new(right, b - r)),
         PathVerb::CubicTo(
-            Point::new(right, t + r + k),
+            Point::new(right, b - r + k),
             Point::new(right - r + k, b),
             Point::new(right - r, b),
         ),
     ];
     if pointer {
-        // a soft pointer: its sides curve in to a rounded tip
         let tip = b + POINTER_DEPTH;
         v.extend([
             PathVerb::LineTo(Point::new(mid + half, b)),
@@ -166,9 +236,10 @@ fn outline(w: f64, pointer: bool) -> Vec<PathVerb> {
         PathVerb::LineTo(Point::new(l + r, b)),
         PathVerb::CubicTo(
             Point::new(l + r - k, b),
-            Point::new(l, t + r + k),
-            Point::new(l, t + r),
+            Point::new(l, b - r + k),
+            Point::new(l, b - r),
         ),
+        PathVerb::LineTo(Point::new(l, t + r)),
         PathVerb::CubicTo(
             Point::new(l, t + r - k),
             Point::new(l + r - k, t),
@@ -179,12 +250,82 @@ fn outline(w: f64, pointer: bool) -> Vec<PathVerb> {
     v
 }
 
-struct LabelNode {
+/// The popup's content: the capsule, with room under it for the pointer.
+struct LabelNode<M> {
+    pointer: bool,
+    children: Vec<Element<M>>,
+}
+
+impl<M: Clone + 'static> Widget<M> for LabelNode<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        let depth = if self.pointer { POINTER_DEPTH } else { 0.0 };
+        LayoutSpec {
+            insets: Insets::new(0.0, 0.0, depth, 0.0),
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Vertical,
+                spacing: 0.0,
+                align: Align::Start,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.pointer != old.pointer {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+}
+
+/// The capsule: the tooltip material under it (or its opaque fill), the pointer under it, and the text.
+struct Body {
     name: String,
+    status: Option<String>,
     pointer: bool,
 }
 
-impl<M: Clone + 'static> Widget<M> for LabelNode {
+impl Body {
+    fn height(&self) -> f64 {
+        if self.status.is_some() {
+            TWO_LINE_HEIGHT
+        } else {
+            HEIGHT
+        }
+    }
+}
+
+impl<M: Clone + 'static> Widget<M> for Body {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
@@ -194,17 +335,23 @@ impl<M: Clone + 'static> Widget<M> for LabelNode {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.name != old.name || self.pointer != old.pointer {
+        if self.name != old.name || self.status != old.status {
             Change::Layout
+        } else if self.pointer != old.pointer {
+            Change::Paint
         } else {
             Change::None
         }
     }
 
     fn measure(&self, _: &(), _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
-        let width = paint::width(cx.env(), &self.name, FONT_PT, WEIGHT);
+        let name = paint::width(cx.env(), &self.name, FONT_PT, WEIGHT);
+        let status = self
+            .status
+            .as_deref()
+            .map_or(0.0, |s| paint::width(cx.env(), s, STATUS_FONT_PT, WEIGHT));
         Measured {
-            size: Size::new(width.ceil() + 2.0 * PADDING, HEIGHT + POINTER_DEPTH),
+            size: Size::new(name.max(status).ceil() + 2.0 * PADDING, self.height()),
             baseline: None,
         }
     }
@@ -220,30 +367,63 @@ impl<M: Clone + 'static> Widget<M> for LabelNode {
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let env = cx.env().clone();
         let mode = usize::from(paint::is_dark(&env));
-        let w = cx.size().width;
-        let shape = Shape::Path {
-            verbs: outline(w, self.pointer),
-            fill_rule: FillRule::NonZero,
+        let (w, h) = (cx.size().width, cx.size().height);
+        let body = Rect::new(0.0, 0.0, w, h);
+        let shown = cx.material(Surface::Tooltip, RADIUS, 1.0);
+        if shown {
+            if self.pointer {
+                cx.push(PaintOp::Fill {
+                    shape: Shape::Path {
+                        verbs: pointer_path(w, h),
+                        fill_rule: FillRule::NonZero,
+                    },
+                    paint: Paint::Solid(VEIL[mode]),
+                });
+            }
+            paint::stroke(cx, body, RADIUS, OUTLINE_WIDTH, OUTLINE[mode]);
+        } else {
+            let shape = Shape::Path {
+                verbs: outline(w, h, self.pointer),
+                fill_rule: FillRule::NonZero,
+            };
+            cx.push(PaintOp::Fill {
+                shape: shape.clone(),
+                paint: Paint::Solid(FILL[mode]),
+            });
+            cx.push(PaintOp::Stroke {
+                shape,
+                width: OUTLINE_WIDTH,
+                paint: Paint::Solid(OUTLINE[mode]),
+            });
+        }
+        let colour = TEXT[mode];
+        let (first, second) = if self.status.is_some() {
+            ((h - STATUS_DROP) / 2.0, (h + STATUS_DROP) / 2.0)
+        } else {
+            (h / 2.0, 0.0)
         };
-        cx.push(PaintOp::Fill {
-            shape: shape.clone(),
-            paint: Paint::Solid(FILL[mode]),
-        });
-        cx.push(PaintOp::Stroke {
-            shape,
-            width: OUTLINE_WIDTH,
-            paint: Paint::Solid(OUTLINE[mode]),
-        });
-        let Some(text) = paint::line(&env, &self.name, FONT_PT, WEIGHT, Some(w)) else {
-            return;
+        let centred = |cx: &mut PaintCx<'_>, s: &str, size: f64, cy: f64, c: Color| {
+            let Some(line) = paint::line(&env, s, size, WEIGHT, Some(w)) else {
+                return;
+            };
+            let (tw, th) = (line.size().width, line.size().height);
+            paint::glyphs(cx, &line, Point::new((w - tw) / 2.0, cy - th / 2.0), c);
         };
-        let (tw, th) = (text.size().width, text.size().height);
-        let origin = Point::new((w - tw) / 2.0, (HEIGHT - th) / 2.0);
-        paint::glyphs(cx, &text, origin, TEXT[mode]);
+        centred(cx, &self.name, FONT_PT, first, colour);
+        if let Some(status) = &self.status {
+            let dim = Color {
+                a: colour.a * STATUS_SHARE,
+                ..colour
+            };
+            centred(cx, status, STATUS_FONT_PT, second, dim);
+        }
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Tooltip);
         cx.name(self.name.clone());
+        if let Some(status) = &self.status {
+            cx.description(status.clone());
+        }
     }
 }

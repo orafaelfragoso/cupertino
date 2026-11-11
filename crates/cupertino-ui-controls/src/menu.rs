@@ -12,8 +12,8 @@ use crate::button::ButtonLook;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::{
-    ButtonRole, ButtonStyle, ContextMenu, Handler, Menu, MenuAnchor, MenuItem, PopUpButton,
-    PullDownButton,
+    ButtonRole, ButtonStyle, ContextMenu, Handler, Menu, MenuAnchor, MenuItem, MenuStyle,
+    PopUpButton, PullDownButton,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_menu_model::tracking::{
@@ -52,7 +52,7 @@ const RETURN: Keysym = Keysym(0xff0d);
 const SPACE: Keysym = Keysym(0x20);
 
 /// The panel's corner radius.
-const PANEL_RADIUS: f64 = 11.5;
+pub(crate) const PANEL_RADIUS: f64 = 11.5;
 /// The panel's own edge, drawn only over the opaque fill a window without the compositor's material paints.
 const EDGE: f64 = 1.0;
 /// Above the first row and below the last.
@@ -85,7 +85,7 @@ const GLASS_SEPARATOR_LIGHT: Color = Color {
 };
 /// The width of a submenu's chevron.
 const CHEVRON_WIDTH: f64 = 5.0;
-const MIN_WIDTH: f64 = 120.0;
+pub(crate) const MIN_WIDTH: f64 = 120.0;
 /// The least room between a row's label and the shortcuts and chevrons of a menu that has any.
 const SHORTCUT_GAP: f64 = 23.0;
 /// Between a highlight and the panel's sides.
@@ -125,10 +125,12 @@ struct Columns {
     label: f64,
     /// Some row has a shortcut or opens a submenu, so every row leaves room for them after its label.
     trailing: bool,
+    /// The least width of a row, and so of the panel.
+    min_width: f64,
 }
 
 impl Columns {
-    fn of<M>(items: &[MenuItem<M>]) -> Self {
+    fn of<M>(items: &[MenuItem<M>], min_width: f64) -> Self {
         let marks = items.iter().any(|item| {
             matches!(
                 item,
@@ -144,6 +146,7 @@ impl Columns {
             trailing: items
                 .iter()
                 .any(|item| matches!(item, MenuItem::Shortcut { .. } | MenuItem::Submenu { .. })),
+            min_width,
         }
     }
 }
@@ -242,6 +245,11 @@ fn level_key(key: &WindowKey, depth: usize) -> WindowKey {
 impl<M: Clone + 'static> Menu<M> {
     /// The popup windows that show the menu and its open submenus.
     pub fn windows(self, key: WindowKey) -> Vec<Window<M>> {
+        self.windows_styled(key, MenuStyle::default())
+    }
+
+    /// [`Menu::windows`] with panels of the corner radius and least width of `style`.
+    pub fn windows_styled(self, key: WindowKey, style: MenuStyle) -> Vec<Window<M>> {
         let Menu {
             parent,
             anchor,
@@ -260,6 +268,7 @@ impl<M: Clone + 'static> Menu<M> {
         let mut anchor = match anchor {
             MenuAnchor::Below(key) => PopupAnchor::Below { key, gap: GAP },
             MenuAnchor::At(point) => PopupAnchor::At(point),
+            MenuAnchor::Above { key, gap, dx } => PopupAnchor::Above { key, gap, dx },
             MenuAnchor::Over(key) => {
                 let above: f64 = items[..current.unwrap_or(0).min(items.len())]
                     .iter()
@@ -271,7 +280,7 @@ impl<M: Clone + 'static> Menu<M> {
                 PopupAnchor::Over {
                     key,
                     offset: Point::new(
-                        LABEL_INSET - Columns::of(&items).label,
+                        LABEL_INSET - Columns::of(&items, style.min_width).label,
                         -(PADDING_Y + above + ROW_HEIGHT / 2.0),
                     ),
                 }
@@ -314,8 +323,10 @@ impl<M: Clone + 'static> Menu<M> {
                 at_pointer: depth == 0 && at_pointer,
                 typing: Rc::clone(&typing),
                 flash: Rc::clone(&flash),
+                radius: style.radius,
                 children: rows(
                     &items,
+                    style.min_width,
                     path,
                     current.filter(|_| depth == 0),
                     next.filter(|_| submenu.is_some()),
@@ -342,7 +353,7 @@ impl<M: Clone + 'static> Menu<M> {
                 on_close: None,
                 background: WindowBackground::Surface {
                     surface: Surface::Menu,
-                    radius: PANEL_RADIUS,
+                    radius: style.radius,
                     alpha: 1.0,
                 },
                 content: Element::new(panel),
@@ -373,6 +384,7 @@ impl<M: Clone + 'static> Menu<M> {
 /// and `open` the item whose submenu is open.
 fn rows<M: Clone + 'static>(
     items: &[MenuItem<M>],
+    min_width: f64,
     path: &[usize],
     current: Option<usize>,
     open: Option<usize>,
@@ -381,7 +393,7 @@ fn rows<M: Clone + 'static>(
     typing: &Rc<RefCell<TypeAhead>>,
     flash: &Flashing<M>,
 ) -> Vec<Element<M>> {
-    let columns = Columns::of(items);
+    let columns = Columns::of(items, min_width);
     let labels: Rc<[String]> = items
         .iter()
         .filter_map(|item| match item {
@@ -582,6 +594,8 @@ struct Panel<M> {
     typing: Rc<RefCell<TypeAhead>>,
     /// The choice flashing now.
     flash: Flashing<M>,
+    /// The panel's corner radius.
+    radius: f64,
     children: Vec<Element<M>>,
 }
 
@@ -870,7 +884,7 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
             let typed = old.typing.borrow().clone();
             *self.typing.borrow_mut() = typed;
         }
-        if self.label != old.label {
+        if self.label != old.label || self.radius != old.radius {
             Change::Paint
         } else {
             Change::None
@@ -1011,7 +1025,7 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         look::stroke(
             cx,
             rect.inset(Insets::uniform(EDGE / 2.0)),
-            PANEL_RADIUS - EDGE / 2.0,
+            self.radius - EDGE / 2.0,
             EDGE,
             edge,
         );
@@ -1212,7 +1226,7 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
         };
         let width = self.columns.label + label + trailing + TRAILING;
         Measured {
-            size: Size::new(width.max(MIN_WIDTH), ROW_HEIGHT),
+            size: Size::new(width.max(self.columns.min_width), ROW_HEIGHT),
             baseline: None,
         }
     }

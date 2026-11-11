@@ -20,6 +20,7 @@ app = [
     "dep:cupertino-icons",
     "dep:cupertino-modifiers",
     "dep:cupertino-shell-client",
+    "dep:cupertino-trash",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
     "dep:tiny-skia",
@@ -41,6 +42,7 @@ cupertino-geometry = { path = "../cupertino-geometry", optional = true }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
 cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
+cupertino-trash = { path = "../cupertino-trash", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 tiny-skia = { version = "0.12", optional = true }

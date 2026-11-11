@@ -25,6 +25,7 @@ cupertino-apps = { path = "../cupertino-apps" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-thumbnails = { path = "../cupertino-thumbnails" }
+cupertino-trash = { path = "../cupertino-trash" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
 async-channel = { version = "2", optional = true }

@@ -6,8 +6,10 @@
 //! [`Input`].
 
 pub mod bar;
+pub mod confirm;
 pub mod drag;
 pub mod edge;
+pub mod fan;
 pub mod force_quit;
 pub mod label;
 pub mod menu;
@@ -103,6 +105,10 @@ pub enum Input {
     StackOpenFolder,
     /// The stack closed: Escape, or a press outside it.
     StackClosed,
+    /// The question of a tile's menu was answered yes: its button was pressed.
+    ConfirmDone,
+    /// The question closed: its other button, Escape, or a press outside it.
+    ConfirmClosed,
     /// The compositor took the hovered tile's label down; the next pointer motion shows it again.
     LabelGone,
 }

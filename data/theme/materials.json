@@ -1,6 +1,45 @@
 {
  "catalogs": {
   "light": {
+   "DockBar": {
+    "variants": {
+     "active.normal": 0,
+     "active.rollover": 0,
+     "active.pressed": 0,
+     "inactive.normal": 0,
+     "inactive.rollover": 0,
+     "inactive.pressed": 0
+    },
+    "recipes": [
+     {
+      "backdrop": {
+       "scale": 0.5,
+       "sigma": 8.0,
+       "ops": [
+        {
+         "saturate": 1.2
+        }
+       ]
+      },
+      "fills": [
+       {
+        "rgba": [
+         1.0,
+         1.0,
+         1.0,
+         0.12
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "active.normal"
+     }
+    ]
+   },
    "Header": {
     "variants": {
      "active.normal": 0,
@@ -2398,9 +2437,87 @@
       "variant": "inactive.rollover"
      }
     ]
+   },
+   "TooltipLabel": {
+    "variants": {
+     "active.normal": 0,
+     "active.rollover": 0,
+     "active.pressed": 0,
+     "inactive.normal": 0,
+     "inactive.rollover": 0,
+     "inactive.pressed": 0
+    },
+    "recipes": [
+     {
+      "backdrop": {
+       "scale": 0.5,
+       "sigma": 12.0,
+       "ops": [
+        {
+         "saturate": 1.2
+        }
+       ]
+      },
+      "fills": [
+       {
+        "rgba": [
+         1.0,
+         1.0,
+         1.0,
+         0.5
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "active.normal"
+     }
+    ]
    }
   },
   "dark": {
+   "DockBar": {
+    "variants": {
+     "active.normal": 0,
+     "active.rollover": 0,
+     "active.pressed": 0,
+     "inactive.normal": 0,
+     "inactive.rollover": 0,
+     "inactive.pressed": 0
+    },
+    "recipes": [
+     {
+      "backdrop": {
+       "scale": 0.5,
+       "sigma": 8.0,
+       "ops": [
+        {
+         "saturate": 1.2
+        }
+       ]
+      },
+      "fills": [
+       {
+        "rgba": [
+         1.0,
+         1.0,
+         1.0,
+         0.03
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "active.normal"
+     }
+    ]
+   },
    "Header": {
     "variants": {
      "active.normal": 0,
@@ -4926,6 +5043,45 @@
       "corner_curve": "circular",
       "notes": [],
       "variant": "inactive.rollover"
+     }
+    ]
+   },
+   "TooltipLabel": {
+    "variants": {
+     "active.normal": 0,
+     "active.rollover": 0,
+     "active.pressed": 0,
+     "inactive.normal": 0,
+     "inactive.rollover": 0,
+     "inactive.pressed": 0
+    },
+    "recipes": [
+     {
+      "backdrop": {
+       "scale": 0.5,
+       "sigma": 12.0,
+       "ops": [
+        {
+         "saturate": 1.2
+        }
+       ]
+      },
+      "fills": [
+       {
+        "rgba": [
+         1.0,
+         1.0,
+         1.0,
+         0.12
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "active.normal"
      }
     ]
    }

@@ -3,13 +3,13 @@
 
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{
-    Change, Element, Environment, Event, EventCx, MeasureCx, PaintCx, Phase, Propagation, Role,
-    SemanticsCx, Widget,
+    next_resource_id, Change, Element, Environment, Event, EventCx, MeasureCx, PaintCx, Phase,
+    Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, Overflow, SizeSpec};
 use cupertino_kit::platform::{KeyEvent, MouseButton, PointerEvent};
-use cupertino_kit::render::{Paint, PaintOp, Sampling, Shape};
+use cupertino_kit::render::{ImageResource, Paint, PaintOp, Sampling, Shape};
 use cupertino_kit::text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle, Wrap,
 };
@@ -158,6 +158,37 @@ pub fn glyphs(cx: &mut PaintCx<'_>, layout: &ParagraphLayout, origin: Point, c: 
     }
 }
 
+/// Draw `layout` with its top-left corner at `origin`, the whole of it turned clockwise by `angle` radians about
+/// `pivot`: the glyphs stay upright and follow the turned baseline.
+pub fn glyphs_turned(
+    cx: &mut PaintCx<'_>,
+    layout: &ParagraphLayout,
+    origin: Point,
+    pivot: Point,
+    angle: f64,
+    c: Color,
+) {
+    let (sin, cos) = angle.sin_cos();
+    let turn = |x: f64, y: f64| Point::new(x * cos - y * sin, x * sin + y * cos);
+    for line in layout.lines() {
+        for run in &line.runs {
+            let from = origin + run.origin;
+            let about = turn(from.x - pivot.x, from.y - pivot.y);
+            let mut glyphs = run.run.clone();
+            for g in &mut glyphs.glyphs {
+                let moved = turn(f64::from(g.x), f64::from(g.y));
+                g.x = moved.x as f32;
+                g.y = moved.y as f32;
+            }
+            cx.push(PaintOp::Glyphs {
+                origin: Point::new(pivot.x + about.x, pivot.y + about.y),
+                run: glyphs,
+                color: c,
+            });
+        }
+    }
+}
+
 /// One line of `s` starting at `x`, centred on `cy`, cut at `max_width`; returns its width.
 #[allow(clippy::too_many_arguments)]
 pub fn text(
@@ -190,6 +221,35 @@ pub fn rendition(icon: &[ImageSource], side: f64, scale: f64) -> Option<&ImageSo
             icon.iter()
                 .max_by_key(|s| s.image.width.max(s.image.height))
         })
+}
+
+/// `icon` with its colours multiplied by `by` (0 to 1): the same shapes, darker. Each rendition is a new image.
+pub fn darkened(icon: &[ImageSource], by: f32) -> Vec<ImageSource> {
+    icon.iter()
+        .map(|source| {
+            let image = &source.image;
+            let mut pixels = image.pixels.to_vec();
+            let row = image.width as usize * 4;
+            for line in pixels.chunks_mut(image.stride.max(1) as usize) {
+                for px in line
+                    .iter_mut()
+                    .take(row)
+                    .enumerate()
+                    .filter(|(i, _)| i % 4 < 3)
+                {
+                    *px.1 = (f32::from(*px.1) * by).round() as u8;
+                }
+            }
+            ImageSource {
+                id: next_resource_id(),
+                image: ImageResource {
+                    pixels: pixels.into(),
+                    revision: 0,
+                    ..image.clone()
+                },
+            }
+        })
+        .collect()
 }
 
 /// `icon` centred in `rect`, as large as fits.

@@ -810,6 +810,27 @@ pub enum MenuAnchor {
     At(Point),
     /// Over the node with this key, the current item's label where the node's label is: a pop-up button's menu.
     Over(Key),
+    /// Above the node with this key, `gap` apart, its leading edge `dx` toward the trailing side of the middle of the
+    /// node's top edge: a context menu that stands off to one side of what it belongs to.
+    Above { key: Key, gap: f64, dx: f64 },
+}
+
+/// The look of a [`Menu`]'s panels that differs between menus.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MenuStyle {
+    /// The panels' corner radius in points.
+    pub radius: f64,
+    /// The least width of a panel in points.
+    pub min_width: f64,
+}
+
+impl Default for MenuStyle {
+    fn default() -> Self {
+        MenuStyle {
+            radius: menu::PANEL_RADIUS,
+            min_width: menu::MIN_WIDTH,
+        }
+    }
 }
 
 /// A menu in a popup window that takes the keyboard while open. Up, Down, Home and End move between the enabled items,

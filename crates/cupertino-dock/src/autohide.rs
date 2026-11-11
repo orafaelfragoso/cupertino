@@ -1,7 +1,7 @@
 //! Auto-hide state machine (structure derived from the visibility settings of)
 //! and the duration formula.
 //!
-//! The delay before a reveal (default 0.15 s) and the show/hide duration formula are as designed;
+//! The delay before a reveal (default 0.2 s; a hide has none) and the show/hide duration formula are as designed;
 //! the state machine around them is. The offset is eased with the cosine ease, approximated here by a cubic Bézier within 3·10⁻⁴.
 //!
 //! ```text
@@ -15,6 +15,9 @@ use cupertino_wm::geometry::Rect;
 
 use crate::config::{DockConfig, Orientation};
 use crate::ease::COSINE_EASE_BEZIER;
+
+/// How long the pointer must have left the dock before it starts to slide away: none, the slide starts at once.
+pub const HIDE_DELAY: f64 = 0.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HideState {
@@ -68,11 +71,15 @@ impl AutoHide {
             }
             (HideState::WaitingToShow { .. }, false) => HideState::Hidden,
             (HideState::Showing, _) if !self.offset.is_animating(now) => HideState::Shown,
+            (HideState::Showing, false) | (HideState::Shown, false) if HIDE_DELAY <= 0.0 => {
+                self.offset.animate_to(1.0, curve, now);
+                HideState::Hiding
+            }
             (HideState::Showing, false) | (HideState::Shown, false) => {
                 HideState::WaitingToHide { since: now }
             }
             (HideState::WaitingToHide { .. }, true) => HideState::Shown,
-            (HideState::WaitingToHide { since }, false) if now - since >= self.delay.min(0.25) => {
+            (HideState::WaitingToHide { since }, false) if now - since >= HIDE_DELAY => {
                 self.offset.animate_to(1.0, curve, now);
                 HideState::Hiding
             }

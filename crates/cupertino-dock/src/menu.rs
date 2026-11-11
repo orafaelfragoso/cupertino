@@ -34,6 +34,8 @@ pub enum MenuCommand {
     /// Launch the tile with this key.
     Open(String),
     OpenTrash,
+    /// Delete everything in the trash, once asked for again.
+    EmptyTrash,
     ToggleAutoHide,
     ToggleMagnification,
     Position(Orientation),
@@ -105,6 +107,8 @@ pub struct TileFacts<'a> {
     pub unresponsive: bool,
     /// The desktop entry file, when the key resolves to one.
     pub entry_path: Option<&'a Path>,
+    /// The trash holds something: its menu can empty it.
+    pub trash_full: bool,
 }
 
 /// The disabled status row that heads the menu of an application that stopped answering.
@@ -132,7 +136,14 @@ fn force_quit(f: &TileFacts<'_>, app: &str) -> Option<MenuItem> {
 pub fn tile_menu(f: &TileFacts<'_>) -> Vec<MenuItem> {
     match f.kind {
         TileKind::Separator | TileKind::MinimizedWindow => Vec::new(),
-        TileKind::Trash => vec![MenuItem::item("Open", MenuCommand::OpenTrash)],
+        TileKind::Trash => vec![
+            MenuItem::item("Open", MenuCommand::OpenTrash),
+            MenuItem::separator(),
+            MenuItem {
+                enabled: f.trash_full,
+                ..MenuItem::item("Empty Trash", MenuCommand::EmptyTrash)
+            },
+        ],
         TileKind::Folder => vec![MenuItem::item(
             &format!("Open \u{201c}{}\u{201d}", crate::stack::folder_name(f.key)),
             MenuCommand::ShowInFileManager(PathBuf::from(f.key)),

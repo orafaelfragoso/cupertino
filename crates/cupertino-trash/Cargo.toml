@@ -1,0 +1,16 @@
+[package]
+name = "cupertino-trash"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The trash of the freedesktop.org Trash specification: moving items in, listing, restoring, deleting and emptying, shared by the file manager and the dock"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[dependencies]
+libc = "0.2"
+percent-encoding = "2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -21,6 +21,7 @@ pub mod config;
 pub mod desktop;
 pub mod dock;
 pub mod ease;
+pub mod fan;
 pub mod force_quit;
 #[cfg(feature = "app")]
 pub mod icons;

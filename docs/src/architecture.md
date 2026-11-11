@@ -49,7 +49,7 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 
 | Layer | Crates | May depend on |
 |---|---|---|
-| `foundation` | `cupertino-animation`, `cupertino-apps`, `cupertino-assets`, `cupertino-capture`, `cupertino-defaults`, `cupertino-filepicker`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-icons`, `cupertino-key-bindings`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-modifiers`, `cupertino-test-bus`, `cupertino-test-pam`, `cupertino-test-pam-shim`, `cupertino-theme`, `cupertino-thumbnails`, `cupertino-typeahead`, `xkbcommon` | `foundation` |
+| `foundation` | `cupertino-animation`, `cupertino-apps`, `cupertino-assets`, `cupertino-capture`, `cupertino-defaults`, `cupertino-filepicker`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-icons`, `cupertino-key-bindings`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-modifiers`, `cupertino-test-bus`, `cupertino-test-pam`, `cupertino-test-pam-shim`, `cupertino-theme`, `cupertino-thumbnails`, `cupertino-trash`, `cupertino-typeahead`, `xkbcommon` | `foundation` |
 | `models` (pure logic, no I/O) | `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-overview`, `cupertino-render-api`, `cupertino-scene`, `cupertino-stage`, `cupertino-wm` | `foundation`, `models` |
 | `platform` (kernel interfaces, and the PipeWire boundary) | `cupertino-alsa`, `cupertino-bluetooth`, `cupertino-devices`, `cupertino-evdev`, `cupertino-netlink`, `cupertino-peer`, `cupertino-pipewire`, `cupertino-screencast`, `cupertino-seat` | `foundation`, `platform` |
 | `protocol` | `cupertino-app-protocols`, `cupertino-login-ipc`, `cupertino-protocols` | `foundation`, `protocol` |

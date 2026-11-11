@@ -32,6 +32,7 @@ use crate::actions::{ActionMap, ActionTarget, Trigger};
 use crate::conf::{dock_config, FILE_MANAGER};
 use crate::config::Orientation;
 use crate::desktop::DesktopIndex;
+use crate::fan::{self, FanLayout};
 use crate::force_quit::{self, Button, Dialog, Entry, Extend};
 use crate::menu::{self, MenuCommand, MenuItem, TileFacts};
 use crate::overview_kit::{OverviewInput, OverviewRequest, OverviewSurface};
@@ -82,6 +83,14 @@ pub const NOT_RESPONDING: &str = "Not responding";
 pub const NEEDS_ATTENTION: &str = "Needs attention";
 pub const MINIMIZED: &str = "Minimized window";
 pub const TRASH_FULL: &str = "Contains items";
+/// What the question before the trash is emptied says: its title, what happens, and its two buttons.
+pub const EMPTY_TRASH_TITLE: &str = "Empty the Trash?";
+pub const EMPTY_TRASH_MESSAGE: &str =
+    "Everything in the Trash is deleted for good. This cannot be undone.";
+pub const EMPTY_TRASH: &str = "Empty Trash";
+pub const CANCEL: &str = "Cancel";
+/// What the name over the tile of an application that runs without windows says under the name.
+pub const NO_WINDOWS: &str = "No open windows";
 
 /// An output of the compositor, by its key (the `wl_output` registry name), in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -319,6 +328,10 @@ pub trait Host {
     fn window_closed(&mut self, id: u32);
     /// Whether the trash holds anything.
     fn trash_full(&mut self) -> bool;
+    /// Delete everything in the trash away from the model: what ends in whether it all went.
+    fn empty_trash(&mut self) -> BusCall {
+        Box::pin(async { false })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -366,6 +379,8 @@ pub enum Message {
         key: String,
         ok: bool,
     },
+    /// The trash was emptied ([`Host::empty_trash`]).
+    TrashEmptied,
     Wake(u64),
     /// `dock.conf` changed on disk.
     ConfChanged,
@@ -413,6 +428,18 @@ struct Pending {
     asked: f64,
 }
 
+/// The question the Empty Trash item asks before it deletes, open over the trash's tile.
+struct OpenConfirm {
+    tile: TileId,
+}
+
+/// A fan closing: when it began and how far out it was then.
+#[derive(Clone, Copy)]
+struct Closing {
+    start: f64,
+    from: f64,
+}
+
 /// A folder's stack open over its tile.
 struct OpenStack {
     tile: TileId,
@@ -423,8 +450,15 @@ struct OpenStack {
     listing: u64,
     /// Its entries, once listed; it shows from then.
     entries: Option<Vec<StackEntry>>,
-    /// When it showed: it comes in over [`stack::ENTRY_S`] from then.
+    /// When it showed: it comes in over [`stack::ENTRY_S`] from then, or a fan over [`fan::OPEN_S`].
     opened: f64,
+    /// Fan or grid, decided when it was listed.
+    shape: fan::Shape,
+    /// The fan has begun to close; it is gone once [`fan::CLOSE_S`] has passed.
+    closing: Option<Closing>,
+    /// The fan's row the pointer is on, and the one the arrow keys moved to.
+    hover: Option<usize>,
+    selected: Option<usize>,
 }
 
 /// An open context menu.
@@ -474,7 +508,11 @@ pub struct Model {
     press: Option<TilePress>,
     poof: Option<Poof>,
     menu: Option<OpenMenu>,
+    confirm: Option<OpenConfirm>,
     stack: Option<OpenStack>,
+    /// The tile the left button is held on, and its icon darkened: the pressed tile shows it until the button comes up
+    /// or the pointer leaves the tile.
+    held: Option<(TileId, IconSet)>,
     /// The folders the host shows as stacks were asked for, and their icons' theme names by path.
     folders_asked: bool,
     folder_icons: HashMap<String, String>,
@@ -552,7 +590,9 @@ impl Model {
             press: None,
             poof: None,
             menu: None,
+            confirm: None,
             stack: None,
+            held: None,
             folders_asked: false,
             folder_icons: HashMap::new(),
             engaged: false,
@@ -773,22 +813,36 @@ impl Model {
                 if let Some(press) = self.press.as_mut() {
                     let (began, id, origin) = (press.moved(p), press.id, press.origin);
                     if began {
+                        self.held = None;
                         self.session.dock.begin_drag(id, origin, p, screen, now);
                     } else if self.session.dock.is_dragging() {
                         self.session.dock.drag_move(p, screen, now);
+                    }
+                }
+                // the darkening goes when the pointer leaves the tile it is held on
+                if let Some((id, _)) = &self.held {
+                    let over = self.session.dock.hit_test(p, screen, now).map(|h| h.id);
+                    if over != Some(*id) {
+                        self.held = None;
                     }
                 }
                 Vec::new()
             }
             Pointer::Leave => {
                 self.pointer = None;
+                self.held = None;
                 Vec::new()
             }
             Pointer::Press(p, _) => {
                 let p = at(p);
                 // a release was lost (the server ended the grab): the drag of that press is over
                 self.session.dock.cancel_drag();
-                match self.session.dock.hit_test(p, screen, now) {
+                let hit = self.session.dock.hit_test(p, screen, now);
+                self.held = hit
+                    .as_ref()
+                    .filter(|h| h.kind != TileKind::Separator)
+                    .map(|h| (h.id, self.darkened_icon(h.id)));
+                match hit {
                     Some(hit) if matches!(hit.kind, TileKind::App | TileKind::Recent) => {
                         self.press = Some(TilePress::new(hit.id, p, now));
                         Vec::new()
@@ -816,6 +870,7 @@ impl Model {
 
     /// A left release: a drag drops the tile, a press that stayed in place is a click.
     fn release(&mut self, position: Point) -> Vec<Command<Message>> {
+        self.held = None;
         let Some(press) = self.press.take() else {
             return Vec::new();
         };
@@ -862,6 +917,25 @@ impl Model {
         self.names.get(key).and_then(|name| name.as_deref())
     }
 
+    /// Whether the application of tile `id` runs without windows.
+    fn windowless(&self, id: TileId) -> bool {
+        self.session.dock.tile(id).is_some_and(|t| {
+            t.kind == TileKind::App && t.running && !self.session.has_windows(&t.key)
+        })
+    }
+
+    /// How much of its colour a pressed tile's icon keeps.
+    const PRESSED_ICON: f32 = 0.405;
+
+    /// The icon of tile `id` darkened as a pressed tile shows it.
+    fn darkened_icon(&self, id: TileId) -> IconSet {
+        let icon = self
+            .tile_icon(id)
+            .map(|key| self.icon(&key, &self.drawn_sides()))
+            .unwrap_or_default();
+        view::paint::darkened(&icon, Self::PRESSED_ICON)
+    }
+
     /// The tile's rectangle in the bar's window, as it is laid out now.
     fn tile_rect(&self, id: TileId) -> Option<Rect> {
         let screen = self.screen()?;
@@ -899,9 +973,11 @@ impl Model {
     /// Open the stack of folder tile `id` over it, or close it when it is the one open (or still being listed).
     /// Opening it closes a menu; it shows once its folder is listed ([`Model::folder_listed`]).
     fn toggle_stack(&mut self, id: TileId) -> Vec<Command<Message>> {
-        if self.stack.take().is_some_and(|s| s.tile == id) {
+        if self.stack.as_ref().is_some_and(|s| s.tile == id) {
+            self.close_stack();
             return Vec::new();
         }
+        self.stack = None;
         let Some(tile) = self.session.dock.tile(id) else {
             return Vec::new();
         };
@@ -918,6 +994,10 @@ impl Model {
             listing,
             entries: None,
             opened: self.now(),
+            shape: fan::Shape::Grid,
+            closing: None,
+            hover: None,
+            selected: None,
         });
         vec![Command::Perform(Box::pin(async move {
             Message::FolderListed {
@@ -931,24 +1011,86 @@ impl Model {
     /// stack that closed, or was opened again, meanwhile is dropped.
     fn folder_listed(&mut self, listing: u64, mut entries: Vec<StackEntry>) {
         let now = self.now();
-        let Some(open) = self
+        let Some(tile) = self
             .stack
-            .as_mut()
+            .as_ref()
             .filter(|s| s.listing == listing && s.entries.is_none())
+            .map(|s| s.tile)
         else {
             return;
         };
         entries.truncate(stack::MAX_ENTRIES);
-        open.entries = Some(entries);
-        open.opened = now;
+        let shape = self.stack_shape(tile, entries.len());
+        if let Some(open) = self.stack.as_mut() {
+            open.entries = Some(entries);
+            open.opened = now;
+            open.shape = shape;
+        }
+    }
+
+    /// Fan or grid for the stack of `tile` with `count` entries: the setting's choice (`dock.conf`'s `stack`), a grid
+    /// for a folder with more entries than the fan holds and where the fan has no room.
+    fn stack_shape(&self, tile: TileId, count: usize) -> fan::Shape {
+        let bottom = self.session.dock.cfg.orientation == Orientation::Bottom;
+        let room = self.screen().map_or(0, |screen| {
+            let layout = self.session.dock.layout(screen, self.now());
+            fan_basis(&layout, screen, tile).map_or(0, |b| fan::room(screen.h, b.above_screen))
+        });
+        fan::shape(self.conf.stack.unwrap_or_default(), count, room, bottom)
+    }
+
+    /// The layout of the fan of the open stack, as the bar lays out now.
+    fn fan_layout(&self) -> Option<FanLayout> {
+        let open = self.stack.as_ref()?;
+        let entries = open.entries.as_ref()?;
+        let screen = self.screen()?;
+        let layout = self.session.dock.layout(screen, self.now());
+        let basis = fan_basis(&layout, screen, open.tile)?;
+        Some(FanLayout::new(
+            &fan::names(entries),
+            stack::OPEN_FOLDER,
+            basis.lowest,
+        ))
+    }
+
+    /// Close the open stack: a fan folds back into its tile over [`fan::CLOSE_S`], a grid goes at once.
+    fn close_stack(&mut self) {
+        let now = self.now();
+        let motion = !self.reduce_motion;
+        let Some(open) = self.stack.as_mut() else {
+            return;
+        };
+        if open.closing.is_some() {
+            return;
+        }
+        if open.shape == fan::Shape::Fan && open.entries.is_some() && motion {
+            let from = fan::progress(now, open.opened, None, false);
+            open.closing = Some(Closing { start: now, from });
+        } else {
+            self.stack = None;
+        }
+    }
+
+    /// Whether a stack, still moving in or out, wants the next frame.
+    fn stack_moving(&self, now: f64) -> bool {
+        self.stack.as_ref().is_some_and(|s| {
+            s.entries.is_some()
+                && s.shape == fan::Shape::Fan
+                && fan::moving(now, s.opened, s.closing.map(|c| c.start))
+        })
     }
 
     /// The tile whose name shows over it, and the name: the tile under the pointer, while no menu, stack, press or drag
     /// is on the bar. A separator has none.
-    fn label(&self, layout: &crate::dock::DockLayout) -> Option<(TileId, String)> {
+    fn label(
+        &self,
+        layout: &crate::dock::DockLayout,
+    ) -> Option<(TileId, String, Option<&'static str>)> {
+        // an ordinary click keeps the name; a drag, a menu or an open stack takes it down
         if self.menu.is_some()
+            || self.confirm.is_some()
             || self.stack.is_some()
-            || self.press.is_some()
+            || self.press.as_ref().is_some_and(|p| p.is_dragging())
             || layout.dragging.is_some()
             || self.locked
         {
@@ -960,15 +1102,24 @@ impl Model {
             return None;
         }
         let name = self.tile_name(id);
-        (!name.is_empty()).then_some((id, name))
+        let status = self.windowless(id).then_some(NO_WINDOWS);
+        (!name.is_empty()).then_some((id, name, status))
     }
 
-    /// A click on the open stack, on its release: an entry opens and the stack closes; the button opens the folder.
+    /// The pointer on the open stack. A grid takes a click on its release: an entry opens and the stack closes, the
+    /// button opens the folder. A fan highlights the row under the pointer and takes the same click; a click on none
+    /// of its rows closes it.
     fn stack_pointer(&mut self, pointer: Pointer) -> Vec<Command<Message>> {
-        let Pointer::Release(p) = pointer else {
+        let Some(open) = self.stack.as_ref().filter(|s| s.closing.is_none()) else {
             return Vec::new();
         };
-        let Some(entries) = self.stack.as_ref().and_then(|s| s.entries.as_ref()) else {
+        let Some(entries) = open.entries.as_ref() else {
+            return Vec::new();
+        };
+        if open.shape == fan::Shape::Fan {
+            return self.fan_pointer(pointer);
+        }
+        let Pointer::Release(p) = pointer else {
             return Vec::new();
         };
         match StackLayout::new(entries.len()).hit(Point::new(p.x, p.y), entries.len()) {
@@ -978,21 +1129,116 @@ impl Model {
         }
     }
 
-    fn open_stack_entry(&mut self, index: usize) -> Vec<Command<Message>> {
-        let Some(open) = self.stack.take() else {
+    /// The pointer on the open fan.
+    fn fan_pointer(&mut self, pointer: Pointer) -> Vec<Command<Message>> {
+        let Some(layout) = self.fan_layout() else {
             return Vec::new();
         };
-        if let Some(entry) = open.entries.as_ref().and_then(|e| e.get(index)) {
-            self.host.open(&entry.path.to_string_lossy());
+        let row_at = |model: &Self, p: cupertino_kit::geometry::Point| {
+            let entries = model.stack.as_ref()?.entries.as_ref()?;
+            layout.hit(
+                Point::new(p.x, p.y),
+                &fan::names(entries),
+                stack::OPEN_FOLDER,
+            )
+        };
+        match pointer {
+            Pointer::Move(p) => {
+                let row = row_at(self, p);
+                if let Some(open) = self.stack.as_mut() {
+                    open.hover = row;
+                    open.selected = None;
+                }
+                Vec::new()
+            }
+            Pointer::Leave => {
+                if let Some(open) = self.stack.as_mut() {
+                    open.hover = None;
+                }
+                Vec::new()
+            }
+            Pointer::Release(p) => match row_at(self, p) {
+                Some(row) if row < layout.entries => self.open_stack_entry(row),
+                Some(_) => self.open_stack_folder(),
+                None => {
+                    self.close_stack();
+                    Vec::new()
+                }
+            },
+            _ => Vec::new(),
+        }
+    }
+
+    /// A key on the open stack that none of its parts took: Escape closes it, and on a fan the arrows, Home and End
+    /// move the selection (the lowest row first), Return and Space choose the selected row.
+    fn stack_key(&mut self, key: KeyEvent) -> Vec<Command<Message>> {
+        if !key.pressed {
+            return Vec::new();
+        }
+        let Some(open) = self.stack.as_mut().filter(|s| s.closing.is_none()) else {
+            return Vec::new();
+        };
+        if key.keysym == ESCAPE {
+            self.close_stack();
+            return Vec::new();
+        }
+        let Some(entries) = open.entries.as_ref().map(Vec::len) else {
+            return Vec::new();
+        };
+        if open.shape != fan::Shape::Fan {
+            return Vec::new();
+        }
+        // the button is the row after the last entry
+        let top = entries;
+        let current = open.selected.or(open.hover);
+        let moved = match key.keysym {
+            UP => Some(current.map_or(0, |i| (i + 1).min(top))),
+            DOWN => Some(current.map_or(0, |i| i.saturating_sub(1))),
+            HOME => Some(0),
+            END => Some(top),
+            RETURN | KP_ENTER | SPACE => {
+                return match current {
+                    Some(row) if row < top => self.open_stack_entry(row),
+                    Some(_) => self.open_stack_folder(),
+                    None => Vec::new(),
+                };
+            }
+            _ => None,
+        };
+        if let Some(row) = moved {
+            open.selected = Some(row);
+            open.hover = None;
         }
         Vec::new()
     }
 
-    fn open_stack_folder(&mut self) -> Vec<Command<Message>> {
-        match self.stack.take() {
-            Some(open) => self.open_in_file_manager(&open.folder),
-            None => Vec::new(),
+    fn open_stack_entry(&mut self, index: usize) -> Vec<Command<Message>> {
+        let Some(open) = self.stack.as_ref().filter(|s| s.closing.is_none()) else {
+            return Vec::new();
+        };
+        let path = open
+            .entries
+            .as_ref()
+            .and_then(|e| e.get(index))
+            .map(|entry| entry.path.to_string_lossy().into_owned());
+        if let Some(path) = path {
+            self.host.open(&path);
         }
+        self.close_stack();
+        Vec::new()
+    }
+
+    fn open_stack_folder(&mut self) -> Vec<Command<Message>> {
+        let Some(folder) = self
+            .stack
+            .as_ref()
+            .filter(|s| s.closing.is_none())
+            .map(|s| s.folder.clone())
+        else {
+            return Vec::new();
+        };
+        self.close_stack();
+        self.open_in_file_manager(&folder)
     }
 
     /// The folders the host shows as stacks, asked for once.
@@ -1202,6 +1448,7 @@ impl Model {
     /// The menu of the tile or the separator.
     fn open_menu(&mut self, id: TileId) {
         self.menu = None;
+        self.confirm = None;
         self.stack = None;
         self.press = None;
         let Some(tile) = self.session.dock.tile(id) else {
@@ -1224,6 +1471,7 @@ impl Model {
                 running_app_id,
                 unresponsive: running_app_id.is_some_and(|app| self.unresponsive.contains(app)),
                 entry_path,
+                trash_full: self.trash_full,
             })
         };
         if items.is_empty() {
@@ -1261,6 +1509,8 @@ impl Model {
             MenuCommand::ForceQuit(app) => self.open_force_quit(Some(&app)),
             MenuCommand::Open(key) => return self.open_app(key),
             MenuCommand::OpenTrash => return self.open_in_file_manager(TRASH_URI),
+            // asked for before it gets here ([`Input::MenuItem`])
+            MenuCommand::EmptyTrash => {}
             MenuCommand::ToggleAutoHide => self.session.dock.toggle_autohide(now),
             MenuCommand::ToggleMagnification => {
                 self.session.dock.cfg.magnification = !self.session.dock.cfg.magnification
@@ -1960,6 +2210,11 @@ impl Model {
             .stack
             .as_ref()
             .is_some_and(|s| self.session.dock.tile(s.tile).is_none())
+            || self
+                .stack
+                .as_ref()
+                .and_then(|s| s.closing)
+                .is_some_and(|c| now >= c.start + fan::CLOSE_S)
         {
             self.stack = None;
         }
@@ -2074,7 +2329,7 @@ impl Model {
             .edge
             .filter(|(o, _)| Some(*o) != self.output)
             .map(|(_, since)| (since + EDGE_DWELL - now).max(0.0));
-        let moving = self.animating(now).then_some(FRAME_FALLBACK);
+        let moving = (self.animating(now) || self.stack_moving(now)).then_some(FRAME_FALLBACK);
         let token = self
             .pending
             .values()
@@ -2107,6 +2362,7 @@ const DOWN: Keysym = Keysym(0xff54);
 const HOME: Keysym = Keysym(0xff50);
 const END: Keysym = Keysym(0xff57);
 const ESCAPE: Keysym = Keysym(0xff1b);
+const SPACE: Keysym = Keysym(0x20);
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
 
@@ -2128,6 +2384,29 @@ impl Model {
             },
         }
     }
+}
+
+/// Where the fan of a folder tile stands over the bar, in the bar's window.
+struct FanBasis {
+    /// The middle of the tile, which is where the fan's window ends below.
+    tile_cx: f64,
+    tile_cy: f64,
+    /// How far above the tile's middle the lowest row's middle is, and how far above the output's bottom edge.
+    lowest: f64,
+    above_screen: f64,
+}
+
+/// Where the fan of `tile` stands in `layout`.
+fn fan_basis(layout: &crate::dock::DockLayout, screen: Rect, tile: TileId) -> Option<FanBasis> {
+    let t = layout.tiles.iter().find(|t| t.id == tile)?;
+    let (cx, cy) = (t.rect.x + t.rect.w / 2.0, t.rect.y + t.rect.h / 2.0);
+    let lowest = (cy - layout.bar.y) + fan::LOWEST_ABOVE_BAR;
+    Some(FanBasis {
+        tile_cx: cx,
+        tile_cy: cy,
+        lowest,
+        above_screen: screen.bottom() - cy + lowest,
+    })
 }
 
 /// What assistive technology says about the state of the tile laid out as `t`.
@@ -2220,6 +2499,11 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::BusActivated { key, ok } => model.bus_activated(key, ok),
+        Message::TrashEmptied => {
+            // the trash's icon follows what is left
+            model.trash_checked = None;
+            Vec::new()
+        }
         Message::Wake(generation) => {
             if generation == model.wake_generation {
                 model.wake_at = None;
@@ -2254,32 +2538,46 @@ fn input_message(model: &mut Model, input: Input) -> Vec<Command<Message>> {
             Vec::new()
         }
         Input::MenuItem(i) => {
+            let tile = model.menu.as_ref().map(|m| m.tile);
             let command = model
                 .menu
                 .as_ref()
                 .and_then(|m| m.items.get(i))
                 .and_then(|item| item.command.clone());
             model.menu = None;
-            match command {
-                Some(command) => model.run_menu_command(command),
-                None => Vec::new(),
+            match (command, tile) {
+                // deleting for good asks first
+                (Some(MenuCommand::EmptyTrash), Some(tile)) => {
+                    model.engaged = false;
+                    model.confirm = Some(OpenConfirm { tile });
+                    Vec::new()
+                }
+                (Some(command), _) => model.run_menu_command(command),
+                (None, _) => Vec::new(),
             }
+        }
+        Input::ConfirmClosed => {
+            model.confirm = None;
+            Vec::new()
+        }
+        Input::ConfirmDone => {
+            model.confirm = None;
+            let emptying = model.host.empty_trash();
+            vec![Command::Perform(Box::pin(async move {
+                let _ = emptying.await;
+                Message::TrashEmptied
+            }))]
         }
         Input::MenuClosed => {
             model.menu = None;
             Vec::new()
         }
         Input::Stack(pointer) => model.stack_pointer(pointer),
-        Input::StackKey(key) => {
-            if key.pressed && key.keysym == ESCAPE {
-                model.stack = None;
-            }
-            Vec::new()
-        }
+        Input::StackKey(key) => model.stack_key(key),
         Input::StackEntry(i) => model.open_stack_entry(i),
         Input::StackOpenFolder => model.open_stack_folder(),
         Input::StackClosed => {
-            model.stack = None;
+            model.close_stack();
             Vec::new()
         }
         Input::LabelGone => Vec::new(),
@@ -2422,11 +2720,19 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 rest: view::kit_rect(&t.rect),
                 // under Reduce Motion a bounce dims the tile in place instead of lifting it
                 opacity: t.presence * (1.0 - REDUCED_BOUNCE_DIM * t.pulse),
-                indicator: t.indicator,
-                icon: model
-                    .tile_icon(t.id)
-                    .map(|k| model.icon(&k, &sides))
-                    .unwrap_or_default(),
+                indicator: if t.indicator { t.indicator_alpha } else { 0.0 },
+                windowless: t.indicator && model.windowless(t.id),
+                chevron: model
+                    .stack
+                    .as_ref()
+                    .is_some_and(|s| s.tile == t.id && s.entries.is_some()),
+                icon: match &model.held {
+                    Some((id, dark)) if *id == t.id && !dark.is_empty() => dark.clone(),
+                    _ => model
+                        .tile_icon(t.id)
+                        .map(|k| model.icon(&k, &sides))
+                        .unwrap_or_default(),
+                },
                 name: model.tile_name(t.id),
                 description: tile_description(model, t.id, t.lifecycle),
             })
@@ -2442,6 +2748,29 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             .iter()
             .map(view::kit_rect)
             .collect();
+        // the rectangles the popups over the bar stand on: from the bar's top (or a tile's middle) down to the bottom
+        // of the window, so that a popup, which has no room below, stands above them
+        let to_bottom = |x: f64, y: f64, width: f64| {
+            let height = screen.bottom() - y;
+            (height > 0.0).then(|| cupertino_kit::geometry::Rect::new(x, y, width, height))
+        };
+        let label = model.label(&layout);
+        let label_anchor = label.as_ref().and_then(|(id, ..)| {
+            let t = layout.tiles.iter().find(|t| t.id == *id)?;
+            to_bottom(t.rect.x, layout.bar.y, t.rect.w)
+        });
+        let fan_open = model
+            .stack
+            .as_ref()
+            .filter(|s| s.shape == fan::Shape::Fan && s.entries.is_some());
+        let fan_basis = fan_open.and_then(|s| fan_basis(&layout, screen, s.tile));
+        let fan_anchor = fan_basis
+            .as_ref()
+            .and_then(|b| to_bottom(b.tile_cx - 0.5, b.tile_cy, 1.0));
+        let menu_anchor = model.menu.as_ref().and_then(|m| {
+            let t = layout.tiles.iter().find(|t| t.id == m.tile)?;
+            to_bottom(t.rect.x + t.rect.w / 2.0 - 0.5, layout.bar.y, 1.0)
+        });
         windows.push(view::bar::window(
             view::bar::BarView {
                 key: key.clone(),
@@ -2451,6 +2780,9 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 tile_size: model.session.dock.cfg.tile_size,
                 bar,
                 tiles,
+                label_anchor,
+                fan_anchor,
+                menu_anchor,
                 input,
                 initial: model.tile_order.first().map(|t| t.0),
                 ticking: model.bar_moving(now),
@@ -2458,12 +2790,15 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             },
             message,
         ));
-        if let Some(name) = model.label(&layout) {
+        if let Some((id, name, status)) = label {
             windows.push(view::label::window(
-                key.clone(),
-                name.0 .0,
-                &name.1,
-                orientation,
+                view::label::LabelView {
+                    parent: key.clone(),
+                    tile: id.0,
+                    name: &name,
+                    status,
+                    orientation,
+                },
                 message,
             ));
         }
@@ -2472,7 +2807,31 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             .as_ref()
             .and_then(|s| Some((s, s.entries.as_ref()?)))
         {
-            if layout.tiles.iter().any(|t| t.id == open.tile) {
+            if let (fan::Shape::Fan, Some(basis)) = (open.shape, &fan_basis) {
+                let lookup = |name: &str| -> IconSet {
+                    model.icon(&IconKey::Named(name.to_owned()), &[fan::ICON])
+                };
+                let closing = open.closing.map(|c| (c.start, c.from));
+                windows.push(view::fan::window(
+                    view::fan::FanView {
+                        parent: key.clone(),
+                        name: &open.name,
+                        entries,
+                        icons: &lookup,
+                        layout: FanLayout::new(
+                            &fan::names(entries),
+                            stack::OPEN_FOLDER,
+                            basis.lowest,
+                        ),
+                        progress: fan::progress(now, open.opened, closing, model.reduce_motion),
+                        highlighted: open.hover.or(open.selected),
+                        moving: fan::moving(now, open.opened, open.closing.map(|c| c.start)),
+                    },
+                    message,
+                ));
+            } else if open.shape == fan::Shape::Grid
+                && layout.tiles.iter().any(|t| t.id == open.tile)
+            {
                 let lookup = |name: &str| -> IconSet {
                     model.icon(&IconKey::Named(name.to_owned()), &[StackLayout::ICON])
                 };
@@ -2486,6 +2845,22 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                         icons: &lookup,
                         since: now - open.opened,
                         reduce_motion: model.reduce_motion,
+                    },
+                    message,
+                ));
+            }
+        }
+        if let Some(confirm) = &model.confirm {
+            if layout.tiles.iter().any(|t| t.id == confirm.tile) {
+                windows.push(view::confirm::window(
+                    view::confirm::ConfirmView {
+                        parent: key.clone(),
+                        tile: confirm.tile.0,
+                        orientation,
+                        title: EMPTY_TRASH_TITLE,
+                        message: EMPTY_TRASH_MESSAGE,
+                        cancel: CANCEL,
+                        confirm: EMPTY_TRASH,
                     },
                     message,
                 ));

@@ -37,6 +37,9 @@ pub struct PlacedTile {
     pub lifecycle: TileLifecycle,
     /// Running indicator should be drawn (running tile and indicators enabled).
     pub indicator: bool,
+    /// How much of the indicator shows, from 0 to 1: it fades in once its app has started (always 1 under Reduce
+    /// Motion).
+    pub indicator_alpha: f64,
     pub presence: f64,
 }
 
@@ -478,6 +481,9 @@ impl Dock {
         let i = self.ensure_app(identity, now);
         let cfg = self.bounce.clone();
         let t = &mut self.apps[i];
+        if !t.running {
+            t.running_since = Some(now);
+        }
         t.running = true;
         t.launch_deadline = None;
         if let Some(b) = t.launch.as_mut() {
@@ -498,6 +504,7 @@ impl Dock {
         if let Some(i) = self.app_index(identity) {
             let t = &mut self.apps[i];
             t.running = false;
+            t.running_since = None;
             t.launch = None;
             t.launch_deadline = None;
             t.attention = None;
@@ -650,7 +657,11 @@ impl Dock {
             || tiles
                 .clone()
                 .any(|t| t.attention.is_some_and(|b| b.is_active(&self.bounce, now)))
-            || self.apps.iter().any(|t| t.launch_deadline.is_some());
+            || self.apps.iter().any(|t| t.launch_deadline.is_some())
+            || self
+                .apps
+                .iter()
+                .any(|t| t.running && !self.reduce_motion && t.indicator_alpha(now) < 1.0);
         // the auto-hide state machine only advances when it is updated, so a pending step or a
         // delay being waited out needs frames too
         let autohide_pending = self.cfg.autohide
@@ -997,6 +1008,10 @@ impl Dock {
             pulse,
             lifecycle: t.lifecycle(&self.bounce, n),
             indicator: self.cfg.show_running_indicators && t.running && t.kind == TileKind::App,
+            indicator_alpha: match now {
+                Some(n) if !self.reduce_motion => t.indicator_alpha(n),
+                _ => 1.0,
+            },
             presence: now.map_or(1.0, |n| t.presence(n)),
         }
     }
@@ -1417,6 +1432,7 @@ impl Dock {
                 pulse: 0.0,
                 lifecycle: TileLifecycle::Idle,
                 indicator: false,
+                indicator_alpha: 1.0,
                 presence: 1.0,
             };
             self.departing = Some(Departing {

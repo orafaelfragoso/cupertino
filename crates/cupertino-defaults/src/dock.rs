@@ -62,6 +62,18 @@ pub enum Position {
     Right,
 }
 
+/// How a folder tile's stack opens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StackStyle {
+    /// A fan for a small folder, a grid for a large one.
+    #[default]
+    Auto,
+    /// Always a fan while the entries fit it; a grid for more.
+    Fan,
+    /// Always the grid.
+    Grid,
+}
+
 /// The names of the eight triggers, as the keys of `dock.conf`.
 pub const TRIGGER_KEYS: [&str; 8] = [
     "corner_top_left",
@@ -203,6 +215,7 @@ pub struct DockSettings {
     pub autohide: Option<bool>,
     pub position: Option<Position>,
     pub recents: Option<bool>,
+    pub stack: Option<StackStyle>,
     pub actions: ActionMap,
 }
 
@@ -285,6 +298,26 @@ const KEYS: &[Key<DockSettings>] = &[
         read: |s, v| parse_switch(v).map(|b| s.recents = Some(b)),
         write: |s| s.recents.map(switch_text),
         keep: |s, g| s.recents = g.recents,
+    },
+    Key {
+        name: "stack",
+        read: |s, v| {
+            s.stack = Some(match v {
+                "auto" => StackStyle::Auto,
+                "fan" => StackStyle::Fan,
+                "grid" => StackStyle::Grid,
+                other => return Err(format!("expected auto, fan or grid, got {other:?}")),
+            });
+            Ok(())
+        },
+        write: |s| {
+            s.stack.map(|p| match p {
+                StackStyle::Auto => "auto".to_string(),
+                StackStyle::Fan => "fan".to_string(),
+                StackStyle::Grid => "grid".to_string(),
+            })
+        },
+        keep: |s, g| s.stack = g.stack,
     },
     Key {
         name: "position",

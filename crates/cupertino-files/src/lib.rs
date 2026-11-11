@@ -57,7 +57,7 @@ pub mod tab_strip;
 pub mod tags;
 pub use cupertino_thumbnails as thumbnail;
 pub mod thumbnail_service;
-pub mod trash;
+pub use cupertino_trash as trash;
 pub mod typeselect;
 #[cfg(feature = "app")]
 pub mod udisks;

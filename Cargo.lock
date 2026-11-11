@@ -1177,6 +1177,7 @@ dependencies = [
  "cupertino-shell-client",
  "cupertino-test-bus",
  "cupertino-theme",
+ "cupertino-trash",
  "cupertino-ui-test",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
@@ -1226,6 +1227,7 @@ dependencies = [
  "cupertino-test-bus",
  "cupertino-theme",
  "cupertino-thumbnails",
+ "cupertino-trash",
  "cupertino-ui-atspi",
  "cupertino-ui-test",
  "cupertino-ui-text",
@@ -1939,6 +1941,15 @@ dependencies = [
  "percent-encoding",
  "png",
  "rustix 1.1.6",
+ "tempfile",
+]
+
+[[package]]
+name = "cupertino-trash"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "percent-encoding",
  "tempfile",
 ]
 

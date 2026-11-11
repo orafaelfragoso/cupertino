@@ -14,7 +14,7 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, LayoutSpec, Measured};
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
-use cupertino_kit::render::{GradientStop, Paint, PaintOp, Shape};
+use cupertino_kit::render::{FillRule, GradientStop, Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::theme::{Surface, GLASS_MATERIAL};
 
 use super::paint::{self, Root};
@@ -22,10 +22,10 @@ use super::{IconSet, Input, BAR_APP_ID, BAR_TITLE};
 use crate::config::Orientation;
 use crate::tiles::TileKind;
 
-/// The surface the bar's material is: the one place to change to give the bar another material. The Dock's surface is
-/// glass with the bar's shape, and with Reduce Transparency a dark (or pale) body in the colour of the wallpaper under
-/// it.
-pub const BAR_SURFACE: Surface = Surface::Dock;
+/// The surface the bar's material is: the one place to change to give the bar another material. The bar's surface is
+/// glass with the bar's shape (in the light appearance a light veil over a blurred backdrop, so the bar stays dark and
+/// clear), and with Reduce Transparency a dark (or pale) body in the colour of the wallpaper under it.
+pub const BAR_SURFACE: Surface = Surface::DockBar;
 
 /// Diameter of the running indicator in points.
 pub const INDICATOR: f64 = 4.0;
@@ -42,11 +42,13 @@ pub const SEPARATOR_WIDTH: f64 = 1.0;
 const FOCUS_RADIUS: f64 = 0.22;
 
 /// Running indicator: light and dark, and the alpha it keeps with Increase Contrast.
-pub(crate) const INDICATOR_LIGHT: paint::Rgba = [0.0, 0.0, 0.0, 0.5];
+pub(crate) const INDICATOR_LIGHT: paint::Rgba = [0.0, 0.0, 0.0, 1.0];
 pub(crate) const INDICATOR_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.6];
 /// Separator line: light and dark; with Increase Contrast it is drawn at twice the alpha.
-const SEPARATOR_LIGHT: paint::Rgba = [0.0, 0.0, 0.0, 0.2];
-const SEPARATOR_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.25];
+const SEPARATOR_LIGHT: paint::Rgba = [0.0, 0.0, 0.0, 0.9];
+const SEPARATOR_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.28];
+/// The share of its opacity the running dot of an application that has no windows keeps.
+pub const DIM_INDICATOR: f64 = 0.3;
 
 /// The bar's fine edge where the bar is not glass: a hairline just inside its outline, darker than what is around it,
 /// light and dark, and its width in points (one device pixel at 2x); Increase Contrast doubles it.
@@ -85,7 +87,12 @@ pub struct TileView {
     /// The resting rectangle the running indicator hangs off.
     pub rest: Rect,
     pub opacity: f64,
-    pub indicator: bool,
+    /// The running indicator's opacity, from 0 (none) to 1; it fades in as the application starts.
+    pub indicator: f64,
+    /// The application runs without windows: its indicator is dimmed.
+    pub windowless: bool,
+    /// The tile's stack is open: a down chevron stands in for its icon.
+    pub chevron: bool,
     pub icon: IconSet,
     /// What assistive technology calls it, and what it says about its state.
     pub name: String,
@@ -104,6 +111,13 @@ pub struct BarView {
     /// The bar's own rectangle, under which the material is; empty while hidden.
     pub bar: Rect,
     pub tiles: Vec<TileView>,
+    /// Where the hovered tile's name stands over: a rectangle across the tile from the top of the bar down to the
+    /// bottom of the window, so the label's popup, which does not fit below it, stands above the bar.
+    pub label_anchor: Option<Rect>,
+    /// The same for the open stack of a folder tile and its fan: from the middle of the tile down.
+    pub fan_anchor: Option<Rect>,
+    /// The same for the open context menu's tail and panel: from the top of the bar down.
+    pub menu_anchor: Option<Rect>,
     /// Where the window takes the pointer.
     pub input: Vec<Rect>,
     /// The tile the keyboard focus goes to when the bar takes the keyboard (`TileId.0`).
@@ -137,11 +151,29 @@ pub fn window<M: Clone + 'static>(view: BarView, input: fn(Input) -> M) -> Windo
     for tile in &view.tiles {
         let mark = match tile.kind {
             TileKind::Separator => Some(Mark::Separator(separator_rect(tile.rest, orientation))),
-            _ if tile.indicator => Some(Mark::Indicator(indicator_rect(tile.rest, orientation))),
+            _ if tile.indicator > 0.0 => {
+                Some(Mark::Indicator(indicator_rect(tile.rest, orientation)))
+            }
             _ => None,
         };
         if let Some(mark) = mark {
-            children.push(Element::new(MarkNode(mark)).key(Key::from(format!("mark-{}", tile.id))));
+            let alpha = match mark {
+                Mark::Indicator(_) if tile.windowless => tile.indicator * DIM_INDICATOR,
+                Mark::Indicator(_) => tile.indicator,
+                Mark::Separator(_) => 1.0,
+            };
+            children.push(
+                Element::new(MarkNode { mark, alpha }).key(Key::from(format!("mark-{}", tile.id))),
+            );
+        }
+    }
+    for (key, rect) in [
+        (LABEL_ANCHOR, view.label_anchor),
+        (FAN_ANCHOR, view.fan_anchor),
+        (MENU_ANCHOR, view.menu_anchor),
+    ] {
+        if let Some(rect) = rect {
+            children.push(Element::new(AnchorNode(rect)).key(key));
         }
     }
     let initial = view.initial;
@@ -339,6 +371,51 @@ pub(crate) fn paint_edge(cx: &mut PaintCx<'_>, all: Rect, radius: f64, lit: bool
     });
 }
 
+/// The top and bottom colours of the plate under the chevron, and the chevron's colour and stroke width as a share of
+/// the plate's side.
+const CHEVRON_PLATE: [[f32; 4]; 2] = [[0.62, 0.60, 0.59, 0.95], [0.40, 0.38, 0.37, 0.95]];
+const CHEVRON_INK: [f32; 4] = [0.08, 0.08, 0.09, 0.85];
+const CHEVRON_STROKE: f64 = 0.0625;
+
+/// A grey plate with a down chevron on it, drawn over `rect` while the tile's stack is open.
+fn paint_chevron(cx: &mut PaintCx<'_>, rect: Rect) {
+    let radius = rect.width() * 0.225;
+    cx.push(PaintOp::Fill {
+        shape: Shape::RoundedRect { rect, radius },
+        paint: Paint::Linear {
+            start: Point::new(0.0, rect.y()),
+            end: Point::new(0.0, rect.y() + rect.height()),
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: paint::color(CHEVRON_PLATE[0]),
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: paint::color(CHEVRON_PLATE[1]),
+                },
+            ],
+        },
+    });
+    let (cx_, cy) = (
+        rect.x() + rect.width() / 2.0,
+        rect.y() + rect.height() / 2.0,
+    );
+    let arm = rect.width() * 0.2;
+    cx.push(PaintOp::Stroke {
+        shape: Shape::Path {
+            verbs: vec![
+                PathVerb::MoveTo(Point::new(cx_ - arm, cy - arm * 0.45)),
+                PathVerb::LineTo(Point::new(cx_, cy + arm * 0.45)),
+                PathVerb::LineTo(Point::new(cx_ + arm, cy - arm * 0.45)),
+            ],
+            fill_rule: FillRule::NonZero,
+        },
+        width: rect.width() * CHEVRON_STROKE,
+        paint: Paint::Solid(paint::color(CHEVRON_INK)),
+    });
+}
+
 /// What the bar draws under a tile.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Mark {
@@ -356,21 +433,25 @@ impl Mark {
     }
 }
 
-/// A running indicator or a separator's line.
-struct MarkNode(Mark);
+/// A running indicator or a separator's line, at `alpha` of its opacity.
+struct MarkNode {
+    mark: Mark,
+    alpha: f64,
+}
 
 impl<M: Clone + 'static> Widget<M> for MarkNode {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
-        paint::placed(self.0.rect())
+        paint::placed(self.mark.rect())
     }
 
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        match (self.0, old.0) {
-            (a, b) if a == b => Change::None,
+        match (self.mark, old.mark) {
+            (a, b) if a == b && self.alpha == old.alpha => Change::None,
+            (a, b) if a == b => Change::Paint,
             (Mark::Indicator(_), Mark::Indicator(_)) | (Mark::Separator(_), Mark::Separator(_)) => {
                 Change::Layout
             }
@@ -380,7 +461,7 @@ impl<M: Clone + 'static> Widget<M> for MarkNode {
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
-            size: self.0.rect().size,
+            size: self.mark.rect().size,
             baseline: None,
         }
     }
@@ -398,10 +479,10 @@ impl<M: Clone + 'static> Widget<M> for MarkNode {
         let (dark, contrast) = (paint::is_dark(&env), paint::is_high_contrast(&env));
         let size = cx.size();
         let all = Rect::new(0.0, 0.0, size.width, size.height);
-        match self.0 {
+        match self.mark {
             Mark::Indicator(_) => {
                 // in the dark the dot lightens the glass behind it, which only the compositor can read
-                if !contrast && cx.material(Surface::DockIndicator, INDICATOR / 2.0, 1.0) {
+                if !contrast && cx.material(Surface::DockIndicator, INDICATOR / 2.0, self.alpha) {
                     return;
                 }
                 let c = if dark {
@@ -409,7 +490,8 @@ impl<M: Clone + 'static> Widget<M> for MarkNode {
                 } else {
                     INDICATOR_LIGHT
                 };
-                let c = paint::color(if contrast { [c[0], c[1], c[2], 1.0] } else { c });
+                let c = if contrast { [c[0], c[1], c[2], 1.0] } else { c };
+                let c = paint::color(paint::faded(c, self.alpha));
                 paint::fill(cx, all, INDICATOR / 2.0, c);
             }
             Mark::Separator(_) => {
@@ -427,6 +509,53 @@ impl<M: Clone + 'static> Widget<M> for MarkNode {
             }
         }
     }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+}
+
+/// The keys of the nodes the popups of the bar stand over.
+pub const LABEL_ANCHOR: &str = "label-anchor";
+pub const FAN_ANCHOR: &str = "fan-anchor";
+pub const MENU_ANCHOR: &str = "menu-anchor";
+
+/// A rectangle of the bar's window that only a popup anchors to: it paints nothing and takes no input.
+struct AnchorNode(Rect);
+
+impl<M: Clone + 'static> Widget<M> for AnchorNode {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        paint::placed(self.0)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.0 != old.0 {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.0.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.hidden();
@@ -576,7 +705,11 @@ impl<M: Clone + 'static> Widget<M> for TileNode<M> {
             cx.set_group(self.tile.opacity.clamp(0.0, 1.0) as f32, Vec::new());
         }
         let artwork = artwork_rect(bounds);
-        paint::image(cx, &self.tile.icon, artwork);
+        if self.tile.chevron {
+            paint_chevron(cx, artwork);
+        } else {
+            paint::image(cx, &self.tile.icon, artwork);
+        }
         // the ring goes with the keyboard: a bar that gave it back keeps its focused tile but shows no ring
         if cx.focus_visible() && cx.window_active() {
             paint::focus_ring(cx, artwork, self.tile_size * ICON_ARTWORK * FOCUS_RADIUS);

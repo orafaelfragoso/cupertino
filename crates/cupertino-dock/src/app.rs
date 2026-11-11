@@ -840,6 +840,16 @@ impl Host for AppHost {
     fn trash_full(&mut self) -> bool {
         self.icons.trash_full()
     }
+
+    /// Emptied on a thread of its own: a big trash takes a while to delete.
+    fn empty_trash(&mut self) -> kit::BusCall {
+        let (sender, receiver) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let ok = cupertino_trash::Trash::new().empty().is_ok();
+            let _ = sender.send_blocking(ok);
+        });
+        Box::pin(async move { receiver.recv().await.unwrap_or(false) })
+    }
 }
 
 /// An icon loaded in the background ([`Host::preload`]).

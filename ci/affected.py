@@ -38,6 +38,11 @@ def workspace() -> list[Package]:
     ) for p in packages]
 
 
+# Agent skills and assistant host configuration, outside every crate.
+AGENT_DIRECTORIES = (".agents/", ".claude/", ".codex/")
+AGENT_FILES = {".mcp.json"}
+
+
 def affected(packages: list[Package], changed: list[str]) -> list[str]:
     """Include all dependency kinds, optional features, and compositor runtime integration tests."""
     names = {p.name for p in packages}
@@ -54,6 +59,9 @@ def affected(packages: list[Package], changed: list[str]) -> list[str]:
         elif path == "docs/architecture/contracts.yaml":
             selected.add("cupertino-server")
         elif path.startswith(("docs/", ".github/ISSUE_TEMPLATE/")) or ("/" not in path and path.endswith(".md")):
+            continue
+        elif path.startswith(AGENT_DIRECTORIES) or path in AGENT_FILES:
+            # Agent skills and assistant configuration are documentation: no crate builds or tests them.
             continue
         else:
             print(f"Full workspace: shared input changed ({path})", file=sys.stderr)

@@ -41,6 +41,21 @@ class AffectedTests(unittest.TestCase):
                  "crates/app/README.md", "crates/cupertino-server/README.md"]
         self.assertEqual(affected(self.packages, paths), [])
 
+    def test_agent_skills_and_assistant_configuration_select_nothing(self) -> None:
+        paths = [".agents/skills/review/SKILL.md", ".agents/skills/review/agents/openai.yaml", ".claude/skills/review",
+                 ".claude/settings.json", ".codex/config.toml", ".mcp.json", "CLAUDE.md"]
+        self.assertEqual(affected(self.packages, paths), [])
+        self.assertEqual({name for name, enabled in checks(paths).items() if enabled}, set())
+
+    def test_agent_paths_do_not_hide_code_or_shared_inputs(self) -> None:
+        self.assertEqual(affected(self.packages, [".agents/skills/review/SKILL.md", "crates/consumer/src/lib.rs"]),
+                         ["consumer"])
+        self.assertEqual(affected(self.packages, [".mcp.json", "crates/app/.mcp.json"]),
+                         ["app", "consumer", "cupertino-server"])
+        for path in (".cargo/config.toml", ".github/workflows/ci.yml", "data/.agents/x"):
+            with self.subTest(path=path):
+                self.assertEqual(affected(self.packages, [".mcp.json", path]), sorted(p.name for p in self.packages))
+
     def test_docs_do_not_hide_code_changes(self) -> None:
         paths = ["crates/app/README.md", "crates/consumer/src/lib.rs"]
         for changed in (paths, list(reversed(paths))):

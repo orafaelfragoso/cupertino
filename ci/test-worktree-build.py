@@ -470,8 +470,12 @@ class WorktreeBuildTest(unittest.TestCase):
     def test_cleanup_refuses_unmanaged_or_other_worktree_targets_and_symlinks(self):
         target = self.root / "target"
         target.mkdir()
-        with self.assertRaises(FileNotFoundError):
+        (target / "debug").mkdir()
+        with self.assertRaisesRegex(ValueError, "this wrapper did not make it.*without `run`.*left alone"):
             BUILD.cleanup(self.root, self.state, True, False)
+        with self.assertRaisesRegex(ValueError, "this wrapper did not make it"):
+            BUILD.prepare(self.root, self.state, "identity", None, ())
+        self.assertTrue((target / "debug").is_dir(), "an unmanaged target is never removed")
         BUILD.write_marker(target, {"schema": BUILD.SCHEMA, "owner": "other-worktree"})
         with self.assertRaisesRegex(ValueError, "ownership"):
             BUILD.cleanup(self.root, self.state, True, False)

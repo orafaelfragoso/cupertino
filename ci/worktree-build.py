@@ -368,6 +368,10 @@ def matches(metadata: Metadata, identity: str, legacy: Callable[[], str] | None)
 def read_marker(directory: Path, owner: str) -> Metadata:
     if directory.is_symlink() or not directory.is_dir() or (directory / MARKER).is_symlink():
         raise ValueError(f"{directory}: refusing an unmanaged directory or symlink")
+    if not (directory / MARKER).exists():
+        raise ValueError(f"{directory}: no {MARKER}, so this wrapper did not make it (a cargo or "
+                         "ci/build-test-fixtures.py command run without `run` makes one); it is left alone: move it "
+                         "away or delete it, then run again through `run`")
     metadata = json.loads((directory / MARKER).read_text())
     if not isinstance(metadata, dict) or metadata.get("owner") != owner or metadata.get("schema") not in (1, SCHEMA):
         raise ValueError(f"{directory}: ownership marker does not match")

@@ -3,6 +3,7 @@
 //! it) and a pointer under it towards the tile. At the bottom of the output it stands over the bar, the pointer's tip a
 //! little above the bar's top edge. It takes neither the pointer nor the keyboard.
 
+use cupertino_kit::controls::CalloutPointer;
 use cupertino_kit::core::{
     Change, CommandRegistry, Element, Event, EventCx, Glass, Key, MeasureCx, PaintCx, Popup,
     PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
@@ -34,7 +35,7 @@ const STATUS_SHARE: f32 = 0.6;
 /// The capsule's corner radius: half a one-line capsule, and a two-line capsule keeps it.
 pub const RADIUS: f64 = 13.0;
 /// The pointer under the capsule: its width and its depth.
-pub const POINTER_WIDTH: f64 = 10.0;
+pub const POINTER_WIDTH: f64 = 20.0;
 pub const POINTER_DEPTH: f64 = 6.5;
 /// How far the pointer's tip stands above the bar's top edge (the label's window ends at the tip).
 pub const GAP: f64 = 3.0;
@@ -43,7 +44,7 @@ const SIDE_GAP: f64 = 3.0;
 /// The glass container the capsule and its pointer share, and how far their outlines blend into each other in points:
 /// the pointer's sides curve out into the capsule's bottom edge as one piece of glass.
 const GLASS_CONTAINER: u32 = 1;
-const GLASS_BLEND: f64 = 6.0;
+const GLASS_BLEND: f64 = 7.0;
 /// The capsule's fill where the session shows no material (Reduce Transparency, Increase Contrast, no desktop
 /// effects), in the light and the dark appearance.
 const FILL: [Color; 2] = [
@@ -158,7 +159,17 @@ pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) ->
                 })
                 .key("body")];
                 if pointer {
-                    children.push(Element::new(Pointer).key("pointer"));
+                    children.push(
+                        CalloutPointer {
+                            width: POINTER_WIDTH,
+                            depth: POINTER_DEPTH,
+                            glass: Glass::regular().container(GLASS_CONTAINER, GLASS_BLEND),
+                            surface: Surface::Tooltip,
+                            fills_without_glass: false,
+                        }
+                        .element()
+                        .key("pointer"),
+                    );
                 }
                 children
             },
@@ -279,47 +290,6 @@ impl<M: Clone + 'static> Widget<M> for LabelNode<M> {
     }
 
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
-
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.hidden();
-    }
-}
-
-/// The pointer under the capsule: a small piece of the label's glass that the capsule's glass blends into. Where the
-/// session shows no material the capsule paints the whole outline, pointer included, and this paints nothing.
-struct Pointer;
-
-impl<M: Clone + 'static> Widget<M> for Pointer {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        LayoutSpec::new(ContainerKind::Leaf)
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        Measured {
-            size: Size::new(POINTER_WIDTH, POINTER_DEPTH),
-            baseline: None,
-        }
-    }
-
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
-        Propagation::Continue
-    }
-
-    fn hit(&self, _: &(), _: Point) -> bool {
-        false
-    }
-
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        shown_on_glass(cx, Glass::regular().capsule());
-    }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.hidden();

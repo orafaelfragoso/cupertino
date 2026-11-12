@@ -19,7 +19,7 @@ pub const PANEL_GAP: f64 = 12.5;
 /// How far a tile menu's pointer tip stands above the bar's top edge, and the pointer's width and depth: the panel's
 /// bottom edge is 12.5 points above the bar.
 pub const TIP_GAP: f64 = 3.0;
-const TAIL_WIDTH: f64 = 14.0;
+const TAIL_WIDTH: f64 = 24.0;
 const TAIL_DEPTH: f64 = 9.5;
 /// How far the panel's leading edge is to the leading side of the tile's middle: the panel stands off to the trailing
 /// side of the icon.

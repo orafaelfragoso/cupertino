@@ -1826,6 +1826,12 @@ fn popup_backdrop_elements(
     glass.finish_popup(p, out, opacity)
 }
 
+/// How much brighter a small callout's rim is than the glass's, in the dark and the light appearance.
+const SMALL_CALLOUT_RIM_GAIN_DARK: f32 = 1.6;
+const SMALL_CALLOUT_RIM_GAIN_LIGHT: f32 = 0.55;
+/// The white lifted over the face of a small dark callout.
+const SMALL_CALLOUT_FACE_DARK: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
+
 /// The shortest side a shape of a callout has to be for the callout to cast the panel shadow under it: the label's
 /// capsule and a pointer cast none.
 const CALLOUT_SHADOW_MIN_SIDE: f64 = 40.0;
@@ -2026,6 +2032,18 @@ fn glass_pieces(
             .is_some_and(|b| b[2].min(b[3]) < CALLOUT_SHADOW_MIN_SIDE as f32);
         if let Some(face) = popup_glass_face(&mode).filter(|_| !(callout && small)) {
             container.params.face.fill = face;
+        }
+        if callout && small && !mode.reduce_transparency && !mode.increase_contrast {
+            // a small callout (a label) is a veil a little lighter than the plain glass, with a rim that reads clearly
+            // over a dark backdrop and gently over a light one
+            container.params.highlight.amount *= if mode.dark {
+                SMALL_CALLOUT_RIM_GAIN_DARK
+            } else {
+                SMALL_CALLOUT_RIM_GAIN_LIGHT
+            };
+            if mode.dark {
+                container.params.face.fill = SMALL_CALLOUT_FACE_DARK;
+            }
         }
     }
     let alpha = members.iter().map(|b| b.alpha).fold(0.0, f64::max) as f32 * opacity;

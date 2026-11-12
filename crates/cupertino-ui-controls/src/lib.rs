@@ -4,6 +4,7 @@
 mod badge;
 mod bar_chart;
 mod button;
+mod callout;
 mod canvas;
 mod checkbox;
 mod choice;
@@ -54,6 +55,7 @@ mod window_drag;
 mod window_group;
 
 pub use button::CompactButton;
+pub use callout::CalloutPointer;
 pub use choice::{segment_at, ChoiceState};
 pub use date_picker::DatePickerState;
 pub use editor::EditorState;

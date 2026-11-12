@@ -12,8 +12,8 @@ use crate::button::ButtonLook;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::{
-    ButtonRole, ButtonStyle, ContextMenu, Handler, InlinePopUpButton, Menu, MenuAnchor, MenuItem,
-    MenuStyle, MenuTail, PopUpButton, PullDownButton,
+    ButtonRole, ButtonStyle, CalloutPointer, ContextMenu, Handler, InlinePopUpButton, Menu,
+    MenuAnchor, MenuItem, MenuStyle, MenuTail, PopUpButton, PullDownButton,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_menu_model::tracking::{
@@ -2187,7 +2187,15 @@ impl<M: Clone + 'static> Widget<M> for TailRow {
     }
 
     fn take_children(&mut self) -> Vec<Element<M>> {
-        vec![Element::new(TailShape { tail: self.tail }).key("shape")]
+        vec![CalloutPointer {
+            width: self.tail.width,
+            depth: self.tail.depth,
+            glass: tail_glass(),
+            surface: Surface::Menu,
+            fills_without_glass: true,
+        }
+        .element()
+        .key("shape")]
     }
 
     fn state(&self) {}
@@ -2216,57 +2224,6 @@ impl<M: Clone + 'static> Widget<M> for TailRow {
     }
 
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
-
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.hidden();
-    }
-}
-
-/// The pointer itself: a small capsule of the panel's glass.
-struct TailShape {
-    tail: MenuTail,
-}
-
-impl<M: Clone + 'static> Widget<M> for TailShape {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        LayoutSpec::new(ContainerKind::Leaf)
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.tail != old.tail {
-            Change::Layout
-        } else {
-            Change::None
-        }
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        Measured {
-            size: Size::new(self.tail.width, self.tail.depth),
-            baseline: None,
-        }
-    }
-
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
-        Propagation::Continue
-    }
-
-    fn hit(&self, _: &(), _: Point) -> bool {
-        false
-    }
-
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if !cx.glass(tail_glass().capsule()) {
-            let size = cx.size();
-            let fill = cx.env().theme.surface(Surface::Menu).fill;
-            let rect = Rect::new(0.0, 0.0, size.width, size.height);
-            look::fill(cx, rect, size.width.min(size.height) / 2.0, fill);
-        }
-    }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.hidden();

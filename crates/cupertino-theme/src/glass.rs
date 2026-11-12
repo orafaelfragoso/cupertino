@@ -191,18 +191,18 @@ const REFRACTION_HEIGHT_PER_POINT_CLEAR: f32 = 0.36;
 /// Bleed strength and width per point of short side (regular style).
 const BLEED_PER_POINT: f32 = 0.35;
 /// Short side past which the bleed stops growing.
-const BLEED_SIDE_MAX: f32 = 140.0;
-/// Opacity of the two narrow blur levels of a small regular shape.
-const NARROW_LEVEL_OPACITY_SMALL: f32 = 0.4;
-/// Short side where the narrow levels start to grow more opaque.
-const NARROW_LEVEL_SIDE_MIN: f32 = 64.0;
-/// Short side where they stop.
-const NARROW_LEVEL_SIDE_MAX: f32 = 140.0;
-/// Opacity gained per point of short side between those two sides.
-const NARROW_LEVEL_OPACITY_PER_POINT: f32 = 1.0 / 240.0;
+const BLEED_SIDE_MAX: f32 = 240.0;
+/// Opacity of the two narrow blur levels of a regular shape by short side `(side, opacity)`; linear between, flat
+/// outside: small shapes keep more of the sharper levels out, large ones let them in.
+const NARROW_LEVEL_OPACITY_BY_SIDE: [(f32, f32); 3] = [(64.0, 0.4), (100.0, 0.55), (240.0, 0.8)];
 /// Largest face luminance of dark regular glass by short side `(side, max luma)`; linear between, flat outside.
-const DARK_MAX_LUMA_BY_SIDE: [(f32, f32); 4] =
-    [(60.0, 0.6), (80.0, 0.5), (100.0, 0.375), (120.0, 0.35)];
+const DARK_MAX_LUMA_BY_SIDE: [(f32, f32); 5] = [
+    (60.0, 0.6),
+    (80.0, 0.5),
+    (100.0, 0.375),
+    (120.0, 0.35),
+    (240.0, 0.358),
+];
 /// Blur radius of the smallest clear shapes, in points.
 const CLEAR_BLUR_MIN: f32 = 5.0;
 /// Blur radius of the largest clear shapes.
@@ -216,7 +216,7 @@ const CLEAR_SHADOW_AMOUNT_PER_POINT: f32 = 0.625;
 const CLEAR_SHADOW_AMOUNT_SIDE_MAX: f32 = 120.0;
 /// Clear drop-shadow blur per point of short side, and the side it stops growing at.
 const CLEAR_SHADOW_HEIGHT_PER_POINT: f32 = 0.4;
-const CLEAR_SHADOW_HEIGHT_SIDE_MAX: f32 = 140.0;
+const CLEAR_SHADOW_HEIGHT_SIDE_MAX: f32 = 240.0;
 
 // ---- accessibility ----------------------------------------------------------------------------------------------
 
@@ -283,7 +283,7 @@ fn regular_face(dark: bool) -> GlassFace {
             black: 0.4,
             clamp: 1.0,
             max_luma: 0.94,
-            fill: [1.0, 1.0, 1.0, 0.2],
+            fill: [1.0, 1.0, 1.0, 0.184],
         }
     }
 }
@@ -502,9 +502,7 @@ impl GlassParams {
     }
 
     fn regular(dark: bool, s: f32) -> Self {
-        let narrow = NARROW_LEVEL_OPACITY_SMALL
-            + (s - NARROW_LEVEL_SIDE_MIN).clamp(0.0, NARROW_LEVEL_SIDE_MAX - NARROW_LEVEL_SIDE_MIN)
-                * NARROW_LEVEL_OPACITY_PER_POINT;
+        let narrow = by_side(&NARROW_LEVEL_OPACITY_BY_SIDE, s);
         let bleed = BLEED_PER_POINT * s.min(BLEED_SIDE_MAX);
         let mut face = regular_face(dark);
         if dark {
@@ -515,9 +513,9 @@ impl GlassParams {
                 radius: 5.0,
                 level_opacity: [narrow, narrow, 1.0, 1.0],
                 fill_radius: 8.0,
-                fill_darken: if dark { 0.9 } else { 0.0 },
-                fill_normal: 0.5,
-                fill_lighten: if dark { 0.0 } else { 0.9 },
+                fill_darken: if dark { 0.882 } else { 0.0 },
+                fill_normal: 0.46,
+                fill_lighten: if dark { 0.0 } else { 0.882 },
             },
             face,
             refraction: GlassRefraction {

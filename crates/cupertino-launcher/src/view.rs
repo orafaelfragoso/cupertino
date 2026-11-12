@@ -132,7 +132,15 @@ pub const EDGE_ALPHA_LIGHT: f32 = 0.27;
 /// light appearance, so it reads as a faint line on any backdrop. Off the glass (the panel's opaque fill) and with
 /// Increase Contrast it takes the theme's separator colour.
 pub const GLASS_SEPARATOR_DARK: f32 = 0.175;
-pub const GLASS_SEPARATOR_LIGHT: f32 = 0.1;
+pub const GLASS_SEPARATOR_LIGHT: f32 = 0.14;
+/// The selected result's fill over the panel's glass: white at this opacity in the dark appearance, black at this one
+/// in the light appearance, so the backdrop's tint shows through it as it does through the rest of the panel. Off the
+/// glass and with Increase Contrast it takes the theme's opaque selection colour.
+pub const GLASS_SELECTION_DARK: f32 = 0.14;
+pub const GLASS_SELECTION_LIGHT: f32 = 0.1;
+/// An action button that is not the chosen one, over the glass: the same thin fill, fainter.
+pub const GLASS_CONTROL_DARK: f32 = 0.12;
+pub const GLASS_CONTROL_LIGHT: f32 = 0.06;
 /// The preview pane: its padding, the largest picture or icon it shows, the text excerpt's size and lines, and the
 /// action buttons' height and gap.
 pub const PREVIEW_PADDING: f64 = 16.0;
@@ -1384,16 +1392,38 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
 /// The colour of a separator line where `cx` paints: translucent over the panel's glass, the theme's separator over
 /// the opaque fill and with Increase Contrast.
 pub(crate) fn separator_color(cx: &PaintCx<'_>) -> Option<Color> {
+    thin_fill(
+        cx,
+        GLASS_SEPARATOR_DARK,
+        GLASS_SEPARATOR_LIGHT,
+        ColorRole::Separator,
+    )
+}
+
+/// The fill of a selected result, row or cell where `cx` paints: a thin fill of the label's tone over the panel's
+/// glass, the theme's selection colour over the opaque fill and with Increase Contrast.
+pub(crate) fn selection_color(cx: &PaintCx<'_>) -> Option<Color> {
+    thin_fill(
+        cx,
+        GLASS_SELECTION_DARK,
+        GLASS_SELECTION_LIGHT,
+        ColorRole::SecondarySelectedControlFill,
+    )
+}
+
+/// Over the glass (and without Increase Contrast), white at `dark` opacity in the dark appearance and black at `light`
+/// in the light one; elsewhere the theme's `role`.
+fn thin_fill(cx: &PaintCx<'_>, dark: f32, light: f32, role: ColorRole) -> Option<Color> {
     let theme = &cx.env().theme;
     let appearance = theme.preferences.appearance;
     if cx.on_glass() && !appearance.is_high_contrast() {
         Some(if appearance.is_dark() {
-            Color::new(1.0, 1.0, 1.0, GLASS_SEPARATOR_DARK)
+            Color::new(1.0, 1.0, 1.0, dark)
         } else {
-            Color::new(0.0, 0.0, 0.0, GLASS_SEPARATOR_LIGHT)
+            Color::new(0.0, 0.0, 0.0, light)
         })
     } else {
-        theme.colors.get(ColorRole::Separator, StateVariant::NORMAL)
+        theme.colors.get(role, StateVariant::NORMAL)
     }
 }
 
@@ -1978,10 +2008,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ResultRow<M> {
             (size.width - 2.0 * SELECTION_INSET).max(0.0),
             size.height,
         );
-        let Some(color) = cx.env().theme.colors.get(
-            ColorRole::SecondarySelectedControlFill,
-            StateVariant::NORMAL,
-        ) else {
+        let Some(color) = selection_color(cx) else {
             return;
         };
         cx.push(PaintOp::Fill {
@@ -2502,11 +2529,22 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ActionButton {
         let size = cx.size();
         let colors = cx.env().theme.colors.clone();
         let (fill, text) = if self.chosen {
-            (ColorRole::DefaultButtonFill, ColorRole::DefaultButtonText)
+            (
+                colors.get(ColorRole::DefaultButtonFill, StateVariant::NORMAL),
+                ColorRole::DefaultButtonText,
+            )
         } else {
-            (ColorRole::ControlFill, ColorRole::ControlText)
+            (
+                thin_fill(
+                    cx,
+                    GLASS_CONTROL_DARK,
+                    GLASS_CONTROL_LIGHT,
+                    ColorRole::ControlFill,
+                ),
+                ColorRole::ControlText,
+            )
         };
-        if let Some(fill) = colors.get(fill, StateVariant::NORMAL) {
+        if let Some(fill) = fill {
             cx.push(PaintOp::Fill {
                 shape: Shape::RoundedRect {
                     rect: Rect::new(0.0, 0.0, size.width, size.height),

@@ -405,11 +405,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for CellNode {
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let local = Rect::new(0.0, 0.0, self.cell.width(), self.cell.height());
         if self.selected {
-            let c = role(
-                cx,
-                ColorRole::SecondarySelectedControlFill,
-                Color::new(0.5, 0.5, 0.5, 0.25),
-            );
+            let c = super::selection_color(cx).unwrap_or(Color::new(0.5, 0.5, 0.5, 0.25));
             fill(
                 cx,
                 ScopeLayout::item_rect(&local),

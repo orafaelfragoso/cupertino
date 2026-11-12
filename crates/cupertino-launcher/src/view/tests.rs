@@ -2462,3 +2462,39 @@ fn separators_over_the_glass_are_a_faint_line_of_the_label_s_tone() {
         );
     }
 }
+
+/// Over the panel's glass the selected result is a thin fill of the label's tone, so the backdrop's tint shows through
+/// it as it does through the panel around it; over the opaque fill it takes the theme's selection colour.
+#[test]
+fn the_selected_result_over_the_glass_is_a_thin_fill_the_tint_shows_through() {
+    for (appearance, glass, expected) in [
+        (
+            Appearance::Dark,
+            true,
+            Some(Color::new(1.0, 1.0, 1.0, GLASS_SELECTION_DARK)),
+        ),
+        (
+            Appearance::Light,
+            true,
+            Some(Color::new(0.0, 0.0, 0.0, GLASS_SELECTION_LIGHT)),
+        ),
+        (
+            Appearance::Light,
+            false,
+            theme_in(Appearance::Light).colors.get(
+                ColorRole::SecondarySelectedControlFill,
+                StateVariant::NORMAL,
+            ),
+        ),
+    ] {
+        let mut run = Run::with(appearance, glass);
+        run.type_text("fire");
+        let id = run.model().panel.selected_item().map(|i| i.id.clone());
+        let key: &'static str =
+            Box::leak(format!("item:{}", id.expect("a selection")).into_boxed_str());
+        assert_eq!(run.fill_of(key), expected, "{appearance:?}, glass {glass}");
+        if let Some(fill) = expected.filter(|_| glass) {
+            assert!(fill.a < 0.2, "thin enough for the tint to show: {fill:?}");
+        }
+    }
+}

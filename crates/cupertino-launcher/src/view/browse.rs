@@ -652,11 +652,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ItemNode {
         let local = Rect::new(0.0, 0.0, self.cell.width(), self.cell.height());
         let item = BrowseLayout::item_rect(&local);
         if self.selected {
-            let c = role(
-                cx,
-                ColorRole::SecondarySelectedControlFill,
-                Color::new(0.5, 0.5, 0.5, 0.25),
-            );
+            let c = super::selection_color(cx).unwrap_or(Color::new(0.5, 0.5, 0.5, 0.25));
             fill(cx, item, BrowseLayout::SELECTION_RADIUS, c);
         }
         let icon = if self.list {

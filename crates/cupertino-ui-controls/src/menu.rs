@@ -349,6 +349,7 @@ impl<M: Clone + 'static> Menu<M> {
             };
             let key = level_key(&key, depth);
             let tailed = depth == 0 && style.tail.is_some();
+            let name = label.clone();
             windows.push(Window {
                 key: key.clone(),
                 spec: WindowSpec {
@@ -374,6 +375,7 @@ impl<M: Clone + 'static> Menu<M> {
                 },
                 content: match style.tail.filter(|_| tailed) {
                     Some(tail) => Element::new(Callout {
+                        name,
                         children: vec![
                             Element::new(panel).key("panel"),
                             Element::new(TailRow { tail }).key("tail"),
@@ -2150,6 +2152,8 @@ fn tail_glass() -> Glass {
 
 /// The content of a menu window with a pointer: the panel, and under it the row that holds the pointer.
 struct Callout<M> {
+    /// What assistive technology calls the window: the menu's name.
+    name: String,
     children: Vec<Element<M>>,
 }
 
@@ -2171,8 +2175,12 @@ impl<M: Clone + 'static> Widget<M> for Callout<M> {
 
     fn state(&self) {}
 
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.name != old.name {
+            Change::Paint
+        } else {
+            Change::None
+        }
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
@@ -2192,8 +2200,9 @@ impl<M: Clone + 'static> Widget<M> for Callout<M> {
 
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
+    // the window around the menu: the panel under it is the menu assistive technology reads
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.hidden();
+        cx.name(self.name.clone());
     }
 }
 

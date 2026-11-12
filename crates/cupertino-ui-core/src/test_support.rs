@@ -407,6 +407,9 @@ pub(crate) struct FakeSystem {
     pub(crate) solid: bool,
     /// Every solid present: the window, its colour and the configure it acknowledged.
     pub(crate) solids: Vec<(WindowId, cupertino_ui_theme::Color, Option<ConfigureId>)>,
+    /// The activated state the compositor states for every window ([`WindowSystem::activated`]); `None` where only
+    /// the keyboard tells.
+    pub(crate) activated: Option<bool>,
 }
 
 /// A raised layer as [`FakeSystem`] saw it presented.
@@ -452,6 +455,10 @@ impl FakeSystem {
 }
 
 impl WindowSystem for FakeSystem {
+    fn activated(&self, _: WindowId) -> Option<bool> {
+        self.activated
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             app_effects: self.effects,

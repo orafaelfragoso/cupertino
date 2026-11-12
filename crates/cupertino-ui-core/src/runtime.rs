@@ -192,6 +192,9 @@ struct WindowState<M> {
     frame_ready: bool,
     /// A frame of the window has been committed; the compositor has not necessarily shown it yet.
     committed: bool,
+    /// A frame was drawn that the window system was not ready to show; it keeps the frame's damage, and the next
+    /// present shows it even when nothing changed since.
+    owed: bool,
     /// The compositor answered the frame callback of a committed frame, so the window has been shown
     /// ([`Command::OnPresented`]).
     presented: bool,
@@ -959,6 +962,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             fullscreen: false,
             frame_ready: false,
             committed: false,
+            owed: false,
             presented: false,
             dirty: true,
             prepared: false,
@@ -1217,7 +1221,17 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let mut effects = Effects::default();
         match event {
             WindowEvent::Configure(c) => {
-                w.size = c.size.unwrap_or(w.spec.size);
+                let size = c.size.unwrap_or(w.spec.size);
+                // a window shown at this size and in these states keeps its layout and its pixels: the next frame
+                // only acknowledges the configure, with a commit that damages nothing
+                let same = w.configured
+                    && w.committed
+                    && w.failed.is_none()
+                    && size == w.size
+                    && w.maximized == c.states.maximized
+                    && w.fullscreen == c.states.fullscreen;
+                let shown_active = w.active || w.keyboard_in_popup;
+                w.size = size;
                 w.ack = Some(c.id);
                 w.configured = true;
                 w.maximized = c.states.maximized;
@@ -1225,8 +1239,18 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 // no longer the window in use, whatever its popups last had
                 w.keyboard_in_popup &= c.states.activated;
                 w.frame_ready = true;
-                w.invalidate();
-                w.invalidate_damage();
+                if same {
+                    w.dirty = true;
+                    if w.active == c.states.activated
+                        && shown_active != (w.active || w.keyboard_in_popup)
+                    {
+                        self.invalidate_window(i);
+                    }
+                } else {
+                    w.invalidate();
+                    w.invalidate_damage();
+                }
+                let w = &mut self.windows[i];
                 if w.active != c.states.activated {
                     w.active = c.states.activated;
                     w.begin_activation(now);
@@ -1311,11 +1335,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 self.key(i, key, time, now, &mut effects);
             }
             WindowEvent::Focus(focused) => {
-                let changed = w.active != focused;
+                // a window the compositor still states activated stays the window in use while a surface of the desktop
+                // (the overview, the launcher) has the keyboard: it neither looks inactive nor paints again for it
+                let active = focused || self.system.activated(w.id) == Some(true);
+                let changed = w.active != active;
                 // a window whose popup had the keyboard was drawn active all along: its colours have nothing to cross
                 let shown = w.active || w.keyboard_in_popup;
-                w.active = focused;
-                if changed && shown != focused {
+                w.active = active;
+                if changed && shown != active {
                     w.begin_activation(now);
                 }
                 if !focused {
@@ -1334,15 +1361,15 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 if let Some(node) = w.focus.node().filter(|_| changed) {
                     let mut ancestors = self.tree.path(node);
                     ancestors.pop();
-                    if !focused {
+                    if !active {
                         ancestors.reverse();
                     }
                     let within = Event::FocusWithin {
-                        gained: focused,
-                        visible: focused && w.focus.visible(),
+                        gained: active,
+                        visible: active && w.focus.visible(),
                     };
                     let mut route = route(&mut self.tree, w, now, &mut effects);
-                    route.notify(node, &Event::WindowActive(focused));
+                    route.notify(node, &Event::WindowActive(active));
                     for ancestor in ancestors {
                         route.notify(ancestor, &within);
                     }
@@ -1350,8 +1377,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 if let Some(adapter) = &mut self.options.accessibility {
                     adapter.window_focus(w.id, focused);
                 }
-                self.invalidate_window(i);
                 self.keyboard_moved(i, focused);
+                // what the window shows changes with its active state alone (a popup's opener repaints in
+                // `keyboard_moved`)
+                let w = &self.windows[i];
+                if changed || shown != (w.active || w.keyboard_in_popup) {
+                    self.invalidate_window(i);
+                }
             }
             WindowEvent::Ime(ime) => {
                 if let Some(node) = w.text_input.or(w.focus.node()) {
@@ -2485,11 +2517,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .as_ref()
                 .is_some_and(|d| !matches!(d, DamageRegion::Rects(r) if r.is_empty()))
             || (painting.layer.is_some() && w.layer.damage.repainted());
-        // a frame that repainted nothing sends nothing; one that repainted no pixel commits with no damage
+        // a frame that repainted nothing sends nothing, unless a configure waits for its acknowledgement or a frame
+        // the window system was not ready for waits to be shown; one that repainted no pixel commits with no damage
         if matches!(&damage, DamageRegion::Rects(r) if r.is_empty())
             && !w.damage.repainted()
             && !layer_changed
             && !materials_changed
+            && w.ack.is_none()
+            && !w.owed
         {
             return Ok(());
         }
@@ -2554,6 +2589,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         match outcome {
             PresentOutcome::Presented => {
                 w.ack = None;
+                w.owed = false;
                 w.frame_ready = false;
                 w.committed = true;
                 self.system.request_frame(w.id);
@@ -2561,10 +2597,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     timing.submitted(w.id, id, self.options.clock.now());
                 }
             }
+            // the frame is drawn and the window system keeps its damage for the next present, which only draws what
+            // changes after it
             PresentOutcome::NotReady => {
                 w.frame_ready = false;
                 w.dirty = true;
-                w.invalidate_damage();
+                w.owed = true;
                 self.system.request_frame(w.id);
             }
         }
@@ -3102,6 +3140,10 @@ mod ungrabbed;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime/relayout-tests.rs"]
+mod relayout_tests;
 
 /// The themes of `theme`'s session options in the light and the dark appearance, from `theme_for`; none without it.
 /// The session's own appearance is asked for last, as the theme maker may remember the last one it made.

@@ -233,8 +233,9 @@ impl<M: 'static> Tree<M> {
         for old in left.into_iter().map(|(_, id)| id).chain(unkeyed) {
             self.unmount(old);
         }
+        // the parent places other children, but paints as it did: what it draws comes from its own props and state
         if children != old {
-            self.mark(parent, Change::Layout);
+            self.mark_layout(parent);
         }
         self.node_mut(parent).children = children;
         result
@@ -258,6 +259,19 @@ impl<M: 'static> Tree<M> {
                 node.generation = Generation(revision);
                 next = node.parent;
             }
+        }
+    }
+
+    /// Records that `id` places its children differently while it paints as before: its generation and its
+    /// ancestors' change, its paint revision does not.
+    fn mark_layout(&mut self, id: NodeId) {
+        let revision = self.next_revision();
+        self.layout_dirty = true;
+        let mut next = Some(id);
+        while let Some(id) = next {
+            let node = self.node_mut(id);
+            node.generation = Generation(revision);
+            next = node.parent;
         }
     }
 

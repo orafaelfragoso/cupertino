@@ -557,18 +557,27 @@ fn frames(run: &Run<Scenes>) -> usize {
         .len()
 }
 
-/// Draws the window whole, as a configure does, and returns its pixels.
+/// Draws the window whole, as a configure into another state and back does, and returns its pixels. (A configure that
+/// changes nothing draws nothing.)
 fn whole(run: &mut Run<Scenes>) -> Vec<u8> {
     let before = frames(run);
     let active = WindowStates {
         activated: true,
         ..WindowStates::default()
     };
-    run.driver
-        .window_system_mut()
-        .configure(run.window, None, active)
-        .unwrap();
-    run.settle();
+    for states in [
+        WindowStates {
+            fullscreen: true,
+            ..active
+        },
+        active,
+    ] {
+        run.driver
+            .window_system_mut()
+            .configure(run.window, None, states)
+            .unwrap();
+        run.settle();
+    }
     let presented = run.driver.runtime().window_system().frames(run.window);
     let last = presented.unwrap()[before..]
         .last()

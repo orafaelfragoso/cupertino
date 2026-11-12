@@ -1161,16 +1161,19 @@ fn finish(
             list.nodes[p].bounds = list.nodes[p].bounds.union(&bounds);
         }
     }
-    // A group's opacity and effects reach its whole subtree, so the group damages all of it; under a group with
-    // effects, which spread each pixel across their reach, any node damages the outermost such group's whole reach.
+    // A group's effects spread each pixel across their reach, so a group with effects damages all of it, and under
+    // one any node damages the outermost such group's whole reach. A group of opacity alone changes only the pixels its
+    // subtree draws: its box is what it draws itself, and the damage tracker adds each descendant's box when it changes.
     let mut spread: Vec<Option<usize>> = Vec::with_capacity(list.nodes.len());
     for (i, (node, own)) in list.nodes.iter().zip(&mut own).enumerate() {
         let above = node
             .parent
             .and_then(|p| index.get(&p))
             .and_then(|&p| spread[p]);
-        if node.group.is_some() {
-            *own = node.bounds;
+        match &node.group {
+            Some(group) if !group.effects.is_empty() => *own = node.bounds,
+            Some(_) if node.ops.is_empty() => *own = Rect::new(own.min_x(), own.min_y(), 0.0, 0.0),
+            _ => {}
         }
         if let Some(group) = above {
             *own = list.nodes[group].bounds;

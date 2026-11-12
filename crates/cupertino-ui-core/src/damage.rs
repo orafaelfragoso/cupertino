@@ -1,7 +1,9 @@
 //! What a frame must repaint. A node that repainted, moved or changed its clip damages where it was and where it
-//! is; a node that went away damages where it was. A change in paint order, a first frame, a resize or a new scale
-//! repaints the whole window. A node that draws nothing itself, before and after (a container with no operation and no
-//! group), changes no pixel and damages nothing; its children damage what they draw.
+//! is; a node that went away damages where it was. A group of opacity alone that changed damages, besides its own box,
+//! the box of every node under it, which it composites anew, and not the space between them. A change in paint order,
+//! a first frame, a resize or a new scale repaints the whole window. A node that draws nothing itself, before and
+//! after (a container with no operation and no group), changes no pixel and damages nothing; its children damage what
+//! they draw. A layout that moves nothing therefore damages nothing.
 
 use crate::paint::Painting;
 use cupertino_geometry::Rect;
@@ -18,6 +20,10 @@ struct Seen {
     own: Rect,
     /// It draws nothing itself, from [`Painting::blank`].
     blank: bool,
+    /// A group of opacity alone: a change of it changes what its whole subtree shows.
+    spreads: bool,
+    /// Under another parent the node is composited with other groups.
+    parent: Option<PaintNodeId>,
 }
 
 #[derive(Default)]
@@ -54,24 +60,43 @@ impl DamageTracker {
         blank: &[bool],
     ) -> DamageRegion {
         let order: Vec<PaintNodeId> = list.nodes.iter().map(|n| n.id).collect();
+        let ends = subtree_ends(list);
         let mut current = HashMap::with_capacity(order.len());
         let mut rects = Vec::new();
         let mut repainted = false;
+        let blank_at = |i: usize| blank.get(i).copied().unwrap_or(false);
+        let boxes = own;
         for (i, (node, &own)) in list.nodes.iter().zip(own).enumerate() {
-            let blank = blank.get(i).copied().unwrap_or(false);
+            let blank = blank_at(i);
             let seen = Seen {
                 revision: node.revision,
                 transform: node.transform,
                 clip: node.clip.clone(),
                 own,
                 blank,
+                spreads: node.group.as_ref().is_some_and(|g| g.effects.is_empty()),
+                parent: node.parent,
             };
             match self.previous.get(&node.id) {
                 Some(old) if *old == seen => {}
                 Some(old) => {
                     repainted |= !old.own.is_empty() || !own.is_empty();
-                    if !(old.blank && blank) {
-                        rects.extend([old.own, own]);
+                    // where it drew and where it draws: a node that draws nothing damages nothing where it is
+                    if !old.blank {
+                        rects.push(old.own);
+                    }
+                    if !blank {
+                        rects.push(own);
+                    }
+                    // the subtree is composited anew: where its nodes draw now (where they drew before, when that
+                    // differs, they damage themselves)
+                    if old.spreads || seen.spreads {
+                        for j in i + 1..ends[i] {
+                            if let (false, Some(&drawn)) = (blank_at(j), boxes.get(j)) {
+                                repainted |= !drawn.is_empty();
+                                rects.push(drawn);
+                            }
+                        }
                     }
                 }
                 None => {
@@ -106,6 +131,24 @@ impl DamageTracker {
         rects.retain(|r| !r.is_empty());
         DamageRegion::Rects(rects)
     }
+}
+
+/// For each node of a list in preorder, the index past the last node of its subtree.
+fn subtree_ends(list: &DisplayList) -> Vec<usize> {
+    let len = list.nodes.len();
+    let mut ends = vec![len; len];
+    let mut open: Vec<usize> = Vec::new();
+    for (j, node) in list.nodes.iter().enumerate() {
+        while let Some(&top) = open.last() {
+            if Some(list.nodes[top].id) == node.parent {
+                break;
+            }
+            ends[top] = j;
+            open.pop();
+        }
+        open.push(j);
+    }
+    ends
 }
 
 #[cfg(test)]
@@ -188,18 +231,13 @@ mod tests {
         assert!(!tracker.repainted(), "nothing painted: no frame");
         assert_eq!(
             tracker.damage(&painting(vec![node(1, 3, 20.0)])),
-            DamageRegion::Rects(vec![
-                Rect::new(20.0, 0.0, 10.0, 10.0),
-                Rect::new(20.0, 0.0, 10.0, 10.0)
-            ]),
+            DamageRegion::Rects(vec![Rect::new(20.0, 0.0, 10.0, 10.0)]),
             "a node that starts drawing damages its box"
         );
         assert_eq!(
-            tracker.damage(&blank(4, 20.0)),
-            DamageRegion::Rects(vec![
-                Rect::new(20.0, 0.0, 10.0, 10.0),
-                Rect::new(20.0, 0.0, 10.0, 10.0)
-            ])
+            tracker.damage(&blank(4, 30.0)),
+            DamageRegion::Rects(vec![Rect::new(20.0, 0.0, 10.0, 10.0)]),
+            "and one that stops drawing where it drew"
         );
         assert_eq!(
             tracker.damage(&painting(vec![])),

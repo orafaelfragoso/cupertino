@@ -921,8 +921,10 @@ fn a_solid_window_the_window_system_cannot_show_is_drawn_filled_with_its_colour(
     assert_eq!(rt.window_system().presented.len(), 2);
 }
 
+/// The frame drawn for a refused present is shown when the window system resumes, which kept its damage: the frame
+/// after it draws no pixel again, yet commits, acknowledging the configure.
 #[test]
-fn a_refused_frame_waits_for_the_window_system_and_is_drawn_whole_when_it_resumes() {
+fn a_refused_frame_waits_for_the_window_system_and_is_shown_when_it_resumes() {
     let (mut rt, window, damage) = start();
     rt.window_system_mut().refuse_next = true;
     configure(&mut rt, window, 3);
@@ -946,7 +948,7 @@ fn a_refused_frame_waits_for_the_window_system_and_is_drawn_whole_when_it_resume
     );
     assert_eq!(
         damage.borrow().as_slice(),
-        [DamageRegion::Full, DamageRegion::Full]
+        [DamageRegion::Full, DamageRegion::Rects(Vec::new())]
     );
     assert_eq!(rt.step(steps()).unwrap(), StepStatus::Idle);
 }

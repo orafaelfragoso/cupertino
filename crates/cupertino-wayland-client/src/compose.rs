@@ -260,6 +260,8 @@ pub(crate) enum Composed {
 #[derive(Debug, Default)]
 pub(crate) struct ComposeState {
     at: Option<usize>,
+    /// The keysyms of the sequence typed so far, modifiers left out.
+    typed: Vec<u32>,
 }
 
 impl ComposeState {
@@ -273,11 +275,14 @@ impl ComposeState {
             };
         }
         let from = self.at.take().unwrap_or(0);
+        let typed = std::mem::take(&mut self.typed);
         match table.nodes[from].next.get(&keysym) {
             Some(&next) => match table.nodes[next].result {
                 Some(result) => Composed::Done(result),
                 None => {
                     self.at = Some(next);
+                    self.typed = typed;
+                    self.typed.push(keysym);
                     Composed::Composing
                 }
             },
@@ -288,6 +293,12 @@ impl ComposeState {
 
     pub(crate) fn reset(&mut self) {
         self.at = None;
+        self.typed.clear();
+    }
+
+    /// The keysyms of the sequence being typed; empty outside one.
+    pub(crate) fn pending(&self) -> &[u32] {
+        &self.typed
     }
 }
 

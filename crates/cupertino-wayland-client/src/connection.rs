@@ -75,7 +75,7 @@ use crate::input::{
 };
 use crate::output::{identification, physical_size, OutputBuilder, OutputId, OutputTransform};
 use crate::scale::ScaleSources;
-use crate::text_input::TextInput;
+use crate::text_input::{Preedit, TextInput, TextInputDone};
 use wayland_client::protocol::wl_data_device_manager::DndAction as DragActions;
 
 use crate::{
@@ -464,6 +464,8 @@ pub struct State {
     pointer_tracker: PointerTracker,
     key_focus: Option<SurfaceId>,
     translator: Option<Translator>,
+    /// A key whose press only took a pending dead key away; its release is not sent either.
+    swallowed: Option<u32>,
     repeat: Repeat,
     last_serial: Option<u32>,
     input_clock: InputClock,
@@ -589,6 +591,7 @@ impl Connection {
             touch_tracker: TouchTracker::default(),
             key_focus: None,
             translator: None,
+            swallowed: None,
             repeat: Repeat::default(),
             last_serial: None,
             input_clock: InputClock::default(),
@@ -3043,8 +3046,9 @@ impl Dispatch<WlKeyboard, ()> for State {
             }
             wl_keyboard::Event::Leave { .. } => {
                 state.repeat.clear();
-                if let Some(t) = state.translator.as_mut() {
-                    t.reset_compose();
+                let shown = state.translator.as_mut().is_some_and(|t| t.reset_compose());
+                if let (true, Some(surface)) = (shown, state.key_focus) {
+                    state.events.push(preview_event(surface, None, None));
                 }
                 if let Some(surface) = state.key_focus.take() {
                     let time = state.input_time(Instant::now());
@@ -3073,6 +3077,19 @@ impl Dispatch<WlKeyboard, ()> for State {
                     state.repeat.release(key);
                     t.translate(key)
                 };
+                if let Some(preview) = t.take_preview() {
+                    state
+                        .events
+                        .push(preview_event(surface, preview.preedit, preview.commit));
+                    if preview.swallow {
+                        state.swallowed = Some(key);
+                        return;
+                    }
+                }
+                if !pressed && state.swallowed == Some(key) {
+                    state.swallowed = None;
+                    return;
+                }
                 state.events.push(Event::Keyboard {
                     surface,
                     time,
@@ -3100,6 +3117,23 @@ impl Dispatch<WlKeyboard, ()> for State {
             wl_keyboard::Event::RepeatInfo { rate, delay } => state.repeat.set_info(rate, delay),
             _ => {}
         }
+    }
+}
+
+/// The marks of a pending dead key sequence as an input method batch for `surface`: `preedit` shown highlighted,
+/// `commit` typed. Text fields take it as they take one from an input method.
+fn preview_event(surface: SurfaceId, preedit: Option<String>, commit: Option<String>) -> Event {
+    Event::TextInput {
+        surface,
+        event: TextInputEvent::Done(TextInputDone {
+            preedit: preedit.map(|text| Preedit {
+                cursor: Some((0, text.len())),
+                text,
+            }),
+            commit,
+            delete: (0, 0),
+            current: true,
+        }),
     }
 }
 

@@ -340,12 +340,62 @@ pub(crate) struct Translation {
     pub mods: Modifiers,
 }
 
+/// How the text of a pending dead key sequence shows in a text field after a key press.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Preview {
+    /// The marks to show composing, or `None` to take the shown ones away.
+    pub preedit: Option<String>,
+    /// Text that goes in before the key's own character: the marks of a sequence the key did not go on with.
+    pub commit: Option<String>,
+    /// The key only took the sequence away (Escape, Backspace) and goes no further.
+    pub swallow: bool,
+}
+
 /// The compositor's keymap and the modifier state it reported, and the compose sequence being typed.
 pub(crate) struct Translator {
     keymap: xkb::Keymap,
     state: xkb::State,
     compose_table: Option<&'static ComposeTable>,
     compose: ComposeState,
+    preview: Option<Preview>,
+}
+
+/// The spacing mark a dead key shows while it waits for the next key.
+fn spacing_mark(keysym: u32) -> Option<char> {
+    use xkb::keysyms as k;
+    Some(match keysym {
+        k::KEY_dead_grave => '`',
+        k::KEY_dead_acute => '\u{b4}',
+        k::KEY_dead_circumflex => '\u{2c6}',
+        k::KEY_dead_tilde => '\u{2dc}',
+        k::KEY_dead_macron => '\u{af}',
+        k::KEY_dead_breve => '\u{2d8}',
+        k::KEY_dead_abovedot => '\u{2d9}',
+        k::KEY_dead_diaeresis => '\u{a8}',
+        k::KEY_dead_abovering => '\u{2da}',
+        k::KEY_dead_doubleacute => '\u{2dd}',
+        k::KEY_dead_caron => '\u{2c7}',
+        k::KEY_dead_cedilla => '\u{b8}',
+        k::KEY_dead_ogonek => '\u{2db}',
+        _ => return None,
+    })
+}
+
+/// The marks of a pending sequence: dead keys as their spacing marks, the letters after one as typed. A sequence
+/// started with the compose key shows nothing, as it types nothing when it is cancelled.
+fn marks(pending: &[u32]) -> String {
+    if pending.first().and_then(|k| spacing_mark(*k)).is_none() {
+        return String::new();
+    }
+    pending
+        .iter()
+        .filter_map(|k| {
+            spacing_mark(*k).or_else(|| {
+                char::from_u32(xkb::keysym_to_utf32(xkb::Keysym::new(*k)))
+                    .filter(|c| *c != '\0' && !c.is_control())
+            })
+        })
+        .collect()
 }
 
 /// The compose table of the process's locale, read on first use.
@@ -387,6 +437,7 @@ impl Translator {
             state,
             compose_table,
             compose: ComposeState::default(),
+            preview: None,
         }
     }
 
@@ -423,14 +474,18 @@ impl Translator {
     }
 
     /// [`Self::translate`] for a press, which also goes on with a compose sequence: a key inside one types nothing,
-    /// the key that ends one types its character. Only a key that types outside a sequence starts `repeat`; one that
-    /// starts, goes on with or ends a sequence stops it.
+    /// the key that ends one types its character. A dead key sequence the key does not go on with types its marks
+    /// and then the key, except Escape and Backspace, which only take it away. Only a key that types outside a
+    /// sequence starts `repeat`; one that starts, goes on with or ends a sequence stops it. What the press does to
+    /// the shown marks waits in [`Self::take_preview`].
     pub(crate) fn press(&mut self, code: u32, repeat: &mut Repeat, now: Instant) -> Translation {
         let mut translation = self.translate(code);
+        let before = marks(self.compose.pending());
         let composed = match self.compose_table {
             Some(table) => self.compose.feed(table, translation.keysym),
             None => Composed::Passed,
         };
+        self.preview = None;
         match composed {
             Composed::Passed => {
                 if self.repeats(code) {
@@ -438,16 +493,54 @@ impl Translator {
                 }
                 return translation;
             }
-            Composed::Composing | Composed::Cancelled => translation.character = None,
-            Composed::Done(c) => translation.character = Some(c),
+            Composed::Composing => {
+                translation.character = None;
+                let after = marks(self.compose.pending());
+                if after != before {
+                    self.preview = Some(Preview {
+                        preedit: (!after.is_empty()).then_some(after),
+                        ..Preview::default()
+                    });
+                }
+            }
+            Composed::Done(c) => {
+                translation.character = Some(c);
+                if !before.is_empty() {
+                    self.preview = Some(Preview::default());
+                }
+            }
+            Composed::Cancelled if before.is_empty() => translation.character = None,
+            Composed::Cancelled => {
+                let swallow = matches!(
+                    translation.keysym,
+                    xkb::keysyms::KEY_Escape | xkb::keysyms::KEY_BackSpace
+                );
+                let chord = translation.mods.ctrl || translation.mods.logo;
+                if swallow {
+                    translation.character = None;
+                }
+                self.preview = Some(Preview {
+                    preedit: None,
+                    commit: (!swallow && !chord).then_some(before),
+                    swallow,
+                });
+            }
         }
         repeat.clear();
         translation
     }
 
-    /// Forget a compose sequence, when the keyboard focus leaves.
-    pub(crate) fn reset_compose(&mut self) {
+    /// What the last press did to the marks of a pending sequence, `None` when it left them as they were.
+    pub(crate) fn take_preview(&mut self) -> Option<Preview> {
+        self.preview.take()
+    }
+
+    /// Forget a compose sequence, when the keyboard focus leaves. Returns whether marks were showing.
+    pub(crate) fn reset_compose(&mut self) -> bool {
+        let shown = !marks(self.compose.pending()).is_empty();
         self.compose.reset();
+        self.preview = None;
+        shown
     }
 
     /// The symbol, character and modifiers of the evdev key `code` now.
@@ -550,6 +643,8 @@ mod tests {
     const KEY_X: u32 = 45;
     const KEY_O: u32 = 24;
     const KEY_COMPOSE: u32 = 127;
+    const KEY_E: u32 = 18;
+    const KEY_ESC: u32 = 1;
 
     fn keymap(layout: &str, variant: &str) -> xkb::Keymap {
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
@@ -658,9 +753,78 @@ mod tests {
         typed.extend([KEY_APOSTROPHE, KEY_X, KEY_X].map(|key| press(&mut t, key)));
         assert_eq!(
             typed,
-            [None, Some('ç'), None, Some('ã'), None, None, Some('x')],
-            "a dead key before a letter it has no sequence with types nothing, and the next key types"
+            [None, Some('ç'), None, Some('ã'), None, Some('x'), Some('x')],
+            "a dead key before a letter it has no sequence with gives the letter, and the next key types"
         );
+    }
+
+    #[test]
+    fn a_pending_dead_key_shows_its_mark_until_the_next_key_ends_or_cancels_it() {
+        let mut t = compose_with("", "<dead_acute> <e> : \"\u{e9}\"\n");
+        let mut r = Repeat::default();
+        let mut press = |t: &mut Translator, key| {
+            let c = t.press(key, &mut r, Instant::now()).character;
+            (c, t.take_preview())
+        };
+        let shown = |text: &str| Preview {
+            preedit: Some(text.into()),
+            ..Preview::default()
+        };
+        assert_eq!(press(&mut t, KEY_APOSTROPHE), (None, Some(shown("\u{b4}"))));
+        assert_eq!(
+            press(&mut t, KEY_E),
+            (Some('\u{e9}'), Some(Preview::default())),
+            "the letter takes the mark away and types the accented letter"
+        );
+        assert_eq!(
+            press(&mut t, KEY_E),
+            (Some('e'), None),
+            "outside a sequence nothing changes"
+        );
+
+        press(&mut t, KEY_APOSTROPHE);
+        assert_eq!(
+            press(&mut t, KEY_X),
+            (
+                Some('x'),
+                Some(Preview {
+                    preedit: None,
+                    commit: Some("\u{b4}".into()),
+                    swallow: false
+                })
+            ),
+            "a letter without a sequence types the mark, then itself"
+        );
+
+        press(&mut t, KEY_APOSTROPHE);
+        assert_eq!(
+            press(&mut t, KEY_ESC),
+            (
+                None,
+                Some(Preview {
+                    preedit: None,
+                    commit: None,
+                    swallow: true
+                })
+            ),
+            "Escape only takes the mark away"
+        );
+        press(&mut t, KEY_APOSTROPHE);
+        assert!(
+            t.reset_compose(),
+            "leaving the surface reports the shown mark"
+        );
+        assert!(!t.reset_compose());
+    }
+
+    #[test]
+    fn a_compose_key_sequence_shows_nothing() {
+        let mut t = compose_with("compose:menu", "<Multi_key> <o> <o> : \"\u{b0}\"\n");
+        let mut r = Repeat::default();
+        for key in [KEY_COMPOSE, KEY_O, KEY_X] {
+            t.press(key, &mut r, Instant::now());
+            assert_eq!(t.take_preview(), None);
+        }
     }
 
     #[test]

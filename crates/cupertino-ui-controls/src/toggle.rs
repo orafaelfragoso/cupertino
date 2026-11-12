@@ -1,5 +1,6 @@
-use crate::lens::{paint_lens, Lens, LensKind};
+use crate::lens::{paint_lens_faded, Lens, LensKind};
 use crate::look::{self, paint_focus_ring};
+use crate::motion::{Curve, Tween};
 use crate::press::{Keys, Outcome, Press};
 use crate::{HeaderToggle, SmallToggle, Toggle};
 use cupertino_geometry::{Rect, Size};
@@ -38,22 +39,47 @@ impl<M: 'static> Toggle<M> {
         );
         let track = track(cx.size(), shape);
         let radius = track.height() / 2.0;
-        let track_color = track_color(&theme, self.on, &look_state);
-        look::fill(cx, track, radius, track_color);
-        let thumb = thumb_at(track, self.on, direction, shape, state.travel());
-        match Lens::of(LensKind::Switch, thumb, state.held() && self.enabled) {
-            // held, the thumb is a lens: the track shows through it, shrunk about its centre
-            Some(lens) => paint_lens(cx, &lens, |cx, lens| {
-                look::fill(cx, lens.through(track), radius * lens.minify, track_color);
-            }),
-            None => {
-                look::fill(
-                    cx,
-                    thumb,
-                    thumb.height() / 2.0,
-                    look::color(&theme, ColorRole::SwitchThumb, &look_state),
-                );
+        // how far the thumb is on its way to the on end: the track takes the on colour as it goes
+        let on = state.on.sample(cx);
+        let (off_color, on_color) = (
+            track_color(&theme, false, &look_state),
+            track_color(&theme, true, &look_state),
+        );
+        let fill_track = |cx: &mut PaintCx<'_>, rect: Rect, radius: f64| {
+            if on < 1.0 {
+                look::fill(cx, rect, radius, off_color);
             }
+            if on >= 1.0 {
+                look::fill(cx, rect, radius, on_color);
+            } else if on > 0.0 {
+                look::fill(cx, rect, radius, look::faded(on_color, on as f32));
+            }
+        };
+        fill_track(cx, track, radius);
+        let thumb = thumb_at_fraction(track, on, direction, shape, state.travel());
+        let lift = if self.enabled {
+            state.lift.sample(cx)
+        } else {
+            0.0
+        };
+        // the plain thumb gives way to the lens as the lens swells out of it
+        let lens_opacity = (lift / LENS_OPAQUE_AT).min(1.0);
+        if lens_opacity < 1.0 {
+            look::fill(
+                cx,
+                thumb,
+                thumb.height() / 2.0,
+                look::faded(
+                    look::color(&theme, ColorRole::SwitchThumb, &look_state),
+                    1.0 - lens_opacity as f32,
+                ),
+            );
+        }
+        if let Some(lens) = Lens::lifted(LensKind::Switch, thumb, lift) {
+            // held, the thumb is a lens: the track shows through it, shrunk about its centre
+            paint_lens_faded(cx, &lens, lens_opacity as f32, |cx, lens| {
+                fill_track(cx, lens.through(track), radius * lens.minify);
+            });
         }
         paint_focus_ring(cx, track, radius);
     }
@@ -144,14 +170,48 @@ fn thumb_at(
     shape: &SwitchShape,
     travel: Option<f64>,
 ) -> Rect {
+    thumb_at_fraction(track, f64::from(u8::from(on)), direction, shape, travel)
+}
+
+/// The thumb's left and right resting x along the track.
+fn thumb_run(track: Rect, shape: &SwitchShape) -> (f64, f64) {
+    let start = track.min_x() + shape.inset;
+    (
+        start,
+        (track.max_x() - shape.inset - shape.thumb.width).max(start),
+    )
+}
+
+/// How far a thumb at `thumb` is from the off end to the on end, 0 to 1.
+fn on_fraction(track: Rect, thumb: Rect, direction: LayoutDirection, shape: &SwitchShape) -> f64 {
+    let (left, right) = thumb_run(track, shape);
+    let right_share = if right > left {
+        ((thumb.min_x() - left) / (right - left)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    match direction {
+        LayoutDirection::Ltr => right_share,
+        LayoutDirection::Rtl => 1.0 - right_share,
+    }
+}
+
+/// [`thumb_at`] with the thumb `on` of the way (0 to 1) from the off end to the on end, as it travels between them.
+fn thumb_at_fraction(
+    track: Rect,
+    on: f64,
+    direction: LayoutDirection,
+    shape: &SwitchShape,
+    travel: Option<f64>,
+) -> Rect {
     let Size { width, height } = shape.thumb;
-    let at_right = on == (direction == LayoutDirection::Ltr);
-    let (start, end) = (
-        track.min_x() + shape.inset,
-        track.max_x() - shape.inset - width,
-    );
-    let x = if at_right { end } else { start };
-    let x = (x + travel.unwrap_or(0.0)).clamp(start, end.max(start));
+    let (start, end) = thumb_run(track, shape);
+    let right_share = match direction {
+        LayoutDirection::Ltr => on,
+        LayoutDirection::Rtl => 1.0 - on,
+    };
+    let x = start + (end - start) * right_share.clamp(0.0, 1.0);
+    let x = (x + travel.unwrap_or(0.0)).clamp(start, end);
     Rect::new(
         x,
         track.min_y() + (track.height() - height) / 2.0,
@@ -168,12 +228,26 @@ fn dragged_on(track: Rect, thumb: Rect, direction: LayoutDirection) -> bool {
 
 /// How far the pointer travels before a press on the switch becomes a drag of its thumb.
 const DRAG_SLOP: f64 = 3.0;
+/// How long, in seconds, the thumb takes to swell into its lens when it is taken hold of.
+const SWITCH_LIFT: f64 = 0.2;
+/// How long the thumb takes to travel from one end of the track to the other, in seconds.
+const SWITCH_TRAVEL: f64 = 0.2;
+/// How long the lens takes to sink back into the plain thumb once it is let go (after its travel when it travels).
+const SWITCH_SETTLE: f64 = 0.2;
+/// The share of its lift by which the lens has fully covered the plain thumb: the white thumb goes early.
+const LENS_OPAQUE_AT: f64 = 0.3;
 
-/// The node state of a switch: how it is armed, and the drag of its thumb. Opaque.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// The node state of a switch: how it is armed, the drag of its thumb, and the thumb's travel and lift. Opaque.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SwitchState {
     press: Press,
     drag: Option<Drag>,
+    /// How far the thumb is from the off end to the on end, 0 to 1.
+    on: Tween,
+    /// How far the thumb has swelled into its lens, 0 to 1.
+    lift: Tween,
+    /// The event at hand sends the thumb across: the lens sinks once it has arrived.
+    travels: bool,
 }
 
 /// A pointer press that may drag the thumb.
@@ -188,6 +262,14 @@ struct Drag {
 }
 
 impl SwitchState {
+    /// A switch at rest, on or off.
+    fn of(on: bool) -> SwitchState {
+        SwitchState {
+            on: Tween::at(f64::from(u8::from(on))),
+            ..SwitchState::default()
+        }
+    }
+
     /// The thumb's travel while it is dragged with the pointer over the switch; away from it the thumb rests.
     fn travel(&self) -> Option<f64> {
         self.drag
@@ -221,10 +303,14 @@ impl<M: 'static> Widget<M> for Toggle<M> {
     }
 
     fn state(&self) -> SwitchState {
-        SwitchState::default()
+        SwitchState::of(self.on)
     }
 
-    fn update(&self, old: &Self, _: &mut SwitchState) -> Change {
+    fn update(&self, old: &Self, state: &mut SwitchState) -> Change {
+        if self.on != old.on {
+            let to = f64::from(u8::from(self.on));
+            state.on.go(to, SWITCH_TRAVEL, 0.0, Curve::EaseInOut);
+        }
         if self.on != old.on || self.enabled != old.enabled || self.label != old.label {
             Change::Paint
         } else {
@@ -268,7 +354,32 @@ impl<M: 'static> Toggle<M> {
     /// release over the switch sets the state the thumb lands on, once and only if it changed. A press that never
     /// moves that far is a click: release over the switch toggles it. Released away from the switch, or cancelled,
     /// neither changes anything and the thumb goes back.
+    ///
+    /// Taken hold of, the thumb swells into its lens over [`SWITCH_LIFT`]; let go, the lens sinks back over
+    /// [`SWITCH_SETTLE`], once the thumb has travelled to its end when it travels.
     fn drag_event(
+        &self,
+        state: &mut SwitchState,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+        shape: &SwitchShape,
+    ) -> Propagation {
+        let held = state.held();
+        state.travels = false;
+        let propagation = self.drag_or_press(state, event, cx, shape);
+        if state.held() != held {
+            if state.held() {
+                state.lift.go(1.0, SWITCH_LIFT, 0.0, Curve::EaseOut);
+            } else {
+                let delay = if state.travels { SWITCH_TRAVEL } else { 0.0 };
+                state.lift.go(0.0, SWITCH_SETTLE, delay, Curve::EaseInOut);
+            }
+            cx.request_paint();
+        }
+        propagation
+    }
+
+    fn drag_or_press(
         &self,
         state: &mut SwitchState,
         event: &Event,
@@ -324,6 +435,17 @@ impl<M: 'static> Toggle<M> {
                     cx.release_pointer();
                     cx.request_paint();
                     // released away from the switch, the drag is cancelled and the thumb goes back
+                    if let Some(bounds) = cx.bounds() {
+                        let size = Size::new(bounds.width(), bounds.height());
+                        let track = track(size, shape);
+                        let direction = cx.env().direction;
+                        let landed = thumb_at(track, self.on, direction, shape, travel);
+                        // the thumb goes on from where it was let go: to the end the view keeps, or to the other one
+                        state.on.jump(on_fraction(track, landed, direction, shape));
+                        let rest = f64::from(u8::from(self.on));
+                        state.on.go(rest, SWITCH_TRAVEL, 0.0, Curve::EaseOut);
+                        state.travels = true;
+                    }
                     if let (true, Some(bounds)) = (inside, cx.bounds()) {
                         let size = Size::new(bounds.width(), bounds.height());
                         let track = track(size, shape);
@@ -355,6 +477,7 @@ impl<M: 'static> Toggle<M> {
             }
             Outcome::Activated(_) => {
                 cx.request_paint();
+                state.travels = true;
                 if let Some(on_toggle) = &self.on_toggle {
                     cx.emit(on_toggle(!self.on));
                 }
@@ -391,7 +514,7 @@ impl<M: 'static> Widget<M> for SmallToggle<M> {
     }
 
     fn state(&self) -> SwitchState {
-        SwitchState::default()
+        SwitchState::of(self.toggle.on)
     }
 
     fn update(&self, old: &Self, state: &mut SwitchState) -> Change {
@@ -437,7 +560,7 @@ impl<M: 'static> Widget<M> for HeaderToggle<M> {
     }
 
     fn state(&self) -> SwitchState {
-        SwitchState::default()
+        SwitchState::of(self.toggle.on)
     }
 
     fn update(&self, old: &Self, state: &mut SwitchState) -> Change {

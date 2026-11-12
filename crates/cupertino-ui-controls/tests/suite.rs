@@ -54,6 +54,8 @@ mod menu_touch;
 mod menu_tracking;
 #[path = "module.rs"]
 mod module;
+#[path = "motion.rs"]
+mod motion;
 #[path = "navigation.rs"]
 mod navigation;
 #[path = "pages.rs"]

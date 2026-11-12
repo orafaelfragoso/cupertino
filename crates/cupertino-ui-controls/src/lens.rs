@@ -2,14 +2,18 @@
 //! with a fine bright rim, through which the track shows, shrunk about the lens's centre. At rest the thumb is a plain
 //! white capsule; ordinary buttons, check boxes and fields never take a lens.
 //!
-//! The model ([`Lens::of`]) is pure: the control's state says whether the lens shows and the thumb's rectangle where
-//! it is. The lens is painted over the track by the control itself ([`GlassRole::ThumbLens`]): the compositor's glass
-//! lies under the window's content and could not show the track drawn above it. It reaches past the thumb, and past
-//! the control's node, but never changes the layout: only paint grows, never the node or its target.
+//! The model ([`Lens::lifted`]) is pure: the control's state says how far the lens shows and the thumb's
+//! rectangle where it is. The lens is painted over the track by the control itself ([`GlassRole::ThumbLens`]): the
+//! compositor's glass lies under the window's content and could not show the track drawn above it. It reaches past
+//! the thumb, and past the control's node, but never changes the layout: only paint grows, never the node or its
+//! target.
 //!
 //! The accessibility options change the lens, never take it away: Increase Contrast darkens its outline and
 //! brightens its rim, Reduce Transparency makes its body nearly opaque, and Reduce Motion leaves it as it is (it
 //! appears and goes at once, with no motion of its own).
+//!
+//! The lens swells out of the thumb as it is taken hold of and sinks back into it when let go
+//! ([`Lens::lifted`]): the control times that lift and fades the lens in over the plain thumb.
 
 use crate::glass::GlassRole;
 use cupertino_geometry::{Insets, Point, Rect};
@@ -68,14 +72,23 @@ pub(crate) struct Lens {
 
 impl Lens {
     /// The lens over `thumb` while `held`; none at rest. A disabled control is never held.
+    #[cfg(test)]
     pub fn of(kind: LensKind, thumb: Rect, held: bool) -> Option<Lens> {
-        if !held {
+        Lens::lifted(kind, thumb, if held { 1.0 } else { 0.0 })
+    }
+
+    /// The lens over `thumb` `lift` of the way (0 to 1) from the plain thumb to the held lens: as large as the thumb
+    /// and showing what is under it as it is at 0, where there is none, and the whole lens at 1.
+    pub fn lifted(kind: LensKind, thumb: Rect, lift: f64) -> Option<Lens> {
+        if lift <= 0.0 {
             return None;
         }
+        let lift = lift.min(1.0);
         let (growth, minify) = match kind {
             LensKind::Switch => (SWITCH_GROWTH, SWITCH_MINIFY),
             LensKind::Slider => (SLIDER_GROWTH, SLIDER_MINIFY),
         };
+        let (growth, minify) = (1.0 + (growth - 1.0) * lift, 1.0 + (minify - 1.0) * lift);
         let (w, h) = (thumb.width() * growth, thumb.height() * growth);
         let centre = thumb.center();
         let rect = Rect::new(centre.x - w / 2.0, centre.y - h / 2.0, w, h);
@@ -166,6 +179,24 @@ impl LensLook {
             }),
         }
     }
+}
+
+/// [`paint_lens`] at `opacity`, as a lens fading in over its thumb or out of it.
+pub(crate) fn paint_lens_faded(
+    cx: &mut PaintCx<'_>,
+    lens: &Lens,
+    opacity: f32,
+    under: impl FnOnce(&mut PaintCx<'_>, &Lens),
+) {
+    if opacity >= 1.0 {
+        return paint_lens(cx, lens, under);
+    }
+    cx.push(PaintOp::PushLayer {
+        opacity,
+        effects: Vec::new(),
+    });
+    paint_lens(cx, lens, under);
+    cx.push(PaintOp::PopLayer);
 }
 
 /// Paints `lens`: its shade, then what `under` draws (in the lens's shrunk coordinates, see [`Lens::through`]),
@@ -290,6 +321,31 @@ mod tests {
         assert!(
             lens.radius < lens.rect.height() / 2.0,
             "a rounded rectangle, not a capsule"
+        );
+    }
+
+    #[test]
+    fn a_lifting_lens_swells_from_the_thumb_to_its_held_size() {
+        let thumb = Rect::new(10.0, 2.0, 32.0, 20.0);
+        assert_eq!(Lens::lifted(LensKind::Switch, thumb, 0.0), None);
+        let start = Lens::lifted(LensKind::Switch, thumb, 1e-9).unwrap();
+        assert!(
+            (start.rect.width() - thumb.width()).abs() < 1e-6,
+            "as large as the thumb"
+        );
+        assert!(
+            (start.minify - 1.0).abs() < 1e-6,
+            "showing what is under it as it is"
+        );
+        let half = Lens::lifted(LensKind::Switch, thumb, 0.5).unwrap();
+        let held = Lens::of(LensKind::Switch, thumb, true).unwrap();
+        assert!(half.rect.width() > thumb.width() && half.rect.width() < held.rect.width());
+        assert_eq!(half.centre(), thumb.center());
+        assert_eq!(Lens::lifted(LensKind::Switch, thumb, 1.0), Some(held));
+        assert_eq!(
+            Lens::lifted(LensKind::Switch, thumb, 3.0),
+            Some(held),
+            "never past it"
         );
     }
 

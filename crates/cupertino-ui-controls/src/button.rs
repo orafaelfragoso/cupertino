@@ -1,5 +1,6 @@
 use crate::glass::GlassRole;
 use crate::look::{self, paint_focus_ring};
+use crate::motion::{Curve, Tween};
 use crate::press::{Keys, Outcome, Press};
 use crate::{Button, ButtonRole, ButtonStyle};
 use cupertino_geometry::{Rect, Size};
@@ -252,7 +253,7 @@ fn paint_capsule<M>(button: &Button<M>, press: &Press, cx: &mut PaintCx<'_>) {
 }
 
 impl<M: Clone + 'static> Widget<M> for SheetButton<M> {
-    type State = Press;
+    type State = ButtonState;
 
     fn layout(&self) -> LayoutSpec {
         if self.capsule {
@@ -265,18 +266,23 @@ impl<M: Clone + 'static> Widget<M> for SheetButton<M> {
         }
     }
 
-    fn state(&self) -> Press {
-        Press::default()
+    fn state(&self) -> ButtonState {
+        ButtonState::default()
     }
 
-    fn update(&self, old: &Self, press: &mut Press) -> Change {
+    fn update(&self, old: &Self, press: &mut ButtonState) -> Change {
         if self.capsule != old.capsule {
             return Change::Layout;
         }
         self.button.update(&old.button, press)
     }
 
-    fn measure(&self, press: &Press, constraints: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+    fn measure(
+        &self,
+        press: &ButtonState,
+        constraints: Constraints,
+        cx: &mut MeasureCx<'_>,
+    ) -> Measured {
         if !self.capsule {
             return self.button.measure(press, constraints, cx);
         }
@@ -287,19 +293,24 @@ impl<M: Clone + 'static> Widget<M> for SheetButton<M> {
         }
     }
 
-    fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        self.button.press(press, event, Keys::Space, cx)
+    fn event(
+        &self,
+        state: &mut ButtonState,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
+        self.button.press(&mut state.press, event, Keys::Space, cx)
     }
 
-    fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
+    fn paint(&self, press: &ButtonState, cx: &mut PaintCx<'_>) {
         if self.capsule {
-            paint_capsule(&self.button, press, cx);
+            paint_capsule(&self.button, &press.press, cx);
         } else {
             self.button.paint(press, cx)
         }
     }
 
-    fn semantics(&self, press: &Press, cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, press: &ButtonState, cx: &mut SemanticsCx<'_>) {
         self.button.semantics(press, cx);
         if self.initial {
             cx.initial_focus();
@@ -307,18 +318,29 @@ impl<M: Clone + 'static> Widget<M> for SheetButton<M> {
     }
 }
 
+/// How long a glass button's press tint takes to come on when it is pressed, and to go when it is let go, in seconds.
+const GLASS_PRESS_IN: f64 = 0.045;
+const GLASS_PRESS_OUT: f64 = 0.32;
+
+/// The node state of a [`Button`]: how it is armed, and how far a glass button's press tint has come on. Opaque.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ButtonState {
+    press: Press,
+    tint: Tween,
+}
+
 impl<M: Clone + 'static> Widget<M> for Button<M> {
-    type State = Press;
+    type State = ButtonState;
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec::new(ContainerKind::Leaf)
     }
 
-    fn state(&self) -> Press {
-        Press::default()
+    fn state(&self) -> ButtonState {
+        ButtonState::default()
     }
 
-    fn update(&self, old: &Self, _: &mut Press) -> Change {
+    fn update(&self, old: &Self, _: &mut ButtonState) -> Change {
         if self.label != old.label || self.style != old.style {
             Change::Layout
         } else if self.role != old.role || self.enabled != old.enabled || self.busy != old.busy {
@@ -329,7 +351,7 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
     }
 
     /// A round icon button's label is only its accessible name; the others fit the label between their insets.
-    fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &ButtonState, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         let metrics = cx.env().theme.metrics;
         let width = match self.style {
             ButtonStyle::RoundIcon => metrics.button_height,
@@ -344,15 +366,29 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         }
     }
 
-    fn target(&self, _: &Press, env: &Environment) -> Size {
+    fn target(&self, _: &ButtonState, env: &Environment) -> Size {
         env.theme.metrics.min_target
     }
 
-    fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        self.press(press, event, Keys::SpaceAndReturn, cx)
+    fn event(
+        &self,
+        state: &mut ButtonState,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
+        let pressed = state.press.pressed();
+        let propagation = self.press(&mut state.press, event, Keys::SpaceAndReturn, cx);
+        // a glass button's press tint comes on quickly and lingers as it goes
+        match (pressed, state.press.pressed()) {
+            (false, true) => state.tint.go(1.0, GLASS_PRESS_IN, 0.0, Curve::EaseOut),
+            (true, false) => state.tint.go(0.0, GLASS_PRESS_OUT, 0.0, Curve::EaseInOut),
+            _ => {}
+        }
+        propagation
     }
 
-    fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
+    fn paint(&self, button: &ButtonState, cx: &mut PaintCx<'_>) {
+        let press = &button.press;
         let theme = cx.env().theme.clone();
         let state = ControlState {
             enabled: self.enabled,
@@ -370,12 +406,21 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         if self.style == ButtonStyle::Glass {
             crate::glass::paint_glass(cx, GlassRole::GlassButton, chrome, radius);
             // a press darkens or lightens the glass a little, never moves or grows it
-            if state.pressed && state.enabled {
+            let tint = if state.enabled {
+                button.tint.sample(cx)
+            } else {
+                0.0
+            };
+            if tint > 0.0 {
+                let held = ControlState {
+                    pressed: true,
+                    ..state
+                };
                 look::fill(
                     cx,
                     chrome,
                     radius,
-                    Some(look::quiet(&theme, look::BEZEL, &state)),
+                    look::faded(Some(look::quiet(&theme, look::BEZEL, &held)), tint as f32),
                 );
             }
         } else if self.style != ButtonStyle::Borderless || state.pressed {
@@ -399,7 +444,7 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         paint_focus_ring(cx, chrome, radius);
     }
 
-    fn semantics(&self, _: &Press, cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &ButtonState, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Button);
         cx.name(self.label.clone());
         cx.states(AccessibleStates {

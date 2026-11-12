@@ -2,6 +2,7 @@
 //! is), arrows that choose the next or previous item and move the focus with the choice.
 
 use crate::look::{self, paint_focus_ring};
+use crate::motion::{Curve, Tween};
 use crate::press::{Keys, Outcome, Press};
 use crate::{FullWidthSegmentedControl, RadioGroup, SegmentedControl};
 use cupertino_geometry::{Insets, Point, Rect, Size};
@@ -28,6 +29,8 @@ const END: Keysym = Keysym(0xff57);
 
 /// Between a radio button's circle and its label.
 const LABEL_GAP: f64 = 6.0;
+/// How long a segmented control's mark takes to glide from the segment it left to the one chosen, in seconds.
+const SEGMENT_SLIDE: f64 = 0.2;
 /// A chosen radio button's dot, as a share of its circle.
 const DOT_SHARE: f64 = 0.375;
 pub(crate) const SEGMENT_RADIUS: f64 = 5.0;
@@ -43,11 +46,14 @@ pub(crate) fn segment_radius(theme: &ThemeTokens) -> f64 {
 
 /// The node state of one choice: how it is armed and, for a segment held by the pointer, the segment the pointer is
 /// over now, which shows pressed while the chosen segment stays marked. Opaque.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChoiceState {
     press: Press,
     /// The segment under the pointer while this segment is held, counted over the whole control.
     hot: Option<usize>,
+    /// Where the chosen segment's mark is, in segments from the first: every segment of a control times the same
+    /// slide, so the mark glides across them as one.
+    mark: Tween,
 }
 
 /// The segment under window x `x` of a row of `count` segments `segment` points wide, the segment `index` of which
@@ -263,10 +269,22 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
     }
 
     fn state(&self) -> ChoiceState {
-        ChoiceState::default()
+        ChoiceState {
+            mark: Tween::at(self.selected.unwrap_or(0) as f64),
+            ..ChoiceState::default()
+        }
     }
 
-    fn update(&self, old: &Self, _: &mut ChoiceState) -> Change {
+    fn update(&self, old: &Self, state: &mut ChoiceState) -> Change {
+        match (old.selected, self.selected) {
+            (Some(was), Some(now)) if was != now => {
+                state
+                    .mark
+                    .go(now as f64, SEGMENT_SLIDE, 0.0, Curve::EaseOut)
+            }
+            (None, Some(now)) => state.mark.jump(now as f64),
+            _ => {}
+        }
         if self.labels != old.labels {
             Change::Layout
         } else if self.selected != old.selected || self.enabled != old.enabled {
@@ -450,22 +468,44 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
                 let height = look::geometry(theme, ControlFamily::Segmented).height;
                 let radius = segment_radius(theme);
                 let chrome = Rect::new(0.0, (size.height - height) / 2.0, size.width, height);
-                if self.checked() {
-                    // the chosen segment stays marked, held or not, while another is highlighted
+                // the chosen segment stays marked, held or not, while another is highlighted; a new choice's mark
+                // glides over from the last one, each segment drawing the part of it over itself
+                let mark = self
+                    .selected
+                    .map(|_| choice.mark.sample(cx) - self.index as f64);
+                if let Some(offset) = mark.filter(|m| m.abs() < 1.0) {
+                    let dx = if env.direction == LayoutDirection::Rtl {
+                        -offset
+                    } else {
+                        offset
+                    } * size.width;
+                    let sliding = offset != 0.0;
+                    if sliding {
+                        cx.push(PaintOp::PushClip(Shape::Rect(chrome)));
+                    }
                     look::fill(
                         cx,
-                        chrome,
+                        chrome.translate(dx, 0.0),
                         radius,
                         look::color(
                             theme,
                             ColorRole::ControlFill,
                             &ControlState {
                                 pressed: false,
+                                selected: true,
                                 ..state
                             },
                         ),
                     );
+                    if sliding {
+                        cx.push(PaintOp::PopClip);
+                    }
                 }
+                // the label reads as chosen while the mark covers most of it
+                let state = ControlState {
+                    selected: mark.is_some_and(|m| m.abs() < 0.5),
+                    ..state
+                };
                 // the segment under a held pointer: its own, or another of the control, a pressed bezel
                 if let (Some(hot), true) = (choice.hot, press.pointer_armed()) {
                     if hot != self.index || !self.checked() {

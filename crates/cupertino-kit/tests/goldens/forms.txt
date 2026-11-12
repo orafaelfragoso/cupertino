@@ -26,7 +26,7 @@ init Account { name: "", revision: 0, remember: false, signed_in: None }
     = Account { name: "Ada", revision: 3, remember: true, signed_in: Some(7) }
 
 window 1
-pending messages=0 tasks=0 frames=0 animating=false next_wake=Some(500000000)
+pending messages=0 tasks=0 frames=0 animating=false next_wake=None
 focus Some(NodeId(7v1))
 pointer_capture None
 text_input None
@@ -67,7 +67,7 @@ display
   paint 4294967301 parent=Some(4294967298) revision=6 bounds=[7,106.51953125 253x33.72900390625] hit=[20,110.51953125 240x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 110.51953125]
   paint 4294967302 parent=Some(4294967301) revision=7 bounds=[7,107.74853515625 120.58642578125x32.5] hit=[20,114.65478515625 89.16552734375x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 114.65478515625]
     Glyphs origin=0,12.59375 font=FontId(1) size=13 count=11 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
-  paint 4294967303 parent=Some(4294967301) revision=39 bounds=[113.16552734375,106.51953125 62x32] hit=[117.16552734375,110.51953125 54x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 117.16552734375, 110.51953125]
+  paint 4294967303 parent=Some(4294967301) revision=91 bounds=[113.16552734375,106.51953125 62x32] hit=[117.16552734375,110.51953125 54x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 117.16552734375, 110.51953125]
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 54.0, height: 24.0 } }, radius: 12.0 }, paint: Solid(Color { r: 0.0, g: 0.47843137, b: 1.0, a: 1.0 }) }
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 20.0, y: 2.0 }, size: Size { width: 32.0, height: 20.0 } }, radius: 10.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -3.0, y: -3.0 }, size: Size { width: 60.0, height: 30.0 } }, radius: 15.0 }, width: 2.0, paint: Solid(Color { r: 0.0, g: 0.40392157, b: 0.95686275, a: 0.49803922 }) }

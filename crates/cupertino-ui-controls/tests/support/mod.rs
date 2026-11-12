@@ -665,6 +665,51 @@ impl<A: Application> Harness<A> {
     pub fn clock(&self) -> &ManualClock {
         &self.clock
     }
+
+    /// Sends `event` and draws what it changes without moving the clock: a transition it starts shows its first step.
+    pub fn send_now(&mut self, event: WindowEvent) {
+        self.rt
+            .window_system_mut()
+            .enqueue_window(self.window, event)
+            .unwrap();
+        self.later(0);
+    }
+
+    /// Moves the clock `ms` milliseconds on and draws the frame the window asks for then.
+    pub fn later(&mut self, ms: u64) {
+        self.clock.advance_by(ms * 1_000_000);
+        self.rt.step(turns()).unwrap();
+        for _ in 0..2 {
+            if !self.animating() {
+                break;
+            }
+            let now = cupertino_ui_core::Clock::now(&*self.clock);
+            self.rt
+                .window_system_mut()
+                .frame_ready(self.window, now)
+                .unwrap();
+            self.rt.step(turns()).unwrap();
+        }
+    }
+
+    /// Whether the window asks for another frame, as it does while a transition runs.
+    pub fn animating(&self) -> bool {
+        self.rt
+            .window_system()
+            .frame_requested(self.window)
+            .unwrap_or(false)
+    }
+
+    /// What the node `node` painted, in its own coordinates.
+    pub fn node_ops(&self, node: NodeId) -> Vec<PaintOp> {
+        let id = PaintNodeId::from(node);
+        let nodes = self.snapshot().display_list.nodes;
+        nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.ops.clone())
+            .unwrap_or_default()
+    }
 }
 
 fn turns() -> NonZeroU32 {

@@ -1,6 +1,7 @@
 use crate::icon::symbol;
-use crate::lens::{paint_lens, Lens, LensKind};
+use crate::lens::{paint_lens_faded, Lens, LensKind};
 use crate::look::{self, paint_focus_ring};
+use crate::motion::{Curve, Tween};
 use crate::{Slider, SliderStyle};
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_ui_core::{
@@ -39,14 +40,26 @@ const TICK_SHARE: f32 = 0.6;
 const KNOB_RING: f64 = 1.0;
 const KNOB_RING_HIGH_CONTRAST: f64 = 2.0;
 
+/// How long, in seconds, a regular knob takes to swell into its lens when it is taken hold of, and to sink back
+/// into the plain knob when it is let go.
+const LENS_IN: f64 = 0.15;
+const LENS_OUT: f64 = 0.12;
+/// How long the knob takes to reach a press on the track away from it, or the next stop of a slider with stops
+/// moved by a key, in seconds. A slider without stops moved by a key steps at once.
+const KNOB_TRAVEL: f64 = 0.2;
+
 /// The node state of a [`Slider`]. Opaque.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SliderState {
     hovered: bool,
     dragging: bool,
     /// The value under the pointer while it drags: what the knob shows and the drag ends at, even before the
     /// application's next view carries it.
     held: Option<f64>,
+    /// The value the knob is drawn at, on its way to the one it shows.
+    knob: Tween,
+    /// How far the knob has swelled into its lens, 0 to 1.
+    lift: Tween,
 }
 
 /// The soft shade under a regular slider's white knob at rest.
@@ -142,6 +155,7 @@ impl<M: 'static> Slider<M> {
         let value = self.fit(value);
         let shown = state.held.unwrap_or(self.value);
         state.held = Some(value);
+        state.knob.jump(value);
         self.set_from(shown, value, cx);
         if value != shown {
             cx.request_paint();
@@ -151,6 +165,7 @@ impl<M: 'static> Slider<M> {
     /// The drag ends: at the value the pointer left the knob at, not the one the application last showed.
     fn let_go(&self, state: &mut SliderState, cx: &mut EventCx<'_, M>) {
         state.dragging = false;
+        state.lift.go(0.0, LENS_OUT, 0.0, Curve::EaseOut);
         let value = state.held.take().unwrap_or(self.value);
         cx.request_paint();
         self.end(value, cx);
@@ -177,10 +192,22 @@ impl<M: 'static> Widget<M> for Slider<M> {
     }
 
     fn state(&self) -> SliderState {
-        SliderState::default()
+        SliderState {
+            knob: Tween::at(self.value),
+            ..SliderState::default()
+        }
     }
 
-    fn update(&self, old: &Self, _: &mut SliderState) -> Change {
+    fn update(&self, old: &Self, state: &mut SliderState) -> Change {
+        // the knob goes where the view puts it, unless the pointer holds it
+        if !state.dragging && self.value != state.knob.target() {
+            match self.step {
+                Some(step) if step > 0.0 => {
+                    state.knob.go(self.value, KNOB_TRAVEL, 0.0, Curve::EaseOut)
+                }
+                _ => state.knob.jump(self.value),
+            }
+        }
         if self.style != old.style || self.ticks != old.ticks {
             Change::Layout
         } else if self.value != old.value
@@ -252,14 +279,18 @@ impl<M: 'static> Widget<M> for Slider<M> {
                 _,
             ) if self.enabled && cx.node() == cx.target() => {
                 state.dragging = true;
+                state.lift.go(1.0, LENS_IN, 0.0, Curve::EaseInOut);
                 cx.capture_pointer();
                 cx.request_focus();
                 if let Some(bounds) = cx.bounds() {
-                    self.drag_to(
-                        state,
-                        self.value_at(position.x, bounds, knob, direction),
-                        cx,
-                    );
+                    let from = state.knob.target();
+                    let value = self.value_at(position.x, bounds, knob, direction);
+                    self.drag_to(state, value, cx);
+                    // pressed away from the knob, the knob glides there; the value is there at once
+                    state.knob.jump(from);
+                    state
+                        .knob
+                        .go(self.fit(value), KNOB_TRAVEL, 0.0, Curve::EaseOut);
                 }
                 cx.request_paint();
                 Propagation::Stop
@@ -369,7 +400,7 @@ impl<M: 'static> Widget<M> for Slider<M> {
         }
         let (from, to) = self.run(size.width, knob, direction);
         // dragged, the knob stays under the pointer while the application catches up
-        let centre = from + (to - from) * self.fraction(state.held.unwrap_or(self.value));
+        let centre = from + (to - from) * self.fraction(state.knob.sample(cx));
         // the level style fills to the knob's far edge, the regular one to its centre
         let reach = if self.style != SliderStyle::Regular {
             knob / 2.0
@@ -432,18 +463,51 @@ impl<M: 'static> Widget<M> for Slider<M> {
             knob_size.height,
         );
         let knob_radius = knob_size.height / 2.0;
-        let held = state.dragging && self.enabled && self.style == SliderStyle::Regular;
-        if let Some(lens) = Lens::of(LensKind::Slider, thumb, held) {
+        let lift = if self.enabled && self.style == SliderStyle::Regular {
+            state.lift.sample(cx)
+        } else {
+            0.0
+        };
+        if lift < 1.0 {
+            // the plain knob fades as the lens swells out of it
+            if lift > 0.0 {
+                cx.push(PaintOp::PushLayer {
+                    opacity: 1.0 - lift as f32,
+                    effects: Vec::new(),
+                });
+            }
+            self.paint_knob(&theme, &look_state, thumb, knob_radius, cx);
+            if lift > 0.0 {
+                cx.push(PaintOp::PopLayer);
+            }
+        }
+        if let Some(lens) = Lens::lifted(LensKind::Slider, thumb, lift) {
             // held, the knob is a lens: the track and its fill show through it, shrunk about its centre
             let fill = look::color(&theme, ColorRole::ControlFill, &filled_state);
-            paint_lens(cx, &lens, |cx, lens| {
+            paint_lens_faded(cx, &lens, lift as f32, |cx, lens| {
                 let r = radius * lens.minify;
                 look::fill(cx, lens.through(track), r, empty);
                 look::fill(cx, lens.through(filled), r, fill);
             });
-            paint_focus_ring(cx, thumb, knob_radius);
-            return;
         }
+        paint_focus_ring(cx, thumb, knob_radius);
+    }
+
+    fn semantics(&self, _: &SliderState, cx: &mut SemanticsCx<'_>) {
+        self.semantics_of(cx);
+    }
+}
+
+impl<M> Slider<M> {
+    /// The knob at rest: a white capsule with a soft shade, or a ringed one.
+    fn paint_knob(
+        &self,
+        theme: &ThemeTokens,
+        look_state: &ControlState,
+        thumb: Rect,
+        knob_radius: f64,
+        cx: &mut PaintCx<'_>,
+    ) {
         let contrast = theme.preferences.appearance.is_high_contrast();
         let ring = if contrast {
             KNOB_RING_HIGH_CONTRAST
@@ -471,7 +535,7 @@ impl<M: 'static> Widget<M> for Slider<M> {
             cx,
             thumb,
             knob_radius,
-            look::color(&theme, ColorRole::SwitchThumb, &look_state),
+            look::color(theme, ColorRole::SwitchThumb, look_state),
         );
         if ringed {
             look::stroke(
@@ -479,13 +543,12 @@ impl<M: 'static> Widget<M> for Slider<M> {
                 thumb.inset(Insets::uniform(ring / 2.0)),
                 knob_radius - ring / 2.0,
                 ring,
-                look::color(&theme, ColorRole::ControlBorder, &look_state),
+                look::color(theme, ColorRole::ControlBorder, look_state),
             );
         }
-        paint_focus_ring(cx, thumb, knob_radius);
     }
 
-    fn semantics(&self, _: &SliderState, cx: &mut SemanticsCx<'_>) {
+    fn semantics_of(&self, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Slider);
         cx.name(self.label.clone());
         cx.value(AccessibleValue::Number {

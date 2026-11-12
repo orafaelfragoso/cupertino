@@ -27,6 +27,7 @@ mod list;
 mod look;
 mod menu;
 mod module;
+mod motion;
 mod navigation;
 mod pages;
 mod popover;

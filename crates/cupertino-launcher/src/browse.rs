@@ -226,7 +226,7 @@ impl BrowseLayout {
     pub const WIDTH: f64 = 844.0;
     pub const HEIGHT: f64 = 576.0;
     pub const MIN_HEIGHT: f64 = 300.0;
-    pub const RADIUS: f64 = 24.0;
+    pub const RADIUS: f64 = 28.5;
     /// The side inset of the category row and the separators.
     pub const INSET: f64 = 20.0;
     /// The columns' insets from the panel's left and right edges: the right one leaves the scroll indicator its lane.

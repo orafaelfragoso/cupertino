@@ -23,6 +23,7 @@ use cupertino_launcher::kit::{self, Host, Message, Model, Running, SearchRequest
 use cupertino_launcher::panel::Now;
 use cupertino_launcher::preview::{self, LatestOnly, Preview, PreviewBody, TEXT_SNIFF};
 use cupertino_launcher::providers::{Provider, Reply, Update};
+use cupertino_launcher::scope::{FileItem, ScopeAnswer, ScopeLayout, ScopeRequest};
 use cupertino_launcher::view::{
     APP_ID, CATCHER_APP_ID, DOCUMENT_ICON, FOLDER_ICON, GENERIC_APPLICATION_ICON, HIDDEN_APP_ID,
     ICON_SIZE, PREVIEW_ICON_SIZE, PREVIEW_IMAGE, PREVIEW_TEXT_LINES, SEARCH_SYMBOL, SHADOW_TOP,
@@ -371,6 +372,11 @@ struct AppHost {
     previews: Option<LatestOnly<PreviewRead>>,
     /// Searches the file index, the newest query only; started at the first search.
     searches: Option<LatestOnly<FileSearch>>,
+    /// Searches the file index for the files scope, the newest request only; started at the first one.
+    scopes: Option<LatestOnly<ScopeSearch>>,
+    /// Loads and decodes the files scope's thumbnails in the order asked, on a thread of its own; started at the
+    /// first one asked. The model keeps at most `kit::MAX_FILE_THUMB_LOADS` waiting.
+    thumb_loads: Option<std::sync::mpsc::Sender<ThumbLoad>>,
     /// Loads and decodes the browser's application icons in the order asked, on a thread of its own; started at the
     /// first icon asked. The model keeps at most `kit::MAX_APP_ICON_LOADS` waiting.
     icon_loads: Option<std::sync::mpsc::Sender<IconLoad>>,
@@ -386,6 +392,32 @@ struct AppHost {
 struct FileSearch {
     request: SearchRequest,
     reply: async_channel::Sender<Update>,
+}
+
+/// A scope search the scope thread is asked for, and where its answer goes. A search replaced by a newer one before it
+/// started drops `reply`, which ends the wait without an answer.
+struct ScopeSearch {
+    request: ScopeRequest,
+    reply: async_channel::Sender<ScopeAnswer>,
+}
+
+/// A file thumbnail the thumbnail thread is asked for, and where its picture goes (none when the file has none).
+struct ThumbLoad {
+    path: PathBuf,
+    reply: async_channel::Sender<Vec<ImageSource>>,
+}
+
+/// Device pixels a files-scope thumbnail is loaded at: the cache's smallest size, which covers its box at scale 1 and
+/// nearly at scale 2.
+const FILE_THUMB_EDGE: u32 = 128;
+
+/// The thumbnail of the file at `path` as a Kit image, none when it has none (the type's icon stays).
+fn file_thumbnail(thumbnailer: &Thumbnailer, path: &Path) -> Vec<ImageSource> {
+    let Ok(mut pixels) = thumbnailer.pixels(path, ThumbSize::Normal, FILE_THUMB_EDGE) else {
+        return Vec::new();
+    };
+    premultiply(&mut pixels.rgba);
+    vec![image(pixels.width, pixels.height, &pixels.rgba)]
 }
 
 /// An application icon the icon thread is asked for (the entry's `Icon`), and where its renditions go.
@@ -763,6 +795,73 @@ impl Host for AppHost {
         }))]
     }
 
+    fn scope_search(&mut self, request: ScopeRequest) -> Vec<Command<Message>> {
+        if self.scopes.is_none() {
+            self.scopes = LatestOnly::new("launcher-scope", |job: ScopeSearch| {
+                let answer = job.request.run();
+                let _ = job.reply.send_blocking(answer);
+            })
+            .map_err(|e| eprintln!("cupertino-launcher: no scope search thread: {e}"))
+            .ok();
+        }
+        let (reply, answer) = async_channel::bounded(1);
+        let generation = request.generation;
+        match &self.scopes {
+            Some(scopes) => scopes.submit(ScopeSearch { request, reply }),
+            None => drop(reply),
+        }
+        vec![Command::Perform(Box::pin(async move {
+            // without the thread, or for a search a newer one replaced, the answer is empty: the grid shows nothing
+            // and never says it is searching
+            Message::Scoped(answer.recv().await.unwrap_or(ScopeAnswer {
+                generation,
+                suggestions: Vec::new(),
+                items: Vec::new(),
+            }))
+        }))]
+    }
+
+    fn file_icon(&mut self, item: &FileItem) -> Vec<ImageSource> {
+        let files = self
+            .files
+            .get_or_insert_with(|| FileIcons::discover(mime_database(), HashMap::new()));
+        let mime = files
+            .database()
+            .file_type(&item.path, item.is_dir)
+            .to_owned();
+        files.images(&item.path, &mime, false, ScopeLayout::THUMB)
+    }
+
+    fn file_thumb(&mut self, item: &FileItem) -> Vec<Command<Message>> {
+        if self.thumb_loads.is_none() {
+            let (jobs, queue) = std::sync::mpsc::channel::<ThumbLoad>();
+            let started = std::thread::Builder::new()
+                .name("launcher-thumbs".to_owned())
+                .spawn(move || {
+                    let thumbnailer = Thumbnailer::from_env(NAMESPACE);
+                    for job in queue {
+                        let images = file_thumbnail(&thumbnailer, &job.path);
+                        let _ = job.reply.send_blocking(images);
+                    }
+                });
+            match started {
+                Ok(_) => self.thumb_loads = Some(jobs),
+                Err(e) => eprintln!("cupertino-launcher: no thumbnail thread: {e}"),
+            }
+        }
+        let path = item.path.clone();
+        let (reply, loaded) = async_channel::bounded(1);
+        if let Some(loads) = &self.thumb_loads {
+            let _ = loads.send(ThumbLoad {
+                path: path.clone(),
+                reply,
+            });
+        }
+        vec![Command::Perform(Box::pin(async move {
+            Message::FileThumb(path, loaded.recv().await.unwrap_or_default())
+        }))]
+    }
+
     fn after(&mut self, seconds: f64, message: Message) -> Vec<Command<Message>> {
         let wait = Duration::from_secs_f64(seconds.clamp(0.0, 60.0));
         vec![Command::Perform(Box::pin(async move {
@@ -926,6 +1025,8 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         files: None,
         previews: None,
         searches: None,
+        scopes: None,
+        thumb_loads: None,
         icon_loads: None,
         assets,
         session,

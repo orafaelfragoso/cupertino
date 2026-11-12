@@ -10,18 +10,21 @@ use crate::engine::{
 };
 use crate::exec::CommandSpec;
 use crate::files::{FileIndex, FileSearchConfig};
-use crate::motion::{Frame, Motion, Shape};
+use crate::modes::{self, Mode};
+use crate::motion::{Frame, Header, Motion, Shape, RESPLIT_DELAY};
 use crate::nav::{Focus as NavFocus, Intent, Nav, Nested, Step, View};
 use crate::panel::{
     Focus, Key as PanelKey, Mods as PanelMods, Now, Panel, PanelCommand, PanelEvent,
 };
 use crate::preview::{self, Preview};
 use crate::providers::{Cancel, Generation, Provider, Reply, Status, Tracker, Update};
+use crate::scope::{self, FileItem, FilesScope, Filter, ScopeAnswer, ScopeLayout, ScopeRequest};
 use crate::view::{self, Input, KeyMode, PanelView, MAX_ROWS};
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// A launch waiting for its activation token.
@@ -53,6 +56,10 @@ const MAX_SAID: usize = 32;
 /// The most application icons the browser has being loaded at once, off the loop: those nearest the view are asked
 /// first, and each one that arrives makes room for the next.
 pub const MAX_APP_ICON_LOADS: usize = 14;
+/// The most file thumbnails the files scope has being loaded at once, and the most pictures it keeps; past it the
+/// cache starts again.
+pub const MAX_FILE_THUMB_LOADS: usize = 12;
+const MAX_FILE_IMAGES: usize = 400;
 
 /// A file search for the host to run off the loop: [`engine::file_sections`] over `index`, answered as
 /// [`Message::Provided`] with `generation`, given up once `cancel` is cancelled.
@@ -131,6 +138,27 @@ pub trait Host {
             Message::Provided(update)
         }))]
     }
+    /// Search the file index for the files scope; the commands deliver the answer as [`Message::Scoped`]. The default
+    /// runs it at once.
+    fn scope_search(&mut self, request: ScopeRequest) -> Vec<Command<Message>> {
+        let answer = request.run();
+        vec![Command::Perform(Box::pin(async move {
+            Message::Scoped(answer)
+        }))]
+    }
+    /// The renditions of the icon of `item`'s type, at once: what the files scope shows until its thumbnail loads.
+    /// None to draw a placeholder (the default).
+    fn file_icon(&mut self, _item: &FileItem) -> Vec<ImageSource> {
+        Vec::new()
+    }
+    /// Load and decode the thumbnail of `item` off the loop; the commands deliver it as [`Message::FileThumb`], none
+    /// when the file has none. The default delivers none at once.
+    fn file_thumb(&mut self, item: &FileItem) -> Vec<Command<Message>> {
+        let path = item.path.clone();
+        vec![Command::Perform(Box::pin(async move {
+            Message::FileThumb(path, Vec::new())
+        }))]
+    }
     /// Deliver `message` after `seconds` (a deadline). The default never does: the model then waits for the answer.
     fn after(&mut self, _seconds: f64, _message: Message) -> Vec<Command<Message>> {
         Vec::new()
@@ -165,6 +193,12 @@ pub enum Message {
     /// `org.cupertino.Launcher1.ToggleApplications` (the dock's app-browser request): the browser opens, the search
     /// field unfolds into it, or the browser closes.
     Browse,
+    /// The files scope opens, the search field unfolds into it, or it closes.
+    Files,
+    /// The files scope's search finished.
+    Scoped(ScopeAnswer),
+    /// The thumbnail of the file at this path arrived ([`Host::file_thumb`]); none when it has none.
+    FileThumb(PathBuf, Vec<ImageSource>),
     /// The file index finished building.
     Indexed(Arc<FileIndex>),
     /// The activation token of the launch waiting as `launch` arrived (`None` when there is none).
@@ -285,6 +319,28 @@ pub struct Model {
     arrangement: Arrangement,
     /// The output's size, once known.
     output: Option<Size>,
+    /// The files scope, from its first opening on.
+    pub scope: Option<FilesScope>,
+    /// Pictures of the scope's files by path: their type's icon, then their thumbnail.
+    pub file_images: HashMap<PathBuf, Vec<ImageSource>>,
+    /// The files whose thumbnails were asked for, and those still being loaded.
+    file_thumbed: HashSet<PathBuf>,
+    file_thumbs_loading: usize,
+    /// The number of the scope's last search, and what it asked.
+    scope_generation: u64,
+    scope_asked: Option<(String, Option<Filter>)>,
+    /// The scope shown last, which a fold keeps fading out.
+    last_scope: Option<View>,
+    /// The mode button the pointer is over, and where the keys are among the buttons.
+    pub mode_hover: Option<usize>,
+    pub mode_focus: modes::Focus,
+    /// The query was kept from the last opening: it is shown selected and nothing is searched or filtered by it until
+    /// it is edited.
+    held: bool,
+    /// The query is shown selected (the kept one, until the first edit).
+    select_query: bool,
+    /// The panel just opened: its buttons bud out at once.
+    just_shown: bool,
 }
 
 impl Model {
@@ -325,6 +381,18 @@ impl Model {
             previewed: None,
             arrangement: Arrangement::Grid,
             output: None,
+            scope: None,
+            file_images: HashMap::new(),
+            file_thumbed: HashSet::new(),
+            file_thumbs_loading: 0,
+            scope_generation: 0,
+            scope_asked: None,
+            last_scope: None,
+            mode_hover: None,
+            mode_focus: modes::Focus::default(),
+            held: false,
+            select_query: false,
+            just_shown: false,
         }
     }
 
@@ -349,6 +417,9 @@ impl Model {
 
     /// What the panel says when no result shows.
     pub fn status(&self) -> Status {
+        if self.held {
+            return Status::Idle;
+        }
         self.tracker.status(
             !self.panel.query().trim().is_empty(),
             self.panel.results().len(),
@@ -367,9 +438,48 @@ impl Model {
         }
     }
 
+    /// The files scope's height on the output known.
+    fn scope_height(&self) -> f64 {
+        match self.output {
+            Some(output) => ScopeLayout::height_on(
+                output.height,
+                (output.height * view::TOP_FRACTION).round(),
+                BROWSE_BOTTOM_ROOM,
+            ),
+            None => ScopeLayout::HEIGHT,
+        }
+    }
+
+    /// The scopes the mode buttons lead to, in order: the applications, and the files while they are searched.
+    pub fn modes(&self) -> Vec<Mode> {
+        let mut modes = vec![Mode::Applications];
+        if self.files.is_some() {
+            modes.push(Mode::Files);
+        }
+        modes
+    }
+
+    /// Whether the mode buttons stand beside the search field: it is the plain bar, with nothing below it.
+    fn wants_modes(&self) -> bool {
+        self.nav.view == View::Search
+            && self.nav.nested.is_none()
+            && view::search_shape(&self.panel, &self.status(), self.nav.nested).height
+                <= view::COLLAPSED_HEIGHT
+    }
+
+    /// The text the scopes filter by: the query, unless it was kept from the last opening and not yet edited.
+    fn filter_text(&self) -> String {
+        if self.held {
+            String::new()
+        } else {
+            self.panel.query().to_owned()
+        }
+    }
+
     /// The shape the current view heads for.
     fn target_shape(&self) -> Shape {
         match self.nav.view {
+            View::Files => view::scope_shape(self.scope_height()),
             View::Browse => view::browse_shape(self.browse_height()),
             _ => view::search_shape(&self.panel, &self.status(), self.nav.nested),
         }
@@ -382,8 +492,16 @@ impl Model {
         let mut browser =
             Browser::from_entries(self.launcher.entries(), &recent, self.browse_height());
         browser.set_arrangement(self.arrangement);
-        browser.set_query(self.panel.query());
+        browser.set_query(&self.filter_text());
         self.browser = Some(browser);
+    }
+
+    /// Open the files scope (afresh), for the query it filters by.
+    fn open_scope(&mut self) {
+        let mut files = FilesScope::new(self.scope_height());
+        files.set_query(&self.filter_text());
+        self.scope = Some(files);
+        self.scope_asked = None;
     }
 
     /// Carry out a navigation step.
@@ -393,15 +511,31 @@ impl Model {
         match step {
             Step::Stay | Step::Noted => {}
             Step::Show(view) => {
+                // the previous query is kept and shown selected, so typing replaces it; nothing filters by it
+                let kept = self.panel.query().to_owned();
                 self.panel.show(&self.launcher, now);
                 self.panel.settle_appear();
                 self.searched = None;
-                let browse = view == View::Browse;
-                if browse {
-                    self.panel.set_text_quiet("");
-                    self.open_browser();
+                self.held = !kept.is_empty();
+                self.select_query = self.held;
+                self.mode_hover = None;
+                self.mode_focus = modes::Focus::default();
+                self.just_shown = true;
+                match view {
+                    View::Browse => {
+                        self.panel.set_text_quiet(&kept);
+                        self.open_browser();
+                        self.last_scope = Some(View::Browse);
+                    }
+                    View::Files => {
+                        self.panel.set_text_quiet(&kept);
+                        self.open_scope();
+                        self.last_scope = Some(View::Files);
+                    }
+                    _ => {}
                 }
-                self.motion.show(self.target_shape(), browse, now.mono);
+                self.motion
+                    .show_in(self.target_shape(), header_of(view), now.mono);
                 if let (Some(config), false, None) = (&self.files, self.indexing, &self.file_index)
                 {
                     self.indexing = true;
@@ -413,11 +547,17 @@ impl Model {
             Step::Fold => {
                 self.panel.set_query("", &self.launcher, now);
                 self.searched = None;
+                self.held = false;
+                self.select_query = false;
+                self.revision += 1;
                 self.motion.fold(self.target_shape(), now.mono);
             }
             Step::Unfold => {
-                let query = self.panel.query().to_owned();
-                self.panel.set_text_quiet(&query);
+                let query = self.filter_text();
+                let text = self.panel.query().to_owned();
+                self.panel.set_text_quiet(&text);
+                self.last_scope = Some(View::Browse);
+                self.mode_hover = None;
                 self.tracker.cancel();
                 self.preview = PreviewState::None;
                 let height = self.browse_height();
@@ -431,15 +571,43 @@ impl Model {
                 }
                 self.motion.unfold(self.target_shape(), now.mono);
             }
+            Step::UnfoldFiles => {
+                let text = self.panel.query().to_owned();
+                self.panel.set_text_quiet(&text);
+                self.tracker.cancel();
+                self.preview = PreviewState::None;
+                self.last_scope = Some(View::Files);
+                self.mode_hover = None;
+                let height = self.scope_height();
+                match self.scope.as_mut() {
+                    Some(files) => files.set_height(height),
+                    None => self.open_scope(),
+                }
+                let query = self.filter_text();
+                if let Some(files) = self.scope.as_mut() {
+                    files.set_query(&query);
+                    files.deselect();
+                }
+                self.motion
+                    .unfold_to(self.target_shape(), Header::Files, now.mono);
+            }
             Step::Leave(_, _) => {}
             Step::Enter(_) => {}
             Step::FocusField => self.panel.focus_field(),
             Step::ClearQuery => {
+                self.held = false;
+                self.select_query = false;
                 match self.nav.view {
                     View::Browse => {
                         self.panel.set_text_quiet("");
                         if let Some(b) = self.browser.as_mut() {
                             b.set_query("");
+                        }
+                    }
+                    View::Files => {
+                        self.panel.set_text_quiet("");
+                        if let Some(files) = self.scope.as_mut() {
+                            files.set_query("");
                         }
                     }
                     _ => self.panel.set_query("", &self.launcher, now),
@@ -468,10 +636,11 @@ impl Model {
     /// Close: the window fades out (at once when `now_gone`, for a session lock); the launch history is written.
     fn hide(&mut self, now_gone: bool) {
         let now = self.now();
-        let browse = self.presented().header == crate::motion::Header::Browse;
         if self.nav.is_visible() {
             self.nav = Nav::HIDDEN;
         }
+        self.mode_hover = None;
+        self.mode_focus = modes::Focus::default();
         self.panel.hide(now.mono);
         self.tracker.cancel();
         self.searched = None;
@@ -482,7 +651,7 @@ impl Model {
         self.browse_said_before.clear();
         self.preview = PreviewState::None;
         self.previewed = None;
-        self.motion.hide(browse, now.mono);
+        self.motion.hide(now.mono);
         if now_gone || self.settled {
             self.motion.settle(now.mono);
         }
@@ -494,8 +663,12 @@ impl Model {
     fn animate(&mut self) -> Vec<Command<Message>> {
         self.frame += 1;
         let now = self.now().mono;
-        let scrolling = self.browser.as_ref().is_some_and(|b| b.animating(now));
-        if self.motion.animating(now) || (self.nav.view == View::Browse && scrolling) {
+        let scrolling = match self.nav.view {
+            View::Browse => self.browser.as_ref().is_some_and(|b| b.animating(now)),
+            View::Files => self.scope.as_ref().is_some_and(|s| s.animating(now)),
+            _ => false,
+        };
+        if self.motion.animating(now) || scrolling {
             self.host.frame(self.frame)
         } else {
             Vec::new()
@@ -638,7 +811,9 @@ impl Model {
             return commands;
         }
         if self.nav.view == View::Search {
-            commands.extend(self.search());
+            if !self.held {
+                commands.extend(self.search());
+            }
             let focus = match self.panel.focus() {
                 Focus::Field => NavFocus::Field,
                 Focus::List => NavFocus::Content,
@@ -657,11 +832,29 @@ impl Model {
                 Zone::Content if b.selected().is_some() => NavFocus::Content,
                 Zone::Content => NavFocus::Field,
             };
-            let (query, category) = (!b.query().is_empty(), b.category().is_some());
+            let (query, category) = (!self.panel.query().is_empty(), b.category().is_some());
             self.nav.apply(Intent::Query(query));
             self.nav.apply(Intent::Category(category));
             self.nav.apply(Intent::Focus(focus));
         }
+        if self.nav.view == View::Files {
+            let text = self.filter_text();
+            if let Some(files) = self.scope.as_mut() {
+                files.set_query(&text);
+                let focus = match files.zone() {
+                    scope::Zone::Filters => NavFocus::Categories,
+                    scope::Zone::Content if files.selected().is_some() => NavFocus::Content,
+                    scope::Zone::Content => NavFocus::Field,
+                };
+                let (query, category) = (!self.panel.query().is_empty(), files.filter().is_some());
+                self.nav.apply(Intent::Query(query));
+                self.nav.apply(Intent::Category(category));
+                self.nav.apply(Intent::Focus(focus));
+            }
+            commands.extend(self.ask_scope());
+            commands.extend(self.load_file_images());
+        }
+        commands.extend(self.place_modes());
         if self.icons.len() > MAX_ICONS {
             self.icons.clear();
         }
@@ -696,6 +889,7 @@ impl Model {
             let settled_in = match self.nav.view {
                 View::Search => header == crate::motion::Header::Search,
                 View::Browse => header == crate::motion::Header::Browse,
+                View::Files => header == crate::motion::Header::Files,
                 View::Hidden => false,
             };
             if settled_in {
@@ -703,6 +897,91 @@ impl Model {
             }
         }
         commands.extend(self.resize());
+        commands
+    }
+
+    /// The buttons stand beside the plain bar, and merge into the field when anything opens below it.
+    fn place_modes(&mut self) -> Vec<Command<Message>> {
+        let now = self.now().mono;
+        let want = if self.wants_modes() {
+            self.modes().len()
+        } else {
+            0
+        };
+        let first = std::mem::take(&mut self.just_shown);
+        let mut commands = Vec::new();
+        if want != self.motion.modes_wanted() || (first && want > 0) {
+            let delay = if first { 0.0 } else { RESPLIT_DELAY };
+            self.motion.set_modes(want, now, delay);
+            if self.settled {
+                self.motion.settle(now);
+            }
+            // the buttons' own motion needs frames
+            commands.extend(self.animate());
+        }
+        if want == 0 {
+            self.mode_hover = None;
+            self.mode_focus = modes::Focus::default();
+        }
+        commands
+    }
+
+    /// Ask the host for the files the scope shows, when its query or filter changed since it last asked. The answer
+    /// comes back as [`Message::Scoped`]; the scope shows no spinner while it waits.
+    fn ask_scope(&mut self) -> Vec<Command<Message>> {
+        let (Some(files), Some(index)) = (self.scope.as_ref(), self.file_index.clone()) else {
+            return Vec::new();
+        };
+        let asked = (files.query().to_owned(), files.filter());
+        if self.scope_asked.as_ref() == Some(&asked) {
+            return Vec::new();
+        }
+        self.scope_asked = Some(asked.clone());
+        self.scope_generation += 1;
+        let request = ScopeRequest {
+            generation: self.scope_generation,
+            text: asked.0,
+            filter: asked.1,
+            index,
+            config: self.launcher.config.clone(),
+            unix: self.now().unix,
+        };
+        self.host.scope_search(request)
+    }
+
+    /// Give the scope's files near the view their type's icon, and ask for the thumbnails of those that have one, a
+    /// few at a time. A thumbnail that arrives ([`Message::FileThumb`]) takes the icon's place and makes room for the
+    /// next.
+    fn load_file_images(&mut self) -> Vec<Command<Message>> {
+        let Some(files) = self.scope.as_ref() else {
+            return Vec::new();
+        };
+        if self.file_images.len() > MAX_FILE_IMAGES {
+            self.file_images.clear();
+            self.file_thumbed.clear();
+        }
+        let near: Vec<FileItem> = files
+            .nearby()
+            .into_iter()
+            .filter_map(|i| files.item(i).cloned())
+            .collect();
+        let mut commands = Vec::new();
+        for item in near {
+            if !self.file_images.contains_key(&item.path) {
+                let icon = self.host.file_icon(&item);
+                if !icon.is_empty() {
+                    self.file_images.insert(item.path.clone(), icon);
+                }
+            }
+            if !item.is_dir
+                && self.file_thumbs_loading < MAX_FILE_THUMB_LOADS
+                && !self.file_thumbed.contains(&item.path)
+            {
+                self.file_thumbed.insert(item.path.clone());
+                self.file_thumbs_loading += 1;
+                commands.extend(self.host.file_thumb(&item));
+            }
+        }
         commands
     }
 
@@ -965,6 +1244,13 @@ impl Model {
         match (self.nav.view, self.nav.nested) {
             (_, Some(Nested::ViewOptions)) => KeyMode::Menu,
             (_, Some(Nested::Preview)) => KeyMode::Preview,
+            (View::Search, _) if self.mode_focus.on.is_some() => KeyMode::Modes,
+            (View::Files, _) => KeyMode::Files {
+                selecting: self
+                    .scope
+                    .as_ref()
+                    .is_some_and(|s| s.zone() != scope::Zone::Content || s.selected().is_some()),
+            },
             (View::Browse, _) => KeyMode::Browse {
                 selecting: self
                     .browser
@@ -978,8 +1264,18 @@ impl Model {
     /// A key of the panel.
     fn key(&mut self, key: PanelKey, mods: PanelMods) -> Vec<Command<Message>> {
         let now = self.now();
-        if mods.only_primary() && key == PanelKey::Char('1') {
-            return self.intent(Intent::Browse);
+        if mods.only_primary() {
+            if let PanelKey::Char(c) = key {
+                if let Some(index) = modes::index_of_digit(c) {
+                    return match self.modes().get(index) {
+                        Some(&mode) => self.press_mode(mode),
+                        None => Vec::new(),
+                    };
+                }
+            }
+        }
+        if let Some(commands) = self.mode_key(key, mods) {
+            return commands;
         }
         match self.nav.nested {
             Some(Nested::ViewOptions) => return self.menu_key(key),
@@ -995,6 +1291,9 @@ impl Model {
         if self.nav.view == View::Browse {
             return self.browse_key(key, mods);
         }
+        if self.nav.view == View::Files {
+            return self.scope_key(key, mods);
+        }
         let outcome = self.panel.handle_key(key, mods, &mut self.launcher, now);
         let mut commands = self.outcome(outcome);
         // a shortcut that closes the panel (settings, help)
@@ -1005,6 +1304,106 @@ impl Model {
             commands.extend(self.intent(Intent::Done));
         }
         commands
+    }
+
+    /// Switch to the scope of `mode`, as its button or its shortcut asks.
+    fn press_mode(&mut self, mode: Mode) -> Vec<Command<Message>> {
+        self.mode_hover = None;
+        self.mode_focus = modes::Focus::default();
+        match mode {
+            Mode::Applications => self.intent(Intent::Browse),
+            Mode::Files => self.intent(Intent::Files),
+        }
+    }
+
+    /// A key while the buttons stand beside the plain bar: Tab goes to them, along them and back to the field; Left and
+    /// Right move between them, Return and Space press the one the keys are on, Escape gives the keys back to the field.
+    /// `None` when the key is not the buttons'.
+    fn mode_key(&mut self, key: PanelKey, mods: PanelMods) -> Option<Vec<Command<Message>>> {
+        let count = self.modes().len();
+        let shown = self.nav.view == View::Search
+            && self.nav.nested.is_none()
+            && self.motion.modes_wanted() > 0
+            && {
+                let m = self.presented().modes;
+                m.count > 0 && m.spread > 0.5
+            };
+        if !shown {
+            self.mode_focus = modes::Focus::default();
+            return None;
+        }
+        match key {
+            PanelKey::Tab => {
+                match self.mode_focus.tab(mods.shift, count) {
+                    modes::Move::To(i) => self.mode_focus.on = Some(i),
+                    _ => self.mode_focus.on = None,
+                }
+                Some(Vec::new())
+            }
+            _ if self.mode_focus.on.is_none() => None,
+            PanelKey::Left | PanelKey::Right => {
+                if let Some(modes::Move::To(i)) =
+                    self.mode_focus.step(key == PanelKey::Right, count)
+                {
+                    self.mode_focus.on = Some(i);
+                }
+                Some(Vec::new())
+            }
+            PanelKey::Enter | PanelKey::Char(' ') => {
+                let mode = self
+                    .mode_focus
+                    .on
+                    .and_then(|i| self.modes().get(i).copied());
+                Some(match mode {
+                    Some(mode) => self.press_mode(mode),
+                    None => Vec::new(),
+                })
+            }
+            PanelKey::Escape => {
+                self.mode_focus.on = None;
+                Some(Vec::new())
+            }
+            // anything else is typing: the keys go back to the field
+            _ => {
+                self.mode_focus.on = None;
+                None
+            }
+        }
+    }
+
+    /// A key in the files scope: the arrows, Home, End and the pages move along the files, Return opens the selected
+    /// one, Tab moves between the files and the filters.
+    fn scope_key(&mut self, key: PanelKey, mods: PanelMods) -> Vec<Command<Message>> {
+        let now = self.now().mono;
+        let key = match (key, mods.shift) {
+            (PanelKey::Left, _) => browse::Key::Left,
+            (PanelKey::Right, _) => browse::Key::Right,
+            (PanelKey::Up, _) => browse::Key::Up,
+            (PanelKey::Down, _) => browse::Key::Down,
+            (PanelKey::Home, _) => browse::Key::Home,
+            (PanelKey::End, _) => browse::Key::End,
+            (PanelKey::PageUp, _) => browse::Key::PageUp,
+            (PanelKey::PageDown, _) => browse::Key::PageDown,
+            (PanelKey::Enter, _) => browse::Key::Return,
+            (PanelKey::Char(' '), _) => browse::Key::Space,
+            (PanelKey::Tab, false) => browse::Key::Tab,
+            (PanelKey::Tab, true) => browse::Key::BackTab,
+            _ => return Vec::new(),
+        };
+        let Some(files) = self.scope.as_mut() else {
+            return Vec::new();
+        };
+        match files.key(key, now) {
+            Some(scope::Outcome::Open(path)) => self.open_file(&path),
+            None => Vec::new(),
+        }
+    }
+
+    /// Open the scope's file or folder with its default handler; the launcher closes.
+    fn open_file(&mut self, path: &std::path::Path) -> Vec<Command<Message>> {
+        self.hide(false);
+        self.host.open(&path.to_string_lossy());
+        Vec::new()
     }
 
     fn browse_key(&mut self, key: PanelKey, mods: PanelMods) -> Vec<Command<Message>> {
@@ -1065,10 +1464,19 @@ impl Model {
                 if self.nav.nested == Some(Nested::Preview) && change.text != self.panel.query() {
                     self.nav.apply(Intent::Done);
                 }
+                // an edit ends the kept query: from here on it filters and is searched
+                self.held = false;
+                self.select_query = false;
+                self.mode_focus = modes::Focus::default();
                 if self.nav.view == View::Browse {
                     self.panel.set_text_quiet(&change.text);
                     if let Some(b) = self.browser.as_mut() {
                         b.set_query(&change.text);
+                    }
+                } else if self.nav.view == View::Files {
+                    self.panel.set_text_quiet(&change.text);
+                    if let Some(files) = self.scope.as_mut() {
+                        files.set_query(&change.text);
                     }
                 } else {
                     self.panel
@@ -1121,10 +1529,46 @@ impl Model {
                 Vec::new()
             }
             Input::BrowseScroll(dy) => {
-                if let Some(b) = self.browser.as_mut() {
+                if self.nav.view == View::Files {
+                    if let Some(files) = self.scope.as_mut() {
+                        files.scroll_by(dy, now.mono);
+                    }
+                } else if let Some(b) = self.browser.as_mut() {
                     b.scroll_by(dy, now.mono);
                 }
                 self.animate()
+            }
+            Input::ModeHover(index) => {
+                self.mode_hover = index;
+                Vec::new()
+            }
+            Input::ModePress(index) => match self.modes().get(index) {
+                Some(&mode) => self.press_mode(mode),
+                None => Vec::new(),
+            },
+            Input::ScopeHover(index) => {
+                if let Some(files) = self.scope.as_mut() {
+                    files.hover(index);
+                }
+                Vec::new()
+            }
+            Input::ScopeActivate(index) => {
+                let path = self
+                    .scope
+                    .as_ref()
+                    .and_then(|s| s.item(index))
+                    .map(|f| f.path.clone());
+                match path {
+                    Some(path) => self.open_file(&path),
+                    None => Vec::new(),
+                }
+            }
+            Input::ScopeFilter(filter) => {
+                if let Some(files) = self.scope.as_mut() {
+                    files.set_zone(scope::Zone::Filters);
+                    files.toggle_filter(filter);
+                }
+                Vec::new()
             }
             // the pointer (or assistive technology) pressed the button: the keys stay where they were, so the button
             // shows no focus ring once the menu closes
@@ -1171,6 +1615,22 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
     let mut commands = match message {
         Message::Toggle => model.intent(Intent::Toggle),
         Message::Browse => model.intent(Intent::Browse),
+        Message::Files => model.intent(Intent::Files),
+        Message::Scoped(answer) => {
+            if answer.generation == model.scope_generation {
+                if let Some(files) = model.scope.as_mut() {
+                    files.answer(answer);
+                }
+            }
+            Vec::new()
+        }
+        Message::FileThumb(path, sources) => {
+            model.file_thumbs_loading = model.file_thumbs_loading.saturating_sub(1);
+            if !sources.is_empty() {
+                model.file_images.insert(path, sources);
+            }
+            Vec::new()
+        }
         Message::Input(_) if !model.nav.is_visible() => Vec::new(),
         Message::Input(input) => model.input(input),
         Message::Indexed(index) => {
@@ -1178,6 +1638,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             model.file_index = Some(index);
             // the open query is asked again, now with the files
             model.searched = None;
+            model.scope_asked = None;
             Vec::new()
         }
         Message::Launch(launch, token) => {
@@ -1278,6 +1739,9 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
     commands.extend(model.changed());
     if !model.presenting() {
         model.browser = None;
+        model.scope = None;
+        model.file_images.clear();
+        model.file_thumbed.clear();
     }
     commands
 }
@@ -1293,10 +1757,19 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         .map(|item| model.launcher.actions(item))
         .unwrap_or_default();
     let frame = model.presented();
-    let browser = model
-        .browser
-        .as_ref()
-        .filter(|_| model.nav.view == View::Browse || frame.content > 0.0);
+    // which scope the content shows: the one of the header, or the last while a fold fades it out
+    let shown = match frame.header {
+        Header::Browse => Some(View::Browse),
+        Header::Files => Some(View::Files),
+        Header::Search => model.last_scope,
+    };
+    let browser = model.browser.as_ref().filter(|_| {
+        shown == Some(View::Browse) && (model.nav.view == View::Browse || frame.content > 0.0)
+    });
+    let files = model.scope.as_ref().filter(|_| {
+        shown == Some(View::Files) && (model.nav.view == View::Files || frame.content > 0.0)
+    });
+    let modes = model.modes();
     let panel = PanelView {
         panel: &model.panel,
         revision: model.revision,
@@ -1315,6 +1788,12 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         app_icons: &model.app_icons,
         browse_no_results_said: model.browse_no_results_said(),
         now: model.now().mono,
+        modes: &modes,
+        mode_hover: model.mode_hover,
+        mode_focus: model.mode_focus.on,
+        scope: files,
+        file_images: &model.file_images,
+        select_query: model.select_query,
     };
     let mut windows = vec![view::panel_window(&panel)];
     if model.nav.is_visible() {
@@ -1328,4 +1807,13 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         ));
     }
     windows
+}
+
+/// The header of the panel's view.
+fn header_of(view: View) -> Header {
+    match view {
+        View::Browse => Header::Browse,
+        View::Files => Header::Files,
+        View::Search | View::Hidden => Header::Search,
+    }
 }

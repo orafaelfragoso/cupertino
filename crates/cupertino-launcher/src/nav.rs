@@ -24,6 +24,15 @@ pub enum View {
     Search,
     /// The application browser: categories over a grid or a list of every application.
     Browse,
+    /// The files scope: filters over the recent files and a grid of the files the query finds.
+    Files,
+}
+
+impl View {
+    /// Whether the view is a scope panel under the query row (the browser or the files scope).
+    pub fn is_scope(self) -> bool {
+        matches!(self, View::Browse | View::Files)
+    }
 }
 
 /// A state over a view that Escape leaves before anything else.
@@ -56,6 +65,8 @@ pub enum Intent {
     Toggle,
     /// The browser's shortcut, the dock's request or Primary+1.
     Browse,
+    /// The files scope's shortcut or its mode button.
+    Files,
     Escape,
     /// The query is now empty (`false`) or not (`true`).
     Query(bool),
@@ -84,6 +95,8 @@ pub enum Step {
     Fold,
     /// The search field unfolds into the browser.
     Unfold,
+    /// The search field, or the browser, unfolds into the files scope.
+    UnfoldFiles,
     /// The nested state closes; the keyboard returns to `Focus`.
     Leave(Nested, Focus),
     /// A nested state opens.
@@ -156,6 +169,10 @@ impl Nav {
                     *self = Nav::opened(View::Browse);
                     Step::Show(View::Browse)
                 }
+                Intent::Files => {
+                    *self = Nav::opened(View::Files);
+                    Step::Show(View::Files)
+                }
                 _ => Step::Stay,
             };
         }
@@ -173,6 +190,18 @@ impl Nav {
                     Step::Unfold
                 }
             },
+            Intent::Files => match self.view {
+                View::Files => self.hide(),
+                _ => {
+                    // the query typed so far filters the files
+                    *self = Nav {
+                        view: View::Files,
+                        query: self.query,
+                        ..Nav::HIDDEN
+                    };
+                    Step::UnfoldFiles
+                }
+            },
             Intent::Escape => self.escape(),
             Intent::Query(typed) => {
                 self.query = typed;
@@ -183,7 +212,7 @@ impl Nav {
                 Step::Noted
             }
             Intent::Category(on) => {
-                if self.view != View::Browse {
+                if !self.view.is_scope() {
                     return Step::Stay;
                 }
                 self.category = on;
@@ -192,7 +221,7 @@ impl Nav {
             Intent::Focus(focus) => {
                 let allowed = match focus {
                     Focus::Field | Focus::Content => true,
-                    Focus::Categories => self.view == View::Browse,
+                    Focus::Categories => self.view.is_scope(),
                 };
                 if !allowed || self.nested.is_some() || self.focus == focus {
                     return Step::Stay;
@@ -244,16 +273,15 @@ impl Nav {
             }
             return Step::ClearQuery;
         }
-        if self.view == View::Browse && self.category {
+        if self.view.is_scope() && self.category {
             self.category = false;
             return Step::ClearCategory;
         }
-        match self.view {
-            View::Browse => {
-                *self = Nav::opened(View::Search);
-                Step::Fold
-            }
-            _ => self.hide(),
+        if self.view.is_scope() {
+            *self = Nav::opened(View::Search);
+            Step::Fold
+        } else {
+            self.hide()
         }
     }
 }

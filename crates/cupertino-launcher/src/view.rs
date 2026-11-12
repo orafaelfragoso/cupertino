@@ -13,14 +13,18 @@
 //! Kit's [`TextField`], which reports the edited query as [`Input::Query`].
 
 pub mod browse;
+pub mod modes;
+pub mod scope;
 
 use crate::browse::{Arrangement, BrowseLayout, Browser, Category};
 use crate::engine::{ItemAction, ItemKind, ResultItem};
-use crate::motion::{Frame, Header, Shape as PanelShape};
+use crate::modes::{self as mode_model, Mode};
+use crate::motion::{Frame, Header, Shape as PanelShape, CLOSE_BLUR, GROUP_WIDTH};
 use crate::nav::Nested;
 use crate::panel::{takes_key, Focus, Key as PanelKey, Mods as PanelMods, Panel};
 use crate::preview::{Preview, PreviewBody};
 use crate::providers::Status;
+use crate::scope::{FilesScope, Filter, ScopeLayout};
 use cupertino_kit::controls::{
     BareField, Icon, IconDirection, Image, ImageFit, ImageSource, Stack, Text, TextChange,
     TextField, TextRole,
@@ -45,6 +49,8 @@ use cupertino_kit::text::{
 };
 use cupertino_kit::theme::{Color, ColorRole, StateVariant, Surface};
 use std::collections::HashMap;
+use std::ops::Range;
+use std::path::PathBuf;
 
 /// The `app_id` of the panel's window, which gives it its layer surface.
 pub const APP_ID: &str = "cupertino-launcher";
@@ -89,14 +95,18 @@ pub const CELL_INSET: f64 = 12.0;
 pub const SELECTION_RADIUS: f64 = 12.0;
 /// Rows, headings included, shown at once.
 pub const MAX_ROWS: usize = 9;
-/// Distance of the panel's top edge from the top of the output, as a fraction of its height.
-pub const TOP_FRACTION: f64 = 0.2;
+/// Distance of the panel's top edge from the top of the output, as a fraction of its height (203 points on an output
+/// 982 points tall).
+pub const TOP_FRACTION: f64 = 203.0 / 982.0;
 /// The query field's placeholder and accessible name.
 pub const PLACEHOLDER: &str = "Search";
 /// The query row's placeholder while browsing the applications.
 pub const BROWSE_PLACEHOLDER: &str = browse::TITLE;
 /// The browsing query row's symbol.
 pub const BROWSE_SYMBOL: &str = "symbol.applications";
+/// The files scope's query row: its placeholder and symbol.
+pub const FILES_PLACEHOLDER: &str = crate::scope::TITLE;
+pub const FILES_SYMBOL: &str = "symbol.folder";
 /// The row that says why nothing shows: its height, and what it says.
 pub const STATUS_HEIGHT: f64 = 64.0;
 pub const SEARCHING: &str = "Searching";
@@ -205,6 +215,16 @@ pub enum Input {
     CloseMenu,
     /// The enlarged preview's close was pressed.
     ClosePreview,
+    /// The pointer moved onto the mode button at this index, or off them all.
+    ModeHover(Option<usize>),
+    /// The mode button at this index was pressed, or activated by assistive technology.
+    ModePress(usize),
+    /// The pointer moved onto the file at this index of the files scope.
+    ScopeHover(usize),
+    /// The file at this index was pressed, or activated by assistive technology.
+    ScopeActivate(usize),
+    /// A files filter was pressed.
+    ScopeFilter(Filter),
 }
 
 /// Which keys the panel takes from the query field now.
@@ -215,6 +235,10 @@ pub enum KeyMode {
     /// Browsing: the arrows that move along the query (Left, Right, Home, End) and Space stay the field's until an
     /// application, a filter or the options button is `selecting`.
     Browse { selecting: bool },
+    /// The files scope: the same keys as the browser's.
+    Files { selecting: bool },
+    /// The keys are on the mode buttons beside the plain bar: Return, Space, the arrows and Escape are theirs.
+    Modes,
     /// The view options menu: it takes every key.
     Menu,
     /// The enlarged preview, opened from the list.
@@ -224,15 +248,24 @@ pub enum KeyMode {
 impl KeyMode {
     /// Whether the panel takes `key` with `mods`, before the field sees it.
     pub fn takes(self, key: PanelKey, mods: PanelMods) -> bool {
-        // the applications, from wherever the keys are
-        if mods.only_primary() && key == PanelKey::Char('1') {
+        // the scopes, from wherever the keys are
+        if mods.only_primary() && matches!(key, PanelKey::Char('1'..='9')) {
             return true;
         }
         match self {
             KeyMode::Search(focus) => takes_key(key, mods, focus),
             KeyMode::Preview => takes_key(key, mods, Focus::List),
             KeyMode::Menu => true,
-            KeyMode::Browse { selecting } => match key {
+            KeyMode::Modes => matches!(
+                key,
+                PanelKey::Escape
+                    | PanelKey::Enter
+                    | PanelKey::Tab
+                    | PanelKey::Left
+                    | PanelKey::Right
+                    | PanelKey::Char(' ')
+            ),
+            KeyMode::Browse { selecting } | KeyMode::Files { selecting } => match key {
                 PanelKey::Escape
                 | PanelKey::Enter
                 | PanelKey::Up
@@ -400,22 +433,34 @@ pub fn browse_shape(height: f64) -> PanelShape {
     PanelShape::new(BrowseLayout::WIDTH, height, BrowseLayout::RADIUS)
 }
 
+/// The files scope's shape, `height` points tall.
+pub fn scope_shape(height: f64) -> PanelShape {
+    PanelShape::new(ScopeLayout::WIDTH, height, ScopeLayout::RADIUS)
+}
+
 /// The panel's window for `shape`: the shape and the room around it for its shadow, in whole points (what an animation
 /// leaves a hair past a whole point does not round up).
 pub fn window_extent(shape: PanelShape) -> Size {
     let whole = |v: f64| ((v * 1000.0).round() / 1000.0).ceil();
+    // never narrower than the search field and its buttons: they stand beside each other in the same window
     Size::new(
-        whole(shape.width + 2.0 * SHADOW_SIDE),
+        whole(shape.width.max(GROUP_WIDTH) + 2.0 * SHADOW_SIDE),
         whole(shape.height + SHADOW_TOP + SHADOW_BOTTOM),
     )
 }
 
-/// Where the enclosure lies in a window `extent` large as `frame` presents it: horizontally centred, its top edge
-/// below the shadow's room, scaled about its top centre.
+/// The most the enclosure is scaled by: the window keeps room for it around the shape.
+pub const MAX_SCALE: f64 = 1.25;
+
+/// Where the enclosure lies in a window `extent` large as `frame` presents it, scaled about its centre: its top edge
+/// below the shadow's room, and its left edge where the group it is placed by starts, half the frame's anchor width
+/// left of the middle. The group is the enclosure alone, or the search field and its buttons.
 pub fn enclosure_rect(extent: Size, frame: &Frame) -> Rect {
-    let scale = frame.scale.clamp(0.0, 1.0);
+    let scale = frame.scale.clamp(0.0, MAX_SCALE);
     let (w, h) = (frame.shape.width * scale, frame.shape.height * scale);
-    Rect::new((extent.width - w) / 2.0, SHADOW_TOP, w, h)
+    let middle = extent.width / 2.0;
+    let top = SHADOW_TOP + (frame.shape.height - h) / 2.0;
+    Rect::new(middle - frame.anchor * scale / 2.0, top, w, h)
 }
 
 /// Where the panel goes on an output `output` points large: horizontally centred, its top edge at [`TOP_FRACTION`]
@@ -477,6 +522,15 @@ pub struct PanelView<'a> {
     pub browse_no_results_said: bool,
     /// The monotonic clock, for the browser's scroll indicator.
     pub now: f64,
+    /// The mode buttons there are, in order, and the one the pointer is over and the one the keys are on.
+    pub modes: &'a [Mode],
+    pub mode_hover: Option<usize>,
+    pub mode_focus: Option<usize>,
+    /// The files scope, while it shows (it is up, or still fading out of a fold), and the pictures of its files.
+    pub scope: Option<&'a FilesScope>,
+    pub file_images: &'a HashMap<PathBuf, Vec<ImageSource>>,
+    /// The query is shown selected, as the last opening left it.
+    pub select_query: bool,
 }
 
 fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
@@ -520,17 +574,78 @@ where
 {
     let rect = enclosure_rect(view.extent, &view.frame);
     let mut spec = window_spec("Launcher", APP_ID, view.extent);
-    spec.input_region = Some(if view.open { vec![rect] } else { Vec::new() });
+    let buttons = mode_buttons(view, &rect);
+    spec.input_region = Some(if view.open {
+        std::iter::once(rect)
+            .chain(
+                buttons
+                    .iter()
+                    .filter(|(_, active, _)| *active)
+                    .map(|(r, _, _)| *r),
+            )
+            .collect()
+    } else {
+        Vec::new()
+    });
+    let mut root = vec![panel_content(view).key("panel")];
+    root.extend(
+        buttons
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, _, button))| button.key(format!("mode-{i}"))),
+    );
     Window {
         key: panel_window_key(),
         spec,
         shortcuts: CommandRegistry::new(),
         on_close: Some(M::from(Input::Dismiss)),
         background: WindowBackground::None,
-        content: Element::new(Plain::absolute(vec![panel_content(view).key("panel")])),
+        content: Element::new(Plain::absolute(root)),
         popup: None,
         menus: None,
     }
+}
+
+/// The mode buttons as the frame presents them: each with its rectangle in the window, whether it takes input and its
+/// element. They stand where the group's layout puts them (the search field's end and the gaps), scaled with the
+/// enclosure about the window's middle, and are none once they merged into the field.
+fn mode_buttons<M>(view: &PanelView<'_>, enclosure: &Rect) -> Vec<(Rect, bool, Element<M>)>
+where
+    M: From<Input> + Clone + 'static,
+{
+    let frame = &view.frame;
+    let count = frame.modes.count.min(view.modes.len());
+    if count == 0 {
+        return Vec::new();
+    }
+    let scale = frame.scale.clamp(0.0, MAX_SCALE);
+    let middle = view.extent.width / 2.0;
+    let centre_y = enclosure.y() + enclosure.height() / 2.0;
+    let active = view.open && frame.modes.spread > 0.5;
+    (0..count)
+        .map(|index| {
+            let place = mode_model::button_rect(index, count, frame.modes.spread, COLLAPSED_HEIGHT);
+            let side = place.width() * scale;
+            let rect = Rect::new(
+                middle + (place.x() - frame.anchor / 2.0) * scale,
+                centre_y - side / 2.0,
+                side,
+                side,
+            );
+            let mode = view.modes[index];
+            let button = Element::new(modes::ModeButton {
+                mode,
+                index,
+                rect,
+                alpha: frame.alpha,
+                sharp: frame.modes.sharp,
+                focus: view.mode_focus == Some(index),
+                active,
+                children: vec![modes::glyph(mode, frame.modes.sharp)],
+            });
+            (rect, active, button)
+        })
+        .collect()
 }
 
 /// The transparent window over the output, below the panel, that closes it on a press.
@@ -578,27 +693,27 @@ where
     let frame = &view.frame;
     let rect = enclosure_rect(view.extent, frame);
     let browsing = frame.header == Header::Browse;
+    let filing = frame.header == Header::Files;
+    let hint = match frame.header {
+        Header::Search => PLACEHOLDER,
+        Header::Browse => BROWSE_PLACEHOLDER,
+        Header::Files => FILES_PLACEHOLDER,
+    };
+    let selection: Option<Range<usize>> = view
+        .select_query
+        .then(|| 0..panel.query().len())
+        .filter(|r| !r.is_empty());
     let field = Element::new(BareField {
         field: TextField {
-            label: if browsing {
-                BROWSE_PLACEHOLDER
-            } else {
-                PLACEHOLDER
-            }
-            .to_owned(),
-            placeholder: if browsing {
-                BROWSE_PLACEHOLDER
-            } else {
-                PLACEHOLDER
-            }
-            .to_owned(),
+            label: hint.to_owned(),
+            placeholder: hint.to_owned(),
             value: panel.query().to_owned(),
             revision: view.revision,
             purpose: ContentPurpose::Normal,
             enabled: true,
             on_change: Some(Box::new(|change| M::from(Input::Query(change)))),
             on_submit: None,
-            selection: None,
+            selection,
             initial: true,
         },
         size: QUERY_SIZE,
@@ -607,10 +722,10 @@ where
     .fill();
     let mut row = vec![
         Element::new(Icon {
-            name: if browsing {
-                BROWSE_SYMBOL
-            } else {
-                SEARCH_SYMBOL
+            name: match frame.header {
+                Header::Search => SEARCH_SYMBOL,
+                Header::Browse => BROWSE_SYMBOL,
+                Header::Files => FILES_SYMBOL,
             }
             .to_owned(),
             size: SEARCH_ICON_SIZE,
@@ -618,13 +733,21 @@ where
             label: None,
             tint: Some(ColorRole::SecondaryText),
         })
-        .key(if browsing {
-            "browse-symbol"
-        } else {
-            "search-symbol"
+        .key(match frame.header {
+            Header::Search => "search-symbol",
+            Header::Browse => "browse-symbol",
+            Header::Files => "files-symbol",
         }),
         field,
     ];
+    if let Some(index) = view.mode_hover.filter(|_| frame.modes.count > 0) {
+        row.push(
+            Element::new(modes::Chips {
+                digit: mode_model::digit(index),
+            })
+            .key("mode-chips"),
+        );
+    }
     if let Some(browser) = view.browser.filter(|_| browsing) {
         row.push(
             Element::new(browse::OptionsButton {
@@ -636,9 +759,12 @@ where
         );
     }
     let showing_browser = view.browser.filter(|_| browsing || frame.content > 0.0);
-    // over the browser the enclosure fades its two parts one by one rather than as one layer: they do not overlap,
-    // so the look is the same, and the browser's own fade then needs no layer inside another
-    let split = showing_browser.is_some();
+    let showing_scope = view
+        .scope
+        .filter(|_| (filing || frame.content > 0.0) && showing_browser.is_none());
+    // over a scope the enclosure fades its two parts one by one rather than as one layer: they do not overlap,
+    // so the look is the same, and the scope's own fade then needs no layer inside another
+    let split = showing_browser.is_some() || showing_scope.is_some();
     let query_row = Element::new(Bar {
         height: COLLAPSED_HEIGHT,
         spacing: QUERY_GAP,
@@ -659,6 +785,17 @@ where
             )
             .key("browser"),
         );
+    } else if let Some(scope) = showing_scope {
+        children.push(
+            scope::body(
+                scope,
+                view.file_images,
+                frame.content,
+                frame.alpha,
+                view.now,
+            )
+            .key("scope"),
+        );
     } else {
         children.extend(search_body(view));
     }
@@ -666,13 +803,15 @@ where
         keys: view.keys,
         alpha: frame.alpha,
         size: Size::new(frame.shape.width, frame.shape.height),
-        offset: ((rect.width() - frame.shape.width) / 2.0).min(0.0),
+        offset: (rect.width() - frame.shape.width) / 2.0,
         children,
     });
     Element::new(Enclosure {
         rect,
-        radius: frame.shape.radius * frame.scale.clamp(0.0, 1.0),
+        radius: frame.shape.radius * frame.scale.clamp(0.0, MAX_SCALE),
         alpha: frame.alpha,
+        blur: frame.blur,
+        joins: frame.modes.count > 0,
         split,
         content: Size::new(frame.shape.width, frame.shape.height),
         children: vec![inner.key("content")],
@@ -1037,6 +1176,10 @@ struct Enclosure<M> {
     rect: Rect,
     radius: f64,
     alpha: f64,
+    /// How blurred its content is, from 0 to 1 (while it closes).
+    blur: f64,
+    /// Its glass joins the mode buttons' into one shape where they come close.
+    joins: bool,
     /// Its parts fade themselves at `alpha` ([`Bar`] and the browser's body): the enclosure draws its own edge (and
     /// without glass its shadow and fill) at `alpha` and lays no layer over them.
     split: bool,
@@ -1066,7 +1209,9 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if (self.rect, self.content) != (old.rect, old.content) {
             Change::Layout
-        } else if (self.radius, self.alpha, self.split) != (old.radius, old.alpha, old.split) {
+        } else if (self.radius, self.alpha, self.split, self.blur, self.joins)
+            != (old.radius, old.alpha, old.split, old.blur, old.joins)
+        {
             Change::Paint
         } else {
             Change::None
@@ -1092,11 +1237,22 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
         let theme = cx.env().theme.clone();
         let dark = theme.preferences.appearance.is_dark();
         // the compositor draws the large panel's glass and its shadow; a window without glass draws both itself
-        let glass = cx.glass(Glass::large_panel().radius(radius).alpha(alpha));
+        let mut material = Glass::large_panel().radius(radius).alpha(alpha);
+        if self.joins {
+            material = material.container(modes::JOIN_CONTAINER, modes::JOIN_SPACING);
+        }
+        let glass = cx.glass(material);
         // what the enclosure's own drawing is multiplied by: the fade itself when its parts fade one by one
         let own = if self.split { alpha as f32 } else { 1.0 };
-        if alpha < 1.0 && !self.split {
-            cx.set_group(alpha as f32, Vec::new());
+        let blur = self.blur.clamp(0.0, 1.0) * CLOSE_BLUR;
+        let fade = if self.split { 1.0 } else { alpha as f32 };
+        if fade < 1.0 || blur > 0.05 {
+            let effects = if blur > 0.05 {
+                vec![Effect::Blur { radius: blur }]
+            } else {
+                Vec::new()
+            };
+            cx.set_group(fade, effects);
         }
         let shape = Shape::RoundedRect { rect, radius };
         if !glass {

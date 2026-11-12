@@ -98,9 +98,7 @@ flag and its Increase Contrast option.
   pt, the blur fill 16 pt) and its tones pressed together, so a launcher-sized sheet reads as one calm surface over any
   wallpaper, stripes and text in the scene melting into broad fields of colour: in the dark appearance a luminance cap
   of 0.102, a black lift of 0.15 and a saturation of 1.15 (white comes out near 125, black near 53, a strong red keeps
-  its colour), in the light one a cap of 0.5, a lift of 0.5 and 1.1 (white near 228, so a bright spot in the scene is a
-  light patch rather than a glare, while the panel over a calm pastel wallpaper stays within a few levels of regular
-  light glass); and a drop shadow of its own (28 pt blur, 16 pt below, black at 0.5 dark or 0.22
+  its colour), in the light one a cap of 0.94, a lift of 0.5 and 1.1 (white near 253, mid tones as before, black near 153); and a drop shadow of its own (28 pt blur, 16 pt below, black at 0.5 dark or 0.22
   light), drawn by the compositor outside the shape. With Reduce Transparency or Increase Contrast it takes regular
   glass's colours; Reduce Transparency also takes regular glass's whole blur. `GlassParams::shadow_reach` is how far the shadow reaches past the shape.
 - **Display filter steps.** `ColorOp::{LinearMatrix, Invert, Contrast}` feed `cupertino-glass::display_filter`. No catalog

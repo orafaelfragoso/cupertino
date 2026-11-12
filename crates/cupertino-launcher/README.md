@@ -40,7 +40,7 @@ fill and the high-contrast colours.
 **Windows.** The process is one Kit application with three windows, each on a layer surface (namespace `cupertino-launcher`)
 that `LauncherRoles` gives it, none of them on an output, so the server puts them on its active output, the one the person works on:
 
-* the panel: overlay layer, anchored to the top only (so centred horizontally), the panel's top edge at one fifth of the output's
+* the panel: overlay layer, anchored to the top only (so centred horizontally), the panel's top edge at 203/982 of the output's
   height, with exclusive keyboard interactivity. The enclosure (the panel's shape: `view::compact_shape`, `view::search_shape`,
   `view::browse_shape`) sits in a window with room for its shadow on every side (`view::window_extent`). While the shape moves,
   the window holds both the shape presented and the one it heads for, and once it settles the window is exactly the target's, so
@@ -92,11 +92,28 @@ the generic application icon standing in for a missing one. They are looked up, 
 thread of the host's with its own icon lookup (`Host::app_icon`, answered as `Message::AppIcon`), nearest the view
 first; at most 14 wait at once (`kit::MAX_APP_ICON_LOADS`), and each that arrives makes room for the next. It launches with an activation token like a search result.
 
-**Motion.** `motion` presents the panel at a time passed in: its shape, opacity, scale about its top centre, the browser
-content's opacity and which header shows. Opening fades and grows the enclosure in from 0.96 over 0.18 s (the browser's content
-following 0.08 s later over 0.10 s); unfolding opens the shape along a critically damped spring (0.24 s response) with the
-content fading in 0.06 s later over 0.12 s; folding fades the content out over 0.05 s, then contracts the shape along the spring;
-closing fades the browser out over 0.2 s (0.1 s for the search field). A transition under way turns from where it is with its
+**Mode buttons and the files scope.** Beside the plain search bar stand round buttons (`modes`, `view::modes`) that switch
+to a scope: the applications (Primary+1) and, while files are searched, the files (Primary+2). Each is a 55 pt circle of the
+panel's glass, 64 pt apart, joined to the field's glass where they come close. They bud out of the field's end as one shape
+and pinch apart when the panel opens, going a few points past their places on a slow spring, and merge back into the field
+when anything opens below it. Hovering one shows its shortcut as two chips in the field's trailing end; Tab moves the keys
+to them, Left and Right along them, Return or Space press, Escape gives the keys back. Each is a button with a name and its
+shortcut for assistive technology. The files scope (`scope`, `view::scope`, 640 × 547 pt, 28.5 pt corners) has three
+filters of equal width (recent, documents, images), a row of the most recently changed files, a bold heading and a grid of
+5 columns 120 pt apart with 67 pt thumbnails and names of up to two lines. The file index is searched off the loop
+(`ScopeRequest`, `Host::scope_search`) and the grid shows no spinner while it waits; thumbnails load on a thread of the host's
+(`Host::file_thumb`), the type's icon standing in until they arrive. The arrows, Home, End, Page Up and Down move the
+selection, Return opens it, Tab moves between the files and the filters, Escape clears the query, then the filter, then folds
+the scope into the plain bar. Reopening keeps the previous query, shown selected so typing replaces it; a kept query filters
+and searches nothing until it is edited.
+
+**Motion.** `motion` presents the panel at a time passed in: its shape, opacity, scale about its centre, the scope
+content's opacity, how blurred it is, which header shows and the mode buttons. Opening starts the enclosure at 1.1 times
+its size and settles it to 1 on an underdamped spring (0.30 s response, damping 0.7) while it fades in over 0.1 s (a
+scope's content following 0.08 s later over 0.10 s); unfolding opens the shape along a spring (0.27 s, damping 0.83 growing;
+0.295 s, 0.86 shrinking) with the content fading in 0.06 s later over 0.12 s, and into the files scope the width also dips
+by 123 pt and comes back; folding fades the content out over 0.05 s, then contracts the shape along the spring; closing takes
+0.1 s: the enclosure grows 2 %, its content blurs and everything fades. A transition under way turns from where it is with its
 velocity. Only the enclosure's rect scales; the content keeps its layout and is centred in it. Once the spring is past its
 settling time, or within 1/64 pt of its target for a frame, the target itself is presented, so a later repaint never reshapes the
 glass. Reduce Motion puts every shape where it heads at once and keeps only the fades.
@@ -215,9 +232,9 @@ calculator and conversion rows have no icon. Missing assets are reported once at
 | Conversions | length, mass, US customary volume, area, time (a Julian year), data (decimal and binary), speed, temperature, angle; no currencies; 6 significant digits |
 | Section limits for hosts | 3 rows per section, 5 sections before "show more", 3 suggestions |
 | Category defaults | `engine::DEFAULT_CATEGORY_ORDER` (enablement list; runtime order is relevance driven) |
-| Motion | open 0.18 s from 0.96 scale; content 0.08 s later over 0.10 s; shape spring 0.24 s, critically damped; unfolding content 0.06 s later over 0.12 s; fold fade 0.05 s; close 0.2 s (search 0.1 s); Reduce Motion: fades only |
+| Motion | open from 1.1 scale about the centre, spring 0.30 s damping 0.7, fade 0.10 s; content 0.08 s later over 0.10 s; shape spring 0.27 s / 0.83 growing and 0.295 s / 0.86 shrinking; unfolding content 0.06 s later over 0.12 s; fold fade 0.05 s; close 0.10 s (grows 2 %, blurs, fades); mode buttons bud on springs of 0.305 s / 0.68 (field) and 0.575 s / 0.69 (buttons); Reduce Motion: fades only |
 | Shape grid | settled widths and heights on multiples of 4 pt |
-| Browser | 844 × 576 pt, 24 pt corners, 7 columns of 102 pt rows (60 pt icons, 13 pt labels), 44 pt list rows (32 pt icons), 26 pt category filters (14 pt regular), 96 pt kept free below on a short output |
+| Browser | 844 × 576 pt, 28.5 pt corners, 7 columns of 102 pt rows (60 pt icons, 13 pt labels), 44 pt list rows (32 pt icons), 26 pt category filters (14 pt regular), 96 pt kept free below on a short output |
 | Deadlines | file search 0.5 s, enlarged preview 1.5 s |
 | Row height 40, header 32, calculator row 64 | authored |
 

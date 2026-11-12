@@ -53,7 +53,7 @@ const DOT_RADIUS: f64 = 1.75;
 const DOT_SPACING: f64 = 6.0;
 
 /// A theme colour, else `fallback`.
-fn role(cx: &PaintCx<'_>, role: ColorRole, fallback: Color) -> Color {
+pub(super) fn role(cx: &PaintCx<'_>, role: ColorRole, fallback: Color) -> Color {
     cx.env()
         .theme
         .colors
@@ -61,15 +61,15 @@ fn role(cx: &PaintCx<'_>, role: ColorRole, fallback: Color) -> Color {
         .unwrap_or(fallback)
 }
 
-fn share(c: Color, a: f32) -> Color {
+pub(super) fn share(c: Color, a: f32) -> Color {
     Color { a: c.a * a, ..c }
 }
 
-fn label(cx: &PaintCx<'_>) -> Color {
+pub(super) fn label(cx: &PaintCx<'_>) -> Color {
     role(cx, ColorRole::Text, Color::new(0.0, 0.0, 0.0, 1.0))
 }
 
-fn fill(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, c: Color) {
+pub(super) fn fill(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, c: Color) {
     cx.push(PaintOp::Fill {
         shape: if radius > 0.0 {
             Shape::RoundedRect { rect, radius }
@@ -81,7 +81,7 @@ fn fill(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, c: Color) {
 }
 
 /// The keyboard focus ring around `rect`, in the theme's focus colour.
-fn focus_ring(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
+pub(super) fn focus_ring(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
     let Some(c) = cx
         .env()
         .theme
@@ -102,7 +102,7 @@ fn focus_ring(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
 }
 
 /// One line of text, cut with an ellipsis at `max_width`.
-fn line(
+pub(super) fn line(
     cx: &PaintCx<'_>,
     text: &str,
     size: f64,
@@ -131,7 +131,7 @@ fn line(
 }
 
 /// The rendition of `icon` that best covers `rect` at the output's scale, drawn fitted in it.
-fn image(cx: &mut PaintCx<'_>, icon: &[ImageSource], rect: Rect) {
+pub(super) fn image(cx: &mut PaintCx<'_>, icon: &[ImageSource], rect: Rect) {
     let px = rect.width().max(rect.height()) * cx.env().scale;
     let best = icon
         .iter()
@@ -159,7 +159,7 @@ fn image(cx: &mut PaintCx<'_>, icon: &[ImageSource], rect: Rect) {
 }
 
 /// Places a node at `rect` of its absolute parent.
-fn placed(rect: Rect, kind: ContainerKind) -> LayoutSpec {
+pub(super) fn placed(rect: Rect, kind: ContainerKind) -> LayoutSpec {
     LayoutSpec {
         width: SizeSpec::Fixed(rect.width().max(0.0)),
         height: SizeSpec::Fixed(rect.height().max(0.0)),
@@ -168,7 +168,7 @@ fn placed(rect: Rect, kind: ContainerKind) -> LayoutSpec {
     }
 }
 
-fn leaf_measure(rect: &Rect) -> Measured {
+pub(super) fn leaf_measure(rect: &Rect) -> Measured {
     Measured {
         size: rect.size,
         baseline: None,
@@ -327,13 +327,13 @@ pub fn options_rect(width: f64) -> Rect {
 }
 
 /// The browser's part: placed below the header, faded as one layer; the wheel scrolls the applications.
-struct BodyNode<M> {
-    size: Size,
+pub(super) struct BodyNode<M> {
+    pub(super) size: Size,
     /// The content's opacity, which decides whether it takes the wheel and is shown to assistive technology.
-    alpha: f64,
+    pub(super) alpha: f64,
     /// What it is drawn at: `alpha`, times the enclosure's opacity when the enclosure fades its parts one by one.
-    opacity: f64,
-    children: Vec<Element<M>>,
+    pub(super) opacity: f64,
+    pub(super) children: Vec<Element<M>>,
 }
 
 impl<M: From<Input> + Clone + 'static> Widget<M> for BodyNode<M> {
@@ -508,13 +508,13 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for FilterNode {
 }
 
 /// The scrolled area, or the recents' group in it: its rows are placed in it and cut at its edges.
-struct ClipNode<M> {
-    rect: Rect,
-    name: &'static str,
-    role: Role,
+pub(super) struct ClipNode<M> {
+    pub(super) rect: Rect,
+    pub(super) name: &'static str,
+    pub(super) role: Role,
     /// How many items it holds, shown or not.
-    count: usize,
-    children: Vec<Element<M>>,
+    pub(super) count: usize,
+    pub(super) children: Vec<Element<M>>,
 }
 
 impl<M: Clone + 'static> Widget<M> for ClipNode<M> {
@@ -727,9 +727,9 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ItemNode {
 }
 
 /// A separator: under the header, and between the recents and the rest. Only the one between the rows is announced.
-struct SeparatorNode {
-    rect: Rect,
-    announced: bool,
+pub(super) struct SeparatorNode {
+    pub(super) rect: Rect,
+    pub(super) announced: bool,
 }
 
 impl<M: 'static> Widget<M> for SeparatorNode {
@@ -832,9 +832,9 @@ impl<M: 'static> Widget<M> for NoResultsNode {
 }
 
 /// The scroll indicator's thumb, at `alpha` while it fades out.
-struct ThumbNode {
-    rect: Rect,
-    alpha: f64,
+pub(super) struct ThumbNode {
+    pub(super) rect: Rect,
+    pub(super) alpha: f64,
 }
 
 impl<M: 'static> Widget<M> for ThumbNode {
@@ -885,8 +885,8 @@ impl<M: 'static> Widget<M> for ThumbNode {
 }
 
 /// What the keys are on, read out by assistive technology as it changes; it draws nothing.
-struct Announcer {
-    text: String,
+pub(super) struct Announcer {
+    pub(super) text: String,
 }
 
 impl<M: 'static> Widget<M> for Announcer {

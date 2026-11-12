@@ -115,8 +115,12 @@ impl Marks {
             cx.fill_pixels(rect, color);
         }
         if let Some((bar, color)) = self.caret.get() {
-            if blink.on(cx.env(), cx.now()) {
-                cx.fill_pixels(bar, color);
+            let opacity = blink.opacity(cx.env(), cx.now());
+            if opacity > 0.0 {
+                cx.fill_pixels(
+                    bar,
+                    Color::new(color.r, color.g, color.b, color.a * opacity),
+                );
             }
         }
     }
@@ -475,11 +479,31 @@ fn paint_text(
 /// settles.
 const BLINK_LIMIT_NS: u64 = 10_000_000_000;
 
-/// The caret's blink: on for the first phase after each edit, move, click or focus gain, then alternating, steady with
-/// Reduce Motion and after [`BLINK_LIMIT_NS`].
+/// How the caret's blink cycle divides, as shares of its period: the caret fades out, stays hidden, fades in and
+/// stays shown. The period is two blink phases ([`Motion::caret_phase_ms`](cupertino_ui_theme::Motion)), less a
+/// fiftieth, so the default phase gives a period just under a second.
+const BLINK_PERIOD_SHARE: f64 = 1.96;
+const BLINK_FADE_OUT: f64 = 0.12 / 0.98;
+const BLINK_FADE_IN: f64 = 0.14 / 0.98;
+const BLINK_SHOWN: f64 = 0.50 / 0.98;
+/// How often the caret asks to be drawn again while it fades, nanoseconds.
+const BLINK_FRAME_NS: f64 = 16_000_000.0;
+
+/// The caret's blink: shown for the first stretch after each edit, move, click or focus gain, then fading out and in
+/// in a cycle just under a second long, steady with Reduce Motion and after [`BLINK_LIMIT_NS`].
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Blink {
     since: Timestamp,
+}
+
+/// Where `elapsed` nanoseconds after a restart lies in the blink cycle of a phase of `phase` nanoseconds.
+enum Cycle {
+    /// Fully shown for this many more nanoseconds.
+    Shown(f64),
+    /// Fully hidden for this many more nanoseconds.
+    Hidden(f64),
+    /// Fading, at this opacity.
+    Fading(f32),
 }
 
 impl Blink {
@@ -489,22 +513,55 @@ impl Blink {
         (!motion.reduce && phase > 0).then_some(phase)
     }
 
-    pub(crate) fn on(&self, env: &Environment, now: Timestamp) -> bool {
-        let elapsed = now.0.saturating_sub(self.since.0);
-        match Self::phase(env) {
-            Some(phase) if elapsed < BLINK_LIMIT_NS => (elapsed / phase).is_multiple_of(2),
-            _ => true,
+    fn cycle(phase: u64, elapsed: u64) -> Cycle {
+        let period = phase as f64 * BLINK_PERIOD_SHARE;
+        let first = BLINK_SHOWN * period;
+        let t = elapsed as f64;
+        if t < first {
+            return Cycle::Shown(first - t);
+        }
+        let into = (t - first) % period;
+        let out = BLINK_FADE_OUT * period;
+        let fade_in = BLINK_FADE_IN * period;
+        let hidden = period - BLINK_SHOWN * period - out - fade_in;
+        if into < out {
+            Cycle::Fading((1.0 - into / out) as f32)
+        } else if into < out + hidden {
+            Cycle::Hidden(out + hidden - into)
+        } else if into < out + hidden + fade_in {
+            Cycle::Fading(((into - out - hidden) / fade_in) as f32)
+        } else {
+            Cycle::Shown(period - into)
         }
     }
 
-    /// The next time the caret shows or hides, or `None` once it is steady.
+    /// The caret's opacity at `now`, from 0 to 1.
+    pub(crate) fn opacity(&self, env: &Environment, now: Timestamp) -> f32 {
+        let elapsed = now.0.saturating_sub(self.since.0);
+        match Self::phase(env) {
+            Some(phase) if elapsed < BLINK_LIMIT_NS => match Self::cycle(phase, elapsed) {
+                Cycle::Shown(_) => 1.0,
+                Cycle::Hidden(_) => 0.0,
+                Cycle::Fading(opacity) => opacity,
+            },
+            _ => 1.0,
+        }
+    }
+
+    /// The next time the caret's opacity needs drawing, or `None` once it is steady: a frame later while it fades,
+    /// else when the next fade starts.
     fn next_edge(&self, env: &Environment, now: Timestamp) -> Option<Timestamp> {
         let phase = Self::phase(env)?;
         let elapsed = now.0.saturating_sub(self.since.0);
-        (elapsed < BLINK_LIMIT_NS).then(|| {
-            let next = (elapsed / phase + 1) * phase;
-            Timestamp(self.since.0 + next.min(BLINK_LIMIT_NS))
-        })
+        if elapsed >= BLINK_LIMIT_NS {
+            return None;
+        }
+        let wait = match Self::cycle(phase, elapsed) {
+            Cycle::Fading(_) => BLINK_FRAME_NS,
+            Cycle::Shown(left) | Cycle::Hidden(left) => left.max(1.0),
+        };
+        let at = (elapsed + wait as u64).min(BLINK_LIMIT_NS);
+        Some(Timestamp(self.since.0 + at))
     }
 
     /// Asks to be woken at the next edge while the caret shows in a focused field of an active window.

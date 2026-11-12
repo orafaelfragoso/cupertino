@@ -1,49 +1,88 @@
 //! How the panel moves between its views: one presentation of the enclosure (its shape, its opacity and scale), the
-//! header (the search field's, or the browser's) and the content inside it, which the panel's paint, clip and input
-//! region all read, so they always agree.
+//! header (the search field's, or the browser's, or the file scope's), the content inside it and the mode buttons
+//! beside the search field, which the panel's paint, clip and input region all read, so they always agree.
 //!
 //! The transitions are staged:
 //!
-//! * **Opening** the browser: the enclosure fades and grows into place first; the browser's filters and applications
-//!   fade in a moment later, so the surface arrives and then fills.
-//! * **Folding** the browser into the search field: the content fades out at once, the header becomes the search
-//!   field's, then the enclosure contracts along a critically damped spring, its top edge fixed and its sides closing
-//!   in evenly, its corners growing into the field's capsule.
-//! * **Unfolding** the search field into the browser: the enclosure opens along the same spring and the content fades
-//!   in as it opens.
-//! * **Closing**: the browser fades and shrinks a little; the compact field only fades, quicker.
+//! * **Opening**: the enclosure starts a little larger than it settles (about 1.1) and shrinks to its size about its
+//!   centre on an underdamped spring, so it undershoots a hair, while it fades in over a tenth of a second. A scope's
+//!   content follows a moment later. With the mode buttons, the bar starts as one wide capsule that contracts while the
+//!   buttons bud off its end as one shape and pinch apart, going a little past their places on a slower spring.
+//! * **Folding** a scope into the search field: the content fades out at once, the header becomes the search
+//!   field's, then the enclosure contracts along a spring, its top edge fixed and its sides closing in evenly, its
+//!   corners growing into the field's capsule; the buttons bud out again once it has.
+//! * **Unfolding** the search field into a scope: the buttons merge into the field at once, the enclosure opens along
+//!   the spring and the content fades in as it opens. Into the files scope the enclosure's width also dips and comes
+//!   back while its height grows.
+//! * **Closing**: a tenth of a second in which the enclosure grows two percent, its content blurs and everything
+//!   fades out.
 //! * The search panel growing or shrinking with its results moves along the same spring.
 //!
 //! Every value is retargeted from what is presented at the moment a new transition starts, with its velocity, so a
 //! transition can be interrupted at any point (fold during an unfold, open during a close) without a jump. Under
-//! Reduce Motion the shape changes at once and nothing scales; only the opacities still fade.
+//! Reduce Motion the shape changes at once, nothing scales, blurs or buds and only the opacities still fade.
 //!
 //! The model is pure: every value is sampled at a time passed in.
 
-use cupertino_animation::{AnimatedValue, CubicBezier, Curve, SpringParams};
+use cupertino_animation::{AnimatedValue, CubicBezier, Curve, Spring, SpringParams};
 
-/// The enclosure fading and growing in when the launcher opens, and the scale it grows from.
-pub const OPEN_DURATION: f64 = 0.18;
-pub const ENTER_SCALE: f64 = 0.96;
-/// The browser's content fading in after the enclosure opened: its delay and its duration.
+/// The enclosure fading in when the launcher opens, in seconds.
+pub const OPEN_FADE: f64 = 0.10;
+/// The scale the enclosure starts at when the launcher opens, and the spring that settles it to 1 about its centre:
+/// its response in seconds and its damping ratio (under 1: it undershoots a little).
+pub const ENTER_SCALE: f64 = 1.1;
+pub const OPEN_RESPONSE: f64 = 0.30;
+pub const OPEN_DAMPING: f64 = 0.7;
+/// The scope's content fading in after the enclosure opened: its delay and its duration.
 pub const CONTENT_DELAY: f64 = 0.08;
 pub const CONTENT_FADE: f64 = 0.10;
-/// The content fading out when the browser folds; the enclosure starts contracting after it.
+/// The content fading out when a scope folds; the enclosure starts contracting after it.
 pub const FOLD_FADE: f64 = 0.05;
-/// The enclosure's spring between shapes: critically damped, with this response in seconds.
-pub const SHAPE_RESPONSE: f64 = 0.24;
+/// The enclosure's spring between shapes: its response and damping ratio when it grows and when it shrinks. Both
+/// overshoot a few points.
+pub const GROW_RESPONSE: f64 = 0.27;
+pub const GROW_DAMPING: f64 = 0.83;
+pub const SHRINK_RESPONSE: f64 = 0.295;
+pub const SHRINK_DAMPING: f64 = 0.86;
 /// The spring's tail: once every edge is this many points from its target, and still is a frame ([`REST_LOOKAHEAD`]
 /// seconds) later, the shape is at its target. The tail moves nothing a display shows, and presenting it would
 /// reshape the glass under the panel on every repaint long after the motion ended. A spring past its settling time
 /// presents its target too.
 pub const SHAPE_REST: f64 = 1.0 / 64.0;
 pub const REST_LOOKAHEAD: f64 = 1.0 / 60.0;
-/// The content fading in as the browser unfolds: its delay and its duration.
+/// The content fading in as a scope unfolds: its delay and its duration, and the same for the files scope, whose
+/// grid waits for the enclosure to have grown.
 pub const UNFOLD_CONTENT_DELAY: f64 = 0.06;
 pub const UNFOLD_CONTENT_FADE: f64 = 0.12;
-/// Closing: the browser's fade (it also shrinks back to [`ENTER_SCALE`]), and the compact field's quicker fade.
-pub const CLOSE_DURATION: f64 = 0.2;
-pub const CLOSE_COMPACT_DURATION: f64 = 0.1;
+pub const FILES_CONTENT_DELAY: f64 = 0.16;
+pub const FILES_CONTENT_FADE: f64 = 0.10;
+/// Closing: how long it takes, how much the enclosure grows, and how far the content blurs, in points.
+pub const CLOSE_DURATION: f64 = 0.10;
+pub const CLOSE_SCALE: f64 = 1.02;
+pub const CLOSE_BLUR: f64 = 8.0;
+/// The mode buttons budding out of the field: the field's end springs back (response, damping ratio) while the
+/// buttons slide out on a slower spring that carries them a little past their places.
+pub const FIELD_RESPONSE: f64 = 0.305;
+pub const FIELD_DAMPING: f64 = 0.68;
+pub const SPLIT_RESPONSE: f64 = 0.575;
+pub const SPLIT_DAMPING: f64 = 0.69;
+/// The buttons' symbols sharpening after they bud: their delay and duration.
+pub const GLYPH_DELAY: f64 = 0.1;
+pub const GLYPH_SHARPEN: f64 = 0.2;
+/// The buttons merging back into the field when a scope opens.
+pub const MERGE_DURATION: f64 = 0.05;
+/// How long the folded field waits before the buttons bud out of it again.
+pub const RESPLIT_DELAY: f64 = 0.3;
+/// The width the enclosure dips by while the files scope opens, how long the dip takes to reach its depth, and the
+/// response of the spring that brings the width back.
+pub const DIP_DEPTH: f64 = 123.0;
+pub const DIP_IN: f64 = 0.14;
+pub const DIP_RESPONSE: f64 = 0.25;
+/// Past this long after it starts, a dip is over.
+const DIP_END: f64 = DIP_IN + 1.2;
+
+/// The widest the mode buttons and the field can be together: the width of the field without the buttons.
+pub const GROUP_WIDTH: f64 = 640.0;
 
 /// The enclosure's size and corner radius, in points. Its top edge stays where it is and it stays centred.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -89,6 +128,14 @@ impl Shape {
 pub enum Header {
     Search,
     Browse,
+    Files,
+}
+
+impl Header {
+    /// Whether the header belongs to a scope panel (not the search field's).
+    pub fn is_scope(self) -> bool {
+        self != Header::Search
+    }
 }
 
 /// A value fading from where it is towards a target after a delay, along an ease.
@@ -141,16 +188,35 @@ impl Fade {
     }
 }
 
+/// The mode buttons as presented: how many, how far they are out of the field and how sharp their symbols are.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Modes {
+    /// How many buttons show; none once they merged into the field.
+    pub count: usize,
+    /// How far they are from the field's end to their places: 0 inside the field, 1 in place, a little past 1 while
+    /// they overshoot.
+    pub spread: f64,
+    /// How sharp their symbols are, from 0 (blurred) to 1.
+    pub sharp: f64,
+}
+
 /// What is presented at one moment.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
+    /// The enclosure as it is drawn: while the mode buttons show, only the search field's part of the group.
     pub shape: Shape,
-    /// The enclosure's opacity (shadow and content included) and its scale about its top centre.
+    /// The width the enclosure and the buttons together are placed by: the left edge of the group is half of it left
+    /// of the middle. It is the shape's own width, or the search field's whatever the buttons make of the shape.
+    pub anchor: f64,
+    /// The enclosure's opacity (shadow and content included) and its scale about its centre.
     pub alpha: f64,
     pub scale: f64,
-    /// The browser's content opacity (filters, applications, separators).
+    /// The scope's content opacity (filters, items, separators).
     pub content: f64,
+    /// How blurred the content is while the panel closes, from 0 to 1.
+    pub blur: f64,
     pub header: Header,
+    pub modes: Modes,
 }
 
 /// The panel's presentation.
@@ -158,14 +224,24 @@ pub struct Frame {
 pub struct Motion {
     shape: AnimatedValue<[f64; 3]>,
     alpha: Fade,
-    scale: Fade,
+    scale: AnimatedValue<f64>,
     content: Fade,
+    blur: Fade,
     /// The header shown before `switch_at`, and the one from then on.
     header: (Header, Header),
     switch_at: f64,
     reduce: bool,
     /// The shape the panel is heading for.
     target: Shape,
+    /// How many mode buttons the panel wants, and how many it lays out while they are out of the field.
+    modes_wanted: usize,
+    modes_laid: usize,
+    /// How far the buttons are out of the field, and how far the field's end has drawn back for them.
+    split: AnimatedValue<f64>,
+    field: AnimatedValue<f64>,
+    sharp: Fade,
+    /// When the width's dip began, while the files scope opens.
+    dip: Option<f64>,
 }
 
 impl Motion {
@@ -173,12 +249,19 @@ impl Motion {
         Self {
             shape: AnimatedValue::new(shape.array()),
             alpha: Fade::at(0.0),
-            scale: Fade::at(1.0),
+            scale: AnimatedValue::new(1.0),
             content: Fade::at(0.0),
+            blur: Fade::at(0.0),
             header: (Header::Search, Header::Search),
             switch_at: 0.0,
             reduce: false,
             target: shape,
+            modes_wanted: 0,
+            modes_laid: 0,
+            split: AnimatedValue::new(0.0),
+            field: AnimatedValue::new(0.0),
+            sharp: Fade::at(0.0),
+            dip: None,
         }
     }
 
@@ -191,8 +274,12 @@ impl Motion {
         self.reduce
     }
 
-    fn spring() -> Curve {
-        Curve::Spring(SpringParams::from_ratio(SHAPE_RESPONSE, 1.0))
+    fn spring(grow: bool) -> Curve {
+        Curve::Spring(if grow {
+            SpringParams::from_ratio(GROW_RESPONSE, GROW_DAMPING)
+        } else {
+            SpringParams::from_ratio(SHRINK_RESPONSE, SHRINK_DAMPING)
+        })
     }
 
     /// Move the shape to `to`, starting `delay` from `now`; at once under Reduce Motion. A shape still moving turns
@@ -201,12 +288,15 @@ impl Motion {
         self.target = to;
         if self.reduce {
             self.shape.set_immediately(to.array());
-        } else if self.shape.is_animating(now) {
-            self.shape.animate_to(to.array(), Self::spring(), now);
+            return;
+        }
+        let grow = to.height >= self.shape.value(now)[1];
+        if self.shape.is_animating(now) {
+            self.shape.animate_to(to.array(), Self::spring(grow), now);
         } else {
             self.shape.cancel(now);
             self.shape
-                .animate_to(to.array(), Self::spring(), now + delay);
+                .animate_to(to.array(), Self::spring(grow), now + delay);
         }
     }
 
@@ -227,6 +317,19 @@ impl Motion {
     /// The panel appears at `now` with `shape`, showing the browser or the search field. A panel still closing is
     /// turned around from where it is.
     pub fn show(&mut self, shape: Shape, browse: bool, now: f64) {
+        self.show_in(
+            shape,
+            if browse {
+                Header::Browse
+            } else {
+                Header::Search
+            },
+            now,
+        );
+    }
+
+    /// The panel appears at `now` with `shape`, showing the view of `header`.
+    pub fn show_in(&mut self, shape: Shape, header: Header, now: f64) {
         let closing = self.alpha.value(now) > 0.0;
         if !closing {
             self.shape.set_immediately(shape.array());
@@ -235,22 +338,23 @@ impl Motion {
             self.shape_to(shape, now, 0.0);
         }
         self.alpha
-            .retarget(1.0, now, 0.0, OPEN_DURATION, CubicBezier::EASE_OUT);
-        let from_scale = if self.reduce || closing {
-            self.scale.value(now)
+            .retarget(1.0, now, 0.0, OPEN_FADE, CubicBezier::LINEAR);
+        self.blur.retarget(0.0, now, 0.0, 0.0, CubicBezier::LINEAR);
+        if self.reduce {
+            self.scale.set_immediately(1.0);
         } else {
-            ENTER_SCALE
-        };
-        self.scale = Fade::at(from_scale);
-        self.scale
-            .retarget(1.0, now, 0.0, OPEN_DURATION, CubicBezier::EASE_OUT);
-        let header = if browse {
-            Header::Browse
-        } else {
-            Header::Search
-        };
+            if !closing {
+                self.scale.set_immediately(ENTER_SCALE);
+            }
+            self.scale.animate_to(
+                1.0,
+                Curve::Spring(SpringParams::from_ratio(OPEN_RESPONSE, OPEN_DAMPING)),
+                now,
+            );
+        }
         self.header = (header, header);
-        if browse {
+        self.dip = None;
+        if header.is_scope() {
             if !closing {
                 self.content = Fade::at(0.0);
             }
@@ -260,43 +364,65 @@ impl Motion {
             self.content
                 .retarget(0.0, now, 0.0, 0.0, CubicBezier::LINEAR);
         }
+        // the buttons start inside the field and bud out as it opens
+        if !closing {
+            self.split.set_immediately(0.0);
+            self.field.set_immediately(0.0);
+            self.sharp = Fade::at(0.0);
+            self.modes_laid = 0;
+            self.modes_wanted = 0;
+        }
+        self.bud(now, 0.0);
     }
 
-    /// The panel goes at `now`; `browse` while the browser is up (it also shrinks a little).
-    pub fn hide(&mut self, browse: bool, now: f64) {
-        let duration = if browse {
-            CLOSE_DURATION
-        } else {
-            CLOSE_COMPACT_DURATION
-        };
+    /// The panel goes at `now`: it grows a little, its content blurs and it fades out.
+    pub fn hide(&mut self, now: f64) {
         self.alpha
-            .retarget(0.0, now, 0.0, duration, CubicBezier::EASE_OUT);
-        if browse && !self.reduce {
-            self.scale
-                .retarget(ENTER_SCALE, now, 0.0, duration, CubicBezier::EASE_OUT);
+            .retarget(0.0, now, 0.0, CLOSE_DURATION, CubicBezier::EASE_OUT);
+        if !self.reduce {
+            self.scale.animate_to(
+                CLOSE_SCALE,
+                Curve::Timed {
+                    duration: CLOSE_DURATION,
+                    bezier: CubicBezier::EASE_OUT,
+                },
+                now,
+            );
+            self.blur
+                .retarget(1.0, now, 0.0, CLOSE_DURATION, CubicBezier::EASE_OUT);
         }
     }
 
-    /// The browser folds into the search field's `compact` shape at `now`.
+    /// A scope folds into the search field's `compact` shape at `now`.
     pub fn fold(&mut self, compact: Shape, now: f64) {
         self.content
             .retarget(0.0, now, 0.0, FOLD_FADE, CubicBezier::LINEAR);
         let wait = if self.reduce { 0.0 } else { FOLD_FADE };
         self.switch_header(Header::Search, now, now + wait);
         self.shape_to(compact, now, wait);
+        self.dip = None;
     }
 
     /// The search field unfolds into the browser's `open` shape at `now`.
     pub fn unfold(&mut self, open: Shape, now: f64) {
-        self.switch_header(Header::Browse, now, now);
+        self.unfold_to(open, Header::Browse, now);
+    }
+
+    /// The search field, or another scope, unfolds into the shape `open` of the scope of `header` at `now`.
+    pub fn unfold_to(&mut self, open: Shape, header: Header, now: f64) {
+        let from_field = self.header_at(now) == Header::Search;
+        self.switch_header(header, now, now);
         self.shape_to(open, now, 0.0);
-        let delay = if self.reduce {
-            0.0
+        let (delay, fade) = if self.reduce {
+            (0.0, UNFOLD_CONTENT_FADE)
+        } else if header == Header::Files {
+            (FILES_CONTENT_DELAY, FILES_CONTENT_FADE)
         } else {
-            UNFOLD_CONTENT_DELAY
+            (UNFOLD_CONTENT_DELAY, UNFOLD_CONTENT_FADE)
         };
         self.content
-            .retarget(1.0, now, delay, UNFOLD_CONTENT_FADE, CubicBezier::EASE_OUT);
+            .retarget(1.0, now, delay, fade, CubicBezier::EASE_OUT);
+        self.dip = (header == Header::Files && from_field && !self.reduce).then_some(now);
     }
 
     /// The search panel takes `shape` (its results changed) at `now`.
@@ -306,12 +432,87 @@ impl Motion {
         }
     }
 
+    /// The panel wants `count` mode buttons beside the field from `now` on (none: they merge into it). `delay` is how
+    /// long the buttons wait before they bud out.
+    pub fn set_modes(&mut self, count: usize, now: f64, delay: f64) {
+        if count == self.modes_wanted {
+            return;
+        }
+        self.modes_wanted = count;
+        if count == 0 {
+            self.merge(now);
+        } else {
+            self.bud(now, delay);
+        }
+    }
+
+    /// The buttons bud out of the field's end after `delay`.
+    fn bud(&mut self, now: f64, delay: f64) {
+        if self.modes_wanted == 0 {
+            return;
+        }
+        self.modes_laid = self.modes_wanted;
+        if self.reduce {
+            self.split.set_immediately(1.0);
+            self.field.set_immediately(1.0);
+            self.sharp = Fade::at(1.0);
+            return;
+        }
+        let spring = |response, damping| Curve::Spring(SpringParams::from_ratio(response, damping));
+        self.field
+            .animate_to(1.0, spring(FIELD_RESPONSE, FIELD_DAMPING), now + delay);
+        self.split
+            .animate_to(1.0, spring(SPLIT_RESPONSE, SPLIT_DAMPING), now + delay);
+        self.sharp = Fade::at(0.0);
+        self.sharp.retarget(
+            1.0,
+            now,
+            delay + GLYPH_DELAY,
+            GLYPH_SHARPEN,
+            CubicBezier::EASE_OUT,
+        );
+    }
+
+    /// The buttons merge back into the field.
+    fn merge(&mut self, now: f64) {
+        if self.reduce {
+            self.split.set_immediately(0.0);
+            self.field.set_immediately(0.0);
+            self.sharp = Fade::at(0.0);
+            return;
+        }
+        let timed = Curve::Timed {
+            duration: MERGE_DURATION,
+            bezier: CubicBezier::EASE_OUT,
+        };
+        self.field.animate_to(0.0, timed, now);
+        self.split.animate_to(0.0, timed, now);
+    }
+
     /// Put every transition at its end (the settled test clock).
     pub fn settle(&mut self, now: f64) {
         self.shape.set_immediately(self.target.array());
-        for fade in [&mut self.alpha, &mut self.scale, &mut self.content] {
+        for fade in [
+            &mut self.alpha,
+            &mut self.content,
+            &mut self.blur,
+            &mut self.sharp,
+        ] {
             *fade = Fade::at(fade.to);
         }
+        let scale = if self.alpha.to > 0.0 {
+            1.0
+        } else {
+            CLOSE_SCALE
+        };
+        self.scale.set_immediately(scale);
+        let out = if self.modes_wanted > 0 { 1.0 } else { 0.0 };
+        self.split.set_immediately(out);
+        self.field.set_immediately(out);
+        if self.modes_wanted > 0 {
+            self.modes_laid = self.modes_wanted;
+        }
+        self.dip = None;
         self.header = (self.header.1, self.header.1);
         self.switch_at = now;
     }
@@ -319,6 +520,11 @@ impl Motion {
     /// The shape the panel is heading for.
     pub fn target(&self) -> Shape {
         self.target
+    }
+
+    /// How many mode buttons the panel wants.
+    pub fn modes_wanted(&self) -> usize {
+        self.modes_wanted
     }
 
     /// Whether the shape is within [`SHAPE_REST`] of its target at `now` and a frame later.
@@ -331,15 +537,49 @@ impl Motion {
         near(now) && near(now + REST_LOOKAHEAD)
     }
 
+    /// How far the dip draws the width in at `now`, in points (zero or negative).
+    fn dip_at(&self, now: f64) -> f64 {
+        let Some(start) = self.dip else {
+            return 0.0;
+        };
+        let t = now - start;
+        if t <= 0.0 || t >= DIP_END {
+            return 0.0;
+        }
+        if t < DIP_IN {
+            let x = t / DIP_IN;
+            return -DIP_DEPTH * CubicBezier::EASE_IN_EASE_OUT.eval(x);
+        }
+        let back = Spring::new(SpringParams::from_ratio(DIP_RESPONSE, 1.0)).value(t - DIP_IN);
+        -DIP_DEPTH * (1.0 - back)
+    }
+
     /// What is presented at `now`.
     pub fn frame(&self, now: f64) -> Frame {
-        let shape = if !self.shape.is_animating(now) || self.shape_rests(now) {
+        let mut shape = if !self.shape.is_animating(now) || self.shape_rests(now) {
             self.target
         } else {
             Shape::of(self.shape.value(now))
         };
+        let anchor = shape.width.max(GROUP_WIDTH);
+        shape.width = (shape.width + self.dip_at(now)).max(0.0);
+        let header = self.header_at(now);
+        let spread = self.split.value(now);
+        let drawn = self.field.value(now);
+        let out = spread.abs() > 1e-3 || drawn.abs() > 1e-3;
+        let count = if out && header == Header::Search {
+            self.modes_laid
+        } else {
+            0
+        };
+        if count > 0 {
+            // the field's end draws back from the whole group's width to the field's own
+            let field = crate::modes::field_width(count);
+            shape.width = (shape.width - (shape.width - field) * drawn).max(0.0);
+        }
         Frame {
             shape,
+            anchor,
             alpha: self.alpha.value(now).clamp(0.0, 1.0),
             scale: if self.reduce {
                 1.0
@@ -347,7 +587,13 @@ impl Motion {
                 self.scale.value(now)
             },
             content: self.content.value(now).clamp(0.0, 1.0),
-            header: self.header_at(now),
+            blur: self.blur.value(now).clamp(0.0, 1.0),
+            header,
+            modes: Modes {
+                count,
+                spread,
+                sharp: self.sharp.value(now).clamp(0.0, 1.0),
+            },
         }
     }
 
@@ -355,8 +601,13 @@ impl Motion {
     pub fn animating(&self, now: f64) -> bool {
         (self.shape.is_animating(now) && !self.shape_rests(now))
             || self.alpha.animating(now)
-            || self.scale.animating(now)
+            || self.scale.is_animating(now)
             || self.content.animating(now)
+            || self.blur.animating(now)
+            || self.split.is_animating(now)
+            || self.field.is_animating(now)
+            || self.sharp.animating(now)
+            || self.dip.is_some_and(|start| now < start + DIP_END)
             || now < self.switch_at
     }
 

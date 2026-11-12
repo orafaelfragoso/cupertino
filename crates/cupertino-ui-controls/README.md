@@ -65,8 +65,9 @@ from the application's model and reports changes as messages.
   so they are crisp at every scale, fractional ones included, and the caret a whole number of device pixels wide. The
   selection lies under the text on whole device pixels of the window too (`PaintCx::fill_pixels`), as does the
   field's interior clip, so its edges meet the caret and the field without a blended row or column
-  (`tests/caret-overlay.rs`). The caret blinks in `caret_phase_ms` phases, each blink
-  drawing only the overlay again, no node, and stays on with Reduce Motion or a phase of 0 (a
+  (`tests/caret-overlay.rs`). The caret is 2 pt wide and blinks in a cycle of two `caret_phase_ms` phases less a fiftieth (about a second):
+  it fades out over about an eighth of it, stays hidden, fades in and stays shown about half of it; each frame of a fade
+  draws only the overlay again, no node, and the caret stays on with Reduce Motion or a phase of 0 (a
   session that asks for a steady caret). Shift-click and shift-drag extend the selection; a drag held past the field's
   edge (an editor's top or bottom) keeps scrolling and selecting every 50 ms by the distance past the edge until the
   text ends; the caret scrolls into view after every edit and move.

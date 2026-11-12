@@ -346,14 +346,22 @@ impl Panel {
         self.visible || self.appear.is_animating(now) || self.appear.value(now) > 0.001
     }
 
-    /// Open with an empty query (suggestions).
+    /// Open with the previous query kept and selected, so typing replaces it. A kept query is not searched until it
+    /// is edited: nothing shows below the field for it. With no query, the suggestions.
     pub fn show(&mut self, launcher: &Launcher, now: Now) {
-        self.field.set_text("");
         self.visible = true;
         self.focus = Focus::Field;
         self.appear
             .animate_to(1.0, Curve::Spring(self.spring), now.mono);
-        self.requery(launcher, now.unix);
+        if self.field.is_empty() {
+            self.requery(launcher, now.unix);
+        } else {
+            self.results = Results::default();
+            self.selected = 0;
+            self.action = 0;
+            self.scroll_row = 0;
+            self.field.select_all();
+        }
     }
 
     /// Put the appear animation at its end at once (the shell client's fixed test clock).

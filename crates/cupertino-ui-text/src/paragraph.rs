@@ -32,7 +32,7 @@ mod work {
 }
 
 /// Width of the rectangle `caret_rect` returns, in points.
-pub const CARET_WIDTH: f64 = 1.0;
+pub const CARET_WIDTH: f64 = 2.0;
 
 /// One shaped piece of a paragraph: a run of one style, one font and one embedding level on one hard line.
 #[derive(Clone, Debug)]

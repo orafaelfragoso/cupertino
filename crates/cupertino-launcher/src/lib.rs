@@ -26,11 +26,13 @@ pub mod files;
 pub mod frecency;
 pub mod kit;
 pub mod matcher;
+pub mod modes;
 pub mod motion;
 pub mod nav;
 pub mod panel;
 pub mod preview;
 pub mod providers;
+pub mod scope;
 pub mod view;
 
 pub use desktop::{DesktopAction, DesktopEntry};

@@ -386,13 +386,13 @@ fn large_panel_face(dark: bool) -> GlassFace {
 /// The large panel's tone compression: saturation, black lift and largest face luminance (as a fraction of the
 /// face's `clamp`), dark and light. In both the white point sits well below the face's own, so a bright spot in the
 /// scene (a sunlit sky, a white page, the light centre of a picture) comes through as a light patch near the panel's
-/// tint rather than a glare: white comes out near 125 dark and near 228 light.
+/// tint rather than a glare: white comes out near 125 dark and near 253 light (the light panel keeps its bright end).
 pub const LARGE_PANEL_SATURATION_DARK: f32 = 1.15;
 pub const LARGE_PANEL_BLACK_DARK: f32 = 0.15;
 pub const LARGE_PANEL_MAX_LUMA_DARK: f32 = 0.102;
 pub const LARGE_PANEL_SATURATION_LIGHT: f32 = 1.1;
 pub const LARGE_PANEL_BLACK_LIGHT: f32 = 0.5;
-pub const LARGE_PANEL_MAX_LUMA_LIGHT: f32 = 0.5;
+pub const LARGE_PANEL_MAX_LUMA_LIGHT: f32 = 0.94;
 /// How much wider the large panel blurs than regular glass: its blur levels and its blur fill (10 and 16 points
 /// rather than 5 and 8), so stripes, text and bright spots in the scene behind a launcher-sized sheet melt into broad
 /// fields of colour instead of showing through as ripples.

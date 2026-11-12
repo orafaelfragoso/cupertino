@@ -573,7 +573,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let elsewhere = dir.path().join("nested/redirected/dock.conf");
         let (_w, rx) = watch(vec![elsewhere.clone()]);
-        std::fs::write(&elsewhere, "autohide = on\n").unwrap();
+        // a plain write is two contents, empty and then written, which a busy machine may report apart: settings
+        // writers replace a file whole, and so do these tests where they count reports
+        crate::atomic::write_atomic(&elsewhere, b"autohide = on\n").unwrap();
         assert_eq!(
             reports(&rx, WINDOW),
             vec![WatchEvent::Changed(vec![elsewhere.clone()])],
@@ -592,7 +594,7 @@ mod tests {
         let dir = root.path().join("cupertino");
         let path = dir.join("dock.conf");
         let (_w, rx) = watch(vec![path.clone()]);
-        std::fs::write(&path, "tile_size = 48\n").unwrap();
+        crate::atomic::write_atomic(&path, b"tile_size = 48\n").unwrap();
         assert_eq!(
             reports(&rx, WINDOW),
             vec![WatchEvent::Changed(vec![path.clone()])]
@@ -605,7 +607,7 @@ mod tests {
         );
         std::fs::create_dir(&dir).unwrap();
         std::thread::sleep(WINDOW);
-        std::fs::write(&path, "tile_size = 64\n").unwrap();
+        crate::atomic::write_atomic(&path, b"tile_size = 64\n").unwrap();
         assert_eq!(
             reports(&rx, WINDOW),
             vec![WatchEvent::Changed(vec![path])],

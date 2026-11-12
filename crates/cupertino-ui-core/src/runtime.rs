@@ -2258,6 +2258,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let effects = capabilities.app_effects;
         let layered = capabilities.raised_layer;
         let paint = |w: &mut WindowState<A::Message>, tree: &Tree<A::Message>| {
+            if w.activated_at.is_some() {
+                // the colours are crossing: each node's last paint is of other colours, and the crossing is not part
+                // of what a node's cached paint is keyed on
+                w.painter.forget_nodes();
+            }
             cupertino_ui_theme::set_activation(w.activation_progress(now));
             let mut painting = w.painter.paint(
                 tree,

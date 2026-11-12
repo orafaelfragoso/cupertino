@@ -490,6 +490,11 @@ impl From<NodeId> for PaintNodeId {
 }
 
 impl Painter {
+    /// Drops every node's kept paint, so the next paint draws each node again.
+    pub(crate) fn forget_nodes(&mut self) {
+        self.nodes.clear();
+    }
+
     pub(crate) fn paint<M: 'static>(
         &mut self,
         tree: &Tree<M>,

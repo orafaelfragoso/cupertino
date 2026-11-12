@@ -126,21 +126,10 @@ fn the_top_of_the_sidebar_moves_the_window_and_a_double_click_zooms_it() {
     );
 }
 
-#[test]
-fn where_the_sidebar_meets_the_content_a_rim_is_drawn_not_a_separator_line() {
+/// The solid fills over the strip beside the sidebar, the whole window high and at most two points wide.
+fn strip_fills(h: &Harness<Shell>) -> Vec<cupertino_ui_theme::Color> {
     use cupertino_ui_render::{Paint, PaintOp, Shape};
-    use cupertino_ui_theme::{ColorRole, InteractionVariant};
-    let h = harness();
-    let separator = support::color(ColorRole::Separator, InteractionVariant::Normal, false);
-    let background = support::color(
-        ColorRole::WindowBackground,
-        InteractionVariant::Normal,
-        false,
-    );
-    // the fills of the strip beside the sidebar, the whole window high: the background reaching half a point into the
-    // content, and the rim over it
-    let strip: Vec<_> = h
-        .snapshot()
+    h.snapshot()
         .display_list
         .nodes
         .into_iter()
@@ -152,11 +141,81 @@ fn where_the_sidebar_meets_the_content_a_rim_is_drawn_not_a_separator_line() {
             } if r.min_x() == SIDEBAR && r.width() <= 2.0 && r.height() == 400.0 => Some(c),
             _ => None,
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn where_the_sidebar_meets_the_content_a_rim_is_drawn_not_a_separator_line() {
+    use cupertino_ui_theme::{ColorRole, InteractionVariant};
+    let h = harness();
+    let separator = support::color(ColorRole::Separator, InteractionVariant::Normal, false);
+    let strip = strip_fills(&h);
     assert!(!strip.contains(&separator), "{strip:?}");
-    assert_eq!(strip.first(), Some(&background), "{strip:?}");
-    let rim = strip.last().unwrap();
-    assert!(rim.a > 0.0 && rim.a < 0.2, "a fine rim over it: {strip:?}");
+    assert_eq!(strip.len(), 1, "only the rim: {strip:?}");
+    assert!(
+        strip[0].a > 0.0 && strip[0].a < 0.2,
+        "a fine rim: {strip:?}"
+    );
+}
+
+#[test]
+fn the_divider_strip_shows_the_contents_own_background_in_light_and_dark() {
+    use cupertino_ui_render::{Paint, PaintOp, Shape};
+    use cupertino_ui_theme::Appearance;
+    for (appearance, rim) in [(Appearance::Light, 0.0), (Appearance::Dark, 1.0)] {
+        let mut theme = support::theme();
+        theme.preferences.appearance = appearance;
+        // without the desktop's materials the content pane paints its background from the sidebar's edge, under the
+        // line, and the line adds only its translucent rim, black in the light appearance and white in the dark
+        let mut h = Harness::<Shell>::with_theme(theme.clone());
+        h.resize(Size::new(700.0, 400.0));
+        let strip = strip_fills(&h);
+        assert_eq!(strip.len(), 1, "{appearance:?}: only the rim: {strip:?}");
+        let line = strip[0];
+        assert!(
+            (line.r, line.g, line.b) == (rim, rim, rim) && line.a > 0.0 && line.a < 0.2,
+            "{appearance:?}: {line:?}"
+        );
+        // the pane's own fill, in its coordinates, the pane beginning at the sidebar's edge
+        let content = h.snapshot().display_list.nodes.into_iter().any(|n| {
+            n.bounds.min_x() == SIDEBAR
+                && n.ops.iter().any(|op| {
+                    matches!(op, PaintOp::Fill {
+                        shape: Shape::Rect(r),
+                        paint: Paint::Solid(c),
+                    } if r.min_x() == 0.0 && r.width() == 700.0 - SIDEBAR && r.height() == 400.0 && c.a == 1.0)
+                })
+        });
+        assert!(
+            content,
+            "{appearance:?}: the content's background runs under the line"
+        );
+
+        // with them the content's material starts at the sidebar's edge and nothing opaque covers the strip, so the
+        // strip is tinted as the content is
+        let mut h = Harness::<Shell>::with_effects(theme);
+        h.resize(Size::new(700.0, 400.0));
+        h.settle();
+        let regions = requests(&h)
+            .into_iter()
+            .rev()
+            .find_map(|r| match r {
+                WindowRequest::Materials(regions) => Some(regions),
+                _ => None,
+            })
+            .expect("the window lays materials");
+        assert!(
+            regions.iter().any(|m| m.rect.min_x() == SIDEBAR
+                && m.rect.max_x() == 700.0
+                && m.rect.max_y() == 400.0),
+            "{appearance:?}: {regions:?}"
+        );
+        let strip = strip_fills(&h);
+        assert!(
+            strip.iter().all(|c| c.a < 0.2),
+            "{appearance:?}: no opaque fill over the content's material: {strip:?}"
+        );
+    }
 }
 
 #[test]

@@ -42,8 +42,8 @@ fn no_measure() -> Measured {
 pub(crate) enum DividerLook {
     /// The separator colour.
     Separator,
-    /// Where a sidebar's glass meets the content: the content's own colour with a rim one device pixel wide on the
-    /// leading pane's side.
+    /// Where a sidebar's glass meets the content: the content's own background, which the trailing pane lays under the
+    /// line, with a rim one device pixel wide on the leading pane's side.
     SidebarRim,
 }
 
@@ -576,30 +576,9 @@ impl<M: 'static> Widget<M> for Divider<M> {
                     look::color(&theme, ColorRole::Separator, &state),
                 ),
                 DividerLook::SidebarRim => {
-                    let background = theme.colors.get(
-                        ColorRole::WindowBackground,
-                        cupertino_ui_theme::StateVariant {
-                            window_active: state.window_active,
-                            ..cupertino_ui_theme::StateVariant::NORMAL
-                        },
-                    );
-                    // on whole device pixels, and half a point into the trailing pane: at a fractional scale the line
-                    // ends inside a pixel that the trailing pane's material, which starts on a pixel of its own, leaves
-                    // uncovered, and the desktop would show through it
-                    if let Some(background) = background {
-                        let reach = DIVIDER + 0.5;
-                        let under = match (self.axis, mirrored) {
-                            (Axis::Horizontal, false) => Rect::new(start, 0.0, reach, size.height),
-                            (Axis::Horizontal, true) => {
-                                Rect::new(start + DIVIDER - reach, 0.0, reach, size.height)
-                            }
-                            (Axis::Vertical, false) => Rect::new(0.0, start, size.width, reach),
-                            (Axis::Vertical, true) => {
-                                Rect::new(0.0, start + DIVIDER - reach, size.width, reach)
-                            }
-                        };
-                        cx.fill_pixels(under, background);
-                    }
+                    // the line paints only its rim: the trailing pane lays its background under the line itself
+                    // (`SidebarWindow`'s content pane), so the strip shows the content's own material, tinted as the
+                    // content is, and an opaque fill here would stand out from it as a plain grey column
                     let px = (1.0 / cx.env().scale.max(1.0)).min(DIVIDER);
                     // the rim lies on the leading pane's side, which is the far side when mirrored
                     let rim = match (self.axis, mirrored) {

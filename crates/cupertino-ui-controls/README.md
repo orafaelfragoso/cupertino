@@ -195,7 +195,8 @@ from the application's model and reports changes as messages.
   panel from the window's top edge to its bottom edge, its 52 pt top (`SIDEBAR_TOP`) left free for the compositor's
   window control buttons and a drag region of the window as a toolbar is, then an optional header slot
   (`sidebar_header`, for a search field) and the sidebar's content; beside it, past a `SplitView` divider drawn as a rim one device pixel wide on the sidebar's
-  side over the content's colour (no separator line), the content
+  side over the content's own background, which the content pane lays under the line so the strip takes the content's
+  tint (no separator line and no fill of its own), the content
   pane's window background reaches the window's top edge, so the window paints none; the compositor draws it
   (`Surface::WindowBackground`) where the desktop can, so the toolbar's glass over it reads the window, and the pane
   paints it where the desktop cannot. The panel meets the

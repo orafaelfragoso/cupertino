@@ -23,7 +23,7 @@ Each item was checked again at `b030dced`, 263 commits after the recording's bas
 | ID | Verdict at `b030dced` | Fixing commits | Issue |
 |---|---|---|---|
 | DQ-01 | Open. Dragging the divider past half the content's minimum width (Settings 320 pt, Files 316 pt) still collapses the content pane. | none | [#162](https://github.com/orafaelfragoso/cupertino/issues/162) |
-| DQ-02 | Fixed, awaiting installed-session check. No column of the desktop shows at 1.25, 1.5 or 1.75 in light or dark; in dark a 1–2 device-pixel divider strip stays untinted. | `2c6d4a03`, `311b70b9`, `14be165a` | [#163](https://github.com/orafaelfragoso/cupertino/issues/163) |
+| DQ-02 | Fixed, awaiting installed-session check. No column of the desktop shows at 1.25, 1.5 or 1.75 in light or dark; the divider strip shows the content's own background with its tint, the line adding only its rim. | `2c6d4a03`, `311b70b9`, `14be165a` | [#163](https://github.com/orafaelfragoso/cupertino/issues/163) |
 | DQ-03 | Partial. Inside a menu the arrow stays and presses reach no window under it; the resize cursor still shows at a window edge just outside an open menu, and scroll routing is unverified. | `638505af`, `76769bc1`, `46a4898e` | [#164](https://github.com/orafaelfragoso/cupertino/issues/164) |
 | DQ-04 | Partial. Menus on desktop items and space, Files items, space and sidebar, Shift+F10 and dock tiles; none on text fields, the file manager's dock tile offers only Open, and the dock's menu is styled differently. | several | [#165](https://github.com/orafaelfragoso/cupertino/issues/165) |
 | DQ-05 | Needs installed-session check. The mapping is correct; a stored delay under 250 ms is shown at the Long end. | — | [#166](https://github.com/orafaelfragoso/cupertino/issues/166) |

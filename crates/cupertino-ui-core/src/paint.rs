@@ -49,6 +49,17 @@ struct Painted {
     pixels: Vec<usize>,
     /// How far raised nodes covered the node's edges when it painted, when its paint depended on it.
     obscured: Option<Insets>,
+    /// What the node read of the window's marks when it painted, when its paint depended on them.
+    marks: Option<WindowMarks>,
+}
+
+/// What nodes of one window tell each other while they paint: whether a scroll view's page is scrolled under the
+/// window's raised nodes, and whether a raised node shows a band over it. Each is kept per node, so two windows of one
+/// process, or two scroll views of one window, never read each other's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct WindowMarks {
+    pub(crate) page_scrolled: bool,
+    pub(crate) band_shown: bool,
 }
 
 /// The glass a node paints on, which picks the colours of its text and symbols: the tone of the glass it lies on, if
@@ -298,6 +309,10 @@ pub(crate) struct Painter {
     /// shows again where it showed before is the same paint.
     overlays: HashMap<NodeId, (Vec<PaintOp>, PaintRevision)>,
     overlay_revision: u64,
+    /// The scroll views that told they are scrolled, by node ([`PaintCx::set_page_scrolled`]).
+    scrolled_pages: HashMap<NodeId, bool>,
+    /// The raised nodes that told they show a band, by node ([`PaintCx::set_band_shown`]).
+    bands: HashMap<NodeId, bool>,
 }
 
 /// The paint node of `node`'s overlay ([`Widget::overlay`](crate::Widget::overlay)): it comes after the node's
@@ -490,6 +505,14 @@ impl From<NodeId> for PaintNodeId {
 }
 
 impl Painter {
+    /// The marks nodes have set so far.
+    fn marks(&self) -> WindowMarks {
+        WindowMarks {
+            page_scrolled: self.scrolled_pages.values().any(|&v| v),
+            band_shown: self.bands.values().any(|&v| v),
+        }
+    }
+
     /// Drops every node's kept paint, so the next paint draws each node again.
     pub(crate) fn forget_nodes(&mut self) {
         self.nodes.clear();
@@ -537,6 +560,9 @@ impl Painter {
         };
         let mut list = DisplayList::default();
         let mut animating = Vec::new();
+        // the nodes that read the window's marks this pass, and the overlays with the band they saw
+        let mut mark_readers: Vec<NodeId> = Vec::new();
+        let mut band_readers: Vec<(NodeId, bool)> = Vec::new();
         let mut resources = PaintResources::default();
         let mut seen = HashSet::with_capacity(self.nodes.len());
         let mut clips = Vec::new();
@@ -659,6 +685,7 @@ impl Painter {
                     && p.on_material == on_material
                     && (p.materials.is_none() || p.foreground.own == foreground.own)
                     && p.obscured.is_none_or(|o| o == obscured)
+                    && p.marks.is_none_or(|m| m == self.marks())
             });
             if !fresh {
                 let mut ops = Vec::new();
@@ -716,6 +743,10 @@ impl Painter {
                 let mut lays_material = false;
                 let mut pixels = Vec::new();
                 let mut reads_obscured = false;
+                let marks = self.marks();
+                let mut reads_marks = false;
+                let mut set_scrolled = None;
+                let mut set_band = None;
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
@@ -749,8 +780,24 @@ impl Painter {
                         obscured,
                         reads_obscured: &mut reads_obscured,
                         layer: input.layer,
+                        marks,
+                        reads_marks: &mut reads_marks,
+                        set_page_scrolled: &mut set_scrolled,
+                        set_band_shown: &mut set_band,
                     },
                 );
+                for (kept, set) in [
+                    (&mut self.scrolled_pages, set_scrolled),
+                    (&mut self.bands, set_band),
+                ] {
+                    match set {
+                        Some(v) => kept.insert(id, v),
+                        None => kept.remove(&id),
+                    };
+                }
+                if reads_marks {
+                    mark_readers.push(id);
+                }
                 if animate {
                     animating.push(id);
                 }
@@ -775,6 +822,7 @@ impl Painter {
                         lays_material,
                         pixels,
                         obscured: reads_obscured.then_some(obscured),
+                        marks: reads_marks.then_some(marks),
                     },
                 );
             }
@@ -847,6 +895,8 @@ impl Painter {
                 let mut fills = Vec::new();
                 let mut clip = None;
                 let mut reach_obscured = false;
+                let band_shown = self.marks().band_shown;
+                let mut reads_band = false;
                 node.widget.overlay(
                     &*node.state,
                     &mut OverlayCx {
@@ -861,8 +911,13 @@ impl Painter {
                         clip: &mut clip,
                         obscured,
                         reach_obscured: &mut reach_obscured,
+                        band_shown,
+                        reads_band: &mut reads_band,
                     },
                 );
+                if reads_band {
+                    band_readers.push((id, band_shown));
+                }
                 // a caret and the like are cut from what raised nodes cover, as what they mark lies under them
                 let cut = match (raised || reach_obscured, placement.clip.or(window)) {
                     (false, Some(around)) if !input.raised.is_empty() => {
@@ -898,6 +953,25 @@ impl Painter {
             &mut layered,
         );
         self.nodes.retain(|id, _| seen.contains(id));
+        self.scrolled_pages.retain(|id, _| seen.contains(id));
+        self.bands.retain(|id, _| seen.contains(id));
+        // a node that painted before the mark it read was set paints again on the next frame
+        let marks = self.marks();
+        for id in mark_readers {
+            if self
+                .nodes
+                .get(&id)
+                .is_some_and(|p| p.marks.is_some_and(|m| m != marks))
+            {
+                self.nodes.remove(&id);
+                animating.push(id);
+            }
+        }
+        for (id, saw) in band_readers {
+            if saw != marks.band_shown {
+                animating.push(id);
+            }
+        }
         self.overlays.retain(|id, _| overlaid.contains(id));
         let any_raised = layered.iter().any(|&l| l);
         if any_raised && !input.layer {

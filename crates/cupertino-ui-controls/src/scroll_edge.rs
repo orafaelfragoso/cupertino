@@ -32,32 +32,6 @@ const HAIRLINE: f64 = 0.5;
 const HAIRLINE_LIGHT: f32 = 0.11;
 const HAIRLINE_DARK: f32 = 0.06;
 
-thread_local! {
-    /// Whether the page under the window's toolbar row is scrolled, as the last paint of its scroll view found it.
-    static PAGE_SCROLLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Whether the toolbar row's blurred band is on show, so the scroll view leaves its own veil out.
-    static BAND_SHOWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// The scroll view tells the toolbar row whether the page under it is scrolled.
-pub(crate) fn set_page_scrolled(scrolled: bool) {
-    PAGE_SCROLLED.with(|c| c.set(scrolled));
-}
-
-/// Whether the page under the toolbar row is scrolled.
-pub fn page_scrolled() -> bool {
-    PAGE_SCROLLED.with(std::cell::Cell::get)
-}
-
-/// The toolbar row tells the scroll view whether its blurred band is on show.
-pub fn set_band_shown(shown: bool) {
-    BAND_SHOWN.with(|c| c.set(shown));
-}
-
-fn band_shown() -> bool {
-    BAND_SHOWN.with(std::cell::Cell::get)
-}
-
 /// How a scroll view's content is set off where raised nodes cover it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScrollEdge {
@@ -197,7 +171,7 @@ impl EdgeLook {
                     return;
                 }
                 // the toolbar row's own blurred band carries the veil when it is on show
-                if !band_shown() {
+                if !cx.band_shown() {
                     cx.fill(
                         rect,
                         Paint::Linear {

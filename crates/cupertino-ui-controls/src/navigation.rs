@@ -137,10 +137,10 @@ impl<M: 'static> Widget<M> for Slot<M> {
     fn paint(&self, _: &DragState, cx: &mut PaintCx<'_>) {
         // over the page, the row lays a blurred band of the window's colour, there once the page is scrolled
         if self.raised && cx.raised_layer() && self.role == Some(Role::Toolbar) {
-            let scrolled = crate::scroll_edge::page_scrolled();
+            let scrolled = cx.page_scrolled();
             let shown =
                 scrolled && cx.window_active() && cx.material(Surface::ToolbarBand, 0.0, 1.0);
-            crate::scroll_edge::set_band_shown(shown);
+            cx.set_band_shown(shown);
         }
     }
 

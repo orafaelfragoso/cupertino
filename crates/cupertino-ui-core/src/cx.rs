@@ -356,6 +356,11 @@ pub struct PaintCx<'a> {
     pub(crate) reads_obscured: &'a mut bool,
     /// The window system draws raised nodes in a layer of their own, with their glass ([`PaintCx::raised_layer`]).
     pub(crate) layer: bool,
+    /// What nodes of the window told each other so far ([`PaintCx::page_scrolled`]).
+    pub(crate) marks: crate::paint::WindowMarks,
+    pub(crate) reads_marks: &'a mut bool,
+    pub(crate) set_page_scrolled: &'a mut Option<bool>,
+    pub(crate) set_band_shown: &'a mut Option<bool>,
 }
 
 impl PaintCx<'_> {
@@ -432,6 +437,24 @@ impl PaintCx<'_> {
     /// place, and what scrolls under them is clipped away.
     pub fn raised_layer(&self) -> bool {
         self.layer
+    }
+
+    /// A scroll view tells the window whether its page is scrolled under the window's raised nodes. A node that does
+    /// not tell again when it paints has told nothing.
+    pub fn set_page_scrolled(&mut self, scrolled: bool) {
+        *self.set_page_scrolled = Some(scrolled);
+    }
+
+    /// Whether a scroll view of this window told its page is scrolled. The node paints again when that changes.
+    pub fn page_scrolled(&mut self) -> bool {
+        *self.reads_marks = true;
+        self.marks.page_scrolled
+    }
+
+    /// A raised node tells the window whether it shows a band over the page, so scroll views leave their own veil
+    /// out ([`OverlayCx::band_shown`]). A node that does not tell again when it paints has told nothing.
+    pub fn set_band_shown(&mut self, shown: bool) {
+        *self.set_band_shown = Some(shown);
     }
 
     /// How far the window's raised nodes ([`Widget::raised`](crate::Widget::raised)), such as a toolbar row over a page
@@ -915,6 +938,9 @@ pub struct OverlayCx<'a> {
     pub(crate) obscured: Insets,
     /// The overlay draws under raised nodes too ([`OverlayCx::reach_obscured`]).
     pub(crate) reach_obscured: &'a mut bool,
+    /// Whether a raised node of the window shows a band over the page ([`PaintCx::set_band_shown`]).
+    pub(crate) band_shown: bool,
+    pub(crate) reads_band: &'a mut bool,
 }
 
 impl OverlayCx<'_> {
@@ -944,6 +970,12 @@ impl OverlayCx<'_> {
     /// How far the window's raised nodes cover the node's edges ([`PaintCx::obscured`]).
     pub fn obscured(&self) -> Insets {
         self.obscured
+    }
+
+    /// Whether a raised node of the window shows a band over the page. The overlay draws again when that changes.
+    pub fn band_shown(&mut self) -> bool {
+        *self.reads_band = true;
+        self.band_shown
     }
 
     /// An overlay is cut from the part of the window raised nodes cover, as a caret is under a toolbar row; this one

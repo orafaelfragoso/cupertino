@@ -77,6 +77,8 @@ pub struct Decor {
     pub hover_group: Option<WindowId>,
     pub pressed: Option<(WindowId, ButtonKind)>,
     last_click: Option<(WindowId, f64)>,
+    /// What a double click on a title bar does; kept across a change of appearance, which rebuilds the configuration.
+    double_click: DoubleClickAction,
     pub cursor: Option<CursorIcon>,
     /// Rasterisations performed (diagnostics and tests).
     pub renders: u64,
@@ -212,6 +214,7 @@ impl Decor {
             hover_group: None,
             pressed: None,
             last_click: None,
+            double_click: DoubleClickAction::Zoom,
             cursor: None,
             renders: 0,
         })
@@ -225,7 +228,21 @@ impl Decor {
                 let style = deco.config.style;
                 deco.set_config(config_for(appearance, style));
             }
+            self.apply_double_click();
             self.cache.clear();
+        }
+    }
+
+    /// What a double click on a title bar does from now on.
+    pub fn set_double_click(&mut self, action: DoubleClickAction) {
+        self.double_click = action;
+        self.apply_double_click();
+    }
+
+    fn apply_double_click(&mut self) {
+        self.deco.config.double_click = self.double_click;
+        for deco in &mut self.styled {
+            deco.config.double_click = self.double_click;
         }
     }
 

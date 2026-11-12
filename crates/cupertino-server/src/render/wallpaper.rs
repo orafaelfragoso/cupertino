@@ -806,7 +806,7 @@ impl Wallpapers {
         if candidates.is_empty() {
             self.forget(output);
             self.tint = None;
-            self.procedural(output, dark);
+            self.procedural(output, crate::render::scene::wallpaper_tint(dark));
             return None;
         }
         self.update(output, candidates, dst, strip_rows, now);
@@ -814,7 +814,7 @@ impl Wallpapers {
         // no candidate could be used and none is being read: the procedural wallpaper stays
         if !state.in_flight && state.shown.is_none() {
             self.tint = None;
-            self.procedural(output, dark);
+            self.procedural(output, crate::render::scene::wallpaper_tint(dark));
             return None;
         }
         match state.shown.as_ref().filter(|s| s.px == px) {
@@ -829,11 +829,19 @@ impl Wallpapers {
         }
     }
 
+    /// A solid colour shows on `output`: nothing is read, the desktop's tint and the lightness under its bar are that
+    /// colour's.
+    pub fn solid(&mut self, output: u64, colour: [f32; 3], now: f64) {
+        self.seen.insert(output, now);
+        self.forget(output);
+        self.tint = Some(colour);
+        self.procedural(output, colour);
+    }
+
     /// The procedural wallpaper shows on `output`: the lightness under its bar is that of the wallpaper's average colour
     /// ([`crate::render::scene::wallpaper_tint`]) through the bar's colour operations, handed out when it differs from
     /// the last one.
-    fn procedural(&mut self, output: u64, dark: bool) {
-        let tint = crate::render::scene::wallpaper_tint(dark);
+    fn procedural(&mut self, output: u64, tint: [f32; 3]) {
         let lightness = colour_lightness(apply_color_ops(tint, &self.bar_ops));
         if self.sent.insert(output, lightness) != Some(lightness) {
             self.measured.push((output, lightness));

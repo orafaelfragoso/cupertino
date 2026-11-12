@@ -237,8 +237,41 @@ fn material_options(reduce_transparency: bool, window: WindowState) -> MaterialO
     }
 }
 
+/// The materials of a window's own background and sidebars, which take a slight tint of the wallpaper's colour.
+const TINTED_MATERIALS: [&str; 3] = ["WindowBackground", "TextBackground", "Sidebar"];
+/// How strongly they take it.
+const WINDOW_TINT_OPACITY: f32 = 0.03;
+
+/// The share of what is still see-through that the densest setting fills.
+const DENSITY_FILL_SHARE: f32 = 0.3;
+
+/// `recipe` made denser by `amount` (0 to 1): its ordinary fills grow more opaque, and a recipe that is only a blur
+/// gets a faint veil of the appearance's own grey.
+fn densify(recipe: &mut cupertino_theme::recipe::Recipe, dark: bool, amount: f32) {
+    use cupertino_theme::recipe::{Blend, Fill};
+    let mut grew = false;
+    for fill in &mut recipe.fills {
+        if fill.blend == Blend::Normal
+            && !fill.tint_layer
+            && fill.rgba[3] > 0.0
+            && fill.rgba[3] < 1.0
+        {
+            fill.rgba[3] += (1.0 - fill.rgba[3]) * DENSITY_FILL_SHARE * amount;
+            grew = true;
+        }
+    }
+    if !grew && recipe.backdrop.is_some() {
+        let grey = if dark { 0.12 } else { 0.95 };
+        recipe.fills.push(Fill {
+            rgba: [grey, grey, grey, DENSITY_FILL_SHARE * amount * 0.5],
+            blend: Blend::Normal,
+            tint_layer: false,
+        });
+    }
+}
+
 /// Recipes by material, appearance, Reduce Transparency and whether the window is inactive.
-type RecipeCache = HashMap<(String, Appearance, bool, bool), Option<Rc<GpuRecipe>>>;
+type RecipeCache = HashMap<(String, Appearance, bool, bool, u8, bool), Option<Rc<GpuRecipe>>>;
 
 /// Plan of window `id` on its output at `now` (None when the window cannot be drawn). With Reduce
 /// Motion in `options` a full-screen transition draws the window at its new frame, and an opening sheet fades in at
@@ -302,6 +335,10 @@ pub struct RenderResources {
     pub snapshots: super::snapshots::Snapshots,
     theme: Option<Theme>,
     recipes: RefCell<RecipeCache>,
+    /// How much denser every material is made, in percent ([`Config::material_density`](crate::config::Config)).
+    density: std::cell::Cell<u8>,
+    /// Windows' own backgrounds and sidebars take a slight tint of the wallpaper's colour.
+    tint_windows: std::cell::Cell<bool>,
 }
 
 impl RenderResources {
@@ -337,6 +374,8 @@ impl RenderResources {
             snapshots: super::snapshots::Snapshots::default(),
             theme,
             recipes: RefCell::new(HashMap::new()),
+            density: std::cell::Cell::new(0),
+            tint_windows: std::cell::Cell::new(true),
         })
     }
 
@@ -365,11 +404,15 @@ impl RenderResources {
         reduce_transparency: bool,
         window: WindowState,
     ) -> Option<Rc<GpuRecipe>> {
+        let density = self.density.get();
+        let tint = self.tint_windows.get() && TINTED_MATERIALS.contains(&material);
         let key = (
             material.to_string(),
             appearance,
             reduce_transparency,
             window == WindowState::Inactive,
+            density,
+            tint,
         );
         self.recipes
             .borrow_mut()
@@ -381,7 +424,19 @@ impl RenderResources {
                     material,
                     &material_options(reduce_transparency, window),
                 ) {
-                    Ok(r) => Some(Rc::new(GpuRecipe::new(&r))),
+                    Ok(mut r) => {
+                        if tint && !r.uses_tint_layer() {
+                            r.fills.push(cupertino_theme::recipe::Fill {
+                                rgba: [0.0, 0.0, 0.0, WINDOW_TINT_OPACITY],
+                                blend: cupertino_theme::recipe::Blend::Normal,
+                                tint_layer: true,
+                            });
+                        }
+                        if density > 0 && !r.opaque {
+                            densify(&mut r, appearance.is_dark(), f32::from(density) / 100.0);
+                        }
+                        Some(Rc::new(GpuRecipe::new(&r)))
+                    }
                     Err(e) => {
                         tracing::warn!(material, error = %e, "missing material recipe");
                         None
@@ -389,6 +444,16 @@ impl RenderResources {
                 }
             })
             .clone()
+    }
+
+    /// Whether windows take a slight tint of the wallpaper's colour from now on.
+    pub fn set_tint_windows(&self, on: bool) {
+        self.tint_windows.set(on);
+    }
+
+    /// Make every material denser by `percent` (0 to 100) from now on.
+    pub fn set_density(&self, percent: u8) {
+        self.density.set(percent.min(100));
     }
 
     /// Release GL objects (call before dropping the renderer).
@@ -753,6 +818,15 @@ fn wallpaper_element(p: &mut SceneParams<'_>) -> Piece {
         .transform_size(smithay::utils::Size::<i32, smithay::utils::Physical>::from(
             p.output_px,
         ));
+    if let Some(colour) = p.config.wallpaper_color {
+        let rgb = colour.map(|c| f32::from(c) / 255.0);
+        p.overlays.wallpaper.solid(p.output_id.0, rgb, p.now);
+        return Piece::item(full_output_wallpaper(
+            p,
+            SceneKind::Wallpaper,
+            [[rgb[0], rgb[1], rgb[2], 1.0]; 4],
+        ));
+    }
     let image = p.overlays.wallpaper.shown(
         p.output_id.0,
         &p.config.wallpaper,
@@ -824,6 +898,22 @@ pub fn wallpaper_tint(dark: bool) -> [f32; 3] {
         [0.22, 0.17, 0.37]
     } else {
         [0.78, 0.76, 0.84]
+    }
+}
+
+/// The colour windows' materials take a slight tint of: the wallpaper's average, or its grey of the same lightness
+/// when windows are not to take the wallpaper's colour.
+fn window_tint(p: &SceneParams<'_>, dark: bool) -> [f32; 3] {
+    let tint = p
+        .overlays
+        .wallpaper
+        .tint
+        .unwrap_or_else(|| wallpaper_tint(dark));
+    if p.config.tint_windows {
+        tint
+    } else {
+        let grey = 0.2126 * tint[0] + 0.7152 * tint[1] + 0.0722 * tint[2];
+        [grey; 3]
     }
 }
 
@@ -2009,7 +2099,10 @@ fn glass_pieces(
     let Some(spec) = members.first().and_then(|b| b.glass) else {
         return Vec::new();
     };
-    let mode = crate::accessibility::glass_mode(p.config.is_dark(), spec.style, p.display);
+    let mode = cupertino_theme::GlassMode {
+        density: (p.config.material_density * 100.0).round() as u8,
+        ..crate::accessibility::glass_mode(p.config.is_dark(), spec.style, p.display)
+    };
     // the shapes back to front, as the surface created them
     let shapes = members
         .iter()
@@ -2312,11 +2405,7 @@ fn material_piece(
         radius,
         style: corner_style(true),
         stage,
-        tint: p
-            .overlays
-            .wallpaper
-            .tint
-            .unwrap_or_else(|| wallpaper_tint(dark)),
+        tint: window_tint(p, dark),
         opacity: alpha,
         clip: Clip::None,
     })))
@@ -2491,6 +2580,9 @@ fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
 
 /// The neutral frame of one output, with the elements the renderer still builds itself.
 pub fn compose_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Composed {
+    p.res
+        .set_density((p.config.material_density * 100.0).round() as u8);
+    p.res.set_tint_windows(p.config.tint_windows);
     let mut stack = Composition::new(p.scale);
     match std::mem::replace(&mut p.lock, LockView::Unlocked) {
         LockView::Locked { surface } => locked_scene(p, &mut stack, surface),

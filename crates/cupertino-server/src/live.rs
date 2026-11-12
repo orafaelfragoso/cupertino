@@ -73,6 +73,8 @@ pub struct LiveSettings {
     pub paths: SettingsPaths,
     /// How many file changes were applied (logged, and what tests wait for).
     pub reloads: u64,
+    /// `appearance.conf`, whose tint of windows and title bar double click the server follows.
+    appearance: Option<PathBuf>,
     watcher: Option<ConfigWatcher>,
 }
 
@@ -82,6 +84,9 @@ impl Cupertino {
     pub fn start_settings_watch(&mut self, files: SettingsFiles, paths: SettingsPaths) {
         self.live.files = files;
         self.live.paths = paths.clone();
+        self.live.appearance = cupertino_defaults::appearance::AppearanceSettings::path();
+        self.apply_shell_options();
+        self.apply_titlebar_double_click();
         if let Some(path) = &paths.data_control {
             self.reload_data_control(path);
         }
@@ -96,6 +101,7 @@ impl Cupertino {
             paths.system_accessibility,
             paths.data_control,
             paths.desktop_control,
+            self.live.appearance.clone(),
         ]
         .into_iter()
         .flatten()
@@ -154,8 +160,68 @@ impl Cupertino {
             } else if self.live.paths.desktop_control.as_ref() == Some(&path) {
                 self.reload_desktop_control(&path);
                 self.live.reloads += 1;
+            } else if self.live.appearance.as_ref() == Some(&path) {
+                self.reload_appearance_settings();
+                self.live.reloads += 1;
             }
         }
+    }
+
+    /// Follow `appearance.conf` again: windows take a tint of the wallpaper or not, and a double click on a title bar
+    /// zooms, minimises or does nothing.
+    fn reload_appearance_settings(&mut self) {
+        let settings = cupertino_defaults::appearance::AppearanceSettings::current();
+        tracing::info!(
+            tint_windows = settings.tint_windows,
+            double_click = ?settings.titlebar_double_click,
+            "appearance settings reloaded"
+        );
+        self.config.apply_appearance_settings(&settings);
+        self.apply_titlebar_double_click();
+        self.request_redraw();
+    }
+
+    /// Hand the title bar's double click action to the decorations.
+    pub fn apply_titlebar_double_click(&mut self) {
+        use cupertino_decorations::DoubleClickAction;
+        use cupertino_defaults::appearance::TitlebarAction;
+        self.decor
+            .set_double_click(match self.config.titlebar_double_click {
+                TitlebarAction::Zoom => DoubleClickAction::Zoom,
+                TitlebarAction::Minimize => DoubleClickAction::Minimize,
+                TitlebarAction::None => DoubleClickAction::None,
+            });
+    }
+
+    /// Hand the menu bar's auto-hide, the tiling options and the material density of the configuration to the parts
+    /// that act on them.
+    pub fn apply_shell_options(&mut self) {
+        use cupertino_wm::menu_bar::AutoHide;
+        let now = self.now();
+        let policy = if self.config.shell.menu_bar_auto_hide {
+            AutoHide::Always
+        } else {
+            AutoHide::FullscreenOnly
+        };
+        let events = self.menu_bars.set.set_auto_hide(policy, now);
+        let outputs: Vec<_> = events
+            .into_iter()
+            .filter_map(|event| match event {
+                cupertino_wm::menu_bar::BarEvent::UsableAreaChanged { output } => Some(output),
+                _ => None,
+            })
+            .collect();
+        for output in outputs {
+            self.refresh_usable_area(output);
+        }
+        let snap = &mut self.wm.config_mut().snap;
+        snap.edge_drag_tiling = self.config.edge_tiling;
+        snap.top_edge_tiling = self.config.edge_tiling;
+        snap.tiled_margin = if self.config.tile_margins {
+            cupertino_wm::SnapConfig::default().tiled_margin
+        } else {
+            0.0
+        };
     }
 
     /// Re-read one layer of `compositor.json`, the system file or the user's, and apply what changed in the result.
@@ -319,6 +385,21 @@ impl Cupertino {
         }
         if changed!(wallpaper, wallpaper_dark) {
             self.config.wallpaper = target.wallpaper.clone();
+            self.request_redraw();
+        }
+        if changed!(
+            menu_bar_auto_hide,
+            edge_tiling,
+            tile_margins,
+            wallpaper_color,
+            material_density
+        ) {
+            self.config.shell.menu_bar_auto_hide = target.shell.menu_bar_auto_hide;
+            self.config.edge_tiling = target.edge_tiling;
+            self.config.tile_margins = target.tile_margins;
+            self.config.wallpaper_color = target.wallpaper_color;
+            self.config.material_density = target.material_density;
+            self.apply_shell_options();
             self.request_redraw();
         }
         if changed!(decorations) {

@@ -44,6 +44,7 @@ pub fn glass_mode(dark: bool, style: GlassStyle, options: DisplayOptions) -> Gla
         reduce_transparency: options.reduce_transparency,
         increase_contrast: options.increase_contrast,
         reduce_motion: options.reduce_motion,
+        density: 0,
     }
 }
 

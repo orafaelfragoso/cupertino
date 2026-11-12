@@ -60,6 +60,8 @@ pub struct GlassMode {
     pub reduce_transparency: bool,
     pub increase_contrast: bool,
     pub reduce_motion: bool,
+    /// How much denser the person asked every material to be, in percent (0 leaves the recipe as it is).
+    pub density: u8,
 }
 
 /// Blur of the multiscale backdrop and the blur fill laid over it.
@@ -231,6 +233,27 @@ const CLEAR_SHADOW_AMOUNT_SIDE_MAX: f32 = 120.0;
 /// Clear drop-shadow blur per point of short side, and the side it stops growing at.
 const CLEAR_SHADOW_HEIGHT_PER_POINT: f32 = 0.4;
 const CLEAR_SHADOW_HEIGHT_SIDE_MAX: f32 = 240.0;
+
+/// The share of what is still see-through that the densest setting fills with the face's own colour.
+const DENSITY_FILL_SHARE: f32 = 0.3;
+/// The colour of a fill that has none of its own (a clear face) once it is made denser: dark and light.
+const DENSITY_NEUTRAL: [f32; 3] = [0.12, 0.12, 0.12];
+const DENSITY_NEUTRAL_LIGHT: [f32; 3] = [0.95, 0.95, 0.95];
+
+/// `fill` made denser by `amount` (0 to 1): its opacity grows towards [`DENSITY_FILL_SHARE`] of what was see-through.
+fn denser_fill(fill: [f32; 4], dark: bool, amount: f32) -> [f32; 4] {
+    let colour = if fill[3] < 0.02 {
+        if dark {
+            DENSITY_NEUTRAL
+        } else {
+            DENSITY_NEUTRAL_LIGHT
+        }
+    } else {
+        [fill[0], fill[1], fill[2]]
+    };
+    let alpha = fill[3] + (1.0 - fill[3]) * DENSITY_FILL_SHARE * amount;
+    [colour[0], colour[1], colour[2], alpha]
+}
 
 // ---- accessibility ----------------------------------------------------------------------------------------------
 
@@ -553,6 +576,8 @@ impl GlassParams {
                 .then(|| increased_contrast_face(dark, mode.style))
                 .flatten();
             p.face = contrast.unwrap_or_else(|| reduced_transparency_face(dark, mode.style));
+        } else if mode.density > 0 {
+            p.face.fill = denser_fill(p.face.fill, dark, f32::from(mode.density.min(100)) / 100.0);
         }
         p
     }

@@ -12,6 +12,9 @@
 //! | `terminals` | program names, tried in order |
 //! | `keybindings` | object: chord → action name |
 //! | `corner_radius`, `menu_bar_height`, `hot_corner_size`, `hot_corner_dwell` | number |
+//! | `menu_bar_auto_hide`, `edge_tiling`, `tile_margins` | boolean: the menu bar hides until the pointer reaches the top edge; dragging a window to a screen edge tiles it; tiled windows keep a margin around and between them |
+//! | `wallpaper_color` | `#rrggbb`: a solid colour in place of any picture |
+//! | `material_density` | number 0 to 1: how much denser (less see-through) every material is made, 0 leaving the recipes as they are |
 //! | `show_menu_bar`, `decorations`, `closing_animation`, `mouse_acceleration`, `trackpad_acceleration`, `natural_scrolling` (touchpads), `mouse_natural_scrolling` (wheels), `shake_to_locate` | boolean |
 //! | `minimize_effect` | `warp`, `funnel`, `scale`, `plain` (also `none`) |
 //! | `show_scroll_bars` | `automatic` (beside the content while a mouse is connected, else over it while it scrolls), `when-scrolling`, `always` |
@@ -197,6 +200,16 @@ pub struct CompositorSettings {
     pub corner_radius: Option<f64>,
     pub menu_bar_height: Option<f64>,
     pub show_menu_bar: Option<bool>,
+    /// The menu bar hides until the pointer reaches the top edge, and the work area grows.
+    pub menu_bar_auto_hide: Option<bool>,
+    /// Dragging a window to a screen edge tiles it.
+    pub edge_tiling: Option<bool>,
+    /// Tiled windows keep a margin around and between them.
+    pub tile_margins: Option<bool>,
+    /// A solid colour the desktop shows instead of a picture (sRGB, opaque).
+    pub wallpaper_color: Option<[u8; 4]>,
+    /// How much denser every material is made, 0 to 1.
+    pub material_density: Option<f64>,
     pub decorations: Option<bool>,
     pub minimize_effect: Option<MinimizeEffectName>,
     pub show_scroll_bars: Option<ScrollBarsName>,
@@ -519,6 +532,23 @@ const KEYS: &[JsonKey] = &[
         |c: &[u8; 4]| Value::String(rgba_text(*c))
     ),
     json_key!(shake_to_locate, boolean, bool_value),
+    json_key!(menu_bar_auto_hide, boolean, bool_value),
+    json_key!(edge_tiling, boolean, bool_value),
+    json_key!(tile_margins, boolean, bool_value),
+    json_key!(
+        wallpaper_color,
+        |v: &Value| string(v).and_then(parse_rgba),
+        |c: &[u8; 4]| Value::String(rgba_text(*c))
+    ),
+    json_key!(
+        material_density,
+        |v: &Value| number(v).and_then(|n| if (0.0..=1.0).contains(&n) {
+            Ok(n)
+        } else {
+            Err(format!("material density {n} is not between 0 and 1"))
+        }),
+        number_value
+    ),
     json_key!(wallpaper, absolute_path, |s: &String| Value::String(
         s.clone()
     )),

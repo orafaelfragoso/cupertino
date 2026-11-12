@@ -174,6 +174,29 @@ pub fn appearance_sections(settings: &Settings, dark: bool) -> Vec<Section> {
     vec![
         section(None, theme_rows, None),
         section(
+            Some("Materials"),
+            vec![
+                row(
+                    ControlId::MaterialDensity,
+                    "Transparency",
+                    Control::Slider {
+                        value: settings.compositor.material_density.unwrap_or(0.0),
+                        stops: None,
+                        marks: &[],
+                        labels: ("Clear", "Dense"),
+                    },
+                    Backend::Key(File::Compositor, "material_density"),
+                ),
+                row(
+                    ControlId::TintWindows,
+                    "Tint window background with wallpaper colour",
+                    Control::Switch { on: a.tint_windows },
+                    file("tint_windows"),
+                ),
+            ],
+            None,
+        ),
+        section(
             Some("Accent"),
             vec![
                 row(
@@ -275,25 +298,85 @@ pub fn dock_dock_rows(settings: &Settings) -> Vec<Row> {
     ]
 }
 
+/// The solid colours the desktop can show instead of a picture: a name and an sRGB colour.
+pub const WALLPAPER_COLORS: [(&str, [u8; 3]); 8] = [
+    ("Slate", [0x3a, 0x3f, 0x4a]),
+    ("Graphite", [0x1c, 0x1c, 0x1e]),
+    ("Blue", [0x2f, 0x6f, 0xc4]),
+    ("Teal", [0x2a, 0x8f, 0x8f]),
+    ("Green", [0x4a, 0x9a, 0x5c]),
+    ("Orange", [0xd9, 0x7a, 0x2b]),
+    ("Pink", [0xcf, 0x5f, 0x8f]),
+    ("Sand", [0xd8, 0xcf, 0xbf]),
+];
+
+/// The Colours section of the wallpaper pane: a press on a colour shows it alone as the desktop.
+pub fn wallpaper_colors_section(settings: &Settings) -> Section {
+    let chosen = settings
+        .compositor
+        .wallpaper_color
+        .and_then(|c| {
+            WALLPAPER_COLORS
+                .iter()
+                .position(|(_, rgb)| rgb[..] == c[..3])
+        })
+        .unwrap_or(usize::MAX);
+    section(
+        Some("Colours"),
+        vec![row(
+            ControlId::WallpaperColor,
+            "Solid colour",
+            Control::Swatches {
+                items: WALLPAPER_COLORS
+                    .iter()
+                    .map(|(name, rgb)| (name.to_string(), SwatchKind::Color(*rgb)))
+                    .collect(),
+                selected: chosen,
+            },
+            Backend::Key(File::Compositor, "wallpaper_color"),
+        )],
+        Some("Choosing a picture shows the picture again.".into()),
+    )
+}
+
+/// The Windows section of the Desktop & Dock pane.
 pub fn windows_section(settings: &Settings) -> Section {
     section(
         Some("Windows"),
-        vec![row(
-            ControlId::DoubleClickTitle,
-            "Double-click a window's title bar to",
-            popup_of(
-                TITLE_ACTION_CHOICES
-                    .iter()
-                    .map(|(l, _)| l.to_string())
-                    .collect(),
-                TITLE_ACTION_CHOICES
-                    .iter()
-                    .position(|(_, v)| *v == settings.appearance.titlebar_double_click)
-                    .unwrap_or(0),
+        vec![
+            row(
+                ControlId::EdgeTiling,
+                "Tile windows by dragging them to the screen edges",
+                Control::Switch {
+                    on: settings.compositor.edge_tiling.unwrap_or(true),
+                },
+                Backend::Key(File::Compositor, "edge_tiling"),
             ),
-            Backend::Key(File::Appearance, "titlebar_double_click"),
-        )],
-        Some("Applies to windows drawn by this desktop's own applications.".into()),
+            row(
+                ControlId::TileMargins,
+                "Margins around tiled windows",
+                Control::Switch {
+                    on: settings.compositor.tile_margins.unwrap_or(true),
+                },
+                Backend::Key(File::Compositor, "tile_margins"),
+            ),
+            row(
+                ControlId::DoubleClickTitle,
+                "Double-click a window's title bar to",
+                popup_of(
+                    TITLE_ACTION_CHOICES
+                        .iter()
+                        .map(|(l, _)| l.to_string())
+                        .collect(),
+                    TITLE_ACTION_CHOICES
+                        .iter()
+                        .position(|(_, v)| *v == settings.appearance.titlebar_double_click)
+                        .unwrap_or(0),
+                ),
+                Backend::Key(File::Appearance, "titlebar_double_click"),
+            ),
+        ],
+        None,
     )
 }
 
@@ -519,6 +602,14 @@ pub fn menu_bar_head_sections(settings: &Settings) -> Vec<Section> {
     vec![section(
         None,
         vec![
+            row(
+                ControlId::MenuBarAutoHide,
+                "Automatically hide and show the menu bar",
+                Control::Switch {
+                    on: settings.compositor.menu_bar_auto_hide.unwrap_or(false),
+                },
+                Backend::Key(File::Compositor, "menu_bar_auto_hide"),
+            ),
             row(
                 ControlId::MenuBarBackground,
                 "Show menu bar background",

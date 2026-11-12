@@ -49,6 +49,18 @@ pub enum ControlId {
     SidebarIconSize,
     /// What a double click on a window's title bar does.
     DoubleClickTitle,
+    /// The menu bar hides until the pointer reaches the top edge.
+    MenuBarAutoHide,
+    /// Dragging a window to a screen edge tiles it.
+    EdgeTiling,
+    /// Tiled windows keep a margin around and between them.
+    TileMargins,
+    /// How much denser every material is made.
+    MaterialDensity,
+    /// Windows take a slight tint of the wallpaper's colour.
+    TintWindows,
+    /// The solid colours the desktop can show instead of a picture, by index of `WALLPAPER_COLORS`.
+    WallpaperColor,
     MinimizeIntoIcon,
     LaunchBounce,
     RunningIndicators,
@@ -801,6 +813,7 @@ fn wallpaper_sections(settings: &Settings, live: &Live) -> Vec<Section> {
             footer: None,
         });
     }
+    sections.push(pane_extras::wallpaper_colors_section(settings));
     sections.push(Section {
         header: None,
         rows: vec![row(
@@ -2558,6 +2571,33 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             settings.appearance.scroll_click = *click;
             store(File::Appearance)
         }
+        ControlId::MenuBarAutoHide => {
+            settings.compositor.menu_bar_auto_hide = Some(bool_of(value));
+            store(File::Compositor)
+        }
+        ControlId::EdgeTiling => {
+            settings.compositor.edge_tiling = Some(bool_of(value));
+            store(File::Compositor)
+        }
+        ControlId::TileMargins => {
+            settings.compositor.tile_margins = Some(bool_of(value));
+            store(File::Compositor)
+        }
+        ControlId::MaterialDensity => {
+            settings.compositor.material_density = Some((fraction_of(value) * 20.0).round() / 20.0);
+            store(File::Compositor)
+        }
+        ControlId::TintWindows => {
+            settings.appearance.tint_windows = bool_of(value);
+            store(File::Appearance)
+        }
+        ControlId::WallpaperColor => {
+            let Some((_, color)) = pane_extras::WALLPAPER_COLORS.get(index_of(value)) else {
+                return Vec::new();
+            };
+            settings.compositor.wallpaper_color = Some([color[0], color[1], color[2], 255]);
+            store(File::Compositor)
+        }
         ControlId::DoubleClickTitle => {
             let Some((_, action)) = pane_extras::TITLE_ACTION_CHOICES.get(index_of(value)) else {
                 return Vec::new();
@@ -2671,6 +2711,7 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             let Some(file) = files.and_then(|f| f.get(index_of(value))) else {
                 return Vec::new();
             };
+            settings.compositor.wallpaper_color = None;
             settings.compositor.wallpaper = Some(file.light.to_string_lossy().into_owned());
             settings.compositor.wallpaper_dark =
                 file.dark.as_ref().map(|d| d.to_string_lossy().into_owned());

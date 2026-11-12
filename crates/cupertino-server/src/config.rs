@@ -461,6 +461,8 @@ pub struct ShellConfig {
     pub overview_dim: f64,
     /// Reserve the menu bar's height in the usable area (off: windows use the whole output).
     pub show_menu_bar: bool,
+    /// The bar hides until the pointer reaches the top edge (`menu_bar_auto_hide`).
+    pub menu_bar_auto_hide: bool,
 }
 
 impl Default for ShellConfig {
@@ -469,6 +471,7 @@ impl Default for ShellConfig {
             menu_bar_height: cupertino_theme::ShapeTokens::default().menu_bar_height,
             overview_dim: 0.35,
             show_menu_bar: true,
+            menu_bar_auto_hide: false,
         }
     }
 }
@@ -509,6 +512,18 @@ pub struct Config {
     pub power: cupertino_defaults::power::PowerSettings,
     /// When applications show their scroll bars (`show_scroll_bars`); automatic by default.
     pub show_scroll_bars: ScrollBarsName,
+    /// A solid colour the desktop shows instead of a picture (`wallpaper_color`).
+    pub wallpaper_color: Option<[u8; 3]>,
+    /// Dragging a window to a screen edge tiles it (`edge_tiling`).
+    pub edge_tiling: bool,
+    /// Tiled windows keep a margin around and between them (`tile_margins`).
+    pub tile_margins: bool,
+    /// How much denser every material is made, 0 to 1 (`material_density`).
+    pub material_density: f64,
+    /// Windows take a slight tint of the wallpaper's colour (`tint_windows` of `appearance.conf`).
+    pub tint_windows: bool,
+    /// What a double click on a server-drawn title bar does (`titlebar_double_click` of `appearance.conf`).
+    pub titlebar_double_click: cupertino_defaults::appearance::TitlebarAction,
 }
 
 /// The wallpaper images of the user (`wallpaper`, `wallpaper_dark` in the JSON file); a pack's wallpaper and then the
@@ -657,6 +672,12 @@ impl Default for Config {
             power: cupertino_defaults::power::PowerSettings::default(),
             wallpaper: WallpaperSettings::default(),
             show_scroll_bars: ScrollBarsName::Automatic,
+            wallpaper_color: None,
+            edge_tiling: true,
+            tile_margins: true,
+            material_density: 0.0,
+            tint_windows: true,
+            titlebar_double_click: cupertino_defaults::appearance::TitlebarAction::Zoom,
         }
     }
 }
@@ -825,6 +846,9 @@ impl Config {
                 system_file = file;
             }
         }
+        cfg.apply_appearance_settings(
+            &cupertino_defaults::appearance::AppearanceSettings::current(),
+        );
         (
             cfg,
             SettingsFiles {
@@ -834,6 +858,15 @@ impl Config {
                 power,
             },
         )
+    }
+
+    /// The keys of `appearance.conf` the server follows: the tint of windows and the title bar's double click.
+    pub fn apply_appearance_settings(
+        &mut self,
+        settings: &cupertino_defaults::appearance::AppearanceSettings,
+    ) {
+        self.tint_windows = settings.tint_windows;
+        self.titlebar_double_click = settings.titlebar_double_click;
     }
 
     /// Apply the settings file at `path` and return them; problems are reported and their keys keep their values.
@@ -896,6 +929,21 @@ impl Config {
         }
         if let Some(b) = f.show_menu_bar {
             self.shell.show_menu_bar = b;
+        }
+        if let Some(b) = f.menu_bar_auto_hide {
+            self.shell.menu_bar_auto_hide = b;
+        }
+        if let Some(b) = f.edge_tiling {
+            self.edge_tiling = b;
+        }
+        if let Some(b) = f.tile_margins {
+            self.tile_margins = b;
+        }
+        if let Some(c) = f.wallpaper_color {
+            self.wallpaper_color = Some([c[0], c[1], c[2]]);
+        }
+        if let Some(d) = f.material_density {
+            self.material_density = d.clamp(0.0, 1.0);
         }
         if let Some(b) = f.decorations {
             self.window.decorations = b;

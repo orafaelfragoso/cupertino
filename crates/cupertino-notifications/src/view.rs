@@ -35,9 +35,8 @@ use std::sync::Arc;
 
 use cupertino_animation::{Spring, SpringParams};
 use cupertino_kit::controls::{
-    paint_glass_edge, Button, ButtonRole, ButtonStyle, DisclosureButton, DisclosureStyle,
-    GlassEdge, Icon, IconDirection, RichText, ScrollView, Scroller, Stack, Text, TextLink,
-    TextRole,
+    paint_glass_edge, AppIcon, Button, ButtonRole, ButtonStyle, DisclosureButton, DisclosureStyle,
+    GlassEdge, RichText, ScrollView, Scroller, Stack, Text, TextLink, TextRole,
 };
 use cupertino_kit::core::{
     AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event, EventCx, Glass,
@@ -1792,8 +1791,9 @@ fn card_content<M: Clone + 'static>(
             children: buttons,
         }));
     }
-    let icon = if n.icon.is_empty() || n.icon.contains('/') {
-        "bell".to_owned()
+    // the sender's icon, by name or file; else one named as the sender, else the generic application icon
+    let icon = if n.icon.is_empty() {
+        n.app_name.to_lowercase().replace(' ', "-")
     } else {
         n.icon.clone()
     };
@@ -1809,12 +1809,9 @@ fn card_content<M: Clone + 'static>(
         },
         spacing: ICON_GAP,
         children: vec![
-            Element::new(Icon {
+            Element::new(AppIcon {
                 name: icon,
                 size: ICON_SIZE,
-                direction: IconDirection::Fixed,
-                label: None,
-                tint: None,
             }),
             Element::new(Stack {
                 axis: Axis::Vertical,

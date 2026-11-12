@@ -266,15 +266,21 @@ impl Interface {
         } else {
             replaces_id
         };
+        let hints = parse_hints(&hints);
+        // without an icon of its own the card shows the icon of the sender's desktop entry
+        let icon = match (&app_icon[..], &hints.desktop_entry) {
+            ("", Some(entry)) => entry_icon(entry).unwrap_or_default(),
+            _ => app_icon,
+        };
         let input = NotifyInput {
             app_name,
             replaces_id,
-            icon: app_icon,
+            icon,
             summary,
             body,
             actions,
             expire: Expire::from_dbus(expire_timeout),
-            hints: parse_hints(&hints),
+            hints,
         }
         .capped();
         let now = (self.0.clock)();
@@ -897,4 +903,20 @@ mod tests {
         m.insert("image-data".to_string(), ov(Value::Structure(s)));
         assert!(parse_hints(&m).image.is_none());
     }
+}
+
+/// The `Icon=` of the installed desktop entry `id` (a trailing `.desktop` is accepted), when it is a plain name or path.
+fn entry_icon(id: &str) -> Option<String> {
+    use cupertino_apps::entry::{parse_handler, xdg_application_dirs, Locale, Visibility};
+    let id = id.strip_suffix(".desktop").unwrap_or(id);
+    if id.is_empty() || id.contains('/') {
+        return None;
+    }
+    let text = xdg_application_dirs()
+        .iter()
+        .find_map(|dir| std::fs::read_to_string(dir.join(format!("{id}.desktop"))).ok())?;
+    parse_handler(id, &text, &Locale::from_env(), &Visibility::from_env())
+        .ok()?
+        .entry
+        .icon
 }

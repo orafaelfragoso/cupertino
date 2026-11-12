@@ -10,7 +10,7 @@ layer = "shell"
 
 [features]
 default = ["dbus"]
-dbus = ["dep:zbus", "dep:libc", "dep:cupertino-peer"]
+dbus = ["dep:zbus", "dep:libc", "dep:cupertino-peer", "dep:cupertino-apps"]
 # the `cupertino-notifications` process: the banners and the notification centre on CupertinoKit layer surfaces
 app = [
     "dbus",
@@ -28,6 +28,7 @@ cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
 cupertino-animation = { path = "../cupertino-animation" }
+cupertino-apps = { path = "../cupertino-apps", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-kit = { path = "../cupertino-kit" }

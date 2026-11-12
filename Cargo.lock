@@ -1507,6 +1507,7 @@ dependencies = [
  "async-channel",
  "async-io",
  "cupertino-animation",
+ "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
  "cupertino-diagnostic-events",

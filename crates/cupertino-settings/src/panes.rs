@@ -1465,13 +1465,13 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             let k = &settings.keyboard;
             let mut out = vec![
                 Section {
-                    header: header("Vision: Display"),
+                    header: header("Display"),
                     rows: display,
                     footer: None,
                 },
                 screen_reader_section(a.screen_reader, live.screen_reader_installed),
                 Section {
-                    header: header("Vision: Pointer"),
+                    header: header("Pointer"),
                     rows: vec![
                         row(
                             ControlId::CursorSize,
@@ -1506,7 +1506,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     footer: file_footer(File::Compositor),
                 },
                 Section {
-                    header: header("Motor: Keyboard"),
+                    header: header("Keyboard"),
                     rows: vec![
                         row(
                             ControlId::StickyKeys,

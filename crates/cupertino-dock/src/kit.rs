@@ -2174,7 +2174,8 @@ impl Model {
             self.engaged = false;
         }
         // an auto-hidden bar shows while it has the keyboard or one of its menus or stacks is open
-        self.session.dock.keep_shown = self.engaged || self.stack.is_some() || self.menu.is_some();
+        self.session.dock.keep_shown =
+            self.engaged || self.stack.is_some() || self.menu.is_some() || self.confirm.is_some();
         if let Some(screen) = self.screen() {
             self.session.dock.pointer_moved(self.pointer, screen, now);
         }
@@ -2775,8 +2776,11 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         let fan_anchor = fan_basis
             .as_ref()
             .and_then(|b| to_bottom(b.tile_cx - 0.5, b.tile_cy, 1.0));
-        let menu_anchor = model.menu.as_ref().and_then(|m| {
-            let t = layout.tiles.iter().find(|t| t.id == m.tile)?;
+        // the tile's menu and the question it asks stand over the same point
+        let menu_tile =
+            (model.menu.as_ref().map(|m| m.tile)).or(model.confirm.as_ref().map(|c| c.tile));
+        let menu_anchor = menu_tile.and_then(|tile| {
+            let t = layout.tiles.iter().find(|t| t.id == tile)?;
             to_bottom(t.rect.x + t.rect.w / 2.0 - 0.5, layout.bar.y, 1.0)
         });
         windows.push(view::bar::window(

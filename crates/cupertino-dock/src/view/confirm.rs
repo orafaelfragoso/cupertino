@@ -1,6 +1,6 @@
-//! The question a tile's menu asks before it does something that cannot be undone, as a popup of the bar over the tile:
-//! a title, a line saying what happens and two buttons. It takes the keyboard, so Tab moves between the buttons,
-//! Return chooses the one that is safe and Escape or a press outside closes it.
+//! The question a tile's menu asks before it does something that cannot be undone, as a popup of the bar standing
+//! where the tile's menu stood: a title, a line saying what happens and two buttons. It takes the keyboard, so Tab moves
+//! between the buttons, Return chooses the one that is safe and Escape or a press outside closes it.
 
 use cupertino_kit::controls::{Button, ButtonRole, ButtonStyle, Stack, Text, TextRole};
 use cupertino_kit::core::{
@@ -12,6 +12,8 @@ use cupertino_kit::platform::{DecorationMode, WindowSpec};
 use cupertino_kit::text::{AttributedText, TextStyle};
 use cupertino_kit::theme::Surface;
 
+use super::bar::MENU_ANCHOR;
+use super::menu::{PANEL_GAP, TAIL_FROM_EDGE};
 use super::Input;
 use crate::config::Orientation;
 
@@ -63,10 +65,11 @@ where
 pub fn window<M: Clone + 'static>(view: ConfirmView<'_>, input: fn(Input) -> M) -> Window<M> {
     let anchor = Key::from(format!("tile-{}", view.tile));
     let anchor = match view.orientation {
-        // over the tile: below has no room at the bottom of the output, so the popup flips
-        Orientation::Bottom => PopupAnchor::Below {
-            key: anchor,
-            gap: GAP,
+        // above the bar where the tile's menu stood
+        Orientation::Bottom => PopupAnchor::Above {
+            key: Key::from(MENU_ANCHOR),
+            gap: PANEL_GAP,
+            dx: -TAIL_FROM_EDGE,
         },
         Orientation::Left | Orientation::Right => PopupAnchor::Beside {
             key: anchor,

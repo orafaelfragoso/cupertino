@@ -830,7 +830,11 @@ impl Dock {
             .iter()
             .filter(|t| t.kind != TileKind::Separator && t.presence > 0.0)
             .map(|t| t.visible_rect(self.cfg.orientation));
-        std::iter::once(layout.bar).chain(tiles).collect()
+        let gap = edge_gap(self.cfg.orientation, layout.bar, screen);
+        std::iter::once(layout.bar)
+            .chain(gap)
+            .chain(tiles)
+            .collect()
     }
 
     /// Auto-hide is on and the bar has slid more than halfway out.
@@ -1061,8 +1065,9 @@ impl Dock {
         self.hit_in(&self.layout(screen, now), pointer)
     }
 
-    fn over_dock(&self, layout: &DockLayout, p: Point) -> bool {
+    fn over_dock(&self, layout: &DockLayout, screen: Rect, p: Point) -> bool {
         layout.bar.contains(p)
+            || edge_gap(self.cfg.orientation, layout.bar, screen).is_some_and(|g| g.contains(p))
             || layout
                 .tiles
                 .iter()
@@ -1076,7 +1081,8 @@ impl Dock {
             return;
         }
         let layout = self.layout(screen, now);
-        let over = pointer.is_some_and(|p| !self.is_hidden(now) && self.over_dock(&layout, p));
+        let over =
+            pointer.is_some_and(|p| !self.is_hidden(now) && self.over_dock(&layout, screen, p));
         if self.cfg.autohide && !self.autohide_external {
             let zone = reveal_zone(self.cfg.orientation, screen, self.cfg.reveal_thickness);
             let hot = self.keep_shown || pointer.is_some_and(|p| over || zone.contains(p));
@@ -1522,4 +1528,17 @@ impl Dock {
             indicator: 0.0,
         })
     }
+}
+
+/// The strip between `bar` and the screen edge the dock stands on, across the bar's length: the pointer resting in
+/// the margin under a shown dock is still over the dock, so the dock neither hides nor stops taking input there.
+fn edge_gap(orientation: Orientation, bar: Rect, screen: Rect) -> Option<Rect> {
+    let gap = match orientation {
+        Orientation::Bottom => {
+            Rect::new(bar.x, bar.bottom(), bar.w, screen.bottom() - bar.bottom())
+        }
+        Orientation::Left => Rect::new(screen.x, bar.y, bar.x - screen.x, bar.h),
+        Orientation::Right => Rect::new(bar.right(), bar.y, screen.right() - bar.right(), bar.h),
+    };
+    (gap.w > 0.0 && gap.h > 0.0).then_some(gap)
 }

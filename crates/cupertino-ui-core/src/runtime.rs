@@ -678,6 +678,24 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
     }
 
+    /// Closes the popups among `old` the view no longer declares (`declared` are the ones still to be opened), and
+    /// the closing menus still fading, the latest first as the protocol destroys popups.
+    fn close_leftover_popups(
+        &mut self,
+        old: &mut Vec<WindowState<A::Message>>,
+        declared: &[WindowKey],
+    ) {
+        let mut i = old.len();
+        while i > 0 {
+            i -= 1;
+            let w = &old[i];
+            if w.popup.is_some() && (w.fade.is_some() || !declared.contains(&w.key)) {
+                let w = old.remove(i);
+                self.close(w);
+            }
+        }
+    }
+
     fn close(&mut self, w: WindowState<A::Message>) {
         if let Some(popup) = &w.popup {
             self.forget_placement(&popup.parent, &w.key);
@@ -793,6 +811,15 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             let popup = popup.expect("partitioned as a popup");
             if self.refused_popups.contains(&key) {
                 continue;
+            }
+            // a new popup that takes the grab must stand on top of the grab's chain: the popups going away (a closing
+            // menu among them) go first
+            let reused = old
+                .iter()
+                .any(|w| w.key == key && w.popup.is_some() && w.fade.is_none());
+            if popup.grab && !reused {
+                let declared: Vec<WindowKey> = popups.iter().map(|w| w.key.clone()).collect();
+                self.close_leftover_popups(&mut old, &declared);
             }
             if let Some(mut w) = self.popup(key, spec, popup, content, &mut old)? {
                 w.shortcuts = shortcuts;

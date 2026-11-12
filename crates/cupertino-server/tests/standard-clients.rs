@@ -305,7 +305,8 @@ fn dead_keys_and_the_compose_key_type_a_tilde_and_c_cedilla_in_a_client() {
     server.tap(KEY_COMPOSE);
     server.chord(&[KEY_RIGHTALT, KEY_LEFTSHIFT], KEY_GRAVE);
     server.tap(KEY_A);
-    // a sequence with no result types nothing, and the key after it types
+    // a key that does not go on with a dead key's sequence types itself after the mark, which reaches the client as
+    // text of its own that this client does not write; the key after it types as usual
     server.tap(KEY_APOSTROPHE);
     server.tap(KEY_X);
     server.tap(KEY_X);
@@ -315,7 +316,7 @@ fn dead_keys_and_the_compose_key_type_a_tilde_and_c_cedilla_in_a_client() {
     });
     assert_eq!(
         std::fs::read_to_string(output.path()).unwrap(),
-        "\u{e7}\u{e3}\u{e7}\u{e3}x\n"
+        "\u{e7}\u{e3}\u{e7}\u{e3}xx\n"
     );
     child.kill().unwrap();
     child.wait().unwrap();

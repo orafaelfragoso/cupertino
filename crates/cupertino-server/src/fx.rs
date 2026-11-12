@@ -264,7 +264,14 @@ mod tests {
     #[test]
     fn close_transform_follows_the_window_kind() {
         let fx = Effects::new(EffectsConfig::default());
-        assert_eq!(fx.close_kind(WindowKind::Plain), None);
+        assert_eq!(
+            fx.close_kind(WindowKind::Plain),
+            Some(TransformKind::WindowClose)
+        );
+        assert_eq!(
+            fx.close_kind(WindowKind::Document),
+            Some(TransformKind::WindowClose)
+        );
         assert_eq!(
             fx.close_kind(WindowKind::Utility),
             Some(TransformKind::FadeOut)
@@ -279,7 +286,8 @@ mod tests {
         });
         assert_eq!(
             fade.close_kind(WindowKind::Plain),
-            Some(TransformKind::FadeOut)
+            Some(TransformKind::WindowClose),
+            "a kind's own close goes before the fade"
         );
     }
 }

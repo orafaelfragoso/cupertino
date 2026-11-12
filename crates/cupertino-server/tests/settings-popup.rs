@@ -25,16 +25,16 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shm::with_buffer_contents;
 
 /// The window's content height; a title bar the server drew would sit above it in the frame.
-const CONTENT_HEIGHT: f64 = 625.0;
-// Centres in the 739 × 625 content: the Accessibility pane's Display row and the Colour filter button on the page it
+const CONTENT_HEIGHT: f64 = 748.0;
+// Centres in the 740 × 748 content: the Accessibility pane's Display row and the Colour filter button on the page it
 // opens, and the Appearance sidebar row.
-const DISPLAY_ROW: (f64, f64) = (474.0, 262.0);
-const COLOUR_FILTER: (f64, f64) = (586.0, 308.0);
-const APPEARANCE_ROW: (f64, f64) = (116.0, 194.0);
-// The Desktop & Dock pane's Hot Corners row (the pane has no header card) and the Top Left corner's button on the page
-// it opens.
-const HOT_CORNERS_ROW: (f64, f64) = (474.0, 348.0);
-const TOP_LEFT_CORNER: (f64, f64) = (609.0, 83.0);
+const DISPLAY_ROW: (f64, f64) = (486.0, 171.0);
+const COLOUR_FILTER: (f64, f64) = (613.0, 314.0);
+const APPEARANCE_ROW: (f64, f64) = (116.0, 271.0);
+// The search field at the top of the sidebar, and the Top Left corner's button on the Hot Corners page, which the
+// search opens (its row lies below the Desktop & Dock pane's first screen).
+const SEARCH_FIELD: (f64, f64) = (116.0, 75.0);
+const TOP_LEFT_CORNER: (f64, f64) = (636.0, 82.0);
 
 struct Process(Child);
 
@@ -68,16 +68,17 @@ impl Harness {
         Self::with_menu(
             "accessibility",
             "Accessibility",
-            (DISPLAY_ROW, "Display"),
+            (Some(DISPLAY_ROW), "Display"),
             COLOUR_FILTER,
         )
     }
 
-    /// Settings on `pane`, the page its `row` opens, and the menu of `button` on that page open.
+    /// Settings on `pane`, the page its `row` opens (or a search for the page's title, with no row), and the menu of
+    /// `button` on that page open.
     fn with_menu(
         pane: &str,
         pane_title: &str,
-        (row, page_title): ((f64, f64), &str),
+        (row, page_title): (Option<(f64, f64)>, &str),
         button: (f64, f64),
     ) -> Self {
         let binary = settings_binary();
@@ -122,7 +123,10 @@ impl Harness {
         };
         h.wait_until("the pane's window", |s| title(s) == pane_title);
         h.settle();
-        h.click(row);
+        match row {
+            Some(row) => h.click(row),
+            None => h.search(&page_title.to_lowercase()),
+        }
         h.wait_until("the row's page", |s| title(s) == page_title);
         h.settle();
         h.click(button);
@@ -147,7 +151,7 @@ impl Harness {
         assert!(!self.bus.has_exited(), "private bus exited unexpectedly");
     }
 
-    fn wait_until(&mut self, what: &str, condition: impl Fn(&Cupertino) -> bool) {
+    fn wait_until(&mut self, what: &str, mut condition: impl FnMut(&Cupertino) -> bool) {
         let end = Instant::now() + common::HANG_GUARD;
         while Instant::now() < end {
             self.step();
@@ -208,6 +212,29 @@ impl Harness {
         self.state.pointer_button(0x110, ButtonState::Pressed, 0);
         self.step();
         self.state.pointer_button(0x110, ButtonState::Released, 0);
+    }
+
+    /// Type `query` into the search field and press Return, which opens the page of the first result.
+    fn search(&mut self, query: &str) {
+        self.click(SEARCH_FIELD);
+        self.settle();
+        for c in query.chars() {
+            let code = match c {
+                ' ' => 57,
+                'c' => 46,
+                'e' => 18,
+                'h' => 35,
+                'n' => 49,
+                'o' => 24,
+                'r' => 19,
+                's' => 31,
+                't' => 20,
+                _ => panic!("no key for {c:?}"),
+            };
+            self.tap(code);
+        }
+        self.settle();
+        self.tap(KEY_ENTER);
     }
 
     fn tap(&mut self, evdev: u32) {
@@ -327,11 +354,10 @@ fn outside_click_dismisses_without_activating_the_underlying_pane() {
 fn changing_settings_pane_destroys_the_choice_popup() {
     let mut h = Harness::new();
     h.show_appearance();
-    assert_eq!(
-        popup_count(&h.state),
-        0,
-        "Appearance must not retain Accessibility's menu"
-    );
+    // the client closes the menu as it leaves the page, on its own time
+    h.wait_until("Appearance to drop Accessibility's menu", |s| {
+        popup_count(s) == 0
+    });
 }
 
 #[test]
@@ -354,7 +380,7 @@ fn pressing_a_row_of_the_open_menu_selects_it() {
     let mut h = Harness::with_menu(
         "desktop-dock",
         "Desktop & Dock",
-        (HOT_CORNERS_ROW, "Hot Corners"),
+        (None, "Hot Corners"),
         TOP_LEFT_CORNER,
     );
     let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
@@ -379,7 +405,7 @@ fn a_popup_under_a_stationary_pointer_takes_the_pointer_focus() {
     let mut h = Harness::with_menu(
         "desktop-dock",
         "Desktop & Dock",
-        (HOT_CORNERS_ROW, "Hot Corners"),
+        (None, "Hot Corners"),
         TOP_LEFT_CORNER,
     );
     let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
@@ -466,7 +492,7 @@ fn down_and_return_choose_the_next_item_of_the_open_menu() {
     let mut h = Harness::with_menu(
         "desktop-dock",
         "Desktop & Dock",
-        (HOT_CORNERS_ROW, "Hot Corners"),
+        (None, "Hot Corners"),
         TOP_LEFT_CORNER,
     );
     h.tap(KEY_DOWN);

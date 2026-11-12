@@ -489,7 +489,7 @@
   source_match: Cupertino, CupertinoScrollV1
 - name: cupertino_app_effects_v1
   kind: wayland-global
-  version: 11
+  version: 14
   owner_crate: cupertino-server
   owner_area: compositor
   scope: public

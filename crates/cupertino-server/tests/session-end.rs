@@ -113,8 +113,12 @@ fn the_session_command_logs_why_the_compositor_panicked_and_ends_within_five_sec
     let server = dir.path().join("server");
     std::fs::write(
         &server,
-        "#!/bin/sh\nexec \"$TEST_EXE\" --exact a_panic_is_recorded_for_the_session_and_a_hung_teardown_is_cut_short \
-         --nocapture >/dev/null 2>&1\n",
+        format!(
+            "#!/bin/sh\nexec \"$TEST_EXE\" --exact {} --nocapture >/dev/null 2>&1\n",
+            cupertino_test_bus::test_path(
+                "a_panic_is_recorded_for_the_session_and_a_hung_teardown_is_cut_short"
+            )
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&server, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();

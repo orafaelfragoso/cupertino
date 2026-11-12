@@ -19,16 +19,17 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
 /// The window's content height at its default size; a title bar the server drew would sit above it in the frame.
-const CONTENT_HEIGHT: f64 = 625.0;
+const CONTENT_HEIGHT: f64 = 748.0;
 /// Content points: in the toolbar row past the back and forward buttons, where no item lies; on the search field at
 /// the top of the sidebar, below the window control buttons; and on the Back button.
 const TOOLBAR_GAP: (f64, f64) = (520.0, 26.0);
 const SEARCH_FIELD: (f64, f64) = (116.0, 75.0);
 const BACK_BUTTON: (f64, f64) = (259.0, 26.0);
 /// The Accessibility pane's Display row, which opens a page and so gives Back a page to go back to.
-const DISPLAY_ROW: (f64, f64) = (474.0, 262.0);
-/// How far a drag takes the pointer, in steps the client sees one by one.
-const DRAG: (f64, f64) = (120.0, 80.0);
+const DISPLAY_ROW: (f64, f64) = (486.0, 171.0);
+/// How far a drag takes the pointer, in steps the client sees one by one; little enough down that the tall window stays
+/// on the output.
+const DRAG: (f64, f64) = (120.0, 30.0);
 const DRAG_STEPS: u32 = 8;
 /// Evdev code of the left button.
 const BTN_LEFT: u32 = 0x110;

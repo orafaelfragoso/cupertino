@@ -465,7 +465,6 @@ fn an_exclusive_layer_surface_takes_the_keyboard_and_gives_it_back() {
 }
 
 /// Protocol error codes of `cupertino_backdrop_v1.error`.
-const UNKNOWN_MATERIAL: u32 = 0;
 const INVALID_SHAPE: u32 = 1;
 const INVALID_ALPHA: u32 = 2;
 const INVALID_GLASS: u32 = 3;
@@ -484,9 +483,31 @@ fn assert_posts_error(cmd: Cmd, code: u32) {
     assert_eq!(client.backdrop_error(), Some(code));
 }
 
+/// An unknown material name keeps the client connected: its backdrop draws the menu recipe instead.
 #[test]
-fn unknown_material_is_a_protocol_error() {
-    assert_posts_error(Cmd::SetMaterial("NoSuchMaterial"), UNKNOWN_MATERIAL);
+fn an_unknown_material_draws_the_menu_recipe_and_keeps_the_client() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn(h.socket_path());
+    let material = |s: &Cupertino| {
+        layer_backdrops(&s.outputs[0].output)
+            .first()
+            .map(|b| b.material.clone())
+    };
+    h.wait_until("the first backdrop commit", |s| material(s).is_some());
+    client.send(Cmd::SetMaterial("Sidebar"));
+    client.send(Cmd::Commit);
+    h.wait_until("the sidebar recipe", |s| {
+        material(s).as_deref() == Some("Sidebar")
+    });
+    client.send(Cmd::SetMaterial("NoSuchMaterial"));
+    client.send(Cmd::Commit);
+    h.wait_until("the menu recipe in place of the unknown one", |s| {
+        material(s).as_deref() == Some("Menu")
+    });
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(client.backdrop_error(), None);
 }
 
 #[test]
@@ -780,11 +801,22 @@ fn glass_pass_matches_the_cpu_model() {
         };
         let mode = cupertino_server::accessibility::glass_mode(dark, style, display);
         let (x0, y0) = (panel.margin_left as f32, panel.margin_top as f32);
-        let container = Container::new(
+        let mut container = Container::new(
             vec![GlassShape::new([x0, y0, 400.0, 160.0], 24.0)],
             0.0,
             mode,
         );
+        if large {
+            // the server lights a soft band under the large panel's top and bottom edges: strength, half-width and
+            // offset in points
+            let (amount, height, offset) = if dark {
+                (0.06, 9.0, 0.0)
+            } else {
+                (0.075, 7.5, 0.0)
+            };
+            let h = &mut container.params.highlight;
+            (h.glow_amount, h.glow_height, h.glow_offset) = (amount, height, offset);
+        }
         let (mut sum, mut max, mut n) = (0.0f64, 0i32, 0usize);
         let mut changed = 0;
         for y in panel.margin_top - 4..panel.margin_top + 164 {
@@ -979,8 +1011,9 @@ fn glass_pass_over_sharp_content_reads_the_backdrop_where_the_model_does() {
         mode,
     );
     let p = &container.params;
-    let mut sigmas: Vec<f32> = p.level_radii().to_vec();
-    sigmas.push(p.blur.fill_radius);
+    // the server blurs each level with a Gaussian whose deviation is half the level's radius
+    let mut sigmas: Vec<f32> = p.level_radii().iter().map(|r| r * 0.5).collect();
+    sigmas.push(p.blur.fill_radius * 0.5);
     // only what the panel reads: its bounds and the reach of the widest level and the refraction
     let reach = p.reach().ceil() as i32;
     let (cx, cy) = (panel.margin_left - reach, panel.margin_top - reach);
@@ -1349,14 +1382,14 @@ fn popup_backdrop_draws_under_the_popup() {
         changed(ox + 10, oy + 10, pw - 20, ph - 20) > 0.9,
         "popup area shows no material"
     );
-    // the popup casts its shadow (the panel row of the table: σ 8, offset 4) just below its edge ...
+    // the popup casts its shadow (σ 17, 9.25 below) just below its edge ...
     assert!(
         changed(ox + 20, oy + ph + 1, pw - 40, 4) > 0.9,
         "no shadow below the popup"
     );
-    // ... and the parent's area beyond the shadow's reach (σ 8 reaches 23 px) is untouched
+    // ... and the parent's area beyond the shadow's reach (σ 17 reaches 48 px) is untouched
     assert_eq!(
-        changed(MARGIN_LEFT + 5, MARGIN_TOP + 5, px - 40, SURFACE.1 - 10),
+        changed(MARGIN_LEFT + 5, MARGIN_TOP + 5, px - 55, SURFACE.1 - 10),
         0.0,
         "material outside the popup"
     );

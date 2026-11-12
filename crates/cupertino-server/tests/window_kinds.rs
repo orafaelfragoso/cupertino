@@ -463,7 +463,7 @@ fn a_parent_under_a_sheet_is_dimmed_as_the_sheet_shows_and_its_content_takes_no_
 }
 
 #[test]
-fn a_plain_child_opens_and_closes_at_once_centred_on_its_parent() {
+fn a_plain_child_centred_on_its_parent_grows_in_from_0_98_and_leaves_a_ghost_as_it_closes() {
     let Some(mut h) = Harness::new() else { return };
     let (client, parent, pf) = parent_window(&mut h);
     let child = map_child(&mut h, &client, false);
@@ -472,12 +472,16 @@ fn a_plain_child_opens_and_closes_at_once_centred_on_its_parent() {
     assert_eq!(w.parent, Some(parent));
     let rest = w.geometry();
     assert_eq!((rest.cx(), rest.cy()), (pf.cx(), pf.cy()));
-    let p = h.state.wm.presentation(child, h.state.now()).unwrap();
-    assert_eq!(
-        (p.frame, p.opacity, p.scale),
-        (rest, 1.0, 1.0),
-        "plain windows do not animate"
+    let t0 = h.state.now();
+    let start = h.state.wm.presentation(child, t0).unwrap();
+    assert!(
+        (start.scale - 0.98).abs() < 1e-9,
+        "it opens from 0.98: {}",
+        start.scale
     );
+    h.at(t0 + 0.16);
+    let p = h.state.wm.presentation(child, t0 + 0.16).unwrap();
+    assert_eq!((p.frame, p.opacity, p.scale), (rest, 1.0, 1.0));
     assert!(!h.state.wm.is_blocked(parent));
 
     client.run(|o, _| o.child.take().unwrap().destroy());
@@ -485,8 +489,14 @@ fn a_plain_child_opens_and_closes_at_once_centred_on_its_parent() {
         s.wm.window(child).is_none()
     });
     assert!(
+        h.state.fx.has_ghost(child),
+        "a plain window fades and shrinks away as a ghost"
+    );
+    let t = h.state.now() + 5.0;
+    h.at(t);
+    assert!(
         !h.state.fx.has_ghost(child),
-        "a plain window disappears at once"
+        "the ghost is gone after the close"
     );
 }
 

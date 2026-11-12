@@ -43,11 +43,13 @@ fn an_idle_desktop_has_nothing_due_within_a_second() {
 /// What `Cupertino::tick` calls, each audited for how the loop wakes for it (Shared/cupertino/prism/row236-tick-audit.md):
 /// an event, a frame (`animating`), or a deadline in `next_tick_deadline`. A call added to the tick fails this test until
 /// it is audited the same way and listed here; otherwise its time-driven work would run up to a second late.
-const AUDITED: [&str; 27] = [
+const AUDITED: [&str; 28] = [
     "crate::acquire_waits::sweep(",
     "self.apply_effects(",
     // a drag that ended is an event: the drop handler leaves it, and the tick only finishes what it left
     "self.drag_ended(",
+    // publications arrive as client requests, which wake the loop; the tick only reads the newest one each sent
+    "self.flush_publications(",
     "self.forget_gone_processes(",
     "self.fx.snapshot_age(",
     "self.fx.tick(",

@@ -1306,18 +1306,20 @@ fn super_c_reaches_a_third_party_client_as_ctrl_c_and_the_real_modifiers_come_ba
 }
 
 #[test]
-fn ctrl_c_is_never_rewritten() {
+fn ctrl_c_reaches_a_third_party_application_with_super_so_ctrl_is_not_its_command_key() {
     let Some(mut h) = Harness::new() else { return };
     let client = client_as(&mut h, "org.example.editor");
     chord(&mut h, &[CTRL, KEY_C]);
     use KeyLog::{Key, Mods};
     assert_eq!(
-        key_log(&mut h, &client, 6),
+        key_log(&mut h, &client, 8),
         [
             Key(CTRL, true),
             Mods(MOD_CTRL, 0),
+            Mods(MOD_SUPER, 0),
             Key(KEY_C, true),
             Key(KEY_C, false),
+            Mods(MOD_CTRL, 0),
             Key(CTRL, false),
             Mods(0, 0)
         ]

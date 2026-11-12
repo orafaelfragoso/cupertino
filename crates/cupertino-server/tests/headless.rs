@@ -1775,25 +1775,8 @@ fn clients_that_ask_for_client_side_decorations_keep_them() {
 }
 
 #[test]
-fn plain_windows_close_at_once_unless_the_fade_is_enabled() {
+fn a_closed_plain_window_leaves_a_ghost_of_its_last_frame_until_its_close_ends() {
     let Some(mut h) = Harness::new() else { return };
-    let client = TestClient::spawn_decorated(
-        h.socket_path(),
-        "org.example.close",
-        (400, 300),
-        [255, 255, 0, 255],
-    );
-    h.mapped_window(1);
-    drop(client);
-    h.wait_until("the window to be destroyed", |s| {
-        s.wm.windows().count() == 0
-    });
-    assert!(
-        h.state.fx.closing.is_empty(),
-        "plain windows have no close animation by default"
-    );
-
-    h.state.fx.cfg.closing = true;
     let client = TestClient::spawn_decorated(
         h.socket_path(),
         "org.example.close",
@@ -1808,7 +1791,7 @@ fn plain_windows_close_at_once_unless_the_fade_is_enabled() {
     assert_eq!(
         h.state.fx.closing.len(),
         1,
-        "with the fade enabled a ghost of the closed window exists"
+        "a ghost of the closed window fades and shrinks away"
     );
     let img = h.screenshot("ghost");
     let (x, y) = ((frame.x + 200.0) as u32, (frame.y + 150.0) as u32);
@@ -1823,7 +1806,7 @@ fn plain_windows_close_at_once_unless_the_fade_is_enabled() {
     h.state.tick();
     assert!(
         h.state.fx.closing.is_empty(),
-        "the ghost is gone after the fade"
+        "the ghost is gone after the close"
     );
 }
 

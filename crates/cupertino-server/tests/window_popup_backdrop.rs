@@ -413,7 +413,8 @@ fn a_window_popup_draws_its_material_over_the_window_and_only_there() {
     let (px, py, pw, ph) = POPUP;
     let at = |x: f64, y: f64| shot.get_pixel((frame.x + x) as u32, (frame.y + y) as u32).0;
     let inside = at(px + pw / 2.0, py + ph / 2.0);
-    let outside = at(px - 30.0, py + ph / 2.0);
+    // beyond the reach of the popup's shadow (σ 17 reaches 48 points)
+    let outside = at(px - 60.0, py + ph / 2.0);
     assert_eq!(
         outside[..3],
         [255, 255, 255],

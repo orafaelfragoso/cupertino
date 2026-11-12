@@ -1043,7 +1043,7 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
         .h;
 
     // the settings application writes atomically; the zone is the bar (the tile and a padding that scales with it) and
-    // its margin: 85 + 5 pt at 64 pt tiles, 47.8 + 5 pt (53 whole) at 36
+    // its margin: 84 + 5 pt at 64 pt tiles, 47.25 + 5 pt (53 whole) at 36
     cupertino_defaults::atomic::write_atomic(&conf, b"tile_size = 36\nmagnification = on\n")
         .unwrap();
     server.wait_until("the dock zone to shrink with the tile size", move |s| {
@@ -1051,7 +1051,7 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
     });
     assert_eq!(
         before - zone(&server.state),
-        37.0,
+        36.0,
         "64 pt tiles became 36 pt tiles"
     );
     server.wait_until("the dock surface to be resized", |s| {
@@ -1662,13 +1662,18 @@ fn interact_with_card(server: &mut Server, card: &PanelSurface, sound_x: i32) {
     /// Centre of the Bluetooth switch and the line of the sound slider's track, in card points (the panel's tiles
     /// start 8 points in from the window's corner).
     const BLUETOOTH: (i32, i32) = (40, 116);
+    /// Where the window's corner lies in the card's surface, inside the margin its shadow is drawn in: a press in that
+    /// margin is outside the window and dismisses the panel.
+    const WINDOW_ORIGIN: (i32, i32) = (122, 24);
     let sound_track = (sound_x, 430);
     use smithay::reexports::wayland_server::Resource;
     /// Observe the selected state through the controller's one-second backend refresh. An unchanged reading produces
     /// no new Wayland frame, so time is the subject of this check: keep dispatching and checking the exact card and
     /// its pixels for this interval after its input frames settle, rather than sleeping until a frame is assumed ready.
     const BACKEND_REFRESH: Duration = Duration::from_millis(1500);
-    let at = |(x, y): (i32, i32)| card.rect.loc + Point::from((x, y));
+    let at = |(x, y): (i32, i32)| {
+        card.rect.loc + Point::from((WINDOW_ORIGIN.0 + x, WINDOW_ORIGIN.1 + y))
+    };
     let frame = || {
         assert!(
             card.surface.is_alive(),

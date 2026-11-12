@@ -1,4 +1,4 @@
 title = "Dock: the menu of a tile"
 programs = ["cupertino-dock", "cupertino-ui-controls"]
 after = 3.5
-args = ["--right-click", "2:512,612"]
+args = ["--right-click", "2:498,600"]

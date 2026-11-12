@@ -1,4 +1,4 @@
 title = "Dock: the menu of the trash"
 programs = ["cupertino-dock", "cupertino-ui-controls", "cupertino-trash"]
 after = 3.5
-args = ["--right-click", "2:TRASH_X,612"]
+args = ["--right-click", "2:690,600"]

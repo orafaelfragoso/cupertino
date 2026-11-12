@@ -464,14 +464,27 @@ fn pane_after(keys: &[u32]) -> Vec<u8> {
         h.tap(*key);
     }
     h.wait_for_menu_to_close();
-    // a key that reached the pane would act on the client's time, after the menu is gone
+    // a key that reached the pane would act on the client's time, after the menu is gone; the window is read once it
+    // looks the same twice in a row, so a transition still running on a loaded machine is not caught halfway
     h.settle();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut last = window_pixels(&h.state);
+    loop {
+        for _ in 0..10 {
+            h.settle();
+        }
+        let now = window_pixels(&h.state);
+        if now == last || std::time::Instant::now() > deadline {
+            break;
+        }
+        last = now;
+    }
     assert_eq!(
         (popup_count(&h.state), title(&h.state)),
         (0, "Display".into()),
         "Escape closes the menu and leaves the pane as it was"
     );
-    window_pixels(&h.state)
+    last
 }
 
 #[test]

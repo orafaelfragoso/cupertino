@@ -2375,20 +2375,25 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             painting
         };
         let mut painting = paint(w, &self.tree);
-        // the shapes take effect with the frame's commit, so the frame presents in full
+        // the shapes take effect with the frame's commit, so the frame commits even when it repaints no pixel: the
+        // compositor draws the glass, and a window's own pixels under a region that moved, grew or faded are the same,
+        // so they are not drawn again (a glass panel that opens or fades repaints only what its content changed)
+        let mut materials_changed = false;
         if painting.materials != w.materials {
             let request = WindowRequest::Materials(painting.materials.clone());
             if self.system.request(w.id, request).is_ok() {
                 w.materials = std::mem::take(&mut painting.materials);
+                materials_changed = true;
             } else {
+                // its nodes paint their own fill from now on
                 w.materials_refused = true;
                 w.materials.clear();
                 painting = paint(w, &self.tree);
+                w.invalidate_damage();
             }
             // regions past the new count lose their backdrops; one made again later starts unmeasured
             let kept = w.materials.len();
             w.painter.tones.regions.truncate(kept);
-            w.invalidate_damage();
         }
         // the layer's height in whole points, from the window's top edge, as far down as its nodes draw
         let layer_height = painting
@@ -2418,6 +2423,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if matches!(&damage, DamageRegion::Rects(r) if r.is_empty())
             && !w.damage.repainted()
             && !layer_changed
+            && !materials_changed
         {
             return Ok(());
         }

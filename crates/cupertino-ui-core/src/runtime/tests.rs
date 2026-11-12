@@ -518,6 +518,131 @@ fn a_window_turning_solid_takes_its_content_s_glass_away_and_gets_it_back_when_d
     assert_eq!(materials(&rt), [1, 0, 1], "the glass again");
 }
 
+/// One window whose 50 x 20 pane stands on the popover's glass at the alpha the model says.
+struct FadingGlass;
+
+impl Application for FadingGlass {
+    type Model = u8;
+    type Message = u8;
+
+    fn init() -> (u8, Vec<Command<u8>>) {
+        (100, Vec::new())
+    }
+
+    fn update(model: &mut u8, message: u8) -> Vec<Command<u8>> {
+        *model = message;
+        Vec::new()
+    }
+
+    fn view(model: &u8) -> Vec<Window<u8>> {
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Fading glass".into(),
+                app_id: "test.fading".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            popup: None,
+            background: WindowBackground::Theme,
+            content: Element::new(FadingPane(*model)),
+            menus: None,
+        }]
+    }
+}
+
+/// A 50 x 20 pane on the popover's glass at an alpha in percent.
+struct FadingPane(u8);
+
+impl<M: 'static> Widget<M> for FadingPane {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if old.0 == self.0 {
+            Change::None
+        } else {
+            Change::Paint
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(50.0, 20.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        cx.material(Surface::Popover, 6.0, f64::from(self.0) / 100.0);
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// Glass that fades (or moves, or grows) is drawn by the window system from the regions each frame sends: the frame
+/// commits with them, but the window's own pixels, which did not change, are not drawn again. Before, every frame of a
+/// fade repainted the whole window.
+#[test]
+fn a_frame_whose_glass_alone_changed_commits_the_regions_without_repainting_the_window() {
+    let damage = Rc::default();
+    let mut system = FakeSystem::default();
+    system.effects = true;
+    let mut rt = Runtime::<FadingGlass, FakeSystem>::new(system, options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    assert_eq!(rt.window_system().presented.len(), 1);
+    assert_eq!(
+        damage.borrow().as_slice(),
+        [DamageRegion::Full],
+        "the first frame"
+    );
+    let alphas = |rt: &Runtime<FadingGlass, FakeSystem>| -> Vec<f64> {
+        rt.window_system()
+            .requests
+            .iter()
+            .filter_map(|(w, r)| match r {
+                WindowRequest::Materials(m) if *w == window => Some(m[0].alpha),
+                _ => None,
+            })
+            .collect()
+    };
+    for (n, alpha) in [80u8, 60, 40, 20].into_iter().enumerate() {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(n as u64 + 1)));
+        rt.step(steps()).unwrap();
+        rt.messages.push_back(alpha);
+        rt.step(steps()).unwrap();
+        assert_eq!(
+            rt.window_system().presented.len(),
+            n + 2,
+            "the frame at {alpha}% commits its glass"
+        );
+        assert_eq!(alphas(&rt).last().copied(), Some(f64::from(alpha) / 100.0));
+        let last = damage.borrow().last().cloned();
+        assert!(
+            matches!(&last, Some(DamageRegion::Rects(r)) if r.is_empty()),
+            "the frame at {alpha}% repaints no pixel of the window: {last:?}"
+        );
+    }
+}
+
 /// One window showing a block that fades out by itself over a second of the runtime's clock.
 struct SelfFading;
 

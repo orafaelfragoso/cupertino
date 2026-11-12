@@ -865,7 +865,8 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
     .key("title")];
     items.extend(views);
     items.extend([
-        Element::from(actions),
+        // keyed, so it keeps its buttons, and the keyboard on one, when the views fold or unfold before it
+        Element::from(actions).key("actions"),
         Element::new(SearchSlot {
             window: id,
             animating: win.search_width.animating(),

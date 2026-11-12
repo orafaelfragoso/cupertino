@@ -133,14 +133,17 @@ fn the_caret_blinks_inside_the_search_field_and_repaints_nothing_else() {
     );
 }
 
-/// How long the caret shows, then hides, while it blinks: the theme's phase.
-const CARET_PHASE_MS: u64 = 500;
+/// How long a cycle of the caret's blink takes, and how much of it the caret spends fading out and in.
+const CARET_PERIOD_MS: u64 = 980;
+const CARET_FADES_MS: u64 = 120 + 140;
+/// The frame a fading caret is drawn at.
+const FRAME_MS: u64 = 16;
 
 /// How long after focus the caret stops blinking and stays on.
 const BLINK_LIMIT_MS: u64 = 10_000;
 
 #[test]
-fn an_idle_window_commits_no_frame_and_a_blinking_caret_one_per_edge() {
+fn an_idle_window_commits_no_frame_and_a_blinking_caret_only_while_it_fades() {
     let mut run = start(40, 1.0);
     // the scroller's fade and anything else that moves comes to rest
     run.frames(3000, 16);
@@ -152,12 +155,15 @@ fn an_idle_window_commits_no_frame_and_a_blinking_caret_one_per_edge() {
     let before = presented(&run);
     let span = 3000;
     run.frames(span, 16);
-    let edges = span / CARET_PHASE_MS;
+    // a frame each step of a fade, and none while the caret is shown or hidden
+    let per_cycle = CARET_FADES_MS / FRAME_MS;
+    let cycles = span / CARET_PERIOD_MS;
     let committed = (presented(&run) - before) as u64;
     assert!(
-        (edges - 1..=edges + 1).contains(&committed),
-        "{committed} frames for {edges} edges of the caret"
+        (cycles * (per_cycle - 2)..=(cycles + 1) * (per_cycle + 2)).contains(&committed),
+        "{committed} frames for {cycles} cycles of the caret, {per_cycle} frames of fading each"
     );
+    assert!(committed < span / FRAME_MS / 2, "not a frame every frame");
     // past the blink's limit the caret stays on, and nothing is committed
     run.frames(BLINK_LIMIT_MS, 16);
     let before = presented(&run);
@@ -275,9 +281,10 @@ fn a_window_kept_from_damage_alone_is_the_window_drawn_whole() {
     assert_drawn_whole(&mut run, "after the search field opened");
     run.type_text("file 1");
     assert_drawn_whole(&mut run, "after typing");
-    // the caret on and off
-    for _ in 0..4 {
-        run.frames(300, 16);
+    // the caret on and off, looked at while it is shown or hidden: a fade's frame is drawn at the fade's own step, so a
+    // frame drawn whole a moment later shows the caret a little more or less faded
+    for ms in [300, 400, 600, 400] {
+        run.frames(ms, 16);
         assert_drawn_whole(&mut run, "while the caret blinks");
     }
     run.key(0xff1b, None);

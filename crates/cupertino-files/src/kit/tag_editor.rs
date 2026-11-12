@@ -177,7 +177,9 @@ pub(super) fn window(
             field: input,
             size: f64::from(TITLE_SIZE),
         })
-        .key("tag-field")],
+        .key("tag-field")
+        // the field takes the frame's width, so its text has room and it can be pressed anywhere in the frame
+        .fill()],
     });
     let rows = tags.into_iter().map(|(name, color, checked)| {
         let dot = color.and_then(|c| colors.get(&c).copied());
@@ -319,9 +321,8 @@ impl Widget<Message> for FieldFrame {
         }
     }
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.hidden();
-    }
+    // the frame has nothing of its own to read; the field inside it is read and focused as any field
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// A tag of the list: its colour's dot, its name, and a check mark when every selected item carries it.
@@ -514,6 +515,8 @@ impl Widget<Message> for TagRow {
         }));
         cx.action(Action::Click);
         cx.focusable();
+        // a press on a tag leaves the field above the list editing, so a name can still be typed
+        cx.keeps_editing();
     }
 }
 

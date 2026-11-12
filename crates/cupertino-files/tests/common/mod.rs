@@ -28,6 +28,9 @@ use cupertino_theme::Theme;
 use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
 use tiny_skia::Pixmap;
 
+/// Longer than the flash a chosen menu row gives before the choice is sent.
+pub const MENU_FLASH_MS: u64 = 150;
+
 pub struct Run {
     pub driver: TestDriver<Files>,
     /// The window the helpers act on and read.
@@ -445,6 +448,13 @@ impl Run {
         let rect = self.bounds(Role::MenuItem, label);
         self.click_at(rect);
         self.window = window;
+        self.settle();
+        self.finish_flash();
+    }
+
+    /// Lets the flash a chosen menu row gives run to its end, when the choice is sent.
+    pub fn finish_flash(&mut self) {
+        self.frames(MENU_FLASH_MS, 16);
         self.settle();
     }
 

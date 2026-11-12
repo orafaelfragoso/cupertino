@@ -401,7 +401,8 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
         }
         lines
     };
-    let window = |first: &str| {
+    // Share shares the selection, so it is on only while something is selected
+    let window = |first: &str, share: &str| {
         let mut lines: Vec<String> = [
             "Window",
             "  ScrollView",
@@ -420,7 +421,6 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
             "      RadioButton \"Columns\" off focusable",
             "      RadioButton \"Gallery\" off focusable",
             "    PopUpButton \"View\" focusable collapsed",
-            "    Button \"Share\" disabled",
             "    PopUpButton \"Tags\" focusable collapsed",
             "    PopUpButton \"Action\" focusable collapsed",
             "    TextInput \"Search\" = \"\" focusable",
@@ -438,6 +438,13 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
         ]
         .map(str::to_owned)
         .to_vec();
+        lines.insert(
+            lines
+                .iter()
+                .position(|l| l.contains("\"Tags\" focusable"))
+                .unwrap(),
+            format!("    PopUpButton \"Share\" {share} collapsed"),
+        );
         lines.extend(row(
             first,
             ["\"a.txt\"", "<date>", "\"1 byte\"", "\"Text\""],
@@ -450,12 +457,16 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
         lines.push("  Splitter \"Sidebar\" = 223 of 0..919 focusable".to_owned());
         lines
     };
-    assert_eq!(outline(&run), window(" focusable"), "nothing selected");
+    assert_eq!(
+        outline(&run),
+        window(" focusable", "disabled"),
+        "nothing selected"
+    );
     // a click on the first item's name selects it and takes the focus to it
     run.click_row("a.txt");
     assert_eq!(
         outline(&run),
-        window(" focusable focused selected"),
+        window(" focusable focused selected", "focusable"),
         "the clicked item reads selected and focused"
     );
 }

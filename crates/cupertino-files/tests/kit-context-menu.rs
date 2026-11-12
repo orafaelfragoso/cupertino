@@ -8,7 +8,7 @@ use crate::common;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use common::{place, Run};
+use common::{place, Run, MENU_FLASH_MS};
 use cupertino_files::kit::Observer;
 use cupertino_files::notice::Notices;
 use cupertino_files::places::PlaceKind;
@@ -152,6 +152,7 @@ fn the_keyboard_opens_show_as_and_chooses_a_view_in_it() {
     run.key('g' as u32, Some('g'));
     assert_eq!(focused_row(&run, 1).as_deref(), Some("Gallery"));
     press(&mut run, RETURN);
+    run.finish_flash();
     run.window = main;
     assert!(level(&run, 0).is_none(), "choosing closed the menu");
     // the strip of every item, the first selected and shown large
@@ -646,6 +647,7 @@ fn a_secondary_press_dragged_onto_a_row_chooses_it_once_and_a_quick_click_leaves
     let duplicate = row(&mut run, 0, "Duplicate");
     ptr.glide(&mut run, middle(duplicate, 0.5), 8, 16);
     ptr.button(&mut run, MouseButton::Right, false);
+    ptr.wait(&mut run, MENU_FLASH_MS);
     assert!(level(&run, 0).is_none(), "the release chose and closed");
     run.wait_until(|run| run.rows().len() == 4);
     run.frames(200, 50);
@@ -662,6 +664,7 @@ fn a_secondary_press_dragged_onto_a_row_chooses_it_once_and_a_quick_click_leaves
     ptr.glide(&mut run, middle(new_folder, 0.5), 4, 16);
     ptr.button(&mut run, MouseButton::Left, true);
     ptr.button(&mut run, MouseButton::Left, false);
+    ptr.wait(&mut run, MENU_FLASH_MS);
     run.wait_until(|run| run.home().join("Documents/untitled folder").is_dir());
 }
 
@@ -690,6 +693,7 @@ fn a_diagonal_into_sort_by_keeps_its_submenu_and_a_rest_or_a_slow_path_gives_it_
     assert_eq!(focused_row(&run, 1).as_deref(), Some("Size"));
     ptr.button(&mut run, MouseButton::Left, true);
     ptr.button(&mut run, MouseButton::Left, false);
+    ptr.wait(&mut run, MENU_FLASH_MS);
     assert!(level(&run, 0).is_none(), "Size chosen");
 
     // a rest on the way, over the rows below Sort By
@@ -745,6 +749,7 @@ fn typed_letters_find_a_row_return_chooses_it_and_escape_closes_one_level_then_t
     }
     assert_eq!(focused_row(&run, 0).as_deref(), Some("Duplicate"));
     press(&mut run, RETURN);
+    run.finish_flash();
     run.window = main;
     assert!(level(&run, 0).is_none());
     run.wait_until(|run| run.rows().len() == 4);
@@ -841,6 +846,7 @@ fn a_secondary_click_whose_menu_opens_with_a_row_under_the_pointer_does_not_choo
     assert!(run.context_menu().is_none());
 
     release_on_a_menu_slid_under_the_pointer(&mut run, ms(TRACKING_INTERVAL) + 10);
+    run.finish_flash();
     assert!(
         level(&run, 0).is_none(),
         "held, the release chose and closed"

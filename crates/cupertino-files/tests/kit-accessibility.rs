@@ -458,6 +458,11 @@ fn shift_tab_visits_the_stops_tab_does_in_the_opposite_order() {
     let back = walk(&mut run, true);
     let mut mirrored = back.clone();
     mirrored.reverse();
+    // Share is a stop only while something is selected, and the walk through the rows selects them: Tab first passes
+    // it with nothing selected, Shift+Tab after the rows
+    let share = "PopUpButton \"Share\"".to_owned();
+    assert!(!forward.contains(&share) && mirrored.contains(&share));
+    mirrored.retain(|stop| *stop != share);
     assert_eq!(mirrored, forward, "Shift+Tab is Tab backwards");
     assert_eq!(focused(&run), "ListItem \"Documents\"");
 }

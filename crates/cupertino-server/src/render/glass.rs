@@ -813,6 +813,18 @@ impl MaterialGl {
     /// # Safety
     /// Must be called with the renderer's context current (inside `GlesFrame::with_context`).
     pub unsafe fn draw_glass(&mut self, gl: &ffi::Gles2, p: &GlassDraw<'_>) -> Result<(), String> {
+        if !self.timing {
+            return self.draw_glass_now(gl, p);
+        }
+        gl.Finish();
+        let start = std::time::Instant::now();
+        let result = self.draw_glass_now(gl, p);
+        gl.Finish();
+        self.glass_time.total += start.elapsed();
+        result
+    }
+
+    unsafe fn draw_glass_now(&mut self, gl: &ffi::Gles2, p: &GlassDraw<'_>) -> Result<(), String> {
         if self.progs.is_none() || self.glass.program == 0 {
             return Err(self
                 .failure
@@ -848,6 +860,7 @@ impl MaterialGl {
             }
             None => {
                 self.stats.backdrop_misses += 1;
+                let blurring = self.timing.then(std::time::Instant::now);
                 let within = p.glass.within.and_then(|w| {
                     let w = to_physical_rect(w, Scale::from(f64::from(p.scale)));
                     framebuffer_rect(&p.projection, viewport, w)
@@ -863,6 +876,10 @@ impl MaterialGl {
                     saved.restore(gl);
                     return Err("glass backdrop processing failed (framebuffer incomplete?)".into());
                 };
+                if let Some(blurring) = blurring {
+                    gl.Finish();
+                    self.glass_time.blur += blurring.elapsed();
+                }
                 if !p.glass.probes.is_empty() {
                     self.read_tones(gl, p, &targets, &slots, viewport, fb);
                 }

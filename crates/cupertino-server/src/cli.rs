@@ -112,6 +112,17 @@ pub struct Cli {
     /// Press the left button at a time and position, `SECONDS:X,Y`; repeatable. With `--pointer` and `--release` it scripts a drag.
     #[arg(long = "press", value_name = "SECONDS:X,Y", value_parser = parse_timed_point)]
     pub presses: Vec<(f64, (f64, f64))>,
+    /// Scroll as two fingers on a touchpad would at a time, position and distance, `SECONDS:X,Y:DY` (logical points,
+    /// positive down); repeatable. A distance of 0 ends the gesture.
+    #[arg(long = "scroll", value_name = "SECONDS:X,Y:DY", value_parser = parse_timed_scroll)]
+    pub scrolls: Vec<(f64, (f64, f64), f64)>,
+    /// Headless: the refresh rate of the display, in Hz (default 60).
+    #[arg(long, value_name = "HZ", requires = "headless")]
+    pub refresh: Option<f64>,
+    /// Headless: write one line of timings per frame shown to this file (`scripts/dev/bench` reads it). The GPU is
+    /// waited for after each frame and around each glass pass, so frames take as long as their work.
+    #[arg(long, value_name = "PATH", requires = "headless")]
+    pub frame_stats: Option<PathBuf>,
     /// Release the left button at a time and position, `SECONDS:X,Y`; repeatable.
     #[arg(long = "release", value_name = "SECONDS:X,Y", value_parser = parse_timed_point)]
     pub releases: Vec<(f64, (f64, f64))>,
@@ -198,6 +209,12 @@ pub fn parse_timed_point(s: &str) -> Result<(f64, (f64, f64)), String> {
     let (x, y) = p.split_once(',').ok_or("expected SECONDS:X,Y")?;
     let n = |v: &str| v.trim().parse::<f64>().map_err(|e| e.to_string());
     Ok((n(t)?, (n(x)?, n(y)?)))
+}
+
+pub fn parse_timed_scroll(s: &str) -> Result<(f64, (f64, f64), f64), String> {
+    let (point, dy) = s.rsplit_once(':').ok_or("expected SECONDS:X,Y:DY")?;
+    let (t, p) = parse_timed_point(point)?;
+    Ok((t, p, dy.trim().parse::<f64>().map_err(|e| e.to_string())?))
 }
 
 pub fn parse_timed_text(s: &str) -> Result<(f64, String), String> {
@@ -410,6 +427,20 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
             );
         })?;
     }
+    for (t, (x, y), dy) in cli.scrolls.iter().copied() {
+        schedule(event_loop, t, move |state| {
+            use smithay::backend::input::{AxisRelativeDirection, AxisSource};
+            state.pointer_moved_to((x, y).into(), 0, None);
+            state.pointer_axis(&crate::events::AxisInput {
+                device: String::new(),
+                source: AxisSource::Finger,
+                usec: Duration::from(state.clock.now()).as_micros() as u64,
+                amount: [Some(0.0), Some(dy)],
+                v120: [None, None],
+                relative_direction: [AxisRelativeDirection::Identical; 2],
+            });
+        })?;
+    }
     for (t, name) in cli.unplugs.iter().cloned() {
         schedule(event_loop, t, move |state| {
             let head = state
@@ -442,6 +473,37 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
             state.request_redraw();
         })?;
     }
+    Ok(())
+}
+
+/// Start writing per-frame timings to `path`, naming the device that renders.
+fn start_frame_stats(
+    state: &mut Cupertino,
+    path: &std::path::Path,
+    refresh_mhz: i32,
+    start: Instant,
+) -> Result<()> {
+    let Some(crate::backend::Backend::Headless(h)) = state.backend.as_mut() else {
+        return Err(anyhow!("--frame-stats needs the headless backend"));
+    };
+    let renderer = h
+        .renderer
+        .with_context(|gl| unsafe {
+            let name = gl.GetString(smithay::backend::renderer::gles::ffi::RENDERER);
+            if name.is_null() {
+                String::from("unknown")
+            } else {
+                std::ffi::CStr::from_ptr(name.cast())
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        })
+        .unwrap_or_else(|_| "unknown".into());
+    let refresh = Duration::from_secs_f64(1000.0 / f64::from(refresh_mhz.max(1000)));
+    state.frame_stats = Some(
+        crate::frame_stats::FrameStats::create(path, &renderer, refresh, start)
+            .with_context(|| format!("creating {}", path.display()))?,
+    );
     Ok(())
 }
 
@@ -774,7 +836,22 @@ pub fn run(cli: Cli) -> Result<()> {
                 Some(_) => cli.scale,
                 None => Some(cli.scale.unwrap_or(1.0)),
             };
-            crate::backend::headless::init_displays(&mut state, &[display], scale)?;
+            crate::backend::headless::init_displays(&mut state, &[], scale)?;
+            let refresh_mhz = cli
+                .refresh
+                .map_or(crate::backend::headless::DEFAULT_REFRESH_MHZ, |hz| {
+                    (hz * 1000.0).round() as i32
+                });
+            crate::backend::headless::add_display_at(
+                &mut state,
+                &display,
+                refresh_mhz,
+                &[],
+                scale,
+            )?;
+            if let Some(path) = &cli.frame_stats {
+                start_frame_stats(&mut state, path, refresh_mhz, script_start)?;
+            }
             for (name, (w, h), scale) in &cli.extra_outputs {
                 let extra = crate::backend::headless::HeadlessDisplay {
                     name: name.clone(),
@@ -794,6 +871,9 @@ pub fn run(cli: Cli) -> Result<()> {
                 })
                 .transpose()?;
             crate::backend::headless::run(&mut state, &mut event_loop, deadline)?;
+            if let Some(stats) = state.frame_stats.as_mut() {
+                stats.flush();
+            }
             if let Some(recorder) = recorder {
                 let written = recorder.finish()?;
                 tracing::info!(

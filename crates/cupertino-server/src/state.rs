@@ -664,6 +664,8 @@ pub struct Cupertino {
     pub output_screenshots: Vec<(OutputId, std::path::PathBuf)>,
     /// Replaces the clock for the model and animations (deterministic tests, frame stepping).
     pub fixed_time: Option<f64>,
+    /// Per-frame timings for the frame-rate benchmark (`--frame-stats`).
+    pub frame_stats: Option<crate::frame_stats::FrameStats>,
     /// Model time runs at this multiple of the wall clock (slow motion for inspection, 1.0 = real
     /// time) starting from `time_origin`.
     pub time_scale: f64,
@@ -973,6 +975,7 @@ impl Cupertino {
             screenshot_each_output: false,
             output_screenshots: Vec::new(),
             fixed_time: None,
+            frame_stats: None,
             time_scale: 1.0,
             time_origin: policy::clock_seconds(std::time::Duration::from(
                 Clock::<Monotonic>::new().now(),

@@ -323,7 +323,14 @@ pub fn render(state: &mut Cupertino) {
                 continue;
             }
             // without a scene (no render resources or no mode yet) nothing is drawn, but callbacks still go out
+            let composing = Instant::now();
+            let timing = state.frame_stats.is_some();
+            if timing {
+                crate::frame_stats::start_glass_timing(state);
+            }
             if let Some(composed) = state.compose_for_present(&mut h.renderer, idx) {
+                let compose = composing.elapsed();
+                let rendering = Instant::now();
                 if let Some((res, cache, tracker)) = state.gles_parts(idx) {
                     let mut resources = GlesResources::new(res, cache, composed.resources);
                     let result = Gles.render(
@@ -344,6 +351,11 @@ pub fn render(state: &mut Cupertino) {
                         Ok(_) => scheduler.queued(),
                         Err(e) => tracing::warn!(error = %e, "headless render failed"),
                     }
+                }
+                if timing {
+                    // the GPU's work belongs to the frame's time: wait for it
+                    let _ = h.renderer.with_context(|gl| unsafe { gl.Finish() });
+                    crate::frame_stats::frame_rendered(state, compose, rendering.elapsed());
                 }
             }
             state.process_screenshots(&mut h.renderer, idx);

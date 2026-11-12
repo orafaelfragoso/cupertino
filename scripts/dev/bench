@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Frame rate of the desktop's busiest moments, at 60 and 120 Hz, in a headless session on the real render path.
+
+    scripts/dev/bench                   the release build of this checkout (built first)
+    NO_BUILD=1 scripts/dev/bench        what target/release holds
+    BIN_DIR=DIR scripts/dev/bench       the programs in DIR (another build, to compare)
+    scripts/dev/bench --out F.json      also write the figures as JSON
+    RATES=120 scripts/dev/bench         only some refresh rates (Hz, comma separated)
+
+The session runs at 2560 x 1600 pixels, scale 2, with Files (400 items in its folder) and Settings open. The server
+writes one line per frame shown (`--frame-stats`): the time composing and rendering it took, the GPU waited for, the
+time its glass passes and their backdrop blurs took, and how many glass backdrops were blurred again or reused. One
+session per refresh rate drives each scenario in turn, with input at the display's rate:
+  window drag    Settings dragged by its title bar under the dock, over Files' sidebar and up to the menu bar
+  dock sweep     the pointer sweeps along the dock and back (magnification)
+  overview       the overview opens and closes
+  launcher       the launcher opens and closes, twice
+  files scroll   Files is raised and its list scrolled with two fingers, down and up
+For each scenario the table reports:
+  frames    frames shown in the scenario
+  fps       frames per second of the scenario
+  int p50/p95/max  the interval between frames shown, in ms
+  missed    refreshes passed with no new frame (an interval of n refreshes misses n - 1) while the scenario moved
+  work p50/p95/max  compose + render time of a frame, GPU included, in ms
+  over      frames whose work exceeded the refresh budget (16.67 ms at 60 Hz, 8.33 ms at 120 Hz)
+  glass p95 time of the glass passes in a frame, in ms
+  blur/f    glass backdrops blurred again per frame; reuse/f backdrops reused per frame
+  in lat    input to the next frame shown, p50/p95 ms (what the server moves itself)
+  app lat   input to the first frame after a client answered it, p50/p95 ms
+The device that rendered is printed above each table: a software rasteriser (llvmpipe) shows there when no GPU is used.
+"""
+import json
+import os
+import pathlib
+import statistics
+import subprocess
+import sys
+import tempfile
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+SIZE = (2560, 1600)
+SCALE = 2
+W, H = SIZE[0] // SCALE, SIZE[1] // SCALE
+SETTLE = 9.0
+DOCK_Y = 760
+SETTINGS_TITLE = (430, 50)
+FILES_VISIBLE = (1056, 400)
+FILES_LIST = (800, 350)
+
+
+def scenarios(hz: float) -> tuple[list[str], list[tuple[str, float, float]], float]:
+    """The server flags of the whole script and each scenario's name and time span."""
+    dt = 1.0 / hz
+    flags: list[str] = []
+    spans = []
+    t = SETTLE
+
+    def path(points: list[tuple[float, float]], start: float, seconds: float) -> float:
+        steps = max(1, round(seconds * hz))
+        legs = len(points) - 1
+        for i in range(steps + 1):
+            f = i / steps * legs
+            leg = min(int(f), legs - 1)
+            u = f - leg
+            (x0, y0), (x1, y1) = points[leg], points[leg + 1]
+            flags.extend(["--pointer", f"{start + i * dt:.4f}:{x0 + (x1 - x0) * u:.1f},{y0 + (y1 - y0) * u:.1f}"])
+        return start + steps * dt
+
+    # window drag: Settings by its title bar
+    x0, y0 = SETTINGS_TITLE
+    flags += ["--press", f"{t:.4f}:{x0},{y0}"]
+    drag = [(x0, y0), (x0, y0 + 90), (x0 - 200, y0 + 90), (x0 - 200, y0 - 40), (x0, y0 - 40), (x0, y0)]
+    end = path(drag, t + 0.1, 3.0)
+    flags += ["--release", f"{end + dt:.4f}:{x0},{y0}"]
+    spans.append(("window drag", t + 0.1, end))
+    t = end + 1.0
+    # dock sweep
+    end = path([(W * 0.3, DOCK_Y), (W * 0.7, DOCK_Y), (W * 0.3, DOCK_Y)], t, 2.4)
+    flags += ["--pointer", f"{end + dt:.4f}:{W / 2},{H / 2}"]
+    spans.append(("dock sweep", t, end + 0.4))
+    t = end + 1.5
+    # overview
+    flags += ["--action", f"{t:.4f}:overview", "--action", f"{t + 1.2:.4f}:overview"]
+    spans.append(("overview", t, t + 1.9))
+    t += 2.8
+    # launcher, twice
+    for i in range(2):
+        s = t + i * 1.6
+        flags += ["--action", f"{s:.4f}:launcher", "--key", f"{s + 0.8:.4f}:Escape"]
+    spans.append(("launcher", t, t + 3.2))
+    t += 4.0
+    # files scroll: raise Files, then scroll its list down and up with two fingers
+    fx, fy = FILES_VISIBLE
+    flags += ["--click", f"{t:.4f}:{fx},{fy}"]
+    t += 0.8
+    lx, ly = FILES_LIST
+    steps = round(1.5 * hz)
+    for d, sign in ((0, 1), (1, -1)):
+        s = t + d * (steps + 1) * dt
+        for i in range(steps):
+            flags += ["--scroll", f"{s + i * dt:.4f}:{lx},{ly}:{sign * 1800 / steps:.2f}"]
+        flags += ["--scroll", f"{s + steps * dt:.4f}:{lx},{ly}:0"]
+    spans.append(("files scroll", t, t + 2 * (steps + 1) * dt))
+    t += 4.0
+    return flags, spans, t
+
+
+def fixture() -> pathlib.Path:
+    folder = ROOT / "target/bench-fixture"
+    folder.mkdir(parents=True, exist_ok=True)
+    for i in range(1, 401):
+        (folder / f"Report {i:03}.txt").touch()
+    return folder
+
+
+def run(bin_dir: pathlib.Path, hz: float) -> tuple[str, float, list[list], list]:
+    flags, spans, end = scenarios(hz)
+    env = dict(os.environ, BIN_DIR=str(bin_dir), SIZE=f"{SIZE[0]}x{SIZE[1]}", FIXTURE_DIR=str(fixture()))
+    with tempfile.TemporaryDirectory() as tmp:
+        stats = pathlib.Path(tmp) / "frames.txt"
+        args = [str(ROOT / "crates/cupertino-server/scripts/session.sh"), "--scale", str(SCALE), "--appearance",
+                "dark", "--refresh", str(hz), "--frame-stats", str(stats), "--spawn", "cupertino-files",
+                "--spawn", "cupertino-settings", "--pointer", f"0:{W - 1},{H / 2}", *flags, "--run-for",
+                f"{end + 0.5:.2f}"]
+        if os.environ.get("BENCH_SHOTS"):
+            # a screenshot in the middle of each scenario, to check what it drives
+            shots = os.environ["BENCH_SHOTS"]
+            for name, a, b in spans:
+                slug = name.replace(" ", "-")
+                args += ["--shot", f"{(a + b) / 2:.2f}:{shots}/{hz:g}-{slug}.png"]
+        subprocess.run(args, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=end + 60,
+                       start_new_session=True)
+        if os.environ.get("BENCH_KEEP"):
+            # the raw lines, for a closer look
+            (pathlib.Path(os.environ["BENCH_KEEP"]) / f"frames-{hz:g}.txt").write_bytes(stats.read_bytes())
+        renderer, refresh, rows = "unknown", 1.0 / hz, []
+        for line in stats.read_text().splitlines():
+            if line.startswith("# renderer "):
+                renderer = line[len("# renderer "):]
+            elif line.startswith("# refresh_us "):
+                refresh = int(line.split()[2]) / 1e6
+            elif not line.startswith("#"):
+                rows.append([None if c == "-" else int(c) for c in line.split()])
+    return renderer, refresh, rows, spans
+
+
+def pct(vals: list[float], p: float) -> float:
+    if not vals:
+        return float("nan")
+    vals = sorted(vals)
+    return vals[min(len(vals) - 1, round(p / 100 * (len(vals) - 1)))]
+
+
+def summarise(refresh: float, rows: list[list], spans: list) -> dict[str, dict]:
+    out = {}
+    for name, a, b in spans:
+        frames = [r for r in rows if a <= r[0] / 1e6 <= b]
+        shown = [r[0] / 1e6 for r in frames]
+        ints = [(y - x) * 1e3 for x, y in zip(shown, shown[1:])]
+        missed = sum(max(0, round(i / (refresh * 1e3)) - 1) for i in ints)
+        work = [(r[1] + r[2]) / 1e3 for r in frames]
+        lat_in = [r[7] / 1e3 for r in frames if r[7] is not None]
+        lat_app = [r[8] / 1e3 for r in frames if r[8] is not None]
+        n = max(1, len(frames))
+        out[name] = {
+            "frames": len(frames),
+            "fps": len(frames) / (b - a),
+            "int p50": pct(ints, 50), "int p95": pct(ints, 95), "int max": max(ints, default=float("nan")),
+            "missed": missed,
+            "work p50": pct(work, 50), "work p95": pct(work, 95), "work max": max(work, default=float("nan")),
+            "over": sum(w > refresh * 1e3 for w in work),
+            "glass p95": pct([r[3] / 1e3 for r in frames], 95),
+            "blur/f": sum(r[5] for r in frames) / n,
+            "reuse/f": sum(r[6] for r in frames) / n,
+            "in p50": pct(lat_in, 50), "in p95": pct(lat_in, 95),
+            "app p50": pct(lat_app, 50), "app p95": pct(lat_app, 95),
+        }
+    return out
+
+
+def table(hz: float, renderer: str, s: dict[str, dict]) -> str:
+    head = (f"{'scenario':13} {'frames':>6} {'fps':>6} {'int p50':>7} {'p95':>6} {'max':>6} {'missed':>6} "
+            f"{'work p50':>8} {'p95':>6} {'max':>6} {'over':>4} {'glass95':>7} {'blur/f':>6} {'reuse/f':>7} "
+            f"{'in lat':>11} {'app lat':>11}")
+    lines = [f"{hz:g} Hz (budget {1000 / hz:.2f} ms), rendered by {renderer}", head]
+    for name, v in s.items():
+        lines.append(
+            f"{name:13} {v['frames']:6} {v['fps']:6.1f} {v['int p50']:7.2f} {v['int p95']:6.2f} {v['int max']:6.2f} "
+            f"{v['missed']:6} {v['work p50']:8.2f} {v['work p95']:6.2f} {v['work max']:6.2f} {v['over']:4} "
+            f"{v['glass p95']:7.2f} {v['blur/f']:6.2f} {v['reuse/f']:7.2f} "
+            f"{v['in p50']:5.1f}/{v['in p95']:<5.1f} {v['app p50']:5.1f}/{v['app p95']:<5.1f}")
+    return "\n".join(lines)
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not os.environ.get("NO_BUILD") and not os.environ.get("BIN_DIR"):
+        subprocess.run([str(ROOT / "scripts/dev/build")], check=True)
+    bin_dir = pathlib.Path(os.environ.get("BIN_DIR", ROOT / "target/release"))
+    rates = [float(r) for r in os.environ.get("RATES", "60,120").split(",")]
+    result = {}
+    for hz in rates:
+        renderer, refresh, rows, spans = run(bin_dir, hz)
+        s = summarise(refresh, rows, spans)
+        result[f"{hz:g}"] = {"renderer": renderer, "scenarios": s}
+        print(table(hz, renderer, s))
+        print()
+    if "--out" in args:
+        pathlib.Path(args[args.index("--out") + 1]).write_text(json.dumps(result, indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

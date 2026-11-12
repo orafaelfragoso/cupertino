@@ -702,6 +702,7 @@ impl Cupertino {
     /// Scripted key press (`--key`, `--type`): a chord such as `Super+space`, `Return` or `a` goes through the
     /// same decisions as a real key; one nothing consumes reaches the focused client as real key events.
     pub fn scripted_key(&mut self, chord: &str) -> Result<(), String> {
+        crate::frame_stats::note_input(self);
         let ch = crate::input::parse_chord(chord)?;
         let command = ch.mods.ctrl || ch.mods.alt || ch.mods.logo;
         let mut text = char::from_u32(smithay::input::keyboard::xkb::keysym_to_utf32(
@@ -953,6 +954,7 @@ impl Cupertino {
         time: u32,
         rel: Option<RelativeMotionEvent>,
     ) {
+        crate::frame_stats::note_input(self);
         let pos = match self.constrain_motion(pos) {
             Some(Constrained::Locked) => {
                 // the pointer stays; the client gets the motion as relative motion only
@@ -1071,6 +1073,7 @@ impl Cupertino {
     /// is consumed too; every other press and release goes to `pointer.button`, whose implicit grab keeps a client's
     /// release with the client that got the press.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
+        crate::frame_stats::note_input(self);
         if !self.control_physical_transition(
             cupertino_control_model::Input::Button(button),
             state == ButtonState::Pressed,
@@ -1439,6 +1442,7 @@ impl Cupertino {
     /// A pointer axis event (also used by scripted input): the scroll goes to the focused client as one
     /// `wl_pointer.frame`, with the scroll count of a touchpad scroll before the frame.
     pub fn pointer_axis(&mut self, input: &AxisInput) {
+        crate::frame_stats::note_input(self);
         self.key_filters.super_tap.disturb();
         // A wheel notch (120 v120 units) scrolls three lines. Finger scrolling of a
         // device with a scroll resolution (the touchpad's counts) is accelerated; other sources,

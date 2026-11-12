@@ -29,6 +29,7 @@ pub mod events;
 pub mod file_limit;
 pub mod force_quit;
 pub mod frame;
+pub mod frame_stats;
 pub mod fx;
 pub mod gpu_reset;
 pub mod handlers;

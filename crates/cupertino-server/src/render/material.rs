@@ -132,6 +132,10 @@ pub struct MaterialGl {
     cache: Vec<CachedBackdrop>,
     tick: u64,
     pub stats: MaterialStats,
+    /// Time the glass passes, the GPU waited for (the frame-rate benchmark only: waiting stalls the pipeline).
+    pub timing: bool,
+    /// What the glass passes took since the benchmark last cleared it.
+    pub glass_time: crate::frame_stats::GlassTime,
     failure: Option<String>,
     glass: glass::GlassGl,
 }
@@ -325,6 +329,8 @@ impl MaterialGl {
             cache: Vec::new(),
             tick: 0,
             stats: MaterialStats::default(),
+            timing: false,
+            glass_time: Default::default(),
             failure: None,
             glass: glass::GlassGl::default(),
         };
@@ -416,6 +422,8 @@ impl MaterialGl {
             cache: Vec::new(),
             tick: 0,
             stats: MaterialStats::default(),
+            timing: false,
+            glass_time: Default::default(),
             failure: None,
             glass: glass::GlassGl::default(),
         }))
@@ -632,6 +640,18 @@ impl MaterialGl {
     /// # Safety
     /// Must be called with the renderer's context current (inside `GlesFrame::with_context`).
     pub unsafe fn draw(&mut self, gl: &ffi::Gles2, p: &DrawParams<'_>) -> Result<(), String> {
+        if !self.timing {
+            return self.draw_now(gl, p);
+        }
+        gl.Finish();
+        let start = std::time::Instant::now();
+        let result = self.draw_now(gl, p);
+        gl.Finish();
+        self.glass_time.total += start.elapsed();
+        result
+    }
+
+    unsafe fn draw_now(&mut self, gl: &ffi::Gles2, p: &DrawParams<'_>) -> Result<(), String> {
         if self.progs.is_none() {
             return Err(self
                 .failure
@@ -669,7 +689,13 @@ impl MaterialGl {
                     let old = self.cache.swap_remove(i);
                     self.free.push(old.target);
                 }
-                let Some(target) = self.process_backdrop(gl, p, src_fbo) else {
+                let blurring = self.timing.then(std::time::Instant::now);
+                let processed = self.process_backdrop(gl, p, src_fbo);
+                if let Some(blurring) = blurring {
+                    gl.Finish();
+                    self.glass_time.blur += blurring.elapsed();
+                }
+                let Some(target) = processed else {
                     saved.restore(gl);
                     let msg = "backdrop processing failed (framebuffer incomplete?)".to_string();
                     self.failure = Some(msg.clone());

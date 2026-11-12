@@ -794,6 +794,7 @@ impl Cupertino {
 
     /// Mark for a frame the outputs that show `surface`, all of them when none is known.
     pub fn request_redraw_for(&mut self, surface: &WlSurface) {
+        crate::frame_stats::note_commit(self);
         // a commit may resize its window, and so move its buttons
         self.button_access.invalidate();
         match self.outputs_showing(surface) {

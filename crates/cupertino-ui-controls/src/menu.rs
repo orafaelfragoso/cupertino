@@ -66,9 +66,13 @@ const MARKED_LABEL_LEADING: f64 = 30.5;
 /// From the leading edge to the middle of a check mark.
 const MARK_CENTRE: f64 = 17.0;
 /// From the trailing edge to the end of a shortcut or a submenu's chevron.
-const TRAILING: f64 = 20.0;
+const TRAILING: f64 = 19.0;
 /// From the trailing edge to the end of a separator line; it starts under the labels.
 const SEPARATOR_TRAILING: f64 = 16.5;
+/// The middle of the shortcut key column and of a submenu chevron, from the trailing edge.
+const KEY_CENTRE: f64 = 24.0;
+/// Where the modifier symbols of a shortcut end, from the trailing edge.
+const KEY_CELL_LEADING: f64 = 32.5;
 /// A separator line over the glass in the dark appearance: white at 14 %.
 const GLASS_SEPARATOR_DARK: Color = Color {
     r: 1.0,
@@ -1382,16 +1386,41 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
                     ..c
                 }),
             };
-            let width = shortcut.size().width;
             let row = Rect::new(0.0, 0.0, size.width, size.height);
-            let origin = Point::new(
-                leading(size.width - TRAILING - width, width),
-                look::top(&shortcut, row, &env),
-            );
-            look::glyphs(cx, &shortcut, origin, keys);
+            let text = self.shortcut.as_deref().unwrap_or_default();
+            match split_key(text) {
+                Some((modifiers, key)) => {
+                    // the modifiers end at the key cell's leading side and the key is centred in the cell, so the keys of
+                    // different widths line up on the cell's middle
+                    let key_label = look::label(&env, key);
+                    let modifier_label = look::label(&env, modifiers);
+                    if let (Some(key_label), Some(modifier_label)) = (key_label, modifier_label) {
+                        let key_width = key_label.size().width;
+                        let modifier_width = modifier_label.size().width;
+                        let key_x = size.width - KEY_CENTRE - key_width / 2.0;
+                        let modifier_x = size.width - KEY_CELL_LEADING - modifier_width;
+                        let key_at =
+                            Point::new(leading(key_x, key_width), look::top(&key_label, row, &env));
+                        let modifier_at = Point::new(
+                            leading(modifier_x, modifier_width),
+                            look::top(&modifier_label, row, &env),
+                        );
+                        look::glyphs(cx, &key_label, key_at, keys);
+                        look::glyphs(cx, &modifier_label, modifier_at, keys);
+                    }
+                }
+                None => {
+                    let width = shortcut.size().width;
+                    let origin = Point::new(
+                        leading(size.width - TRAILING - width, width),
+                        look::top(&shortcut, row, &env),
+                    );
+                    look::glyphs(cx, &shortcut, origin, keys);
+                }
+            }
         }
         if matches!(self.action, RowAction::Open { .. }) {
-            let x = leading(size.width - TRAILING - CHEVRON_WIDTH / 2.0, 0.0);
+            let x = leading(size.width - KEY_CENTRE, 0.0);
             symbol(
                 cx,
                 "symbol.chevron.right",
@@ -2229,4 +2258,17 @@ impl<M: Clone + 'static> Widget<M> for TailRow {
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.hidden();
     }
+}
+
+/// A shortcut split into its modifier symbols and its one-character key; `None` for any other form (a named key).
+fn split_key(text: &str) -> Option<(&str, &str)> {
+    let (at, key) = text.char_indices().last()?;
+    let modifiers = &text[..at];
+    let symbols = modifiers
+        .chars()
+        .all(|c| matches!(c, '\u{2318}' | '\u{21e7}' | '\u{2325}' | '\u{2303}' | '^'));
+    (!modifiers.is_empty()
+        && symbols
+        && !matches!(key, '\u{2318}' | '\u{21e7}' | '\u{2325}' | '\u{2303}' | '^'))
+    .then(|| (modifiers, &text[at..]))
 }

@@ -44,7 +44,7 @@ impl MenuPalette {
             Self {
                 text: [0.05, 0.05, 0.06, 0.92],
                 disabled_alpha: DISABLED_ALPHA,
-                bar_highlight: [0.0, 0.0, 0.0, 0.07],
+                bar_highlight: [0.0, 0.0, 0.0, 0.045],
                 row_highlight: [0.04, 0.45, 1.0, 1.0],
                 row_highlight_text: [1.0, 1.0, 1.0, 1.0],
                 separator: [0.0, 0.0, 0.0, 0.13],

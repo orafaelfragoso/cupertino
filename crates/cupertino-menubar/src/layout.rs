@@ -313,7 +313,7 @@ impl Default for MenuMetrics {
             separator_height: 11.0,
             padding_x: 16.5,
             padding_y: 5.0,
-            trailing_inset: 20.0,
+            trailing_inset: 18.5,
             mark_column: 14.0,
             icon_column: 23.0,
             search_row_height: 35.0,

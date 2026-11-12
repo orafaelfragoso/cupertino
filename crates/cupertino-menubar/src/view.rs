@@ -79,6 +79,8 @@ const FIELD_SELECTION_ALPHA: f32 = 0.35;
 /// Inset of a row's highlight from the menu's sides, and its corner radius, in points.
 const ROW_HIGHLIGHT_INSET: f64 = 5.5;
 const ROW_HIGHLIGHT_RADIUS: f64 = 6.75;
+/// How far the submenu chevron stands further in than the end of the shortcut column.
+const CHEVRON_SHIFT: f64 = 2.7;
 /// Half the width of the submenu chevron in points.
 const CHEVRON_HALF_WIDTH: f64 = 1.8;
 /// Stroke widths of the check mark and the submenu chevron in points. approximate.
@@ -1344,7 +1346,10 @@ impl<M> RowNode<M> {
     fn shortcut(&self, cx: &mut PaintCx<'_>, sc: &ShortcutGlyphs, width: f64, c: Rgba) -> f64 {
         let height = cx.size().height;
         let key_x = width - self.metrics.trailing_inset - self.key_width;
-        text(cx, &self.font, &sc.key, key_x, 0.0, height, false, c);
+        // the keys stand centred in their column, so keys of different widths line up on its middle
+        let centred =
+            key_x + (self.key_width - self::width(cx, &self.font, &sc.key)).max(0.0) / 2.0;
+        text(cx, &self.font, &sc.key, centred, 0.0, height, false, c);
         let modifiers_x = key_x - self::width(cx, &self.font, &sc.modifiers);
         text(
             cx,
@@ -1624,7 +1629,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
             self.shortcut(cx, sc, room, keys);
         }
         if item.has_submenu {
-            let x = size.width - m.trailing_inset - CHEVRON_HALF_WIDTH;
+            let x = size.width - m.trailing_inset - CHEVRON_HALF_WIDTH - CHEVRON_SHIFT;
             let chevron = [
                 Point::new(x - CHEVRON_HALF_WIDTH, middle - 3.6),
                 Point::new(x + CHEVRON_HALF_WIDTH, middle),

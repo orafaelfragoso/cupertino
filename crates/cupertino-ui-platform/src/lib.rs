@@ -750,6 +750,13 @@ pub trait WindowSystem {
     }
     /// Asks for a [`WindowEvent::Frame`] when the compositor wants the next frame.
     fn request_frame(&mut self, window: WindowId);
+    /// Whether the compositor's latest configure of `window` states it activated, where its protocol states that (a
+    /// toplevel); `None` where only the keyboard tells. A toplevel the compositor keeps activated while a surface of
+    /// the desktop holds the keyboard stays the window in use.
+    fn activated(&self, window: WindowId) -> Option<bool> {
+        let _ = window;
+        None
+    }
     /// Copies the frame's damage, plus whatever the chosen buffer missed since it was last used, into a buffer and
     /// commits it. After a failure the next successful present also covers this frame's damage.
     /// `configure`, when set, is acknowledged with this frame.

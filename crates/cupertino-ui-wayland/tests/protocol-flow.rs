@@ -1745,6 +1745,22 @@ mod window_system {
         (kit, control, committed, seen)
     }
 
+    /// A toplevel's activated state is the one its latest configure stated, which the runtime reads when the keyboard
+    /// moves; before a configure there is none.
+    #[test]
+    fn a_toplevel_is_activated_as_its_latest_configure_states() {
+        let (mut kit, _control, _committed, _seen) = created();
+        assert_eq!(kit.ws.activated(kit.window), None);
+        let configure = kit.window_event(|e| match e {
+            WindowEvent::Configure(c) => Some(*c),
+            _ => None,
+        });
+        assert_eq!(
+            kit.ws.activated(kit.window),
+            Some(configure.states.activated)
+        );
+    }
+
     fn frame(id: u64, first: [u8; 4], damage: &[PixelRect]) -> CpuFrame {
         frame_sized(id, (200, 100), first, damage)
     }
@@ -2805,6 +2821,11 @@ mod window_system {
             _ => None,
         });
         assert!(!first, "no keyboard yet");
+        assert_eq!(
+            kit.ws.activated(kit.window),
+            None,
+            "the keyboard alone tells"
+        );
 
         control.send(Control::KeyboardEnter).unwrap();
         assert!(kit.window_event(|e| match e {

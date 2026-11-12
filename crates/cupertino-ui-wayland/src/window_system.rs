@@ -114,6 +114,8 @@ struct Window {
     input_region: Option<Option<Vec<Rect>>>,
     /// The surface has the keyboard focus, between its `wl_keyboard.enter` and `leave`.
     keyboard: bool,
+    /// A toplevel's activated state as its latest configure stated it; `None` before one, and for other surfaces.
+    activated: Option<bool>,
     /// The subsurface the window's raised layer and raised materials are drawn in, once it showed one.
     layer: Option<LayerSurface>,
 }
@@ -559,6 +561,7 @@ impl WaylandWindowSystem {
             menus: None,
             input_region: None,
             keyboard: false,
+            activated: None,
             layer: None,
         });
         id
@@ -874,7 +877,9 @@ impl WaylandWindowSystem {
                     let _ = self.publish_menus(self.windows[i].id);
                 }
                 due = self.resume(i);
-                (i, WindowEvent::Configure(convert::configure(&configure)))
+                let configure = convert::configure(&configure);
+                self.windows[i].activated = Some(configure.states.activated);
+                (i, WindowEvent::Configure(configure))
             }
             Event::PopupConfigure { popup, configure } => {
                 let Some(i) = on(&self.windows, popup.surface()) else {
@@ -1585,6 +1590,10 @@ impl WindowSystem for WaylandWindowSystem {
 
     /// With no frame callback outstanding and no present waiting for a configure or a free buffer nothing paces the
     /// window, so the frame is due at once.
+    fn activated(&self, window: WindowId) -> Option<bool> {
+        self.window(window).ok().and_then(|w| w.activated)
+    }
+
     fn request_frame(&mut self, window: WindowId) {
         let now = self.now();
         let Ok(w) = self.window_mut(window) else {

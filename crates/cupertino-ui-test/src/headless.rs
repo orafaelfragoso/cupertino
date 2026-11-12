@@ -334,6 +334,12 @@ impl HeadlessWindowSystem {
         self.enqueue(PlatformEvent::Window { window, event })
     }
 
+    /// Whether the runtime takes one queued event a turn (a test driver's default) or all of them at once, as a display
+    /// connection delivers input that came in one burst.
+    pub fn set_dispatch_one(&mut self, one: bool) {
+        self.dispatch_one = one;
+    }
+
     /// Starts over with no input event, as a Wayland client before its first: a popup grab is refused, as the client
     /// refuses it without a serial, until a button, a touch, a key or the keyboard comes to a window.
     pub fn set_no_input_yet(&mut self) {

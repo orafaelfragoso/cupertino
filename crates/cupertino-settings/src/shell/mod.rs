@@ -1392,6 +1392,97 @@ mod tests {
         assert_eq!(stored(), Some(mapping::dock_px(1.0)), "and once");
     }
 
+    /// The dock size slider's value as the window shows it.
+    fn dock_size_shown(driver: &TestDriver<SettingsApp>, window: WindowId) -> f64 {
+        let key = Key::from(format!("{:?}-control", ControlId::DockSize));
+        let id = driver.runtime().find(window, &key).unwrap();
+        let snapshot = driver.runtime().snapshot(window).unwrap();
+        match snapshot.accessibility.into_iter().find(|(n, _)| *n == id) {
+            Some((_, node)) => match node.value {
+                Some(cupertino_kit::core::AccessibleValue::Number { value, .. }) => value,
+                other => panic!("a slider's value, not {other:?}"),
+            },
+            None => panic!("the slider is read"),
+        }
+    }
+
+    /// A drag forward never shows the knob back where it was: not while it moves, not when it is let go in the same
+    /// turn as its last move (before the next view carries that move), and not once its value is stored.
+    #[test]
+    fn a_dragged_slider_never_moves_back() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
+        let key = Key::from(format!("{:?}-control", ControlId::DockSize));
+        let id = driver.runtime().find(window, &key).unwrap();
+        let rect = driver
+            .runtime()
+            .snapshot(window)
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap()
+            .rect;
+        let at = |share: f64| Point::new(rect.min_x() + rect.width() * share, rect.center().y);
+        let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+        let button = |share: f64, pressed: bool| {
+            pointer(PointerEvent::Button {
+                position: at(share),
+                button: MouseButton::Left,
+                pressed,
+                serial: 1,
+                mods: Mods::NONE,
+            })
+        };
+        let motion = |share: f64| {
+            pointer(PointerEvent::Motion {
+                position: at(share),
+            })
+        };
+        // the stored size is whole points: the value read back may sit up to half a point under the one let go
+        let store_step = 0.5 / mapping::DOCK_SPAN_PX;
+        send(&mut driver, window, motion(0.2));
+        send(&mut driver, window, button(0.2, true));
+        let mut last = dock_size_shown(&driver, window);
+        for share in [0.35, 0.5, 0.65] {
+            send(&mut driver, window, motion(share));
+            let shown = dock_size_shown(&driver, window);
+            assert!(
+                shown > last,
+                "dragged forward to {share}: {shown} after {last}"
+            );
+            last = shown;
+        }
+        // the last move and the release in one turn, as a quick flick delivers them
+        driver.window_system_mut().set_dispatch_one(false);
+        for event in [motion(0.9), button(0.9, false)] {
+            driver
+                .window_system_mut()
+                .enqueue_window(window, event)
+                .unwrap();
+        }
+        settle(&mut driver, window);
+        driver.window_system_mut().set_dispatch_one(true);
+        let shown = dock_size_shown(&driver, window);
+        assert!(
+            shown > last + 0.1,
+            "let go further on, the knob stays there: {shown} after {last}"
+        );
+        let stored = Settings::load(&paths(dir.path()), 1080.0)
+            .unwrap()
+            .dock
+            .tile_size
+            .unwrap();
+        assert!(
+            (mapping::dock_value(stored) - shown).abs() <= store_step,
+            "the value let go at is the one stored"
+        );
+        // later turns (a timer, the files read again) keep it there
+        settle(&mut driver, window);
+        assert!(dock_size_shown(&driver, window) >= shown - store_step);
+    }
+
     #[test]
     fn the_join_button_joins_with_the_typed_passphrase() {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());

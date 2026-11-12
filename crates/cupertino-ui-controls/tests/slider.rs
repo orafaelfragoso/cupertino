@@ -4,7 +4,7 @@ use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_controls::{Slider, SliderStyle, Stack};
 use cupertino_ui_core::{AccessibleValue, Action, Application, Command, Element, Role, Window};
 use cupertino_ui_layout::{Align, Axis, LayoutDirection};
-use cupertino_ui_platform::PointerEvent;
+use cupertino_ui_platform::{Mods, MouseButton, PointerEvent, Timestamp, WindowEvent};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_theme::{ColorRole, InteractionVariant};
 use support::{color, window, Harness, TAB};
@@ -243,4 +243,87 @@ fn the_knob_is_a_lens_only_while_dragged_and_the_lens_never_moves_the_layout() {
     h.button(Point::new(rect.min_x() + rect.width() * 0.8, at.y), false);
     assert!(!has_lens(&h), "let go, the knob is plain again");
     assert_eq!(h.rect("volume"), rect);
+}
+
+/// The paint's knob: the plain fill the size of a panel level knob.
+fn knob_x(h: &Harness<Brightness>) -> f64 {
+    h.ops("brightness")
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::RoundedRect { rect, .. },
+                ..
+            } if rect.size == Size::new(22.0, 22.0) => Some(rect.center().x),
+            _ => None,
+        })
+        .last()
+        .expect("a knob")
+}
+
+#[test]
+fn a_drag_let_go_before_the_view_follows_ends_where_the_pointer_left_the_knob() {
+    let mut h = Harness::<Brightness>::new();
+    let track = h.rect("brightness");
+    let at = |x: f64| Point::new(x, track.center().y);
+    let start = knob_x(&h);
+    // the press, the drag and the release reach the slider in one turn, before the application's next view
+    for event in [
+        PointerEvent::Motion {
+            position: at(track.min_x() + track.width() * 0.5),
+        },
+        PointerEvent::Button {
+            position: at(track.min_x() + track.width() * 0.5),
+            button: MouseButton::Left,
+            pressed: true,
+            serial: 1,
+            mods: Mods::NONE,
+        },
+        PointerEvent::Motion {
+            position: at(track.max_x() - 1.0),
+        },
+        PointerEvent::Button {
+            position: at(track.max_x() - 1.0),
+            button: MouseButton::Left,
+            pressed: false,
+            serial: 1,
+            mods: Mods::NONE,
+        },
+    ] {
+        h.rt.window_system_mut()
+            .enqueue_window(h.window, WindowEvent::Pointer(event, Timestamp(0)))
+            .unwrap();
+    }
+    h.settle();
+    assert_eq!(
+        h.model().1,
+        [Heard::Change(1.0), Heard::End(1.0)],
+        "the end is the value dragged to, not the one shown before the drag"
+    );
+    assert_eq!(h.model().0, 1.0);
+    assert!(
+        knob_x(&h) > start,
+        "the knob stays at the end it was let go at"
+    );
+}
+
+#[test]
+fn a_dragged_knob_follows_the_pointer_before_the_view_does() {
+    let mut h = Harness::<Brightness>::new();
+    let track = h.rect("brightness");
+    let at = |x: f64| Point::new(x, track.center().y);
+    h.pointer(PointerEvent::Motion {
+        position: at(track.min_x() + 1.0),
+    });
+    h.button(at(track.min_x() + 1.0), true);
+    let mut last = knob_x(&h);
+    for share in [0.3, 0.55, 0.8, 1.0] {
+        h.pointer(PointerEvent::Motion {
+            position: at(track.min_x() + track.width() * share),
+        });
+        let x = knob_x(&h);
+        assert!(x >= last, "the knob never moves back while dragged forward");
+        last = x;
+    }
+    h.button(at(track.max_x()), false);
+    assert!(knob_x(&h) >= last, "nor once let go");
 }

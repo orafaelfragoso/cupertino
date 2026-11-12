@@ -44,6 +44,9 @@ const KNOB_RING_HIGH_CONTRAST: f64 = 2.0;
 pub struct SliderState {
     hovered: bool,
     dragging: bool,
+    /// The value under the pointer while it drags: what the knob shows and the drag ends at, even before the
+    /// application's next view carries it.
+    held: Option<f64>,
 }
 
 /// The soft shade under a regular slider's white knob at rest.
@@ -79,10 +82,10 @@ impl<M> Slider<M> {
         }
     }
 
-    /// Where the value sits between the ends, 0 to 1.
-    fn fraction(&self) -> f64 {
+    /// Where `value` sits between the ends, 0 to 1.
+    fn fraction(&self, value: f64) -> f64 {
         if self.span() > 0.0 {
-            ((self.value - self.min) / self.span()).clamp(0.0, 1.0)
+            ((value - self.min) / self.span()).clamp(0.0, 1.0)
         } else {
             0.0
         }
@@ -118,9 +121,10 @@ impl<M> Slider<M> {
 }
 
 impl<M: 'static> Slider<M> {
-    fn set(&self, value: f64, cx: &mut EventCx<'_, M>) {
+    /// Move to `value` from `shown`, the value the knob shows now.
+    fn set_from(&self, shown: f64, value: f64, cx: &mut EventCx<'_, M>) {
         let value = self.fit(value);
-        if value != self.value {
+        if value != shown {
             if let Some(on_change) = &self.on_change {
                 cx.emit(on_change(value));
             }
@@ -133,11 +137,30 @@ impl<M: 'static> Slider<M> {
         }
     }
 
+    /// The pointer drags the knob to `value`: it shows there at once, and the application hears of it when it moved.
+    fn drag_to(&self, state: &mut SliderState, value: f64, cx: &mut EventCx<'_, M>) {
+        let value = self.fit(value);
+        let shown = state.held.unwrap_or(self.value);
+        state.held = Some(value);
+        self.set_from(shown, value, cx);
+        if value != shown {
+            cx.request_paint();
+        }
+    }
+
+    /// The drag ends: at the value the pointer left the knob at, not the one the application last showed.
+    fn let_go(&self, state: &mut SliderState, cx: &mut EventCx<'_, M>) {
+        state.dragging = false;
+        let value = state.held.take().unwrap_or(self.value);
+        cx.request_paint();
+        self.end(value, cx);
+    }
+
     /// A key or assistive technology moves the value in one step: the change also ends there.
     fn step_to(&self, value: f64, cx: &mut EventCx<'_, M>) {
         let value = self.fit(value);
         if value != self.value {
-            self.set(value, cx);
+            self.set_from(self.value, value, cx);
             self.end(value, cx);
         }
     }
@@ -232,28 +255,32 @@ impl<M: 'static> Widget<M> for Slider<M> {
                 cx.capture_pointer();
                 cx.request_focus();
                 if let Some(bounds) = cx.bounds() {
-                    self.set(self.value_at(position.x, bounds, knob, direction), cx);
+                    self.drag_to(
+                        state,
+                        self.value_at(position.x, bounds, knob, direction),
+                        cx,
+                    );
                 }
                 cx.request_paint();
                 Propagation::Stop
             }
             Event::Pointer(PointerEvent::Motion { position }, _) if state.dragging => {
                 if let Some(bounds) = cx.bounds() {
-                    self.set(self.value_at(position.x, bounds, knob, direction), cx);
+                    self.drag_to(
+                        state,
+                        self.value_at(position.x, bounds, knob, direction),
+                        cx,
+                    );
                 }
                 Propagation::Stop
             }
             Event::Pointer(PointerEvent::Button { pressed: false, .. }, _) if state.dragging => {
-                state.dragging = false;
                 cx.release_pointer();
-                cx.request_paint();
-                self.end(self.value, cx);
+                self.let_go(state, cx);
                 Propagation::Stop
             }
             Event::Cancel if state.dragging => {
-                state.dragging = false;
-                cx.request_paint();
-                self.end(self.value, cx);
+                self.let_go(state, cx);
                 Propagation::Continue
             }
             Event::Key(key, _) if self.enabled && key.pressed && cx.node() == cx.target() => {
@@ -341,7 +368,8 @@ impl<M: 'static> Widget<M> for Slider<M> {
             );
         }
         let (from, to) = self.run(size.width, knob, direction);
-        let centre = from + (to - from) * self.fraction();
+        // dragged, the knob stays under the pointer while the application catches up
+        let centre = from + (to - from) * self.fraction(state.held.unwrap_or(self.value));
         // the level style fills to the knob's far edge, the regular one to its centre
         let reach = if self.style != SliderStyle::Regular {
             knob / 2.0

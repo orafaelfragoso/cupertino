@@ -34,6 +34,21 @@ Keep the same profile and build environment during an active development task so
 artifacts. Switching between dev and release, or starting from a fresh target, forces more compilation. Incremental
 compilation is disabled by this repository's configuration; shared downloads are not a shared compiled target.
 
+## Installing a local build
+
+On Arch Linux, `scripts/package-local.sh` builds the packages of the committed HEAD (release, no test suite) with a
+release number from the current time, so each build replaces the installed one:
+
+```bash
+scripts/package-local.sh                       # writes ~/.cache/cupertino-pkg/cupertino-*.pkg.tar.zst
+sudo pacman -U ~/.cache/cupertino-pkg/cupertino-*.pkg.tar.zst
+```
+
+Install the three packages together, so the server, the shell processes, the applications, the theme and the assets
+come from one commit. A change to the server or to what the session manager links takes effect at the next login; a
+shell process takes it with `cupertino shell restart NAME`. Leave nothing in the development folder that the package
+replaces: the server starts a folder file only when it is no older than the installed program.
+
 ## Installed-session iteration
 
 When developing inside Cupertino, choose the smallest change that can demonstrate the fix. Rebuilding the workspace
@@ -112,8 +127,9 @@ installed program and logs why. Its log names the program and the source of ever
    installed program: run it at once when the candidate fails, and once an installed package contains the change.
 
 Only the user's own session runs the folder's files: the server checks them against the user it runs as, so another
-account's session, root's files aside, never starts them. The folder takes no part in package updates: a file left in
-it keeps starting instead of a newer installed program. `cupertino shell list` marks such a file
+account's session, root's files aside, never starts them. A package update wins over the folder: the server starts a
+file of the folder only when it was last modified no earlier than the installed program, whose package files keep their
+build time, so a build left behind stops starting once a newer package is installed. `cupertino shell list` marks such a file
 `development folder (older than installed)` (`dev_program_older_than_installed` in JSON) when it was last modified
 before the installed program, whose package files keep their build time, and `cupertino diagnose` warns about it
 (`shell.dev_folder`) with the `use-installed` command to run.

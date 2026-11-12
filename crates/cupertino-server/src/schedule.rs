@@ -87,6 +87,8 @@ pub struct FrameScheduler {
     next_due: Option<Duration>,
     /// A change waits for the grid point too ([`FrameScheduler::pace_changes`]).
     paced: bool,
+    /// The time of the last vblank the display reported: the phase of its refresh grid.
+    last_vblank: Option<Duration>,
     failed: Option<FailedFrames>,
     in_flight: Option<InFlight>,
     generation: u64,
@@ -101,6 +103,7 @@ impl Default for FrameScheduler {
             damaged: true,
             next_due: None,
             paced: false,
+            last_vblank: None,
             failed: None,
             in_flight: None,
             generation: GENERATIONS.fetch_add(1, Ordering::Relaxed),
@@ -165,6 +168,26 @@ impl FrameScheduler {
     /// The display showed a frame at `time`: the grid follows its vblank.
     pub fn vblank(&mut self, time: Duration, refresh: Duration) {
         self.next_due = Some(time + refresh);
+        self.last_vblank = Some(time);
+    }
+
+    /// When a frame drawn at `now` reaches the screen: the first vblank after `now` on the grid of the last one the
+    /// display reported. Animation is sampled at this time, so each frame shows where the motion is when it is seen,
+    /// however long after the vblank the loop drew it. `None` without a reported vblank (an output no flip paces) or
+    /// when the last one is more than [`PHASE_TRUSTED_FOR`] old, as the refresh period is rounded and the phase drifts.
+    pub fn presentation_at(&self, now: Duration, refresh: Duration) -> Option<Duration> {
+        let vblank = self.last_vblank?;
+        if refresh.is_zero() {
+            return None;
+        }
+        let Some(since) = now.checked_sub(vblank) else {
+            return Some(vblank + refresh);
+        };
+        if since > PHASE_TRUSTED_FOR {
+            return None;
+        }
+        let periods = since.as_nanos() / refresh.as_nanos() + 1;
+        Some(vblank + refresh * u32::try_from(periods).ok()?)
     }
 
     /// A frame failed to draw at `time`: the output stays damaged, and is not drawn again before one `refresh` later.
@@ -298,6 +321,9 @@ impl FrameScheduler {
         self.counts
     }
 }
+
+/// How long after a vblank the refresh grid's phase is trusted to predict the next one.
+pub const PHASE_TRUSTED_FOR: Duration = Duration::from_secs(1);
 
 /// How long a flip waits for its vblank before its clients are called back without it.
 fn timeout_after(refresh: Duration) -> Duration {
@@ -586,6 +612,67 @@ mod tests {
             s.overdue(500 * MS, fast),
             Some(Overdue::GiveUp),
             "not before one second at 144 Hz"
+        );
+    }
+
+    #[test]
+    fn a_frame_is_presented_at_the_first_vblank_after_it_is_drawn() {
+        let mut s = FrameScheduler::default();
+        assert_eq!(s.presentation_at(MS, REFRESH), None, "no vblank seen yet");
+        let v = Duration::from_secs(3);
+        s.vblank(v, REFRESH);
+        assert_eq!(s.presentation_at(v, REFRESH), Some(v + REFRESH));
+        assert_eq!(s.presentation_at(v + MS, REFRESH), Some(v + REFRESH));
+        assert_eq!(
+            s.presentation_at(v + REFRESH + MS, REFRESH),
+            Some(v + 2 * REFRESH),
+            "a loop that drew past the next vblank waits for the one after"
+        );
+        assert_eq!(
+            s.presentation_at(v + PHASE_TRUSTED_FOR + MS, REFRESH),
+            None,
+            "an old phase is not trusted"
+        );
+    }
+
+    /// The model times a 60 Hz head samples animation at over one second, drawing each frame `delay(n)` after its vblank,
+    /// as the loop gets to it: at the time the frame is drawn, or at the time it is presented.
+    fn sample_times(delay: impl Fn(u32) -> Duration, at_presentation: bool) -> Vec<Duration> {
+        let mut s = FrameScheduler::default();
+        let mut samples = Vec::new();
+        for n in 0..60 {
+            let vblank = Duration::from_secs(10) + REFRESH * n;
+            s.vblank(vblank, REFRESH);
+            let drawn = vblank + delay(n);
+            samples.push(if at_presentation {
+                s.presentation_at(drawn, REFRESH)
+                    .expect("a vblank was seen")
+            } else {
+                drawn
+            });
+        }
+        samples
+    }
+
+    #[test]
+    fn sampling_at_the_presentation_time_steps_animation_one_refresh_per_frame_however_late_the_loop_draws(
+    ) {
+        // the loop draws 0.2 to 9 ms after each vblank, as events, clients and the previous frame keep it busy
+        let delay = |n: u32| Duration::from_micros(200 + u64::from(n * 7919 % 8800));
+        let steps = |samples: Vec<Duration>| -> Vec<Duration> {
+            samples.windows(2).map(|w| w[1] - w[0]).collect()
+        };
+        let at_draw = steps(sample_times(delay, false));
+        let jitter = at_draw.iter().max().unwrap().as_micros() as i64
+            - at_draw.iter().min().unwrap().as_micros() as i64;
+        assert!(
+            jitter > 4000,
+            "sampled when drawn, animation steps vary by {jitter} us between frames shown one refresh apart"
+        );
+        let at_present = steps(sample_times(delay, true));
+        assert!(
+            at_present.iter().all(|&step| step == REFRESH),
+            "sampled when presented, every step is one refresh: {at_present:?}"
         );
     }
 

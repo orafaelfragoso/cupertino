@@ -106,7 +106,7 @@ impl Cupertino {
         let scale = self.outputs[idx].scale;
         let cursor = self.cursor_plan(scale);
         let pointer: Point<f64, Logical> = self.pointer.current_location();
-        let now = self.now();
+        let now = self.scene_time(idx);
         let drag_icon = self.drag_icon.clone();
         let lock = self.lock_view(idx);
         let session_overlays = [
@@ -759,6 +759,21 @@ impl Cupertino {
             || Duration::from(self.clock.now()),
             |t| Duration::from_secs_f64(t.max(0.0)),
         )
+    }
+
+    /// The model time a frame of output `idx` drawn now shows: the time it reaches the screen, on a display whose
+    /// vblanks give its refresh phase ([`crate::schedule::FrameScheduler::presentation_at`]), so animation advances
+    /// by one refresh per frame shown however long after the vblank the loop drew it. Without a known phase, now.
+    pub fn scene_time(&self, idx: usize) -> f64 {
+        let now = self.now();
+        let frame_now = self.frame_now();
+        match self.outputs[idx]
+            .scheduler
+            .presentation_at(frame_now, self.refresh_of(idx))
+        {
+            Some(at) => now + (at - frame_now).as_secs_f64() * self.time_scale,
+            None => now,
+        }
     }
 
     /// One refresh period of output `idx`'s mode.

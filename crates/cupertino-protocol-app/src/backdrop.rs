@@ -127,7 +127,18 @@ impl Backdrop {
     /// zero width or height hides the backdrop.
     pub fn set_shape(&self, rect: &Rect, radius: f64) -> Result<(), Error> {
         let s = Shape::new(rect, radius)?;
-        self.proxy.set_shape(s.x, s.y, s.width, s.height, s.radius);
+        // a server before it takes whole points only
+        if self.proxy.version() >= FRACTIONAL_SHAPE_VERSION {
+            self.proxy.set_shape_fixed(
+                rect.x(),
+                rect.y(),
+                rect.width().max(0.0),
+                rect.height().max(0.0),
+                s.radius,
+            );
+        } else {
+            self.proxy.set_shape(s.x, s.y, s.width, s.height, s.radius);
+        }
         Ok(())
     }
 
@@ -187,6 +198,8 @@ const BAR_VERSION: u32 = 12;
 
 /// The version of `cupertino_backdrop_v1` that has the dense and module glass styles.
 const DENSE_VERSION: u32 = 13;
+/// The first version that takes a shape in fractional points.
+const FRACTIONAL_SHAPE_VERSION: u32 = 14;
 
 impl Dispatch<CupertinoBackdropV1, BackdropData> for State {
     fn event(

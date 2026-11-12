@@ -12,7 +12,7 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="13">
+  <interface name="cupertino_app_effects_v1" version="14">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
       event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
@@ -144,7 +144,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_backdrop_v1" version="13">
+  <interface name="cupertino_backdrop_v1" version="14">
     <description summary="a material region below a surface">
       All state is double-buffered: it applies on the next wl_surface.commit of the surface the
       backdrop was created for, together with that commit's buffer, so the backdrop and the content
@@ -190,6 +190,18 @@
       <arg name="y" type="int"/>
       <arg name="width" type="int"/>
       <arg name="height" type="int"/>
+      <arg name="radius" type="fixed"/>
+    </request>
+
+    <request name="set_shape_fixed" since="14">
+      <description summary="set the region in fractional points and its corner radius">
+        As set_shape, with the rectangle in fractional surface-local logical points, so the shape keeps the
+        device pixels of a scaled output. A zero width or height hides the backdrop.
+      </description>
+      <arg name="x" type="fixed"/>
+      <arg name="y" type="fixed"/>
+      <arg name="width" type="fixed"/>
+      <arg name="height" type="fixed"/>
       <arg name="radius" type="fixed"/>
     </request>
 

@@ -45,7 +45,7 @@ impl AppEffectsV1Global {
 }
 
 /// The version of `cupertino_app_effects_v1` the server offers.
-const VERSION: u32 = 13;
+const VERSION: u32 = 14;
 /// The version from which the backdrops of a subsurface are drawn, above the rest of its surface tree.
 pub const SUBSURFACE_BACKDROPS_VERSION: u32 = 11;
 
@@ -173,10 +173,10 @@ static NEXT_SERIAL: AtomicU64 = AtomicU64::new(0);
 /// Region of a backdrop in surface-local logical coordinates.
 #[derive(Clone, Copy, Debug, Default)]
 struct Shape {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
     radius: f64,
 }
 
@@ -292,14 +292,11 @@ fn committed_backdrops(
                 (None, None) => return None,
             };
             let s = e.shape;
-            (s.width > 0 && s.height > 0).then(|| BackdropArea {
+            (s.width > 0.0 && s.height > 0.0).then(|| BackdropArea {
                 key: e.serial,
                 material,
                 glass,
-                area: Rectangle::new(
-                    origin + Point::from((f64::from(s.x), f64::from(s.y))),
-                    (f64::from(s.width), f64::from(s.height)).into(),
-                ),
+                area: Rectangle::new(origin + Point::from((s.x, s.y)), (s.width, s.height).into()),
                 radius: s.radius,
                 alpha: e.alpha,
             })
@@ -771,6 +768,31 @@ fn warn_unknown_material(name: &str) {
     }
 }
 
+/// Set the region of a backdrop, in surface-local logical points; a negative or non-finite value is a protocol error.
+fn set_shape(resource: &CupertinoBackdropV1, data: &BackdropData, rect: [f64; 4], radius: f64) {
+    let [x, y, width, height] = rect;
+    if !rect.iter().chain([&radius]).all(|v| v.is_finite())
+        || width < 0.0
+        || height < 0.0
+        || radius < 0.0
+    {
+        resource.post_error(
+            Error::InvalidShape,
+            format!("negative or non-finite size or radius: {width}x{height}, radius {radius}"),
+        );
+        return;
+    }
+    data.edit(|e| {
+        e.shape = Shape {
+            x,
+            y,
+            width,
+            height,
+            radius,
+        }
+    });
+}
+
 impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
     fn request(
         state: &mut Self,
@@ -812,23 +834,25 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                 height,
                 radius,
             } => {
-                if width < 0 || height < 0 || radius < 0.0 {
-                    resource.post_error(
-                        Error::InvalidShape,
-                        format!("negative size or radius: {width}x{height}, radius {radius}"),
-                    );
-                    return;
-                }
-                data.edit(|e| {
-                    e.shape = Shape {
-                        x,
-                        y,
-                        width,
-                        height,
-                        radius,
-                    }
-                });
+                set_shape(
+                    resource,
+                    data,
+                    [
+                        f64::from(x),
+                        f64::from(y),
+                        f64::from(width),
+                        f64::from(height),
+                    ],
+                    radius,
+                );
             }
+            cupertino_backdrop_v1::Request::SetShapeFixed {
+                x,
+                y,
+                width,
+                height,
+                radius,
+            } => set_shape(resource, data, [x, y, width, height], radius),
             cupertino_backdrop_v1::Request::SetAlpha { alpha } => {
                 if !(0.0..=1.0).contains(&alpha) {
                     resource.post_error(

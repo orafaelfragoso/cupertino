@@ -165,6 +165,9 @@ pub enum PopupAnchor {
     /// top edge moved by `dx` toward the trailing side: a callout that stands off to one side of what it points at.
     /// It flips below the node when there is no room above.
     Above { key: Key, gap: f64, dx: f64 },
+    /// Centred above the parent's node with this key, its bottom edge `gap` above the node's top edge, flipping below
+    /// the node when there is no room above: a label over what it names.
+    CentredAbove { key: Key, gap: f64 },
 }
 
 /// What a window paints under its content.

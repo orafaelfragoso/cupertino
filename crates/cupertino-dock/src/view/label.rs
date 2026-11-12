@@ -36,9 +36,8 @@ pub const RADIUS: f64 = 13.0;
 /// The pointer under the capsule: its width and its depth.
 pub const POINTER_WIDTH: f64 = 10.0;
 pub const POINTER_DEPTH: f64 = 6.5;
-/// How far the capsule's bottom edge stands above the tile's top: the pointer's tip then stands 3 points above the
-/// bar's top edge, which lies about 10.5 points above the tile.
-pub const GAP: f64 = 13.5;
+/// How far the pointer's tip stands above the bar's top edge (the label's window ends at the tip).
+pub const GAP: f64 = 3.0;
 /// How far a label beside a bar at the side of the output stands off its tile.
 const SIDE_GAP: f64 = 3.0;
 /// The glass container the capsule and its pointer share, and how far their outlines blend into each other in points:
@@ -118,8 +117,8 @@ pub struct LabelView<'a> {
 /// The label of a tile.
 pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) -> Window<M> {
     let anchor = match view.orientation {
-        // over the bar: below has no room at the bottom of the output, so the popup flips
-        Orientation::Bottom => PopupAnchor::Below {
+        // over the bar, the pointer's tip a little above its top edge
+        Orientation::Bottom => PopupAnchor::CentredAbove {
             key: Key::from(LABEL_ANCHOR),
             gap: GAP,
         },

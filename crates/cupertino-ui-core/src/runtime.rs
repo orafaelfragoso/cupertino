@@ -2560,6 +2560,12 @@ fn place<M: 'static>(
             PopupEdge::BottomRight,
             *offset,
         ),
+        PopupAnchor::CentredAbove { key, gap } => (
+            rect_of(key)?,
+            PopupEdge::Top,
+            PopupEdge::Top,
+            Point::new(0.0, -gap),
+        ),
         PopupAnchor::Above { key, gap, dx } if rtl => (
             rect_of(key)?,
             PopupEdge::Top,

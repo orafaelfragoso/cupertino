@@ -17,6 +17,7 @@ pub mod lock;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+pub mod launcher;
 pub mod login;
 pub mod menubar;
 pub mod notifications;

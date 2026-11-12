@@ -300,7 +300,7 @@ t; a toolbar group is regular glass (`PaintCx::glass`) in one container
   fills a preview window with the content alone, a file shown by its icon keeping its name, summary and details beside
   it. It reads as a group named "Preview of <name>"; a picture reads by the file's name and text by its text.
 
-`Swatch` is a choice drawn as a picture: a 66 by 45 point mock of the light, dark or automatic look with its name under it, or a 22 point dot of a colour (or of every accent colour in turn), with a ring in the accent colour when chosen. A scroll bar with `ScrollClick::JumpToSpot` moves the knob's middle to a click in the track and carries on as a drag. A `TileSidebar` row can be an account row (a 64 point row with the person's picture or initials and a second line), and its icon size follows the sidebar icon size choice (rows 28, 32 or 36 points, tiles 16, 20 or 24).
+`BarChart` draws a series of vertical bars (a recorded level over time) with value labels and guide lines at its right and time labels along its bottom; bars can be set apart by a dimmer shade. A `Swatch` can also mock a window at one step of a row from larger text to more room. `Swatch` is a choice drawn as a picture: a 66 by 45 point mock of the light, dark or automatic look with its name under it, or a 22 point dot of a colour (or of every accent colour in turn), with a ring in the accent colour when chosen. A scroll bar with `ScrollClick::JumpToSpot` moves the knob's middle to a click in the track and carries on as a drag. A `TileSidebar` row can be an account row (a 64 point row with the person's picture or initials and a second line), and its icon size follows the sidebar icon size choice (rows 28, 32 or 36 points, tiles 16, 20 or 24).
 
 ## Not yet
 

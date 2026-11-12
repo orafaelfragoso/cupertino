@@ -154,6 +154,17 @@ pub enum InteractionVariant {
     Disabled,
 }
 
+thread_local! {
+    /// How far a window that just became active has come from its inactive colours to its active ones, 0 to 1.
+    static ACTIVATION: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// Sets how far the colours of the window being painted have crossed from the inactive to the active ones: 1 is the
+/// active colours (the usual state). The painter sets it around the paint of a window and puts 1 back.
+pub fn set_activation(progress: f32) {
+    ACTIVATION.with(|a| a.set(progress.clamp(0.0, 1.0)));
+}
+
 /// The state a colour is resolved for. Keyboard focus is not part of it: the focus ring is drawn on its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StateVariant {
@@ -224,6 +235,25 @@ impl ColorTokens {
 
     /// The colour of `role` in `state`, or its normal colour when the theme has no entry for that state.
     pub fn get(&self, role: ColorRole, state: StateVariant) -> Option<Color> {
+        let shown = self.lookup(role, state);
+        let progress = ACTIVATION.with(|a| a.get());
+        if state.window_active && progress < 1.0 {
+            // a window that just became active: its colours cross from the inactive ones
+            let before = self.lookup(
+                role,
+                StateVariant {
+                    window_active: false,
+                    ..state
+                },
+            );
+            if let (Some(before), Some(shown)) = (before, shown) {
+                return Some(before.lerp(shown, progress));
+            }
+        }
+        shown
+    }
+
+    fn lookup(&self, role: ColorRole, state: StateVariant) -> Option<Color> {
         self.map
             .get(&(role, state))
             .or_else(|| self.map.get(&(role, StateVariant::NORMAL)))

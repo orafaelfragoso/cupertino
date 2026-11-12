@@ -19,7 +19,8 @@ use rustix::event::{poll, PollFd, PollFlags};
 use rustix::io::Errno;
 use rustix::time::Timespec;
 
-const USAGE: &str = "usage: cupertino-powerd [--session-bus [--no-auth]] [--sysfs-root PATH]";
+const USAGE: &str =
+    "usage: cupertino-powerd [--session-bus [--no-auth]] [--sysfs-root PATH] [--history PATH]";
 
 /// How often sysfs is read again when no uevent arrives. approximate: battery drivers do not
 /// send an event for every change of charge or rate, so the figures would go stale; UPower
@@ -30,6 +31,8 @@ struct Options {
     session_bus: bool,
     no_auth: bool,
     sysfs_root: PathBuf,
+    /// Where the charge history is kept.
+    history_path: PathBuf,
 }
 
 impl Options {
@@ -39,6 +42,7 @@ impl Options {
             session_bus: false,
             no_auth: false,
             sysfs_root: PathBuf::from("/sys"),
+            history_path: PathBuf::from("/var/lib/cupertino/power-history"),
         };
         let mut args = args;
         while let Some(arg) = args.next() {
@@ -50,6 +54,12 @@ impl Options {
                         .next()
                         .map(PathBuf::from)
                         .ok_or_else(|| "--sysfs-root needs a path".to_owned())?
+                }
+                "--history" => {
+                    options.history_path = args
+                        .next()
+                        .map(PathBuf::from)
+                        .ok_or_else(|| "--history needs a path".to_owned())?
                 }
                 other => return Err(format!("unknown argument {other}")),
             }
@@ -117,6 +127,7 @@ fn run(options: &Options) -> Result<Infallible, Error> {
         sysfs_root: options.sysfs_root.clone(),
         lid,
         authorizer,
+        history_path: Some(options.history_path.clone()),
     })?;
 
     // the interval runs from the last read, so uevents that do not concern power do not put the read off

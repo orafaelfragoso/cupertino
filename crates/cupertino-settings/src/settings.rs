@@ -16,6 +16,7 @@ use cupertino_defaults::data_control::DataControlConf;
 use cupertino_defaults::desktop_control::{App, Decision, DesktopControlConf, Service};
 use cupertino_defaults::dock::{sanitize_large_size, sanitize_tile_size, DockSettings, Position};
 use cupertino_defaults::keyboard::KeyboardSettings;
+use cupertino_defaults::launcher::LauncherSettings;
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_defaults::notifications::NotificationSettings;
 use cupertino_defaults::power::PowerSettings;
@@ -48,10 +49,12 @@ pub enum File {
     DesktopControl,
     /// `appearance.conf`, read by every program that draws with the toolkit and by the menu bar's schedule.
     Appearance,
+    /// `launcher.conf`, read by the launcher each time its panel opens.
+    Launcher,
 }
 
 impl File {
-    pub const ALL: [File; 10] = [
+    pub const ALL: [File; 11] = [
         File::Dock,
         File::Compositor,
         File::MenuBar,
@@ -62,6 +65,7 @@ impl File {
         File::Notifications,
         File::DesktopControl,
         File::Appearance,
+        File::Launcher,
     ];
 
     /// The process that applies the file.
@@ -75,6 +79,7 @@ impl File {
             | File::DesktopControl => "the window server",
             File::MenuBar => "the menu bar",
             File::Appearance => "each app",
+            File::Launcher => "the launcher",
             File::ScreenSharing => "the portal",
             File::Notifications => "the notification centre",
         }
@@ -106,6 +111,7 @@ pub struct Paths {
     pub notifications: Option<PathBuf>,
     pub desktop_control: Option<PathBuf>,
     pub appearance: Option<PathBuf>,
+    pub launcher: Option<PathBuf>,
     /// The installed screen reader (`installed_screen_reader`), which the session's compositor runs; `None` without one.
     /// Settings only shows whether there is one: it never starts it.
     pub screen_reader: Option<PathBuf>,
@@ -126,6 +132,7 @@ impl Paths {
             notifications: NotificationSettings::path(),
             desktop_control: DesktopControlConf::path(),
             appearance: AppearanceSettings::path(),
+            launcher: LauncherSettings::path(),
             screen_reader: cupertino_defaults::accessibility::installed_screen_reader(),
         }
     }
@@ -142,6 +149,7 @@ impl Paths {
             File::Notifications => self.notifications.as_ref(),
             File::DesktopControl => self.desktop_control.as_ref(),
             File::Appearance => self.appearance.as_ref(),
+            File::Launcher => self.launcher.as_ref(),
         }
     }
 }
@@ -154,6 +162,8 @@ pub struct Settings {
     pub menubar: MenuBarSettings,
     /// `appearance.conf`: the accent, the highlight, the schedule and how windows behave.
     pub appearance: AppearanceSettings,
+    /// `launcher.conf`: the kinds of result the launcher lists and the folders its file search leaves out.
+    pub launcher: LauncherSettings,
     pub keyboard: KeyboardSettings,
     pub power: PowerSettings,
     pub accessibility: AccessibilitySettings,
@@ -251,6 +261,15 @@ impl Settings {
             )?,
             None => AppearanceSettings::UNSET,
         };
+        let launcher = match &paths.launcher {
+            Some(p) => {
+                LauncherSettings::load(p, last_good.map(|l| &l.launcher)).map(|(s, problems)| {
+                    lines("launcher.conf", problems);
+                    s
+                })?
+            }
+            None => LauncherSettings::UNSET,
+        };
         let keyboard = match &paths.keyboard {
             Some(p) => {
                 KeyboardSettings::load(p, last_good.map(|l| &l.keyboard)).map(|(s, problems)| {
@@ -312,6 +331,7 @@ impl Settings {
             compositor,
             menubar,
             appearance,
+            launcher,
             keyboard,
             power,
             accessibility,
@@ -544,6 +564,7 @@ impl Settings {
             File::Compositor => self.compositor.store(path).map(drop),
             File::MenuBar => self.menubar.store(path).map(drop),
             File::Appearance => self.appearance.store(path).map(drop),
+            File::Launcher => self.launcher.store(path).map(drop),
             File::Keyboard => self.keyboard.store(path).map(drop),
             File::Power => self.power.store(path).map(drop),
             File::DataControl => self.clipboard.store(path),

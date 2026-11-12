@@ -4,3 +4,4 @@ After=dbus.socket
 
 [Service]
 ExecStart=/usr/bin/cupertino-powerd
+StateDirectory=cupertino

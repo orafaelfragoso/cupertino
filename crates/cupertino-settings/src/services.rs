@@ -22,8 +22,8 @@ use crate::nm;
 use crate::pane::PaneId;
 
 use crate::live::{
-    display_name, Battery, BatteryState, Bluetooth, BtDevice, Device, Focus, Monitor, Mouse,
-    Network, Output, Reading, Volume, Wifi,
+    display_name, Battery, BatteryExtras, BatteryState, Bluetooth, BtDevice, ChargePoint, Device,
+    Focus, KnownNetwork, Monitor, Mouse, Network, Output, Reading, Volume, Vpn, Wifi,
 };
 use crate::panes::Call;
 
@@ -46,6 +46,16 @@ pub const LOGIN_PATH: &str = "/org/cupertino/LoginManager1";
 const LOGIN_ERROR: &str = "org.cupertino.LoginManager1.Error.";
 /// The Bluetooth daemon's refusal to replace another client's live agent.
 const AGENT_EXISTS: &str = "org.cupertino.Bluetooth1.AgentExists";
+
+/// The power profiles service, whose power-saver profile is the Battery pane's low power mode.
+const PROFILES_NAME: &str = "net.hadess.PowerProfiles";
+const PROFILES_PATH: &str = "/net/hadess/PowerProfiles";
+/// The keyboard backlight of the power service.
+const KEYBOARD_BACKLIGHT_NAME: &str = "org.freedesktop.UPower.KbdBacklight";
+const KEYBOARD_BACKLIGHT_PATH: &str = "/org/freedesktop/UPower/KbdBacklight";
+/// How far back the charge history is asked for, and how coarsely: ten days in points ten minutes apart.
+const HISTORY_SPAN: u32 = 10 * 24 * 60 * 60;
+const HISTORY_STEP: u32 = 600;
 
 /// The lowest raw brightness the slider writes: 1, so it never turns the panel off (the control panel's floor,
 /// approximate).
@@ -297,6 +307,9 @@ impl Backends {
         if self.network.is_none() {
             hidden.extend([PaneId::Wifi, PaneId::Network]);
         }
+        if self.network != Some(NetworkBackend::NetworkManager) {
+            hidden.push(PaneId::Vpn);
+        }
         if self.bluetooth.is_none() {
             hidden.push(PaneId::Bluetooth);
         }
@@ -328,6 +341,8 @@ pub struct Services {
     pairing: Arc<Mutex<HashSet<String>>>,
     /// Where the hardware facts are read; `None` (tests) is a machine without a battery or a touchpad.
     hardware: Option<Sources>,
+    /// Listens to the input while the Sound pane shows it, to draw its level.
+    meter: Option<crate::meter::Meter>,
 }
 
 impl Services {
@@ -343,6 +358,7 @@ impl Services {
             backends: Backends::default(),
             pairing: Arc::default(),
             hardware: Some(Sources::default()),
+            meter: None,
         }
     }
 
@@ -359,6 +375,7 @@ impl Services {
             backends: Backends::default(),
             pairing: Arc::default(),
             hardware: None,
+            meter: None,
         }
     }
 
@@ -567,6 +584,8 @@ impl Services {
                 conn.roundtrip().map_err(|e| e.to_string())?;
                 Ok(conn.outputs())
             });
+        // where each display lies and which refresh rates it has: the server's output management says
+        let layouts = crate::output_config::layouts().unwrap_or_default();
         match outputs {
             Ok(outputs) => Reading::Ready(
                 outputs
@@ -590,6 +609,17 @@ impl Services {
                             physical_mm: o.physical_size_mm,
                             logical: o.geometry.map(|g| (g.width, g.height)),
                             rotated: o.transform.swaps_sides(),
+                            position: o
+                                .name
+                                .as_ref()
+                                .and_then(|n| layouts.iter().find(|l| &l.connector == n))
+                                .map(|l| l.position),
+                            refresh_rates: o
+                                .name
+                                .as_ref()
+                                .and_then(|n| layouts.iter().find(|l| &l.connector == n))
+                                .map(|l| l.refresh_rates.clone())
+                                .unwrap_or_default(),
                         })
                     })
                     .collect(),
@@ -644,6 +674,144 @@ impl Services {
         )
     }
 
+    /// The VPN connections NetworkManager holds; none are listed while another service manages the network.
+    pub fn vpns(&mut self) -> Reading<Vec<Vpn>> {
+        if !self.network_manager() {
+            return Reading::Unavailable("VPN connections are managed by NetworkManager".into());
+        }
+        let result = self.system.connection().and_then(nm::vpns);
+        reading(self.system.checked(result), "NetworkManager is not running")
+    }
+
+    /// The battery's health, charge history and power-saving profile. `with_history` reads the charge history too,
+    /// which is long: the pane asks for it when it opens and now and then.
+    pub fn battery_extras(&mut self, keep: &BatteryExtras, with_history: bool) -> BatteryExtras {
+        let mut extras = BatteryExtras {
+            history: keep.history.clone(),
+            ..BatteryExtras::default()
+        };
+        let device = self
+            .system
+            .proxy(UPOWER_NAME, UPOWER_DISPLAY_DEVICE, UPOWER_DEVICE)
+            .and_then(|p| {
+                let full: f64 = p.get_property("EnergyFull")?;
+                let design: f64 = p.get_property("EnergyFullDesign")?;
+                let rate: f64 = p.get_property("EnergyRate")?;
+                let history: Option<Vec<(u32, f64, u32)>> = if with_history {
+                    p.call("GetHistory", &("charge", HISTORY_SPAN, HISTORY_STEP))
+                        .ok()
+                } else {
+                    None
+                };
+                Ok((full, design, rate, history))
+            });
+        if let Ok((full, design, rate, history)) = self.system.checked(device) {
+            extras.health =
+                (design > 0.0 && full > 0.0).then(|| (full / design * 100.0).min(100.0));
+            extras.rate_watts = (rate.abs() > 0.0).then_some(rate.abs());
+            if let Some(rows) = history {
+                extras.history = rows
+                    .into_iter()
+                    .map(|(time, percent, state)| ChargePoint {
+                        time: i64::from(time),
+                        percent,
+                        charging: state == 1,
+                    })
+                    .collect();
+            }
+        }
+        let profile = self
+            .system
+            .proxy(PROFILES_NAME, PROFILES_PATH, PROFILES_NAME)
+            .and_then(|p| p.get_property::<String>("ActiveProfile"));
+        extras.low_power = self
+            .system
+            .checked(profile)
+            .ok()
+            .map(|p| p == "power-saver");
+        extras
+    }
+
+    /// The keyboard backlight's level, 0 to 1; `None` without one.
+    pub fn keyboard_backlight(&mut self) -> Option<f64> {
+        let result = self
+            .system
+            .proxy(
+                UPOWER_NAME,
+                KEYBOARD_BACKLIGHT_PATH,
+                KEYBOARD_BACKLIGHT_NAME,
+            )
+            .and_then(|p| {
+                let max: i32 = p.call("GetMaxBrightness", &())?;
+                let now: i32 = p.call("GetBrightness", &())?;
+                Ok((now, max))
+            });
+        match self.system.checked(result) {
+            Ok((now, max)) if max > 0 => Some(f64::from(now) / f64::from(max)),
+            _ => None,
+        }
+    }
+
+    /// The sound inputs, in `wpctl status` order; none without a PipeWire daemon.
+    pub fn inputs(&mut self) -> Vec<Output> {
+        if !self.pipewire {
+            return Vec::new();
+        }
+        self.wpctl
+            .sources()
+            .map(|sources| {
+                sources
+                    .into_iter()
+                    .map(|s| Output {
+                        id: s.id,
+                        name: s.name,
+                        default: s.default,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The default input's volume.
+    pub fn input_volume(&mut self) -> Reading<Volume> {
+        match self.wpctl.volume(Target::DefaultSource) {
+            Ok(v) => Reading::Ready(Volume {
+                level: v.level,
+                muted: v.muted,
+            }),
+            Err(e) => {
+                log_once(&format!("no sound input: {e}"));
+                Reading::Unavailable("No sound input is available".into())
+            }
+        }
+    }
+
+    /// The output's balance, -1 to 1; `None` when the output is not stereo or the sound server does not say.
+    pub fn balance(&mut self) -> Option<f64> {
+        if !self.pipewire {
+            return None;
+        }
+        self.wpctl.balance().ok().map(|(balance, _)| balance)
+    }
+
+    /// Start listening to the default input to measure how loud it is. Does nothing when it already runs.
+    pub fn start_meter(&mut self) {
+        if self.meter.is_some() {
+            return;
+        }
+        self.meter = crate::meter::Meter::start();
+    }
+
+    /// Stop listening.
+    pub fn stop_meter(&mut self) {
+        self.meter = None;
+    }
+
+    /// How loud the input is, 0 to 1, since the last asked; 0 while nothing listens.
+    pub fn meter_level(&mut self) -> f64 {
+        self.meter.as_ref().map_or(0.0, |m| m.level())
+    }
+
     pub fn wifi(&mut self, keep: Option<&Wifi>) -> Reading<Wifi> {
         let result = if self.network_manager() {
             self.system.connection().and_then(nm::wifi)
@@ -677,7 +845,40 @@ impl Services {
             .and_then(|p| {
                 let devices: Vec<DeviceRecord> = p.get_property("Devices")?;
                 let networks: Vec<NetworkRecord> = p.call("GetNetworks", &())?;
+                // a daemon that lists its saved networks (and can forget them) says so by answering
+                let listed: Option<Vec<(String, bool)>> = p.call("GetKnownNetworks", &()).ok();
+                let in_list = |ssid: &str| networks.iter().find(|n| n.0 == ssid);
+                let known: Vec<KnownNetwork> = match &listed {
+                    Some(listed) => listed
+                        .iter()
+                        .map(|(ssid, auto_join)| {
+                            let seen = in_list(ssid);
+                            KnownNetwork {
+                                ssid: ssid.clone(),
+                                name: display_name(ssid),
+                                auto_join: Some(*auto_join),
+                                in_range: seen.is_some(),
+                                connected: seen.is_some_and(|n| n.4),
+                                secured: seen.map_or(true, |n| n.2 != "open"),
+                            }
+                        })
+                        .collect(),
+                    None => networks
+                        .iter()
+                        .filter(|n| n.3)
+                        .map(|n| KnownNetwork {
+                            ssid: n.0.clone(),
+                            name: display_name(&n.0),
+                            auto_join: None,
+                            in_range: true,
+                            connected: n.4,
+                            secured: n.2 != "open",
+                        })
+                        .collect(),
+                };
                 Ok(Wifi {
+                    known,
+                    can_forget: listed.is_some(),
                     enabled: p.get_property("WirelessEnabled")?,
                     devices: devices
                         .into_iter()
@@ -834,6 +1035,38 @@ impl Services {
             Call::SetWirelessEnabled(on) if self.network_manager() => self.on_system(|c| nm::set_wireless_enabled(c, *on)),
             Call::Join { ssid, passphrase } if self.network_manager() => self.on_system(|c| nm::join(c, ssid, passphrase.as_ref().map_or("", |p| p.as_str()))),
             Call::Disconnect if self.network_manager() => self.on_system(nm::disconnect),
+            Call::ForgetNetwork(ssid) if self.network_manager() => self.on_system(|c| nm::forget(c, ssid)),
+            Call::SetAutoJoin { ssid, on } if self.network_manager() => self.on_system(|c| nm::set_auto_join(c, ssid, *on)),
+            Call::SetVpn { id, on } => self.on_system(|c| nm::set_vpn(c, id, *on)),
+            Call::ForgetNetwork(ssid) => system(self, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME, &|p| p.call::<_, _, ()>("Forget", &(ssid.as_str(),))),
+            Call::SetAutoJoin { ssid, on } => system(self, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME, &|p| p.call::<_, _, ()>("SetAutoJoin", &(ssid.as_str(), *on))),
+            Call::SetLowPower(on) => system(self, PROFILES_NAME, PROFILES_PATH, PROFILES_NAME, &|p| p.set_property("ActiveProfile", if *on { "power-saver" } else { "balanced" }).map_err(zbus::Error::from)),
+            Call::SetInput(id) => {
+                let changed = self.wpctl.set_default_source(*id);
+                changed.map_err(|e| {
+                    log_once(&format!("the sound input could not be changed: {e}"));
+                    "The sound input could not be changed.".to_string()
+                })
+            }
+            Call::SetInputVolume { level, muted } => self
+                .wpctl
+                .set_level(Target::DefaultSource, *level)
+                .and_then(|()| self.wpctl.set_muted(Target::DefaultSource, *muted))
+                .map_err(|e| {
+                    log_once(&format!("the input volume could not be changed: {e}"));
+                    "The input volume could not be changed.".to_string()
+                }),
+            Call::SetBalance(balance) => {
+                let level = self.wpctl.volume(Target::DefaultSink).map_or(1.0, |v| v.level);
+                self.wpctl.set_balance(*balance, level).map_err(|e| {
+                    log_once(&format!("the balance could not be changed: {e}"));
+                    "The balance could not be changed.".to_string()
+                })
+            }
+            Call::SetKeyboardBacklight(level) => system(self, UPOWER_NAME, KEYBOARD_BACKLIGHT_PATH, KEYBOARD_BACKLIGHT_NAME, &|p| {
+                let max: i32 = p.call("GetMaxBrightness", &())?;
+                p.call::<_, _, ()>("SetBrightness", &(((level.clamp(0.0, 1.0) * f64::from(max)).round() as i32),))
+            }),
             Call::SetBluetoothPowered(on) if self.bluez() => self.on_system(|c| bluez::set_powered(c, *on)),
             Call::Connect(id) if self.bluez() => self.on_system(|c| bluez::connect(c, id)),
             Call::DisconnectDevice(id) if self.bluez() => self.on_system(|c| bluez::disconnect(c, id)),
@@ -883,6 +1116,14 @@ impl Services {
                 let max: u32 = p.call("GetMaxBrightness", &())?;
                 let raw = ((level.clamp(0.0, 1.0) * f64::from(max)).round() as u32).clamp(BRIGHTNESS_FLOOR.min(max), max);
                 p.call::<_, _, ()>("SetBrightness", &(raw,))
+            }),
+            Call::SetDisplayRefresh { connector, mhz } => crate::output_config::configure(connector, crate::output_config::Change { refresh_mhz: Some(*mhz), ..Default::default() }).map_err(|e| {
+                log_once(&format!("the refresh rate could not be changed: {e}"));
+                "The refresh rate could not be changed.".to_string()
+            }),
+            Call::SetDisplayPosition { connector, x, y } => crate::output_config::configure(connector, crate::output_config::Change { position: Some((*x, *y)), ..Default::default() }).map_err(|e| {
+                log_once(&format!("the display could not be moved: {e}"));
+                "The display could not be moved.".to_string()
             }),
             Call::SetDisplayScale { connector, scale } => crate::output_config::set_scale(connector, *scale).map_err(|e| {
                 log_once(&format!("the display size could not be changed: {e}"));

@@ -5,10 +5,10 @@
 use std::collections::HashMap;
 
 use cupertino_kit::controls::{
-    AppIcon, AppIconRow, FormGroup, FormHeader, FormRow, FullWidthSegmentedControl, IconTile,
-    ImageSource, InlinePopUpButton, NavigationRow, PaneHeader, PopUpButton, ScrollView, Scroller,
-    SegmentedControl, Slider, SliderStyle, Swatch, SwatchFill, SwatchLook, TextRole, ThumbnailTile,
-    TileColor,
+    AppIcon, AppIconRow, BarChart, ChartBar, ChartColor, FormGroup, FormHeader, FormRow,
+    FullWidthSegmentedControl, IconTile, ImageSource, InlinePopUpButton, NavigationRow, PaneHeader,
+    PopUpButton, Progress, ScrollView, Scroller, SegmentedControl, Slider, SliderStyle, Swatch,
+    SwatchFill, SwatchLook, TextRole, ThumbnailTile, TileColor,
 };
 use cupertino_kit::core::{
     Change, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget, Window,
@@ -339,10 +339,37 @@ fn control(row: &Row, name: &str, view: &View<'_>) -> Option<Element<Message>> {
         }
         Control::Tiles { tiles, selected } => tile_strip(id, tiles, *selected, enabled, view),
         Control::Swatches { items, selected } => swatch_row(id, items, *selected, enabled),
+        Control::Meter { value } => Element::new(Progress {
+            label: name.to_owned(),
+            value: Some(*value),
+        })
+        .width(metrics::LEVEL_WIDTH),
+        Control::Chart(chart) => Element::new(BarChart {
+            label: chart.name.clone(),
+            summary: chart.summary.clone(),
+            bars: chart
+                .bars
+                .iter()
+                .map(|(value, marked)| ChartBar {
+                    value: *value,
+                    marked: *marked,
+                })
+                .collect(),
+            color: if chart.blue {
+                ChartColor::Blue
+            } else {
+                ChartColor::Green
+            },
+            value_labels: chart.value_labels.clone(),
+            time_labels: chart.time_labels.clone(),
+            height: CHART_HEIGHT,
+        }),
     };
     Some(control.key(control_key(id)))
 }
 
+/// The height of a chart's plot.
+const CHART_HEIGHT: f64 = 110.0;
 /// The width of each slider of a pair sharing one row.
 const PAIRED_SLIDER_WIDTH: f64 = 200.0;
 /// Between a slider and the end labels under it.
@@ -477,6 +504,7 @@ fn swatch_row(
                 SwatchKind::Auto => SwatchFill::Look(SwatchLook::Auto),
                 SwatchKind::Color(c) => SwatchFill::Color(*c),
                 SwatchKind::Multicolor => SwatchFill::Multicolor,
+                SwatchKind::Scale(step) => SwatchFill::Scale(*step),
             };
             Element::new(Swatch {
                 label: label.clone(),
@@ -680,7 +708,7 @@ fn row(row: &Row, names: &Names, view: &View<'_>) -> Element<Message> {
     // a segmented control takes the whole width of its row, under the row's label
     let content = if matches!(
         row.control,
-        Control::Segmented { .. } | Control::Swatches { .. }
+        Control::Segmented { .. } | Control::Swatches { .. } | Control::Chart(_)
     ) {
         let mut children = Vec::new();
         if !label.is_empty() {

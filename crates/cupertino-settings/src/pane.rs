@@ -15,6 +15,7 @@ pub enum PaneId {
     Wifi,
     Bluetooth,
     Network,
+    Vpn,
     Battery,
     Accessibility,
     Appearance,
@@ -27,6 +28,8 @@ pub enum PaneId {
     Focus,
     LockScreen,
     Privacy,
+    Search,
+    Users,
     Keyboard,
     Mouse,
     Trackpad,
@@ -89,7 +92,7 @@ const fn pane(
 }
 
 /// Every pane of the minimum set.
-pub const PANES: [Pane; 21] = [
+pub const PANES: [Pane; 24] = [
     pane(
         PaneId::Account,
         "Account",
@@ -173,6 +176,21 @@ pub const PANES: [Pane; 21] = [
         Tier::Live,
         &["Devices"],
         &["ethernet", "connection", "address", "interface"],
+    ),
+    pane(
+        PaneId::Vpn,
+        "VPN",
+        "symbol.network.fill",
+        Enclosure::Blue,
+        Tier::Live,
+        &["Connections"],
+        &[
+            "virtual private network",
+            "tunnel",
+            "wireguard",
+            "openvpn",
+            "connect",
+        ],
     ),
     pane(
         PaneId::Battery,
@@ -361,6 +379,40 @@ pub const PANES: [Pane; 21] = [
         ],
     ),
     pane(
+        PaneId::Search,
+        "Search",
+        "symbol.document.fill",
+        Enclosure::Gray,
+        Tier::File,
+        &["Results", "Files"],
+        &[
+            "launcher",
+            "find",
+            "applications",
+            "folders",
+            "calculator",
+            "web",
+            "exclude",
+            "top hit",
+        ],
+    ),
+    pane(
+        PaneId::Users,
+        "Users & Groups",
+        "symbol.house.fill",
+        Enclosure::Blue,
+        Tier::Live,
+        &["Users"],
+        &[
+            "accounts",
+            "people",
+            "administrator",
+            "standard",
+            "login",
+            "home folder",
+        ],
+    ),
+    pane(
         PaneId::Keyboard,
         "Keyboard",
         "symbol.keyboard.fill",
@@ -425,6 +477,7 @@ impl PaneId {
             PaneId::Wifi => "wifi",
             PaneId::Bluetooth => "bluetooth",
             PaneId::Network => "network",
+            PaneId::Vpn => "vpn",
             PaneId::Battery => "battery",
             PaneId::Accessibility => "accessibility",
             PaneId::Appearance => "appearance",
@@ -437,6 +490,8 @@ impl PaneId {
             PaneId::Focus => "focus",
             PaneId::LockScreen => "lock-screen",
             PaneId::Privacy => "privacy",
+            PaneId::Search => "search",
+            PaneId::Users => "users",
             PaneId::Keyboard => "keyboard",
             PaneId::Mouse => "mouse",
             PaneId::Trackpad => "trackpad",

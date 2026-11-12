@@ -15,6 +15,7 @@ pub const GROUPS: [&[PaneId]; 6] = [
         PaneId::Wifi,
         PaneId::Bluetooth,
         PaneId::Network,
+        PaneId::Vpn,
         PaneId::Battery,
     ],
     &[
@@ -28,7 +29,12 @@ pub const GROUPS: [&[PaneId]; 6] = [
         PaneId::Wallpaper,
     ],
     &[PaneId::Notifications, PaneId::Sound, PaneId::Focus],
-    &[PaneId::LockScreen, PaneId::Privacy],
+    &[
+        PaneId::LockScreen,
+        PaneId::Privacy,
+        PaneId::Search,
+        PaneId::Users,
+    ],
     &[PaneId::Keyboard, PaneId::Mouse, PaneId::Trackpad],
 ];
 

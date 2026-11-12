@@ -191,6 +191,25 @@ impl DeviceObject {
 
 #[zbus::interface(name = "org.freedesktop.UPower.Device")]
 impl DeviceObject {
+    /// The recorded charge of the last `timespan` seconds, one point per `resolution` seconds at most, as
+    /// `(time, value, state)` rows, oldest first. Only the type `charge` (per cent) is recorded.
+    fn get_history(
+        &self,
+        kind: String,
+        timespan: u32,
+        resolution: u32,
+    ) -> fdo::Result<Vec<(u32, f64, u32)>> {
+        if kind != "charge" {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .shared
+            .history(timespan, resolution)
+            .into_iter()
+            .map(|s| (u32::try_from(s.time).unwrap_or(0), s.percent, s.state))
+            .collect())
+    }
+
     #[zbus(property)]
     fn native_path(&self) -> fdo::Result<String> {
         Ok(self.view()?.native_path)

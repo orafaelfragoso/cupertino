@@ -31,6 +31,9 @@ pub enum SwatchFill {
     Color([u8; 3]),
     /// A dot of every accent colour in turn.
     Multicolor,
+    /// A mock of a window whose text and controls get smaller as the step grows, from 0 (the largest text) up: a
+    /// choice of how much room the display gives its content.
+    Scale(u8),
 }
 
 /// One choice of a row of choices drawn as pictures. `label` is its name, shown under a look's mock and read to
@@ -82,7 +85,7 @@ fn rgb(c: [u8; 3]) -> Color {
 
 impl<M> Swatch<M> {
     fn is_look(&self) -> bool {
-        matches!(self.fill, SwatchFill::Look(_))
+        matches!(self.fill, SwatchFill::Look(_) | SwatchFill::Scale(_))
     }
 
     /// The room the ring takes on each side.
@@ -97,7 +100,9 @@ impl<M> Swatch<M> {
     fn picture(&self) -> Rect {
         let room = self.room();
         match self.fill {
-            SwatchFill::Look(_) => Rect::new(room, room, LOOK_SIZE.width, LOOK_SIZE.height),
+            SwatchFill::Look(_) | SwatchFill::Scale(_) => {
+                Rect::new(room, room, LOOK_SIZE.width, LOOK_SIZE.height)
+            }
             _ => Rect::new(room, room, DOT, DOT),
         }
     }
@@ -152,6 +157,65 @@ fn mock(cx: &mut PaintCx<'_>, rect: Rect, colors: &[[u8; 3]; 4]) {
         );
         fill(cx, line, 1.25, colors[2]);
     }
+}
+
+/// A mock of a window filling `rect` whose lines of text get thinner and more numerous as `step` grows, so that the
+/// row of mocks reads from larger text to more room.
+fn scale_mock(cx: &mut PaintCx<'_>, rect: Rect, step: u8, colors: &[[u8; 3]; 4]) {
+    let fill = |cx: &mut PaintCx<'_>, r: Rect, radius: f64, c: [u8; 3]| {
+        cx.push(PaintOp::Fill {
+            shape: Shape::RoundedRect { rect: r, radius },
+            paint: Paint::Solid(rgb(c)),
+        });
+    };
+    fill(cx, rect, 0.0, colors[0]);
+    // the window's buttons
+    for i in 0..3 {
+        let dot = Rect::new(
+            rect.min_x() + 4.0 + 4.5 * f64::from(i),
+            rect.min_y() + 4.0,
+            3.0,
+            3.0,
+        );
+        fill(cx, dot, 1.5, colors[2]);
+    }
+    let step = f64::from(step.min(4));
+    // the lines: thick and few at the start, thin and many at the end
+    let height = 5.5 - step;
+    let pitch = height + 2.5 - step * 0.35;
+    let count = 3 + step as usize * 2;
+    let page = rect.inset(Insets {
+        top: 12.0,
+        left: 6.0,
+        bottom: 5.0,
+        right: 6.0,
+    });
+    for i in 0..count {
+        let y = page.min_y() + pitch * i as f64;
+        if y + height > page.max_y() {
+            break;
+        }
+        let width = [1.0, 0.8, 0.92, 0.6][i % 4];
+        fill(
+            cx,
+            Rect::new(page.min_x(), y, page.width() * width, height),
+            height / 2.0,
+            colors[2],
+        );
+    }
+    // the accent pill at the bottom
+    let pill_height = 6.0 - step * 0.6;
+    fill(
+        cx,
+        Rect::new(
+            page.min_x(),
+            rect.max_y() - 4.0 - pill_height,
+            14.0 - step,
+            pill_height,
+        ),
+        pill_height / 2.0,
+        colors[3],
+    );
 }
 
 impl<M: Clone + 'static> Widget<M> for Swatch<M> {
@@ -218,7 +282,7 @@ impl<M: Clone + 'static> Widget<M> for Swatch<M> {
         let picture = self.picture();
         let text = theme.colors.get(ColorRole::Text, StateVariant::NORMAL);
         let radius = match self.fill {
-            SwatchFill::Look(_) => LOOK_RADIUS,
+            SwatchFill::Look(_) | SwatchFill::Scale(_) => LOOK_RADIUS,
             _ => DOT / 2.0,
         };
         cx.push(PaintOp::PushClip(Shape::RoundedRect {
@@ -242,6 +306,15 @@ impl<M: Clone + 'static> Widget<M> for Swatch<M> {
                     mock(cx, picture, colors);
                     cx.push(PaintOp::PopClip);
                 }
+            }
+            SwatchFill::Scale(step) => {
+                let dark = theme.preferences.appearance.is_dark();
+                scale_mock(
+                    cx,
+                    picture,
+                    step,
+                    if dark { &MOCK_DARK } else { &MOCK_LIGHT },
+                );
             }
             SwatchFill::Color(c) => look::fill(cx, picture, radius, Some(rgb(c))),
             SwatchFill::Multicolor => {

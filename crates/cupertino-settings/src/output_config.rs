@@ -13,11 +13,41 @@ use wayland_protocols_wlr::output_management::v1::client::{
     zwlr_output_mode_v1::ZwlrOutputModeV1,
 };
 
+/// A mode of a head: its size in device pixels and its refresh rate in millihertz.
+struct Mode {
+    proxy: ZwlrOutputModeV1,
+    width: i32,
+    height: i32,
+    refresh: i32,
+}
+
 /// A head as the server described it.
 struct Head {
     proxy: ZwlrOutputHeadV1,
     name: Option<String>,
     enabled: bool,
+    modes: Vec<Mode>,
+    current: Option<ZwlrOutputModeV1>,
+    position: (i32, i32),
+}
+
+/// What a display's configuration changes: the fields that are set.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Change {
+    pub scale: Option<f64>,
+    /// The refresh rate in millihertz, at the size the display has now.
+    pub refresh_mhz: Option<u32>,
+    /// Where the display's top-left corner lies in the desktop, in points.
+    pub position: Option<(i32, i32)>,
+}
+
+/// What the server says about a display's modes and place.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Layout {
+    pub connector: String,
+    pub position: (i32, i32),
+    /// The refresh rates, in millihertz, the display has at its current size, ascending.
+    pub refresh_rates: Vec<u32>,
 }
 
 #[derive(Default)]
@@ -36,6 +66,17 @@ pub fn set_scale(connector: &str, scale: f64) -> Result<(), String> {
     if !(scale.is_finite() && scale > 0.0) {
         return Err(format!("scale {scale} is not above zero"));
     }
+    configure(
+        connector,
+        Change {
+            scale: Some(scale),
+            ..Change::default()
+        },
+    )
+}
+
+/// The place and the refresh rates of each enabled display, from one short connection.
+pub fn layouts() -> Result<Vec<Layout>, String> {
     let conn = Connection::connect_to_env().map_err(|e| e.to_string())?;
     let (globals, mut queue) = registry_queue_init::<State>(&conn).map_err(|e| e.to_string())?;
     let qh = queue.handle();
@@ -48,7 +89,60 @@ pub fn set_scale(connector: &str, scale: f64) -> Result<(), String> {
             .blocking_dispatch(&mut state)
             .map_err(|e| e.to_string())?;
     }
-    let result = apply(&manager, &mut queue, &qh, &mut state, connector, scale);
+    let layouts = state
+        .heads
+        .iter()
+        .filter(|h| h.enabled)
+        .filter_map(|h| {
+            let connector = h.name.clone()?;
+            let current = h
+                .current
+                .as_ref()
+                .and_then(|c| h.modes.iter().find(|m| &m.proxy == c));
+            let mut refresh_rates: Vec<u32> = current
+                .map(|c| {
+                    h.modes
+                        .iter()
+                        .filter(|m| (m.width, m.height) == (c.width, c.height) && m.refresh > 0)
+                        .map(|m| m.refresh as u32)
+                        .collect()
+                })
+                .unwrap_or_default();
+            refresh_rates.sort_unstable();
+            refresh_rates.dedup();
+            Some(Layout {
+                connector,
+                position: h.position,
+                refresh_rates,
+            })
+        })
+        .collect();
+    for head in &state.heads {
+        if head.proxy.version() >= 3 {
+            head.proxy.release();
+        }
+    }
+    manager.stop();
+    let _ = conn.flush();
+    Ok(layouts)
+}
+
+/// Change the display on `connector` as `change` says. Fails when the server offers no output management, the display
+/// is gone or off, the mode asked for does not exist, or the server refuses or cancels the configuration.
+pub fn configure(connector: &str, change: Change) -> Result<(), String> {
+    let conn = Connection::connect_to_env().map_err(|e| e.to_string())?;
+    let (globals, mut queue) = registry_queue_init::<State>(&conn).map_err(|e| e.to_string())?;
+    let qh = queue.handle();
+    let manager: ZwlrOutputManagerV1 = globals
+        .bind(&qh, 1..=4, ())
+        .map_err(|_| "the server offers no output management".to_string())?;
+    let mut state = State::default();
+    while state.serial.is_none() && !state.finished {
+        queue
+            .blocking_dispatch(&mut state)
+            .map_err(|e| e.to_string())?;
+    }
+    let result = apply(&manager, &mut queue, &qh, &mut state, connector, change);
     for head in &state.heads {
         if head.proxy.version() >= 3 {
             head.proxy.release();
@@ -65,7 +159,7 @@ fn apply(
     qh: &QueueHandle<State>,
     state: &mut State,
     connector: &str,
-    scale: f64,
+    change: Change,
 ) -> Result<(), String> {
     let serial = state
         .serial
@@ -83,7 +177,25 @@ fn apply(
         if head.enabled {
             let configured = config.enable_head(&head.proxy, qh, ());
             if head.name.as_deref() == Some(connector) {
-                configured.set_scale(scale);
+                if let Some(scale) = change.scale {
+                    configured.set_scale(scale);
+                }
+                if let Some(mhz) = change.refresh_mhz {
+                    let size = head
+                        .current
+                        .as_ref()
+                        .and_then(|c| head.modes.iter().find(|m| &m.proxy == c))
+                        .map(|m| (m.width, m.height));
+                    let mode = head
+                        .modes
+                        .iter()
+                        .find(|m| Some((m.width, m.height)) == size && m.refresh == mhz as i32)
+                        .ok_or_else(|| "this display has no such refresh rate".to_string())?;
+                    configured.set_mode(&mode.proxy);
+                }
+                if let Some((x, y)) = change.position {
+                    configured.set_position(x, y);
+                }
             }
             named.push(configured);
         } else {
@@ -125,6 +237,9 @@ impl Dispatch<ZwlrOutputManagerV1, ()> for State {
                 proxy: head,
                 name: None,
                 enabled: false,
+                modes: Vec::new(),
+                current: None,
+                position: (0, 0),
             }),
             zwlr_output_manager_v1::Event::Done { serial } => state.serial = Some(serial),
             zwlr_output_manager_v1::Event::Finished => state.finished = true,
@@ -152,6 +267,14 @@ impl Dispatch<ZwlrOutputHeadV1, ()> for State {
         match event {
             zwlr_output_head_v1::Event::Name { name } => head.name = Some(name),
             zwlr_output_head_v1::Event::Enabled { enabled } => head.enabled = enabled != 0,
+            zwlr_output_head_v1::Event::Mode { mode } => head.modes.push(Mode {
+                proxy: mode,
+                width: 0,
+                height: 0,
+                refresh: 0,
+            }),
+            zwlr_output_head_v1::Event::CurrentMode { mode } => head.current = Some(mode),
+            zwlr_output_head_v1::Event::Position { x, y } => head.position = (x, y),
             zwlr_output_head_v1::Event::Finished => {
                 state.heads.retain(|h| &h.proxy != proxy);
             }
@@ -166,13 +289,27 @@ impl Dispatch<ZwlrOutputHeadV1, ()> for State {
 
 impl Dispatch<ZwlrOutputModeV1, ()> for State {
     fn event(
-        _: &mut Self,
-        _: &ZwlrOutputModeV1,
-        _: <ZwlrOutputModeV1 as Proxy>::Event,
+        state: &mut Self,
+        proxy: &ZwlrOutputModeV1,
+        event: <ZwlrOutputModeV1 as Proxy>::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        use wayland_protocols_wlr::output_management::v1::client::zwlr_output_mode_v1::Event;
+        let Some(mode) = state
+            .heads
+            .iter_mut()
+            .flat_map(|h| h.modes.iter_mut())
+            .find(|m| &m.proxy == proxy)
+        else {
+            return;
+        };
+        match event {
+            Event::Size { width, height } => (mode.width, mode.height) = (width, height),
+            Event::Refresh { refresh } => mode.refresh = refresh,
+            _ => {}
+        }
     }
 }
 

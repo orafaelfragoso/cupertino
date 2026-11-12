@@ -16,7 +16,6 @@ app = [
     "dep:async-io",
     "cupertino-apps/dbus",
     "dep:cupertino-assets",
-    "dep:cupertino-defaults",
     "dep:cupertino-icons",
     "dep:cupertino-modifiers",
     "dep:cupertino-peer",
@@ -36,7 +35,7 @@ async-io = { version = "2", optional = true }
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-assets = { path = "../cupertino-assets", optional = true }
-cupertino-defaults = { path = "../cupertino-defaults", optional = true }
+cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }

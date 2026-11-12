@@ -17,6 +17,8 @@ pub use worker::{Reading, VolumeWorker};
 
 /// The program run when no other is given.
 pub const WPCTL: &str = "wpctl";
+/// The program that reads and sets the channel levels of the default output.
+pub const PACTL: &str = "pactl";
 /// How long a call waits for `wpctl` before it kills it: a PipeWire daemon that is up but does not answer must not
 /// hold the caller's UI thread.
 pub const TIMEOUT: Duration = Duration::from_secs(1);
@@ -170,6 +172,57 @@ impl Wpctl {
         self.run(["set-default", &id.to_string()]).map(drop)
     }
 
+    /// The inputs `wpctl status` lists, in its order.
+    pub fn sources(&self) -> Result<Vec<Sink>> {
+        let output = self.run(["status"])?;
+        Ok(parse_nodes(&String::from_utf8_lossy(&output), "Sources:"))
+    }
+
+    /// Make the source `id` the input applications record from.
+    pub fn set_default_source(&self, id: u32) -> Result<()> {
+        self.run(["set-default", &id.to_string()]).map(drop)
+    }
+
+    /// How the output's level divides between its left and right channel, from -1 (all left) to 1 (all right), asked
+    /// of the sound server's `pactl` and `None` when the output is not stereo. The level of the louder channel is the
+    /// second value.
+    pub fn balance(&self) -> Result<(f64, f64)> {
+        let pactl = Self {
+            program: PathBuf::from(PACTL),
+            timeout: self.timeout,
+        };
+        let output = pactl.run(["get-sink-volume", "@DEFAULT_SINK@"])?;
+        parse_balance(&String::from_utf8_lossy(&output))
+    }
+
+    /// Set the output's balance to `balance` (-1 to 1) at the level `level` of its louder channel (0 to 1).
+    pub fn set_balance(&self, balance: f64, level: f64) -> Result<()> {
+        let pactl = Self {
+            program: PathBuf::from(PACTL),
+            timeout: self.timeout,
+        };
+        let balance = if balance.is_nan() {
+            0.0
+        } else {
+            balance.clamp(-1.0, 1.0)
+        };
+        let level = if level.is_nan() {
+            0.0
+        } else {
+            level.clamp(0.0, 1.0)
+        };
+        let left = level * (1.0 - balance.max(0.0));
+        let right = level * (1.0 + balance.min(0.0));
+        pactl
+            .run([
+                "set-sink-volume",
+                "@DEFAULT_SINK@",
+                &format!("{:.0}%", left * 100.0),
+                &format!("{:.0}%", right * 100.0),
+            ])
+            .map(drop)
+    }
+
     /// Start `wpctl`. A program another thread has just written can be busy (`ETXTBSY`) until that thread's concurrent
     /// fork has executed; a few short retries ride it out.
     fn spawn(&self, args: &[OsString]) -> Result<Child> {
@@ -283,6 +336,36 @@ pub fn parse_volume(output: &str) -> Result<Volume> {
 /// The sinks in `wpctl status` output: the entries below the `Sinks:` heading of the `Audio` section, each
 /// `*   52. Built-in Audio Analog Stereo        [vol: 0.40]` with `*` on the default. Output without that heading lists none.
 pub fn parse_sinks(output: &str) -> Vec<Sink> {
+    parse_nodes(output, "Sinks:")
+}
+
+/// The left and right levels of `pactl get-sink-volume` output (`Volume: front-left: 26214 /  40% / ..., front-right:
+/// ...`) as the balance, -1 to 1, and the level of the louder channel, 0 to 1. A mono output is an error.
+pub fn parse_balance(output: &str) -> Result<(f64, f64)> {
+    let unparsed = || Error::Unparsed(output.trim().to_string());
+    let line = output.lines().next().ok_or_else(unparsed)?;
+    let levels: Vec<f64> = line
+        .split_whitespace()
+        .filter_map(|w| w.strip_suffix('%')?.parse::<f64>().ok())
+        .map(|p| p / 100.0)
+        .collect();
+    let [left, right] = levels[..] else {
+        return Err(unparsed());
+    };
+    let loud = left.max(right);
+    if loud <= 0.0 {
+        return Ok((0.0, 0.0));
+    }
+    let balance = if right >= left {
+        (right - left) / loud
+    } else {
+        -(left - right) / loud
+    };
+    Ok((balance, loud.min(1.0)))
+}
+
+/// The nodes `wpctl status` lists below the heading `heading` (`Sinks:` or `Sources:`) of the `Audio` section.
+pub fn parse_nodes(output: &str, heading: &str) -> Vec<Sink> {
     let mut audio = false;
     let mut in_sinks = false;
     let mut sinks = Vec::new();
@@ -297,7 +380,7 @@ pub fn parse_sinks(output: &str) -> Vec<Sink> {
             continue;
         }
         if text.trim_end().ends_with(':') {
-            in_sinks = text.trim_end() == "Sinks:";
+            in_sinks = text.trim_end() == heading;
             continue;
         }
         if !in_sinks {

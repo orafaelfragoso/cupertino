@@ -23,12 +23,16 @@ pub mod live;
 pub mod mapping;
 pub mod menu_bar;
 #[cfg(feature = "app")]
+pub mod meter;
+pub mod netinfo;
+#[cfg(feature = "app")]
 pub mod nm;
 #[cfg(feature = "app")]
 pub mod output_config;
 pub mod pages;
 pub mod pane;
 pub mod pane_extras;
+pub mod pane_more;
 pub mod panes;
 pub mod screen_sharing;
 pub mod search;

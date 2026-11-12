@@ -203,6 +203,9 @@ pub fn description(pane: PaneId, has_battery: Option<bool>) -> &'static str {
         PaneId::Wifi => "Turn wireless networking on or off and join the networks around you.",
         PaneId::Bluetooth => "Pair and connect keyboards, headphones and other wireless devices.",
         PaneId::Network => "See this computer's network connections and how they are set up.",
+        PaneId::Vpn => "Connect and disconnect the VPN connections the system holds.",
+        PaneId::Search => "Choose what the launcher finds and which folders it leaves out.",
+        PaneId::Users => "See who has an account on this computer.",
         PaneId::Battery if has_battery == Some(false) => {
             "Choose when the computer goes to sleep to save energy."
         }

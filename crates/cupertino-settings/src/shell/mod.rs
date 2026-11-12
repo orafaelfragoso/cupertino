@@ -40,6 +40,8 @@ use state::{background_channel, Background, Result, State};
 pub const APP_ID: &str = "cupertino-settings";
 /// The window loop reads the live services again this often, as a safety net (the control panel's 1 s, approximate).
 const REFRESH: Duration = Duration::from_secs(1);
+/// How often the input level meter reads the level while it shows.
+const METER_REFRESH: Duration = Duration::from_millis(100);
 /// The level slider's waiting write is checked this often while it is dragged.
 const LEVEL_TICK: Duration = Duration::from_millis(17);
 /// How often a dragged slider without stops checks whether it has settled.
@@ -462,7 +464,10 @@ impl Shell {
             }
             Message::Refresh => {
                 let now = self.state.now();
-                if self.state.level.is_none() {
+                let listening = self.state.meter_running();
+                if listening && now - self.state.refreshed < REFRESH.as_secs_f64() {
+                    self.state.refresh_meter();
+                } else if self.state.level.is_none() {
                     let apps = |state: &state::State| {
                         crate::panes::notification_apps(&state.settings, &state.live)
                     };
@@ -474,7 +479,8 @@ impl Shell {
                         self.open = None;
                     }
                 }
-                return Ok(vec![after(REFRESH, Message::Refresh)]);
+                let next = if listening { METER_REFRESH } else { REFRESH };
+                return Ok(vec![after(next, Message::Refresh)]);
             }
         }
         Ok(Vec::new())

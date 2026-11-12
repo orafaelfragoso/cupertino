@@ -28,6 +28,7 @@ cupertino-launcher [--no-files] [--terminal PROGRAM]
 
 | Option or file | Default | Effect |
 |---|---|---|
+| `launcher.conf` (`$CUPERTINO_LAUNCHER_CONF`) | every kind on | Read each time the launcher opens: which kinds of result it lists (applications, folders, files, calculator, actions), whether it marks a top hit, and the folders the file search leaves out. |
 | `--no-files` | files indexed | Do not index the home directory for file results. Otherwise a background thread builds the index on the first show. |
 | `--terminal PROGRAM` | the first installed of `xdg-terminal-exec`, `$TERMINAL`, `foot`, `alacritty`, `kitty`, `wezterm`, `xterm` | Run entries with `Terminal=true` as `PROGRAM -e …` (`xdg-terminal-exec` takes the command without `-e`). |
 | `~/.local/share/cupertino/launcher.json` (`$XDG_DATA_HOME/cupertino/launcher.json`) | none | The launch history (see Persistence). |

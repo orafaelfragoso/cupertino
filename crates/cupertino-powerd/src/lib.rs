@@ -6,6 +6,7 @@
 //! - [`backlight`]: pure model of display and keyboard backlights, and the choice among several.
 //! - [`sysfs`]: reads those classes from an injectable sysfs root and writes a brightness.
 //! - [`lid`]: the lid switch, an evdev device that reports `SW_LID`.
+//! - [`history`]: the charge recorded over the last ten days, which `GetHistory` serves.
 //! - [`events`]: which kernel uevents mean "read sysfs again".
 //! - [`warning`]: the low-battery warning level (none, early, final) and its timing rules.
 //! - `auth` (feature `dbus`): who may write a brightness, decided from logind.
@@ -17,6 +18,7 @@
 pub mod backlight;
 pub mod error;
 pub mod events;
+pub mod history;
 pub mod lid;
 pub mod supply;
 pub mod sysfs;

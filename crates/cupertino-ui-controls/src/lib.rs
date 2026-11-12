@@ -2,6 +2,7 @@
 //! tokens, takes values from the application's model and reports changes as messages.
 
 mod badge;
+mod bar_chart;
 mod button;
 mod canvas;
 mod checkbox;
@@ -42,6 +43,7 @@ mod swatch;
 mod tabs;
 mod text;
 mod text_box;
+pub use bar_chart::{BarChart, ChartBar, ChartColor};
 pub use swatch::{Swatch, SwatchFill, SwatchLook};
 mod thumbnail;
 mod tile_sidebar;

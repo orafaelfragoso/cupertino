@@ -76,6 +76,29 @@ pub enum Control {
         items: Vec<(String, SwatchKind)>,
         selected: usize,
     },
+    /// A bar chart that is only shown.
+    Chart(Chart),
+    /// A level that is only shown, from 0 to 1 (the input level).
+    Meter {
+        value: f64,
+    },
+}
+
+/// A bar chart of [`Control::Chart`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chart {
+    /// What assistive technology calls it.
+    pub name: String,
+    /// What it shows, in words.
+    pub summary: String,
+    /// The bars: height 0 to 1, and whether the bar is set apart.
+    pub bars: Vec<(f64, bool)>,
+    /// The bars' colour: false green, true blue.
+    pub blue: bool,
+    /// Labels at the right, with their guide lines: position from the bottom (0 to 1) and text.
+    pub value_labels: Vec<(f64, String)>,
+    /// Labels along the bottom: position from the left (0 to 1) and text.
+    pub time_labels: Vec<(f64, String)>,
 }
 
 /// What a swatch of [`Control::Swatches`] draws.
@@ -91,6 +114,8 @@ pub enum SwatchKind {
     Color([u8; 3]),
     /// A dot of every accent colour in turn.
     Multicolor,
+    /// A mock window of one step of a row from larger text (0) to more room.
+    Scale(u8),
 }
 
 /// A picture of a [`Control::Tiles`] grid.

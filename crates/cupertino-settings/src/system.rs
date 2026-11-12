@@ -594,3 +594,80 @@ impl SystemInfo {
         }
     }
 }
+
+/// A person with an account on this machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct User {
+    pub name: String,
+    pub username: String,
+    pub initials: String,
+    pub picture: Option<PathBuf>,
+    pub administrator: bool,
+    /// The account this program runs as.
+    pub current: bool,
+}
+
+/// The lowest user id of a person's account.
+const FIRST_USER_ID: u32 = 1000;
+/// The user id `nobody` has, which is not a person.
+const NOBODY_ID: u32 = 65534;
+
+/// The accounts of people in the text of `/etc/passwd` and `/etc/group`: user ids from 1000 up, not `nobody`, by user
+/// id. `current` is the user id this program runs as.
+pub fn users_in(passwd: &str, groups: &str, current: u32) -> Vec<User> {
+    let mut found: Vec<(u32, User)> = passwd
+        .lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split(':').collect();
+            let uid = f.get(2)?.parse::<u32>().ok()?;
+            if f.len() < 6 || !(FIRST_USER_ID..NOBODY_ID).contains(&uid) {
+                return None;
+            }
+            // an account whose shell refuses logins is not a person who signs in
+            if f.get(6)
+                .is_some_and(|shell| shell.ends_with("nologin") || shell.ends_with("/false"))
+            {
+                return None;
+            }
+            let username = f[0].to_owned();
+            let comment = f[4].split(',').next().unwrap_or("").trim().to_owned();
+            let name = if comment.is_empty() {
+                username.clone()
+            } else {
+                comment
+            };
+            let home = PathBuf::from(f[5]);
+            let picture = [
+                home.join(".face"),
+                home.join(".face.icon"),
+                PathBuf::from("/var/lib/AccountsService/icons").join(&username),
+            ]
+            .into_iter()
+            .find(|p| p.is_file());
+            Some((
+                uid,
+                User {
+                    initials: initials(&name),
+                    administrator: in_admin_group(groups, &username),
+                    picture,
+                    current: uid == current,
+                    name,
+                    username,
+                },
+            ))
+        })
+        .collect();
+    found.sort_by_key(|(uid, _)| *uid);
+    found.into_iter().map(|(_, user)| user).collect()
+}
+
+/// The accounts of people on this machine.
+pub fn users() -> Vec<User> {
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    users_in(
+        &read_small(Path::new("/etc/passwd")).unwrap_or_default(),
+        &read_small(Path::new("/etc/group")).unwrap_or_default(),
+        uid,
+    )
+}

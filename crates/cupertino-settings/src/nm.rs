@@ -8,7 +8,7 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
-use crate::live::{display_name, Device, Network, Wifi};
+use crate::live::{display_name, Device, KnownNetwork, Network, Vpn, Wifi};
 
 pub const NAME: &str = "org.freedesktop.NetworkManager";
 pub const PATH: &str = "/org/freedesktop/NetworkManager";
@@ -18,6 +18,7 @@ const WIRELESS: &str = "org.freedesktop.NetworkManager.Device.Wireless";
 const ACCESS_POINT: &str = "org.freedesktop.NetworkManager.AccessPoint";
 const SETTINGS: &str = "org.freedesktop.NetworkManager.Settings";
 const CONNECTION: &str = "org.freedesktop.NetworkManager.Settings.Connection";
+const ACTIVE: &str = "org.freedesktop.NetworkManager.Connection.Active";
 
 /// `NM_DEVICE_TYPE_ETHERNET` and `NM_DEVICE_TYPE_WIFI`; other kinds are not listed.
 const ETHERNET: u32 = 1;
@@ -215,6 +216,74 @@ fn saved(connection: &Connection) -> zbus::Result<Vec<(Vec<u8>, OwnedObjectPath)
         .collect())
 }
 
+/// One saved Wi-Fi connection: its network's SSID bytes, its object and whether it joins by itself.
+struct SavedWifi {
+    ssid: Vec<u8>,
+    path: OwnedObjectPath,
+    auto_join: bool,
+    secured: bool,
+}
+
+/// The saved Wi-Fi connections, in range or not.
+fn saved_wifi(connection: &Connection) -> zbus::Result<Vec<SavedWifi>> {
+    let paths: Vec<OwnedObjectPath> =
+        proxy(connection, SETTINGS_PATH, SETTINGS)?.call("ListConnections", &())?;
+    Ok(paths
+        .into_iter()
+        .take(MAX_CONNECTIONS)
+        .filter_map(|path| {
+            let settings: HashMap<String, HashMap<String, OwnedValue>> =
+                proxy(connection, path.as_str(), CONNECTION)
+                    .ok()?
+                    .call("GetSettings", &())
+                    .ok()?;
+            let ssid = settings.get("802-11-wireless")?.get("ssid")?;
+            let auto_join = settings
+                .get("connection")
+                .and_then(|c| c.get("autoconnect"))
+                .and_then(|v| bool::try_from(&**v).ok())
+                .unwrap_or(true);
+            Some(SavedWifi {
+                ssid: ssid.try_clone().ok()?.try_into().ok()?,
+                secured: settings.contains_key("802-11-wireless-security"),
+                auto_join,
+                path,
+            })
+        })
+        .collect())
+}
+
+/// Take the saved connections of the network `ssid` ([`ssid_key`]) away, so the machine no longer joins it.
+pub fn forget(connection: &Connection, ssid: &str) -> zbus::Result<()> {
+    let ssid = ssid_bytes(ssid);
+    for saved in saved_wifi(connection)?
+        .into_iter()
+        .filter(|s| s.ssid == ssid)
+    {
+        proxy(connection, saved.path.as_str(), CONNECTION)?.call::<_, _, ()>("Delete", &())?;
+    }
+    Ok(())
+}
+
+/// Let the machine join the network `ssid` by itself, or stop it.
+pub fn set_auto_join(connection: &Connection, ssid: &str, on: bool) -> zbus::Result<()> {
+    let ssid = ssid_bytes(ssid);
+    for saved in saved_wifi(connection)?
+        .into_iter()
+        .filter(|s| s.ssid == ssid)
+    {
+        let p = proxy(connection, saved.path.as_str(), CONNECTION)?;
+        let mut settings: HashMap<String, HashMap<String, OwnedValue>> =
+            p.call("GetSettings", &())?;
+        settings
+            .entry("connection".to_owned())
+            .or_default()
+            .insert("autoconnect".to_owned(), Value::from(on).try_into()?);
+        p.call::<_, _, ()>("Update", &(settings,))?;
+    }
+    Ok(())
+}
+
 /// The reading the panes show.
 pub fn wifi(connection: &Connection) -> zbus::Result<Wifi> {
     let nm = proxy(connection, PATH, NAME)?;
@@ -246,8 +315,25 @@ pub fn wifi(connection: &Connection) -> zbus::Result<Wifi> {
         }
     }
     networks.sort_by(|a, b| b.connected.cmp(&a.connected).then(b.signal.cmp(&a.signal)));
+    let known = saved_wifi(connection)?
+        .into_iter()
+        .map(|s| {
+            let key = ssid_key(&s.ssid);
+            let seen = networks.iter().find(|n| n.ssid == key);
+            KnownNetwork {
+                name: display_name(&String::from_utf8_lossy(&s.ssid)),
+                auto_join: Some(s.auto_join),
+                in_range: seen.is_some(),
+                connected: seen.is_some_and(|n| n.connected),
+                secured: s.secured,
+                ssid: key,
+            }
+        })
+        .collect();
     let state: u32 = nm.get_property("State")?;
     Ok(Wifi {
+        known,
+        can_forget: true,
         enabled: nm.get_property("WirelessEnabled")?,
         devices,
         state: overall_state(state).to_string(),
@@ -337,6 +423,101 @@ pub fn scan(connection: &Connection) -> zbus::Result<()> {
         let options: HashMap<&str, Value<'_>> = HashMap::new();
         proxy(connection, radio.path.as_str(), WIRELESS)?
             .call::<_, _, ()>("RequestScan", &(options,))?;
+    }
+    Ok(())
+}
+
+/// The VPN connections the system holds, and which of them are active.
+pub fn vpns(connection: &Connection) -> zbus::Result<Vec<Vpn>> {
+    let nm = proxy(connection, PATH, NAME)?;
+    let mut active: Vec<(String, u32)> = Vec::new();
+    let actives: Vec<OwnedObjectPath> = nm.get_property("ActiveConnections")?;
+    for path in actives {
+        let a = proxy(connection, path.as_str(), ACTIVE)?;
+        if let Ok(uuid) = a.get_property::<String>("Uuid") {
+            active.push((uuid, a.get_property("State").unwrap_or(0)));
+        }
+    }
+    let paths: Vec<OwnedObjectPath> =
+        proxy(connection, SETTINGS_PATH, SETTINGS)?.call("ListConnections", &())?;
+    Ok(paths
+        .into_iter()
+        .take(MAX_CONNECTIONS)
+        .filter_map(|path| {
+            let settings: HashMap<String, HashMap<String, OwnedValue>> =
+                proxy(connection, path.as_str(), CONNECTION)
+                    .ok()?
+                    .call("GetSettings", &())
+                    .ok()?;
+            let c = settings.get("connection")?;
+            let kind: String = c.get("type")?.try_clone().ok()?.try_into().ok()?;
+            if kind != "vpn" && kind != "wireguard" {
+                return None;
+            }
+            let text = |k: &str| -> Option<String> { c.get(k)?.try_clone().ok()?.try_into().ok() };
+            let id = text("uuid")?;
+            let state = active.iter().find(|(u, _)| *u == id).map(|(_, s)| *s);
+            Some(Vpn {
+                name: display_name(&text("id").unwrap_or_else(|| id.clone())),
+                kind: vpn_kind(&kind, settings.get("vpn")).to_owned(),
+                // NM_ACTIVE_CONNECTION_STATE_ACTIVATED is 2; ACTIVATING 1 and DEACTIVATING 3 are in between
+                active: state == Some(2),
+                busy: matches!(state, Some(1) | Some(3)),
+                id,
+            })
+        })
+        .collect())
+}
+
+/// What a VPN connection is called in the list: the plug-in's name where NetworkManager gives one.
+fn vpn_kind(kind: &str, vpn: Option<&HashMap<String, OwnedValue>>) -> &'static str {
+    if kind == "wireguard" {
+        return "WireGuard";
+    }
+    let service: Option<String> = vpn
+        .and_then(|v| v.get("service-type"))
+        .and_then(|v| v.try_clone().ok())
+        .and_then(|v| v.try_into().ok());
+    match service.as_deref().and_then(|s| s.rsplit('.').next()) {
+        Some("openvpn") => "OpenVPN",
+        Some("openconnect") => "OpenConnect",
+        Some("vpnc") => "Cisco",
+        Some("pptp") => "PPTP",
+        Some("l2tp") => "L2TP",
+        Some("strongswan") => "IPsec",
+        _ => "VPN",
+    }
+}
+
+/// Connect the VPN `id` (its UUID), or disconnect it.
+pub fn set_vpn(connection: &Connection, id: &str, on: bool) -> zbus::Result<()> {
+    let nm = proxy(connection, PATH, NAME)?;
+    if on {
+        let paths: Vec<OwnedObjectPath> =
+            proxy(connection, SETTINGS_PATH, SETTINGS)?.call("ListConnections", &())?;
+        for path in paths {
+            let settings: HashMap<String, HashMap<String, OwnedValue>> =
+                proxy(connection, path.as_str(), CONNECTION)?.call("GetSettings", &())?;
+            let uuid: Option<String> = settings
+                .get("connection")
+                .and_then(|c| c.get("uuid"))
+                .and_then(|v| v.try_clone().ok())
+                .and_then(|v| v.try_into().ok());
+            if uuid.as_deref() == Some(id) {
+                let none = OwnedObjectPath::try_from("/")?;
+                return nm
+                    .call::<_, _, OwnedObjectPath>("ActivateConnection", &(path, &none, &none))
+                    .map(drop);
+            }
+        }
+        return Err(zbus::fdo::Error::Failed("That VPN connection is gone.".into()).into());
+    }
+    let actives: Vec<OwnedObjectPath> = nm.get_property("ActiveConnections")?;
+    for path in actives {
+        let uuid: String = proxy(connection, path.as_str(), ACTIVE)?.get_property("Uuid")?;
+        if uuid == id {
+            nm.call::<_, _, ()>("DeactivateConnection", &(path,))?;
+        }
     }
     Ok(())
 }

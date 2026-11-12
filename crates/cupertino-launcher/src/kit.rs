@@ -20,6 +20,7 @@ use crate::preview::{self, Preview};
 use crate::providers::{Cancel, Generation, Provider, Reply, Status, Tracker, Update};
 use crate::scope::{self, FileItem, FilesScope, Filter, ScopeAnswer, ScopeLayout, ScopeRequest};
 use crate::view::{self, Input, KeyMode, PanelView, MAX_ROWS};
+use cupertino_defaults::launcher::LauncherSettings;
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
@@ -279,6 +280,8 @@ pub struct Model {
     pub settled: bool,
     host: Box<dyn Host>,
     indexing: bool,
+    /// What `launcher.conf` held when the panel last opened.
+    launcher_settings: LauncherSettings,
     /// The file index, searched as a provider.
     file_index: Option<Arc<FileIndex>>,
     tracker: Tracker,
@@ -361,6 +364,7 @@ impl Model {
             settled: false,
             host,
             indexing: false,
+            launcher_settings: LauncherSettings::UNSET,
             file_index: None,
             tracker: Tracker::new(),
             searched: None,
@@ -485,6 +489,56 @@ impl Model {
         }
     }
 
+    /// Read `launcher.conf` again and apply it: the kinds of result listed, the top hit, and the folders the file
+    /// search leaves out (a change of those builds the index again).
+    fn apply_launcher_settings(&mut self) {
+        let Some(path) = LauncherSettings::path() else {
+            return;
+        };
+        let (settings, _) = match LauncherSettings::load(&path, Some(&self.launcher_settings)) {
+            Ok(loaded) => loaded,
+            Err(_) => return,
+        };
+        if settings == self.launcher_settings {
+            return;
+        }
+        let config = &mut self.launcher.config;
+        // a kind that is off lists no rows: its section's limit is zero
+        let defaults = LauncherConfig::default();
+        config.max_apps = if settings.applications {
+            defaults.max_apps
+        } else {
+            0
+        };
+        config.max_folders = if settings.folders {
+            defaults.max_folders
+        } else {
+            0
+        };
+        config.max_files = if settings.files {
+            defaults.max_files
+        } else {
+            0
+        };
+        config.show_calculator = settings.calculator;
+        config.top_hit = settings.top_hit;
+        if config.include_actions != settings.actions {
+            config.include_actions = settings.actions;
+            let entries = self.launcher.entries().to_vec();
+            self.launcher.set_entries(entries);
+        }
+        if settings.excluded != self.launcher_settings.excluded {
+            if let Some(files) = self.files.as_mut() {
+                files.extra_patterns = settings.exclusion_patterns(&files.root);
+                // the index is built again from the new rules the next time the panel needs it
+                self.file_index = None;
+                self.launcher.set_file_index(None);
+                self.indexing = false;
+            }
+        }
+        self.launcher_settings = settings;
+    }
+
     /// Open the browser (afresh) with the launcher's applications and recents, in the remembered arrangement.
     fn open_browser(&mut self) {
         let now = self.now();
@@ -513,6 +567,7 @@ impl Model {
             Step::Show(view) => {
                 // the previous query is kept and shown selected, so typing replaces it; nothing filters by it
                 let kept = self.panel.query().to_owned();
+                self.apply_launcher_settings();
                 self.panel.show(&self.launcher, now);
                 self.panel.settle_appear();
                 self.searched = None;

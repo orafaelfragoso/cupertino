@@ -831,16 +831,29 @@ impl NotificationCenter {
             .flatten();
         let suppressed = self.dnd_active(now)
             && !(self.config.critical_bypasses_dnd
+                && self.policy.critical_during_dnd
                 && input.hints.urgency == Some(Urgency::Critical));
         let id = match existing {
             Some(i) => self.entries[i].n.id,
             None => self.alloc_id(),
         };
         let mut n = Notification::from_input(id, input, now);
+        let app_policy = self.policy_of(&n);
+        // an application the person turned off is neither shown nor kept
+        if !app_policy.allow {
+            self.events.push_back(Event::Closed {
+                id,
+                reason: CloseReason::Undefined,
+            });
+            return id;
+        }
         let in_centre = !n.transient;
-        // while locked nothing new takes the screen: it goes to the centre, and the lock screen lists it
+        // while locked nothing new takes the screen: it goes to the centre, and the lock screen lists it; an
+        // application without banners puts its notifications there too
         let locked = self.screen_locked;
-        let held = suppressed || locked;
+        let held = suppressed
+            || locked
+            || app_policy.alert_style == cupertino_defaults::notifications::AlertStyle::None;
         let locked_arrival = locked && !suppressed;
         let mut queued = None;
         match existing {

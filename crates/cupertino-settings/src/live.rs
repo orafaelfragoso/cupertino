@@ -181,9 +181,79 @@ impl Network {
     }
 }
 
+/// A network the machine has saved, in range or not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnownNetwork {
+    /// The network's key for the service ([`Network::ssid`]).
+    pub ssid: String,
+    pub name: String,
+    /// Whether the machine joins it by itself when it is in range; `None` when the service does not say.
+    pub auto_join: Option<bool>,
+    pub in_range: bool,
+    pub connected: bool,
+    pub secured: bool,
+}
+
+/// A network interface as the kernel and the resolver describe it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Interface {
+    pub name: String,
+    /// `ethernet`, `wifi` or `other`.
+    pub kind: String,
+    pub mac: Option<String>,
+    /// The kernel's operational state (`up`, `down`, …).
+    pub state: String,
+    /// The IPv4 address with its prefix length, as `192.168.1.20/24`.
+    pub ipv4: Option<String>,
+    pub gateway: Option<String>,
+    pub dns: Vec<String>,
+    /// The link's speed in megabits per second, when the driver reports one.
+    pub speed: Option<u32>,
+}
+
+/// A VPN connection the system holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Vpn {
+    /// The connection's identifier for the service (its UUID).
+    pub id: String,
+    pub name: String,
+    /// What kind of VPN it is, as a label.
+    pub kind: String,
+    pub active: bool,
+    /// An attempt to connect or disconnect is under way.
+    pub busy: bool,
+}
+
+/// One point of the battery's charge history.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChargePoint {
+    /// Seconds since the epoch.
+    pub time: i64,
+    /// The charge, 0 to 100.
+    pub percent: f64,
+    pub charging: bool,
+}
+
+/// What the Battery pane shows besides the charge itself.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BatteryExtras {
+    /// What the battery holds when full now against when it was new, in per cent; `None` when the supply does not say.
+    pub health: Option<f64>,
+    /// The power flowing in or out, in watts.
+    pub rate_watts: Option<f64>,
+    /// The recorded charge, oldest first, for the last ten days.
+    pub history: Vec<ChargePoint>,
+    /// Whether the power-saving profile is on; `None` when no service offers one.
+    pub low_power: Option<bool>,
+}
+
 /// `org.cupertino.Network1`.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Wifi {
+    /// The saved networks, in range or not; empty when the service does not list them.
+    pub known: Vec<KnownNetwork>,
+    /// Whether the service can forget a saved network.
+    pub can_forget: bool,
     pub enabled: bool,
     pub devices: Vec<Device>,
     /// The daemon's overall state.
@@ -260,6 +330,11 @@ pub struct Monitor {
     pub logical: Option<(u32, u32)>,
     /// Turned by 90 or 270 degrees.
     pub rotated: bool,
+    /// Where the display's top-left corner lies in the desktop, in points.
+    pub position: Option<(i32, i32)>,
+    /// The refresh rates it has at its current size, in millihertz, ascending; empty when the server does not list
+    /// them.
+    pub refresh_rates: Vec<u32>,
 }
 
 impl Monitor {
@@ -335,6 +410,27 @@ pub struct Live {
     pub browsers: (Vec<crate::system::Browser>, Option<usize>),
     /// The status icons applications have put in the menu bar, read when the Menu Bar pane opens.
     pub tray: Vec<TrayItem>,
+    /// The network interfaces, read while the Wi-Fi or Network pane shows.
+    pub interfaces: Vec<Interface>,
+    /// The VPN connections, read while the VPN pane shows.
+    pub vpns: Reading<Vec<Vpn>>,
+    /// The battery's health, history and power-saving profile, read while the Battery pane shows.
+    pub battery_extras: BatteryExtras,
+    /// The sound inputs, empty without a PipeWire daemon.
+    pub inputs: Vec<Output>,
+    pub input_volume: Reading<Volume>,
+    /// The output balance, -1 (left) to 1 (right); `None` when the sound server does not say.
+    pub balance: Option<f64>,
+    /// How loud the input is now, 0 to 1, while the Sound pane shows its inputs.
+    pub input_level: f64,
+    /// The people with an account on this machine, read while the Users & Groups pane shows.
+    pub users: Vec<crate::system::User>,
+    /// The keyboard's backlight, 0 to 1; `None` without one.
+    pub keyboard_backlight: Option<f64>,
+    /// The page's tab (Trackpad and Mouse, Sound): not saved anywhere.
+    pub tab: usize,
+    /// Which span the battery charts show: false the last 24 hours, true the last ten days.
+    pub chart_days: bool,
 }
 
 /// A status icon an application keeps in the menu bar.
@@ -367,6 +463,17 @@ impl Default for Live {
             login_items: Vec::new(),
             browsers: (Vec::new(), None),
             tray: Vec::new(),
+            interfaces: Vec::new(),
+            vpns: Reading::Unknown,
+            battery_extras: BatteryExtras::default(),
+            inputs: Vec::new(),
+            input_volume: Reading::Unknown,
+            balance: None,
+            input_level: 0.0,
+            users: Vec::new(),
+            keyboard_backlight: None,
+            tab: 0,
+            chart_days: false,
         }
     }
 }

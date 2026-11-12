@@ -110,6 +110,28 @@ impl<M> WindowState<M> {
         self.layer.damage.invalidate();
     }
 
+    /// The window just became active or inactive: when it became active, its colours cross over [`ACTIVATION_NS`]
+    /// (at once with Reduce Motion).
+    fn begin_activation(&mut self, now: Timestamp) {
+        self.activated_at =
+            (self.active && !self.env.theme.preferences.reduce_motion).then_some(now);
+    }
+
+    /// How far the colours of the window have crossed to the active ones at `now`, 0 to 1; ends the crossing when done.
+    fn activation_progress(&mut self, now: Timestamp) -> f32 {
+        let Some(start) = self.activated_at else {
+            return 1.0;
+        };
+        let elapsed = now.0.saturating_sub(start.0);
+        if elapsed >= ACTIVATION_NS {
+            self.activated_at = None;
+            return 1.0;
+        }
+        // eased out: it moves fastest at the start
+        let t = elapsed as f32 / ACTIVATION_NS as f32;
+        1.0 - (1.0 - t) * (1.0 - t)
+    }
+
     /// Something in the window changed how it paints but no node's size or place: paint it again, and build its
     /// semantics and geometry again from the layout it has.
     fn repaint(&mut self) {
@@ -241,7 +263,12 @@ struct WindowState<M> {
     drop: Option<drops::DropState>,
     /// The popup closed and is fading out; it takes no input and the view no longer holds it.
     fade: Option<fade::Fade>,
+    /// When the window last became active, while its colours still cross from the inactive ones.
+    activated_at: Option<Timestamp>,
 }
+
+/// How long the colours of a window that becomes active take to cross from the inactive ones, in nanoseconds.
+const ACTIVATION_NS: u64 = 120_000_000;
 
 struct PopupState<M> {
     parent: WindowKey,
@@ -904,6 +931,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             popups: Vec::new(),
             drop: None,
             fade: None,
+            activated_at: None,
         }
     }
 
@@ -1120,6 +1148,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.invalidate_damage();
                 if w.active != c.states.activated {
                     w.active = c.states.activated;
+                    w.begin_activation(now);
                     if let Some(node) = w.focus.node() {
                         let event = Event::WindowActive(w.active);
                         route(&mut self.tree, w, now, &mut effects).notify(node, &event);
@@ -1149,6 +1178,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 // the callback of a committed frame: the compositor has shown it, not only received it
                 w.presented |= w.committed;
                 let animate = std::mem::take(&mut w.animate);
+                if w.activated_at.is_some() {
+                    // the colours of an activated window are still crossing: paint it again
+                    w.repaint();
+                    w.invalidate_damage();
+                }
                 if !animate.is_empty() {
                     w.repaint();
                     let mut route = route(&mut self.tree, w, now, &mut effects);
@@ -1176,6 +1210,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             WindowEvent::Focus(focused) => {
                 let changed = w.active != focused;
                 w.active = focused;
+                if changed {
+                    w.begin_activation(now);
+                }
                 if !focused {
                     let held: BTreeSet<NodeId> = w.held.drain(..).map(|(_, node)| node).collect();
                     w.dismissed = None;
@@ -2177,6 +2214,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let effects = capabilities.app_effects;
         let layered = capabilities.raised_layer;
         let paint = |w: &mut WindowState<A::Message>, tree: &Tree<A::Message>| {
+            cupertino_ui_theme::set_activation(w.activation_progress(now));
             let mut painting = w.painter.paint(
                 tree,
                 root,
@@ -2194,6 +2232,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     layer: layered,
                 },
             );
+            cupertino_ui_theme::set_activation(1.0);
             if let Some(fade) = w.fade {
                 fade::dim(&mut painting.list, fade.opacity);
             }

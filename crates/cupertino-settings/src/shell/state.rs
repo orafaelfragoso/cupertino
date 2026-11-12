@@ -126,6 +126,8 @@ pub(crate) fn background_channel(
 
 /// The Wi-Fi pane scans this often while it is shown and the radio is on (approximate, §6.4).
 const SCAN: f64 = 10.0;
+/// How often the battery's recorded charge is read again while the Battery pane shows, in seconds.
+const HISTORY_REFRESH: f64 = 60.0;
 
 /// The level slider being dragged: its control, its writer, when it last moved and where its knob is.
 pub(crate) struct LevelDrag {
@@ -165,6 +167,10 @@ pub struct State {
     pub(crate) start: std::time::Instant,
     pub(crate) refreshed: f64,
     pub(crate) scanned: f64,
+    /// When the battery's charge history was last read.
+    pub(crate) history_read: f64,
+    /// The folder chooser that is open adds a folder the file search leaves out.
+    pub(crate) picking_exclusion: bool,
     pub(crate) notify: Notify,
     pub(crate) assets: Assets,
     /// Each picture's thumbnail once made.
@@ -266,6 +272,8 @@ impl State {
             start: std::time::Instant::now(),
             refreshed: f64::NEG_INFINITY,
             scanned: f64::NEG_INFINITY,
+            history_read: f64::NEG_INFINITY,
+            picking_exclusion: false,
             notify,
             assets: Assets::discover(),
             thumbnails: HashMap::new(),
@@ -333,6 +341,19 @@ impl State {
         Ok(())
     }
 
+    /// Whether the input level meter listens and shows now.
+    pub(crate) fn meter_running(&self) -> bool {
+        self.content_pane == PaneId::Sound && self.live.tab == 1 && !self.live.inputs.is_empty()
+    }
+
+    /// Read how loud the input is now; true when it changed.
+    pub(crate) fn refresh_meter(&mut self) -> bool {
+        let level = self.services.meter_level();
+        let changed = (level - self.live.input_level).abs() > 0.005;
+        self.live.input_level = level;
+        changed
+    }
+
     /// Read the live services of the pane shown again; draw again when something changed. The battery is read on the
     /// first refresh too, whatever the pane: whether there is one names the Battery row.
     pub(crate) fn refresh(&mut self, now: f64) -> Result<()> {
@@ -356,6 +377,15 @@ impl State {
         {
             self.live.battery = self.services.battery();
         }
+        if self.content_pane == PaneId::Battery {
+            let with_history = now - self.history_read >= HISTORY_REFRESH;
+            if with_history {
+                self.history_read = now;
+            }
+            self.live.battery_extras = self
+                .services
+                .battery_extras(&self.live.battery_extras, with_history);
+        }
         match self.content_pane {
             PaneId::Focus => self.live.focus = self.services.focus(),
             PaneId::Notifications => self.live.notifying_apps = self.services.notifying_apps(),
@@ -363,8 +393,22 @@ impl State {
                 if self.level.is_none() {
                     self.live.volume = self.services.volume();
                     self.live.outputs = self.services.outputs();
+                    self.live.balance = self.services.balance();
+                    if self.live.tab == 1 {
+                        self.live.inputs = self.services.inputs();
+                        self.live.input_volume = self.services.input_volume();
+                    }
+                }
+                if self.live.tab == 1 {
+                    self.services.start_meter();
+                    self.live.input_level = self.services.meter_level();
+                } else {
+                    self.services.stop_meter();
+                    self.live.input_level = 0.0;
                 }
             }
+            PaneId::Keyboard => self.live.keyboard_backlight = self.services.keyboard_backlight(),
+            PaneId::Vpn => self.live.vpns = self.services.vpns(),
             PaneId::Displays => {
                 self.live.displays = self.services.displays();
                 if self.level.is_none() {
@@ -374,6 +418,7 @@ impl State {
             PaneId::Wifi | PaneId::Network => {
                 let keep = self.live.wifi.ready().cloned();
                 self.live.wifi = self.services.wifi(keep.as_ref());
+                self.live.interfaces = crate::netinfo::read();
                 let radio_on = self
                     .live
                     .wifi
@@ -405,6 +450,11 @@ impl State {
             return Ok(());
         }
         self.scanned = f64::NEG_INFINITY;
+        self.history_read = f64::NEG_INFINITY;
+        self.live.tab = 0;
+        if to == PaneId::Users {
+            self.live.users = crate::system::users();
+        }
         if to == PaneId::Wallpaper {
             self.load_pictures();
         }
@@ -468,6 +518,10 @@ impl State {
     }
 
     pub(crate) fn leave_pane(&mut self, pane: PaneId) {
+        if pane == PaneId::Sound {
+            self.services.stop_meter();
+            self.live.input_level = 0.0;
+        }
         if pane == PaneId::Bluetooth && self.live.bluetooth.ready().is_some_and(|b| b.discovering) {
             if let Err(e) = self.services.discovery(false) {
                 eprintln!("cupertino-settings: Bluetooth discovery: {e}");
@@ -612,6 +666,24 @@ impl State {
                     self.sheet = Some(Sheet::apps(apps));
                     Ok(())
                 }
+                Effect::ChartSpan(ten_days) => {
+                    self.live.chart_days = ten_days;
+                    Ok(())
+                }
+                Effect::Tab(tab) => {
+                    self.live.tab = tab;
+                    let now = self.now();
+                    self.refresh(now).map_err(|e| e.to_string())
+                }
+                Effect::AskExclusion => {
+                    let start = std::env::var_os("HOME")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+                    self.picking_exclusion = true;
+                    self.sheet = Some(Sheet::picker_pending(&start, Mode::Folder));
+                    self.drive_picker();
+                    Ok(())
+                }
                 Effect::Refuse(reason) => Err(reason),
                 Effect::ForgetGrant(grant) => self.settings.forget_grant(&self.paths, &grant),
                 Effect::DecideApp {
@@ -730,6 +802,7 @@ impl State {
         match outcome {
             Outcome::Stay => {}
             Outcome::Cancel => {
+                self.picking_exclusion = false;
                 self.sheet = None;
                 self.agent_answer = None;
             }
@@ -763,6 +836,17 @@ impl State {
                     }
                 }
             },
+            Outcome::Picked { path, folder } if std::mem::take(&mut self.picking_exclusion) => {
+                let _ = folder;
+                self.sheet = None;
+                let text = path.to_string_lossy().into_owned();
+                if !self.settings.launcher.excluded.contains(&text) {
+                    self.settings.launcher.excluded.push(text);
+                    if let Err(e) = self.settings.store(&self.paths, File::Launcher) {
+                        eprintln!("cupertino-settings: {e}");
+                    }
+                }
+            }
             Outcome::Picked { path, folder } => {
                 self.sheet = None;
                 let added = if folder {

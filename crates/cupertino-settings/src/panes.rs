@@ -21,7 +21,7 @@ use cupertino_assets::WallpaperFile;
 
 use crate::about;
 use crate::clipboard::{self, State};
-use crate::controls::{Control, Tile, Value, MUTE_BELOW};
+use crate::controls::{Control, SwatchKind, Tile, Value, MUTE_BELOW};
 use crate::desktop_control;
 use crate::live::{
     display_name, duration_text, BatteryState, Bluetooth, Live, LoginScreen, Mouse, Reading, Wifi,
@@ -163,6 +163,8 @@ pub enum ControlId {
     NotificationAppLockScreen(usize),
     /// An application of [`notification_apps`], by index: its own choice of [`ControlId::NotificationsPreviews`].
     NotificationAppPreviews(usize),
+    /// A control of the networks, battery, sound, display, search and notification options.
+    More(crate::pane_more::More),
 }
 
 /// What a control's value reaches the system through.
@@ -245,6 +247,12 @@ pub enum Effect {
     /// Take the answer of an app out of `desktop-control.conf`, so it asks again
     /// ([`Settings::forget_app`](crate::settings::Settings::forget_app)).
     ForgetApp { service: Service, app: App },
+    /// Show the battery charts for the last ten days (true) or the last day.
+    ChartSpan(bool),
+    /// Show this tab of the page.
+    Tab(usize),
+    /// Ask for a folder the file search leaves out.
+    AskExclusion,
     /// The change is refused for this reason; nothing changed.
     Refuse(String),
 }
@@ -266,6 +274,17 @@ pub enum Call {
         connector: String,
         scale: f64,
     },
+    /// Set the refresh rate, in millihertz, of the display on `connector` at its current size.
+    SetDisplayRefresh {
+        connector: String,
+        mhz: u32,
+    },
+    /// Move the display on `connector` so its top-left corner lies at (`x`, `y`) in the desktop.
+    SetDisplayPosition {
+        connector: String,
+        x: i32,
+        y: i32,
+    },
     SetWirelessEnabled(bool),
     /// Join a network; `None`: ask for the passphrase first (a secured network that is not saved).
     Join {
@@ -273,6 +292,29 @@ pub enum Call {
         passphrase: Option<crate::sheet::Secret>,
     },
     Disconnect,
+    /// Take a saved network, by its key, off the machine.
+    ForgetNetwork(String),
+    /// Let the machine join a saved network by itself, or stop it.
+    SetAutoJoin {
+        ssid: String,
+        on: bool,
+    },
+    /// Connect the VPN with this identifier, or disconnect it.
+    SetVpn {
+        id: String,
+        on: bool,
+    },
+    /// Turn the power-saving profile on or off.
+    SetLowPower(bool),
+    /// Make the PipeWire source with this id the input applications record from.
+    SetInput(u32),
+    SetInputVolume {
+        level: f64,
+        muted: bool,
+    },
+    /// Set the output's balance, -1 (left) to 1 (right).
+    SetBalance(f64),
+    SetKeyboardBacklight(f64),
     SetBluetoothPowered(bool),
     Pair(String),
     Connect(String),
@@ -304,6 +346,18 @@ pub const CORNER_ACTIONS: [(&str, &str); 9] = [
     ("Lock Screen", "lock"),
     ("Notification Centre", "notification-center"),
     ("Control Panel", "control-panel"),
+];
+
+/// The gestures of the trackpad that run an action, with the keys of the dock's file.
+const GESTURES: [(Trigger, &str, &str); 4] = [
+    (Trigger::SwipeUp, "Swipe up with three fingers", "swipe_up"),
+    (
+        Trigger::SwipeDown,
+        "Swipe down with three fingers",
+        "swipe_down",
+    ),
+    (Trigger::Pinch, "Pinch with four fingers", "pinch"),
+    (Trigger::Spread, "Spread with four fingers", "spread"),
 ];
 
 const CORNERS: [(Trigger, &str, &str); 4] = [
@@ -1110,7 +1164,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             let rate =
                 mapping::rate_position(settings.repeat_delay_ms(), settings.repeat_interval_ms());
             let delay = delay_position(settings);
-            vec![
+            let mut out = vec![
                 Section {
                     header: header("Key Repeat"),
                     rows: vec![
@@ -1195,64 +1249,126 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     ],
                     footer: file_footer(File::Keyboard),
                 },
-            ]
+            ];
+            out.extend(crate::pane_more::keyboard_sections(settings, live));
+            out
         }
         PaneId::Mouse => {
             let key = |k| Backend::Key(File::Compositor, k);
-            let mut sections = vec![Section {
-                header: None,
-                rows: vec![
-                    row(
-                        ControlId::MouseSpeed,
-                        "Tracking speed",
-                        tracking(settings.mouse_speed()),
-                        key("mouse_speed"),
-                    ),
-                    row(
-                        ControlId::MouseAcceleration,
-                        "Pointer acceleration",
-                        switch(settings.mouse_acceleration()),
-                        key("mouse_acceleration"),
-                    ),
-                    row(
+            let mut sections = vec![crate::pane_more::tabs(
+                &["Point & Click", "Scrolling", "Devices"],
+                live,
+            )];
+            sections.push(match live.tab {
+                0 => Section {
+                    header: None,
+                    rows: vec![
+                        row(
+                            ControlId::MouseSpeed,
+                            "Tracking speed",
+                            tracking(settings.mouse_speed()),
+                            key("mouse_speed"),
+                        ),
+                        row(
+                            ControlId::MouseAcceleration,
+                            "Pointer acceleration",
+                            switch(settings.mouse_acceleration()),
+                            key("mouse_acceleration"),
+                        ),
+                    ],
+                    footer: file_footer(File::Compositor),
+                },
+                1 => Section {
+                    header: None,
+                    rows: vec![row(
                         ControlId::MouseNatural,
                         "Natural scrolling",
                         switch(settings.mouse_natural_scrolling()),
                         key("mouse_natural_scrolling"),
-                    ),
-                ],
-                footer: file_footer(File::Compositor),
-            }];
-            sections.extend(live.mice.ready().and_then(|m| resolution_section(m)));
+                    )],
+                    footer: file_footer(File::Compositor),
+                },
+                _ => match live.mice.ready().and_then(|m| resolution_section(m)) {
+                    Some(section) => section,
+                    None => Section {
+                        header: None,
+                        rows: vec![row(
+                            ControlId::Reading,
+                            "Mouse",
+                            Control::Text {
+                                value: "No mouse is connected".to_string(),
+                            },
+                            Backend::Service("Mice"),
+                        )],
+                        footer: None,
+                    },
+                },
+            });
             sections
         }
         PaneId::Wallpaper => wallpaper_sections(settings, live),
         PaneId::Trackpad => {
             let key = |k| Backend::Key(File::Compositor, k);
-            vec![Section {
-                header: None,
-                rows: vec![
-                    row(
-                        ControlId::TrackpadSpeed,
-                        "Tracking speed",
-                        tracking(settings.trackpad_speed()),
-                        key("trackpad_speed"),
-                    ),
-                    row(
-                        ControlId::TrackpadAcceleration,
-                        "Pointer acceleration",
-                        switch(settings.trackpad_acceleration()),
-                        key("trackpad_acceleration"),
-                    ),
-                    row(
+            let mut sections = vec![crate::pane_more::tabs(
+                &["Point & Click", "Scroll & Zoom", "More Gestures"],
+                live,
+            )];
+            sections.push(match live.tab {
+                0 => Section {
+                    header: None,
+                    rows: vec![
+                        row(
+                            ControlId::TrackpadSpeed,
+                            "Tracking speed",
+                            tracking(settings.trackpad_speed()),
+                            key("trackpad_speed"),
+                        ),
+                        row(
+                            ControlId::TrackpadAcceleration,
+                            "Pointer acceleration",
+                            switch(settings.trackpad_acceleration()),
+                            key("trackpad_acceleration"),
+                        ),
+                    ],
+                    footer: file_footer(File::Compositor),
+                },
+                1 => Section {
+                    header: None,
+                    rows: vec![row(
                         ControlId::TrackpadNatural,
                         "Natural scrolling",
                         switch(settings.natural_scrolling()),
                         key("natural_scrolling"),
-                    ),
-                ],
-                footer: file_footer(File::Compositor),
-            }]
+                    )],
+                    footer: file_footer(File::Compositor),
+                },
+                _ => Section {
+                    header: None,
+                    rows: GESTURES
+                        .iter()
+                        .map(|(trigger, label, key)| {
+                            let action = settings.dock.actions.get(*trigger);
+                            let mut choices: Vec<String> =
+                                CORNER_ACTIONS.iter().map(|(l, _)| l.to_string()).collect();
+                            let selected = match corner_choice(action) {
+                                Some(i) => i,
+                                None => {
+                                    choices.push(cupertino_defaults::dock::action_text(action));
+                                    choices.len() - 1
+                                }
+                            };
+                            row(
+                                ControlId::HotCorner(*trigger),
+                                *label,
+                                Control::Popup { choices, selected },
+                                Backend::Key(File::Dock, *key),
+                            )
+                        })
+                        .collect(),
+                    footer: file_footer(File::Dock),
+                },
+            });
+            sections
         }
         PaneId::Accessibility => {
             let a = &settings.accessibility;
@@ -1336,13 +1452,13 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             let k = &settings.keyboard;
             let mut out = vec![
                 Section {
-                    header: header("Display"),
+                    header: header("Vision: Display"),
                     rows: display,
                     footer: None,
                 },
                 screen_reader_section(a.screen_reader, live.screen_reader_installed),
                 Section {
-                    header: header("Pointer"),
+                    header: header("Vision: Pointer"),
                     rows: vec![
                         row(
                             ControlId::CursorSize,
@@ -1377,7 +1493,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     footer: file_footer(File::Compositor),
                 },
                 Section {
-                    header: header("Keyboard"),
+                    header: header("Motor: Keyboard"),
                     rows: vec![
                         row(
                             ControlId::StickyKeys,
@@ -1409,7 +1525,10 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                             switch(k.mouse_keys_shortcut.unwrap_or(false)),
                             keys("mouse_keys_shortcut"),
                         ),
-                    ],
+                    ]
+                    .into_iter()
+                    .chain(crate::pane_more::key_delay_rows(settings))
+                    .collect(),
                     footer: file_footer(File::Keyboard),
                 },
             ];
@@ -1527,6 +1646,11 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                 }],
             };
             let mut out = level;
+            out.extend(crate::pane_more::battery_sections(
+                &live.battery_extras,
+                live.chart_days,
+                live.has_battery() == Some(true),
+            ));
             out.push(Section {
                 header: header("System Sleep"),
                 // without a battery only the power-adapter timer applies (§3)
@@ -1556,47 +1680,13 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             });
             out
         }
-        PaneId::Focus => focus_sections(&live.focus),
-        PaneId::Notifications => notifications_sections(settings, live),
-        PaneId::Sound => {
-            let svc = Backend::Service("master");
-            let (level, muted, reason) = match &live.volume {
-                Reading::Ready(v) => (v.level, v.muted, None),
-                other => (0.0, false, other.reason().map(str::to_string)),
-            };
-            let mut rows = Vec::new();
-            if live.outputs.len() > 1 {
-                rows.push(row(
-                    ControlId::Output,
-                    "Output device",
-                    Control::Popup {
-                        choices: live.outputs.iter().map(|o| o.name.clone()).collect(),
-                        selected: live.outputs.iter().position(|o| o.default).unwrap_or(0),
-                    },
-                    svc,
-                ));
-            }
-            rows.extend([
-                Row {
-                    disabled: reason.clone(),
-                    ..row(
-                        ControlId::Volume,
-                        "Output volume",
-                        Control::Level { value: level },
-                        svc,
-                    )
-                },
-                Row {
-                    disabled: reason,
-                    ..row(ControlId::Mute, "Mute", switch(muted), svc)
-                },
-            ]);
-            vec![Section {
-                header: header("Output"),
-                rows,
-                footer: None,
-            }]
+        PaneId::Focus => {
+            let mut out = focus_sections(&live.focus);
+            out.push(crate::pane_more::focus_critical_section(settings));
+            out
         }
+        PaneId::Notifications => notifications_sections(settings, live),
+        PaneId::Sound => crate::pane_more::sound_sections(live),
         PaneId::Displays => {
             let text = |label: &str, value: String| {
                 row(
@@ -1615,8 +1705,11 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                         rows: [
                             display_size_row(i, m),
                             Some(text("Resolution", about::mode_text(m.mode))),
-                            m.refresh_mhz
-                                .map(|r| text("Refresh Rate", about::refresh_text(r))),
+                            crate::pane_more::refresh_row(i, m).or_else(|| {
+                                m.refresh_mhz
+                                    .map(|r| text("Refresh Rate", about::refresh_text(r)))
+                            }),
+                            crate::pane_more::arrange_row(i, monitors),
                             Some(text("Scale", about::scale_text(m.scale))),
                         ]
                         .into_iter()
@@ -1649,9 +1742,20 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             }
             out
         }
-        PaneId::Wifi => wifi_sections(&live.wifi),
-        PaneId::Network => network_sections(&live.wifi),
+        PaneId::Wifi => {
+            let mut out = wifi_sections(&live.wifi);
+            out.extend(crate::pane_more::wifi_details(live));
+            out
+        }
+        PaneId::Network => {
+            let mut out = network_sections(&live.wifi);
+            out.extend(crate::pane_more::interface_sections(live));
+            out
+        }
+        PaneId::Vpn => crate::pane_more::vpn_sections(live),
         PaneId::Bluetooth => bluetooth_sections(&live.bluetooth),
+        PaneId::Search => crate::pane_more::search_sections(settings),
+        PaneId::Users => crate::pane_more::users_sections(live),
     }
 }
 
@@ -1677,6 +1781,9 @@ pub fn display_size_label(
         None => size,
     }
 }
+
+/// The most sizes that show as pictures; more show as a pop-up.
+const MAX_SIZE_TILES: usize = 7;
 
 /// The "looks like" choices of display `index` of `Live::displays`, from the biggest text to the most room, the one
 /// it shows selected. A size that is none of them (a scale set elsewhere) is an extra item at the end. `None` when the
@@ -1704,10 +1811,27 @@ fn display_size_row(index: usize, monitor: &crate::live::Monitor) -> Option<Row>
         }
         None => list.default.unwrap_or(0),
     };
+    // a few sizes that are all the display's own show as pictures, from the biggest text to the most room
+    let control =
+        if choices.len() == list.choices.len() && (2..=MAX_SIZE_TILES).contains(&choices.len()) {
+            Control::Swatches {
+                items: (0..list.choices.len())
+                    .map(|i| {
+                        (
+                            about::mode_text(monitor.choice_logical(&list.choices[i])),
+                            SwatchKind::Scale(i as u8),
+                        )
+                    })
+                    .collect(),
+                selected,
+            }
+        } else {
+            Control::Popup { choices, selected }
+        };
     Some(row(
         ControlId::DisplaySize(index),
         "Desktop Size",
-        Control::Popup { choices, selected },
+        control,
         Backend::Service("zwlr_output_manager_v1"),
     ))
 }
@@ -2021,26 +2145,29 @@ fn notifications_sections(settings: &Settings, live: &Live) -> Vec<Section> {
         let preview_selected = own.show_previews.map_or(0, |p| 1 + previews_index(p));
         out.push(Section {
             header: Some(name.clone()),
-            rows: vec![
-                row(
-                    ControlId::NotificationAppLockScreen(i),
-                    "Show on lock screen",
-                    Control::Popup {
-                        choices: lock_choices,
-                        selected: lock_selected,
-                    },
-                    key("app.<id>.show_on_lock_screen"),
-                ),
-                row(
-                    ControlId::NotificationAppPreviews(i),
-                    "Show previews",
-                    Control::Popup {
-                        choices: preview_choices,
-                        selected: preview_selected,
-                    },
-                    key("app.<id>.show_previews"),
-                ),
-            ],
+            rows: crate::pane_more::app_rows(i, &own)
+                .into_iter()
+                .chain([
+                    row(
+                        ControlId::NotificationAppLockScreen(i),
+                        "Show on lock screen",
+                        Control::Popup {
+                            choices: lock_choices,
+                            selected: lock_selected,
+                        },
+                        key("app.<id>.show_on_lock_screen"),
+                    ),
+                    row(
+                        ControlId::NotificationAppPreviews(i),
+                        "Show previews",
+                        Control::Popup {
+                            choices: preview_choices,
+                            selected: preview_selected,
+                        },
+                        key("app.<id>.show_previews"),
+                    ),
+                ])
+                .collect(),
             footer: None,
         });
     }
@@ -2178,7 +2305,9 @@ fn wifi_sections(wifi: &Reading<Wifi>) -> Vec<Section> {
         .filter(|(_, n)| !n.saved)
         .map(network_row)
         .collect();
-    if !known.is_empty() {
+    if !w.known.is_empty() {
+        out.push(crate::pane_more::known_section(w));
+    } else if !known.is_empty() {
         out.push(Section {
             header: header("Known Networks"),
             rows: known,
@@ -2938,6 +3067,7 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             vec![Effect::Service(Call::SetBluetoothPowered(bool_of(value)))]
         }
         ControlId::Reading => Vec::new(),
+        ControlId::More(more) => crate::pane_more::change(more, value, settings, live),
         ControlId::BluetoothDevice(i) => {
             match live.bluetooth.ready().and_then(|b| b.devices.get(i)) {
                 Some(d) if !d.paired => vec![Effect::Service(Call::Pair(d.id.clone()))],

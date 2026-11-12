@@ -21,6 +21,7 @@ use zbus::Connection;
 
 use crate::auth::Authorizer;
 use crate::error::{start_failed, Error, Result};
+use crate::history::{History, Sample};
 use crate::interfaces::{
     device_path, device_properties, keyboard_path, manager_properties, DeviceObject,
     KeyboardBacklightObject, Manager, PowerObject, Property, Target, DEVICE_INTERFACE,
@@ -41,6 +42,13 @@ pub enum Bus {
     Address(String),
 }
 
+/// Seconds since the epoch.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 /// Everything the daemon needs to start.
 pub struct Config {
     pub bus: Bus,
@@ -50,6 +58,8 @@ pub struct Config {
     pub lid: Lid,
     /// Decides who may write a brightness.
     pub authorizer: Box<dyn Authorizer>,
+    /// Where the charge history is kept between runs; `None` keeps it in memory only.
+    pub history_path: Option<PathBuf>,
 }
 
 /// State shared between the host thread and the bus objects.
@@ -61,6 +71,9 @@ pub struct Shared {
     warnings: Mutex<Warnings>,
     /// Time base of the warning rules.
     start: Instant,
+    /// The battery's recorded charge.
+    history: Mutex<History>,
+    history_path: Option<PathBuf>,
 }
 
 /// Why a brightness write did not happen.
@@ -112,6 +125,33 @@ impl Shared {
 
     pub fn authorizer(&self) -> &dyn Authorizer {
         self.authorizer.as_ref()
+    }
+
+    /// The charge samples of the last `timespan` seconds, thinned to one per `resolution` seconds.
+    pub fn history(&self, timespan: u32, resolution: u32) -> Vec<Sample> {
+        self.history
+            .lock()
+            .expect("no thread panics while holding the history")
+            .query(unix_now(), timespan, resolution)
+    }
+
+    /// Record the battery's charge when a sample is due, and keep the file.
+    fn record_charge(&self, supplies: &[crate::supply::Supply]) {
+        let view = DeviceView::display(supplies);
+        if !view.is_present {
+            return;
+        }
+        let mut history = self
+            .history
+            .lock()
+            .expect("no thread panics while holding the history");
+        if history.record(unix_now(), view.percentage, view.state) {
+            if let Some(path) = &self.history_path {
+                if let Err(e) = history.save(path) {
+                    eprintln!("cupertino-powerd: the charge history is not saved: {e}");
+                }
+            }
+        }
     }
 
     pub fn sysfs_root(&self) -> &Path {
@@ -190,8 +230,17 @@ impl Daemon {
             authorizer: config.authorizer,
             warnings: Mutex::new(Warnings::new()),
             start: Instant::now(),
+            history: Mutex::new(
+                config
+                    .history_path
+                    .as_deref()
+                    .map(History::load)
+                    .unwrap_or_default(),
+            ),
+            history_path: config.history_path,
         });
         shared.update_warnings(&snapshot.supplies);
+        shared.record_charge(&snapshot.supplies);
         let bus = Error::bus("connecting to the bus");
         let builder = match &config.bus {
             Bus::System => Builder::system(),
@@ -298,6 +347,7 @@ impl Daemon {
         };
         let level_before = self.shared.warning_level();
         let level = self.shared.update_warnings(&new.supplies);
+        self.shared.record_charge(&new.supplies);
         zbus::block_on(async {
             announce(self.connection.inner(), &self.shared, &old, &new).await?;
             if level != level_before {

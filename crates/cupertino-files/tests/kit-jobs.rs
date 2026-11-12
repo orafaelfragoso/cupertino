@@ -299,6 +299,14 @@ fn a_copy_outlives_its_window_and_the_progress_window_and_files_exits_only_once_
         named_in(&run, shown, Role::ProgressIndicator),
         ["Copying “big.bin” to “Notes”"]
     );
+    let title = run
+        .driver
+        .window_system_mut()
+        .spec(shown)
+        .unwrap()
+        .title
+        .clone();
+    assert_eq!(title, "Copy", "named by the kind of operation it lists");
     assert!(named_in(&run, shown, Role::Button).contains(&"Stop".to_owned()));
 
     // the browser window goes: the copy and the progress window stay, and so does Files

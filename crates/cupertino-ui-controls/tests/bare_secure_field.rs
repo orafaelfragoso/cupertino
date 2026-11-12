@@ -7,7 +7,11 @@ use cupertino_ui_controls::{BareSecureField, SecureField, Stack};
 use cupertino_ui_core::{Application, Command, Element, Role, Window};
 use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_render::{PaintOp, Shape};
+use cupertino_ui_theme::Color;
 use support::{window, Harness};
+
+/// The placeholder's own colour.
+const PLACEHOLDER: Color = Color::new(1.0, 1.0, 1.0, 0.5);
 
 #[derive(Clone, Debug, PartialEq)]
 enum Message {
@@ -42,6 +46,7 @@ impl Application for Lock {
             },
             size: 13.0,
             weight: Some(500),
+            placeholder_color: Some(PLACEHOLDER),
         })
         .key("password");
         window(Element::new(Stack {
@@ -100,5 +105,25 @@ fn a_bare_secure_field_reads_as_a_password_field() {
     assert_eq!(
         (field.role, field.name.as_deref()),
         (Role::PasswordInput, Some("Password"))
+    );
+}
+
+#[test]
+fn a_bare_secure_field_draws_its_placeholder_in_its_own_colour_until_something_is_typed() {
+    let mut h = harness();
+    let glyph_colors = |h: &Harness<Lock>| -> Vec<Color> {
+        h.ops("password")
+            .into_iter()
+            .filter_map(|op| match op {
+                PaintOp::Glyphs { color, .. } => Some(color),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(glyph_colors(&h), vec![PLACEHOLDER]);
+    h.type_text("s");
+    assert!(
+        !glyph_colors(&h).contains(&PLACEHOLDER),
+        "the dots take the text colour"
     );
 }

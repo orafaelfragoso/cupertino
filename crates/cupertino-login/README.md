@@ -531,7 +531,7 @@ network users).
 | Item | Value | Where |
 |---|---|---|
 | Wallpaper | Procedural gradient with two blobs in the server's dark desktop colours. The design shows the user's wallpaper, which the process cannot ask for yet. | `view::widgets::WALLPAPER_*` |
-| Password and name fields | Kit's chromeless `BareSecureField` and `BareField` in the capsule, 10 pt from its leading edge and clear of the 18 pt trailing slot; dots and caret in the text colour, the placeholder in the secondary label colour (white 0.55, not 0.5). The screen's text and fields always take the dark appearance (`PaintCx::pin_appearance`), whatever the session's. | `view::screen`, `view::widgets::FieldFrame` |
+| Password and name fields | Kit's chromeless `BareSecureField` and `BareField` in the capsule, 10 pt from its leading edge and clear of the 18 pt trailing slot; dots and caret in the text colour, the password's placeholder white 0.5 (the name field's in the secondary label colour). The screen's text and fields always take the dark appearance (`PaintCx::pin_appearance`), whatever the session's. | `view::screen`, `view::widgets::FieldFrame` |
 | Consent panel | An alert on regular glass: 260 pt wide, 26 pt corners, padding 22 pt above and 16 pt around, the icon 64 pt and the text 6 pt further in, the title Bold 13 and the message 13 pt 10 pt apart, Don't Allow and Allow as 28 pt capsules 8 pt apart. The surface is 260 x 520 pt, the alert centred in it. | `view::desktop_control`, `view::widgets::AlertBody` |
 | Gap between name and field, notice position | 10 pt (the spinner gap of), 20 pt. | `layout` |
 | Initials, text | Grey fill, initials 0.4 of the avatar; white text, date Medium, time Semibold of the theme's family. | `view::widgets::AVATAR_FILL`, `view::INITIALS_SIZE` |

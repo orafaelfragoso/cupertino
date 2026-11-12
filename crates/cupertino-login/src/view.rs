@@ -88,6 +88,8 @@ const WEIGHT_SEMIBOLD: FontWeight = FontWeight::SEMIBOLD;
 const NOTICE_SIZE: f64 = 13.0;
 /// Size of the text typed in the field and of its placeholder.
 const FIELD_TEXT_SIZE: f64 = 13.0;
+/// The password field's placeholder: white at half opacity.
+const PLACEHOLDER_COLOR: Color = Color::new(1.0, 1.0, 1.0, 0.5);
 /// Widest a notice draws, and how many lines it may take.
 const NOTICE_MAX_WIDTH: f64 = 544.0;
 const NOTICE_LINES: f64 = 3.0;
@@ -470,6 +472,7 @@ pub fn screen<M: Clone + 'static>(
                 },
                 size: FIELD_TEXT_SIZE,
                 weight: Some(WEIGHT_MEDIUM.0),
+                placeholder_color: Some(PLACEHOLDER_COLOR),
             }),
             format!("password-{generation}"),
         ),

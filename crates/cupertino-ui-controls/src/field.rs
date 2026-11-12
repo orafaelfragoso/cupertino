@@ -400,6 +400,8 @@ struct Shown<'a> {
     composition: Option<Range<usize>>,
     /// The clause of the composition the input method is converting, drawn with a heavier underline.
     clause: Option<Range<usize>>,
+    /// The placeholder's colour in place of the look's ([`BareSecureField::placeholder_color`]).
+    placeholder_color: Option<Color>,
 }
 
 /// Paints a field's text, or its placeholder while empty, with the selection while focused, all clipped to the
@@ -464,7 +466,12 @@ fn paint_text(
                 FieldLook::Plain => ColorRole::PlaceholderText,
                 FieldLook::Search(_) | FieldLook::Bare(..) => ColorRole::SecondaryText,
             };
-            look::glyphs(cx, &placeholder, at, color(role));
+            look::glyphs(
+                cx,
+                &placeholder,
+                at,
+                shown.placeholder_color.or(color(role)),
+            );
         }
     } else {
         look::glyphs(cx, &layout, origin, color(ColorRole::Text));
@@ -1256,6 +1263,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             selection: state.buffer.selection(),
             composition: state.buffer.composition(),
             clause: state.buffer.composition_cursor(),
+            placeholder_color: None,
         };
         paint_text(
             cx,
@@ -1319,6 +1327,8 @@ pub struct SecureState {
     last_press: Option<(Timestamp, usize)>,
     /// The field's chrome and type: a [`BareSecureField`]'s has none.
     look: FieldLook,
+    /// The placeholder's colour in place of the look's: a [`BareSecureField`]'s own.
+    placeholder_color: Option<Color>,
 }
 
 impl SecureState {
@@ -1561,6 +1571,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             drag: None,
             last_press: None,
             look: FieldLook::Plain,
+            placeholder_color: None,
         }
     }
 
@@ -1620,6 +1631,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             selection: selection.start * width..selection.end * width,
             composition: None,
             clause: None,
+            placeholder_color: state.placeholder_color,
         };
         paint_text(
             cx,
@@ -1669,12 +1681,19 @@ impl<M: 'static> Widget<M> for BareSecureField<M> {
     fn state(&self) -> SecureState {
         SecureState {
             look: bare_secure_look(self.size, self.weight),
+            placeholder_color: self.placeholder_color,
             ..self.field.state()
         }
     }
 
     fn update(&self, old: &Self, state: &mut SecureState) -> Change {
         let change = self.field.update(&old.field, state);
+        if self.placeholder_color != old.placeholder_color {
+            state.placeholder_color = self.placeholder_color;
+            if change == Change::None {
+                return Change::Paint;
+            }
+        }
         if self.size != old.size || self.weight != old.weight {
             state.look = bare_secure_look(self.size, self.weight);
             return Change::Layout;

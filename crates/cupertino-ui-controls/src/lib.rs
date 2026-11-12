@@ -1355,12 +1355,13 @@ pub struct BareField<M> {
 
 /// A [`SecureField`] without chrome, its text set at `size` points (whole points, 1 to 200) in `weight` (the body
 /// type's when `None`): for a password field that stands on a capsule drawn around it, such as a lock screen's. It
-/// behaves, edits and reads to assistive technology as its field does; its placeholder takes the secondary label colour
-/// and its caret the text colour.
+/// behaves, edits and reads to assistive technology as its field does; its placeholder takes `placeholder_color`, or
+/// the secondary label colour when `None`, and its caret the text colour.
 pub struct BareSecureField<M> {
     pub field: SecureField<M>,
     pub size: f64,
     pub weight: Option<u16>,
+    pub placeholder_color: Option<cupertino_ui_theme::Color>,
 }
 
 /// A row of a [`TileSidebar`].

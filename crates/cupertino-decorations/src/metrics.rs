@@ -188,7 +188,7 @@ impl DecorationMetrics {
             button_leading_compact: COMPACT_BUTTON_LEADING,
             button_leading_sidebar: leading(TOOLBAR_ROW_HEIGHT),
             glyph_half_extent: 0.2,
-            glyph_stroke: 1.1,
+            glyph_stroke: 1.5,
             button_ring: 0.04,
             title_size: 13.0,
             title_weight: 600,

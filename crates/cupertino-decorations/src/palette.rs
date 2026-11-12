@@ -38,6 +38,8 @@ pub struct Palette {
     pub button_inactive: Rgba,
     /// The ring of each button just inside its edge, in the order close, minimise, zoom.
     pub button_rim: [Rgba; 3],
+    /// The colour each button's edge takes at its two sides, where the ring is deepest.
+    pub button_edge: [Rgba; 3],
     /// The fill of each button while it is pressed.
     pub button_pressed: [Rgba; 3],
     /// The glyph each button shows while the group is hovered.
@@ -52,8 +54,12 @@ pub struct Palette {
 const CLOSE: [u8; 4] = [0xFF, 0x5F, 0x57, 255];
 const MINIMIZE: [u8; 4] = [0xFE, 0xBC, 0x2E, 255];
 const ZOOM: [u8; 4] = [0x28, 0xC8, 0x40, 255];
-const MINIMIZE_GLYPH: [u8; 4] = [152, 86, 0, 255];
-const ZOOM_GLYPH: [u8; 4] = [0, 98, 0, 255];
+const MINIMIZE_GLYPH: [u8; 4] = [199, 56, 0, 255];
+const ZOOM_GLYPH: [u8; 4] = [0, 118, 0, 255];
+/// The close glyph of the light appearance.
+const CLOSE_GLYPH_LIGHT: [u8; 4] = [165, 0, 0, 255];
+/// The deepest colour of each button's edge, at its two sides (close, minimise, zoom).
+const EDGE: [[u8; 4]; 3] = [[175, 3, 0, 255], [118, 20, 0, 255], [0, 78, 0, 255]];
 
 /// A ring a little darker than the fill it goes round, for the appearance with no ring colours of its own.
 fn darkened(c: Rgba) -> Rgba {
@@ -117,6 +123,7 @@ impl Palette {
                     darkened(rgba8(MINIMIZE)),
                     darkened(rgba8(ZOOM)),
                 ],
+                button_edge: EDGE.map(rgba8),
                 button_pressed: [
                     rgba8([255, 141, 133, 255]),
                     rgba8([255, 234, 92, 255]),
@@ -152,13 +159,14 @@ impl Palette {
                     rgba8([241, 173, 25, 255]),
                     rgba8([19, 185, 44, 255]),
                 ],
+                button_edge: EDGE.map(rgba8),
                 button_pressed: [
-                    rgba8([191, 71, 65, 255]),
-                    rgba8([190, 141, 34, 255]),
-                    rgba8([30, 152, 49, 255]),
+                    rgba8([252, 148, 142, 255]),
+                    rgba8([254, 210, 115, 255]),
+                    rgba8([110, 218, 126, 255]),
                 ],
                 button_glyph: [
-                    rgba8([115, 0, 0, 255]),
+                    rgba8(CLOSE_GLYPH_LIGHT),
                     rgba8(MINIMIZE_GLYPH),
                     rgba8(ZOOM_GLYPH),
                 ],
@@ -249,6 +257,11 @@ impl Palette {
     /// The ring of a button just inside its edge.
     pub fn rim_of(&self, kind: crate::metrics::ButtonKind) -> Rgba {
         self.button_rim[Self::index(kind)]
+    }
+
+    /// The colour of a button's edge at its sides.
+    pub fn edge_of(&self, kind: crate::metrics::ButtonKind) -> Rgba {
+        self.button_edge[Self::index(kind)]
     }
 
     /// The fill of a pressed button.

@@ -1737,6 +1737,20 @@ impl Cupertino {
     /// The popup surface under `pos` (global logical) of the window whose popups are drawn above every window and the
     /// bars (`SceneLayer::Popups`, [`crate::render::scene::raised_popups_window`]), so the pointer finds them before
     /// either. The popups of the other windows are part of their window ([`Self::window_target_under`]).
+    /// The window target under `pos` when nothing drawn above the windows (an overlay or top layer surface such as the
+    /// dock, a bar's popup, a lock surface) takes the point first: what hover cursors and presses on the decorations
+    /// act on, so a resize band under the dock neither changes the cursor nor starts a resize.
+    pub fn window_target_on_top(&self, pos: Point<f64, Logical>) -> Option<WindowTarget> {
+        let target = self.window_target_under(pos)?;
+        let above = self.surface_under(pos);
+        let on_top = match (&target, &above) {
+            (WindowTarget::Decoration { .. }, None) => true,
+            (WindowTarget::Surface { surface, .. }, Some((s, _))) => s == surface,
+            _ => false,
+        };
+        on_top.then_some(target)
+    }
+
     pub fn window_popup_under(&self, pos: Point<f64, Logical>) -> Option<WindowTarget> {
         let out = self.output_at(pos)?;
         let raised = crate::render::scene::raised_popups_window(&self.wm, out.id)?;

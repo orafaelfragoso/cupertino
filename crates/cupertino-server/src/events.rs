@@ -1026,7 +1026,7 @@ impl Cupertino {
         let target = if self.shell.overview_open() {
             None
         } else {
-            self.window_target_under(pos)
+            self.window_target_on_top(pos)
         };
         self.update_decor_hover(target.as_ref());
         let under = self.surface_under(pos);
@@ -1266,7 +1266,7 @@ impl Cupertino {
     /// threshold ([`PendingDrag`]). True when the press was consumed.
     fn decoration_press(&mut self, pos: Point<f64, Logical>, button: u32, now: f64) -> bool {
         use cupertino_decorations::{DoubleClickAction, Hit};
-        let Some(WindowTarget::Decoration { id, hit, .. }) = self.window_target_under(pos) else {
+        let Some(WindowTarget::Decoration { id, hit, .. }) = self.window_target_on_top(pos) else {
             return false;
         };
         if button != BTN_LEFT {
@@ -1358,7 +1358,7 @@ impl Cupertino {
             return;
         };
         self.request_redraw();
-        let still = matches!(self.window_target_under(pos), Some(WindowTarget::Decoration { id: w, hit: Hit::Button(k), .. }) if w == id && k == kind);
+        let still = matches!(self.window_target_on_top(pos), Some(WindowTarget::Decoration { id: w, hit: Hit::Button(k), .. }) if w == id && k == kind);
         if still {
             self.press_window_button(id, kind);
         }

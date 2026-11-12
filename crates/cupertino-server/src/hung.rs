@@ -183,7 +183,7 @@ impl crate::state::Cupertino {
         if !self.hung.any_unresponsive() {
             return false;
         }
-        match self.window_target_under(self.pointer.current_location()) {
+        match self.window_target_on_top(self.pointer.current_location()) {
             Some(crate::state::WindowTarget::Surface { id, .. }) => self.window_is_unresponsive(id),
             _ => false,
         }

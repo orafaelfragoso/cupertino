@@ -118,7 +118,7 @@ impl Overlay {
             Kind::Mute => "symbol.speaker.slash",
             Kind::Volume if self.level < MUTE_BELOW => "symbol.speaker.slash",
             Kind::Volume if self.level < LOW_BELOW => "symbol.speaker.low",
-            Kind::Volume if self.level < MEDIUM_BELOW => "symbol.speaker",
+            Kind::Volume if self.level < MEDIUM_BELOW => "symbol.speaker.medium",
             Kind::Volume => "symbol.speaker.high",
             Kind::Brightness => "symbol.sun",
             Kind::KeyboardBrightness if self.level <= 0.0 => "symbol.keyboard-brightness.off",
@@ -133,7 +133,7 @@ impl Overlay {
 pub const ICON_NAMES: [&str; 9] = [
     "symbol.speaker.slash",
     "symbol.speaker.low",
-    "symbol.speaker",
+    "symbol.speaker.medium",
     "symbol.speaker.high",
     "symbol.sun",
     "symbol.keyboard-brightness",
@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(volume(0.0).icon_name(), "symbol.speaker.slash");
         assert_eq!(volume(0.0005).icon_name(), "symbol.speaker.slash");
         assert_eq!(volume(0.2).icon_name(), "symbol.speaker.low");
-        assert_eq!(volume(0.5).icon_name(), "symbol.speaker");
+        assert_eq!(volume(0.5).icon_name(), "symbol.speaker.medium");
         assert_eq!(volume(0.9).icon_name(), "symbol.speaker.high");
         assert_eq!(
             Overlay::new(Kind::Mute, 0.0).unwrap().icon_name(),

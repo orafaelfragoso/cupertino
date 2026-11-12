@@ -113,6 +113,7 @@
 "symbol.speaker.high" = ["audio-volume-high-symbolic"]
 "symbol.speaker.high.fill" = ["audio-volume-high-symbolic"]
 "symbol.speaker.low" = ["audio-volume-low-symbolic"]
+"symbol.speaker.medium" = ["audio-volume-medium-symbolic"]
 "symbol.speaker.slash" = ["audio-volume-muted-symbolic"]
 "symbol.stage" = ["view-grid-symbolic", "focus-windows-symbolic", "window-symbolic"]
 "symbol.sun" = ["weather-clear-symbolic", "display-brightness-symbolic", "brightness-symbolic"]

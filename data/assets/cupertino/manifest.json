@@ -261,6 +261,9 @@
     "symbol.speaker.low": {
       "symbol": "symbols/speaker-low.svg"
     },
+    "symbol.speaker.medium": {
+      "symbol": "symbols/speaker-medium.svg"
+    },
     "symbol.speaker.slash": {
       "symbol": "symbols/speaker-slash.svg"
     },

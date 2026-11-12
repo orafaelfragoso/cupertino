@@ -266,7 +266,7 @@ pub fn speaker_icon(volume: &VolumeState) -> &'static str {
     } else if volume.level < LOW_BELOW {
         "symbol.speaker.low"
     } else if volume.level < MEDIUM_BELOW {
-        "symbol.speaker"
+        "symbol.speaker.medium"
     } else {
         "symbol.speaker.high"
     }

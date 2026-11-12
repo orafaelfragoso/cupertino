@@ -190,6 +190,15 @@ pub fn button_enabled(can_minimize: bool, can_zoom: bool) -> [bool; 3] {
     .map(|p| p.enabled())
 }
 
+/// Blur sigma of the shadow of menus, popovers and panels, in points.
+const POPUP_SHADOW_SIGMA: f64 = 17.0;
+/// How far below its popup the shadow falls, in points.
+const POPUP_SHADOW_OFFSET: f64 = 9.25;
+/// Opacity of a popup's shadow in the dark appearance.
+const POPUP_SHADOW_DENSITY_DARK: f64 = 0.265;
+/// Opacity of a popup's shadow in the light appearance.
+const POPUP_SHADOW_DENSITY_LIGHT: f64 = 0.23;
+
 impl Decor {
     pub fn new(appearance: Appearance, assets: &Assets) -> Result<Self, AssetError> {
         Ok(Self {
@@ -314,12 +323,24 @@ impl Decor {
     /// panel, utility, popover, combo box, drawer and menu windows (the shadow option
     /// per class is `window-management.md` section 4).
     pub fn popup_shadow_params(&self) -> ShadowParams {
-        ShadowParams::lookup(
+        let dark = self.deco.config.appearance.is_dark();
+        let increased_contrast = self.deco.config.increased_contrast;
+        let mut params = ShadowParams::lookup(
             cupertino_theme::window_shadow::ShadowOption::Panel,
             true,
-            self.deco.config.appearance.is_dark(),
-            self.deco.config.increased_contrast,
-        )
+            dark,
+            increased_contrast,
+        );
+        if !increased_contrast {
+            params.entry.sigma = POPUP_SHADOW_SIGMA;
+            params.entry.vertical_offset = POPUP_SHADOW_OFFSET;
+            params.entry.density = if dark {
+                POPUP_SHADOW_DENSITY_DARK
+            } else {
+                POPUP_SHADOW_DENSITY_LIGHT
+            };
+        }
+        params
     }
 
     /// The edge of a window, active or not: the outline the compositor draws just outside its frame (the inner

@@ -683,7 +683,7 @@ pub enum WindowCornerSize {
 impl WindowCornerSize {
     pub const ALL: [WindowCornerSize; 2] = [WindowCornerSize::Regular, WindowCornerSize::Small];
 
-    /// Corner radius in points (12 regular, 10 small).
+    /// Corner radius in points (16 regular, 10 small).
     pub fn radius_pt(self) -> f64 {
         match self {
             WindowCornerSize::Regular => WINDOW_CORNER_RADIUS_REGULAR,
@@ -700,7 +700,7 @@ impl WindowCornerSize {
     }
 }
 
-pub const WINDOW_CORNER_RADIUS_REGULAR: f64 = 12.0;
+pub const WINDOW_CORNER_RADIUS_REGULAR: f64 = 16.0;
 pub const WINDOW_CORNER_RADIUS_SMALL: f64 = 10.0;
 
 #[cfg(test)]
@@ -771,7 +771,7 @@ mod tests {
 
     #[test]
     fn corner_radii() {
-        assert_eq!(WindowCornerSize::Regular.radius_pt(), 12.0);
+        assert_eq!(WindowCornerSize::Regular.radius_pt(), 16.0);
         assert_eq!(WindowCornerSize::Small.radius_pt(), 10.0);
         assert_eq!(WindowCornerSize::Regular.shape_rendition_px(), 27);
         assert_eq!(WindowCornerSize::Small.shape_rendition_px(), 23);

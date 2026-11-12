@@ -372,6 +372,20 @@ pub fn step(
     Ok(())
 }
 
+/// The longest a headless loop waits without an event: until the earliest output is due to draw (`frames`), the
+/// next time-driven work of [`Cupertino::tick`] (`tick`) or the end of the run (`end`), and at most [`IDLE_WAIT`].
+/// With nothing due the loop sleeps; clients, input and the scripted steps' timers wake it sooner.
+fn loop_wait(frames: Option<Duration>, tick: Option<Duration>, end: Option<Duration>) -> Duration {
+    [frames, tick, end]
+        .into_iter()
+        .flatten()
+        .min()
+        .map_or(IDLE_WAIT, |wait| wait.min(IDLE_WAIT))
+}
+
+/// The longest a headless loop sleeps with nothing due, so work that names no deadline still runs, if late.
+const IDLE_WAIT: Duration = Duration::from_secs(1);
+
 /// Run until `deadline` or until the compositor stops.
 #[allow(irrefutable_let_patterns)]
 pub fn run(
@@ -379,14 +393,15 @@ pub fn run(
     event_loop: &mut EventLoop<'static, Cupertino>,
     deadline: Option<Instant>,
 ) -> Result<()> {
-    const PASS: Duration = Duration::from_millis(8);
     while state.running {
         let now = state.frame_now();
-        let timeout = (0..state.outputs.len())
+        let frames = (0..state.outputs.len())
             .filter(|&idx| state.displays.powered(state.outputs[idx].id))
             .filter_map(|idx| state.frame_deadline(idx, now))
             .min()
-            .map_or(PASS, |at| at.saturating_sub(now).min(PASS));
+            .map(|at| at.saturating_sub(now));
+        let end = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+        let timeout = loop_wait(frames, super::tick_wait(state), end);
         step(state, event_loop, timeout)?;
         if deadline.is_some_and(|d| Instant::now() >= d) {
             break;
@@ -398,4 +413,28 @@ pub fn run(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MS: Duration = Duration::from_millis(1);
+
+    #[test]
+    fn a_session_at_rest_wakes_its_loop_once_a_second_at_most() {
+        assert_eq!(loop_wait(None, None, None), IDLE_WAIT);
+        // ten seconds of rest are ten passes, not the hundreds a fixed short pass makes
+        let passes = Duration::from_secs(10).as_millis() / loop_wait(None, None, None).as_millis();
+        assert_eq!(passes, 10);
+    }
+
+    #[test]
+    fn the_loop_wakes_for_the_first_of_a_frame_a_tick_and_the_end_of_the_run() {
+        assert_eq!(loop_wait(Some(16 * MS), Some(200 * MS), None), 16 * MS);
+        assert_eq!(loop_wait(None, Some(200 * MS), Some(3000 * MS)), 200 * MS);
+        assert_eq!(loop_wait(None, None, Some(300 * MS)), 300 * MS);
+        assert_eq!(loop_wait(Some(5000 * MS), None, None), IDLE_WAIT);
+        assert_eq!(loop_wait(Some(Duration::ZERO), None, None), Duration::ZERO);
+    }
 }

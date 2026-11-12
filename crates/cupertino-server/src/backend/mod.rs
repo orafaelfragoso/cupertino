@@ -115,3 +115,17 @@ pub fn init_buffers(state: &mut Cupertino, renderer: &GlesRenderer) {
     state.dmabuf_global = Some(global);
     state.shm_state.update_formats(renderer.shm_formats());
 }
+
+/// How long until [`Cupertino::tick`] has time-driven work ([`Cupertino::next_tick_deadline`]), in wall time; a passed
+/// deadline nothing acted on yet is a millisecond away, so it cannot spin a loop.
+pub(crate) fn tick_wait(state: &Cupertino) -> Option<std::time::Duration> {
+    const PASSED: std::time::Duration = std::time::Duration::from_millis(1);
+    state.next_tick_deadline().map(|at| {
+        let wait = (at - state.now()) / state.time_scale;
+        if wait > 0.0 {
+            std::time::Duration::from_secs_f64(wait)
+        } else {
+            PASSED
+        }
+    })
+}

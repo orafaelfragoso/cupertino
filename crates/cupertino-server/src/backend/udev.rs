@@ -175,14 +175,7 @@ fn loop_timeout(state: &Cupertino) -> Duration {
     const MAX: Duration = Duration::from_secs(1);
     // a passed deadline nothing acted on must not spin the loop
     const PASSED: Duration = Duration::from_millis(1);
-    let tick = state.next_tick_deadline().map(|at| {
-        let wait = (at - state.now()) / state.time_scale;
-        if wait > 0.0 {
-            Duration::from_secs_f64(wait)
-        } else {
-            PASSED
-        }
-    });
+    let tick = super::tick_wait(state);
     let frames = match state.backend.as_ref() {
         Some(Backend::Udev(u)) if u.renderer_lost && !(u.paused || u.asleep) => Some(PASSED),
         Some(Backend::Udev(u)) if !(u.paused || u.asleep || u.renderer_lost) => {

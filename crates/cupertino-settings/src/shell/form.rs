@@ -7,19 +7,18 @@ use std::collections::HashMap;
 use cupertino_kit::controls::{
     AppIcon, AppIconRow, BarChart, ChartBar, ChartColor, FormGroup, FormHeader, FormRow,
     FullWidthSegmentedControl, IconTile, ImageSource, InlinePopUpButton, NavigationRow, PaneHeader,
-    PopUpButton, Progress, ScrollView, Scroller, SegmentedControl, Slider, SliderStyle, Swatch,
-    SwatchFill, SwatchLook, TextRole, ThumbnailTile, TileColor,
+    PopUpButton, Progress, SegmentedControl, Slider, SliderStyle, Swatch, SwatchFill, SwatchLook,
+    TextRole, ThumbnailTile, TileColor, Wrap,
 };
 use cupertino_kit::core::{
     Change, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget, Window,
 };
 use cupertino_kit::geometry::{Insets, Size};
-use cupertino_kit::layout::ScrollState;
 use cupertino_kit::layout::{Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, FontWeight, TextStyle};
 
-use super::{Message, UNSCROLLED};
+use super::Message;
 use crate::controls::{metrics, Control, SwatchKind, Value};
 use crate::pages::{Block, SubPage};
 use crate::pane::{Enclosure, PaneId};
@@ -32,7 +31,6 @@ pub struct View<'a> {
     pub open: Option<ControlId>,
     pub icons: &'a HashMap<String, String>,
     pub thumbnails: &'a HashMap<std::path::PathBuf, ImageSource>,
-    pub tile_scrolls: &'a [(ControlId, ScrollState)],
 }
 
 /// Between a row's label and the segmented control under it.
@@ -478,11 +476,10 @@ const THUMBNAIL_RADIUS: f64 = 5.0;
 const THUMBNAIL_GAP: f64 = 9.5;
 /// The room a thumbnail's ring takes on each side of the picture: the strip's spacing leaves it out.
 const THUMBNAIL_RING_ROOM: f64 = 3.0;
-/// The strip's height: a thumbnail with its ring room and its caption.
-const STRIP_HEIGHT: f64 = THUMBNAIL.height + 2.0 * THUMBNAIL_RING_ROOM + 3.0 + 14.0;
+/// Between a row of thumbnails, captions included, and the next.
+const THUMBNAIL_ROW_GAP: f64 = 12.0;
 
-/// One row of thumbnails, scrolling sideways: the pictures of `tiles` side by side, the chosen one ringed. The strip
-/// runs on past the page's inset to the window's edge.
+/// The thumbnails of `tiles` in rows across the group, the chosen one ringed.
 /// The choices of a swatch row side by side, centred under the row's label; a row of colour dots names the chosen one
 /// under it.
 fn swatch_row(
@@ -568,27 +565,14 @@ fn tile_strip(
             .key(i as u64)
         })
         .collect();
-    let content = Element::new(Stack {
-        axis: Axis::Horizontal,
-        padding: Insets::ZERO,
-        spacing: THUMBNAIL_GAP - 2.0 * THUMBNAIL_RING_ROOM,
-        align: Align::Start,
+    // as many in a row as the group's width holds, the rows scrolling with the page
+    Element::new(Wrap {
+        gaps: Size::new(
+            THUMBNAIL_GAP - 2.0 * THUMBNAIL_RING_ROOM,
+            THUMBNAIL_ROW_GAP - 2.0 * THUMBNAIL_RING_ROOM,
+        ),
         children,
-    });
-    let state = view
-        .tile_scrolls
-        .iter()
-        .find(|(i, _)| *i == id)
-        .map_or(UNSCROLLED, |(_, s)| *s);
-    Element::from(ScrollView {
-        content,
-        state,
-        horizontal: true,
-        vertical: false,
-        scroller: Scroller::Overlay,
-        on_scroll: Box::new(move |s| Message::TileScroll(id, s)),
     })
-    .height(STRIP_HEIGHT)
 }
 
 /// A row's label over its second line. When the row is too narrow for it and its control, it shrinks along the row (not
@@ -705,10 +689,13 @@ fn row(row: &Row, names: &Names, view: &View<'_>) -> Element<Message> {
         .chain(second.and_then(|s| styled(s, TextRole::Caption, true)))
         .collect();
     let name = names.get(row.id).unwrap_or(&row.label);
-    // a segmented control takes the whole width of its row, under the row's label
+    // a segmented control and a grid of thumbnails take the whole width of their row, under the row's label
     let content = if matches!(
         row.control,
-        Control::Segmented { .. } | Control::Swatches { .. } | Control::Chart(_)
+        Control::Segmented { .. }
+            | Control::Swatches { .. }
+            | Control::Chart(_)
+            | Control::Tiles { .. }
     ) {
         let mut children = Vec::new();
         if !label.is_empty() {

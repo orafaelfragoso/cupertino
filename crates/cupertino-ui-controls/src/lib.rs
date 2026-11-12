@@ -585,6 +585,13 @@ pub struct Stack<M> {
     pub children: Vec<Element<M>>,
 }
 
+/// Children at their natural sizes in rows across the width it is given, as many in each row as fit, `gaps` apart: a
+/// grid of thumbnails that follows the window's width.
+pub struct Wrap<M> {
+    pub gaps: Size,
+    pub children: Vec<Element<M>>,
+}
+
 /// How a scroll view shows where it is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Scroller {

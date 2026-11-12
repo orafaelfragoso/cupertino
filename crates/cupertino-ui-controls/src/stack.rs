@@ -1,4 +1,4 @@
-use crate::{Separator, Spacer, Stack};
+use crate::{Separator, Spacer, Stack, Wrap};
 use cupertino_geometry::{Rect, Size};
 use cupertino_ui_core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
@@ -152,6 +152,43 @@ impl<M: 'static> Widget<M> for Separator {
             });
         }
     }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+impl<M: 'static> Widget<M> for Wrap<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Wrap { gaps: self.gaps })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.gaps != old.gaps {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }

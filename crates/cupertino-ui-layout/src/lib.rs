@@ -9,6 +9,7 @@ mod scroll;
 mod split;
 mod stack;
 mod virtual_list;
+mod wrap;
 
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use std::collections::HashMap;
@@ -214,6 +215,10 @@ pub enum ContainerKind {
     /// Two children along an axis: the leading one at its asked extent within its limits, the trailing one taking
     /// the rest; see [`SplitSpec::shown`].
     Split(SplitSpec),
+    /// Children at their natural sizes in rows across the width, as many in each row as fit, `gaps` apart.
+    Wrap {
+        gaps: Size,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

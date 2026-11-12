@@ -206,7 +206,6 @@ pub struct Shell {
     sidebar_scroll: ScrollState,
     content_scroll: ScrollState,
     /// How far each strip of thumbnails is scrolled, by control.
-    tile_scrolls: Vec<(ControlId, ScrollState)>,
     /// Where the sheet's list is scrolled, and the rows it was scrolled on: another list starts at its top.
     sheet_scroll: (Vec<String>, ScrollState),
     query: String,
@@ -226,7 +225,6 @@ pub enum Message {
     /// The sheet's list scrolled.
     SheetScroll(ScrollState),
     /// The strip of thumbnails of this control scrolled.
-    TileScroll(ControlId, ScrollState),
     Query(TextChange),
     /// Return in the search field: the first result.
     Search,
@@ -365,12 +363,6 @@ impl Shell {
             }
             Message::SidebarScroll(scroll) => self.sidebar_scroll = scroll,
             Message::ContentScroll(scroll) => self.content_scroll = scroll,
-            Message::TileScroll(id, scroll) => {
-                match self.tile_scrolls.iter_mut().find(|(i, _)| *i == id) {
-                    Some(entry) => entry.1 = scroll,
-                    None => self.tile_scrolls.push((id, scroll)),
-                }
-            }
             Message::SheetScroll(scroll) => {
                 let rows = self.state.sheet.as_ref().and_then(|s| s.rows());
                 self.sheet_scroll = (rows.map(|(r, _)| r).unwrap_or_default(), scroll);
@@ -608,7 +600,6 @@ impl Shell {
                 open: self.open,
                 icons: &icons,
                 thumbnails: &self.state.thumbnail_images,
-                tile_scrolls: &self.tile_scrolls,
             };
             form::page(header, &blocks, &sections, &view)
         } else {
@@ -686,7 +677,6 @@ impl Application for SettingsApp {
             },
             sidebar_scroll: UNSCROLLED,
             content_scroll: UNSCROLLED,
-            tile_scrolls: Vec::new(),
             sheet_scroll: (Vec::new(), UNSCROLLED),
             query: String::new(),
             query_revision: 0,

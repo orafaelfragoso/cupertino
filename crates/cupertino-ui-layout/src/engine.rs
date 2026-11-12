@@ -230,6 +230,7 @@ fn validate_spec(spec: &LayoutSpec) -> Result<(), LayoutError> {
     }
     match &spec.kind {
         ContainerKind::Stack { spacing, .. } => values.push(*spacing),
+        ContainerKind::Wrap { gaps } => values.extend([gaps.width, gaps.height]),
         ContainerKind::Split(split) => values.extend([
             split.leading,
             split.gap,
@@ -375,6 +376,19 @@ impl<T: LayoutTree> Engine<'_, T> {
                 }
                 sizes.iter().sum::<f64>() + gap * sizes.len().saturating_sub(1) as f64
             }
+            ContainerKind::Wrap { gaps } => {
+                let mut sizes = Vec::with_capacity(kids.len());
+                for &kid in kids {
+                    let width = self.min_content(kid, Axis::Horizontal, f64::INFINITY)?;
+                    let height = self.min_content(kid, Axis::Vertical, width)?;
+                    sizes.push(Size::new(width, height));
+                }
+                match axis {
+                    // the widest child alone in its row
+                    Axis::Horizontal => sizes.iter().map(|s| s.width).fold(0.0, f64::max),
+                    Axis::Vertical => crate::wrap::place(&sizes, inner_cross, *gaps).1.height,
+                }
+            }
             ContainerKind::Split(split) if split.axis == axis => match kids.get(1) {
                 Some(&trailing) => self.min_content(trailing, axis, inner_cross)?,
                 None => 0.0,
@@ -466,6 +480,7 @@ impl<T: LayoutTree> Engine<'_, T> {
             ContainerKind::Absolute => layers::arrange(self, kids, layers::Mode::Absolute, inner)?,
             ContainerKind::Overlay => layers::arrange(self, kids, layers::Mode::Overlay, inner)?,
             ContainerKind::Split(split) => crate::split::arrange(self, kids, split, inner)?,
+            ContainerKind::Wrap { gaps } => crate::wrap::arrange(self, kids, *gaps, inner)?,
             ContainerKind::Scroll {
                 horizontal,
                 vertical,

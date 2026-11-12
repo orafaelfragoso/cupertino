@@ -124,6 +124,9 @@ pub struct Item {
     pub chord: Option<Chord>,
     /// The name an assistive technology reads when it differs from the label.
     pub accessible_name: Option<String>,
+    /// The picture drawn before the label, as a template symbol of the system's pictures (`symbol.trash`); none for a
+    /// row that has no picture.
+    pub icon: Option<String>,
 }
 
 impl Item {
@@ -133,7 +136,14 @@ impl Item {
             command: Command::Action(action),
             chord,
             accessible_name: None,
+            icon: None,
         }
+    }
+
+    /// The same item with the picture `symbol` before its label.
+    pub fn with_icon(mut self, symbol: &str) -> Item {
+        self.icon = Some(symbol.to_string());
+        self
     }
 
     pub fn accessible_name(&self) -> &str {
@@ -225,6 +235,7 @@ mod tests {
             command: Command::System(command),
             chord: None,
             accessible_name: None,
+            icon: None,
         })
     }
 

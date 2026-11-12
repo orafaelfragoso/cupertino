@@ -210,6 +210,11 @@ fn item(label: &str, action: MenuAction) -> Entry {
     Entry::Item(Item::new(label, action.name(), action.chord()))
 }
 
+/// An item with the picture `symbol` before its label.
+fn item_with_icon(label: &str, action: MenuAction, symbol: &str) -> Entry {
+    Entry::Item(Item::new(label, action.name(), action.chord()).with_icon(symbol))
+}
+
 impl MenuAction {
     /// The keys that do `self` in a window, shown beside its item in every menu that offers it. Full screen's are
     /// the standard View menu's.
@@ -327,7 +332,7 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
             .flatten()
             .collect(),
             [
-                Some(item("Move to Trash", MoveToTrash)),
+                Some(item_with_icon("Move to Trash", MoveToTrash, "symbol.trash")),
                 state.in_trash.then(|| item("Put Back", PutBack)),
                 Some(item("Rename", Rename)),
                 Some(item("Duplicate", Duplicate)),
@@ -341,7 +346,7 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
             state
                 .eject
                 .iter()
-                .map(|name| item(&format!("Eject “{name}”"), Eject))
+                .map(|name| item_with_icon(&format!("Eject “{name}”"), Eject, "symbol.eject"))
                 .collect(),
         ]
         .into_iter()
@@ -369,10 +374,10 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
         "View",
         vec![
             vec![
-                item("as Icons", View(ViewMode::Icons)),
-                item("as List", View(ViewMode::List)),
-                item("as Columns", View(ViewMode::Columns)),
-                item("as Gallery", View(ViewMode::Gallery)),
+                item_with_icon("as Icons", View(ViewMode::Icons), "symbol.grid"),
+                item_with_icon("as List", View(ViewMode::List), "symbol.list"),
+                item_with_icon("as Columns", View(ViewMode::Columns), "symbol.columns"),
+                item_with_icon("as Gallery", View(ViewMode::Gallery), "symbol.gallery"),
             ],
             vec![Entry::Submenu(sort_by)],
             vec![item(
@@ -412,7 +417,10 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
                 item("Forward", Forward),
                 item("Enclosing Folder", EnclosingFolder),
             ],
-            vec![item("Recents", Recents), item("Home", Home)],
+            vec![
+                item_with_icon("Recents", Recents, "symbol.recents"),
+                item_with_icon("Home", Home, "symbol.house"),
+            ],
         ],
     );
     let window = Menu::new(

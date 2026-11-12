@@ -21,6 +21,8 @@ pub(crate) struct WireItem {
     pub label: Option<String>,
     pub action: Option<String>,
     pub accel: Option<String>,
+    /// The picture before the label, a template symbol name.
+    pub icon: Option<String>,
     pub link: Option<Link>,
 }
 
@@ -34,6 +36,7 @@ impl WireItem {
             ("label", &label),
             ("action", &self.action),
             ("accel", &self.accel),
+            ("icon", &self.icon),
         ] {
             if let Some(value) = value {
                 dict.insert(key.to_string(), text(value));
@@ -98,6 +101,7 @@ impl Encoder<'_> {
                     label: Some(item.label.clone()),
                     action,
                     accel: item.chord.as_ref().and_then(|c| c.to_accel(self.map)),
+                    icon: item.icon.clone(),
                     link: None,
                 }
             }
@@ -226,6 +230,7 @@ mod tests {
             label: Some(label.to_string()),
             action: Some(action.to_string()),
             accel: accel.map(str::to_string),
+            icon: None,
             link: None,
         }
     }

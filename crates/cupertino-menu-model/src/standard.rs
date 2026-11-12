@@ -45,6 +45,7 @@ fn system(label: &str, command: SystemCommand, chord: Option<Chord>) -> Entry {
         command: Command::System(command),
         chord,
         accessible_name: None,
+        icon: None,
     })
 }
 

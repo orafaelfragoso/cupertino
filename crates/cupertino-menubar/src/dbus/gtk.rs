@@ -318,6 +318,7 @@ impl Builder<'_> {
                 };
             }
             item.accel = super::prop_str(it, "accel");
+            item.icon_name = super::prop_str(it, "icon").filter(|name| !name.is_empty());
             if let Some(a) = full {
                 item.action = Some(a.clone());
                 self.refs

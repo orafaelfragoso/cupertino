@@ -29,7 +29,9 @@ pub enum ExtraKind {
 }
 
 /// Every template symbol [`Extras::glyph`] can name, which the process requires of the asset directory at startup.
-pub const SYMBOL_NAMES: [&str; 4] = [
+pub const SYMBOL_NAMES: [&str; 6] = [
+    "symbol.computer",
+    "symbol.control-panel",
     "symbol.wifi",
     "symbol.battery",
     "symbol.bluetooth",
@@ -514,6 +516,7 @@ impl Extras {
             chords,
             ExtraAction::System(SystemAction::About),
         );
+        set_row_symbol(&mut menu, "symbol.computer");
         menu.rows.push(MenuItem::separator(SEPARATOR_AFTER_ABOUT));
         menu.system_row(
             SystemRow::Settings,
@@ -522,6 +525,7 @@ impl Extras {
             chords,
             ExtraAction::System(SystemAction::Settings),
         );
+        set_row_symbol(&mut menu, "symbol.control-panel");
         menu.rows
             .push(MenuItem::separator(SEPARATOR_AFTER_SETTINGS));
         let items = recent_items(recent);
@@ -627,6 +631,13 @@ impl Extras {
     /// The menu as the bar's status menu: a submenu titled with the item.
     pub fn status_menu(&self, kind: ExtraKind) -> MenuItem {
         MenuItem::submenu(0, kind.title(), self.menu(kind).rows)
+    }
+}
+
+/// The symbol the last row of `menu` wears at its leading edge.
+fn set_row_symbol(menu: &mut ExtraMenu, symbol: &str) {
+    if let Some(row) = menu.rows.last_mut() {
+        row.icon_name = Some(symbol.to_owned());
     }
 }
 

@@ -590,7 +590,10 @@ pub fn run() -> Result<std::convert::Infallible> {
             height: metrics.height,
             metrics,
             display: observed.display,
-            icons: Rc::new(RowIcons::new(ThemeIcons::new(&assets))),
+            icons: Rc::new(RowIcons::new(
+                ThemeIcons::new(&assets),
+                SystemIcons::new(&assets),
+            )),
             data_dirs: cupertino_defaults::data_dirs(),
             start: Instant::now(),
             wifi_scan_until: None,

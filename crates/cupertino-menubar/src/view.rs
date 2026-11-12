@@ -14,7 +14,7 @@ use crate::layout::{
 };
 use crate::popups;
 use crate::tone::{BarTone, Halo, MenuPalette, Rgba};
-use cupertino_icons::ThemeIcons;
+use cupertino_icons::{SystemIcons, ThemeIcons};
 use cupertino_kit::core::{
     next_resource_id, AccessibleStates, AccessibleValue, Action, Change, Checked, CommandRegistry,
     Element, Environment, Event, EventCx, IconImage, Key, MeasureCx, PaintCx, Phase, Popup,
@@ -702,13 +702,16 @@ impl RowIcon {
 /// icon and size.
 pub struct RowIcons {
     themed: RefCell<ThemeIcons>,
+    /// The template symbols of the asset packs, which rows name as `symbol.*`.
+    system: RefCell<SystemIcons>,
     loaded: RefCell<HashMap<(u64, u32), Option<RowIcon>>>,
 }
 
 impl RowIcons {
-    pub fn new(themed: ThemeIcons) -> Self {
+    pub fn new(themed: ThemeIcons, system: SystemIcons) -> Self {
         Self {
             themed: RefCell::new(themed),
+            system: RefCell::new(system),
             loaded: RefCell::new(HashMap::new()),
         }
     }
@@ -739,6 +742,11 @@ impl RowIcons {
                 from_data
                     .or_else(|| {
                         let name = item.icon_name.as_deref()?;
+                        if name.starts_with("symbol.") {
+                            // a template symbol is drawn in black and takes the row's colour when painted
+                            let black = [0.0, 0.0, 0.0, 1.0];
+                            return Some(self.system.borrow_mut().symbol(name, px, black).clone());
+                        }
                         self.load(name, px)
                     })
                     .map(|pixmap| RowIcon::new(&pixmap))
@@ -1279,7 +1287,7 @@ impl<M> RowNode<M> {
             }
             PanelRow::Disclosure { title, expanded } => {
                 let c = secondary(PANEL_DISCLOSURE);
-                text(cx, &self.font, title, x, 0.0, size.height, false, c);
+                text(cx, &self.font, title, x, 0.0, size.height, true, c);
                 let at = size.width - panel::LOCK_INSET + 2.0;
                 let chevron = if *expanded {
                     [

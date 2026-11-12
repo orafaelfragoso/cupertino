@@ -136,8 +136,8 @@ impl Default for StackLayout {
 }
 
 impl StackLayout {
-    /// Top padding of the notification list below the menu bar: 16 pt (role).
-    const LIST_TOP_PADDING: f64 = 16.0;
+    /// Top padding of the notification list below the menu bar: 11 pt.
+    const LIST_TOP_PADDING: f64 = 11.0;
     /// Padding per side of a banner row: 16 pt.
     const ROW_SIDE_PADDING: f64 = 16.0;
 

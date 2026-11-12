@@ -518,6 +518,129 @@ fn a_window_turning_solid_takes_its_content_s_glass_away_and_gets_it_back_when_d
     assert_eq!(materials(&rt), [1, 0, 1], "the glass again");
 }
 
+/// One window showing a block that fades out by itself over a second of the runtime's clock.
+struct SelfFading;
+
+impl Application for SelfFading {
+    type Model = ();
+    type Message = ();
+
+    fn init() -> ((), Vec<Command<()>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: ()) -> Vec<Command<()>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<()>> {
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Fading".into(),
+                app_id: "test.fading".into(),
+                size: Size::new(100.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            popup: None,
+            background: WindowBackground::Theme,
+            content: Element::new(FadeOut),
+            menus: None,
+        }]
+    }
+}
+
+/// A 40 x 40 block whose alpha falls from 1 to 0 over the first second of the clock. It asks for animation frames from
+/// its paint and handles no event, as a band that fades once released does.
+struct FadeOut;
+
+impl<M: 'static> Widget<M> for FadeOut {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(40.0, 40.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let t = cx.now().0 as f64 / 1e9;
+        if t < 1.0 {
+            cx.request_animation_frame();
+        }
+        cx.push(PaintOp::Fill {
+            shape: Shape::Rect(Rect::new(0.0, 0.0, 40.0, 40.0)),
+            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, (1.0 - t).max(0.0) as f32)),
+        });
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// A node that animates from its paint draws every frame of its animation: each frame callback paints it again at the
+/// clock's time and presents, until it stops asking. Before, the node kept its cached paint at the first callback,
+/// presented nothing, and so asked for no more frames: the fade stood still at its first step.
+#[test]
+fn a_node_animating_from_its_paint_paints_again_at_every_frame_until_it_stops_asking() {
+    let clock = Arc::new(FakeClock::default());
+    let damage = Rc::default();
+    let mut options = options(&damage);
+    options.clock = clock.clone();
+    let mut rt = Runtime::<SelfFading, FakeSystem>::new(FakeSystem::default(), options);
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(100.0, 100.0));
+    assert_eq!(rt.window_system().presented.len(), 1);
+    let frame = 16_666_667u64;
+    let mut n = 0;
+    while n * frame < 1_000_000_000 {
+        n += 1;
+        clock.0.store(n * frame, Ordering::SeqCst);
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(n)));
+        rt.step(steps()).unwrap();
+        assert_eq!(
+            rt.window_system().presented.len() as u64,
+            n + 1,
+            "frame {n} of the fade presents"
+        );
+    }
+    clock.0.store(2_000_000_000, Ordering::SeqCst);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1_000)));
+    rt.step(steps()).unwrap();
+    let presented = rt.window_system().presented.len();
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1_001)));
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        rt.window_system().presented.len(),
+        presented,
+        "once faded it stops"
+    );
+}
+
 /// Where the window system cannot show a colour without a frame, a solid window is drawn like any other: filled with
 /// its colour under its content, and not filled when the colour is transparent.
 #[test]

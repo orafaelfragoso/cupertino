@@ -209,6 +209,9 @@ struct WindowState<M> {
     /// The Escape a dismissible node took, whose release then goes to no one.
     dismissed: Option<HeldKey>,
     animate: BTreeSet<NodeId>,
+    /// The nodes of [`WindowState::animate`] that asked from their paint: what they draw moves by itself, so they
+    /// paint again at the frame whether or not they handle [`Event::AnimationFrame`].
+    paint_animate: BTreeSet<NodeId>,
     /// When each node asked to be woken, one time per node; ordered so that nodes due together wake in a fixed order.
     wakes: BTreeMap<NodeId, Timestamp>,
     text_input: Option<NodeId>,
@@ -864,6 +867,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             for w in &mut self.windows {
                 w.pointer.retain(&self.tree);
                 w.animate.retain(|n| self.tree.contains(*n));
+                w.paint_animate.retain(|n| self.tree.contains(*n));
                 w.wakes.retain(|n, _| self.tree.contains(*n));
                 w.touches
                     .retain(|_, path| path.last().is_some_and(|&n| self.tree.contains(n)));
@@ -930,6 +934,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             held: Vec::new(),
             dismissed: None,
             animate: BTreeSet::new(),
+            paint_animate: BTreeSet::new(),
             wakes: BTreeMap::new(),
             text_input: None,
             geometry: Geometry::new(),
@@ -1217,6 +1222,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 // the callback of a committed frame: the compositor has shown it, not only received it
                 w.presented |= w.committed;
                 let animate = std::mem::take(&mut w.animate);
+                // a node animating from its paint draws its next step: without it a node that does not answer the
+                // frame with a paint of its own keeps its cached paint, presents nothing and so asks for no more frames
+                effects.changes.extend(
+                    std::mem::take(&mut w.paint_animate)
+                        .into_iter()
+                        .map(|node| (node, crate::Change::Paint)),
+                );
                 if w.activated_at.is_some() {
                     // the colours of an activated window are still crossing: paint it again
                     w.repaint();
@@ -2391,6 +2403,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             .layer
             .as_ref()
             .map(|l| w.layer.damage.damage_of(&l.list, &l.own, &l.blank));
+        w.paint_animate.extend(painting.animating.iter().copied());
         w.animate.extend(painting.animating);
         w.display_list = painting.list;
         w.resources = painting.resources;

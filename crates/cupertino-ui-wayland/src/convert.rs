@@ -32,6 +32,20 @@ impl InputTimeline {
     }
 }
 
+/// A frame callback's time (`millis`, the compositor's milliseconds) on the window system's clock that reads `now`
+/// (nanoseconds). The compositor stamps the callback with the frame it shows on the same monotonic clock, so the time
+/// is that many milliseconds before `now`; a stamp from the future or over [`MAX_LAG`] old reads on another clock, and
+/// the frame is taken as handled when it came: at `now`.
+pub(crate) fn frame_time(millis: u32, now: u64) -> u64 {
+    let age = i64::from((now / 1_000_000) as u32).wrapping_sub(i64::from(millis)) as i32;
+    let age_nanos = i64::from(age) * 1_000_000;
+    if age < 0 || age_nanos as u128 > MAX_LAG.as_nanos() {
+        return now;
+    }
+    // the stamp is a whole millisecond: the frame's time is that millisecond's start
+    (now - now % 1_000_000).saturating_sub(age_nanos as u64)
+}
+
 /// `time` on a clock that reads `clock_now`, on the window system's clock that reads `now`; never later than `now`.
 pub(crate) fn on_window_clock(time: u64, clock_now: u64, now: u64) -> u64 {
     now.saturating_sub(clock_now.saturating_sub(time))
@@ -427,6 +441,25 @@ mod tests {
         let mut t = InputTimeline::default();
         t.map(u32::MAX - 5, 50 * MS);
         assert_eq!(t.map(4, 60 * MS), 60 * MS);
+    }
+
+    #[test]
+    fn a_frame_takes_the_time_the_compositor_stamped_on_it() {
+        // stamped 7 ms before it was handled
+        assert_eq!(frame_time(12_000, 12_007 * MS + 300_000), 12_000 * MS);
+        // handled in the millisecond it was stamped
+        assert_eq!(frame_time(12_007, 12_007 * MS + 300_000), 12_007 * MS);
+        // the compositor's milliseconds wrap at 2^32
+        let now = (1u64 << 32) * MS + 5 * MS;
+        assert_eq!(frame_time(u32::MAX - 4, now), now - 10 * MS);
+    }
+
+    #[test]
+    fn a_frame_stamped_on_another_clock_is_taken_at_its_handling() {
+        let now = 50_000 * MS + 123;
+        assert_eq!(frame_time(50_010, now), now, "from the future");
+        assert_eq!(frame_time(40_000, now), now, "ten seconds old");
+        assert_eq!(frame_time(7, now), now, "an unrelated base");
     }
 
     #[test]

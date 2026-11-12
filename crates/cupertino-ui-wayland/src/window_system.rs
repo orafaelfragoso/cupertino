@@ -907,7 +907,9 @@ impl WaylandWindowSystem {
                 if !self.resume(i) {
                     return;
                 }
-                (i, WindowEvent::Frame(self.now()))
+                // animations step to the time of the frame the compositor showed, not to when it was read
+                let time = Timestamp(convert::frame_time(callback.time, self.now().0));
+                (i, WindowEvent::Frame(time))
             }
             Event::ScaleChanged { surface, scale } => match on(&self.windows, surface) {
                 Some(i) => (i, WindowEvent::Scale(scale.factor())),

@@ -1290,7 +1290,18 @@ fn centre_window<M: Clone + 'static>(
         };
         if !open {
             // collapsed: the sheets behind first, the farthest first, then the front card, all one glass shape
-            for behind in sheets.iter().rev() {
+            for (at, behind) in sheets.iter().enumerate().rev() {
+                let nearer = sheets[..at]
+                    .iter()
+                    .map(|n| {
+                        Rect::new(
+                            n.rect.x() - behind.rect.x(),
+                            n.rect.y() - behind.rect.y(),
+                            n.rect.width(),
+                            n.rect.height(),
+                        )
+                    })
+                    .collect();
                 let cover = Rect::new(
                     collapsed.x() - behind.rect.x(),
                     collapsed.y() - behind.rect.y(),
@@ -1301,6 +1312,7 @@ fn centre_window<M: Clone + 'static>(
                     brightness: behind.brightness,
                     container,
                     cover: Some(cover),
+                    nearer,
                     shadow: false,
                     ..Card::plain(front.id, behind.rect, true, map)
                 };
@@ -2341,6 +2353,9 @@ struct Card<M> {
     /// For a sheet behind a group's front card: the front card's rect in the sheet's frame, which the sheet's own
     /// paint (its shadow, darkening and outline) stays out of.
     cover: Option<Rect>,
+    /// For a sheet behind a group's front card: the sheets in front of it, in its frame, which its own paint also
+    /// stays out of, so each sheet's darkening shows on its own strip only.
+    nearer: Vec<Rect>,
     /// What a click, Return, Space or assistive technology's click sends; `None` activates the notification.
     press: Option<Input>,
     /// A collapsed group's front card (`false`): pressing it expands the group.
@@ -2376,6 +2391,7 @@ impl<M> Card<M> {
             clickable: false,
             container: 0,
             cover: None,
+            nearer: Vec::new(),
             press: None,
             expanded: None,
             revealed: None,
@@ -2638,6 +2654,7 @@ impl<M: 'static> Widget<M> for Card<M> {
             || self.clickable != old.clickable
             || self.container != old.container
             || self.cover != old.cover
+            || self.nearer != old.nearer
             || self.press != old.press
             || self.expanded != old.expanded
             || self.revealed != old.revealed
@@ -2753,6 +2770,15 @@ impl<M: 'static> Widget<M> for Card<M> {
                 fill_rule: FillRule::EvenOdd,
             }));
         }
+        // the sheets in front of it too: the clips intersect, so its paint stays off each of them
+        for near in &self.nearer {
+            let mut ring = rounded_path(rect.outset(SHADOW_REACH), 0.0);
+            ring.extend(rounded_path(*near, CORNER_RADIUS.min(near.height() / 2.0)));
+            cx.push(PaintOp::PushClip(Shape::Path {
+                verbs: ring,
+                fill_rule: FillRule::EvenOdd,
+            }));
+        }
         // a card that is leaving blurs before anything else of it is composited
         let blur: Vec<Effect> = if self.blur > 0.0 {
             vec![Effect::Blur { radius: self.blur }]
@@ -2822,6 +2848,9 @@ impl<M: 'static> Widget<M> for Card<M> {
                 width: OUTLINE_WIDTH,
                 paint: Paint::Solid(outline),
             });
+        }
+        for _ in &self.nearer {
+            cx.push(PaintOp::PopClip);
         }
         if self.cover.is_some() {
             cx.push(PaintOp::PopClip);

@@ -200,17 +200,18 @@ mod tests {
     fn sidebar_recipe_fill_ops() {
         let r = recipe(Appearance::Light, "Sidebar");
         let f = fill_ops(&r);
-        assert_eq!(f.len(), 3);
-        assert_eq!(f[0].a[0], 0.0);
-        assert_eq!(f[1].a[0], 3.0, "darken blend id");
-        assert_eq!(f[2].a[1], 1.0, "tint layer flag");
-        assert!((f[0].b[3] - 0.84).abs() < 1e-3);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].a[0], 0.0, "normal blend id");
+        assert_eq!(f[0].a[1], 0.0, "no tint layer");
+        assert!((f[0].b[3] - 0.98).abs() < 1e-3);
     }
 
     #[test]
-    fn dark_sidebar_uses_lighten_id() {
+    fn dark_sidebar_is_one_normal_fill() {
         let f = fill_ops(&recipe(Appearance::Dark, "Sidebar"));
-        assert_eq!(f[1].a[0], 4.0);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].a[0], 0.0);
+        assert!((f[0].b[3] - 0.966).abs() < 1e-3);
     }
 
     #[test]
@@ -224,7 +225,8 @@ mod tests {
     #[test]
     fn region_fill_packing() {
         let mut p: RegionParams = bytemuck::Zeroable::zeroed();
-        let ops = fill_ops(&recipe(Appearance::Light, "Sidebar"));
+        let ops = fill_ops(&recipe(Appearance::Light, "InlineSidebar"));
+        assert_eq!(ops.len(), 3);
         p.set_fills(&ops);
         assert_eq!(p.info[0], 3.0);
         assert_eq!(p.fills[2], ops[1].a);

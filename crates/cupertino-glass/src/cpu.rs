@@ -537,7 +537,8 @@ mod tests {
     /// sidebar is an opaque grey laid with the wallpaper's tint, the same over both and a navy whose blue stands well
     /// above its red and green (an inactive sidebar over a blue wallpaper reads as a dark navy, not a vivid blue).
     #[test]
-    fn an_inactive_sidebar_is_the_same_navy_over_any_scene_and_an_active_one_follows_the_scene() {
+    fn an_inactive_sidebar_is_the_same_navy_over_any_scene_and_an_active_one_lets_a_trace_of_it_through(
+    ) {
         use cupertino_theme::{Appearance, MaterialOptions, Theme, WindowState};
         let theme = Theme::load().unwrap();
         let sidebar = |window| {
@@ -591,8 +592,8 @@ mod tests {
             draw(WindowState::Active, blue),
         );
         assert!(
-            i32::from(active_wall[2]) - i32::from(active_body[2]) > 30,
-            "the active sidebar follows the scene: {active_body:?} {active_wall:?}"
+            i32::from(active_wall[2]) - i32::from(active_body[2]) > 5,
+            "the active sidebar lets a trace of the scene through: {active_body:?} {active_wall:?}"
         );
     }
 }

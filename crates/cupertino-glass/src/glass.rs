@@ -817,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn the_large_panel_compresses_white_and_black_and_keeps_strong_colours() {
+    fn the_dark_large_panel_compresses_white_and_black_and_keeps_strong_colours() {
         let face = |dark: bool, style: GlassStyle, c: [f32; 3]| {
             let p = GlassParams::new(
                 GlassMode {
@@ -854,22 +854,13 @@ mod tests {
             red[0] > white[0] + 60.0,
             "brighter than the grey of white: {red:?}"
         );
-        // light: the same order, gentler; the panel stays light but dimmer than regular light glass over black
-        let light_black = face(false, GlassStyle::LargePanel, [15.0; 3]);
-        let regular_light_black = face(false, GlassStyle::Regular, [15.0; 3]);
-        assert!(light_black[0] > regular_light_black[0], "{light_black:?}");
-        // a white page (or the bright centre of a picture) stays a light patch near the panel's tint, about 228,
-        // rather than the glare regular light glass gives it
-        let light_white = face(false, GlassStyle::LargePanel, [245.0; 3]);
-        assert!(
-            light_white[0] > 222.0 && light_white[0] < 234.0,
-            "{light_white:?}"
-        );
-        let regular_light_white = face(false, GlassStyle::Regular, [245.0; 3]);
-        assert!(
-            regular_light_white[0] > light_white[0] + 10.0,
-            "{regular_light_white:?}"
-        );
+        // light: the large panel keeps the regular light face
+        for c in [[15.0; 3], [245.0; 3], [229.0, 55.0, 60.0]] {
+            assert_eq!(
+                face(false, GlassStyle::LargePanel, c),
+                face(false, GlassStyle::Regular, c)
+            );
+        }
     }
 
     /// The blurred backdrop `x` points along a backdrop that is `source(t)` at `t` points, through `p`: each blur level
@@ -951,8 +942,8 @@ mod tests {
         let white = face_color([0.953; 3], &p, p.face.max_luma);
         assert!(white[0] > 0.95, "{white:?}");
         let black = face_color([0.0; 3], &p, p.face.max_luma);
-        // lift 0.4, then white at 0.2 over it
-        assert!(close(black[0], 0.4 * 0.8 + 0.2, 1e-4), "{black:?}");
+        // lift 0.43, then white at 0.215 over it
+        assert!(close(black[0], 0.43 * 0.785 + 0.215, 1e-4), "{black:?}");
     }
 
     #[test]
@@ -1157,7 +1148,7 @@ mod tests {
     fn uniform_layout_and_scaling() {
         assert_eq!(
             std::mem::size_of::<GlassUniform>(),
-            (17 + 3 * MAX_SHAPES) * 16
+            (18 + 3 * MAX_SHAPES) * 16
         );
         let c = Container::new(
             vec![GlassShape::capsule([10.0, 20.0, 100.0, 40.0])],

@@ -119,6 +119,13 @@ impl ConfigWatcher {
     }
 }
 
+/// Whether a file event of `kind` may have changed a file. Opening, reading and closing a file change nothing; the
+/// watcher's own reads, and every other process's watcher's reads of the same directory, would otherwise wake it
+/// again without end.
+fn may_change(kind: &notify::EventKind) -> bool {
+    !kind.is_access()
+}
+
 /// The watch thread: waits for a burst, lets it go quiet, then reports the files whose contents changed.
 fn watch_loop(
     mut watcher: notify::RecommendedWatcher,
@@ -133,6 +140,7 @@ fn watch_loop(
     let mut handle = |msg: Msg, report: &mut dyn FnMut(WatchEvent)| -> Option<bool> {
         match msg {
             Msg::Stop => None,
+            Msg::Event(Ok(event)) if !may_change(&event.kind) => Some(false),
             Msg::Event(Ok(event)) => {
                 for dir in event.paths.iter().filter(|p| dirs.contains(*p)) {
                     if event.kind.is_create() {
@@ -156,6 +164,8 @@ fn watch_loop(
             }
         }
     };
+    // the files were read before the watch began: a change in between shows now
+    compare(files, last, report);
     loop {
         // wait for the first event of a burst, then until the burst is quiet
         let Ok(first) = rx.recv() else { return };
@@ -177,21 +187,30 @@ fn watch_loop(
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
-        let mut changed = Vec::new();
-        for f in files {
-            match snapshot(f) {
-                Ok(now) => {
-                    if last.get(f) != Some(&now) {
-                        last.insert(f.clone(), now);
-                        changed.push(f.clone());
-                    }
+        compare(files, last, report);
+    }
+}
+
+/// Report each of `files` whose contents differ from `last`, and remember them.
+fn compare(
+    files: &[PathBuf],
+    last: &mut BTreeMap<PathBuf, Option<Vec<u8>>>,
+    report: &mut dyn FnMut(WatchEvent),
+) {
+    let mut changed = Vec::new();
+    for f in files {
+        match snapshot(f) {
+            Ok(now) => {
+                if last.get(f) != Some(&now) {
+                    last.insert(f.clone(), now);
+                    changed.push(f.clone());
                 }
-                Err(e) => report(WatchEvent::Error(format!("{}: {e}", f.display()))),
             }
+            Err(e) => report(WatchEvent::Error(format!("{}: {e}", f.display()))),
         }
-        if !changed.is_empty() {
-            report(WatchEvent::Changed(changed));
-        }
+    }
+    if !changed.is_empty() {
+        report(WatchEvent::Changed(changed));
     }
 }
 
@@ -305,6 +324,52 @@ mod tests {
             received
         });
         assert_eq!(received, Ok(WatchEvent::Changed(vec![path])));
+    }
+
+    /// The files are read before the watch begins; a change made in between is reported once the watch runs, not
+    /// only with the next change.
+    #[test]
+    fn a_change_before_the_watch_began_is_reported() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("dock.conf");
+        std::fs::write(&path, "tile_size = 48\n").unwrap();
+        let mut last = BTreeMap::from([(path.clone(), Some(b"tile_size = 64\n".to_vec()))]);
+        let (tx, rx) = mpsc::channel();
+        tx.send(Msg::Stop).unwrap();
+        let watcher = notify::recommended_watcher(|_| {}).unwrap();
+        let mut reports = Vec::new();
+        watch_loop(
+            watcher,
+            &rx,
+            std::slice::from_ref(&path),
+            &BTreeSet::new(),
+            &mut last,
+            &mut |event| reports.push(event),
+        );
+        assert_eq!(reports, vec![WatchEvent::Changed(vec![path])]);
+    }
+
+    #[test]
+    fn opening_and_reading_a_watched_file_is_not_a_change() {
+        use notify::event::{
+            AccessKind, AccessMode, CreateKind, DataChange, ModifyKind, RemoveKind,
+        };
+        use notify::EventKind;
+        for kind in [
+            AccessKind::Open(AccessMode::Any),
+            AccessKind::Read,
+            AccessKind::Close(AccessMode::Read),
+        ] {
+            assert!(!may_change(&EventKind::Access(kind)), "{kind:?}");
+        }
+        for kind in [
+            EventKind::Create(CreateKind::File),
+            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            EventKind::Remove(RemoveKind::File),
+            EventKind::Other,
+        ] {
+            assert!(may_change(&kind), "{kind:?}");
+        }
     }
 
     #[test]

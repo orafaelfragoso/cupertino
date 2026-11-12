@@ -219,25 +219,10 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   indigo. Third-party status items keep their own icons. Before the first value, below version 14, and while Reduce
   Transparency makes the bar solid, the whole bar keeps the appearance's palette. The server measures the wallpaper's
   strip as it is, since nothing lies between it and the text, as the mean of each pixel's L* (a few bright lines over a dark strip leave it dark). Outside the band the chosen text is the one that reads
-  better, at 4.5:1 or more below 400 and above 600; inside it neither colour reaches 4.5:1 (about 4.0:1 at 500). A
-  strip's mean can hide light and dark parts side by side, so a slot over a busy part of the wallpaper keeps a soft halo
-  of the opposite tone under its text, symbol or mark (`tone::halo`, `tone::Halo`). From shell version 21 the server
-  also sends how unevenly light the wallpaper is under the strip, band by band across the output (`backdrop_spread`,
-  the standard deviation of L*, from the same samples as the lightness); each slot takes the most of the bands it
-  covers (`tone::spread_under`) and its halo follows it: none at all up to `CALM_SPREAD` (6 L*), so over a calm
-  wallpaper nothing shows, then growing smoothly to full at `BUSY_SPREAD` (25 L*), black at 0.5625 under light text and
-  white at 0.75 under dark text, its blur from 0.5 to 3 pt, over a dense core that hugs the strokes first (black 0.8,
-  white 0.85, 1 pt, at the same share of full). The core is laid three times (`HALO_CORE_PASSES`), each pass under the
-  strokes and the passes before it, so it grows about a point past even a hairline stroke at close to its full opacity
-  rather than thinning out as one blur of a thin stroke does: within a point of the strokes the wallpaper reads 4.5:1 or
-  more from the text on average, even where it is as light as light text or as dark as dark text (white, a bright
-  yellow, black, a deep blue), where one pass at the earlier core gave about 1.2:1 over white (`Halo::shadows`). Over
-  measured wallpaper the open title's highlight lies on a backing of the halo's tone (black 0.4 under light text, white
-  0.5 under dark, at the core's share; `Halo::pill_backing`), so it shows as a shape of its own over a busy picture.
-  Before the first spread, and from an older server, every slot draws the halo at 0.8 of full without the core (black
-  0.45, white 0.6, 2.5 pt) and the highlight has no backing, as all slots did before. The session's Reduce
-  Transparency is the one source of both the solid strip and the halo (`tone::solid_bar`, `BarScene::solid`): a solid
-  bar draws no halo, whatever the theme's own option says. A bar redraws when its tone or a slot's halo changes.
+  better, at 4.5:1 or more below 400 and above 600; inside it neither colour reaches 4.5:1 (about 4.0:1 at 500). The text, symbols and mark lie sharp on the
+  wallpaper with no halo, ring or backing under them, over any wallpaper and in either tone. The session's Reduce
+  Transparency is the one source of the solid strip (`tone::solid_bar`, `BarScene::solid`). A bar redraws when its tone
+  changes.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and
   opens `Extras::system_menu`: About This Computer, Settings…, Recent Items, Force Quit…, then Sleep, Restart…, Shut Down…, Lock Screen, Log
   Out <name>… and, when the session agent can switch, Login Window…, with separators between the groups. Every row and

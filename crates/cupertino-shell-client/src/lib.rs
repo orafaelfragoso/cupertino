@@ -26,7 +26,7 @@ pub use error::Error;
 pub use menu_bar::{
     ActiveApp, AppWindow, BoundAction, EditAction, GtkMenu, MenuBar, MenuBarUpdate,
     PrimaryModifier, SessionAction, SessionAgent, Shortcuts, WindowCommand, WindowMenu,
-    WindowState, MAX_SPREAD_BANDS,
+    WindowState,
 };
 pub use roles::{
     AppActivation, IdleNotifier, IdleWatch, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,

@@ -554,7 +554,7 @@ fn a_public_client_cannot_see_bind_or_use_a_role_global() {
 
     let (shell_name, shell_version) = offered(&holder, holder_registry, "cupertino_shell_v1")
         .expect("a shell process is offered cupertino_shell_v1");
-    assert_eq!(shell_version, 21);
+    assert_eq!(shell_version, 20);
     let public_interfaces: Vec<String> = public
         .globals(registry)
         .into_iter()

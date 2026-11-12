@@ -155,19 +155,12 @@ pub struct MenuBarUpdate {
     /// The lightness of the wallpaper under the bar (CIE L*/100 in thousandths, at most 1000), from version 14 once
     /// the server has measured it.
     pub backdrop_lightness: Option<u16>,
-    /// How unevenly light the wallpaper is under the bar, band by band from the output's left edge to its right (the
-    /// standard deviation of CIE L*/100 in thousandths, at most 1000; at most [`MAX_SPREAD_BANDS`] bands), from version
-    /// 21 once the server has measured it.
-    pub backdrop_spread: Option<Vec<u16>>,
     /// The windows of the active application, in stacking order from the top; a group with `window_state` carries
     /// the complete list from version 10.
     pub windows: Option<Vec<AppWindow>>,
     /// The chords of the server's actions, from version 10.
     pub shortcuts: Option<Shortcuts>,
 }
-
-/// The most bands of [`MenuBarUpdate::backdrop_spread`] a bar reads; the rest of a longer array is dropped.
-pub const MAX_SPREAD_BANDS: usize = 256;
 
 /// The process whose ownership of the session agent's bus name is trusted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -455,16 +448,6 @@ impl GroupBuilder {
             Event::BackdropLuminance { luminance } => {
                 self.update.backdrop_lightness = Some(luminance.min(1000) as u16)
             }
-            Event::BackdropSpread { spread } => {
-                let (bands, _) = spread.as_chunks::<2>();
-                self.update.backdrop_spread = Some(
-                    bands
-                        .iter()
-                        .take(MAX_SPREAD_BANDS)
-                        .map(|b| u16::from_le_bytes(*b).min(1000))
-                        .collect(),
-                )
-            }
             Event::AppWindow { id, title, flags } => {
                 let flags = match flags {
                     WEnum::Value(flags) => flags,
@@ -580,7 +563,6 @@ mod tests {
                 screen_capture: None,
                 session_agent: None,
                 backdrop_lightness: None,
-                backdrop_spread: None,
                 windows: None,
                 shortcuts: None,
             }]
@@ -783,39 +765,6 @@ mod tests {
                 },
                 MenuBarUpdate {
                     backdrop_lightness: Some(1000),
-                    ..MenuBarUpdate::default()
-                }
-            ]
-        );
-    }
-
-    #[test]
-    fn the_backdrop_spread_arrives_in_its_group_band_by_band_capped_at_white_and_in_number() {
-        let bands = |values: &[u16]| {
-            values
-                .iter()
-                .flat_map(|v| v.to_le_bytes())
-                .collect::<Vec<u8>>()
-        };
-        let mut long = bands(&[7; 300]);
-        long.push(9);
-        let updates = feed(vec![
-            Event::BackdropSpread {
-                spread: bands(&[0, 500, 70, 4000]),
-            },
-            Event::Done,
-            Event::BackdropSpread { spread: long },
-            Event::Done,
-        ]);
-        assert_eq!(
-            updates,
-            [
-                MenuBarUpdate {
-                    backdrop_spread: Some(vec![0, 500, 70, 1000]),
-                    ..MenuBarUpdate::default()
-                },
-                MenuBarUpdate {
-                    backdrop_spread: Some(vec![7; MAX_SPREAD_BANDS]),
                     ..MenuBarUpdate::default()
                 }
             ]

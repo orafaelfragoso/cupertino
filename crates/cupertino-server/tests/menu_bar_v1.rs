@@ -265,8 +265,6 @@ enum BarEvent {
     ScreenCapture(u32),
     SessionAgent(u32, u32),
     BackdropLuminance(u32),
-    /// Version 21: the spread under the bar, band by band.
-    BackdropSpread(Vec<u16>),
     AppWindow {
         id: u32,
         title: String,
@@ -488,14 +486,6 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
             E::ScreenCapture { active } => BarEvent::ScreenCapture(active),
             E::SessionAgent { trust, pid } => BarEvent::SessionAgent(raw(trust), pid),
             E::BackdropLuminance { luminance } => BarEvent::BackdropLuminance(luminance),
-            E::BackdropSpread { spread } => BarEvent::BackdropSpread(
-                spread
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|b| u16::from_le_bytes(*b))
-                    .collect(),
-            ),
             E::AppWindow { id, title, flags } => BarEvent::AppWindow {
                 id,
                 title,
@@ -1637,61 +1627,6 @@ fn a_version_14_bar_gets_the_known_backdrop_lightness_after_its_first_groups() {
         bar.groups()[4],
         [BarEvent::BackdropLuminance(300), BarEvent::Done]
     );
-    assert_eq!(bar.error(), None);
-}
-
-/// The `backdrop_spread` profiles the bar got, in order.
-fn spread_values(bar: &BarClient) -> Vec<Vec<u16>> {
-    bar.groups()
-        .iter()
-        .flatten()
-        .filter_map(|e| match e {
-            BarEvent::BackdropSpread(s) => Some(s.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// A bar of version 21 is told how unevenly light the wallpaper is under it, band by band, in a group of its own:
-/// the known profile after its first groups, then a profile in which a band moved by more than 10, clamped to white
-/// and to 256 bands.
-#[test]
-fn a_version_21_bar_is_told_the_backdrop_spread_band_by_band_when_a_band_moves_by_more_than_10() {
-    let Some(mut h) = Harness::new() else { return };
-    let out = h.state.outputs[0].id;
-    procedural_measure(&mut h, out);
-    h.state.set_backdrop_spread(out, Some(vec![0, 300, 40]));
-    let bar = bar_at(&mut h, 21);
-    h.wait_until("the spread group", |_| {
-        spread_values(&bar).last() == Some(&vec![0, 300, 40])
-    });
-    let before = bar.groups().len();
-    h.state.set_backdrop_spread(out, Some(vec![10, 290, 50]));
-    h.state.set_backdrop_spread(out, Some(vec![0, 300, 2000]));
-    h.wait_for_groups(&bar, before + 1);
-    assert_eq!(
-        bar.groups().last().unwrap(),
-        &[BarEvent::BackdropSpread(vec![0, 300, 1000]), BarEvent::Done]
-    );
-    h.state.set_backdrop_spread(out, Some(vec![7; 300]));
-    h.wait_for_groups(&bar, before + 2);
-    assert_eq!(
-        spread_values(&bar).last().unwrap(),
-        &vec![7; 256],
-        "a profile is cut to 256 bands"
-    );
-    assert_eq!(bar.error(), None);
-}
-
-#[test]
-fn a_version_20_bar_never_gets_the_backdrop_spread() {
-    let Some(mut h) = Harness::new() else { return };
-    let out = h.state.outputs[0].id;
-    h.state.set_backdrop_spread(out, Some(vec![0, 300, 40]));
-    let bar = bar_at(&mut h, 20);
-    h.state.set_backdrop_spread(out, Some(vec![500; 4]));
-    session_agent_group(&mut h, &bar);
-    assert!(spread_values(&bar).is_empty());
     assert_eq!(bar.error(), None);
 }
 

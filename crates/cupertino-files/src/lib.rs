@@ -13,6 +13,7 @@
 //! * [`places`], [`recents`], [`history`], [`browser`]: the sidebar's standard places, the Recents folder, back / forward history and
 //!   the state of one browser window; [`window`]: its size limits, view modes, path bar and status bar text;
 //! * [`context_menu`], [`menu_spec`], [`menu_bar`]: the rows of the context menus and the menus of the menu bar;
+//! * [`desktop`]: where the desktop folder's items sit on the desktop, and what keeps their places;
 //! * [`search_field`]: the toolbar search field's width;
 //! * [`columns`]: the column view's chain of folders, their widths and scrolling; [`preview`]: what a preview of a
 //!   file draws, its bounded text and the preview window's motion; [`tab_strip`]: a window's tabs;
@@ -22,6 +23,7 @@
 pub mod browser;
 pub mod columns;
 pub mod context_menu;
+pub mod desktop;
 pub mod entry;
 pub mod format;
 pub mod geom;

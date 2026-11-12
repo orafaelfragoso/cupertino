@@ -452,6 +452,21 @@ pub fn folder_icons(
     icons
 }
 
+/// The desktop folder of the running session: the one `user-dirs.dirs` in the configuration directory names, else
+/// `Desktop` in `home`.
+pub fn desktop_folder(home: &Path) -> PathBuf {
+    let assigned = cupertino_defaults::config_home()
+        .and_then(|config| std::fs::read_to_string(config.join("user-dirs.dirs")).ok())
+        .and_then(|text| {
+            parse_user_dirs(&text, home)
+                .into_iter()
+                .rev()
+                .find(|(key, _)| key == "DESKTOP")
+                .map(|(_, path)| path)
+        });
+    assigned.unwrap_or_else(|| home.join("Desktop"))
+}
+
 /// The sidebar places of a session and the folders with icons of their own.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionPlaces {

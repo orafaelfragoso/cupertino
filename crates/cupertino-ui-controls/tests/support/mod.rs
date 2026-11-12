@@ -19,6 +19,8 @@ use cupertino_ui_test::{HeadlessWindowSystem, ManualClock};
 
 /// One display frame at 60 Hz, in nanoseconds.
 const FRAME_NS: u64 = 16_666_667;
+/// Longer than a chosen menu row flashes before its choice is sent.
+pub const MENU_FLASH_NS: u64 = 120_000_000;
 use cupertino_ui_text::{
     AttributedText, FontIndex, FontStyle, FontWeight, GlyphKey, GlyphRasterizer, ParagraphStyle,
     RasterGlyph, TextError, TextStyle, TextSystem,
@@ -355,6 +357,15 @@ impl<A: Application> Harness<A> {
         harness
     }
 
+    /// A harness on a desktop that shows a window's raised nodes in a layer over its content but lays no material:
+    /// what a node draws in place of the material shows.
+    pub fn with_layer_only(theme: ThemeTokens) -> Self {
+        LAYER.with(|e| e.set(true));
+        let harness = Self::with_theme(theme);
+        LAYER.with(|e| e.set(false));
+        harness
+    }
+
     /// A harness whose window draws with `theme` instead of the fixture theme.
     pub fn with_theme(theme: ThemeTokens) -> Self {
         Self::build(LayoutDirection::Ltr, theme, placeholder_icons(), false)
@@ -400,9 +411,9 @@ impl<A: Application> Harness<A> {
             clock: clock.clone(),
             on_window_error: None,
         };
-        let system = if EFFECTS.with(Cell::get) {
+        let system = if EFFECTS.with(Cell::get) || LAYER.with(Cell::get) {
             HeadlessWindowSystem::new(Capabilities {
-                app_effects: true,
+                app_effects: EFFECTS.with(Cell::get),
                 raised_layer: LAYER.with(Cell::get),
                 ..Capabilities::default()
             })
@@ -429,10 +440,10 @@ impl<A: Application> Harness<A> {
     }
 
     /// Steps until the window has drawn everything it asked to draw. A window still asking after 8 frames at the same
-    /// time is in a transition (the colours of a window made active): the clock then moves a display frame per frame
-    /// until the transition ends.
+    /// time is in a transition (the colours of a window made active, a sheet popping in): the clock then moves a display
+    /// frame per frame, for up to 2 seconds, until the transition ends.
     pub fn settle(&mut self) {
-        let rounds = if self.animated { 2 } else { 24 };
+        let rounds = if self.animated { 2 } else { 8 + 120 };
         for round in 0..rounds {
             if self.animated && round + 1 == rounds {
                 self.rt.step(turns()).unwrap();
@@ -454,6 +465,12 @@ impl<A: Application> Harness<A> {
                 .unwrap();
         }
         panic!("the window keeps asking for frames");
+    }
+
+    /// Lets a menu row chosen with the pointer or a finger finish the flash it gives before its choice is sent.
+    pub fn finish_flash(&mut self) {
+        self.clock.advance_by(MENU_FLASH_NS);
+        self.settle();
     }
 
     pub fn resize(&mut self, size: Size) {

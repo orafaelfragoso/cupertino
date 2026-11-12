@@ -366,6 +366,7 @@ fn return_or_a_click_chooses_an_item_and_closes_the_menu() {
     context(&mut h);
     let cut = row_rect(&h, 0);
     h.click(Point::new(cut.min_x() + 20.0, cut.min_y() + 10.0));
+    h.finish_flash();
     assert_eq!(h.model().chosen, ["Copy", "Cut"]);
     assert_eq!(h.model().closes, 2);
 }
@@ -409,7 +410,7 @@ fn the_trailing_arrow_opens_a_submenu_beside_its_item_and_the_leading_arrow_or_e
         (
             PopupEdge::TopRight,
             PopupEdge::BottomRight,
-            Point::new(-2.0, -5.0)
+            Point::new(-5.5, -5.0)
         )
     );
     enter(&mut h, "menu/1");
@@ -456,7 +457,7 @@ fn in_right_to_left_the_left_arrow_opens_a_submenu_on_the_left() {
         (
             PopupEdge::TopLeft,
             PopupEdge::BottomLeft,
-            Point::new(2.0, -5.0)
+            Point::new(5.5, -5.0)
         )
     );
     enter(&mut h, "menu/1");
@@ -533,13 +534,18 @@ fn an_items_shortcut_sits_at_its_trailing_edge_in_a_dimmer_colour_and_is_read_as
             .collect::<Vec<_>>()
     };
     let copy = glyphs(1);
-    assert_eq!(copy.len(), 2, "the label and the keys");
+    assert_eq!(
+        copy.len(),
+        3,
+        "the label, the key and its modifiers, each in its own column"
+    );
     let width = row_rect(&h, 1).width();
     assert!(
-        copy[0].0 < 40.0 && copy[1].0 > width / 2.0,
+        copy[0].0 < 40.0 && copy[1].0 > width / 2.0 && copy[2].0 > width / 2.0,
         "{copy:?} in {width}"
     );
     assert_ne!(copy[0].1, copy[1].1, "the keys are dimmer than the label");
+    assert_eq!(copy[1].1, copy[2].1, "the key and its modifiers alike");
     assert_eq!(glyphs(0).len(), 1);
 }
 
@@ -553,14 +559,14 @@ fn a_pop_up_button_opens_its_options_over_itself_with_the_chosen_one_checked_on_
     let id = popup(&h, "sizes").expect("open");
     let placed = h.rt.window_system().placement(id).unwrap().unwrap().clone();
     assert_eq!(placed.anchor_rect, button);
-    // the button's label is 10 pt in, a row's 31 in a menu with check marks; the chosen first row's middle is 5 + 12
+    // the button's label is 10 pt in, a row's 30.5 in a menu with check marks; the chosen first row's middle is 5 + 12
     // down
     assert_eq!(
         (placed.anchor, placed.gravity, placed.offset),
         (
             PopupEdge::Left,
             PopupEdge::BottomRight,
-            Point::new(-21.0, -17.0)
+            Point::new(-20.5, -17.0)
         )
     );
     assert!(!placed.constraint.flip, "it slides to fit and never flips");
@@ -600,7 +606,7 @@ fn a_pop_up_button_opens_its_options_over_itself_with_the_chosen_one_checked_on_
     let placed = h.rt.window_system().placement(id).unwrap().unwrap();
     assert_eq!(
         placed.offset,
-        Point::new(-21.0, -65.0),
+        Point::new(-20.5, -65.0),
         "Large, the third row, is over the button"
     );
     enter(&mut h, "sizes");
@@ -623,7 +629,7 @@ fn in_right_to_left_a_pop_up_buttons_menu_lines_up_with_its_right_edge() {
         (
             PopupEdge::Right,
             PopupEdge::BottomLeft,
-            Point::new(21.0, -17.0)
+            Point::new(20.5, -17.0)
         )
     );
 }
@@ -650,7 +656,7 @@ fn label_x(h: &Harness<Editor>, index: u64) -> f64 {
 }
 
 #[test]
-fn rows_are_24_points_tall_with_labels_15_in_and_separators_from_the_labels_to_15_short_of_the_edge(
+fn rows_are_24_points_tall_with_labels_16_5_in_and_separators_from_the_labels_to_16_5_short_of_the_edge(
 ) {
     let mut h = Harness::<Editor>::assistive();
     context(&mut h);
@@ -658,7 +664,7 @@ fn rows_are_24_points_tall_with_labels_15_in_and_separators_from_the_labels_to_1
         assert_eq!(row_rect(&h, index).height(), 24.0, "row {index}");
     }
     for index in [0, 1, 4] {
-        assert!((label_x(&h, index) - 15.0).abs() < 0.5, "row {index}");
+        assert!((label_x(&h, index) - 16.5).abs() < 0.5, "row {index}");
     }
     let separator = row_rect(&h, 3);
     assert_eq!(separator.height(), 11.0);
@@ -672,8 +678,8 @@ fn rows_are_24_points_tall_with_labels_15_in_and_separators_from_the_labels_to_1
             _ => None,
         })
         .expect("the line");
-    assert_eq!(line.x(), 15.0);
-    assert_eq!(line.x() + line.width(), separator.width() - 15.0);
+    assert_eq!(line.x(), 16.5);
+    assert_eq!(line.x() + line.width(), separator.width() - 16.5);
     assert_eq!(line.height(), 1.0);
 }
 
@@ -684,7 +690,7 @@ fn in_a_menu_with_check_marks_the_labels_move_over_to_make_room_for_them() {
     h.tap(SPACE);
     enter(&mut h, "sizes");
     for index in 0..SIZES.len() as u64 {
-        assert!((label_x(&h, index) - 31.0).abs() < 0.5, "row {index}");
+        assert!((label_x(&h, index) - 30.5).abs() < 0.5, "row {index}");
     }
 }
 

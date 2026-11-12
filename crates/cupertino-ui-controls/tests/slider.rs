@@ -122,7 +122,9 @@ fn it_is_a_slider_with_its_range_and_step() {
 fn tick_marks_are_dots_under_the_track_at_each_step_position() {
     let h = Harness::<Volume>::new();
     let width = h.rect("volume").width();
-    let dot = color(ColorRole::SecondaryText, InteractionVariant::Normal, false);
+    // the secondary text colour at 60 %, lighter than the text
+    let text = color(ColorRole::SecondaryText, InteractionVariant::Normal, false);
+    let dot = text.with_alpha(text.a * 0.6);
     let dots: Vec<Rect> = h
         .ops("volume")
         .into_iter()
@@ -130,7 +132,7 @@ fn tick_marks_are_dots_under_the_track_at_each_step_position() {
             PaintOp::Fill {
                 shape: Shape::RoundedRect { rect, radius },
                 paint: Paint::Solid(c),
-            } if c == dot && radius == 2.0 => Some(rect),
+            } if c == dot && radius == 1.0 => Some(rect),
             _ => None,
         })
         .collect();
@@ -140,7 +142,7 @@ fn tick_marks_are_dots_under_the_track_at_each_step_position() {
         [10.0, width / 2.0, width - 10.0],
         "from the knob's run, end to end"
     );
-    assert!(dots.iter().all(|d| d.size == Size::new(4.0, 4.0)));
+    assert!(dots.iter().all(|d| d.size == Size::new(2.0, 2.0)));
 }
 
 #[derive(Clone, Debug, PartialEq)]

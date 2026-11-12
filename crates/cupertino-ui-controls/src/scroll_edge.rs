@@ -205,21 +205,21 @@ mod tests {
     use cupertino_ui_theme::Appearance;
 
     #[test]
-    fn the_soft_veil_holds_over_the_top_then_eases_out_to_nothing_at_the_bottom() {
+    fn the_soft_veil_thins_in_a_straight_line_down_the_band_and_is_nothing_below_it() {
         let band = 52.0;
         assert_eq!(soft_edge_opacity(0.0, band), SOFT_EDGE_MAX);
         assert_eq!(
             soft_edge_opacity(band * SOFT_EDGE_HOLD, band),
             SOFT_EDGE_MAX
         );
-        assert_eq!(soft_edge_opacity(band, band), 0.0);
+        assert!((soft_edge_opacity(band, band) - SOFT_EDGE_MIN).abs() < 1e-12);
         assert_eq!(
             soft_edge_opacity(band + 10.0, band),
             0.0,
             "nothing below the band"
         );
         assert_eq!(soft_edge_opacity(10.0, 0.0), 0.0, "no band, no veil");
-        // never stronger further down, and smooth: no step larger than a smoothstep's steepest at this sampling
+        // never stronger further down, and smooth: no step larger than a straight line's at this sampling
         let mut last = SOFT_EDGE_MAX;
         for i in 0..=520 {
             let o = soft_edge_opacity(f64::from(i) / 10.0, band);
@@ -227,9 +227,10 @@ mod tests {
             assert!(last - o < 0.01, "at {i}: a step from {last} to {o}");
             last = o;
         }
-        // half way down the easing it is half as strong
+        // half way down the thinning it is half way between its ends
         let mid = band * (SOFT_EDGE_HOLD + 1.0) / 2.0;
-        assert!((soft_edge_opacity(mid, band) - SOFT_EDGE_MAX / 2.0).abs() < 1e-9);
+        let half = (SOFT_EDGE_MAX + SOFT_EDGE_MIN) / 2.0;
+        assert!((soft_edge_opacity(mid, band) - half).abs() < 1e-9);
     }
 
     #[test]
@@ -244,7 +245,7 @@ mod tests {
             let want = soft_edge_opacity(f64::from(s.offset), 1.0) as f32;
             assert!((s.color.a - want).abs() < 1e-6);
         }
-        assert_eq!(stops[SOFT_EDGE_STOPS - 1].color.a, 0.0);
+        assert!((stops[SOFT_EDGE_STOPS - 1].color.a - SOFT_EDGE_MIN as f32).abs() < 1e-6);
     }
 
     #[test]

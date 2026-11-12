@@ -137,7 +137,8 @@ fn where_the_sidebar_meets_the_content_a_rim_is_drawn_not_a_separator_line() {
         InteractionVariant::Normal,
         false,
     );
-    // the fills of the one-point strip beside the sidebar, the whole window high
+    // the fills of the strip beside the sidebar, the whole window high: the background reaching half a point into the
+    // content, and the rim over it
     let strip: Vec<_> = h
         .snapshot()
         .display_list
@@ -146,9 +147,9 @@ fn where_the_sidebar_meets_the_content_a_rim_is_drawn_not_a_separator_line() {
         .flat_map(|n| n.ops)
         .filter_map(|op| match op {
             PaintOp::Fill {
-                shape: Shape::RoundedRect { rect: r, .. },
+                shape: Shape::RoundedRect { rect: r, .. } | Shape::Rect(r),
                 paint: Paint::Solid(c),
-            } if r.min_x() == SIDEBAR && r.width() <= 1.0 && r.height() == 400.0 => Some(c),
+            } if r.min_x() == SIDEBAR && r.width() <= 2.0 && r.height() == 400.0 => Some(c),
             _ => None,
         })
         .collect();

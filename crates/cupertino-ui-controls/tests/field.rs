@@ -141,7 +141,7 @@ fn rects(h: &Harness<App>, key: &'static str) -> Vec<(Rect, Color)> {
 fn caret(h: &Harness<App>) -> Option<Rect> {
     rects(h, "name")
         .into_iter()
-        .find(|(r, c)| r.width() == CARET_WIDTH && *c == normal(ColorRole::Text))
+        .find(|(r, c)| r.width() == CARET_WIDTH && *c == normal(ColorRole::DefaultButtonFill))
         .map(|(r, _)| r)
 }
 
@@ -466,13 +466,15 @@ fn a_drag_held_past_the_field_keeps_scrolling_until_the_text_ends() {
 fn caret_any(h: &Harness<App>) -> Option<Rect> {
     rects(h, "name")
         .into_iter()
-        .find(|(r, c)| r.height() > 4.0 && r.width() <= 2.0 && *c == normal(ColorRole::Text))
+        .find(|(r, c)| {
+            r.height() > 4.0 && r.width() <= 2.0 && *c == normal(ColorRole::DefaultButtonFill)
+        })
         .map(|(r, _)| r)
 }
 
 #[test]
 fn the_caret_is_whole_device_pixels_on_pixel_edges_at_every_scale() {
-    for (scale, pixels) in [(1.0, 1.0), (1.5, 2.0), (2.0, 2.0)] {
+    for (scale, pixels) in [(1.0, 2.0), (1.5, 3.0), (2.0, 4.0)] {
         let mut h = Harness::<App>::new();
         h.send(WindowEvent::Scale(scale));
         h.tap(TAB);
@@ -1063,9 +1065,13 @@ fn next_wake(h: &Harness<App>) -> Option<u64> {
 fn the_caret_blinks_in_phases_from_its_last_move() {
     let mut h = focused_name();
     assert!(caret(&h).is_some());
-    assert_eq!(next_wake(&h), Some(500));
-    at(&mut h, 500);
-    assert!(caret(&h).is_none(), "off for the second phase");
+    assert_eq!(
+        next_wake(&h),
+        Some(500),
+        "the fade out starts after the first phase"
+    );
+    at(&mut h, 700);
+    assert!(caret(&h).is_none(), "off once it has faded out");
     at(&mut h, 1000);
     assert!(caret(&h).is_some());
 
@@ -1073,7 +1079,7 @@ fn the_caret_blinks_in_phases_from_its_last_move() {
     h.type_text("A");
     at(&mut h, 1600);
     assert!(caret(&h).is_some(), "a key restarts the on phase");
-    at(&mut h, 1700);
+    at(&mut h, 1900);
     assert!(caret(&h).is_none());
 }
 

@@ -1,7 +1,7 @@
 use crate::support;
 
 use cupertino_geometry::{Insets, Point, Rect, Size};
-use cupertino_ui_controls::scroll_edge::{soft_edge_stops, SOFT_EDGE_STOPS};
+use cupertino_ui_controls::scroll_edge::{soft_edge_opacity, soft_edge_stops, SOFT_EDGE_STOPS};
 use cupertino_ui_controls::{
     unobscured_insets, Navigation, NavigationStack, ScrollView, Scroller, Spacer, Stack,
     TextChange, TextField,
@@ -14,7 +14,7 @@ use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, ScrollState,
     SizeSpec,
 };
-use cupertino_ui_platform::{DecorationMode, Mods, PointerEvent, ScrollSource};
+use cupertino_ui_platform::{DecorationMode, Mods, PointerEvent, ScrollSource, WindowRequest};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_text::ContentPurpose;
 use cupertino_ui_theme::Color;
@@ -463,9 +463,10 @@ fn window_background() -> Color {
     )
 }
 
+/// Where the desktop lays no material under the row, the page's own soft veil sets the row off.
 #[test]
 fn over_a_raised_layer_the_page_shows_under_the_row_through_a_soft_edge() {
-    let mut h = Harness::<Behind>::with_layer(support::theme());
+    let mut h = Harness::<Behind>::with_layer_only(support::theme());
     h.resize(Size::new(600.0, 300.0));
     scrolled_by(&mut h, 30.0);
     let layers = h.rt.window_system().layers(h.window).unwrap();
@@ -505,7 +506,12 @@ fn over_a_raised_layer_the_page_shows_under_the_row_through_a_soft_edge() {
     let top = level(&h, 300, 2);
     let low = level(&h, 300, 48);
     assert!(top > 200 && top <= bg, "veiled at the top: {top}");
-    assert!(low < 40, "showing through near the bottom: {low}");
+    // the veil thins down the band but still holds most of its strength at the bottom
+    let thinned = (soft_edge_opacity(48.5, 52.0) * f64::from(bg)).round() as u8;
+    assert!(
+        low < top && low.abs_diff(thinned) <= 2,
+        "thinner near the bottom: {low}, near {thinned}"
+    );
     assert_eq!(level(&h, 300, 60), 0, "plain below the band");
     let mut last = top;
     for y in 2..52 {
@@ -532,11 +538,53 @@ fn over_a_raised_layer_the_page_shows_under_the_row_through_a_soft_edge() {
     );
 }
 
+/// Where the desktop lays the material, the row lays a band of it over the page once the page is scrolled, and the
+/// page leaves its own veil out and keeps only the hairline along the band's bottom.
+#[test]
+fn with_the_material_the_row_lays_its_band_and_the_page_keeps_only_its_hairline() {
+    let mut h = Harness::<Behind>::with_layer(support::theme());
+    h.resize(Size::new(600.0, 300.0));
+    let veiled = |h: &Harness<Behind>| {
+        fills(h).iter().any(
+            |(_, p)| matches!(p, Paint::Linear { stops, .. } if stops.len() == SOFT_EDGE_STOPS),
+        )
+    };
+    let band = |h: &Harness<Behind>| {
+        h.rt.window_system()
+            .requests(h.window)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|r| match r {
+                WindowRequest::Materials(regions) => Some(
+                    regions
+                        .iter()
+                        .any(|m| m.raised && m.rect.min_y() == 0.0 && m.rect.width() == 600.0),
+                ),
+                _ => None,
+            })
+            .unwrap_or(false)
+    };
+    assert!(
+        !band(&h),
+        "nothing lies under the row before the page scrolls"
+    );
+    scrolled_by(&mut h, 30.0);
+    assert!(band(&h), "the row lays its band once the page is scrolled");
+    assert!(!veiled(&h), "the band carries the veil");
+    assert!(
+        fills(&h).iter().any(|(r, _)| r.height() <= 1.0
+            && r.width() == 600.0
+            && (51.0..=52.0).contains(&r.min_y())),
+        "the hairline stays along the band's bottom"
+    );
+}
+
 /// In a window that is not active the row recedes into a solid band of the inactive title bar colour, in place of
 /// the veil: the content stops at the row as under a solid title bar, a little lighter than the window in dark.
 #[test]
 fn an_inactive_window_sets_its_row_on_the_inactive_title_bar_band() {
-    let mut h = Harness::<Behind>::with_layer(support::theme());
+    let mut h = Harness::<Behind>::with_layer_only(support::theme());
     h.resize(Size::new(600.0, 300.0));
     scrolled_by(&mut h, 30.0);
     h.send(cupertino_ui_platform::WindowEvent::Focus(false));

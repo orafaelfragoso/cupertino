@@ -182,14 +182,19 @@ fn it_opens_below_its_anchor_at_the_size_of_its_content() {
         (placed.anchor, placed.gravity),
         (PopupEdge::Bottom, PopupEdge::Bottom)
     );
-    assert_eq!(placed.offset, Point::new(0.0, 8.0));
+    assert_eq!(
+        placed.offset,
+        Point::new(0.0, 6.0),
+        "the pointer's tip 6 pt below"
+    );
     assert!(placed.grab);
     enter(&mut h);
     let first = h.rect("First");
     let second = h.rect("Second");
-    assert_eq!(first.origin, Point::new(12.0, 12.0), "12 pt padding");
-    assert_eq!(placed.size.height, second.max_y() + 12.0);
-    assert_eq!(placed.size.width, first.width().max(second.width()) + 24.0);
+    // the pointer stands 10.5 pt over the panel, whose padding is 2 pt at the top and 5 pt elsewhere
+    assert_eq!(first.origin, Point::new(5.0, 12.5));
+    assert_eq!(placed.size.height, second.max_y() + 5.0);
+    assert_eq!(placed.size.width, first.width().max(second.width()) + 10.0);
 }
 
 #[test]
@@ -284,11 +289,11 @@ fn content_taller_than_its_bound_scrolls_inside_the_padding() {
     enter(&mut h);
     let content = h.rect("content");
     let state = h.model().scroll;
-    // the harness configures the popup at the window's 400 pt width
-    assert_eq!(state.viewport, Size::new(376.0, 576.0));
+    // the harness configures the popup at the window's 400 pt width; the pointer row takes 10.5 pt of its height
+    assert_eq!(state.viewport, Size::new(390.0, 582.5));
     assert_eq!(state.content.height, content.height());
     assert!(content.height() > 1000.0);
-    assert_eq!(h.rect("First").origin, Point::new(12.0, 12.0));
+    assert_eq!(h.rect("First").origin, Point::new(5.0, 12.5));
     h.pointer(PointerEvent::Scroll {
         position: Point::new(30.0, 300.0),
         delta: Point::new(0.0, 30.0),
@@ -314,12 +319,12 @@ fn content_taller_than_its_bound_scrolls_inside_the_padding() {
         .expect("the scroller shows while it moves");
     assert_eq!(
         (thumb.origin.x, thumb.size.width),
-        (367.0, 6.0),
+        (381.0, 6.0),
         "along the trailing edge, 3 pt in"
     );
     assert_eq!(
         h.rect("First").origin,
-        Point::new(12.0, -18.0),
+        Point::new(5.0, -17.5),
         "moved by the offset"
     );
     h.pointer(PointerEvent::Scroll {
@@ -332,7 +337,7 @@ fn content_taller_than_its_bound_scrolls_inside_the_padding() {
     });
     assert_eq!(
         h.model().scroll.offset.y,
-        content.height() - 576.0,
+        content.height() - 582.5,
         "it stops at the end"
     );
 }

@@ -141,7 +141,7 @@ fn every_pixel_of_the_caret_is_covered_whole_or_not_at_all_at_fractional_scales(
         EDITOR.set(editor);
         let mut h = focused(top, scale);
         let (width, on) = pixels(&h);
-        at(&mut h, 500);
+        at(&mut h, 700);
         let (_, off) = pixels(&h);
         // the caret's pixels: what the blink changed
         let what = if editor { "an editor" } else { "a field" };
@@ -149,8 +149,8 @@ fn every_pixel_of_the_caret_is_covered_whole_or_not_at_all_at_fractional_scales(
         let (columns, _) = solid(width, &on, &off, &case);
         assert_eq!(
             columns,
-            scale.round().max(1.0) as usize,
-            "one point wide in whole pixels {case}"
+            (2.0 * scale).round().max(1.0) as usize,
+            "two points wide in whole pixels {case}"
         );
     }
     EDITOR.set(false);
@@ -162,7 +162,7 @@ fn every_pixel_of_the_compositions_underline_is_covered_whole_or_not_at_all_at_f
         EDITOR.set(editor);
         let mut h = focused(top, scale);
         // the caret in the off phase of its blink, so what the next frame changes is what the composition drew
-        at(&mut h, 500);
+        at(&mut h, 700);
         let (width, off) = pixels(&h);
         // spaces with no caret: what changes is the underline alone
         h.send(WindowEvent::Ime(ImeEvent::Done(ImeBatch {
@@ -200,7 +200,7 @@ fn every_pixel_of_the_selection_is_covered_whole_or_not_at_all_at_fractional_sca
         h.type_text("     ");
         assert_eq!(h.model(), "     ");
         // the caret in the off phase of its blink, so selecting changes the selection's pixels alone
-        at(&mut h, 2_500);
+        at(&mut h, 2_700);
         let (width, off) = pixels(&h);
         h.key_event(0x61, true, false, Mods::PRIMARY);
         h.key_event(0x61, false, false, Mods::PRIMARY);
@@ -235,7 +235,7 @@ fn the_blink_paints_no_node_again_and_only_the_overlay_changes() {
     let before = revisions(&h);
     assert!(before.contains_key(&overlay), "the caret shows");
     let frames = h.rt.window_system().frames(h.window).unwrap().len();
-    for (ms, shown) in [(500, false), (1000, true), (1500, false), (2000, true)] {
+    for (ms, shown) in [(700, false), (1000, true), (1700, false), (2000, true)] {
         at(&mut h, ms);
         let now = revisions(&h);
         assert!(
@@ -274,7 +274,7 @@ fn the_blink_damages_only_the_carets_pixels() {
             (b.max_x() * scale).ceil() as u32 + 1,
             (b.max_y() * scale).ceil() as u32 + 1,
         );
-        for ms in [500, 1000, 1500] {
+        for ms in [700, 1000, 1700] {
             at(&mut h, ms);
             let frames = h.rt.window_system().frames(h.window).unwrap();
             let frame = frames.last().unwrap();

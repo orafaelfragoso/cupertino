@@ -341,10 +341,11 @@ fn deactivating_the_window_or_escape_during_the_delay_cancels_the_tip() {
     at(&mut h, 900);
     assert!(h.model().said.is_empty());
 
+    // the window's colours cross back to active over the frames that follow
     h.send(WindowEvent::Focus(true));
-    at(&mut h, 1000);
+    at(&mut h, 1150);
     h.tap(ESCAPE);
-    at(&mut h, 1600);
+    at(&mut h, 1750);
     assert!(h.model().said.is_empty(), "{:?}", h.model().said);
 }
 

@@ -17,6 +17,8 @@ use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_platform::{PopupEdge, TouchEvent, WindowEvent, WindowId, WindowStates};
 use support::{window, Harness};
 
+/// Longer than a chosen row flashes before its choice is sent, in milliseconds.
+const FLASH_MS: u64 = support::MENU_FLASH_NS / MS;
 const MS: u64 = 1_000_000;
 
 const SIZES: [&str; 3] = ["Small", "Medium", "Large"];
@@ -447,6 +449,7 @@ fn a_tap_on_a_pop_up_button_opens_its_menu_and_leaves_it_open_and_a_tap_on_an_op
     );
     let large = row_point(&h, "sizes", 2, 0.5);
     f.tap(&mut h, 2, large);
+    f.wait(&mut h, FLASH_MS);
     assert_eq!(
         (h.model().sizes_chosen, h.model().size, popup(&h, "sizes")),
         (1, 2, None),
@@ -469,16 +472,18 @@ fn a_finger_slid_from_a_pop_up_button_onto_an_option_chooses_it_and_one_held_sti
         "Large is highlighted under the finger"
     );
     f.lift(&mut h, 1);
+    f.wait(&mut h, FLASH_MS);
     assert_eq!(
         (h.model().sizes_chosen, h.model().size, popup(&h, "sizes")),
         (1, 2, None),
-        "slid onto Large, the lift chooses it at once"
+        "slid onto Large, the lift chooses it"
     );
 
     // the menu opens over the button with the chosen option under the finger
     f.put_down(&mut h, 2, button);
     f.wait(&mut h, held());
     f.lift(&mut h, 2);
+    f.wait(&mut h, FLASH_MS);
     assert_eq!(
         (h.model().sizes_chosen, h.model().size, popup(&h, "sizes")),
         (2, 2, None),
@@ -517,6 +522,7 @@ fn a_finger_resting_on_a_context_region_opens_its_menu_and_one_slid_onto_an_item
     f.glide(&mut h, 1, copy, 6);
     assert_eq!(focused(&h, "menu"), Some(3), "Copy is highlighted");
     f.lift(&mut h, 1);
+    f.wait(&mut h, FLASH_MS);
     assert_eq!(h.model().chosen, ["Copy"], "chosen once");
     assert_eq!((h.model().closes, popup(&h, "menu")), (1, None));
     assert_eq!(
@@ -629,6 +635,7 @@ fn a_finger_resting_on_a_submenu_row_opens_it_and_lifted_on_its_item_chooses_it(
     f.glide(&mut h, 1, kind, 6);
     assert_eq!(focused(&h, "menu/1"), Some(1), "Kind is highlighted");
     f.lift(&mut h, 1);
+    f.wait(&mut h, FLASH_MS);
     assert_eq!(h.model().chosen, ["Kind"], "chosen once");
     assert_eq!((popup(&h, "menu"), popup(&h, "menu/1")), (None, None));
     assert_eq!(h.model().pressed, 0);
@@ -653,6 +660,7 @@ fn a_finger_put_down_in_a_menu_slides_into_its_submenu_and_chooses_there() {
     let name = row_point(&h, "menu/1", 0, 0.5);
     f.glide(&mut h, 2, name, 4);
     f.lift(&mut h, 2);
+    f.wait(&mut h, FLASH_MS);
     assert_eq!(h.model().chosen, ["Name"]);
     assert_eq!((popup(&h, "menu"), popup(&h, "menu/1")), (None, None));
 }
@@ -686,6 +694,7 @@ fn a_second_finger_neither_opens_nor_chooses_while_the_first_holds_the_menu() {
     let large = row_point(&h, "sizes", 2, 0.5);
     f.glide(&mut h, 1, large, 4);
     f.lift(&mut h, 1);
+    f.wait(&mut h, FLASH_MS);
     assert_eq!((h.model().sizes_chosen, h.model().size), (1, 2));
 }
 
@@ -709,6 +718,7 @@ fn a_cancelled_touch_ends_with_nothing_chosen_and_the_menu_answers_the_next() {
     );
     let medium = row_point(&h, "sizes", 1, 0.5);
     f.tap(&mut h, 2, medium);
+    f.wait(&mut h, FLASH_MS);
     assert_eq!(
         (h.model().sizes_chosen, h.model().size, popup(&h, "sizes")),
         (1, 1, None),

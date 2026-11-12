@@ -25,6 +25,8 @@ const RIGHT: u32 = 0xff53;
 const ESCAPE: u32 = 0xff1b;
 const MENU: u32 = 0xff67;
 const TAB: u32 = 0xff09;
+/// Longer than a chosen row flashes before its choice is sent, in milliseconds.
+const FLASH_MS: u64 = support::MENU_FLASH_NS / MS;
 const MS: u64 = 1_000_000;
 
 const SIZES: [&str; 3] = ["Small", "Medium", "Large"];
@@ -488,6 +490,7 @@ fn a_secondary_press_dragged_onto_an_item_chooses_it_once_and_closes_the_menu() 
     ptr.glide(&mut h, copy, 8, 16);
     assert_eq!(focused(&h, "menu"), Some(5));
     ptr.button(&mut h, MouseButton::Right, false);
+    ptr.wait(&mut h, FLASH_MS);
     assert_eq!(h.model().chosen, ["Copy"], "chosen once");
     assert_eq!(h.model().closes, 1);
     assert_eq!(popup(&h, "menu"), None);
@@ -502,6 +505,7 @@ fn a_quick_click_leaves_a_menu_open_and_a_held_or_dragged_press_on_a_pop_up_butt
     ptr.glide(&mut h, copy, 4, 16);
     ptr.button(&mut h, MouseButton::Left, true);
     ptr.button(&mut h, MouseButton::Left, false);
+    ptr.wait(&mut h, FLASH_MS);
     assert_eq!(h.model().chosen, ["Copy"], "then a click chooses");
 
     // the pop-up button's menu opens over it, the current option under the pointer
@@ -526,6 +530,7 @@ fn a_quick_click_leaves_a_menu_open_and_a_held_or_dragged_press_on_a_pop_up_butt
     ptr.move_to(&mut h, button);
     ptr.wait(&mut h, (TRACKING_INTERVAL * 1000.0) as u64 + 50);
     ptr.button(&mut h, MouseButton::Left, false);
+    ptr.wait(&mut h, FLASH_MS);
     assert_eq!(
         (h.model().sizes_chosen, h.model().size, popup(&h, "sizes")),
         (1, 0, None),
@@ -537,10 +542,11 @@ fn a_quick_click_leaves_a_menu_open_and_a_held_or_dragged_press_on_a_pop_up_butt
     let large = row_point(&h, "sizes", 2, 0.5);
     ptr.glide(&mut h, large, 4, 16);
     ptr.button(&mut h, MouseButton::Left, false);
+    ptr.wait(&mut h, FLASH_MS);
     assert_eq!(
         (h.model().sizes_chosen, h.model().size, popup(&h, "sizes")),
         (2, 2, None),
-        "dragged onto another option, at once"
+        "dragged onto another option"
     );
 }
 
@@ -779,6 +785,7 @@ fn a_context_menu_opened_with_a_row_under_the_pointer_chooses_it_only_after_the_
         0,
         (TRACKING_INTERVAL * 1000.0) as u64 + 10,
     );
+    Pointer::new(&h).wait(&mut h, FLASH_MS);
     assert_eq!(h.model().chosen, ["Copy"], "held, the release chooses it");
     assert_eq!(popup(&h, "menu"), None);
 }
@@ -795,6 +802,7 @@ fn press_and_hold_counts_from_the_press_however_late_the_menu_opens() {
         (TRACKING_INTERVAL * 1000.0) as u64 + 10,
         30,
     );
+    Pointer::new(&h).wait(&mut h, FLASH_MS);
     assert_eq!(h.model().chosen, ["Copy"], "held from the press");
     assert_eq!(popup(&h, "menu"), None);
 }
@@ -880,6 +888,7 @@ fn drag_into_a_submenu(reduce: bool) {
     ptr.glide(&mut h, size, 6, 16);
     assert_eq!(focused(&h, "menu/1"), Some(3), "Size is highlighted");
     ptr.button(&mut h, MouseButton::Right, false);
+    ptr.wait(&mut h, FLASH_MS);
     assert_eq!(h.model().chosen, ["Size"], "chosen once");
     assert_eq!((popup(&h, "menu"), popup(&h, "menu/1")), (None, None));
 }

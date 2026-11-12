@@ -217,6 +217,24 @@ fn wheel(h: &mut Harness<Scrolled>, at: Point, dy: f64, source: ScrollSource, st
 }
 
 /// The overlay thumb's rect, from the window's display list, if it paints.
+/// The overlay thumb at any width, resting or widened by the pointer on it.
+fn any_thumb(h: &Harness<Scrolled>) -> Option<(Rect, f32)> {
+    h.snapshot()
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| n.ops.iter())
+        .find_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::RoundedRect { rect, radius },
+                paint: cupertino_ui_render::Paint::Solid(color),
+            } if (6.0..=10.0).contains(&rect.size.width) && *radius == rect.size.width / 2.0 => {
+                Some((*rect, color.a))
+            }
+            _ => None,
+        })
+}
+
 fn thumb(h: &Harness<Scrolled>) -> Option<(Rect, f32)> {
     h.snapshot()
         .display_list
@@ -346,13 +364,21 @@ fn a_gesture_stays_with_the_view_that_took_it_and_a_new_one_moves_the_outer_view
     assert_eq!(h.model().outer.offset.y, 50.0, "a new burst passes on");
 }
 
+/// The thumb flashes for a second when the view first has something to scroll; a scroll shows it again for half a
+/// second, then it fades over a quarter of one. While hidden, its strip lets clicks through.
 #[test]
-fn an_overlay_thumb_shows_on_scroll_fades_after_a_second_and_lets_clicks_through_while_hidden() {
+fn an_overlay_thumb_flashes_on_appearing_shows_on_scroll_fades_after_half_a_second_and_lets_clicks_through_while_hidden(
+) {
     let mut h = harness(Setup {
         buttons: true,
         ..Setup::default()
     });
-    assert_eq!(thumb(&h), None);
+    assert!(thumb(&h).is_some(), "the thumb flashes as the view appears");
+    h.clock().advance_to(Timestamp(1_300 * MS)).unwrap();
+    step(&mut h);
+    next_frame(&mut h);
+    h.settle();
+    assert_eq!(thumb(&h), None, "a second and a fade later it is gone");
     h.click(point(196.0, 12.0));
     assert_eq!(
         h.model().pressed,
@@ -367,13 +393,13 @@ fn an_overlay_thumb_shows_on_scroll_fades_after_a_second_and_lets_clicks_through
     assert_eq!(rect, Rect::new(8.0, 30.0, 6.0, 40.0));
     let full = alpha;
 
-    h.clock().advance_to(Timestamp(1_150 * MS)).unwrap();
+    h.clock().advance_to(Timestamp(1_925 * MS)).unwrap();
     step(&mut h);
     next_frame(&mut h);
     let (_, fading) = thumb(&h).expect("half way through the fade");
     assert!((fading - full * 0.5).abs() < 0.01, "{fading} of {full}");
 
-    h.clock().advance_to(Timestamp(1_400 * MS)).unwrap();
+    h.clock().advance_to(Timestamp(2_200 * MS)).unwrap();
     next_frame(&mut h);
     h.settle();
     assert_eq!(thumb(&h), None);
@@ -937,20 +963,21 @@ fn an_overlay_thumb_stays_while_the_pointer_is_on_it_and_fades_after_it_leaves()
     });
     h.clock().advance_to(Timestamp(3_000 * MS)).unwrap();
     h.settle();
-    let (_, alpha) = thumb(&h).expect("held by the pointer");
+    let (rect, alpha) = any_thumb(&h).expect("held by the pointer");
     assert!(alpha > 0.0);
+    assert_eq!(rect.width(), 10.0, "widened under the pointer");
 
-    // off the thumb: shown a second longer, then it fades
+    // off the thumb: shown a little longer, then it fades
     h.pointer(PointerEvent::Motion {
         position: point(50.0, 50.0),
     });
-    h.clock().advance_to(Timestamp(3_900 * MS)).unwrap();
+    h.clock().advance_to(Timestamp(3_200 * MS)).unwrap();
     h.settle();
     assert!(
         thumb(&h).is_some(),
-        "shown for a second after the pointer left"
+        "shown for a moment after the pointer left, narrow again"
     );
-    h.clock().advance_to(Timestamp(4_400 * MS)).unwrap();
+    h.clock().advance_to(Timestamp(3_600 * MS)).unwrap();
     step(&mut h);
     next_frame(&mut h);
     h.settle();
@@ -974,7 +1001,7 @@ fn dragging_an_overlay_thumb_keeps_it_shown_until_the_release() {
     assert!((y - 105.0).abs() < 0.5, "{y}");
     h.clock().advance_to(Timestamp(5_000 * MS)).unwrap();
     h.settle();
-    assert!(thumb(&h).is_some(), "held while dragged");
+    assert!(any_thumb(&h).is_some(), "held while dragged");
     h.button(point(191.0, 54.0), false);
     h.pointer(PointerEvent::Motion {
         position: point(50.0, 50.0),
@@ -986,6 +1013,6 @@ fn dragging_an_overlay_thumb_keeps_it_shown_until_the_release() {
     assert_eq!(
         thumb(&h),
         None,
-        "gone a second and a fade after the release"
+        "gone a moment and a fade after the release"
     );
 }

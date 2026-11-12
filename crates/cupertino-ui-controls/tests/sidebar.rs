@@ -371,9 +371,17 @@ fn device_rect(h: &Harness<Devices>, name: &str) -> Rect {
         .rect
 }
 
+/// Lets the scroll bar the list shows as it first appears, taller than the window, fade: until then its strip at the
+/// trailing edge takes the presses.
+fn flash_over(h: &mut Harness<Devices>) {
+    h.clock().advance_by(1_300_000_000);
+    h.settle();
+}
+
 #[test]
 fn a_press_at_the_trailing_edge_ejects_without_selecting_and_a_press_on_the_name_selects() {
     let mut h = Harness::<Devices>::animated();
+    flash_over(&mut h);
     let r = device_rect(&h, "Backup");
     let y = r.min_y() + r.height() / 2.0;
     h.click(Point::new(r.max_x() - 11.0, y));
@@ -393,6 +401,7 @@ fn a_press_at_the_trailing_edge_ejects_without_selecting_and_a_press_on_the_name
 #[test]
 fn a_busy_row_has_no_eject_button_and_says_it_is_busy() {
     let mut h = Harness::<Devices>::animated();
+    flash_over(&mut h);
     let r = device_rect(&h, "Card");
     h.click(Point::new(r.max_x() - 11.0, r.min_y() + r.height() / 2.0));
     assert_eq!(h.model().1, [Device::Select(1)]);
@@ -663,7 +672,7 @@ fn the_neutral_look_fills_the_selected_row_grey_and_tints_symbols_by_section() {
         Some(&PaintOp::Fill {
             shape: Shape::RoundedRect {
                 rect: Rect::new(10.0, 0.0, 180.0, 32.0),
-                radius: 10.0,
+                radius: 8.0,
             },
             paint: Paint::Solid(grey),
         }),

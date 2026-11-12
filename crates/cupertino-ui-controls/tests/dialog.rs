@@ -160,8 +160,8 @@ fn button_rect<A: Application>(h: &Harness<A>, name: &str) -> cupertino_geometry
 }
 
 /// Three answers are stacked as full-width capsules, the default on top and the given order reversed below it; two
-/// short ones go side by side at equal widths in their given order, the default trailing. The alert hangs under the
-/// toolbar row, centred across the window.
+/// short ones go side by side at equal widths in their given order, the default trailing. The alert hangs 24 pt below
+/// the window's top, centred across the window.
 #[test]
 fn an_alert_stacks_three_answers_default_first_and_puts_two_short_ones_side_by_side() {
     let mut h = opened::<false, true>();
@@ -191,7 +191,7 @@ fn an_alert_stacks_three_answers_default_first_and_puts_two_short_ones_side_by_s
         .find(|(_, n)| n.role == Role::AlertDialog)
         .map(|(_, n)| n.bounds)
         .unwrap();
-    assert_eq!((alert.min_y(), alert.width()), (52.0, 260.0));
+    assert_eq!((alert.min_y(), alert.width()), (24.0, 260.0));
     assert_eq!(alert.max_y() - dont.max_y(), 16.0, "16 pt under the last");
 
     let mut two = opened::<false, false>();

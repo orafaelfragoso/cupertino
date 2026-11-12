@@ -12,7 +12,7 @@ use crate::paint::{raised_nodes, same_environment, PaintInput, Painter};
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
 use crate::scroll::{geometry_events, reveal_events};
-use crate::semantics::{build, composing, diff, dismissible, protected};
+use crate::semantics::{build, composing, diff, dismissible, protected, text_input};
 use crate::task::Executor;
 use crate::tree::Tree;
 use crate::{
@@ -1238,6 +1238,21 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     if let (true, Some(timing)) = (scroll, &mut self.scroll_timing) {
                         timing.handled(w.id, time, self.options.clock.now());
                     }
+                    if let PointerEvent::Button {
+                        pressed: true,
+                        position,
+                        ..
+                    } = event
+                    {
+                        Self::press_away_from_text(
+                            &mut self.tree,
+                            w,
+                            root,
+                            position,
+                            &mut effects,
+                            now,
+                        );
+                    }
                 }
             }
             WindowEvent::Touch(event, time) => self.touch(i, event, time, now, &mut effects),
@@ -1473,6 +1488,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             effects.messages.push(message);
             return;
         }
+        if escape {
+            Self::escape_from_text(&mut self.tree, w, effects, now);
+            return;
+        }
         if key.keysym == TAB || key.keysym == LEFT_TAB {
             let forward =
                 key.keysym == TAB && !key.mods.contains(cupertino_ui_platform::Mods::SHIFT);
@@ -1481,6 +1500,58 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             let rest = Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
             effects.absorb(rest);
         }
+    }
+
+    /// A press at `position` that lands outside the focused text input, where no node took the focus, ends its editing:
+    /// the window keeps no focus, so typing goes nowhere until a field is chosen again.
+    fn press_away_from_text(
+        tree: &mut Tree<A::Message>,
+        w: &mut WindowState<A::Message>,
+        root: NodeId,
+        position: Point,
+        effects: &mut Effects<A::Message>,
+        now: Timestamp,
+    ) {
+        if effects.focus.is_some() {
+            return;
+        }
+        let Some(node) = w
+            .focus
+            .node()
+            .filter(|&n| tree.contains(n) && text_input(tree, n))
+        else {
+            return;
+        };
+        let path = hit_test(tree, root, &w.geometry, position).unwrap_or_default();
+        if path.contains(&node) {
+            return;
+        }
+        let change = w.focus.set(tree, None, false);
+        let mut messages = VecDeque::new();
+        let rest = Self::focus_events(tree, w, change, &mut messages, now);
+        effects.messages.extend(messages);
+        effects.absorb(rest);
+    }
+
+    /// Escape that nothing took, in a focused text input, ends its editing as a press away from it does.
+    fn escape_from_text(
+        tree: &mut Tree<A::Message>,
+        w: &mut WindowState<A::Message>,
+        effects: &mut Effects<A::Message>,
+        now: Timestamp,
+    ) {
+        if !w
+            .focus
+            .node()
+            .is_some_and(|n| tree.contains(n) && text_input(tree, n))
+        {
+            return;
+        }
+        let change = w.focus.set(tree, None, false);
+        let mut messages = VecDeque::new();
+        let rest = Self::focus_events(tree, w, change, &mut messages, now);
+        effects.messages.extend(messages);
+        effects.absorb(rest);
     }
 
     /// Moves the focus a roving item asked for before the next frame when the item is already a Tab stop, so a key

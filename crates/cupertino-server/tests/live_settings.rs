@@ -329,6 +329,7 @@ fn the_machines_accessibility_is_an_accounts_without_its_own_file_and_follows_it
         !h.state.display_options().reduce_motion,
         "a change applies at once"
     );
+    cupertino_server::store_later::flush();
     assert!(!own.exists(), "nothing is written for the account");
 }
 
@@ -474,6 +475,8 @@ fn the_setters_are_served_on_the_session_bus() {
         Some("on")
     );
     assert!(h.state.display_options().reduce_transparency);
+    // the store runs on the settings writer's thread after the reply: wait for it
+    cupertino_server::store_later::flush();
     assert!(
         Path::new(&h.path("compositor.json")).exists(),
         "the appearance was stored"

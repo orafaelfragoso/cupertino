@@ -24,6 +24,9 @@ use cupertino_filepicker::Mode;
 
 /// A level slider still this long, in seconds, has ended its drag: the live readings show again.
 const LEVEL_SETTLE: f64 = 0.5;
+/// While a slider without stops is dragged, its value is applied at most this often, in seconds, so what it sets
+/// follows the knob; the value it is let go at is applied at once.
+const SLIDE_APPLY_EVERY: f64 = 0.15;
 
 pub(crate) type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -137,11 +140,14 @@ pub(crate) struct LevelDrag {
     value: f64,
 }
 
-/// A slider without stops being dragged: it commits once, when it has been still for [`LEVEL_SETTLE`].
+/// A slider without stops being dragged: it commits every [`SLIDE_APPLY_EVERY`] while it moves, and its last value
+/// when it is let go or has been still for [`LEVEL_SETTLE`].
 pub(crate) struct SliderDrag {
     id: ControlId,
     value: f64,
     moved: f64,
+    /// The value last committed and when.
+    applied: Option<(f64, f64)>,
 }
 
 pub struct State {
@@ -1177,22 +1183,60 @@ impl State {
             .take()
             .filter(|drag| drag.id != id)
             .map(|drag| (drag.id, drag.value));
+        let applied = self
+            .slide
+            .as_ref()
+            .filter(|drag| drag.id == id)
+            .and_then(|drag| drag.applied);
         self.slide = Some(SliderDrag {
             id,
             value,
             moved: now,
+            applied,
         });
         ended
     }
 
-    /// The slider's timer at `now`: the drag to commit once it has settled, and whether a drag still waits.
+    /// The slider's timer at `now`: the value to commit (a moved knob every [`SLIDE_APPLY_EVERY`], the last value once
+    /// it has settled), and whether a drag still waits.
     pub(crate) fn slide_tick(&mut self, now: f64) -> (Option<(ControlId, f64)>, bool) {
-        match self.slide.take() {
-            Some(drag) if now - drag.moved < LEVEL_SETTLE => {
-                self.slide = Some(drag);
-                (None, true)
+        let Some(mut drag) = self.slide.take() else {
+            return (None, false);
+        };
+        let unapplied = drag.applied.is_none_or(|(v, _)| v != drag.value);
+        if now - drag.moved >= LEVEL_SETTLE {
+            return (unapplied.then_some((drag.id, drag.value)), false);
+        }
+        let due = drag
+            .applied
+            .is_none_or(|(_, at)| now - at >= SLIDE_APPLY_EVERY);
+        let commit = (unapplied && due).then(|| {
+            drag.applied = Some((drag.value, now));
+            (drag.id, drag.value)
+        });
+        self.slide = Some(drag);
+        (commit, true)
+    }
+
+    /// The slider `id` was let go at `value`: its drag ends, and the value to commit when it was not committed yet.
+    pub(crate) fn slide_ended(&mut self, id: ControlId, value: f64) -> Option<(ControlId, f64)> {
+        let drag = self.slide.take();
+        match drag {
+            Some(drag) if drag.id != id => {
+                // another slider's drag, which this one ends; this one's value goes in after it
+                self.slide = Some(SliderDrag {
+                    id,
+                    value,
+                    moved: f64::NEG_INFINITY,
+                    applied: None,
+                });
+                Some((drag.id, drag.value))
             }
-            drag => (drag.map(|d| (d.id, d.value)), false),
+            Some(SliderDrag {
+                applied: Some((v, _)),
+                ..
+            }) if v == value => None,
+            _ => Some((id, value)),
         }
     }
 

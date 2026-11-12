@@ -400,7 +400,9 @@ fn slider_column(row: &Row, name: &str, width: f64, titled: bool) -> Element<Mes
             Some(n) => Message::Commit(id, Value::Index(Control::nearest_stop(v, n))),
             None => Message::Slide(id, v),
         })),
-        on_end: None,
+        on_end: stops
+            .is_none()
+            .then(|| Box::new(move |v| Message::SlideEnd(id, v)) as Box<dyn Fn(f64) -> Message>),
     })
     .key(control_key(id));
     let caption = |content: &str| line(content, TextRole::Caption, false);
@@ -949,6 +951,7 @@ mod tests {
             screen_sharing: Default::default(),
             desktop_control: Default::default(),
             notifications: Default::default(),
+            launcher: Default::default(),
         }
     }
 
@@ -1003,6 +1006,7 @@ mod tests {
             cupertino_defaults::notifications::AppOverride {
                 show_on_lock_screen: Some(false),
                 show_previews: None,
+                ..cupertino_defaults::notifications::AppOverride::default()
             },
         );
         assert_eq!(previews_names(&plain, &live(both.to_vec())), expected);
@@ -1032,6 +1036,7 @@ mod tests {
             screen_sharing: Default::default(),
             desktop_control: Default::default(),
             notifications: Default::default(),
+            launcher: Default::default(),
         };
         let session = crate::panes::Session {
             dark: false,

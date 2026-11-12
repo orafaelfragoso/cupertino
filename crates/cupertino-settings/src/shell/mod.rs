@@ -243,6 +243,8 @@ pub enum Message {
     LevelTick,
     /// The slider without stops of `ControlId` moved, committed once it settles.
     Slide(ControlId, f64),
+    /// A slider without stops was let go, or moved by a key.
+    SlideEnd(ControlId, f64),
     SlideTick,
 }
 
@@ -407,6 +409,15 @@ impl Shell {
                 }
                 if started {
                     return Ok(vec![after(SLIDE_TICK, Message::SlideTick)]);
+                }
+            }
+            Message::SlideEnd(id, value) => {
+                if let Some((id, v)) = self.state.slide_ended(id, value) {
+                    self.state.commit(id, Value::Fraction(v))?;
+                }
+                // another slider's drag that this one ended leaves this one's value for the timer
+                if self.state.slide.is_some() {
+                    return Ok(vec![after(Duration::ZERO, Message::SlideTick)]);
                 }
             }
             Message::SlideTick => {
@@ -977,6 +988,7 @@ mod tests {
             desktop_control: Some(dir.join("desktop-control.conf")),
             // shown as installed; Settings never starts it
             screen_reader: Some(std::path::PathBuf::from("/usr/bin/orca")),
+            ..Paths::default()
         }
     }
 
@@ -1334,7 +1346,7 @@ mod tests {
     }
 
     #[test]
-    fn a_slider_without_stops_writes_once_it_settles() {
+    fn a_slider_without_stops_moved_by_a_key_writes_at_once() {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
@@ -1350,10 +1362,13 @@ mod tests {
                 .dock
                 .tile_size
         };
-        assert_eq!(stored(), None, "nothing is written while the knob moves");
-        std::thread::sleep(Duration::from_secs_f64(0.8));
+        assert_eq!(
+            stored(),
+            Some(mapping::dock_px(1.0)),
+            "a key ends the change: written without waiting for the knob to settle"
+        );
         settle(&mut driver, window);
-        assert_eq!(stored(), Some(mapping::dock_px(1.0)));
+        assert_eq!(stored(), Some(mapping::dock_px(1.0)), "and once");
     }
 
     #[test]

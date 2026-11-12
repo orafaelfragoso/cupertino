@@ -3227,6 +3227,7 @@ mod tests {
             screen_sharing: crate::screen_sharing::Grants::default(),
             desktop_control: crate::desktop_control::Answers::default(),
             notifications: cupertino_defaults::notifications::NotificationSettings::default(),
+            launcher: Default::default(),
         }
     }
 
@@ -3316,6 +3317,8 @@ mod tests {
                 physical_mm: None,
                 logical: Some((2048, 1152)),
                 rotated: false,
+                position: None,
+                refresh_rates: Vec::new(),
             }]),
             brightness: Reading::Unavailable("This display has no brightness control".into()),
             ..Live::default()
@@ -3372,6 +3375,8 @@ mod tests {
             physical_mm: Some((302, 196)),
             logical: Some(logical),
             rotated: false,
+            position: None,
+            refresh_rates: Vec::new(),
         }
     }
 
@@ -3439,6 +3444,8 @@ mod tests {
             physical_mm: Some((597, 336)),
             logical: Some((1440, 2560)),
             rotated: true,
+            position: None,
+            refresh_rates: Vec::new(),
         };
         let live = displays(vec![upright.clone()]);
         let list = upright.catalogue();
@@ -3572,6 +3579,8 @@ mod tests {
             physical_mm: Some((597, 336)),
             logical: Some((2560, 1440)),
             rotated: false,
+            position: None,
+            refresh_rates: Vec::new(),
         }]);
         let Control::Popup { choices, selected } = size_row(&external).unwrap().control else {
             panic!("a popup");
@@ -3655,6 +3664,7 @@ mod tests {
             apps: Vec::new(),
             notifying_apps: vec![("org.example.Mail".into(), "Mail".into())],
             screen_reader_installed: true,
+            ..Live::default()
         };
         for pane in crate::pane::PANES.iter().map(|p| p.id) {
             for r in sections(pane, &unset(), LIGHT, &live)
@@ -3683,7 +3693,8 @@ mod tests {
                         Value::Fraction(0.5),
                         Value::Fraction(1.0),
                     ],
-                    Control::Text { .. } => Vec::new(),
+                    Control::Swatches { items, .. } => (0..items.len()).map(Value::Index).collect(),
+                    Control::Text { .. } | Control::Chart(_) | Control::Meter { .. } => Vec::new(),
                 };
                 for value in values {
                     let effects = change(r.id, value, &mut unset(), &live);
@@ -4501,6 +4512,7 @@ mod tests {
             ],
             joining: None,
             failure: None,
+            ..Wifi::default()
         };
         let live = Live {
             wifi: Reading::Ready(wifi),
@@ -5038,6 +5050,7 @@ mod tests {
             AppOverride {
                 show_on_lock_screen: Some(false),
                 show_previews: None,
+                ..AppOverride::default()
             },
         ));
         let live = Live {

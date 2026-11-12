@@ -122,7 +122,11 @@ impl Application for FormApp {
                         .map(Block::Section)
                         .collect::<Vec<_>>(),
                     sections,
-                    None,
+                    &form::View {
+                        open: None,
+                        icons: &std::collections::HashMap::new(),
+                        thumbnails: &std::collections::HashMap::new(),
+                    },
                 )],
             }),
             popup: None,

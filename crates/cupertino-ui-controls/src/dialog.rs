@@ -68,10 +68,13 @@ const ALERT_HANG: f64 = 24.0;
 /// An alert's pop-in. The panel starts at [`POP_START`] of its size, grows to `1 + POP_OVERSHOOT` of it at
 /// [`POP_PEAK`] of the way through [`POP_DURATION`] and settles back to its size by the end; it fades in over
 /// [`POP_PANEL_FADE`] seconds, and its content fades in between [`POP_CONTENT_DELAY`] and the same again later.
-const POP_DURATION: f64 = 0.26;
+const POP_DURATION: f64 = 0.31;
 const POP_START: f64 = 0.07;
-const POP_OVERSHOOT: f64 = 0.2;
-const POP_PEAK: f64 = 0.52;
+const POP_OVERSHOOT: f64 = 0.18;
+const POP_PEAK: f64 = 0.5;
+/// How sharply the pop-in's rise eases in (the exponent of the sine it follows) and how its settling creeps in.
+const POP_RISE_EXPONENT: f64 = 1.7;
+const POP_SETTLE_EXPONENT: f64 = 1.35;
 const POP_PANEL_FADE: f64 = 0.1;
 const POP_CONTENT_DELAY: f64 = 0.06;
 const POP_CONTENT_FADE: f64 = 0.08;
@@ -738,10 +741,14 @@ fn pop_scale(t: f64) -> f64 {
         1.0
     } else if t < peak {
         let u = (t / peak).clamp(0.0, 1.0);
-        POP_START + (1.0 + POP_OVERSHOOT - POP_START) * u.powf(1.4)
+        POP_START
+            + (1.0 + POP_OVERSHOOT - POP_START)
+                * (u * std::f64::consts::FRAC_PI_2)
+                    .sin()
+                    .powf(POP_RISE_EXPONENT)
     } else {
         let u = ((t - peak) / (POP_DURATION - peak)).clamp(0.0, 1.0);
-        1.0 + POP_OVERSHOOT * (1.0 - u).powi(3)
+        1.0 + POP_OVERSHOOT * (1.0 - u).powf(POP_SETTLE_EXPONENT)
     }
 }
 

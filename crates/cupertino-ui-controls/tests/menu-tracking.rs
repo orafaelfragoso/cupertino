@@ -7,9 +7,7 @@
 use crate::support;
 
 use cupertino_geometry::{Insets, Point, Rect};
-use cupertino_menu_model::tracking::{
-    SUBMENU_AIM_PAUSE, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY, TRACKING_INTERVAL,
-};
+use cupertino_menu_model::tracking::{SUBMENU_AIM_PAUSE, SUBMENU_OPEN_DELAY, TRACKING_INTERVAL};
 use cupertino_ui_controls::{
     Button, ButtonRole, ButtonStyle, ContextMenu, Menu, MenuAnchor, MenuItem, PopUpButton, Stack,
 };
@@ -631,11 +629,119 @@ fn a_rest_on_the_way_gives_the_submenu_up_to_the_row_under_the_pointer() {
     let rest = Point::new(from.x + 30.0, group.y);
     ptr.glide(&mut h, rest, 4, 16);
     assert_eq!(focused(&h, "menu"), Some(0), "heading into the submenu");
-    ptr.wait(&mut h, (SUBMENU_AIM_PAUSE * 1000.0) as u64 + 10);
+    ptr.wait(&mut h, (SUBMENU_AIM_PAUSE * 1000.0) as u64 - 20);
+    assert_eq!(
+        focused(&h, "menu"),
+        Some(0),
+        "a rest shorter than the grace"
+    );
+    assert_eq!(h.model().submenus, [0], "keeps Sort By's submenu");
+    ptr.wait(&mut h, 30);
     assert_eq!(focused(&h, "menu"), Some(2), "resting, Group By takes over");
-    assert_eq!(h.model().submenus, [0], "until its own delay");
+    assert!(
+        h.model().submenus.is_empty(),
+        "and Sort By's closes with it"
+    );
     ptr.wait(&mut h, (SUBMENU_OPEN_DELAY * 1000.0) as u64 + 10);
-    assert_eq!(h.model().submenus, [2], "its submenu replaces Sort By's");
+    assert_eq!(h.model().submenus, [2], "Group By's opens after its delay");
+}
+
+#[test]
+fn a_submenu_opens_a_short_dwell_after_its_row_lights() {
+    let mut h = Harness::<Browser>::new();
+    let mut ptr = Pointer::new(&h);
+    context(&mut h, &mut ptr);
+    let refresh = row_point(&h, "menu", 1, 0.5);
+    ptr.move_to(&mut h, refresh);
+    ptr.wait(&mut h, 500);
+    let sort_by = row_point(&h, "menu", 0, 0.5);
+    ptr.move_to(&mut h, sort_by);
+    assert_eq!(focused(&h, "menu"), Some(0), "the row lights at once");
+    ptr.wait(&mut h, (SUBMENU_OPEN_DELAY * 1000.0) as u64 - 10);
+    assert!(h.model().submenus.is_empty(), "not before the dwell");
+    ptr.wait(&mut h, 20);
+    assert_eq!(h.model().submenus, [0], "open {SUBMENU_OPEN_DELAY} s after");
+    assert!(popup(&h, "menu/1").is_some());
+}
+
+#[test]
+fn a_row_crossed_on_the_way_elsewhere_opens_no_submenu() {
+    let mut h = Harness::<Browser>::new();
+    let mut ptr = Pointer::new(&h);
+    context(&mut h, &mut ptr);
+    let sort_by = row_point(&h, "menu", 0, 0.5);
+    ptr.move_to(&mut h, sort_by);
+    ptr.wait(&mut h, 50);
+    let reload = row_point(&h, "menu", 3, 0.5);
+    ptr.glide(&mut h, reload, 6, 16);
+    ptr.wait(&mut h, 1000);
+    assert!(
+        h.model().submenus.is_empty(),
+        "Sort By and Group By crossed"
+    );
+    assert_eq!(focused(&h, "menu"), Some(3));
+}
+
+#[test]
+fn moving_off_the_way_onto_another_row_closes_the_submenu_and_lights_the_row_at_once() {
+    let mut h = Harness::<Browser>::new();
+    let mut ptr = Pointer::new(&h);
+    sort_by_open(&mut h, &mut ptr);
+    // straight down onto Refresh, away from the submenu
+    let refresh = row_point(&h, "menu", 1, 0.5);
+    ptr.wait(&mut h, 16);
+    ptr.move_to(&mut h, refresh);
+    assert_eq!(focused(&h, "menu"), Some(1), "Refresh lights at once");
+    assert!(
+        h.model().submenus.is_empty(),
+        "and Sort By's submenu closes with it"
+    );
+    assert_eq!(popup(&h, "menu/1"), None);
+
+    // back onto Sort By, open again, then straight down two rows onto Group By: one submenu replaces the other
+    let sort_by = row_point(&h, "menu", 0, 0.5);
+    ptr.wait(&mut h, 16);
+    ptr.move_to(&mut h, sort_by);
+    ptr.wait(&mut h, (SUBMENU_OPEN_DELAY * 1000.0) as u64 + 10);
+    assert_eq!(h.model().submenus, [0]);
+    let group = row_point(&h, "menu", 2, 0.5);
+    ptr.wait(&mut h, 16);
+    ptr.move_to(&mut h, group);
+    assert_eq!(focused(&h, "menu"), Some(2));
+    assert!(h.model().submenus.is_empty(), "Sort By's closes at once");
+    ptr.wait(&mut h, (SUBMENU_OPEN_DELAY * 1000.0) as u64 + 10);
+    assert_eq!(h.model().submenus, [2], "Group By's opens after its dwell");
+}
+
+#[test]
+fn leaving_the_menus_keeps_the_open_submenu_and_drops_one_still_to_open() {
+    let mut h = Harness::<Browser>::new();
+    let mut ptr = Pointer::new(&h);
+    sort_by_open(&mut h, &mut ptr);
+    let menu = rect(&h, popup(&h, "menu").unwrap());
+    // off the menu on the side away from the submenu, onto the window it opened from
+    let outside = Point::new(menu.min_x() - 20.0, ptr.at.y);
+    ptr.wait(&mut h, 16);
+    ptr.move_to(&mut h, outside);
+    assert_eq!(ptr.locate(&h, outside).0, ptr.main);
+    ptr.wait(&mut h, 1000);
+    assert_eq!(
+        h.model().submenus,
+        [0],
+        "the open submenu stays to come back to"
+    );
+    assert!(popup(&h, "menu/1").is_some());
+
+    // a submenu still to open when the pointer leaves never opens
+    let group = row_point(&h, "menu", 2, 0.5);
+    ptr.wait(&mut h, 16);
+    ptr.move_to(&mut h, group);
+    assert!(h.model().submenus.is_empty());
+    ptr.wait(&mut h, 50);
+    let outside = Point::new(menu.min_x() - 20.0, group.y);
+    ptr.move_to(&mut h, outside);
+    ptr.wait(&mut h, 1000);
+    assert!(h.model().submenus.is_empty(), "Group By's never opened");
 }
 
 #[test]
@@ -707,7 +813,7 @@ fn typed_letters_find_a_row_return_chooses_it_and_escape_closes_one_level_then_t
 }
 
 #[test]
-fn resting_on_a_separator_closes_the_open_submenu_as_another_row_does() {
+fn moving_onto_a_separator_closes_the_open_submenu_at_once_as_another_row_does() {
     let mut h = Harness::<Browser>::new();
     let mut ptr = Pointer::new(&h);
     sort_by_open(&mut h, &mut ptr);
@@ -715,9 +821,7 @@ fn resting_on_a_separator_closes_the_open_submenu_as_another_row_does() {
     let separator = row_point(&h, "menu", 4, 0.2);
     ptr.wait(&mut h, 16);
     ptr.move_to(&mut h, separator);
-    assert_eq!(h.model().submenus, [0], "not at once");
-    ptr.wait(&mut h, (SUBMENU_CLOSE_DELAY * 1000.0) as u64 + 10);
-    assert!(h.model().submenus.is_empty());
+    assert!(h.model().submenus.is_empty(), "at once");
 }
 
 /// A secondary press on the canvas whose menu the compositor slid to fit, leaving Copy under the pointer, which never

@@ -17,8 +17,7 @@ use crate::{
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_menu_model::tracking::{
-    Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY,
-    TRACKING_INTERVAL,
+    Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_OPEN_DELAY, TRACKING_INTERVAL,
 };
 use cupertino_theme::ControlFamily;
 use cupertino_typeahead::TypeAhead;
@@ -637,13 +636,6 @@ struct Slot<M> {
     action: Option<RowAction<M>>,
 }
 
-/// A submenu opening or closing once the pointer rests long enough.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Pending {
-    Open(usize),
-    Collapse,
-}
-
 #[derive(Default)]
 struct PanelState {
     /// The focus came in.
@@ -666,7 +658,8 @@ struct PanelState {
     /// The row, of any kind, the pointer was first found on.
     first: Option<Option<usize>>,
     aim: SubmenuAim,
-    pending: Option<(Timestamp, Pending)>,
+    /// The submenu of this row opens at this time, unless the pointer moves on first.
+    pending: Option<(Timestamp, usize)>,
 }
 
 fn seconds(t: Timestamp) -> f64 {
@@ -753,8 +746,9 @@ impl<M: Clone + 'static> Panel<M> {
         self.schedule(state, cx);
     }
 
-    /// The row under `p` takes the highlight, and its submenu opens, or the open one closes, once the pointer rests.
-    /// On a row that cannot be chosen the open submenu closes too; on the panel's padding it stays.
+    /// The row under `p` takes the highlight, the open submenu of another row closes at once, and the row's own
+    /// submenu opens after [`SUBMENU_OPEN_DELAY`]. On a row that cannot be chosen the open submenu closes too; on the
+    /// panel's padding it stays.
     fn hover(&self, state: &mut PanelState, p: Point, bounds: Rect, cx: &mut EventCx<'_, M>) {
         let row = self.row_at(p, bounds);
         let position = row.and_then(|i| self.slots[i].position);
@@ -768,23 +762,21 @@ impl<M: Clone + 'static> Panel<M> {
         }
         state.hovered = row;
         let Some(index) = row else {
-            // off the rows a closing submenu still closes, an opening one does not open
-            state.pending = state.pending.filter(|(_, p)| *p == Pending::Collapse);
+            // off the rows a submenu still to open does not open
+            state.pending = None;
             return;
         };
         if let Some(position) = position {
             cx.focus_item(FocusTarget::Index(position));
         }
-        let now = cx.now();
         let open = self.open.map(|(i, _)| i);
-        state.pending = match &self.slots[index].action {
-            Some(RowAction::Open { .. }) if open == Some(index) => None,
-            Some(RowAction::Open { .. }) => {
-                Some((after(now, SUBMENU_OPEN_DELAY), Pending::Open(index)))
-            }
-            _ if open.is_some() => Some((after(now, SUBMENU_CLOSE_DELAY), Pending::Collapse)),
-            _ => None,
-        };
+        if open.is_some_and(|open| open != index) {
+            // the pointer came onto another row, not on its way into the open submenu: it closes now
+            cx.emit(self.collapse.clone());
+        }
+        let opens = matches!(self.slots[index].action, Some(RowAction::Open { .. }));
+        state.pending =
+            (opens && open != Some(index)).then(|| (after(cx.now(), SUBMENU_OPEN_DELAY), index));
     }
 
     /// Wakes the panel for the earliest of its pending submenu and the end of the pointer's way into one.
@@ -802,15 +794,10 @@ impl<M: Clone + 'static> Panel<M> {
                 self.hover(state, p, bounds, cx);
             }
         }
-        if let Some((_, pending)) = state.pending.filter(|(at, _)| *at <= now) {
+        if let Some((_, index)) = state.pending.filter(|(at, _)| *at <= now) {
             state.pending = None;
-            match pending {
-                Pending::Collapse => cx.emit(self.collapse.clone()),
-                Pending::Open(index) => {
-                    if let Some(RowAction::Open { on_open, .. }) = &self.slots[index].action {
-                        cx.emit(on_open.clone());
-                    }
-                }
+            if let Some(RowAction::Open { on_open, .. }) = &self.slots[index].action {
+                cx.emit(on_open.clone());
             }
         }
         self.schedule(state, cx);

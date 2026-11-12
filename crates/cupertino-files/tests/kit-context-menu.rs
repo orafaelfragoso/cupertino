@@ -393,9 +393,7 @@ fn a_paste_that_runs_to_its_end_takes_its_row_away_and_selects_what_arrived() {
 
 use cupertino_kit::geometry::Rect;
 use cupertino_kit::platform::{PointerEvent, PopupEdge, WindowEvent, WindowId, WindowStates};
-use cupertino_menu_model::tracking::{
-    SUBMENU_AIM_PAUSE, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY, TRACKING_INTERVAL,
-};
+use cupertino_menu_model::tracking::{SUBMENU_AIM_PAUSE, SUBMENU_OPEN_DELAY, TRACKING_INTERVAL};
 
 const RETURN: u32 = 0xff0d;
 const ESCAPE: u32 = 0xff1b;
@@ -703,8 +701,13 @@ fn a_diagonal_into_sort_by_keeps_its_submenu_and_a_rest_or_a_slow_path_gives_it_
     ptr.glide(&mut run, Point::new(from.x + 20.0, below.center().y), 3, 16);
     ptr.wait(&mut run, 16);
     assert!(level(&run, 1).is_some(), "heading into the submenu");
-    ptr.wait(&mut run, ms(SUBMENU_AIM_PAUSE + SUBMENU_CLOSE_DELAY) + 50);
-    assert!(level(&run, 1).is_none(), "resting gave it up");
+    ptr.wait(&mut run, ms(SUBMENU_AIM_PAUSE) - 40);
+    assert!(
+        level(&run, 1).is_some(),
+        "a rest shorter than the grace keeps it"
+    );
+    ptr.wait(&mut run, 60);
+    assert!(level(&run, 1).is_none(), "resting for the grace gave it up");
     run.close_menu();
 
     // the same way, crawling
@@ -728,6 +731,28 @@ fn a_diagonal_into_sort_by_keeps_its_submenu_and_a_rest_or_a_slow_path_gives_it_
         }
     }
     assert!(closed, "crawling over the rows below gave the submenu up");
+}
+
+#[test]
+fn moving_from_sort_by_straight_onto_another_row_closes_its_submenu_at_once() {
+    let mut run = run();
+    let mut ptr = Pointer::new(&run);
+    sort_by_open(&mut run, &mut ptr);
+    // straight up onto Show As, away from the submenu
+    let show_as = middle(row(&mut run, 0, "Show As"), 0.5);
+    ptr.wait(&mut run, 16);
+    ptr.move_to(&mut run, show_as);
+    assert!(level(&run, 1).is_none(), "closed with the move");
+    assert_eq!(
+        focused_row(&run, 0).as_deref(),
+        Some("Show As"),
+        "and the row under the pointer lit"
+    );
+    ptr.wait(&mut run, ms(SUBMENU_OPEN_DELAY) + 20);
+    assert!(
+        level(&run, 1).is_some(),
+        "Show As's own submenu after its dwell"
+    );
 }
 
 #[test]

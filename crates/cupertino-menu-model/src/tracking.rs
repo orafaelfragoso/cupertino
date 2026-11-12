@@ -6,7 +6,8 @@
 //!   on the way neither take the highlight nor close the submenu. The pointer heads into the submenu while each move
 //!   stays inside the triangle between where it was and the submenu's near edge, and only as long as it keeps moving:
 //!   a move outside the triangle, or a rest of [`SUBMENU_AIM_PAUSE`], gives the submenu up to the row under the
-//!   pointer.
+//!   pointer, and the submenu then closes at once. A submenu opens [`SUBMENU_OPEN_DELAY`] after its row takes the
+//!   highlight, so a pointer passing over the row on its way elsewhere opens nothing.
 //!
 //! Times are in seconds on any clock the caller keeps; positions are `(x, y)` in any coordinates the caller keeps, the
 //! same for the pointer and the submenu.
@@ -17,14 +18,11 @@
 pub const TRACKING_INTERVAL: f64 = 0.5;
 
 /// How long a submenu's row stays highlighted before the submenu opens (seconds).
-pub const SUBMENU_OPEN_DELAY: f64 = 0.35;
+pub const SUBMENU_OPEN_DELAY: f64 = 0.2;
 
-/// How long the pointer rests on another row of the menu before an open submenu closes (seconds).
-pub const SUBMENU_CLOSE_DELAY: f64 = 0.375;
-
-/// The tracking timer: how long the pointer may rest on its way into an open submenu, over any row, before the row
-/// under it takes over (seconds).
-pub const SUBMENU_AIM_PAUSE: f64 = 0.5;
+/// The grace of the way into an open submenu: how long the pointer may rest on it, over any row, before the row under
+/// it takes over and the submenu closes (seconds). Off the way, another row takes over at once.
+pub const SUBMENU_AIM_PAUSE: f64 = 0.375;
 
 /// Where a press was let go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,11 +257,10 @@ mod tests {
     }
 
     /// A diagonal from the submenu's row down to its lower rows crosses three rows of the menu below it, 24 points
-    /// each: the submenu stays all the way, and once the pointer stops on a row for the tracking timer, that row takes
-    /// over.
+    /// each: the submenu stays all the way, and once the pointer stops on a row for the grace, that row takes over.
     #[test]
-    fn a_diagonal_across_other_rows_keeps_the_submenu_and_a_half_second_rest_hands_it_over() {
-        assert_eq!(SUBMENU_AIM_PAUSE, 0.5);
+    fn a_diagonal_across_other_rows_keeps_the_submenu_and_a_rest_for_the_grace_hands_it_over() {
+        assert_eq!(SUBMENU_AIM_PAUSE, 0.375);
         let mut aim = SubmenuAim::default();
         aim.moved((40.0, 12.0), 0.0, Some(EDGE));
         let mut t = 0.0;
@@ -284,8 +281,33 @@ mod tests {
         );
         assert!(
             aim.expired(t + SUBMENU_AIM_PAUSE),
-            "half a second at rest: the row takes over"
+            "the grace at rest: the row takes over"
         );
+    }
+
+    /// Straight down or up from the submenu's row onto the next one is not the way into the submenu, however short the
+    /// step: nothing waits, and the row the pointer reaches takes over at once.
+    #[test]
+    fn straight_down_or_up_to_the_next_row_is_not_the_way_into_the_submenu() {
+        let mut aim = SubmenuAim::default();
+        aim.moved((60.0, 12.0), 0.0, Some(EDGE));
+        assert!(!aim.moved((60.0, 36.0), 0.016, Some(EDGE)), "down");
+        assert_eq!(aim.deadline(), None);
+        let mut aim = SubmenuAim::default();
+        aim.moved((60.0, 12.0), 0.0, Some(EDGE));
+        assert!(!aim.moved((60.0, 2.0), 0.016, Some(EDGE)), "up");
+        assert_eq!(aim.deadline(), None);
+    }
+
+    #[test]
+    fn a_submenu_opens_after_a_short_dwell_and_the_way_into_it_holds_for_the_grace() {
+        assert_eq!(SUBMENU_OPEN_DELAY, 0.2);
+        assert_eq!(SUBMENU_AIM_PAUSE, 0.375);
+        let mut aim = SubmenuAim::default();
+        aim.moved((60.0, 12.0), 0.0, Some(EDGE));
+        assert!(aim.moved((70.0, 20.0), 0.016, Some(EDGE)));
+        assert!(!aim.expired(0.016 + SUBMENU_AIM_PAUSE - 0.001));
+        assert!(aim.expired(0.016 + SUBMENU_AIM_PAUSE));
     }
 
     #[test]

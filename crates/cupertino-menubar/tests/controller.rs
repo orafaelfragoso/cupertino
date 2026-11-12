@@ -627,7 +627,7 @@ fn clicking_a_submenu_row_opens_it_immediately_and_keeps_the_menu_open() {
 }
 
 #[test]
-fn moving_to_another_row_closes_the_submenu_after_the_delay() {
+fn moving_off_the_way_onto_another_row_closes_the_submenu_at_once() {
     let mut c = controller();
     let p = slot_center(&c, &file());
     c.pointer_press(p, 0.0);
@@ -635,11 +635,29 @@ fn moving_to_another_row_closes_the_submenu_after_the_delay() {
     c.pointer_move(row_center(&c, 0, 11), 1.0);
     c.tick(1.0 + c.cfg.submenu_open_delay);
     assert_eq!(c.levels().len(), 2);
-    c.pointer_move(row_center(&c, 0, 16), 2.0);
-    assert_eq!(c.levels().len(), 2, "closes after the delay, not at once");
-    c.tick(2.0 + c.cfg.submenu_close_delay + 0.01);
-    assert_eq!(c.levels().len(), 1);
-    assert_eq!(selected_id(&c, 0), Some(16));
+    let o = c.pointer_move(row_center(&c, 0, 16), 2.0);
+    assert!(has(&o, &Effect::Redraw));
+    assert_eq!(c.levels().len(), 1, "closed with the move");
+    assert_eq!(selected_id(&c, 0), Some(16), "and the row lit");
+    assert_eq!(c.next_deadline(), None, "nothing left to wait for");
+}
+
+#[test]
+fn leaving_the_menus_keeps_the_open_submenu() {
+    let mut c = controller();
+    let p = slot_center(&c, &file());
+    c.pointer_press(p, 0.0);
+    c.pointer_release(p, 0.1);
+    let row = row_center(&c, 0, 11);
+    c.pointer_move(row, 1.0);
+    c.tick(1.0 + c.cfg.submenu_open_delay);
+    assert_eq!(c.levels().len(), 2);
+    let parent = c.levels()[0].layout.rect;
+    // off the menu on the side away from the submenu
+    c.pointer_move(Point::new(parent.x - 30.0, row.y), 1.5);
+    c.tick(3.0);
+    assert_eq!(c.levels().len(), 2, "the submenu stays to come back to");
+    assert_eq!(selected_id(&c, 0), Some(11));
 }
 
 #[test]

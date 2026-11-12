@@ -20,7 +20,7 @@ use crate::layout::{
 };
 use crate::search::{self, Match};
 use cupertino_menu_model::tracking::{
-    Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY,
+    Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_OPEN_DELAY,
 };
 use cupertino_typeahead::TypeAhead;
 use cupertino_ui_text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
@@ -85,8 +85,6 @@ pub struct Outcome {
 pub struct ControllerConfig {
     /// Hover time on a submenu row before its popup opens.
     pub submenu_open_delay: f64,
-    /// Time before the popup of a submenu closes after the pointer moved to another row while not heading into it.
-    pub submenu_close_delay: f64,
     /// Keep a submenu open while the pointer heads into it ([`SubmenuAim`]).
     pub safe_triangle: bool,
     /// Releasing the button over the open title within the tracking interval of the press leaves the menu open
@@ -104,7 +102,6 @@ impl Default for ControllerConfig {
     fn default() -> Self {
         Self {
             submenu_open_delay: SUBMENU_OPEN_DELAY,
-            submenu_close_delay: SUBMENU_CLOSE_DELAY,
             safe_triangle: true,
             release_on_title_keeps_open: true,
             click_outside_passthrough: false,
@@ -166,10 +163,11 @@ impl Flash {
     }
 }
 
+/// The submenu `open` of the selected row of `level` opens at `due`, unless the pointer moves on first.
 #[derive(Clone, Copy, Debug)]
 struct Pending {
     level: usize,
-    open: Option<ItemId>,
+    open: ItemId,
     due: f64,
 }
 
@@ -775,24 +773,24 @@ impl MenuController {
         if changed {
             self.select(level, target, out);
         }
-        let has_child = self.levels.len() > level + 1;
-        if let Some(it) = target.map(|_| &item).filter(|it| it.has_submenu) {
-            let open_already = has_child && self.levels[level + 1].menu.id == it.id;
-            if !open_already {
-                self.pending = Some(Pending {
-                    level,
-                    open: Some(it.id),
-                    due: now + self.cfg.submenu_open_delay,
-                });
-            } else {
-                self.pending = None;
-            }
-        } else if has_child && (changed || (target.is_none() && self.pending.is_none())) {
+        let opens = target.is_some() && item.has_submenu;
+        let open_already = self
+            .levels
+            .get(level + 1)
+            .is_some_and(|child| opens && child.menu.id == item.id);
+        if self.levels.len() > level + 1 && !open_already && (changed || target.is_none()) {
+            // the pointer came onto another row, not on its way into the open submenu: it closes now
+            self.levels.truncate(level + 1);
+            out.effects.push(Effect::Redraw);
+        }
+        if opens && !open_already {
             self.pending = Some(Pending {
                 level,
-                open: None,
-                due: now + self.cfg.submenu_close_delay,
+                open: item.id,
+                due: now + self.cfg.submenu_open_delay,
             });
+        } else if changed || open_already {
+            self.pending = None;
         }
     }
 
@@ -918,7 +916,7 @@ impl MenuController {
         out
     }
 
-    /// Advance timers (submenu open / close, the end of the way into a submenu).
+    /// Advance timers (a submenu opening, the end of the way into a submenu).
     pub fn tick(&mut self, now: f64) -> Outcome {
         let mut out = Outcome::default();
         if self.flash.is_some() {
@@ -931,17 +929,13 @@ impl MenuController {
         if let Some(p) = self.pending {
             if now >= p.due {
                 self.pending = None;
-                if p.level < self.levels.len() {
-                    self.levels.truncate(p.level + 1);
-                    out.effects.push(Effect::Redraw);
-                    if let Some(id) = p.open {
-                        if self.levels[p.level]
-                            .selected_item()
-                            .is_some_and(|i| i.id == id)
-                        {
-                            self.open_submenu(p.level, false, &mut out);
-                        }
-                    }
+                if self
+                    .levels
+                    .get(p.level)
+                    .and_then(|l| l.selected_item())
+                    .is_some_and(|i| i.id == p.open)
+                {
+                    self.open_submenu(p.level, false, &mut out);
                 }
             }
         }

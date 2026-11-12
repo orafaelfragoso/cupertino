@@ -21,8 +21,8 @@ use crate::providers::{Cancel, Generation, Provider, Reply, Status, Tracker, Upd
 use crate::scope::{self, FileItem, FilesScope, Filter, ScopeAnswer, ScopeLayout, ScopeRequest};
 use crate::view::{self, Input, KeyMode, PanelView, MAX_ROWS};
 use cupertino_defaults::launcher::LauncherSettings;
-use cupertino_kit::controls::ImageSource;
-use cupertino_kit::core::{Command, Key, Window, WindowKey};
+use cupertino_kit::controls::{FrameClock, ImageSource};
+use cupertino_kit::core::{Command, Element, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -116,8 +116,6 @@ pub trait Host {
     fn index(&mut self, config: FileSearchConfig) -> Vec<Command<Message>>;
     /// The panel's window is now `size` points large.
     fn resize(&mut self, size: Size);
-    /// The next animation frame, as [`Message::Frame`] with `frame`.
-    fn frame(&mut self, frame: u64) -> Vec<Command<Message>>;
     /// The renditions of `item`'s icon, one per output scale it is loaded at; none to show its kind's symbol.
     fn icon(&mut self, item: &ResultItem) -> Vec<ImageSource>;
     /// Load and decode the renditions of an application's icon at the browser's sizes off the loop; the commands
@@ -726,12 +724,14 @@ impl Model {
             View::Files => self.scope.as_ref().is_some_and(|s| s.animating(now)),
             _ => false,
         };
+        // the panel's window sends the frame's message at its next frame callback ([`view`])
         self.frame_waiting = self.motion.animating(now) || scrolling;
-        if self.frame_waiting {
-            self.host.frame(self.frame)
-        } else {
-            Vec::new()
-        }
+        Vec::new()
+    }
+
+    /// Whether the panel moves by itself and its window asks the compositor for frames.
+    pub fn animating(&self) -> bool {
+        self.frame_waiting
     }
 
     /// What the preview shows of the selected result, once it has arrived.
@@ -1858,7 +1858,13 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         file_images: &model.file_images,
         select_query: model.select_query,
     };
-    let mut windows = vec![view::panel_window(&panel)];
+    let mut window = view::panel_window(&panel);
+    // what moves by itself steps once per frame the compositor gives the panel's window, never on a timer of its own
+    window.content = Element::from(FrameClock {
+        content: window.content,
+        on_frame: model.frame_waiting.then_some(Message::Frame(model.frame)),
+    });
+    let mut windows = vec![window];
     if model.nav.is_visible() {
         windows.push(view::catcher_window());
     }

@@ -117,8 +117,6 @@ impl UiRenderer for Blank {
 type IconLoad = (String, async_channel::Sender<Vec<ImageSource>>);
 
 thread_local! {
-    /// The animation frame the model waits for, delivered at the next step.
-    static PENDING: Cell<Option<u64>> = const { Cell::new(None) };
     /// The session's monotonic clock, in seconds: the meter's.
     static CLOCK: Cell<f64> = const { Cell::new(0.0) };
     /// How many applications the next [`Metered`] launcher lists; the test entries when `None`.
@@ -175,7 +173,7 @@ fn launcher_of(count: usize) -> crate::Launcher {
     )
 }
 
-/// The test host, with a clock that moves and animation frames answered one per step.
+/// The test host, with a clock that moves.
 struct MeteredHost;
 
 impl Host for MeteredHost {
@@ -186,10 +184,6 @@ impl Host for MeteredHost {
     }
     fn resize(&mut self, size: Size) {
         EXTENT.set(Some(size));
-    }
-    fn frame(&mut self, frame: u64) -> Vec<Command<Message>> {
-        PENDING.set(Some(frame));
-        Vec::new()
     }
     fn icon(&mut self, _: &ResultItem) -> Vec<ImageSource> {
         Vec::new()
@@ -245,7 +239,6 @@ impl Application for MeteredApp {
     fn init() -> (Model, Vec<Command<Message>>) {
         EXTENT.set(None);
         INBOXED.set(false);
-        PENDING.set(None);
         CLOCK.set(0.0);
         INBOX.set(Some(async_channel::unbounded()));
         let launcher = APPS.get().map_or_else(test_launcher, launcher_of);
@@ -398,7 +391,7 @@ impl Metered {
             })
     }
 
-    /// One frame period on: `input` queues the period's input and the animation frame the model waits for is
+    /// One frame period on: `input` queues the period's input and the frame callback the panel's window waits for is
     /// answered. A panel that just opened is metered from its first configure.
     fn step(&mut self, input: impl FnOnce(&mut HeadlessWindowSystem, WindowId)) -> bool {
         self.configure();
@@ -416,9 +409,6 @@ impl Metered {
         let start = thread_cpu();
         let presented = meter.step(&mut self.driver, |system, now| {
             CLOCK.set(now.0 as f64 / 1e9);
-            if let Some(frame) = PENDING.take() {
-                send(Message::Frame(frame));
-            }
             input(system, panel);
         });
         if let Some(sample) = presented {
@@ -434,7 +424,7 @@ impl Metered {
         let mut still = 0;
         for _ in 0..limit {
             let presented = self.step(|_, _| {});
-            let animating = PENDING.with(|p| p.get().is_some());
+            let animating = self.model().animating();
             still = if presented || animating { 0 } else { still + 1 };
             if still >= quiet {
                 return;
@@ -952,5 +942,30 @@ fn a_launch_closes_the_panel_with_every_frame_of_its_animation_as_escape_does() 
     assert!(
         launch + 1 >= escape,
         "a launch's close draws as many frames as Escape's: {launch} against {escape}"
+    );
+}
+
+/// The panel's transitions step once per frame callback of its window: a frame of the display is one step of the
+/// motion, never two and never none, from its first frame until the panel settles.
+#[test]
+fn the_panel_steps_once_per_frame_callback_of_its_window() {
+    let mut m = Metered::new(1.0, false);
+    send(Message::Toggle);
+    let mut steps = Vec::new();
+    for _ in 0..200 {
+        let before = m.model().frame;
+        let animating = m.model().animating();
+        m.step(|_, _| {});
+        if animating {
+            steps.push(m.model().frame - before);
+        }
+        if !m.model().animating() && !steps.is_empty() {
+            break;
+        }
+    }
+    assert!(steps.len() > 5, "the opening runs over frames: {steps:?}");
+    assert!(
+        steps.iter().skip_while(|&&s| s == 0).all(|&s| s == 1),
+        "each frame callback steps the motion once: {steps:?}"
     );
 }

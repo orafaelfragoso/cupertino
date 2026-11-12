@@ -54,9 +54,6 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 /// Role of the surfaces for the server (`wlr-layer-shell` namespace).
 const NAMESPACE: &str = "cupertino-launcher";
 
-/// The appear animation's frame interval.
-const FRAME: Duration = Duration::from_micros(16_667);
-
 /// Device pixels the results' icons are loaded at: their size at scales 1 to 3, so they stay sharp on every output.
 const ICON_PX: [u32; 3] = [ICON_SIZE as u32, ICON_SIZE as u32 * 2, ICON_SIZE as u32 * 3];
 /// Device pixels the browser's icons are loaded at: the list's and the grid's sizes at scales 1 and 2, the grid's at 3.
@@ -617,13 +614,6 @@ impl Host for AppHost {
                 (size.width.ceil() as u32, size.height.ceil() as u32),
             );
         }
-    }
-
-    fn frame(&mut self, frame: u64) -> Vec<Command<Message>> {
-        vec![Command::Perform(Box::pin(async move {
-            async_io::Timer::after(FRAME).await;
-            Message::Frame(frame)
-        }))]
     }
 
     fn icon(&mut self, item: &ResultItem) -> Vec<ImageSource> {

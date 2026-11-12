@@ -142,6 +142,10 @@ Required evidence includes login with VT and suspend cycles, an eight-hour appli
 
 Not started, WP-17, WP-18 and WP-19. The planned scope is a per-user AI service, local and user-supplied providers, context actions, local voice and toolkit APIs. There is no shipped implementation to mark complete.
 
+## Planned: GPU rendering in applications
+
+Not started. The compositor composites and draws its materials on the GPU, but every toolkit application still rasterizes its windows on the CPU and hands them over in shared memory. The plan is to draw everything on the GPU: the toolkit renders each window with the GPU and passes the compositor GPU buffers (dmabuf), and the CPU rasterizer stays only as the fallback when no usable GPU is present (a virtual machine without 3D, a broken driver). Both paths must draw the same pixels within the golden tolerance, and the choice must be visible in diagnostics. The design (graphics API, shared device and text atlas, buffer handoff, fallback rule, migration order, frame-time and memory budgets) is still to be written. The Vulkan half of WP-04 is part of the same decision.
+
 ## Deferred work
 
 The Vulkan half of WP-04 and the Verse adapter remain deferred. X11 applications already run through `xwayland-satellite`; XWayland is part of daily-driver acceptance, not a deferred feature. External CJK input methods remain out of scope ([#24](https://github.com/orafaelfragoso/cupertino/issues/24)). Translation and locale support remain open in [#66](https://github.com/orafaelfragoso/cupertino/issues/66).

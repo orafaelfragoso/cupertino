@@ -322,3 +322,26 @@ fn assistive_technology_cannot_consent_before_a_consent_window_is_armed() {
     assert_eq!(answer.try_recv().unwrap(), screenshot::Answer::Cancelled);
     assert!(driver.runtime().windows().is_empty());
 }
+
+#[test]
+fn each_prompt_is_a_glass_panel_whose_title_bar_is_only_its_buttons_over_its_content() {
+    let _turn = INBOX.lock().unwrap_or_else(|e| e.into_inner());
+    let _screenshot = screenshot_ask(60);
+    let _share = share_ask(61);
+    let (driver, window) = start();
+    let windows = Dialogs::view(driver.runtime().model());
+    assert_eq!(
+        windows.len(),
+        2,
+        "the screenshot consent and the sharing chooser"
+    );
+    for window in &windows {
+        assert_eq!(window.spec.decorations, DecorationMode::Unified);
+        assert_eq!(window.background, PANEL_WINDOW_BACKGROUND);
+    }
+    let prompt = rect_of(&driver, window, &Key::from("prompt"));
+    assert!(
+        prompt.origin.y >= SIDEBAR_TOP,
+        "the prompt lies under the row of the window's buttons: {prompt:?}"
+    );
+}

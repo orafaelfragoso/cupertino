@@ -13,7 +13,7 @@ use cupertino_filepicker::{Listing, Request};
 use cupertino_icons::ThemeIcons;
 use cupertino_kit::controls::{
     CheckBox, Image, ImageFit, ImageSource, ListView, SegmentedControl, Selection, SplitLayout,
-    SplitView, TextRole,
+    SplitView, TextRole, WindowDragArea, PANEL_WINDOW_BACKGROUND, SIDEBAR_TOP,
 };
 use cupertino_kit::core::{
     next_resource_id, Change, Checked, CommandRegistry, Event as CoreEvent, EventCx, Key,
@@ -50,8 +50,12 @@ const BAR_INSETS: Insets = Insets {
     right: 16.0,
 };
 const SIZE: Size = Size::new(720.0, 460.0);
-const PICKER_SIZE: Size = Size::new(480.0, 360.0);
-const CONSENT_SIZE: Size = Size::new(420.0, 180.0);
+/// The prompt windows: the row of the window's buttons ([`SIDEBAR_TOP`]) over their content.
+const PICKER_SIZE: Size = Size::new(480.0, 360.0 + SIDEBAR_TOP);
+const PICKER_MIN_SIZE: Size = Size::new(360.0, 240.0 + SIDEBAR_TOP);
+const CONSENT_SIZE: Size = Size::new(420.0, 180.0 + SIDEBAR_TOP);
+/// A prompt window's title bar is only its control buttons, over the top of its glass panel.
+const PROMPT_DECORATIONS: DecorationMode = DecorationMode::Unified;
 /// Side of the requesting app's icon in the screen-sharing and screenshot windows.
 const APP_ICON: f64 = 32.0;
 const RETURN: Keysym = Keysym(0xff0d);
@@ -1213,6 +1217,23 @@ fn bar(d: &Dialog) -> Element<Message> {
     )
 }
 
+/// A prompt window's content from the top of its panel down, under the row of the window's buttons; a press its
+/// controls do not take moves the window.
+fn prompt_content(children: Vec<Element<Message>>) -> Element<Message> {
+    Element::from(WindowDragArea {
+        content: Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets {
+                top: SIDEBAR_TOP,
+                ..Insets::ZERO
+            },
+            spacing: 0.0,
+            align: Align::Stretch,
+            children,
+        }),
+    })
+}
+
 fn bar_row(
     mut leading: Vec<Element<Message>>,
     trailing: Vec<Element<Message>>,
@@ -1427,9 +1448,9 @@ fn picker_window(p: &Picker, app_icons: &AppIcons) -> Window<Message> {
             title: "Share Screen".to_owned(),
             app_id: "org.cupertino.Portal".into(),
             size: PICKER_SIZE,
-            min_size: Some(Size::new(360.0, 240.0)),
+            min_size: Some(PICKER_MIN_SIZE),
             max_size: None,
-            decorations: DecorationMode::Preferred,
+            decorations: PROMPT_DECORATIONS,
             foreign_parent: crate::wayland_parent(&p.ask.parent_window).map(str::to_owned),
             input_region: None,
         },
@@ -1452,26 +1473,20 @@ fn picker_window(p: &Picker, app_icons: &AppIcons) -> Window<Message> {
                 Message::Cancel(id),
             ),
         on_close: Some(Message::Cancel(id)),
-        background: WindowBackground::Theme,
+        background: PANEL_WINDOW_BACKGROUND,
         popup: None,
         menus: None,
-        content: Element::new(Stack {
-            axis: Axis::Vertical,
-            padding: Insets::ZERO,
-            spacing: 0.0,
-            align: Align::Stretch,
-            children: vec![
-                header,
-                Element::new(Separator {
-                    axis: Axis::Horizontal,
-                }),
-                list,
-                Element::new(Separator {
-                    axis: Axis::Horizontal,
-                }),
-                bar,
-            ],
-        }),
+        content: prompt_content(vec![
+            header,
+            Element::new(Separator {
+                axis: Axis::Horizontal,
+            }),
+            list,
+            Element::new(Separator {
+                axis: Axis::Horizontal,
+            }),
+            bar,
+        ]),
     }
 }
 
@@ -1575,9 +1590,9 @@ fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
             title: "Open With".to_owned(),
             app_id: "org.cupertino.Portal".into(),
             size: PICKER_SIZE,
-            min_size: Some(Size::new(360.0, 240.0)),
+            min_size: Some(PICKER_MIN_SIZE),
             max_size: None,
-            decorations: DecorationMode::Preferred,
+            decorations: PROMPT_DECORATIONS,
             foreign_parent: crate::wayland_parent(&a.ask.parent_window).map(str::to_owned),
             input_region: None,
         },
@@ -1598,26 +1613,20 @@ fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
                 Message::Cancel(id),
             ),
         on_close: Some(Message::Cancel(id)),
-        background: WindowBackground::Theme,
+        background: PANEL_WINDOW_BACKGROUND,
         popup: None,
         menus: None,
-        content: Element::new(Stack {
-            axis: Axis::Vertical,
-            padding: Insets::ZERO,
-            spacing: 0.0,
-            align: Align::Stretch,
-            children: vec![
-                header,
-                Element::new(Separator {
-                    axis: Axis::Horizontal,
-                }),
-                list,
-                Element::new(Separator {
-                    axis: Axis::Horizontal,
-                }),
-                bar,
-            ],
-        }),
+        content: prompt_content(vec![
+            header,
+            Element::new(Separator {
+                axis: Axis::Horizontal,
+            }),
+            list,
+            Element::new(Separator {
+                axis: Axis::Horizontal,
+            }),
+            bar,
+        ]),
     }
 }
 
@@ -1653,7 +1662,7 @@ fn consent_window(c: &Consent, app_icons: &AppIcons) -> Window<Message> {
             size: CONSENT_SIZE,
             min_size: Some(CONSENT_SIZE),
             max_size: None,
-            decorations: DecorationMode::Preferred,
+            decorations: PROMPT_DECORATIONS,
             foreign_parent: crate::wayland_parent(&c.ask.parent_window).map(str::to_owned),
             input_region: None,
         },
@@ -1667,24 +1676,18 @@ fn consent_window(c: &Consent, app_icons: &AppIcons) -> Window<Message> {
             Message::Cancel(id),
         ),
         on_close: Some(Message::Cancel(id)),
-        background: WindowBackground::Theme,
+        background: PANEL_WINDOW_BACKGROUND,
         popup: None,
         menus: None,
-        content: Element::new(Stack {
-            axis: Axis::Vertical,
-            padding: Insets::ZERO,
-            spacing: 0.0,
-            align: Align::Stretch,
-            children: vec![
-                Element::new(Spacer { min: 0.0 }),
-                prompt,
-                Element::new(Spacer { min: 0.0 }),
-                Element::new(Separator {
-                    axis: Axis::Horizontal,
-                }),
-                bar,
-            ],
-        }),
+        content: prompt_content(vec![
+            Element::new(Spacer { min: 0.0 }),
+            prompt,
+            Element::new(Spacer { min: 0.0 }),
+            Element::new(Separator {
+                axis: Axis::Horizontal,
+            }),
+            bar,
+        ]),
     }
 }
 
@@ -2287,8 +2290,9 @@ mod tests {
         let take = rect_of(&driver, window, &Key::from("take"));
         let separator = take.origin.y - BAR_INSETS.top - 1.0;
         let bottom = prompt.origin.y + prompt.size.height;
+        let above = icon.origin.y - SIDEBAR_TOP;
         assert!(
-            icon.origin.y < prompt.origin.y && (icon.origin.y - (separator - bottom)).abs() < 0.5,
+            above > 0.0 && icon.origin.y < prompt.origin.y && (above - (separator - bottom)).abs() < 0.5,
             "the app's icon and the prompt under it are centred in the body above the separator: {icon:?}, \
              {prompt:?}, separator at {separator}"
         );

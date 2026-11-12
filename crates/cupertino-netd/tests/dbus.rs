@@ -289,6 +289,7 @@ fn a_client_reads_the_networkmanager_values_of_the_current_state() {
             wireless_enabled: true,
             devices: vec![wired],
             networks: Vec::new(),
+            known: Vec::new(),
         })
         .unwrap();
     assert_eq!(manager.get_property::<u32>("State").unwrap(), 70);
@@ -333,6 +334,7 @@ fn state_changes_reach_listeners_as_signals_and_properties() {
             wireless_enabled: true,
             devices: vec![wifi],
             networks: Vec::new(),
+            known: Vec::new(),
         })
         .unwrap();
 
@@ -368,6 +370,7 @@ fn an_authorised_caller_switches_wifi_and_the_engine_hears_it() {
             wireless_enabled: true,
             devices: Vec::new(),
             networks: Vec::new(),
+            known: Vec::new(),
         })
         .unwrap();
 
@@ -387,6 +390,7 @@ fn an_authorised_caller_switches_wifi_and_the_engine_hears_it() {
             wireless_enabled: false,
             devices: Vec::new(),
             networks: Vec::new(),
+            known: Vec::new(),
         })
         .unwrap();
     assert!(!network(&client)
@@ -433,6 +437,7 @@ fn a_refused_caller_cannot_switch_wifi_scan_connect_or_disconnect() {
             wireless_enabled: true,
             devices: Vec::new(),
             networks: Vec::new(),
+            known: Vec::new(),
         })
         .unwrap();
 

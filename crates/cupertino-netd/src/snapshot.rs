@@ -29,6 +29,9 @@ pub struct Snapshot {
     pub devices: Vec<DeviceView>,
     /// The scan list of the Wi-Fi device.
     pub networks: Vec<Network>,
+    /// The saved networks of the Wi-Fi device, in range or not, one per name: the name and whether the supplicant joins
+    /// it by itself.
+    pub known: Vec<(String, bool)>,
 }
 
 impl Snapshot {
@@ -57,10 +60,24 @@ impl Snapshot {
             .wifi_device()
             .map(|device| model.networks(device.ifindex))
             .unwrap_or_default();
+        let mut known: Vec<(String, bool)> = Vec::new();
+        for saved in model
+            .wifi_device()
+            .map(|device| device.known.as_slice())
+            .unwrap_or_default()
+        {
+            let name = saved.ssid.to_text();
+            match known.iter_mut().find(|(n, _)| *n == name) {
+                Some((_, auto)) => *auto |= saved.auto_connect,
+                None => known.push((name, saved.auto_connect)),
+            }
+        }
+        known.sort();
         Self {
             wireless_enabled: model.wireless_enabled(),
             devices,
             networks,
+            known,
         }
     }
 }

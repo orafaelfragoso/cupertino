@@ -294,6 +294,27 @@ impl IwdSupplicant {
             .ok_or_else(|| Error::SupplicantDevice(name.to_owned()))
     }
 
+    /// The object path of the saved profile of a network.
+    fn known_path(&self, ssid: &Ssid, class: NetworkClass) -> Result<OwnedObjectPath> {
+        let wanted_type = class_name(class).ok_or_else(|| {
+            Error::SupplicantNetwork(format!("{} has no saved profile", ssid.to_text()))
+        })?;
+        self.objects()?
+            .into_iter()
+            .find(|(_, interfaces)| {
+                interfaces.iter().any(|(interface, properties)| {
+                    interface.as_str() == KNOWN_NETWORK
+                        && text(properties, "Name")
+                            .is_some_and(|name| name.as_bytes() == ssid.as_bytes())
+                        && text(properties, "Type").as_deref() == Some(wanted_type)
+                })
+            })
+            .map(|(path, _)| path)
+            .ok_or_else(|| {
+                Error::SupplicantNetwork(format!("{} has no saved profile", ssid.to_text()))
+            })
+    }
+
     /// Registers the agent. iwd answers `AlreadyExists` when it is registered, which is the goal.
     fn register_agent(&self) -> Result<()> {
         let manager = self.proxy(AGENT_MANAGER_PATH, AGENT_MANAGER)?;
@@ -525,6 +546,11 @@ impl Supplicant for IwdSupplicant {
                 Some(KnownNetwork {
                     ssid: Ssid(text(&properties, "Name")?.into_bytes()),
                     class: class_of(&text(&properties, "Type")?),
+                    // iwd's default for a profile that does not say
+                    auto_connect: properties
+                        .get("AutoConnect")
+                        .and_then(|value| bool::try_from(&**value).ok())
+                        .unwrap_or(true),
                 })
             })
             .collect())
@@ -610,6 +636,29 @@ impl Supplicant for IwdSupplicant {
                 source,
             })?;
         Ok(())
+    }
+
+    fn forget(&mut self, ssid: &Ssid, class: NetworkClass) -> Result<()> {
+        let path = self.known_path(ssid, class)?;
+        self.proxy(path.as_str(), KNOWN_NETWORK)?
+            .call_method("Forget", &())
+            .map(drop)
+            .map_err(call_error("forgetting a network"))
+    }
+
+    fn set_auto_connect(&mut self, ssid: &Ssid, class: NetworkClass, on: bool) -> Result<()> {
+        let path = self.known_path(ssid, class)?;
+        let properties = PropertiesProxy::builder(&self.connection)
+            .destination(SERVICE)
+            .and_then(|builder| builder.path(path.as_str()))
+            .and_then(|builder| builder.build())
+            .map_err(Error::bus("creating a properties proxy"))?;
+        let result = properties.set(
+            InterfaceName::from_static_str_unchecked(KNOWN_NETWORK),
+            "AutoConnect",
+            Value::Bool(on),
+        );
+        result.map_err(|error| call_error("changing a network's auto-join")(error.into()))
     }
 
     fn disconnect(&mut self, interface: Interface<'_>) -> Result<()> {

@@ -39,6 +39,8 @@ impl From<Security> for NetworkClass {
 pub struct KnownNetwork {
     pub ssid: Ssid,
     pub class: NetworkClass,
+    /// Whether the supplicant joins the network by itself when it is in range.
+    pub auto_connect: bool,
 }
 
 /// Why a connection attempt ended.
@@ -117,6 +119,12 @@ pub trait Supplicant {
 
     fn disconnect(&mut self, interface: Interface<'_>) -> Result<()>;
 
+    /// Takes the saved credentials of a network away, so the supplicant no longer joins it.
+    fn forget(&mut self, ssid: &Ssid, class: NetworkClass) -> Result<()>;
+
+    /// Lets the supplicant join a saved network by itself, or stops it.
+    fn set_auto_connect(&mut self, ssid: &Ssid, class: NetworkClass, on: bool) -> Result<()>;
+
     /// The events and failures to watch since the last call, in order.
     fn events(&mut self) -> Vec<Result<SupplicantEvent>>;
 
@@ -140,6 +148,8 @@ pub mod fake {
             passphrase: Option<String>,
         },
         Disconnect(u32),
+        Forget(Ssid, NetworkClass),
+        AutoConnect(Ssid, NetworkClass, bool),
     }
 
     /// Records calls and returns the events a test queued.
@@ -183,6 +193,23 @@ pub mod fake {
 
         fn disconnect(&mut self, interface: Interface<'_>) -> Result<()> {
             self.calls.push(Call::Disconnect(interface.index));
+            Ok(())
+        }
+
+        fn forget(&mut self, ssid: &Ssid, class: NetworkClass) -> Result<()> {
+            self.calls.push(Call::Forget(ssid.clone(), class));
+            self.known
+                .retain(|k| !(k.ssid == *ssid && k.class == class));
+            Ok(())
+        }
+
+        fn set_auto_connect(&mut self, ssid: &Ssid, class: NetworkClass, on: bool) -> Result<()> {
+            self.calls.push(Call::AutoConnect(ssid.clone(), class, on));
+            for k in &mut self.known {
+                if k.ssid == *ssid && k.class == class {
+                    k.auto_connect = on;
+                }
+            }
             Ok(())
         }
 

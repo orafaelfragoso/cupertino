@@ -204,6 +204,42 @@ impl NetworkObject {
         answered("Connect", Some(&named), result)
     }
 
+    /// The saved networks, in range or not: the name and whether the device joins it by itself.
+    fn get_known_networks(&self) -> Vec<(String, bool)> {
+        self.0.snapshot().known.clone()
+    }
+
+    /// Takes the saved credentials of a network away, so the device no longer joins it.
+    async fn forget(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        ssid: String,
+    ) -> Result<(), NetworkError> {
+        let named = ssid.clone();
+        let result = async {
+            authorize(&self.0, Some(&header)).await?;
+            Ok(self.0.submit(Command::Forget(ssid)).await?)
+        }
+        .await;
+        answered("Forget", Some(&named), result)
+    }
+
+    /// Lets the device join a saved network by itself, or stops it.
+    async fn set_auto_join(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        ssid: String,
+        on: bool,
+    ) -> Result<(), NetworkError> {
+        let named = ssid.clone();
+        let result = async {
+            authorize(&self.0, Some(&header)).await?;
+            Ok(self.0.submit(Command::SetAutoJoin { ssid, on }).await?)
+        }
+        .await;
+        answered("SetAutoJoin", Some(&named), result)
+    }
+
     async fn disconnect(&self, #[zbus(header)] header: Header<'_>) -> Result<(), NetworkError> {
         let result = async {
             authorize(&self.0, Some(&header)).await?;

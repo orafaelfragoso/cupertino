@@ -115,6 +115,7 @@ mod tests {
             wireless_enabled: true,
             devices,
             networks: Vec::new(),
+            known: Vec::new(),
         }
     }
 

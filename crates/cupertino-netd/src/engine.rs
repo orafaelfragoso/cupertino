@@ -61,6 +61,13 @@ pub enum Command {
         passphrase: Option<String>,
     },
     Disconnect,
+    /// Take the saved credentials of the network named `ssid` away.
+    Forget(String),
+    /// Let the supplicant join the saved network named `ssid` by itself, or stop it.
+    SetAutoJoin {
+        ssid: String,
+        on: bool,
+    },
 }
 
 /// Why a [`Command`] was refused.
@@ -335,6 +342,8 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
             Command::Disconnect => Input::Disconnect {
                 ifindex: self.usable_wifi()?.0,
             },
+            Command::Forget(ssid) => return self.change_saved(now, ssid, None),
+            Command::SetAutoJoin { ssid, on } => return self.change_saved(now, ssid, Some(on)),
             Command::Connect { ssid, passphrase } => {
                 let (ifindex, _) = self.usable_wifi()?;
                 let wanted = Ssid(ssid.clone().into_bytes());
@@ -371,6 +380,52 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
             Some(error) => Err(CommandError::Failed(error.to_string())),
             None => Ok(()),
         }
+    }
+
+    /// Forgets (`auto_join` none) or sets the auto-join of every saved profile of the network named `ssid`, then reads
+    /// the saved list again.
+    fn change_saved(
+        &mut self,
+        now: Timestamp,
+        ssid: String,
+        auto_join: Option<bool>,
+    ) -> std::result::Result<(), CommandError> {
+        let (ifindex, name) = self.usable_wifi()?;
+        let wanted = Ssid(ssid.clone().into_bytes());
+        let profiles: Vec<NetworkClass> = self
+            .model
+            .device(ifindex)
+            .map(|device| {
+                device
+                    .known
+                    .iter()
+                    .filter(|known| known.ssid == wanted)
+                    .map(|known| known.class)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if profiles.is_empty() {
+            return Err(CommandError::UnknownNetwork(ssid));
+        }
+        for class in profiles {
+            match auto_join {
+                None => self.supplicant.forget(&wanted, class),
+                Some(on) => self.supplicant.set_auto_connect(&wanted, class, on),
+            }
+            .map_err(|error| CommandError::Failed(error.to_string()))?;
+        }
+        let known = self
+            .supplicant
+            .known_networks(Interface {
+                index: ifindex,
+                name: &name,
+            })
+            .map_err(|error| CommandError::Failed(error.to_string()))?;
+        self.run(
+            now,
+            VecDeque::from([Input::KnownNetworks { ifindex, known }]),
+        );
+        Ok(())
     }
 
     /// The Wi-Fi device (index and name) if it can work.

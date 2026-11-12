@@ -774,6 +774,7 @@ mod tests {
             known: vec![KnownNetwork {
                 ssid: Ssid(b"home".to_vec()),
                 class: Security::Wpa2.into(),
+                auto_connect: true,
             }],
         });
         model.apply(Input::Supplicant(SupplicantEvent::Connected {
@@ -806,6 +807,7 @@ mod tests {
             known: vec![KnownNetwork {
                 ssid: Ssid(b"home".to_vec()),
                 class: Security::Wpa2.into(),
+                auto_connect: true,
             }],
         });
         assert!(!model.networks(3)[0].known);

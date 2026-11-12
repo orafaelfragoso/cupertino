@@ -54,12 +54,12 @@ cargo run -p cupertino-netd --features app -- [--session-bus [--no-auth]] [--res
 
 | Where | What |
 |---|---|
-| `org.cupertino.Network1` at `/org/cupertino/Network1` | properties `WirelessEnabled` (read and write), `Devices` (`a(ussssss)`: index, name, `ethernet` or `wifi`, state, SSID, failure, address), `State` (`disconnected`, `connecting`, `connected-local`, `connected`); methods `Scan`, `GetNetworks` (`a(sisbb)`: SSID, signal in dBm or `i32::MIN` when unknown, security, saved, connected), `Connect(ssid, passphrase)`, `Disconnect`; signals `NetworksChanged`, `ConnectionFailed(device, reason)`; errors `NotAuthorized`, `NoWifiDevice`, `WifiUnavailable`, `UnknownNetwork`, `PassphraseRequired`, `UnsupportedSecurity`, `Failed` |
+| `org.cupertino.Network1` at `/org/cupertino/Network1` | properties `WirelessEnabled` (read and write), `Devices` (`a(ussssss)`: index, name, `ethernet` or `wifi`, state, SSID, failure, address), `State` (`disconnected`, `connecting`, `connected-local`, `connected`); methods `Scan`, `GetNetworks` (`a(sisbb)`: SSID, signal in dBm or `i32::MIN` when unknown, security, saved, connected), `Connect(ssid, passphrase)`, `Disconnect`, `GetKnownNetworks` (`a(sb)`: saved SSID in range or not, whether the device joins it by itself), `Forget(ssid)`, `SetAutoJoin(ssid, on)` (through the supplicant's saved profiles); signals `NetworksChanged`, `ConnectionFailed(device, reason)`; errors `NotAuthorized`, `NoWifiDevice`, `WifiUnavailable`, `UnknownNetwork`, `PassphraseRequired`, `UnsupportedSecurity`, `Failed` |
 | `org.freedesktop.NetworkManager` at `/org/freedesktop/NetworkManager` | properties `State`, `Connectivity`, `NetworkingEnabled`, `WirelessEnabled` (read and write), `PrimaryConnectionType`; method `CheckConnectivity`; signal `StateChanged`. Nothing else of NetworkManager exists. |
 
 ## How it works
 
-- **Reading is open, writing is not.** `WirelessEnabled`, `Scan`, `Connect` and `Disconnect` need the caller's process,
+- **Reading is open, writing is not.** `WirelessEnabled`, `Scan`, `Connect`, `Disconnect`, `Forget` and `SetAutoJoin` need the caller's process,
   taken from the bus daemon with `GetConnectionCredentials`, to belong to a logind session that is `Active` and has a
   seat (rule 5). No polkit. The `Authorizer` is a copy of the one in `cupertino-powerd`, so the daemons
   stay independent. The credentials are asked on a second connection to the bus (`cupertino_peer::lookup::Lookup`, a few

@@ -24,6 +24,9 @@ const HANG_GUARD: Duration = Duration::from_secs(60);
 /// - `early`: exits 1 without saying it is ready;
 /// - `silent`: never says it is ready, keeps the descriptor open and sleeps until a signal ends it;
 /// - `partial`: writes `WAYLAND_DISPLAY=` without the line end, keeps the descriptor open and sleeps.
+///
+/// `silent` and `partial` then open `$FAKE_SAID` for writing when it is set (a FIFO: the open waits for its reader),
+/// so a test knows the stand-in got that far before it stops it.
 const FAKE: &str = r#"#!/bin/bash
 # the command passes its own PATH, which may be empty
 PATH=/usr/bin:/bin
@@ -33,6 +36,9 @@ while [ $# -gt 0 ]; do
     if [ "$1" = --ready-fd ]; then fd=$2; printf '%s\n' "$2" >> "$FAKE_ARGS"; shift; fi
     shift
 done
+said() {
+    if [ -n "$FAKE_SAID" ]; then : > "$FAKE_SAID"; fi
+}
 ready() {
     printf 'WAYLAND_DISPLAY=wayland-fake\n' >&"$fd"
     eval "exec $fd>&-"
@@ -53,8 +59,8 @@ case "$FAKE_MODE" in
     exit-0) ready; exit 0 ;;
     exit-3) ready; exit 3 ;;
     early) exit 1 ;;
-    silent) exec sleep infinity ;;
-    partial) printf 'WAYLAND_DISPLAY=wayland-fake' >&"$fd"; exec sleep infinity ;;
+    silent) said; exec sleep infinity ;;
+    partial) printf 'WAYLAND_DISPLAY=wayland-fake' >&"$fd"; said; exec sleep infinity ;;
 esac
 exit 2
 "#;
@@ -210,6 +216,21 @@ fn run_until(cx: Context, words: &[&str], when: &'static str) -> Output {
     Output {
         code,
         stdout: String::from_utf8(out.out).unwrap(),
+        stderr: String::from_utf8(err).unwrap(),
+    }
+}
+
+/// Runs `words` until another thread sets `stop`.
+fn run_with_stop(cx: Context, words: &[&str], stop: &StopFlag) -> Output {
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let code =
+        Runner::new(REGISTRY)
+            .context(cx)
+            .stop(stop)
+            .run_to(&args(words), "r1", &mut out, &mut err);
+    Output {
+        code,
+        stdout: String::from_utf8(out).unwrap(),
         stderr: String::from_utf8(err).unwrap(),
     }
 }
@@ -673,14 +694,21 @@ fn the_installed_command_finds_the_compositor_beside_it_and_forwards_sigterm() {
 }
 
 /// A compositor that never says it is ready, or says half of it and keeps the pipe open, is stopped all the same: the
-/// command never waits on the pipe or on the process, only for one of them with a bound.
+/// command never waits on the pipe or on the process, only for one of them with a bound. The half it said before it
+/// ended is no announcement: the command reports no `ready`.
 #[test]
 fn a_stop_ends_a_compositor_that_never_said_it_was_ready() {
     for mode in ["silent", "partial"] {
         // the bench stays with the test, so its stand-in is killed when the test fails
         let b = Bench::new();
-        let dir = b.dir.path().to_path_buf();
+        let said = b.path("said");
+        let name = std::ffi::CString::new(said.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: `name` is a NUL-terminated path that outlives the call.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (dir, fifo) = (b.dir.path().to_path_buf(), said.clone());
+        let stop = std::sync::Arc::new(StopFlag::new());
         let (tx, rx) = mpsc::channel();
+        let command_stop = stop.clone();
         std::thread::spawn(move || {
             let words = [
                 "--format",
@@ -690,8 +718,19 @@ fn a_stop_ends_a_compositor_that_never_said_it_was_ready() {
                 "--backend",
                 "headless",
             ];
-            let _ = tx.send(run_until(bench_context(&dir, mode), &words, "starting"));
+            let cx = bench_context(&dir, mode).with_var("FAKE_SAID", fifo);
+            let _ = tx.send(run_with_stop(cx, &words, &command_stop));
         });
+        // the stand-in opens the FIFO once it has written what it writes; the stop comes after that, never before
+        let (opened_tx, opened) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = opened_tx.send(std::fs::read(&said));
+        });
+        opened
+            .recv_timeout(HANG_GUARD)
+            .unwrap_or_else(|_| panic!("{mode}: the stand-in did not start"))
+            .unwrap();
+        stop.set();
         let out = rx
             .recv_timeout(HANG_GUARD)
             .unwrap_or_else(|_| panic!("{mode}: the command hung"));

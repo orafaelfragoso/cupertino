@@ -468,13 +468,11 @@ impl Server {
                 std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd.as_raw_fd()) });
             match file.read(&mut chunk) {
                 Ok(0) => {
-                    // closed: a last line without its end counts too
+                    // closed: the announcement ends with its line end, so what came without one was cut off (the
+                    // compositor ended while writing it) and says nothing
                     self.ready = None;
-                    if self.pending.is_empty() {
-                        return None;
-                    }
-                    let line = std::mem::take(&mut self.pending);
-                    return Some(String::from_utf8_lossy(&line).into_owned());
+                    self.pending.clear();
+                    return None;
                 }
                 Ok(n) => self.pending.extend_from_slice(&chunk[..n]),
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}

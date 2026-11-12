@@ -939,6 +939,7 @@ fixtures! {
         content: body("Document"),
         dialog: Some(Dialog {
             kind: DialogKind::Dialog,
+            icon: None,
             title: "Rename".into(),
             message: String::new(),
             body: Some(Element::new(TextField {
@@ -960,6 +961,7 @@ fixtures! {
         content: body("Document"),
         dialog: Some(Dialog {
             kind: DialogKind::Alert,
+            icon: None,
             title: "Save changes?".into(),
             message: "Your changes are lost if you don't save them.".into(),
             body: None,

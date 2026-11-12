@@ -170,6 +170,7 @@ pub fn dialog(sheet: &Sheet, scroll: ScrollState) -> Dialog<Message> {
         } else {
             DialogKind::Dialog
         },
+        icon: None,
         title: sheet.title(),
         message: sheet.message(),
         body: body(sheet, scroll),

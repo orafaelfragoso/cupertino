@@ -101,6 +101,7 @@ impl<const FIELD: bool, const CANCEL: bool> Application for Page<FIELD, CANCEL> 
         buttons.push(choice("Save", DialogAction::Default, Message::Save));
         let dialog = model.open.then(|| Dialog {
             kind: DialogKind::Alert,
+            icon: None,
             title: "Save changes?".into(),
             message: "Your changes are lost if you don't save them.".into(),
             body: FIELD.then(|| {

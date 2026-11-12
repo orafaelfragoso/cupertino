@@ -19,7 +19,7 @@ use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec, Track,
 };
 use cupertino_ui_platform::{Keysym, Timestamp};
-use cupertino_ui_render::{Effect, Sampling};
+use cupertino_ui_render::{Effect, GradientStop, Paint, PaintOp, Sampling, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, TextStyle};
 use cupertino_ui_theme::{Color, ColorRole, StateVariant};
 use std::cell::Cell;
@@ -52,6 +52,13 @@ const SHADOW_ALPHA: f32 = 0.3;
 const ALERT_BODY_DARK: f32 = 0.2;
 const ALERT_BODY_LIGHT: f32 = 0.99;
 const ALERT_BODY_ALPHA: f32 = 0.97;
+/// The faint warm tint at the top of a light alert's body: its colour, how far down it fades out, in points, where it is
+/// strongest as a share of that and how strong it is at the top and there.
+const ALERT_TINT: [f32; 3] = [1.0, 0.90, 0.75];
+const ALERT_TINT_HEIGHT: f64 = 130.0;
+const ALERT_TINT_PEAK_AT: f32 = 0.12;
+const ALERT_TINT_TOP: f32 = 0.17;
+const ALERT_TINT_PEAK: f32 = 0.21;
 const ALERT_RIM_DARK: f32 = 0.12;
 const ALERT_RIM_LIGHT: f32 = 0.06;
 /// How far below the window's top a dialog hangs: under the toolbar row.
@@ -246,7 +253,9 @@ fn alert<M: Clone + 'static>(dialog: Dialog<M>) -> Element<M> {
     let labels: Vec<&str> = dialog.buttons.iter().map(|b| b.label.as_str()).collect();
     let paired = side_by_side(&labels);
     let mut text = vec![
-        Element::new(AppIcon),
+        Element::new(AppIcon {
+            name: dialog.icon.clone(),
+        }),
         Element::new(Gap(ALERT_ICON_GAP)),
         styled_label(
             &dialog.title,
@@ -422,7 +431,9 @@ impl<M: 'static> Widget<M> for Gap {
 }
 
 /// The application's own icon at the alert's leading edge; the room stays when the icons have none.
-struct AppIcon;
+struct AppIcon {
+    name: Option<String>,
+}
 
 impl<M: 'static> Widget<M> for AppIcon {
     type State = ();
@@ -438,8 +449,12 @@ impl<M: 'static> Widget<M> for AppIcon {
 
     fn state(&self) {}
 
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.name != old.name {
+            Change::Paint
+        } else {
+            Change::None
+        }
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
@@ -459,7 +474,12 @@ impl<M: 'static> Widget<M> for AppIcon {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let px = (ALERT_ICON * cx.env().scale.max(1.0)).round() as u32;
-        if let Some(icon) = cx.env().icons.application(px) {
+        let icons = &cx.env().icons;
+        let icon = match &self.name {
+            Some(name) => icons.named(name, px),
+            None => icons.application(px),
+        };
+        if let Some(icon) = icon {
             let dst = Rect::new(0.0, 0.0, ALERT_ICON, ALERT_ICON);
             cx.image(icon.id, &icon.image, dst, Sampling::Linear);
         }
@@ -921,6 +941,42 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
                 let alpha = if opaque { 1.0 } else { ALERT_BODY_ALPHA };
                 let round = ALERT_RADIUS * grow;
                 look::fill(cx, rect, round, Some(Color::new(grey, grey, grey, alpha)));
+                if !dark {
+                    let [r, g, b] = ALERT_TINT;
+                    let at = |alpha: f32| Color::new(r, g, b, alpha);
+                    let height = ALERT_TINT_HEIGHT.min(rect.height());
+                    cx.push(PaintOp::PushClip(Shape::RoundedRect {
+                        rect,
+                        radius: round,
+                    }));
+                    cx.push(PaintOp::Fill {
+                        shape: Shape::Rect(Rect::new(
+                            rect.min_x(),
+                            rect.min_y(),
+                            rect.width(),
+                            height,
+                        )),
+                        paint: Paint::Linear {
+                            start: Point::new(0.0, rect.min_y()),
+                            end: Point::new(0.0, rect.min_y() + height),
+                            stops: vec![
+                                GradientStop {
+                                    offset: 0.0,
+                                    color: at(ALERT_TINT_TOP),
+                                },
+                                GradientStop {
+                                    offset: ALERT_TINT_PEAK_AT,
+                                    color: at(ALERT_TINT_PEAK),
+                                },
+                                GradientStop {
+                                    offset: 1.0,
+                                    color: at(0.0),
+                                },
+                            ],
+                        },
+                    });
+                    cx.push(PaintOp::PopClip);
+                }
                 look::stroke(
                     cx,
                     rect.inset(Insets::uniform(px / 2.0)),

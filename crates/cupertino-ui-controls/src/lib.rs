@@ -780,6 +780,9 @@ pub enum DialogKind {
 /// button, wherever the focus is in the sheet, except that a focused text field keeps Return for its own submit.
 pub struct Dialog<M> {
     pub kind: DialogKind,
+    /// The picture an alert shows at its leading edge, named as the system's pictures are; the running application's own icon
+    /// when none.
+    pub icon: Option<String>,
     /// Names the sheet.
     pub title: String,
     /// Below the title in the secondary text colour; describes the sheet. May be empty.

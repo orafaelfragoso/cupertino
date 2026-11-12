@@ -435,6 +435,7 @@ fn place_item(session: &Session, index: usize) -> SidebarItem {
 fn unlock_sheet(id: u64, unlock: &Unlock) -> Dialog<Message> {
     Dialog {
         kind: DialogKind::Dialog,
+        icon: None,
         title: format!("Unlock “{}”", unlock.name),
         message: "Enter the passphrase of this encrypted volume.".into(),
         body: Some(
@@ -468,10 +469,14 @@ fn unlock_sheet(id: u64, unlock: &Unlock) -> Dialog<Message> {
     }
 }
 
+/// The name of the full trash can picture the empty-trash alert shows.
+const FULL_TRASH_ICON: &str = "trash.full";
+
 /// The question before the trash is emptied: an alert whose default button deletes everything for good.
 fn empty_trash_alert(id: u64) -> Dialog<Message> {
     Dialog {
         kind: DialogKind::Alert,
+        icon: Some(FULL_TRASH_ICON.into()),
         title: cupertino_trash::EMPTY_TITLE.into(),
         message: cupertino_trash::EMPTY_MESSAGE.into(),
         body: None,

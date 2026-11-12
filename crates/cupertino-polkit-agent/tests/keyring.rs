@@ -77,6 +77,23 @@ impl Running {
         Some(Running { bus, host })
     }
 
+    /// The prompter with its loop run by the thread that takes the calls: each call is answered, then `person` acts
+    /// on the model, before that thread does anything else. A person can't be quicker.
+    fn start_inline(person: impl Fn(&mut Host) + Send + Sync + Clone + 'static) -> Option<Running> {
+        let bus = PrivateBus::start()?;
+        let conn = bus.connect();
+        let host = Arc::new(Mutex::new(Host::new(conn.clone())));
+        let looping = host.clone();
+        let owned = serve(&conn, move |request| {
+            let mut host = looping.lock().unwrap();
+            host.request(request);
+            person(&mut host);
+        })
+        .unwrap();
+        assert_eq!(owned, Owned::Now);
+        Some(Running { bus, host })
+    }
+
     fn caller(&self) -> Caller {
         let (heard, hearing) = channel();
         let conn = self
@@ -286,6 +303,64 @@ fn a_typed_password_returns_through_the_exchange_and_never_in_clear() {
         h.model.prompt().is_none()
     });
     caller.nothing_heard();
+}
+
+/// A person who answers the moment the question arrives still answers after the caller has the reply to its asking:
+/// the caller's connection gets the reply to `PerformPrompt` first, then `PromptReady`. A caller that heard the answer
+/// before its reply would take the reply for the end of the question and never stop prompting.
+#[test]
+fn an_answer_given_at_once_reaches_the_caller_after_the_reply_to_its_question() {
+    let Some(running) = Running::start_inline(|host| {
+        if host.model.shown().is_some_and(|p| p.phase == Phase::Asking) {
+            let effects = host.model.cancel();
+            host.apply(effects);
+        }
+    }) else {
+        return;
+    };
+    let mut caller = running.caller();
+    caller.begin();
+    let incoming = zbus::blocking::MessageIterator::from(&caller.conn);
+    let (seen, seeing) = channel();
+    std::thread::spawn(move || {
+        for message in incoming.flatten() {
+            let header = message.header();
+            let what = match message.message_type() {
+                zbus::message::Type::MethodReturn | zbus::message::Type::Error => {
+                    header.reply_serial().map(|serial| serial.get().to_string())
+                }
+                zbus::message::Type::MethodCall => header.member().map(|m| m.to_string()),
+                zbus::message::Type::Signal => None,
+            };
+            if let Some(what) = what {
+                if seen.send(what).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    let properties: HashMap<&str, Value<'_>> = HashMap::new();
+    let ask = zbus::Message::method_call(PATH, "PerformPrompt")
+        .unwrap()
+        .destination(SYSTEM_NAME)
+        .unwrap()
+        .interface(INTERFACE)
+        .unwrap()
+        .build(&(
+            ObjectPath::try_from(CALLBACK).unwrap(),
+            "password",
+            properties,
+            caller.exchange.begin(),
+        ))
+        .unwrap();
+    let serial = ask.primary_header().serial_num().get().to_string();
+    caller.conn.send(&ask).unwrap();
+    let order = [
+        seeing.recv_timeout(WAIT).unwrap(),
+        seeing.recv_timeout(WAIT).unwrap(),
+    ];
+    assert_eq!(order, [serial, "PromptReady".to_string()]);
+    assert_eq!(caller.reply().0, "no");
 }
 
 #[test]

@@ -6,8 +6,6 @@
 
 use std::collections::HashMap;
 
-use std::sync::mpsc::{channel, Sender};
-
 use zbus::blocking::Connection;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::zvariant::{ObjectPath, OwnedValue, Value as Variant};
@@ -27,25 +25,73 @@ pub const ERROR_FAILED: &str = "org.gnome.keyring.Prompter.Failed";
 /// What the loop answers a call: the call's result, then the effects to send once the call has its reply.
 pub type Answer = (Result<(), PromptError>, Vec<Effect>);
 
+/// A call waiting for the loop's [`Answer`]. The loop replies itself, so the reply is on the bus before anything the
+/// loop sends later: a question the person answers at once still reaches the caller after the reply to its asking.
+/// A call dropped unanswered is refused as the prompter ending.
+pub struct Call {
+    bus: Connection,
+    message: zbus::Message,
+    answered: bool,
+}
+
+impl Call {
+    /// Reply with the answer's result, then send the effects it leads to.
+    pub fn answer(mut self, (result, effects): Answer) {
+        self.answered = true;
+        if let Err(error) = self.reply(result, &effects) {
+            eprintln!("cupertino-keyring-prompter: answering a call: {error}");
+        }
+    }
+
+    fn reply(&self, result: Result<(), PromptError>, effects: &[Effect]) -> zbus::Result<()> {
+        let header = self.message.header();
+        match result {
+            Ok(()) => self.bus.reply(&header, &())?,
+            Err(error) => {
+                let (name, text) = error_reply(&error);
+                self.bus.reply_error(&header, name, &text)?
+            }
+        }
+        for effect in effects {
+            send(&self.bus, effect)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Call {
+    fn drop(&mut self) {
+        if !self.answered {
+            let _ = self.bus.reply_error(
+                &self.message.header(),
+                ERROR_FAILED,
+                &"the prompter is ending",
+            );
+        }
+    }
+}
+
 /// A call that reached the prompter, for the loop.
 pub enum Request {
     Begin {
         caller: Caller,
-        answer: Sender<Answer>,
+        answer: Call,
     },
     Perform {
         caller: Caller,
         kind: Kind,
         properties: Vec<(String, Value)>,
         exchange: String,
-        answer: Sender<Answer>,
+        answer: Call,
     },
     Stop {
         caller: Caller,
-        answer: Sender<Answer>,
+        answer: Call,
     },
     /// A bus name left the bus.
-    Vanished { name: String },
+    Vanished {
+        name: String,
+    },
 }
 
 impl std::fmt::Debug for Request {
@@ -89,9 +135,9 @@ pub enum Owned {
 }
 
 /// Serve the prompter on `bus`: a thread that takes the calls to its object, a watch for callers leaving, then both
-/// names, which replace a prompter that allows it and are never given up to another. Every call reaches `to_loop`;
-/// the thread waits for the loop's [`Answer`], replies, and only then sends what the answer leads to, so a caller
-/// always has its reply before its callback is called.
+/// names, which replace a prompter that allows it and are never given up to another. Every call reaches `to_loop` as a
+/// [`Call`] the loop answers: the reply first, then what the answer leads to, so a caller always has its reply before
+/// its callback is called.
 pub fn serve(
     bus: &Connection,
     to_loop: impl Fn(Request) + Send + Sync + Clone + 'static,
@@ -147,20 +193,25 @@ fn call(bus: &Connection, message: &zbus::Message, to_loop: &impl Fn(Request)) -
         name: sender.clone(),
         path: path.to_string(),
     };
-    let (answer, answered) = channel();
+    // made only for a request that reaches the loop, which then answers it
+    let answer = || Call {
+        bus: bus.clone(),
+        message: message.clone(),
+        answered: false,
+    };
     let body = message.body();
     let request = match member {
         "BeginPrompting" => body
             .deserialize::<ObjectPath<'_>>()
             .map(|path| Request::Begin {
                 caller: caller(path),
-                answer,
+                answer: answer(),
             }),
         "StopPrompting" => body
             .deserialize::<ObjectPath<'_>>()
             .map(|path| Request::Stop {
                 caller: caller(path),
-                answer,
+                answer: answer(),
             }),
         "PerformPrompt" => body
             .deserialize::<(ObjectPath<'_>, String, HashMap<String, OwnedValue>, String)>()
@@ -176,7 +227,7 @@ fn call(bus: &Connection, message: &zbus::Message, to_loop: &impl Fn(Request)) -
                     kind,
                     properties,
                     exchange,
-                    answer,
+                    answer: answer(),
                 })
             }),
         _ => {
@@ -198,19 +249,6 @@ fn call(bus: &Connection, message: &zbus::Message, to_loop: &impl Fn(Request)) -
         }
     };
     to_loop(request);
-    let Ok((result, effects)) = answered.recv() else {
-        return bus.reply_error(&header, ERROR_FAILED, &"the prompter is ending");
-    };
-    match result {
-        Ok(()) => bus.reply(&header, &())?,
-        Err(error) => {
-            let (name, text) = error_reply(&error);
-            bus.reply_error(&header, name, &text)?
-        }
-    }
-    for effect in &effects {
-        send(bus, effect)?;
-    }
     Ok(())
 }
 
@@ -309,7 +347,7 @@ impl Host {
     pub fn request(&mut self, request: Request) {
         match request {
             Request::Begin { caller, answer } => {
-                let _ = answer.send(split(self.model.begin(caller)));
+                answer.answer(split(self.model.begin(caller)));
             }
             Request::Perform {
                 caller,
@@ -319,10 +357,10 @@ impl Host {
                 answer,
             } => {
                 let result = self.model.perform(&caller, kind, properties, &exchange);
-                let _ = answer.send(split(result));
+                answer.answer(split(result));
             }
             Request::Stop { caller, answer } => {
-                let _ = answer.send((Ok(()), self.model.stop(&caller)));
+                answer.answer((Ok(()), self.model.stop(&caller)));
             }
             Request::Vanished { name } => {
                 let effects = self.model.vanished(&name);

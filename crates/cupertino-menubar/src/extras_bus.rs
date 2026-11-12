@@ -19,7 +19,7 @@
 
 use crate::extras::{
     BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, FocusLifetime, FocusState,
-    OpenPanels, SessionCaps, SessionState, WifiNetwork, WifiState,
+    OpenPanels, Passphrase, SessionCaps, SessionState, WifiLink, WifiNetwork, WifiState,
 };
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -64,6 +64,11 @@ pub const QUEUE: usize = 16;
 enum Command {
     Refresh,
     Act(ExtraAction),
+    /// Join a network with a passphrase.
+    Join {
+        ssid: String,
+        passphrase: Passphrase,
+    },
 }
 
 /// Which process may answer as the session agent, as the server names it. Nothing is trusted until it does.
@@ -117,6 +122,16 @@ impl Queue {
     /// The task took a refresh: the next signal queues another.
     fn took_refresh(&self) {
         self.refresh_waiting.store(false, Ordering::Release);
+    }
+
+    /// Queue a join with a passphrase; the passphrase is not printed when it is dropped. Fails only when the task is
+    /// gone.
+    fn join(&self, ssid: String, passphrase: Passphrase) -> Result<(), WorkerGone> {
+        match self.commands.try_send(Command::Join { ssid, passphrase }) {
+            Ok(()) => Ok(()),
+            Err(async_channel::TrySendError::Full(_)) => Ok(()),
+            Err(async_channel::TrySendError::Closed(_)) => Err(WorkerGone),
+        }
     }
 
     /// Queue an action; one that finds the queue full is dropped and reported. Fails only when the task is gone.
@@ -182,6 +197,12 @@ impl ExtrasBus {
     /// Name the process that is the session agent; the system menu is read again.
     pub fn session_agent(&self, agent: SessionAgent) -> Result<(), WorkerGone> {
         self.queue.set_agent(agent)
+    }
+
+    /// Join the network `ssid` with `passphrase`. The outcome shows in [`WifiLink`]: the device's state, its failure,
+    /// and what the service answered when it refused the request.
+    pub fn join(&self, ssid: String, passphrase: Passphrase) -> Result<(), WorkerGone> {
+        self.queue.join(ssid, passphrase)
     }
 
     /// Carry out an action; dropped and reported when the queue is full.
@@ -270,6 +291,8 @@ async fn run(
 
     let mut reasons = Reasons::default();
     let mut last: Option<Extras> = None;
+    // what the service answered to the last join the bar asked for, when it refused
+    let mut refused: (u32, Option<String>) = (0, None);
     loop {
         let previous = last
             .as_ref()
@@ -280,6 +303,7 @@ async fn run(
             &session,
             queue.agent(),
             previous,
+            &refused,
             &mut reasons,
         )
         .await;
@@ -301,6 +325,12 @@ async fn run(
                     if let Err(e) = act(system.as_ref(), &session, &action).await {
                         eprintln!("cupertino-menubar: {action:?} failed: {e}");
                     }
+                }
+                Command::Join { ssid, passphrase } => {
+                    refused = (
+                        refused.0 + 1,
+                        join(system.as_ref(), &ssid, &passphrase).await.err(),
+                    );
                 }
                 Command::Refresh => queue.took_refresh(),
             }
@@ -384,6 +414,7 @@ async fn read_all(
     session: &Connection,
     agent: SessionAgent,
     previous: Option<SessionCaps>,
+    refused: &(u32, Option<String>),
     reasons: &mut Reasons,
 ) -> Extras {
     let mut extras = Extras {
@@ -392,6 +423,9 @@ async fn read_all(
     };
     if let Some(system) = system {
         extras.wifi = reasons.note("Wi-Fi", absent_if_not_running(read_wifi(system).await));
+        extras.wifi_link = read_link(system).await.unwrap_or_default();
+        extras.wifi_link.refused = refused.1.clone();
+        extras.wifi_link.joins = refused.0;
         extras.battery = reasons.note("battery", absent_if_not_running(read_battery(system).await));
         extras.bluetooth = reasons.note(
             "Bluetooth",
@@ -486,6 +520,23 @@ async fn read_session(
         user_name,
         caps: session_caps(capabilities.as_ref(), previous),
     }))
+}
+
+/// The Wi-Fi device's state, the network and the failure of the last attempt; empty when the service does not answer.
+async fn read_link(conn: &Connection) -> zbus::Result<WifiLink> {
+    let network = proxy(conn, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).await?;
+    let devices: Vec<DeviceRecord> = network.get_property("Devices").await?;
+    Ok(devices
+        .into_iter()
+        .find(|device| device.2 == "wifi")
+        .map(|(_, _, _, state, ssid, failure, _)| WifiLink {
+            state,
+            ssid,
+            failure,
+            refused: None,
+            joins: 0,
+        })
+        .unwrap_or_default())
 }
 
 /// `None` without a Wi-Fi device.
@@ -607,6 +658,26 @@ async fn read_panel(
     Ok(Some(panel.get_property::<String>(output).await?))
 }
 
+/// Ask the service to join `ssid` with `passphrase`; the text of its refusal when it refuses.
+async fn join(
+    system: Option<&Connection>,
+    ssid: &str,
+    passphrase: &Passphrase,
+) -> Result<(), String> {
+    let system =
+        system.ok_or_else(|| "There is no connection to the network service.".to_owned())?;
+    let network = proxy(system, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
+        .await
+        .map_err(|e| e.to_string())?;
+    network
+        .call::<_, _, ()>("Connect", &(ssid, passphrase.as_str()))
+        .await
+        .map_err(|e| match e {
+            zbus::Error::MethodError(_, Some(text), _) => text,
+            other => other.to_string(),
+        })
+}
+
 async fn act(
     system: Option<&Connection>,
     session: &Connection,
@@ -639,7 +710,13 @@ async fn act(
                 .set_property("WirelessEnabled", *on)
                 .await?)
         }
-        ExtraAction::ToggleWifiList => Ok(()),
+        ExtraAction::ToggleWifiList | ExtraAction::PromptNetwork(_) => Ok(()),
+        ExtraAction::CancelJoin => {
+            proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
+                .await?
+                .call("Disconnect", &())
+                .await
+        }
         ExtraAction::ScanWifi => {
             proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
                 .await?

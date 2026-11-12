@@ -148,6 +148,55 @@ pub struct Extras {
     /// shown, and whether a scan the panel asked for is still under way.
     pub wifi_list_open: bool,
     pub wifi_scanning: bool,
+    /// What the network service says of the Wi-Fi device and of the last join the bar asked for.
+    pub wifi_link: WifiLink,
+}
+
+/// The Wi-Fi device as the network service shows it, for the join prompt: where an attempt stands.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WifiLink {
+    /// The device's state (`disconnected`, `configuring`, `connected`, ...), empty without a device.
+    pub state: String,
+    /// The network the device is joining or has joined.
+    pub ssid: String,
+    /// Why the last attempt failed, in the service's words (`wrong-passphrase`, ...); empty when it did not.
+    pub failure: String,
+    /// What the service answered to the last join the bar asked for, when it refused it.
+    pub refused: Option<String>,
+    /// How many joins the bar asked for the service has answered; the answer in `refused` belongs to the last.
+    pub joins: u32,
+}
+
+impl WifiLink {
+    /// The device is busy joining a network.
+    pub fn busy(&self) -> bool {
+        self.state == "configuring"
+    }
+
+    /// The device is joined to the network `ssid`.
+    pub fn joined(&self, ssid: &str) -> bool {
+        self.state == "connected" && self.ssid == ssid
+    }
+}
+
+/// A passphrase on its way to the network service: zeroed when dropped and never printed.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Passphrase(zeroize::Zeroizing<String>);
+
+impl Passphrase {
+    pub fn new(text: &str) -> Self {
+        Passphrase(zeroize::Zeroizing::new(text.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Passphrase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Passphrase(..)")
+    }
 }
 
 /// The panels other processes show for the bar's items: the control panel and the notification centre's list. Each is
@@ -186,6 +235,10 @@ pub enum ExtraAction {
     ScanWifi,
     /// Join a network without a passphrase (open, or with saved credentials).
     JoinNetwork(String),
+    /// Ask for the passphrase of a secured network the service has no credentials for; the bar carries it out itself.
+    PromptNetwork(String),
+    /// Stop the attempt that is under way.
+    CancelJoin,
     SetBluetoothPowered(bool),
     ConnectDevice(String),
     DisconnectDevice(String),
@@ -831,11 +884,11 @@ fn wifi_menu(menu: &mut ExtraMenu, wifi: &WifiState, list_open: bool, scanning: 
             }
             for (i, network) in others.into_iter().take(MAX_PANEL_NETWORKS).enumerate() {
                 let secured = is_secured(&network.security);
-                // without a passphrase prompt in the bar, a network that needs one is finished in the settings
+                // a network that needs a passphrase the service does not have asks for it
                 let action = if network.known || !secured {
                     ExtraAction::JoinNetwork(network.ssid.clone())
                 } else {
-                    ExtraAction::System(SystemAction::WifiSettings)
+                    ExtraAction::PromptNetwork(network.ssid.clone())
                 };
                 panel_row(
                     menu,

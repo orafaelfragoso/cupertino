@@ -43,6 +43,7 @@ cupertino-kit = { path = "../cupertino-kit", optional = true }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
+zeroize = "1"
 cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }

@@ -556,6 +556,8 @@ pub struct SecureField<M> {
     /// keystroke with no room left is refused: no edit is reported and nothing is said. A lower limit keeps text
     /// already past it.
     pub max_len: Option<usize>,
+    /// Takes the focus when its window or popup opens.
+    pub initial: bool,
 }
 
 impl<M> Default for SecureField<M> {
@@ -569,6 +571,7 @@ impl<M> Default for SecureField<M> {
             busy: false,
             invalid: false,
             max_len: None,
+            initial: false,
         }
     }
 }

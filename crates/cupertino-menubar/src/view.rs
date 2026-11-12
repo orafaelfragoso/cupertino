@@ -4,6 +4,7 @@
 //! pointer and the keys back as [`Input`], in the coordinates of the bar.
 
 use crate::controller::{Level, MenuController};
+use crate::extras::Passphrase;
 use crate::fallback::HELP_SEARCH;
 use crate::feed::{Shared, StatusIcon, SCREEN_CAPTURE_SLOT};
 use crate::geom::{self, Point as BarPoint};
@@ -15,12 +16,17 @@ use crate::layout::{
 use crate::popups;
 use crate::tone::{BarTone, Halo, MenuPalette, Rgba};
 use cupertino_icons::{SystemIcons, ThemeIcons};
+use cupertino_kit::controls::{
+    Button, ButtonRole, ButtonStyle, CheckBox, SecureField, Spacer, Stack, Text, TextField,
+    TextRole,
+};
 use cupertino_kit::core::{
     next_resource_id, AccessibleStates, AccessibleValue, Action, Change, Checked, CommandRegistry,
     Element, Environment, Event, EventCx, IconImage, Key, MeasureCx, PaintCx, Phase, Popup,
     PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
-use cupertino_kit::geometry::{Point, Rect, Size};
+use cupertino_kit::geometry::{Insets, Point, Rect, Size};
+use cupertino_kit::layout::{Align, Axis};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, Overflow, SizeSpec};
 use cupertino_kit::platform::{
     DecorationMode, KeyEvent, MouseButton, PointerEvent, Timestamp, WindowSpec,
@@ -29,7 +35,8 @@ use cupertino_kit::render::{
     Effect, FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat, Sampling, Shape,
 };
 use cupertino_kit::text::{
-    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle, TextSystem,
+    AttributedText, ContentPurpose, FontWeight, ParagraphLayout, ParagraphStyle, SecureBuffer,
+    TextStyle, TextSystem,
 };
 use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant, Surface};
 use std::cell::{Cell, RefCell};
@@ -103,6 +110,10 @@ impl BarId {
         WindowKey(Key::from(format!("bar-{}", self.0)))
     }
 
+    fn prompt(self) -> WindowKey {
+        WindowKey(Key::from(format!("prompt-{}", self.0)))
+    }
+
     fn menu(self, level: usize) -> WindowKey {
         WindowKey(Key::from(format!("menu-{}-{level}", self.0)))
     }
@@ -133,6 +144,46 @@ pub enum Input {
     Dismissed(BarId),
     /// The compositor closed the bar's window.
     Closed(BarId),
+    /// Something in the join prompt of the bar.
+    Prompt {
+        bar: BarId,
+        event: PromptEvent,
+    },
+}
+
+/// What the person did in the join prompt.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PromptEvent {
+    /// The passphrase as typed so far.
+    Typed(Passphrase),
+    /// The Show Password box was set or cleared.
+    Show(bool),
+    /// Join with the passphrase as typed, from the button or from Return in the field.
+    Join(Passphrase),
+    /// Cancel, or a press outside the prompt.
+    Cancel,
+}
+
+/// How far a join stands.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PromptPhase {
+    Editing,
+    /// The service is joining the network.
+    Joining,
+    /// The attempt failed, with the line that says so.
+    Failed(String),
+}
+
+/// The join prompt: the passphrase of a secured network, asked in the panel's style under the Wi-Fi item.
+pub struct PromptScene<'a> {
+    /// The network, by name.
+    pub ssid: &'a str,
+    /// The prompt's top-left corner in the bar's coordinates: where the Wi-Fi panel's is.
+    pub at: BarPoint,
+    /// The passphrase is shown as text.
+    pub show: bool,
+    pub text: &'a Passphrase,
+    pub phase: PromptPhase,
 }
 
 /// The type of the bar and its menus: the regular items' and the bold application name's weights at one size.
@@ -205,6 +256,8 @@ pub struct BarScene<'a> {
     pub open_panels: &'a [SlotKey],
     /// The icons of menu rows.
     pub icons: &'a Rc<RowIcons>,
+    /// The join prompt, when it is open on this bar.
+    pub prompt: Option<PromptScene<'a>>,
 }
 
 /// The bar's window and one popup per open menu level.
@@ -219,7 +272,168 @@ pub fn windows<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) 
         };
         windows.push(menu(scene, level, rects[level], at, parent, input));
     }
+    if let Some(prompt) = &scene.prompt {
+        windows.push(join_prompt(scene.bar, prompt, input));
+    }
     windows
+}
+
+/// The prompt's size: the panel's width, and a height that holds its title, field, box, status line and buttons.
+const PROMPT_HEIGHT: f64 = 176.0;
+/// Space between the prompt's edge and what it holds, and between its rows.
+const PROMPT_PAD: f64 = panel::TEXT_INSET;
+const PROMPT_GAP: f64 = 9.0;
+/// The most bytes of a passphrase the field takes (the longest WPA passphrase is 63).
+const PASSPHRASE_MAX: usize = 128;
+
+fn plain_text<M: 'static>(text: &str, role: TextRole, size: f32, secondary: bool) -> Element<M> {
+    Element::new(Text {
+        content: AttributedText::plain(text, TextStyle::new(size)),
+        role,
+        wrap: true,
+        secondary,
+        selected: false,
+    })
+}
+
+/// The join prompt as a popup of the bar, with the panel's material and corners.
+fn join_prompt<M: Clone + 'static>(
+    bar: BarId,
+    prompt: &PromptScene<'_>,
+    input: fn(Input) -> M,
+) -> Window<M> {
+    let event = move |e: PromptEvent| input(Input::Prompt { bar, event: e });
+    let joining = prompt.phase == PromptPhase::Joining;
+    let empty = prompt.text.as_str().is_empty();
+    let field = if prompt.show {
+        Element::new(TextField {
+            label: "Password".into(),
+            placeholder: "Password".into(),
+            value: prompt.text.as_str().to_owned(),
+            revision: 0,
+            purpose: ContentPurpose::Password,
+            enabled: !joining,
+            on_change: Some(Box::new(move |change| {
+                event(PromptEvent::Typed(Passphrase::new(&change.text)))
+            })),
+            on_submit: (!empty).then(|| event(PromptEvent::Join(prompt.text.clone()))),
+            selection: None,
+            initial: true,
+        })
+        .key("shown")
+    } else {
+        Element::new(SecureField {
+            label: "Password".into(),
+            placeholder: "Password".into(),
+            enabled: !joining,
+            on_change: Some(Box::new(move |secret| {
+                event(PromptEvent::Typed(typed(secret)))
+            })),
+            on_submit: Some(Box::new(move |secret| {
+                event(PromptEvent::Join(typed(secret)))
+            })),
+            invalid: matches!(prompt.phase, PromptPhase::Failed(_)),
+            max_len: Some(PASSPHRASE_MAX),
+            initial: true,
+            ..SecureField::default()
+        })
+        .key("hidden")
+    };
+    let status = match &prompt.phase {
+        PromptPhase::Editing => String::new(),
+        PromptPhase::Joining => "Joining\u{2026}".to_owned(),
+        PromptPhase::Failed(why) => why.clone(),
+    };
+    let buttons = Element::new(Stack {
+        axis: Axis::Horizontal,
+        padding: Insets::ZERO,
+        spacing: 8.0,
+        align: Align::Center,
+        children: vec![
+            Element::new(Spacer::default()),
+            Element::new(Button {
+                label: "Cancel".into(),
+                role: ButtonRole::Normal,
+                style: ButtonStyle::Bordered,
+                enabled: true,
+                busy: false,
+                on_press: Some(event(PromptEvent::Cancel)),
+            })
+            .key("cancel"),
+            Element::new(Button {
+                label: "Join".into(),
+                role: ButtonRole::Default,
+                style: ButtonStyle::Bordered,
+                enabled: !empty && !joining,
+                busy: joining,
+                on_press: Some(event(PromptEvent::Join(prompt.text.clone()))),
+            })
+            .key("join"),
+        ],
+    });
+    let content = Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets {
+            top: PROMPT_PAD,
+            left: PROMPT_PAD,
+            bottom: PROMPT_PAD,
+            right: PROMPT_PAD,
+        },
+        spacing: PROMPT_GAP,
+        align: Align::Stretch,
+        children: vec![
+            plain_text(
+                &format!("Join \u{201c}{}\u{201d}", prompt.ssid),
+                TextRole::Section,
+                13.0,
+                false,
+            ),
+            field,
+            Element::new(CheckBox {
+                label: "Show Password".into(),
+                checked: if prompt.show {
+                    Checked::True
+                } else {
+                    Checked::False
+                },
+                enabled: !joining,
+                on_toggle: Some(Box::new(move |on| event(PromptEvent::Show(on)))),
+            })
+            .key("show"),
+            plain_text(
+                &status,
+                TextRole::Caption,
+                11.0,
+                !matches!(prompt.phase, PromptPhase::Failed(_)),
+            ),
+            buttons,
+        ],
+    });
+    let size = Size::new(panel::WIDTH, PROMPT_HEIGHT);
+    Window {
+        key: bar.prompt(),
+        spec: spec(BAR_APP_ID.to_owned(), size),
+        shortcuts: CommandRegistry::new(),
+        on_close: None,
+        background: WindowBackground::Surface {
+            surface: Surface::Menu,
+            radius: panel::RADIUS,
+            alpha: 1.0,
+        },
+        content,
+        popup: Some(Popup {
+            parent: bar.window(),
+            // `At` hangs the popup off the far corner of the point's one-point square
+            anchor: PopupAnchor::At(Point::new(prompt.at.x - 1.0, prompt.at.y - 1.0)),
+            grab: true,
+            on_dismiss: event(PromptEvent::Cancel),
+        }),
+        menus: None,
+    }
+}
+
+fn typed(secret: &SecureBuffer) -> Passphrase {
+    secret.with_secret(Passphrase::new)
 }
 
 fn spec(app_id: String, size: Size) -> WindowSpec {

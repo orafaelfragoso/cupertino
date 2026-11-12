@@ -1632,6 +1632,9 @@ impl<M: 'static> Widget<M> for SecureField<M> {
         if self.enabled {
             cx.focusable();
             cx.action(Action::Focus);
+            if self.initial {
+                cx.initial_focus();
+            }
         }
     }
 }

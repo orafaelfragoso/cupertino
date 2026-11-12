@@ -18,7 +18,7 @@ use cupertino_kit::text::{KeyInput, Keymap, TextSystem};
 use cupertino_menubar::clock::{clock_text, local_time, next_tick, separators_off, ClockSettings};
 use cupertino_menubar::controller::{MenuController, Mode, Outcome};
 use cupertino_menubar::desktop::app_name;
-use cupertino_menubar::extras::{self, ExtraAction, Extras, SessionAction};
+use cupertino_menubar::extras::{self, ExtraAction, Extras, Passphrase, SessionAction};
 use cupertino_menubar::extras_bus::{ExtrasBus, SessionAgent};
 use cupertino_menubar::feed::{status_icon, status_icon_px, BarFeed, Shared, StatusState};
 use cupertino_menubar::geom::Rect;
@@ -27,7 +27,8 @@ use cupertino_menubar::recent::RecentSources;
 use cupertino_menubar::routing::{self, menu_key, Action, Context};
 use cupertino_menubar::tone::BarTone;
 use cupertino_menubar::view::{
-    self, BarFont, BarId, BarPointer, BarScene, Input, KitMeasure, RowIcons,
+    self, BarFont, BarId, BarPointer, BarScene, Input, KitMeasure, PromptEvent, PromptPhase,
+    PromptScene, RowIcons,
 };
 use cupertino_menubar::wakeup::Wakeup;
 use cupertino_menubar::worker::{self, Worker};
@@ -68,6 +69,38 @@ const ICON_SCALE: f64 = 2.0;
 /// The keysyms of the Alt keys, which show the alternates of the open menus' items while held.
 const ALT_L: Keysym = Keysym(0xffe9);
 const ALT_R: Keysym = Keysym(0xffea);
+
+/// How long a join may take before the prompt says it failed.
+const JOIN_TIME: Duration = Duration::from_secs(30);
+
+/// The join prompt of one bar: which network, what is typed and how far the attempt stands.
+struct JoinPrompt {
+    bar: BarId,
+    ssid: String,
+    show: bool,
+    text: Passphrase,
+    phase: PromptPhase,
+    /// What the service had answered and what the device had failed with when the join was asked, so an earlier
+    /// attempt's answer is not taken for this one's.
+    joins_at_send: u32,
+    failure_at_send: String,
+    /// The service took the request: the device's state tells the rest.
+    answered: bool,
+    saw_busy: bool,
+    deadline: Option<Instant>,
+}
+
+/// The line that says why a join failed, from the device's failure.
+fn failure_line(failure: &str) -> String {
+    match failure {
+        "wrong-passphrase" => "The password is not correct.",
+        "network-not-found" => "The network is not in range.",
+        "no-address" => "The network gave no address.",
+        "connection-lost" => "The connection was lost.",
+        _ => "The network could not be joined.",
+    }
+    .to_owned()
+}
 
 /// The shell objects of one bar, made by the roles when its window opens and dropped with the bar.
 struct BarSurface {
@@ -381,6 +414,8 @@ pub struct App {
     start: Instant,
     /// When the Wi-Fi panel's "looking for networks" state ends, while a scan it asked for is under way.
     wifi_scan_until: Option<Instant>,
+    /// The join prompt, while the person is asked for a passphrase.
+    join: Option<JoinPrompt>,
     clock: ClockSettings,
     /// `menubar.conf` as last read, the last good values of the next read.
     conf: MenuBarSettings,
@@ -597,6 +632,7 @@ pub fn run() -> Result<std::convert::Infallible> {
             data_dirs: cupertino_defaults::data_dirs(),
             start: Instant::now(),
             wifi_scan_until: None,
+            join: None,
             clock: conf.clock,
             conf,
             next_clock: f64::NEG_INFINITY,
@@ -1006,6 +1042,7 @@ impl App {
                 }
                 None => Vec::new(),
             },
+            Input::Prompt { bar, event } => self.prompt_event(bar, event),
             Input::Closed(bar) => {
                 let Some(i) = self.index(bar) else {
                     return Vec::new();
@@ -1019,6 +1056,106 @@ impl App {
                 }
                 commands
             }
+        }
+    }
+
+    /// Open the join prompt for `ssid` on the bar `i`.
+    fn open_prompt(&mut self, i: usize, ssid: String) {
+        let link = &self.shared.extras.wifi_link;
+        self.join = Some(JoinPrompt {
+            bar: self.bars[i].id,
+            ssid,
+            show: false,
+            text: Passphrase::new(""),
+            phase: PromptPhase::Editing,
+            joins_at_send: link.joins,
+            failure_at_send: link.failure.clone(),
+            answered: false,
+            saw_busy: false,
+            deadline: None,
+        });
+    }
+
+    /// Something happened in the join prompt.
+    fn prompt_event(&mut self, bar: BarId, event: PromptEvent) -> Vec<Command<Message>> {
+        let Some(join) = self.join.as_mut().filter(|j| j.bar == bar) else {
+            return Vec::new();
+        };
+        match event {
+            PromptEvent::Typed(text) => {
+                join.text = text;
+                if matches!(join.phase, PromptPhase::Failed(_)) {
+                    join.phase = PromptPhase::Editing;
+                }
+            }
+            PromptEvent::Show(on) => {
+                join.show = on;
+                // the hidden field starts empty: nothing typed there is handed back to it
+                if !on {
+                    join.text = Passphrase::new("");
+                }
+            }
+            PromptEvent::Join(text) => {
+                if text.as_str().is_empty() || join.phase == PromptPhase::Joining {
+                    return Vec::new();
+                }
+                join.text = text.clone();
+                let link = &self.shared.extras.wifi_link;
+                join.joins_at_send = link.joins;
+                join.failure_at_send = link.failure.clone();
+                join.answered = false;
+                join.saw_busy = false;
+                join.phase = PromptPhase::Joining;
+                join.deadline = Some(Instant::now() + JOIN_TIME);
+                if let Err(e) = self.services.extras.join(join.ssid.clone(), text) {
+                    return fail(e);
+                }
+            }
+            PromptEvent::Cancel => {
+                let joining = join.phase == PromptPhase::Joining;
+                self.join = None;
+                if joining {
+                    if let Err(e) = self.services.extras.act(ExtraAction::CancelJoin) {
+                        return fail(e);
+                    }
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    /// The service's state moved: see how far the join stands.
+    fn follow_join(&mut self) {
+        let Some(join) = self.join.as_mut() else {
+            return;
+        };
+        if join.phase != PromptPhase::Joining {
+            return;
+        }
+        let link = &self.shared.extras.wifi_link;
+        if link.joins > join.joins_at_send {
+            if let Some(refused) = &link.refused {
+                join.phase = PromptPhase::Failed(refused.clone());
+                join.deadline = None;
+                return;
+            }
+            join.answered = true;
+        }
+        if !join.answered {
+            return;
+        }
+        if link.joined(&join.ssid) {
+            self.join = None;
+        } else if link.busy() {
+            join.saw_busy = true;
+        } else if !link.failure.is_empty()
+            && (join.saw_busy || link.failure != join.failure_at_send)
+        {
+            join.phase = PromptPhase::Failed(failure_line(&link.failure));
+            join.deadline = None;
+        } else if join.saw_busy {
+            join.phase = PromptPhase::Failed(failure_line(""));
+            join.deadline = None;
         }
     }
 
@@ -1135,6 +1272,7 @@ impl App {
                         .as_ref()
                         .is_some_and(|w| !w.networks.is_empty());
                     self.shared.extras.wifi_scanning = scanning && !listed;
+                    self.follow_join();
                     if agent_gone {
                         for i in 0..self.bars.len() {
                             if let Some(outcome) =
@@ -1209,6 +1347,16 @@ impl App {
                 self.wifi_scan_until = None;
                 self.shared.extras.wifi_scanning = false;
                 commands.extend(self.refresh());
+            } else {
+                next = next.min(until.saturating_duration_since(Instant::now()));
+            }
+        }
+        if let Some(until) = self.join.as_ref().and_then(|j| j.deadline) {
+            if Instant::now() >= until {
+                if let Some(join) = self.join.as_mut() {
+                    join.phase = PromptPhase::Failed(failure_line(""));
+                    join.deadline = None;
+                }
             } else {
                 next = next.min(until.saturating_duration_since(Instant::now()));
             }
@@ -1392,6 +1540,7 @@ impl App {
                 Action::Extra(ExtraAction::Session(action)) => {
                     self.menu_bar(bar, |m| m.session_action(client_session_action(action)));
                 }
+                Action::Extra(ExtraAction::PromptNetwork(ssid)) => self.open_prompt(i, ssid),
                 Action::Extra(ExtraAction::ToggleWifiList) => {
                     self.shared.extras.wifi_list_open = !self.shared.extras.wifi_list_open;
                     commands.extend(self.refresh());
@@ -1494,6 +1643,17 @@ impl Application for App {
                             .open_on(slot, output, app.bars.len())
                     })
                     .collect();
+                let prompt = app
+                    .join
+                    .as_ref()
+                    .filter(|j| j.bar == bar.id)
+                    .map(|j| PromptScene {
+                        ssid: &j.ssid,
+                        at: prompt_origin(bar, app.height),
+                        show: j.show,
+                        text: &j.text,
+                        phase: j.phase.clone(),
+                    });
                 view::windows(
                     &BarScene {
                         bar: bar.id,
@@ -1506,12 +1666,27 @@ impl Application for App {
                         size: Size::new(f64::from(bar.width), app.height),
                         open_panels: &open_panels,
                         icons: &app.icons,
+                        prompt,
                     },
                     Message::Input,
                 )
             })
             .collect()
     }
+}
+
+/// Where the join prompt's top-left corner is on `bar`: where the Wi-Fi panel's is, its right edge level with the
+/// Wi-Fi item's, a little below the bar.
+fn prompt_origin(bar: &Bar, bar_height: f64) -> cupertino_menubar::geom::Point {
+    use cupertino_menubar::layout::panel;
+    let right = bar
+        .controller
+        .layout()
+        .slots
+        .iter()
+        .find(|slot| matches!(&slot.key, SlotKey::Status(id) if id == "extra:wifi"))
+        .map_or(f64::from(bar.width) - 8.0, |slot| slot.rect.x + slot.rect.w);
+    cupertino_menubar::geom::Point::new((right - panel::WIDTH).max(8.0), bar_height + panel::GAP)
 }
 
 /// Seconds since the Unix epoch (0 for a clock set before it).

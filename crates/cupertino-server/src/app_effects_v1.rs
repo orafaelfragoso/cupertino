@@ -45,7 +45,7 @@ impl AppEffectsV1Global {
 }
 
 /// The version of `cupertino_app_effects_v1` the server offers.
-const VERSION: u32 = 12;
+const VERSION: u32 = 13;
 /// The version from which the backdrops of a subsurface are drawn, above the rest of its surface tree.
 pub const SUBSURFACE_BACKDROPS_VERSION: u32 = 11;
 
@@ -61,6 +61,8 @@ const TONE_VERSION: u32 = 7;
 const LARGE_PANEL_VERSION: u32 = 10;
 /// The version of `cupertino_backdrop_v1` that has the bar glass style.
 const BAR_VERSION: u32 = 12;
+/// The version of `cupertino_backdrop_v1` that has the dense and module glass styles.
+const DENSE_VERSION: u32 = 13;
 
 /// The tone a backdrop's text is drawn with, as the wire carries it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,11 +182,13 @@ struct Shape {
 
 /// Material names that draw glass rather than a recipe of the design tokens: each backdrop is a glass shape of its
 /// own, like `set_glass` with container 0.
-pub const GLASS_MATERIALS: [(&str, GlassStyle); 4] = [
+pub const GLASS_MATERIALS: [(&str, GlassStyle); 6] = [
     ("Glass", GlassStyle::Regular),
     ("ClearGlass", GlassStyle::Clear),
     ("LargePanelGlass", GlassStyle::LargePanel),
     ("BarGlass", GlassStyle::Bar),
+    ("DenseGlass", GlassStyle::Dense),
+    ("ModuleGlass", GlassStyle::Module),
 ];
 
 /// The glass style a material name stands for.
@@ -835,6 +839,16 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                         if resource.version() >= BAR_VERSION =>
                     {
                         Some(GlassStyle::Bar)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::Dense)
+                        if resource.version() >= DENSE_VERSION =>
+                    {
+                        Some(GlassStyle::Dense)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::Module)
+                        if resource.version() >= DENSE_VERSION =>
+                    {
+                        Some(GlassStyle::Module)
                     }
                     _ => None,
                 };

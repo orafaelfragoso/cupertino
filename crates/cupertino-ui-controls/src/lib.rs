@@ -17,6 +17,7 @@ mod editor;
 mod field;
 mod form;
 mod glass;
+mod glass_edge;
 mod grid;
 mod icon;
 mod image;
@@ -65,6 +66,7 @@ pub use form::{
     FORM_SMALL_ICON_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT,
 };
 pub use glass::{nested_radius, paint_glass, GlassMaterial, GlassRole};
+pub use glass_edge::{paint_glass_edge, GlassEdge};
 pub use list::{striped_element, ListState};
 pub use press::Press;
 pub use scroll::{BarState, ViewportState};

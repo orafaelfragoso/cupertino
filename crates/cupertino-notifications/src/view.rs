@@ -35,8 +35,9 @@ use std::sync::Arc;
 
 use cupertino_animation::{Spring, SpringParams};
 use cupertino_kit::controls::{
-    Button, ButtonRole, ButtonStyle, DisclosureButton, DisclosureStyle, Icon, IconDirection,
-    RichText, ScrollView, Scroller, Stack, Text, TextLink, TextRole,
+    paint_glass_edge, Button, ButtonRole, ButtonStyle, DisclosureButton, DisclosureStyle,
+    GlassEdge, Icon, IconDirection, RichText, ScrollView, Scroller, Stack, Text, TextLink,
+    TextRole,
 };
 use cupertino_kit::core::{
     AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event, EventCx, Glass,
@@ -118,6 +119,14 @@ pub const CLOSE_REACH_Y: f64 = 4.25;
 const _: () = assert!(CLOSE_REACH_X <= SHADOW_MARGIN);
 /// Outline of a card: 0.5 pt.
 pub const OUTLINE_WIDTH: f64 = 0.5;
+/// The edge of a card of glass: the black outline along its sides and the white rim along its top and bottom, in the dark
+/// and the light appearance, and the share of the rim left down the sides.
+const CARD_OUTLINE_DARK: f32 = 0.65;
+const CARD_OUTLINE_LIGHT: f32 = 0.5;
+const CARD_RIM_DARK: f32 = 0.37;
+const CARD_RIM_LIGHT: f32 = 1.0;
+const CARD_RIM_WIDTH_LIGHT: f64 = 1.0;
+const CARD_RIM_SIDE: f32 = 0.1;
 /// The centre's header row (title and Clear All), the gap under it and the title's inset from the cards' leading edge.
 pub const HEADER_HEIGHT: f64 = 33.0;
 pub const HEADER_GAP: f64 = 5.0;
@@ -2752,7 +2761,7 @@ impl<M: 'static> Widget<M> for Card<M> {
         };
         let glass = self.material
             && cx.glass(
-                Glass::regular()
+                Glass::dense()
                     .radius(radius)
                     .container(self.container, 0.0)
                     .alpha(opacity),
@@ -2784,7 +2793,30 @@ impl<M: 'static> Widget<M> for Card<M> {
                 paint: Paint::Solid(fill),
             });
         }
-        if let Some(outline) = color(cx, ColorRole::Separator) {
+        if glass {
+            let dark = theme.preferences.appearance.is_dark();
+            paint_glass_edge(
+                cx,
+                rect,
+                radius,
+                GlassEdge {
+                    outline: if dark {
+                        CARD_OUTLINE_DARK
+                    } else {
+                        CARD_OUTLINE_LIGHT
+                    },
+                    outline_width: OUTLINE_WIDTH,
+                    rim: if dark { CARD_RIM_DARK } else { CARD_RIM_LIGHT },
+                    rim_bottom: 1.0,
+                    rim_side: CARD_RIM_SIDE,
+                    rim_width: if dark {
+                        OUTLINE_WIDTH
+                    } else {
+                        CARD_RIM_WIDTH_LIGHT
+                    },
+                },
+            );
+        } else if let Some(outline) = color(cx, ColorRole::Separator) {
             cx.push(PaintOp::Stroke {
                 shape,
                 width: OUTLINE_WIDTH,

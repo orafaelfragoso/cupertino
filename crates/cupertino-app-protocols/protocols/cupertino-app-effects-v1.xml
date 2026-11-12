@@ -12,7 +12,7 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="12">
+  <interface name="cupertino_app_effects_v1" version="13">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
       event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
@@ -20,7 +20,7 @@
       set_glass of cupertino_backdrop_v1, version 7 the tone event of cupertino_backdrop_v1, version 8 the always_show_scroll_bars display
       option of cupertino_appearance_v1, version 9 its steady_caret display option, version 10 the large_panel glass
       style of cupertino_backdrop_v1, version 11 the backdrops of a subsurface (get_backdrop), version 12 the bar glass
-      style of cupertino_backdrop_v1; the other interfaces of the protocol are unchanged in each.
+      style of cupertino_backdrop_v1, version 13 its dense and module glass styles; the other interfaces of the protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -144,7 +144,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_backdrop_v1" version="12">
+  <interface name="cupertino_backdrop_v1" version="13">
     <description summary="a material region below a surface">
       All state is double-buffered: it applies on the next wl_surface.commit of the surface the
       backdrop was created for, together with that commit's buffer, so the backdrop and the content
@@ -163,6 +163,8 @@
       <entry name="clear" value="1" summary="the clearer glass of controls over rich content, such as media"/>
       <entry name="large_panel" value="2" summary="the regular glass of a large floating panel: its face toned further towards the middle (a lower white, a lifted black, a little less colour), with a soft drop shadow below it" since="10"/>
       <entry name="bar" value="3" summary="the glass of a floating bar of icons: clear glass optics over a face that barely changes the scene, a small lift of white and a bright rim along the top and bottom" since="12"/>
+      <entry name="dense" value="4" summary="the glass of a dense floating surface with text on it, a menu, a popover or a card: regular glass over a face pressed to a mid grey veil" since="13"/>
+      <entry name="module" value="5" summary="the glass of the tiles of a panel of modules: regular optics over a face that lets the scene through darker, in both appearances" since="13"/>
     </enum>
 
     <request name="destroy" type="destructor">

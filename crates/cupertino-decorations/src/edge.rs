@@ -28,20 +28,21 @@ pub const INACTIVE_OUTLINE_SHARE: f32 = 0.62;
 /// Opacity of the black outline along the sides of a menu in the dark appearance.
 pub const MENU_OUTLINE_DARK: f32 = 0.65;
 /// Opacity of the black outline along the sides of a menu in the light appearance.
-pub const MENU_OUTLINE_LIGHT: f32 = 0.15;
+pub const MENU_OUTLINE_LIGHT: f32 = 0.5;
 /// Share of the shadow table's inner-rim density the white inner rim of a window shows.
 pub const INNER_RIM_SHARE: f64 = 0.5;
 /// How sharply a menu's outline fades from its sides towards its top and bottom: the outline's strength is the
 /// horizontal part of the edge's outward normal to this power.
 pub const SIDE_FALLOFF_POWER: f32 = 2.0;
-/// Width in points of the light rim inside a menu.
+/// Width in points of the light rim inside a menu, in the dark and the light appearance.
 pub const MENU_RIM_WIDTH: f64 = 0.5;
+pub const MENU_RIM_WIDTH_LIGHT: f64 = 1.0;
 /// Opacity of the white rim along the top and bottom of a menu in the dark appearance.
-pub const MENU_RIM_DARK: f32 = 0.22;
+pub const MENU_RIM_DARK: f32 = 0.36;
 /// Opacity of the white rim along the top and bottom of a menu in the light appearance.
-pub const MENU_RIM_LIGHT: f32 = 0.5;
+pub const MENU_RIM_LIGHT: f32 = 1.0;
 /// Share of the menu rim's top and bottom opacity left along its sides.
-pub const MENU_RIM_SIDE_SHARE: f32 = 0.45;
+pub const MENU_RIM_SIDE_SHARE: f32 = 0.1;
 /// How quickly the menu rim fades from its top and bottom towards its sides: the vertical part of the edge's outward
 /// normal to this power.
 pub const MENU_RIM_FALLOFF_POWER: f32 = 1.0;
@@ -193,7 +194,11 @@ pub fn edge(
                     1.0,
                     if dark { MENU_RIM_DARK } else { MENU_RIM_LIGHT },
                 ],
-                width_pt: MENU_RIM_WIDTH,
+                width_pt: if dark {
+                    MENU_RIM_WIDTH
+                } else {
+                    MENU_RIM_WIDTH_LIGHT
+                },
             };
             let falloff = OutlineFalloff::Ends {
                 power: MENU_RIM_FALLOFF_POWER,

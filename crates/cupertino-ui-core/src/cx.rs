@@ -650,6 +650,24 @@ impl Glass {
         }
     }
 
+    /// The glass of a dense floating surface with square corners, on its own, opaque: regular glass over a mid grey
+    /// veil.
+    pub fn dense() -> Self {
+        Self {
+            style: GlassStyle::Dense,
+            ..Self::regular()
+        }
+    }
+
+    /// The glass of the tiles of a panel of modules with square corners, on its own, opaque: regular optics over a face
+    /// that lets the scene through darker.
+    pub fn module() -> Self {
+        Self {
+            style: GlassStyle::Module,
+            ..Self::regular()
+        }
+    }
+
     /// Corners of `radius` points.
     pub fn radius(self, radius: f64) -> Self {
         Self {

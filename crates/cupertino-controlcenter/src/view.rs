@@ -10,13 +10,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use cupertino_kit::controls::{Icon, IconDirection};
+use cupertino_kit::controls::{paint_glass_edge, GlassEdge, Icon, IconDirection};
 use cupertino_kit::core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, Checked, CommandRegistry,
     Element, Environment, Event, EventCx, Glass, Key, MeasureCx, PaintCx, Phase, Propagation, Role,
     SemanticsCx, Shortcut, Widget, Window, WindowBackground, WindowKey,
 };
-use cupertino_kit::geometry::{Insets, Point, Rect, Size};
+use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
     Overflow, SizeSpec,
@@ -24,7 +24,7 @@ use cupertino_kit::layout::{
 use cupertino_kit::platform::{
     DecorationMode, Keysym, Mods, MouseButton, PointerEvent, WindowSpec,
 };
-use cupertino_kit::render::{GradientStop, Paint, PaintOp, Shape};
+use cupertino_kit::render::{FillRule, GradientStop, Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, Wrap,
 };
@@ -60,28 +60,43 @@ const END: Keysym = Keysym(0xff57);
 const CONTAINER: u32 = 1;
 const BLEND: f64 = 8.0;
 
-/// The fills a tile paints itself. `RT_*`: the opaque panel and tiles with Reduce Transparency. `LIGHT_TINT`: laid
-/// over the glass in a light session, where the compositor draws light glass: about a quarter black, so a tile over a
-/// white page reads as a mid-light grey (about three quarters of the page's brightness) under its white text, not as
-/// dark glass. `FALLBACK`: a tile the window cannot show glass under.
+/// The fills a tile paints itself. `RT_*`: the opaque panel and tiles with Reduce Transparency. `FALLBACK`: a tile the window cannot show glass under.
 const RT_GROUP: Color = Color::new(0.302, 0.302, 0.302, 1.0);
 const RT_TILE: Color = Color::new(0.114, 0.114, 0.114, 1.0);
-const LIGHT_TINT: Color = Color::new(0.0, 0.0, 0.0, 0.27);
 /// The tiles with Increase Contrast: opaque mid grey inside a darker rim half a point wide, so no backdrop shows through
 /// behind the white text.
 const IC_TILE: Color = Color::new(0.463, 0.463, 0.463, 1.0);
 const IC_RIM_COLOR: Color = Color::new(0.341, 0.341, 0.341, 1.0);
 const IC_RIM: f64 = 0.5;
 const FALLBACK: Color = Color::new(0.16, 0.16, 0.17, 0.92);
-/// The light a tile lays on its glass: white at these opacities. `GLOW` under the top edge, fading out over
-/// `GLOW_REACH` points; `RIM` along the top, `RIM_SIDE` down the sides, the bottom at `BOTTOM_RIM` of the top's; the
-/// rim `RIM_WIDTH` points wide.
-const GLOW: f32 = 0.10;
-const GLOW_REACH: f64 = 6.0;
-const RIM: f32 = 0.42;
-const RIM_SIDE: f32 = 0.12;
-const BOTTOM_RIM: f32 = 0.6;
-const RIM_WIDTH: f64 = 0.75;
+/// The light a tile lays on its glass: white glows under the top and bottom edges, as `(distance in points, opacity)`
+/// stops that fade to nothing; a white rim `RIM_WIDTH` points wide along the top and bottom (`RIM` at the top,
+/// `BOTTOM_RIM` of it at the bottom, `RIM_SIDE` down the sides); and a fine dark outline along the sides, `OUTLINE`
+/// black at its strongest.
+const TOP_GLOW: [(f64, f32); 7] = [
+    (0.0, 0.55),
+    (1.0, 0.43),
+    (2.0, 0.26),
+    (3.0, 0.17),
+    (4.0, 0.11),
+    (5.0, 0.06),
+    (7.0, 0.0),
+];
+const BOTTOM_GLOW: [(f64, f32); 7] = [
+    (0.0, 0.40),
+    (1.0, 0.25),
+    (2.0, 0.13),
+    (3.0, 0.095),
+    (4.0, 0.06),
+    (5.0, 0.035),
+    (7.0, 0.0),
+];
+const RIM: f32 = 0.95;
+const RIM_SIDE: f32 = 0.0;
+const BOTTOM_RIM: f32 = 1.0;
+const RIM_WIDTH: f64 = 1.0;
+const OUTLINE: f32 = 0.55;
+const OUTLINE_WIDTH: f64 = 0.5;
 /// A switch that is on: a white disc behind its symbol, drawn in the accent colour.
 const ON_FILL: Color = Color::new(1.0, 1.0, 1.0, 1.0);
 /// A switch badge that is off: a light veil.
@@ -207,7 +222,7 @@ impl Input {
 pub struct Presentation {
     /// The panel's opacity while it fades out.
     pub alpha: f64,
-    /// The session is in the light appearance: the tiles tint their glass dark.
+    /// The session is in the light appearance: the panel keeps its dark glass.
     pub light: bool,
     /// The panel takes input: false while it fades out.
     pub input: bool,
@@ -481,6 +496,46 @@ fn fill(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, color: Color) {
     });
 }
 
+/// `rect` with its corners rounded by `radius`, as a path of four quarter circles.
+fn rounded_path(rect: Rect, radius: f64) -> Vec<PathVerb> {
+    // a quarter circle's control points sit this far along its tangents, as a fraction of the radius
+    const KAPPA: f64 = 0.552_284_75;
+    let (l, t, r, b) = (rect.min_x(), rect.min_y(), rect.max_x(), rect.max_y());
+    let radius = radius
+        .min(rect.width() / 2.0)
+        .min(rect.height() / 2.0)
+        .max(0.0);
+    let k = radius * KAPPA;
+    vec![
+        PathVerb::MoveTo(Point::new(l + radius, t)),
+        PathVerb::LineTo(Point::new(r - radius, t)),
+        PathVerb::CubicTo(
+            Point::new(r - radius + k, t),
+            Point::new(r, t + radius - k),
+            Point::new(r, t + radius),
+        ),
+        PathVerb::LineTo(Point::new(r, b - radius)),
+        PathVerb::CubicTo(
+            Point::new(r, b - radius + k),
+            Point::new(r - radius + k, b),
+            Point::new(r - radius, b),
+        ),
+        PathVerb::LineTo(Point::new(l + radius, b)),
+        PathVerb::CubicTo(
+            Point::new(l + radius - k, b),
+            Point::new(l, b - radius + k),
+            Point::new(l, b - radius),
+        ),
+        PathVerb::LineTo(Point::new(l, t + radius)),
+        PathVerb::CubicTo(
+            Point::new(l, t + radius - k),
+            Point::new(l + radius - k, t),
+            Point::new(l + radius, t),
+        ),
+        PathVerb::Close,
+    ]
+}
+
 /// Darkening at a distance from the modules' edge, in points: the share of black laid over the backdrop. It starts
 /// at about 9 % at the edge and fades out over [`SHADOW_REACH`].
 const SHADOW_PROFILE: [(f64, f64); 5] = [
@@ -507,7 +562,27 @@ fn shadow_at(distance: f64) -> f64 {
 
 /// A soft shadow around `rect` (rounded at [`LARGE_RADIUS`]): concentric bands outside the outline, so the modules
 /// themselves are not darkened.
-fn shadow(cx: &mut PaintCx<'_>, rect: Rect) {
+///
+/// The `holes` are the tiles' outlines (a rectangle and its corner radius): the shadow is also laid between them, where
+/// the glass of the tiles does not cover it, at the strength it has at the edge, and is clipped away over the tiles,
+/// whose glass lies under everything the window paints.
+fn shadow(cx: &mut PaintCx<'_>, rect: Rect, holes: &[(Rect, f64)]) {
+    if !holes.is_empty() {
+        let mut path = rounded_path(rect.outset(SHADOW_REACH + 1.0), 0.0);
+        for (hole, radius) in holes {
+            path.extend(rounded_path(*hole, *radius));
+        }
+        cx.push(PaintOp::PushClip(Shape::Path {
+            verbs: path,
+            fill_rule: FillRule::EvenOdd,
+        }));
+        fill(
+            cx,
+            rect,
+            LARGE_RADIUS,
+            Color::new(0.0, 0.0, 0.0, shadow_at(0.0) as f32),
+        );
+    }
     let bands = (SHADOW_REACH / SHADOW_BAND).ceil() as usize;
     for i in (0..bands).rev() {
         let inner = i as f64 * SHADOW_BAND;
@@ -526,45 +601,54 @@ fn shadow(cx: &mut PaintCx<'_>, rect: Rect) {
             paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, alpha)),
         });
     }
+    if !holes.is_empty() {
+        cx.push(PaintOp::PopClip);
+    }
 }
 
 /// A tile's light on its glass: a soft glow under its top edge, then a fine bright rim strongest along the top and
 /// bottom and faint down the sides, so a tile reads as a raised piece of glass on any wallpaper.
 fn lift(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
-    let (glow, rim, side) = (GLOW, RIM, RIM_SIDE);
     let white = |a: f32| Color::new(1.0, 1.0, 1.0, a);
     let stop = |offset: f32, a: f32| GradientStop {
         offset,
         color: white(a),
     };
-    let reach = (GLOW_REACH / rect.height().max(1.0)) as f32;
+    let height = rect.height().max(1.0);
+    // the glows: from the top edge down and from the bottom edge up
+    let top: Vec<GradientStop> = TOP_GLOW
+        .iter()
+        .map(|&(d, a)| stop((d / height).min(0.5) as f32, a))
+        .collect();
+    let bottom: Vec<GradientStop> = BOTTOM_GLOW
+        .iter()
+        .map(|&(d, a)| stop((1.0 - d / height).max(0.5) as f32, a))
+        .rev()
+        .collect();
+    let mut stops = top;
+    stops.push(stop(0.5, 0.0));
+    stops.extend(bottom);
     cx.push(PaintOp::Fill {
         shape: Shape::RoundedRect { rect, radius },
         paint: Paint::Linear {
             start: Point::new(rect.min_x(), rect.min_y()),
             end: Point::new(rect.min_x(), rect.max_y()),
-            stops: vec![stop(0.0, glow), stop(reach.min(1.0), 0.0), stop(1.0, 0.0)],
+            stops,
         },
     });
-    let edge = rect.inset(Insets::uniform(RIM_WIDTH / 2.0));
-    let band = (radius / rect.height().max(1.0)).clamp(0.0, 0.5) as f32;
-    cx.push(PaintOp::Stroke {
-        shape: Shape::RoundedRect {
-            rect: edge,
-            radius: (radius - RIM_WIDTH / 2.0).max(0.0),
+    paint_glass_edge(
+        cx,
+        rect,
+        radius,
+        GlassEdge {
+            outline: OUTLINE,
+            outline_width: OUTLINE_WIDTH,
+            rim: RIM,
+            rim_bottom: BOTTOM_RIM,
+            rim_side: RIM_SIDE,
+            rim_width: RIM_WIDTH,
         },
-        width: RIM_WIDTH,
-        paint: Paint::Linear {
-            start: Point::new(rect.min_x(), rect.min_y()),
-            end: Point::new(rect.min_x(), rect.max_y()),
-            stops: vec![
-                stop(0.0, rim),
-                stop(band, side),
-                stop(1.0 - band, side),
-                stop(1.0, rim * BOTTOM_RIM),
-            ],
-        },
-    });
+    );
 }
 
 fn reduce_transparency(cx: &PaintCx<'_>) -> bool {
@@ -712,6 +796,8 @@ struct Board<M> {
     height: f64,
     /// The outline of what the soft shadow goes around, relative to the grid's corner.
     shadow: Rect,
+    /// The tiles' outlines, relative to the grid's corner, that the shadow is cut away over.
+    holes: Vec<(Rect, f64)>,
     on_outside: M,
     children: Vec<Element<M>>,
 }
@@ -736,7 +822,11 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.alpha != old.alpha || self.height != old.height || self.shadow != old.shadow {
+        if self.alpha != old.alpha
+            || self.height != old.height
+            || self.shadow != old.shadow
+            || self.holes != old.holes
+        {
             Change::Paint
         } else {
             Change::None
@@ -781,7 +871,16 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
             );
             fill(cx, group, layout::GROUP_RADIUS, RT_GROUP);
         } else if !increase_contrast(cx) {
-            shadow(cx, self.shadow.translate(GRID_ORIGIN.x, GRID_ORIGIN.y));
+            let holes: Vec<(Rect, f64)> = self
+                .holes
+                .iter()
+                .map(|(rect, radius)| (rect.translate(GRID_ORIGIN.x, GRID_ORIGIN.y), *radius))
+                .collect();
+            shadow(
+                cx,
+                self.shadow.translate(GRID_ORIGIN.x, GRID_ORIGIN.y),
+                &holes,
+            );
         }
     }
 
@@ -887,9 +986,9 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
             return;
         }
         let shape = if self.capsule {
-            Glass::regular().capsule()
+            Glass::module().capsule()
         } else {
-            Glass::regular().radius(radius)
+            Glass::module().radius(radius)
         };
         let glass = shape
             .container(CONTAINER, BLEND)
@@ -897,9 +996,6 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
         if !cx.glass(glass) {
             fill(cx, rect, radius, FALLBACK);
             return;
-        }
-        if self.light {
-            fill(cx, rect, radius, LIGHT_TINT);
         }
         lift(cx, rect, radius);
     }
@@ -2179,6 +2275,24 @@ impl<M: Clone + 'static> Builder<'_, M> {
         })
     }
 
+    /// The outlines of the tiles at rest, from the grid's corner: what the soft shadow is cut away over. None while a
+    /// detail view opens or closes, when the tiles move.
+    fn holes(&self) -> Vec<(Rect, f64)> {
+        if self.presentation.detail.is_some() {
+            return Vec::new();
+        }
+        let mut holes: Vec<(Rect, f64)> = Module::ALL
+            .into_iter()
+            .map(|m| {
+                let frame = layout::frame(m);
+                (frame, layout::outline(m).radius(frame.size))
+            })
+            .collect();
+        let edit = layout::edit_frame();
+        holes.push((edit, edit.height() / 2.0));
+        holes
+    }
+
     /// What the soft shadow goes around: the grid with the Edit Controls capsule, going to the open detail view's
     /// outline as it opens. It fades with the panel.
     fn shadow(&self) -> Rect {
@@ -2479,6 +2593,7 @@ pub fn panel<M: Clone + 'static>(
             alpha: presentation.alpha,
             height: builder.height(),
             shadow: builder.shadow(),
+            holes: builder.holes(),
             on_outside: to(away(Via::Pointer)),
             children: builder.board(),
         }),

@@ -221,23 +221,37 @@ pub enum GlassStyle {
     LargePanel,
     /// The glass of a floating bar of icons (the Dock): clear glass optics over a face that barely changes the scene.
     Bar,
+    /// The glass of a dense floating surface with text on it (a menu, a popover, a card): regular glass over a mid
+    /// grey veil.
+    Dense,
+    /// The glass of the tiles of a panel of modules: regular optics over a face that lets the scene through darker.
+    Module,
 }
 
 impl GlassStyle {
     /// The material name that stands for this glass on its own, as the theme names it (`Glass`, `ClearGlass`,
-    /// `LargePanelGlass`, `BarGlass`).
+    /// `LargePanelGlass`, `BarGlass`, `DenseGlass`, `ModuleGlass`).
     pub fn material(self) -> &'static str {
         match self {
             Self::Regular => "Glass",
             Self::Clear => "ClearGlass",
             Self::LargePanel => "LargePanelGlass",
             Self::Bar => "BarGlass",
+            Self::Dense => "DenseGlass",
+            Self::Module => "ModuleGlass",
         }
     }
 
     /// The glass a material name stands for.
     pub fn of_material(name: &str) -> Option<Self> {
-        [Self::Regular, Self::Clear, Self::LargePanel, Self::Bar]
+        [
+            Self::Regular,
+            Self::Clear,
+            Self::LargePanel,
+            Self::Bar,
+            Self::Dense,
+            Self::Module,
+        ]
             .into_iter()
             .find(|s| s.material() == name)
     }

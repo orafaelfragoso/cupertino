@@ -44,6 +44,12 @@ pub enum GlassStyle {
     /// the top and bottom) over a face that barely changes the scene, only a small lift of white, so the wallpaper stays
     /// readable through it.
     Bar,
+    /// The glass of a dense floating surface with text on it (a menu, a popover, a notification card): regular glass over
+    /// a face pressed to a mid grey veil, so any backdrop reads as a quiet smoky pane under light text.
+    Dense,
+    /// The glass of the tiles of a panel of modules (the control panel): regular optics over a face that lets the
+    /// scene through darker, in both appearances, so white labels read over a bright sky.
+    Module,
 }
 
 /// Everything besides the shape's size that selects a recipe.
@@ -334,6 +340,56 @@ fn bar_face(dark: bool) -> GlassFace {
     }
 }
 
+/// The face of dense glass. Dark: a bright backdrop comes out near a mid grey (about 125 of 255) and a dark one is
+/// lifted a little, with the colours kept, under a faint grey veil. Light: the regular light face.
+fn dense_face(dark: bool) -> GlassFace {
+    if dark {
+        GlassFace {
+            saturation: DENSE_SATURATION_DARK,
+            white: DENSE_WHITE_DARK,
+            black: DENSE_BLACK_DARK,
+            clamp: 1.308_310_9,
+            max_luma: DENSE_MAX_LUMA_DARK,
+            fill: DENSE_FILL_DARK,
+        }
+    } else {
+        GlassFace {
+            saturation: DENSE_SATURATION_LIGHT,
+            white: DENSE_WHITE_LIGHT,
+            black: DENSE_BLACK_LIGHT,
+            fill: DENSE_FILL_LIGHT,
+            ..regular_face(false)
+        }
+    }
+}
+
+/// The light dense face: a strong saturation under a pale veil, so a backdrop's colour comes through as a pastel of it.
+const DENSE_SATURATION_LIGHT: f32 = 2.245;
+const DENSE_WHITE_LIGHT: f32 = 1.086;
+const DENSE_BLACK_LIGHT: f32 = 0.439;
+const DENSE_FILL_LIGHT: [f32; 4] = [1.0, 1.0, 1.0, 0.221];
+
+/// Saturation, gain on linear light, black lift and largest luminance (as a fraction of the clamp) of the dark dense
+/// face, and the straight sRGB veil laid over it.
+const DENSE_SATURATION_DARK: f32 = 1.62;
+const DENSE_WHITE_DARK: f32 = 1.43;
+const DENSE_BLACK_DARK: f32 = 0.054;
+const DENSE_MAX_LUMA_DARK: f32 = 0.251;
+const DENSE_FILL_DARK: [f32; 4] = [0.261, 0.261, 0.261, 0.482];
+
+/// The face of module glass: a gain on linear light of about 0.6 with a little more colour, and a largest luminance
+/// below the regular glass's, so a bright backdrop comes out a darker, more saturated tone of itself.
+fn module_face() -> GlassFace {
+    GlassFace {
+        saturation: 1.32,
+        white: 0.557,
+        black: 0.034,
+        clamp: 1.308_310_9,
+        max_luma: 0.434,
+        fill: [0.0; 4],
+    }
+}
+
 /// Face colours with Reduce Transparency.
 fn reduced_transparency_face(dark: bool, style: GlassStyle) -> GlassFace {
     match (style, dark) {
@@ -465,6 +521,8 @@ impl GlassParams {
             GlassStyle::Clear => Self::clear(dark, s),
             GlassStyle::LargePanel => Self::large_panel(dark, s),
             GlassStyle::Bar => Self::bar(dark, s),
+            GlassStyle::Dense => Self::dense(dark, s),
+            GlassStyle::Module => Self::module(s),
         };
         if mode.increase_contrast {
             if let Some(face) = increased_contrast_face(dark, mode.style) {
@@ -483,7 +541,11 @@ impl GlassParams {
             p.shadow.ring_stroke = 0.0;
             p.shadow.ring_offset = 0.0;
             match mode.style {
-                GlassStyle::Regular | GlassStyle::LargePanel | GlassStyle::Bar => {
+                GlassStyle::Regular
+                | GlassStyle::LargePanel
+                | GlassStyle::Bar
+                | GlassStyle::Dense
+                | GlassStyle::Module => {
                     // the large panel's wider blur gives way to regular glass's whole blur recipe
                     p.blur = Self::regular(dark, s).blur;
                     p.blur.radius = REDUCED_TRANSPARENCY_BLUR;
@@ -577,6 +639,21 @@ impl GlassParams {
             },
         ];
         p.shadow.opacity = 1.0;
+        p
+    }
+
+    /// The dense glass: the regular recipe of its size over the dense face ([`dense_face`]).
+    fn dense(dark: bool, s: f32) -> Self {
+        let mut p = Self::regular(dark, s);
+        p.face = dense_face(dark);
+        p
+    }
+
+    /// The module glass: the dark regular recipe of its size over the module face ([`module_face`]), in both
+    /// appearances.
+    fn module(s: f32) -> Self {
+        let mut p = Self::regular(true, s);
+        p.face = module_face();
         p
     }
 

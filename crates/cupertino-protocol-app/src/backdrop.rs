@@ -48,6 +48,10 @@ pub enum GlassStyle {
     LargePanel,
     /// The glass of a floating bar of icons, clear glass optics over a face that barely changes the scene.
     Bar,
+    /// The glass of a dense floating surface with text on it, regular glass over a mid grey veil.
+    Dense,
+    /// The glass of the tiles of a panel of modules, regular optics over a face that lets the scene through darker.
+    Module,
 }
 
 impl GlassStyle {
@@ -151,6 +155,12 @@ impl Backdrop {
             // a server before it draws the bar as clear glass
             GlassStyle::Bar if self.proxy.version() < BAR_VERSION => WireStyle::Clear,
             GlassStyle::Bar => WireStyle::Bar,
+            // a server before it draws them as regular glass
+            GlassStyle::Dense | GlassStyle::Module if self.proxy.version() < DENSE_VERSION => {
+                WireStyle::Regular
+            }
+            GlassStyle::Dense => WireStyle::Dense,
+            GlassStyle::Module => WireStyle::Module,
         };
         self.proxy.set_glass(style, container, spacing);
         Ok(())
@@ -174,6 +184,9 @@ const LARGE_PANEL_VERSION: u32 = 10;
 
 /// The version of `cupertino_backdrop_v1` that has the bar glass style.
 const BAR_VERSION: u32 = 12;
+
+/// The version of `cupertino_backdrop_v1` that has the dense and module glass styles.
+const DENSE_VERSION: u32 = 13;
 
 impl Dispatch<CupertinoBackdropV1, BackdropData> for State {
     fn event(

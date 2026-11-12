@@ -910,6 +910,13 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
             let typed = old.typing.borrow().clone();
             *self.typing.borrow_mut() = typed;
         }
+        // a choice still flashing when the application builds its menu again (a pane that refreshes as it shows a
+        // level) carries on in the new menu, so it is still sent when the flash ends
+        if !Rc::ptr_eq(&self.flash, &old.flash) {
+            if let Some(flash) = old.flash.borrow_mut().take() {
+                *self.flash.borrow_mut() = Some(flash);
+            }
+        }
         if self.label != old.label || self.radius != old.radius {
             Change::Paint
         } else {

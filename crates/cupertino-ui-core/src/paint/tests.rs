@@ -622,9 +622,9 @@ fn a_node_s_material_is_cut_to_what_shows_and_capped_per_window_and_a_refused_on
     assert_eq!(
         shown.materials[0],
         MaterialRegion {
-            material: cupertino_ui_theme::GLASS_MATERIAL.into(),
+            material: cupertino_ui_theme::DENSE_GLASS_MATERIAL.into(),
             glass: Some(cupertino_ui_platform::GlassRegion {
-                style: cupertino_ui_platform::GlassStyle::Regular,
+                style: cupertino_ui_platform::GlassStyle::Dense,
                 container: 0,
                 spacing: 0.0,
             }),

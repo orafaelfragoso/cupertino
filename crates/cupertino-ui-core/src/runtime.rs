@@ -1263,8 +1263,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             WindowEvent::Focus(focused) => {
                 let changed = w.active != focused;
+                // a window whose popup had the keyboard was drawn active all along: its colours have nothing to cross
+                let shown = w.active || w.keyboard_in_popup;
                 w.active = focused;
-                if changed {
+                if changed && shown != focused {
                     w.begin_activation(now);
                 }
                 if !focused {

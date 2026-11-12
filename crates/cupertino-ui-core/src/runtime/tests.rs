@@ -1841,7 +1841,7 @@ fn a_menu_window_shows_its_glass_where_the_desktop_draws_it_and_the_opaque_fill_
         "the compositor draws the material"
     );
     let menu = Backdrop {
-        material: cupertino_ui_theme::GLASS_MATERIAL.into(),
+        material: cupertino_ui_theme::DENSE_GLASS_MATERIAL.into(),
         radius: 8.0,
         alpha: 1.0,
     };
@@ -3575,6 +3575,7 @@ mod popup_release {
             match message.as_str() {
                 "opener:Target:press" => model.menu = true,
                 "more:Target:motion" => model.submenu = true,
+                "menu dismissed" => model.menu = false,
                 _ => {}
             }
             model.heard.push(message);
@@ -3759,6 +3760,61 @@ mod popup_release {
             ["menu:Target:release outside, opened by Some(1000)"],
             "heard: {heard:?}"
         );
+    }
+
+    impl Desk {
+        /// Window `key` gains or loses the keyboard.
+        fn focus(&mut self, key: &str, focused: bool) {
+            let id = self.id(key);
+            self.rt
+                .window_system_mut()
+                .send(id, WindowEvent::Focus(focused));
+            self.rt.step(steps()).unwrap();
+        }
+
+        /// Whether window `key` still repaints on the second of two frames at one time: its colours are crossing.
+        fn crossing(&mut self, key: &str) -> bool {
+            let id = self.id(key);
+            let presents = |desk: &Self| {
+                let system = desk.rt.window_system();
+                system.presented.iter().filter(|(w, _)| *w == id).count()
+            };
+            let mut counts = Vec::new();
+            for _ in 0..2 {
+                let now = Timestamp(self.clock.now().0);
+                self.rt
+                    .window_system_mut()
+                    .send(id, WindowEvent::Frame(now));
+                self.rt.step(steps()).unwrap();
+                counts.push(presents(self));
+            }
+            counts[1] > counts[0]
+        }
+    }
+
+    /// A window whose menu has the keyboard is drawn active all along, so when the menu closes and the keyboard comes
+    /// back its colours do not cross again; a window that was drawn inactive crosses them as the keyboard comes back.
+    #[test]
+    fn the_keyboard_back_from_a_closed_menu_crosses_no_colours_but_back_from_elsewhere_does() {
+        let mut desk = Desk::new();
+        desk.press_opener();
+        desk.focus("main", false);
+        desk.focus("menu", true);
+        let menu = desk.id("menu");
+        desk.rt
+            .window_system_mut()
+            .send(menu, WindowEvent::PopupDone);
+        desk.rt.step(steps()).unwrap();
+        assert!(!desk.rt.model().menu, "the menu closed");
+        desk.focus("main", true);
+        assert!(
+            !desk.crossing("main"),
+            "the window was drawn active while its menu had the keyboard"
+        );
+
+        desk.focus("main", false);
+        desk.focus("main", true);
+        assert!(desk.crossing("main"), "back from elsewhere, it crosses");
     }
 
     #[test]

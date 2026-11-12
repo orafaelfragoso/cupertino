@@ -867,27 +867,38 @@ impl XdgShellHandler for Cupertino {
             },
         };
         if let Ok(mut grab) = self.popups.grab_popup(root.clone(), kind, &seat, serial) {
-            if let Some(keyboard) = seat.get_keyboard() {
-                if keyboard.is_grabbed()
+            let keyboard = seat.get_keyboard();
+            let pointer = seat.get_pointer();
+            let keyboard_held = keyboard.as_ref().is_some_and(|keyboard| {
+                keyboard.is_grabbed()
                     && !(keyboard.has_grab(serial)
                         || keyboard.has_grab(grab.previous_serial().unwrap_or(serial)))
-                {
-                    grab.ungrab(PopupUngrabStrategy::All);
-                    return;
-                }
-                keyboard.set_focus(self, grab.current_grab(), enter);
-                keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
-            }
-            if let Some(pointer) = seat.get_pointer() {
-                if pointer.is_grabbed()
+            });
+            let pointer_held = pointer.as_ref().is_some_and(|pointer| {
+                pointer.is_grabbed()
                     && !(pointer.has_grab(serial)
                         || pointer
                             .has_grab(grab.previous_serial().unwrap_or_else(|| grab.serial())))
-                {
-                    grab.ungrab(PopupUngrabStrategy::All);
-                    return;
+            });
+            if keyboard_held || pointer_held {
+                grab.ungrab(PopupUngrabStrategy::All);
+                return;
+            }
+            // The pointer grab of the menu this one grows from gives the keyboard back to the chain's root as it is
+            // replaced, while the keyboard is still grabbed under the chain's serial. Let go of that keyboard grab
+            // first, so the keyboard goes straight from the menu to the new popup and the window that opened the chain
+            // never hears of it in between.
+            if let Some(keyboard) = &keyboard {
+                if keyboard.is_grabbed() {
+                    keyboard.unset_grab(self);
                 }
+            }
+            if let Some(pointer) = &pointer {
                 pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
+            }
+            if let Some(keyboard) = &keyboard {
+                keyboard.set_focus(self, grab.current_grab(), enter);
+                keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
             }
             self.popup_grab = Some(crate::popup_grab::ActivePopupGrab::new(grab, root, private));
             self.refocus_pointer();

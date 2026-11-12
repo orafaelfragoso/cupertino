@@ -29,7 +29,8 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as Serve
 use smithay::utils::SERIAL_COUNTER;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols::xdg::shell::client::{
@@ -131,6 +132,8 @@ struct Seen {
     submenu_drawn: bool,
     menu_done: usize,
     submenu_done: usize,
+    /// Each keyboard enter (`true`) and leave the client got, on the panel or window, the menu or the submenu.
+    keys: Vec<(&'static str, bool)>,
 }
 
 struct State {
@@ -138,7 +141,8 @@ struct State {
     /// The surface of the window, for a window's client.
     window: Option<wl_surface::WlSurface>,
     window_drawn: bool,
-    /// The surface of the submenu, once it was made.
+    /// The surfaces of the menu and the submenu, once they were made.
+    menu: Option<wl_surface::WlSurface>,
     submenu: Option<wl_surface::WlSurface>,
     shm: wl_shm::WlShm,
     /// The serials of the presses the client got, in order: the first opens the menu, the second (on the menu) the
@@ -300,7 +304,36 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
             if caps.contains(wl_seat::Capability::Pointer) {
                 seat.get_pointer(qh, ());
             }
+            if caps.contains(wl_seat::Capability::Keyboard) {
+                seat.get_keyboard(qh, ());
+            }
         }
+    }
+}
+
+/// The keyboard: it notes on which of its surfaces each enter and leave was.
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let (surface, entered) = match event {
+            wl_keyboard::Event::Enter { surface, .. } => (surface, true),
+            wl_keyboard::Event::Leave { surface, .. } => (surface, false),
+            _ => return,
+        };
+        let name = if state.submenu.as_ref() == Some(&surface) {
+            "submenu"
+        } else if state.menu.as_ref() == Some(&surface) {
+            "menu"
+        } else {
+            "panel"
+        };
+        state.seen.lock().unwrap().keys.push((name, entered));
     }
 }
 
@@ -325,11 +358,13 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
 }
 
 /// A panel's client on a thread of its own: it maps the panel, the first press on it opens the menu with a popup grab
-/// on that press, and a second press (on the menu) opens a submenu beside it with a grab of its own. It disconnects when
-/// dropped.
+/// on that press, and a second press (on the menu) opens a submenu beside it with a grab of its own, or, once told to
+/// ([`PanelClient::rest_on_menu`]), a submenu opens as a pointer resting on its row opens it: with a grab on the press
+/// that opened the menu. It disconnects when dropped.
 struct PanelClient {
     seen: Arc<Mutex<Seen>>,
     stop: Arc<AtomicBool>,
+    rested: Arc<AtomicBool>,
     rounds: common::Rounds,
 }
 
@@ -337,6 +372,8 @@ impl PanelClient {
     fn spawn(stream: UnixStream, panel: &'static Panel) -> PanelClient {
         let seen = Arc::new(Mutex::new(Seen::default()));
         let stop = Arc::new(AtomicBool::new(false));
+        let rested = Arc::new(AtomicBool::new(false));
+        let rested2 = rested.clone();
         let rounds = common::Rounds::default();
         let (seen2, stop2, rounds2) = (seen.clone(), stop.clone(), rounds.clone());
         std::thread::spawn(move || {
@@ -376,6 +413,7 @@ impl PanelClient {
                 seen: seen2,
                 window: panel.window.then(|| surface.clone()),
                 window_drawn: false,
+                menu: None,
                 submenu: None,
                 shm,
                 presses: Vec::new(),
@@ -410,10 +448,15 @@ impl PanelClient {
                     }
                     popup.grab(&seat, serial);
                     menu_surface.commit();
+                    state.menu = Some(menu_surface.clone());
                     menu = Some((menu_surface, xdg, popup));
                 }
+                let rest = rested2
+                    .load(Ordering::SeqCst)
+                    .then(|| state.presses.first())
+                    .flatten();
                 if let (Some(&serial), Some((_, menu_xdg, _)), None) =
-                    (state.presses.get(1), &menu, &submenu)
+                    (state.presses.get(1).or(rest), &menu, &submenu)
                 {
                     let positioner = wm_base.create_positioner(&qh, ());
                     positioner.set_size(SUBMENU.0, SUBMENU.1);
@@ -431,7 +474,12 @@ impl PanelClient {
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
-        PanelClient { seen, stop, rounds }
+        PanelClient {
+            seen,
+            stop,
+            rested,
+            rounds,
+        }
     }
 
     fn menu_drawn(&self) -> bool {
@@ -444,6 +492,16 @@ impl PanelClient {
 
     fn popup_done(&self) -> bool {
         self.seen.lock().unwrap().menu_done > 0
+    }
+
+    /// The pointer rests on the menu's row of a submenu: the submenu opens with a grab on the press that opened the menu.
+    fn rest_on_menu(&self) {
+        self.rested.store(true, Ordering::SeqCst);
+    }
+
+    /// The keyboard enters and leaves the client got, in order.
+    fn keys(&self) -> Vec<(&'static str, bool)> {
+        self.seen.lock().unwrap().keys.clone()
     }
 
     /// The `popup_done` the menu and the submenu got.
@@ -950,6 +1008,36 @@ fn focus_within_a_dock_menus_chain_keeps_its_submenu_open() {
 #[test]
 fn focus_within_a_window_menus_chain_keeps_its_submenu_open() {
     nested_focus_keeps_the_chain(&APP_WINDOW);
+}
+
+/// A submenu opened by the pointer resting on its row, with a grab on the press that opened its menu, takes the
+/// keyboard straight from the menu: the surface that opened the chain hears nothing of the keyboard in between (a
+/// window that did would draw itself inactive for a frame and cross its colours back), and the submenu keeps the
+/// keyboard grabbed.
+#[test]
+fn a_submenu_opened_by_a_rest_takes_the_keyboard_straight_from_its_menu() {
+    let (mut d, client) = menu_open(&DOCK);
+    let menu = keyboard_focus(&d.state).expect("the menu has the keyboard");
+    client.rest_on_menu();
+    wait_until(&mut d, "the submenu to open", |_| client.submenu_drawn());
+    sync(&mut d, &client);
+    let keys = client.keys();
+    let opened = keys
+        .iter()
+        .position(|&key| key == ("menu", true))
+        .expect("the menu got the keyboard");
+    assert_eq!(
+        keys[opened + 1..],
+        [("menu", false), ("submenu", true)],
+        "from the menu the keyboard goes to the submenu alone: {keys:?}"
+    );
+    let submenu = keyboard_focus(&d.state).expect("the keyboard has a focus");
+    assert!(
+        submenu != menu && d.state.popups.find_popup(&submenu).is_some(),
+        "the submenu has the keyboard"
+    );
+    let keyboard = d.state.seat.get_keyboard().unwrap();
+    assert!(keyboard.is_grabbed(), "the keyboard stays grabbed");
 }
 
 /// With a submenu open, `taker` takes the keyboard: the menu and the submenu are each dismissed exactly once, the grab

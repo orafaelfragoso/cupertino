@@ -575,7 +575,23 @@ impl<M: 'static> Widget<M> for Divider<M> {
                             ..cupertino_ui_theme::StateVariant::NORMAL
                         },
                     );
-                    look::fill(cx, rect, 0.0, background);
+                    // on whole device pixels, and half a point into the trailing pane: at a fractional scale the line
+                    // ends inside a pixel that the trailing pane's material, which starts on a pixel of its own, leaves
+                    // uncovered, and the desktop would show through it
+                    if let Some(background) = background {
+                        let reach = DIVIDER + 0.5;
+                        let under = match (self.axis, mirrored) {
+                            (Axis::Horizontal, false) => Rect::new(start, 0.0, reach, size.height),
+                            (Axis::Horizontal, true) => {
+                                Rect::new(start + DIVIDER - reach, 0.0, reach, size.height)
+                            }
+                            (Axis::Vertical, false) => Rect::new(0.0, start, size.width, reach),
+                            (Axis::Vertical, true) => {
+                                Rect::new(0.0, start + DIVIDER - reach, size.width, reach)
+                            }
+                        };
+                        cx.fill_pixels(under, background);
+                    }
                     let px = (1.0 / cx.env().scale.max(1.0)).min(DIVIDER);
                     // the rim lies on the leading pane's side, which is the far side when mirrored
                     let rim = match (self.axis, mirrored) {

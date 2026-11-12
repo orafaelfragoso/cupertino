@@ -372,6 +372,14 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
                         cx.capture_pointer();
                         Pointer::Press(position, mods)
                     }
+                    // the press that opened this popup, let go where it went down, is no click on the popup
+                    PointerEvent::Button {
+                        button: MouseButton::Left,
+                        pressed: false,
+                        ..
+                    } if !cx.has_pointer_capture() && cx.opening_press().is_some() => {
+                        return Propagation::Stop;
+                    }
                     PointerEvent::Button {
                         position,
                         button: MouseButton::Left,

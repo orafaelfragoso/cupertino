@@ -150,6 +150,7 @@ pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) ->
         on_close: None,
         background: WindowBackground::None,
         content: Element::new(LabelNode {
+            name: view.name.to_owned(),
             pointer,
             children: {
                 let mut children = vec![Element::new(Body {
@@ -245,6 +246,8 @@ fn outline(w: f64, h: f64, pointer: bool) -> Vec<PathVerb> {
 
 /// The popup's content: the capsule, with room under it for the pointer.
 struct LabelNode<M> {
+    /// What assistive technology calls the window: the tile's name, which the capsule under it reads.
+    name: String,
     pointer: bool,
     children: Vec<Element<M>>,
 }
@@ -270,6 +273,8 @@ impl<M: Clone + 'static> Widget<M> for LabelNode<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.pointer != old.pointer {
             Change::Layout
+        } else if self.name != old.name {
+            Change::Paint
         } else {
             Change::None
         }
@@ -292,8 +297,9 @@ impl<M: Clone + 'static> Widget<M> for LabelNode<M> {
 
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
+    // the window around the capsule, which assistive technology reads as the tooltip
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.hidden();
+        cx.name(self.name.clone());
     }
 }
 

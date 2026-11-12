@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use cupertino_assets::BUILTIN_FONT;
 use cupertino_kit::controls::{SIDEBAR_TOP, WINDOW_CORNER_RADIUS};
 use cupertino_kit::core::WindowBackground;
-use cupertino_kit::core::{AccessibilityUpdate, PlaceholderIcons, Role, RuntimeOptions};
+use cupertino_kit::core::{AccessibilityUpdate, Key, PlaceholderIcons, Role, RuntimeOptions};
 use cupertino_kit::geometry::Size;
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
@@ -64,6 +64,11 @@ struct Run {
 }
 
 fn start(appearance: Appearance, scale: f64) -> Run {
+    start_on(appearance, scale, None)
+}
+
+/// [`start`] on a screen `screen` points tall, when given.
+fn start_on(appearance: Appearance, scale: f64, screen: Option<f64>) -> Run {
     let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
     let preferences = ThemePreferences {
         appearance,
@@ -77,8 +82,12 @@ fn start(appearance: Appearance, scale: f64) -> Run {
     let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
     let about = about();
     let (_, shown) = async_channel::bounded(1);
+    let mut fitted = layout(&about, &text, &theme);
+    if let Some(height) = screen {
+        fitted.fit(height);
+    }
     launch(Start {
-        layout: layout(&about, &text, &theme),
+        layout: fitted,
         about,
         activation: String::new(),
         shown,
@@ -352,4 +361,34 @@ fn the_window_is_a_glass_panel_whose_title_bar_is_only_its_buttons() {
         SIDEBAR_TOP,
         "the mark starts under the row of the window's buttons"
     );
+}
+
+#[test]
+fn on_a_short_screen_the_window_fits_and_its_rows_scroll_above_the_button() {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let screen = 440.0;
+    let mut run = start_on(Appearance::Light, 1.0, Some(screen));
+    let spec = run
+        .driver
+        .window_system_mut()
+        .spec(run.window)
+        .unwrap()
+        .clone();
+    assert!(
+        spec.size.height <= screen - metrics::SCREEN_RESERVED,
+        "{spec:?} fits the screen"
+    );
+    let runtime = run.driver.runtime();
+    assert!(
+        runtime.find(run.window, &Key::from("rows")).is_some(),
+        "the rows scroll"
+    );
+    let snapshot = runtime.snapshot(run.window).unwrap();
+    let button = snapshot
+        .accessibility
+        .iter()
+        .find(|(_, node)| node.role == Role::Button)
+        .map(|(_, node)| node.bounds)
+        .unwrap();
+    assert!(button.max_y() <= spec.size.height, "{button:?} shows");
 }

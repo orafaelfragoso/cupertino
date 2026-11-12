@@ -5,13 +5,17 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use cupertino_kit::controls::{Grid, Spacer, TextRole, WindowDragArea, PANEL_WINDOW_BACKGROUND};
+use cupertino_kit::controls::{
+    Grid, ScrollView, Scroller, Spacer, TextRole, WindowDragArea, PANEL_WINDOW_BACKGROUND,
+};
 use cupertino_kit::core::{
     next_resource_id, Change, CommandRegistry, Event, EventCx, MeasureCx, PaintCx, Propagation,
     SemanticsCx, Shortcut, Widget,
 };
-use cupertino_kit::geometry::{Insets, Rect, Size};
-use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec, Track};
+use cupertino_kit::geometry::{Insets, Point, Rect, Size};
+use cupertino_kit::layout::{
+    Constraints, ContainerKind, LayoutSpec, Measured, ScrollState, SizeSpec, Track,
+};
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowRequest};
 use cupertino_kit::prelude::*;
 use cupertino_kit::render::{ImageResource, PixelFormat, ResourceId, Sampling};
@@ -64,11 +68,14 @@ pub fn run(activation: String) -> Result<()> {
         return Ok(());
     };
     let mut about = About::read(Path::new("/"));
-    about
+    let screen = about
         .read_displays()
         .map_err(|e| format!("cannot list the displays: {e}"))?;
     let options = cupertino_kit::app::options()?;
-    let layout = layout(&about, &options.text, &options.theme);
+    let mut layout = layout(&about, &options.text, &options.theme);
+    if let Some(height) = screen {
+        layout.fit(height);
+    }
     launch(Start {
         about,
         layout,
@@ -111,6 +118,8 @@ pub struct AboutWindow {
     shown: async_channel::Receiver<String>,
     /// A More Info process is being started or runs, so a held key or repeated clicks start one.
     more_info: bool,
+    /// Where the rows are scrolled to when the screen is too short for them all.
+    scroll: ScrollState,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,6 +131,7 @@ pub enum Message {
     Token(Option<String>),
     /// The More Info process ended.
     Ended,
+    Scroll(ScrollState),
     Close,
 }
 
@@ -191,6 +201,11 @@ impl Application for AboutApp {
             layout,
             shown,
             more_info: false,
+            scroll: ScrollState {
+                offset: Point::ZERO,
+                content: Size::ZERO,
+                viewport: Size::ZERO,
+            },
         };
         (window, commands)
     }
@@ -226,6 +241,10 @@ impl Application for AboutApp {
                 window.more_info = false;
                 Vec::new()
             }
+            Message::Scroll(scroll) => {
+                window.scroll = scroll;
+                Vec::new()
+            }
             Message::Close => vec![Command::Exit],
         }
     }
@@ -250,7 +269,7 @@ impl Application for AboutApp {
             background: BACKGROUND,
             // moved by a press anywhere the button does not take
             content: Element::from(WindowDragArea {
-                content: content(&window.about, &window.layout),
+                content: content(&window.about, &window.layout, window.scroll),
             }),
             popup: None,
             menus: None,
@@ -286,23 +305,92 @@ fn cell(align: Align, children: Vec<Element<Message>>) -> Element<Message> {
 }
 
 /// The approved layout as a grid of fixed tracks, so every row sits where [`Layout`] put it and the window is its size.
-fn content(about: &About, layout: &Layout) -> Element<Message> {
+fn content(about: &About, layout: &Layout, scroll: ScrollState) -> Element<Message> {
     use metrics::*;
-    let mut rows = vec![
+    let whole = |children| cell(Align::Center, children).span(3, 1);
+    let rows_block = layout.rows_view.unwrap_or(if layout.rows.is_empty() {
+        layout.button.y - ROWS_Y - BUTTON_GAP
+    } else {
+        layout.rows_height()
+    });
+    let mut list = Element::new(Grid {
+        columns: columns(),
+        rows: row_tracks(layout),
+        padding: Insets::ZERO,
+        spacing: Size::ZERO,
+        children: row_cells(about, layout),
+    });
+    if layout.rows_view.is_some() {
+        // a screen too short for every row: they scroll in what it leaves
+        list = Element::from(ScrollView {
+            content: list,
+            state: scroll,
+            horizontal: false,
+            vertical: true,
+            scroller: Scroller::Overlay,
+            on_scroll: Box::new(Message::Scroll),
+        })
+        .key("rows");
+    }
+    let rows = vec![
         Track::Fixed(NAME_Y - TOP),
         Track::Fixed(VERSION_Y - NAME_Y),
         Track::Fixed(ROWS_Y - VERSION_Y),
+        Track::Fixed(rows_block),
+        Track::Fixed(BUTTON_GAP),
+        Track::Fixed(layout.button.h),
     ];
-    let whole = |children| cell(Align::Center, children).span(3, 1);
-    let mut children = vec![
+    let children = vec![
         whole(vec![Element::new(Mark)]),
-        whole(vec![text(NAME, TextRole::Title, false)]),
+        whole(vec![text(NAME, TextRole::LargeTitle, false)]),
         whole(vec![text(&about.version, TextRole::Caption, true)]),
+        list.span(3, 1),
+        Element::new(Spacer { min: 0.0 }).span(3, 1),
+        whole(vec![Element::new(Button {
+            label: MORE_INFO.into(),
+            // a plain grey button: the window asks nothing, so it has no default action to colour
+            role: ButtonRole::Normal,
+            style: ButtonStyle::Bordered,
+            enabled: true,
+            busy: false,
+            on_press: Some(Message::MoreInfo),
+        })
+        .width(layout.button.w)]),
     ];
+    Element::new(Grid {
+        columns: columns(),
+        rows,
+        padding: Insets::new(TOP, PADDING, BOTTOM, PADDING),
+        spacing: Size::ZERO,
+        children,
+    })
+}
+
+/// The labels' column, the gap about the centre and the values' column.
+fn columns() -> Vec<Track> {
+    use metrics::*;
+    vec![
+        Track::Fixed(LABEL_COLUMN),
+        Track::Fixed(LABEL_END + VALUE_START),
+        Track::Fixed(VALUE_COLUMN),
+    ]
+}
+
+/// Each row as tall as its wrapped lines put it, so every row sits where [`Layout`] put it.
+fn row_tracks(layout: &Layout) -> Vec<Track> {
+    let end = metrics::ROWS_Y + layout.rows_height();
     let mut tops = layout.rows.iter().map(|row| row.y).skip(1);
+    layout
+        .rows
+        .iter()
+        .map(|row| Track::Fixed(tops.next().unwrap_or(end) - row.y))
+        .collect()
+}
+
+/// A repeated label is shown once, on the first of its rows.
+fn row_cells(about: &About, layout: &Layout) -> Vec<Element<Message>> {
+    let mut children = Vec::new();
     for (row, value) in layout.rows.iter().zip(&about.rows) {
-        let next = tops.next().unwrap_or(layout.button.y);
-        rows.push(Track::Fixed(next - row.y));
         let label = if row.label.is_empty() {
             Element::new(Spacer { min: 0.0 })
         } else {
@@ -315,32 +403,7 @@ fn content(about: &About, layout: &Layout) -> Element<Message> {
             vec![text(&value.value, ROW_ROLE, false)],
         ));
     }
-    if layout.rows.is_empty() {
-        rows.push(Track::Fixed(layout.button.y - ROWS_Y));
-        children.push(Element::new(Spacer { min: 0.0 }).span(3, 1));
-    }
-    rows.push(Track::Fixed(layout.button.h));
-    children.push(whole(vec![Element::new(Button {
-        label: MORE_INFO.into(),
-        // a plain grey button: the window asks nothing, so it has no default action to colour
-        role: ButtonRole::Normal,
-        style: ButtonStyle::Bordered,
-        enabled: true,
-        busy: false,
-        on_press: Some(Message::MoreInfo),
-    })
-    .width(layout.button.w)]));
-    Element::new(Grid {
-        columns: vec![
-            Track::Fixed(LABEL_COLUMN),
-            Track::Fixed(LABEL_END + VALUE_START),
-            Track::Fixed(VALUE_COLUMN),
-        ],
-        rows,
-        padding: Insets::new(TOP, PADDING, BOTTOM, PADDING),
-        spacing: Size::ZERO,
-        children,
-    })
+    children
 }
 
 /// The system mark in the label colour; decorative, as the name beside it says what it is.

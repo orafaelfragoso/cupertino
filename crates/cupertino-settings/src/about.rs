@@ -14,11 +14,11 @@ pub mod metrics {
     /// Above the mark: the row the window's control buttons lie in, which the content runs under.
     pub const TOP: f64 = 52.0;
     pub const MARK: f64 = 64.0;
-    pub const NAME_Y: f64 = TOP + MARK + 12.0;
+    pub const NAME_Y: f64 = TOP + MARK + 8.0;
     pub const NAME_HEIGHT: f64 = 28.0;
     pub const VERSION_Y: f64 = NAME_Y + NAME_HEIGHT + 4.0;
     pub const VERSION_HEIGHT: f64 = 16.0;
-    pub const ROWS_Y: f64 = VERSION_Y + VERSION_HEIGHT + 16.0;
+    pub const ROWS_Y: f64 = VERSION_Y + VERSION_HEIGHT + 12.0;
     pub const ROW_HEIGHT: f64 = 16.0;
     pub const ROW_GAP: f64 = 0.0;
     /// How far before the window's centre the right-aligned labels end, and how far after it the values start.
@@ -28,10 +28,14 @@ pub mod metrics {
     pub const LABEL_COLUMN: f64 = WIDTH as f64 / 2.0 - LABEL_END - PADDING;
     /// The width the values wrap at, from [`VALUE_START`] to the trailing padding.
     pub const VALUE_COLUMN: f64 = WIDTH as f64 / 2.0 - VALUE_START - PADDING;
-    pub const BUTTON_GAP: f64 = 20.0;
+    pub const BUTTON_GAP: f64 = 16.0;
     pub const BUTTON_WIDTH: f64 = 92.0;
     pub const BUTTON_HEIGHT: f64 = 24.0;
-    pub const BOTTOM: f64 = 20.0;
+    pub const BOTTOM: f64 = 16.0;
+    /// Of a screen's height, what the window leaves free: the menu bar above it, the Dock below it and a margin.
+    pub const SCREEN_RESERVED: f64 = 120.0;
+    /// The rows always show at least this many lines, however small the screen.
+    pub const MIN_ROW_LINES: f64 = 3.0;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -45,9 +49,36 @@ pub struct RowLayout {
 pub struct Layout {
     pub rows: Vec<RowLayout>,
     pub button: crate::Rect,
+    /// The height the rows show when the window is capped to a screen too short for them all; they scroll in it.
+    /// `None` when every row shows.
+    pub rows_view: Option<f64>,
 }
 
 impl Layout {
+    /// The rows' whole height, from the first row's top to the last row's bottom.
+    pub fn rows_height(&self) -> f64 {
+        self.rows.last().map_or(0.0, |row| {
+            row.y + row.lines.len() as f64 * metrics::ROW_HEIGHT - metrics::ROWS_Y
+        })
+    }
+
+    /// Keep the window within a screen `screen_height` points tall: when it would be taller than the screen leaves
+    /// ([`metrics::SCREEN_RESERVED`]), the rows show only the whole lines that fit, at least [`metrics::MIN_ROW_LINES`], and
+    /// scroll, the button moving up with them.
+    pub fn fit(&mut self, screen_height: f64) {
+        let available = screen_height - metrics::SCREEN_RESERVED;
+        let excess = self.button.bottom() + metrics::BOTTOM - available;
+        if excess <= 0.0 || self.rows.is_empty() {
+            return;
+        }
+        let whole = self.rows_height();
+        // whole lines, so the last one shown is never cut through
+        let lines = ((whole - excess) / metrics::ROW_HEIGHT).floor();
+        let shown = (lines.max(metrics::MIN_ROW_LINES) * metrics::ROW_HEIGHT).min(whole);
+        self.button.y -= whole - shown;
+        self.rows_view = Some(shown);
+    }
+
     pub fn size(&self) -> (u32, u32) {
         (
             metrics::WIDTH,
@@ -83,7 +114,11 @@ impl About {
             BUTTON_WIDTH,
             BUTTON_HEIGHT,
         );
-        Layout { rows, button }
+        Layout {
+            rows,
+            button,
+            rows_view: None,
+        }
     }
 }
 
@@ -343,7 +378,10 @@ impl About {
     /// A Displays row before Kernel for each connected display with a current mode: one short connection asks the
     /// server.
     #[cfg(feature = "app")]
-    pub fn read_displays(&mut self) -> Result<(), cupertino_wayland_client::Error> {
+    /// Add a Displays row for each output, and give the height in points of the shortest one, which the window keeps
+    /// within ([`Layout::fit`]).
+    pub fn read_displays(&mut self) -> Result<Option<f64>, cupertino_wayland_client::Error> {
+        let mut shortest: Option<f64> = None;
         let mut conn = cupertino_wayland_client::Connection::connect()?;
         conn.roundtrip()?;
         for output in conn.outputs() {
@@ -359,6 +397,8 @@ impl About {
                     .effective_scale()
                     .unwrap_or_else(|| output.scale.factor()),
             };
+            let height = f64::from(mode.1) / display.scale.max(1.0);
+            shortest = Some(shortest.map_or(height, |h: f64| h.min(height)));
             if let Some(value) = display_value(&display) {
                 let before_kernel = self
                     .rows
@@ -374,7 +414,7 @@ impl About {
                 );
             }
         }
-        Ok(())
+        Ok(shortest)
     }
 }
 
@@ -748,6 +788,52 @@ mod tests {
             layout.button.bottom() + metrics::BOTTOM
         );
         assert_eq!(layout.rows[1].label, "");
+    }
+
+    #[test]
+    fn on_a_short_screen_the_rows_scroll_so_the_window_fits_and_never_show_fewer_than_three_lines()
+    {
+        let about = About {
+            version: "Version 1".into(),
+            os: None,
+            rows: (0..12)
+                .map(|_| Row {
+                    label: "Hardware",
+                    value: "a value long enough to wrap onto lines".into(),
+                })
+                .collect(),
+        };
+        let measure = |text: &str| text.chars().count() as f64 * 6.0;
+        let whole = about.layout(measure);
+        let mut roomy = whole.clone();
+        roomy.fit(2000.0);
+        assert_eq!(roomy, whole, "a tall screen leaves the layout as it is");
+
+        let mut fitted = whole.clone();
+        fitted.fit(491.0);
+        let shown = fitted.rows_view.expect("the rows scroll");
+        let available = 491.0 - metrics::SCREEN_RESERVED;
+        let height = f64::from(fitted.size().1);
+        assert!(
+            height <= available && height > available - metrics::ROW_HEIGHT,
+            "the window takes what the screen leaves, to a whole line: {height}"
+        );
+        assert_eq!(shown % metrics::ROW_HEIGHT, 0.0, "whole lines");
+        assert_eq!(
+            fitted.button.y,
+            metrics::ROWS_Y + shown + metrics::BUTTON_GAP
+        );
+        assert_eq!(
+            fitted.rows, whole.rows,
+            "every row is still there to scroll to"
+        );
+
+        let mut tiny = whole.clone();
+        tiny.fit(200.0);
+        assert_eq!(
+            tiny.rows_view,
+            Some(metrics::MIN_ROW_LINES * metrics::ROW_HEIGHT)
+        );
     }
 
     #[test]

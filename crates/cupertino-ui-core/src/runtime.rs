@@ -12,7 +12,7 @@ use crate::paint::{raised_nodes, same_environment, PaintInput, Painter};
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
 use crate::scroll::{geometry_events, reveal_events};
-use crate::semantics::{build, composing, diff, dismissible, protected, text_input};
+use crate::semantics::{build, composing, diff, dismissible, keeps_editing, protected, text_input};
 use crate::task::Executor;
 use crate::tree::Tree;
 use crate::{
@@ -1525,7 +1525,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             return;
         };
         let path = hit_test(tree, root, &w.geometry, position).unwrap_or_default();
-        if path.contains(&node) {
+        if path.contains(&node) || path.iter().any(|&n| keeps_editing(tree, n)) {
             return;
         }
         let change = w.focus.set(tree, None, false);

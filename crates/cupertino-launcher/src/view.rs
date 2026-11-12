@@ -1375,7 +1375,10 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
 
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+    /// The query field is where the panel's keys go: a press on a button or in the content leaves it editing.
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.keeps_editing();
+    }
 }
 
 /// The colour of a separator line where `cx` paints: translucent over the panel's glass, the theme's separator over

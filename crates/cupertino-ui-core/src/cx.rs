@@ -749,6 +749,7 @@ pub(crate) struct Semantics {
     pub(crate) roving_group: bool,
     pub(crate) roving_item: bool,
     pub(crate) focus_fallback: bool,
+    pub(crate) keeps_editing: bool,
     pub(crate) dismissible: bool,
     pub(crate) composing: bool,
     pub(crate) bounds: Option<Rect>,
@@ -841,6 +842,12 @@ impl SemanticsCx<'_> {
     /// behind a modal sheet.
     pub fn hidden(&mut self) {
         self.semantics.hidden = true;
+    }
+
+    /// A press on the node or under it leaves a focused text field editing, where a press elsewhere ends it: for
+    /// content whose field is where the keys always go, such as a search panel's.
+    pub fn keeps_editing(&mut self) {
+        self.semantics.keeps_editing = true;
     }
 
     /// Makes the node a group whose items share one Tab stop and move the focus among themselves with

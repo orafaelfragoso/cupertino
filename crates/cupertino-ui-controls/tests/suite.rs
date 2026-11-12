@@ -60,6 +60,8 @@ mod pages;
 mod pickers;
 #[path = "popover.rs"]
 mod popover;
+#[path = "press-away.rs"]
+mod press_away;
 #[path = "progress.rs"]
 mod progress;
 #[path = "rich_text.rs"]

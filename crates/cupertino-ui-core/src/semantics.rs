@@ -61,6 +61,11 @@ pub(crate) fn text_input<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
     declared(tree, id).is_some_and(|s| s.role == Some(Role::TextInput))
 }
 
+/// Whether the node asked that a press on it leave a focused text field editing ([`SemanticsCx::keeps_editing`]).
+pub(crate) fn keeps_editing<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
+    declared(tree, id).is_some_and(|s| s.keeps_editing)
+}
+
 pub(crate) fn build<M: 'static>(
     tree: &Tree<M>,
     root: NodeId,

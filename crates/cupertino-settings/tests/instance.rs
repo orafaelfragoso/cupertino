@@ -94,7 +94,7 @@ fn show_pane_reaches_the_owner_and_rejects_an_unknown_id() {
         Ok((PaneId::Wifi, "fresh-token".into()))
     );
     assert!(show(bus.builder(), "wifi", &"x".repeat(4097)).is_err());
-    match show(bus.builder(), "general", "") {
+    match show(bus.builder(), "no-such-pane", "") {
         Err(zbus::Error::MethodError(name, _, _)) => {
             assert_eq!(name.as_str(), "org.freedesktop.DBus.Error.InvalidArgs")
         }

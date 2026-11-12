@@ -46,6 +46,8 @@ fn settings(dir: &std::path::Path) -> Settings {
         screen_sharing: None,
         desktop_control: None,
         notifications: None,
+        appearance: None,
+        launcher: None,
         screen_reader: None,
     };
     Settings::load(&paths, 1080.0).expect("defaults load without files")
@@ -415,8 +417,9 @@ fn the_wifi_and_network_panes_read_and_change_networkmanager() {
         s.iter().map(labels).collect::<Vec<_>>(),
         [
             vec!["Wi-Fi"],
-            vec!["home (secured)", "office (secured)"],
-            vec!["cafe", "lab (secured)"]
+            vec!["home", "office"],
+            vec!["cafe", "lab (secured)"],
+            vec!["Network", "Security"]
         ]
     );
 
@@ -882,11 +885,14 @@ fn without_a_network_or_bluetooth_service_their_panes_hide_from_the_sidebar_and_
         [
             PaneId::Wifi,
             PaneId::Network,
+            PaneId::Vpn,
             PaneId::Bluetooth,
             PaneId::Trackpad
-        ]
+        ],
+        "the VPN pane needs NetworkManager"
     );
-    assert_eq!(sidebar::groups(&hidden)[0], [PaneId::Battery]);
+    assert_eq!(sidebar::groups(&hidden)[0], [PaneId::Account]);
+    assert_eq!(sidebar::groups(&hidden)[1], [PaneId::Battery]);
     assert!(search("wi-fi", &hidden)
         .iter()
         .all(|h| !hidden.contains(&h.pane)));

@@ -318,6 +318,8 @@ fn a_switch_repaints_only_itself_while_its_knob_slides() {
     let dir = tempfile::tempdir().unwrap();
     let (mut driver, window) = start(dir.path(), PaneId::DesktopDock, 1.0, false);
     let mut meter = FrameMeter::new(window, Timestamp(0));
+    // the window's opening transitions end first
+    until_quiet(&mut driver, &mut meter, 10, 200);
     let switch = rect_of(
         &driver,
         window,
@@ -343,6 +345,8 @@ fn a_slider_repaints_only_itself_while_its_knob_is_dragged() {
     let dir = tempfile::tempdir().unwrap();
     let (mut driver, window) = start(dir.path(), PaneId::DesktopDock, 1.0, false);
     let mut meter = FrameMeter::new(window, Timestamp(0));
+    // the window's opening transitions end first
+    until_quiet(&mut driver, &mut meter, 10, 200);
     let slider = rect_of(
         &driver,
         window,
@@ -384,10 +388,13 @@ fn a_slider_repaints_only_itself_while_its_knob_is_dragged() {
 fn switching_panes_repaints_in_the_sidebar_only_the_rows_the_selection_left_and_reached() {
     let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    let (mut driver, window) = start(dir.path(), PaneId::Keyboard, 1.0, false);
+    // rows a window of the default height shows
+    let (mut driver, window) = start(dir.path(), PaneId::Notifications, 1.0, false);
     let mut meter = FrameMeter::new(window, Timestamp(0));
-    let mut from = rect_of(&driver, window, "keyboard");
-    for pane in ["mouse", "sound", "appearance"] {
+    // the window's opening transitions end first
+    until_quiet(&mut driver, &mut meter, 10, 200);
+    let mut from = rect_of(&driver, window, "notifications");
+    for pane in ["sound", "focus", "appearance"] {
         let to = rect_of(&driver, window, pane);
         let (_, before) = damage_since(&driver, window, 0);
         meter.step(&mut driver, |s, _| {

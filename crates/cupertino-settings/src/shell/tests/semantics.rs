@@ -71,7 +71,7 @@ fn chrome(title: &str) -> [String; 5] {
         "Button \"Back\" disabled".to_owned(),
         "Button \"Forward\" disabled".to_owned(),
         "TextInput \"Search\" = \"\" focusable".to_owned(),
-        "Splitter \"Sidebar\" = 232 of 0..738 focusable".to_owned(),
+        "Splitter \"Sidebar\" = 232 of 0..739 focusable".to_owned(),
     ]
 }
 
@@ -91,7 +91,7 @@ fn pane_announces(pane: PaneId, title: &str, content: &[&str], services: Option<
 #[test]
 fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state() {
     let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
-    let panes: [(PaneId, &str, &[&str]); 14] = [
+    let panes: [(PaneId, &str, &[&str]); 15] = [
         (
             PaneId::Battery,
             "Energy Saver",
@@ -113,14 +113,25 @@ fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state()
             PaneId::Appearance,
             "Appearance",
             &[
-                "RadioGroup \"Appearance\"",
-                "RadioButton \"Light\" on focusable",
-                "RadioButton \"Dark\" off",
+                "Button \"Auto\" focusable",
+                "Button \"Light\" focusable selected",
+                "Button \"Dark\" focusable",
             ],
         ),
         (
             PaneId::ControlPanel,
             "Control Panel",
+            &[
+                "StaticText \"Show in Menu Bar\"",
+                "Switch \"Wi-Fi\" on focusable",
+                "Switch \"Bluetooth\" on focusable",
+                "Switch \"Battery\" on focusable",
+                "Switch \"Focus\" on focusable",
+            ],
+        ),
+        (
+            PaneId::MenuBar,
+            "Menu Bar",
             &[
                 "StaticText \"Clock Options\"",
                 "PopUpButton \"Show date\" = \"Never\" focusable collapsed",
@@ -226,9 +237,12 @@ fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state()
             PaneId::Mouse,
             "Mouse",
             &[
+                "RadioGroup \"Page\"",
+                "RadioButton \"Point & Click\" on focusable",
+                "RadioButton \"Scrolling\" off",
+                "RadioButton \"Devices\" off",
                 "Slider \"Tracking speed\" = 0.3333333333333333 of 0..1 focusable",
                 "Switch \"Pointer acceleration\" on focusable",
-                "Switch \"Natural scrolling\" off focusable",
             ],
         ),
     ];
@@ -246,7 +260,7 @@ fn sub_page_chrome(pane: &str, title: &str) -> [String; 6] {
         "Button \"Back\" focusable".to_owned(),
         "Button \"Forward\" disabled".to_owned(),
         "TextInput \"Search\" = \"\" focusable".to_owned(),
-        "Splitter \"Sidebar\" = 232 of 0..738 focusable".to_owned(),
+        "Splitter \"Sidebar\" = 232 of 0..739 focusable".to_owned(),
     ]
 }
 
@@ -335,6 +349,8 @@ fn each_sub_page_reads_its_controls_by_role_name_value_and_state() {
     for (pane, pane_title, sub, content) in pages {
         let dir = tempfile::tempdir().unwrap();
         let (mut driver, window) = start(dir.path(), pane);
+        // a row that opens a sub-page may lie below a window of the default height
+        tall(&mut driver, window);
         click(&mut driver, window, &format!("open-{sub:?}"));
         let chrome = sub_page_chrome(pane_title, sub.title());
         let mut expected: Vec<&str> = chrome.iter().map(String::as_str).collect();
@@ -347,7 +363,17 @@ fn each_sub_page_reads_its_controls_by_role_name_value_and_state() {
 fn a_committed_switch_reads_its_new_state() {
     let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    let (mut driver, window) = start(dir.path(), PaneId::Mouse);
+    // natural scrolling is on the Scrolling tab
+    let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+    let (mut driver, window) = start_state(dir.path(), PaneId::Mouse, services, |state| {
+        state.live.tab = 1;
+    });
+    announces(
+        &driver,
+        window,
+        "Mouse's Scrolling tab",
+        &["Switch \"Natural scrolling\" off focusable"],
+    );
     let switch = node(&driver, window, Role::Switch, "Natural scrolling");
     click_node(&mut driver, window, switch);
     announces(
@@ -405,7 +431,8 @@ fn the_network_bluetooth_and_trackpad_panes_read_their_controls_by_role_name_val
             &[
                 "Switch \"Wi-Fi\" on focusable",
                 "StaticText \"Known Networks\"",
-                "StaticText \"home (secured)\"",
+                "StaticText \"home\"",
+                "StaticText \"Connected\"",
                 "Button \"Disconnect\" focusable",
                 "StaticText \"Other Networks\"",
                 "StaticText \"cafe\"",
@@ -441,8 +468,12 @@ fn the_network_bluetooth_and_trackpad_panes_read_their_controls_by_role_name_val
             PaneId::Trackpad,
             "Trackpad",
             &[
+                "RadioGroup \"Page\"",
+                "RadioButton \"Point & Click\" on focusable",
+                "RadioButton \"Scroll & Zoom\" off",
+                "RadioButton \"More Gestures\" off",
                 "Slider \"Tracking speed\" = 0.3333333333333333 of 0..1 focusable",
-                "Switch \"Natural scrolling\" on focusable",
+                "Switch \"Pointer acceleration\" on focusable",
             ],
         ),
     ];

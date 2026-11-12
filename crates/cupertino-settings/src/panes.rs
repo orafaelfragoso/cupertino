@@ -3211,7 +3211,7 @@ mod tests {
     use cupertino_defaults::compositor::CompositorSettings;
     use cupertino_defaults::dock::DockSettings;
     use cupertino_defaults::keyboard::KeyboardSettings;
-    use cupertino_defaults::menubar::{ClockSettings, MenuBarSettings};
+    use cupertino_defaults::menubar::MenuBarSettings;
 
     fn unset() -> Settings {
         Settings {
@@ -3241,9 +3241,16 @@ mod tests {
         },
     };
 
+    /// Control `id` of `pane`, on whichever of the pane's tabs shows it.
     fn control(pane: PaneId, id: ControlId, s: &Settings) -> Control {
-        sections(pane, s, LIGHT, &Live::default())
-            .into_iter()
+        (0..4)
+            .flat_map(|tab| {
+                let live = Live {
+                    tab,
+                    ..Live::default()
+                };
+                sections(pane, s, LIGHT, &live)
+            })
             .flat_map(|sec| sec.rows)
             .find(|r| r.id == id)
             .expect("the control is in the pane")
@@ -3394,26 +3401,42 @@ mod tests {
             .find(|r| matches!(r.id, ControlId::DisplaySize(_)))
     }
 
+    /// The labels of a size row's choices and the one selected, whether it shows them as pictures or a pop-up.
+    fn size_choices(control: Control) -> (Vec<String>, usize) {
+        match control {
+            Control::Popup { choices, selected } => (choices, selected),
+            Control::Swatches { items, selected } => (
+                items.into_iter().map(|(label, _)| label).collect(),
+                selected,
+            ),
+            other => panic!("a pop-up or pictures, not {other:?}"),
+        }
+    }
+
     #[test]
     fn a_built_in_panel_offers_its_sizes_from_bigger_text_to_more_room() {
         let row = size_row(&displays(vec![built_in_panel((1512, 982))])).expect("the size row");
         assert_eq!(row.label, "Desktop Size");
         let nb = '\u{202f}';
+        // a few sizes show as pictures, from the biggest text to the most room
         assert_eq!(
             row.control,
-            Control::Popup {
-                choices: vec![
-                    format!("1024{nb}×{nb}665 (Bigger)"),
-                    format!("1147{nb}×{nb}745"),
-                    format!("1352{nb}×{nb}878"),
-                    format!("1512{nb}×{nb}982 (Default)"),
-                    format!("1800{nb}×{nb}1169 (More Room)"),
+            Control::Swatches {
+                items: vec![
+                    (format!("1024{nb}×{nb}665"), SwatchKind::Scale(0)),
+                    (format!("1147{nb}×{nb}745"), SwatchKind::Scale(1)),
+                    (format!("1352{nb}×{nb}878"), SwatchKind::Scale(2)),
+                    (format!("1512{nb}×{nb}982"), SwatchKind::Scale(3)),
+                    (format!("1800{nb}×{nb}1169"), SwatchKind::Scale(4)),
                 ],
                 selected: 3,
             }
         );
         let larger = size_row(&displays(vec![built_in_panel((1147, 745))])).unwrap();
-        assert!(matches!(larger.control, Control::Popup { selected: 1, .. }));
+        assert!(matches!(
+            larger.control,
+            Control::Swatches { selected: 1, .. }
+        ));
         // the size row comes first, the readings after it
         let rows: Vec<String> = sections(
             PaneId::Displays,
@@ -3454,9 +3477,7 @@ mod tests {
             .iter()
             .position(|c| c.scale == 1.5)
             .expect("1.5 is one of the choices");
-        let Control::Popup { choices, selected } = size_row(&live).unwrap().control else {
-            panic!("a popup");
-        };
+        let (choices, selected) = size_choices(size_row(&live).unwrap().control);
         assert_eq!(
             choices.len(),
             list.choices.len(),
@@ -3582,12 +3603,10 @@ mod tests {
             position: None,
             refresh_rates: Vec::new(),
         }]);
-        let Control::Popup { choices, selected } = size_row(&external).unwrap().control else {
-            panic!("a popup");
-        };
+        let (choices, selected) = size_choices(size_row(&external).unwrap().control);
         assert_eq!(
             choices[selected],
-            format!("2560{nb}×{nb}1440 (Default)", nb = '\u{202f}')
+            format!("2560{nb}×{nb}1440", nb = '\u{202f}')
         );
     }
 
@@ -3864,12 +3883,14 @@ mod tests {
         assert_eq!(
             change(
                 ControlId::Appearance,
-                Value::Index(1),
+                Value::Index(2),
                 &mut s,
                 &Live::default()
             ),
-            [Effect::SetAppearance { dark: true }]
+            [Effect::SetTheme { dark: Some(true) }],
+            "Dark turns the schedule off and sets the look at once"
         );
+        assert!(!s.appearance.auto);
         assert_eq!(
             (
                 control(PaneId::Mouse, ControlId::MouseNatural, &s),
@@ -4434,8 +4455,10 @@ mod tests {
             rows(PaneId::Bluetooth, &live)[0].disabled.as_deref(),
             Some("Bluetooth is not available")
         );
+        let sound = rows(PaneId::Sound, &Live::default());
+        let volume = sound.iter().find(|r| r.id == ControlId::Volume).unwrap();
         assert_eq!(
-            rows(PaneId::Sound, &Live::default())[0].disabled.as_deref(),
+            volume.disabled.as_deref(),
             Some("Checking…"),
             "before the first read"
         );
@@ -4469,7 +4492,12 @@ mod tests {
         let r = rows(PaneId::Focus, &live);
         assert_eq!(
             r.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(),
-            ["Do Not Disturb", "For 1 hour", "Until this evening"]
+            [
+                "Do Not Disturb",
+                "For 1 hour",
+                "Until this evening",
+                "Allow critical notifications"
+            ]
         );
         let mut s = unset();
         assert_eq!(
@@ -4524,7 +4552,8 @@ mod tests {
             [
                 None,
                 Some("Known Networks".into()),
-                Some("Other Networks".into())
+                Some("Other Networks".into()),
+                Some("Network Details".into())
             ]
         );
         assert_eq!(
@@ -4679,7 +4708,10 @@ mod tests {
             ],
             ..Live::default()
         };
-        let first = &rows(PaneId::Sound, &live)[0];
+        // the Output and Input tabs come first, then the output's rows
+        let shown = rows(PaneId::Sound, &live);
+        assert_eq!(shown[0].id, ControlId::More(crate::pane_more::More::Tab));
+        let first = &shown[1];
         assert_eq!(first.id, ControlId::Output);
         assert_eq!(
             first.control,
@@ -4701,7 +4733,7 @@ mod tests {
             outputs: vec![output(52, "Speakers", true)],
             ..Live::default()
         };
-        assert_eq!(rows(PaneId::Sound, &one)[0].id, ControlId::Volume);
+        assert_eq!(rows(PaneId::Sound, &one)[1].id, ControlId::Volume);
     }
 
     #[test]
@@ -4735,8 +4767,10 @@ mod tests {
                 stored: false,
             })
             .collect();
+        // the Devices tab lists the mice
         let live = Live {
             mice: Reading::Ready(mice),
+            tab: 2,
             ..Live::default()
         };
         let sections = sections(PaneId::Mouse, &unset(), LIGHT, &live);
@@ -4789,7 +4823,14 @@ mod tests {
                 .iter()
                 .map(|s| s.header.as_deref())
                 .collect::<Vec<_>>(),
-            [Some("Current"), Some("Pictures"), Some("Art"), None, None]
+            [
+                Some("Current"),
+                Some("Pictures"),
+                Some("Art"),
+                None,
+                Some("Colours"),
+                None
+            ]
         );
         assert_eq!(
             tiles_of(&sections[1]),
@@ -5084,12 +5125,20 @@ mod tests {
             other => panic!("a pop-up, not {other:?}"),
         };
         assert_eq!(
-            popup_of(&shown[2], 0),
+            shown[2].rows[..2]
+                .iter()
+                .map(|r| r.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Allow notifications", "Alert style"],
+            "each app first says whether and how it notifies"
+        );
+        assert_eq!(
+            popup_of(&shown[2], 2),
             (vec!["Default (On)".into(), "On".into(), "Off".into()], 0)
         );
-        assert_eq!(popup_of(&shown[3], 0).1, 2, "Mail: off");
+        assert_eq!(popup_of(&shown[3], 2).1, 2, "Mail: off");
         assert_eq!(
-            popup_of(&shown[3], 1),
+            popup_of(&shown[3], 3),
             (
                 vec![
                     "Default (When Unlocked)".into(),

@@ -48,6 +48,8 @@ fn settings(dir: &std::path::Path) -> Settings {
         screen_sharing: None,
         desktop_control: None,
         notifications: None,
+        appearance: None,
+        launcher: None,
         screen_reader: None,
     };
     Settings::load(&paths, 1080.0).expect("defaults load without files")
@@ -183,10 +185,11 @@ fn st10_wifi_switch_join_and_a_refused_write() {
         s.iter().map(labels).collect::<Vec<_>>(),
         [
             vec!["Wi-Fi"],
-            vec!["home (secured)", "office (secured)"],
-            vec!["cafe"]
+            vec!["home", "office"],
+            vec!["cafe"],
+            vec!["Network", "Security"]
         ],
-        "GetNetworks order, known first"
+        "GetNetworks order, known first, then the connection's details"
     );
 
     // the switch writes WirelessEnabled; the shown value is the daemon's on the next read
@@ -689,7 +692,15 @@ fn the_notifications_pane_lists_the_applications_the_centre_holds() {
     );
     let s = sections(PaneId::Notifications, &settings(dir.path()), LIGHT, &live);
     assert_eq!(s[2].header.as_deref(), Some("Mail"));
-    assert_eq!(labels(&s[2]), ["Show on lock screen", "Show previews"]);
+    assert_eq!(
+        labels(&s[2]),
+        [
+            "Allow notifications",
+            "Alert style",
+            "Show on lock screen",
+            "Show previews"
+        ]
+    );
 }
 
 // ---- no daemon ---------------------------------------------------------------------------------------------------
@@ -712,7 +723,13 @@ fn st19_a_missing_daemon_disables_the_switch_with_the_reason() {
         (PaneId::Focus, "The notification centre is not running"),
         (PaneId::Network, "Wi-Fi is not available"),
     ] {
-        let s = sections(pane, &settings(dir.path()), LIGHT, &live);
+        let mut s = sections(pane, &settings(dir.path()), LIGHT, &live);
+        if pane == PaneId::Focus {
+            // the exception for critical notifications is a key of the file, there without the centre
+            let exceptions = s.pop().unwrap();
+            assert_eq!(exceptions.header.as_deref(), Some("Exceptions"));
+            assert_eq!(exceptions.rows[0].disabled, None);
+        }
         assert_eq!(
             (s.len(), s[0].rows.len()),
             (1, 1),
@@ -755,8 +772,10 @@ fn mouse_pane(
         .unwrap()
         .build()
         .unwrap();
+    // the mice are on the Devices tab
     let live = Live {
         mice: services(&bus).mice(),
+        tab: 2,
         ..Live::default()
     };
     (sections(PaneId::Mouse, &settings(dir), LIGHT, &live), live)
@@ -776,7 +795,12 @@ fn a_single_mouse_gets_one_resolution_row_and_none_gets_no_row() {
     }
     let dir = tempfile::tempdir().unwrap();
     let (none, _) = mouse_pane(vec![], dir.path());
-    assert_eq!(none.len(), 1, "no mouse, no resolution row");
+    assert_eq!(none.len(), 2, "the tabs, then what the Devices tab shows");
+    assert_eq!(
+        labels(&none[1]),
+        ["Mouse"],
+        "no mouse, no resolution row: a note that none is connected"
+    );
     let (one, _) = mouse_pane(
         vec![mouse("046d:c077:Mouse", "Mouse", 800, false)],
         dir.path(),
@@ -959,6 +983,8 @@ fn the_colour_filter_button_shows_what_the_server_holds_not_the_file() {
         screen_sharing: None,
         desktop_control: None,
         notifications: None,
+        appearance: None,
+        launcher: None,
         screen_reader: None,
     };
     settings.reload(&paths).unwrap();

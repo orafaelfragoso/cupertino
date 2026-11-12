@@ -44,6 +44,8 @@ impl Fixture {
             screen_sharing: None,
             desktop_control: None,
             notifications: None,
+            appearance: None,
+            launcher: None,
             screen_reader: None,
         };
         Fixture { dir, paths }

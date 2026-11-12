@@ -890,16 +890,17 @@ mod tests {
         }
     }
 
-    /// A pane's title shares the toolbar row after the back and forward buttons, with no header card; a pane that
-    /// gathers sub-pages opens with its header card instead and no title in the toolbar.
+    /// A pane's title shares the toolbar row after the back and forward buttons; a pane with a header card or a
+    /// compact header also opens with it, which reads the pane's description.
     #[test]
-    fn a_page_shows_its_title_in_the_toolbar_row_unless_it_has_a_header_card() {
+    fn a_page_shows_its_title_in_the_toolbar_row_and_its_header_reads_the_description() {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
-        for (pane, title, card) in [
+        for (pane, title, header) in [
             (PaneId::Appearance, "Appearance", false),
             (PaneId::DesktopDock, "Desktop & Dock", false),
             (PaneId::Accessibility, "Accessibility", true),
             (PaneId::Privacy, "Privacy & Security", true),
+            (PaneId::General, "General", true),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
@@ -923,25 +924,26 @@ mod tests {
                     b.min_x() > forward.max_x() && (b.center().y - forward.center().y).abs() < 2.0
                 })
                 .collect();
-            // the card reads the title with the pane's description; nothing else does
+            // the card reads the title described by the pane's description, a compact header reads the description
+            // as a line of its own; nothing else reads it
+            let text = pages::description(pane, None);
             let description: Vec<_> = snapshot
                 .accessibility
                 .iter()
-                .filter(|(_, n)| n.description.as_deref() == Some(pages::description(pane, None)))
+                .filter(|(_, n)| {
+                    n.description.as_deref() == Some(text)
+                        || (n.role == Role::StaticText && n.name.as_deref() == Some(text))
+                })
                 .collect();
-            if card {
-                assert!(
-                    in_row.is_empty(),
-                    "{pane:?}: no title in the toolbar row: {titles:?}"
-                );
-                assert_eq!(description.len(), 1, "{pane:?}: its header card");
+            assert_eq!(
+                in_row.len(),
+                1,
+                "{pane:?}: the title after the buttons: {titles:?}"
+            );
+            if header {
+                assert_eq!(description.len(), 1, "{pane:?}: its header");
             } else {
-                assert_eq!(
-                    in_row.len(),
-                    1,
-                    "{pane:?}: the title after the buttons: {titles:?}"
-                );
-                assert!(description.is_empty(), "{pane:?}: no header card");
+                assert!(description.is_empty(), "{pane:?}: no header");
             }
             // the first section's title starts at the page's inset below the row, as a card would
             if pane == PaneId::DesktopDock {
@@ -959,7 +961,7 @@ mod tests {
             .map(|f| default_size(*f))
             .map(|s| (s.width, s.height))
             .collect();
-        assert_eq!(sizes, [(739.0, 625.0), (813.0, 625.0), (961.0, 625.0)]);
+        assert_eq!(sizes, [(740.0, 748.0), (815.0, 748.0), (962.0, 748.0)]);
     }
 
     #[test]
@@ -1126,6 +1128,23 @@ mod tests {
         driver.assert_accessible("Settings");
     }
 
+    /// Makes `window` tall enough that a long pane's lower rows are on screen to be clicked.
+    fn tall(driver: &mut TestDriver<SettingsApp>, window: WindowId) {
+        let active = WindowStates {
+            activated: true,
+            ..WindowStates::default()
+        };
+        driver
+            .window_system_mut()
+            .configure(
+                window,
+                Some(Size::new(metrics::DEFAULT_WIDTH, 1600.0)),
+                active,
+            )
+            .unwrap();
+        settle(driver, window);
+    }
+
     fn send(driver: &mut TestDriver<SettingsApp>, window: WindowId, event: WindowEvent) {
         driver
             .window_system_mut()
@@ -1227,6 +1246,8 @@ mod tests {
         let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
         assert_eq!(title(&mut driver, window), "Desktop & Dock");
         assert!(driver.window_system_mut().menus(window).unwrap().is_some());
+        // the Keyboard row is low in the sidebar, past a window of the default height
+        tall(&mut driver, window);
 
         click(&mut driver, window, "keyboard");
         assert_eq!(title(&mut driver, window), "Keyboard");
@@ -1492,6 +1513,8 @@ mod tests {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
+        // the row that opens Hot Corners is below a window of the default height
+        tall(&mut driver, window);
         let corner = "Top Left".to_owned();
         let on_pane = |driver: &TestDriver<SettingsApp>| {
             let buttons = named(driver, window, Role::Button);
@@ -1579,11 +1602,20 @@ mod tests {
         );
     }
 
+    /// With the session asking for bars that always show, a pane longer than the window shows its scroll bar and
+    /// one that fits does not. (Bars that show only while scrolling are not read as scroll bars.)
     #[test]
     fn a_pane_longer_than_the_window_shows_its_scroll_bar_and_one_that_fits_does_not() {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let (mut driver, window) = start(dir.path(), PaneId::Keyboard);
+        driver
+            .window_system_mut()
+            .enqueue(cupertino_kit::platform::PlatformEvent::ScrollBars(
+                cupertino_kit::platform::ScrollBars::Always,
+            ))
+            .unwrap();
+        settle(&mut driver, window);
         let bars = |driver: &TestDriver<SettingsApp>| {
             driver
                 .runtime()
@@ -1610,8 +1642,8 @@ mod tests {
         settle(&mut driver, window);
         assert_eq!(
             bars(&driver),
-            1,
-            "the Keyboard pane goes on below a short window"
+            2,
+            "the sidebar and the Keyboard pane go on below a short window"
         );
         driver
             .window_system_mut()
@@ -1718,8 +1750,11 @@ mod tests {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
-        let rect = |driver: &TestDriver<SettingsApp>, key: &'static str| {
-            let id = driver.runtime().find(window, &Key::from(key)).unwrap();
+        let rect = |driver: &TestDriver<SettingsApp>, key: &str| {
+            let id = driver
+                .runtime()
+                .find(window, &Key::from(key.to_owned()))
+                .unwrap();
             driver
                 .runtime()
                 .snapshot(window)
@@ -1733,7 +1768,12 @@ mod tests {
         let field = rect(&driver, "search");
         let y = field.origin.y + field.size.height / 2.0;
         // in the toolbar row over the top of the page, after the back and forward buttons, where no toolbar item lies
-        let content = rect(&driver, "content");
+        // each page's scroll view is keyed by its page
+        let page = Page::pane(PaneId::DesktopDock);
+        let content = rect(
+            &driver,
+            &format!("content-{}-{:?}", page.pane.key(), page.sub),
+        );
         let gap = Point::new(
             content.origin.x + content.size.width - 60.0,
             content.origin.y + 26.0,

@@ -119,7 +119,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_minimum_set_shows_in_the_reference_order() {
+    fn the_minimum_set_shows_in_the_design_order() {
         let titles: Vec<Vec<&str>> = groups(&[])
             .iter()
             .map(|g| g.iter().map(|p| p.pane().title).collect())
@@ -127,17 +127,25 @@ mod tests {
         assert_eq!(
             titles,
             [
-                vec!["Wi-Fi", "Bluetooth", "Network", "Battery"],
+                vec!["Account"],
+                vec!["Wi-Fi", "Bluetooth", "Network", "VPN", "Battery"],
                 vec![
                     "Accessibility",
                     "Appearance",
                     "Control Panel",
                     "Desktop & Dock",
                     "Displays",
+                    "General",
+                    "Menu Bar",
                     "Wallpaper"
                 ],
                 vec!["Notifications", "Sound", "Focus"],
-                vec!["Lock Screen", "Privacy & Security"],
+                vec![
+                    "Lock Screen",
+                    "Privacy & Security",
+                    "Search",
+                    "Users & Groups"
+                ],
                 vec!["Keyboard", "Mouse", "Trackpad"],
             ]
         );

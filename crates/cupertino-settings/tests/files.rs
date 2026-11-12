@@ -20,6 +20,8 @@ fn paths(dir: &std::path::Path) -> Paths {
         screen_sharing: None,
         desktop_control: None,
         notifications: Some(dir.join("notifications.conf")),
+        appearance: None,
+        launcher: None,
         screen_reader: None,
     }
 }
@@ -236,7 +238,7 @@ fn a_relative_folder_or_picture_is_refused_and_nothing_is_written() {
 
 #[test]
 fn the_notifications_pane_writes_the_default_and_each_apps_choice_and_keeps_the_rest() {
-    use cupertino_defaults::notifications::{NotificationSettings, Policy, Previews};
+    use cupertino_defaults::notifications::{AlertStyle, NotificationSettings, Policy, Previews};
     let dir = tempfile::tempdir().unwrap();
     let p = paths(dir.path());
     let file = dir.path().join("notifications.conf");
@@ -280,14 +282,18 @@ fn the_notifications_pane_writes_the_default_and_each_apps_choice_and_keeps_the_
         read.policy("org.example.Chat"),
         Policy {
             show_on_lock_screen: true,
-            show_previews: Previews::Always
+            show_previews: Previews::Always,
+            allow: true,
+            alert_style: AlertStyle::Banners,
         }
     );
     assert_eq!(
         read.policy("org.example.Mail"),
         Policy {
             show_on_lock_screen: false,
-            show_previews: Previews::Never
+            show_previews: Previews::Never,
+            allow: true,
+            alert_style: AlertStyle::Banners,
         },
         "the default"
     );

@@ -344,7 +344,10 @@ fn the_mouse_resolution_footnote_wraps_without_clipping_or_overlapping_at_every_
         .unwrap();
     let dir = tempfile::tempdir().unwrap();
     let services = Services::on(Bus::address(NOWHERE), Bus::at(bus.connect()));
-    let (mut driver, window) = start_on(dir.path(), PaneId::Mouse, None, services);
+    // the mice and their footnote are on the Devices tab
+    let (mut driver, window) = start_state(dir.path(), PaneId::Mouse, services, |state| {
+        state.live.tab = 2;
+    });
     let footnote = crate::panes::MOUSE_RESOLUTION_FOOTER;
     // a footnote's line at each scale, read where the footnote fits on one line: the widest window, which comes first
     let mut caption_line = [0.0; SCALES.len()];
@@ -537,6 +540,8 @@ fn each_apps_notification_popups_read_a_name_of_their_own_with_the_apps_name() {
     assert_eq!(
         popups,
         [
+            "Alert style, Calendar",
+            "Alert style, Mail",
             "Show on lock screen, Calendar",
             "Show on lock screen, Mail",
             "Show previews, Calendar",

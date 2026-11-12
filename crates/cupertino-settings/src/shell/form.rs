@@ -1054,6 +1054,9 @@ mod tests {
         assert_eq!(
             popups,
             [
+                "Alert style, Chat",
+                "Alert style, Mail (1)",
+                "Alert style, Mail (2)",
                 "Show on lock screen, Chat",
                 "Show on lock screen, Mail (1)",
                 "Show on lock screen, Mail (2)",

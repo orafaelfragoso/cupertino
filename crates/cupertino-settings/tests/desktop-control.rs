@@ -38,6 +38,8 @@ fn paths(dir: &Path) -> Paths {
         screen_sharing: None,
         notifications: None,
         desktop_control: Some(dir.join("desktop-control.conf")),
+        appearance: None,
+        launcher: None,
         screen_reader: None,
     }
 }

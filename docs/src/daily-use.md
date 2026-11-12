@@ -31,6 +31,8 @@ Not verified: how GDM treats the session on a real machine (the virtual console,
 
 To change a shortcut, add a `chord = action` line to `~/.config/cupertino/shortcuts.conf`, for example `Super+x = exec:foot`, or `Super+Tab = none` to free a chord. The file is applied on top of the defaults. `modifier_profile = classic-pc` in `~/.config/cupertino/keyboard.conf` switches to Windows and Linux habits (`Alt+Tab` switches, `Alt+F4` closes, `Ctrl` is the command key in Settings and text fields, and a tap of `Super` alone opens the launcher).
 
+Under the default profile `Super` is the command key in every application. Other applications get `Super` chords as the `Ctrl` chords they bind, and a `Ctrl` chord on a letter, digit, punctuation key or `Return` reaches them with `Super` instead, so `Ctrl` copies, pastes and closes nothing. In a text field the line-editing chords `Ctrl+A`, `E`, `B`, `F`, `P`, `N`, `D` and `H` move and delete as their keys do. Terminals keep `Ctrl`. `client_rewrite = off` in `keyboard.conf`, or the application's id in `rewrite_off`, sends every chord as it is pressed.
+
 ## Layouts, Compose and dead keys
 
 - **Layouts.** At login Cupertino reads the system layout (`X11Layout`, `X11Variant` and `X11Options` from `localed`). If `keyboard.conf` has no `input_sources`, those layouts become the input sources. To set them yourself, write `input_sources = us, de, fr(nodeadkeys)` in `~/.config/cupertino/keyboard.conf`; that file wins over `localed`.

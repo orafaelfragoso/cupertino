@@ -1,8 +1,9 @@
 //! Which chords the compositor may rewrite for third-party clients, so that Super-based and Alt-based editing
 //! chords work without breaking their Ctrl shortcuts (§10).
 //!
-//! The rule never rewrites Ctrl: a chord with Ctrl down passes unchanged. Only physical Super and Alt chords on keys
-//! the compositor does not claim are rewritten, and only for clients that are not first-party. The rewrite changes
+//! Only physical Super, Ctrl and Alt chords on keys the compositor does not claim are rewritten, and only for clients
+//! that are neither first-party nor terminals for Ctrl. Super is the command key: its chords reach the client as the
+//! Ctrl chords it binds, and a Ctrl chord reaches it with Super instead, so Ctrl never acts as the command key. The rewrite changes
 //! the modifiers the client is told about and, for the cursor chords, the key.
 //!
 //! The decision is pure. The table is from the design's split between menu key equivalents and
@@ -92,8 +93,8 @@ pub fn decide(profile: &Profile, t: &ClientTarget, k: &KeyPress) -> Rewrite {
     if profile.primary() != Physical::Super || t.opted_out || t.class == ClientClass::FirstParty {
         return Rewrite::Pass;
     }
-    // 3 and 4: modifier keys, and every chord with Ctrl down (third-party Ctrl shortcuts, Ctrl+Super combinations)
-    if k.is_modifier || k.raw.contains(RawMods::CTRL) {
+    // 3: modifier keys, and Ctrl+Super combinations
+    if k.is_modifier || k.raw.contains(RawMods::CTRL | RawMods::SUPER) {
         return Rewrite::Pass;
     }
     let (sup, alt, shift) = (
@@ -101,7 +102,7 @@ pub fn decide(profile: &Profile, t: &ClientTarget, k: &KeyPress) -> Rewrite {
         k.raw.contains(RawMods::ALT),
         k.raw.contains(RawMods::SHIFT),
     );
-    // 5 and 6: terminals get copy and paste as Ctrl+Shift and nothing else
+    // 5 and 6: terminals get copy and paste as Ctrl+Shift and nothing else; their Ctrl chords are control characters
     if t.class == ClientClass::Terminal {
         let copy_or_paste = matches!(k.sym, SYM_C | SYM_V | SYM_UPPER_C | SYM_UPPER_V);
         return if sup && !alt && !shift && copy_or_paste {
@@ -114,6 +115,27 @@ pub fn decide(profile: &Profile, t: &ClientTarget, k: &KeyPress) -> Rewrite {
         };
     }
     let text_input = t.text_input_active;
+    // 4: Ctrl is not the command key here. In a text input its line-editing chords move and delete as their keys do
+    // (Shift kept, so it selects); every other Ctrl chord on a printable key or Return reaches the client with Super,
+    // which carries no shortcut there, so the Ctrl key cannot copy, paste or close as the command key does
+    if k.raw.contains(RawMods::CTRL) {
+        if text_input && !alt {
+            if let Some(evdev) = line_editing_key(k.sym) {
+                return Rewrite::Key {
+                    evdev,
+                    remove: RawMods::CTRL,
+                    add: RawMods::default(),
+                };
+            }
+        }
+        if k.printable || matches!(k.sym, SYM_RETURN | SYM_KP_ENTER) {
+            return Rewrite::Mods {
+                remove: RawMods::CTRL,
+                add: RawMods::SUPER,
+            };
+        }
+        return Rewrite::Pass;
+    }
     if sup {
         let arrow = matches!(k.evdev, KEY_LEFT | KEY_RIGHT | KEY_UP | KEY_DOWN);
         // 7: line and document ends, as the key the toolkits bind (Home and End, with Ctrl for the document)
@@ -155,25 +177,55 @@ pub fn decide(profile: &Profile, t: &ClientTarget, k: &KeyPress) -> Rewrite {
     Rewrite::Pass
 }
 
+/// The key a Ctrl line-editing chord on the key of Latin keysym `sym` stands for in a text input: the line's start and
+/// end, a character back and forward, a line up and down, and the character after and before the caret deleted.
+fn line_editing_key(sym: u32) -> Option<u32> {
+    let letter = if (0x41..=0x5a).contains(&sym) {
+        sym + 0x20
+    } else {
+        sym
+    };
+    Some(match char::from_u32(letter)? {
+        'a' => KEY_HOME,
+        'e' => KEY_END,
+        'b' => KEY_LEFT,
+        'f' => KEY_RIGHT,
+        'p' => KEY_UP,
+        'n' => KEY_DOWN,
+        'd' => KEY_DELETE,
+        'h' => KEY_BACKSPACE,
+        _ => return None,
+    })
+}
+
 /// The chord the person presses so that a client of class `class` receives `received`, outside a text input: the
-/// inverse of the Super rows of [`decide`]. For a terminal, Shift+Ctrl+C or V comes from Super+C or V (5 and 6); for
-/// any other third-party client, a Ctrl chord without Super on a printable key or Return comes from the Super chord of
-/// the same key with Shift and Alt kept (9). Every other chord, every chord of a first-party client and every chord
+/// inverse of the Super and Ctrl rows of [`decide`]. For a terminal, Shift+Ctrl+C or V comes from Super+C or V (5 and
+/// 6); for any other third-party client, a Ctrl chord without Super on a printable key or Return comes from the Super
+/// chord of the same key with Shift and Alt kept (9), and a Super chord without Ctrl from the Ctrl one (4). Every other
+/// chord, every chord of a first-party client and every chord
 /// under a profile whose primary modifier is not Super is pressed as it is received.
 pub fn pressed_for(profile: &Profile, class: ClientClass, received: &KeyPress) -> KeyPress {
     let raw = received.raw;
-    if profile.primary() != Physical::Super || received.is_modifier || raw.contains(RawMods::SUPER)
+    if profile.primary() != Physical::Super
+        || received.is_modifier
+        || raw.contains(RawMods::CTRL | RawMods::SUPER)
     {
         return *received;
     }
+    let swap = |from: RawMods, to: RawMods| RawMods((raw.0 & !from.0) | to.0);
+    let chord_key = received.printable || matches!(received.sym, SYM_RETURN | SYM_KP_ENTER);
     let pressed = match class {
         ClientClass::FirstParty => None,
         ClientClass::Terminal => (raw == RawMods::CTRL | RawMods::SHIFT
             && matches!(received.sym, SYM_C | SYM_V | SYM_UPPER_C | SYM_UPPER_V))
         .then_some(RawMods::SUPER),
-        ClientClass::Other => (raw.contains(RawMods::CTRL)
-            && (received.printable || matches!(received.sym, SYM_RETURN | SYM_KP_ENTER)))
-        .then_some(RawMods((raw.0 & !RawMods::CTRL.0) | RawMods::SUPER.0)),
+        ClientClass::Other if !chord_key => None,
+        ClientClass::Other if raw.contains(RawMods::CTRL) => {
+            Some(swap(RawMods::CTRL, RawMods::SUPER))
+        }
+        ClientClass::Other => raw
+            .contains(RawMods::SUPER)
+            .then(|| swap(RawMods::SUPER, RawMods::CTRL)),
     };
     match pressed {
         Some(raw) => KeyPress { raw, ..*received },
@@ -235,12 +287,16 @@ mod tests {
     }
 
     #[test]
-    fn super_chords_become_ctrl_chords_and_ctrl_is_never_touched() {
+    fn super_chords_become_ctrl_chords_and_ctrl_chords_super_ones() {
         let other = target(ClientClass::Other);
         assert_eq!(reference(&other, &letter(KEY_C, SYM_C, SUP)), to_ctrl(SUP));
         assert_eq!(
             reference(&other, &letter(KEY_C, SYM_C, CTRL)),
-            Rewrite::Pass
+            Rewrite::Mods {
+                remove: CTRL,
+                add: SUP
+            },
+            "Ctrl is not the command key"
         );
         assert_eq!(
             reference(&other, &letter(KEY_C, SYM_C, CTRL | SUP)),
@@ -509,6 +565,44 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn ctrl_line_editing_chords_move_and_delete_in_a_text_input() {
+        let text = ClientTarget {
+            text_input_active: true,
+            ..target(ClientClass::Other)
+        };
+        let key = |evdev| Rewrite::Key {
+            evdev,
+            remove: CTRL,
+            add: RawMods::default(),
+        };
+        assert_eq!(reference(&text, &letter(18, 0x65, CTRL)), key(KEY_END));
+        assert_eq!(reference(&text, &letter(30, 0x61, CTRL)), key(KEY_HOME));
+        assert_eq!(reference(&text, &letter(32, 0x64, CTRL)), key(KEY_DELETE));
+        // Shift stays with the key, which then selects
+        assert_eq!(
+            reference(&text, &letter(18, 0x45, CTRL | SHIFT)),
+            key(KEY_END)
+        );
+        // outside a text input, and for other letters, the chord reaches the client with Super
+        let swapped = Rewrite::Mods {
+            remove: CTRL,
+            add: SUP,
+        };
+        assert_eq!(
+            reference(&target(ClientClass::Other), &letter(18, 0x65, CTRL)),
+            swapped
+        );
+        assert_eq!(reference(&text, &letter(KEY_C, SYM_C, CTRL)), swapped);
+        // a terminal and a first-party client keep Ctrl
+        for class in [ClientClass::Terminal, ClientClass::FirstParty] {
+            assert_eq!(
+                reference(&target(class), &letter(18, 0x65, CTRL)),
+                Rewrite::Pass
+            );
         }
     }
 

@@ -16,14 +16,15 @@
 /// open.
 pub const TRACKING_INTERVAL: f64 = 0.5;
 
-/// How long the pointer rests on a submenu's row before the submenu opens (seconds).
-pub const SUBMENU_OPEN_DELAY: f64 = 0.2;
+/// How long a submenu's row stays highlighted before the submenu opens (seconds).
+pub const SUBMENU_OPEN_DELAY: f64 = 0.35;
 
 /// How long the pointer rests on another row of the menu before an open submenu closes (seconds).
-pub const SUBMENU_CLOSE_DELAY: f64 = 0.3;
+pub const SUBMENU_CLOSE_DELAY: f64 = 0.375;
 
-/// How long the pointer may rest on its way into an open submenu before the row under it takes over (seconds).
-pub const SUBMENU_AIM_PAUSE: f64 = 0.3;
+/// The tracking timer: how long the pointer may rest on its way into an open submenu, over any row, before the row
+/// under it takes over (seconds).
+pub const SUBMENU_AIM_PAUSE: f64 = 0.5;
 
 /// Where a press was let go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,13 +258,43 @@ mod tests {
         );
     }
 
+    /// A diagonal from the submenu's row down to its lower rows crosses three rows of the menu below it, 24 points
+    /// each: the submenu stays all the way, and once the pointer stops on a row for the tracking timer, that row takes
+    /// over.
+    #[test]
+    fn a_diagonal_across_other_rows_keeps_the_submenu_and_a_half_second_rest_hands_it_over() {
+        assert_eq!(SUBMENU_AIM_PAUSE, 0.5);
+        let mut aim = SubmenuAim::default();
+        aim.moved((40.0, 12.0), 0.0, Some(EDGE));
+        let mut t = 0.0;
+        for step in 1..=6 {
+            t += 0.016;
+            let to = (40.0 + 9.0 * step as f64, 12.0 + 12.0 * step as f64);
+            assert!(
+                aim.moved(to, t, Some(EDGE)),
+                "row {} crossed",
+                (to.1 / 24.0) as u32
+            );
+        }
+        // resting on the row at y = 84, the fourth one, until just before the timer
+        assert!(!aim.expired(t + SUBMENU_AIM_PAUSE - 0.01));
+        assert!(
+            aim.moved((94.0, 84.0), t + SUBMENU_AIM_PAUSE - 0.01, Some(EDGE)),
+            "still resting"
+        );
+        assert!(
+            aim.expired(t + SUBMENU_AIM_PAUSE),
+            "half a second at rest: the row takes over"
+        );
+    }
+
     #[test]
     fn the_same_point_again_keeps_the_aim_until_its_deadline() {
         let mut aim = SubmenuAim::default();
         aim.moved((50.0, 10.0), 0.0, Some(EDGE));
         assert!(aim.moved((60.0, 20.0), 0.1, Some(EDGE)));
         assert!(aim.moved((60.0, 20.0), 0.2, Some(EDGE)));
-        assert!(!aim.moved((60.0, 20.0), 0.5, Some(EDGE)));
+        assert!(!aim.moved((60.0, 20.0), 0.7, Some(EDGE)));
     }
 
     #[test]

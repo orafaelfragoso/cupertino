@@ -577,8 +577,11 @@ fn submenus_open_after_the_hover_delay_and_report_about_to_show() {
     c.pointer_move(row_center(&c, 0, 11), 1.0);
     assert_eq!(c.levels().len(), 1);
     assert_eq!(c.next_deadline(), Some(1.0 + c.cfg.submenu_open_delay));
-    assert!(c.tick(1.1).effects.is_empty());
-    let o = c.tick(1.21);
+    assert!(c
+        .tick(1.0 + c.cfg.submenu_open_delay - 0.05)
+        .effects
+        .is_empty());
+    let o = c.tick(1.0 + c.cfg.submenu_open_delay + 0.01);
     assert!(has(
         &o,
         &Effect::AboutToShow {
@@ -593,11 +596,11 @@ fn submenus_open_after_the_hover_delay_and_report_about_to_show() {
         c.levels()[1].layout.rect.x < parent.right() + 1e-9
             && c.levels()[1].layout.rect.x > parent.x
     );
-    c.pointer_move(row_center(&c, 1, 13), 1.3);
+    c.pointer_move(row_center(&c, 1, 13), 1.4);
     assert_eq!(selected_id(&c, 1), Some(13));
-    let o = c.pointer_press(row_center(&c, 1, 13), 1.4);
+    let o = c.pointer_press(row_center(&c, 1, 13), 1.5);
     assert!(o.consumed);
-    let o = c.pointer_release(row_center(&c, 1, 13), 1.5);
+    let o = c.pointer_release(row_center(&c, 1, 13), 1.6);
     assert!(has(
         &o,
         &Effect::Activate {
@@ -630,7 +633,7 @@ fn moving_to_another_row_closes_the_submenu_after_the_delay() {
     c.pointer_press(p, 0.0);
     c.pointer_release(p, 0.1);
     c.pointer_move(row_center(&c, 0, 11), 1.0);
-    c.tick(1.3);
+    c.tick(1.0 + c.cfg.submenu_open_delay);
     assert_eq!(c.levels().len(), 2);
     c.pointer_move(row_center(&c, 0, 16), 2.0);
     assert_eq!(c.levels().len(), 2, "closes after the delay, not at once");
@@ -647,7 +650,7 @@ fn safe_triangle_keeps_the_submenu_while_crossing_other_rows() {
     c.pointer_release(p, 0.1);
     let row = row_center(&c, 0, 11);
     c.pointer_move(row, 1.0);
-    c.tick(1.3);
+    c.tick(1.0 + c.cfg.submenu_open_delay);
     assert_eq!(c.levels().len(), 2);
     let child = c.levels()[1].layout.rect;
     let parent = c.levels()[0].layout.rect;
@@ -1481,7 +1484,7 @@ fn resting_on_the_way_or_a_slow_path_gives_the_submenu_up_to_the_row_under_the_p
     for step in 1..=16 {
         let k = f64::from(step) / 16.0;
         let p = Point::new(from.x + (to.x - from.x) * k, from.y + (to.y - from.y) * k);
-        t += 0.4;
+        t += cupertino_menu_model::tracking::SUBMENU_AIM_PAUSE + 0.1;
         while let Some(due) = c.next_deadline().filter(|due| *due <= t) {
             c.tick(due);
         }

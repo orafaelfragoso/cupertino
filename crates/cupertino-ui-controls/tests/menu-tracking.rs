@@ -7,7 +7,9 @@
 use crate::support;
 
 use cupertino_geometry::{Insets, Point, Rect};
-use cupertino_menu_model::tracking::{SUBMENU_AIM_PAUSE, SUBMENU_OPEN_DELAY, TRACKING_INTERVAL};
+use cupertino_menu_model::tracking::{
+    SUBMENU_AIM_PAUSE, SUBMENU_CLOSE_DELAY, SUBMENU_OPEN_DELAY, TRACKING_INTERVAL,
+};
 use cupertino_ui_controls::{
     Button, ButtonRole, ButtonStyle, ContextMenu, Menu, MenuAnchor, MenuItem, PopUpButton, Stack,
 };
@@ -646,7 +648,7 @@ fn a_slow_path_gives_the_submenu_up() {
     let mut switched = false;
     for step in 1..=16 {
         let k = f64::from(step) / 16.0;
-        ptr.wait(&mut h, 400);
+        ptr.wait(&mut h, (SUBMENU_AIM_PAUSE * 1000.0) as u64 + 100);
         ptr.move_to(
             &mut h,
             Point::new(
@@ -714,7 +716,7 @@ fn resting_on_a_separator_closes_the_open_submenu_as_another_row_does() {
     ptr.wait(&mut h, 16);
     ptr.move_to(&mut h, separator);
     assert_eq!(h.model().submenus, [0], "not at once");
-    ptr.wait(&mut h, 310);
+    ptr.wait(&mut h, (SUBMENU_CLOSE_DELAY * 1000.0) as u64 + 10);
     assert!(h.model().submenus.is_empty());
 }
 

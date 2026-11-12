@@ -31,14 +31,14 @@ focus Some(NodeId(7v1))
 pointer_capture None
 text_input None
 layout
-  NodeId(0v1) cupertino_ui_controls::Stack<examples::forms::Message> key=None parent=None children=[NodeId(1v1), NodeId(2v1)] rect=[0,0 280x180] clip=[none]
+  NodeId(0v1) cupertino_ui_controls::Stack<suite::examples::forms::Message> key=None parent=None children=[NodeId(1v1), NodeId(2v1)] rect=[0,0 280x180] clip=[none]
   NodeId(1v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(0v1)) children=[] rect=[20,20 240x14.51953125] clip=[none]
-  NodeId(2v1) cupertino_ui_controls::Stack<examples::forms::Message> key=None parent=Some(NodeId(0v1)) children=[NodeId(3v1), NodeId(4v1), NodeId(5v1)] rect=[20,46.51953125 240x88] clip=[none]
-  NodeId(3v1) cupertino_ui_controls::TextField<examples::forms::Message> key=Some(Str("name")) parent=Some(NodeId(2v1)) children=[] rect=[20,46.51953125 240x24] clip=[none]
-  NodeId(4v1) cupertino_ui_controls::SecureField<examples::forms::Message> key=Some(Str("password")) parent=Some(NodeId(2v1)) children=[] rect=[20,78.51953125 240x24] clip=[none]
-  NodeId(5v1) cupertino_ui_controls::Stack<examples::forms::Message> key=None parent=Some(NodeId(2v1)) children=[NodeId(6v1), NodeId(7v1)] rect=[20,110.51953125 240x24] clip=[none]
+  NodeId(2v1) cupertino_ui_controls::Stack<suite::examples::forms::Message> key=None parent=Some(NodeId(0v1)) children=[NodeId(3v1), NodeId(4v1), NodeId(5v1)] rect=[20,46.51953125 240x88] clip=[none]
+  NodeId(3v1) cupertino_ui_controls::TextField<suite::examples::forms::Message> key=Some(Str("name")) parent=Some(NodeId(2v1)) children=[] rect=[20,46.51953125 240x24] clip=[none]
+  NodeId(4v1) cupertino_ui_controls::SecureField<suite::examples::forms::Message> key=Some(Str("password")) parent=Some(NodeId(2v1)) children=[] rect=[20,78.51953125 240x24] clip=[none]
+  NodeId(5v1) cupertino_ui_controls::Stack<suite::examples::forms::Message> key=None parent=Some(NodeId(2v1)) children=[NodeId(6v1), NodeId(7v1)] rect=[20,110.51953125 240x24] clip=[none]
   NodeId(6v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(5v1)) children=[] rect=[20,114.65478515625 89.16552734375x15.7294921875] clip=[none]
-  NodeId(7v1) cupertino_ui_controls::Toggle<examples::forms::Message> key=Some(Str("remember")) parent=Some(NodeId(5v1)) children=[] rect=[117.16552734375,110.51953125 54x24] clip=[none]
+  NodeId(7v1) cupertino_ui_controls::Toggle<suite::examples::forms::Message> key=Some(Str("remember")) parent=Some(NodeId(5v1)) children=[] rect=[117.16552734375,110.51953125 54x24] clip=[none]
 semantics
   NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 280x180] actions=[] relations=[] children=[NodeId(1v1), NodeId(3v1), NodeId(4v1), NodeId(6v1), NodeId(7v1)]
   NodeId(1v1) role=StaticText name=Some("Sign In") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[20,20 240x14.51953125] actions=[] relations=[] children=[]
@@ -68,6 +68,6 @@ display
   paint 4294967302 parent=Some(4294967301) revision=7 bounds=[7,107.74853515625 120.58642578125x32.5] hit=[20,114.65478515625 89.16552734375x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 114.65478515625]
     Glyphs origin=0,12.59375 font=FontId(1) size=13 count=11 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
   paint 4294967303 parent=Some(4294967301) revision=39 bounds=[113.16552734375,106.51953125 62x32] hit=[117.16552734375,110.51953125 54x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 117.16552734375, 110.51953125]
-    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 54.0, height: 24.0 } }, radius: 12.0 }, paint: Solid(Color { r: 0.20392157, g: 0.47058824, b: 0.9647059, a: 1.0 }) }
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 54.0, height: 24.0 } }, radius: 12.0 }, paint: Solid(Color { r: 0.0, g: 0.47843137, b: 1.0, a: 1.0 }) }
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 20.0, y: 2.0 }, size: Size { width: 32.0, height: 20.0 } }, radius: 10.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
-    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -3.0, y: -3.0 }, size: Size { width: 60.0, height: 30.0 } }, radius: 15.0 }, width: 2.0, paint: Solid(Color { r: 0.23137255, g: 0.6, b: 0.9882353, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -3.0, y: -3.0 }, size: Size { width: 60.0, height: 30.0 } }, radius: 15.0 }, width: 2.0, paint: Solid(Color { r: 0.0, g: 0.40392157, b: 0.95686275, a: 0.49803922 }) }

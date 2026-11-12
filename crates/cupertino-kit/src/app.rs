@@ -592,7 +592,11 @@ mod tests {
             ..SystemAppearance::default()
         };
         let tokens = follow(&dark);
-        let expected = ThemeTokens::cupertino(&Theme::load().unwrap(), preferences(&dark)).unwrap();
+        // the theme for the session's appearance, with the person's accent (the default one, nothing being set) over it
+        let mut expected =
+            ThemeTokens::cupertino(&Theme::load().unwrap(), preferences(&dark)).unwrap();
+        let accent = AppearanceSettings::UNSET.accent.rgb(true);
+        expected.colors = expected.colors.with_accent(accent, accent, true);
         assert_eq!(*tokens, expected);
         assert!(tokens.motion.reduce);
     }

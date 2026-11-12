@@ -224,7 +224,7 @@ fn render(
     );
     if let (State::Focused, Some(focus)) = (state, snapshot.focus) {
         // the keyboard focus shows in every appearance, high contrast included: a menu item by its highlight, a text
-        // editor by its caret, any other control by a ring in the theme's colour
+        // editor by its caret in the accent, any other control by a ring in the theme's colour
         let theme = repository_theme(appearance);
         let color = |role| theme.colors.get(role, StateVariant::NORMAL).unwrap();
         let role = snapshot
@@ -239,10 +239,10 @@ fn render(
                 ops.any(|op| matches!(op, PaintOp::Fill { paint: Paint::Solid(c), .. } if *c == highlight))
             }
             Some(Role::MultilineTextInput) => {
-                let text = color(ColorRole::Text);
+                let caret = color(ColorRole::DefaultButtonFill);
                 ops.any(|op| {
                     matches!(op, PaintOp::Fill { shape: Shape::Rect(r), paint: Paint::Solid(c) }
-                        if *c == text && r.size.width <= 2.0)
+                        if *c == caret && r.size.width <= 2.0)
                 })
             }
             _ => {

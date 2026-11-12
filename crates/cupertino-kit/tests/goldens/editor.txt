@@ -65,10 +65,10 @@ focus Some(NodeId(2v1))
 pointer_capture None
 text_input Some(NodeId(2v1))
 layout
-  NodeId(0v1) cupertino_ui_controls::scroll::Frame<examples::editor::Message> key=None parent=None children=[NodeId(1v1), NodeId(3v1)] rect=[0,0 480x320] clip=[none]
-  NodeId(1v1) cupertino_ui_controls::scroll::Viewport<examples::editor::Message> key=None parent=Some(NodeId(0v1)) children=[NodeId(2v1)] rect=[0,0 480x320] clip=[none]
-  NodeId(2v1) cupertino_ui_controls::TextEditor<examples::editor::Message> key=Some(Str("text")) parent=Some(NodeId(1v1)) children=[] rect=[0,0 480x320] clip=[0,0 480x320]
-  NodeId(3v1) cupertino_ui_controls::scroll::Bar<examples::editor::Message> key=None parent=Some(NodeId(0v1)) children=[] rect=[463,0 17x320] clip=[none]
+  NodeId(0v1) cupertino_ui_controls::scroll::Frame<suite::examples::editor::Message> key=None parent=None children=[NodeId(1v1), NodeId(3v1)] rect=[0,0 480x320] clip=[none]
+  NodeId(1v1) cupertino_ui_controls::scroll::Viewport<suite::examples::editor::Message> key=None parent=Some(NodeId(0v1)) children=[NodeId(2v1)] rect=[0,0 480x320] clip=[none]
+  NodeId(2v1) cupertino_ui_controls::TextEditor<suite::examples::editor::Message> key=Some(Str("text")) parent=Some(NodeId(1v1)) children=[] rect=[0,0 480x320] clip=[0,0 480x320]
+  NodeId(3v1) cupertino_ui_controls::scroll::Bar<suite::examples::editor::Message> key=None parent=Some(NodeId(0v1)) children=[] rect=[463,0 17x320] clip=[none]
 semantics
   NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 480x320] actions=[] relations=[] children=[NodeId(1v1)]
   NodeId(1v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 480x320] actions=[] relations=[] children=[NodeId(2v1)]

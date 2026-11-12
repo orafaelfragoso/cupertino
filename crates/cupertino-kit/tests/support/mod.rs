@@ -123,7 +123,12 @@ pub fn repository_theme(appearance: Appearance) -> ThemeTokens {
 pub struct Run<A: Application> {
     pub driver: TestDriver<A>,
     pub window: WindowId,
+    /// The driver's clock: the runtime's time.
+    pub clock: ManualClock,
 }
+
+/// A display frame at 60 Hz, in nanoseconds.
+const FRAME_NS: u64 = 16_666_667;
 
 impl<A: Application> Run<A> {
     pub fn new() -> Self {
@@ -175,11 +180,8 @@ impl<A: Application> Run<A> {
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
-        let mut driver = TestDriver::new(
-            Capabilities::default(),
-            options,
-            ManualClock::new(Timestamp(0)),
-        );
+        let clock = ManualClock::new(Timestamp(0));
+        let mut driver = TestDriver::new(Capabilities::default(), options, clock.clone());
         driver.run_until_idle(budget()).unwrap();
         let window = driver.runtime().windows()[0].1;
         let active = WindowStates {
@@ -190,19 +192,33 @@ impl<A: Application> Run<A> {
             .window_system_mut()
             .configure(window, None, active)
             .unwrap();
-        let mut run = Self { driver, window };
+        let mut run = Self {
+            driver,
+            window,
+            clock,
+        };
         run.settle();
         run
     }
 
+    /// Steps until the window has drawn everything it asked to draw. A window still asking after 8 frames at the same
+    /// time is in a transition (the colours of a window made active again): the clock then moves a display frame per
+    /// frame, for up to 2 seconds, until the transition ends.
     pub fn settle(&mut self) {
-        for _ in 0..8 {
+        for round in 0..8 + 120 {
             self.driver.run_until_idle(budget()).unwrap();
             let system = self.driver.window_system_mut();
             if !system.frame_requested(self.window).unwrap() {
                 return;
             }
-            system.frame_ready(self.window, Timestamp(0)).unwrap();
+            if round >= 8 {
+                self.clock.advance_by(FRAME_NS);
+            }
+            let now = cupertino_kit::core::Clock::now(&self.clock);
+            self.driver
+                .window_system_mut()
+                .frame_ready(self.window, now)
+                .unwrap();
         }
         panic!("the window keeps asking for frames");
     }

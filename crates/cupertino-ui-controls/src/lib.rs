@@ -71,7 +71,9 @@ pub use glass_edge::{paint_glass_edge, GlassEdge};
 pub use list::{striped_element, ListState};
 pub use press::Press;
 pub use scroll::{BarState, ViewportState};
-pub use shell::{SidebarWindow, SIDEBAR_PANEL_INSET, SIDEBAR_TOP, WINDOW_CORNER_RADIUS};
+pub use shell::{
+    SidebarWindow, PANEL_WINDOW_BACKGROUND, SIDEBAR_PANEL_INSET, SIDEBAR_TOP, WINDOW_CORNER_RADIUS,
+};
 pub use slider::SliderState;
 pub use split::DividerState;
 pub use stepper::StepperState;

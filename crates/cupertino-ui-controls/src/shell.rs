@@ -10,6 +10,7 @@ use crate::{Handler, SplitLayout, SplitView};
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_ui_core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
+    WindowBackground,
 };
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
@@ -19,6 +20,14 @@ use cupertino_ui_theme::{ColorRole, StateVariant, Surface};
 
 /// The window's corner radius, which the sidebar panel's corners follow.
 pub const WINDOW_CORNER_RADIUS: f64 = 16.0;
+/// The background of a small window that is a single panel, such as an About window or a prompt for permission: the
+/// sidebar's glass under the whole window, its corners the window's, so it reads as the same glass as a sidebar
+/// window's panel. Where the desktop's effects offer no glass it is the theme's opaque window colour in that shape.
+pub const PANEL_WINDOW_BACKGROUND: WindowBackground = WindowBackground::Surface {
+    surface: Surface::Sidebar,
+    radius: WINDOW_CORNER_RADIUS,
+    alpha: 1.0,
+};
 /// How far the sidebar panel lies inside the window's edges. The panel meets the top, leading and bottom edges, its
 /// corners there the window's own; a panel inset from them would have [`nested_radius`] corners.
 pub const SIDEBAR_PANEL_INSET: f64 = 0.0;
@@ -388,4 +397,27 @@ impl<M: 'static> Widget<M> for ContentPane<M> {
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panel_window_is_the_sidebar_glass_with_the_window_corners_and_opaque() {
+        let WindowBackground::Surface {
+            surface,
+            radius,
+            alpha,
+        } = PANEL_WINDOW_BACKGROUND
+        else {
+            panic!("a panel window asks for a compositor surface");
+        };
+        assert_eq!(
+            GlassRole::SidebarPanel.material(),
+            crate::GlassMaterial::Compositor(surface),
+            "the same glass as a sidebar window's panel"
+        );
+        assert_eq!((radius, alpha), (WINDOW_CORNER_RADIUS, 1.0));
+    }
 }

@@ -708,6 +708,79 @@ fn dragging_a_pinned_tile_off_the_bar_removes_it_and_stores_the_pins() {
     assert_eq!(names, ["Terminal", kit::TRASH_NAME]);
 }
 
+/// The names of the bar's tiles, in order.
+fn tile_names(run: &Run, bar: WindowId) -> Vec<String> {
+    run.nodes(bar)
+        .into_iter()
+        .filter(|n| n.0 == Role::Button)
+        .map(|n| n.1)
+        .collect()
+}
+
+/// The names of the application tiles, ahead of the trash: an application that quit is listed after it, among the
+/// recent ones.
+fn applications(run: &Run, bar: WindowId) -> Vec<String> {
+    let names = tile_names(run, bar);
+    let trash = names.iter().position(|n| n == kit::TRASH_NAME).unwrap();
+    names[..trash].to_vec()
+}
+
+/// A secondary click on the tile named `tile`, then a click on its menu's item named `item`, and the flash it acts
+/// after.
+fn choose_on_tile(run: &mut Run, bar: WindowId, tile: &str, item: &str) {
+    let at = centre(run.bounds(bar, Role::Button, tile));
+    run.pointer(bar, PointerEvent::Enter { position: at });
+    run.button(bar, at, MouseButton::Right, true);
+    run.button(bar, at, MouseButton::Right, false);
+    let menu = open_menu(run, bar).expect("the menu opened");
+    let row = run.bounds(menu, Role::MenuItem, item);
+    run.click(menu, centre(row));
+    run.advance(MENU_FLASH);
+    assert!(
+        open_menu(run, bar).is_none(),
+        "choosing {item} closes the menu"
+    );
+}
+
+#[test]
+fn remove_from_dock_unpins_at_once_and_a_running_tile_stays_until_its_application_quits() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    choose_on_tile(&mut run, bar, "Terminal", "Remove from Dock");
+    assert_eq!(
+        run.record.borrow().pins.last().cloned(),
+        Some(vec![EDITOR.to_owned()]),
+        "the pins are stored without the terminal"
+    );
+    run.advance(1.0);
+    assert_eq!(
+        tile_names(&run, bar),
+        ["Editor", "Terminal", kit::TRASH_NAME],
+        "the running terminal keeps its tile"
+    );
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::WindowClosed(7)],
+    });
+    run.advance(1.0);
+    assert_eq!(
+        applications(&run, bar),
+        ["Editor"],
+        "its tile goes as it quits"
+    );
+    choose_on_tile(&mut run, bar, "Editor", "Remove from Dock");
+    assert_eq!(
+        run.record.borrow().pins.last().cloned(),
+        Some(Vec::new()),
+        "the pins are stored without the editor"
+    );
+    run.advance(1.0);
+    assert!(
+        applications(&run, bar).is_empty(),
+        "an application that is not running leaves at once"
+    );
+}
+
 #[test]
 fn a_secondary_click_opens_the_tiles_menu_whose_items_reach_the_server() {
     let mut run = Run::start();

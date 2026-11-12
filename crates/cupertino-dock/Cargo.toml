@@ -21,6 +21,7 @@ app = [
     "dep:cupertino-modifiers",
     "dep:cupertino-shell-client",
     "dep:cupertino-trash",
+    "dep:notify",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
     "dep:tiny-skia",
@@ -45,6 +46,7 @@ cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-trash = { path = "../cupertino-trash", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
+notify = { version = "8", optional = true }
 tiny-skia = { version = "0.12", optional = true }
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
 

@@ -153,12 +153,11 @@ mod tests {
         a.update(true, 1.0);
         assert_eq!(a.state, HideState::Shown);
         a.update(false, 1.1);
-        a.update(false, 1.5);
-        assert_eq!(a.state, HideState::Hiding);
-        let mid = a.offset.value(1.6);
-        a.update(true, 1.6);
+        assert_eq!(a.state, HideState::Hiding, "a hide starts at once");
+        let mid = a.offset.value(1.2);
+        a.update(true, 1.2);
         assert_eq!(a.state, HideState::Showing);
-        assert!((a.offset.value(1.6) - mid).abs() < 1e-9);
+        assert!((a.offset.value(1.2) - mid).abs() < 1e-9);
     }
 
     #[test]
@@ -211,10 +210,11 @@ mod tests {
     }
 
     #[test]
-    fn default_duration_field_matches_the_formula() {
+    fn the_default_slide_is_shorter_than_the_formula_for_a_full_hide() {
         let c = DockConfig::default();
-        assert_eq!(c.autohide_duration * 1000.0, autohide_hide_ms(&c, 0.0, 0.0));
-        assert_eq!(c.autohide_delay, 0.15);
+        assert_eq!(autohide_hide_ms(&c, 0.0, 0.0), 240.0);
+        assert_eq!(c.autohide_duration, 0.22);
+        assert_eq!(c.autohide_delay, 0.2);
     }
 
     #[test]

@@ -5,7 +5,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use cupertino_assets::Assets;
 use cupertino_icons::{SystemIcons, ThemeIcons};
@@ -48,9 +47,6 @@ const MAX_FILL_SCALE: f64 = 4.0;
 /// A pixel at least this opaque is part of an icon's shape.
 const SHAPE_ALPHA: u8 = 8;
 
-/// How long the trash's state is trusted before the folder is looked at again.
-const TRASH_CHECK_EVERY: Duration = Duration::from_secs(1);
-
 /// Whether the home trash holds anything: `$XDG_DATA_HOME/Trash/files` (`~/.local/share` by default) has an entry.
 fn trash_is_full() -> bool {
     let data_home = std::env::var_os("XDG_DATA_HOME")
@@ -72,7 +68,6 @@ pub struct Icons {
     system_cache: HashMap<(&'static str, u32), Pixmap>,
     /// Windows' own icons by window id.
     windows: BTreeMap<u32, WindowIcon>,
-    trash: Option<(Instant, bool)>,
 }
 
 /// The icon a window set for itself: a theme name, an image, or both.
@@ -262,7 +257,6 @@ impl Icons {
             cache: HashMap::new(),
             system_cache: HashMap::new(),
             windows: BTreeMap::new(),
-            trash: None,
         }
     }
 
@@ -275,7 +269,6 @@ impl Icons {
             cache: HashMap::new(),
             system_cache: HashMap::new(),
             windows: BTreeMap::new(),
-            trash: None,
         }
     }
 
@@ -377,17 +370,9 @@ impl Icons {
         }
     }
 
-    /// Whether the trash folder holds anything; looked at again once [`TRASH_CHECK_EVERY`] passed.
+    /// Whether the trash folder holds anything now; the model decides how often to ask.
     pub fn trash_full(&mut self) -> bool {
-        let now = cupertino_shell_client::test_clock::display_now();
-        match self.trash {
-            Some((at, full)) if now.duration_since(at) < TRASH_CHECK_EVERY => full,
-            _ => {
-                let full = trash_is_full();
-                self.trash = Some((now, full));
-                full
-            }
-        }
+        trash_is_full()
     }
 
     /// The trash's icon, empty or full.

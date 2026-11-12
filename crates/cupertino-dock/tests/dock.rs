@@ -1240,7 +1240,7 @@ fn verified_defaults() {
         (c.tile_size, c.large_size, c.magnification),
         (64.0, 128.0, false)
     );
-    assert_eq!(c.autohide_delay, 0.15);
+    assert_eq!(c.autohide_delay, 0.2);
     assert_eq!(c.autohide_time_modifier, 1.0);
     assert!(!c.autohide && c.launch_animation);
     assert_eq!(c.minimize_effect, MinimizeEffect::WarpMinimize);
@@ -1410,8 +1410,8 @@ fn input_goes_to_the_bar_and_its_tiles_or_only_the_reveal_strip_while_hidden() {
     assert_eq!(shown[0], layout.bar);
     assert_eq!(
         shown.len(),
-        1 + 3 + 1,
-        "the bar, three apps and the trash; separators take no input"
+        1 + 1 + 3 + 1,
+        "the bar, the strip between it and the screen edge, three apps and the trash; separators take no input"
     );
     assert!(shown
         .iter()
@@ -1578,14 +1578,14 @@ fn default_dock() -> Dock {
 }
 
 #[test]
-fn the_default_bar_is_85_pt_deep_5_pt_above_the_screen_edge_with_its_tiles_inside_it() {
+fn the_default_bar_is_84_pt_deep_5_pt_above_the_screen_edge_with_its_tiles_inside_it() {
     let d = default_dock();
     let l = d.layout(SCREEN, 100.0);
-    assert_eq!(l.bar.h, 85.0);
+    assert_eq!(l.bar.h, 84.0);
     assert_eq!(l.bar.bottom(), 1080.0 - 5.0);
     for t in l.tiles.iter().filter(|t| t.kind != TileKind::Separator) {
         assert_eq!((t.rect.w, t.rect.h), (64.0, 64.0));
-        assert_eq!(t.rect.y - l.bar.y, 11.0, "padding above");
+        assert_eq!(t.rect.y - l.bar.y, 10.0, "padding above");
         assert_eq!(
             l.bar.bottom() - t.rect.bottom(),
             10.0,
@@ -1594,13 +1594,13 @@ fn the_default_bar_is_85_pt_deep_5_pt_above_the_screen_edge_with_its_tiles_insid
     }
     let first = &l.tiles[0];
     let last = l.tiles.last().unwrap();
-    assert_eq!(first.rect.x - l.bar.x, 10.5, "padding at the leading end");
+    assert_eq!(first.rect.x - l.bar.x, 10.0, "padding at the leading end");
     assert_eq!(
         l.bar.right() - last.rect.right(),
-        10.5,
+        10.0,
         "padding at the trailing end"
     );
-    assert_eq!(d.exclusive_zone(), 90.0, "the bar and its margin");
+    assert_eq!(d.exclusive_zone(), 89.0, "the bar and its margin");
 }
 
 #[test]
@@ -1624,7 +1624,7 @@ fn tiles_stand_68_pt_apart_and_34_pt_across_the_separator() {
     );
     assert!((l.tiles[sep + 2].rect.cx() - l.tiles[sep + 1].rect.cx() - 68.0).abs() < 1e-9);
     // 9 tiles, 10 items with their gaps, the separator's slot and the padding
-    assert!((l.bar.w - (9.0 * 64.0 + 9.0 * 4.0 + 26.0 + 21.0)).abs() < 1e-9);
+    assert!((l.bar.w - (9.0 * 64.0 + 9.0 * 4.0 + 26.0 + 20.0)).abs() < 1e-9);
 }
 
 #[test]
@@ -1634,10 +1634,10 @@ fn the_metrics_scale_with_the_tile_size() {
         ..DockConfig::default()
     };
     assert_eq!(cfg.gap(), 2.0);
-    assert_eq!(cfg.bar_padding(), 5.25);
+    assert_eq!(cfg.bar_padding(), 5.0);
     assert_eq!(cfg.edge_padding(), 5.0);
     assert_eq!(cfg.separator_extent(), 13.0);
-    assert_eq!(cfg.bar_thickness(), 42.5);
+    assert_eq!(cfg.bar_thickness(), 42.0);
     assert_eq!(cfg.edge_margin, 5.0, "the gap to the screen edge stays");
 }
 

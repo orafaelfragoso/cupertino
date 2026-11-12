@@ -956,6 +956,37 @@ fn watch_conf(
     }
 }
 
+/// Watch the home trash's `files` folder (made when missing); an entry put there or taken away is told as
+/// [`Message::TrashChanged`], so the trash's icon follows at once. A watch that cannot be set up leaves the
+/// once-a-second look the model takes anyway.
+fn watch_trash(messages: async_channel::Sender<Message>) -> Option<notify::RecommendedWatcher> {
+    use notify::Watcher;
+    let files = cupertino_trash::Trash::new().home_trash().join("files");
+    if let Err(e) = std::fs::create_dir_all(&files) {
+        eprintln!("{PROCESS}: cannot make {}: {e}", files.display());
+        return None;
+    }
+    let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event.is_ok_and(|e| !e.kind.is_access()) {
+            let _ = messages.send_blocking(Message::TrashChanged);
+        }
+    });
+    let mut watcher = match watcher {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("{PROCESS}: cannot watch the trash: {e}");
+            return None;
+        }
+    };
+    match watcher.watch(&files, notify::RecursiveMode::NonRecursive) {
+        Ok(()) => Some(watcher),
+        Err(e) => {
+            eprintln!("{PROCESS}: cannot watch {}: {e}", files.display());
+            None
+        }
+    }
+}
+
 /// Connect, take the dock role of the first output and serve until the connection fails.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
@@ -1017,6 +1048,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 
     let (messages, heard) = async_channel::unbounded();
     let _conf_watch = watch_conf(conf_path.as_ref(), messages.clone());
+    let _trash_watch = watch_trash(messages.clone());
     let surfaces = Rc::new(RefCell::new(Surfaces::default()));
     let initial = (
         observed.dark,

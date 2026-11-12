@@ -259,6 +259,7 @@ mod tests {
             running_app_id: running,
             unresponsive: false,
             entry_path: path,
+            trash_full: false,
         }
     }
 
@@ -303,6 +304,7 @@ mod tests {
             running_app_id: Some("cupertino-files"),
             unresponsive: true,
             entry_path: None,
+            trash_full: false,
         });
         assert_eq!(
             labels(&items),
@@ -377,6 +379,7 @@ mod tests {
             running_app_id: running,
             unresponsive: false,
             entry_path: None,
+            trash_full: false,
         };
         let running = tile_menu(&file_manager(Some("cupertino-files")));
         assert_eq!(labels(&running), ["Show All Windows", "Hide"]);

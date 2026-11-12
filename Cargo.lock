@@ -1182,6 +1182,7 @@ dependencies = [
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "cupertino-wm",
+ "notify",
  "tempfile",
  "tiny-skia",
  "zbus",

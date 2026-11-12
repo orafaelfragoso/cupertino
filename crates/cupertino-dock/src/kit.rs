@@ -380,6 +380,8 @@ pub enum Message {
     },
     /// The trash was emptied ([`Host::empty_trash`]).
     TrashEmptied,
+    /// Something was put in the trash or taken out of it.
+    TrashChanged,
     Wake(u64),
     /// `dock.conf` changed on disk.
     ConfChanged,
@@ -400,6 +402,7 @@ impl Message {
                 | Message::Sized(..)
                 | Message::KeyboardLeft(_)
                 | Message::ConfChanged
+                | Message::TrashChanged
         )
     }
 }
@@ -2508,7 +2511,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::BusActivated { key, ok } => model.bus_activated(key, ok),
-        Message::TrashEmptied => {
+        Message::TrashEmptied | Message::TrashChanged => {
             // the trash's icon follows what is left
             model.trash_checked = None;
             Vec::new()

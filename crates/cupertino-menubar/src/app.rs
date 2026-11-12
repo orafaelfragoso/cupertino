@@ -370,9 +370,6 @@ struct Bar {
     alt: bool,
     /// The lightness of the wallpaper under the bar, from the server; `None` before it is known.
     backdrop_lightness: Option<u16>,
-    /// How unevenly light the wallpaper is under the bar, band by band across it, from the server; empty before it is
-    /// known.
-    backdrop_spread: Vec<u16>,
     /// The palette of the bar's strip.
     tone: BarTone,
 }
@@ -778,7 +775,6 @@ impl App {
             focused: false,
             alt: false,
             backdrop_lightness: None,
-            backdrop_spread: Vec::new(),
             tone: BarTone::Appearance,
         });
         if self.bars.len() == 1 {
@@ -947,9 +943,6 @@ impl App {
             let bar = &mut self.bars[i];
             bar.backdrop_lightness = Some(lightness);
             bar.tone = bar.tone.next(Some(lightness), tone_display);
-        }
-        if let Some(spread) = &update.backdrop_spread {
-            self.bars[i].backdrop_spread = spread.clone();
         }
         if let Some(agent) = update.session_agent {
             let agent = match agent {
@@ -1662,7 +1655,6 @@ impl Application for App {
                         font: app.font,
                         tone: bar.tone,
                         solid: cupertino_menubar::tone::solid_bar(app.tone_display()),
-                        spread: &bar.backdrop_spread,
                         size: Size::new(f64::from(bar.width), app.height),
                         open_panels: &open_panels,
                         icons: &app.icons,

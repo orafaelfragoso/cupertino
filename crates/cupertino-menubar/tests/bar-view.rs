@@ -98,9 +98,8 @@ struct Model {
     shared: Shared,
     font: BarFont,
     effects: Vec<Effect>,
-    /// The scene's solid strip, spread under the bar and tone, from [`LOOK`].
+    /// The scene's solid strip and tone, from [`LOOK`].
     solid: bool,
-    spread: Vec<u16>,
     tone: BarTone,
     /// The items whose panel another process shows open on this bar, from [`PANELS`].
     open_panels: Vec<SlotKey>,
@@ -108,12 +107,11 @@ struct Model {
     icons: std::rc::Rc<view::RowIcons>,
 }
 
-/// What the next bar started shows: whether its strip is solid, the spread under it, whether the theme's Reduce
-/// Transparency is on, and the tone of its text.
+/// What the next bar started shows: whether its strip is solid, whether the theme's Reduce Transparency is on, and the
+/// tone of its text.
 #[derive(Clone, Default)]
 struct Look {
     solid: bool,
-    spread: Vec<u16>,
     theme_reduce_transparency: bool,
     tone: BarTone,
 }
@@ -141,7 +139,6 @@ impl Application for Bar {
             font,
             effects: Vec::new(),
             solid: LOOK.with_borrow(|l| l.solid),
-            spread: LOOK.with_borrow(|l| l.spread.clone()),
             tone: LOOK.with_borrow(|l| l.tone),
             open_panels: PANELS.with_borrow(Clone::clone),
             icons: std::rc::Rc::new(view::RowIcons::new(
@@ -194,7 +191,6 @@ impl Application for Bar {
                 font: model.font,
                 tone: model.tone,
                 solid: model.solid,
-                spread: &model.spread,
                 size: Size::new(bar.w, bar.h),
                 open_panels: &model.open_panels,
                 icons: &model.icons,
@@ -585,8 +581,8 @@ fn a_screen_reader_opens_a_menu_by_its_title_and_chooses_a_row() {
     assert_eq!(run.window("menu-1-0"), None, "choosing closes the menu");
 }
 
-/// How many of the bar's items draw a halo under their text and symbols, for `look`.
-fn halos(look: Look) -> usize {
+/// How many shadows the bar's items draw under their text and symbols, for `look`.
+fn shadows(look: Look) -> usize {
     LOOK.set(look);
     let run = Run::start();
     LOOK.set(Look::default());
@@ -599,214 +595,115 @@ fn halos(look: Look) -> usize {
         .count()
 }
 
-/// The session's Reduce Transparency is the one source of both the bar's solid strip and its items' halos: the strip
-/// shows exactly when it is on (`tone::solid_bar`), and a bar drawn with it draws no halo over the busiest wallpaper,
-/// even with the theme's own Reduce Transparency off; with the session's off, the theme's does not take the halos
-/// away.
+/// The session's Reduce Transparency alone shows the bar's solid strip (`tone::solid_bar`), and with it or without it,
+/// in either tone and whatever the theme's own option, no item draws a shadow or halo under its text and symbols.
 #[test]
-fn reduce_transparency_gives_the_solid_strip_and_no_halo_from_one_source() {
+fn the_items_draw_no_shadow_with_or_without_the_solid_strip() {
     use cupertino_defaults::accessibility::DisplayOptions;
     use cupertino_menubar::tone::solid_bar;
-    let busy = vec![1000; 64];
     let reduced = DisplayOptions {
         reduce_transparency: true,
         ..DisplayOptions::default()
     };
     assert!(solid_bar(reduced), "the strip shows");
     assert!(!solid_bar(DisplayOptions::default()), "the strip is hidden");
-    let items = halos(Look {
-        solid: solid_bar(DisplayOptions::default()),
-        spread: busy.clone(),
-        theme_reduce_transparency: false,
-        ..Look::default()
-    });
-    assert!(
-        items >= 4,
-        "each item over a busy wallpaper has a halo: {items}"
-    );
-    assert_eq!(
-        halos(Look {
-            solid: solid_bar(reduced),
-            spread: busy.clone(),
-            theme_reduce_transparency: false,
-            ..Look::default()
-        }),
-        0,
-        "a solid bar draws no halo"
-    );
-    assert_eq!(
-        halos(Look {
-            solid: solid_bar(DisplayOptions::default()),
-            spread: busy,
-            theme_reduce_transparency: true,
-            ..Look::default()
-        }),
-        items,
-        "the theme's own option is not a second source"
-    );
+    for tone in [BarTone::Appearance, BarTone::LightText, BarTone::DarkText] {
+        for solid in [false, true] {
+            for theme_reduce_transparency in [false, true] {
+                let look = Look {
+                    solid,
+                    theme_reduce_transparency,
+                    tone,
+                };
+                assert_eq!(
+                    shadows(look),
+                    0,
+                    "{tone:?}, solid {solid}, theme {theme_reduce_transparency}"
+                );
+            }
+        }
+    }
 }
 
-/// Over a calm wallpaper no item draws a halo; over a wallpaper busy under one part of the bar only, only the items
-/// over that part do; with no measure every item keeps the halo it drew before the spread was measured.
-#[test]
-fn only_the_items_over_a_busy_part_of_the_wallpaper_draw_a_halo() {
-    let all = halos(Look::default());
-    assert!(all >= 4, "with no measure every item has a halo: {all}");
-    assert_eq!(
-        halos(Look {
-            spread: vec![30; 64],
-            ..Look::default()
-        }),
-        0,
-        "calm"
-    );
-    // busy under the left eighth of the bar only, where the application's menus are
-    let mut left = vec![0; 64];
-    left[..8].fill(400);
-    let some = halos(Look {
-        spread: left,
-        ..Look::default()
-    });
-    assert!(some > 0 && some < all, "{some} of {all}");
-}
-
-/// The bar's frame at 1x for `look`, with the File menu open when `open`, and the File title's rectangle.
-fn frame(look: Look, open: bool) -> (Pixmap, Rect) {
+/// The bar's frame at 1x for `look`, with the File menu open when `open`, and the slot rectangles of the mark and of
+/// the File title.
+fn frame(look: Look, open: bool) -> (Pixmap, Rect, Rect) {
     LOOK.set(look);
     let mut run = Run::start();
     LOOK.set(Look::default());
     if open {
         run.open_file();
     }
-    let file = run
-        .model()
-        .controller
-        .layout()
-        .slot(&SlotKey::Menu(ItemId(FILE)))
-        .unwrap()
-        .rect;
-    (run.capture("bar-1").0, file)
+    let layout = run.model().controller.layout();
+    let slot = |key: &SlotKey| layout.slot(key).unwrap().rect;
+    let (mark, file) = (slot(&SlotKey::System), slot(&SlotKey::Menu(ItemId(FILE))));
+    (run.capture("bar-1").0, mark, file)
 }
 
-/// The linear luminance of the premultiplied pixel `px` laid over the opaque sRGB `backdrop`.
-fn over(px: &[u8; 4], backdrop: [u8; 3]) -> f64 {
-    let a = f64::from(px[3]) / 255.0;
-    let channel = |i: usize| {
-        let v = f64::from(px[i]) / 255.0 + f64::from(backdrop[i]) / 255.0 * (1.0 - a);
-        if v <= 0.04045 {
-            v / 12.92
-        } else {
-            ((v + 0.055) / 1.055).powf(2.4)
-        }
-    };
+/// The sRGB luminance of the premultiplied pixel `px` taken alone, its colour without its coverage.
+fn ink(px: &[u8; 4]) -> f64 {
+    let a = f64::from(px[3]);
+    let channel = |i: usize| f64::from(px[i]) / a;
     0.2126 * channel(0) + 0.7152 * channel(1) + 0.0722 * channel(2)
 }
 
-fn contrast(a: f64, b: f64) -> f64 {
-    (a.max(b) + 0.05) / (a.min(b) + 0.05)
-}
-
-/// The text of every item over the busiest wallpaper reads against what lies right around its strokes, wherever the
-/// wallpaper is as light as light text or as dark as dark text: within a point of the strokes the halo's core makes the
-/// pixels 4.5:1 or more from the text on average, and 3:1 or more at nine in ten of them. The same bar over a calm
-/// wallpaper draws no halo, so there the wallpaper right beside the strokes is left as it is.
+/// The bar's text, the mark and the open title lie straight on the wallpaper: every pixel the bar draws, the
+/// antialiased edges of the strokes included, is of the text's own tone, light under light text and dark under dark
+/// text, so no darker ring or lighter glow surrounds a stroke and the mark has no outline. The open title's highlight
+/// is the plain veil of the palette.
 #[test]
-fn over_the_busiest_wallpaper_every_item_reads_next_to_its_strokes() {
-    // light text over white and over a bright yellow, dark text over black and over a deep blue
-    for (tone, backdrop) in [
-        (BarTone::LightText, [255, 255, 255]),
-        (BarTone::LightText, [242, 202, 68]),
-        (BarTone::DarkText, [0, 0, 0]),
-        (BarTone::DarkText, [31, 69, 240]),
-    ] {
-        let look = |spread| Look {
-            spread: vec![spread; 64],
-            tone,
-            ..Look::default()
-        };
-        let (calm, _) = frame(look(0), false);
-        let (busy, _) = frame(look(1000), false);
-        let (w, h) = (calm.width() as usize, calm.height() as usize);
-        let calm_px = calm.data().as_chunks::<4>().0;
-        let busy_px = busy.data().as_chunks::<4>().0;
-        // the text's strokes, where the calm bar is (almost) opaque, and the pixels within a point of them it leaves
-        let stroke = |x: usize, y: usize| calm_px[y * w + x][3] >= 200;
-        let (mut text, mut ring) = (Vec::new(), Vec::new());
-        for y in 1..h - 1 {
-            for x in 1..w - 1 {
-                let i = y * w + x;
-                if stroke(x, y) {
-                    text.push(over(&busy_px[i], backdrop));
-                } else if calm_px[i][3] == 0
-                    && (y - 1..=y + 1).any(|yy| (x - 1..=x + 1).any(|xx| stroke(xx, yy)))
-                {
-                    ring.push(over(&busy_px[i], backdrop));
-                    assert_eq!(
-                        over(&calm_px[i], backdrop),
-                        over(&[0, 0, 0, 0], backdrop),
-                        "{tone:?}: a calm bar leaves the wallpaper beside the strokes"
-                    );
-                }
-            }
-        }
-        assert!(
-            text.len() > 50 && ring.len() > 200,
-            "{tone:?}: {} {}",
-            text.len(),
-            ring.len()
-        );
-        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
-        let ink = mean(&text);
-        let average = contrast(ink, mean(&ring));
-        let mut each: Vec<f64> = ring.iter().map(|&l| contrast(ink, l)).collect();
-        each.sort_by(f64::total_cmp);
-        let tenth = each[each.len() / 10];
-        eprintln!(
-            "{tone:?} over {backdrop:?}: {average:.2}:1 on average, {tenth:.2}:1 at the tenth"
-        );
-        assert!(
-            average >= 4.5,
-            "{tone:?} over {backdrop:?}: {average:.2}:1 beside the strokes"
-        );
-        assert!(
-            tenth >= 3.0,
-            "{tone:?} over {backdrop:?}: {tenth:.2}:1 at the tenth of the pixels beside the strokes"
-        );
-    }
-}
-
-/// The open title's highlight shows as a shape of its own over the busiest wallpaper, even where the picture is as
-/// light as the highlight of light text (or as dark as that of dark text): at its ends, clear of the text, it differs
-/// from the wallpaper by 1.5:1 or more. Over a calm wallpaper it is the plain highlight.
-#[test]
-fn the_open_title_shows_over_the_busiest_wallpaper() {
-    for (tone, backdrop) in [
-        (BarTone::LightText, [255, 255, 255]),
-        (BarTone::DarkText, [0, 0, 0]),
-    ] {
-        let look = |spread| Look {
-            spread: vec![spread; 64],
-            tone,
-            ..Look::default()
-        };
-        let end = |pixmap: &Pixmap, file: Rect| {
+fn the_strokes_lie_on_the_wallpaper_with_no_ring_around_them() {
+    for (tone, light) in [(BarTone::LightText, true), (BarTone::DarkText, false)] {
+        for open in [false, true] {
+            let (pixmap, mark, file) = frame(
+                Look {
+                    tone,
+                    ..Look::default()
+                },
+                open,
+            );
             let w = pixmap.width() as usize;
             let px = pixmap.data().as_chunks::<4>().0;
-            // the highlight's left end, a point in from its edge, halfway down
-            let (x, y) = ((file.x + 2.0) as usize, (file.y + file.h / 2.0) as usize);
-            over(&px[y * w + x], backdrop)
-        };
-        let (busy, file) = frame(look(1000), true);
-        let (calm, _) = frame(look(0), true);
-        let wallpaper = over(&[0, 0, 0, 0], backdrop);
-        let busy = contrast(end(&busy, file), wallpaper);
-        let calm = contrast(end(&calm, file), wallpaper);
-        eprintln!("{tone:?}: the highlight's end at {busy:.2}:1 (calm {calm:.2}:1)");
-        assert!(busy >= 1.5, "{tone:?}: {busy:.2}:1");
-        assert!(
-            busy > calm,
-            "{tone:?}: the backing shows over busy wallpaper only"
-        );
+            let inside = |r: Rect, x: usize, y: usize| {
+                let (x, y) = (x as f64 + 0.5, y as f64 + 0.5);
+                x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h
+            };
+            let mut mark_ink = 0;
+            for (i, p) in px.iter().enumerate() {
+                let (x, y) = (i % w, i / w);
+                // the open title's veil reaches past its slot, over the room between titles; its own colour is checked below
+                if p[3] < 8
+                    || (open && (file.x - 20.0..file.x + file.w + 20.0).contains(&(x as f64)))
+                {
+                    continue;
+                }
+                let l = ink(p);
+                assert!(
+                    if light { l > 0.6 } else { l < 0.4 },
+                    "{tone:?}, open {open}: a pixel of luminance {l:.2} at ({x}, {y})"
+                );
+                if inside(mark, x, y) {
+                    mark_ink += 1;
+                }
+            }
+            assert!(mark_ink > 20, "{tone:?}: the mark is drawn ({mark_ink})");
+            if open {
+                // halfway down the highlight, a point in from its left end, clear of the text: the veil alone
+                let (x, y) = ((file.x + 2.0) as usize, (file.y + file.h / 2.0) as usize);
+                let p = px[y * w + x];
+                assert!(p[3] > 0, "{tone:?}: the highlight shows");
+                let l = ink(&p);
+                assert!(
+                    if light { l > 0.6 } else { l < 0.4 },
+                    "{tone:?}: the highlight is the plain veil, luminance {l:.2}"
+                );
+                assert!(
+                    p[3] < 64,
+                    "{tone:?}: the highlight is a light veil, alpha {}",
+                    p[3]
+                );
+            }
+        }
     }
 }
 

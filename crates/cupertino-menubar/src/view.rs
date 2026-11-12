@@ -14,7 +14,7 @@ use crate::layout::{
     STATUS_ICON_PT, SYSTEM_MARK_PT,
 };
 use crate::popups;
-use crate::tone::{BarTone, Halo, MenuPalette, Rgba};
+use crate::tone::{BarTone, MenuPalette, Rgba};
 use cupertino_icons::{SystemIcons, ThemeIcons};
 use cupertino_kit::controls::{
     Button, ButtonRole, ButtonStyle, CheckBox, SecureField, Spacer, Stack, Text, TextField,
@@ -32,7 +32,7 @@ use cupertino_kit::platform::{
     DecorationMode, KeyEvent, MouseButton, PointerEvent, Timestamp, WindowSpec,
 };
 use cupertino_kit::render::{
-    Effect, FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat, Sampling, Shape,
+    FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat, Sampling, Shape,
 };
 use cupertino_kit::text::{
     AttributedText, ContentPurpose, FontWeight, ParagraphLayout, ParagraphStyle, SecureBuffer,
@@ -243,12 +243,8 @@ pub struct BarScene<'a> {
     pub shared: &'a Shared,
     pub font: BarFont,
     pub tone: BarTone,
-    /// Whether the bar draws its solid strip ([`crate::tone::solid_bar`] of the session's display options): then no
-    /// item draws a halo, from the same source.
+    /// Whether the bar draws its solid strip ([`crate::tone::solid_bar`] of the session's display options).
     pub solid: bool,
-    /// How unevenly light the wallpaper is under the bar, band by band across it, from the server; empty while not
-    /// known.
-    pub spread: &'a [u16],
     /// The bar's size: the output's width and the bar's height.
     pub size: Size,
     /// The items whose panel, shown by another process, is open on this bar's output
@@ -475,15 +471,6 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
                 metrics: controller.bar_metrics.clone(),
                 font: scene.font,
                 tone: scene.tone,
-                halo: crate::tone::halo(
-                    crate::tone::spread_under(
-                        scene.spread,
-                        scene.size.width,
-                        slot.rect.x,
-                        slot.rect.x + slot.rect.w,
-                    ),
-                    scene.solid,
-                ),
                 input,
             })
         })
@@ -1158,9 +1145,6 @@ struct SlotNode<M> {
     metrics: BarMetrics,
     font: BarFont,
     tone: BarTone,
-    /// The halo under the slot's text and symbols, for the wallpaper under it; `None` on a solid bar or a calm
-    /// wallpaper.
-    halo: Option<Halo>,
     input: fn(Input) -> M,
 }
 
@@ -1182,7 +1166,6 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
             || self.name != old.name
             || self.place != old.place
             || self.tone != old.tone
-            || self.halo != old.halo
             || self.font != old.font
             || self.metrics != old.metrics
         {
@@ -1222,35 +1205,11 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
                 height,
             );
             let radius = m.selection_corner_radius.min(height / 2.0);
-            // over a busy wallpaper the highlight lies on a backing of the halo's tone, so it shows as a shape of its
-            // own wherever the picture under it is as light (or as dark) as the highlight is
-            if let Some(backing) = self.halo.and_then(|h| h.pill_backing(palette.text)) {
-                fill(cx, rect, radius, backing);
-            }
             fill(cx, rect, radius, palette.bar_highlight);
         }
-        // over a busy wallpaper the text and symbols keep a halo of the opposite tone, so they read where the picture
-        // under them is as light or as dark as they are; a calm wallpaper and a solid bar need none (over measured
-        // wallpaper a dense core is laid around the strokes in a few passes first, and the soft halo spreads from it)
-        if let Some(halo) = self.halo {
-            let effects = halo
-                .shadows(palette.text)
-                .into_iter()
-                .map(|(blur, c)| Effect::DropShadow {
-                    offset: Point::ZERO,
-                    blur,
-                    color: color(c),
-                })
-                .collect();
-            cx.push(PaintOp::PushLayer {
-                opacity: 1.0,
-                effects,
-            });
-        }
+        // the text and symbols lie straight on the wallpaper, sharp, with no shadow or halo under them: their tone
+        // alone, dark or light for the wallpaper under the whole bar, keeps them readable
         self.paint_look(cx, &palette);
-        if self.halo.is_some() {
-            cx.push(PaintOp::PopLayer);
-        }
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {

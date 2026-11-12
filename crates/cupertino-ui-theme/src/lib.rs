@@ -402,13 +402,10 @@ impl ThemeTokens {
             Surface::Switcher => ("Switcher", false),
             Surface::Dock if prefs.reduce_transparency => ("Dock", true),
             Surface::Dock => (GLASS_MATERIAL, true),
-            Surface::DockBar
-                if !prefs.reduce_transparency && !prefs.appearance.is_dark() && !opaque =>
-            {
-                (DOCK_BAR_MATERIAL, true)
-            }
+            // The compositor of an older release knows neither the Dock bar's nor the label's own material, and
+            // refuses a name it does not know, so these ask for materials every release has until they ship.
             Surface::DockBar => return self.surface(Surface::Dock),
-            Surface::Tooltip => (TOOLTIP_MATERIAL, false),
+            Surface::Tooltip => ("Menu", false),
             Surface::DockIndicator => (
                 "RunningIndicator",
                 prefs.appearance.is_dark() && !prefs.appearance.is_high_contrast(),

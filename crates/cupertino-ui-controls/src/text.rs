@@ -8,7 +8,13 @@ use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpe
 use cupertino_ui_text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, Wrap,
 };
-use cupertino_ui_theme::{ColorRole, StateVariant, ThemeTokens};
+use cupertino_ui_theme::{ColorRole, StateVariant, ThemeTokens, TypeRole};
+
+/// The large title role's size and weight.
+pub(crate) const LARGE_TITLE: TypeRole = TypeRole {
+    size: 22.0,
+    weight: 700,
+};
 
 impl Text {
     /// The content set in its role: the role's size everywhere, and its weight where a run keeps the regular one.
@@ -19,6 +25,7 @@ impl Text {
             TextRole::Caption => scale.caption,
             TextRole::Section => scale.section,
             TextRole::Title => scale.title,
+            TextRole::LargeTitle => LARGE_TITLE,
         };
         let mut content = self.content.clone();
         for (_, style) in &mut content.runs {
@@ -129,5 +136,32 @@ impl<M: 'static> Widget<M> for Text {
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::StaticText);
         cx.name(self.content.text.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cupertino_ui_text::TextStyle;
+
+    #[test]
+    fn the_large_title_is_22_pt_bold_whatever_size_the_content_asks_for() {
+        let theme = ThemeTokens::neutral(cupertino_ui_theme::ThemePreferences {
+            appearance: cupertino_ui_theme::Appearance::Light,
+            reduce_transparency: false,
+            reduce_motion: false,
+        })
+        .unwrap();
+        let text = Text {
+            content: AttributedText::plain("Name", TextStyle::new(13.0)),
+            role: TextRole::LargeTitle,
+            wrap: false,
+            secondary: false,
+            selected: false,
+        };
+        let styled = text.styled(&theme);
+        let (_, style) = &styled.runs[0];
+        assert_eq!((style.size, style.weight), (22.0, FontWeight::BOLD));
+        assert!(style.size > theme.type_scale.title.size);
     }
 }

@@ -130,6 +130,8 @@ pub enum TextRole {
     Caption,
     Section,
     Title,
+    /// The name a small window is about, such as the system's name in an About window: large and bold.
+    LargeTitle,
 }
 
 /// Static text; not a tab stop.

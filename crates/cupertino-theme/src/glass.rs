@@ -284,15 +284,22 @@ fn regular_face(dark: bool) -> GlassFace {
         }
     } else {
         GlassFace {
-            saturation: 1.2,
-            white: 0.96,
-            black: 0.4,
+            saturation: REGULAR_SATURATION_LIGHT,
+            white: REGULAR_WHITE_LIGHT,
+            black: REGULAR_BLACK_LIGHT,
             clamp: 1.0,
             max_luma: 0.94,
-            fill: [1.0, 1.0, 1.0, 0.184],
+            fill: [1.0, 1.0, 1.0, REGULAR_FILL_LIGHT],
         }
     }
 }
+
+/// The light regular face: a strong saturation under a pale veil, so a backdrop's colour comes through as a pastel of it
+/// (a strong gain on the colour, then the black lift and the white fill that keep it light).
+const REGULAR_SATURATION_LIGHT: f32 = 2.2;
+const REGULAR_WHITE_LIGHT: f32 = 1.09;
+const REGULAR_BLACK_LIGHT: f32 = 0.43;
+const REGULAR_FILL_LIGHT: f32 = 0.215;
 
 fn clear_face(dark: bool) -> GlassFace {
     if dark {
@@ -353,21 +360,9 @@ fn dense_face(dark: bool) -> GlassFace {
             fill: DENSE_FILL_DARK,
         }
     } else {
-        GlassFace {
-            saturation: DENSE_SATURATION_LIGHT,
-            white: DENSE_WHITE_LIGHT,
-            black: DENSE_BLACK_LIGHT,
-            fill: DENSE_FILL_LIGHT,
-            ..regular_face(false)
-        }
+        regular_face(false)
     }
 }
-
-/// The light dense face: a strong saturation under a pale veil, so a backdrop's colour comes through as a pastel of it.
-const DENSE_SATURATION_LIGHT: f32 = 2.245;
-const DENSE_WHITE_LIGHT: f32 = 1.086;
-const DENSE_BLACK_LIGHT: f32 = 0.439;
-const DENSE_FILL_LIGHT: [f32; 4] = [1.0, 1.0, 1.0, 0.221];
 
 /// Saturation, gain on linear light, black lift and largest luminance (as a fraction of the clamp) of the dark dense
 /// face, and the straight sRGB veil laid over it.
@@ -446,8 +441,7 @@ fn increased_contrast_face(dark: bool, style: GlassStyle) -> Option<GlassFace> {
 
 /// Face of the large panel. Dark: white behind it comes out a mid grey (about 125 of 255) and black a dark grey (about
 /// 50), while strong colours keep much of their brightness, as their luminance is under the cap; the saturation is a
-/// little under the regular glass's. Light: the same compression, gentler, so the panel reads a little dimmer than a
-/// regular light bar.
+/// little under the regular glass's. Light: the regular light face.
 fn large_panel_face(dark: bool) -> GlassFace {
     let regular = regular_face(dark);
     if dark {
@@ -458,35 +452,27 @@ fn large_panel_face(dark: bool) -> GlassFace {
             ..regular
         }
     } else {
-        GlassFace {
-            saturation: LARGE_PANEL_SATURATION_LIGHT,
-            black: LARGE_PANEL_BLACK_LIGHT,
-            max_luma: LARGE_PANEL_MAX_LUMA_LIGHT,
-            ..regular
-        }
+        regular
     }
 }
 
-/// The large panel's tone compression: saturation, black lift and largest face luminance (as a fraction of the
-/// face's `clamp`), dark and light. In both the white point sits well below the face's own, so a bright spot in the
-/// scene (a sunlit sky, a white page, the light centre of a picture) comes through as a light patch near the panel's
-/// tint rather than a glare: white comes out near 125 dark and near 253 light (the light panel keeps its bright end).
+/// The dark large panel's tone compression: saturation, black lift and largest face luminance (as a fraction of the
+/// face's `clamp`). The white point sits well below the face's own, so a bright spot in the scene (a sunlit sky, a white
+/// page, the light centre of a picture) comes through as a light patch near the panel's tint rather than a glare: white
+/// comes out near 125.
 pub const LARGE_PANEL_SATURATION_DARK: f32 = 1.15;
 pub const LARGE_PANEL_BLACK_DARK: f32 = 0.15;
 pub const LARGE_PANEL_MAX_LUMA_DARK: f32 = 0.102;
-pub const LARGE_PANEL_SATURATION_LIGHT: f32 = 1.1;
-pub const LARGE_PANEL_BLACK_LIGHT: f32 = 0.5;
-pub const LARGE_PANEL_MAX_LUMA_LIGHT: f32 = 0.94;
 /// How much wider the large panel blurs than regular glass: its blur levels and its blur fill (10 and 16 points
 /// rather than 5 and 8), so stripes, text and bright spots in the scene behind a launcher-sized sheet melt into broad
 /// fields of colour instead of showing through as ripples.
 pub const LARGE_PANEL_BLUR_SCALE: f32 = 2.0;
 /// The large panel's drop shadow: how far below the panel it falls and its blur radius in points (its edge fades over
 /// three radii), and its black's opacity in each appearance.
-pub const LARGE_PANEL_SHADOW_OFFSET: f32 = 16.0;
-pub const LARGE_PANEL_SHADOW_BLUR: f32 = 28.0;
+pub const LARGE_PANEL_SHADOW_OFFSET: f32 = 8.0;
+pub const LARGE_PANEL_SHADOW_BLUR: f32 = 24.0;
 pub const LARGE_PANEL_SHADOW_DARK: f32 = 0.5;
-pub const LARGE_PANEL_SHADOW_LIGHT: f32 = 0.22;
+pub const LARGE_PANEL_SHADOW_LIGHT: f32 = 0.42;
 
 /// Linear interpolation through `table` (sorted by side), flat outside it.
 fn by_side(table: &[(f32, f32)], side: f32) -> f32 {

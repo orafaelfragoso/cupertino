@@ -127,7 +127,7 @@ pub const SHADOW_BOTTOM: f64 = 1.5 * SHADOW_BLUR + SHADOW_OFFSET;
 /// The thin dark edge just outside the panel, and its opacity in each appearance.
 pub const EDGE_WIDTH: f64 = 0.5;
 pub const EDGE_ALPHA_DARK: f32 = 0.55;
-pub const EDGE_ALPHA_LIGHT: f32 = 0.12;
+pub const EDGE_ALPHA_LIGHT: f32 = 0.27;
 /// A separator line over the panel's glass: white at this opacity in the dark appearance, black at this one in the
 /// light appearance, so it reads as a faint line on any backdrop. Off the glass (the panel's opaque fill) and with
 /// Increase Contrast it takes the theme's separator colour.

@@ -766,6 +766,125 @@ fn a_node_animating_from_its_paint_paints_again_at_every_frame_until_it_stops_as
     );
 }
 
+/// One window showing a block whose alpha falls in four steps over a second of the runtime's clock.
+struct SteppedFading;
+
+impl Application for SteppedFading {
+    type Model = ();
+    type Message = ();
+
+    fn init() -> ((), Vec<Command<()>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: ()) -> Vec<Command<()>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<()>> {
+        let mut windows = SelfFading::view(&());
+        windows[0].content = Element::new(SteppedFade);
+        windows
+    }
+}
+
+/// A 40 x 40 block whose alpha drops by a quarter every 250 ms until the clock reaches a second: most frames of its
+/// animation paint the same pixels as the one before, as a slow fade's frames do between two levels of a colour.
+struct SteppedFade;
+
+impl<M: 'static> Widget<M> for SteppedFade {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(40.0, 40.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let t = cx.now().0 as f64 / 1e9;
+        if t < 1.0 {
+            cx.request_animation_frame();
+        }
+        let step = (t * 4.0).floor().min(4.0);
+        cx.push(PaintOp::Fill {
+            shape: Shape::Rect(Rect::new(0.0, 0.0, 40.0, 40.0)),
+            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, (1.0 - step / 4.0) as f32)),
+        });
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// An animation whose next frame paints the same pixels as the last keeps asking for frames until it reports done:
+/// the frame commits with no damage, so the compositor paces the next one. Before, such a frame sent nothing and asked
+/// for nothing, and the animation stood still at its first unchanged step.
+#[test]
+fn an_animation_keeps_its_frames_through_steps_that_paint_the_same_pixels() {
+    let clock = Arc::new(FakeClock::default());
+    let damage = Rc::default();
+    let mut options = options(&damage);
+    options.clock = clock.clone();
+    let mut rt = Runtime::<SteppedFading, FakeSystem>::new(FakeSystem::default(), options);
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(100.0, 100.0));
+    let frame = 16_666_667u64;
+    let mut n = 0;
+    while n * frame < 1_000_000_000 {
+        n += 1;
+        clock.0.store(n * frame, Ordering::SeqCst);
+        let asked = rt.window_system().frames_requested;
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(n)));
+        rt.step(steps()).unwrap();
+        assert!(
+            rt.window_system().frames_requested > asked,
+            "frame {n} of the fade asks for the next"
+        );
+    }
+    let alpha = |rt: &Runtime<SteppedFading, FakeSystem>| {
+        rt.snapshot(window)
+            .unwrap()
+            .display_list
+            .nodes
+            .iter()
+            .flat_map(|node| &node.ops)
+            .find_map(|op| match op {
+                PaintOp::Fill {
+                    paint: Paint::Solid(c),
+                    shape: Shape::Rect(r),
+                } if r.size.width == 40.0 => Some(c.a),
+                _ => None,
+            })
+    };
+    assert_eq!(alpha(&rt), Some(0.0), "the fade reached its last step");
+    let asked = rt.window_system().frames_requested;
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1_000)));
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        rt.window_system().frames_requested,
+        asked,
+        "once done it asks for no more"
+    );
+}
+
 /// Where the window system cannot show a colour without a frame, a solid window is drawn like any other: filled with
 /// its colour under its content, and not filled when the colour is transparent.
 #[test]

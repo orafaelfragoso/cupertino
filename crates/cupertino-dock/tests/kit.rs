@@ -478,13 +478,16 @@ impl Run {
         self.settle();
     }
 
-    /// Move the host's clock on by `seconds` and wake the model.
+    /// Move the host's clock on by `seconds`, and the toolkit's with it, and wake the model.
     fn advance(&mut self, seconds: f64) {
-        let generation = {
+        let (generation, now) = {
             let mut record = self.record.borrow_mut();
             record.now += seconds;
-            record.wake.unwrap_or(0)
+            (record.wake.unwrap_or(0), record.now)
         };
+        self.driver
+            .advance_to(Timestamp((now * 1e9).round() as u64))
+            .unwrap();
         self.message(Message::Wake(generation));
     }
 
@@ -727,6 +730,8 @@ fn a_secondary_click_opens_the_tiles_menu_whose_items_reach_the_server() {
     assert!(items.iter().any(|i| i == "Quit"), "{items:?}");
     let quit = run.bounds(menu, Role::MenuItem, "Quit");
     run.click(menu, centre(quit));
+    // the chosen item flashes before it acts
+    run.advance(MENU_FLASH);
     assert!(
         run.requests()
             .contains(&(1, Request::App(TERMINAL.to_owned(), kit::AppAction::Quit))),
@@ -734,6 +739,9 @@ fn a_secondary_click_opens_the_tiles_menu_whose_items_reach_the_server() {
         run.requests()
     );
 }
+
+/// Longer than a chosen menu item flashes before it acts.
+const MENU_FLASH: f64 = 0.2;
 
 /// The dock read by an assistive technology, before anything gave it an input event.
 fn untouched() -> (Run, AssistiveTechnology) {
@@ -790,6 +798,8 @@ fn a_menu_an_assistive_action_shows_before_any_input_opens_without_a_grab_and_it
     let quit = node(&run, menu, Role::MenuItem, "Quit");
     run.driver.ask(&reader, quit, Action::Click, None);
     run.settle();
+    // the chosen item flashes before it acts
+    run.advance(MENU_FLASH);
     assert!(
         run.requests()
             .contains(&(1, Request::App(TERMINAL.to_owned(), kit::AppAction::Quit))),
@@ -839,16 +849,20 @@ fn a_menu_shown_on_an_auto_hidden_bar_slides_the_bar_in_and_follows_its_tile() {
     let hidden = terminal_y(&mut run);
     assert!(hidden > shown, "the bar slid out: {hidden} > {shown}");
     let bar = run.bar();
-    let menu = show_menu(&mut run, &reader, bar);
+    let tile = node(&run, bar, Role::Button, "Terminal");
+    run.driver.ask(&reader, tile, Action::ShowMenu, None);
+    run.settle();
+    // the menu stands over the bar, so it opens as the bar slides in
     for _ in 0..4 {
         run.advance(0.5);
     }
+    let menu = open_menu(&run, bar).expect("the menu opened");
     assert_eq!(terminal_y(&mut run), shown, "the bar slid in for its menu");
     let tile = run.bounds(bar, Role::Button, "Terminal");
-    assert_eq!(
-        placed_at(&mut run, menu),
-        tile,
-        "the menu is placed against the tile where it is drawn"
+    let anchor = placed_at(&mut run, menu);
+    assert!(
+        (centre(anchor).x - centre(tile).x).abs() < 0.5 && anchor.y() <= tile.y(),
+        "the menu stands over the tile where it is drawn: {anchor:?} for {tile:?}"
     );
     let quit = node(&run, menu, Role::MenuItem, "Quit");
     run.driver.ask(&reader, quit, Action::Click, None);
@@ -965,8 +979,12 @@ fn a_menu_desktop_control_shows_closes_when_the_compositor_ends_its_grab_and_an_
     let menu = show_menu_grabbing(&mut run, bar);
     run.send_to(menu, WindowEvent::PopupDone);
     assert_eq!(open_menu(&run, bar), None);
+    // the closed menu fades out
+    run.advance(0.5);
     // shown again, its item acts through desktop control as through a click
     let menu = show_menu_grabbing(&mut run, bar);
+    // the menu's opening frames end before the action
+    run.advance(0.5);
     let outcome = perform(
         &mut run,
         menu,
@@ -975,6 +993,8 @@ fn a_menu_desktop_control_shows_closes_when_the_compositor_ends_its_grab_and_an_
         true,
     );
     assert_eq!(outcome, Some(semantics::Outcome::Applied));
+    // the chosen item flashes before it acts
+    run.advance(MENU_FLASH);
     assert!(
         run.requests()
             .contains(&(1, Request::App(TERMINAL.to_owned(), kit::AppAction::Quit))),
@@ -1313,7 +1333,7 @@ fn the_window_feed_comes_from_the_bars_role_and_a_trigger_from_any() {
 /// wallpaper's colour.
 #[test]
 fn with_reduce_transparency_the_bar_has_its_own_body() {
-    for (reduce, material, glass) in [(false, "Glass", true), (true, "Dock", false)] {
+    for (reduce, material, glass) in [(false, "BarGlass", true), (true, "Dock", false)] {
         let mut run = Run::with(tokens(reduce), ActionMap::default());
         let bar = run.bar();
         let width = run.driver.window_system_mut().spec(bar).unwrap().size.width;
@@ -2095,9 +2115,15 @@ fn the_downloads_folder_is_a_tile_before_the_trash_whose_click_opens_its_stack()
     let stack = stack_window(&run).expect("the stack opened");
     let buttons = named(&run, stack, Role::Button);
     assert_eq!(buttons.len(), 8, "{buttons:?}");
-    assert_eq!(buttons[0], "file-0.txt");
     assert!(buttons.contains(&"Open in Files".to_owned()));
     let layout = cupertino_dock::stack::StackLayout::new(7);
+    // the newest file takes the first cell
+    let first = run.bounds(stack, Role::Button, "file-0.txt");
+    assert!(
+        kit_rect(layout.cell(0)).contains(centre(first)),
+        "{first:?} in {:?}",
+        layout.cell(0)
+    );
     let bounds = run.bounds(stack, Role::Button, "Open in Files");
     assert_eq!(
         bounds,
@@ -2132,12 +2158,13 @@ fn escape_closes_the_stack_and_its_button_opens_the_folder() {
     let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
     run.click(bar, tile);
     run.advance(0.5);
+    // an empty folder fans out only its button
     let stack = stack_window(&run).expect("the stack opened");
-    let texts = named(&run, stack, Role::StaticText);
-    assert!(texts.contains(&"No Items".to_owned()), "{texts:?}");
+    assert_eq!(named(&run, stack, Role::Button), ["Open in Files"]);
     run.send_to(stack, WindowEvent::Focus(true));
     run.key(stack, ESCAPE);
-    run.settle();
+    // the fan folds back into its tile
+    run.advance(0.5);
     assert!(stack_window(&run).is_none());
     run.click(bar, tile);
     run.advance(0.5);
@@ -2146,7 +2173,7 @@ fn escape_closes_the_stack_and_its_button_opens_the_folder() {
         stack,
         centre(run.bounds(stack, Role::Button, "Open in Files")),
     );
-    run.settle();
+    run.advance(0.5);
     assert_eq!(run.record.borrow().opened, [DOWNLOADS.to_owned()]);
     assert!(stack_window(&run).is_none());
 }
@@ -2488,10 +2515,11 @@ fn the_tiles_menu_is_a_popup_anchored_to_its_tile() {
         "centred on the tile: {:?} for {terminal:?}",
         spec.anchor_rect
     );
+    // the anchor runs from the bar's top down, so the menu stands above the bar, over the tile
     assert!(
-        spec.anchor_rect.y() >= terminal.y() - 0.5
+        spec.anchor_rect.y() <= terminal.y() + 0.5
             && spec.anchor_rect.y() + spec.anchor_rect.height()
-                <= terminal.y() + terminal.height() + 0.5,
+                >= terminal.y() + terminal.height() - 0.5,
         "{:?} for {terminal:?}",
         spec.anchor_rect
     );

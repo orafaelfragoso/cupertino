@@ -158,3 +158,45 @@ fn where_the_sidebar_meets_the_content_a_rim_is_drawn_not_a_separator_line() {
     let rim = strip.last().unwrap();
     assert!(rim.a > 0.0 && rim.a < 0.2, "a fine rim over it: {strip:?}");
 }
+
+#[test]
+fn the_sidebars_glass_and_the_contents_background_cover_every_device_pixel_across_the_window() {
+    let mut h = Harness::<Shell>::with_effects(support::theme());
+    h.resize(Size::new(700.0, 400.0));
+    h.settle();
+    let regions = requests(&h)
+        .into_iter()
+        .rev()
+        .find_map(|r| match r {
+            WindowRequest::Materials(regions) => Some(regions),
+            _ => None,
+        })
+        .expect("the window lays materials");
+    // what lies under a row through the middle of the window, beside the toolbar row
+    let row = 300.0;
+    let spans: Vec<(f64, f64)> = regions
+        .iter()
+        .filter(|m| m.rect.min_y() <= row && m.rect.max_y() > row)
+        .map(|m| (m.rect.min_x(), m.rect.max_x()))
+        .collect();
+    assert!(
+        spans.len() >= 2,
+        "the sidebar's and the content's: {spans:?}"
+    );
+    // each region on device pixels by its own edges, wherever on the display the window lies; a pixel no region covers
+    // has only what the window paints over it, and the desktop shows through anything short of opaque there
+    for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+        for origin in [0.0, 0.25, 1.0 / 3.0, 0.5, 2.0 / 3.0, 0.75, 41.0, 41.5] {
+            let px = |x: f64| ((origin + x) * scale).round() as i64;
+            let (left, right) = (px(0.0), px(700.0));
+            let bare: Vec<i64> = (left..right)
+                .filter(|&p| !spans.iter().any(|&(a, b)| px(a) <= p && p < px(b)))
+                .collect();
+            assert!(
+                bare.is_empty(),
+                "at scale {scale}, the window at {origin}: no material under pixels {bare:?} of {left}..{right}: \
+                 {spans:?}"
+            );
+        }
+    }
+}

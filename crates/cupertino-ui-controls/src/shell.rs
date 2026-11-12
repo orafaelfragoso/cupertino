@@ -3,7 +3,7 @@
 //! the sidebar's content; beside it the content pane, which runs to the window's top edge under its floating toolbar.
 
 use crate::glass::{nested_radius, paint_glass, GlassRole};
-use crate::split::{split_element, DividerLook};
+use crate::split::{split_element, DividerLook, DIVIDER};
 use crate::toolbar::TOOLBAR_ROW;
 use crate::window_drag::DragState;
 use crate::{Handler, SplitLayout, SplitView};
@@ -126,7 +126,7 @@ impl<M: 'static> From<SidebarWindow<M>> for Element<M> {
             children: vec![Element::new(PanelBody { children })],
         });
         let content = Element::new(ContentPane {
-            children: vec![window.content.fill()],
+            children: vec![Element::new(UnderLine), window.content.fill()],
         });
         // where the sidebar's glass meets the content a fine rim, not a separator line
         split_element(
@@ -281,8 +281,49 @@ impl<M: 'static> Widget<M> for SidebarTop {
     fn semantics(&self, _: &DragState, _: &mut SemanticsCx<'_>) {}
 }
 
+/// The room under the divider's line at the content pane's leading edge, which the line covers.
+struct UnderLine;
+
+impl<M: 'static> Widget<M> for UnderLine {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(DIVIDER),
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(DIVIDER, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: cupertino_geometry::Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
 /// The content pane: the window background from the window's top edge to its bottom edge, drawn by the compositor
-/// where the desktop can ([`Surface::WindowBackground`]) and painted where it cannot.
+/// where the desktop can ([`Surface::WindowBackground`]) and painted where it cannot. It begins under the divider's
+/// line, so its background meets the sidebar's glass, and its content beside the line.
 struct ContentPane<M> {
     children: Vec<Element<M>>,
 }
@@ -291,7 +332,17 @@ impl<M: 'static> Widget<M> for ContentPane<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
-        column(Insets::ZERO)
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            flex: Flex::grow(1.0),
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: 0.0,
+                align: Align::Stretch,
+                justify: Justify::Start,
+            })
+        }
     }
 
     fn take_children(&mut self) -> Vec<Element<M>> {

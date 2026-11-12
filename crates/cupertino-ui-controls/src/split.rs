@@ -23,7 +23,7 @@ const DOWN: Keysym = Keysym(0xff54);
 const END: Keysym = Keysym(0xff57);
 
 /// The divider line's thickness.
-const DIVIDER: f64 = 1.0;
+pub(crate) const DIVIDER: f64 = 1.0;
 /// The strip centred on the line that takes the pointer; narrower than the 24 pt target so the panes' edge controls
 /// stay reachable. Approximate design value.
 const ZONE: f64 = 6.0;
@@ -75,14 +75,22 @@ pub(crate) fn split_element<M: 'static>(view: SplitView<M>, look: DividerLook) -
             children: vec![pane(content)],
         })
     };
+    // beside a sidebar the trailing pane reaches under the line and keeps the line's width clear at its leading edge
+    // (`SidebarWindow`'s content pane): the window background it lays then meets the sidebar's glass at one edge, so no
+    // rounding of either to device pixels leaves a column between them with only the line over the desktop. The
+    // leading pane's extent is the same either way.
+    let under = match look {
+        DividerLook::Separator => 0.0,
+        DividerLook::SidebarRim => DIVIDER,
+    };
     let panes = match view.layout.collapsed {
         None => Element::new(Panes {
             spec: SplitSpec {
                 axis: view.axis,
                 leading: view.layout.position.max(0.0),
-                gap: DIVIDER,
+                gap: DIVIDER - under,
                 min_leading: view.min_leading,
-                min_trailing: view.min_trailing,
+                min_trailing: view.min_trailing + under,
             },
             children: vec![pane(view.leading), pane(view.trailing)],
         }),

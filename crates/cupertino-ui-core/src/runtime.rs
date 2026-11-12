@@ -190,6 +190,10 @@ struct WindowState<M> {
     accessibility_focus: Option<NodeId>,
     semantic_revision: u64,
     semantic_snapshot: Option<cupertino_semantics::Snapshot>,
+    /// When the tree was last handed to the window system as a new snapshot.
+    semantic_sent: Option<Timestamp>,
+    /// When a change of the tree held back by the publishing interval may go out.
+    semantic_due: Option<Timestamp>,
     /// The adapter holds this window's whole tree, so a diff is enough.
     accessible: bool,
     focusable: Vec<NodeId>,
@@ -466,6 +470,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             .iter()
             .flat_map(|w| w.wakes.values())
             .copied()
+            .chain(self.windows.iter().filter_map(|w| w.semantic_due))
             .chain(timer)
             .chain(self.next_fade_end())
             .min()
@@ -860,6 +865,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             accessibility_focus: None,
             semantic_revision: 0,
             semantic_snapshot: None,
+            semantic_sent: None,
+            semantic_due: None,
             accessible: false,
             focusable: Vec::new(),
             roving_groups: Vec::new(),

@@ -5,6 +5,11 @@ use cupertino_semantics as wire;
 #[path = "semantic-tests.rs"]
 mod tests;
 
+/// The least time between two snapshots of one window's tree, in nanoseconds. Each snapshot is a file sent to the
+/// compositor, so a tree that changes every frame (a slide, a spring, a fade) is published a few times a second, with
+/// the last state going out when the interval has passed.
+const SEMANTIC_INTERVAL_NS: u64 = 250_000_000;
+
 fn id(node: NodeId) -> u64 {
     (u64::from(node.generation().get()) << 32) | u64::from(node.index())
 }
@@ -186,12 +191,15 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
     }
     pub(super) fn sync_semantics(&mut self) {
+        let now = self.options.clock.now();
         for w in &mut self.windows {
             if w.fade.is_some() {
                 continue;
             }
             if !self.system.semantics_active(w.id) {
                 w.semantic_snapshot = None;
+                w.semantic_sent = None;
+                w.semantic_due = None;
                 continue;
             }
             let Some(root) = w.root.filter(|_| w.prepared) else {
@@ -210,7 +218,15 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             let changed = w.semantic_snapshot.as_ref().is_none_or(|s| {
                 s.root != snapshot.root || s.focus != snapshot.focus || s.nodes != snapshot.nodes
             });
-            if changed {
+            // a change right after the last snapshot waits for the interval to pass
+            let hold = changed
+                .then(|| w.semantic_sent.zip(w.semantic_snapshot.as_ref()))
+                .flatten()
+                .map(|(sent, _)| Timestamp(sent.0.saturating_add(SEMANTIC_INTERVAL_NS)))
+                .filter(|due| now < *due);
+            w.semantic_due = hold;
+            if changed && hold.is_none() {
+                w.semantic_sent = Some(now);
                 let Some(revision) = w.semantic_revision.checked_add(1) else {
                     continue;
                 };

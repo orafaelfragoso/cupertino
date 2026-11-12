@@ -71,11 +71,11 @@ impl<A: Application> TestDriver<A> {
             if snapshot.accessibility.is_empty() {
                 continue;
             }
+            // the title assistive technology is told, a popup's too
             let title = self
                 .runtime
-                .window_system()
-                .spec(window)
-                .map(|s| s.title.clone())
+                .window_title(window)
+                .map(str::to_owned)
                 .unwrap_or_default();
             let mut tree =
                 crate::whole_tree(window, snapshot.accessibility, snapshot.accessibility_focus);
@@ -116,11 +116,11 @@ impl<A: Application> TestDriver<A> {
             if snapshot.accessibility.is_empty() {
                 continue;
             }
+            // the title assistive technology is told, a popup's too
             let title = self
                 .runtime
-                .window_system()
-                .spec(window)
-                .map(|s| s.title.clone())
+                .window_title(window)
+                .map(str::to_owned)
                 .unwrap_or_default();
             out.push_str(&format!("[{title}]\n"));
             let tree =

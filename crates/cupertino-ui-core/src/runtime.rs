@@ -2531,6 +2531,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         })
     }
 
+    /// The title window `window` gives assistive technology: its spec's, a popup's too, which the window system is
+    /// not told.
+    pub fn window_title(&self, window: WindowId) -> Option<&str> {
+        let w = self.windows.iter().find(|w| w.id == window)?;
+        Some(&w.spec.title)
+    }
+
     /// Whether the current focus protects input. This reads widget semantics, including nodes without a role.
     pub fn protected_focus(&self, window: WindowId) -> Option<bool> {
         let w = self.windows.iter().find(|w| w.id == window)?;

@@ -714,7 +714,7 @@ fn a_diagonal_into_sort_by_keeps_its_submenu_and_a_rest_or_a_slow_path_gives_it_
     let mut closed = false;
     for step in 1..=12 {
         let k = f64::from(step) / 12.0;
-        ptr.wait(&mut run, 400);
+        ptr.wait(&mut run, ms(SUBMENU_AIM_PAUSE) + 100);
         ptr.move_to(
             &mut run,
             Point::new(

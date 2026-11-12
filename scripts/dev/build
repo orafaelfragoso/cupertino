@@ -1,0 +1,8 @@
+#!/bin/sh
+# Release build of every program, with the feature set and target folder the package build, the headless checks and
+# scripts/preview share, so one build serves them all and an edit rebuilds only the crates it touched.
+#   scripts/dev/build            all programs into target/release
+# Compile only; tests are scripts/test.
+set -e
+cd "$(dirname "$0")/../.."
+exec cargo build --locked --release --workspace --all-features --bins "$@"

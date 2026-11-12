@@ -1,0 +1,6 @@
+title = "A window closing, a quarter of the way through (motion slowed to a quarter)"
+programs = ["cupertino-files"]
+after = 6.3
+scales = [1, 2]
+appearances = ["light"]
+args = ["--time-scale", "0.25", "--spawn", "cupertino-files", "--action", "6:close-window"]

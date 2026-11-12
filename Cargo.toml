@@ -9,7 +9,7 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 
 [profile.release]
-debug = 1
+debug = "line-tables-only"
 
 # Dev builds optimise the crates where CPU drawing spends its time: the rasteriser, the font, SVG and PNG crates, and
 # cupertino-ui-render's own shadow and blur loops. Unoptimised, a 2x frame or capture is several times slower; why each

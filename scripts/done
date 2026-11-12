@@ -1,0 +1,66 @@
+#!/bin/bash
+# Whether a change is done: every check a change must pass before it is called finished, in one command, stopping at
+# the first that fails. Covers the work since origin/main, committed or not.
+#   scripts/done              the checks below
+#   NO_TEST_REASON="..." scripts/done
+#                             accept a source change without a test change, for a reason (a refactor, say)
+# 1. the project gate and the test suite layout
+# 2. formatting, and clippy on the changed crates and their dependents
+# 3. a change to a crate's sources comes with a change to its tests
+# 4. the fast tier of the changed crates' tests, within budget (scripts/test)
+# 5. the release build of every program (scripts/dev/build)
+# 6. the screens of the changed programs (scripts/preview --changed), shown in target/preview/index.html
+set -euo pipefail
+cd "$(dirname "$0")/.."
+step() { printf '\n== %s\n' "$*"; }
+
+step "gate"
+python3 ci/gate.py .
+ci/test_suite.py --check
+
+base=$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)
+mapfile -t changed < <({ git diff --name-only --no-renames "$base"; git ls-files --others --exclude-standard; } | sort -u)
+mapfile -t crates < <(python3 - "${changed[@]}" <<'EOF'
+import sys
+sys.path.insert(0, "ci")
+import affected
+paths = sys.argv[1:]
+print("\n".join(affected.affected(affected.workspace(), paths) if paths else []))
+EOF
+)
+
+step "format"
+cargo fmt --all --check
+
+if [ ${#crates[@]} -gt 0 ]; then
+    step "clippy (${#crates[@]} crates)"
+    cargo clippy --locked --all-targets --all-features $(printf -- '-p %s ' "${crates[@]}") -- -D warnings
+fi
+
+step "tests come with the change"
+missing=()
+for crate_dir in $(printf '%s\n' "${changed[@]}" | grep -oE '^crates/[^/]+' | sort -u); do
+    src=$(printf '%s\n' "${changed[@]}" | grep -E "^$crate_dir/src/.*\.rs$" | grep -vE '/tests?(\.rs|/)' || true)
+    [ -n "$src" ] || continue
+    tests=$(printf '%s\n' "${changed[@]}" | grep -E "^$crate_dir/(tests/|src/.*/tests?(\.rs|/)|src/tests?\.rs)" || true)
+    # a test added or changed inside a source file counts too
+    inline=$(git diff "$base" -- $src | grep -cE '^\+.*#\[(test|tokio::test)' || true)
+    [ -n "$tests" ] || [ "$inline" -gt 0 ] || missing+=("$crate_dir")
+done
+if [ ${#missing[@]} -gt 0 ] && [ -z "${NO_TEST_REASON:-}" ]; then
+    printf 'sources changed with no test change: %s\n' "${missing[@]}" >&2
+    echo "add a test of the new behaviour, or set NO_TEST_REASON=\"why none is needed\"" >&2
+    exit 1
+fi
+[ ${#missing[@]} -eq 0 ] || echo "no test change, accepted: $NO_TEST_REASON"
+
+step "tests"
+scripts/test
+
+step "release build"
+scripts/dev/build
+
+step "screens"
+scripts/preview --changed
+
+printf '\nDONE: every check passed.\n'

@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""See what a change looks like: every scenario in scenarios/*.toml, shot headless with this checkout and with the
+installed release, side by side with the pixels that changed, in one page.
+
+    scripts/preview                  every scenario
+    scripts/preview dock-menu ..     the scenarios named
+    scripts/preview --changed        the scenarios of the programs changed since origin/main (all of them when a shared
+                                     crate changed); nothing when no program changed
+    scripts/preview --no-before      this checkout only, no comparison
+    scripts/preview --live           the desktop of this checkout in a window of the current session, to try by hand
+
+The page is target/preview/index.html: a row per shot with the installed release, this checkout and the changed pixels
+in magenta, and a switch that shows only the shots that changed. Builds first (scripts/dev/build).
+
+A scenario file:
+
+    title = "Dock: the menu of a tile"       # what the shot shows
+    programs = ["cupertino-dock"]            # crates whose change shows in it (--changed)
+    after = 3                                # seconds before the shot
+    args = ["--right-click", "2:512,612"]    # server flags: --spawn, --pointer, --click, --key, --type, --action ..
+    scales = [1, 2]                          # optional, default [1, 1.5, 2]
+    appearances = ["light", "dark"]          # optional, default both
+
+Points are logical, on a 1024 x 640 point display at every scale. `@ROOT@` in an argument stands for the checkout;
+--spawn splits its command on spaces, so a command whose arguments hold spaces goes in a script beside the scenarios.
+"""
+import concurrent.futures as futures
+import html
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import tomllib
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "ci"))
+import affected  # noqa: E402
+
+OUT = ROOT / "target" / "preview"
+LOGICAL = (1024, 640)
+INSTALLED = pathlib.Path("/usr/bin")
+# crates every program draws through: a change to one of these re-shoots every scenario
+SHARED_PREFIXES = ("cupertino-ui-", "cupertino-kit", "cupertino-theme", "cupertino-glass", "cupertino-effects",
+                   "cupertino-server", "cupertino-assets", "cupertino-icons", "cupertino-wayland-client")
+JOBS = 4
+
+
+def scenarios() -> dict[str, dict]:
+    found = {}
+    for path in sorted((ROOT / "scenarios").glob("*.toml")):
+        with path.open("rb") as f:
+            found[path.stem] = tomllib.load(f)
+    return found
+
+
+def changed_crates() -> set[str]:
+    base = subprocess.run(["git", "merge-base", "HEAD", "origin/main"], cwd=ROOT, capture_output=True, text=True)
+    base = base.stdout.strip() or "HEAD"
+    paths = subprocess.check_output(["git", "diff", "--name-only", base], cwd=ROOT, text=True).split()
+    paths += subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT, text=True).split()
+    if any(p.startswith("data/") for p in paths):
+        return {"*"}
+    return set(affected.affected(affected.workspace(), paths)) if paths else set()
+
+
+def wanted(all_: dict[str, dict], names: list[str], only_changed: bool) -> dict[str, dict]:
+    if names:
+        missing = [n for n in names if n not in all_]
+        if missing:
+            sys.exit(f"scripts/preview: no scenario {', '.join(missing)} (scenarios/*.toml)")
+        return {n: all_[n] for n in names}
+    if not only_changed:
+        return all_
+    crates = changed_crates()
+    if "*" in crates or any(c.startswith(SHARED_PREFIXES) for c in crates):
+        return all_
+    return {n: s for n, s in all_.items() if crates & set(s.get("programs", []))}
+
+
+def shot(bin_dir: pathlib.Path, out: pathlib.Path, scenario: dict, scale: float, appearance: str,
+         before: bool) -> bool:
+    env = dict(os.environ)
+    env.update({
+        "BIN_DIR": str(bin_dir),
+        "SIZE": f"{round(LOGICAL[0] * scale)}x{round(LOGICAL[1] * scale)}",
+        "AFTER": str(scenario.get("after", 3)),
+        "SYSTEM_DATA_DIRS": f"{pathlib.Path.home()}/.local/share:/usr/local/share:/usr/share",
+    })
+    if before:
+        user = pathlib.Path.home() / ".local/share/cupertino/assets"
+        env["CUPERTINO_ASSET_DIR"] = ":".join(str(p) for p in (user, pathlib.Path("/usr/share/cupertino/assets/cupertino"))
+                                              if p.is_dir())
+    out.parent.mkdir(parents=True, exist_ok=True)
+    flags = [a.replace("@ROOT@", str(ROOT)) for a in scenario.get("args", [])]
+    args = [str(ROOT / "crates/cupertino-server/scripts/capture.sh"), str(out), *flags,
+            "--scale", str(scale), "--appearance", appearance]
+    result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0 or not out.exists():
+        (out.with_suffix(".log")).write_text(result.stdout + result.stderr)
+        return False
+    return True
+
+
+def compare(tool: pathlib.Path, before: pathlib.Path, after: pathlib.Path, diff: pathlib.Path) -> tuple[int, str]:
+    out = subprocess.run([str(tool), str(before), str(after), str(diff)], capture_output=True, text=True)
+    parts = out.stdout.split()
+    if out.returncode != 0 or len(parts) != 6:
+        return -1, ""
+    count, x, y, w, h = map(int, parts[1:])
+    return count, (f"{w} x {h} px at {x}, {y}" if count else "")
+
+
+def page(rows: list[dict], with_before: bool) -> str:
+    changed = sum(1 for r in rows if r["count"] != 0)
+    css = """
+body { font: 13px system-ui, sans-serif; margin: 16px; background: #1e1e1e; color: #ddd; }
+h1 { font-size: 18px; } .row { margin: 0 0 28px; } .row h2 { font-size: 14px; margin: 0 0 6px; }
+.row .note { color: #f6a; } .row .same { color: #8c8; } .shots { display: flex; gap: 8px; }
+.shots figure { margin: 0; flex: 1; } .shots img { width: 100%; border: 1px solid #444; cursor: zoom-in; }
+figcaption { color: #999; margin: 2px 0; } body.changed .row.unchanged { display: none; }
+label { margin-left: 16px; } .fail { color: #f66; }
+"""
+    out = [f"<!doctype html><meta charset=utf-8><title>Preview</title><style>{css}</style>",
+           f"<h1>{len(rows)} shots, {changed} changed" + (" from the installed release" if with_before else "") +
+           "<label><input type=checkbox id=only onchange=\"document.body.classList.toggle('changed', this.checked)\">"
+           " changed only</label></h1>"]
+    for r in rows:
+        cls = "unchanged" if r["count"] == 0 else "changed"
+        note = ("<span class=fail>the shot failed: see " + html.escape(r["log"]) + "</span>") if r.get("log") else (
+            f"<span class=note>{r['count']} pixels changed, {r['box']}</span>" if r["count"] > 0 else
+            "<span class=same>unchanged</span>" if r["count"] == 0 else "")
+        out.append(f"<div class='row {cls}'><h2>{html.escape(r['title'])} · {r['variant']} · {note}</h2><div class=shots>")
+        for caption, src in r["images"]:
+            out.append(f"<figure><figcaption>{caption}</figcaption><a href='{src}' target=_blank><img loading=lazy "
+                       f"src='{src}'></a></figure>")
+        out.append("</div></div>")
+    return "\n".join(out)
+
+
+def live() -> int:
+    subprocess.run([str(ROOT / "scripts/dev/build")], check=True)
+    bin_dir = ROOT / "target/release"
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
+    print("scripts/preview: the desktop of this checkout in a window; close the window to end it", flush=True)
+    return subprocess.run([str(bin_dir / "cupertino-server"), "--winit", "--dev-shell", "--size", "1280x800"],
+                          env=env).returncode
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if "--live" in args:
+        return live()
+    with_before = "--no-before" not in args and (INSTALLED / "cupertino-server").exists()
+    names = [a for a in args if not a.startswith("--")]
+    chosen = wanted(scenarios(), names, "--changed" in args)
+    if not chosen:
+        print("scripts/preview: no program changed, no scenario to shoot")
+        return 0
+    if not os.environ.get("NO_BUILD"):
+        subprocess.run([str(ROOT / "scripts/dev/build")], check=True)
+    subprocess.run(["cargo", "build", "--locked", "--release", "-q", "-p", "cupertino-ui-test", "--example",
+                    "compare-shots"], cwd=ROOT, check=True)
+    tool = ROOT / "target/release/examples/compare-shots"
+    shutil.rmtree(OUT, ignore_errors=True)
+    jobs = []
+    for name, s in chosen.items():
+        for scale in s.get("scales", [1, 1.5, 2]):
+            for appearance in s.get("appearances", ["light", "dark"]):
+                variant = f"{scale}x-{appearance}"
+                jobs.append((name, s, scale, appearance, variant))
+    print(f"scripts/preview: {len(jobs)} shots" + (" and the installed release's" if with_before else ""), flush=True)
+    rows = []
+    with futures.ThreadPoolExecutor(JOBS) as pool:
+        tasks = {}
+        for name, s, scale, appearance, variant in jobs:
+            after = OUT / "after" / f"{name}-{variant}.png"
+            before = OUT / "before" / f"{name}-{variant}.png"
+            tasks[(name, variant)] = (
+                pool.submit(shot, ROOT / "target/release", after, s, scale, appearance, False),
+                pool.submit(shot, INSTALLED, before, s, scale, appearance, True) if with_before else None,
+            )
+        for name, s, scale, appearance, variant in jobs:
+            a, b = tasks[(name, variant)]
+            after = OUT / "after" / f"{name}-{variant}.png"
+            before = OUT / "before" / f"{name}-{variant}.png"
+            diff = OUT / "diff" / f"{name}-{variant}.png"
+            ok = a.result()
+            row = {"title": s.get("title", name), "variant": f"{name} · scale {scale} · {appearance}", "count": -1,
+                   "box": "", "images": []}
+            if not ok:
+                row["log"] = str(after.with_suffix(".log"))
+            elif b is not None:
+                b.result()
+                diff.parent.mkdir(parents=True, exist_ok=True)
+                row["count"], row["box"] = compare(tool, before, after, diff)
+                row["images"] = [("installed", f"before/{before.name}"), ("this checkout", f"after/{after.name}"),
+                                 ("changed pixels", f"diff/{diff.name}")]
+            else:
+                row["images"] = [("this checkout", f"after/{after.name}")]
+            rows.append(row)
+            print(f"  {row['variant']}: " + ("FAILED" if not ok else "unchanged" if row["count"] == 0 else
+                                             f"{row['count']} px changed" if row["count"] > 0 else "shot"), flush=True)
+    rows.sort(key=lambda r: (r["count"] == 0, r["variant"]))
+    index = OUT / "index.html"
+    index.write_text(page(rows, with_before))
+    print(f"scripts/preview: {index}")
+    return 1 if any(r.get("log") for r in rows) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

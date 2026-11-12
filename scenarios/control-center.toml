@@ -1,0 +1,4 @@
+title = "Control Center over the menu bar"
+programs = ["cupertino-controlcenter", "cupertino-menubar"]
+after = 3.5
+args = ["--action", "2:control-panel"]

@@ -19,15 +19,34 @@ Short rules for any agent (and any person) who edits this repository. Details li
 
 ## Build and test
 
-For build/install-only work, use `cargo build --locked -p PACKAGE --bin BINARY` and only the
-production features the binary needs (usually `--features app`). Do not add test execution, `--tests`, `--all-targets`
-or the test-fixture script to an ordinary development build. Validation of implementation changes is a separate,
-scoped test step; package selection on the fixture script and on its child command are independent.
+Four commands cover the work; use them rather than hand-written cargo lines:
 
 ```bash
-export PATH=$HOME/.cargo/bin:$PATH
-cargo build --workspace
-python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --workspace --all-features
+scripts/test             # the fast tier of the changed crates' tests (and their dependents), within budget
+scripts/test --all       # the fast tier of the workspace: 5 minutes at most, 2 seconds a test
+scripts/test --slow      # the slow tier (whole programs, buses, displays, measurements); CI runs it too
+scripts/dev/build        # the release build of every program, one feature set, into target/release
+scripts/dev/shot OUT.png [server flags]   # one headless screenshot of the current checkout (builds first)
+scripts/preview          # every scenario in scenarios/, this checkout beside the installed release, changed pixels marked
+scripts/done             # everything a change must pass before it is called done
+```
+
+- A change is done when `scripts/done` passes: the gate, formatting, clippy on the changed crates, a test change with
+  every source change (or `NO_TEST_REASON`), the fast tier, the release build and the changed programs' screens.
+  Report its last line; never call work done on a partial run.
+- A test over 2 seconds fails `scripts/test`. Make it fast (a manual clock, no sleeps, no real timeouts) or move it to
+  the slow tier in `.config/nextest.toml` with the reason.
+- Each crate's integration tests are modules of one program, `tests/suite.rs`, written by `ci/test_suite.py --write`
+  after a test file is added or removed (CI checks it). A test's name starts with its file's module
+  (`cargo test -p CRATE --test suite store::`); a test that runs itself again names itself through
+  `cupertino_test_bus::test_path`.
+- Builds link with mold when it is installed (`ci/linker.sh`); install it (`pacman -S mold`).
+- A visible change gets a scenario in `scenarios/` when none shows it.
+
+The underlying commands, for CI and for anything the scripts do not cover:
+
+```bash
+python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --workspace --all-features --profile ci
 cargo test --workspace --all-features --doc
 cargo clippy --workspace --all-targets
 cargo fmt --check
@@ -35,7 +54,7 @@ cargo run -p cupertino-layers
 ```
 
 - `cargo fmt --all --check` is clean, vendored crates in `third-party/` included; CI runs `cargo fmt` without `--all`.
-- A test that runs over 2 minutes is killed and fails by name. To use libtest, replace `cargo nextest run` with `cargo test` inside the fixture script above; libtest has no per-test limit. Stop any stray test `dbus-daemon` after a killed run; never touch the real session bus.
+- A test that runs over 2 minutes is killed and fails by name, in either tier. To use libtest, replace `cargo nextest run` with `cargo test` inside the fixture script above; libtest has no per-test limit. Stop any stray test `dbus-daemon` after a killed run; never touch the real session bus.
 - Run the compositor nested: `cargo run -p cupertino-server -- --winit --spawn foot`, with `XDG_DATA_DIRS="$PWD/crates/cupertino-files/data:$PWD/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"` so the menu bar and dock find the apps' desktop entries (name, icon). Headless screenshots: `crates/cupertino-server/scripts/capture.sh out.png [server flags]` (fixture home and XDG directories, cleared environment, your asset pack kept, then the checkout icon pack); never capture with your real `HOME`. One window surface at a time (Settings panes, Files, Kit controls, the overview) in light and dark at any scale: `ci/capture.sh APP/SURFACE [flags]` (`crates/cupertino-capture/README.md`).
 - Tests run with the built-in font and never depend on a pack installed in your home directory; set `CUPERTINO_ASSET_DIR` only to try another pack.
 - CI runs the tests a second time as the Arch package's `check()` does: binaries compiled with `CUPERTINO_THEME_DIR=/usr/share/cupertino/theme` (a directory that does not exist while testing) and `CUPERTINO_SPEC_DIR` pointing at the checkout. Reproduce it with `CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CUPERTINO_SPEC_DIR="$PWD/data/theme" python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --workspace --all-features`. A test that starts a Cupertino binary with a cleared environment builds it with `common::spawn::cleared` (`crates/cupertino-server/tests/common/spawn.rs`), which always sets `CUPERTINO_SPEC_DIR` and the empty asset search path (`CUPERTINO_ASSET_SEARCH_PATH=`, the built-in assets alone); every other test spawn sets that path itself (`crates/cupertino-server/tests/asset-isolation.rs` checks the sources); a nightly workflow runs the whole Arch container build (`packaging/ci/build-in-container.sh arch DIST --upgrade`: `check()`, the upgrade test from one package release to the next, and the same install test the release build runs) without publishing.

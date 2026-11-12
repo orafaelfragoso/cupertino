@@ -71,7 +71,7 @@ check() {
   # The compositor tests open a Wayland socket; the build environment has no runtime directory of its own.
   export XDG_RUNTIME_DIR="$srcdir/runtime"
   install -d -m 700 "$XDG_RUNTIME_DIR"
-  dbus-run-session -- python3 ci/build-test-fixtures.py --frozen --release -- cargo nextest run --frozen --release --workspace --all-features
+  dbus-run-session -- python3 ci/build-test-fixtures.py --frozen --release -- cargo nextest run --frozen --release --profile ci --workspace --all-features
   cargo test --frozen --release --workspace --all-features --doc
 }
 

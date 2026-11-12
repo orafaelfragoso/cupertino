@@ -1,0 +1,4 @@
+title = "The desktop: menu bar, dock and wallpaper"
+programs = ["cupertino-menubar", "cupertino-dock"]
+after = 3
+args = []

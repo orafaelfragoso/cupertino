@@ -1,0 +1,4 @@
+title = "Launcher: the search field"
+programs = ["cupertino-launcher"]
+after = 3
+args = ["--action", "2:launcher"]

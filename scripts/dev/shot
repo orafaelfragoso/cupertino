@@ -1,0 +1,17 @@
+#!/bin/sh
+# One headless screenshot of the whole desktop with the current checkout. Builds first (a no-op when nothing changed),
+# so a shot never shows a stale program.
+#   scripts/dev/shot OUT.png [server flags...]
+#   scripts/dev/shot /tmp/files.png --spawn cupertino-files
+#   AFTER=3 SCALE=1 APPEARANCE=light scripts/dev/shot /tmp/dock.png --pointer 2:640,780
+# SIZE (default 1512x982), SCALE (default 2), APPEARANCE (dark|light, default dark), AFTER (seconds, default 5),
+# WALLPAPER (an image path). The user's icon and cursor themes in ~/.local/share are visible to the run.
+# --spawn splits its value on spaces: to run a command with arguments, put it in a script and spawn `sh SCRIPT`.
+set -e
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+[ $# -ge 1 ] || { sed -n '4,7p' "$0" >&2; exit 2; }
+[ -n "${NO_BUILD:-}" ] || "$ROOT/scripts/dev/build" >&2
+export BIN_DIR="$ROOT/target/release" SIZE="${SIZE:-1512x982}"
+export SYSTEM_DATA_DIRS="${SYSTEM_DATA_DIRS:-$HOME/.local/share:/usr/local/share:/usr/share}"
+[ -n "${WALLPAPER:-}" ] && export CONFIG_JSON="{\"wallpaper\": \"$WALLPAPER\"}"
+exec "$ROOT/crates/cupertino-server/scripts/capture.sh" "$@" --scale "${SCALE:-2}" --appearance "${APPEARANCE:-dark}"

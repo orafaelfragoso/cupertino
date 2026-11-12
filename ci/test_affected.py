@@ -83,7 +83,7 @@ class AffectedTests(unittest.TestCase):
     def test_runner_selects_packages_and_propagates_failure(self) -> None:
         for check, command in (
             ("clippy", ["cargo", "clippy", "--all-targets", "--all-features", "--timings", "-p", "core", "-p", "app", "--", "-D", "warnings"]),
-            ("tests", ["cargo", "nextest", "run", "--all-features", "--no-fail-fast", "--timings", "-p", "core", "-p", "app"]),
+            ("tests", ["cargo", "nextest", "run", "--all-features", "--no-fail-fast", "--timings", "--profile", "ci", "-p", "core", "-p", "app"]),
             ("doctests", ["cargo", "test", "--all-features", "--doc", "-p", "core", "-p", "app"]),
         ):
             with self.subTest(check=check), patch.object(sys, "argv", ["affected.py", "run", check]), \
@@ -118,7 +118,7 @@ class AffectedTests(unittest.TestCase):
                                               str(Path(__file__).resolve().with_name("build-test-fixtures.py")),
                                               "--locked"])
                 self.assertEqual(command[3:split], [value for package in expected for value in ("--package", package)])
-                self.assertEqual(command[split + 1:], ["cargo", "nextest", "run", "--all-features", "--no-fail-fast", "--timings",
+                self.assertEqual(command[split + 1:], ["cargo", "nextest", "run", "--all-features", "--no-fail-fast", "--timings", "--profile", "ci",
                                                      *[value for package in expected for value in ("-p", package)]])
 
     def fixture_workspace(self) -> list[Package]:

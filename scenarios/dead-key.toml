@@ -1,0 +1,4 @@
+title = "Typing: an accent key waiting for its letter shows the accent marked in the field"
+programs = ["cupertino-launcher", "cupertino-wayland-client"]
+after = 3.5
+args = ["--action", "2:launcher", "--key", "2.8:Alt+e"]

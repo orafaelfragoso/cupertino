@@ -2,6 +2,9 @@
 [profile.dev]
 debug = "line-tables-only"
 
-# Incremental artifacts duplicate worktree storage and cannot be used by sccache.
-[build]
-incremental = false
+# Debug and test builds are incremental (cargo's default), so an edit rebuilds only what changed. CI and packaging set
+# CARGO_INCREMENTAL=0 themselves.
+
+# Link through ci/linker.sh, which uses mold when it is installed.
+[target.x86_64-unknown-linux-gnu]
+linker = "ci/linker.sh"

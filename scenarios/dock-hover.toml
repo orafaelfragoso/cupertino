@@ -1,0 +1,4 @@
+title = "Dock: the pointer resting on a tile, its name shown"
+programs = ["cupertino-dock"]
+after = 3.5
+args = ["--pointer", "2:512,612"]

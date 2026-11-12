@@ -5,8 +5,16 @@ Thanks for helping. This page covers how to build, what a good change looks like
 ## Build and test
 
 ```bash
+scripts/test           # the fast tier of the tests of the crates you changed, within budget (--all: every crate)
+scripts/preview        # the screens your change affects, beside the installed release, in target/preview/index.html
+scripts/done           # every check a change must pass
+```
+
+The commands under them, which CI runs:
+
+```bash
 cargo build --workspace
-python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --workspace --all-features
+python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --workspace --all-features --profile ci
 cargo test --workspace --all-features --doc
 cargo run -p cupertino-layers
 cargo clippy --workspace --all-targets
@@ -17,6 +25,9 @@ Notes:
 
 - Run `cargo fmt` without `--all`, as CI does: `--all` also formats the vendored crates in `third-party/`, which stay as their authors wrote them (and one is missing the test files that its sources declare).
 - Shell and app crates build their process code behind the `app` feature. Use `cargo test -p <crate> --features app` for those.
+- The tests come in two tiers (`.config/nextest.toml`): the fast tier, held to 2 seconds a test and 5 minutes for the workspace, and the slow tier of tests that run whole programs, buses or displays. `scripts/test --slow` runs the slow one; the `ci` profile runs both.
+- Each crate's integration tests build as one program, `tests/suite.rs`; after adding or removing a test file run `ci/test_suite.py --write`.
+- Install [mold](https://github.com/rui314/mold): builds link through it when it is there (`ci/linker.sh`), several times faster than the default linker.
 - Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`; CI uses 0.9.151). It runs every test in its own process and kills a test that runs longer than 2 minutes (`.config/nextest.toml`), so a hang fails with the test's name. To use libtest, replace `cargo nextest run` with `cargo test` inside the fixture script above; libtest has no per-test limit. A killed run can leave a test `dbus-daemon` behind: stop it, never your real session bus.
 - Dev builds optimise the crates where a CPU-drawn frame spends its time (`[profile.dev.package.*]` in `Cargo.toml`): the 2D rasteriser (`tiny-skia`), the font readers, shaper and glyph rasteriser, the SVG and PNG coders and their compression, and our own `cupertino-ui-render`, whose shadow and blur loops were half of a frame. Unoptimised, a 2x app-grid frame took about a second and a 2x Files capture three times as long as it does now; optimised, the frame takes about an eighth of that. The third-party crates are compiled once per target, and `cupertino-ui-render` takes about a second to compile optimised, so editing our crates rebuilds about as fast as before. Debug assertions and overflow checks stay on. Add a crate to the list only after a stack sample of a dev binary shows its time.
 - Run the compositor nested while you work: `cargo run -p cupertino-server -- --winit --spawn foot`. Export `XDG_DATA_DIRS="$PWD/crates/cupertino-files/data:$PWD/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"` first, or the menu bar and dock show `Cupertino-files` and a generic icon instead of the apps' names and icons (see [Building](docs/src/building.md)). Headless screenshots are the quickest visual check and work in CI. Take them with `crates/cupertino-server/scripts/capture.sh out.png --spawn cupertino-files`: it runs the whole desktop with a temporary sample home folder, so a screenshot never shows your own files (see the script header for more examples).

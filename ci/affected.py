@@ -198,7 +198,8 @@ def main() -> int:
             packages = prepared
         cargo_checks = {
             "clippy": ["clippy", "--all-targets", "--all-features", "--timings"],
-            "tests": ["nextest", "run", "--all-features", "--no-fail-fast", "--timings"],
+            # both tiers: the fast one and the slow one (.config/nextest.toml)
+            "tests": ["nextest", "run", "--all-features", "--no-fail-fast", "--timings", "--profile", "ci"],
             "doctests": ["test", "--all-features", "--doc"],
         }
         command = ["cargo", *cargo_checks[args.check]]

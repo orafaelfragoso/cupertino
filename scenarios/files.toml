@@ -1,0 +1,4 @@
+title = "Files: the home folder"
+programs = ["cupertino-files"]
+after = 5
+args = ["--spawn", "cupertino-files"]

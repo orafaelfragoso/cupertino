@@ -1,0 +1,4 @@
+title = "Notification Centre with a notification"
+programs = ["cupertino-notifications"]
+after = 4.5
+args = ["--spawn", "sh @ROOT@/scenarios/notify.sh", "--action", "3.5:notification-center"]

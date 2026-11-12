@@ -1,0 +1,4 @@
+title = "Settings: the first pane"
+programs = ["cupertino-settings"]
+after = 5
+args = ["--spawn", "cupertino-settings"]

@@ -1514,18 +1514,7 @@ pub fn capture_window(
     // the snapshot holds the window as it shows, its popups over it
     let mut pieces = window_popup_elements(p, entry, &plan);
     pieces.extend(window_elements(p, entry, &plan, active, shadow, deco));
-    let pieces = pieces
-        .into_iter()
-        .map(|piece| match piece {
-            Piece::Material(m) => vec![fallback_fill(
-                p, m.kind, m.index, m.rect, m.radius, m.opacity,
-            )],
-            Piece::Glass(g) => glass_fallback(p, g.kind, g.index, &g.glass.container, g.opacity),
-            piece => vec![piece],
-        })
-        .collect::<Vec<_>>()
-        .into_iter()
-        .flatten();
+    let pieces = snapshot_fills(p, pieces);
     let mut stack = Composition::new(p.scale);
     stack.extend(SceneLayer::Windows, pieces);
     let composed = stack.finish(p);
@@ -1546,6 +1535,91 @@ pub fn capture_window(
             None
         }
     }
+}
+
+/// The fills that stand in for the materials of a window snapshot, in `pieces`' order, each at its first material's
+/// place. The materials cut to one rounded outline share one fill over the part of their bounds inside it, with the
+/// outline's corners when that part spans it: a fill cannot be cut by the outline, and the square corners of a sidebar
+/// and a content area would show past it.
+fn snapshot_fills(p: &SceneParams<'_>, pieces: Vec<Piece>) -> Vec<Piece> {
+    let key = |clip: &Clip| match clip {
+        Clip::Rounded { rect, .. } => {
+            Some([rect.0.x(), rect.0.y(), rect.0.width(), rect.0.height()].map(f64::to_bits))
+        }
+        _ => None,
+    };
+    // the bounds and opacity of the materials of each outline
+    let mut groups: Vec<([u64; 4], Rect, f64, f32)> = Vec::new();
+    for piece in &pieces {
+        let Piece::Material(m) = piece else { continue };
+        let (Some(k), Clip::Rounded { radius, .. }) = (key(&m.clip), m.clip) else {
+            continue;
+        };
+        let area = Rect::new(m.rect.loc.x, m.rect.loc.y, m.rect.size.w, m.rect.size.h);
+        match groups.iter_mut().find(|g| g.0 == k) {
+            Some(g) => {
+                let (l, t) = (g.1.x.min(area.x), g.1.y.min(area.y));
+                let (r, b) = (
+                    g.1.right().max(area.right()),
+                    g.1.bottom().max(area.bottom()),
+                );
+                g.1 = Rect::new(l, t, r - l, b - t);
+                g.3 = g.3.max(m.opacity);
+            }
+            None => groups.push((k, area, radius, m.opacity)),
+        }
+    }
+    let mut drawn: Vec<[u64; 4]> = Vec::new();
+    let mut out = Vec::new();
+    for piece in pieces {
+        match piece {
+            Piece::Material(m) => {
+                let Some(k) = key(&m.clip) else {
+                    out.push(fallback_fill(
+                        p, m.kind, m.index, m.rect, m.radius, m.opacity,
+                    ));
+                    continue;
+                };
+                if drawn.contains(&k) {
+                    continue;
+                }
+                drawn.push(k);
+                let Some(&(_, bounds, radius, opacity)) = groups.iter().find(|g| g.0 == k) else {
+                    continue;
+                };
+                let [x, y, w, h] = k.map(f64::from_bits);
+                let clip = Rect::new(x, y, w, h);
+                let (left, top) = (bounds.x.max(clip.x), bounds.y.max(clip.y));
+                let (right, bottom) = (
+                    bounds.right().min(clip.right()),
+                    bounds.bottom().min(clip.bottom()),
+                );
+                if right <= left || bottom <= top {
+                    continue;
+                }
+                let near = |a: f64, b: f64| (a - b).abs() < 0.5;
+                let spans = near(left, clip.x)
+                    && near(right, clip.right())
+                    && near(top, clip.y)
+                    && near(bottom, clip.bottom());
+                let inside = smithay::utils::Rectangle::<f64, Logical>::new(
+                    (left, top).into(),
+                    (right - left, bottom - top).into(),
+                );
+                let radius = if spans { radius } else { m.radius };
+                out.push(fallback_fill(p, m.kind, m.index, inside, radius, opacity));
+            }
+            Piece::Glass(g) => out.extend(glass_fallback(
+                p,
+                g.kind,
+                g.index,
+                &g.glass.container,
+                g.opacity,
+            )),
+            piece => out.push(piece),
+        }
+    }
+    out
 }
 
 /// Render the surface tree of `surface`, its surface's top-left corner at `origin` (global logical points), into a new

@@ -727,31 +727,30 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_light_active_layers() {
+    fn sidebar_light_active_is_one_translucent_fill_over_a_saturated_backdrop() {
         let r = rec(&lib(), Appearance::Light, "Sidebar");
         let b = r.backdrop.as_ref().unwrap();
         assert_eq!(b.sigma_pt, 30.0);
         assert!(matches!(b.ops[..], [ColorOp::Saturate(s)] if near(s, 2.2)));
-        assert_eq!(r.fills.len(), 3);
-        assert!(near(r.fills[0].rgba[0], 0.9647) && near(r.fills[0].rgba[3], 0.84));
+        assert_eq!(r.fills.len(), 1);
+        assert!(near(r.fills[0].rgba[0], 0.9137) && near(r.fills[0].rgba[3], 0.98));
         assert_eq!(r.fills[0].blend, Blend::Normal);
-        assert_eq!(r.fills[1].blend, Blend::Darken);
-        assert!(near(r.fills[1].rgba[0], 0.915));
-        assert!(r.fills[2].tint_layer && near(r.fills[2].rgba[3], 0.05));
-        assert!(r.uses_tint_layer());
+        assert!(!r.uses_tint_layer());
         assert!(!r.opaque);
     }
 
     #[test]
-    fn dark_sidebar_uses_lighten() {
+    fn dark_sidebar_is_one_translucent_fill_over_a_more_saturated_backdrop() {
         let r = rec(&lib(), Appearance::Dark, "Sidebar");
-        assert_eq!(r.fills[1].blend, Blend::Lighten);
+        assert_eq!(r.fills.len(), 1);
+        assert_eq!(r.fills[0].blend, Blend::Normal);
+        assert!(near(r.fills[0].rgba[0], 0.137) && near(r.fills[0].rgba[3], 0.966));
         assert!(matches!(r.backdrop.unwrap().ops[..], [ColorOp::Saturate(s)] if near(s, 2.4)));
     }
 
     /// A window that is not active keeps its body's opaque materials (Reduce Transparency) as an active one draws
     /// them, in every appearance and interaction, so it grows no darker; their translucent variants draw the data's
-    /// own inactive variant, an opaque base with the desktop tint and no backdrop, not darker than the window's
+    /// own inactive variant, an opaque base with the desktop tint (at least where the active one has it) and no backdrop, not darker than the window's
     /// background by more than three levels of 255 in the dark appearance.
     #[test]
     fn an_inactive_window_keeps_its_body_s_opaque_materials_and_tints_the_translucent_ones() {
@@ -794,9 +793,8 @@ mod tests {
                         );
                         if interaction == Interaction::Normal {
                             translucent += 1;
-                            assert_eq!(
-                                inactive.uses_tint_layer(),
-                                active.uses_tint_layer(),
+                            assert!(
+                                inactive.uses_tint_layer() || !active.uses_tint_layer(),
                                 "{what}: the desktop tint, where the active one has it"
                             );
                             let window =

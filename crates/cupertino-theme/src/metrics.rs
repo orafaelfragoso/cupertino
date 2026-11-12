@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn shape_and_shadow_tokens_are_verified_values() {
         let s = ShapeTokens::default();
-        assert_eq!(s.window_corner_radius, 12.0);
+        assert_eq!(s.window_corner_radius, 16.0);
         assert_eq!(s.window_corner_radius_for(WindowCornerSize::Small), 10.0);
         let w = WindowShadowPreset::default();
         assert_eq!((w.sigma, w.alpha, w.offset_y), (20.0, 0.40, 18.0));

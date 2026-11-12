@@ -146,7 +146,7 @@ mod tests {
         );
         assert_eq!(
             hex(Appearance::Dark, SemanticColor::WindowBackground),
-            "#1F2025"
+            "#1E1E1E"
         );
         assert_eq!(
             hex(Appearance::Light, SemanticColor::ControlBackground),
@@ -156,15 +156,15 @@ mod tests {
             hex(Appearance::Dark, SemanticColor::ControlBackground),
             "#1E1E1E"
         );
-        assert_eq!(hex(Appearance::Light, SemanticColor::SystemBlue), "#007AFF");
-        assert_eq!(hex(Appearance::Dark, SemanticColor::SystemBlue), "#0A84FF");
-        assert_eq!(hex(Appearance::Light, SemanticColor::SystemRed), "#FF3B30");
-        assert_eq!(hex(Appearance::Dark, SemanticColor::SystemRed), "#FF453A");
+        assert_eq!(hex(Appearance::Light, SemanticColor::SystemBlue), "#0088FF");
+        assert_eq!(hex(Appearance::Dark, SemanticColor::SystemBlue), "#0091FF");
+        assert_eq!(hex(Appearance::Light, SemanticColor::SystemRed), "#FF383C");
+        assert_eq!(hex(Appearance::Dark, SemanticColor::SystemRed), "#FF4245");
         assert_eq!(hex(Appearance::Light, SemanticColor::Grid), "#E6E6E6");
         assert_eq!(hex(Appearance::Dark, SemanticColor::Grid), "#1A1A1A");
         assert_eq!(
             hex(Appearance::Light, SemanticColor::KeyboardFocusIndicator),
-            "#3B99FC"
+            "#0067F4"
         );
     }
 
@@ -185,8 +185,8 @@ mod tests {
     #[test]
     fn catalog_sizes() {
         let t = tokens();
-        assert_eq!(t.table(Appearance::Light).len(), 88);
-        assert_eq!(t.table(Appearance::Dark).len(), 87);
+        assert_eq!(t.table(Appearance::Light).len(), 90);
+        assert_eq!(t.table(Appearance::Dark).len(), 89);
         assert!(t.table(Appearance::LightHighContrast).len() < t.table(Appearance::Light).len());
     }
 

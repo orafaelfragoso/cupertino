@@ -941,7 +941,7 @@ mod tests {
         assert_eq!(&p.blur.level_opacity[2..], &[1.0, 1.0]);
         assert_eq!(
             (p.blur.fill_darken, p.blur.fill_normal, p.blur.fill_lighten),
-            (0.9, 0.5, 0.0)
+            (0.882, 0.46, 0.0)
         );
         assert_eq!(
             (p.face.saturation, p.face.white, p.face.black),
@@ -980,10 +980,10 @@ mod tests {
         let p = GlassParams::new(mode(false, GlassStyle::Regular), 100.0);
         assert_eq!(
             (p.face.saturation, p.face.white, p.face.black, p.face.clamp),
-            (1.2, 0.96, 0.4, 1.0)
+            (2.2, 1.09, 0.43, 1.0)
         );
-        assert_eq!(p.face.fill, [1.0, 1.0, 1.0, 0.2]);
-        assert_eq!((p.blur.fill_darken, p.blur.fill_lighten), (0.0, 0.9));
+        assert_eq!(p.face.fill, [1.0, 1.0, 1.0, 0.215]);
+        assert_eq!((p.blur.fill_darken, p.blur.fill_lighten), (0.0, 0.882));
         assert!(p.bleed.darken && p.bleed.saturation == 1.2);
         let dark = GlassParams::new(mode(true, GlassStyle::Regular), 100.0);
         assert_eq!(p.refraction, dark.refraction);
@@ -999,9 +999,9 @@ mod tests {
             (60.0, -30.0, 15.0, 21.0, 0.4, 0.6),
             (80.0, -40.0, 20.0, 28.0, 0.466_67, 0.5),
             (100.0, -50.0, 20.0, 35.0, 0.55, 0.375),
-            (120.0, -60.0, 20.0, 42.0, 0.633_33, 0.35),
-            (140.0, -60.0, 20.0, 49.0, 0.716_67, 0.35),
-            (180.0, -60.0, 20.0, 49.0, 0.716_67, 0.35),
+            (120.0, -60.0, 20.0, 42.0, 0.585_714_3, 0.35),
+            (140.0, -60.0, 20.0, 49.0, 0.621_428_6, 0.351_333_3),
+            (180.0, -60.0, 20.0, 63.0, 0.692_857_2, 0.354),
         ];
         for (s, amount, height, bleed, narrow, luma) in rows {
             let p = GlassParams::new(mode(true, GlassStyle::Regular), s);
@@ -1037,7 +1037,7 @@ mod tests {
             (100.0, -60.0, 20.0, 8.611_111, 62.5, 40.0),
             (120.0, -60.0, 20.0, 10.0, 75.0, 48.0),
             (140.0, -60.0, 20.0, 10.0, 75.0, 56.0),
-            (180.0, -60.0, 20.0, 10.0, 75.0, 56.0),
+            (180.0, -60.0, 20.0, 10.0, 75.0, 72.0),
         ];
         for (s, amount, height, blur, shadow, shadow_height) in rows {
             let p = GlassParams::new(mode(true, GlassStyle::Clear), s);
@@ -1124,10 +1124,14 @@ mod tests {
                 (panel.face.white, panel.face.clamp, panel.face.fill),
                 (regular.face.white, regular.face.clamp, regular.face.fill)
             );
-            // a lower white point, a lifted black and a little less saturation
-            assert!(panel.face.max_luma < regular.face.max_luma, "{dark}");
-            assert!(panel.face.black > regular.face.black, "{dark}");
-            assert!(panel.face.saturation < regular.face.saturation, "{dark}");
+            // dark: a lower white point, a lifted black and a little less saturation; light: the regular face
+            if dark {
+                assert!(panel.face.max_luma < regular.face.max_luma);
+                assert!(panel.face.black > regular.face.black);
+                assert!(panel.face.saturation < regular.face.saturation);
+            } else {
+                assert_eq!(panel.face, regular.face);
+            }
             // the shadow shows, below the panel; regular glass casts none at rest
             assert_eq!(regular.shadow_reach(), 0.0);
             assert_eq!(panel.shadow.offset, [0.0, LARGE_PANEL_SHADOW_OFFSET]);
@@ -1145,7 +1149,10 @@ mod tests {
                 ),
                 (1.0, 100.0, alpha)
             );
-            assert_eq!(panel.shadow_reach(), 16.0 + 1.5 * 28.0);
+            assert_eq!(
+                panel.shadow_reach(),
+                LARGE_PANEL_SHADOW_OFFSET + 1.5 * LARGE_PANEL_SHADOW_BLUR
+            );
             assert!(panel.reach() >= panel.shadow_reach());
         }
     }

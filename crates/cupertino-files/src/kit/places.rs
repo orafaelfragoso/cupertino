@@ -19,6 +19,8 @@ pub(super) struct PlacesWatch {
     watcher: Option<RecommendedWatcher>,
     /// The folders watched; the trash's own folder is added once it exists.
     watched: Vec<PathBuf>,
+    /// Wakes the application to read the places again.
+    wake: Arc<async_channel::Sender<()>>,
     pub woken: async_channel::Receiver<()>,
 }
 
@@ -28,11 +30,11 @@ impl PlacesWatch {
     pub fn start(folders: Vec<PathBuf>, trash: &Path) -> PlacesWatch {
         let (wake, woken) = async_channel::bounded(1);
         let wake = Arc::new(wake);
-        let first = Arc::clone(&wake);
+        let events = Arc::clone(&wake);
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
             if wakes(&event) {
                 // a wake already waiting covers this change too
-                let _ = wake.try_send(());
+                let _ = events.try_send(());
             }
         })
         .map_err(|e| eprintln!("cupertino-files: the sidebar's places are not watched: {e}"))
@@ -40,6 +42,7 @@ impl PlacesWatch {
         let mut watch = PlacesWatch {
             watcher,
             watched: Vec::new(),
+            wake,
             woken,
         };
         for folder in folders {
@@ -49,27 +52,32 @@ impl PlacesWatch {
             watch.add(parent);
         }
         watch.follow(trash);
-        let _ = first.try_send(());
+        let _ = watch.wake.try_send(());
         watch
     }
 
-    /// Watch the trash's folder too once it exists, so the removal of its `files` folder is heard.
+    /// Watch the trash's folder too once it exists, so the removal of its `files` folder is heard. Its `files` folder
+    /// may have come between the read that found the trash and this watch, so a new watch wakes the application once
+    /// to read the places again.
     pub fn follow(&mut self, trash: &Path) {
-        if trash.is_dir() {
-            self.add(trash);
+        if trash.is_dir() && self.add(trash) {
+            let _ = self.wake.try_send(());
         }
     }
 
-    fn add(&mut self, folder: &Path) {
+    /// Watch `folder`; whether it was not watched before and is now.
+    fn add(&mut self, folder: &Path) -> bool {
         if self.watched.iter().any(|w| w == folder) {
-            return;
+            return false;
         }
         let Some(watcher) = self.watcher.as_mut() else {
-            return;
+            return false;
         };
-        if watcher.watch(folder, RecursiveMode::NonRecursive).is_ok() {
+        let added = watcher.watch(folder, RecursiveMode::NonRecursive).is_ok();
+        if added {
             self.watched.push(folder.to_path_buf());
         }
+        added
     }
 }
 
@@ -181,6 +189,16 @@ mod tests {
             .recv_blocking()
             .expect("the trash's arrival is heard");
         watch.follow(&trash);
+        assert_eq!(
+            watch.woken.try_recv(),
+            Ok(()),
+            "a trash watched anew reads the places again, in case its files folder came first"
+        );
+        watch.follow(&trash);
+        assert!(
+            watch.woken.try_recv().is_err(),
+            "a trash watched already does not"
+        );
         while watch.woken.try_recv().is_ok() {}
         std::fs::remove_dir(trash.join("files")).unwrap();
         watch

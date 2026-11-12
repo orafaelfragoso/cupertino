@@ -69,32 +69,7 @@ const IC_TILE: Color = Color::new(0.463, 0.463, 0.463, 1.0);
 const IC_RIM_COLOR: Color = Color::new(0.341, 0.341, 0.341, 1.0);
 const IC_RIM: f64 = 0.5;
 const FALLBACK: Color = Color::new(0.16, 0.16, 0.17, 0.92);
-/// The light a tile lays on its glass: white glows under the top and bottom edges, as `(distance in points, opacity)`
-/// stops that fade to nothing; a white rim `RIM_WIDTH` points wide along the top and bottom (`RIM` at the top,
-/// `BOTTOM_RIM` of it at the bottom, `RIM_SIDE` down the sides); and a fine dark outline along the sides, `OUTLINE`
-/// black at its strongest.
-const TOP_GLOW: [(f64, f32); 7] = [
-    (0.0, 0.55),
-    (1.0, 0.43),
-    (2.0, 0.26),
-    (3.0, 0.17),
-    (4.0, 0.11),
-    (5.0, 0.06),
-    (7.0, 0.0),
-];
-const BOTTOM_GLOW: [(f64, f32); 7] = [
-    (0.0, 0.40),
-    (1.0, 0.25),
-    (2.0, 0.13),
-    (3.0, 0.095),
-    (4.0, 0.06),
-    (5.0, 0.035),
-    (7.0, 0.0),
-];
-const RIM: f32 = 0.95;
-const RIM_SIDE: f32 = 0.0;
-const BOTTOM_RIM: f32 = 1.0;
-const RIM_WIDTH: f64 = 1.0;
+/// The fine dark outline a tile draws along its sides: `OUTLINE` black at its strongest.
 const OUTLINE: f32 = 0.55;
 const OUTLINE_WIDTH: f64 = 0.5;
 /// A switch that is on: a white disc behind its symbol, drawn in the accent colour.

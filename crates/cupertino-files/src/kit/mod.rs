@@ -1727,12 +1727,8 @@ impl Model {
                 .map(|e| e.path.clone())
                 .collect()
         } else {
-            // asked from another folder: the trash's own items, listed again by the worker
-            self.session
-                .trash
-                .list()
-                .map(|items| items.iter().map(|i| i.file_path()).collect())
-                .unwrap_or_default()
+            // asked from another folder: the trash's own entries, listed again by the worker
+            self.session.trash.entries()
         };
         if sources.is_empty() {
             return Vec::new();
@@ -2455,7 +2451,7 @@ impl BrowserWindow {
         let holds_items = if self.in_trash() {
             !self.browser.entries().is_empty()
         } else {
-            session.trash.list().is_ok_and(|items| !items.is_empty())
+            session.trash.holds_items()
         };
         self.context = None;
         self.confirm_empty = holds_items;
@@ -2494,7 +2490,7 @@ impl BrowserWindow {
             items.push(crate::context_menu::MenuItem::command(
                 "Empty Trash",
                 MenuCommand::EmptyTrash,
-                session.trash.list().is_ok_and(|items| !items.is_empty()),
+                session.trash.holds_items(),
             ));
         }
         self.context = Some(context::OpenMenu {

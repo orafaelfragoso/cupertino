@@ -317,6 +317,21 @@ fn run(work: Work, cancel: &Cancel, report: &mut dyn FnMut(&Progress)) -> Outcom
                 done.current = None;
                 report(&done);
             }
+            // an entry without its .trashinfo is in no list, and would keep the trash looking full
+            if listed.is_ok() && !cancel.is_cancelled() {
+                for orphan in trash
+                    .entries()
+                    .into_iter()
+                    .filter(|p| cupertino_trash::trashed_item(p).is_none())
+                {
+                    let gone = match std::fs::symlink_metadata(&orphan) {
+                        Ok(m) if m.is_dir() => std::fs::remove_dir_all(&orphan),
+                        Ok(_) => std::fs::remove_file(&orphan),
+                        Err(_) => Ok(()),
+                    };
+                    results.push(gone.map(|()| orphan));
+                }
+            }
             // a trash that cannot be listed fails as a whole, whatever it held
             if let Err(e) = listed {
                 results = sources

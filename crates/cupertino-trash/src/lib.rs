@@ -173,6 +173,13 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+fn now_unix_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
 fn mount_points() -> Vec<PathBuf> {
     let Ok(s) = fs::read_to_string("/proc/self/mountinfo") else {
         return vec![PathBuf::from("/")];
@@ -391,6 +398,19 @@ impl Trash {
         self.list_dir(&self.home_trash)
     }
 
+    /// The entries of the home trash's `files` folder, without reading their `.trashinfo`: a quick look at what an
+    /// emptying would take (an entry without its `.trashinfo` too).
+    pub fn entries(&self) -> Vec<PathBuf> {
+        fs::read_dir(self.home_trash.join("files"))
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Whether the home trash holds anything, from its `files` folder alone.
+    pub fn holds_items(&self) -> bool {
+        fs::read_dir(self.home_trash.join("files")).is_ok_and(|mut e| e.next().is_some())
+    }
+
     /// Put a trashed item back at its original location (fails if the location exists).
     pub fn restore(&self, item: &TrashedItem) -> Result<PathBuf, TrashError> {
         let dest = &item.original_path;
@@ -421,13 +441,65 @@ impl Trash {
         Ok(())
     }
 
-    /// Empty the home trash.
+    /// Empty the home trash and return how many items it held. The trash's `files` and `info` folders are swapped
+    /// for empty ones first, so the trash is empty at once (an entry without its `.trashinfo` goes too), and the old
+    /// ones are deleted after; what cannot be deleted is left in a hidden folder of the trash directory and tried again
+    /// at the next emptying. Where the swap is refused, the items are deleted one by one.
     pub fn empty(&self) -> Result<usize, TrashError> {
-        let items = self.list()?;
-        for i in &items {
-            self.delete(i)?;
+        let files = self.home_trash.join("files");
+        let info = self.home_trash.join("info");
+        let count = match fs::read_dir(&files) {
+            Ok(entries) => entries.count(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e.into()),
+        };
+        let expunged = self.home_trash.join(format!(
+            ".expunged-{}-{}",
+            std::process::id(),
+            now_unix_nanos()
+        ));
+        let swapped = {
+            let _held = sizes_lock();
+            fs::create_dir(&expunged)
+                .and_then(|()| fs::rename(&files, expunged.join("files")))
+                .and_then(|()| fs::create_dir(&files))
+                .and_then(|()| match fs::rename(&info, expunged.join("info")) {
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+                    other => other,
+                })
+                .and_then(|()| fs::create_dir(&info))
+                .map(|()| {
+                    let _ = fs::remove_file(self.home_trash.join("directorysizes"));
+                })
+        };
+        if let Err(e) = swapped {
+            // put back whatever moved, then go item by item
+            if !files.exists() {
+                let _ = fs::rename(expunged.join("files"), &files);
+            }
+            if !info.exists() {
+                let _ = fs::rename(expunged.join("info"), &info);
+            }
+            let _ = fs::remove_dir_all(&expunged);
+            let items = self.list().map_err(|_| TrashError::from(e))?;
+            for i in &items {
+                self.delete(i)?;
+            }
+            return Ok(items.len());
         }
-        Ok(items.len())
+        // this emptying's folder, and any an earlier one could not finish
+        if let Ok(entries) = fs::read_dir(&self.home_trash) {
+            for entry in entries.flatten() {
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".expunged-")
+                {
+                    let _ = fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+        Ok(count)
     }
 
     /// Delete items trashed more than `days` days ago (the "remove after 30 days" option, which the
@@ -712,6 +784,46 @@ mod tests {
         fs::write(&f, b"1").unwrap();
         t.trash(&f).unwrap();
         assert_eq!(t.empty().unwrap(), 1);
+    }
+
+    #[test]
+    fn emptying_takes_every_entry_and_leaves_empty_folders() {
+        let (d, t) = setup();
+        for n in ["a", "b"] {
+            let f = d.path().join(n);
+            fs::create_dir_all(f.join("inner")).unwrap();
+            fs::write(f.join("inner/x"), b"1").unwrap();
+            t.trash(&f).unwrap();
+        }
+        let home = t.home_trash().to_path_buf();
+        // an entry without its .trashinfo, and what an earlier emptying left
+        fs::write(home.join("files/orphan"), b"1").unwrap();
+        fs::create_dir_all(home.join(".expunged-1-2/files")).unwrap();
+        assert_eq!(t.empty().unwrap(), 3);
+        for folder in ["files", "info"] {
+            assert_eq!(
+                fs::read_dir(home.join(folder)).unwrap().count(),
+                0,
+                "{folder}"
+            );
+        }
+        assert!(!home.join("directorysizes").exists());
+        let left: Vec<_> = fs::read_dir(&home)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .filter(|n| n.to_string_lossy().starts_with(".expunged-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        assert!(t.list().unwrap().is_empty());
+        assert_eq!(t.empty().unwrap(), 0, "an empty trash empties to nothing");
+    }
+
+    #[test]
+    fn emptying_a_trash_that_was_never_made_is_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let t = Trash::with_home(d.path().join("Trash"));
+        assert_eq!(t.empty().unwrap(), 0);
     }
 
     #[test]

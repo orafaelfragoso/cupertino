@@ -772,6 +772,42 @@ impl SystemIcons {
 mod tests {
     use super::*;
 
+    /// Standard base64 with padding, for building data URLs in tests.
+    fn base64(bytes: &[u8]) -> String {
+        const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let n = chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    out.push(ABC[(n >> (18 - 6 * i) & 63) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    /// Some themes draw an icon as a PNG embedded in an SVG: the picture is drawn, not dropped.
+    #[test]
+    fn an_svg_whose_picture_is_an_embedded_png_draws_it() {
+        let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="16" height="16"><image width="16" height="16" xlink:href="data:image/png;base64,{}"/></svg>"#,
+            base64(&png)
+        );
+        let icon = render_svg(svg.as_bytes(), 32).unwrap();
+        let centre = ((16 * icon.width + 16) * 4) as usize;
+        assert_eq!(&icon.rgba[centre..centre + 4], &[0, 200, 0, 255]);
+    }
+
     fn write_theme(root: &Path, name: &str) {
         let dir = root.join(name);
         std::fs::create_dir_all(dir.join("16x16/apps")).unwrap();

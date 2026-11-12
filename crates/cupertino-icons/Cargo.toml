@@ -13,7 +13,7 @@ cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 image = { version = "0.25", default-features = false, features = ["png"] }
-resvg = { version = "0.49", default-features = false }
+resvg = { version = "0.49", default-features = false, features = ["raster-images"] }
 tiny-skia = "0.12"
 
 [dev-dependencies]

@@ -6,6 +6,7 @@
     {"name": "notifications", "command": ["/usr/bin/cupertino-notifications"]},
     {"name": "controlcenter", "command": ["/usr/bin/cupertino-controlcenter"]},
     {"name": "osd", "command": ["/usr/bin/cupertino-osd"]},
+    {"name": "desktop", "command": ["/usr/bin/cupertino-files", "--desktop"]},
     {"name": "windowmanager", "command": ["/usr/bin/cupertino-windowmanager"], "roles": ["window_manager"]},
     {"name": "login", "command": ["/usr/bin/cupertino-login"], "roles": ["session", "session_lock"]}
   ]

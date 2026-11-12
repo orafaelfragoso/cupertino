@@ -920,3 +920,37 @@ fn every_frame_of_the_panel_s_transitions_fits_the_budget_in_wall_time_on_an_idl
     }
     assert_every_transition_frame_fits_the_budget(FrameTime::Wall);
 }
+
+/// The panel, opened on `query`, closed by `keysym`: the frames it presents from the key until its window is gone.
+fn frames_closing_by(query: &str, keysym: u32) -> usize {
+    let mut m = Metered::new(1.0, false);
+    send(Message::Toggle);
+    m.until_quiet(10, 200);
+    for c in query.chars() {
+        m.step(|s, w| key(s, w, c as u32, Some(c), Mods::NONE));
+        m.until_quiet(3, 200);
+    }
+    m.take("opened");
+    m.step(|s, w| key(s, w, keysym, None, Mods::NONE));
+    let mut frames = 1;
+    for _ in 0..120 {
+        if m.panel().is_none() {
+            return frames;
+        }
+        frames += usize::from(m.step(|_, _| {}));
+    }
+    panic!("the panel did not close");
+}
+
+/// Return launches the top result and closes the panel; its close animation runs frame by frame as Escape's does,
+/// instead of standing still until some other message asks for a frame.
+#[test]
+fn a_launch_closes_the_panel_with_every_frame_of_its_animation_as_escape_does() {
+    let escape = frames_closing_by("", ESCAPE);
+    let launch = frames_closing_by("te", RETURN);
+    assert!(escape > 5, "Escape's close draws its frames: {escape}");
+    assert!(
+        launch + 1 >= escape,
+        "a launch's close draws as many frames as Escape's: {launch} against {escape}"
+    );
+}

@@ -313,6 +313,8 @@ pub struct Model {
     next_launch: u64,
     /// The animation frame that counts; an older one is ignored when it arrives.
     pub(crate) frame: u64,
+    /// The animation frame [`Model::frame`] names was asked of the host and has not come yet.
+    frame_waiting: bool,
     /// The hidden window's generation: each one is a new window, so one the server closed is not kept.
     pub hidden: u64,
     preview: PreviewState,
@@ -380,6 +382,7 @@ impl Model {
             opening: HashMap::new(),
             next_launch: 0,
             frame: 0,
+            frame_waiting: false,
             hidden: 0,
             preview: PreviewState::None,
             previewed: None,
@@ -723,7 +726,8 @@ impl Model {
             View::Files => self.scope.as_ref().is_some_and(|s| s.animating(now)),
             _ => false,
         };
-        if self.motion.animating(now) || scrolling {
+        self.frame_waiting = self.motion.animating(now) || scrolling;
+        if self.frame_waiting {
             self.host.frame(self.frame)
         } else {
             Vec::new()
@@ -1792,6 +1796,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         }
     };
     commands.extend(model.changed());
+    // whatever started a transition (a launch or an opened file hides the panel as Escape does), its frames follow
+    if !model.frame_waiting && model.motion.animating(model.now().mono) {
+        commands.extend(model.animate());
+    }
     if !model.presenting() {
         model.browser = None;
         model.scope = None;

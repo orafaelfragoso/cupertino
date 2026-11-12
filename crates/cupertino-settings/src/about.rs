@@ -11,7 +11,8 @@ const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub mod metrics {
     pub const WIDTH: u32 = 280;
     pub const PADDING: f64 = 24.0;
-    pub const TOP: f64 = 20.0;
+    /// Above the mark: the row the window's control buttons lie in, which the content runs under.
+    pub const TOP: f64 = 52.0;
     pub const MARK: f64 = 64.0;
     pub const NAME_Y: f64 = TOP + MARK + 12.0;
     pub const NAME_HEIGHT: f64 = 28.0;
@@ -20,9 +21,13 @@ pub mod metrics {
     pub const ROWS_Y: f64 = VERSION_Y + VERSION_HEIGHT + 16.0;
     pub const ROW_HEIGHT: f64 = 16.0;
     pub const ROW_GAP: f64 = 0.0;
-    /// The size of the type of the rows' labels and values.
-    pub const ROW_TEXT: f32 = 11.0;
-    pub const COLUMN_GAP: f64 = 12.0;
+    /// How far before the window's centre the right-aligned labels end, and how far after it the values start.
+    pub const LABEL_END: f64 = 6.5;
+    pub const VALUE_START: f64 = 5.0;
+    /// The width of the labels' column, from the leading padding to [`LABEL_END`].
+    pub const LABEL_COLUMN: f64 = WIDTH as f64 / 2.0 - LABEL_END - PADDING;
+    /// The width the values wrap at, from [`VALUE_START`] to the trailing padding.
+    pub const VALUE_COLUMN: f64 = WIDTH as f64 / 2.0 - VALUE_START - PADDING;
     pub const BUTTON_GAP: f64 = 20.0;
     pub const BUTTON_WIDTH: f64 = 92.0;
     pub const BUTTON_HEIGHT: f64 = 24.0;
@@ -55,7 +60,7 @@ impl About {
     /// Wrap values at the painter's measured width; painting, hit testing and the window share this layout.
     pub fn layout(&self, mut measure: impl FnMut(&str) -> f64) -> Layout {
         use metrics::*;
-        let width = f64::from(WIDTH) / 2.0 - COLUMN_GAP / 2.0 - PADDING;
+        let width = VALUE_COLUMN;
         let mut y = ROWS_Y;
         let mut rows = Vec::new();
         for (i, row) in self.rows.iter().enumerate() {

@@ -6,15 +6,21 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
 use cupertino_assets::BUILTIN_FONT;
+use cupertino_kit::controls::{SIDEBAR_TOP, WINDOW_CORNER_RADIUS};
+use cupertino_kit::core::WindowBackground;
 use cupertino_kit::core::{AccessibilityUpdate, PlaceholderIcons, Role, RuntimeOptions};
 use cupertino_kit::geometry::Size;
 use cupertino_kit::layout::LayoutDirection;
-use cupertino_kit::platform::{Capabilities, Timestamp, WindowEvent, WindowId, WindowStates};
+use cupertino_kit::platform::{
+    Capabilities, DecorationMode, Timestamp, WindowEvent, WindowId, WindowStates,
+};
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
-use cupertino_kit::theme::{Appearance, ColorRole, StateVariant, ThemePreferences, ThemeTokens};
+use cupertino_kit::theme::{
+    Appearance, ColorRole, StateVariant, Surface, ThemePreferences, ThemeTokens,
+};
 use cupertino_settings::about::{display_value, metrics, About, Display, Row};
-use cupertino_settings::about_app::{launch, layout, AboutApp, Start};
+use cupertino_settings::about_app::{self, launch, layout, AboutApp, Start};
 use cupertino_theme::Theme;
 use cupertino_ui_test::{semantic_gaps, ManualClock, TestDriver};
 
@@ -199,10 +205,31 @@ fn a_screen_reader_reads_every_field_in_order_and_the_more_info_button() {
         let (_, rect) = bounds.iter().find(|(name, _)| name == label).unwrap();
         assert_eq!(
             rect.max_x(),
-            centre - metrics::COLUMN_GAP / 2.0,
-            "{label} ends at the centre"
+            centre - metrics::LABEL_END,
+            "{label} ends just before the centre"
         );
     }
+    for value in ["Example CPU (8 threads)", "Card A", "6.17.0"] {
+        let (_, rect) = bounds.iter().find(|(name, _)| name == value).unwrap();
+        assert_eq!(
+            rect.x(),
+            centre + metrics::VALUE_START,
+            "{value} starts just after the centre"
+        );
+    }
+    let (_, button) = bounds
+        .iter()
+        .find(|(name, _)| name == "More Info…")
+        .unwrap();
+    assert_eq!(
+        (button.width(), button.height()),
+        (metrics::BUTTON_WIDTH, metrics::BUTTON_HEIGHT)
+    );
+    assert_eq!(
+        button.x(),
+        centre - metrics::BUTTON_WIDTH / 2.0,
+        "the button is centred"
+    );
     for pair in bounds[3..].windows(2).filter(|p| p[0].1.x() > centre) {
         let ((above, a), (below, b)) = (&pair[0], &pair[1]);
         assert!(a.max_y() <= b.y(), "{above:?} ends before {below:?} starts");
@@ -256,7 +283,11 @@ fn the_mark_takes_the_label_colour_of_each_appearance_on_the_window_background()
             let at = ((y * 2.0) as usize * frame.width as usize + (x * 2.0) as usize) * 4;
             [frame.pixels[at], frame.pixels[at + 1], frame.pixels[at + 2]]
         };
-        assert_eq!(pixel(2.0, 2.0), background, "{appearance:?}: the corner");
+        assert_eq!(
+            pixel(f64::from(metrics::WIDTH) / 2.0, 2.0),
+            background,
+            "{appearance:?}: the top edge"
+        );
         let left = (f64::from(metrics::WIDTH) - metrics::MARK) / 2.0;
         let side = (metrics::MARK * 2.0) as u32;
         let ink = run
@@ -293,4 +324,32 @@ fn the_mark_takes_the_label_colour_of_each_appearance_on_the_window_background()
             "{appearance:?}: beside the mark"
         );
     }
+}
+
+#[test]
+fn the_window_is_a_glass_panel_whose_title_bar_is_only_its_buttons() {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let mut run = start(Appearance::Dark, 1.0);
+    let spec = run
+        .driver
+        .window_system_mut()
+        .spec(run.window)
+        .unwrap()
+        .clone();
+    assert_eq!(spec.decorations, DecorationMode::Unified);
+    assert_eq!(about_app::DECORATIONS, DecorationMode::Unified);
+    assert_eq!(
+        about_app::BACKGROUND,
+        WindowBackground::Surface {
+            surface: Surface::Sidebar,
+            radius: WINDOW_CORNER_RADIUS,
+            alpha: 1.0,
+        },
+        "the sidebar's glass under the whole window, with the window's corners"
+    );
+    assert_eq!(
+        metrics::TOP,
+        SIDEBAR_TOP,
+        "the mark starts under the row of the window's buttons"
+    );
 }

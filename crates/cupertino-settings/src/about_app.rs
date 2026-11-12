@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use cupertino_kit::controls::{Grid, Spacer, TextRole};
+use cupertino_kit::controls::{Grid, Spacer, TextRole, WindowDragArea, PANEL_WINDOW_BACKGROUND};
 use cupertino_kit::core::{
     next_resource_id, Change, CommandRegistry, Event, EventCx, MeasureCx, PaintCx, Propagation,
     SemanticsCx, Shortcut, Widget,
@@ -78,13 +78,16 @@ pub fn run(activation: String) -> Result<()> {
     Ok(cupertino_kit::app::run::<AboutApp>()?)
 }
 
-/// The rows wrapped as the window's body text sets them.
+/// The text role of the rows' labels and values.
+const ROW_ROLE: TextRole = TextRole::Caption;
+
+/// The rows wrapped as the window sets them, in the theme's caption type ([`ROW_ROLE`]).
 pub fn layout(about: &About, text: &TextSystem, theme: &ThemeTokens) -> Layout {
-    let body = theme.type_scale.body;
+    let caption = theme.type_scale.caption;
     about.layout(|line| {
         let style = TextStyle {
-            weight: FontWeight(body.weight),
-            ..TextStyle::new(metrics::ROW_TEXT)
+            weight: FontWeight(caption.weight),
+            ..TextStyle::new(caption.size)
         };
         text.measure(
             &AttributedText::plain(line, style),
@@ -238,28 +241,32 @@ impl Application for AboutApp {
                 size,
                 min_size: Some(size),
                 max_size: Some(size),
-                decorations: DecorationMode::Preferred,
+                decorations: DECORATIONS,
                 foreign_parent: None,
                 input_region: None,
             },
             shortcuts: shortcuts(),
             on_close: Some(Message::Close),
-            background: WindowBackground::Theme,
-            content: content(&window.about, &window.layout),
+            background: BACKGROUND,
+            // moved by a press anywhere the button does not take
+            content: Element::from(WindowDragArea {
+                content: content(&window.about, &window.layout),
+            }),
             popup: None,
             menus: None,
         }]
     }
 }
 
-fn text(content: &str, role: TextRole, secondary: bool) -> Element<Message> {
-    sized_text(content, role, secondary, 13.0)
-}
+/// The window's title bar is only its control buttons, over the top of the content, which runs to every edge.
+pub const DECORATIONS: DecorationMode = DecorationMode::Unified;
+/// The glass of a panel window under the whole window, its corners the window's.
+pub const BACKGROUND: WindowBackground = PANEL_WINDOW_BACKGROUND;
 
-/// [`text`] at `size` points.
-fn sized_text(content: &str, role: TextRole, secondary: bool, size: f32) -> Element<Message> {
+/// `content` set in `role`, which decides its size.
+fn text(content: &str, role: TextRole, secondary: bool) -> Element<Message> {
     Element::new(Text {
-        content: AttributedText::plain(content, TextStyle::new(size)),
+        content: AttributedText::plain(content, TextStyle::new(13.0)),
         role,
         wrap: true,
         secondary,
@@ -281,8 +288,6 @@ fn cell(align: Align, children: Vec<Element<Message>>) -> Element<Message> {
 /// The approved layout as a grid of fixed tracks, so every row sits where [`Layout`] put it and the window is its size.
 fn content(about: &About, layout: &Layout) -> Element<Message> {
     use metrics::*;
-    let centre = f64::from(WIDTH) / 2.0;
-    let column = centre - COLUMN_GAP / 2.0 - PADDING;
     let mut rows = vec![
         Track::Fixed(NAME_Y - TOP),
         Track::Fixed(VERSION_Y - NAME_Y),
@@ -301,16 +306,13 @@ fn content(about: &About, layout: &Layout) -> Element<Message> {
         let label = if row.label.is_empty() {
             Element::new(Spacer { min: 0.0 })
         } else {
-            cell(
-                Align::End,
-                vec![sized_text(row.label, TextRole::Body, true, ROW_TEXT)],
-            )
+            cell(Align::End, vec![text(row.label, ROW_ROLE, true)])
         };
         children.push(label);
         children.push(Element::new(Spacer { min: 0.0 }));
         children.push(cell(
             Align::Start,
-            vec![sized_text(&value.value, TextRole::Body, false, ROW_TEXT)],
+            vec![text(&value.value, ROW_ROLE, false)],
         ));
     }
     if layout.rows.is_empty() {
@@ -320,7 +322,8 @@ fn content(about: &About, layout: &Layout) -> Element<Message> {
     rows.push(Track::Fixed(layout.button.h));
     children.push(whole(vec![Element::new(Button {
         label: MORE_INFO.into(),
-        role: ButtonRole::Default,
+        // a plain grey button: the window asks nothing, so it has no default action to colour
+        role: ButtonRole::Normal,
         style: ButtonStyle::Bordered,
         enabled: true,
         busy: false,
@@ -329,9 +332,9 @@ fn content(about: &About, layout: &Layout) -> Element<Message> {
     .width(layout.button.w)]));
     Element::new(Grid {
         columns: vec![
-            Track::Fixed(column),
-            Track::Fixed(COLUMN_GAP),
-            Track::Fixed(column),
+            Track::Fixed(LABEL_COLUMN),
+            Track::Fixed(LABEL_END + VALUE_START),
+            Track::Fixed(VALUE_COLUMN),
         ],
         rows,
         padding: Insets::new(TOP, PADDING, BOTTOM, PADDING),

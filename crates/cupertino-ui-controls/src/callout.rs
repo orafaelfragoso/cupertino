@@ -6,13 +6,15 @@ use cupertino_geometry::{Point, Size};
 use cupertino_ui_core::{
     Change, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured};
+use cupertino_ui_layout::{
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, SizeSpec,
+};
 use cupertino_ui_render::{FillRule, Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_theme::Surface;
 
-/// How wide each layer is, from the one at the panel to the tip, as a share of the pointer's width: they narrow in even
-/// steps, so the union's outline is a straight taper with a rounded tip.
-const LAYER_WIDTH: [f64; 6] = [1.0, 0.8, 0.62, 0.44, 0.28, 0.16];
+/// How wide each layer is, from the one at the panel to the tip, as a share of the pointer's width: they narrow a little
+/// faster towards the tip, so the union's outline is a taper with soft shoulders and a small rounded tip.
+const LAYER_WIDTH: [f64; 6] = [1.0, 0.787, 0.587, 0.402, 0.235, 0.092];
 
 /// A callout's pointer `width` wide where it leaves the panel and `depth` deep, as glass of the container `glass` names
 /// or, where `surface` shows no material, a filled outline of `surface`'s fill.
@@ -33,6 +35,11 @@ impl CalloutPointer {
     pub fn element<M: Clone + 'static>(self) -> Element<M> {
         Element::new(self)
     }
+}
+
+/// How far a smooth union of blend `spacing` reaches past two shapes where they meet: a quarter of the blend.
+fn union_swell(spacing: f64) -> f64 {
+    spacing.max(0.0) / 4.0
 }
 
 /// The outline of the pointer: from the panel's edge the sides curve in to a rounded tip.
@@ -62,12 +69,21 @@ impl<M: Clone + 'static> Widget<M> for CalloutPointer {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
-        LayoutSpec::new(ContainerKind::Stack {
-            axis: Axis::Vertical,
-            spacing: 0.0,
-            align: Align::Center,
-            justify: Justify::Start,
-        })
+        LayoutSpec {
+            // the whole depth, though the layers stop short of it
+            height: SizeSpec::Fixed(self.depth),
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Vertical,
+                spacing: 0.0,
+                align: Align::Center,
+                // the layers stay against the panel; the room the union's swell takes is left at the tip's end
+                justify: if self.up {
+                    Justify::End
+                } else {
+                    Justify::Start
+                },
+            })
+        }
     }
 
     fn take_children(&mut self) -> Vec<Element<M>> {
@@ -76,11 +92,14 @@ impl<M: Clone + 'static> Widget<M> for CalloutPointer {
         if self.up {
             layers.reverse();
         }
+        // the smooth union swells the outline past the last layer by up to a quarter of its blend: the layers stop that
+        // short of `depth`, so the tip lands at it
+        let stack = (self.depth - union_swell(self.glass.spacing)).max(self.depth * 0.5);
         layers
             .into_iter()
             .map(|(i, share)| {
                 Element::new(Layer {
-                    size: Size::new(self.width * share, self.depth / LAYER_WIDTH.len() as f64),
+                    size: Size::new(self.width * share, stack / LAYER_WIDTH.len() as f64),
                     glass: self.glass,
                 })
                 .key(format!("layer-{i}"))

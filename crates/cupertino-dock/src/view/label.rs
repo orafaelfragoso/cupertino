@@ -35,7 +35,7 @@ const STATUS_SHARE: f32 = 0.6;
 /// The capsule's corner radius: half a one-line capsule, and a two-line capsule keeps it.
 pub const RADIUS: f64 = 13.0;
 /// The pointer under the capsule: its width and its depth.
-pub const POINTER_WIDTH: f64 = 20.0;
+pub const POINTER_WIDTH: f64 = 14.0;
 pub const POINTER_DEPTH: f64 = 6.5;
 /// How far the pointer's tip stands above the bar's top edge (the label's window ends at the tip).
 pub const GAP: f64 = 3.0;
@@ -44,7 +44,7 @@ const SIDE_GAP: f64 = 3.0;
 /// The glass container the capsule and its pointer share, and how far their outlines blend into each other in points:
 /// the pointer's sides curve out into the capsule's bottom edge as one piece of glass.
 const GLASS_CONTAINER: u32 = 1;
-const GLASS_BLEND: f64 = 7.0;
+const GLASS_BLEND: f64 = 4.0;
 /// The capsule's fill where the session shows no material (Reduce Transparency, Increase Contrast, no desktop
 /// effects), in the light and the dark appearance.
 const FILL: [Color; 2] = [

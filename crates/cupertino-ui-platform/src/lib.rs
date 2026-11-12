@@ -252,8 +252,8 @@ impl GlassStyle {
             Self::Dense,
             Self::Module,
         ]
-            .into_iter()
-            .find(|s| s.material() == name)
+        .into_iter()
+        .find(|s| s.material() == name)
     }
 }
 

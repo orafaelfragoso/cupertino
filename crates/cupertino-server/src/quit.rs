@@ -391,7 +391,7 @@ impl Cupertino {
         }
     }
 
-    /// `SetAppearance`: store `appearance` in `compositor.json`, then apply it.
+    /// `SetAppearance`: apply `appearance`, and store it in `compositor.json` on the settings writer's thread.
     pub fn set_session_appearance(&mut self, appearance: &str) -> Result<(), Refusal> {
         use cupertino_defaults::compositor::{AppearanceName, CompositorSettings};
         let (name, value) = match appearance {
@@ -402,13 +402,18 @@ impl Cupertino {
         };
         match self.live.paths.compositor.clone() {
             Some(path) => {
+                // read here, so a file that cannot be read refuses the change; written after it is applied
                 let (mut file, _) = CompositorSettings::load(&path, None).map_err(|e| Refusal::Failed(format!("reading {}: {e}", path.display())))?;
                 file.appearance = Some(name);
-                file.store(&path).map_err(|e| Refusal::Failed(format!("writing {}: {e}", path.display())))?;
+                crate::store_later::store_later(move || {
+                    if let Err(e) = file.store(&path) {
+                        tracing::error!(path = %path.display(), error = %e, "cannot store the appearance: it lasts until the server stops");
+                    }
+                });
                 // the watcher sees the key as it is now: the change is applied here, once
                 self.live.files.compositor.appearance = Some(name);
             }
-            // store, then apply: what cannot be stored is not applied either
+            // without a settings directory nothing is applied, as nothing could last
             None => return Err(Refusal::Failed("no settings directory (neither XDG_CONFIG_HOME nor HOME is set): the appearance cannot be stored".into())),
         }
         self.set_appearance(value);

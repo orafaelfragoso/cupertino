@@ -113,14 +113,19 @@ impl Accessibility {
     }
 
     /// The person changed the settings to `settings`: the keys that differ are theirs from now on, whether or not the
-    /// file could be written.
+    /// file could be written. The file is written on the settings writer's thread.
     fn change(&mut self, settings: AccessibilitySettings) {
         self.personal.record(&self.settings, &settings);
         self.settings = settings;
-        let Some(path) = &self.store else { return };
-        if let Err(e) = self.personal.store(path) {
-            tracing::error!(path = %path.display(), error = %e, "cannot store the accessibility settings: the change lasts until the server stops");
-        }
+        let Some(path) = self.store.clone() else {
+            return;
+        };
+        let personal = self.personal.clone();
+        crate::store_later::store_later(move || {
+            if let Err(e) = personal.store(&path) {
+                tracing::error!(path = %path.display(), error = %e, "cannot store the accessibility settings: the change lasts until the server stops");
+            }
+        });
     }
 }
 

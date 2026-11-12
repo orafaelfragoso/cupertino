@@ -249,7 +249,9 @@ fn in_a_session(h: &mut Harness, dir: &std::path::Path) -> std::path::PathBuf {
     out
 }
 
+/// `accessibility.conf` in `dir` once the server's pending settings writes are done.
 fn stored(dir: &std::path::Path) -> String {
+    cupertino_server::store_later::flush();
     std::fs::read_to_string(dir.join("accessibility.conf")).unwrap_or_default()
 }
 

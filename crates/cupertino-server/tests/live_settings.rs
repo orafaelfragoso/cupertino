@@ -196,8 +196,7 @@ fn the_appearance_setter_stores_the_key_and_applies_it_once() {
     let reloads = h.state.live.reloads;
     assert_eq!(h.state.set_session_appearance("dark"), Ok(()));
     assert!(h.state.config.is_dark());
-    let written: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let written: serde_json::Value = serde_json::from_str(&stored(&path)).unwrap();
     assert_eq!(
         written,
         serde_json::json!({"appearance": "dark", "future_key": 1, "keybindings": {"Super+t": "spawn-terminal"}}),
@@ -231,7 +230,7 @@ fn without_a_settings_directory_the_appearance_setter_refuses_and_applies_nothin
     ));
     assert!(
         !h.state.config.is_dark(),
-        "store, then apply: nothing was stored, nothing applies"
+        "nowhere to store it: nothing applies"
     );
 }
 
@@ -354,7 +353,7 @@ fn a_person_who_changed_one_key_keeps_following_the_machine_for_the_rest() {
     h.state
         .set_display_option(DisplayOption::ReduceTransparency, true);
     assert_eq!(
-        std::fs::read_to_string(&own).unwrap(),
+        stored(&own),
         "reduce_transparency = on\n",
         "only the changed key is written"
     );
@@ -378,10 +377,7 @@ fn a_key_the_person_set_back_to_the_machines_value_stays_theirs() {
         .set_display_option(DisplayOption::ReduceMotion, true);
     h.state.set_system_accessibility(machine(false));
     assert!(h.state.display_options().reduce_motion);
-    assert_eq!(
-        std::fs::read_to_string(&own).unwrap(),
-        "reduce_motion = on\n"
-    );
+    assert_eq!(stored(&own), "reduce_motion = on\n");
 }
 
 #[test]
@@ -711,4 +707,10 @@ fn the_session_interface_refuses_a_host_process_that_is_not_the_agent() {
         "light",
         "the appearance was not set"
     );
+}
+
+/// The file at `path` once the server's pending settings writes are done.
+fn stored(path: &std::path::Path) -> String {
+    cupertino_server::store_later::flush();
+    std::fs::read_to_string(path).unwrap()
 }

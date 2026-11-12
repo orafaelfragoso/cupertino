@@ -606,36 +606,9 @@ fn shadow(cx: &mut PaintCx<'_>, rect: Rect, holes: &[(Rect, f64)]) {
     }
 }
 
-/// A tile's light on its glass: a soft glow under its top edge, then a fine bright rim strongest along the top and
-/// bottom and faint down the sides, so a tile reads as a raised piece of glass on any wallpaper.
+/// A tile's edge on its glass: the fine dark outline down its sides. The compositor lights the rim itself, in the colour
+/// of what lies behind the tile, so the tile reads as a raised piece of glass on any wallpaper.
 fn lift(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
-    let white = |a: f32| Color::new(1.0, 1.0, 1.0, a);
-    let stop = |offset: f32, a: f32| GradientStop {
-        offset,
-        color: white(a),
-    };
-    let height = rect.height().max(1.0);
-    // the glows: from the top edge down and from the bottom edge up
-    let top: Vec<GradientStop> = TOP_GLOW
-        .iter()
-        .map(|&(d, a)| stop((d / height).min(0.5) as f32, a))
-        .collect();
-    let bottom: Vec<GradientStop> = BOTTOM_GLOW
-        .iter()
-        .map(|&(d, a)| stop((1.0 - d / height).max(0.5) as f32, a))
-        .rev()
-        .collect();
-    let mut stops = top;
-    stops.push(stop(0.5, 0.0));
-    stops.extend(bottom);
-    cx.push(PaintOp::Fill {
-        shape: Shape::RoundedRect { rect, radius },
-        paint: Paint::Linear {
-            start: Point::new(rect.min_x(), rect.min_y()),
-            end: Point::new(rect.min_x(), rect.max_y()),
-            stops,
-        },
-    });
     paint_glass_edge(
         cx,
         rect,
@@ -643,10 +616,10 @@ fn lift(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
         GlassEdge {
             outline: OUTLINE,
             outline_width: OUTLINE_WIDTH,
-            rim: RIM,
-            rim_bottom: BOTTOM_RIM,
-            rim_side: RIM_SIDE,
-            rim_width: RIM_WIDTH,
+            rim: 0.0,
+            rim_bottom: 0.0,
+            rim_side: 0.0,
+            rim_width: 0.0,
         },
     );
 }

@@ -2126,8 +2126,6 @@ fn glass_pieces(
     if !callout {
         use cupertino_theme::GlassStyle;
         match spec.style {
-            // the client paints the rim and glow of a module's edge itself
-            GlassStyle::Module => container.params.highlight.amount = 0.0,
             // dense glass has a soft glow under its top and bottom edges; its rim is drawn apart (`inner_rim_item` for a
             // popup, by the client for a card)
             GlassStyle::Dense => {

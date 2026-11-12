@@ -146,10 +146,10 @@ mod tests {
     #[test]
     fn the_open_width_is_its_own_within_half_the_toolbar_and_the_title() {
         assert_eq!(open_width(WIDE), OPEN);
-        // 700 pt: the group, the title's room, the controls and the gaps leave 700 - 16 - 489.5
-        assert_eq!(open_width(700.0), 194.5);
-        // 540 pt: they leave 34.5, less than the rest: the field stays at rest
-        assert_eq!(open_width(540.0), REST);
+        // 500 pt: the group, the title's room, the controls and the gaps leave 500 - 16 - 321.5
+        assert_eq!(open_width(500.0), 162.5);
+        // 360 pt: they leave 22.5, less than the rest: the field stays at rest
+        assert_eq!(open_width(360.0), REST);
         for toolbar in [200.0, 300.0, 400.0, 600.0, 1000.0, 2000.0] {
             let w = open_width(toolbar);
             assert!((REST..=OPEN).contains(&w), "{toolbar}: {w}");
@@ -157,7 +157,7 @@ mod tests {
                 w <= toolbar * window::SEARCH_MAX_SHARE || w == REST,
                 "{toolbar}: {w}"
             );
-            let room = toolbar - 2.0 * window::TOOLBAR_INSET - 73.0 - 8.0 - 60.0 - 8.0 - 340.5;
+            let room = toolbar - 2.0 * window::TOOLBAR_INSET - 73.0 - 8.0 - 60.0 - 8.0 - 172.5;
             assert!(w <= room.max(REST), "{toolbar}: {w} passes the title");
         }
     }
@@ -214,8 +214,8 @@ mod tests {
         width.want(true);
         width.tick(0.0, WIDE, true);
         width.tick(1.0, WIDE, true);
-        width.tick(1.5, 700.0, true);
-        assert_eq!(width.width(), open_width(700.0));
+        width.tick(1.5, 500.0, true);
+        assert_eq!(width.width(), open_width(500.0));
         assert!(width.width() < OPEN);
         assert!(!width.animating());
     }

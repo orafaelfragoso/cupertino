@@ -40,6 +40,10 @@ pub enum GlassStyle {
     /// tone compression (a lower white point, a lifted black and a little less saturation), so a big surface softens
     /// the scene behind it, and a broad drop shadow of its own.
     LargePanel,
+    /// The glass of a floating bar of icons (the Dock): the clear glass optics (a wide bending edge, a bright rim along
+    /// the top and bottom) over a face that barely changes the scene, only a small lift of white, so the wallpaper stays
+    /// readable through it.
+    Bar,
 }
 
 /// Everything besides the shape's size that selects a recipe.
@@ -306,6 +310,30 @@ fn clear_face(dark: bool) -> GlassFace {
     }
 }
 
+/// How strongly the rim light of bar glass shows along its top and bottom edges.
+const BAR_HIGHLIGHT_AMOUNT: f32 = 0.6;
+/// The white laid over bar glass in the dark appearance: a faint lift, so the bar is only just paler than the scene.
+const BAR_LIFT_DARK: f32 = 0.03;
+/// The white laid over bar glass in the light appearance: a little more, still clear enough to show the scene.
+const BAR_LIFT_LIGHT: f32 = 0.12;
+
+/// The face of bar glass: the blurred scene as it is, with a small lift of white.
+fn bar_face(dark: bool) -> GlassFace {
+    GlassFace {
+        saturation: 1.0,
+        white: 1.0,
+        black: 0.0,
+        clamp: 1.0,
+        max_luma: 1.0,
+        fill: [
+            1.0,
+            1.0,
+            1.0,
+            if dark { BAR_LIFT_DARK } else { BAR_LIFT_LIGHT },
+        ],
+    }
+}
+
 /// Face colours with Reduce Transparency.
 fn reduced_transparency_face(dark: bool, style: GlassStyle) -> GlassFace {
     match (style, dark) {
@@ -436,6 +464,7 @@ impl GlassParams {
             GlassStyle::Regular => Self::regular(dark, s),
             GlassStyle::Clear => Self::clear(dark, s),
             GlassStyle::LargePanel => Self::large_panel(dark, s),
+            GlassStyle::Bar => Self::bar(dark, s),
         };
         if mode.increase_contrast {
             if let Some(face) = increased_contrast_face(dark, mode.style) {
@@ -454,7 +483,7 @@ impl GlassParams {
             p.shadow.ring_stroke = 0.0;
             p.shadow.ring_offset = 0.0;
             match mode.style {
-                GlassStyle::Regular | GlassStyle::LargePanel => {
+                GlassStyle::Regular | GlassStyle::LargePanel | GlassStyle::Bar => {
                     // the large panel's wider blur gives way to regular glass's whole blur recipe
                     p.blur = Self::regular(dark, s).blur;
                     p.blur.radius = REDUCED_TRANSPARENCY_BLUR;
@@ -550,6 +579,14 @@ impl GlassParams {
             },
         ];
         p.shadow.opacity = 1.0;
+        p
+    }
+
+    /// The bar glass: clear glass with the bar face ([`bar_face`]) and a brighter rim.
+    fn bar(dark: bool, s: f32) -> Self {
+        let mut p = Self::clear(dark, s);
+        p.face = bar_face(dark);
+        p.highlight.amount = BAR_HIGHLIGHT_AMOUNT;
         p
     }
 

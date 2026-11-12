@@ -184,6 +184,7 @@ fn set_look(
                 GlassStyle::Regular => cupertino_protocol_app::GlassStyle::Regular,
                 GlassStyle::Clear => cupertino_protocol_app::GlassStyle::Clear,
                 GlassStyle::LargePanel => cupertino_protocol_app::GlassStyle::LargePanel,
+                GlassStyle::Bar => cupertino_protocol_app::GlassStyle::Bar,
             };
             backdrop.set_glass(style, g.container, g.spacing)
         }

@@ -46,6 +46,8 @@ pub enum GlassStyle {
     Clear,
     /// The regular glass of a large floating panel, toned further towards the middle, with a soft drop shadow.
     LargePanel,
+    /// The glass of a floating bar of icons, clear glass optics over a face that barely changes the scene.
+    Bar,
 }
 
 impl GlassStyle {
@@ -146,6 +148,9 @@ impl Backdrop {
                 WireStyle::Regular
             }
             GlassStyle::LargePanel => WireStyle::LargePanel,
+            // a server before it draws the bar as clear glass
+            GlassStyle::Bar if self.proxy.version() < BAR_VERSION => WireStyle::Clear,
+            GlassStyle::Bar => WireStyle::Bar,
         };
         self.proxy.set_glass(style, container, spacing);
         Ok(())
@@ -166,6 +171,9 @@ const TONE_VERSION: u32 = 7;
 
 /// The version of `cupertino_backdrop_v1` that has the large panel glass style.
 const LARGE_PANEL_VERSION: u32 = 10;
+
+/// The version of `cupertino_backdrop_v1` that has the bar glass style.
+const BAR_VERSION: u32 = 12;
 
 impl Dispatch<CupertinoBackdropV1, BackdropData> for State {
     fn event(

@@ -750,6 +750,27 @@ pub fn disabled_controls(surface: &WlSurface) -> DisabledControls {
     })
 }
 
+/// The recipe drawn in place of a name that is not a recipe.
+const FALLBACK_MATERIAL: &str = "Menu";
+
+/// Log, once per name, that a client asked for a material recipe that does not exist.
+fn warn_unknown_material(name: &str) {
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let mut seen = SEEN
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    // a client could send a new name for every request: stop keeping them past a few
+    if seen.len() < 64 && seen.insert(name.to_owned()) {
+        tracing::warn!(
+            material = name,
+            fallback = FALLBACK_MATERIAL,
+            "unknown material recipe, using the fallback"
+        );
+    }
+}
+
 impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
     fn request(
         state: &mut Self,
@@ -766,18 +787,18 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                     state.appearance(),
                     state.display_options().reduce_transparency,
                 );
-                if glass_material(&name).is_none()
+                let name = if glass_material(&name).is_none()
                     && !state
                         .render
                         .as_ref()
                         .is_some_and(|r| r.recipe(&name, appearance, reduce_transparency).is_some())
                 {
-                    resource.post_error(
-                        Error::UnknownMaterial,
-                        format!("{name:?} is not a material recipe"),
-                    );
-                    return;
-                }
+                    // an unknown name is no reason to drop the client: say so once and draw the stand-in recipe
+                    warn_unknown_material(&name);
+                    FALLBACK_MATERIAL.to_owned()
+                } else {
+                    name
+                };
                 // the last of set_material and set_glass wins
                 data.edit(|e| {
                     e.material = Some(name);

@@ -404,7 +404,7 @@ async fn await_owner(conn: &zbus::Connection, name: &'static str) -> zbus::Resul
 }
 
 /// Follow the owner of `name` on a thread of its own, for as long as the connection lives.
-fn watch_owner(conn: &zbus::Connection, name: &'static str, changed: OwnerChanged) {
+fn watch_owner(conn: &zbus::Connection, name: &'static str, changed: SharedWatch) {
     let conn = zbus::blocking::Connection::from(conn.clone());
     let spawned = std::thread::Builder::new()
         .name("cupertino-owner-watch".into())
@@ -418,9 +418,10 @@ fn watch_owner(conn: &zbus::Connection, name: &'static str, changed: OwnerChange
                     return;
                 }
             };
-            changed();
+            let notify = || (changed.lock().unwrap_or_else(|e| e.into_inner()))();
+            notify();
             for _ in changes {
-                changed();
+                notify();
             }
         });
     if let Err(e) = spawned {
@@ -449,6 +450,58 @@ async fn own_credentials(conn: &zbus::Connection) -> Option<ConnectionCredential
         .ok()
 }
 
+/// How long the worker waits before it connects again after the first failure, and the longest it waits.
+pub(crate) const RECONNECT_FIRST: std::time::Duration = std::time::Duration::from_millis(250);
+pub(crate) const RECONNECT_LONGEST: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// A watch on the owner of a name, shared by the connections that carry it.
+type SharedWatch = std::sync::Arc<std::sync::Mutex<OwnerChanged>>;
+/// A callback waiting for a name to have an owner, taken by the one that fires it.
+type SharedAwait = std::sync::Arc<std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>>;
+
+/// What the worker keeps across connections: what it was asked to follow, so a new connection follows it again.
+#[derive(Default)]
+struct Kept {
+    watches: Vec<(&'static str, SharedWatch)>,
+    awaiting: Vec<(&'static str, SharedAwait)>,
+    /// The latest variables and defaults published.
+    published: Option<(Vec<(String, String)>, Vec<(String, String)>)>,
+}
+
+/// How a connection's serving ended.
+enum Ended {
+    /// The bus went away.
+    Closed,
+    /// Nobody can send jobs any more.
+    NoMoreJobs,
+}
+
+/// The output of whichever of two futures completes first.
+pub(crate) enum Either<A, B> {
+    First(A),
+    Second(B),
+}
+
+/// Wait for the first of two futures (the first when both are ready).
+pub(crate) async fn either<A: std::future::Future, B: std::future::Future>(
+    a: A,
+    b: B,
+) -> Either<A::Output, B::Output> {
+    let (mut a, mut b) = (std::pin::pin!(a), std::pin::pin!(b));
+    std::future::poll_fn(move |cx| {
+        if let std::task::Poll::Ready(v) = a.as_mut().poll(cx) {
+            return std::task::Poll::Ready(Either::First(v));
+        }
+        match b.as_mut().poll(cx) {
+            std::task::Poll::Ready(v) => std::task::Poll::Ready(Either::Second(v)),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    })
+    .await
+}
+
+/// Serve the jobs on the bus, and when the connection drops, connect again after a growing pause, take up what was
+/// being followed and go on. While no connection is there, calls are dropped and owner checks answered as without a bus.
 async fn worker(
     address: Option<String>,
     rx: async_channel::Receiver<Job>,
@@ -457,60 +510,196 @@ async fn worker(
     identifying: Identifying,
     calls: ShellCalls,
 ) {
-    let conn = match async { bus(address.as_deref())?.build().await }.await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::info!(error = %e, "no session bus: the shell toggles and media keys are unavailable");
-            return;
+    let mut keep = Kept::default();
+    let mut pause = RECONNECT_FIRST;
+    let mut first = true;
+    loop {
+        match async { bus(address.as_deref())?.build().await }.await {
+            Ok(conn) => {
+                if first {
+                    first = false;
+                } else {
+                    tracing::info!("the session bus is back: the shell toggles, the session interface and the watches resume");
+                }
+                pause = RECONNECT_FIRST;
+                match serve(
+                    &conn,
+                    &rx,
+                    &login_missing,
+                    &login,
+                    &identifying,
+                    &calls,
+                    &mut keep,
+                )
+                .await
+                {
+                    Ended::NoMoreJobs => return,
+                    Ended::Closed => {
+                        tracing::warn!("the session bus connection dropped: connecting again")
+                    }
+                }
+            }
+            Err(e) => {
+                if first {
+                    first = false;
+                    tracing::info!(error = %e, "no session bus: the shell toggles and media keys are unavailable until it is there");
+                } else {
+                    tracing::debug!(error = %e, "the session bus is still not there");
+                }
+                pause = (pause * 2).min(RECONNECT_LONGEST);
+            }
         }
-    };
-    if let Some(notice) = own_credentials(&conn)
+        // wait out the pause; whatever is asked meanwhile is refused or kept for the next connection
+        let deadline = Instant::now() + pause;
+        // nothing else runs on this thread without a connection, so it can look for jobs between short sleeps
+        while Instant::now() < deadline {
+            loop {
+                match rx.try_recv() {
+                    Ok(job) => refuse(job, &mut keep, &calls),
+                    Err(async_channel::TryRecvError::Empty) => break,
+                    Err(async_channel::TryRecvError::Closed) => return,
+                }
+            }
+            std::thread::sleep(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(std::time::Duration::from_millis(50)),
+            );
+        }
+    }
+}
+
+/// Deal with a job while there is no connection: a call is over, a check finds no bus, what is to be followed or
+/// published waits for the next connection.
+fn refuse(job: Job, keep: &mut Kept, calls: &ShellCalls) {
+    match job {
+        Job::Call(_) => {
+            calls.0 .1.fetch_add(1, Ordering::SeqCst);
+        }
+        Job::Owner(query) => (query.reply)(Err(OwnerRefusal::NoBus)),
+        Job::WatchOwner(name, changed) => keep
+            .watches
+            .push((name, std::sync::Arc::new(std::sync::Mutex::new(changed)))),
+        Job::AwaitOwner(name, owned) => keep.awaiting.push((
+            name,
+            std::sync::Arc::new(std::sync::Mutex::new(Some(owned))),
+        )),
+        Job::Publish(variables, defaults) => keep.published = Some((variables, defaults)),
+    }
+}
+
+/// Follow the owner of `name` for `conn`'s lifetime.
+fn spawn_await(conn: &zbus::Connection, name: &'static str, owned: SharedAwait) {
+    let conn = conn.clone();
+    conn.executor()
+        .clone()
+        .spawn(
+            {
+                let conn = conn.clone();
+                async move {
+                    match await_owner(&conn, name).await {
+                        Ok(()) => {
+                            let fire = owned.lock().unwrap_or_else(|e| e.into_inner()).take();
+                            if let Some(fire) = fire {
+                                fire();
+                            }
+                        }
+                        Err(e) => tracing::warn!(name, error = %e, "cannot wait for the owner of a bus name"),
+                    }
+                }
+            },
+            "cupertino-await-owner",
+        )
+        .detach();
+}
+
+/// Publish the session's variables on `conn`.
+fn spawn_publish(
+    conn: &zbus::Connection,
+    variables: Vec<(String, String)>,
+    defaults: Vec<(String, String)>,
+) {
+    let conn = conn.clone();
+    conn.executor()
+        .clone()
+        .spawn(
+            {
+                let conn = conn.clone();
+                async move {
+                    report_publication(
+                        crate::activation_env::publish(
+                            &conn,
+                            &pairs(&variables),
+                            &pairs(&defaults),
+                        )
+                        .await,
+                    )
+                }
+            },
+            "cupertino-activation-env",
+        )
+        .detach();
+}
+
+/// Serve the jobs on `conn` until it closes or there are no more jobs; first take up what was kept from earlier
+/// connections.
+async fn serve(
+    conn: &zbus::Connection,
+    rx: &async_channel::Receiver<Job>,
+    login_missing: &LoginMissing,
+    login: &SharedLoginTrust,
+    identifying: &Identifying,
+    calls: &ShellCalls,
+    keep: &mut Kept,
+) -> Ended {
+    if let Some(notice) = own_credentials(conn)
         .await
         .as_ref()
         .and_then(cupertino_peer::process_fd_notice)
     {
         tracing::warn!("{notice}: the menu bar's menus are not shown");
     }
-    while let Ok(job) = rx.recv().await {
+    for (name, changed) in &keep.watches {
+        watch_owner(conn, name, changed.clone());
+    }
+    keep.awaiting
+        .retain(|(_, owned)| owned.lock().unwrap_or_else(|e| e.into_inner()).is_some());
+    for (name, owned) in &keep.awaiting {
+        spawn_await(conn, name, owned.clone());
+    }
+    if let Some((variables, defaults)) = keep.published.clone() {
+        spawn_publish(conn, variables, defaults);
+    }
+    loop {
+        let job = match either(rx.recv(), conn.closed()).await {
+            Either::First(Ok(job)) => job,
+            Either::First(Err(_)) => return Ended::NoMoreJobs,
+            Either::Second(()) => return Ended::Closed,
+        };
         let conn = conn.clone();
+        let (login_missing, login, identifying, calls) = (
+            login_missing.clone(),
+            login.clone(),
+            identifying.clone(),
+            calls.clone(),
+        );
         let what = match job {
             Job::Call(what) => what,
             Job::WatchOwner(name, changed) => {
-                watch_owner(&conn, name, changed);
+                let changed: SharedWatch = std::sync::Arc::new(std::sync::Mutex::new(changed));
+                watch_owner(&conn, name, changed.clone());
+                keep.watches.push((name, changed));
                 continue;
             }
             Job::AwaitOwner(name, owned) => {
-                conn.executor()
-                    .clone()
-                    .spawn(
-                        async move {
-                            match await_owner(&conn, name).await {
-                                Ok(()) => owned(),
-                                Err(e) => tracing::warn!(name, error = %e, "cannot wait for the owner of a bus name"),
-                            }
-                        },
-                        "cupertino-await-owner",
-                    )
-                    .detach();
+                let owned: SharedAwait = std::sync::Arc::new(std::sync::Mutex::new(Some(owned)));
+                spawn_await(&conn, name, owned.clone());
+                keep.awaiting.push((name, owned));
                 continue;
             }
             Job::Publish(variables, defaults) => {
-                conn.executor()
-                    .clone()
-                    .spawn(
-                        async move {
-                            report_publication(
-                                crate::activation_env::publish(
-                                    &conn,
-                                    &pairs(&variables),
-                                    &pairs(&defaults),
-                                )
-                                .await,
-                            )
-                        },
-                        "cupertino-activation-env",
-                    )
-                    .detach();
+                keep.published = Some((variables.clone(), defaults.clone()));
+                spawn_publish(&conn, variables, defaults);
                 continue;
             }
             Job::Owner(OwnerQuery {
@@ -520,7 +709,6 @@ async fn worker(
                 expires,
                 reply,
             }) => {
-                let identifying = identifying.clone();
                 conn.executor()
                     .clone()
                     .spawn(
@@ -539,9 +727,6 @@ async fn worker(
             call(&conn, what, &login_missing, &login).await;
             calls.0 .1.fetch_add(1, Ordering::SeqCst);
         } else {
-            let login_missing = login_missing.clone();
-            let login = login.clone();
-            let calls = calls.clone();
             conn.executor()
                 .clone()
                 .spawn(

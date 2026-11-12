@@ -718,37 +718,82 @@ pub fn start_session_service_on(state: &mut Cupertino, address: Option<String>) 
     // the values the change signals were last emitted for
     let mut emitted = state.session_settings();
     let spawned = std::thread::Builder::new().name("cupertino-session".into()).spawn(move || {
-        let served = zbus::block_on(async {
-            let iface = Session1 { calls: std::sync::Mutex::new(calls), settings: Arc::clone(&settings) };
-            let conn = crate::dbus::bus(address.as_deref())?.serve_at(OBJECT_PATH, iface)?.name(BUS_NAME)?.build().await?;
-            let emitter = SignalEmitter::new(&conn, OBJECT_PATH)?;
-            let served = conn.object_server().interface::<_, Session1>(OBJECT_PATH).await?;
-            while let Ok(out) = signals_rx.recv().await {
-                match out {
-                    BusOut::ApplicationQuit(app_id) => Session1::application_quit(&emitter, &app_id).await?,
-                    BusOut::Settings(now) => {
-                        let before = std::mem::replace(&mut emitted, now.clone());
-                        let iface = served.get().await;
-                        if before.appearance != now.appearance {
-                            iface.appearance_changed(&emitter).await?;
-                        }
-                        if before.accessibility != now.accessibility {
-                            iface.accessibility_changed(&emitter).await?;
-                        }
-                        if before.mice != now.mice {
-                            iface.mice_changed(&emitter).await?;
-                        }
+        // when the bus connection drops, connect again after a growing pause and claim the name again
+        let mut pause = crate::dbus::RECONNECT_FIRST;
+        let mut served_before = false;
+        loop {
+            let ended = zbus::block_on(serve_session(&address, &calls, &settings, &signals_rx, &mut emitted));
+            match ended {
+                Ok(true) => break,
+                Ok(false) => {
+                    tracing::warn!("the session bus connection dropped: serving {BUS_NAME} again");
+                    pause = crate::dbus::RECONNECT_FIRST;
+                    served_before = true;
+                }
+                Err(e) => {
+                    if served_before {
+                        tracing::debug!(error = %e, "the session interface {BUS_NAME} is not served yet");
+                    } else {
+                        tracing::warn!(error = %e, "the session interface {BUS_NAME} is not served: a log out does not quit the applications first until it is");
+                        served_before = true;
                     }
+                    pause = (pause * 2).min(crate::dbus::RECONNECT_LONGEST);
                 }
             }
-            Ok::<(), zbus::Error>(())
-        });
-        if let Err(e) = served {
-            tracing::warn!(error = %e, "the session interface {BUS_NAME} is not served: a log out does not quit the applications first");
+            std::thread::sleep(pause);
         }
     });
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "cannot start the session interface thread");
+    }
+}
+
+/// Serve the interface on one connection until it closes (`Ok(false)`) or nothing can send signals any more (`Ok(true)`).
+async fn serve_session(
+    address: &Option<String>,
+    calls: &channel::Sender<Call>,
+    settings: &Arc<Mutex<SessionSettings>>,
+    signals_rx: &async_channel::Receiver<BusOut>,
+    emitted: &mut SessionSettings,
+) -> zbus::Result<bool> {
+    let iface = Session1 {
+        calls: std::sync::Mutex::new(calls.clone()),
+        settings: Arc::clone(settings),
+    };
+    let conn = crate::dbus::bus(address.as_deref())?
+        .serve_at(OBJECT_PATH, iface)?
+        .name(BUS_NAME)?
+        .build()
+        .await?;
+    let emitter = SignalEmitter::new(&conn, OBJECT_PATH)?;
+    let served = conn
+        .object_server()
+        .interface::<_, Session1>(OBJECT_PATH)
+        .await?;
+    loop {
+        let out = match crate::dbus::either(signals_rx.recv(), conn.closed()).await {
+            crate::dbus::Either::First(Ok(out)) => out,
+            crate::dbus::Either::First(Err(_)) => return Ok(true),
+            crate::dbus::Either::Second(()) => return Ok(false),
+        };
+        match out {
+            BusOut::ApplicationQuit(app_id) => {
+                Session1::application_quit(&emitter, &app_id).await?
+            }
+            BusOut::Settings(now) => {
+                let before = std::mem::replace(emitted, now.clone());
+                let iface = served.get().await;
+                if before.appearance != now.appearance {
+                    iface.appearance_changed(&emitter).await?;
+                }
+                if before.accessibility != now.accessibility {
+                    iface.accessibility_changed(&emitter).await?;
+                }
+                if before.mice != now.mice {
+                    iface.mice_changed(&emitter).await?;
+                }
+            }
+        }
     }
 }
 

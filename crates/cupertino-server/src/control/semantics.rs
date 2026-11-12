@@ -67,6 +67,9 @@ struct Publication {
     /// The subscription the publication is under while a run sees it.
     epoch: Option<u64>,
     snapshot: Option<wire::Snapshot>,
+    /// The newest publication that arrived and was not read yet (its descriptor and length): a newer one replaces it and
+    /// closes its descriptor at once, so a burst is read once ([`Cupertino::flush_publications`]).
+    unread: Option<(OwnedFd, u32)>,
 }
 struct Pending {
     id: u64,
@@ -310,6 +313,39 @@ impl Cupertino {
                     + at.saturating_duration_since(Instant::now()).as_secs_f64() * self.time_scale
             })
     }
+    /// Read the newest publication each publisher has sent since the last call and tell the observing runs once. An
+    /// invalid, stale or unsealed one is a protocol error of its publisher, as when it arrived.
+    pub(crate) fn flush_publications(&mut self) {
+        let mut changed = false;
+        for p in &mut self.control.semantics.pubs {
+            let Some((payload, length)) = p.unread.take() else {
+                continue;
+            };
+            match wire::read::<wire::Snapshot>(payload, length, wire::MAX_FRAME)
+                .ok()
+                .filter(|s| s.validate().is_ok())
+            {
+                Some(snapshot)
+                    if p.snapshot
+                        .as_ref()
+                        .is_none_or(|old| snapshot.revision > old.revision) =>
+                {
+                    p.snapshot = Some(snapshot);
+                    changed = true;
+                }
+                _ => {
+                    p.snapshot = None;
+                    p.resource.post_error(
+                        manager::Error::InvalidPayload,
+                        "invalid, stale or unsealed semantic publication",
+                    );
+                }
+            }
+        }
+        if changed {
+            self.semantics_changed();
+        }
+    }
     pub(super) fn refresh_semantics(&mut self) {
         let active = self.semantic_runs();
         if active.is_empty() {
@@ -373,6 +409,7 @@ impl Cupertino {
             if p.epoch != epoch {
                 p.epoch = epoch;
                 p.snapshot = None;
+                p.unread = None;
                 let (h, l) = split(epoch.unwrap_or(0));
                 p.resource.interest(h, l, u32::from(epoch.is_some()));
                 changed = true;
@@ -414,6 +451,7 @@ impl Cupertino {
         index: usize,
         serial: u32,
     ) -> Result<(), session::Refusal> {
+        self.flush_publications();
         if !self.semantic_runs().contains(&index) {
             return Err(session::Refusal::NotGranted);
         }
@@ -486,6 +524,7 @@ impl Cupertino {
         fd: OwnedFd,
         len: u32,
     ) -> Result<bool, session::Refusal> {
+        self.flush_publications();
         if !self.semantic_runs().contains(&index) || self.control.runs[index].capabilities & 16 == 0
         {
             return Err(session::Refusal::NotGranted);
@@ -710,6 +749,7 @@ impl Dispatch<CupertinoSemanticsV1, ()> for Cupertino {
                 handle,
                 epoch: None,
                 snapshot: None,
+                unread: None,
             });
             state.refresh_semantics();
             state.semantics_changed();
@@ -748,36 +788,21 @@ impl Dispatch<CupertinoSemanticSurfaceV1, ()> for Cupertino {
                 if p.epoch != Some(epoch) {
                     return;
                 }
-                match wire::read::<wire::Snapshot>(payload, length, wire::MAX_FRAME)
-                    .ok()
-                    .filter(|s| s.validate().is_ok())
-                {
-                    Some(snapshot)
-                        if p.snapshot
-                            .as_ref()
-                            .is_none_or(|old| snapshot.revision > old.revision) =>
-                    {
-                        p.snapshot = Some(snapshot);
-                        state.semantics_changed();
-                    }
-                    _ => {
-                        p.snapshot = None;
-                        resource.post_error(
-                            manager::Error::InvalidPayload,
-                            "invalid, stale or unsealed semantic publication",
-                        );
-                    }
-                }
+                // read once per loop turn, the newest only
+                p.unread = Some((payload, length));
             }
             publisher::Request::Unavailable { epoch_hi, epoch_lo } => {
                 let epoch = (u64::from(epoch_hi) << 32) | u64::from(epoch_lo);
                 let p = &mut state.control.semantics.pubs[i];
                 if p.epoch == Some(epoch) {
                     p.snapshot = None;
+                    p.unread = None;
                     state.semantics_changed();
                 }
             }
             publisher::Request::Complete { payload, length } => {
+                // the reply is checked against the revision of the publication sent before it
+                state.flush_publications();
                 let Ok(reply) = wire::read::<wire::ActionReply>(payload, length, wire::MAX_FRAME)
                 else {
                     return;

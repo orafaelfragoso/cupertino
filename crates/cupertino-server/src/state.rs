@@ -2045,6 +2045,7 @@ impl Cupertino {
 
     /// Advance the model to now and apply the resulting effects.
     pub fn tick(&mut self) {
+        self.flush_publications();
         self.refresh_control();
         self.forget_gone_processes();
         let now = self.now();

@@ -1200,6 +1200,15 @@
   scope: shell-private
   test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-polkit-agent/src/main.rs
+- name: cupertino-keyring-prompter
+  kind: binary
+  version: 0.1.0
+  shipped: yes
+  owner_crate: cupertino-polkit-agent
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
+  source: crates/cupertino-polkit-agent/src/keyring_main.rs
 - name: cupertino-portal
   kind: binary
   version: 0.1.0

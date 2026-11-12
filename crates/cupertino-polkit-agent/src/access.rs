@@ -199,7 +199,7 @@ fn field(view: &View<'_>, focused: bool) -> AccessibilityNode {
     }
 }
 
-fn control(
+pub(crate) fn control(
     role: Role,
     name: &str,
     frame: Rect,
@@ -218,11 +218,11 @@ fn control(
     }
 }
 
-fn text(content: &str, bounds: Rect) -> AccessibilityNode {
+pub(crate) fn text(content: &str, bounds: Rect) -> AccessibilityNode {
     node(Role::StaticText, Some(content), bounds)
 }
 
-fn node(role: Role, name: Option<&str>, bounds: Rect) -> AccessibilityNode {
+pub(crate) fn node(role: Role, name: Option<&str>, bounds: Rect) -> AccessibilityNode {
     AccessibilityNode {
         role,
         name: name.map(str::to_owned),

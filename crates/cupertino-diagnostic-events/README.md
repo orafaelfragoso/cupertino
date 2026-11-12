@@ -208,5 +208,6 @@ Every id a test can drive, where it comes from, and how. `tests/registry.rs` che
 
 The areas: `server`, `dock`, `menubar`, `launcher`, `notifications`, `controlcenter`, `osd`, `screenshot`,
 `windowmanager`, `login_ui` (`cupertino-login`), `files`, `settings`, `portal`, `polkit` (`cupertino-polkit-agent`),
-`login` (`cupertino-sessiond`), `network`, `bluetooth` and `power` (`cupertino-netd`, `-btd`, `-powerd`).
+`keyring` (`cupertino-keyring-prompter`), `login` (`cupertino-sessiond`), `network`, `bluetooth` and `power`
+(`cupertino-netd`, `-btd`, `-powerd`).
 <!-- event ids: end -->

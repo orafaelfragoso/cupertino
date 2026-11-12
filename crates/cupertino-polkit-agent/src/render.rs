@@ -33,24 +33,24 @@ pub fn panel_material(reduce_transparency: bool, increase_contrast: bool) -> Opt
 }
 
 /// A button's capsule corners.
-const BUTTON_RADIUS: f64 = BUTTON_HEIGHT / 2.0;
+pub(crate) const BUTTON_RADIUS: f64 = BUTTON_HEIGHT / 2.0;
 
 /// The symbol at the top of the panel (approximate).
 pub const SYMBOL: &str = "symbol.lock";
-const TEXT_SIZE: f64 = 13.0;
-const CAPTION_SIZE: f64 = 11.0;
-const TITLE_WEIGHT: u16 = 700;
-const WEIGHT: u16 = 400;
-const CONTROL_RADIUS: f64 = 5.0;
-const FIELD_INSET: f64 = 6.0;
-const FOCUS_RING: f64 = 3.0;
-const FAILURE_OUTLINE: f64 = 2.0;
+pub(crate) const TEXT_SIZE: f64 = 13.0;
+pub(crate) const CAPTION_SIZE: f64 = 11.0;
+pub(crate) const TITLE_WEIGHT: u16 = 700;
+pub(crate) const WEIGHT: u16 = 400;
+pub(crate) const CONTROL_RADIUS: f64 = 5.0;
+pub(crate) const FIELD_INSET: f64 = 6.0;
+pub(crate) const FOCUS_RING: f64 = 3.0;
+pub(crate) const FAILURE_OUTLINE: f64 = 2.0;
 /// The spinner that stands in for Authenticate's title while the answer is checked (approximate proportions).
 const SPINNER: f64 = 12.0;
 const SPOKES: usize = 12;
 const SPINNER_PERIOD: f64 = 1.0;
 /// A typed character of a secret.
-const BULLET: char = '•';
+pub(crate) const BULLET: char = '•';
 /// The disclosure's and the pop-up's chevrons (approximate).
 const CHEVRON: f64 = 3.5;
 const CHEVRON_STROKE: f64 = 1.5;
@@ -127,7 +127,7 @@ fn skia(c: Rgba) -> Color {
     .expect("clamped channels are colours")
 }
 
-fn paint(c: Rgba) -> Paint<'static> {
+pub(crate) fn paint(c: Rgba) -> Paint<'static> {
     let mut p = Paint::default();
     p.set_color(skia(c));
     p.anti_alias = true;
@@ -138,7 +138,7 @@ fn with_alpha(c: Rgba, alpha: f64) -> Rgba {
     [c[0], c[1], c[2], c[3] * alpha as f32]
 }
 
-fn line(width: f64, s: f64) -> Stroke {
+pub(crate) fn line(width: f64, s: f64) -> Stroke {
     Stroke {
         width: (width * s) as f32,
         line_cap: LineCap::Round,
@@ -175,8 +175,8 @@ pub struct Painter {
     pub palette: Palette,
     /// The compositor draws the panel's glass under it, so the body is left clear; else the body is painted opaque.
     pub glass: bool,
-    text: TextRenderer,
-    icons: SystemIcons,
+    pub(crate) text: TextRenderer,
+    pub(crate) icons: SystemIcons,
 }
 
 impl Painter {
@@ -206,35 +206,50 @@ impl Painter {
     /// `message` broken at spaces into lines of at most `width` points, at most [`MAX_MESSAGE_LINES`] of them; the
     /// last one ends in an ellipsis when the message goes on. A word longer than a line is cut with an ellipsis.
     pub fn wrap(&mut self, message: &str, width: f64) -> Vec<String> {
+        self.wrap_lines(message, width, WEIGHT, MAX_MESSAGE_LINES)
+    }
+
+    /// `message` wrapped as [`Painter::wrap`] does, in `weight`, to at most `max_lines` lines.
+    pub fn wrap_lines(
+        &mut self,
+        message: &str,
+        width: f64,
+        weight: u16,
+        max_lines: usize,
+    ) -> Vec<String> {
         let words: Vec<&str> = message.split_whitespace().collect();
         let mut lines: Vec<String> = Vec::new();
         let mut next = 0;
         while next < words.len() {
-            if lines.len() == MAX_MESSAGE_LINES {
+            if lines.len() == max_lines {
                 let last = lines.pop().expect("full");
                 let rest = words[next..].join(" ");
-                lines.push(self.fit(&format!("{last} {rest}"), width));
+                lines.push(self.fit_weighted(&format!("{last} {rest}"), width, weight));
                 break;
             }
             let mut line = words[next].to_owned();
             next += 1;
             while let Some(word) = words.get(next) {
                 let joined = format!("{line} {word}");
-                if self.measure(&joined, TEXT_SIZE, WEIGHT) > width {
+                if self.measure(&joined, TEXT_SIZE, weight) > width {
                     break;
                 }
                 line = joined;
                 next += 1;
             }
-            lines.push(self.fit(&line, width));
+            lines.push(self.fit_weighted(&line, width, weight));
         }
         lines
     }
 
-    fn fit(&mut self, text: &str, width: f64) -> String {
+    pub(crate) fn fit(&mut self, text: &str, width: f64) -> String {
+        self.fit_weighted(text, width, WEIGHT)
+    }
+
+    fn fit_weighted(&mut self, text: &str, width: f64, weight: u16) -> String {
         self.text.set_scale(1.0);
         self.text
-            .fit(text, TEXT_SIZE as f32, WEIGHT, 0.0, width as f32)
+            .fit(text, TEXT_SIZE as f32, weight, 0.0, width as f32)
             .0
     }
 
@@ -487,7 +502,7 @@ impl Painter {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn centred(
+    pub(crate) fn centred(
         &mut self,
         pixmap: &mut Pixmap,
         text: &str,
@@ -514,7 +529,7 @@ impl Painter {
 
     /// `text` at the leading edge of `frame` in `weight`.
     #[allow(clippy::too_many_arguments)]
-    fn weighted(
+    pub(crate) fn weighted(
         &mut self,
         pixmap: &mut Pixmap,
         text: &str,
@@ -537,7 +552,7 @@ impl Painter {
         );
     }
 
-    fn leading(
+    pub(crate) fn leading(
         &mut self,
         pixmap: &mut Pixmap,
         text: &str,
@@ -559,7 +574,7 @@ impl Painter {
         );
     }
 
-    fn rounded(&self, pixmap: &mut Pixmap, r: Rect, radius: f64, s: f64, c: Rgba) {
+    pub(crate) fn rounded(&self, pixmap: &mut Pixmap, r: Rect, radius: f64, s: f64, c: Rgba) {
         if let Some(path) = rounded_path(r, Radii::uniform(radius), CornerStyle::Circular, s) {
             pixmap.fill_path(
                 &path,
@@ -571,7 +586,7 @@ impl Painter {
         }
     }
 
-    fn rounded_stroke(
+    pub(crate) fn rounded_stroke(
         &self,
         pixmap: &mut Pixmap,
         r: Rect,
@@ -592,7 +607,7 @@ impl Painter {
     }
 
     /// A push button's or a pop-up's body: the control fill with its border.
-    fn bordered(&self, pixmap: &mut Pixmap, r: Rect, s: f64, fill: Rgba) {
+    pub(crate) fn bordered(&self, pixmap: &mut Pixmap, r: Rect, s: f64, fill: Rgba) {
         self.rounded(pixmap, r, CONTROL_RADIUS, s, fill);
         self.rounded_stroke(
             pixmap,
@@ -605,7 +620,7 @@ impl Painter {
     }
 
     /// A button's capsule: the control fill with its border.
-    fn capsule(&self, pixmap: &mut Pixmap, r: Rect, s: f64, fill: Rgba) {
+    pub(crate) fn capsule(&self, pixmap: &mut Pixmap, r: Rect, s: f64, fill: Rgba) {
         self.rounded(pixmap, r, BUTTON_RADIUS, s, fill);
         self.rounded_stroke(
             pixmap,
@@ -618,7 +633,7 @@ impl Painter {
     }
 
     /// The keyboard focus ring around the capsule `r`.
-    fn capsule_ring(&self, pixmap: &mut Pixmap, r: Rect, s: f64) {
+    pub(crate) fn capsule_ring(&self, pixmap: &mut Pixmap, r: Rect, s: f64) {
         self.rounded_stroke(
             pixmap,
             r.outset(FOCUS_RING / 2.0),
@@ -630,7 +645,7 @@ impl Painter {
     }
 
     /// The keyboard focus ring around `r`.
-    fn ring(&self, pixmap: &mut Pixmap, r: Rect, s: f64) {
+    pub(crate) fn ring(&self, pixmap: &mut Pixmap, r: Rect, s: f64) {
         self.rounded_stroke(
             pixmap,
             r.outset(FOCUS_RING / 2.0),
@@ -670,7 +685,7 @@ impl Painter {
     }
 
     /// Twelve spokes around `c`, the brightest turning once per second.
-    fn spinner(&self, pixmap: &mut Pixmap, c: Point, s: f64, elapsed: f64) {
+    pub(crate) fn spinner(&self, pixmap: &mut Pixmap, c: Point, s: f64, elapsed: f64) {
         let head = ((elapsed / SPINNER_PERIOD).fract() * SPOKES as f64) as usize;
         for spoke in 0..SPOKES {
             let angle = 2.0 * PI * spoke as f64 / SPOKES as f64 - PI / 2.0;

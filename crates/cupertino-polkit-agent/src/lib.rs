@@ -8,6 +8,7 @@
 //! - `surfaces` (with `app`): the scrims' and the panel's layer surfaces.
 //! - [`text`]: the strings polkitd and PAM send, made safe to show.
 //! - [`helper`]: the conversation with polkit's helper.
+//! - [`keyring`]: the keyring's prompter, which asks the keyring's password questions in the same prompt.
 //! - [`model`]: the prompt and the requests waiting for it, as a pure model.
 //! - [`panel`]: where the prompt's parts sit and what a key or a click on them does.
 //! - [`render`]: the scrim and the panel drawn.
@@ -18,6 +19,7 @@ pub mod access;
 pub mod agent;
 pub mod conversation;
 pub mod helper;
+pub mod keyring;
 pub mod model;
 pub mod panel;
 pub mod render;

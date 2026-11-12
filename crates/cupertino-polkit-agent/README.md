@@ -1,6 +1,9 @@
 # cupertino-polkit-agent
 
-The session's polkit authentication agent. When another program asks polkitd for an action that needs a password
+The session's password prompts: the polkit authentication agent (`cupertino-polkit-agent`) and the keyring's prompter
+(`cupertino-keyring-prompter`, see [The keyring's prompter](#the-keyrings-prompter)), drawn alike.
+
+The polkit authentication agent: When another program asks polkitd for an action that needs a password
 (`pkexec`, mounting a disk, changing the date), polkitd asks this agent. The agent shows the prompt, starts polkit's
 own setuid helper for the chosen user, and passes on what the person types. Only the helper checks the password, and
 it tells polkitd the result itself; the agent never reports success. No Cupertino daemon asks polkit (architecture
@@ -8,8 +11,9 @@ rule 5).
 
 ## Running
 
-Feature `app` builds the `cupertino-polkit-agent` binary. The server starts and supervises it from its installed path,
-on a Wayland connection that may only draw the authentication prompt. Nothing in `compositor.json` names it.
+Feature `app` builds the `cupertino-polkit-agent` and `cupertino-keyring-prompter` binaries. The server starts and
+supervises each from its installed path, on a Wayland connection that may only draw the authentication prompt. Nothing
+in `compositor.json` names them.
 
 ```
 cargo build -p cupertino-polkit-agent --features app
@@ -72,9 +76,51 @@ value is protected, so neither what is typed nor its length leaves the process; 
 | `users` | how the prompt names polkitd's users |
 | `zeroing` | the process's global allocator, which zeroes every block it frees |
 | `surfaces` | the layer surfaces (feature `app`) |
+| `keyring::exchange` | the keyring's secret exchange: DH, HKDF and AES |
+| `keyring::model` | the keyring's callers and its prompt, as a pure model |
+| `keyring::prompter` | the prompter on the session bus |
+| `keyring::panel`, `keyring::render`, `keyring::access` | the keyring prompt's layout, drawing and accessible tree |
 
 The colours are the design tokens of the session's appearance; the scrim is `authentication-scrim`. Values marked
 approximate in `panel` and `render` are Cupertino's own.
+
+## The keyring's prompter
+
+The keyring daemon (gnome-keyring) asks for passwords through a prompter on the session bus: to unlock a keyring, for a
+new keyring's password and its confirmation, or to confirm an action. Its D-Bus activation files start a GTK window;
+`cupertino-keyring-prompter` takes the two names first, so in a Cupertino session the questions appear in the
+authentication prompt's panel instead. The server starts and supervises it like the polkit agent, from its installed
+path and on a connection that may only draw the prompt, so its surfaces stay out of every capture and suspend desktop
+control. Nothing under `/usr` changes: outside a Cupertino session the stock prompter still answers.
+
+The process hardens itself, zeroes what it frees and keeps its fields at their limit (512 bytes) as the agent does, then:
+
+- serves `org.gnome.keyring.internal.Prompter` at `/org/gnome/keyring/Prompter` and requests
+  `org.gnome.keyring.SystemPrompter` and `org.gnome.keyring.PrivatePrompter`, replacing a prompter that allows it and
+  allowing no replacement; when another prompter holds a name it waits in the bus's queue for it;
+- takes one caller at a time (`BeginPrompting` with the path of its callback object); the others wait in order, at most
+  eight. Only the active caller may ask (`PerformPrompt`, type `password` or `confirm`, with the properties it changed);
+  another call is refused with `org.gnome.keyring.Prompter.InProgress`, a broken exchange with `…Failed`;
+- answers through the caller's `org.gnome.keyring.internal.Prompter.Callback`: `PromptReady("", {}, exchange)` once a
+  caller is active, `PromptReady("yes" | "no", {choice-chosen, password-strength}, exchange)` for each question, and
+  `PromptDone()` when it ends a prompt itself (the session locks). The reply to a call is always sent before its
+  callback is called. A caller that leaves the bus (the bus daemon's `NameOwnerChanged`) loses its prompt;
+- returns the password only through the secret exchange (`sx-aes-1`): Diffie-Hellman in the 1536-bit MODP group of
+  RFC 3526, HKDF with SHA256 of the shared value padded to the prime's length into a 16-byte key, 128-bit AES in CBC mode with PKCS#7
+  padding and a fresh IV. A cancel or a confirmation carries no secret.
+
+The panel is the agent's alert: 260 points wide, 26-point corners, the panel window's glass, the 64-point lock, the
+caller's message in bold (its title when there is no message) and its description, the password field, the
+confirmation field when `password-new` is set, a check box when `choice-label` is set, the caller's `warning` in red,
+and Cancel and the continue button (`cancel-label`, `continue-label`, their mnemonic marks removed; Continue by
+default) as 28-point capsules 8 points apart, 16 points in. Return in the first field of a new password goes on to the
+confirmation; a confirmation that differs keeps the answer back and says so. After an answer the panel stays, busy,
+until the caller asks again (the daemon's warning after a wrong password) or stops. `password-strength` goes back as 0
+for an empty password, else 1. `caller-window` names an X11 window, which a Wayland surface can't be parented to: the
+panel is modal over the active output whatever it names. While the session is locked or isn't logind's active one,
+nothing shows: a question is answered `no`, the active caller hears `PromptDone`, and waiting callers wait.
+
+Assistive technology sees a modal alert dialog; both fields are password inputs with a protected value.
 
 ## Diagnostic events
 
@@ -90,6 +136,17 @@ names the user, polkitd's identities or anything typed.
 | `polkit.panic` | fatal | `panic`, `location` | any panic |
 
 ## Tests
+
+The keyring's prompter: `src/keyring/*/tests.rs` the exchange (both directions, padding, refused keys and messages),
+the model, the panel's layout and keys, the drawing (warning and outline red, glass, check box) and the accessibility
+audit; `tests/keyring.rs` the prompter on a private bus with a caller of the test's own, which decrypts the typed
+password from the exchange: a password round trip, a wrong password asked again with the warning, a new password with
+its confirmation and the choice, a confirmation, a cancel, one caller at a time, refusals, a locked session, and both
+names on one connection; `tests/keyring_daemon.rs` the installed gnome-keyring daemon on a private bus unlocking its
+login keyring with the password typed into the prompt, after a cancel and a wrong password (skipped when the daemon is
+not installed; `CUPERTINO_KEYRING_REQUIRED=1` fails instead).
+
+The polkit agent:
 
 `cargo test -p cupertino-polkit-agent`: the model, the panel, the text and the helper's protocol as unit tests;
 `tests/agent.rs` the agent on a private bus with a fake polkitd (registration, refusals, limits, a forged restart that

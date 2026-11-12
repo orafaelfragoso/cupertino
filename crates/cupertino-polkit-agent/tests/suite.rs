@@ -7,5 +7,9 @@ mod agent;
 mod diag_events;
 #[path = "flow.rs"]
 mod flow;
+#[path = "keyring.rs"]
+mod keyring;
+#[path = "keyring_daemon.rs"]
+mod keyring_daemon;
 #[path = "zeroing.rs"]
 mod zeroing;

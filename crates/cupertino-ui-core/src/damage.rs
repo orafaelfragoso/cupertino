@@ -137,6 +137,7 @@ mod tests {
             resources: Default::default(),
             materials: Vec::new(),
             layer: None,
+            pins: false,
         }
     }
 

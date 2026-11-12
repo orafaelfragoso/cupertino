@@ -358,6 +358,8 @@ pub struct PaintCx<'a> {
     pub(crate) layer: bool,
     /// What nodes of the window told each other so far ([`PaintCx::page_scrolled`]).
     pub(crate) marks: crate::paint::WindowMarks,
+    /// The appearance the node asked its subtree to draw in ([`PaintCx::pin_appearance`]).
+    pub(crate) pin: &'a mut Option<bool>,
     pub(crate) reads_marks: &'a mut bool,
     pub(crate) set_page_scrolled: &'a mut Option<bool>,
     pub(crate) set_band_shown: &'a mut Option<bool>,
@@ -553,6 +555,15 @@ impl PaintCx<'_> {
         });
         self.take_foreground();
         self.material.is_some()
+    }
+
+    /// Draws the node's subtree in the dark appearance (`dark`) or the light one, whatever the window's: content that
+    /// always stands on a picture of one tone, such as a lock screen over its darkened wallpaper. The theme keeps the
+    /// session's other display options (contrast, transparency, motion). The node itself paints in the appearance it
+    /// was given. Without a way to make the theme of another appearance (a runtime that does not follow the session's
+    /// appearance) the subtree keeps the window's.
+    pub fn pin_appearance(&mut self, dark: bool) {
+        *self.pin = Some(dark);
     }
 
     /// What the node paints after it asked for a material lies on it: text and symbols on glass take the colours of

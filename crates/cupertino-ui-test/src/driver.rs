@@ -49,6 +49,12 @@ impl<A: Application> TestDriver<A> {
         &self.runtime
     }
 
+    /// The runtime, to set it up as an application's runner does: the theme it follows the session's appearance with,
+    /// say.
+    pub fn runtime_mut(&mut self) -> &mut Runtime<A, HeadlessWindowSystem> {
+        &mut self.runtime
+    }
+
     pub fn window_system_mut(&mut self) -> &mut HeadlessWindowSystem {
         self.runtime.window_system_mut()
     }

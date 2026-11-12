@@ -328,6 +328,12 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     touch_opened: bool,
     exit: bool,
     theme_for: Option<ThemeForAppearance>,
+    /// The theme in the light and the dark appearance with the session's other options, for subtrees pinned to one
+    /// ([`PaintCx::pin_appearance`](crate::PaintCx::pin_appearance)), and the theme they were made from.
+    pinned: [Option<Arc<ThemeTokens>>; 2],
+    pinned_from: Option<Arc<ThemeTokens>>,
+    /// Some window pinned a subtree to an appearance: the pinned themes follow the session from then on.
+    pins_seen: bool,
     personal_refresh: Option<PersonalRefresh>,
     /// Follows each scroll event to the screen, when asked ([`Runtime::with_scroll_timing`]).
     scroll_timing: Option<crate::scroll_timing::ScrollTimings>,
@@ -390,6 +396,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             touch_opened: false,
             exit: false,
             theme_for: None,
+            pinned: [None, None],
+            pinned_from: None,
+            pins_seen: false,
             personal_refresh: None,
             scroll_timing: None,
             tokens: HashMap::new(),
@@ -418,7 +427,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
 
     /// Follow the session's appearance: `theme_for` makes the theme each time the window system reports it.
     pub fn with_theme_for(mut self, theme_for: ThemeForAppearance) -> Self {
-        self.theme_for = Some(theme_for);
+        self.set_theme_for(theme_for);
         self
     }
 
@@ -435,6 +444,26 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
 
     /// Draw every window with `theme` from now on. Text is measured and laid out again; focus and input-method
     /// compositions stay. A theme equal to the current one changes nothing.
+    /// [`Runtime::with_theme_for`] on a runtime already made.
+    pub fn set_theme_for(&mut self, theme_for: ThemeForAppearance) {
+        self.theme_for = Some(theme_for);
+        self.pinned_from = None;
+    }
+
+    /// Makes the themes of subtrees pinned to the light or the dark appearance again when the window's theme changed,
+    /// once some subtree was pinned ([`pinned_themes`]).
+    fn refresh_pinned(&mut self) {
+        if self
+            .pinned_from
+            .as_ref()
+            .is_some_and(|from| Arc::ptr_eq(from, &self.options.theme))
+        {
+            return;
+        }
+        self.pinned_from = Some(Arc::clone(&self.options.theme));
+        self.pinned = pinned_themes(&mut self.theme_for, &self.options.theme);
+    }
+
     pub fn set_theme(&mut self, theme: Arc<ThemeTokens>) {
         if *theme == *self.options.theme {
             return;
@@ -2283,6 +2312,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if laid_out {
             self.drop_over(i);
         }
+        if self.pins_seen {
+            self.refresh_pinned();
+        }
         let w = &mut self.windows[i];
         if hold {
             w.held_paints += 1;
@@ -2344,7 +2376,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let capabilities = self.system.capabilities();
         let effects = capabilities.app_effects;
         let layered = capabilities.raised_layer;
-        let paint = |w: &mut WindowState<A::Message>, tree: &Tree<A::Message>| {
+        let paint = |w: &mut WindowState<A::Message>,
+                     tree: &Tree<A::Message>,
+                     pinned: &[Option<Arc<ThemeTokens>>; 2]| {
             if w.activated_at.is_some() {
                 // the colours are crossing: each node's last paint is of other colours, and the crossing is not part
                 // of what a node's cached paint is keyed on
@@ -2366,6 +2400,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     now,
                     raised: &w.raised,
                     layer: layered,
+                    pinned,
                 },
             );
             cupertino_ui_theme::set_activation(1.0);
@@ -2374,7 +2409,16 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             painting
         };
-        let mut painting = paint(w, &self.tree);
+        let mut painting = paint(w, &self.tree, &self.pinned);
+        if painting.pins && !self.pins_seen {
+            // the first subtree pinned to an appearance: make the themes it draws with and paint it in them at once
+            self.pins_seen = true;
+            self.pinned_from = Some(Arc::clone(&self.options.theme));
+            self.pinned = pinned_themes(&mut self.theme_for, &self.options.theme);
+            if self.pinned.iter().any(Option::is_some) {
+                painting = paint(w, &self.tree, &self.pinned);
+            }
+        }
         // the shapes take effect with the frame's commit, so the frame commits even when it repaints no pixel: the
         // compositor draws the glass, and a window's own pixels under a region that moved, grew or faded are the same,
         // so they are not drawn again (a glass panel that opens or fades repaints only what its content changed)
@@ -2388,7 +2432,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 // its nodes paint their own fill from now on
                 w.materials_refused = true;
                 w.materials.clear();
-                painting = paint(w, &self.tree);
+                painting = paint(w, &self.tree, &self.pinned);
                 w.invalidate_damage();
             }
             // regions past the new count lose their backdrops; one made again later starts unmeasured
@@ -2821,6 +2865,7 @@ fn drag_image<M: 'static>(
             now,
             raised: &[],
             layer: false,
+            pinned: &[None, None],
         },
     );
     let mut renderer = (options.renderers)();
@@ -3034,3 +3079,30 @@ mod ungrabbed;
 
 #[cfg(test)]
 mod tests;
+
+/// The themes of `theme`'s session options in the light and the dark appearance, from `theme_for`; none without it.
+/// The session's own appearance is asked for last, as the theme maker may remember the last one it made.
+fn pinned_themes(
+    theme_for: &mut Option<ThemeForAppearance>,
+    theme: &ThemeTokens,
+) -> [Option<Arc<ThemeTokens>>; 2] {
+    let Some(theme_for) = theme_for else {
+        return [None, None];
+    };
+    let session = appearance_of(theme);
+    let pinned = [false, true].map(|dark| Some(theme_for(&SystemAppearance { dark, ..session })));
+    theme_for(&session);
+    pinned
+}
+
+/// The session's appearance and display options as `theme` was made for them.
+fn appearance_of(theme: &ThemeTokens) -> SystemAppearance {
+    let preferences = &theme.preferences;
+    SystemAppearance {
+        dark: preferences.appearance.is_dark(),
+        increase_contrast: preferences.appearance.is_high_contrast(),
+        reduce_transparency: preferences.reduce_transparency,
+        reduce_motion: preferences.reduce_motion,
+        steady_caret: theme.motion.caret_phase_ms == 0,
+    }
+}

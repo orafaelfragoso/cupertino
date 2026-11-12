@@ -117,6 +117,7 @@ impl Fixture {
                 now: Timestamp(0),
                 raised: &[],
                 layer: false,
+                pinned: &[None, None],
             },
         )
     }
@@ -226,6 +227,7 @@ fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_sub
             now: Timestamp(0),
             raised: &[],
             layer: false,
+            pinned: &[None, None],
         },
     );
     let [scroller, content] = &list.list.nodes[..] else {
@@ -377,6 +379,7 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
             now: Timestamp(0),
             raised: &[],
             layer: false,
+            pinned: &[None, None],
         },
     );
     let node = &painting.list.nodes[0];
@@ -483,6 +486,7 @@ fn an_image_a_node_draws_travels_with_the_list_and_stays_when_the_node_is_reused
                 now: Timestamp(0),
                 raised: &[],
                 layer: false,
+                pinned: &[None, None],
             },
         )
     };
@@ -601,6 +605,7 @@ fn a_node_s_material_is_cut_to_what_shows_and_capped_per_window_and_a_refused_on
                 now: Timestamp(0),
                 raised: &[],
                 layer: false,
+                pinned: &[None, None],
             },
         )
     };
@@ -769,6 +774,7 @@ fn glass_nodes_join_their_container_with_round_ends() {
             now: Timestamp(0),
             raised: &[],
             layer: false,
+            pinned: &[None, None],
         },
     );
     let glass = GlassRegion {
@@ -980,6 +986,7 @@ fn text_on_glass_takes_the_matrix_of_its_face_and_text_beside_it_keeps_the_theme
                 now: Timestamp(0),
                 raised: &[],
                 layer: false,
+                pinned: &[None, None],
             },
         );
         let of = |id: NodeId| {
@@ -1098,6 +1105,7 @@ fn text_drawn_after_a_glass_node_and_inside_it_lies_on_that_glass() {
                 now: Timestamp(0),
                 raised: &[],
                 layer: false,
+                pinned: &[None, None],
             },
         );
         let of = |id: NodeId| {
@@ -1181,6 +1189,7 @@ fn text_on_a_window_of_glass_takes_the_windows_tone() {
                 now: Timestamp(0),
                 raised: &[],
                 layer: false,
+                pinned: &[None, None],
             },
         );
         fills(&painting.list.nodes[0])[0]
@@ -1334,6 +1343,7 @@ fn probed(beneath: Beneath, background: WindowBackground, shown: bool) -> bool {
             now: Timestamp(0),
             raised: &[],
             layer: false,
+            pinned: &[None, None],
         },
     );
     seen.get().expect("the probe painted")
@@ -1468,6 +1478,7 @@ fn what_a_node_puts_on_device_pixels_lands_on_them_wherever_a_frame_draws_it() {
                 now: Timestamp(0),
                 raised: &[],
                 layer: false,
+                pinned: &[None, None],
             },
         );
         let node = &painting.list.nodes[0];
@@ -1669,6 +1680,7 @@ impl Overlaid {
                 now: Timestamp(0),
                 raised: &[],
                 layer: false,
+                pinned: &[None, None],
             },
         )
     }
@@ -1768,4 +1780,161 @@ fn an_overlay_keeps_its_revision_until_what_it_draws_changes_and_goes_with_its_r
     let plain = f.paint(Point::new(10.3, 7.1));
     assert!(find(&plain, overlay_id(caret)).is_none());
     assert_eq!(plain.list.nodes.len(), 4);
+}
+
+/// A panel that pins its children to the dark appearance, or the light one, and paints a label itself.
+struct Pinned {
+    dark: bool,
+    children: Vec<Element<M>>,
+}
+
+impl Widget<M> for Pinned {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        cx.pin_appearance(self.dark);
+        text_fills(cx);
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+#[test]
+fn a_subtree_pinned_to_an_appearance_paints_in_its_theme_and_the_rest_keeps_the_window_s() {
+    use cupertino_ui_theme::{Appearance, ColorTokens};
+    let themed = |appearance, text: Color, secondary: Color| {
+        let mut theme = (*env().theme).clone();
+        theme.preferences.appearance = appearance;
+        theme.colors = ColorTokens::new([
+            ((ColorRole::Text, StateVariant::NORMAL), text),
+            ((ColorRole::SecondaryText, StateVariant::NORMAL), secondary),
+        ]);
+        Arc::new(theme)
+    };
+    let black = |a: f32| Color::new(0.0, 0.0, 0.0, a);
+    let white = |a: f32| Color::new(1.0, 1.0, 1.0, a);
+    let light = themed(Appearance::Light, black(0.85), black(0.5));
+    let dark = themed(Appearance::Dark, white(0.85), white(0.55));
+    let mut env = env();
+    env.theme = Arc::clone(&light);
+
+    // a dark panel holding a label and a light panel inside it, and a label beside the panel
+    let mut tree = Tree::<M>::new(8);
+    let panel = Element::new(Pinned {
+        dark: true,
+        children: vec![
+            Element::new(TextSwatch),
+            Element::new(Pinned {
+                dark: false,
+                children: vec![Element::new(TextSwatch)],
+            }),
+        ],
+    });
+    let root = tree
+        .reconcile(
+            None,
+            Element::new(crate::test_support::group(vec![
+                panel,
+                Element::new(TextSwatch),
+            ])),
+        )
+        .unwrap();
+    let [panel, beside] = tree.get(root).unwrap().children.clone()[..] else {
+        unreachable!()
+    };
+    let [label, light_panel] = tree.get(panel).unwrap().children.clone()[..] else {
+        unreachable!()
+    };
+    let light_label = tree.get(light_panel).unwrap().children[0];
+    let mut geometry = Geometry::new();
+    for (i, id) in [root, panel, label, light_panel, light_label, beside]
+        .into_iter()
+        .enumerate()
+    {
+        let rect = Rect::new(i as f64 * 10.0, 0.0, 10.0, 10.0);
+        geometry.insert(
+            id,
+            Placement {
+                rect,
+                target: rect,
+                clip: None,
+                own_clip: None,
+                raised: Default::default(),
+            },
+        );
+    }
+    let mut painter = Painter::default();
+    let mut paint = |pinned: &[Option<Arc<ThemeTokens>>; 2]| {
+        let painting = painter.paint(
+            &tree,
+            root,
+            &geometry,
+            &PaintInput {
+                env: &env,
+                focus: None,
+                focus_visible: false,
+                window_active: true,
+                background: WindowBackground::None,
+                backdrop: false,
+                materials: false,
+                now: Timestamp(0),
+                raised: &[],
+                layer: false,
+                pinned,
+            },
+        );
+        let of = |id: NodeId| {
+            painting
+                .list
+                .nodes
+                .iter()
+                .find(|n| n.id == id.into())
+                .map(fills)
+                .unwrap()
+        };
+        (
+            painting.pins,
+            [of(panel), of(label), of(light_label), of(beside)],
+        )
+    };
+    let in_light = vec![black(0.85), black(0.5)];
+    let in_dark = vec![white(0.85), white(0.55)];
+
+    // the pinning node paints in the window's appearance; its subtree in the dark one, down to a subtree pinned
+    // back to light; the label beside the panel keeps the window's
+    let (pins, [own, inside, back, beside]) = paint(&[Some(Arc::clone(&light)), Some(dark)]);
+    assert!(pins);
+    assert_eq!(own, in_light);
+    assert_eq!(inside, in_dark);
+    assert_eq!(back, in_light);
+    assert_eq!(beside, in_light);
+
+    // without the themes of the appearances, the subtree keeps the window's
+    let (_, [_, inside, _, _]) = paint(&[None, None]);
+    assert_eq!(inside, in_light);
 }

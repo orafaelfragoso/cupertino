@@ -13,8 +13,8 @@ use cupertino_ui_render::{
     DisplayList, Effect, Group, ImageResource, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PathVerb, ResourceId, Shape, Transform,
 };
-use cupertino_ui_theme::FaceTone;
 use cupertino_ui_theme::{Color, ColorRole, StateVariant};
+use cupertino_ui_theme::{FaceTone, ThemeTokens};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -49,6 +49,10 @@ struct Painted {
     pixels: Vec<usize>,
     /// How far raised nodes covered the node's edges when it painted, when its paint depended on it.
     obscured: Option<Insets>,
+    /// The appearance the node painted in, pinned by an ancestor ([`PaintCx::pin_appearance`]).
+    pinned: Option<bool>,
+    /// The appearance the node pinned its subtree to.
+    pins: Option<bool>,
     /// What the node read of the window's marks when it painted, when its paint depended on them.
     marks: Option<WindowMarks>,
 }
@@ -119,6 +123,15 @@ fn holds(outer: &Rect, inner: &Rect) -> bool {
         && inner.min_y() >= outer.min_y() - SLACK
         && inner.max_x() <= outer.max_x() + SLACK
         && inner.max_y() <= outer.max_y() + SLACK
+}
+
+/// The index of an appearance a subtree is pinned to in the painter's environments: none (the window's), light, dark.
+fn pin_index(pin: Option<bool>) -> usize {
+    match pin {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    }
 }
 
 /// The index of a tone in the painter's glass environments.
@@ -303,8 +316,13 @@ pub(crate) struct Painter {
     painted_in: Option<Environment>,
     /// The tone of the window's glass regions; a change repaints what lies on the region.
     pub(crate) tones: GlassTones,
-    /// The environments of text on glass of each tone, made from `painted_in`.
-    glass_envs: Option<[Environment; 3]>,
+    /// The pinned themes the kept paint was made with ([`PaintInput::pinned`]); others repaint every node.
+    pinned_in: [Option<Arc<ThemeTokens>>; 2],
+    /// The environments of text on glass of each tone, made from `painted_in`, then from the light and the dark pinned
+    /// themes ([`pin_index`]).
+    glass_envs: Option<[[Environment; 3]; 3]>,
+    /// The environments of the window's appearance, the light one and the dark one, made from `painted_in`.
+    pin_envs: Option<[Environment; 3]>,
     /// What each node's overlay drew last, and the revision it drew with, while the node asks for one: a caret that
     /// shows again where it showed before is the same paint.
     overlays: HashMap<NodeId, (Vec<PaintOp>, PaintRevision)>,
@@ -469,6 +487,8 @@ pub(crate) struct Painting {
     pub(crate) materials: Vec<MaterialRegion>,
     /// What the raised nodes draw, when the window system shows them in a layer of their own.
     pub(crate) layer: Option<LayerPainting>,
+    /// A node pinned its subtree to an appearance ([`PaintCx::pin_appearance`]).
+    pub(crate) pins: bool,
 }
 
 /// The raised layer of a [`Painting`]: its own list, damage boxes and blank flags, in window coordinates.
@@ -495,6 +515,9 @@ pub(crate) struct PaintInput<'a> {
     pub(crate) raised: &'a [(NodeId, Rect)],
     /// The window system shows a raised layer, which the raised nodes draw in.
     pub(crate) layer: bool,
+    /// The window's theme in the light and the dark appearance, for subtrees pinned to one
+    /// ([`PaintCx::pin_appearance`]); `None` keeps such a subtree in the window's.
+    pub(crate) pinned: &'a [Option<Arc<ThemeTokens>>; 2],
 }
 
 /// The paint node a UI node draws into, so tests and the inspector can find a node's operations.
@@ -526,22 +549,55 @@ impl Painter {
         input: &PaintInput<'_>,
     ) -> Painting {
         // a node paints in its environment's colours, type and pixels, none of which its own revision covers
-        if !self
-            .painted_in
-            .as_ref()
-            .is_some_and(|env| same_environment(env, input.env))
+        let same_pins =
+            self.pinned_in
+                .iter()
+                .zip(input.pinned)
+                .all(|(kept, now)| match (kept, now) {
+                    (Some(kept), Some(now)) => Arc::ptr_eq(kept, now),
+                    (None, None) => true,
+                    _ => false,
+                });
+        if !same_pins
+            || !self
+                .painted_in
+                .as_ref()
+                .is_some_and(|env| same_environment(env, input.env))
         {
             self.nodes.clear();
             self.painted_in = Some(input.env.clone());
+            self.pinned_in = input.pinned.clone();
             self.glass_envs = None;
+            self.pin_envs = None;
         }
+        let pin_envs = self
+            .pin_envs
+            .get_or_insert_with(|| {
+                let pinned = |theme: &Option<Arc<ThemeTokens>>| Environment {
+                    theme: theme
+                        .clone()
+                        .unwrap_or_else(|| Arc::clone(&input.env.theme)),
+                    ..input.env.clone()
+                };
+                [
+                    input.env.clone(),
+                    pinned(&input.pinned[0]),
+                    pinned(&input.pinned[1]),
+                ]
+            })
+            .clone();
         let glass_envs = self
             .glass_envs
             .get_or_insert_with(|| {
-                [GlassTone::Appearance, GlassTone::Dark, GlassTone::Light]
-                    .map(|tone| glass_environment(input.env, tone))
+                pin_envs.clone().map(|env| {
+                    [GlassTone::Appearance, GlassTone::Dark, GlassTone::Light]
+                        .map(|tone| glass_environment(&env, tone))
+                })
             })
             .clone();
+        // the appearance each node pinned its subtree to, as its children inherit it
+        let mut pinned_below: HashMap<NodeId, Option<bool>> = HashMap::new();
+        let mut pins = false;
         // What each node lies on, as its children inherit it: the window's material when it is glass and shown, below
         // a node that shows a material that node's region. A node with nothing under it from its ancestors lies on
         // the glass painted before it that holds it whole: a panel's content is often drawn beside the node of its
@@ -670,6 +726,10 @@ impl Painter {
                 on: inherited,
                 own: self.tones.region(materials.len()),
             };
+            let pinned = node
+                .parent
+                .and_then(|parent| pinned_below.get(&parent).copied().flatten());
+            let (base, glass) = (&pin_envs[pin_index(pinned)], &glass_envs[pin_index(pinned)]);
             let on_material = inherited.is_some()
                 || match node.parent {
                     Some(parent) => material_below.get(&parent).copied().unwrap_or(false),
@@ -686,6 +746,7 @@ impl Painter {
                     && (p.materials.is_none() || p.foreground.own == foreground.own)
                     && p.obscured.is_none_or(|o| o == obscured)
                     && p.marks.is_none_or(|m| m == self.marks())
+                    && p.pinned == pinned
             });
             if !fresh {
                 let mut ops = Vec::new();
@@ -747,17 +808,18 @@ impl Painter {
                 let mut reads_marks = false;
                 let mut set_scrolled = None;
                 let mut set_band = None;
+                let mut pin = None;
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
                         node: id,
                         size,
                         env: match inherited {
-                            Some(tone) => &glass_envs[tone_index(tone)],
-                            None => input.env,
+                            Some(tone) => &glass[tone_index(tone)],
+                            None => base,
                         },
-                        plain_env: input.env,
-                        glass_env: &glass_envs[tone_index(foreground.own)],
+                        plain_env: base,
+                        glass_env: &glass[tone_index(foreground.own)],
                         focused,
                         focus_visible: focused && input.focus_visible,
                         window_active: input.window_active,
@@ -784,6 +846,7 @@ impl Painter {
                         reads_marks: &mut reads_marks,
                         set_page_scrolled: &mut set_scrolled,
                         set_band_shown: &mut set_band,
+                        pin: &mut pin,
                     },
                 );
                 for (kept, set) in [
@@ -823,10 +886,14 @@ impl Painter {
                         pixels,
                         obscured: reads_obscured.then_some(obscured),
                         marks: reads_marks.then_some(marks),
+                        pinned,
+                        pins: pin,
                     },
                 );
             }
             let painted = &self.nodes[&id];
+            pinned_below.insert(id, painted.pins.or(pinned));
+            pins |= painted.pins.is_some();
             material_below.insert(id, on_material || painted.lays_material);
             on_glass.insert(
                 id,
@@ -902,8 +969,8 @@ impl Painter {
                     &mut OverlayCx {
                         size,
                         env: match inherited {
-                            Some(tone) => &glass_envs[tone_index(tone)],
-                            None => input.env,
+                            Some(tone) => &glass[tone_index(tone)],
+                            None => base,
                         },
                         now: input.now,
                         origin,
@@ -1059,6 +1126,7 @@ impl Painter {
             resources,
             materials,
             layer,
+            pins,
         }
     }
 }

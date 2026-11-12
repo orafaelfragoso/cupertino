@@ -131,6 +131,33 @@ impl<M: 'static> Element<M> {
         self
     }
 
+    /// The element with its widget replaced by `f` of it when that widget is a `W`, keeping its key and size; any
+    /// other element unchanged. A container uses it to tell a child of a known kind where it stands among the others.
+    pub fn map_widget<W: Widget<M>, V: Widget<M>>(self, f: impl FnOnce(W) -> V) -> Self {
+        if !self.widget.as_any().is::<W>() {
+            return self;
+        }
+        let Self {
+            key,
+            widget,
+            width,
+            height,
+            span,
+            fill,
+        } = self;
+        let Ok(widget) = widget.into_any().downcast::<W>() else {
+            unreachable!("the widget was checked to be a W");
+        };
+        Self {
+            key,
+            widget: Box::new(f(*widget)),
+            width,
+            height,
+            span,
+            fill,
+        }
+    }
+
     pub(crate) fn layout(&self) -> LayoutSpec {
         let mut spec = self.widget.layout();
         if self.fill {
@@ -170,6 +197,7 @@ pub(crate) trait AnyWidget<M> {
     fn type_name(&self) -> &'static str;
     fn widget_type(&self) -> TypeId;
     fn as_any(&self) -> &dyn Any;
+    fn into_any(self: Box<Self>) -> Box<dyn Any>;
     fn take_children(&mut self) -> Vec<Element<M>>;
     fn layout(&self) -> LayoutSpec;
     fn new_state(&self) -> Box<dyn Any>;
@@ -202,6 +230,10 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
     }
 
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
 

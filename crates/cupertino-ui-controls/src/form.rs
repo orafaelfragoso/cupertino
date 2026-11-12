@@ -212,14 +212,22 @@ struct Group<M> {
     rows: Vec<Element<M>>,
 }
 
-impl<M: 'static> From<FormGroup<M>> for Element<M> {
+impl<M: Clone + 'static> From<FormGroup<M>> for Element<M> {
     fn from(group: FormGroup<M>) -> Self {
-        let mut rows = Vec::with_capacity(group.rows.len() * 2);
+        let count = group.rows.len();
+        let mut rows = Vec::with_capacity(count * 2);
         for (i, row) in group.rows.into_iter().enumerate() {
             if i > 0 {
                 rows.push(Element::new(Hairline));
             }
-            rows.push(row);
+            // a navigation row's press fill follows the group's rounded corners where the row meets them
+            let corners = GroupCorners {
+                top: i == 0,
+                bottom: i + 1 == count,
+            };
+            rows.push(
+                row.map_widget(|row: NavigationRow<M>| GroupedNavigationRow { row, corners }),
+            );
         }
         Element::new(Group { rows })
     }
@@ -603,12 +611,96 @@ impl<M: Clone + 'static> Widget<M> for NavigationRow<M> {
     }
 
     fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
+        self.paint_in_group(press, cx, GroupCorners::default());
+    }
+
+    fn semantics(&self, press: &Press, cx: &mut SemanticsCx<'_>) {
+        self.describe(press, cx);
+    }
+}
+
+/// Which of a group's rounded corners a row meets: the first row the top ones, the last the bottom ones.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct GroupCorners {
+    top: bool,
+    bottom: bool,
+}
+
+/// A [`NavigationRow`] that knows where it stands in its group, so its press fill takes the group's corners.
+struct GroupedNavigationRow<M> {
+    row: NavigationRow<M>,
+    corners: GroupCorners,
+}
+
+impl<M: Clone + 'static> Widget<M> for GroupedNavigationRow<M> {
+    type State = Press;
+
+    fn layout(&self) -> LayoutSpec {
+        Widget::<M>::layout(&self.row)
+    }
+
+    fn state(&self) -> Press {
+        Press::default()
+    }
+
+    fn update(&self, old: &Self, press: &mut Press) -> Change {
+        match self.row.update(&old.row, press) {
+            Change::None if self.corners != old.corners => Change::Paint,
+            change => change,
+        }
+    }
+
+    fn measure(&self, press: &Press, constraints: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        self.row.measure(press, constraints, cx)
+    }
+
+    fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        self.row.event(press, event, cx)
+    }
+
+    fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
+        self.row.paint_in_group(press, cx, self.corners);
+    }
+
+    fn semantics(&self, press: &Press, cx: &mut SemanticsCx<'_>) {
+        self.row.describe(press, cx);
+    }
+}
+
+/// The press fill of a row `whole` big: square where the row meets the next one, the group's radius where it meets
+/// the group's edge.
+fn paint_row_press(cx: &mut PaintCx<'_>, whole: Rect, corners: GroupCorners, color: Option<Color>) {
+    let r = GROUP_RADIUS;
+    let (top, bottom) = (corners.top, corners.bottom);
+    if !top && !bottom {
+        look::fill(cx, whole, 0.0, color);
+        return;
+    }
+    // a rounded rectangle reaching a radius past each square edge, clipped to the row
+    let y0 = if top {
+        whole.min_y()
+    } else {
+        whole.min_y() - r
+    };
+    let y1 = if bottom {
+        whole.max_y()
+    } else {
+        whole.max_y() + r
+    };
+    let shape = Rect::new(whole.min_x(), y0, whole.width(), y1 - y0);
+    cx.push(PaintOp::PushClip(Shape::Rect(whole)));
+    look::fill(cx, shape, r, color);
+    cx.push(PaintOp::PopClip);
+}
+
+impl<M: Clone + 'static> NavigationRow<M> {
+    fn paint_in_group(&self, press: &Press, cx: &mut PaintCx<'_>, corners: GroupCorners) {
         let env = cx.env().clone();
         let theme = env.theme.clone();
         let size = cx.size();
         let whole = Rect::new(0.0, 0.0, size.width, size.height);
         if press.pressed() {
-            look::fill(cx, whole, 0.0, label_tint(&theme, PRESSED_ALPHA));
+            paint_row_press(cx, whole, corners, label_tint(&theme, PRESSED_ALPHA));
         }
         let (tile_area, label_area, chevron) = self.places(size);
         let rtl = env.direction == LayoutDirection::Rtl;
@@ -646,7 +738,7 @@ impl<M: Clone + 'static> Widget<M> for NavigationRow<M> {
         paint_focus_ring(cx, whole.inset(Insets::uniform(2.0)), GROUP_RADIUS / 2.0);
     }
 
-    fn semantics(&self, _: &Press, cx: &mut SemanticsCx<'_>) {
+    fn describe(&self, _: &Press, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Button);
         cx.name(self.label.clone());
         let enabled = self.on_open.is_some();

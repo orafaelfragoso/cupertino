@@ -82,6 +82,8 @@ pub(crate) struct IconTheme {
     pub name: Option<String>,
     /// Pack-relative TOML file `"<logical name>" = ["<freedesktop name>", ...]`.
     pub map: Option<String>,
+    /// Whether applications' icons are looked up in the theme too, before `hicolor`.
+    pub applications: bool,
 }
 
 /// The cursor theme of a pack and where to look for it.
@@ -408,11 +410,22 @@ impl Manifest {
         let icons = obj.get("icons").map(|v| r.icons(v)).unwrap_or_default();
         let icon_theme = obj.get("icon_theme").and_then(|v| match v.as_object() {
             Some(o) => {
-                r.unknown("icon_theme", o, &["name", "map"]);
+                r.unknown("icon_theme", o, &["name", "map", "applications"]);
                 let map = o.get("map").and_then(|m| r.path("icon_theme.map", m));
+                let applications = match o.get("applications") {
+                    None => false,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => {
+                        r.note(
+                            "icon_theme.applications: expected true or false; ignored".to_string(),
+                        );
+                        false
+                    }
+                };
                 Some(IconTheme {
                     name: o.get("name").and_then(Value::as_str).map(str::to_string),
                     map,
+                    applications,
                 })
             }
             None => {

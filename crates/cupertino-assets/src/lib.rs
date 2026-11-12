@@ -558,6 +558,16 @@ impl Assets {
         self.packs.iter().find_map(Pack::cursor_theme)
     }
 
+    /// The host icon theme of the first pack whose `icon_theme` sets `applications`: applications' icons are looked
+    /// up there (and in the themes it inherits) before `hicolor`.
+    pub fn application_icon_theme(&self) -> Option<&str> {
+        self.packs
+            .iter()
+            .filter_map(|p| p.manifest.icon_theme.as_ref())
+            .find(|t| t.applications)
+            .and_then(|t| t.name.as_deref())
+    }
+
     /// The pictures the packs ship in their `wallpapers` directory, the first pack's first; a name an earlier pack has
     /// is not listed again.
     pub fn wallpaper_files(&self) -> Vec<WallpaperFile> {

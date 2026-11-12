@@ -2,8 +2,8 @@
 //! the asset packs by logical name ([`SystemIcons`], [`document`]): a pack's raster, SVG or template symbol file, or
 //! freedesktop names resolved in the host icon theme (a pack's `theme` entries and default icon map); a name no pack
 //! provides is drawn as a placeholder. An application's icon comes from its own `Icon=` entry: a name of the packs'
-//! `application.` namespace (the session's own applications), an absolute path or the `hicolor` theme ([`IconLookup`],
-//! [`ThemeIcons`]). Files load into premultiplied RGBA pixels.
+//! `application.` namespace (the session's own applications), an absolute path, or the `hicolor` theme, after the icon
+//! theme of a pack that opts in with `icon_theme.applications` ([`IconLookup`], [`ThemeIcons`]). Files load into premultiplied RGBA pixels.
 
 pub mod document;
 #[cfg(test)]
@@ -142,20 +142,22 @@ fn load_theme(name: &str, bases: &[PathBuf]) -> Option<Theme> {
     found.then_some(theme)
 }
 
-/// Name of the only icon theme applications' icons are looked up in: the base theme of the icon theme
-/// specification, where applications install their own icons. No other theme is searched, so the
-/// look of the system never depends on the host's theme.
+/// Name of the icon theme applications' icons are looked up in: the base theme of the icon theme specification, where
+/// applications install their own icons. Unless a pack opts in with `icon_theme.applications`, no other theme is
+/// searched, so the look of the system never depends on the host's theme.
 const APPLICATION_THEME: &str = "hicolor";
 
 /// Semantic names of the asset directory that are application icons.
 const APPLICATION_NAMESPACE: &str = "application.";
 
 /// Lookup of an application's own icon files by name and size: the asset directory for names in the
-/// `application.` namespace, else the `hicolor` theme only.
+/// `application.` namespace, else the pack's application icon theme (when one opts in) and the `hicolor` theme.
 pub struct IconLookup {
     assets: Assets,
     bases: Vec<PathBuf>,
-    theme: Option<Theme>,
+    /// The themes searched in order: the opted-in theme and the themes it inherits, then `hicolor`.
+    themes: Vec<Theme>,
+    host: HostThemes,
     cache: HashMap<(String, u32, u32), Option<PathBuf>>,
 }
 
@@ -172,36 +174,55 @@ impl IconLookup {
 
     /// Lookup of `assets` and explicit icon directories (tests).
     pub fn with_roots(assets: &Assets, bases: Vec<PathBuf>) -> Self {
-        let theme = load_theme(APPLICATION_THEME, &bases);
+        let mut host = HostThemes::new(bases.clone());
+        let themes = match assets.application_icon_theme() {
+            Some(theme) => host
+                .chain(Some(theme))
+                .iter()
+                .filter_map(|name| load_theme(name, &bases))
+                .collect(),
+            None => load_theme(APPLICATION_THEME, &bases).into_iter().collect(),
+        };
         Self {
             assets: assets.clone(),
             bases,
-            theme,
+            themes,
+            host,
             cache: HashMap::new(),
         }
     }
 
     fn search_theme(&self, name: &str, size: u32, scale: u32) -> Option<PathBuf> {
-        search(self.theme.as_ref()?, name, size, scale)
+        self.themes
+            .iter()
+            .find_map(|t| search(t, name, size, scale))
     }
 
     /// File of the icon `name` for `size` pixels at `scale`: a name of the `application.` namespace from the asset
-    /// directory (`application.file-manager`), an absolute path as it is, else the `hicolor` theme, then the flat
-    /// directories (pixmaps and legacy `~/.icons`).
+    /// directory (`application.file-manager`), an absolute path as it is, else the application icon themes, then the
+    /// flat directories (pixmaps and legacy `~/.icons`).
     pub fn find(&mut self, name: &str, size: u32, scale: u32) -> Option<PathBuf> {
         if name.is_empty() {
             return None;
         }
         if name.starts_with(APPLICATION_NAMESPACE) {
-            let own = IconName::new(name).ok().and_then(|n| {
-                self.assets
-                    .icon_sources(&n, size * scale)
-                    .into_iter()
-                    .find_map(|(_, s)| match s {
-                        IconSource::Raster(r) => Some(r.path),
-                        IconSource::Svg(p) => Some(p),
-                        IconSource::Symbol(_) | IconSource::Theme { .. } => None,
-                    })
+            let sources = IconName::new(name)
+                .map(|n| {
+                    self.assets
+                        .icon_sources(&n, size * scale)
+                        .into_iter()
+                        .map(|(_, s)| s)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let host = &mut self.host;
+            let own = sources.into_iter().find_map(|s| match s {
+                IconSource::Raster(r) => Some(r.path),
+                IconSource::Svg(p) => Some(p),
+                IconSource::Theme { names, theme } => {
+                    host.find(theme.as_deref(), &names, size * scale)
+                }
+                IconSource::Symbol(_) => None,
             });
             if own.is_some() {
                 return own;
@@ -440,7 +461,7 @@ impl ThemeIcons {
 
     /// The icon of the installed application whose desktop entry has the id `entry` (`org.example.Mail`, a trailing
     /// `.desktop` is accepted) at `px` × `px` device pixels, from the entry's `Icon=`; `None` when there is no such
-    /// entry, it names no icon, or that icon is not an application icon of the `hicolor` theme or a file.
+    /// entry, it names no icon, or that icon is not an application icon of the application icon themes or a file.
     pub fn load_for_entry(&mut self, entry: &str, px: u32) -> Option<tiny_skia::Pixmap> {
         let id = entry.strip_suffix(".desktop").unwrap_or(entry);
         let dirs = &self.application_dirs;
@@ -895,6 +916,67 @@ mod tests {
             "an icon of the theme hicolor lists in Inherits"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_pack_that_opts_in_puts_its_theme_before_hicolor_for_applications() {
+        let root = tmp("application-theme");
+        write_theme(&root, "hicolor");
+        let other = root.join("Glossy");
+        std::fs::create_dir_all(other.join("scalable/apps")).unwrap();
+        std::fs::write(other.join("index.theme"), "[Icon Theme]\nInherits=hicolor\nDirectories=scalable/apps\n\n[scalable/apps]\nSize=16\nMinSize=8\nMaxSize=512\nType=Scalable\n").unwrap();
+        for name in ["small", "preferences-system"] {
+            std::fs::write(
+                other.join(format!("scalable/apps/{name}.svg")),
+                "<svg xmlns='http://www.w3.org/2000/svg'/>",
+            )
+            .unwrap();
+        }
+        let pack = tmp("application-theme-pack");
+        std::fs::write(
+            pack.join("map.toml"),
+            "\"application.settings\" = [\"preferences-system\"]\n",
+        )
+        .unwrap();
+        let manifest = |applications: bool| {
+            format!(
+                r#"{{"version": 2, "icon_theme": {{"name": "Glossy", "map": "map.toml", "applications": {applications}}}}}"#
+            )
+        };
+
+        std::fs::write(pack.join("manifest.json"), manifest(true)).unwrap();
+        let assets = Assets::from_dirs(&[pack.clone()]);
+        assert_eq!(assets.application_icon_theme(), Some("Glossy"));
+        let mut l = IconLookup::with_roots(&assets, vec![root.clone()]);
+        assert_eq!(
+            l.find("small", 16, 1),
+            Some(other.join("scalable/apps/small.svg")),
+            "the opted-in theme wins over hicolor"
+        );
+        assert!(
+            l.find("vector", 128, 1)
+                .unwrap()
+                .ends_with("hicolor/scalable/apps/vector.svg"),
+            "a name it lacks comes from hicolor"
+        );
+        assert_eq!(
+            l.find("application.settings", 16, 1),
+            Some(other.join("scalable/apps/preferences-system.svg")),
+            "a session application's mapped theme name"
+        );
+
+        std::fs::write(pack.join("manifest.json"), manifest(false)).unwrap();
+        let assets = Assets::from_dirs(&[pack.clone()]);
+        assert_eq!(assets.application_icon_theme(), None);
+        let mut l = IconLookup::with_roots(&assets, vec![root.clone()]);
+        assert!(
+            l.find("small", 16, 1)
+                .unwrap()
+                .ends_with("hicolor/16x16/apps/small.png"),
+            "without the opt-in only hicolor"
+        );
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(pack);
     }
 
     #[test]

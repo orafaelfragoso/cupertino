@@ -808,8 +808,8 @@ mod tests {
             }),
             Some(Action::Request(Request::TogglePanel))
         );
-        // 1000 wide bar: clock 51 and control panel 28 from the right inset of 6, then the 26 wide
-        // status slot at 889 with its middle at 902, on the output at x = 1920
+        // 1000 wide bar: clock 51 and control panel 32 from the right inset of 6, then the 36 wide
+        // status slot at 875 with its middle at 893, on the output at x = 1920
         assert_eq!(
             f.resolve(Effect::SlotActivated {
                 slot: SlotKey::Status(":1.9/StatusNotifierItem".into())
@@ -817,7 +817,7 @@ mod tests {
             Some(Action::Request(Request::ActivateStatus {
                 service: ":1.9".into(),
                 path: "/StatusNotifierItem".into(),
-                x: 2822,
+                x: 2813,
                 y: 12
             }))
         );
@@ -1053,6 +1053,8 @@ mod tests {
     fn choose_first_result(f: &Fixture, text: &str) -> Option<Action> {
         let output = Rect::new(0.0, 0.0, 1000.0, 800.0);
         let mut c = MenuController::new(output, Box::new(MonoMeasure::default()));
+        // chosen at once, without the flash a chosen row gives first
+        c.cfg.flash_choice = false;
         c.set_content(f.feed.content(&f.shared));
         let help = c.layout().slot(&SlotKey::Menu(fallback::HELP_MENU))?.rect;
         let p = Point::new(help.x + help.w / 2.0, help.y + help.h / 2.0);

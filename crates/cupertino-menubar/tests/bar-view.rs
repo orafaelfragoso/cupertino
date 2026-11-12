@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use cupertino_assets::BUILTIN_FONT;
 use cupertino_kit::core::{
-    Application, Command, Key, PlaceholderIcons, RuntimeOptions, Window, WindowKey,
+    Application, Clock, Command, Key, PlaceholderIcons, RuntimeOptions, Window, WindowKey,
 };
 use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::layout::LayoutDirection;
@@ -24,7 +24,7 @@ use cupertino_menubar::controller::{Effect, MenuController};
 use cupertino_menubar::feed::Shared;
 use cupertino_menubar::geom::Rect;
 use cupertino_menubar::item::{ItemId, MenuItem, Shortcut, Toggle};
-use cupertino_menubar::layout::{BarContent, SlotKey};
+use cupertino_menubar::layout::{BarContent, BarMetrics, SlotKey};
 use cupertino_menubar::tone::BarTone;
 use cupertino_menubar::view::{self, BarFont, BarId, BarPointer, BarScene, Input, KitMeasure};
 use cupertino_theme::Theme;
@@ -32,6 +32,8 @@ use cupertino_ui_test::{AssistiveTechnology, Inspector, ManualClock, TestDriver}
 use tiny_skia::Pixmap;
 
 const BAR: BarId = BarId(1);
+/// One frame at 60 Hz, in nanoseconds.
+const FRAME_NS: u64 = 16_666_667;
 const OUTPUT: Rect = Rect::new(0.0, 0.0, 1024.0, 600.0);
 const FILE: i32 = 1;
 const NEW_FOLDER: i32 = 11;
@@ -130,6 +132,8 @@ impl Application for Bar {
         let font = BarFont::new(theme().tokens.typography());
         let mut controller =
             MenuController::new(OUTPUT, Box::new(KitMeasure { text: text(), font }));
+        // the bar here works at one time, so a choice is made at once, without the flash a chosen row gives first
+        controller.cfg.flash_choice = false;
         controller.set_content(content());
         let model = Model {
             controller,
@@ -207,6 +211,7 @@ fn budget() -> NonZeroU32 {
 
 struct Run {
     driver: TestDriver<Bar>,
+    clock: ManualClock,
 }
 
 impl Run {
@@ -222,6 +227,7 @@ impl Run {
             reduce_motion: false,
         };
         let tokens = ThemeTokens::cupertino(&theme(), preferences).unwrap();
+        let clock = ManualClock::new(Timestamp(0));
         let text = text();
         let glyphs = Arc::clone(&text);
         let options = RuntimeOptions {
@@ -242,7 +248,7 @@ impl Run {
                 ))
             }),
             accessibility: reader.map(AssistiveTechnology::adapter),
-            clock: Arc::new(ManualClock::new(Timestamp(0))),
+            clock: Arc::new(clock.clone()),
             on_window_error: None,
         };
         let capabilities = Capabilities {
@@ -250,7 +256,8 @@ impl Run {
             ..Capabilities::default()
         };
         let mut run = Self {
-            driver: TestDriver::new(capabilities, options, ManualClock::new(Timestamp(0))),
+            driver: TestDriver::new(capabilities, options, clock.clone()),
+            clock,
         };
         run.settle();
         run
@@ -271,14 +278,18 @@ impl Run {
         self.driver.assert_accessible("Menu bar");
     }
 
-    /// Runs until idle, configuring each window it opens and drawing each frame asked for.
+    /// Runs until idle, configuring each window it opens and drawing each frame asked for; once it has stepped a few
+    /// rounds at one time, the clock moves a frame a round so that transitions finish.
     fn settle_frames(&mut self) {
         let active = WindowStates {
             activated: true,
             ..WindowStates::default()
         };
         let mut configured: Vec<WindowId> = Vec::new();
-        for _ in 0..16 {
+        for round in 0..16 + 120 {
+            if round >= 16 {
+                self.clock.advance_by(FRAME_NS);
+            }
             self.driver.run_until_idle(budget()).unwrap();
             let mut idle = true;
             for (_, window) in self.driver.runtime().windows() {
@@ -289,7 +300,7 @@ impl Run {
                     idle = false;
                 }
                 if system.frame_requested(window).unwrap() {
-                    system.frame_ready(window, Timestamp(0)).unwrap();
+                    system.frame_ready(window, Clock::now(&self.clock)).unwrap();
                     idle = false;
                 }
             }
@@ -843,12 +854,19 @@ fn differ_only_in(a: &Pixmap, b: &Pixmap, inside: Rect) -> (bool, bool) {
 }
 
 /// While the control panel or the notification centre's list is open on the bar's output, its item is drawn
-/// highlighted as an open menu's title is, and a screen reader reads it as expanded; nothing else of the bar changes.
+/// highlighted as an open menu's title is, and a screen reader reads it as expanded; nothing else of the bar changes
+/// past the reach of the highlight.
 #[test]
 fn the_item_of_an_open_panel_is_highlighted_and_expanded() {
     let run = Run::start();
     let layout = run.model().controller.layout();
-    let slot = |key: &SlotKey| layout.slot(key).unwrap().rect;
+    // an item's highlight reaches a little past its slot on each side, and its edge touches the pixels it crosses
+    let reach = BarMetrics::default().status_highlight_overhang;
+    let slot = |key: &SlotKey| {
+        let r = layout.slot(key).unwrap().rect;
+        let (left, right) = ((r.x - reach).floor(), (r.right() + reach).ceil());
+        Rect::new(left, r.y, right - left, r.h)
+    };
     let (panel, clock) = (slot(&SlotKey::ControlPanel), slot(&SlotKey::Clock));
     let clock_name = run.model().controller.content().clock.clone();
     drop(run);

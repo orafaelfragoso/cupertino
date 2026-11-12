@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cupertino_menubar::controller::{Effect, MenuController};
+use cupertino_menubar::controller::{Effect, MenuController, FLASH_OFF, FLASH_ON};
 use cupertino_menubar::dbus::dbusmenu::{
     apply_properties_update, make_node, DBusMenuClient, MenuUpdate, RawNode,
 };
@@ -277,7 +277,9 @@ fn controller_drives_a_dbusmenu_session_end_to_end() {
         let row = c.levels()[0].layout.rows[0].rect;
         let target = Point::new(row.x + 5.0, row.y + 5.0);
         c.pointer_move(target, 0.1);
-        let out = c.pointer_release(target, 0.2);
+        c.pointer_release(target, 0.2);
+        // the row flashes, then is chosen
+        let out = c.tick(0.2 + FLASH_OFF + FLASH_ON);
         let activated = out
             .effects
             .iter()

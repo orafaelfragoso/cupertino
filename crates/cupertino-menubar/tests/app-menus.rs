@@ -4,7 +4,7 @@
 #![cfg(feature = "app")]
 
 use cupertino_menu_model::{ActionName, MenuBar};
-use cupertino_menubar::controller::{Effect, MenuController};
+use cupertino_menubar::controller::{Effect, MenuController, FLASH_OFF, FLASH_ON};
 use cupertino_menubar::desktop::AppName;
 use cupertino_menubar::feed::{BarFeed, Shared};
 use cupertino_menubar::geom::{Point, Rect};
@@ -108,7 +108,9 @@ fn choose(bus: &PrivateBus, app_id: &str, menus: &MenuBar, title: &str, label: &
         .unwrap_or_else(|| panic!("the {title} menu has no {label}"))
         .rect;
     controller.pointer_move(centre(row), 0.1);
-    let outcome = controller.pointer_release(centre(row), 0.2);
+    controller.pointer_release(centre(row), 0.2);
+    // the row flashes, then is chosen
+    let outcome = controller.tick(0.2 + FLASH_OFF + FLASH_ON);
     let chosen: Vec<_> = outcome
         .effects
         .into_iter()

@@ -80,7 +80,15 @@ fn content() -> BarContent {
     }
 }
 
+/// A controller whose choices are made at once, as under Reduce Motion: the flash a chosen row gives first has a test
+/// of its own.
 fn controller() -> MenuController {
+    let mut c = flashing_controller();
+    c.cfg.flash_choice = false;
+    c
+}
+
+fn flashing_controller() -> MenuController {
     let mut c = MenuController::new(OUT, Box::new(MonoMeasure::default()));
     c.set_content(content());
     c
@@ -146,6 +154,36 @@ fn click_opens_a_sticky_menu_and_a_second_click_chooses() {
     assert!(has(&o, &Effect::Closed));
     assert!(!c.is_open());
     assert_eq!(c.mode(), Mode::Idle);
+}
+
+#[test]
+fn a_chosen_row_goes_dark_then_lights_again_and_only_then_is_chosen_and_the_menus_close() {
+    use cupertino_menubar::controller::{FLASH_OFF, FLASH_ON};
+    let mut c = flashing_controller();
+    c.pointer_press(slot_center(&c, &file()), 0.0);
+    c.pointer_move(row_center(&c, 0, 16), 0.2);
+    let o = c.pointer_release(row_center(&c, 0, 16), 0.4);
+    assert!(!o
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Activate { .. })));
+    assert!(c.is_open(), "open while the row flashes");
+    assert_eq!(selected_id(&c, 0), None, "the row goes dark first");
+    assert_eq!(c.next_deadline(), Some(0.4 + FLASH_OFF));
+    c.tick(0.4 + FLASH_OFF);
+    assert_eq!(selected_id(&c, 0), Some(16), "then lights again");
+    let ends = 0.4 + FLASH_OFF + FLASH_ON;
+    assert_eq!(c.next_deadline(), Some(ends));
+    let o = c.tick(ends);
+    assert!(has(
+        &o,
+        &Effect::Activate {
+            slot: file(),
+            item: ItemId(16)
+        }
+    ));
+    assert!(has(&o, &Effect::Closed));
+    assert!(!c.is_open());
 }
 
 #[test]
@@ -689,6 +727,7 @@ fn lazy_submenus_load_through_set_content() {
     let mut cont = content();
     cont.menus[0].children[1] = MenuItem::submenu(11, "Open Recent", vec![]);
     let mut c = MenuController::new(OUT, Box::new(MonoMeasure::default()));
+    c.cfg.flash_choice = false;
     c.set_content(cont);
     c.focus_bar();
     c.key(Key::Right, 0.1);
@@ -732,6 +771,7 @@ fn narrow_output_hides_menus_that_do_not_fit() {
         Rect::new(0.0, 0.0, 260.0, 600.0),
         Box::new(MonoMeasure::default()),
     );
+    c.cfg.flash_choice = false;
     c.set_content(content());
     assert!(!c.layout().hidden_menus.is_empty() || !c.layout().hidden_status.is_empty());
     c.focus_bar();
@@ -749,6 +789,7 @@ fn narrow_output_hides_menus_that_do_not_fit() {
 fn second_output_popups_stay_on_their_output() {
     let right = Rect::new(1920.0, 0.0, 1280.0, 800.0);
     let mut c = MenuController::new(right, Box::new(MonoMeasure::default()));
+    c.cfg.flash_choice = false;
     c.set_content(content());
     let p = slot_center(&c, &edit());
     c.pointer_press(p, 0.0);
@@ -773,6 +814,7 @@ fn with_help() -> MenuController {
         ],
     ));
     let mut c = MenuController::new(OUT, Box::new(MonoMeasure::default()));
+    c.cfg.flash_choice = false;
     c.set_content(content);
     c
 }
@@ -1343,6 +1385,7 @@ fn nested() -> MenuController {
         ],
     ));
     let mut c = MenuController::new(OUT, Box::new(MonoMeasure::default()));
+    c.cfg.flash_choice = false;
     c.set_content(content);
     c
 }

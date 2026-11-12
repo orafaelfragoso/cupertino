@@ -1079,33 +1079,51 @@ mod tests {
     }
 
     #[test]
-    fn wifi_lists_known_then_other_networks_by_name() {
-        let menu = wifi_fixture().menu(ExtraKind::Wifi);
+    fn wifi_shows_the_joined_network_and_lists_the_others_by_strength_then_name_once_opened() {
+        let mut extras = wifi_fixture();
+        let menu = extras.menu(ExtraKind::Wifi);
         assert_eq!(
             labels(&menu),
             [
                 "Wi-Fi",
                 "---",
-                "Known Networks",
+                "Joined network",
                 "Home",
-                "Office",
                 "---",
-                "Other Networks",
-                "Attic",
-                "Lobby",
-                "cafe_guest"
+                "Other networks",
+                "---",
+                "Wi-Fi Settings\u{2026}"
             ]
         );
-        assert_eq!(row(&menu, "Home").toggle, Toggle::Check(true));
         assert!(
-            !row(&menu, "Known Networks").enabled,
+            !row(&menu, "Joined network").enabled,
             "section titles are not rows to pick"
+        );
+        extras.wifi_list_open = true;
+        assert_eq!(
+            labels(&extras.menu(ExtraKind::Wifi)),
+            [
+                "Wi-Fi",
+                "---",
+                "Joined network",
+                "Home",
+                "---",
+                "Other networks",
+                "Attic",
+                "Lobby",
+                "Office",
+                "cafe_guest",
+                "---",
+                "Wi-Fi Settings\u{2026}"
+            ]
         );
     }
 
     #[test]
-    fn wifi_joins_networks_that_need_no_passphrase() {
-        let menu = wifi_fixture().menu(ExtraKind::Wifi);
+    fn wifi_joins_networks_it_can_and_asks_for_the_passphrase_of_the_rest() {
+        let mut extras = wifi_fixture();
+        extras.wifi_list_open = true;
+        let menu = extras.menu(ExtraKind::Wifi);
         let action = |label| menu.action(row(&menu, label).id).cloned();
         assert_eq!(
             action("cafe_guest"),
@@ -1120,14 +1138,18 @@ mod tests {
             Some(ExtraAction::JoinNetwork("Office".into())),
             "saved credentials"
         );
+        assert_eq!(
+            action("Attic"),
+            Some(ExtraAction::PromptNetwork("Attic".into()))
+        );
         assert_eq!(action("Home"), None, "already joined");
-        assert_eq!(action("Attic"), None);
-        assert!(!row(&menu, "Attic").enabled);
+        assert!(!row(&menu, "Home").enabled);
+        assert_eq!(action("Other networks"), Some(ExtraAction::ToggleWifiList));
         assert_eq!(action("Wi-Fi"), Some(ExtraAction::SetWifiEnabled(false)));
     }
 
     #[test]
-    fn a_single_network_takes_the_singular_title_and_wifi_off_lists_none() {
+    fn without_a_joined_network_wifi_has_no_joined_section_and_wifi_off_lists_none() {
         let mut extras = Extras {
             wifi: Some(WifiState {
                 enabled: true,
@@ -1137,11 +1159,20 @@ mod tests {
         };
         assert_eq!(
             labels(&extras.menu(ExtraKind::Wifi)),
-            ["Wi-Fi", "---", "Known Network", "Home"]
+            [
+                "Wi-Fi",
+                "---",
+                "Other networks",
+                "---",
+                "Wi-Fi Settings\u{2026}"
+            ]
         );
         extras.wifi.as_mut().expect("set above").enabled = false;
         let menu = extras.menu(ExtraKind::Wifi);
-        assert_eq!(labels(&menu), ["Wi-Fi"]);
+        assert_eq!(
+            labels(&menu),
+            ["Wi-Fi", "---", "---", "Wi-Fi Settings\u{2026}"]
+        );
         assert_eq!(
             menu.action(menu.rows[0].id),
             Some(&ExtraAction::SetWifiEnabled(true))

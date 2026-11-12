@@ -922,7 +922,8 @@ mod tests {
             ("<Primary>F5", "Ctrl+F5", "Ctrl+F5"),
             ("<Primary>Escape", "Ctrl+Esc", "Ctrl+Esc"),
             ("<Alt>F4", "Alt+F4", "Alt+F4"),
-            ("<Super>q", "Super+Q", "Super+Q"),
+            // a Super chord reaches the application from the Ctrl one
+            ("<Super>q", "Ctrl+Q", "Super+Q"),
         ];
         for (accel, cupertino, classic) in cases {
             assert_eq!(

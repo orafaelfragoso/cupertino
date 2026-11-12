@@ -707,7 +707,8 @@ mod tests {
         let app = l.slot(&SlotKey::AppMenu).unwrap();
         assert!(app.bold);
         assert_eq!(app.rect.x, 6.0);
-        assert!((app.rect.w - (5.0 * 7.5 + 16.0)).abs() < 1e-9);
+        let metrics = BarMetrics::default();
+        assert!((app.rect.w - (5.0 * 7.5 + 2.0 * metrics.title_padding)).abs() < 1e-9);
         let clock = l.slot(&SlotKey::Clock).unwrap();
         assert!((clock.rect.right() - (1920.0 - 6.0)).abs() < 1e-9);
         assert!(l.hidden_menus.is_empty() && l.hidden_status.is_empty());
@@ -824,7 +825,7 @@ mod tests {
         let min_w = m.padding_x
             + m.mark_column
             + 11.0 * 7.0
-            + m.padding_x
+            + m.trailing_inset
             + m.shortcut_gap
             + 2.0 * 7.0
             + m.arrow_width;
@@ -861,7 +862,7 @@ mod tests {
             "Alt swaps a row without resizing the menu"
         );
         assert_eq!(plain.shortcut_key_width, alt.shortcut_key_width);
-        let alternate = m.padding_x + 26.0 * 7.0 + m.padding_x + m.shortcut_gap + 3.0 * 7.0;
+        let alternate = m.padding_x + 26.0 * 7.0 + m.trailing_inset + m.shortcut_gap + 3.0 * 7.0;
         assert!((plain.rect.w - alternate).abs() < 1e-9);
         assert_eq!(plain.index_of(ItemId(11)), Some(0));
         assert_eq!(alt.index_of(ItemId(10)), Some(0));

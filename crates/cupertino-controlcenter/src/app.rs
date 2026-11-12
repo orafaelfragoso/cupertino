@@ -21,7 +21,8 @@ use cupertino_controlcenter::system::{
 use cupertino_controlcenter::view::{
     self, focus_key, Input, Opened, Presentation, Via, APP_ID, CATCHER_APP_ID, DETAIL_FOCUS,
 };
-use cupertino_kit::core::{Application, Command, Key, Window};
+use cupertino_kit::controls::FrameClock;
+use cupertino_kit::core::{Application, Command, Element, Key, Window};
 use cupertino_kit::platform::{SystemAppearance, WindowSpec};
 use cupertino_modifiers::Profile;
 use cupertino_pipewire::Wpctl;
@@ -51,9 +52,6 @@ const FAKE_DEVICE: (&str, &str) = ("00:11:22:33:44:55", "Headphones");
 const FAKE_OUTPUTS: [(u32, &str); 2] = [(31, "Speakers"), (47, "Headphones")];
 const FAKE_BRIGHTNESS: f64 = 0.6;
 const FAKE_VOLUME: f64 = 0.4;
-
-/// The fade's frame interval.
-const FRAME: Duration = Duration::from_micros(16_667);
 
 /// Command line of the process.
 #[derive(Default)]
@@ -480,6 +478,8 @@ pub struct Panel {
     moving: bool,
     /// The keyboard or assistive technology started the motion, so the focus follows the view when it ends.
     follow_focus: bool,
+    /// The fade or a detail view's motion runs: the panel's window asks for frames, each one a step.
+    animating: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -487,6 +487,8 @@ pub enum Message {
     Request(Request),
     Input(Input),
     Timer(u64),
+    /// The panel's window got a frame from the compositor while the panel moves.
+    Frame,
     /// The bus thread and the window system's roles are gone.
     Unheard,
 }
@@ -612,24 +614,19 @@ fn listen(requests: &async_channel::Receiver<Request>) -> Command<Message> {
     }))
 }
 
-/// The timer for the controller's next write or refresh, the end of the fade, or the next frame of the fade or of a
-/// detail view's motion.
+/// The timer for the controller's next write or refresh or the end of the fade; the frames of the fade and of a
+/// detail view's motion come from the panel's window ([`Message::Frame`]), one per frame the compositor gives it.
 fn schedule(model: &mut Panel) -> Vec<Command<Message>> {
     model.timer += 1;
     let now = model.now();
-    let next = model
-        .controller
-        .next_wakeup(now)
-        .map(Duration::from_secs_f64);
-    let animating = model.controller.phase(now) == Phase::Hiding
+    model.animating = model.controller.phase(now) == Phase::Hiding
         || model.controller.opening(now)
         || (model.moving && model.controller.phase(now) == Phase::Shown);
-    let wait = if animating {
-        Some(next.map_or(FRAME, |next| next.min(FRAME)))
-    } else {
-        next
-    };
-    let Some(wait) = wait else {
+    let Some(wait) = model
+        .controller
+        .next_wakeup(now)
+        .map(Duration::from_secs_f64)
+    else {
         return Vec::new();
     };
     let timer = model.timer;
@@ -637,6 +634,16 @@ fn schedule(model: &mut Panel) -> Vec<Command<Message>> {
         async_io::Timer::after(wait).await;
         Message::Timer(timer)
     }))]
+}
+
+/// The controller and the motion advance to now.
+fn step(model: &mut Panel) -> Vec<Command<Message>> {
+    let now = model.now();
+    model.controller.tick(now);
+    let focus = model.settle(now);
+    let mut commands = schedule(model);
+    commands.extend(focus.map(|key| Command::Focus(Key::from(key))));
+    commands
 }
 
 fn start(
@@ -657,6 +664,7 @@ fn start(
         expansion: None,
         moving: false,
         follow_focus: false,
+        animating: false,
     };
     (model, vec![first])
 }
@@ -718,15 +726,10 @@ impl Application for Panel {
                 commands.extend(schedule(model));
                 commands
             }
-            Message::Timer(timer) if timer == model.timer => {
-                let now = model.now();
-                model.controller.tick(now);
-                let focus = model.settle(now);
-                let mut commands = schedule(model);
-                commands.extend(focus.map(|key| Command::Focus(Key::from(key))));
-                commands
-            }
+            Message::Timer(timer) if timer == model.timer => step(model),
             Message::Timer(_) => Vec::new(),
+            Message::Frame if model.animating => step(model),
+            Message::Frame => Vec::new(),
             Message::Unheard => {
                 eprintln!("cupertino-controlcenter: the bus interface stopped");
                 vec![Command::Exit]
@@ -737,7 +740,12 @@ impl Application for Panel {
     fn view(model: &Panel) -> Vec<Window<Message>> {
         let now = model.now();
         let controls = model.controller.controls();
-        let panel = view::panel(controls, model.presentation(now), input);
+        let mut panel = view::panel(controls, model.presentation(now), input);
+        // what moves steps once per frame the compositor gives the panel's window, never on a timer of its own
+        panel.content = Element::from(FrameClock {
+            content: panel.content,
+            on_frame: model.animating.then_some(Message::Frame),
+        });
         match model.controller.phase(now) {
             Phase::Hidden => Vec::new(),
             Phase::Shown => vec![view::catcher(input), panel],
@@ -854,9 +862,12 @@ mod tests {
     fn a_dismissal_fades_the_card_without_the_catcher() {
         let mut model = panel();
         Panel::update(&mut model, Message::Request(Request::Toggle));
-        let commands = Panel::update(&mut model, Message::Input(Input::Dismiss));
+        Panel::update(&mut model, Message::Input(Input::Dismiss));
         assert_eq!(app_ids(&model), [APP_ID]);
-        assert!(timer(&commands), "the fade's next frame is scheduled");
+        assert!(
+            model.animating,
+            "the card's window asks for the fade's frames"
+        );
     }
 
     #[test]
@@ -911,11 +922,14 @@ mod tests {
     fn a_detail_view_grows_out_of_its_tile_and_takes_the_focus_once_open() {
         let mut model = panel();
         Panel::update(&mut model, Message::Request(Request::Toggle));
-        let commands = Panel::update(
+        Panel::update(
             &mut model,
             Message::Input(Input::Expand(Detail::WiFi, Via::Keyboard)),
         );
-        assert!(timer(&commands), "the motion's next frame is scheduled");
+        assert!(
+            model.animating,
+            "the card's window asks for the motion's frames"
+        );
         assert_eq!(model.controller.detail(), Some(Detail::WiFi));
         let (_, progress, morph) = detail(&model).unwrap();
         assert!(progress < 0.1 && morph);
@@ -1068,6 +1082,36 @@ mod tests {
         assert!(app_ids(&model).is_empty());
     }
 
+    /// The fade steps once per frame the card's window gets: each frame moves it on, and once it ends the frames
+    /// stop and the card's window goes.
+    #[test]
+    fn the_fade_steps_at_each_frame_of_the_card_s_window_until_it_ends() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        model.start -= Duration::from_secs(1);
+        Panel::update(&mut model, Message::Frame);
+        Panel::update(&mut model, Message::Input(Input::Dismiss));
+        let mut frames = 0;
+        let mut last = model.presentation(model.now()).alpha;
+        while model.animating {
+            model.start -= Duration::from_micros(16_667);
+            Panel::update(&mut model, Message::Frame);
+            frames += 1;
+            let alpha = model.presentation(model.now()).alpha;
+            assert!(
+                alpha < last || !model.animating,
+                "frame {frames} moves the fade"
+            );
+            last = alpha;
+            assert!(frames < 200, "the fade ends");
+        }
+        assert!(frames > 5, "the fade runs over frames: {frames}");
+        assert!(app_ids(&model).is_empty());
+        let before = model.timer;
+        assert!(Panel::update(&mut model, Message::Frame).is_empty());
+        assert_eq!(model.timer, before, "a frame after the fade does nothing");
+    }
+
     #[test]
     fn a_stale_timer_is_ignored() {
         let mut model = panel();
@@ -1095,8 +1139,8 @@ mod tests {
             );
             assert_eq!(model.controller.phase(model.now()), Phase::Hidden);
             assert!(
-                !timer(&commands),
-                "fading {fading}: no fade frame is scheduled"
+                !timer(&commands) && !model.animating,
+                "fading {fading}: no fade frame is asked for"
             );
             Panel::update(&mut model, Message::Request(Request::Toggle));
             assert_eq!(app_ids(&model), [CATCHER_APP_ID, APP_ID]);

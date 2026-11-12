@@ -26,19 +26,19 @@ Cupertino is an Arch-based Linux distribution with its own Wayland desktop, writ
 
 ## Status
 
-Work is grouped in seven phases. Assessed on 2026-11-04 against merged commit `0a928c70`, phase 4 updated on 2026-11-07:
+Work is grouped in seven phases. The [roadmap](docs/src/roadmap.md) records the assessment, last updated on 2026-11-12 at commit `b030dced`:
 
 | Phase | State |
 |---|---|
 | 1. Baseline and trust | Done |
 | 2. Transport and scene | Done |
 | 3. CupertinoKit core | Done |
-| 4. Apps and portals | In progress: every Cupertino app and shell process draws with Kit, and five portal interfaces exist; installed-session and hardware checks remain |
-| 5. Command line, diagnostics, SDK | Started: the `cupertino` command with one subcommand, `cupertino-diagnose`, a first C interface |
+| 4. Apps and portals | In progress: every Cupertino app and shell process draws with Kit except the password prompts and the portal's colour picker, and five portal interfaces exist; the [desktop quality backlog](docs/src/desktop-quality.md) and the installed-session and hardware checks remain |
+| 5. Command line, diagnostics, SDK | In progress: the `cupertino` command with its command groups, diagnostic events, and a C SDK whose library runs the headless backend; the C interface for windows and UI events remains |
 | 6. Hardware and distribution | In progress: ISO, installer, signed packages and rollback exist; hardware acceptance and transactional updates remain open |
 | 7. AI and voice | Not started |
 
-The live ISO and TTY backend have VM evidence. The full hardware matrix and installed-system acceptance remain open. The [book](docs/src/roadmap.md) has the roadmap, and [Install from a USB stick](docs/src/install-usb.md) the steps.
+The live ISO and TTY backend have VM evidence. The full hardware matrix and installed-system acceptance remain open. [Install from a USB stick](docs/src/install-usb.md) has the steps.
 
 Cupertino serves Wayland clients. X11 programs run through [`xwayland-satellite`](https://github.com/Supreeeme/xwayland-satellite) when it is installed, started at the first X11 program. The live image ships it with Xwayland; the `cupertino` package lists both as optional (`sudo pacman -S xwayland-satellite xorg-xwayland`); without `xwayland-satellite`, X11 programs stay off.
 
@@ -57,6 +57,8 @@ You need a current stable Rust toolchain, OpenGL ES drivers (Mesa) and a termina
 Or start the full desktop on a text console (`Ctrl+Alt+F3`) with `./run-cupertino.sh`. It builds the release binaries, starts the compositor and the shell processes with a fresh session bus, and writes `~/cupertino-tty.log`; it installs nothing and enables no service. `Ctrl+Alt+Backspace` quits and `Ctrl+Alt+F<n>` returns to the console you came from. The TTY backend has run in a virtual machine, not yet on real hardware.
 
 Known problems and how to report them: [Trying Cupertino](docs/src/trying.md).
+
+To install a build of your checkout on Arch Linux, `scripts/package-local.sh` builds the `cupertino`, `cupertino-data` and `cupertino-kit` packages of the committed HEAD; install them together with `sudo pacman -U ~/.cache/cupertino-pkg/*.pkg.tar.zst`. See [Building and running](docs/src/building.md#installing-a-local-build).
 
 ## Keys
 
@@ -86,11 +88,18 @@ Cupertino is a set of small processes around one compositor. A crash in a shell 
 | `cupertino-launcher` | search and launch panel |
 | `cupertino-notifications` | banners, notification list, `org.freedesktop.Notifications` |
 | `cupertino-controlcenter`, `cupertino-osd` | control panel, volume and brightness overlays |
-| `cupertino-files`, `cupertino-settings`, `cupertino-screenshot` | file manager, settings app, screenshot tool |
+| `cupertino-windowmanager` | stage and tiling policy (off by default) |
+| `cupertino-files`, `cupertino-settings`, `cupertino-screenshot` | file manager (and the items on the desktop), settings app, screenshot tool |
+| `cupertino-portal` | xdg-desktop-portal backend: file chooser, screen sharing, screenshots, app chooser, appearance settings |
+| `cupertino-polkit-agent`, `cupertino-keyring-prompter` | the password prompts of polkit and of the keyring |
+| `cupertino-control` | desktop control for local agents, with the person's consent per app, and its MCP bridge |
 | `cupertino-login`, `cupertino-sessiond` | lock screen and greeter, root-owned session manager |
-| `cupertino-netd`, `cupertino-btd`, `cupertino-powerd` | network, Bluetooth and power daemons |
+| `cupertino-netd`, `cupertino-btd`, `cupertino-powerd` | network, Bluetooth and power daemons; the installed system uses NetworkManager and BlueZ for network and Bluetooth |
+| `cupertino`, `cupertino-diagnose` | the command line ([The cupertino command](docs/src/cupertino-command.md)) and the machine check it replaces |
 
-The crates are layered (`foundation`, `models`, `platform`, `render`, `core`, `shell`, `services`, `apps`, `tools`). Model crates are pure logic and are tested without a display. `cargo run -p cupertino-layers` checks that a crate only depends on layers below it. The design is described in [Architecture](docs/src/architecture.md); each crate has its own README.
+The compositor composites and draws its materials on the GPU with OpenGL ES. CupertinoKit applications and shell processes currently rasterize their windows on the CPU and hand them over in shared memory; drawing them on the GPU, with the CPU only as a fallback, is planned ([#155](https://github.com/orafaelfragoso/cupertino/issues/155)).
+
+The 87 crates are layered (`foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui`, `core`, `shell`, `services`, `apps`, `tools`). Model crates are pure logic and are tested without a display. `cargo run -p cupertino-layers` checks that a crate only depends on layers below it. The design is described in [Architecture](docs/src/architecture.md); each crate has its own README.
 
 ## Asset packs
 

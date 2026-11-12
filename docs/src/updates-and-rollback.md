@@ -56,7 +56,7 @@ If `pacman-key --populate cupertino` failed during the install, the installer pr
 | File | Installed as | What it does |
 |---|---|---|
 | `cupertino-keyring` (`PKGBUILD`, `cupertino-keyring.install`) | the package | Ships the public key as `/usr/share/pacman/keyrings/cupertino.gpg`, the primary key's fingerprint as `cupertino-trusted` and an empty `cupertino-revoked` in the same directory, then runs `pacman-key --populate cupertino` on install and on upgrade. |
-| `cupertino-rollback` | `/usr/bin/cupertino-rollback` | Installs an earlier release of `cupertino` and `cupertino-data`. |
+| `cupertino-rollback` | `/usr/bin/cupertino-rollback` | Installs an earlier release of `cupertino` and `cupertino-data` (`cupertino-kit`, the C SDK, is not rolled back). |
 | `cupertino-save-previous` | `/usr/share/libalpm/scripts/cupertino-save-previous` | Keeps the installed release before an upgrade. |
 | `cupertino-previous.hook` | `/usr/share/libalpm/hooks/cupertino-previous.hook` | The pacman hook that runs the script above. |
 | `build-repo` | not installed | Writes a signed repository tree. |
@@ -166,4 +166,4 @@ packaging/ci/test-keyring.sh [OUT_DIR]
 packaging/ci/test-repo.sh [OUT_DIR]
 ```
 
-The first builds the keyring and stand-in packages, serves a signed repository on the loopback and exercises the bootstrap order, an update, the hook, the rollback and its refusals, and `archive-prune`. The second runs `build-repo` for two releases and checks the tree, and that pacman refuses a tampered database or package. I did not run them while writing this page.
+The first builds the keyring and stand-in packages, serves a signed repository on the loopback and exercises the bootstrap order, an update, the hook, the rollback and its refusals, and `archive-prune`. The second runs `build-repo` for two releases and checks the tree, and that pacman refuses a tampered database or package. They were not run for this page.

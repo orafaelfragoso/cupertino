@@ -60,7 +60,7 @@ and restarting the session are separate operations; neither is the default for a
 | Files or Settings | Regular applications: build the binary with `--features app` and run that build directly; no installed file is replaced | Quit the installed copy first when the change concerns its single instance; preserve navigation and pending work |
 | Dock, menu bar, launcher, notifications, control panel, OSD or window manager | The development folder loop below, as the session's own user | A short interruption of that component; transient state can be lost (overview/switcher, queued notifications, window placement, open panels) |
 | Portal | Build only `cupertino-portal` with `--features app`; test it nested or headless and leave it for a planned package update; after the update, `cupertino shell restart portal` | Restarting the portal ends its active screen-sharing sessions and outstanding requests |
-| Login, lock screen, authentication agent, desktop control | Use private backends, a nested session or a VM before a planned package update; after the update, `cupertino shell restart NAME` (`login`, `polkit-agent`, `desktop-control`) | They never start from the development folder; a restart loses what the process held in memory (an open prompt, every desktop-control run) |
+| Login, lock screen, authentication prompts, desktop control | Use private backends, a nested session or a VM before a planned package update; after the update, `cupertino shell restart NAME` (`login`, `polkit-agent`, `keyring-prompter`, `desktop-control`) | They never start from the development folder; a restart loses what the process held in memory (an open prompt, every desktop-control run) |
 | Session manager, network/Bluetooth/power daemons | Use private backends, a nested session or a VM before a planned package update | These can affect authentication, connectivity or device state; the session manager takes a new package at the next login, the daemons through their system service units |
 | Server, its linked libraries or vendored Smithay | Build the server and exercise it nested or headless | A new server binary takes effect in the installed desktop at its next session start |
 | A library shared by applications | Rebuild the consuming binaries needed to test the change | Rust libraries are linked into each consumer; copying a library alone does not update them |
@@ -78,8 +78,8 @@ sudo cupertino dev-folder enable --components dock,menubar
 This sets the `dev_folder` key of `/etc/cupertino/compositor.json` (see [The shell processes](#the-shell-processes))
 and creates the folder with mode 0700 for the user who ran `sudo`. Eligible processes are those whose roles are all
 among `session`, `menu_bar`, `dock` and `window_manager`: in the packaged configuration `dock`, `menubar`, `launcher`,
-`notifications`, `controlcenter`, `osd` and `windowmanager`. `login` (the lock screen and the session agent), the
-portal, the authentication agent, desktop control, a data-control client and the server itself are never eligible.
+`notifications`, `controlcenter`, `osd`, `desktop` (Files showing the desktop's items, program `cupertino-files`) and
+`windowmanager`. `login` (the lock screen and the session agent), the portal, the authentication prompts, desktop control, a data-control client and the server itself are never eligible.
 A server that supports the key reads it again when the file changes; it applies from each process's next start.
 `sudo cupertino dev-folder disable` removes the key and leaves the folder's files in place.
 
@@ -135,7 +135,7 @@ before the installed program, whose package files keep their build time, and `cu
 (`shell.dev_folder`) with the `use-installed` command to run.
 
 After a package install, a change that lies only in a supervised process (a name `cupertino shell list` shows, the
-built-in `portal`, `polkit-agent` and `desktop-control` included) takes effect with `cupertino shell restart NAME`,
+built-in `portal`, `polkit-agent`, `keyring-prompter` and `desktop-control` included) takes effect with `cupertino shell restart NAME`,
 deferred while the process is in use. Only a change to the server, to what it links or to the session manager needs
 a new login.
 
@@ -145,7 +145,7 @@ The server, the login process, the session manager, the authentication agent, th
 system daemons are not swapped in a running session. Build them, exercise them nested or headless (`cupertino desktop
 start --backend nested|headless`, the integration tests) or in a VM, and take them into the installed desktop through
 a planned package update: then `cupertino shell restart NAME` for the processes the server supervises (`login`,
-`portal`, `polkit-agent`, `desktop-control`), a new login for the server and the session manager. When a manual replacement is unavoidable for an investigation, follow
+`portal`, `polkit-agent`, `keyring-prompter`, `desktop-control`), a new login for the server and the session manager. When a manual replacement is unavoidable for an investigation, follow
 the same identity rules as above: find the process through the server's runtime record under
 `$XDG_RUNTIME_DIR/cupertino/server-<socket>.json`, its parent and start time, never by name alone (another nested
 session may run the same program); keep a rollback copy, stage the new executable beside the installed one and rename
@@ -341,71 +341,24 @@ protocols, not requirements to link another implementation. MCP's small local st
 in Rust. EIS/RemoteDesktop interoperability can be considered later as an in-tree protocol implementation if needed;
 it is not a prerequisite for Terra to operate Cupertino.
 
-### Existing foundations and gaps
+### Where it lives
 
-- `cupertino-cli` already provides a typed command registry, JSON/JSONL results, request IDs, version reports and
-  diagnostic export. Extend this interface before adding a second desktop command vocabulary.
-- Kit's own `cupertino-ui-core` already maintains roles, names, states, bounds, protected values and supported
-  actions. Export this native model for Cupertino applications. The existing AT-SPI adapter remains an accessibility
-  integration; native automation does not depend on AccessKit or AT-SPI.
-- The compositor already routes keyboard, pointer, button and axis events through shared handlers. The native
-  control endpoint should feed those handlers with explicit device ownership, not bypass menus, grabs or focus.
-- `cupertino-ui-test` supplies deterministic input traces, a manual clock, semantic audits and inspectable runtime
-  state. The server's integration tests cover real shell processes on private buses; captures supply visual evidence.
-- Privileged connections are created by the server and handed to supervised processes as `WAYLAND_SOCKET`.
-  Reuse that capability boundary. The current eight-bit capability set is full: adding a control capability also
-  requires a wider bitset and tests that existing roles keep exactly their existing privileges.
-- The portal currently provides Settings, FileChooser, ScreenCast, AppChooser and Screenshot. Existing guarded
-  image-copy capture and window geometry can be reused by a trusted controller without adding a portal backend.
-  Screen sharing supplies pixels, not permission or a mechanism to inject input.
-
-### Source changes
-
-The following records the architecture and remaining integration roadmap; the implemented output-scoped interfaces are described above.
-
-| Area | Native change |
+| Area | What it does |
 | --- | --- |
-| `cupertino-protocols` | Define a versioned private control protocol with explicit requests, bounded batches, acknowledgements, refusals, session epochs and output/window handles |
-| `cupertino-server` and an in-tree pure control model | Add the control capability, model grants/refusals without I/O, enforce them on every request, route accepted input through existing handlers, expose current geometry, and clean up the controller's held input |
-| `cupertino-shell-client` | Bind the private control protocol through the existing transport extension mechanism |
-| An in-tree Rust control process | Receive the supervised connection; own the local tool connection and bounded requests, with capture through grant-aware existing protocols |
-| `cupertino-login` and `cupertino-menubar` | Let the trusted session agent present consent in Kit and publish active-control status/stop, with the compositor enforcing genuine-user approval and a reserved revoke shortcut |
-| `cupertino-app-protocols`, `cupertino-protocol-app` and Kit | Publish only each application's own semantic tree and accept only supported actions routed back to that publication; emit explicit window-close and node-removal updates |
-| `cupertino-cli` and the control process | Provide typed local commands and a Rust MCP stdio adapter over the same operations |
-| Contract registry and packaging | Register the private globals, executable and local IPC; install the owned process with the existing trusted-path rules |
+| `cupertino-control-model` | Grant states, epochs, scope and capability narrowing, the app a request comes from, the remembered answers, and the ownership of held keys and buttons per input source, without I/O |
+| `cupertino-protocols` | The private `cupertino_control_v1` and `cupertino_control_authority_v1` protocols |
+| `cupertino-semantics`, `cupertino-app-protocols` | Bounded semantic snapshots and actions, and the public `cupertino_semantics_v1` through which a Kit application publishes only its own surfaces |
+| `cupertino-server` | The `DesktopControl` role (the role set is 16 bits wide), grants checked on every request, accepted input routed through the existing handlers, capture checked per frame, the controller's held input released when its run ends |
+| `cupertino-shell-client` | Binds the control and consent protocols for the controller and the session agent |
+| `cupertino-control` | The supervised controller: the local socket, bounded requests, capture, and the MCP stdio bridge |
+| `cupertino-login`, `cupertino-menubar`, `cupertino-settings` | The consent panel, the capture indicator, and the Privacy pages that edit `desktop-control.conf` |
+| Contract registry and packaging | The globals, the executable and its install path, under the trusted-path rules of the built-in processes |
 
-Keep the public app transport free of private shell protocols. Keep semantic wire types below both the server and
-toolkit: the server must not depend on `cupertino-ui-core`. Applications can publish only their own surfaces' data;
-publishing semantics grants no observation of other applications and no input-injection capability.
-
-### Delivery order
-
-1. **Establish and test the native control boundary.** Specify request/version limits, input-device ownership,
-   grant lifetime and refusals before exposing mutation. Add generated protocol bindings and a pure state model.
-   Test that a public Wayland client cannot discover or bind the control global, another privileged role cannot
-   use it, and stale sessions or handles cannot act.
-2. **Complete one nested control loop.** Run an in-tree Rust controller on a server-created connection. Observe
-   outputs and windows, capture a frame, click and type in a fixture, drag its window and check the result. The
-   server must enforce lock, authentication-prompt and revocation boundaries independently of the controller.
-   On disconnect or revocation, release only injected keys/buttons and cancel its outstanding grabs or drags.
-   Verify that physical keys held by the person are preserved and that the controller cannot grant or extend its
-   own authorization through synthetic input to its consent UI.
-3. **Export Kit semantics.** Publish bounded native snapshots, supported actions and lifecycle events from the
-   production runtime. Map window-local bounds through the compositor's authoritative geometry. Support stable
-   identifiers for ambiguous role/name queries, and keep secrets out of snapshots, traces and error messages.
-   Third-party applications initially use pixels and real input; their semantic interoperability is separate work.
-4. **Connect Terra through a Rust MCP adapter.** Use
-   [MCP stdio](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio):
-   newline-delimited JSON-RPC, negotiated protocol version, tool discovery, bounded tool calls, text/image results,
-   cancellation and clean EOF handling. Keep stdout exclusively for protocol messages. Report unsupported operations
-   honestly, and never expose arbitrary shell execution as a desktop tool. OpenAI's
-   [custom UI tool guidance](https://developers.openai.com/api/docs/guides/tools-computer-use-integration#use-your-own-ui-tools)
-   supports this approach. Verify the connected host and Terra's image/tool support before claiming a model-driven pass.
-5. **Deploy and shorten the bug-fix loop.** Add a preview updater to `cupertino dev` using the installed-session
-   sequence above: explicit package/binary/session, scoped build, artifact manifest, stage, restart, verify
-   and rollback. Prove it by updating and restoring a launcher candidate while the compositor PID and an unrelated
-   application stay alive. Build only the changed consumers. Activate server changes at a planned session restart;
-   subsequent compatible controller and app changes can be replaced separately.
+The public app transport stays free of private shell protocols, and the semantic wire types sit below both the server
+and the toolkit: the server does not depend on `cupertino-ui-core`. Publishing semantics grants an application no
+observation of other applications and no input injection. Still to do: window-scoped grants, `cupertino` commands over
+the same operations, and a preview updater in `cupertino dev` that builds, stages, restarts, verifies and rolls back a
+candidate as [Installed-session iteration](#installed-session-iteration) describes.
 
 Native input necessarily changes compositor source. A portal or standalone helper cannot add that capability to an
 already running server. Keep development on private nested/headless sessions until the complete loop passes; deploy
@@ -585,18 +538,19 @@ Without a pack of your own, text, icons and cursors come from the built-in fallb
 
 ## The whole desktop on a TTY
 
-From a text console (switch with `Ctrl+Alt+F3`), a checkout can start the full desktop — compositor, dock, menu bar, launcher, notifications, control panel, OSD, window manager, Files and Settings:
+From a text console (switch with `Ctrl+Alt+F3`), a checkout can start the full desktop — compositor, the shell processes of the packaged configuration (dock, menu bar, launcher, notifications, control panel, OSD, the desktop's items, window manager and lock screen), Files and Settings:
 
 ```bash
 ./run-cupertino.sh
 ```
 
-The script refuses to run inside a desktop session (`WAYLAND_DISPLAY` or `DISPLAY` set). It builds the workspace's release binaries (`cargo build --release --workspace --all-features --bins`), writes a shell process list to `$XDG_RUNTIME_DIR/cupertino-compositor.json`, starts a fresh session bus with `dbus-run-session`, and runs `cupertino-server --udev` with Files and Settings. It installs nothing and enables no service: the session manager and the login screen are not used. `XDG_RUNTIME_DIR` must be set, which a console login does.
+The script refuses to run inside a desktop session (`WAYLAND_DISPLAY` or `DISPLAY` set). It builds the workspace's release binaries (`cargo build --release --workspace --all-features --bins`), runs `cupertino-server --check-hardware`, copies the packaged shell process list (`packaging/files/etc/cupertino/compositor.json`) to a temporary file with the programs taken from the build, starts a fresh session bus with `dbus-run-session`, and runs `cupertino-server --udev --dev-shell` with Files and Settings. The built-in processes (portal, authentication prompts, desktop control) start from their installed programs under `/usr/bin` when a package is installed, never from the checkout. It installs nothing and enables no service: the session manager and the login screen are not used. `XDG_RUNTIME_DIR` must be set, which a console login does.
 
 - `Ctrl+Alt+Backspace` quits.
 - `Ctrl+Alt+F<n>` returns to the console session you came from.
 - The log is `~/cupertino-tty.log`; when the server exits with a non-zero status the script prints the last 20 lines.
 - Server flags pass through: `./run-cupertino.sh --run-for 600` stops by itself after ten minutes.
+- Without `--run-for` the run stops after `CUPERTINO_RUN_FOR` seconds (900 by default), and a watchdog ends the whole process tree 30 seconds later if the server hangs instead of stopping. No limit (`0`) needs `CUPERTINO_ALLOW_NO_TIMEOUT=1`: a hung server on a console without a limit leaves the keyboard muted.
 
 The TTY backend has run in a virtual machine, not yet on real hardware. Treat it as experimental.
 
@@ -652,15 +606,43 @@ The TTY backend has run in a virtual machine, not yet on real hardware. Treat it
 ## Tests
 
 ```bash
-python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --workspace --all-features
+scripts/test                   # the fast tier of the crates changed since origin/main and of their dependents
+scripts/test --all             # the fast tier of the whole workspace
+scripts/test --slow            # the slow tier: whole programs, private buses, displays and measurements
+scripts/test -p cupertino-dock # the fast tier of the crates named
+scripts/test -- -E 'test(/dock/)'   # arguments after -- go to nextest
 cargo test --workspace --all-features --doc
-cargo clippy --workspace --all-targets
 cargo run -p cupertino-layers
 ```
 
-The fixture script prepares integration-test programs before nextest starts. Keep the same profile and environment throughout a task so Cargo reuses what it built.
+The tests come in two tiers, defined in `.config/nextest.toml`. The fast tier (the `default` profile) is every test
+but the slow tier's: `scripts/test` fails a fast-tier test that takes more than 2 seconds and a whole-workspace run that
+takes more than 5 minutes, and prints the 20 slowest tests after every run. The slow tier (the `slow` profile) lists by
+name the tests that run whole programs, buses or displays or that measure, each with its reason; the `ci` profile runs
+both. `scripts/test` prepares the integration-test programs through `ci/build-test-fixtures.py` before nextest starts.
+Doctests run separately, as nextest does not run them.
 
-Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`; CI uses 0.9.151). It runs every test in its own process and kills a test that runs longer than 2 minutes (`.config/nextest.toml`), so a hang fails with the test's name; doctests run separately. Shell and app crates need `--features app` to test their process code; pass the crate selection and features to nextest inside the fixture script above. A killed run can leave a test `dbus-daemon` behind: stop it, never your real session bus.
+Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`; CI uses 0.9.151). It runs every
+test in its own process and kills a test that runs longer than 2 minutes, so a hang fails with the test's name. Shell
+and app crates need `--features app` to test their process code; `scripts/test` passes `--all-features`. A killed run
+can leave a test `dbus-daemon` behind: stop it, never your real session bus.
+
+`scripts/done` runs every check a change must pass, stopping at the first that fails: the project gate
+(`ci/gate.py`) and the test suite layout, formatting, clippy on the changed crates and their dependents, a test change
+for every crate whose sources changed (`NO_TEST_REASON="..."` accepts one without, for a reason), `scripts/test`,
+`scripts/dev/build` and `scripts/preview --changed`.
+
+## Development scripts
+
+| Script | What it does |
+|---|---|
+| `scripts/dev/build` | The release build of every program (`cargo build --locked --release --workspace --all-features --bins`) into `target/release`, the one build the package recipe, the headless checks and `scripts/preview` share. |
+| `scripts/dev/shot OUT.png [server flags]` | One headless screenshot of the whole desktop with the current checkout, built first. `SIZE` (default `1512x982`), `SCALE` (default 2), `APPEARANCE` (`dark` or `light`), `AFTER` (seconds before the shot, default 5) and `WALLPAPER` change it. |
+| `scripts/preview` | Shoots every scenario in `scenarios/*.toml` headless with this checkout and with the installed release (or the programs in `PREVIEW_BEFORE=DIR`), at scales 1, 1.5 and 2 in light and dark, and shows them side by side with the changed pixels in `target/preview/index.html`. `--changed` takes only the scenarios of the programs changed since `origin/main`, `--no-before` skips the comparison, and `--live` runs the checkout's desktop in a window of the current session. |
+| `scripts/dev/bench` | The frame rate of the desktop's busiest moments in a headless session at 2560 × 1600, scale 2, at 60 and 120 Hz: a window drag, a dock sweep, the overview, the launcher, a scrolled Files list and a context menu with its submenu. For each it reports frames per second, frame intervals, missed refreshes, compose and render time, glass time, blurs per frame and input latency, and the device that rendered. `RATES=120` picks refresh rates, `--out F.json` writes the figures, `NO_BUILD=1` or `BIN_DIR=DIR` measures other programs. |
+| `scripts/dev/measure` | Memory (PSS and RSS) and CPU of every desktop process in a headless session at rest, while used and at rest after use, the median of `RUNS` sessions (default 3). `--out F.json` writes the figures and `--compare A.json B.json` shows the change process by process; `NO_BUILD=1` or `MEASURE_BIN=DIR` measures other programs. |
+| `scripts/package-local.sh [OUT_DIR]` | The Arch packages of the committed HEAD ([Installing a local build](#installing-a-local-build)). |
+| `scripts/build-iso.sh [OUT_DIR]` | The live and install ISO ([Install from a USB stick](install-usb.md)). |
 
 ## Soak
 
@@ -671,7 +653,7 @@ ci/soak.py                                     # in a terminal of the session: 8
 ci/soak.py --headless --hours 1 --warmup-minutes 10
 ```
 
-The run fails when the server's RSS at the end is more than 10% above its RSS after the warm-up (the median of five samples each), when any descriptor count after the warm-up is more than 5% from the one after the warm-up, when the server exits, or when a workload program exits. It writes `samples.csv` (a line a minute, as it goes), `frames.txt`, `workloads.log` and `results.json` into `soak-DATE-TIME` (`--out` changes it), prints `PASSED` or `FAILED` with the reasons, and exits 1 on a failure. It ignores the hang-up of the terminal, so a server crash that takes the terminal down still ends with `results.json`. `--without NAME` leaves a workload out and marks the result incomplete. `--headless` runs the same soak as a client of `scripts/session.sh`'s headless desktop and writes the server's log and a screenshot of the desktop three minutes in (`desktop.png`) next to the results.
+The run fails when the server's RSS at the end is more than 10% above its RSS after the warm-up (the median of five samples each), when any descriptor count after the warm-up is more than 5% from the one after the warm-up, when the server exits, or when a workload program exits. It writes `samples.csv` (a line a minute, as it goes), `frames.txt`, `workloads.log` and `results.json` into `soak-DATE-TIME` (`--out` changes it), prints `PASSED` or `FAILED` with the reasons, and exits 1 on a failure. It ignores the hang-up of the terminal, so a server crash that takes the terminal down still ends with `results.json`. `--without NAME` leaves a workload out and marks the result incomplete. `--headless` runs the same soak as a client of `crates/cupertino-server/scripts/session.sh`'s headless desktop and writes the server's log and a screenshot of the desktop three minutes in (`desktop.png`) next to the results.
 
 ## Configuration
 

@@ -29,7 +29,7 @@ Not verified: how GDM treats the session on a real machine (the virtual console,
 | `Super+Alt+S` | screen reader on or off, at the login screen and the lock screen too, the one shortcut that works on the lock screen besides switching consoles (the first of the installed readers, `/usr/bin/orca`; the same as **Settings > Accessibility > Screen reader**; no shortcuts file can take it while a reader is installed) |
 | `Shift+Super+/` | Help menu with its search field focused |
 
-To change a shortcut, add a `chord = action` line to `~/.config/cupertino/shortcuts.conf`, for example `Super+x = exec:foot`, or `Super+Tab = none` to free a chord. The file is applied on top of the defaults. `modifier_profile = classic-pc` in `~/.config/cupertino/keyboard.conf` switches to Windows and Linux habits (`Alt+Tab` switches, `Alt+F4` closes, `Ctrl` is the command key in Settings and text fields, and a tap of `Super` alone opens the launcher).
+To change a shortcut, add a `chord = action` line to `~/.config/cupertino/shortcuts.conf`, for example `Super+x = exec:foot`, or `Super+Tab = none` to free a chord. The file is applied on top of the defaults. `modifier_profile = classic-pc` in `~/.config/cupertino/keyboard.conf` switches to common PC keyboard habits (`Alt+Tab` switches, `Alt+F4` closes, `Ctrl` is the command key in Settings and text fields, and a tap of `Super` alone opens the launcher).
 
 Under the default profile `Super` is the command key in every application. Other applications get `Super` chords as the `Ctrl` chords they bind, and a `Ctrl` chord on a letter, digit, punctuation key or `Return` reaches them with `Super` instead, so `Ctrl` copies, pastes and closes nothing. In a text field the line-editing chords `Ctrl+A`, `E`, `B`, `F`, `P`, `N`, `D` and `H` move and delete as their keys do. Terminals keep `Ctrl`. `client_rewrite = off` in `keyboard.conf`, or the application's id in `rewrite_off`, sends every chord as it is pressed.
 
@@ -67,8 +67,10 @@ Not verified: none of this has been run in an installed session yet; the README 
 
 ## Logs and crash reasons
 
-`cupertino-diagnose` checks the GPU driver, the session, the portal, the services and the last crash in one go, and names
-the fix for what is wrong; `cupertino-diagnose --json` gives the same as JSON.
+`cupertino diagnose` checks the GPU driver, the session, the portal, the services and the last crash in one go, and names
+the fix for what is wrong; `cupertino --format json diagnose` gives the same as JSON. `cupertino diagnose events --since 24h`
+lists the errors the desktop recorded, and `cupertino diagnose export --output FILE` writes one file for a bug report
+([Checking a machine](diagnose.md)).
 
 | File | Holds |
 |---|---|
@@ -96,7 +98,7 @@ Not verified on hardware: the new renderer has run only through the offscreen te
 
 To investigate a reset with an AI assistant:
 
-1. Run `cupertino-diagnose --area crash --json`. The `crash.gpu_reset` check is `warn` when `session.log` has a reset, with the facts `resets`, `remade`, `last_time`, `last_gpu`, `last_reason` and `last_outcome`.
+1. Run `cupertino --format json diagnose --area crash`. The `crash.gpu_reset` check is `warn` when `session.log` has a reset, with the facts `resets`, `remade`, `last_time`, `last_gpu`, `last_reason` and `last_outcome`.
 2. Copy the lines of `~/.local/state/cupertino/server.log` around `last_time` (`server.log.1` if the session has restarted since).
 3. Give both to an AI assistant, or to the driver's bug tracker. Paste them by hand; no Cupertino service does this yet.
 
@@ -109,7 +111,7 @@ To investigate a reset with an AI assistant:
 
 ## Known limits
 
-The 2026-11-10 installed-session review and follow-up inspection found or recorded 32 open interaction and presentation issues. See [Desktop quality and open issues](desktop-quality.md) for the complete list, evidence status and acceptance checks. In particular, menu pointer ownership, sidebar bounds, Control Center readability/connectivity, Trash emptying, quick preview, input/cursor behavior and glass/scrollbar consistency are not accepted as finished. Newly installed applications also remain absent from the launcher until its process restarts (DQ-30); the backlog records the workaround. ChatGPT Desktop cannot be moved by dragging through XWayland; launching it with `--ozone-platform=wayland` restores dragging in the maintainer's test (DQ-33). Electron applications that draw their own titlebar, such as ChatGPT and Claude Desktop, keep it instead of Cupertino's by design (DQ-31, closed). The backlog records the app-specific flags file and remaining checks. ChatGPT status-menu actions can also stop working because the menu bar retains obsolete action IDs (DQ-32). Some entries are maintainer reports still awaiting focused reproduction.
+The 2026-11-10 installed-session review and follow-up inspection recorded 32 interaction and presentation issues; at the 2026-11-12 recheck 31 remain open, 2 of them fixed in code and awaiting the installed-session check, and one is resolved by design. See [Desktop quality and open issues](desktop-quality.md) for the complete list, evidence status and acceptance checks. In particular, menu pointer ownership, sidebar bounds, Control Center readability/connectivity, Trash emptying, quick preview, input/cursor behavior and glass/scrollbar consistency are not accepted as finished. Newly installed applications also remain absent from the launcher until its process restarts (DQ-30); the backlog records the workaround. ChatGPT Desktop could not be moved by dragging through XWayland in the installed session, and launching it with `--ozone-platform=wayland` restored dragging; the move was not reproduced headless and awaits the installed-session check (DQ-33). Electron applications that draw their own titlebar, such as ChatGPT and Claude Desktop, keep it instead of Cupertino's by design (DQ-31, closed). The backlog records the app-specific flags file and remaining checks. ChatGPT status-menu actions can also stop working because the menu bar retains obsolete action IDs (DQ-32). Some entries are maintainer reports still awaiting focused reproduction.
 
 The server's README has the full list under "Daily-driver known limits". The ones to expect in a first week:
 

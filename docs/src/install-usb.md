@@ -15,10 +15,10 @@ You need:
 The ISO is built from a clean committed checkout with Docker and `git` installed. Supply the public release key; `packaging/keyring/check-key` rejects a different primary fingerprint:
 
 ```sh
-CUPERTINO_KEYRING_KEY=/path/to/PUBLIC.asc scripts/build-iso.sh [OUT_DIR]
+CUPERTINO_KEYRING_KEY=/path/to/PUBLIC.asc scripts/build-iso.sh [OUT_DIR] [--packages DIR]
 ```
 
-`OUT_DIR` defaults to `~/.cache/cupertino-iso`, and the build refuses to start with less than 48 GB free there. It writes three files:
+`OUT_DIR` defaults to `~/.cache/cupertino-iso`, and the build refuses to start with less than 48 GiB free there (a 30 GiB floor, which `CUPERTINO_ISO_FLOOR_GB` changes, plus 18 GiB for the build). `--packages DIR` uses packages built before for the same commit, checked against it, instead of building them. It writes three files:
 
 | File | Content |
 |---|---|

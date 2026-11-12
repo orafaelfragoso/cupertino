@@ -102,16 +102,13 @@ Still required:
 
 In progress, WP-14, WP-16 and WP-11.
 
-The `cupertino` registry implements `appearance assets check`, human and JSON output, and defined exit codes. `cupertino-diagnose` is a separate shipped binary. The C ABI has a headless runtime, generational handles, panic containment and symbol, header and layout baselines.
+The `cupertino` command ships as `/usr/bin/cupertino` with the groups `appearance`, `diagnose` (with `events` and `export`), `desktop`, `shell`, `dev`, `dev-folder`, `sdk`, `version` and `completions`, human, JSON and JSON-lines output, defined exit codes, completions and manual pages generated from its registry. Every process records diagnostic events in a bounded store. `cupertino-diagnose` and `cupertino-assets check` remain as deprecated programs. The C ABI has a headless runtime, generational handles, panic containment and symbol, header and layout baselines; the `cupertino-kit` package ships its library, header and pkg-config file, and CI builds and runs a C sample against it.
 
-Source: `crates/cupertino-cli/src/lib.rs`, `crates/cupertino-diagnostics`, `crates/cupertino-ui-abi` and `packaging/release.py`.
+Source: `crates/cupertino-cli/src/lib.rs`, `crates/cupertino-diagnostics`, `crates/cupertino-diagnostic-events`, `crates/cupertino-ui-abi`, `ci/c-sdk.py` and `packaging/release.py`.
 
 Still required:
 
-- Package `/usr/bin/cupertino` and add `diagnose`, `dev layers`, `desktop start` and the SDK commands to its registry.
-- Generate completions and manual pages, support JSONL streams and report component versions.
-- Build diagnostic events and their bounded store, redaction and service integration.
-- Extend the C ABI to windows, nodes and UI events; run a C sample in CI and package the shared library, header and pkg-config file.
+- Extend the C ABI to windows, nodes and UI events, and run an interactive C application in CI ([#122](https://github.com/orafaelfragoso/cupertino/issues/122), [#123](https://github.com/orafaelfragoso/cupertino/issues/123)).
 - Complete the phase-end review. See [The cupertino command](cupertino-command.md) for the commands available today.
 
 ## Phase 6: hardware and distribution
@@ -158,7 +155,7 @@ Not started, WP-17, WP-18 and WP-19. The planned scope is a per-user AI service,
 
 ## Planned: GPU rendering in applications
 
-Not started. The compositor composites and draws its materials on the GPU, but every toolkit application still rasterizes its windows on the CPU and hands them over in shared memory. The plan is to draw everything on the GPU: the toolkit renders each window with the GPU and passes the compositor GPU buffers (dmabuf), and the CPU rasterizer stays only as the fallback when no usable GPU is present (a virtual machine without 3D, a broken driver). Both paths must draw the same pixels within the golden tolerance, and the choice must be visible in diagnostics. The design (graphics API, shared device and text atlas, buffer handoff, fallback rule, migration order, frame-time and memory budgets) is still to be written. The Vulkan half of WP-04 is part of the same decision.
+Not started ([#155](https://github.com/orafaelfragoso/cupertino/issues/155)). The compositor composites and draws its materials on the GPU, but every toolkit application still rasterizes its windows on the CPU and hands them over in shared memory. The plan is to draw everything on the GPU: the toolkit renders each window with the GPU and passes the compositor GPU buffers (dmabuf), and the CPU rasterizer stays only as the fallback when no usable GPU is present (a virtual machine without 3D, a broken driver). Both paths must draw the same pixels within the golden tolerance, and the choice must be visible in diagnostics. The design (graphics API, shared device and text atlas, buffer handoff, fallback rule, migration order, frame-time and memory budgets) is still to be written. The Vulkan half of WP-04 is part of the same decision.
 
 ## Deferred work
 

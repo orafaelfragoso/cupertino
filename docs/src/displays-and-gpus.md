@@ -1,6 +1,6 @@
 # Displays and GPUs
 
-How Cupertino treats monitors, the GPU driver and X11 programs on the text-console (DRM) backend, as the code on `main` does it. Where a statement is about a program Cupertino starts but does not contain (the NVIDIA driver, `xwayland-satellite`), the page says so. For a machine you can reach, [`cupertino-diagnose`](diagnose.md) shows most of this at once.
+How Cupertino treats monitors, the GPU driver and X11 programs on the text-console (DRM) backend, as the code on `main` does it. Where a statement is about a program Cupertino starts but does not contain (the NVIDIA driver, `xwayland-satellite`), the page says so. For a machine you can reach, [`cupertino diagnose`](diagnose.md) shows most of this at once.
 
 ## Monitors
 
@@ -39,7 +39,9 @@ A paused session does not scan. The scan compares the displays with every connec
 
 **More than one GPU.** Every DRM card is opened. One card draws every frame: the one named by `CUPERTINO_DRM_DEVICE`, otherwise the primary one. The value is a card node such as `/dev/dri/card1`, its render node such as `/dev/dri/renderD129`, or a `/dev/dri/by-path` link to either. If the variable names no GPU, the log warns and the primary one renders; an empty value counts as unset. A display on another card shows a copy of what the render card drew. If the render card goes away, the session cannot go on drawing.
 
-**No GPU acceleration.** When the render card has only a software renderer (Mesa's llvmpipe, as on a virtual machine without 3D or a GPU whose driver is missing), another card with a hardware renderer draws instead. When no card has one, the CPU draws the desktop: it works, but more slowly and with more power. The server log warns and names the card, and `session.log` gets a line `<time> only a software renderer is available: gpu=<card>; the CPU draws the desktop`, which `cupertino-diagnose` reports as `gpu.renderer`. A card named by `CUPERTINO_DRM_DEVICE` draws even when its renderer is a software one. On a virtual machine, a GPU with 3D (`virtio-vga-gl` or `virtio-gpu-gl` in QEMU) makes the desktop fast again.
+**How the desktop is drawn.** The server composites the windows and draws its materials with OpenGL ES on the render card. CupertinoKit applications and shell processes rasterize their own windows on the CPU and hand them over in shared memory; drawing them on the GPU is planned ([#155](https://github.com/orafaelfragoso/cupertino/issues/155)).
+
+**No GPU acceleration.** When the render card has only a software renderer (Mesa's llvmpipe, as on a virtual machine without 3D or a GPU whose driver is missing), another card with a hardware renderer draws instead. When no card has one, the CPU draws the desktop: it works, but more slowly and with more power. The server log warns and names the card, and `session.log` gets a line `<time> only a software renderer is available: gpu=<card>; the CPU draws the desktop`, which `cupertino diagnose` reports as `gpu.renderer`. A card named by `CUPERTINO_DRM_DEVICE` draws even when its renderer is a software one. On a virtual machine, a GPU with 3D (`virtio-vga-gl` or `virtio-gpu-gl` in QEMU) makes the desktop fast again.
 
 ## NVIDIA
 
@@ -64,14 +66,14 @@ X11 programs run through `xwayland-satellite`, which starts when the first X11 p
 - A program the server starts gets `DISPLAY` and `XAUTHORITY` for the X display, and `XDG_SESSION_TYPE=wayland`.
 - It also gets `QT_QPA_PLATFORM=wayland;xcb` and `ELECTRON_OZONE_PLATFORM_HINT=auto`, so Qt and Electron prefer Wayland and fall back to X11. A value the program or the session already set is kept. `SDL_VIDEODRIVER` is not set.
 - When the satellite exits, the server waits for the next X11 program to start it again. After a failure, or a success within a second of the start, the restart waits for a back-off that starts at 1 second and doubles to 30 seconds, so a satellite that cannot run is not started in a loop. X11 windows that were open are lost when it exits.
-- The satellite, not the server, decides the scale of X11 windows. With monitors of different scales, [Using Cupertino every day](daily-use.md) says every X11 window gets the smallest scale. I did not check this in the satellite's code.
+- The satellite, not the server, decides the scale of X11 windows. With monitors of different scales, [Using Cupertino every day](daily-use.md) says every X11 window gets the smallest scale; that is the satellite's behaviour and is not checked here.
 
 ## Report a display problem
 
 Run this in the session that has the problem, from a terminal:
 
 ```sh
-cupertino-diagnose --area gpu --area session --area crash --area logs
+cupertino diagnose --area gpu --area session --area crash --area logs
 ```
 
-Add `--json` for a script. `gpu.driver` shows the driver and the findings above, `session.wayland` shows whether the compositor answers, `crash.last` shows how the last sessions ended, and `logs.paths` shows where the logs are. With the report, attach `~/.local/state/cupertino/session.log` and `server.log` (and `server.log.1` after a restart). The log lines named on this page (`display connected`, `the display shows a fallback mode`, `explicit sync`) are in `server.log`.
+Add `--format json` before `diagnose` for a script, and attach the file `cupertino diagnose export --output FILE` writes. `gpu.driver` shows the driver and the findings above, `session.wayland` shows whether the compositor answers, `crash.last` shows how the last sessions ended, and `logs.paths` shows where the logs are. With the report, attach `~/.local/state/cupertino/session.log` and `server.log` (and `server.log.1` after a restart). The log lines named on this page (`display connected`, `the display shows a fallback mode`, `explicit sync`) are in `server.log`.

@@ -77,7 +77,7 @@ Rules:
 
 ## Logical names
 
-A pack uses the logical names the shell looks up: 26 raster icon names (such as `folder.documents` and `document.pdf`), 99 `symbol.*` names, the font roles, 34 cursor names and the wallpaper. The lists are the constants `RASTER_NAMES`, `SYMBOL_NAMES` and `CURSOR_NAMES` in `cupertino-assets` (`crates/cupertino-assets/src/name.rs`). A name no code looks up may be left out.
+A pack uses the logical names the shell looks up: 26 raster icon names (such as `folder.documents` and `document.pdf`), 100 `symbol.*` names, the font roles, 34 cursor names and the wallpaper. The lists are the constants `RASTER_NAMES`, `SYMBOL_NAMES` and `CURSOR_NAMES` in `cupertino-assets` (`crates/cupertino-assets/src/name.rs`). A name no code looks up may be left out.
 
 ## Build your own pack
 
@@ -90,10 +90,10 @@ A pack uses the logical names the shell looks up: 26 raster icon names (such as 
 7. **Check it:**
 
    ```bash
-   cargo run -p cupertino-assets -- check <dir>
+   cupertino appearance assets check <dir>
    ```
 
-   It prints the problems of the pack, then for every logical name which pack or fallback provides it, and lists the names that fall back. It exits 1 only when the manifest cannot be read, is not valid JSON or has an unsupported version, never because assets are missing. Then start a nested session with `CUPERTINO_ASSET_DIR=<dir>` and look at the dock, the file manager, the settings app and the control panel.
+   It prints the problems of the pack, then for every logical name which pack or fallback provides it, and lists the names that fall back. It fails (exit 5) only when the manifest cannot be read, is not valid JSON or has an unsupported version, never because assets are missing. From a checkout, `cargo run -p cupertino-cli --bin cupertino -- appearance assets check <dir>` runs the same; the older `cupertino-assets check <dir>` still works and names the command that replaces it. Then start a nested session with `CUPERTINO_ASSET_DIR=<dir>` and look at the dock, the file manager, the settings app and the control panel.
 8. **Share it (optional):** ship the directory as a package that installs to `/usr/share/cupertino/assets/<name>/`. A pack that contains other people's artwork must keep their licence files next to it.
 
 ## Licences

@@ -31,6 +31,9 @@ checkout and was run on the commit this page was written against.
 - Fonts and icons come from an asset pack when one is installed (`CUPERTINO_ASSET_DIR`, else the user or system
   pack). The kit falls back to its built-in Inter font. Headless captures of the controls sheet need a pack
   (`ci/capture.sh` says so in its header).
+- No GPU. The kit rasterizes each window on the CPU (`cupertino-ui-render`), repainting only what changed, and hands it
+  to the compositor in shared memory (`wl_shm`). Rendering on the GPU, with the CPU kept as the fallback, is planned
+  ([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)).
 - A Rust toolchain. Nothing else is installed or enabled by these steps.
 
 ## Build and run the examples

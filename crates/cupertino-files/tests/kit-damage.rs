@@ -309,14 +309,24 @@ fn assert_drawn_whole(run: &mut Run, when: &str) {
         ..WindowStates::default()
     };
     let before = presented(run);
-    run.driver
-        .window_system_mut()
-        .configure(run.window, None, active)
-        .unwrap();
-    run.settle();
+    // a configure that changes nothing draws nothing: into another state and back draws the window whole
+    for states in [
+        WindowStates {
+            fullscreen: true,
+            ..active
+        },
+        active,
+    ] {
+        run.driver
+            .window_system_mut()
+            .configure(run.window, None, states)
+            .unwrap();
+        run.settle();
+    }
     let frames = run.driver.runtime().window_system().frames(run.window);
     let whole = frames.unwrap()[before..]
         .iter()
+        .rev()
         .find(|f| area(&f.damage) == u64::from(f.width) * u64::from(f.height))
         .expect("the configure drew the window whole");
     let stale = kept

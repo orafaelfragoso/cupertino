@@ -444,30 +444,44 @@ fn fill_layout() -> LayoutSpec {
 }
 
 impl<M: 'static> Widget<M> for Overlay<M> {
-    type State = ();
+    /// Whether the view changed since its last frame was asked for: the system pointer follows the look on that frame.
+    type State = std::cell::Cell<bool>;
 
     fn layout(&self) -> LayoutSpec {
         fill_layout()
     }
 
-    fn state(&self) {}
+    fn state(&self) -> std::cell::Cell<bool> {
+        std::cell::Cell::new(true)
+    }
 
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
+    fn update(&self, old: &Self, owed: &mut std::cell::Cell<bool>) -> Change {
         if self.view == old.view {
             Change::None
         } else {
+            owed.set(true);
             Change::Paint
         }
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(
+        &self,
+        _: &std::cell::Cell<bool>,
+        _: Constraints,
+        _: &mut MeasureCx<'_>,
+    ) -> Measured {
         Measured {
             size: Size::ZERO,
             baseline: None,
         }
     }
 
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+    fn event(
+        &self,
+        _: &mut std::cell::Cell<bool>,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
         let to = self.to;
         match event {
             Event::Pointer(
@@ -532,7 +546,7 @@ impl<M: 'static> Widget<M> for Overlay<M> {
         }
     }
 
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+    fn paint(&self, owed: &std::cell::Cell<bool>, cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let full = Rect::new(0.0, 0.0, size.width, size.height);
         self.paint_selection(cx, full);
@@ -543,11 +557,14 @@ impl<M: 'static> Widget<M> for Overlay<M> {
                 crosshair(cx, p);
             }
         }
-        // the system pointer follows the look on the next frame, and before the overlay goes
-        cx.request_animation_frame();
+        // the system pointer follows the look on the next frame, and before the overlay goes; one frame per change, so
+        // an overlay that stays as it is draws nothing more
+        if owed.replace(false) {
+            cx.request_animation_frame();
+        }
     }
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &std::cell::Cell<bool>, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Group);
         cx.name(OVERLAY_TITLE);
         cx.description(match self.view.style {

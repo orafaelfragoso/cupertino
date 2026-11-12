@@ -14,6 +14,7 @@ struct Glass {
   bleed: vec4<f32>,       // white, black, saturation, darken
   highlight: vec4<f32>,   // amount, angle, spread, half-width
   highlight2: vec4<f32>,  // offset, colour bias, curvature
+  glow: vec4<f32>,        // soft band: amount, half-width, offset
   hm: array<vec4<f32>, 3>,
   shadow: vec4<f32>,      // offset x, offset y, alpha, blur
   shadow_color: vec4<f32>,// rgb, ring alpha
@@ -197,12 +198,22 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
     c = mix(c, b, w);
   }
   // stage 5: key and fill rim lights, added along the light's axis
-  if (G.highlight.x > 0.0 && G.highlight.w > 0.0 && gl > 1e-6) {
-    let x = (d - G.highlight2.x) / G.highlight.w;
-    let band = exp(-x * x);
+  let rim_on = G.highlight.x > 0.0 && G.highlight.w > 0.0;
+  let glow_on = G.glow.x > 0.0 && G.glow.y > 0.0;
+  if ((rim_on || glow_on) && gl > 1e-6) {
     let na = atan2(-n.y, n.x);
     let ends = lobe(na, G.highlight.y) + lobe(na, G.highlight.y + PI) * max(1.0 + G.highlight2.y, 0.0);
-    c = min(c + key_color(c) * (G.highlight.x * band * ends), vec3<f32>(1.0));
+    var strength = 0.0;
+    if (rim_on) {
+      let x = (d - G.highlight2.x) / G.highlight.w;
+      strength = G.highlight.x * exp(-x * x);
+    }
+    // a soft band wider than the rim, lighting the same ends of the axis
+    if (glow_on) {
+      let xg = (d - G.glow.z) / G.glow.y;
+      strength = strength + G.glow.x * exp(-xg * xg);
+    }
+    c = min(c + key_color(c) * (strength * ends), vec3<f32>(1.0));
   }
   let cov = clamp(0.5 - d / G.info.z, 0.0, 1.0) * G.info.w;
   return vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), cov);

@@ -262,11 +262,20 @@ pub const LOBE_REACH: f32 = 0.75;
 /// the other end the same light weakened by the colour bias.
 pub fn highlight(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
     let h = &p.highlight;
-    if h.amount <= 0.0 || h.height <= 0.0 || (normal[0] == 0.0 && normal[1] == 0.0) {
+    let rim = h.amount > 0.0 && h.height > 0.0;
+    let glow = h.glow_amount > 0.0 && h.glow_height > 0.0;
+    if !(rim || glow) || (normal[0] == 0.0 && normal[1] == 0.0) {
         return c;
     }
-    let x = (d - h.offset) / h.height;
-    let band = (-x * x).exp();
+    let mut band = 0.0;
+    if rim {
+        let x = (d - h.offset) / h.height;
+        band += h.amount * (-x * x).exp();
+    }
+    if glow {
+        let x = (d - h.glow_offset) / h.glow_height;
+        band += h.glow_amount * (-x * x).exp();
+    }
     // y up for the angle
     let normal_angle = (-normal[1]).atan2(normal[0]);
     let key = highlight_lobe(normal_angle, h.angle, h.spread, h.curvature);
@@ -276,7 +285,7 @@ pub fn highlight(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
         h.spread,
         h.curvature,
     );
-    let w = h.amount * band * (key + fill * (1.0 + h.color_bias).max(0.0));
+    let w = band * (key + fill * (1.0 + h.color_bias).max(0.0));
     let light = matrix_rgb(&h.matrix, c);
     std::array::from_fn(|i| (c[i] + light[i] * w).min(1.0))
 }
@@ -507,6 +516,8 @@ pub struct GlassUniform {
     pub highlight: [f32; 4],
     /// Highlight: offset, colour bias, curvature, 0.
     pub highlight2: [f32; 4],
+    /// The soft band of light: strength, half-width, offset, 0.
+    pub glow: [f32; 4],
     /// Key colour matrix rows: `[r, g, b coefficients, offset (+ alpha coefficient)]`.
     pub highlight_matrix: [[f32; 4]; 3],
     /// Drop shadow: offset x, offset y, alpha, blur radius.
@@ -569,6 +580,12 @@ impl GlassUniform {
         let h = &p.highlight;
         u.highlight = [h.amount, h.angle, h.spread, h.height * scale];
         u.highlight2 = [h.offset * scale, h.color_bias, h.curvature, 0.0];
+        u.glow = [
+            h.glow_amount,
+            h.glow_height * scale,
+            h.glow_offset * scale,
+            0.0,
+        ];
         for r in 0..3 {
             let m = &h.matrix[r * 5..r * 5 + 5];
             u.highlight_matrix[r] = [m[0], m[1], m[2], m[3] + m[4]];

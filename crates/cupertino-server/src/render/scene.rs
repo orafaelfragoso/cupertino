@@ -1826,6 +1826,11 @@ const SMALL_CALLOUT_FACE_DARK: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
 const DENSE_GLOW_DARK: (f32, f32, f32) = (0.09, 1.8, -0.8);
 const DENSE_GLOW_LIGHT: (f32, f32, f32) = (0.07, 4.2, -1.0);
 
+/// The soft band of light under the top and bottom edges of a large panel, in the same terms: wide, so it also lifts the
+/// face where the blur of the backdrop outside the panel darkens it near the edge.
+const LARGE_PANEL_GLOW_DARK: (f32, f32, f32) = (0.06, 9.0, 0.0);
+const LARGE_PANEL_GLOW_LIGHT: (f32, f32, f32) = (0.075, 7.5, 0.0);
+
 /// The shortest side a shape of a callout has to be for the callout to cast the panel shadow under it: the label's
 /// capsule and a pointer cast none.
 const CALLOUT_SHADOW_MIN_SIDE: f64 = 40.0;
@@ -2032,6 +2037,17 @@ fn glass_pieces(
                 h.amount = amount;
                 h.height = height;
                 h.offset = offset;
+            }
+            GlassStyle::LargePanel => {
+                let h = &mut container.params.highlight;
+                let (amount, height, offset) = if mode.dark {
+                    LARGE_PANEL_GLOW_DARK
+                } else {
+                    LARGE_PANEL_GLOW_LIGHT
+                };
+                h.glow_amount = amount;
+                h.glow_height = height;
+                h.glow_offset = offset;
             }
             // the popup's rim is drawn apart (`inner_rim_item`), lit all round: the glass's own would light its top and
             // bottom twice

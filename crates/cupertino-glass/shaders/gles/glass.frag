@@ -19,6 +19,7 @@ layout(std140) uniform Glass {
     vec4 bleed;       // white, black, saturation, darken
     vec4 highlight;   // amount, angle, spread, half-width
     vec4 highlight2;  // offset, colour bias, curvature
+    vec4 glow;        // soft band: amount, half-width, offset
     vec4 hm[3];
     vec4 shadow;      // offset x, offset y, alpha, blur
     vec4 shadow_color;// rgb, ring alpha
@@ -181,12 +182,22 @@ void main() {
         c = mix(c, b, w);
     }
     // stage 5: key and fill rim lights, added along the light's axis
-    if (G.highlight.x > 0.0 && G.highlight.w > 0.0 && gl > 1e-6) {
-        float x = (d - G.highlight2.x) / G.highlight.w;
-        float band = exp(-x * x);
+    bool rim_on = G.highlight.x > 0.0 && G.highlight.w > 0.0;
+    bool glow_on = G.glow.x > 0.0 && G.glow.y > 0.0;
+    if ((rim_on || glow_on) && gl > 1e-6) {
         float na = atan(-n.y, n.x);
         float ends = lobe(na, G.highlight.y) + lobe(na, G.highlight.y + PI) * max(1.0 + G.highlight2.y, 0.0);
-        c = min(c + key_color(c) * (G.highlight.x * band * ends), vec3(1.0));
+        float strength = 0.0;
+        if (rim_on) {
+            float x = (d - G.highlight2.x) / G.highlight.w;
+            strength = G.highlight.x * exp(-x * x);
+        }
+        // a soft band wider than the rim, lighting the same ends of the axis
+        if (glow_on) {
+            float xg = (d - G.glow.z) / G.glow.y;
+            strength += G.glow.x * exp(-xg * xg);
+        }
+        c = min(c + key_color(c) * (strength * ends), vec3(1.0));
     }
     float cov = clamp(0.5 - d / G.info.z, 0.0, 1.0) * G.info.w;
     frag_color = vec4(clamp(c, vec3(0.0), vec3(1.0)), cov);

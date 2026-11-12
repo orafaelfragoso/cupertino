@@ -143,6 +143,11 @@ pub struct GlassHighlight {
     pub color_bias: f32,
     /// Exponent on the lit arc's falloff.
     pub curvature: f32,
+    /// A second, soft band of the same light along the same arcs: its strength (0 for none), its half-width and where
+    /// its middle lies relative to the edge, in points.
+    pub glow_amount: f32,
+    pub glow_height: f32,
+    pub glow_offset: f32,
     /// Colour of the light added to the rim, from the face colour under it.
     pub matrix: ColorMatrix,
 }
@@ -469,10 +474,10 @@ pub const LARGE_PANEL_MAX_LUMA_DARK: f32 = 0.102;
 pub const LARGE_PANEL_BLUR_SCALE: f32 = 2.0;
 /// The large panel's drop shadow: how far below the panel it falls and its blur radius in points (its edge fades over
 /// three radii), and its black's opacity in each appearance.
-pub const LARGE_PANEL_SHADOW_OFFSET: f32 = 8.0;
+pub const LARGE_PANEL_SHADOW_OFFSET: f32 = 16.0;
 pub const LARGE_PANEL_SHADOW_BLUR: f32 = 24.0;
 pub const LARGE_PANEL_SHADOW_DARK: f32 = 0.5;
-pub const LARGE_PANEL_SHADOW_LIGHT: f32 = 0.42;
+pub const LARGE_PANEL_SHADOW_LIGHT: f32 = 0.40;
 
 /// Linear interpolation through `table` (sorted by side), flat outside it.
 fn by_side(table: &[(f32, f32)], side: f32) -> f32 {
@@ -587,6 +592,9 @@ impl GlassParams {
                 offset: -0.5,
                 color_bias: -0.1875,
                 curvature: 0.75,
+                glow_amount: 0.0,
+                glow_height: 0.0,
+                glow_offset: 0.0,
                 matrix: HIGHLIGHT_MATRIX_REGULAR,
             },
             shadow: GlassShadow {
@@ -684,6 +692,9 @@ impl GlassParams {
                 offset: -0.5,
                 color_bias: -0.25,
                 curvature: 0.75,
+                glow_amount: 0.0,
+                glow_height: 0.0,
+                glow_offset: 0.0,
                 matrix: HIGHLIGHT_MATRIX_CLEAR,
             },
             shadow: GlassShadow {

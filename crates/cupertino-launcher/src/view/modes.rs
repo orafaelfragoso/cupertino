@@ -6,7 +6,7 @@
 //! pressing it, or the shortcut, switches the launcher to the scope.
 
 use super::browse::{fill, focus_ring, label, line, placed, role, share};
-use super::{glyphs, Input, EDGE_ALPHA_DARK, EDGE_ALPHA_LIGHT, EDGE_WIDTH};
+use super::{glyphs, Input, EDGE_ALPHA_DARK, EDGE_ALPHA_LIGHT};
 use crate::modes::{self, Mode};
 use cupertino_kit::controls::{Icon, IconDirection};
 use cupertino_kit::core::{
@@ -17,7 +17,7 @@ use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_kit::platform::{MouseButton, PointerEvent};
 use cupertino_kit::render::{Effect, Paint, PaintOp, Shape};
-use cupertino_kit::theme::{Color, ColorRole, Surface};
+use cupertino_kit::theme::{ColorRole, Surface};
 
 /// The glass container the field's enclosure and the buttons share, and how far their outlines blend into each other,
 /// in points: more than the gap between a settled field and its first button is not blended.
@@ -43,13 +43,18 @@ pub struct ModeButton<M> {
     pub focus: bool,
     /// Whether it takes input (the panel is open and the buttons are in place).
     pub active: bool,
+    /// The other shapes its glass joins (the field's and the other buttons'), in the window, with their corner radii:
+    /// its edge is not drawn inside them.
+    pub joined: Vec<(Rect, f64)>,
     pub children: Vec<Element<M>>,
 }
 
-/// A button's children: its symbol, blurred while it sharpens.
+/// A button's children: its symbol, blurred and faint while it sharpens (absent while the button is a bud).
 pub fn glyph<M: 'static>(mode: Mode, sharp: f64) -> Element<M> {
+    let sharp = sharp.clamp(0.0, 1.0);
     Element::new(GlyphBox {
-        blur: (1.0 - sharp.clamp(0.0, 1.0)) * GLYPH_BLUR,
+        blur: (1.0 - sharp) * GLYPH_BLUR,
+        alpha: sharp,
         children: vec![Element::new(Icon {
             name: mode.symbol().to_owned(),
             size: modes::GLYPH_SIZE,
@@ -81,6 +86,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ModeButton<M> {
             Change::Layout
         } else if (self.mode, self.index, self.alpha, self.focus, self.active)
             != (old.mode, old.index, old.alpha, old.focus, old.active)
+            || self.joined != old.joined
         {
             Change::Paint
         } else {
@@ -167,14 +173,12 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ModeButton<M> {
         } else {
             EDGE_ALPHA_LIGHT
         };
-        cx.push(PaintOp::Stroke {
-            shape: Shape::RoundedRect {
-                rect: rect.outset(EDGE_WIDTH / 2.0),
-                radius: radius + EDGE_WIDTH / 2.0,
-            },
-            width: EDGE_WIDTH,
-            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, edge)),
-        });
+        let joined: Vec<(Rect, f64)> = self
+            .joined
+            .iter()
+            .map(|(r, radius)| (r.translate(-self.rect.x(), -self.rect.y()), *radius))
+            .collect();
+        super::edge_outside(cx, rect, radius, edge, &joined);
         if self.focus {
             focus_ring(cx, rect, radius);
         }
@@ -200,9 +204,10 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ModeButton<M> {
     }
 }
 
-/// A button's symbol, centred, blurred by `blur` points while it sharpens.
+/// A button's symbol, centred, blurred by `blur` points and at `alpha` while it sharpens.
 struct GlyphBox<M> {
     blur: f64,
+    alpha: f64,
     children: Vec<Element<M>>,
 }
 
@@ -229,7 +234,7 @@ impl<M: 'static> Widget<M> for GlyphBox<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.blur != old.blur {
+        if (self.blur, self.alpha) != (old.blur, old.alpha) {
             Change::Paint
         } else {
             Change::None
@@ -252,8 +257,13 @@ impl<M: 'static> Widget<M> for GlyphBox<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if self.blur > 0.05 {
-            cx.set_group(1.0, vec![Effect::Blur { radius: self.blur }]);
+        let effects = if self.blur > 0.05 {
+            vec![Effect::Blur { radius: self.blur }]
+        } else {
+            Vec::new()
+        };
+        if self.alpha < 1.0 || !effects.is_empty() {
+            cx.set_group(self.alpha as f32, effects);
         }
     }
 

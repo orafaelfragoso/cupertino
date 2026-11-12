@@ -622,24 +622,25 @@ where
     M: From<Input> + Clone + 'static,
 {
     let frame = &view.frame;
-    let count = frame.modes.count.min(view.modes.len());
-    if count == 0 {
-        return Vec::new();
-    }
-    let scale = frame.scale.clamp(0.0, MAX_SCALE);
-    let middle = view.extent.width / 2.0;
-    let centre_y = enclosure.y() + enclosure.height() / 2.0;
+    let rects = mode_rects(view, enclosure);
     let active = view.open && frame.modes.spread > 0.5;
-    (0..count)
-        .map(|index| {
-            let place = mode_model::button_rect(index, count, frame.modes.spread, COLLAPSED_HEIGHT);
-            let side = place.width() * scale;
-            let rect = Rect::new(
-                middle + (place.x() - frame.anchor / 2.0) * scale,
-                centre_y - side / 2.0,
-                side,
-                side,
-            );
+    let field = (
+        *enclosure,
+        frame.shape.radius * frame.scale.clamp(0.0, MAX_SCALE),
+    );
+    rects
+        .iter()
+        .enumerate()
+        .map(|(index, &rect)| {
+            let joined = std::iter::once(field)
+                .chain(
+                    rects
+                        .iter()
+                        .enumerate()
+                        .filter(|&(i, _)| i != index)
+                        .map(|(_, r)| (*r, r.width() / 2.0)),
+                )
+                .collect();
             let mode = view.modes[index];
             let button = Element::new(modes::ModeButton {
                 mode,
@@ -649,10 +650,79 @@ where
                 sharp: frame.modes.sharp,
                 focus: view.mode_focus == Some(index),
                 active,
+                joined,
                 children: vec![modes::glyph(mode, frame.modes.sharp)],
             });
             (rect, active, button)
         })
+        .collect()
+}
+
+/// The mode buttons' rectangles in the window as the frame presents them, scaled with the enclosure about the window's
+/// middle; none once they merged into the field.
+fn mode_rects(view: &PanelView<'_>, enclosure: &Rect) -> Vec<Rect> {
+    let frame = &view.frame;
+    let count = frame.modes.count.min(view.modes.len());
+    let scale = frame.scale.clamp(0.0, MAX_SCALE);
+    let middle = view.extent.width / 2.0;
+    let centre_y = enclosure.y() + enclosure.height() / 2.0;
+    (0..count)
+        .map(|index| {
+            let place = mode_model::button_rect(index, count, frame.modes.spread, COLLAPSED_HEIGHT);
+            let side = place.width() * scale;
+            Rect::new(
+                middle + (place.x() - frame.anchor / 2.0) * scale,
+                centre_y - side / 2.0,
+                side,
+                side,
+            )
+        })
+        .collect()
+}
+
+/// The thin dark edge just outside the rounded `rect`, black at `alpha`, left out inside each of the `joined` shapes
+/// (other shapes of the same joined glass, in the same coordinates) that come within the glass's join spacing: where
+/// the shapes join into one, only the outline of the whole shows, not each part's.
+pub(crate) fn edge_outside(
+    cx: &mut PaintCx<'_>,
+    rect: Rect,
+    radius: f64,
+    alpha: f32,
+    joined: &[(Rect, f64)],
+) {
+    let near = edge_cuts(rect, joined);
+    let room = rect.outset(EDGE_WIDTH + 1.0);
+    for (other, r) in &near {
+        let mut cut = rounded_path(room.union(other), 0.0);
+        cut.extend(rounded_path(
+            *other,
+            r.min(other.width().min(other.height()) / 2.0),
+        ));
+        cx.push(PaintOp::PushClip(Shape::Path {
+            verbs: cut,
+            fill_rule: FillRule::EvenOdd,
+        }));
+    }
+    cx.push(PaintOp::Stroke {
+        shape: Shape::RoundedRect {
+            rect: rect.outset(EDGE_WIDTH / 2.0),
+            radius: radius + EDGE_WIDTH / 2.0,
+        },
+        width: EDGE_WIDTH,
+        paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, alpha)),
+    });
+    for _ in &near {
+        cx.push(PaintOp::PopClip);
+    }
+}
+
+/// Which of the `joined` shapes the edge round `rect` is left out inside: those that come close enough for the glass
+/// to join them into one shape with it.
+pub(crate) fn edge_cuts(rect: Rect, joined: &[(Rect, f64)]) -> Vec<&(Rect, f64)> {
+    let reach = rect.outset(modes::JOIN_SPACING + EDGE_WIDTH);
+    joined
+        .iter()
+        .filter(|(r, _)| r.intersects(&reach))
         .collect()
 }
 
@@ -820,6 +890,10 @@ where
         alpha: frame.alpha,
         blur: frame.blur,
         joins: frame.modes.count > 0,
+        joined: mode_rects(view, &rect)
+            .into_iter()
+            .map(|r| (r, r.width() / 2.0))
+            .collect(),
         split,
         content: Size::new(frame.shape.width, frame.shape.height),
         children: vec![inner.key("content")],
@@ -1188,6 +1262,8 @@ struct Enclosure<M> {
     blur: f64,
     /// Its glass joins the mode buttons' into one shape where they come close.
     joins: bool,
+    /// The mode buttons, in the window, with their corner radii: its edge is not drawn inside them.
+    joined: Vec<(Rect, f64)>,
     /// Its parts fade themselves at `alpha` ([`Bar`] and the browser's body): the enclosure draws its own edge (and
     /// without glass its shadow and fill) at `alpha` and lays no layer over them.
     split: bool,
@@ -1219,6 +1295,7 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
             Change::Layout
         } else if (self.radius, self.alpha, self.split, self.blur, self.joins)
             != (old.radius, old.alpha, old.split, old.blur, old.joins)
+            || self.joined != old.joined
         {
             Change::Paint
         } else {
@@ -1302,14 +1379,12 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
         } else {
             EDGE_ALPHA_LIGHT
         };
-        cx.push(PaintOp::Stroke {
-            shape: Shape::RoundedRect {
-                rect: rect.outset(EDGE_WIDTH / 2.0),
-                radius: radius + EDGE_WIDTH / 2.0,
-            },
-            width: EDGE_WIDTH,
-            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, edge * own)),
-        });
+        let joined: Vec<(Rect, f64)> = self
+            .joined
+            .iter()
+            .map(|(r, radius)| (r.translate(-self.rect.x(), -self.rect.y()), *radius))
+            .collect();
+        edge_outside(cx, rect, radius, edge * own, &joined);
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}

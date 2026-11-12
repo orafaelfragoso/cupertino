@@ -2498,3 +2498,18 @@ fn the_selected_result_over_the_glass_is_a_thin_fill_the_tint_shows_through() {
         }
     }
 }
+
+/// While a mode button buds out of the field the two are one shape of glass, so neither draws its own edge inside the
+/// other; once the button stands in its place, a gap away, each has its whole edge.
+#[test]
+fn a_budding_button_and_the_field_draw_no_edge_inside_each_other() {
+    let field = (Rect::new(0.0, 0.0, 512.0, 57.0), 28.5);
+    let bud = mode_model::button_rect(0, 2, 0.1, 57.0);
+    assert_eq!(edge_cuts(field.0, &[(bud, bud.width() / 2.0)]).len(), 1);
+    assert_eq!(edge_cuts(bud, &[field]).len(), 1);
+    let placed = mode_model::button_rect(0, 2, 1.0, 57.0);
+    let field = (Rect::new(0.0, 0.0, mode_model::field_width(2), 57.0), 28.5);
+    assert!(edge_cuts(field.0, &[(placed, placed.width() / 2.0)]).is_empty());
+    let second = mode_model::button_rect(1, 2, 1.0, 57.0);
+    assert!(edge_cuts(placed, &[(second, second.width() / 2.0)]).is_empty());
+}

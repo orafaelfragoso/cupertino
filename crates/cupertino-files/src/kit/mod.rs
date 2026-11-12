@@ -19,6 +19,7 @@ mod places;
 mod progress;
 mod remote;
 mod search;
+mod share_popover;
 mod sidebar;
 mod spring;
 mod tabs;
@@ -33,6 +34,7 @@ pub use jobs::{JobEvent, PROGRESS_WINDOW_DELAY};
 pub use list::RowGrab;
 pub use peek::PeekEvent;
 pub use places::PlacesSource;
+pub use share_popover::ShareEvent;
 pub use tabs::TabEvent;
 pub use tag_editor::TagEvent;
 pub use transfer::Observer;
@@ -434,6 +436,8 @@ struct BrowserWindow {
     peek: Option<peek::Peek>,
     /// The tags popover, while it is open.
     tag_editor: Option<tag_editor::TagEditor>,
+    /// The share popover, while it is open.
+    share: Option<share_popover::ShareState>,
 }
 
 /// The sheet that asks for a locked container's passphrase.
@@ -609,6 +613,8 @@ pub enum Event {
     Tab(TabEvent),
     /// The tags popover.
     Tags(TagEvent),
+    /// The share popover.
+    Share(ShareEvent),
     /// The tag of this name in the sidebar was chosen: the folder's items that carry it are shown.
     TagPlace(String),
 }
@@ -620,6 +626,8 @@ pub enum Popup {
     View,
     /// The selection's tag colours.
     Tags,
+    /// What the selection can be sent to.
+    Share,
     /// The selection's menu, or the folder's without a selection.
     Action,
     /// The selected item's menu, from the preview column's button.
@@ -750,7 +758,8 @@ impl Application for Files {
                     .map(|menu| context::windows(id, menu));
                 let preview = peek::window(&model.session, id, window)
                     .into_iter()
-                    .chain(view::tag_popover(&model.session, id, window));
+                    .chain(view::tag_popover(&model.session, id, window))
+                    .chain(view::share_popover(&model.session, id, window));
                 std::iter::once(view::window(&model.session, id, window))
                     .chain(preview)
                     .chain(menu.into_iter().flatten())
@@ -887,6 +896,7 @@ impl Model {
             texts: peek::Texts::default(),
             peek: None,
             tag_editor: None,
+            share: None,
         };
         window.entered();
         self.windows.insert(id, window);
@@ -1393,6 +1403,20 @@ impl Model {
                 }
             }
             Event::Tags(TagEvent::Close) => window.tag_editor = None,
+            Event::Share(ShareEvent::Close) => window.share = None,
+            Event::Share(ShareEvent::Scroll(scroll)) => {
+                if let Some(share) = window.share.as_mut() {
+                    share.scroll = scroll;
+                }
+            }
+            Event::Share(ShareEvent::Copy) => {
+                window.share = None;
+                return self.menu(id, MenuAction::Copy);
+            }
+            Event::Share(ShareEvent::Open(app)) => {
+                window.share = None;
+                return self.menu_command(id, MenuCommand::OpenWith(app));
+            }
             Event::Tags(TagEvent::Scroll(scroll)) => {
                 if let Some(editor) = window.tag_editor.as_mut() {
                     editor.scroll = scroll;
@@ -2177,6 +2201,7 @@ impl BrowserWindow {
         self.sidebar_row = None;
         self.peek = None;
         self.tag_editor = None;
+        self.share = None;
         *self.list_presses.borrow_mut() = Default::default();
         let polled = self.browser.poll();
         for error in polled.errors {
@@ -2491,9 +2516,20 @@ impl BrowserWindow {
             };
             return;
         }
+        if popup == Popup::Share {
+            // the selection's apps and copy, in a popover; without a selection the button does nothing
+            self.context = None;
+            self.tag_editor = None;
+            self.share = match (self.share.as_ref(), self.browser.selection().is_empty()) {
+                (None, false) => Some(share_popover::ShareState::new()),
+                _ => None,
+            };
+            return;
+        }
         let in_trash = self.browser.dir() == session.trash.home_trash().join("files");
         let has_selection = !self.browser.selection().is_empty();
         let (label, items) = match popup {
+            Popup::Share => return,
             Popup::View => ("View".to_owned(), menu_spec::view_menu(self.view)),
             Popup::Tags => {
                 let subject = self.subject(in_trash);
@@ -2577,7 +2613,7 @@ impl BrowserWindow {
     }
 
     /// The applications that open every selected item, for Open With.
-    fn selection_apps(&self, session: &Session) -> Vec<AppChoice> {
+    pub(super) fn selection_apps(&self, session: &Session) -> Vec<AppChoice> {
         let apps = match (session.applications)() {
             Ok(apps) => apps,
             Err(e) => {

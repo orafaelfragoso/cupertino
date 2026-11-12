@@ -323,6 +323,16 @@ pub fn shadow_alpha(d_shadow: f32, d_ring: f32, p: &GlassParams) -> (f32, f32) {
     (drop, ring)
 }
 
+/// The alpha of the outline hairline at a pixel `d` points outside the shape: full within its width, fading over the
+/// last pixel.
+pub fn outline_alpha(d: f32, p: &GlassParams) -> f32 {
+    let s = &p.shadow;
+    if s.outline_opacity <= 0.0 || s.outline_width <= 0.0 {
+        return 0.0;
+    }
+    s.outline_opacity * (s.outline_width + 0.5 - d).clamp(0.0, 1.0)
+}
+
 /// The foreground of a glyph on glass: the face `face` under it through `matrix`, mixed over the face by `coverage`
 /// (the glyph's coverage times its alpha).
 pub fn foreground(face: Rgb, matrix: &ColorMatrix, coverage: f32) -> Rgb {
@@ -459,7 +469,7 @@ impl Container {
             let d_shadow = self.field([p[0] - s.offset[0], p[1] - s.offset[1]]).0;
             let d_ring = self.field([p[0], p[1] - s.ring_offset]).0;
             let (drop, ring) = shadow_alpha(d_shadow, d_ring, params);
-            let a = (drop + ring).min(1.0);
+            let a = (drop + ring + outline_alpha(d, params)).min(1.0);
             return ([s.fill[0], s.fill[1], s.fill[2]], a);
         }
         let mut opacity = params.blur.level_opacity;
@@ -516,7 +526,7 @@ pub struct GlassUniform {
     pub highlight: [f32; 4],
     /// Highlight: offset, colour bias, curvature, 0.
     pub highlight2: [f32; 4],
-    /// The soft band of light: strength, half-width, offset, 0.
+    /// The soft band of light: strength, half-width, offset, and the opacity of the outline outside the shape.
     pub glow: [f32; 4],
     /// Key colour matrix rows: `[r, g, b coefficients, offset (+ alpha coefficient)]`.
     pub highlight_matrix: [[f32; 4]; 3],
@@ -524,7 +534,7 @@ pub struct GlassUniform {
     pub shadow: [f32; 4],
     /// Shadow colour (rgb) and the ring's alpha.
     pub shadow_color: [f32; 4],
-    /// Ring: offset, stroke, blur, 0.
+    /// Ring: offset, stroke, blur, and the width of the outline outside the shape.
     pub ring: [f32; 4],
     /// Each shape: x, y, w, h.
     pub shapes: [[f32; 4]; MAX_SHAPES],
@@ -584,7 +594,7 @@ impl GlassUniform {
             h.glow_amount,
             h.glow_height * scale,
             h.glow_offset * scale,
-            0.0,
+            p.shadow.outline_opacity,
         ];
         for r in 0..3 {
             let m = &h.matrix[r * 5..r * 5 + 5];
@@ -602,7 +612,7 @@ impl GlassUniform {
             s.ring_offset * scale,
             s.ring_stroke * scale,
             s.ring_blur * scale,
-            0.0,
+            s.outline_width * scale,
         ];
         for (i, (shape, v)) in container.shapes.iter().zip(&container.values).enumerate() {
             u.shapes[i] = shape.rect.map(|x| x * scale);

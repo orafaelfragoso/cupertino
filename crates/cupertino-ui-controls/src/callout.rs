@@ -25,6 +25,8 @@ pub struct CalloutPointer {
     /// Whether the pointer fills its outline where the session shows no material; a callout whose body paints the whole
     /// outline itself leaves it off.
     pub fills_without_glass: bool,
+    /// Whether the pointer points up, from a panel under it (a popover below what it belongs to), rather than down.
+    pub up: bool,
 }
 
 impl CalloutPointer {
@@ -34,21 +36,23 @@ impl CalloutPointer {
 }
 
 /// The outline of the pointer: from the panel's edge the sides curve in to a rounded tip.
-fn outline(w: f64, d: f64) -> Vec<PathVerb> {
-    let (mid, half, tip) = (w / 2.0, w / 2.0, d);
-    let rim = 0.2 * w;
+fn outline(w: f64, d: f64, up: bool) -> Vec<PathVerb> {
+    let (mid, half) = (w / 2.0, w / 2.0);
+    // the panel's edge and the tip, in the pointer's own height: down from the top edge, or up from the bottom edge
+    let (edge, tip) = if up { (d + 0.5, 0.0) } else { (-0.5, d) };
+    let (rim, inner) = (0.2 * w, if up { d } else { 0.0 });
     vec![
-        PathVerb::MoveTo(Point::new(mid - half, -0.5)),
-        PathVerb::LineTo(Point::new(mid + half, -0.5)),
+        PathVerb::MoveTo(Point::new(mid - half, edge)),
+        PathVerb::LineTo(Point::new(mid + half, edge)),
         PathVerb::CubicTo(
-            Point::new(mid + half - rim, 0.0),
+            Point::new(mid + half - rim, inner),
             Point::new(mid + 0.18 * w, tip),
             Point::new(mid, tip),
         ),
         PathVerb::CubicTo(
             Point::new(mid - 0.18 * w, tip),
-            Point::new(mid - half + rim, 0.0),
-            Point::new(mid - half, -0.5),
+            Point::new(mid - half + rim, inner),
+            Point::new(mid - half, edge),
         ),
         PathVerb::Close,
     ]
@@ -67,9 +71,13 @@ impl<M: Clone + 'static> Widget<M> for CalloutPointer {
     }
 
     fn take_children(&mut self) -> Vec<Element<M>> {
-        LAYER_WIDTH
-            .iter()
-            .enumerate()
+        let mut layers: Vec<(usize, f64)> = LAYER_WIDTH.iter().copied().enumerate().collect();
+        // an upward pointer has its tip first
+        if self.up {
+            layers.reverse();
+        }
+        layers
+            .into_iter()
             .map(|(i, share)| {
                 Element::new(Layer {
                     size: Size::new(self.width * share, self.depth / LAYER_WIDTH.len() as f64),
@@ -119,7 +127,7 @@ impl<M: Clone + 'static> Widget<M> for CalloutPointer {
         let size = cx.size();
         cx.push(PaintOp::Fill {
             shape: Shape::Path {
-                verbs: outline(size.width, size.height),
+                verbs: outline(size.width, size.height, self.up),
                 fill_rule: FillRule::NonZero,
             },
             paint: Paint::Solid(fill),

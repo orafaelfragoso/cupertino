@@ -172,6 +172,9 @@ pub struct GlassShadow {
     /// Offset in points of the ring below the shape.
     pub ring_offset: f32,
     pub ring_opacity: f32,
+    /// A hairline just outside the shape, in the drop shadow's colour: its opacity (0 for none) and its width in points.
+    pub outline_opacity: f32,
+    pub outline_width: f32,
 }
 
 /// The complete background recipe of one glass shape.
@@ -608,6 +611,8 @@ impl GlassParams {
                 ring_stroke: 4.0,
                 ring_offset: 8.0,
                 ring_opacity: 0.0,
+                outline_opacity: 0.0,
+                outline_width: 0.0,
             },
         }
     }
@@ -708,6 +713,8 @@ impl GlassParams {
                 ring_stroke: 0.0,
                 ring_offset: 0.0,
                 ring_opacity: 0.0,
+                outline_opacity: 0.0,
+                outline_width: 0.0,
             },
         }
     }

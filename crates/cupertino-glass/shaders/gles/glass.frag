@@ -152,11 +152,14 @@ void main() {
     float d = field(p, fa, fb);
     if (d > 0.5) {
         // stage 6: shadows outside the shape, drawn at their opacity (none at rest)
-        if (G.shadow.z <= 0.0 && G.shadow_color.w <= 0.0) { discard; }
+        bool outlined = G.glow.w > 0.0 && G.ring.w > 0.0;
+        if (G.shadow.z <= 0.0 && G.shadow_color.w <= 0.0 && !outlined) { discard; }
         float drop = G.shadow.z * coverage(field_d(p - G.shadow.xy), G.shadow.w);
         float dr = field_d(p - vec2(0.0, G.ring.x));
         float ring = G.shadow_color.w * max(coverage(dr, G.ring.z) - coverage(dr + G.ring.y, G.ring.z), 0.0);
-        float a = min(drop + ring, 1.0) * G.info.w;
+        // a hairline of the shadow's colour along the outside of the shape
+        float line = outlined ? G.glow.w * clamp(G.ring.w + 0.5 - d, 0.0, 1.0) : 0.0;
+        float a = min(drop + ring + line, 1.0) * G.info.w;
         if (a <= 0.0) { discard; }
         frag_color = vec4(G.shadow_color.rgb, a);
         return;

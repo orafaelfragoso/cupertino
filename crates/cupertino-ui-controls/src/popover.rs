@@ -1,10 +1,10 @@
 use crate::look;
 use crate::scroll;
-use crate::Popover;
-use cupertino_geometry::{Insets, Rect, Size};
+use crate::{CalloutPointer, Popover};
+use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
-    Change, CommandRegistry, Element, Event, EventCx, MeasureCx, PaintCx, Popup, PopupAnchor,
-    Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
+    Change, CommandRegistry, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Popup,
+    PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_ui_layout::{Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured};
 use cupertino_ui_platform::{DecorationMode, Keysym, WindowSpec};
@@ -14,8 +14,17 @@ use std::rc::Rc;
 const ESCAPE: Keysym = Keysym(0xff1b);
 /// The panel's corner radius.
 const RADIUS: f64 = 16.0;
-const PADDING: f64 = 12.0;
-const GAP: f64 = 8.0;
+const PADDING: f64 = 5.0;
+/// The room above the content, less than at its sides: a heading stands close under the panel's top edge.
+const PADDING_TOP: f64 = 2.0;
+/// How far the tip of the pointer stands below what the popover belongs to.
+const GAP: f64 = 6.0;
+/// The pointer's width where it leaves the panel and its height above the panel.
+const POINTER_WIDTH: f64 = 30.0;
+const POINTER_DEPTH: f64 = 10.5;
+/// The container the panel and its pointer share as glass, and how far their outlines blend into each other.
+const GLASS_CONTAINER: u32 = 1;
+const GLASS_BLEND: f64 = 8.0;
 /// The panel's own edge, drawn only over the opaque fill a window without the compositor's glass paints.
 const EDGE: f64 = 1.0;
 /// The widest the panel grows; the height bound is not in the spec, so it stays well under a laptop screen.
@@ -41,20 +50,22 @@ impl<M: Clone + 'static> Popover<M> {
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,
-            // glass, whose edge the compositor draws; without it the window paints the opaque fill
-            background: WindowBackground::Surface {
-                surface: Surface::Popover,
-                radius: RADIUS,
-                alpha: 1.0,
-            },
-            content: Element::new(Panel {
-                label: self.label,
-                on_close: self.on_close.clone(),
-                children: vec![scroll::fitted(
-                    self.content,
-                    self.scroll,
-                    Rc::new(self.on_scroll),
-                )],
+            // the panel and its pointer are one piece of glass the panel's node paints
+            background: WindowBackground::None,
+            content: Element::new(Callout {
+                children: vec![
+                    Element::new(PointerRow).key("pointer"),
+                    Element::new(Panel {
+                        label: self.label,
+                        on_close: self.on_close.clone(),
+                        children: vec![scroll::fitted(
+                            self.content,
+                            self.scroll,
+                            Rc::new(self.on_scroll),
+                        )],
+                    })
+                    .key("panel"),
+                ],
             }),
             popup: Some(Popup {
                 parent: self.parent,
@@ -81,7 +92,7 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
-            insets: Insets::uniform(PADDING),
+            insets: Insets::new(PADDING_TOP, PADDING, PADDING, PADDING),
             ..LayoutSpec::new(ContainerKind::Stack {
                 axis: Axis::Vertical,
                 spacing: 0.0,
@@ -122,15 +133,18 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         }
     }
 
-    /// Over the opaque fill a window without the compositor's glass paints, the panel draws its own edge.
+    /// The panel is glass joined to its pointer's; without the compositor's material it paints the opaque fill and its
+    /// own edge.
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if cx.window_backdrop() {
+        let size = cx.size();
+        let rect = Rect::new(0.0, 0.0, size.width, size.height);
+        if cx.glass(popover_glass().radius(RADIUS)) {
             return;
         }
-        let size = cx.size();
+        let fill = cx.env().theme.surface(Surface::Popover).fill;
+        look::fill(cx, rect, RADIUS, fill);
         let theme = &cx.env().theme;
         let edge = theme.colors.get(ColorRole::Separator, StateVariant::NORMAL);
-        let rect = Rect::new(0.0, 0.0, size.width, size.height);
         look::stroke(
             cx,
             rect.inset(Insets::uniform(EDGE / 2.0)),
@@ -145,5 +159,114 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         cx.name(self.label.clone());
         cx.focus_scope();
         cx.focus_fallback();
+    }
+}
+
+fn popover_glass() -> Glass {
+    Glass::dense().container(GLASS_CONTAINER, GLASS_BLEND)
+}
+
+/// The content of a popover window: the row holding the pointer, and under it the panel.
+struct Callout<M> {
+    children: Vec<Element<M>>,
+}
+
+impl<M: Clone + 'static> Widget<M> for Callout<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Stack {
+            axis: Axis::Vertical,
+            spacing: 0.0,
+            align: Align::Stretch,
+            justify: Justify::Start,
+        })
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+}
+
+/// The row above the panel that holds its pointer in the middle.
+struct PointerRow;
+
+impl<M: Clone + 'static> Widget<M> for PointerRow {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Stack {
+            axis: Axis::Horizontal,
+            spacing: 0.0,
+            align: Align::Start,
+            justify: Justify::Center,
+        })
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        vec![CalloutPointer {
+            width: POINTER_WIDTH,
+            depth: POINTER_DEPTH,
+            glass: popover_glass(),
+            surface: Surface::Popover,
+            fills_without_glass: true,
+            up: true,
+        }
+        .element()
+        .key("shape")]
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
     }
 }

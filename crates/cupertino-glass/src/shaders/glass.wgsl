@@ -168,11 +168,15 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
   let d = f.d;
   if (d > 0.5) {
     // stage 6: shadows outside the shape, drawn at their opacity (none at rest)
-    if (G.shadow.z <= 0.0 && G.shadow_color.w <= 0.0) { discard; }
+    let outlined = G.glow.w > 0.0 && G.ring.w > 0.0;
+    if (G.shadow.z <= 0.0 && G.shadow_color.w <= 0.0 && !outlined) { discard; }
     let drop = G.shadow.z * coverage(field_d(p - G.shadow.xy), G.shadow.w);
     let dr = field_d(p - vec2<f32>(0.0, G.ring.x));
     let ring = G.shadow_color.w * max(coverage(dr, G.ring.z) - coverage(dr + G.ring.y, G.ring.z), 0.0);
-    let a = min(drop + ring, 1.0) * G.info.w;
+    // a hairline of the shadow's colour along the outside of the shape
+    var line = 0.0;
+    if (outlined) { line = G.glow.w * clamp(G.ring.w + 0.5 - d, 0.0, 1.0); }
+    let a = min(drop + ring + line, 1.0) * G.info.w;
     if (a <= 0.0) { discard; }
     return vec4<f32>(G.shadow_color.rgb, a);
   }

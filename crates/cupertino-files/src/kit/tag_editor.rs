@@ -30,19 +30,21 @@ use crate::context_menu::TAG_ROW_ORDER;
 use crate::tags::TagColor;
 
 /// The popover's width.
-const WIDTH: f64 = 222.0;
+const WIDTH: f64 = 217.0;
 /// A tag's row: its height, the side of its colour's dot and the room after the dot.
 const ROW_HEIGHT: f64 = 19.0;
 /// Between the title and the field, and from the field to the first row.
-const TITLE_GAP: f64 = 8.0;
-const ROWS_GAP: f64 = 8.0;
-const DOT: f64 = 11.0;
-const DOT_GAP: f64 = 6.0;
+const TITLE_GAP: f64 = 6.0;
+const ROWS_GAP: f64 = 11.0;
+const DOT: f64 = 10.0;
+const DOT_GAP: f64 = 4.5;
 /// From the row's leading edge to the dot.
-const ROW_INSET: f64 = 6.0;
+const ROW_INSET: f64 = 14.5;
 /// The side of the check mark of a tag every selected item carries.
 const CHECK: f64 = 10.0;
 const TITLE_SIZE: f32 = 13.0;
+/// The size of the heading over the field.
+const HEADING_SIZE: f32 = 11.0;
 const RETURN: Keysym = Keysym(0xff0d);
 const SPACE: Keysym = Keysym(0x20);
 
@@ -142,17 +144,17 @@ pub(super) fn window(
             format!("Tags for {subject}"),
             TextStyle {
                 weight: FontWeight::SEMIBOLD,
-                ..TextStyle::new(TITLE_SIZE)
+                ..TextStyle::new(HEADING_SIZE)
             },
         ),
         role: TextRole::Body,
         wrap: false,
-        secondary: false,
+        secondary: true,
         selected: false,
     });
     let field = Element::new(TextField {
         label: "Tag".into(),
-        placeholder: "Add a tag".into(),
+        placeholder: String::new(),
         value: editor.filter.clone(),
         revision: editor.revision,
         purpose: ContentPurpose::Normal,

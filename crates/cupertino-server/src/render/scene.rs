@@ -1826,6 +1826,10 @@ const SMALL_CALLOUT_FACE_DARK: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
 const DENSE_GLOW_DARK: (f32, f32, f32) = (0.09, 1.8, -0.8);
 const DENSE_GLOW_LIGHT: (f32, f32, f32) = (0.07, 4.2, -1.0);
 
+/// The opacity and the width in points of the black outline along the outside of a popover.
+const POPOVER_OUTLINE_DARK: (f32, f32) = (0.45, 1.0);
+const POPOVER_OUTLINE_LIGHT: (f32, f32) = (0.33, 1.0);
+
 /// The soft band of light under the top and bottom edges of a large panel, in the same terms: wide, so it also lifts the
 /// face where the blur of the backdrop outside the panel darkens it near the edge.
 const LARGE_PANEL_GLOW_DARK: (f32, f32, f32) = (0.06, 9.0, 0.0);
@@ -2054,6 +2058,16 @@ fn glass_pieces(
             _ if popup => container.params.highlight.amount = 0.0,
             _ => {}
         }
+    }
+    // a popover's outline, which a callout's one piece of glass draws itself
+    if popup && callout && spec.style == cupertino_theme::GlassStyle::Dense {
+        let (opacity, width) = if mode.dark {
+            POPOVER_OUTLINE_DARK
+        } else {
+            POPOVER_OUTLINE_LIGHT
+        };
+        container.params.shadow.outline_opacity = opacity;
+        container.params.shadow.outline_width = width;
     }
     if popup {
         let small = container

@@ -2193,6 +2193,7 @@ impl<M: Clone + 'static> Widget<M> for TailRow {
             glass: tail_glass(),
             surface: Surface::Menu,
             fills_without_glass: true,
+            up: false,
         }
         .element()
         .key("shape")]

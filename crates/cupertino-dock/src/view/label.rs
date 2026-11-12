@@ -166,6 +166,7 @@ pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) ->
                             glass: Glass::regular().container(GLASS_CONTAINER, GLASS_BLEND),
                             surface: Surface::Tooltip,
                             fills_without_glass: false,
+                            up: false,
                         }
                         .element()
                         .key("pointer"),

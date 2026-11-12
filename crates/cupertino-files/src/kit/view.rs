@@ -289,7 +289,8 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let sidebar = Element::new(ContextMenu {
         content: sidebar,
         on_open: Some(send(id, Event::SidebarMenu)),
-    });
+    })
+    .fill();
     drops::sidebar(session, id, sidebar)
 }
 
@@ -340,6 +341,49 @@ pub(super) fn tag_popover(
         &subject,
         tags,
         &session.tag_colors,
+    ))
+}
+
+/// The share popover of window `id`, while it is open.
+pub(super) fn share_popover(
+    session: &Session,
+    id: u64,
+    win: &BrowserWindow,
+) -> Option<Window<Message>> {
+    let state = win.share.as_ref()?;
+    let entries = win.browser.entries();
+    let selected: Vec<&Entry> = win
+        .browser
+        .selection()
+        .indices()
+        .filter_map(|i| entries.get(i))
+        .collect();
+    let first = selected.first()?;
+    let subject = match selected.as_slice() {
+        [one] => {
+            let kind = crate::mime::kind_description(&crate::mime::entry_mime(one));
+            let mut chars = kind.chars();
+            let kind = chars
+                .next()
+                .map(|c| c.to_uppercase().chain(chars).collect())
+                .unwrap_or_default();
+            super::share_popover::Subject {
+                name: one.name.clone(),
+                kind,
+                icon: session.icons.icon(one, 36.0),
+            }
+        }
+        many => super::share_popover::Subject {
+            name: format!("{} items", many.len()),
+            kind: String::new(),
+            icon: session.icons.icon(first, 36.0),
+        },
+    };
+    Some(super::share_popover::window(
+        id,
+        state,
+        subject,
+        &win.selection_apps(session),
     ))
 }
 
@@ -746,7 +790,17 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
     let actions = ToolbarGroup {
         label: String::new(),
         items: vec![
-            item(None, "symbol.share", "Share", None, None),
+            // a share popover for the selection; without one the button is off
+            ToolbarItem {
+                key: Some(popup_key(Popup::Share)),
+                ..item(
+                    None,
+                    "symbol.share",
+                    "Share",
+                    popup(Popup::Share).filter(|_| !win.browser.selection().is_empty()),
+                    Some(win.share.is_some()),
+                )
+            },
             // an authored tag: the host's symbol themes may have none, and stand a different glyph in for it
             ToolbarItem {
                 glyph: ToolbarGlyph::Tag,
@@ -1184,6 +1238,7 @@ pub(super) fn popup_key(popup: Popup) -> Key {
     Key::from(match popup {
         Popup::View => "popup-view",
         Popup::Tags => "popup-tags",
+        Popup::Share => "popup-share",
         Popup::Action => "popup-action",
         Popup::More => "popup-more",
     })

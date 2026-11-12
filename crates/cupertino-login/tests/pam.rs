@@ -13,8 +13,8 @@ use cupertino_test_pam::{Code, Pam, Prompt, Script, CHILD_VARIABLE, PASSWORD};
 
 /// The account the attempts are for.
 const LOGIN: &str = "cupertino-test-lock";
-/// The child's name for this file's runner.
-const CHILD: &str = "attempts_in_a_process_with_the_test_shim";
+/// The full name of this file's runner in the crate's test program, whose tests are named by their file's module.
+const CHILD: &str = "pam::attempts_in_a_process_with_the_test_shim";
 
 /// Run by the tests below in a process with the shim: one attempt for each line of the case, each event printed as
 /// `EVENT <debug>`.

@@ -13,7 +13,8 @@ use cupertino_test_pam::{
     REFUSE_VARIABLE,
 };
 
-const CHILD: &str = "probes_in_a_process_with_the_test_shim";
+/// The full name of this file's runner in the crate's test program, whose tests are named by their file's module.
+const CHILD: &str = "shim::probes_in_a_process_with_the_test_shim";
 
 /// A symbol of the loaded shim.
 fn symbol(name: &CStr) -> *mut c_void {

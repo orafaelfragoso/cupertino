@@ -978,6 +978,9 @@ fn chevron(area: Rect, right: bool) -> Shape {
     }
 }
 
+/// How much of the label colour the title of an active window's toolbar keeps.
+const TOOLBAR_TITLE_ALPHA: f32 = 0.76;
+
 /// A glyph's colour, and the title's: the label colour; dimmed when disabled, and the faintest text colour in a window
 /// that is not active, where the toolbar recedes.
 fn glyph_color(theme: &cupertino_ui_theme::ThemeTokens, state: &ControlState) -> Color {
@@ -1079,6 +1082,12 @@ impl<M: 'static> Widget<M> for ToolbarTitle {
             ..ControlState::default()
         };
         let color = glyph_color(&theme, &state);
+        // the title is a little lighter than the label colour, in a window that is active
+        let color = if state.window_active {
+            color.with_alpha(color.a * TOOLBAR_TITLE_ALPHA)
+        } else {
+            color
+        };
         let rtl = cx.env().direction == LayoutDirection::Rtl;
         let x = if rtl {
             size.width - inset - layout.size().width

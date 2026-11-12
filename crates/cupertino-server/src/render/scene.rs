@@ -33,7 +33,9 @@ use super::compose::{
 };
 use super::gles::{Gles, GlesCompletion, GlesResources, GlesTarget};
 use super::lower::id_hash;
-use super::material::glass::{area_generation, Below, GlassContainer, ToneProbe};
+use super::material::glass::{
+    backdrop_generation, BackdropRecord, Below, GlassContainer, ToneProbe,
+};
 use super::material::{GpuRecipe, MaterialStage, SharedMaterial};
 use super::mesh::{MeshGl, SharedMesh};
 use super::motion::{
@@ -2851,7 +2853,7 @@ fn display_filter(p: &mut SceneParams<'_>, stack: &mut Composition) {
 
 /// Assign each material element the signature of everything below it (bottom to top). A
 /// composite takes the signature of its capture element, which sits lower in the scene. A glass element takes the
-/// signature of the elements below it that overlap the area it samples ([`area_generation`]).
+/// signature of the elements below it that overlap the area it samples ([`backdrop_generation`]).
 pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: &mut ElementCache) {
     let scale = Scale::from(scale);
     let mut running = Sig::new();
@@ -2859,10 +2861,52 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
     let mut captured: Vec<(u64, u64)> = Vec::new();
     // the elements so far, bottom to top
     let mut below: Vec<Below> = Vec::new();
-    for e in elements.iter_mut().rev() {
+    // the elements below each glass element that overlap the area it samples, as indices into `elements`
+    let mut glass_generations: Vec<Option<u64>> = vec![None; elements.len()];
+    for (i, e) in elements.iter().enumerate().rev() {
         if let CupertinoElement::Glass(g) = e {
-            // glass reads only the area it samples: what changes elsewhere leaves its blurred levels alone
-            let generation = area_generation(g.geometry(scale), below.iter().copied());
+            // glass reads only the area it samples: what changes elsewhere, or a commit that leaves that area as it
+            // was, keeps its blurred levels
+            let area = g.geometry(scale);
+            let (overlapping, at): (Vec<Below>, Vec<usize>) = below
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.geometry.overlaps(area))
+                .map(|(j, b)| (*b, elements.len() - 1 - j))
+                .unzip();
+            let generation =
+                backdrop_generation(area, &overlapping, cache.backdrop(g.key()), |k, since| {
+                    let e = &elements[at[k]];
+                    let origin = e.geometry(scale).loc;
+                    e.damage_since(scale, Some(CommitCounter::from(since as usize)))
+                        .iter()
+                        .map(|d| smithay::utils::Rectangle::new(d.loc + origin, d.size))
+                        .collect()
+                });
+            cache.set_backdrop(
+                g.key(),
+                BackdropRecord {
+                    generation,
+                    below: overlapping,
+                },
+            );
+            glass_generations[i] = Some(generation);
+        }
+        let g = e.geometry(scale);
+        let c = e
+            .current_commit()
+            .distance(Some(CommitCounter::default()))
+            .unwrap_or(0) as u64;
+        below.push(Below {
+            id: id_hash(e.id()),
+            commit: c,
+            alpha: e.alpha(),
+            geometry: g,
+        });
+    }
+    below.clear();
+    for (i, e) in elements.iter_mut().enumerate().rev() {
+        if let (CupertinoElement::Glass(g), Some(generation)) = (&mut *e, glass_generations[i]) {
             g.finalize(generation, cache);
         }
         if let CupertinoElement::Material(m) = e {
@@ -2897,12 +2941,6 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
             .u(g.size.h as u64);
         h = h.u(id_hash(e.id()));
         acc = h.finish();
-        below.push(Below {
-            id: id_hash(e.id()),
-            commit: c,
-            alpha: e.alpha(),
-            geometry: g,
-        });
         let _ = &mut running;
     }
 }

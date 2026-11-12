@@ -102,9 +102,34 @@ struct MaterialLocs {
     backdrop: GLint,
 }
 
-/// Identity of a processed backdrop: recipe, capture size, pixel scale and, for backdrops captured
-/// by a [`MaterialStage::Capture`] element, the owner they were captured for.
-type BackdropKey = (u64, i32, i32, u32, Option<u64>);
+/// Identity of a processed backdrop: recipe, capture size, pixel scale, for backdrops captured by a
+/// [`MaterialStage::Capture`] element the owner they were captured for, and for a [`MaterialStage::Full`] element the
+/// element itself, so regions of one recipe at different depths of the scene keep a backdrop each instead of taking
+/// one another's place every frame.
+type BackdropKey = (u64, i32, i32, u32, Option<u64>, u64);
+
+/// The [`BackdropKey`] of a draw of `element` (a hash of its [`ElementKey`]).
+fn backdrop_key(
+    recipe: u64,
+    output_px: (i32, i32),
+    scale: f32,
+    stage: MaterialStage,
+    element: u64,
+) -> BackdropKey {
+    let full = match stage {
+        MaterialStage::Full => element,
+        // a composite finds the backdrop its capture element made
+        MaterialStage::Capture { .. } | MaterialStage::Composite { .. } => 0,
+    };
+    (
+        recipe,
+        output_px.0,
+        output_px.1,
+        scale.to_bits(),
+        stage_owner(stage),
+        full,
+    )
+}
 
 struct CachedBackdrop {
     key: BackdropKey,
@@ -296,6 +321,8 @@ fn stage_owner(stage: MaterialStage) -> Option<u64> {
 /// Parameters of one composite draw.
 pub struct DrawParams<'a> {
     pub stage: MaterialStage,
+    /// The element drawing, a hash of its [`ElementKey`].
+    pub element: u64,
     pub projection: [f32; 9],
     pub recipe: &'a GpuRecipe,
     pub generation: u64,
@@ -661,13 +688,7 @@ impl MaterialGl {
         self.tick += 1;
         let saved = SavedState::capture(gl);
         let src_fbo = saved.draw_fbo as GLuint;
-        let key: BackdropKey = (
-            p.recipe.key,
-            p.output_px.0,
-            p.output_px.1,
-            p.scale.to_bits(),
-            stage_owner(p.stage),
-        );
+        let key = backdrop_key(p.recipe.key, p.output_px, p.scale, p.stage, p.element);
         let hit = self
             .cache
             .iter()
@@ -1021,6 +1042,12 @@ impl RenderElement<GlesRenderer> for MaterialElement {
             .collect();
         let params = DrawParams {
             stage: self.stage,
+            element: {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                self.key.hash(&mut h);
+                h.finish()
+            },
             projection,
             recipe: &self.recipe,
             generation: self.generation,
@@ -1054,6 +1081,24 @@ impl RenderElement<GlesRenderer> for MaterialElement {
 mod tests {
     use super::*;
     use cupertino_theme::{Appearance, MaterialOptions, Theme};
+
+    #[test]
+    fn regions_of_one_recipe_keep_a_backdrop_each_and_a_composite_finds_its_capture() {
+        let key = |stage, element| backdrop_key(7, (2560, 1600), 2.0, stage, element);
+        // two sidebars of one recipe at different depths: neither replaces the other's blurred backdrop
+        assert_ne!(key(MaterialStage::Full, 1), key(MaterialStage::Full, 2));
+        // the same region frame after frame finds its own
+        assert_eq!(key(MaterialStage::Full, 1), key(MaterialStage::Full, 1));
+        // a composite reads what the capture element of its owner made, whatever element draws it
+        assert_eq!(
+            key(MaterialStage::Capture { owner: 5 }, 1),
+            key(MaterialStage::Composite { owner: 5 }, 2)
+        );
+        assert_ne!(
+            key(MaterialStage::Capture { owner: 5 }, 1),
+            key(MaterialStage::Composite { owner: 6 }, 1)
+        );
+    }
 
     fn recipe(a: Appearance, m: &str) -> Recipe {
         Theme::load()

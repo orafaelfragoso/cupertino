@@ -61,6 +61,8 @@ struct Slot {
 #[derive(Debug, Default)]
 pub struct ElementCache {
     slots: HashMap<ElementKey, Slot>,
+    /// What each glass element's backdrop signature was made from, and whether it was used since the last frame.
+    backdrops: HashMap<ElementKey, (crate::render::material::glass::BackdropRecord, bool)>,
 }
 
 impl ElementCache {
@@ -99,10 +101,29 @@ impl ElementCache {
         Some(s.commit)
     }
 
+    /// What the backdrop signature of glass element `key` was made from last frame.
+    pub fn backdrop(
+        &self,
+        key: ElementKey,
+    ) -> Option<&crate::render::material::glass::BackdropRecord> {
+        self.backdrops.get(&key).map(|(r, _)| r)
+    }
+
+    /// Keep what the backdrop signature of glass element `key` was made from this frame.
+    pub fn set_backdrop(
+        &mut self,
+        key: ElementKey,
+        record: crate::render::material::glass::BackdropRecord,
+    ) {
+        self.backdrops.insert(key, (record, true));
+    }
+
     /// Forget every key that was not requested since the previous call.
     pub fn end_frame(&mut self) {
         self.slots
             .retain(|_, s| std::mem::replace(&mut s.used, false));
+        self.backdrops
+            .retain(|_, (_, used)| std::mem::replace(used, false));
     }
 
     pub fn len(&self) -> usize {

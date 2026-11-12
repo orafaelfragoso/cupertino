@@ -182,7 +182,7 @@ impl GlassContainer {
 }
 
 /// One element below a glass element, as its backdrop signature sees it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Below {
     pub id: u64,
     pub commit: u64,
@@ -213,6 +213,43 @@ pub fn area_generation(
         }
     }
     sig.finish()
+}
+
+/// What the backdrop signature of a glass element was made from in the last frame: the signature and the elements below
+/// that overlapped the area it samples, bottom to top.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BackdropRecord {
+    pub generation: u64,
+    pub below: Vec<Below>,
+}
+
+/// The backdrop signature of a glass element sampling `area`, given the elements below that overlap it (`overlapping`,
+/// bottom to top) and what the signature was made from last frame. When the same elements lie there, in the same order,
+/// place and opacity, and those that committed since report no damage inside `area` (`damage(i, since)`: the damage
+/// of `overlapping[i]` since commit `since`, in output pixels), the backdrop the glass reads is what it was: the last
+/// signature holds and the blurred levels are kept. Otherwise it is [`area_generation`]'s.
+pub fn backdrop_generation(
+    area: Rectangle<i32, Physical>,
+    overlapping: &[Below],
+    last: Option<&BackdropRecord>,
+    mut damage: impl FnMut(usize, u64) -> Vec<Rectangle<i32, Physical>>,
+) -> u64 {
+    let fresh = || area_generation(area, overlapping.iter().copied());
+    let Some(last) = last.filter(|l| l.below.len() == overlapping.len()) else {
+        return fresh();
+    };
+    for (i, (was, now)) in last.below.iter().zip(overlapping).enumerate() {
+        let same_place = was.id == now.id
+            && was.alpha.to_bits() == now.alpha.to_bits()
+            && was.geometry == now.geometry;
+        if !same_place {
+            return fresh();
+        }
+        if was.commit != now.commit && damage(i, was.commit).iter().any(|d| d.overlaps(area)) {
+            return fresh();
+        }
+    }
+    last.generation
 }
 
 /// The framebuffer rectangle (x, y, w, h in framebuffer pixels, rows from the bottom) that `area` (output pixels)
@@ -1131,6 +1168,11 @@ impl GlassElement {
         self.area
     }
 
+    /// The key its id, commit and backdrop record are kept under.
+    pub fn key(&self) -> ElementKey {
+        self.key
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -1479,6 +1521,113 @@ mod tests {
             ..inside(0)
         };
         assert_ne!(base, area_generation(area, [fading, outside(0)]));
+    }
+
+    #[test]
+    fn a_commit_that_leaves_the_sampled_area_as_it_was_keeps_the_blur() {
+        let area = rect(100, 100, 200, 100);
+        // a window under the glass and beyond it, and the wallpaper
+        let wall = Below {
+            id: 1,
+            commit: 0,
+            alpha: 1.0,
+            geometry: rect(0, 0, 1000, 800),
+        };
+        let window = Below {
+            id: 2,
+            commit: 0,
+            alpha: 1.0,
+            geometry: rect(50, 50, 600, 400),
+        };
+        let first = backdrop_generation(area, &[wall, window], None, |_, _| vec![]);
+        let record = BackdropRecord {
+            generation: first,
+            below: vec![wall, window],
+        };
+        let scrolled = Below {
+            commit: 1,
+            ..window
+        };
+        // the window's list scrolled where the glass does not read: the blur is kept
+        let elsewhere = |_: usize, since: u64| {
+            assert_eq!(since, 0, "damage is asked since the last frame's commit");
+            vec![rect(400, 250, 200, 150)]
+        };
+        assert_eq!(
+            backdrop_generation(area, &[wall, scrolled], Some(&record), elsewhere),
+            first
+        );
+        // the change reaches into the sampled area: blurred again
+        let under = |_: usize, _: u64| vec![rect(280, 180, 50, 50)];
+        assert_ne!(
+            backdrop_generation(area, &[wall, scrolled], Some(&record), under),
+            first
+        );
+        // a window dragged under the glass: its place changed, blurred again whatever its damage says
+        let dragged = Below {
+            geometry: rect(60, 50, 600, 400),
+            ..window
+        };
+        assert_ne!(
+            backdrop_generation(area, &[wall, dragged], Some(&record), |_, _| vec![]),
+            first
+        );
+        // an element that comes to lie under the glass, or a fade, makes it again
+        assert_ne!(
+            backdrop_generation(area, &[wall], Some(&record), |_, _| vec![]),
+            first
+        );
+        let fading = Below {
+            alpha: 0.5,
+            ..window
+        };
+        assert_ne!(
+            backdrop_generation(area, &[wall, fading], Some(&record), |_, _| vec![]),
+            first
+        );
+        // with nothing kept from the last frame it is the area's signature
+        assert_eq!(first, area_generation(area, [wall, window]));
+    }
+
+    #[test]
+    fn dragging_a_window_blurs_again_only_the_glass_it_passes_under() {
+        let bar = rect(0, 0, 1000, 60);
+        let dock = rect(300, 700, 400, 100);
+        let wall = Below {
+            id: 1,
+            commit: 0,
+            alpha: 1.0,
+            geometry: rect(0, 0, 1000, 800),
+        };
+        let window = |y| Below {
+            id: 2,
+            commit: 0,
+            alpha: 1.0,
+            geometry: rect(200, y, 500, 400),
+        };
+        let generation =
+            |area: Rectangle<i32, Physical>, below: &[Below], last: Option<&BackdropRecord>| {
+                let over: Vec<Below> = below
+                    .iter()
+                    .copied()
+                    .filter(|b| b.geometry.overlaps(area))
+                    .collect();
+                let g = backdrop_generation(area, &over, last, |_, _| vec![]);
+                (
+                    g,
+                    BackdropRecord {
+                        generation: g,
+                        below: over,
+                    },
+                )
+            };
+        let (bar0, bar_rec) = generation(bar, &[wall, window(200)], None);
+        let (dock0, dock_rec) = generation(dock, &[wall, window(200)], None);
+        // the window moves down, under the dock but nowhere near the bar
+        let (bar1, _) = generation(bar, &[wall, window(320)], Some(&bar_rec));
+        let (dock1, _) = generation(dock, &[wall, window(320)], Some(&dock_rec));
+        assert_eq!(bar0, bar1, "the bar's blur is kept");
+        assert_ne!(dock0, dock1, "the dock's is made again");
     }
 
     /// One frame of `shown` containers (owner, state, sig): every build checks them, then each draws, making its

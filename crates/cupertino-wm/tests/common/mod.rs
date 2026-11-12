@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use cupertino_wm::*;
 
 pub const OUT: OutputId = OutputId(1);

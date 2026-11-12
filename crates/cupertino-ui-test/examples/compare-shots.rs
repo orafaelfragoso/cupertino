@@ -44,9 +44,14 @@ fn main() {
     let (mut count, mut x0, mut y0, mut x1, mut y1) = (0u64, usize::MAX, usize::MAX, 0, 0);
     let pixels = before
         .data()
-        .chunks_exact(4)
-        .zip(after.data().chunks_exact(4));
-    for (i, ((b, a), o)) in pixels.zip(out.data_mut().chunks_exact_mut(4)).enumerate() {
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(after.data().as_chunks::<4>().0);
+    for (i, ((b, a), o)) in pixels
+        .zip(out.data_mut().as_chunks_mut::<4>().0)
+        .enumerate()
+    {
         let changed = b.iter().zip(a).any(|(b, a)| b.abs_diff(*a) > TOLERANCE);
         if changed {
             let (x, y) = (i % width, i / width);

@@ -28,7 +28,8 @@ pub const RISE_RATE: f64 = 21.75;
 
 /// A critically damped spring from `from` (moving at `velocity`) to `target`, `t` seconds after it began.
 fn spring(from: f64, velocity: f64, target: f64, rate: f64, t: f64) -> (f64, f64) {
-    if !(t < SETTLED_AFTER) {
+    // a time past the settling one, or not a number, is settled
+    if t.partial_cmp(&SETTLED_AFTER) != Some(std::cmp::Ordering::Less) {
         return (target, 0.0);
     }
     let away = from - target;
@@ -150,6 +151,6 @@ impl Rise {
 
     /// Whether the cards have settled by `now`.
     pub fn done(&self, now: f64) -> bool {
-        !(now - self.start < 1.0)
+        (now - self.start).partial_cmp(&1.0) != Some(std::cmp::Ordering::Less)
     }
 }

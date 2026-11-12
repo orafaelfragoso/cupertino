@@ -2,8 +2,6 @@
 //! [`Traced`] application's golden starts with its trace: each input, then each message it caused and the model after
 //! that message, in order.
 
-#![allow(dead_code)]
-
 use cupertino_assets::BUILTIN_FONT;
 use cupertino_kit::core::{
     AccessibilityAdapter, Application, Command, FrameSnapshot, Key, RuntimeOptions, Window,

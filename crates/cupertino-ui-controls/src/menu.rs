@@ -408,6 +408,7 @@ impl<M: Clone + 'static> Menu<M> {
 
 /// The rows of the menu at `path`, keyed by their index; `current` is the item that takes the focus when it opens,
 /// and `open` the item whose submenu is open.
+#[allow(clippy::too_many_arguments)]
 fn rows<M: Clone + 'static>(
     items: &[MenuItem<M>],
     min_width: f64,

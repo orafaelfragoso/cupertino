@@ -1684,15 +1684,14 @@ impl Model {
                         .map(Path::to_path_buf);
                     return self.open_windows(folder.into_iter().collect());
                 }
-                MenuCommand::EjectPlace(place) => {
+                MenuCommand::EjectPlace(place)
                     if self
                         .session
                         .places
                         .get(place)
-                        .is_some_and(|p| p.ejectable())
-                    {
-                        self.eject(place);
-                    }
+                        .is_some_and(|p| p.ejectable()) =>
+                {
+                    self.eject(place);
                 }
                 _ => {}
             }

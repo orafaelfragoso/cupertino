@@ -859,7 +859,7 @@ impl Services {
                                 auto_join: Some(*auto_join),
                                 in_range: seen.is_some(),
                                 connected: seen.is_some_and(|n| n.4),
-                                secured: seen.map_or(true, |n| n.2 != "open"),
+                                secured: seen.is_none_or(|n| n.2 != "open"),
                             }
                         })
                         .collect(),
@@ -1152,9 +1152,8 @@ impl Services {
         done: impl FnOnce(Result<(), String>) + Send + 'static,
     ) -> Option<Result<(), String>> {
         type Job = Box<dyn FnOnce() -> Result<(), String> + Send>;
-        let on_bus = |s: &mut Self,
-                      f: Box<dyn FnOnce(&Connection) -> zbus::Result<()> + Send>|
-         -> Result<Job, String> {
+        type BusCall = Box<dyn FnOnce(&Connection) -> zbus::Result<()> + Send>;
+        let on_bus = |s: &mut Self, f: BusCall| -> Result<Job, String> {
             let connection = s.system.connection().cloned();
             let connection = s.system.checked(connection).map_err(|e| failure(&e))?;
             Ok(Box::new(move || f(&connection).map_err(|e| failure(&e))))

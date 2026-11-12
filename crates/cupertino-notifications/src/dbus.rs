@@ -695,6 +695,22 @@ impl CentrePublisher {
     }
 }
 
+/// The `Icon=` of the installed desktop entry `id` (a trailing `.desktop` is accepted), when it is a plain name or path.
+fn entry_icon(id: &str) -> Option<String> {
+    use cupertino_apps::entry::{parse_handler, xdg_application_dirs, Locale, Visibility};
+    let id = id.strip_suffix(".desktop").unwrap_or(id);
+    if id.is_empty() || id.contains('/') {
+        return None;
+    }
+    let text = xdg_application_dirs()
+        .iter()
+        .find_map(|dir| std::fs::read_to_string(dir.join(format!("{id}.desktop"))).ok())?;
+    parse_handler(id, &text, &Locale::from_env(), &Visibility::from_env())
+        .ok()?
+        .entry
+        .icon
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -903,20 +919,4 @@ mod tests {
         m.insert("image-data".to_string(), ov(Value::Structure(s)));
         assert!(parse_hints(&m).image.is_none());
     }
-}
-
-/// The `Icon=` of the installed desktop entry `id` (a trailing `.desktop` is accepted), when it is a plain name or path.
-fn entry_icon(id: &str) -> Option<String> {
-    use cupertino_apps::entry::{parse_handler, xdg_application_dirs, Locale, Visibility};
-    let id = id.strip_suffix(".desktop").unwrap_or(id);
-    if id.is_empty() || id.contains('/') {
-        return None;
-    }
-    let text = xdg_application_dirs()
-        .iter()
-        .find_map(|dir| std::fs::read_to_string(dir.join(format!("{id}.desktop"))).ok())?;
-    parse_handler(id, &text, &Locale::from_env(), &Visibility::from_env())
-        .ok()?
-        .entry
-        .icon
 }

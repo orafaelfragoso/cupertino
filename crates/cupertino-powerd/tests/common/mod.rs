@@ -1,6 +1,5 @@
 //! Shared helpers: a fake sysfs tree written into a temporary directory.
 // Each test file uses a different part.
-#![allow(dead_code)]
 
 use std::fs;
 use std::path::Path;

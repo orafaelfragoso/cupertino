@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use cupertino_geometry::{Insets, Size};
 use cupertino_ui_layout::{
     layout, layout_cached, Align, Axis, Constraints, ContainerKind, Flex, Generation, Justify,

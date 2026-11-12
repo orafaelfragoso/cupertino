@@ -1,16 +1,13 @@
 //! The heap a Virtual List holds once scrolled to its end, beyond its model, is the same within a fixed margin for
 //! 1,000 and 50,000 rows: rows away from the viewport cost nothing. A test binary of its own, for its counting allocator.
 
-#[path = "../examples/apps/virtual-list.rs"]
-mod virtual_list;
-
 use crate::support;
 
+use crate::examples::virtual_list::VirtualList;
 use cupertino_kit::core::Application;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use support::{Run, END, TAB};
-use virtual_list::VirtualList;
 
 /// Stated before measuring: what 49,000 more rows may cost.
 const MARGIN: isize = 64 * 1024;

@@ -1,7 +1,5 @@
 //! What the command tests share: words to arguments, and the checks every envelope and JSON lines output must pass.
 
-#![allow(dead_code)]
-
 use cupertino_cli::Output;
 use serde_json::Value;
 

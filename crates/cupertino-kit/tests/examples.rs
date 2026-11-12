@@ -8,7 +8,7 @@ mod editor;
 #[path = "../examples/apps/forms.rs"]
 mod forms;
 #[path = "../examples/apps/virtual-list.rs"]
-mod virtual_list;
+pub(crate) mod virtual_list;
 
 use crate::support;
 

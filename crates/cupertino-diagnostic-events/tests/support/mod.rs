@@ -1,8 +1,6 @@
 //! Running one test of this binary in a process of its own: an emitter is one per process, and some tests read what a
 //! process wrote to standard error.
 
-#![allow(dead_code)]
-
 use std::path::Path;
 use std::process::{Command, Output};
 

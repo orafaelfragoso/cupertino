@@ -1,6 +1,5 @@
 //! A private bus for the integration tests (`dbus-daemon --session`, the daemons' pattern); a test is skipped when the
 //! daemon is not installed. The fake services' tests use one as their "system" bus.
-#![allow(dead_code)]
 
 pub use cupertino_test_bus::PrivateBus;
 

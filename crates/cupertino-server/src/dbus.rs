@@ -458,6 +458,8 @@ pub(crate) const RECONNECT_LONGEST: std::time::Duration = std::time::Duration::f
 type SharedWatch = std::sync::Arc<std::sync::Mutex<OwnerChanged>>;
 /// A callback waiting for a name to have an owner, taken by the one that fires it.
 type SharedAwait = std::sync::Arc<std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>>;
+/// Name and value pairs, as the variables and defaults are published.
+type Pairs = Vec<(String, String)>;
 
 /// What the worker keeps across connections: what it was asked to follow, so a new connection follows it again.
 #[derive(Default)]
@@ -465,7 +467,7 @@ struct Kept {
     watches: Vec<(&'static str, SharedWatch)>,
     awaiting: Vec<(&'static str, SharedAwait)>,
     /// The latest variables and defaults published.
-    published: Option<(Vec<(String, String)>, Vec<(String, String)>)>,
+    published: Option<(Pairs, Pairs)>,
 }
 
 /// How a connection's serving ended.

@@ -1,5 +1,4 @@
 //! The browser window on CupertinoKit, run headless, for the tests that drive it.
-#![allow(dead_code)]
 
 use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroU32;

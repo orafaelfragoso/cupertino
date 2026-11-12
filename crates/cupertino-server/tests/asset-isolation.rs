@@ -2,9 +2,7 @@
 //! path (`CUPERTINO_ASSET_SEARCH_PATH=`, the built-in fallback alone): [`spawn::cleared`] sets it, and every other
 //! spawn in the workspace's tests sets it itself, which the source check here keeps true.
 
-#[allow(dead_code)]
-#[path = "common/spawn.rs"]
-mod spawn;
+use crate::common::spawn;
 
 use std::path::{Path, PathBuf};
 

@@ -1374,7 +1374,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                                 ControlId::HotCorner(*trigger),
                                 *label,
                                 Control::Popup { choices, selected },
-                                Backend::Key(File::Dock, *key),
+                                Backend::Key(File::Dock, key),
                             )
                         })
                         .collect(),

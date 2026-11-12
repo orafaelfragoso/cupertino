@@ -1,8 +1,6 @@
 //! Runs one-window applications on the headless window system, with a theme whose colours are distinct per role and
 //! state so a test can tell which one a control painted.
 
-#![allow(dead_code)]
-
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_core::{
     overlay_id, AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Action,

@@ -1,8 +1,6 @@
 //! Diagnostic events in tests: a journal socket of the test's own, and the process of its own a fresh emitter needs
 //! (one emitter per process).
 
-#![allow(dead_code)]
-
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

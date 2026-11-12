@@ -67,7 +67,9 @@ impl Meter {
             let mut bytes = vec![0u8; WINDOW * 2];
             while out.read_exact(&mut bytes).is_ok() {
                 let samples: Vec<i16> = bytes
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|b| i16::from_be_bytes([b[0], b[1]]))
                     .collect();
                 shared.store((level_of(&samples) as f32).to_bits(), Ordering::Relaxed);

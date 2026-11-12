@@ -1,6 +1,5 @@
 //! Shared helpers: a model driven by hand with a clock, and builders for kernel replies.
 // Each test file uses a different part.
-#![allow(dead_code)]
 
 pub mod controller;
 

@@ -2699,7 +2699,7 @@ fn anchor_declared<M: 'static>(
     tree.preorder(root)
         .into_iter()
         .find(|&n| tree.get(n).is_some_and(|n| n.key.as_ref() == Some(key)))
-        .is_some_and(|node| parent.geometry.get(&node).is_none())
+        .is_some_and(|node| !parent.geometry.contains_key(&node))
 }
 
 /// Where a popup of `parent` opens, in the parent's coordinates; `None` while its anchor is not laid out.

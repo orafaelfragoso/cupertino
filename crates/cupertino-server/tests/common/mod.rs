@@ -1,6 +1,5 @@
 //! Wayland clients the tests share: a client with one mapped toplevel and a session locker that covers the output with a
 //! lock surface, each on a thread of its own that ends, and so disconnects the client, when the handle is dropped.
-#![allow(dead_code)]
 
 pub mod fixtures {
     include!(concat!(

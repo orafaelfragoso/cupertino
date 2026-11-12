@@ -287,7 +287,7 @@ fn now_and_offset() -> (i64, i64) {
         if libc::localtime_r(&now, tm.as_mut_ptr()).is_null() {
             return (now as i64, 0);
         }
-        (now as i64, tm.assume_init().tm_gmtoff as i64)
+        (now as i64, tm.assume_init().tm_gmtoff)
     }
 }
 
@@ -648,8 +648,7 @@ pub fn key_delay_rows(settings: &Settings) -> Vec<Row> {
             "Mouse keys: start moving after",
             delay_popup(
                 &MOUSE_KEY_DELAYS,
-                k.mouse_keys_delay_ms
-                    .map_or(MOUSE_KEY_DEFAULT, |d| d as u32),
+                k.mouse_keys_delay_ms.unwrap_or(MOUSE_KEY_DEFAULT),
             ),
             Backend::Key(File::Keyboard, "mouse_keys_delay"),
         ),
@@ -946,7 +945,7 @@ pub fn change(more: More, value: Value, settings: &mut Settings, live: &Live) ->
         },
         More::MouseKeysDelay => match MOUSE_KEY_DELAYS.get(index) {
             Some(ms) => {
-                settings.keyboard.mouse_keys_delay_ms = Some((*ms).into());
+                settings.keyboard.mouse_keys_delay_ms = Some(*ms);
                 store(File::Keyboard)
             }
             None => Vec::new(),

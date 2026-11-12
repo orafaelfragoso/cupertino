@@ -5,9 +5,7 @@
 //! the test's own) and a journal socket of the test's own, as the binary needs: [`spawn::cleared`] sets both, and every
 //! other spawn in the workspace's tests sets them itself, which the source check here keeps true.
 
-#[allow(dead_code)]
-#[path = "common/spawn.rs"]
-mod spawn;
+use crate::common::spawn;
 
 #[allow(dead_code)]
 mod fixtures {

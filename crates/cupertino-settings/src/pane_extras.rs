@@ -91,7 +91,7 @@ pub const RECENT_COUNTS: [u32; 7] = [0, 5, 10, 15, 20, 30, 50];
 /// A time-of-day pop-up on the hour, a stored time between hours shown as one more item.
 fn time_popup(minutes: Minutes) -> Control {
     let mut choices: Vec<String> = (0..24).map(|h| time_text(h * 60)).collect();
-    let selected = if minutes % 60 == 0 && minutes < 24 * 60 {
+    let selected = if minutes.is_multiple_of(60) && minutes < 24 * 60 {
         (minutes / 60) as usize
     } else {
         choices.push(time_text(minutes));
@@ -512,11 +512,10 @@ pub fn general_sections(live: &Live) -> Vec<Section> {
     if !storage.is_empty() {
         sections.push(section(Some("Storage"), storage, None));
     }
-    let mut when = Vec::new();
-    when.push(text_row(
+    let when = vec![text_row(
         "Time zone",
         info.timezone.clone().unwrap_or_else(|| "Unknown".into()),
-    ));
+    )];
     sections.push(section(
         Some("Date & Time"),
         when,

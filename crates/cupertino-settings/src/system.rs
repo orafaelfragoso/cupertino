@@ -196,8 +196,8 @@ fn space(path: &Path) -> Option<(u64, u64)> {
     }
     // SAFETY: statvfs succeeded, so it filled the structure.
     let st = unsafe { st.assume_init() };
-    let unit = st.f_frsize as u64;
-    Some((st.f_blocks as u64 * unit, st.f_bavail as u64 * unit))
+    let unit = st.f_frsize;
+    Some((st.f_blocks * unit, st.f_bavail * unit))
 }
 
 /// A size as people read it: decimal units, one decimal below ten.
@@ -346,7 +346,7 @@ fn is_enabled(text: &str) -> bool {
     let off = |key| entry_value(text, key).is_some_and(|v| v.eq_ignore_ascii_case("true"));
     !off("Hidden")
         && entry_value(text, "X-GNOME-Autostart-enabled")
-            .map_or(true, |v| !v.eq_ignore_ascii_case("false"))
+            .is_none_or(|v| !v.eq_ignore_ascii_case("false"))
 }
 
 fn desktop_files(dir: &Path) -> Vec<(String, PathBuf)> {

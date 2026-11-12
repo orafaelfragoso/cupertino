@@ -1090,7 +1090,7 @@ fn banner_window<M: Clone + 'static>(
                 card.size,
                 age,
                 Controls {
-                    close: hovered.then(|| (Input::Dismiss(n.id), None)),
+                    close: hovered.then_some((Input::Dismiss(n.id), None)),
                     ..Controls::default()
                 },
                 None,

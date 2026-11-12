@@ -462,6 +462,7 @@ pub fn screen<M: Clone + 'static>(
                 invalid: screen.denied,
                 // the field refuses what the authenticator would not take, so a submission is never cut
                 max_len: Some(MAX_PASSWORD_BYTES),
+                initial: false,
             }),
             format!("password-{generation}"),
         ),

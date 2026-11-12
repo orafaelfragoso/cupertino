@@ -93,18 +93,23 @@ const ROW_ROLE: TextRole = TextRole::Caption;
 /// The rows wrapped as the window sets them, in the theme's caption type ([`ROW_ROLE`]).
 pub fn layout(about: &About, text: &TextSystem, theme: &ThemeTokens) -> Layout {
     let caption = theme.type_scale.caption;
-    about.layout(|line| {
-        let style = TextStyle {
-            weight: FontWeight(caption.weight),
-            ..TextStyle::new(caption.size)
-        };
+    let style = TextStyle {
+        weight: FontWeight(caption.weight),
+        ..TextStyle::new(caption.size)
+    };
+    let measure = |line: &str| {
         text.measure(
-            &AttributedText::plain(line, style),
+            &AttributedText::plain(line, style.clone()),
             &ParagraphStyle::default(),
             None,
         )
-        .map_or(f64::INFINITY, |size| size.width)
-    })
+    };
+    // one line of the type, the pitch of a value's wrapped lines
+    let line_height = measure("Ag").map_or(metrics::ROW_HEIGHT, |size| size.height);
+    about.layout(
+        |line| measure(line).map_or(f64::INFINITY, |size| size.width),
+        line_height,
+    )
 }
 
 /// Hand `start` to the next [`AboutApp`] to start, as [`run`] does; for a test's window system.

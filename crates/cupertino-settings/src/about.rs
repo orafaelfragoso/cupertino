@@ -43,6 +43,8 @@ pub struct RowLayout {
     pub label: &'static str,
     pub lines: Vec<String>,
     pub y: f64,
+    /// The row's first line takes [`metrics::ROW_HEIGHT`], each wrapped line after it one text line.
+    pub height: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,19 +54,37 @@ pub struct Layout {
     /// The height the rows show when the window is capped to a screen too short for them all; they scroll in it.
     /// `None` when every row shows.
     pub rows_view: Option<f64>,
+    /// The height of one line of the rows' text: the pitch of a value's wrapped lines, which start at the top of
+    /// their row.
+    pub line_height: f64,
 }
 
 impl Layout {
     /// The rows' whole height, from the first row's top to the last row's bottom.
     pub fn rows_height(&self) -> f64 {
-        self.rows.last().map_or(0.0, |row| {
-            row.y + row.lines.len() as f64 * metrics::ROW_HEIGHT - metrics::ROWS_Y
-        })
+        self.rows
+            .last()
+            .map_or(0.0, |row| row.y + row.height - metrics::ROWS_Y)
+    }
+
+    /// Where, from the first row's top, the rows may be cut without cutting through a line of text: under each
+    /// wrapped line, and at each row's end.
+    pub fn line_ends(&self) -> Vec<f64> {
+        let mut ends = Vec::new();
+        for row in &self.rows {
+            let top = row.y - metrics::ROWS_Y;
+            for i in 1..row.lines.len() {
+                ends.push(top + i as f64 * self.line_height);
+            }
+            // as [`Layout::rows_height`] sums it
+            ends.push(row.y + row.height - metrics::ROWS_Y);
+        }
+        ends
     }
 
     /// Keep the window within a screen `screen_height` points tall: when it would be taller than the screen leaves
-    /// ([`metrics::SCREEN_RESERVED`]), the rows show only the whole lines that fit, at least [`metrics::MIN_ROW_LINES`], and
-    /// scroll, the button moving up with them.
+    /// ([`metrics::SCREEN_RESERVED`]), the rows show only the whole lines that fit, at least
+    /// [`metrics::MIN_ROW_LINES`], and scroll, the button moving up with them.
     pub fn fit(&mut self, screen_height: f64) {
         let available = screen_height - metrics::SCREEN_RESERVED;
         let excess = self.button.bottom() + metrics::BOTTOM - available;
@@ -72,9 +92,17 @@ impl Layout {
             return;
         }
         let whole = self.rows_height();
+        let ends = self.line_ends();
+        let least = ends
+            .get(metrics::MIN_ROW_LINES as usize - 1)
+            .copied()
+            .unwrap_or(whole);
         // whole lines, so the last one shown is never cut through
-        let lines = ((whole - excess) / metrics::ROW_HEIGHT).floor();
-        let shown = (lines.max(metrics::MIN_ROW_LINES) * metrics::ROW_HEIGHT).min(whole);
+        let shown = ends
+            .iter()
+            .copied()
+            .filter(|&end| end <= whole - excess)
+            .fold(least, f64::max);
         self.button.y -= whole - shown;
         self.rows_view = Some(shown);
     }
@@ -88,8 +116,9 @@ impl Layout {
 }
 
 impl About {
-    /// Wrap values at the painter's measured width; painting, hit testing and the window share this layout.
-    pub fn layout(&self, mut measure: impl FnMut(&str) -> f64) -> Layout {
+    /// Wrap values at the painter's measured width, `line_height` the height of one line of their text; painting,
+    /// hit testing and the window share this layout.
+    pub fn layout(&self, mut measure: impl FnMut(&str) -> f64, line_height: f64) -> Layout {
         use metrics::*;
         let width = VALUE_COLUMN;
         let mut y = ROWS_Y;
@@ -101,8 +130,13 @@ impl About {
             } else {
                 row.label
             };
-            let height = lines.len() as f64 * ROW_HEIGHT;
-            rows.push(RowLayout { label, lines, y });
+            let height = ROW_HEIGHT + (lines.len() - 1) as f64 * line_height;
+            rows.push(RowLayout {
+                label,
+                lines,
+                y,
+                height,
+            });
             y += height + ROW_GAP;
         }
         if !rows.is_empty() {
@@ -118,6 +152,7 @@ impl About {
             rows,
             button,
             rows_view: None,
+            line_height,
         }
     }
 }
@@ -620,6 +655,13 @@ pub struct PciAddress {
     function: String,
 }
 
+impl PciAddress {
+    /// "0000:05:00.0" or "00000000:05:00.0".
+    pub fn parse(text: &str) -> Option<Self> {
+        pci_address(text)
+    }
+}
+
 fn pci_address(text: &str) -> Option<PciAddress> {
     let (domain, function) = text.trim().split_once(':')?;
     let domain = u32::from_str_radix(domain, 16).ok()?;
@@ -1074,7 +1116,7 @@ mod tests {
             ]
         );
         assert_eq!(about.os.as_deref(), Some("Example Linux 1"));
-        let layout = about.layout(|text| text.chars().count() as f64);
+        let layout = about.layout(|text| text.chars().count() as f64, 13.0);
         assert_eq!(layout.size().0, 280);
         assert_eq!(
             layout.size().1 as f64,
@@ -1100,7 +1142,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let layout = about.layout(|text| text.chars().count() as f64 * 8.0);
+        let layout = about.layout(|text| text.chars().count() as f64 * 8.0, 13.0);
         let mut bottom = metrics::ROWS_Y - metrics::ROW_GAP;
         for (row, value) in layout.rows.iter().zip(values) {
             assert_eq!(row.lines.join(" "), value);
@@ -1110,7 +1152,12 @@ mod tests {
                 .iter()
                 .all(|s| s.chars().count() as f64 * 8.0 <= 110.0));
             assert_eq!(row.y, bottom + metrics::ROW_GAP);
-            bottom = row.y + row.lines.len() as f64 * metrics::ROW_HEIGHT;
+            assert_eq!(
+                row.height,
+                metrics::ROW_HEIGHT + (row.lines.len() - 1) as f64 * 13.0,
+                "a wrapped line takes one line of text"
+            );
+            bottom = row.y + row.height;
         }
         assert_eq!(layout.button.y, bottom + metrics::BUTTON_GAP);
         assert_eq!(
@@ -1134,7 +1181,7 @@ mod tests {
                 .collect(),
         };
         let measure = |text: &str| text.chars().count() as f64 * 6.0;
-        let whole = about.layout(measure);
+        let whole = about.layout(measure, 13.0);
         let mut roomy = whole.clone();
         roomy.fit(2000.0);
         assert_eq!(roomy, whole, "a tall screen leaves the layout as it is");
@@ -1148,7 +1195,7 @@ mod tests {
             height <= available && height > available - metrics::ROW_HEIGHT,
             "the window takes what the screen leaves, to a whole line: {height}"
         );
-        assert_eq!(shown % metrics::ROW_HEIGHT, 0.0, "whole lines");
+        assert!(fitted.line_ends().contains(&shown), "whole lines: {shown}");
         assert_eq!(
             fitted.button.y,
             metrics::ROWS_Y + shown + metrics::BUTTON_GAP
@@ -1160,10 +1207,55 @@ mod tests {
 
         let mut tiny = whole.clone();
         tiny.fit(200.0);
-        assert_eq!(
-            tiny.rows_view,
-            Some(metrics::MIN_ROW_LINES * metrics::ROW_HEIGHT)
+        assert_eq!(tiny.rows_view, Some(whole.line_ends()[2]), "three lines");
+    }
+
+    #[test]
+    fn rows_cut_to_fit_a_short_screen_never_cut_through_a_wrapped_line_and_scroll_to_the_last_one()
+    {
+        let line = 13.3;
+        let about = About {
+            version: "Version 1".into(),
+            os: None,
+            rows: [
+                "one",
+                "two lines long",
+                "one",
+                "three lines long here",
+                "a wrapped last",
+            ]
+            .iter()
+            .map(|value| Row {
+                label: "Hardware",
+                value: (*value).into(),
+            })
+            .collect(),
+        };
+        // a word to a line
+        let whole = about.layout(|text| if text.contains(' ') { 1000.0 } else { 100.0 }, line);
+        let last = whole.rows.last().unwrap();
+        assert_eq!(last.lines.len(), 3);
+        assert!(
+            whole.rows_height() >= last.y - metrics::ROWS_Y + 3.0 * line,
+            "the rows' height takes in every line of the last row"
         );
+        assert_eq!(*whole.line_ends().last().unwrap(), whole.rows_height());
+        for screen in (200..=560).map(f64::from) {
+            let mut fitted = whole.clone();
+            fitted.fit(screen);
+            let Some(shown) = fitted.rows_view else {
+                continue;
+            };
+            for row in &fitted.rows {
+                for i in 0..row.lines.len() {
+                    let top = row.y - metrics::ROWS_Y + i as f64 * line;
+                    assert!(
+                        shown <= top + 1e-9 || shown >= top + line - 1e-9,
+                        "a {screen}-point screen cuts {shown} through a line at {top}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

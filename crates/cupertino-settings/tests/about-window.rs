@@ -69,6 +69,11 @@ fn start(appearance: Appearance, scale: f64) -> Run {
 
 /// [`start`] on a screen `screen` points tall, when given.
 fn start_on(appearance: Appearance, scale: f64, screen: Option<f64>) -> Run {
+    start_with(about(), appearance, scale, screen)
+}
+
+/// [`start_on`] showing `about`.
+fn start_with(about: About, appearance: Appearance, scale: f64, screen: Option<f64>) -> Run {
     let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
     let preferences = ThemePreferences {
         appearance,
@@ -80,7 +85,6 @@ fn start_on(appearance: Appearance, scale: f64, screen: Option<f64>) -> Run {
     let mut fonts = FontIndex::new();
     fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
     let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
-    let about = about();
     let (_, shown) = async_channel::bounded(1);
     let mut fitted = layout(&about, &text, &theme);
     if let Some(height) = screen {
@@ -391,4 +395,111 @@ fn on_a_short_screen_the_window_fits_and_its_rows_scroll_above_the_button() {
         .map(|(_, node)| node.bounds)
         .unwrap();
     assert!(button.max_y() <= spec.size.height, "{button:?} shows");
+}
+
+#[test]
+fn on_a_short_screen_no_line_is_cut_and_the_rows_scroll_to_every_line_of_a_wrapped_last_row() {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let mut about = about();
+    let wrapped = "Example Graphics Product Lite 12\u{a0}GB";
+    about.rows.push(Row {
+        label: "Graphics",
+        value: wrapped.into(),
+    });
+    let texts = |run: &Run| {
+        let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+        let view = snapshot
+            .accessibility
+            .iter()
+            .find(|(_, node)| node.role == Role::ScrollView)
+            .map(|(_, node)| node.bounds);
+        let values: Vec<(String, cupertino_kit::geometry::Rect)> = snapshot
+            .accessibility
+            .iter()
+            .filter(|(_, node)| node.role == Role::StaticText)
+            .filter_map(|(_, node)| Some((node.name.clone()?, node.bounds)))
+            .collect();
+        (view, values)
+    };
+    // the view's bottom falls between lines of text, never through one, however short the screen
+    let mut cut_screens = 0;
+    for screen in (360..=480).step_by(4) {
+        let run = start_with(
+            about.clone(),
+            Appearance::Light,
+            1.0,
+            Some(f64::from(screen)),
+        );
+        let (Some(view), values) = texts(&run) else {
+            continue;
+        };
+        cut_screens += 1;
+        let line = values
+            .iter()
+            .find(|(name, _)| name == "Kernel")
+            .unwrap()
+            .1
+            .size
+            .height;
+        let last = values.iter().find(|(name, _)| name == wrapped).unwrap().1;
+        assert!(
+            last.size.height > line * 1.5,
+            "the last value wraps: {last:?}"
+        );
+        for (name, bounds) in values.iter().filter(|(_, b)| b.min_y() >= view.min_y()) {
+            let lines = (bounds.size.height / line).round() as usize;
+            for i in 0..lines {
+                let top = bounds.min_y() + i as f64 * line;
+                assert!(
+                    view.max_y() <= top + 0.01 || view.max_y() >= top + line - 0.01,
+                    "the view's bottom {} cuts line {i} of {name:?} at {top}",
+                    view.max_y()
+                );
+            }
+        }
+    }
+    assert!(cut_screens > 10, "the rows scroll on most of these screens");
+    let mut run = start_with(about, Appearance::Light, 1.0, Some(400.0));
+    let view = texts(&run).0.expect("the rows scroll");
+    let over = cupertino_kit::geometry::Point::new(view.center().x, view.center().y);
+    for _ in 0..20 {
+        run.driver
+            .window_system_mut()
+            .enqueue_window(
+                run.window,
+                WindowEvent::Pointer(
+                    cupertino_kit::platform::PointerEvent::Scroll {
+                        position: over,
+                        delta: cupertino_kit::geometry::Point::new(0.0, 40.0),
+                        value120: None,
+                        source: cupertino_kit::platform::ScrollSource::Continuous,
+                        stop: false,
+                        inverted: (false, false),
+                    },
+                    Timestamp(0),
+                ),
+            )
+            .unwrap();
+        settle(&mut run);
+    }
+    let (view, values) = texts(&run);
+    let view = view.unwrap();
+    let last = values.iter().find(|(name, _)| name == wrapped).unwrap().1;
+    assert!(
+        last.max_y() <= view.max_y() + 0.01 && last.min_y() >= view.min_y(),
+        "scrolled to the end, every line of the last row shows: {last:?} in {view:?}"
+    );
+}
+
+/// Run the window until it has drawn everything asked of it.
+fn settle(run: &mut Run) {
+    let budget = NonZeroU32::new(64).unwrap();
+    for _ in 0..8 {
+        run.driver.run_until_idle(budget).unwrap();
+        let system = run.driver.window_system_mut();
+        if !system.frame_requested(run.window).unwrap() {
+            break;
+        }
+        system.frame_ready(run.window, Timestamp(0)).unwrap();
+    }
 }

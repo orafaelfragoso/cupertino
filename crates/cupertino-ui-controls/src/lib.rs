@@ -16,6 +16,7 @@ mod disclosure;
 mod editor;
 mod field;
 mod form;
+mod frame_clock;
 mod glass;
 mod glass_edge;
 mod grid;
@@ -652,6 +653,15 @@ pub struct NavigationStack<M> {
 /// Build its element with `Element::from`.
 pub struct WindowDragArea<M> {
     pub content: Element<M>,
+}
+
+/// Wraps `content` (the size of the content) and, while `on_frame` holds a message, sends it once at each frame the
+/// compositor gives the window: what the application moves by itself steps with the display's frames, never ahead of
+/// them and never waiting on a timer between them. A window the compositor does not show gets no frames, so nothing
+/// is sent. Build its element with `Element::from`.
+pub struct FrameClock<M> {
+    pub content: Element<M>,
+    pub on_frame: Option<M>,
 }
 
 /// One of a split view's two panes: the leading one is at the top, or at the reading direction's start.

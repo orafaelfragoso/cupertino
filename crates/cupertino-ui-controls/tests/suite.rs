@@ -34,6 +34,8 @@ mod fill;
 mod fixed_width;
 #[path = "form.rs"]
 mod form;
+#[path = "frame-clock.rs"]
+mod frame_clock;
 #[path = "grid.rs"]
 mod grid;
 #[path = "high-contrast-buttons.rs"]

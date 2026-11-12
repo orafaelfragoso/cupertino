@@ -357,7 +357,7 @@ fn a_launch_hands_its_activation_token_to_the_window_it_opens() {
 }
 
 #[test]
-fn activate_with_no_window_open_opens_one_and_show_progress_brings_the_progress_window_back() {
+fn activate_with_no_window_open_brings_the_hidden_progress_window_back_then_opens_one() {
     let Some(bus) = bus() else { return };
     let gate = Gate::new();
     let (reached, waits) = mpsc::channel();
@@ -414,7 +414,20 @@ fn activate_with_no_window_open_opens_one_and_show_progress_brings_the_progress_
     );
     assert_eq!(run.windows().len(), 1, "no browser window comes with it");
 
-    // Activate with no browser window open opens one on the home folder
+    // so does Activate while the copy runs and the progress window is hidden
+    close(&mut run, progress);
+    assert!(run.windows().is_empty());
+    let reopen = call(&bus, "Activate", (data("reopen-token"),));
+    while_turning(&mut run, reopen).expect("Activate is taken");
+    let progress = window(&run, "progress").expect("the progress window is back");
+    present(&mut run, progress);
+    assert_eq!(
+        activations(&mut run, progress),
+        [Some("reopen-token".to_owned())]
+    );
+    assert_eq!(run.windows().len(), 1, "no browser window comes with it");
+
+    // Activate with the progress window shown and no browser window open opens one on the home folder
     let activate = call(&bus, "Activate", (data("window-token"),));
     while_turning(&mut run, activate).expect("Activate is taken");
     let opened = window(&run, "browser/1").expect("a browser window opens");

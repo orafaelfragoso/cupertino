@@ -1,6 +1,7 @@
 //! File operations apart from the windows, run headless: a copy outlives the browser window that started it and the
 //! progress window, Files exits only once it ended, Stop stops it, the progress window opens only after its delay, and
-//! failures and ends nobody saw are reported.
+//! each failure, each end of an operation that lasted and each end nobody saw is one notification, whose click shows the
+//! progress window again.
 
 #![cfg(feature = "app")]
 
@@ -16,7 +17,7 @@ use cupertino_files::kit::{Observer, Start, PROGRESS_WINDOW_DELAY};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::PlaceKind;
 use cupertino_kit::core::{Key, Role, WindowKey};
-use cupertino_kit::platform::{Mods, WindowEvent, WindowId, WindowStates};
+use cupertino_kit::platform::{Mods, WindowEvent, WindowId, WindowRequest, WindowStates};
 use cupertino_kit::theme::{Appearance, ThemePreferences};
 use cupertino_test_bus::{missing_tool, PrivateBus};
 use zbus::zvariant::OwnedValue;
@@ -59,8 +60,14 @@ impl Gate {
     }
 }
 
-/// What a fake notification service heard, as "summary / body".
-struct Notifications(Mutex<mpsc::Sender<String>>);
+/// The actions each notification offered, by its id.
+type Offered = Arc<Mutex<Vec<(u32, Vec<String>)>>>;
+
+/// What a fake notification service heard, as "summary / body", and the actions of each notification by its id.
+struct Notifications {
+    heard: Mutex<mpsc::Sender<String>>,
+    actions: Offered,
+}
 
 #[zbus::interface(name = "org.freedesktop.Notifications")]
 impl Notifications {
@@ -72,20 +79,53 @@ impl Notifications {
         _app_icon: String,
         summary: String,
         body: String,
-        _actions: Vec<String>,
+        actions: Vec<String>,
         _hints: HashMap<String, OwnedValue>,
         _expire_timeout: i32,
     ) -> u32 {
-        let _ = self.0.lock().unwrap().send(format!("{summary} / {body}"));
-        1
+        let mut all = self.actions.lock().unwrap();
+        let id = all.len() as u32 + 1;
+        all.push((id, actions));
+        let _ = self
+            .heard
+            .lock()
+            .unwrap()
+            .send(format!("{summary} / {body}"));
+        id
     }
 }
 
 /// A bus with a notification service, and what it hears.
 struct Bus {
     bus: PrivateBus,
-    _service: zbus::blocking::Connection,
+    service: zbus::blocking::Connection,
     heard: mpsc::Receiver<String>,
+    actions: Offered,
+}
+
+impl Bus {
+    /// The id of the last notification posted, which must offer a click.
+    fn last_clickable(&self) -> u32 {
+        let actions = self.actions.lock().unwrap();
+        let (id, offered) = actions.last().expect("a notification was posted");
+        assert_eq!(offered[0], "default", "a click on it does something");
+        *id
+    }
+
+    /// A click on the notification `id`, as the service tells it: the activation token, then the action.
+    fn click(&self, id: u32, token: &str) {
+        for (member, body) in [("ActivationToken", token), ("ActionInvoked", "default")] {
+            self.service
+                .emit_signal(
+                    None::<()>,
+                    "/org/freedesktop/Notifications",
+                    "org.freedesktop.Notifications",
+                    member,
+                    &(id, body),
+                )
+                .unwrap();
+        }
+    }
 }
 
 fn notifications() -> Option<Bus> {
@@ -94,21 +134,26 @@ fn notifications() -> Option<Bus> {
         return None;
     };
     let (sent, heard) = mpsc::channel();
+    let actions = Arc::default();
     let service = bus
         .blocking_builder()
         .name("org.freedesktop.Notifications")
         .unwrap()
         .serve_at(
             "/org/freedesktop/Notifications",
-            Notifications(Mutex::new(sent)),
+            Notifications {
+                heard: Mutex::new(sent),
+                actions: Arc::clone(&actions),
+            },
         )
         .unwrap()
         .build()
         .unwrap();
     Some(Bus {
         bus,
-        _service: service,
+        service,
         heard,
+        actions,
     })
 }
 
@@ -279,14 +324,22 @@ fn a_copy_outlives_its_window_and_the_progress_window_and_files_exits_only_once_
         bus.heard.recv_timeout(Duration::from_secs(5)).unwrap(),
         "Copied “big.bin” to “Notes” / "
     );
+    assert!(
+        bus.heard.try_recv().is_err(),
+        "one notification for the copy"
+    );
 }
 
 #[test]
 fn stop_in_the_progress_window_stops_the_copy_and_leaves_nothing_half_written() {
+    let Some(bus) = notifications() else {
+        return;
+    };
     let gate = Gate::new();
     let (reached, waits) = mpsc::channel();
     let observer = Gate::observer(&gate, reached);
-    let mut run = window(Notices::start(None), |start| {
+    let notices = Notices::start(Some(bus.bus.connect()));
+    let mut run = window(notices.clone(), |start| {
         start
             .with_transfer_observer(observer)
             .with_progress_delay(Duration::ZERO)
@@ -314,14 +367,23 @@ fn stop_in_the_progress_window_stops_the_copy_and_leaves_nothing_half_written() 
         BIG
     );
     assert!(!exited(&run), "the browser window is still open");
+    notices.flush(Duration::from_secs(5));
+    assert!(
+        bus.heard.try_recv().is_err(),
+        "a stop the person asked for is no news"
+    );
 }
 
 #[test]
 fn the_progress_window_opens_by_itself_only_after_its_delay_and_on_request() {
+    let Some(bus) = notifications() else {
+        return;
+    };
     let gate = Gate::new();
     let (reached, waits) = mpsc::channel();
     let observer = Gate::observer(&gate, reached);
-    let mut run = window(Notices::start(None), |start| {
+    let notices = Notices::start(Some(bus.bus.connect()));
+    let mut run = window(notices.clone(), |start| {
         start.with_transfer_observer(observer)
     });
     paste_into_notes(&mut run);
@@ -355,11 +417,25 @@ fn the_progress_window_opens_by_itself_only_after_its_delay_and_on_request() {
     wait(&mut run, |run| progress(run).is_none());
     assert_eq!(names(&notes(&run)), ["big.bin"], "copied once");
     assert!(run.disabled().contains(&common::action("show-progress")));
+    // it ran past the delay: its end is one notification, though its window is open
+    notices.flush(Duration::from_secs(5));
+    assert_eq!(
+        bus.heard.try_recv().unwrap(),
+        "Copied “big.bin” to “Notes” / "
+    );
+    assert!(
+        bus.heard.try_recv().is_err(),
+        "one notification for the copy"
+    );
 }
 
 #[test]
-fn a_quick_operation_never_shows_the_progress_window() {
-    let mut run = window(Notices::start(None), |start| start);
+fn a_quick_operation_never_shows_the_progress_window_nor_a_notification() {
+    let Some(bus) = notifications() else {
+        return;
+    };
+    let notices = Notices::start(Some(bus.bus.connect()));
+    let mut run = window(notices.clone(), |start| start);
     std::fs::write(run.home().join("Documents/a.txt"), "a").unwrap();
     run.wait_until(|run| run.rows().len() == 3);
     run.click_row("a.txt");
@@ -368,6 +444,8 @@ fn a_quick_operation_never_shows_the_progress_window() {
     run.frames(PROGRESS_WINDOW_DELAY.as_millis() as u64 + 200, 20);
     assert!(progress(&run).is_none());
     assert_eq!(run.windows().len(), 1);
+    notices.flush(Duration::from_secs(5));
+    assert!(bus.heard.try_recv().is_err(), "a quick success is no news");
 }
 
 #[test]
@@ -419,7 +497,7 @@ fn a_name_taken_gives_the_arrival_a_free_one_and_a_failure_opens_the_progress_wi
     );
     assert!(progress(&run).is_none());
 
-    // a failure: the progress window opens with what failed and why, and no notification is needed
+    // a failure: the progress window opens with what failed and why, and one notification says so too
     run.menu("go-back");
     run.wait_until(|run| run.title() == "Documents");
     run.click_row("secret.txt");
@@ -438,9 +516,33 @@ fn a_name_taken_gives_the_arrival_a_free_one_and_a_failure_opens_the_progress_wi
     present(&mut run, shown);
     run.driver.look(shown, "files-progress-failure").unwrap();
     notices.flush(Duration::from_secs(5));
-    assert!(bus.heard.try_recv().is_err(), "the window shows it");
+    assert_eq!(
+        bus.heard.try_recv().unwrap(),
+        "Could not duplicate “secret.txt” / Permission denied."
+    );
+    assert!(bus.heard.try_recv().is_err(), "one notification for it");
 
-    // its Close forgets the failure; with no browser window a failure is also posted, and opens it again
+    // its Close forgets the failure; a click on the notification lists it again, raised with the click's token
+    close(&mut run, shown);
+    assert!(progress(&run).is_none());
+    bus.click(bus.last_clickable(), "click-token");
+    wait(&mut run, |run| progress(run).is_some());
+    let shown = progress(&run).unwrap();
+    present(&mut run, shown);
+    let texts = named_in(&run, shown, Role::StaticText);
+    assert!(
+        texts.contains(&"Could not duplicate “secret.txt”".to_owned()),
+        "{texts:?}"
+    );
+    assert!(run
+        .driver
+        .window_system_mut()
+        .requests(shown)
+        .unwrap()
+        .contains(&WindowRequest::Activate(Some("click-token".into()))));
+    assert_eq!(run.windows().len(), 2, "no other window opens");
+
+    // with no browser window a failure is posted too, and opens the progress window again
     close(&mut run, shown);
     assert!(progress(&run).is_none());
     // still selected

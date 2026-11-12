@@ -2,7 +2,8 @@
 //! its Stop button stops it. Closing the window that started one leaves it running, and Files does not exit while one
 //! runs. The progress window ([`super::progress`]) lists them; it opens by itself once one has run for
 //! [`PROGRESS_WINDOW_DELAY`], so a quick operation never shows it, and its Close button only hides it. A failure is
-//! listed there until it is closed, and opens it.
+//! listed there until it is closed, and opens it. An operation that ran for the delay has [`Job::lasted`]: its end is
+//! worth a notification.
 
 use std::time::Duration;
 
@@ -40,6 +41,8 @@ pub(super) struct Job {
     pub origin: u64,
     /// The drop it does, whose source hears what was done only once it ends.
     pub drop: Option<DropToken>,
+    /// It ran for the delay: long enough that a person may have turned to something else.
+    pub lasted: bool,
 }
 
 /// An operation that ended with a failure, listed in the progress window until it is closed.
@@ -115,6 +118,7 @@ impl Jobs {
             transfer,
             origin,
             drop,
+            lasted: false,
         });
         let job = self.running.last().expect("just pushed");
         (job, commands)
@@ -145,14 +149,17 @@ impl Jobs {
 
     /// The operation `id` ran for the delay: the progress window opens while it still runs.
     pub fn due(&mut self, id: u64) {
-        if self.running.iter().any(|j| j.transfer.id == id) {
+        if let Some(job) = self.running.iter_mut().find(|j| j.transfer.id == id) {
+            job.lasted = true;
             self.shown = true;
         }
     }
 
-    /// List a failure, which opens the progress window.
+    /// List a failure, which opens the progress window; one listed already is listed once.
     pub fn failed(&mut self, failure: Failure) {
-        self.failures.push(failure);
+        if !self.failures.iter().any(|f| f.id == failure.id) {
+            self.failures.push(failure);
+        }
         self.shown = true;
     }
 
@@ -265,12 +272,14 @@ mod tests {
         let mut jobs = Jobs::new(Duration::from_secs(60), Some(observer));
         let id = jobs.start(copy(file, dest.clone()), 0, None).0.transfer.id;
         assert!(!jobs.visible(), "not before the delay");
+        assert!(!jobs.running[0].lasted);
         jobs.show();
         assert!(jobs.visible(), "Show Progress shows it at once");
         jobs.hide();
         assert!(!jobs.visible());
         jobs.due(id);
         assert!(jobs.visible(), "the delay shows it while it runs");
+        assert!(jobs.running[0].lasted, "it ran for the delay");
         jobs.hide();
         assert!(
             !jobs.running[0].transfer.cancel.is_cancelled(),
@@ -283,12 +292,15 @@ mod tests {
         assert!(!outcome.stopped());
         assert_eq!(std::fs::read(dest.join("a.txt")).unwrap().len(), 3 << 20);
 
-        jobs.failed(Failure {
+        let failure = Failure {
             id: 9,
             title: "Could not copy “a.txt” to “Documents”".into(),
             reason: "Permission denied.".into(),
-        });
+        };
+        jobs.failed(failure.clone());
+        jobs.failed(failure);
         assert!(jobs.visible(), "a failure opens it");
+        assert_eq!(jobs.failures.len(), 1, "listed once");
         jobs.hide();
         assert!(jobs.is_empty(), "closing it forgets the failure");
     }

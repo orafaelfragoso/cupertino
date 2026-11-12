@@ -22,7 +22,7 @@ use super::Message;
 
 /// The progress window's key among the application's windows.
 pub(super) const KEY: &str = "progress";
-/// Its title.
+/// Its title when the operations it lists are of several kinds, or it lists failures alone; one kind names it.
 const TITLE: &str = "File Operations";
 /// Its width, and the most rows it grows to before its list scrolls.
 const WIDTH: f64 = 420.0;
@@ -68,7 +68,7 @@ pub(super) fn window(jobs: &Jobs) -> Option<Window<Message>> {
     Some(Window {
         key: WindowKey(Key::from(KEY)),
         spec: WindowSpec {
-            title: TITLE.into(),
+            title: title(jobs).into(),
             app_id: super::APP_ID.into(),
             size,
             min_size: Some(size),
@@ -92,6 +92,15 @@ pub(super) fn window(jobs: &Jobs) -> Option<Window<Message>> {
         })
         .key("operations"),
     })
+}
+
+/// The title: the kind every running operation shares ("Copy"), else [`TITLE`].
+fn title(jobs: &Jobs) -> &'static str {
+    let mut kinds = jobs.running.iter().map(|job| job.transfer.kind());
+    match kinds.next() {
+        Some(kind) if kinds.all(|k| k == kind) => kind,
+        _ => TITLE,
+    }
 }
 
 /// A running operation: what it does, its bar and Stop button, and how far it came.

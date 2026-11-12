@@ -41,7 +41,7 @@ pub use tag_editor::TagEvent;
 pub use transfer::Observer;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -342,6 +342,9 @@ struct Session {
     pasteboard: Vec<PathBuf>,
     /// The file operations, which outlive the windows that started them, and the progress window.
     jobs: jobs::Jobs,
+    /// The ends of file operations posted as notices, newest last, by operation id, with the failure each reported: a
+    /// click on one lists it again.
+    noticed: VecDeque<(u64, Option<jobs::Failure>)>,
     places_source: Option<PlacesSource>,
     places_watch: places::PlacesWatch,
     /// The items' icons and thumbnails, shared with the list's rows, which ask for them as they show.
@@ -473,6 +476,8 @@ pub enum Message {
     Remote,
     /// The window with this key is shown: raise it, with the activation token of the launch that asked for it.
     Raise(WindowKey, Option<String>),
+    /// A notice of a file operation's end was clicked; none once no click can come any more.
+    Noticed(Option<crate::notice::Click>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -661,6 +666,9 @@ fn window_key(window: u64) -> WindowKey {
     WindowKey(Key::from(format!("browser/{window}")))
 }
 
+/// The most ends of file operations whose notices list them again when clicked.
+const MAX_NOTICED: usize = 64;
+
 /// How long Files waits, as it exits, for the notices it posted to be sent.
 const EXIT_NOTICES: Duration = Duration::from_secs(2);
 
@@ -710,6 +718,7 @@ impl Application for Files {
                 prefs_file: start.prefs_file,
                 pasteboard: Vec::new(),
                 jobs: jobs::Jobs::new(start.progress_delay, start.observer),
+                noticed: VecDeque::new(),
                 places_watch,
                 places_source: start.places_source,
                 icons,
@@ -733,6 +742,7 @@ impl Application for Files {
         if let Some(instance) = &model.session.instance {
             commands.push(woken(instance.woken(), Message::Remote));
         }
+        commands.extend(model.session.notice_clicks());
         if model.session.volumes.is_some() {
             commands.push(woken(&model.session.media_woken, Message::Media));
         }
@@ -775,6 +785,7 @@ impl Model {
     fn handle(&mut self, message: Message) -> Vec<Command<Message>> {
         match message {
             Message::Job(event) => self.job_event(event),
+            Message::Noticed(click) => self.noticed(click),
             Message::Remote => self.remote_calls(),
             Message::Raise(key, token) => {
                 vec![Command::Window(key, WindowRequest::Activate(token))]
@@ -1054,8 +1065,10 @@ impl Model {
 
     /// A file operation ended. The window that started it, if still open, says so, selects what arrived where it
     /// shows it (or edits the name of the folder New Folder with Selection made) and reads its free space again. A
-    /// failure is listed in the progress window, which opens; a stop is none. When neither a browser window nor the
-    /// progress window was shown (`seen`), the end is a notification. A drop's source hears what was done.
+    /// failure is listed in the progress window, which opens; a stop is none. The end is one notification when it
+    /// failed, when the operation ran long enough to show the progress window, or when neither a browser window nor
+    /// the progress window was shown (`seen`); an operation stopped without failing says nothing. A drop's source hears
+    /// what was done.
     fn job_ended(
         &mut self,
         job: jobs::Job,
@@ -1066,22 +1079,30 @@ impl Model {
             transfer,
             origin,
             drop,
+            lasted,
         } = job;
         let failures: Vec<_> = outcome.failures(transfer.sources()).collect();
-        let text = transfer.ended(outcome.stopped(), failures.len());
-        let reason = failures.first().map(|(_, e)| notice::explained(e));
+        let stopped = outcome.stopped();
+        let text = transfer.ended(stopped, failures.len());
+        let failure = failures.first().map(|(_, e)| jobs::Failure {
+            id: transfer.id,
+            title: text.clone(),
+            reason: notice::explained(e),
+        });
         let session = &mut self.session;
-        if !seen && self.windows.is_empty() {
+        let unseen = !seen && self.windows.is_empty();
+        if failure.is_some() || (!stopped && (lasted || unseen)) {
+            let reason = failure.as_ref().map(|f| f.reason.as_str());
             session
                 .notices
-                .post(notice::finished(&text, reason.as_deref()));
+                .post_clickable(notice::finished(&text, reason), transfer.id);
+            session.noticed.push_back((transfer.id, failure.clone()));
+            if session.noticed.len() > MAX_NOTICED {
+                session.noticed.pop_front();
+            }
         }
-        if let Some(reason) = reason {
-            session.jobs.failed(jobs::Failure {
-                id: transfer.id,
-                title: text.clone(),
-                reason,
-            });
+        if let Some(failure) = failure {
+            session.jobs.failed(failure);
         }
         if let Some(window) = self.windows.get_mut(&origin) {
             window.announcement.say(announce::About::Transfer, text);
@@ -1897,6 +1918,14 @@ impl Model {
 }
 
 impl Session {
+    /// What waits for the next click on a notice of a file operation's end; nothing without a session bus.
+    fn notice_clicks(&self) -> Option<Command<Message>> {
+        let clicks = self.notices.clicks()?.clone();
+        Some(Command::Perform(Box::pin(async move {
+            Message::Noticed(clicks.recv().await.ok())
+        })))
+    }
+
     /// `window`'s view and bars become what a new window starts with, kept in the prefs file when there is one.
     fn remember(&self, window: &BrowserWindow) {
         let prefs = WindowPrefs {

@@ -14,6 +14,8 @@ use crate::trash::Trash;
 
 /// How often a running transfer wakes the application to show its progress.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
+/// How long a transfer runs before its time left is estimated from its pace so far.
+const ESTIMATE_AFTER: Duration = Duration::from_secs(2);
 
 /// What a transfer calls with its progress after each step, on its own thread, before it looks for a stop: tests pace
 /// a transfer with it.
@@ -83,6 +85,8 @@ impl Outcome {
 #[derive(Default)]
 struct Shared {
     progress: Progress,
+    /// How long it had run at that progress.
+    elapsed: Duration,
     /// Set once the transfer ended.
     outcome: Option<Outcome>,
 }
@@ -93,6 +97,8 @@ pub(super) struct Transfer {
     pub work: Work,
     pub cancel: Cancel,
     pub progress: Progress,
+    /// How long it had run at that progress.
+    pub elapsed: Duration,
     pub woken: async_channel::Receiver<()>,
     shared: Arc<Mutex<Shared>>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -109,9 +115,13 @@ impl Transfer {
         let thread = std::thread::Builder::new()
             .name("cupertino-files transfer".into())
             .spawn(move || {
-                let mut woke = Instant::now() - PROGRESS_INTERVAL;
+                let started = Instant::now();
+                let mut woke = started - PROGRESS_INTERVAL;
                 let mut report = |progress: &Progress| {
-                    lock(&thread_shared).progress = progress.clone();
+                    let mut shared = lock(&thread_shared);
+                    shared.progress = progress.clone();
+                    shared.elapsed = started.elapsed();
+                    drop(shared);
                     if woke.elapsed() >= PROGRESS_INTERVAL {
                         woke = Instant::now();
                         // a wake already waiting shows this progress too
@@ -132,6 +142,7 @@ impl Transfer {
             work,
             cancel,
             progress: Progress::default(),
+            elapsed: Duration::ZERO,
             woken,
             shared,
             thread: Some(thread),
@@ -142,6 +153,7 @@ impl Transfer {
     pub fn poll(&mut self) -> Option<Outcome> {
         let mut shared = lock(&self.shared);
         self.progress = shared.progress.clone();
+        self.elapsed = shared.elapsed;
         shared.outcome.take()
     }
 
@@ -213,12 +225,31 @@ impl Transfer {
         }
     }
 
-    /// How far it came, as "428 KB of 960 KB", or "2 of 5 items" for items that weigh nothing.
+    /// How far it came, as "428 KB of 960 KB", or "2 of 5 items" for items that weigh nothing, then the time left once
+    /// its pace is known: "428 KB of 960 KB, 5 seconds left".
     pub fn detail(&self) -> String {
         let p = &self.progress;
-        match p.total_bytes {
+        let done = match p.total_bytes {
             0 => format!("{} of {} items", p.items, p.total_items),
             total => format!("{} of {}", human_size(p.bytes), human_size(total)),
+        };
+        match time_left(self.elapsed, self.fraction()) {
+            Some(left) => format!("{done}, {}", left_words(left)),
+            None => done,
+        }
+    }
+
+    /// What the work is, as the progress window's title names it: "Copy" for a copy or a duplicate, "Move" for a move,
+    /// "Empty Trash" for emptying the trash.
+    pub fn kind(&self) -> &'static str {
+        match &self.work {
+            Work::Transfer {
+                action: DropAction::Copy,
+                ..
+            }
+            | Work::Duplicate { .. } => "Copy",
+            Work::Transfer { .. } | Work::NewFolderWith { .. } | Work::Trash { .. } => "Move",
+            Work::EmptyTrash { .. } => "Empty Trash",
         }
     }
 
@@ -226,6 +257,27 @@ impl Transfer {
     pub fn fraction(&self) -> f64 {
         self.progress.fraction()
     }
+}
+
+/// The time a transfer `fraction` done after `elapsed` still needs at its pace so far; none before [`ESTIMATE_AFTER`]
+/// or with nothing done yet.
+fn time_left(elapsed: Duration, fraction: f64) -> Option<Duration> {
+    if elapsed < ESTIMATE_AFTER || !(fraction > 0.0 && fraction < 1.0) {
+        return None;
+    }
+    Some(elapsed.mul_f64((1.0 - fraction) / fraction))
+}
+
+/// `left` as words: "5 seconds left", "3 minutes left", "2 hours left", rounded up.
+fn left_words(left: Duration) -> String {
+    let seconds = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+    let (count, unit) = match seconds {
+        0..=59 => (seconds.max(1), "second"),
+        60..=3599 => (seconds.div_ceil(60), "minute"),
+        _ => (seconds.div_ceil(3600), "hour"),
+    };
+    let plural = if count == 1 { "" } else { "s" };
+    format!("{count} {unit}{plural} left")
 }
 
 /// Do `work`, reporting to `report` and stopping at `cancel`.
@@ -520,5 +572,46 @@ mod tests {
             "the part copied is removed before the transfer is gone"
         );
         assert_eq!(std::fs::metadata(&big).unwrap().len(), 8 << 20);
+    }
+
+    #[test]
+    fn the_time_left_is_estimated_from_the_pace_once_it_ran_for_a_while() {
+        assert_eq!(time_left(Duration::from_secs(1), 0.5), None, "too soon");
+        assert_eq!(time_left(Duration::from_secs(4), 0.0), None, "no pace yet");
+        assert_eq!(time_left(Duration::from_secs(4), 1.0), None, "done");
+        assert_eq!(
+            time_left(Duration::from_secs(4), 0.25),
+            Some(Duration::from_secs(12))
+        );
+        assert_eq!(left_words(Duration::from_millis(200)), "1 second left");
+        assert_eq!(left_words(Duration::from_millis(4200)), "5 seconds left");
+        assert_eq!(left_words(Duration::from_secs(61)), "2 minutes left");
+        assert_eq!(left_words(Duration::from_secs(60)), "1 minute left");
+        assert_eq!(left_words(Duration::from_secs(7200)), "2 hours left");
+        let mut transfer = Transfer::start(0, Work::Duplicate { sources: vec![] }, None);
+        transfer.elapsed = Duration::from_secs(3);
+        transfer.progress.bytes = 1 << 10;
+        transfer.progress.total_bytes = 4 << 10;
+        assert!(
+            transfer.detail().ends_with(", 9 seconds left"),
+            "{}",
+            transfer.detail()
+        );
+    }
+
+    #[test]
+    fn the_kind_of_work_names_the_progress_window() {
+        let dest = PathBuf::from("/nowhere");
+        let kind = |work| Transfer::start(0, work, None).kind();
+        assert_eq!(kind(copy(vec![], dest.clone())), "Copy");
+        assert_eq!(kind(Work::Duplicate { sources: vec![] }), "Copy");
+        assert_eq!(
+            kind(Work::Transfer {
+                sources: vec![],
+                dest,
+                action: DropAction::Move
+            }),
+            "Move"
+        );
     }
 }

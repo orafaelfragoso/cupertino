@@ -2,7 +2,7 @@
 //! option works alone and with the others, a held thumb's lens follows the pointer whatever the options, and glass
 //! is never laid on glass.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Size};
 use cupertino_ui_controls::{

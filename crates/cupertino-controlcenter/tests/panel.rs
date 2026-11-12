@@ -1,3 +1,4 @@
+#![cfg(feature = "app")]
 //! The panel as CupertinoKit draws it, compared with `tests/goldens`: `<scene>.png` is the frame at 1x and `<scene>.txt`
 //! the focus and the accessibility tree, for the shown panel, under Reduce Transparency, under Increase Contrast, in a
 //! light session and with the Wi-Fi view open. The glass is the compositor's, so the frames hold what the window paints
@@ -120,6 +121,7 @@ impl Application for Shown {
 const WIFI_OPEN: Presentation = Presentation {
     alpha: 1.0,
     light: false,
+    input: true,
     detail: Some(Opened {
         detail: Detail::WiFi,
         progress: 1.0,

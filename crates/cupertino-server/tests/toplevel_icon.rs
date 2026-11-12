@@ -4,7 +4,7 @@
 //! buffers before that commit. Against a headless compositor; tests skip (pass)
 //! when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

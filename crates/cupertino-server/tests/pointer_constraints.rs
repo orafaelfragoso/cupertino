@@ -3,7 +3,7 @@
 //! keyboard focus and a client that answers its pings, and the release chord gives the pointer back until the person
 //! focuses or presses on the window again. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

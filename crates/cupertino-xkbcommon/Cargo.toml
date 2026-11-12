@@ -6,6 +6,7 @@ version = "0.8.1"
 edition.workspace = true
 license = "MIT"
 description = "Pure-Rust drop-in for the xkbcommon 0.8 crate (the API Smithay and the client transport use), on top of a vendored copy of the xkbcommon-rs port with the keysym names of libxkbcommon 1.13; no libxkbcommon"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "foundation"
@@ -22,3 +23,7 @@ wayland = []
 
 [dev-dependencies]
 log = "0.4"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

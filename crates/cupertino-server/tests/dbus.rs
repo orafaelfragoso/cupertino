@@ -2,7 +2,7 @@
 //! launcher toggles (its search and its application browser), the overlay's media keys, the lock request and the power key's press and release reach their processes. Skipped when `dbus-daemon` is not installed.
 #![cfg(feature = "dbus")]
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Renderer-agnostic window effect generators for the Cupertino compositor: warp, funnel and scale minimize meshes, open/close, workspace slide, overview zoom and show-desktop transforms"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "models"
@@ -16,3 +17,7 @@ tiny-skia = "0.12"
 [[bench]]
 name = "effects"
 harness = false
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

@@ -1,4 +1,4 @@
-//! Opt-in timing matrix: `cargo test --release -p cupertino-ui-render --test render_matrix -- --ignored --nocapture`.
+//! Opt-in timing matrix: `cargo test --release -p cupertino-ui-render --test suite render_matrix:: -- --ignored --nocapture`.
 //! Prints cold, steady (one row changes) and full-repaint timings with the counters of each case. Timings from a
 //! shared machine are indicative only; the counters are exact.
 

@@ -2,7 +2,7 @@
 //! client (shm buffer + xdg toplevel) connects through its socket, and the rendered output is
 //! checked pixel-wise. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "Wayland client transport over standard protocols only: connection with capability discovery, application windows and popups, shm buffer leases, frame callbacks and presentation feedback, per-surface scale, pointer with an XCursor theme fallback, keyboard, input methods and clipboard"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "transport"
@@ -19,7 +20,12 @@ xcursor = "0.3"
 
 # the integration test runs a minimal protocol server in-process; layer shell stands in for an extension's protocol
 [dev-dependencies]
+cupertino-test-bus = { path = "../cupertino-test-bus" }
 tempfile = "3"
 wayland-protocols = { version = "0.32", features = ["client", "server", "staging", "unstable"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client", "server"] }
 wayland-server = "0.31"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

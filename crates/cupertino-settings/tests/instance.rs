@@ -1,7 +1,7 @@
 //! ST-24: one settings process per session through `org.cupertino.Settings1`, on a private session bus.
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use std::sync::mpsc;
 use std::time::Duration;

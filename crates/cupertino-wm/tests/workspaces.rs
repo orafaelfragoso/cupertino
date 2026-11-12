@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use common::*;
 use cupertino_effects::{point_in_x, settle_time, SpaceSlideState};
 use cupertino_wm::*;

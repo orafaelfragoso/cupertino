@@ -1,6 +1,6 @@
 //! The model against fake sysfs trees written by the test, through the public reading API.
 
-mod common;
+use crate::common;
 
 use std::fs;
 

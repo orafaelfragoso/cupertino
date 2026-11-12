@@ -1,6 +1,6 @@
 //! The bare field: a text field without chrome whose text is set at its own size.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Size};
 use cupertino_ui_controls::{BareField, Stack, TextChange, TextField};

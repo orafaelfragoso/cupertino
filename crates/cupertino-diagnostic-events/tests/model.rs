@@ -1,7 +1,7 @@
 //! The event model: the record's fields and their order, every value type, the rate limit, the size limit, and that a
 //! message is never formatted.
 
-mod support;
+use crate::support;
 
 use std::path::Path;
 use std::time::{Duration, Instant};

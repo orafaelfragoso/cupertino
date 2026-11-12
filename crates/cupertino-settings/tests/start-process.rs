@@ -3,7 +3,7 @@
 //! on a private session bus (it claims `org.cupertino.Settings1` first).
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use std::process::{Command, Output};
 

@@ -4,7 +4,7 @@
 //! kind's open transform and, on close, its close transform. Tests skip (pass) when no EGL device is
 //! available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

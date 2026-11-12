@@ -2,7 +2,7 @@
 //! asked first, an application that closes its toplevel is reported quit, one that ignores the request stays, and with no
 //! toplevel left there is nothing to quit. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

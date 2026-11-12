@@ -1,7 +1,7 @@
 //! The focus-on-map rule: a window that maps takes the keyboard only when there is nothing to take it from, when it belongs
 //! to the key window or the front application, when its client presented a fresh valid grant, or when it is the first
 //! window of a client the person has not left; any other opens behind the key window and its tile asks for attention.
-mod common;
+use crate::common;
 use common::*;
 use cupertino_wm::*;
 

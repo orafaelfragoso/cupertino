@@ -2,7 +2,7 @@
 //! it five times until the shaking stops. The compositor runs in-process on an
 //! offscreen EGL device; tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

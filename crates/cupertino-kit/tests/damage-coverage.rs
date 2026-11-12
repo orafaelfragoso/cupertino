@@ -4,7 +4,7 @@
 //! from damage, and each frame is compared with the window drawn whole before and after it: a pixel that differs
 //! between the two whole frames lies inside the damage, and every pixel, inside it or out, is the whole frame's exactly.
 
-mod support;
+use crate::support;
 
 use cupertino_kit::core::{
     Application, Change, Command, CommandRegistry, Element, Event, EventCx, MeasureCx, PaintCx,

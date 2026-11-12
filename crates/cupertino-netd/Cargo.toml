@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Network daemon for the system bus: links, DHCPv4, DNS, Wi-Fi through iwd, the org.freedesktop.NetworkManager subset apps poll, and the network service at org.cupertino.Network1"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "services"
@@ -33,3 +34,7 @@ required-features = ["app"]
 [dev-dependencies]
 cupertino-test-bus = { path = "../cupertino-test-bus" }
 tempfile = "3"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

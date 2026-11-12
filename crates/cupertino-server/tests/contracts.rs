@@ -4,7 +4,7 @@
 //! skip with a message, unless CUPERTINO_EGL_REQUIRED=1 (CI), which makes a missing device a failure. With it set, a
 //! host whose /dev/dri has a renderD node while EGL runs on a device without one also fails, by design.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 use std::path::Path;

@@ -1204,6 +1204,7 @@ mod tests {
             session: None,
             lock_without_agent: false,
             panels: OpenPanels::default(),
+            ..Extras::default()
         };
         for kind in ExtraKind::ORDER {
             let glyph = extras.glyph(kind).expect("every item is shown");

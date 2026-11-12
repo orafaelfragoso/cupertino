@@ -4,7 +4,7 @@
 //! does not, and a double click on the toolbar zooms the window and another restores it.
 //! Needs an EGL device and `dbus-daemon` for the app's private bus.
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 use std::process::Child;

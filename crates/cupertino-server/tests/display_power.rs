@@ -2,7 +2,7 @@
 //! the dim factor, sleep turns it black, and input brings the picture back. Tests skip (pass) when no EGL device is
 //! available.
 
-mod common;
+use crate::common;
 
 use std::time::{Duration, Instant};
 

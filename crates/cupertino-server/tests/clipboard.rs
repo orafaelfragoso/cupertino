@@ -31,7 +31,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_source_v1::{self, ZwlrDataControlSourceV1},
 };
 
-mod common;
+use crate::common;
 
 const OUTPUT: (i32, i32) = (1000, 700);
 const TEXT: &[u8] = "Grüße, clipboard".as_bytes();

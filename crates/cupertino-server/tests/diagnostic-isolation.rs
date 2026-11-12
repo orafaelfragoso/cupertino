@@ -564,7 +564,8 @@ fn child_journal() -> PathBuf {
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "a_test_process_removes_its_journal_socket_when_it_ends",
+            cupertino_test_bus::test_path("a_test_process_removes_its_journal_socket_when_it_ends")
+                .as_str(),
             "--nocapture",
         ])
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")

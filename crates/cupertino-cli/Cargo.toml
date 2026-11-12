@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "The `cupertino` command: a typed registry of subcommands that the help, completions and manual pages come from, with human, JSON and JSON lines output"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "tools"
@@ -31,3 +32,7 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [dev-dependencies]
 cupertino-test-bus = { path = "../cupertino-test-bus" }
 tempfile = "3"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

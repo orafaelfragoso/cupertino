@@ -5,7 +5,7 @@
 //! its own process checks first that the shim is loaded. The source check here keeps that true for every test of the
 //! workspace; the runtime checks show the shared helpers and the real binaries carry the shim.
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

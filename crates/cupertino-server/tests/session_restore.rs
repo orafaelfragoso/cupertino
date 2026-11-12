@@ -5,7 +5,7 @@
 //! running session is dropped. Every directory the process reads is the fixture's; it finds its session through a
 //! stand-in logind on a private system bus and serves its interface on a private session bus.
 
-mod common;
+use crate::common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

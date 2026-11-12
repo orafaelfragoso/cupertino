@@ -214,7 +214,11 @@ fn announced(name: &str, part: &str) -> Option<Vec<String>> {
         }
     });
     let mut app = Command::new(std::env::current_exe().unwrap())
-        .args([name, "--exact", "--nocapture"])
+        .args([
+            cupertino_test_bus::test_path(name).as_str(),
+            "--exact",
+            "--nocapture",
+        ])
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env(APPLICATION, part)
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
@@ -411,7 +415,11 @@ fn behind_the_lock_an_application_window_reads_as_an_empty_frame_and_takes_no_ac
         .build()
         .unwrap();
     let mut app = Command::new(std::env::current_exe().unwrap())
-        .args([NAME, "--exact", "--nocapture"])
+        .args([
+            cupertino_test_bus::test_path(NAME).as_str(),
+            "--exact",
+            "--nocapture",
+        ])
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env(APPLICATION, "reader")
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)

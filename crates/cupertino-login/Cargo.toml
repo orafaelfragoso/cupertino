@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Lock screen, greeter and session agent for the Cupertino compositor: password entry state machine, clock and user block, wallpaper treatment, PAM authentication for the lock screen, the connection to the session manager, confirmation panels and org.cupertino.Login1, drawn with CupertinoKit"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "shell"
@@ -65,9 +66,5 @@ path = "src/main.rs"
 required-features = ["app"]
 
 [[test]]
-name = "harden"
-required-features = ["app"]
-
-[[test]]
-name = "pam"
-required-features = ["app"]
+name = "suite"
+path = "tests/suite.rs"

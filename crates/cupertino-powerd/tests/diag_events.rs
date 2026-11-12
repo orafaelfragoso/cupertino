@@ -3,8 +3,8 @@
 //! also checks that what the caller sees is unchanged.
 #![cfg(feature = "dbus")]
 
-mod common;
-mod diag;
+use crate::common;
+use crate::diag;
 
 use common::{write_tree, BACKLIGHT, KEYBOARD_BACKLIGHT};
 use cupertino_diagnostic_events::{self as events, Severity};
@@ -38,6 +38,7 @@ fn config(bus: &PrivateBus, root: &std::path::Path, authorizer: Box<dyn Authoriz
             closed: false,
         },
         authorizer,
+        history_path: None,
     }
 }
 

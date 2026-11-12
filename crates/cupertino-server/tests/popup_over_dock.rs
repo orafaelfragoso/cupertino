@@ -4,7 +4,7 @@
 //! backdrop that reaches over the bar. Only the key window's popups are raised so: a second window that comes in front
 //! keeps the first window's popup below it. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

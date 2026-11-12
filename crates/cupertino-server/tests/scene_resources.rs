@@ -1,7 +1,7 @@
 //! What a frame holds is released when the frame is: window snapshots stay in the store while a closing ghost or a
 //! frame composed with them needs them, and go when the last of them goes.
 
-mod common;
+use crate::common;
 
 use common::desktop::Desktop;
 use cupertino_render_api::Renderer;

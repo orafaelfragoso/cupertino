@@ -41,7 +41,13 @@ fn is_child() -> bool {
 fn child(name: &str, state: &Path) -> Option<Output> {
     let output = Command::new(std::env::current_exe().unwrap())
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
-        .args(["--exact", name, "--nocapture", "--test-threads", "1"])
+        .args([
+            "--exact",
+            cupertino_test_bus::test_path(name).as_str(),
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
         .env(CHILD, "1")
         .env("XDG_STATE_HOME", state)
         .env("HOME", state.join("home"))

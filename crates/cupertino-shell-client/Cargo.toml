@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "The privileged protocols of the Cupertino shell processes on the transport's queue: layer surfaces, the session lock, idle notification, the session observer and the menu-bar and dock roles"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "transport"
@@ -25,3 +26,7 @@ cupertino-protocols = { path = "../cupertino-protocols", features = ["client", "
 wayland-protocols = { version = "0.32", features = ["server", "staging"] }
 wayland-protocols-wlr = { version = "0.3", features = ["server"] }
 wayland-server = "0.31"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

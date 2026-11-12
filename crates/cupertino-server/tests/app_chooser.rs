@@ -3,7 +3,7 @@
 //! Return on the chooser the portal maps, and checks the answer carries a token the server made for the chosen app, one
 //! it lets activate. Skips (passes) without an EGL device or `dbus-daemon`.
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

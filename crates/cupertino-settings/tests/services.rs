@@ -3,7 +3,7 @@
 //! registration) run in the window process; here the `Services` calls they make are driven directly.
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};

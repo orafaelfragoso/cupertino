@@ -4,7 +4,7 @@
 //! screen, being dragged), the pointer, a locked session's keyboard and an overview. A display that comes back gets the
 //! windows it lost that were not moved since. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

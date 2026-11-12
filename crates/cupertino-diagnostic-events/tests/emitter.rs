@@ -1,7 +1,7 @@
 //! The emitter of a process: what it adds to every event, the exit-error event, the summaries of the rate limit at the
 //! end of a window and at exit, and the lines a fatal signal handler writes.
 
-mod support;
+use crate::support;
 
 use std::io::Write;
 use std::time::{Duration, Instant, SystemTime};

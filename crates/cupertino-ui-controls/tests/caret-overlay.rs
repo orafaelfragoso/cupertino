@@ -2,7 +2,7 @@
 //! only that: no node paints again. The composition's underline and the selection, a field's and an editor's, lie on
 //! whole device pixels too.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::Insets;
 use cupertino_ui_controls::{Stack, TextChange, TextEditor, TextField};

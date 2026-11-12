@@ -1,7 +1,7 @@
 //! The redaction policy: one row per class of the README's table, the free-text scrubber against planted private data,
 //! the salt, and a secret that never reaches the ring, the store or the journal.
 
-mod support;
+use crate::support;
 
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;

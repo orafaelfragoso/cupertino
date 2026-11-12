@@ -1,7 +1,7 @@
 //! The main loop sleeps until something is due: the work a tick does on its own clock names its next deadline, and
 //! no tick leaves one behind that is already due, which would wake the loop over and over for nothing.
 
-mod common;
+use crate::common;
 
 use common::desktop::Desktop;
 use cupertino_server::hung::{PING_INTERVAL, PONG_TIMEOUT};

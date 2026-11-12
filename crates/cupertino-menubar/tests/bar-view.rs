@@ -102,6 +102,8 @@ struct Model {
     tone: BarTone,
     /// The items whose panel another process shows open on this bar, from [`PANELS`].
     open_panels: Vec<SlotKey>,
+    /// The icons of menu rows, from the built-in assets.
+    icons: std::rc::Rc<view::RowIcons>,
 }
 
 /// What the next bar started shows: whether its strip is solid, the spread under it, whether the theme's Reduce
@@ -138,6 +140,10 @@ impl Application for Bar {
             spread: LOOK.with_borrow(|l| l.spread.clone()),
             tone: LOOK.with_borrow(|l| l.tone),
             open_panels: PANELS.with_borrow(Clone::clone),
+            icons: std::rc::Rc::new(view::RowIcons::new(
+                cupertino_icons::ThemeIcons::new(&cupertino_assets::Assets::builtin()),
+                cupertino_icons::SystemIcons::new(&cupertino_assets::Assets::builtin()),
+            )),
         };
         (model, Vec::new())
     }
@@ -159,7 +165,7 @@ impl Application for Bar {
                 model.effects.extend(outcome.effects);
                 return Vec::new();
             }
-            Input::Key { .. } | Input::Closed(_) => return Vec::new(),
+            Input::Key { .. } | Input::Closed(_) | Input::Prompt { .. } => return Vec::new(),
         };
         let outcome = match pointer {
             BarPointer::Move(p) => c.pointer_move(p, 0.0),
@@ -187,6 +193,8 @@ impl Application for Bar {
                 spread: &model.spread,
                 size: Size::new(bar.w, bar.h),
                 open_panels: &model.open_panels,
+                icons: &model.icons,
+                prompt: None,
             },
             |input| input,
         )

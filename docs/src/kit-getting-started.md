@@ -25,7 +25,7 @@ checkout and was run on the commit this page was written against.
   test starts the Counter this way and compares it with `tests/goldens/counter-neutral.txt`:
 
   ```bash
-  cargo test -p cupertino-kit --test examples the_counter_starts_on_the_neutral_theme
+  cargo test -p cupertino-kit --test suite examples::the_counter_starts_on_the_neutral_theme
   ```
 
 - Fonts and icons come from an asset pack when one is installed (`CUPERTINO_ASSET_DIR`, else the user or system
@@ -120,8 +120,8 @@ Commands behind these statements:
 
 ```bash
 cargo test -p cupertino-ui-atspi
-cargo test -p cupertino-kit --test assistive-technology
-cargo test -p cupertino-kit --test control-fixtures
+cargo test -p cupertino-kit --test suite assistive_technology::
+cargo test -p cupertino-kit --test suite control_fixtures::
 ```
 
 The first runs the mapping and filter tests, tests of the live-region rules and of the hidden windows while the session is locked, and, when
@@ -169,7 +169,7 @@ Limits:
 Commands behind these statements:
 
 ```bash
-cargo test -p cupertino-ui-layout --test layout right_to_left
+cargo test -p cupertino-ui-layout --test suite layout::right_to_left
 cargo test -p cupertino-ui-text
-cargo test -p cupertino-ui-layout --test properties
+cargo test -p cupertino-ui-layout --test suite properties::
 ```

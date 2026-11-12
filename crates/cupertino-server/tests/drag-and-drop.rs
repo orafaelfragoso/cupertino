@@ -31,7 +31,7 @@ use wayland_client::protocol::{
 use wayland_client::{event_created_child, Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
-mod common;
+use crate::common;
 
 const OUTPUT: (i32, i32) = (1000, 700);
 const TEXT: &[u8] = "Grüße, drag and drop".as_bytes();

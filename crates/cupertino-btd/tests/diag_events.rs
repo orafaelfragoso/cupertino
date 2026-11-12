@@ -4,8 +4,8 @@
 //! unchanged.
 #![cfg(feature = "dbus")]
 
-mod common;
-mod diag;
+use crate::common;
+use crate::diag;
 
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;

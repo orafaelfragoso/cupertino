@@ -2,7 +2,7 @@
 //! by that column, flipping the order of the column already sorted. The sorting header tells assistive technology its
 //! order. A key on a header never reaches the rows' handler; one on a row does.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Point, Size};
 use cupertino_ui_controls::{Column, ColumnWidth, Selection, SortOrder, TableView, Text, TextRole};

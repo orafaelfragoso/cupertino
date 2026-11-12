@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Device discovery without libudev: sysfs enumeration, input classification, primary GPU and a kernel uevent hotplug monitor"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "platform"
@@ -14,3 +15,7 @@ rustix = { version = "1", features = ["fs", "net"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

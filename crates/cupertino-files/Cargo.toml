@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "File-manager core without a toolkit: directory model with batched enumeration and watching, natural sort, grouping, per-folder view settings, selection, rename and type-select logic, trash, thumbnails, tags, MIME, and view layout engines with the measured metrics"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "apps"
@@ -73,3 +74,7 @@ harness = false
 name = "files_capture"
 required-features = ["app"]
 test = true
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

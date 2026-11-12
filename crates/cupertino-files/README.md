@@ -516,7 +516,7 @@ over 8 ms and the damaged share of the window. It uses the application's rendere
 the frames. Run it in the release profile:
 
 ```sh
-cargo test --release -p cupertino-files --features app --test kit-repaint -- --ignored --nocapture --exact repaint_budget_report
+cargo test --release -p cupertino-files --features app --test suite -- --ignored --nocapture --exact kit_repaint::repaint_budget_report
 ```
 
 `CUPERTINO_REPAINT_DIR=DIR` also writes `files-<scale>x.md` and `files-<scale>x.csv` (one line per frame) there, and

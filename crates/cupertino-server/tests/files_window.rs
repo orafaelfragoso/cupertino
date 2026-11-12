@@ -4,7 +4,7 @@
 //! closes it. The server runs on
 //! an offscreen EGL device; the test skips (passes) when there is none.
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

@@ -5,7 +5,7 @@
 //! events, not on time: a change the client makes counts once the server presented it, measured the faces it read back
 //! and the client received what the server sent since ([`settle`]). Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::cell::Cell;
 use std::io::Write;

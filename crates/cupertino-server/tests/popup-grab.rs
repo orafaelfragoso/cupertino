@@ -2,7 +2,7 @@
 //! pressed, and a press outside the popup chain dismisses it and never reaches the toplevel. Tests skip (pass) when no
 //! EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

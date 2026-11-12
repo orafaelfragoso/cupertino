@@ -3,7 +3,7 @@
 
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::sync::{mpsc, Mutex};

@@ -7,7 +7,7 @@
 
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 

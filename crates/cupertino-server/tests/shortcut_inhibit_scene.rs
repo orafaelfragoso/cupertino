@@ -1,7 +1,7 @@
 //! The notice that an application holds the shortcuts is composed on the compositor-overlay layer, in front of a
 //! fullscreen window, and a locked frame leaves it out.
 
-mod common;
+use crate::common;
 
 use common::desktop::Desktop;
 use cupertino_scene::{SceneKind, SceneLayer};

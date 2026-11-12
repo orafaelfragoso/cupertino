@@ -1,7 +1,7 @@
 //! `cupertino dev layers` on fixture checkouts with a policy given through `Context::provide`, and `cupertino dev
 //! manual`.
 
-mod support;
+use crate::support;
 
 use std::path::{Path, PathBuf};
 

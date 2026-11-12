@@ -2,7 +2,7 @@
 //! which file systems are listed, the calls a mount and an eject make in order, and what a failure reports.
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -1503,7 +1503,11 @@ fn assistive_technology_reads_the_sidebar_over_atspi_and_its_eject_button_ejects
         .build()
         .unwrap();
     let mut window = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([NAME, "--exact", "--nocapture"])
+        .args([
+            cupertino_test_bus::test_path(NAME).as_str(),
+            "--exact",
+            "--nocapture",
+        ])
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env(ATSPI_WINDOW, "1")
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)

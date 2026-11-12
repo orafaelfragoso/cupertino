@@ -421,7 +421,9 @@ mod tests {
             s.policy("org.example.Mail"),
             Policy {
                 show_on_lock_screen: true,
-                show_previews: Previews::WhenUnlocked
+                show_previews: Previews::WhenUnlocked,
+                allow: true,
+                alert_style: AlertStyle::Banners
             }
         );
     }
@@ -437,21 +439,27 @@ mod tests {
             s.policy("org.example.Mail"),
             Policy {
                 show_on_lock_screen: false,
-                show_previews: Previews::Always
+                show_previews: Previews::Always,
+                allow: true,
+                alert_style: AlertStyle::Banners
             }
         );
         assert_eq!(
             s.policy("Chat App"),
             Policy {
                 show_on_lock_screen: true,
-                show_previews: Previews::Never
+                show_previews: Previews::Never,
+                allow: true,
+                alert_style: AlertStyle::Banners
             }
         );
         assert_eq!(
             s.policy("other"),
             Policy {
                 show_on_lock_screen: false,
-                show_previews: Previews::Never
+                show_previews: Previews::Never,
+                allow: true,
+                alert_style: AlertStyle::Banners
             }
         );
     }
@@ -508,6 +516,7 @@ mod tests {
             AppOverride {
                 show_on_lock_screen: Some(false),
                 show_previews: None,
+                ..AppOverride::default()
             },
         );
         assert!(s.store(&path).unwrap().is_empty());

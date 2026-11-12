@@ -2,7 +2,7 @@
 //! device, a dock client (a bottom-anchored layer surface with the dock role) and application
 //! clients connect through its socket. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

@@ -1,7 +1,7 @@
 //! `cupertino desktop start` with a stand-in compositor: a script that says it is ready on `--ready-fd` as the real
 //! one does, then idles, exits or ignores SIGTERM as `FAKE_MODE` says.
 
-mod support;
+use crate::support;
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;

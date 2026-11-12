@@ -4,7 +4,7 @@
 
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::path::Path;

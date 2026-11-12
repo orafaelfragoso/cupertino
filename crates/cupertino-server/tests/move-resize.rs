@@ -1,7 +1,7 @@
 //! A client may start a move or resize of its window only with the serial of a pointer press that is still held on it,
 //! not with that of a key or focus change that came after the press. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

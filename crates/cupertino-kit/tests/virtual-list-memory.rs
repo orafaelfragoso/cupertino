@@ -4,7 +4,7 @@
 #[path = "../examples/apps/virtual-list.rs"]
 mod virtual_list;
 
-mod support;
+use crate::support;
 
 use cupertino_kit::core::Application;
 use std::alloc::{GlobalAlloc, Layout, System};

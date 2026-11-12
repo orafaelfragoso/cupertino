@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Kernel network interfaces without a C library: rtnetlink (links, addresses, routes), generic netlink nl80211 (interfaces, station, scan, events) and rfkill, with message codecs written over rustix sockets"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "platform"
@@ -13,3 +14,7 @@ rustix = { version = "1", features = ["fs", "net"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

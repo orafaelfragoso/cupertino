@@ -4,7 +4,7 @@
 //! time). The compositor runs in-process on an offscreen EGL device and scrolls are injected as a touchpad or a wheel
 //! would send them. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

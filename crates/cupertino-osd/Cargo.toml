@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Volume, brightness and keyboard-backlight overlay for the Cupertino compositor: show/hold/fade model, segmented meter, ALSA and backlight effects, org.cupertino.Osd1 and the overlay window on CupertinoKit"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "shell"
@@ -51,3 +52,7 @@ tempfile = "3"
 name = "cupertino-osd"
 path = "src/main.rs"
 required-features = ["app"]
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

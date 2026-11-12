@@ -2,7 +2,7 @@
 //! folder is created for the user who ran sudo, only eligible processes are accepted, and only root may run them. The
 //! real `/etc` is never read or written.
 
-mod support;
+use crate::support;
 
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};

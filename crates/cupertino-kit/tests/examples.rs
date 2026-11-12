@@ -10,7 +10,7 @@ mod forms;
 #[path = "../examples/apps/virtual-list.rs"]
 mod virtual_list;
 
-mod support;
+use crate::support;
 
 use cupertino_kit::core::{Key, Role};
 use cupertino_kit::geometry::Point;

@@ -4,7 +4,7 @@
 //! the pointer rests or crawls, press-and-hold counts from the press however late the menu opens, and typed letters
 //! find a row that Return chooses.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Point, Rect};
 use cupertino_menu_model::tracking::{SUBMENU_AIM_PAUSE, SUBMENU_OPEN_DELAY, TRACKING_INTERVAL};

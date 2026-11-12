@@ -8,10 +8,10 @@
 //! with zero pixels allowed beyond that tolerance. There is no spatial tolerance or ignored region.
 //! `CUPERTINO_GOLDEN_MUTATE_WINDOW=1` moves the front window exactly one logical pixel and must fail comparison.
 //! Perf is opt-in with `CUPERTINO_GOLDEN_PERF=1 CUPERTINO_GOLDEN_PERF_REPORT=/absolute/report.json
-//! cargo test -p cupertino-server --test goldens headless_frame_and_memory_report -- --ignored`.
+//! cargo test -p cupertino-server --test suite goldens::headless_frame_and_memory_report -- --ignored`.
 //! These are full repaint/readback costs, not display frame latency; the JSON records build profile and raw repeats.
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -455,7 +455,12 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
     std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut child = common::spawn::cleared(std::env::current_exe().unwrap(), &home);
     child
-        .args(["--exact", test, "--nocapture", "--include-ignored"])
+        .args([
+            "--exact",
+            cupertino_test_bus::test_path(test).as_str(),
+            "--nocapture",
+            "--include-ignored",
+        ])
         .env("CUPERTINO_GOLDEN_WORKER", "1")
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")

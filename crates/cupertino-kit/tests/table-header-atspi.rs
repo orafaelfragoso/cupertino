@@ -3,7 +3,7 @@
 //! application. The application, a table on the headless window system with the AT-SPI adapter, runs in a copy of this
 //! test binary.
 
-mod support;
+use crate::support;
 
 use std::io::Read;
 use std::sync::mpsc::{channel, Sender};
@@ -238,7 +238,11 @@ fn an_assistive_technology_finds_a_focusable_sorted_column_header_whose_click_so
         .build()
         .unwrap();
     let mut app = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([NAME, "--exact", "--nocapture"])
+        .args([
+            cupertino_test_bus::test_path(NAME).as_str(),
+            "--exact",
+            "--nocapture",
+        ])
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env(APPLICATION, "1")
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)

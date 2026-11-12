@@ -1,7 +1,7 @@
 //! The completion scripts: generated from the registry alone, and completing in the real shells. A shell that is not
 //! installed skips its part, unless `CUPERTINO_SHELLS_REQUIRED=1` (CI) makes that a failure.
 
-mod support;
+use crate::support;
 
 use std::path::Path;
 use std::process::Command as Process;

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 description = "A private PAM policy for the Cupertino desktop's tests: scripted accounts, the record of every PAM step, and the environment that loads the test shim so a process under test never reaches the machine's PAM stack, journal or buses"
 publish = false
+autotests = false
 
 [package.metadata.cupertino]
 layer = "foundation"
@@ -12,3 +13,7 @@ layer = "foundation"
 [dependencies]
 libc = "0.2"
 tempfile = "3"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

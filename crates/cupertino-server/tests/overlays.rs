@@ -1,7 +1,7 @@
 //! Input-source HUD, caps-lock delay, key repeat advertised to clients and the accent picker's
 //! text-input bridge, in-process on an offscreen EGL device (tests skip when there is none).
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

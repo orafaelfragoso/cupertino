@@ -2,7 +2,7 @@
 //! what the commands print, how the server's answers and refusals map to failures, and that `use-installed` removes
 //! the development folder's file before it restarts. Skipped when `dbus-daemon` is not installed.
 
-mod support;
+use crate::support;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

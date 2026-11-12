@@ -4,7 +4,7 @@
 //! again gets its stored arrangement back. Tests skip (pass) when no
 //! EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::ErrorKind;
 use std::os::unix::net::UnixStream;

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Linux evdev input devices from an fd: capability and axis-geometry queries, non-blocking batch reads, SYN_REPORT framing with SYN_DROPPED resync, and typed frames for keys, relative motion, wheels, multitouch (protocol B), absolute pointers and switches"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "platform"
@@ -13,3 +14,7 @@ rustix = { version = "1", features = ["fs", "time"] }
 
 [dev-dependencies]
 rustix = { version = "1", features = ["event", "fs", "pipe", "time"] }
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

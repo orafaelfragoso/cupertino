@@ -4,7 +4,7 @@
 //! its log and the reason in the session log, and the session ends within 5 s of the crash. The crash is also in the
 //! server's diagnostic store: `server.panic` after `server.session_end` for a panic, `server.fatal_signal` for a signal.
 
-mod common;
+use crate::common;
 
 use std::ffi::OsStr;
 use std::path::PathBuf;

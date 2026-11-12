@@ -3,7 +3,7 @@
 //! connects to it and a second connection plays the shell.
 #![cfg(feature = "dbus")]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::fmt::Debug;

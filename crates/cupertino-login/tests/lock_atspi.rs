@@ -601,7 +601,11 @@ impl Locked {
             .build()
             .unwrap();
         let mut app = Process::new(std::env::current_exe().unwrap())
-            .args([name, "--exact", "--nocapture"])
+            .args([
+                cupertino_test_bus::test_path(name).as_str(),
+                "--exact",
+                "--nocapture",
+            ])
             .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .env(LOCK_SCREEN, "1")
             .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)

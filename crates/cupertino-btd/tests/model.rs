@@ -1,7 +1,7 @@
 //! The model: bring-up, the merge of discovery results, power and discovery requests, connecting,
 //! forgetting devices and the adapter going away.
 
-mod common;
+use crate::common;
 
 use common::*;
 use cupertino_bluetooth::{

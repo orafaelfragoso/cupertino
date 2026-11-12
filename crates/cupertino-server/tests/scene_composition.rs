@@ -1,6 +1,6 @@
 //! What the compositor composes into the neutral frame of an output, before any renderer lowers it.
 
-mod common;
+use crate::common;
 
 use common::desktop::Desktop;
 use cupertino_scene::{SceneKind, SceneLayer};

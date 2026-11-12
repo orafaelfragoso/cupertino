@@ -1156,10 +1156,13 @@ fn the_panel_is_collapsed_without_results_and_expanded_with_them() {
     let window = window_extent(shape);
     let frame = Frame {
         shape,
+        anchor: WIDTH,
         alpha: 1.0,
         scale: 1.0,
         content: 0.0,
+        blur: 0.0,
         header: Header::Search,
+        modes: Default::default(),
     };
     let panel = enclosure_rect(window, &frame);
     assert_eq!(

@@ -6,7 +6,7 @@
 //! the worker's log line and the exit status are as before, and that no event names the account.
 #![cfg(feature = "app")]
 
-mod diag;
+use crate::diag;
 
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;

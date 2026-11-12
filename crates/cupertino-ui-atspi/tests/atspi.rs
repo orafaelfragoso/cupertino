@@ -248,7 +248,11 @@ fn run(name: &str, enabled: bool) -> Option<Session> {
         .build()
         .unwrap();
     let app = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([name, "--exact", "--nocapture"])
+        .args([
+            cupertino_test_bus::test_path(name).as_str(),
+            "--exact",
+            "--nocapture",
+        ])
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env(APPLICATION, if enabled { "on" } else { "off" })
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)

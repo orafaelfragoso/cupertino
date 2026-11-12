@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "CupertinoKit's window system on the Cupertino transport, and drawing on a surface of it with tiny-skia: frame pacing, damage and buffer conversion, popup placement and the text clipboard"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "ui"
@@ -32,3 +33,7 @@ wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "server", "staging"] }
 wayland-server = "0.31"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

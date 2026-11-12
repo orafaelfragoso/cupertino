@@ -1,7 +1,7 @@
 //! Close, minimize, zoom and full screen are distinct operations: each keeps the frame to go back to, a refused one
 //! leaves everything as it was, closing asks the client and never ends its application, and key and main are separate
 //! states.
-mod common;
+use crate::common;
 use common::*;
 use cupertino_wm::*;
 

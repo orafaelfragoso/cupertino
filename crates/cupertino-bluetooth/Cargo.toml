@@ -4,9 +4,14 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "The kernel's Bluetooth management interface without BlueZ: the control channel socket, the codec for its commands, replies and events, EIR parsing, and the L2CAP socket that opens a baseband link"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "platform"
 
 [dependencies]
 rustix = { version = "1", features = ["event", "net"] }
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

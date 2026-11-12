@@ -3,7 +3,7 @@
 //! cannot take them again by moving the focus itself, and a notice names the application. Tests skip (pass) when no EGL
 //! device is available.
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

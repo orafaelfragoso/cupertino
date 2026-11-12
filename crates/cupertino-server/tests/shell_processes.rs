@@ -4,7 +4,7 @@
 //! in-process server. The server runs on an offscreen EGL device; tests that need it skip (pass)
 //! when there is none, and the tests that need a session bus skip when `dbus-daemon` is missing.
 
-mod common;
+use crate::common;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};

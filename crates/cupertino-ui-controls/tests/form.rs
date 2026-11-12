@@ -1,7 +1,7 @@
 //! The grouped settings form: icon tiles, groups of rows, navigation rows, the header card, the search field and the
 //! tiled sidebar of a settings window.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Point, Size};
 use cupertino_ui_controls::{

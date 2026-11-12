@@ -4,7 +4,7 @@
 //! writes what is typed into it and exits on the close request. The server runs on an offscreen EGL device; the tests
 //! skip (pass) when there is none.
 
-mod common;
+use crate::common;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};

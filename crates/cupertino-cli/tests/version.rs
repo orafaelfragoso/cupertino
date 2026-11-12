@@ -1,6 +1,6 @@
 //! `cupertino version` on a fixture root: every part installed, then each one missing or unreadable.
 
-mod support;
+use crate::support;
 
 use std::path::PathBuf;
 

@@ -26,7 +26,13 @@ pub fn child(name: &str, journal: &Journal) -> Option<Output> {
     let state = tempfile::tempdir().unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
-        .args(["--exact", name, "--nocapture", "--test-threads", "1"])
+        .args([
+            "--exact",
+            cupertino_test_bus::test_path(name).as_str(),
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
         .env(CHILD, "1")
         .env("XDG_STATE_HOME", state.path())
         .env("HOME", state.path().join("home"))

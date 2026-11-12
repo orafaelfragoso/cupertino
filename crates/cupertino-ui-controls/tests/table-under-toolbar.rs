@@ -2,7 +2,7 @@
 //! rows start below the header and scroll under both, and the header keeps its clicks. Over a raised layer the rows
 //! under the row and the header sit on a solid band, so the header's titles stay legible.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_controls::scroll_edge::SOFT_EDGE_STOPS;

@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_controls::{Sidebar, SidebarAccessory, SidebarItem, SidebarLook, SidebarSection};

@@ -1,3 +1,4 @@
+#![cfg(feature = "app")]
 //! The tool's windows as CupertinoKit runs them on the headless window system, driven through the real
 //! [`Controller`]: the pointer and the keys on the overlay, the toolbar's buttons and their accessibility, the Options
 //! menu, the thumbnail, and Escape and the close button taking every surface (and with them the keyboard) away.

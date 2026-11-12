@@ -646,9 +646,9 @@ mod tests {
         assert_eq!(f.content, 0.0);
         let f = m.frame(CONTENT_DELAY + CONTENT_FADE / 2.0);
         assert!(f.content > 0.0 && f.content < 1.0, "{f:?}");
-        let f = m.frame(OPEN_DURATION.max(CONTENT_DELAY + CONTENT_FADE));
+        let f = m.frame(settled(0.0));
         assert_eq!((f.alpha, f.scale, f.content), (1.0, 1.0, 1.0));
-        assert!(!m.animating(OPEN_DURATION.max(CONTENT_DELAY + CONTENT_FADE)));
+        assert!(!m.animating(settled(0.0)));
     }
 
     #[test]
@@ -741,30 +741,29 @@ mod tests {
     fn opening_while_closing_turns_around_from_the_presented_opacity() {
         let mut m = Motion::new(COMPACT);
         m.show(COMPACT, false, 0.0);
-        m.hide(false, 1.0);
-        let mid = m.frame(1.0 + CLOSE_COMPACT_DURATION / 2.0);
+        m.hide(1.0);
+        let mid = m.frame(1.0 + CLOSE_DURATION / 2.0);
         assert!(mid.alpha > 0.0 && mid.alpha < 1.0);
-        m.show(COMPACT, false, 1.0 + CLOSE_COMPACT_DURATION / 2.0);
-        let f = m.frame(1.0 + CLOSE_COMPACT_DURATION / 2.0);
+        m.show(COMPACT, false, 1.0 + CLOSE_DURATION / 2.0);
+        let f = m.frame(1.0 + CLOSE_DURATION / 2.0);
         assert!((f.alpha - mid.alpha).abs() < 1e-9, "no flash to zero");
-        assert!(!m.gone(1.0 + CLOSE_COMPACT_DURATION));
-        m.hide(false, 5.0);
-        assert!(m.gone(5.0 + CLOSE_COMPACT_DURATION));
+        assert!(!m.gone(1.0 + CLOSE_DURATION));
+        m.hide(5.0);
+        assert!(m.gone(5.0 + CLOSE_DURATION));
     }
 
     #[test]
-    fn closing_the_browser_fades_and_shrinks_and_the_compact_field_only_fades_quicker() {
-        let mut m = Motion::new(COMPACT);
-        m.show(OPEN, true, 0.0);
-        m.hide(true, 1.0);
-        let f = m.frame(1.0 + CLOSE_DURATION / 2.0);
-        assert!(f.alpha < 1.0 && f.scale < 1.0);
-        assert!(m.gone(1.0 + CLOSE_DURATION));
-        let mut m = Motion::new(COMPACT);
-        m.show(COMPACT, false, 0.0);
-        m.hide(false, 1.0);
-        assert_eq!(m.frame(1.0 + CLOSE_COMPACT_DURATION / 2.0).scale, 1.0);
-        assert!(m.gone(1.0 + CLOSE_COMPACT_DURATION));
+    fn closing_fades_grows_a_little_and_blurs_whatever_the_panel_shows() {
+        for (shape, browse) in [(OPEN, true), (COMPACT, false)] {
+            let mut m = Motion::new(COMPACT);
+            m.show(shape, browse, 0.0);
+            m.hide(settled(0.0));
+            let f = m.frame(settled(0.0) + CLOSE_DURATION / 2.0);
+            assert!(f.alpha > 0.0 && f.alpha < 1.0, "{f:?}");
+            assert!(f.scale > 1.0 && f.scale < CLOSE_SCALE, "{f:?}");
+            assert!(f.blur > 0.0 && f.blur < 1.0, "{f:?}");
+            assert!(m.gone(settled(0.0) + CLOSE_DURATION));
+        }
     }
 
     #[test]
@@ -781,8 +780,9 @@ mod tests {
         assert_eq!(m.frame(1.0 + FOLD_FADE).content, 0.0);
         m.unfold(OPEN, 2.0);
         assert_eq!(m.frame(2.0).shape, OPEN);
-        m.hide(true, 3.0);
-        assert_eq!(m.frame(3.0 + CLOSE_DURATION / 2.0).scale, 1.0);
+        m.hide(3.0);
+        let f = m.frame(3.0 + CLOSE_DURATION / 2.0);
+        assert_eq!((f.scale, f.blur), (1.0, 0.0));
     }
 
     #[test]

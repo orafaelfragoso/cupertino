@@ -2,7 +2,7 @@
 //! `server.session_end` with the exit status, and the error's text when it ended with one. Its crashes are in
 //! `session-end.rs`, beside the session's own record of them.
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::process::Output;

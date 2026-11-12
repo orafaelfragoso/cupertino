@@ -1,3 +1,4 @@
+#![cfg(feature = "fake")]
 //! A stream against a private PipeWire daemon, linked to a video consumer the test runs: the consumer fixes a format,
 //! takes a frame with its damage and timestamp, and fixes the new size after a resize. Skipped when `pipewire` is not
 //! installed.

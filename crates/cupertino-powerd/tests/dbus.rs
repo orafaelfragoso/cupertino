@@ -2,7 +2,7 @@
 //! binary is not installed), the daemon connects to it and a second connection plays the client.
 #![cfg(feature = "dbus")]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::fs;
@@ -58,6 +58,7 @@ fn start_daemon(bus: &PrivateBus, root: &Path, authorizer: Box<dyn Authorizer>) 
             closed: false,
         },
         authorizer,
+        history_path: None,
     })
     .unwrap()
 }

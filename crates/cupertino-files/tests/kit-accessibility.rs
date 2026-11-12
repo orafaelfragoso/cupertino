@@ -5,7 +5,7 @@
 
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
@@ -1076,7 +1076,11 @@ fn assistive_technology_reads_the_lists_selection_over_atspi_and_a_rows_click_se
         .build()
         .unwrap();
     let mut window = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([NAME, "--exact", "--nocapture"])
+        .args([
+            cupertino_test_bus::test_path(NAME).as_str(),
+            "--exact",
+            "--nocapture",
+        ])
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .env(ATSPI_WINDOW, "1")
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)

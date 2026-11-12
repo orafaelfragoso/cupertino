@@ -5,7 +5,7 @@
 //! open; a finger that rests on a context menu's region opens its menu, whose submenus open under it too; a second
 //! finger opens and chooses nothing; and a cancelled touch ends with nothing chosen.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Point, Rect};
 use cupertino_menu_model::tracking::{SUBMENU_OPEN_DELAY, TRACKING_INTERVAL};

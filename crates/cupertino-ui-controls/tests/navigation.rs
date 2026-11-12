@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_controls::scroll_edge::{soft_edge_stops, SOFT_EDGE_STOPS};

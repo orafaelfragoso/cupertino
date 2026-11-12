@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Settings application on CupertinoKit: pane table, sidebar, navigation history, search, the panes and their controls, and the `cupertino-settings` process"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "apps"
@@ -59,3 +60,7 @@ serde_json = "1"
 name = "cupertino-settings"
 path = "src/main.rs"
 required-features = ["app"]
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

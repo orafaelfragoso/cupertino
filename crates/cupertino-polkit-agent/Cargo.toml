@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "polkit authentication agent of the session: answers polkitd for other software's actions with a Cupertino prompt and polkit's own helper"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "shell"
@@ -49,3 +50,7 @@ tempfile = "3"
 name = "cupertino-polkit-agent"
 path = "src/main.rs"
 required-features = ["app"]
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

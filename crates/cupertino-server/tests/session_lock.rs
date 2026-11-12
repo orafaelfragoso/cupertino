@@ -5,12 +5,12 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::common;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
-mod common;
 
 use common::events;
 use common::Client;

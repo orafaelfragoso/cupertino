@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Checks that workspace dependencies follow the layer rules of the prototype tree (foundation, models, platform, render, core, shippables)"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "tools"
@@ -19,3 +20,7 @@ path = "src/bin/cupertino-layers.rs"
 serde_json = "1"
 sha2 = "0.10"
 spdx = "0.13.6"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

@@ -8,7 +8,7 @@
 //! a grab of its own belongs to the same chain: focus moving within it keeps both open, and a surface outside it closes
 //! both, each told once. The tests need an offscreen EGL device.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

@@ -2,7 +2,7 @@
 //! device, a client binds the global, creates a layer surface with a backdrop, and the test
 //! reads the committed backdrops the scene draws. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

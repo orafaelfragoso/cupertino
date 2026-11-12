@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Input model for the Cupertino compositor: touchpad gesture recognition, hot corners, screen-edge dwell, shortcut maps and kinetic scrolling"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "models"
@@ -15,3 +16,7 @@ cupertino-modifiers = { path = "../cupertino-modifiers" }
 [dev-dependencies]
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

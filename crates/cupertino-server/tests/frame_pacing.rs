@@ -3,7 +3,7 @@
 //! model clock of the headless compositor, as differences, so they do not depend on machine load. Only the pacing of a
 //! change, which no vblank does offscreen, is counted on the running clock.
 
-mod common;
+use crate::common;
 
 use std::time::{Duration, Instant};
 

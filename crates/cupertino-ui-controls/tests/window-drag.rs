@@ -2,7 +2,7 @@
 //! drag that no control inside takes, and zoom the window on a double click; the controls keep their presses and the
 //! rest of the window starts nothing.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Point, Size};
 use cupertino_ui_controls::{

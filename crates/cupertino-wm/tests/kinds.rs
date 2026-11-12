@@ -1,6 +1,6 @@
 //! Window kinds chosen when a window maps, and where dialogs open.
 
-mod common;
+use crate::common;
 use common::*;
 use cupertino_wm::*;
 

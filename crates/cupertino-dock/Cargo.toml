@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Dock for the Cupertino desktop: tiles, layout, magnification, bounce animations, hit-testing, drag-reorder and auto-hide, the window feed and `dock.conf`, and the `cupertino-dock` process"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "shell"
@@ -66,3 +67,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(cupertino_capture_fixtures
 name = "cupertino-dock"
 path = "src/main.rs"
 required-features = ["app"]
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

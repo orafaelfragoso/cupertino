@@ -10,7 +10,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-mod common;
+use crate::common;
 
 use cupertino_protocols::client::screenshot::cupertino_screenshot_v1::{
     self, CupertinoScreenshotV1,

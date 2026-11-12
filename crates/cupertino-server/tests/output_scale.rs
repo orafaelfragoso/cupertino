@@ -3,7 +3,7 @@
 //! draw at (and so their buffers) follows, and panel pixels map to the same logical points the output is drawn with.
 //! Needs an offscreen EGL renderer, like the other desktop tests.
 
-mod common;
+use crate::common;
 
 use common::absolute;
 use common::desktop::Desktop;

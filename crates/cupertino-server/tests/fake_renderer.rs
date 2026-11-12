@@ -2,7 +2,7 @@
 //! resolves in the frame's resources (retained Snapshot sources are outside this fake's checks), and the frame has the items the scene calls for. It is the proof that the seam
 //! (`cupertino-render-api`) and the scene frame are usable by an implementation that is not GLES.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

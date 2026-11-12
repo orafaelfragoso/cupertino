@@ -2,7 +2,7 @@
 //! the signals are recorded instead of sent. The model clock stands still in these tests and moves where the test moves
 //! it. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::os::unix::net::UnixStream;

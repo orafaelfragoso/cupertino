@@ -27,7 +27,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_offer_v1::ZwlrDataControlOfferV1,
 };
 
-mod common;
+use crate::common;
 
 const DATA_CONTROL: [&str; 2] = [
     "zwlr_data_control_manager_v1",

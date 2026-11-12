@@ -1,6 +1,6 @@
 //! Controls an application disabled on its own window (`Command::SetDisabledControls`): the model refuses them whoever
 //! asks, and leaves every way out of them open.
-mod common;
+use crate::common;
 use common::*;
 use cupertino_wm::*;
 

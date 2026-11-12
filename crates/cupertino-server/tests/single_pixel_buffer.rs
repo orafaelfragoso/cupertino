@@ -4,7 +4,7 @@
 //! the pointer where its input region says, and follows the output as it turns and changes scale. Tests skip (pass)
 //! when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;

@@ -90,7 +90,7 @@ docker create --cidfile "$cidfile" \
   --env "CUPERTINO_UPDATE_GOLDENS=$update" \
   "$image_id" \
   python3 ci/build-test-fixtures.py --locked -- \
-  cargo test --locked -p cupertino-server --test goldens -- --include-ignored --skip headless_frame_and_memory_report \
+  cargo test --locked -p cupertino-server --test suite -- goldens:: --include-ignored --skip headless_frame_and_memory_report \
   >/dev/null
 # Waiting on an asynchronous attachment lets TERM/INT run cleanup immediately, even if the client is unresponsive.
 docker start --attach "$(cat "$cidfile")" | tee "$log" &

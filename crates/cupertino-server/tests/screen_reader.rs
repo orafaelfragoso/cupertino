@@ -3,7 +3,7 @@
 //! but its own descends from its compositor. In a person's session the compositor runs a reader itself while
 //! `screen_reader` is on, and the same chord turns it on or off.
 
-mod common;
+use crate::common;
 
 use std::os::fd::OwnedFd;
 

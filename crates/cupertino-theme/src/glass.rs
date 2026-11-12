@@ -1085,6 +1085,7 @@ mod tests {
                 reduce_transparency: rt,
                 increase_contrast: ic,
                 reduce_motion: rm,
+                density: 0,
             },
             100.0,
         )

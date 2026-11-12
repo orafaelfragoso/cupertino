@@ -1,7 +1,7 @@
 //! Pairing through the model: confirmation (numeric comparison and Just Works), passkey entry and
 //! display, refusal, remote failure, timeout and a pairing the remote side starts.
 
-mod common;
+use crate::common;
 
 use common::*;
 use cupertino_bluetooth::{

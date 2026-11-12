@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Bluetooth daemon for the system bus: adapter and device inventory over the kernel management interface, pairing with an agent the shell registers, and the org.cupertino.Bluetooth1 interface"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "services"
@@ -31,3 +32,7 @@ tempfile = "3"
 name = "cupertino-btd"
 path = "src/main.rs"
 required-features = ["app"]
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

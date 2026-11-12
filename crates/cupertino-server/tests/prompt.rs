@@ -1,7 +1,7 @@
 //! The authentication prompt among other overlay surfaces: it is drawn and hit before an overlay surface mapped after
 //! it, and the keyboard stays with it while it is shown, until the session lock takes it.
 
-mod common;
+use crate::common;
 
 use std::os::unix::net::UnixStream;
 use std::time::Instant;

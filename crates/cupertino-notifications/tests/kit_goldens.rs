@@ -1348,8 +1348,8 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
         .rect;
     assert_eq!(
         (close.min_x() - card.min_x(), close.min_y() - card.min_y()),
-        (-view::CLOSE_OUTSET, -view::CLOSE_OUTSET),
-        "centred on the card's top-leading corner"
+        (-view::CLOSE_REACH_X, -view::CLOSE_REACH_Y),
+        "centred on the card's top-leading corner curve"
     );
     assert!(
         close.min_y() >= rect(&snapshot, "list-content").min_y(),

@@ -3,7 +3,7 @@
 //! error. Each test also checks that what the caller sees is unchanged.
 #![cfg(feature = "dbus")]
 
-mod diag;
+use crate::diag;
 
 use cupertino_diagnostic_events::{self as events, Severity};
 use cupertino_netd::auth::{AllowAll, Authorizer, Decision};

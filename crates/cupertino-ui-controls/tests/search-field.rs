@@ -1,7 +1,7 @@
 //! A search field's look follows what it lies on: a light capsule on a material (a sidebar), a text field's recessed
 //! well on the window's content; and its height follows the size table.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Size};
 use cupertino_ui_controls::{

@@ -8,7 +8,7 @@
 
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use std::time::{Duration, Instant};
 

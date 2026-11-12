@@ -6,7 +6,7 @@
 //! diagnostic events go to a journal socket of the test's own.
 #![cfg(feature = "app")]
 
-mod diag;
+use crate::diag;
 
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;

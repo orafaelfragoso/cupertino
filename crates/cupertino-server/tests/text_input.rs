@@ -2,7 +2,7 @@
 //! `zwp_input_method_v2`): enable and disable, the state a field sends, the input method's preedit, commit and delete
 //! as one `done`, and a focus change. A synthetic input method on a connection of the compositor's own stands in for
 //! a real one. In-process on an offscreen EGL device (tests skip when there is none).
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

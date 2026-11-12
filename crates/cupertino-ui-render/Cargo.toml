@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "CupertinoKit rendering: the display list a window paints into, damage, and the renderer that draws it into premultiplied pixels"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "ui"
@@ -16,3 +17,7 @@ tiny-skia = { version = "0.12", default-features = false, features = ["std", "si
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

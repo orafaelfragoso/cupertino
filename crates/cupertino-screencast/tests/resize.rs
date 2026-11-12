@@ -1,3 +1,4 @@
+#![cfg(feature = "fake")]
 //! A resize that reaches a stream between the consumer fixing a format and PipeWire adding its buffers: the stream
 //! goes on in the new size. Skipped when `pipewire` is not
 //! installed.

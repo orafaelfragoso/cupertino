@@ -1,7 +1,7 @@
 //! The bounded store: rotation, the total cap, age expiry, many writers, the unavailable store and its recovery,
 //! and reading back what is broken.
 
-mod support;
+use crate::support;
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -203,7 +203,12 @@ fn eight_threads_and_four_processes_write_whole_lines_within_the_cap() {
         .map(|id| {
             std::process::Command::new(std::env::current_exe().unwrap())
                 .env("CUPERTINO_ASSET_SEARCH_PATH", "")
-                .args(["--exact", "concurrent_writer_child", "--test-threads", "1"])
+                .args([
+                    "--exact",
+                    cupertino_test_bus::test_path("concurrent_writer_child").as_str(),
+                    "--test-threads",
+                    "1",
+                ])
                 // a store and a journal of the test's own, should the child record anything of its own
                 .env("XDG_STATE_HOME", tmp.path().join("state"))
                 .env(

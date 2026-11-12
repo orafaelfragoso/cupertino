@@ -107,7 +107,7 @@ the close request exits; `--frames N` animates N frames and prints the size, sca
 ```
 python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-wayland-client
 # Mutter check; skips only when mutter is absent.
-python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-wayland-client --test mutter
+python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-wayland-client --test suite mutter::
 # Optional Weston check.
 python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-wayland-client --run-ignored only
 ```

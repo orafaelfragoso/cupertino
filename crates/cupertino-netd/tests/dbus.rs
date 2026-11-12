@@ -513,6 +513,7 @@ fn get_networks_lists_what_the_last_scan_found() {
             wireless_enabled: true,
             devices: vec![wifi],
             networks,
+            known: Vec::new(),
         })
         .unwrap();
 
@@ -611,6 +612,7 @@ fn a_failed_connection_is_signalled_once_with_its_reason() {
         wireless_enabled: true,
         devices: vec![wifi],
         networks: Vec::new(),
+        known: Vec::new(),
     };
     running.daemon.publish(snapshot.clone()).unwrap();
     running.daemon.publish(snapshot).unwrap();

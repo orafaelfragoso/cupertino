@@ -1,7 +1,7 @@
 //! Pointer hit testing over layer surfaces: the compositor runs in-process on an offscreen EGL device and one client maps
 //! two overlay surfaces that overlap. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

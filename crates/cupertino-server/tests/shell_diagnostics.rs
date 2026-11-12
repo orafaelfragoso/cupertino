@@ -3,7 +3,7 @@
 //! binaries run with a cleared environment, no Wayland display and no session bus, so each fails at its start; the panic
 //! is the one `CUPERTINO_DIAG_TEST_PANIC` asks for right after the emitter is installed.
 
-mod common;
+use crate::common;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};

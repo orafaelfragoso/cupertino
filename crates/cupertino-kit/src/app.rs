@@ -500,6 +500,19 @@ fn fonts(assets: &Assets) -> (FontIndex, Option<String>) {
 mod tests {
     use super::*;
 
+    /// What an application's window follows: the theme for each appearance the session reports, from `theme` (the
+    /// installed data) or else `start`, with the default personal settings.
+    fn theme_for(theme: Option<Theme>, start: Arc<ThemeTokens>) -> ThemeForAppearance {
+        let inner = Rc::new(PersonalInner {
+            theme,
+            start,
+            settings: Cell::new(AppearanceSettings::UNSET),
+            last: Cell::new(SystemAppearance::default()),
+            changed: Arc::new(AtomicBool::new(false)),
+        });
+        Box::new(move |appearance| inner.make(appearance))
+    }
+
     #[test]
     fn a_scroll_timing_line_is_one_json_object_with_null_for_a_missing_stage() {
         use cupertino_ui_platform::{Timestamp, WindowId};

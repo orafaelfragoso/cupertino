@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, SplitLayout, SplitPane, SplitView};

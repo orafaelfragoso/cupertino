@@ -333,7 +333,13 @@ const CHILD: &str = "DIAG_TEST_CHILD";
 fn recorded(name: &str, state: &Path) -> Option<Vec<(Record, String)>> {
     let output = Command::new(std::env::current_exe().unwrap())
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
-        .args(["--exact", name, "--nocapture", "--test-threads", "1"])
+        .args([
+            "--exact",
+            cupertino_test_bus::test_path(name).as_str(),
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
         .env(CHILD, "1")
         .env("XDG_STATE_HOME", state)
         .env_remove("XDG_SESSION_ID")

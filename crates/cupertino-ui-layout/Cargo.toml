@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "CupertinoKit layout: constraints, two-pass measure and place over a borrowed tree, stacks, grids, scroll math and virtualization windows; no display, font or scale factor"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "ui"
@@ -17,3 +18,7 @@ proptest = "1.12"
 [[bench]]
 name = "layout"
 harness = false
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

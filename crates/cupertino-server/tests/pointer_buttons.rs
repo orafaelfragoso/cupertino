@@ -2,7 +2,7 @@
 //! press a client received must always be followed by its release. The compositor runs in-process on an offscreen EGL
 //! device and real clients record the button events they get. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

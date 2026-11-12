@@ -4,7 +4,7 @@
 //! size matrix when run with `--ignored --nocapture`, for Probe to validate. (The comparison with the builder the scene
 //! frame replaced was made while it existed, in the work packages that migrated it.)
 
-mod common;
+use crate::common;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -134,7 +134,7 @@ fn a_steady_frame_makes_no_pixel_sized_allocation() {
 }
 
 #[test]
-#[ignore = "opt-in measurement for Probe: cargo test -p cupertino-server --test scene_cost -- --ignored --nocapture"]
+#[ignore = "opt-in measurement for Probe: cargo test -p cupertino-server --test suite scene_cost:: -- --ignored --nocapture"]
 fn scene_cost_report() {
     for size in [(1920, 1080), (3840, 2160)] {
         for scale in [1.0, 2.0] {

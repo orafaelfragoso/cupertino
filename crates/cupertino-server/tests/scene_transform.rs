@@ -9,7 +9,7 @@
 //! handful of pixels in 540 000 differ by one step in one channel, where the wallpaper gradient is rounded
 //! differently when the rasteriser samples the turned frame. Nothing may differ by more than that, or be anywhere else.
 
-mod common;
+use crate::common;
 
 use common::desktop::Desktop;
 use cupertino_server::backend::{headless, Backend};

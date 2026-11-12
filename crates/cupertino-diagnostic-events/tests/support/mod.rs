@@ -20,7 +20,13 @@ pub fn child(name: &str, state: &Path, envs: &[(&str, &str)]) -> Output {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
-        .args(["--exact", name, "--nocapture", "--test-threads", "1"])
+        .args([
+            "--exact",
+            cupertino_test_bus::test_path(name).as_str(),
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
         .env(CHILD, "1")
         .env("XDG_STATE_HOME", state)
         .env("HOME", state.join("home"))

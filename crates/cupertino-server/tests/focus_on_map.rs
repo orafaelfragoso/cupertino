@@ -4,7 +4,7 @@
 //! still brings it forward; and the application a window without an application id joins. Tests skip (pass) when no EGL
 //! device is available.
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

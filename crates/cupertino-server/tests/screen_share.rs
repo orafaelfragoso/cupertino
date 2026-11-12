@@ -3,7 +3,7 @@
 //! xdg-desktop-portal does, presses Return on the chooser the portal maps once it is armed, and reads frames of the
 //! headless output from the stream `Start` names, as a browser would. Skips (passes) without an EGL device, `dbus-daemon` or `pipewire`.
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

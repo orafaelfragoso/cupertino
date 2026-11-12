@@ -1,7 +1,7 @@
 //! Issue #5: the real Settings choice menu must not survive dismissal or navigation.
-//! Run through `python3 ci/build-test-fixtures.py --locked -- cargo test --locked --workspace --all-features --test settings-popup -- --test-threads=1`.
+//! Run through `python3 ci/build-test-fixtures.py --locked -- cargo test --locked --workspace --all-features -p cupertino-server --test suite settings_popup:: -- --test-threads=1`.
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 use std::process::Child;

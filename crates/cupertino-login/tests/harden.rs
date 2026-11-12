@@ -1,3 +1,4 @@
+#![cfg(feature = "app")]
 //! The running greeter process is undumpable (its owner cannot read its `/proc` environment) and has no core file size, read
 //! while it waits for a compositor that never answers. Run as root the dumpable check is skipped.
 

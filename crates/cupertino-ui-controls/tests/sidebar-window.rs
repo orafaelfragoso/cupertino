@@ -2,7 +2,7 @@
 //! the window's drag region with room for the window control buttons, then the header and the sidebar's content;
 //! beside it the content pane up to the window's top edge.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Point, Size};
 use cupertino_ui_controls::{

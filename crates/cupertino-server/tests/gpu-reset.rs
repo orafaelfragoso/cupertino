@@ -1,7 +1,7 @@
 //! A GPU reset loses the rendering context and everything made with it; the server makes a new renderer and the user's
 //! windows come back as they were, their clients still connected.
 
-mod common;
+use crate::common;
 
 use std::time::Instant;
 

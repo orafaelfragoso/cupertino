@@ -1,7 +1,7 @@
 //! A frame holds the client buffers it was drawn from, every surface of a window's tree included, so their explicit-sync
 //! release points fire only once the frame is shown. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

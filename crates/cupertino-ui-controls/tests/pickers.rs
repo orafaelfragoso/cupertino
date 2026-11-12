@@ -1,7 +1,7 @@
 //! The pull-down button, the colour well, the date picker and the combo box: each opens or steps as its family does
 //! and tells assistive technology what it holds.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::Insets;
 use cupertino_ui_controls::{

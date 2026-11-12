@@ -4,7 +4,7 @@
 //! scales: it follows `wl_surface.preferred_buffer_scale` and nothing else. Its window has a subsurface and a popup,
 //! which follow the window. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::io::Write;

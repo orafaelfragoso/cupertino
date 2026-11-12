@@ -3,7 +3,7 @@
 //! it; then `cupertino-portal` itself, whose file chooser opens as a child of the window its request names. Tests skip
 //! (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::os::fd::AsFd;

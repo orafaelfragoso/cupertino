@@ -15,6 +15,35 @@ use std::time::Duration;
 /// How long the daemon's address, a connection's handshake and each method call may take.
 pub const WAIT: Duration = Duration::from_secs(5);
 
+/// The full name of this test program's test `name`, for running it again in a process of its own with `--exact`.
+/// A crate's integration tests are modules of one program, so a test's name starts with its file's module
+/// (`store::concurrent_writer_child`); `name` is the test's own name, or a name already qualified.
+pub fn test_path(name: &str) -> String {
+    static LIST: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let list = LIST.get_or_init(|| {
+        let out = Command::new(std::env::current_exe().expect("this test program"))
+            .args(["--list", "--format", "terse"])
+            .env_remove("RUST_TEST_THREADS")
+            .output()
+            .expect("list this program's tests");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| line.strip_suffix(": test"))
+            .map(str::to_owned)
+            .collect()
+    });
+    let tail = format!("::{name}");
+    let found: Vec<&String> = list
+        .iter()
+        .filter(|t| *t == name || t.ends_with(&tail))
+        .collect();
+    match found.as_slice() {
+        [one] => (*one).clone(),
+        [] => panic!("no test named {name} in this program"),
+        many => panic!("{name} names several tests: {many:?}"),
+    }
+}
+
 /// Report a missing D-Bus executable; required-backend runs must fail instead of skipping.
 pub fn missing_tool(tool: &str) {
     assert!(

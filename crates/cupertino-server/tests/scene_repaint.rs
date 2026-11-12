@@ -7,7 +7,7 @@
 //! cleared buffer (a pixel of a shadow edge differs by one step in one channel); stale or missing pixels differ by far
 //! more.
 
-mod common;
+use crate::common;
 
 use common::desktop::Desktop;
 use cupertino_server::backend::{headless, Backend};

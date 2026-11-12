@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 
 use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Tabs};
 use cupertino_ui_core::{AccessibilityNode, Application, Command, Element, Relation, Role, Window};

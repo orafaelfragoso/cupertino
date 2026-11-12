@@ -2,7 +2,7 @@
 //! connected mice (not the touchpads) with the resolution in use and whether it was stored, and the change signal when
 //! `mouse_dpi` changes in `compositor.json`. Skipped when no EGL device or no `dbus-daemon` is available.
 
-mod common;
+use crate::common;
 
 use std::time::{Duration, Instant};
 

@@ -37,7 +37,7 @@ use wayland_protocols_wlr::output_management::v1::client::{
     zwlr_output_mode_v1::ZwlrOutputModeV1,
 };
 
-mod common;
+use crate::common;
 
 const OUTPUT: (i32, i32) = (1000, 700);
 const CLIPBOARD: &[u8] = "Grüße, clipboard".as_bytes();

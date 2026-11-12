@@ -1,7 +1,7 @@
 //! The network and Bluetooth panes on NetworkManager and BlueZ (fakes on a private bus), and hidden without either.
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};

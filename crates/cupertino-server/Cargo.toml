@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Smithay-based Wayland compositor: window policy from cupertino-wm, GLES shadows, rounded corners and material passes, dock and overview placeholders"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "core"
@@ -102,3 +103,7 @@ cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
 # the asset icons the switcher test compares the dock process's panel with
 cupertino-icons = { path = "../cupertino-icons" }
 rustix = { version = "1", features = ["shm", "mm"] }
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

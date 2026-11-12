@@ -2,7 +2,7 @@
 //! text field, a focus move, a click; and a keyed control keeps its node, which its AT-SPI object path is made of, when
 //! the view is built again around it.
 
-mod support;
+use crate::support;
 
 use std::cell::RefCell;
 use std::rc::Rc;

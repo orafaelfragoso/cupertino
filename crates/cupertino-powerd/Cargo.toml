@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Power and backlight daemon for the system bus: power_supply and backlight sysfs, the lid switch over evdev, the org.freedesktop.UPower interface subset apps call, and display brightness at org.cupertino.Power1"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "services"
@@ -30,3 +31,7 @@ tempfile = "3"
 name = "cupertino-powerd"
 path = "src/main.rs"
 required-features = ["app"]
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

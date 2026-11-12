@@ -154,7 +154,11 @@ pub fn run_child_test_after(
 ) -> (ExitStatus, Duration) {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
-        .args(["--exact", name, "--nocapture"])
+        .args([
+            "--exact",
+            cupertino_test_bus::test_path(name).as_str(),
+            "--nocapture",
+        ])
         .env("CUPERTINO_ASSET_SEARCH_PATH", "")
         .stdout(Stdio::null())
         .stderr(Stdio::null());

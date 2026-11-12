@@ -4,7 +4,7 @@
 
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use common::{place, Run};
 use cupertino_files::notice::Notices;

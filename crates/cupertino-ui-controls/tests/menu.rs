@@ -2,7 +2,7 @@
 //! The keyboard moves between the enabled items and opens and closes submenus, an item is chosen by Return or a
 //! click, and Escape or a press outside closes the menu.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Point, Rect};
 use cupertino_ui_controls::{

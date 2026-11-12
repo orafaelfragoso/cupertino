@@ -3,7 +3,7 @@
 
 #![cfg(feature = "app")]
 
-mod common;
+use crate::common;
 
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Duration;

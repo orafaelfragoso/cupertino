@@ -4,7 +4,7 @@
 //! accessibility defaults apply to an account without a file of its own, live, and never from a file root does not own. Tests skip (pass)
 //! when no EGL device is available; the bus test also when `dbus-daemon` is missing.
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::time::{Duration, Instant};

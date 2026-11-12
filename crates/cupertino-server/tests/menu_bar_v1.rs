@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::common;
 use cupertino_defaults::compositor::CompositorSettings;
 use cupertino_defaults::keyboard::{KeyboardSettings, ModifierProfile};
 use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::{
@@ -54,7 +55,6 @@ use wayland_protocols_plasma::appmenu::client::{
     org_kde_kwin_appmenu, org_kde_kwin_appmenu_manager,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
-mod common;
 
 mod gtk_shell {
     #![allow(
@@ -2749,7 +2749,11 @@ impl Foreign {
     /// Another process on the bus, owning `name`.
     fn start_named(bus: &PrivateBus, name: &str) -> Foreign {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "foreign_menu_owner_process", "--nocapture"])
+            .args([
+                "--exact",
+                cupertino_test_bus::test_path("foreign_menu_owner_process").as_str(),
+                "--nocapture",
+            ])
             .env("CUPERTINO_ASSET_SEARCH_PATH", "")
             .env(FOREIGN_BUS, &bus.address)
             .env(FOREIGN_NAME_VAR, name)

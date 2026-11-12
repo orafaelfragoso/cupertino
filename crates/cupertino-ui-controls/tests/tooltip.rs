@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Point};
 use cupertino_ui_controls::{

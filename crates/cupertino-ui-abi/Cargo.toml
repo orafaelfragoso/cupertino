@@ -6,6 +6,7 @@ license = "MPL-2.0"
 # from 1.81 a panic that escapes an `extern "C"` function aborts instead of unwinding into C
 rust-version = "1.81"
 description = "CupertinoKit's C ABI v1: libcupertinokit.so.1 and its header"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "ui"
@@ -24,3 +25,7 @@ cbindgen = { version = "=0.29.4", default-features = false }
 object = { version = "0.40.0", default-features = false, features = ["read_core", "elf", "std"] }
 rustix = { version = "1", features = ["event", "pipe"] }
 toml = "1"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

@@ -1,7 +1,7 @@
 //! What the server tells the program that started it: `--ready-fd` and the runtime file, on the headless server alone and
 //! under `cupertino desktop start`. Both skip without an EGL device, unless `CUPERTINO_EGL_REQUIRED=1`.
 
-mod common;
+use crate::common;
 
 use std::io::{BufRead, BufReader, Read};
 

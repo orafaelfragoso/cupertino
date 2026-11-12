@@ -3,7 +3,7 @@
 //! wallpaper, and the lightness of the strip under each output's menu bar is measured as that output shows the image,
 //! turned outputs included. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

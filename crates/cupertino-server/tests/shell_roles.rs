@@ -4,7 +4,7 @@
 //! the objects it creates; `cupertino_app_effects_v1` is the public protocol. Tests skip (pass) when no EGL device is
 //! available.
 
-mod common;
+use crate::common;
 
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;

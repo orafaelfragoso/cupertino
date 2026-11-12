@@ -8,7 +8,7 @@
 //! channel, nowhere else; the pixels are compared on x86_64 only, as the renderer's own baselines are.
 //! `CUPERTINO_UPDATE_GOLDENS=1` re-records every fixture it runs and then fails, so the variable can never pass a run.
 
-mod support;
+use crate::support;
 
 use cupertino_kit::controls::Tabs;
 use cupertino_kit::controls::{

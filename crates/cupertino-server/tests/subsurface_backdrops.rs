@@ -5,7 +5,7 @@
 //! glass. The tests wait on events (frames the server presented, the client's roundtrips), not on time, and skip (pass)
 //! when no EGL device is available.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeSet;
 use std::io::Write;

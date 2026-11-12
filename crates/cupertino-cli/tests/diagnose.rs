@@ -1,7 +1,7 @@
 //! `cupertino diagnose` on fixture machines given through `Context::provide`: the report in each form, the areas, and
 //! `--strict`.
 
-mod support;
+use crate::support;
 
 use std::collections::HashMap;
 use std::path::Path;

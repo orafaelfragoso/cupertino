@@ -9,7 +9,7 @@
 //! private session bus; every directory it reads is a fixture's, and its PAM transactions start from a private policy
 //! (`cupertino-test-pam`), never from the machine's. Tests skip (pass) when no EGL device is available.
 
-mod common;
+use crate::common;
 #[path = "lock-screen/control.rs"]
 mod desktop_control;
 

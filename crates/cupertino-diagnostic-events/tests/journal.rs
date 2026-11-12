@@ -1,7 +1,7 @@
 //! The journald sink: the native protocol's fields, the binary-safe form of a value with a newline, and the fallback
 //! to standard error when there is no journal.
 
-mod support;
+use crate::support;
 
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;

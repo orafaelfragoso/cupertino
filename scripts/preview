@@ -8,6 +8,9 @@ installed release, side by side with the pixels that changed, in one page.
                                      crate changed); nothing when no program changed
     scripts/preview --no-before      this checkout only, no comparison
     scripts/preview --live           the desktop of this checkout in a window of the current session, to try by hand
+    PREVIEW_BEFORE=DIR scripts/preview
+                                     compare with the programs in DIR (a copy of an earlier target/release, say)
+                                     instead of the installed release
 
 The page is target/preview/index.html: a row per shot with the installed release, this checkout and the changed pixels
 in magenta, and a switch that shows only the shots that changed. Builds first (scripts/dev/build).
@@ -39,7 +42,9 @@ import affected  # noqa: E402
 
 OUT = ROOT / "target" / "preview"
 LOGICAL = (1024, 640)
-INSTALLED = pathlib.Path("/usr/bin")
+INSTALLED = pathlib.Path(os.environ.get("PREVIEW_BEFORE", "/usr/bin"))
+# the programs compared with are a build of a checkout, which finds its assets as this checkout's build does
+BEFORE_IS_BUILD = "PREVIEW_BEFORE" in os.environ
 # crates every program draws through: a change to one of these re-shoots every scenario
 SHARED_PREFIXES = ("cupertino-ui-", "cupertino-kit", "cupertino-theme", "cupertino-glass", "cupertino-effects",
                    "cupertino-server", "cupertino-assets", "cupertino-icons", "cupertino-wayland-client")
@@ -178,7 +183,7 @@ def main() -> int:
             before = OUT / "before" / f"{name}-{variant}.png"
             tasks[(name, variant)] = (
                 pool.submit(shot, ROOT / "target/release", after, s, scale, appearance, False),
-                pool.submit(shot, INSTALLED, before, s, scale, appearance, True) if with_before else None,
+                pool.submit(shot, INSTALLED, before, s, scale, appearance, not BEFORE_IS_BUILD) if with_before else None,
             )
         for name, s, scale, appearance, variant in jobs:
             a, b = tasks[(name, variant)]

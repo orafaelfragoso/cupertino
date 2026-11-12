@@ -121,14 +121,30 @@ pub fn union_field(shapes: &[GlassShape], k: f32, p: [f32; 2]) -> (f32, Vec<f32>
 
 /// Outward unit normal of the field at `p` (central differences one unit apart); zero where the field is flat.
 pub fn field_normal(shapes: &[GlassShape], k: f32, p: [f32; 2]) -> [f32; 2] {
-    let f = |dx: f32, dy: f32| union_field(shapes, k, [p[0] + dx, p[1] + dy]).0;
-    let g = [f(0.5, 0.0) - f(-0.5, 0.0), f(0.0, 0.5) - f(0.0, -0.5)];
+    let g = field_gradient(shapes, k, p);
     let len = (g[0] * g[0] + g[1] * g[1]).sqrt();
     if len < 1e-6 {
         [0.0, 0.0]
     } else {
         [g[0] / len, g[1] / len]
     }
+}
+
+/// The central difference of the union's field over one unit at `p`: about a unit long near a real edge, and short
+/// along the seam where two joined shapes meet, where the fields of both sides cancel.
+pub fn field_gradient(shapes: &[GlassShape], k: f32, p: [f32; 2]) -> [f32; 2] {
+    let f = |dx: f32, dy: f32| union_field(shapes, k, [p[0] + dx, p[1] + dy]).0;
+    [f(0.5, 0.0) - f(-0.5, 0.0), f(0.0, 0.5) - f(0.0, -0.5)]
+}
+
+/// The shortest field slope [`edge_distance`] divides by.
+pub const MIN_FIELD_SLOPE: f32 = 0.05;
+
+/// How far inside the edge a point with field value `d` lies, from the field's `slope` there (the length of
+/// [`field_gradient`]): `d` itself near a real edge, and far inside along a seam between joined shapes, whose shallow
+/// field would otherwise put a rim light across the join.
+pub fn edge_distance(d: f32, slope: f32) -> f32 {
+    d / slope.max(MIN_FIELD_SLOPE)
 }
 
 pub fn srgb_decode(v: f32) -> f32 {
@@ -463,7 +479,13 @@ impl Container {
     pub fn shade(&self, p: [f32; 2], sample: &dyn Fn(usize, [f32; 2]) -> Rgb) -> (Rgb, f32) {
         let params = &self.params;
         let (d, v) = self.field(p);
-        let normal = field_normal(&self.shapes, self.spacing, p);
+        let gradient = field_gradient(&self.shapes, self.spacing, p);
+        let slope = (gradient[0] * gradient[0] + gradient[1] * gradient[1]).sqrt();
+        let normal = if slope < 1e-6 {
+            [0.0, 0.0]
+        } else {
+            [gradient[0] / slope, gradient[1] / slope]
+        };
         if d > 0.5 {
             let s = &params.shadow;
             let d_shadow = self.field([p[0] - s.offset[0], p[1] - s.offset[1]]).0;
@@ -494,7 +516,7 @@ impl Container {
             v.bleed_amount,
             v.bleed_height,
         );
-        c = highlight(c, d, normal, params);
+        c = highlight(c, edge_distance(d, slope), normal, params);
         (c, (0.5 - d).clamp(0.0, 1.0))
     }
 }
@@ -965,6 +987,41 @@ mod tests {
         let light = params(false);
         let darker = bleed([0.98; 3], [0.0, 0.0, 0.5], 0.0, &light, 35.0, 35.0);
         assert!(darker[0] < 0.98, "light glass darkens: {darker:?}");
+    }
+
+    #[test]
+    fn a_seam_between_joined_shapes_is_far_from_the_edge() {
+        // a wide panel with a thin strip joined under the middle of its bottom edge
+        let shapes = [
+            GlassShape::new([0.0, 0.0, 132.0, 39.0], 19.5),
+            GlassShape::new([55.5, 39.0, 21.0, 1.4], 0.7),
+        ];
+        let k = 6.0;
+        let slope = |p: [f32; 2]| {
+            let g = field_gradient(&shapes, k, p);
+            (g[0] * g[0] + g[1] * g[1]).sqrt()
+        };
+        let seam = [66.0, 39.0];
+        let d = union_field(&shapes, k, seam).0;
+        assert!(d < 0.0 && d > -3.0, "the seam is shallow: {d}");
+        assert!(slope(seam) < 0.4, "{}", slope(seam));
+        assert!(
+            edge_distance(d, slope(seam)) < -10.0,
+            "and far from an edge"
+        );
+        // the panel's own edge away from the strip keeps its distance
+        let edge = [20.0, 38.5];
+        let d_edge = union_field(&shapes, k, edge).0;
+        assert!(close(edge_distance(d_edge, slope(edge)), d_edge, 1e-3));
+        let p = params(true);
+        let face = [0.2, 0.15, 0.6];
+        let lit = highlight(face, edge_distance(d_edge, slope(edge)), [0.0, 1.0], &p);
+        let across = highlight(face, edge_distance(d, slope(seam)), [0.0, 1.0], &p);
+        assert!(lit[0] > face[0] + 0.01, "{lit:?}");
+        assert!(
+            close(across[0], face[0], 1e-3),
+            "no rim across the join: {across:?}"
+        );
     }
 
     #[test]

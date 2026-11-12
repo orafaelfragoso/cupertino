@@ -125,6 +125,8 @@ float angle_between(float a, float b) {
 
 // a raised cosine of the angle from the light, nothing past LOBE_REACH of the spread
 const float LOBE_REACH = 0.75;
+// the shortest field slope the rim's distance to the edge divides by
+const float MIN_FIELD_SLOPE = 0.05;
 
 float lobe(float normal_angle, float light) {
     float reach = G.highlight.z * LOBE_REACH;
@@ -190,14 +192,16 @@ void main() {
     if ((rim_on || glow_on) && gl > 1e-6) {
         float na = atan(-n.y, n.x);
         float ends = lobe(na, G.highlight.y) + lobe(na, G.highlight.y + PI) * max(1.0 + G.highlight2.y, 0.0);
+        // the distance to the edge the field's slope gives: far inside along a seam between joined shapes
+        float de = d / max(gl, MIN_FIELD_SLOPE);
         float strength = 0.0;
         if (rim_on) {
-            float x = (d - G.highlight2.x) / G.highlight.w;
+            float x = (de - G.highlight2.x) / G.highlight.w;
             strength = G.highlight.x * exp(-x * x);
         }
         // a soft band wider than the rim, lighting the same ends of the axis
         if (glow_on) {
-            float xg = (d - G.glow.z) / G.glow.y;
+            float xg = (de - G.glow.z) / G.glow.y;
             strength += G.glow.x * exp(-xg * xg);
         }
         c = min(c + key_color(c) * (strength * ends), vec3(1.0));

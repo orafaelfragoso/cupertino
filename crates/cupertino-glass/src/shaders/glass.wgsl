@@ -141,6 +141,8 @@ fn angle_between(a: f32, b: f32) -> f32 {
 
 // a raised cosine of the angle from the light, nothing past LOBE_REACH of the spread
 const LOBE_REACH: f32 = 0.75;
+// the shortest field slope the rim's distance to the edge divides by
+const MIN_FIELD_SLOPE: f32 = 0.05;
 
 fn lobe(normal_angle: f32, light: f32) -> f32 {
   let reach = G.highlight.z * LOBE_REACH;
@@ -207,14 +209,16 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
   if ((rim_on || glow_on) && gl > 1e-6) {
     let na = atan2(-n.y, n.x);
     let ends = lobe(na, G.highlight.y) + lobe(na, G.highlight.y + PI) * max(1.0 + G.highlight2.y, 0.0);
+    // the distance to the edge the field's slope gives: far inside along a seam between joined shapes
+    let de = d / max(gl, MIN_FIELD_SLOPE);
     var strength = 0.0;
     if (rim_on) {
-      let x = (d - G.highlight2.x) / G.highlight.w;
+      let x = (de - G.highlight2.x) / G.highlight.w;
       strength = G.highlight.x * exp(-x * x);
     }
     // a soft band wider than the rim, lighting the same ends of the axis
     if (glow_on) {
-      let xg = (d - G.glow.z) / G.glow.y;
+      let xg = (de - G.glow.z) / G.glow.y;
       strength = strength + G.glow.x * exp(-xg * xg);
     }
     c = min(c + key_color(c) * (strength * ends), vec3<f32>(1.0));

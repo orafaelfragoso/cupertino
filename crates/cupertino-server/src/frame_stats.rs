@@ -2,8 +2,13 @@
 //!
 //! Each frame drawn for presentation writes one line: when it was shown, how long composing the scene and rendering it
 //! took (the GPU waited for, so the time covers the GPU's work too), how much of that the glass passes and their
-//! backdrop blurs took, how many glass backdrops were blurred again or reused, and the input-to-present latency of the
-//! frame when it is the first shown after an input.
+//! backdrop blurs took on the GPU, how many glass backdrops were blurred again or reused, how late it came after the
+//! output owed it and how many refreshes passed meanwhile, and the input-to-present latency of the frame when it is the
+//! first shown after an input.
+//!
+//! An output owes a frame from the time it is due ([`crate::state::Cupertino::frame_deadline`]): a change is due at the
+//! next refresh, an animation frame at its grid point. A frame shown more than a refresh after it was owed missed the
+//! refreshes in between ([`missed_refreshes`]); an output at rest owes nothing, so its rests count as no miss.
 //!
 //! Latency is counted two ways. `input` ends at the first frame shown after the input: what the server itself moves (a
 //! dragged window, the pointer) shows there. `app` ends at the first frame shown after a client committed in answer
@@ -64,6 +69,14 @@ impl Latency {
     }
 }
 
+/// The refreshes of `refresh` that passed with a frame owed and none shown: a frame shown `late` after it was owed.
+pub fn missed_refreshes(late: Duration, refresh: Duration) -> u64 {
+    if refresh.is_zero() {
+        return 0;
+    }
+    (late.as_nanos() / refresh.as_nanos()) as u64
+}
+
 /// The time the glass passes took within one frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GlassTime {
@@ -84,6 +97,9 @@ pub struct FrameRecord {
     /// Glass backdrops blurred again and reused.
     pub blurred: u64,
     pub reused: u64,
+    /// How long after the output owed it the frame was shown, and the refreshes missed meanwhile.
+    pub late: Duration,
+    pub missed: u64,
     pub latency: (Option<Duration>, Option<Duration>),
 }
 
@@ -93,7 +109,7 @@ impl FrameRecord {
         let us = |d: Duration| d.as_micros().to_string();
         let opt = |d: Option<Duration>| d.map_or_else(|| "-".into(), us);
         format!(
-            "{} {} {} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {} {} {} {}",
             us(self.shown),
             us(self.compose),
             us(self.render),
@@ -101,6 +117,8 @@ impl FrameRecord {
             us(self.glass.blur),
             self.blurred,
             self.reused,
+            us(self.late),
+            self.missed,
             opt(self.latency.0),
             opt(self.latency.1),
         )
@@ -111,6 +129,9 @@ impl FrameRecord {
 pub struct FrameStats {
     pub start: Instant,
     pub latency: Latency,
+    /// From when each output (by index) owes the frame it has not shown yet, on the frame clock.
+    owed: Vec<Option<Duration>>,
+    refresh: Duration,
     /// The material counters when the frame being drawn began.
     before: crate::render::material::MaterialStats,
     out: std::io::BufWriter<std::fs::File>,
@@ -118,7 +139,7 @@ pub struct FrameStats {
 
 /// The first line of the file: the column names.
 pub const HEADER: &str =
-    "# shown_us compose_us render_us glass_us blur_us blurred reused input_lat_us app_lat_us";
+    "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us app_lat_us";
 
 impl FrameStats {
     /// Write to `path`, naming the device that renders (`renderer`) on the first line; times count from `start`.
@@ -135,9 +156,28 @@ impl FrameStats {
         Ok(Self {
             start,
             latency: Latency::default(),
+            owed: Vec::new(),
+            refresh,
             before: Default::default(),
             out,
         })
+    }
+
+    /// Output `idx` owes a frame from `due` (the frame clock) on, unless it owed one from earlier.
+    pub fn owe(&mut self, idx: usize, due: Duration) {
+        if self.owed.len() <= idx {
+            self.owed.resize(idx + 1, None);
+        }
+        let owed = &mut self.owed[idx];
+        *owed = Some(owed.map_or(due, |o| o.min(due)));
+    }
+
+    /// Output `idx` showed a frame at `now` (the frame clock): how late it came after it was owed.
+    pub fn shown(&mut self, idx: usize, now: Duration) -> Duration {
+        self.owed
+            .get_mut(idx)
+            .and_then(Option::take)
+            .map_or(Duration::ZERO, |o| now.saturating_sub(o))
     }
 
     pub fn write(&mut self, record: &FrameRecord) {
@@ -162,8 +202,44 @@ pub fn start_glass_timing(state: &mut crate::state::Cupertino) {
     }
 }
 
-/// A frame was rendered and its GPU work finished: write its line.
-pub fn frame_rendered(state: &mut crate::state::Cupertino, compose: Duration, render: Duration) {
+/// The outputs that owe a frame at `now` (the frame clock), noted for [`frame_rendered`].
+pub fn note_owed(state: &mut crate::state::Cupertino, now: Duration) {
+    if state.frame_stats.is_none() {
+        return;
+    }
+    let due: Vec<(usize, Duration)> = (0..state.outputs.len())
+        .filter(|&idx| state.displays.powered(state.outputs[idx].id))
+        .filter_map(|idx| state.frame_deadline(idx, now).map(|at| (idx, at)))
+        .filter(|(_, at)| *at <= now)
+        .collect();
+    if let Some(stats) = state.frame_stats.as_mut() {
+        for (idx, at) in due {
+            stats.owe(idx, at);
+        }
+    }
+}
+
+/// Once the frame's GPU work finished: the GPU times of its timed passes. Call with the renderer's context current.
+///
+/// # Safety
+/// `gl` must be the current context of the renderer the material pipeline was made on.
+pub unsafe fn collect_pass_times(
+    state: &crate::state::Cupertino,
+    gl: &smithay::backend::renderer::gles::ffi::Gles2,
+) {
+    if let Some(material) = state.render.as_ref().and_then(|r| r.material.as_ref()) {
+        material.borrow_mut().collect_pass_times(gl);
+    }
+}
+
+/// A frame of output `idx` was rendered and its GPU work finished: write its line.
+pub fn frame_rendered(
+    state: &mut crate::state::Cupertino,
+    idx: usize,
+    compose: Duration,
+    render: Duration,
+) {
+    let clock = state.frame_now();
     let material = state
         .render
         .as_ref()
@@ -176,6 +252,7 @@ pub fn frame_rendered(state: &mut crate::state::Cupertino, compose: Duration, re
         return;
     };
     let now = Instant::now();
+    let late = stats.shown(idx, clock);
     let (glass, counts) = material.unwrap_or((GlassTime::default(), stats.before));
     let record = FrameRecord {
         shown: now.saturating_duration_since(stats.start),
@@ -184,6 +261,8 @@ pub fn frame_rendered(state: &mut crate::state::Cupertino, compose: Duration, re
         glass,
         blurred: counts.backdrop_misses - stats.before.backdrop_misses,
         reused: counts.backdrop_hits - stats.before.backdrop_hits,
+        late,
+        missed: missed_refreshes(late, stats.refresh),
         latency: stats.latency.presented(now),
     };
     stats.write(&record);
@@ -234,6 +313,44 @@ mod tests {
         l.input(t0 + ms(500));
         l.commit(t0 + ms(504));
         assert_eq!(l.presented(t0 + ms(508)), (Some(ms(8)), Some(ms(8))));
+    }
+
+    #[test]
+    fn a_frame_shown_within_a_refresh_of_being_owed_misses_none_and_a_rest_owes_nothing() {
+        let refresh = Duration::from_micros(8333);
+        assert_eq!(missed_refreshes(ms(3), refresh), 0);
+        assert_eq!(missed_refreshes(ms(8), refresh), 0);
+        assert_eq!(missed_refreshes(ms(9), refresh), 1);
+        assert_eq!(missed_refreshes(ms(30), refresh), 3);
+        let mut owed = Vec::<Option<Duration>>::new();
+        let mut owe = |idx: usize, due: Duration| {
+            if owed.len() <= idx {
+                owed.resize(idx + 1, None);
+            }
+            owed[idx] = Some(owed[idx].map_or(due, |o: Duration| o.min(due)));
+            owed[idx]
+        };
+        // owed from the first time it was due, however often the loop looks again
+        assert_eq!(owe(0, ms(100)), Some(ms(100)));
+        assert_eq!(owe(0, ms(104)), Some(ms(100)));
+    }
+
+    #[test]
+    fn the_recorder_counts_lateness_from_when_the_frame_was_first_owed() {
+        let path = std::env::temp_dir().join(format!("frame-stats-{}.txt", std::process::id()));
+        let mut stats =
+            FrameStats::create(&path, "test", Duration::from_micros(8333), Instant::now()).unwrap();
+        stats.owe(0, ms(100));
+        stats.owe(0, ms(104));
+        assert_eq!(stats.shown(0, ms(120)), ms(20));
+        // nothing owed since: a frame drawn after a rest is not late
+        assert_eq!(stats.shown(0, ms(900)), Duration::ZERO);
+        // another output keeps its own debt
+        stats.owe(1, ms(50));
+        assert_eq!(stats.shown(0, ms(60)), Duration::ZERO);
+        assert_eq!(stats.shown(1, ms(60)), ms(10));
+        drop(stats);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

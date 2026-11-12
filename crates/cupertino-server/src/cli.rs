@@ -339,6 +339,7 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
     }
     for (t, action) in cli.actions.iter().copied() {
         schedule(event_loop, t, move |state| {
+            crate::frame_stats::note_input(state);
             let ctx = state.action_context();
             let plan = translate_action(action, &ctx);
             state.execute_plan(plan);
@@ -486,19 +487,41 @@ fn start_frame_stats(
     let Some(crate::backend::Backend::Headless(h)) = state.backend.as_mut() else {
         return Err(anyhow!("--frame-stats needs the headless backend"));
     };
-    let renderer = h
+    use smithay::backend::renderer::gles::ffi;
+    let text = |gl: &ffi::Gles2, name| unsafe {
+        let s = gl.GetString(name);
+        if s.is_null() {
+            String::new()
+        } else {
+            std::ffi::CStr::from_ptr(s.cast())
+                .to_string_lossy()
+                .into_owned()
+        }
+    };
+    let (renderer, extensions) = h
         .renderer
-        .with_context(|gl| unsafe {
-            let name = gl.GetString(smithay::backend::renderer::gles::ffi::RENDERER);
-            if name.is_null() {
-                String::from("unknown")
-            } else {
-                std::ffi::CStr::from_ptr(name.cast())
-                    .to_string_lossy()
-                    .into_owned()
-            }
-        })
-        .unwrap_or_else(|_| "unknown".into());
+        .with_context(|gl| (text(gl, ffi::RENDERER), text(gl, ffi::EXTENSIONS)))
+        .unwrap_or_default();
+    // the GPU times each glass pass when it can; otherwise the passes are timed by waiting for the GPU around each
+    let gpu_timers = extensions
+        .split_whitespace()
+        .any(|e| e == "GL_EXT_disjoint_timer_query");
+    if let Some(material) = state.render.as_ref().and_then(|r| r.material.as_ref()) {
+        material.borrow_mut().gpu_timers = gpu_timers;
+    }
+    let renderer = if renderer.is_empty() {
+        "unknown".into()
+    } else {
+        renderer
+    };
+    let renderer = format!(
+        "{renderer} ({})",
+        if gpu_timers {
+            "glass timed by GPU timer queries"
+        } else {
+            "glass timed by waiting for the GPU"
+        }
+    );
     let refresh = Duration::from_secs_f64(1000.0 / f64::from(refresh_mhz.max(1000)));
     state.frame_stats = Some(
         crate::frame_stats::FrameStats::create(path, &renderer, refresh, start)

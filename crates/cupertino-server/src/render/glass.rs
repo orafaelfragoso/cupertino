@@ -850,7 +850,7 @@ impl MaterialGl {
     /// # Safety
     /// Must be called with the renderer's context current (inside `GlesFrame::with_context`).
     pub unsafe fn draw_glass(&mut self, gl: &ffi::Gles2, p: &GlassDraw<'_>) -> Result<(), String> {
-        if !self.timing {
+        if !self.timing || self.gpu_timers {
             return self.draw_glass_now(gl, p);
         }
         gl.Finish();
@@ -897,7 +897,8 @@ impl MaterialGl {
             }
             None => {
                 self.stats.backdrop_misses += 1;
-                let blurring = self.timing.then(std::time::Instant::now);
+                let blurring = (self.timing && !self.gpu_timers).then(std::time::Instant::now);
+                self.timer_begin(gl, true);
                 let within = p.glass.within.and_then(|w| {
                     let w = to_physical_rect(w, Scale::from(f64::from(p.scale)));
                     framebuffer_rect(&p.projection, viewport, w)
@@ -910,9 +911,11 @@ impl MaterialGl {
                     &p.glass.container,
                     p.scale,
                 ) else {
+                    self.timer_end(gl);
                     saved.restore(gl);
                     return Err("glass backdrop processing failed (framebuffer incomplete?)".into());
                 };
+                self.timer_end(gl);
                 if let Some(blurring) = blurring {
                     gl.Finish();
                     self.glass_time.blur += blurring.elapsed();
@@ -941,6 +944,7 @@ impl MaterialGl {
         let target = [viewport[2] as f32, viewport[3] as f32];
         let uniform = GlassUniform::new(&p.glass.container, p.scale, uv, quad, target, p.opacity);
 
+        self.timer_begin(gl, false);
         gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, saved.draw_fbo as GLuint);
         gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, saved.read_fbo as GLuint);
         gl.Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
@@ -984,6 +988,7 @@ impl MaterialGl {
             let t = self.free.remove(0);
             self.destroy_target(gl, t);
         }
+        self.timer_end(gl);
         saved.restore(gl);
         Ok(())
     }

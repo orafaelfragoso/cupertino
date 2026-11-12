@@ -19,15 +19,17 @@ session per refresh rate drives each scenario in turn, with input at the display
 For each scenario the table reports:
   frames    frames shown in the scenario
   fps       frames per second of the scenario
-  int p50/p95/max  the interval between frames shown, in ms
-  missed    refreshes passed with no new frame (an interval of n refreshes misses n - 1) while the scenario moved
+  int p50/p95/max  the interval between frames shown, in ms (rests, where nothing changes, show here too)
+  missed    refreshes that passed while the output owed a frame (a change or an animation step was due) and showed
+            none: a frame shown more than a refresh after it was due; rests owe nothing and count as no miss
   work p50/p95/max  compose + render time of a frame, GPU included, in ms
   over      frames whose work exceeded the refresh budget (16.67 ms at 60 Hz, 8.33 ms at 120 Hz)
-  glass p95 time of the glass passes in a frame, in ms
+  glass p95 GPU time of the glass passes in a frame, in ms (by GPU timer queries when the device has them)
   blur/f    glass backdrops blurred again per frame; reuse/f backdrops reused per frame
   in lat    input to the next frame shown, p50/p95 ms (what the server moves itself)
   app lat   input to the first frame after a client answered it, p50/p95 ms
 The device that rendered is printed above each table: a software rasteriser (llvmpipe) shows there when no GPU is used.
+Input latency counts scripted actions (the overview and launcher shortcuts) as inputs too.
 """
 import json
 import os
@@ -157,10 +159,10 @@ def summarise(refresh: float, rows: list[list], spans: list) -> dict[str, dict]:
         frames = [r for r in rows if a <= r[0] / 1e6 <= b]
         shown = [r[0] / 1e6 for r in frames]
         ints = [(y - x) * 1e3 for x, y in zip(shown, shown[1:])]
-        missed = sum(max(0, round(i / (refresh * 1e3)) - 1) for i in ints)
+        missed = sum(r[8] for r in frames)
         work = [(r[1] + r[2]) / 1e3 for r in frames]
-        lat_in = [r[7] / 1e3 for r in frames if r[7] is not None]
-        lat_app = [r[8] / 1e3 for r in frames if r[8] is not None]
+        lat_in = [r[9] / 1e3 for r in frames if r[9] is not None]
+        lat_app = [r[10] / 1e3 for r in frames if r[10] is not None]
         n = max(1, len(frames))
         out[name] = {
             "frames": len(frames),

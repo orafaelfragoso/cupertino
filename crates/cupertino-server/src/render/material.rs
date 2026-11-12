@@ -157,8 +157,13 @@ pub struct MaterialGl {
     cache: Vec<CachedBackdrop>,
     tick: u64,
     pub stats: MaterialStats,
-    /// Time the glass passes, the GPU waited for (the frame-rate benchmark only: waiting stalls the pipeline).
+    /// Time the glass passes (the frame-rate benchmark only): with GPU timer queries ([`MaterialGl::gpu_timers`]) the
+    /// GPU measures each pass; without them the GPU is waited for around each, which stalls the pipeline.
     pub timing: bool,
+    /// The context has GPU timer queries.
+    pub gpu_timers: bool,
+    /// The timer queries of the passes timed and not yet read.
+    timers: PassTimers,
     /// What the glass passes took since the benchmark last cleared it.
     pub glass_time: crate::frame_stats::GlassTime,
     failure: Option<String>,
@@ -166,6 +171,18 @@ pub struct MaterialGl {
 }
 
 pub type SharedMaterial = Rc<RefCell<MaterialGl>>;
+
+/// `GL_TIME_ELAPSED_EXT` of the timer query extension.
+const TIME_ELAPSED: GLenum = 0x88BF;
+
+/// The benchmark's GPU timer queries.
+#[derive(Debug, Default)]
+struct PassTimers {
+    free: Vec<GLuint>,
+    /// Ended queries and whether each timed a backdrop blur.
+    pending: Vec<(GLuint, bool)>,
+    open: Option<(GLuint, bool)>,
+}
 
 unsafe fn compile(gl: &ffi::Gles2, kind: GLenum, src: &str) -> Result<GLuint, String> {
     let sh = gl.CreateShader(kind);
@@ -357,6 +374,8 @@ impl MaterialGl {
             tick: 0,
             stats: MaterialStats::default(),
             timing: false,
+            gpu_timers: false,
+            timers: PassTimers::default(),
             glass_time: Default::default(),
             failure: None,
             glass: glass::GlassGl::default(),
@@ -450,6 +469,8 @@ impl MaterialGl {
             tick: 0,
             stats: MaterialStats::default(),
             timing: false,
+            gpu_timers: false,
+            timers: PassTimers::default(),
             glass_time: Default::default(),
             failure: None,
             glass: glass::GlassGl::default(),
@@ -667,7 +688,7 @@ impl MaterialGl {
     /// # Safety
     /// Must be called with the renderer's context current (inside `GlesFrame::with_context`).
     pub unsafe fn draw(&mut self, gl: &ffi::Gles2, p: &DrawParams<'_>) -> Result<(), String> {
-        if !self.timing {
+        if !self.timing || self.gpu_timers {
             return self.draw_now(gl, p);
         }
         gl.Finish();
@@ -710,8 +731,10 @@ impl MaterialGl {
                     let old = self.cache.swap_remove(i);
                     self.free.push(old.target);
                 }
-                let blurring = self.timing.then(std::time::Instant::now);
+                let blurring = (self.timing && !self.gpu_timers).then(std::time::Instant::now);
+                self.timer_begin(gl, true);
                 let processed = self.process_backdrop(gl, p, src_fbo);
+                self.timer_end(gl);
                 if let Some(blurring) = blurring {
                     gl.Finish();
                     self.glass_time.blur += blurring.elapsed();
@@ -746,6 +769,7 @@ impl MaterialGl {
             return Ok(());
         }
         let backdrop_tex = self.cache[idx].target.tex;
+        self.timer_begin(gl, false);
 
         let progs = self.progs.as_ref().unwrap();
         let mut region: RegionParams = bytemuck::Zeroable::zeroed();
@@ -821,8 +845,49 @@ impl MaterialGl {
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
             self.stats.composites += 1;
         }
+        self.timer_end(gl);
         saved.restore(gl);
         Ok(())
+    }
+
+    /// Start timing a pass on the GPU (the benchmark with timer queries only); `blur` for a backdrop blur.
+    unsafe fn timer_begin(&mut self, gl: &ffi::Gles2, blur: bool) {
+        if !(self.timing && self.gpu_timers) || self.timers.open.is_some() {
+            return;
+        }
+        let q = self.timers.free.pop().unwrap_or_else(|| {
+            let mut q = 0;
+            gl.GenQueries(1, &mut q);
+            q
+        });
+        gl.BeginQuery(TIME_ELAPSED, q);
+        self.timers.open = Some((q, blur));
+    }
+
+    /// End the pass timed by [`MaterialGl::timer_begin`].
+    unsafe fn timer_end(&mut self, gl: &ffi::Gles2) {
+        if let Some(open) = self.timers.open.take() {
+            gl.EndQuery(TIME_ELAPSED);
+            self.timers.pending.push(open);
+        }
+    }
+
+    /// Once the frame's GPU work finished: add what the timed passes took to [`MaterialGl::glass_time`].
+    ///
+    /// # Safety
+    /// Must be called with the renderer's context current.
+    pub unsafe fn collect_pass_times(&mut self, gl: &ffi::Gles2) {
+        self.timer_end(gl);
+        for (q, blur) in std::mem::take(&mut self.timers.pending) {
+            let mut ns: GLuint = 0;
+            gl.GetQueryObjectuiv(q, ffi::QUERY_RESULT, &mut ns);
+            let took = std::time::Duration::from_nanos(u64::from(ns));
+            if blur {
+                self.glass_time.blur += took;
+            }
+            self.glass_time.total += took;
+            self.timers.free.push(q);
+        }
     }
 
     /// Release all GL objects. Call with the renderer's context current.
@@ -843,6 +908,14 @@ impl MaterialGl {
                 }
             }
             gl.DeleteBuffers(2, bufs.as_ptr());
+            for q in self
+                .timers
+                .free
+                .drain(..)
+                .chain(self.timers.pending.drain(..).map(|(q, _)| q))
+            {
+                gl.DeleteQueries(1, &q);
+            }
             self.glass.destroy(gl);
         });
     }

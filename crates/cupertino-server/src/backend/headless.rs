@@ -354,8 +354,12 @@ pub fn render(state: &mut Cupertino) {
                 }
                 if timing {
                     // the GPU's work belongs to the frame's time: wait for it
-                    let _ = h.renderer.with_context(|gl| unsafe { gl.Finish() });
-                    crate::frame_stats::frame_rendered(state, compose, rendering.elapsed());
+                    let st = &*state;
+                    let _ = h.renderer.with_context(|gl| unsafe {
+                        gl.Finish();
+                        crate::frame_stats::collect_pass_times(st, gl);
+                    });
+                    crate::frame_stats::frame_rendered(state, idx, compose, rendering.elapsed());
                 }
             }
             state.process_screenshots(&mut h.renderer, idx);
@@ -377,6 +381,8 @@ pub fn step(
         .dispatch(Some(timeout), state)
         .map_err(|e| anyhow!("event loop: {e}"))?;
     state.tick();
+    let now = state.frame_now();
+    crate::frame_stats::note_owed(state, now);
     if state.wants_frames() {
         render(state);
     }

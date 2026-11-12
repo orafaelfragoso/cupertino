@@ -16,6 +16,8 @@ session per refresh rate drives each scenario in turn, with input at the display
   overview       the overview opens and closes
   launcher       the launcher opens and closes, twice
   files scroll   Files is raised and its list scrolled with two fingers, down and up
+  context menu   the desktop's menu opens at a right click, the pointer slides down its rows onto Sort By and rests
+                 there until the submenu opens, and Escape closes both; twice
 For each scenario the table reports:
   frames    frames shown in the scenario
   fps       frames per second of the scenario
@@ -48,6 +50,8 @@ DOCK_Y = 760
 SETTINGS_TITLE = (430, 50)
 FILES_VISIBLE = (1056, 400)
 FILES_LIST = (800, 350)
+DESKTOP_MENU = (40, 300)
+MENU_ROWS = ((80, 317), (80, 422))
 
 
 def scenarios(hz: float) -> tuple[list[str], list[tuple[str, float, float]], float]:
@@ -104,6 +108,15 @@ def scenarios(hz: float) -> tuple[list[str], list[tuple[str, float, float]], flo
         flags += ["--scroll", f"{s + steps * dt:.4f}:{lx},{ly}:0"]
     spans.append(("files scroll", t, t + 2 * (steps + 1) * dt))
     t += 4.0
+    # context menu: the desktop's, then down its rows onto Sort By, a rest long enough for the submenu, Escape
+    start = t
+    for _ in range(2):
+        flags += ["--right-click", f"{t:.4f}:{DESKTOP_MENU[0]},{DESKTOP_MENU[1]}"]
+        end = path(list(MENU_ROWS), t + 0.4, 0.3)
+        flags += ["--key", f"{end + 0.8:.4f}:Escape", "--key", f"{end + 1.0:.4f}:Escape"]
+        t = end + 1.4
+    spans.append(("context menu", start, t))
+    t += 0.6
     return flags, spans, t
 
 

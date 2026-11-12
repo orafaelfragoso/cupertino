@@ -2,7 +2,7 @@
 //! material, whose enabled items are one roving group (the arrows, Home, End and typed characters move between them,
 //! Return or Space chooses, Escape or a press outside closes).
 
-use cupertino_kit::controls::{Menu, MenuAnchor, MenuItem as KitItem, MenuStyle};
+use cupertino_kit::controls::{Menu, MenuAnchor, MenuItem as KitItem, MenuStyle, MenuTail};
 use cupertino_kit::core::{Key, Window, WindowKey};
 use cupertino_kit::geometry::{Point, Rect};
 
@@ -14,8 +14,13 @@ use crate::menu::{MenuItem, GAP};
 /// The corner radius of a tile menu's panel, and the least width it has.
 pub const RADIUS: f64 = 14.5;
 pub const MIN_WIDTH: f64 = 110.0;
-/// How far a tile menu's panel stands above the bar's top edge.
+/// How far a panel without a pointer stands above the bar's top edge.
 pub const PANEL_GAP: f64 = 12.5;
+/// How far a tile menu's pointer tip stands above the bar's top edge, and the pointer's width and depth: the panel's
+/// bottom edge is 12.5 points above the bar.
+pub const TIP_GAP: f64 = 3.0;
+const TAIL_WIDTH: f64 = 14.0;
+const TAIL_DEPTH: f64 = 9.5;
 /// How far the panel's leading edge is to the leading side of the tile's middle: the panel stands off to the trailing
 /// side of the icon.
 pub const TAIL_FROM_EDGE: f64 = 27.5;
@@ -57,7 +62,7 @@ pub fn windows<M: Clone + 'static>(view: MenuView<'_>, input: fn(Input) -> M) ->
         // above the bar, its leading edge to the leading side of the icon's middle
         Orientation::Bottom => MenuAnchor::Above {
             key: Key::from(MENU_ANCHOR),
-            gap: PANEL_GAP,
+            gap: TIP_GAP,
             dx: -TAIL_FROM_EDGE,
         },
         Orientation::Left => MenuAnchor::At(Point::new(a.x() + a.width() + GAP, a.y())),
@@ -79,6 +84,11 @@ pub fn windows<M: Clone + 'static>(view: MenuView<'_>, input: fn(Input) -> M) ->
         MenuStyle {
             radius: RADIUS,
             min_width: MIN_WIDTH,
+            tail: (view.orientation == Orientation::Bottom).then_some(MenuTail {
+                from_leading: TAIL_FROM_EDGE,
+                width: TAIL_WIDTH,
+                depth: TAIL_DEPTH,
+            }),
         },
     )
 }

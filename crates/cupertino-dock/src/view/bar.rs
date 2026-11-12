@@ -15,7 +15,7 @@ use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, LayoutSpec, Measured};
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
 use cupertino_kit::render::{FillRule, GradientStop, Paint, PaintOp, PathVerb, Shape};
-use cupertino_kit::theme::{Surface, GLASS_MATERIAL};
+use cupertino_kit::theme::{Surface, BAR_GLASS_MATERIAL, GLASS_MATERIAL};
 
 use super::paint::{self, Root};
 use super::{IconSet, Input, BAR_APP_ID, BAR_TITLE};
@@ -23,8 +23,8 @@ use crate::config::Orientation;
 use crate::tiles::TileKind;
 
 /// The surface the bar's material is: the one place to change to give the bar another material. The bar's surface is
-/// glass with the bar's shape (in the light appearance a light veil over a blurred backdrop, so the bar stays dark and
-/// clear), and with Reduce Transparency a dark (or pale) body in the colour of the wallpaper under it.
+/// bar glass with the bar's shape (clear glass with a small lift of white in both appearances, so the wallpaper stays
+/// readable through it), and with Reduce Transparency a dark (or pale) body in the colour of the wallpaper under it.
 pub const BAR_SURFACE: Surface = Surface::DockBar;
 
 /// Diameter of the running indicator in points.
@@ -289,7 +289,10 @@ impl<M: Clone + 'static> Widget<M> for BarMaterial {
 
 /// Whether the bar's surface is glass, which lights its own rim along the top and the bottom.
 pub(crate) fn lit_by_glass(cx: &PaintCx<'_>) -> bool {
-    cx.env().theme.surface(BAR_SURFACE).material == Some(GLASS_MATERIAL)
+    matches!(
+        cx.env().theme.surface(BAR_SURFACE).material,
+        Some(GLASS_MATERIAL | BAR_GLASS_MATERIAL)
+    )
 }
 
 /// The bar's fine edge over its material or fill, in the bar's rectangle `all`, and inside it the light rim; neither

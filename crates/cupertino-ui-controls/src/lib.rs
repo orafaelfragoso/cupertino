@@ -856,6 +856,18 @@ pub struct MenuStyle {
     pub radius: f64,
     /// The least width of a panel in points.
     pub min_width: f64,
+    /// A pointer under the first panel, joined to it as one piece of glass.
+    pub tail: Option<MenuTail>,
+}
+
+/// The pointer of a menu panel that points at what opened it: a small piece of the panel's glass under its bottom edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MenuTail {
+    /// From the panel's leading edge to the middle of the pointer, in points.
+    pub from_leading: f64,
+    /// The pointer's width where it leaves the panel and its depth below the panel, in points.
+    pub width: f64,
+    pub depth: f64,
 }
 
 impl Default for MenuStyle {
@@ -863,6 +875,7 @@ impl Default for MenuStyle {
         MenuStyle {
             radius: menu::PANEL_RADIUS,
             min_width: menu::MIN_WIDTH,
+            tail: None,
         }
     }
 }

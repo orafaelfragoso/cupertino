@@ -13,7 +13,7 @@ use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::{
     ButtonRole, ButtonStyle, ContextMenu, Handler, InlinePopUpButton, Menu, MenuAnchor, MenuItem,
-    MenuStyle, PopUpButton, PullDownButton,
+    MenuStyle, MenuTail, PopUpButton, PullDownButton,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_menu_model::tracking::{
@@ -24,9 +24,9 @@ use cupertino_theme::ControlFamily;
 use cupertino_typeahead::TypeAhead;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActivationSource, Change, Checked, CommandRegistry,
-    ControlState, Element, Environment, Event, EventCx, FocusTarget, Key, MeasureCx, PaintCx,
-    Phase, Popup, PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
-    WindowKey,
+    ControlState, Element, Environment, Event, EventCx, FocusTarget, Glass, Key, MeasureCx,
+    PaintCx, Phase, Popup, PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window,
+    WindowBackground, WindowKey,
 };
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
@@ -330,6 +330,7 @@ impl<M: Clone + 'static> Menu<M> {
                 typing: Rc::clone(&typing),
                 flash: Rc::clone(&flash),
                 radius: style.radius,
+                tailed: depth == 0 && style.tail.is_some(),
                 children: rows(
                     &items,
                     style.min_width,
@@ -343,6 +344,7 @@ impl<M: Clone + 'static> Menu<M> {
                 ),
             };
             let key = level_key(&key, depth);
+            let tailed = depth == 0 && style.tail.is_some();
             windows.push(Window {
                 key: key.clone(),
                 spec: WindowSpec {
@@ -357,12 +359,24 @@ impl<M: Clone + 'static> Menu<M> {
                 },
                 shortcuts: CommandRegistry::new(),
                 on_close: None,
-                background: WindowBackground::Surface {
-                    surface: Surface::Menu,
-                    radius: style.radius,
-                    alpha: 1.0,
+                background: if tailed {
+                    WindowBackground::None
+                } else {
+                    WindowBackground::Surface {
+                        surface: Surface::Menu,
+                        radius: style.radius,
+                        alpha: 1.0,
+                    }
                 },
-                content: Element::new(panel),
+                content: match style.tail.filter(|_| tailed) {
+                    Some(tail) => Element::new(Callout {
+                        children: vec![
+                            Element::new(panel).key("panel"),
+                            Element::new(TailRow { tail }).key("tail"),
+                        ],
+                    }),
+                    None => Element::new(panel),
+                },
                 popup: Some(Popup {
                     parent,
                     anchor,
@@ -602,6 +616,8 @@ struct Panel<M> {
     flash: Flashing<M>,
     /// The panel's corner radius.
     radius: f64,
+    /// The panel is glass of its own, joined to its pointer's ([`MenuTail`]); the window has no background.
+    tailed: bool,
     children: Vec<Element<M>>,
 }
 
@@ -1021,7 +1037,16 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
     /// The window paints the glass or, without the compositor's material, the opaque fill under it. The compositor
     /// draws the glass's edge; over the opaque fill the panel draws its own.
     fn paint(&self, _: &PanelState, cx: &mut PaintCx<'_>) {
-        if cx.window_backdrop() {
+        if self.tailed {
+            let size = cx.size();
+            let rect = Rect::new(0.0, 0.0, size.width, size.height);
+            if cx.glass(tail_glass().radius(self.radius)) {
+                return;
+            }
+            // without the compositor's material the panel paints the menu's opaque fill itself
+            let fill = cx.env().theme.surface(Surface::Menu).fill;
+            look::fill(cx, rect, self.radius, fill);
+        } else if cx.window_backdrop() {
             return;
         }
         let size = cx.size();
@@ -2076,5 +2101,174 @@ impl<M: Clone + 'static> Widget<M> for PullDownButton<M> {
                 cx.action(Action::Click);
             }
         }
+    }
+}
+
+/// The container the panel and its pointer share as glass, and how far their outlines blend into each other.
+const TAIL_CONTAINER: u32 = 1;
+const TAIL_BLEND: f64 = 8.0;
+
+fn tail_glass() -> Glass {
+    Glass::regular().container(TAIL_CONTAINER, TAIL_BLEND)
+}
+
+/// The content of a menu window with a pointer: the panel, and under it the row that holds the pointer.
+struct Callout<M> {
+    children: Vec<Element<M>>,
+}
+
+impl<M: Clone + 'static> Widget<M> for Callout<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Stack {
+            axis: Axis::Vertical,
+            spacing: 0.0,
+            align: Align::Stretch,
+            justify: Justify::Start,
+        })
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+}
+
+/// The row under the panel that holds its pointer at [`MenuTail::from_leading`].
+struct TailRow {
+    tail: MenuTail,
+}
+
+impl<M: Clone + 'static> Widget<M> for TailRow {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            insets: Insets::new(
+                0.0,
+                self.tail.from_leading - self.tail.width / 2.0,
+                0.0,
+                0.0,
+            ),
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: 0.0,
+                align: Align::Start,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        vec![Element::new(TailShape { tail: self.tail }).key("shape")]
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.tail != old.tail {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+}
+
+/// The pointer itself: a small capsule of the panel's glass.
+struct TailShape {
+    tail: MenuTail,
+}
+
+impl<M: Clone + 'static> Widget<M> for TailShape {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.tail != old.tail {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(self.tail.width, self.tail.depth),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if !cx.glass(tail_glass().capsule()) {
+            let size = cx.size();
+            let fill = cx.env().theme.surface(Surface::Menu).fill;
+            let rect = Rect::new(0.0, 0.0, size.width, size.height);
+            look::fill(cx, rect, size.width.min(size.height) / 2.0, fill);
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
     }
 }

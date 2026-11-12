@@ -4,10 +4,10 @@
 //! little above the bar's top edge. It takes neither the pointer nor the keyboard.
 
 use cupertino_kit::core::{
-    Change, CommandRegistry, Element, Event, EventCx, Key, MeasureCx, PaintCx, Popup, PopupAnchor,
-    Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
+    Change, CommandRegistry, Element, Event, EventCx, Glass, Key, MeasureCx, PaintCx, Popup,
+    PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
-use cupertino_kit::geometry::{Insets, Point, Rect, Size};
+use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured,
 };
@@ -33,27 +33,18 @@ const STATUS_DROP: f64 = 14.0;
 const STATUS_SHARE: f32 = 0.6;
 /// The capsule's corner radius: half a one-line capsule, and a two-line capsule keeps it.
 pub const RADIUS: f64 = 13.0;
-/// The pointer under the capsule: its width at the capsule and its depth.
-pub const POINTER_WIDTH: f64 = 16.0;
+/// The pointer under the capsule: its width and its depth.
+pub const POINTER_WIDTH: f64 = 10.0;
 pub const POINTER_DEPTH: f64 = 6.5;
-/// How far the pointer's tip stands off what it points over: the bar's top edge.
-pub const GAP: f64 = 3.0;
-/// The veil over the blurred backdrop the pointer is painted in (the capsule's own is the compositor's material), in
-/// the light and the dark appearance.
-const VEIL: [Color; 2] = [
-    Color {
-        r: 1.0,
-        g: 1.0,
-        b: 1.0,
-        a: 0.5,
-    },
-    Color {
-        r: 1.0,
-        g: 1.0,
-        b: 1.0,
-        a: 0.12,
-    },
-];
+/// How far the capsule's bottom edge stands above the tile's top: the pointer's tip then stands 3 points above the
+/// bar's top edge, which lies about 10.5 points above the tile.
+pub const GAP: f64 = 13.5;
+/// How far a label beside a bar at the side of the output stands off its tile.
+const SIDE_GAP: f64 = 3.0;
+/// The glass container the capsule and its pointer share, and how far their outlines blend into each other in points:
+/// the pointer's sides curve out into the capsule's bottom edge as one piece of glass.
+const GLASS_CONTAINER: u32 = 1;
+const GLASS_BLEND: f64 = 6.0;
 /// The capsule's fill where the session shows no material (Reduce Transparency, Increase Contrast, no desktop
 /// effects), in the light and the dark appearance.
 const FILL: [Color; 2] = [
@@ -101,6 +92,13 @@ const TEXT: [Color; 2] = [
 ];
 const OUTLINE_WIDTH: f64 = 0.5;
 
+/// Asks for the label's glass under the node when the session shows materials; false where the label paints its own
+/// opaque fill (Reduce Transparency, Increase Contrast, no desktop effects).
+fn shown_on_glass(cx: &mut PaintCx<'_>, glass: Glass) -> bool {
+    cx.env().theme.surface(Surface::Tooltip).material.is_some()
+        && cx.glass(glass.container(GLASS_CONTAINER, GLASS_BLEND))
+}
+
 pub fn key() -> WindowKey {
     WindowKey(Key::from("tile-label"))
 }
@@ -127,7 +125,7 @@ pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) ->
         },
         Orientation::Left | Orientation::Right => PopupAnchor::Beside {
             key: Key::from(format!("tile-{}", view.tile)),
-            offset: Point::new(GAP, 0.0),
+            offset: Point::new(SIDE_GAP, 0.0),
         },
     };
     let pointer = view.orientation == Orientation::Bottom;
@@ -153,12 +151,18 @@ pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) ->
         background: WindowBackground::None,
         content: Element::new(LabelNode {
             pointer,
-            children: vec![Element::new(Body {
-                name: view.name.to_owned(),
-                status: view.status.map(str::to_owned),
-                pointer,
-            })
-            .key("body")],
+            children: {
+                let mut children = vec![Element::new(Body {
+                    name: view.name.to_owned(),
+                    status: view.status.map(str::to_owned),
+                    pointer,
+                })
+                .key("body")];
+                if pointer {
+                    children.push(Element::new(Pointer).key("pointer"));
+                }
+                children
+            },
         }),
         popup: Some(Popup {
             parent: view.parent,
@@ -168,28 +172,6 @@ pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) ->
         }),
         menus: None,
     }
-}
-
-/// The path of the pointer under a capsule `w` wide and `h` tall: its sides curve in to a rounded tip. It starts a
-/// little inside the capsule so no seam shows where they meet.
-fn pointer_path(w: f64, h: f64) -> Vec<PathVerb> {
-    let (mid, half) = (w / 2.0, POINTER_WIDTH / 2.0);
-    let (top, tip) = (h - 0.5, h + POINTER_DEPTH);
-    vec![
-        PathVerb::MoveTo(Point::new(mid - half, top)),
-        PathVerb::LineTo(Point::new(mid + half, top)),
-        PathVerb::CubicTo(
-            Point::new(mid + half * 0.45, h),
-            Point::new(mid + 1.5, tip),
-            Point::new(mid, tip),
-        ),
-        PathVerb::CubicTo(
-            Point::new(mid - 1.5, tip),
-            Point::new(mid - half * 0.45, h),
-            Point::new(mid - half, top),
-        ),
-        PathVerb::Close,
-    ]
 }
 
 /// The outline of a capsule `w` × `h` with, when `pointer`, the pointer under its middle: the shape painted where
@@ -260,16 +242,12 @@ impl<M: Clone + 'static> Widget<M> for LabelNode<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
-        let depth = if self.pointer { POINTER_DEPTH } else { 0.0 };
-        LayoutSpec {
-            insets: Insets::new(0.0, 0.0, depth, 0.0),
-            ..LayoutSpec::new(ContainerKind::Stack {
-                axis: Axis::Vertical,
-                spacing: 0.0,
-                align: Align::Start,
-                justify: Justify::Start,
-            })
-        }
+        LayoutSpec::new(ContainerKind::Stack {
+            axis: Axis::Vertical,
+            spacing: 0.0,
+            align: Align::Center,
+            justify: Justify::Start,
+        })
     }
 
     fn take_children(&mut self) -> Vec<Element<M>> {
@@ -308,7 +286,48 @@ impl<M: Clone + 'static> Widget<M> for LabelNode<M> {
     }
 }
 
-/// The capsule: the tooltip material under it (or its opaque fill), the pointer under it, and the text.
+/// The pointer under the capsule: a small piece of the label's glass that the capsule's glass blends into. Where the
+/// session shows no material the capsule paints the whole outline, pointer included, and this paints nothing.
+struct Pointer;
+
+impl<M: Clone + 'static> Widget<M> for Pointer {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(POINTER_WIDTH, POINTER_DEPTH),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        shown_on_glass(cx, Glass::regular().capsule());
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+}
+
+/// The capsule: the label's glass under it (or its opaque fill), the pointer under it, and the text.
 struct Body {
     name: String,
     status: Option<String>,
@@ -368,20 +387,9 @@ impl<M: Clone + 'static> Widget<M> for Body {
         let env = cx.env().clone();
         let mode = usize::from(paint::is_dark(&env));
         let (w, h) = (cx.size().width, cx.size().height);
-        let body = Rect::new(0.0, 0.0, w, h);
-        let shown = cx.material(Surface::Tooltip, RADIUS, 1.0);
-        if shown {
-            if self.pointer {
-                cx.push(PaintOp::Fill {
-                    shape: Shape::Path {
-                        verbs: pointer_path(w, h),
-                        fill_rule: FillRule::NonZero,
-                    },
-                    paint: Paint::Solid(VEIL[mode]),
-                });
-            }
-            paint::stroke(cx, body, RADIUS, OUTLINE_WIDTH, OUTLINE[mode]);
-        } else {
+        let shown = shown_on_glass(cx, Glass::regular().radius(RADIUS));
+        // the glass lights its own rim, along the top and the bottom
+        if !shown {
             let shape = Shape::Path {
                 verbs: outline(w, h, self.pointer),
                 fill_rule: FillRule::NonZero,

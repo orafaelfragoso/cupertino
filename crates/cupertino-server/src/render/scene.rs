@@ -1777,6 +1777,16 @@ fn popup_backdrop_elements(
     let mut glass = GlassGroups::default();
     for b in backdrops.iter().rev() {
         let alpha = b.alpha as f32 * opacity;
+        let joined = in_callout(backdrops, b);
+        if joined {
+            // a callout is one piece of glass: the glass lights its own rim, and no shape of it gets an outline
+            glass.add(b, out.len());
+            let (w, h) = (b.area.size.w, b.area.size.h);
+            if w.min(h) >= CALLOUT_SHADOW_MIN_SIDE {
+                out.extend(popup_shadow(p, b, &params, alpha));
+            }
+            continue;
+        }
         if b.glass.is_some() {
             // the light rim inside the glass, in front of it
             out.extend(inner_rim_item(
@@ -1811,33 +1821,62 @@ fn popup_backdrop_elements(
             p.scale,
             alpha,
         ));
-        let visual = cupertino_wm::Rect::new(
-            p.rect.x + b.area.loc.x,
-            p.rect.y + b.area.loc.y,
-            b.area.size.w,
-            b.area.size.h,
-        );
-        let plan = WindowPlan {
-            visual,
-            scale_x: 1.0,
-            scale_y: 1.0,
-            opacity: 1.0,
-            shadow: 1.0,
-            exact: true,
-            corner: None,
-            corner_cap: None,
-        };
-        out.extend(shadow_item(
-            p,
-            SceneKind::PopupShadow,
-            b.key,
-            &params,
-            &plan,
-            b.radius,
-            f64::from(alpha),
-        ));
+        out.extend(popup_shadow(p, b, &params, alpha));
     }
     glass.finish_popup(p, out, opacity)
+}
+
+/// The shortest side a shape of a callout has to be for the callout to cast the panel shadow under it: the label's
+/// capsule and a pointer cast none.
+const CALLOUT_SHADOW_MIN_SIDE: f64 = 40.0;
+
+/// Whether glass backdrop `b` joins at least one other glass backdrop of its surface in a container: the shapes of one
+/// callout, a panel and its pointer.
+fn in_callout(backdrops: &[BackdropArea], b: &BackdropArea) -> bool {
+    let Some(spec) = b.glass.filter(|g| g.container != 0) else {
+        return false;
+    };
+    backdrops
+        .iter()
+        .filter(|o| o.glass.is_some_and(|g| g.container == spec.container))
+        .count()
+        > 1
+}
+
+/// The panel shadow below popup backdrop `b`.
+fn popup_shadow(
+    p: &mut SceneParams<'_>,
+    b: &BackdropArea,
+    params: &cupertino_decorations::ShadowParams,
+    alpha: f32,
+) -> Vec<Piece> {
+    let visual = cupertino_wm::Rect::new(
+        p.rect.x + b.area.loc.x,
+        p.rect.y + b.area.loc.y,
+        b.area.size.w,
+        b.area.size.h,
+    );
+    let plan = WindowPlan {
+        visual,
+        scale_x: 1.0,
+        scale_y: 1.0,
+        opacity: 1.0,
+        shadow: 1.0,
+        exact: true,
+        corner: None,
+        corner_cap: None,
+    };
+    shadow_item(
+        p,
+        SceneKind::PopupShadow,
+        b.key,
+        params,
+        &plan,
+        b.radius,
+        f64::from(alpha),
+    )
+    .into_iter()
+    .collect()
 }
 
 /// Material pieces of committed backdrops, to go directly below the owning surface's pieces
@@ -1973,11 +2012,19 @@ fn glass_pieces(
         })
         .collect();
     let mut container = Container::new(shapes, spec.spacing as f32, mode);
+    // a callout (a panel and its pointer, a label and its pointer) is one piece of glass that lights its own rim, and a
+    // small one keeps the glass's face
+    let callout = members.len() > 1 && spec.container != 0;
     if popup {
-        // the popup's rim is drawn apart (`inner_rim_item`), lit all round: the glass's own would light its top and
-        // bottom twice
-        container.params.highlight.amount = 0.0;
-        if let Some(face) = popup_glass_face(&mode) {
+        if !callout {
+            // the popup's rim is drawn apart (`inner_rim_item`), lit all round: the glass's own would light its top
+            // and bottom twice
+            container.params.highlight.amount = 0.0;
+        }
+        let small = container
+            .bounds()
+            .is_some_and(|b| b[2].min(b[3]) < CALLOUT_SHADOW_MIN_SIDE as f32);
+        if let Some(face) = popup_glass_face(&mode).filter(|_| !(callout && small)) {
             container.params.face.fill = face;
         }
     }

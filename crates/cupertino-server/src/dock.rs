@@ -583,7 +583,9 @@ impl Cupertino {
         }
     }
 
-    /// Windows a dock lists: every mapped one, by id.
+    /// Windows a dock lists, by id: every mapped main window of an application. A window with a parent (a dialog, a
+    /// portal's chooser over another application) belongs to its parent's application and is not listed, and neither
+    /// is a window of the server's own connections or of a shell process.
     fn dock_feed(&self) -> BTreeMap<u32, WindowInfo> {
         let key = self.wm.key_window();
         self.wm
@@ -594,6 +596,7 @@ impl Cupertino {
                     LifecycleState::Created | LifecycleState::Closing | LifecycleState::Destroyed
                 )
             })
+            .filter(|w| w.parent.is_none() && !self.is_shell_window(w.id))
             .map(|w| {
                 let mut state = WindowState::empty();
                 state.set(
@@ -617,6 +620,17 @@ impl Cupertino {
                 )
             })
             .collect()
+    }
+
+    /// Whether window `id` belongs to one of the server's own connections or to a shell process.
+    fn is_shell_window(&self, id: WindowId) -> bool {
+        self.entry(id)
+            .and_then(|e| e.surface().client())
+            .and_then(|c| {
+                c.get_data::<crate::state::ClientState>()
+                    .map(|d| d.internal || !d.capabilities.is_empty())
+            })
+            .unwrap_or(false)
     }
 
     /// Note the application of every mapped window of an application client as resident for that client, and have

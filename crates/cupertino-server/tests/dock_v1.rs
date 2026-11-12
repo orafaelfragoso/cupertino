@@ -500,6 +500,23 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
     }
 }
 
+/// A dialog's surface: it takes its buffer on its first configure.
+impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for ClientState {
+    fn event(
+        state: &mut Self,
+        xdg: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        surface: &wl_surface::WlSurface,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let xdg_surface::Event::Configure { serial } = event {
+            xdg.ack_configure(serial);
+            attach_and_commit(&state.shm, surface, (200, 100), qh);
+        }
+    }
+}
+
 impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
     fn event(
         _: &mut Self,
@@ -541,6 +558,8 @@ enum Cmd {
     SetIcon(&'static str),
     /// An application destroys its toplevel and stays connected.
     CloseWindow,
+    /// An application maps a dialog, a toplevel whose parent is its window, of this application id.
+    OpenDialog(&'static str),
     /// The dock asks for exclusive keyboard interactivity (true) or for none, and commits.
     SetKeyboard(bool),
     /// The launcher's session object asks to bring the application of a desktop file ID forward, with a serial.
@@ -711,6 +730,7 @@ impl DockClient {
                 | Cmd::GtkRequestFocus(_)
                 | Cmd::SetIcon(_)
                 | Cmd::CloseWindow
+                | Cmd::OpenDialog(_)
                 | Cmd::OpenApp(..) => {
                     panic!("the dock does not act as an application window or the launcher")
                 }
@@ -826,6 +846,11 @@ fn icon_buffer(shm: &wl_shm::WlShm, qh: &QueueHandle<ClientState>) -> wl_buffer:
 /// An application with one 300x200 toplevel.
 fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
     let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+    spawn_app_on(stream, app_id)
+}
+
+/// [`spawn_app`] on the connection `stream`.
+fn spawn_app_on(stream: UnixStream, app_id: &'static str) -> TestClient {
     run_client(stream, move |globals, qh, status| {
         let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
         let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
@@ -844,6 +869,7 @@ fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
         let icon_shm = shm.clone();
         let qh = qh.clone();
         let mut kept = Vec::new();
+        let mut kept_dialogs = Vec::new();
         let state = ClientState {
             status: status.clone(),
             shm,
@@ -863,6 +889,15 @@ fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
                 icons.set_icon(&toplevel, Some(&icon));
                 window.commit();
                 kept.push((icon, buffer));
+            }
+            Cmd::OpenDialog(dialog_id) => {
+                let dialog = compositor.create_surface(&qh, ());
+                let xdg = wm_base.get_xdg_surface(&dialog, &qh, dialog.clone());
+                let child = xdg.get_toplevel(&qh, ());
+                child.set_parent(Some(&toplevel));
+                child.set_app_id(dialog_id.to_string());
+                dialog.commit();
+                kept_dialogs.push((dialog, xdg, child));
             }
             Cmd::CloseWindow => {
                 toplevel.destroy();
@@ -966,6 +1001,36 @@ fn the_first_group_lists_the_windows_and_the_bar_backdrop_is_the_docks_rectangle
     );
     assert_eq!(h.state.usable_area(out), Rect::new(0.0, 0.0, 1000.0, 600.0));
     assert_eq!(dock.error(), None);
+}
+
+/// The dock lists only the main windows of applications: a dialog (a window with a parent, here a portal's chooser
+/// over the editor) and a window of a shell process are left out.
+#[test]
+fn the_dock_lists_only_the_main_windows_of_applications() {
+    let Some(mut h) = Harness::new() else { return };
+    let app = spawn_app(h.socket_path(), "org.example.editor");
+    let id = h.mapped_window(1);
+    app.commands
+        .send(Cmd::OpenDialog("org.example.portal"))
+        .unwrap();
+    h.mapped_window(2);
+    let shell = cupertino_server::shell_connection::shell_process_connection(
+        &h.state.display_handle,
+        &[ShellRole::MenuBar],
+    )
+    .unwrap();
+    let _part = spawn_app_on(shell, "org.example.shellpart");
+    h.mapped_window(3);
+    let dock = DockClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&dock, 1);
+    let listed: Vec<(u32, String)> = dock.groups()[0]
+        .iter()
+        .filter_map(|e| match e {
+            DockEvent::Window { id, app_id, .. } => Some((*id, app_id.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(listed, [(id.0 as u32, "org.example.editor".to_owned())]);
 }
 
 #[test]

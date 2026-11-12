@@ -4,7 +4,7 @@
 //! pointer and the keys back as [`Input`], in the coordinates of the bar.
 
 use crate::controller::{Level, MenuController};
-use crate::extras::Passphrase;
+use crate::extras::{ExtraGlyph, Passphrase};
 use crate::fallback::HELP_SEARCH;
 use crate::feed::{Shared, StatusIcon, SCREEN_CAPTURE_SLOT};
 use crate::geom::{self, Point as BarPoint};
@@ -573,10 +573,7 @@ enum SlotLook {
     },
     PrivacyDot,
     Image(IconImage),
-    Symbol {
-        name: &'static str,
-        dimmed: bool,
-    },
+    Symbol(ExtraGlyph),
     Dot,
     ControlPanel,
     Nothing,
@@ -603,10 +600,7 @@ fn slot_look(slot: &Slot, scene: &BarScene<'_>) -> SlotLook {
         SlotKey::Status(id) if id == SCREEN_CAPTURE_SLOT => SlotLook::PrivacyDot,
         SlotKey::Status(id) => match scene.shared.status_icon(id) {
             Some(StatusIcon::Image(image)) => SlotLook::Image(image.clone()),
-            Some(StatusIcon::Symbol(glyph)) => SlotLook::Symbol {
-                name: glyph.symbol,
-                dimmed: glyph.dimmed,
-            },
+            Some(StatusIcon::Symbol(glyph)) => SlotLook::Symbol(glyph),
             Some(StatusIcon::Dot) => SlotLook::Dot,
             None => SlotLook::Nothing,
         },
@@ -733,6 +727,29 @@ fn color(c: Rgba) -> Color {
 
 fn faded(c: Rgba, alpha: f32) -> Rgba {
     [c[0], c[1], c[2], c[3] * alpha]
+}
+
+/// What a status slot showing `glyph` draws at `scale` device pixels per point in a bar of `palette`: the template symbol's
+/// name, its side in device pixels (the bar's status icon size) and its colour (the bar's text colour, faded when the
+/// item is dimmed).
+pub fn status_symbol(
+    glyph: ExtraGlyph,
+    palette: &MenuPalette,
+    scale: f64,
+) -> (&'static str, u32, Rgba) {
+    let alpha = if glyph.dimmed { DIMMED_ALPHA } else { 1.0 };
+    let px = (STATUS_ICON_PT * scale).ceil().max(1.0) as u32;
+    (glyph.symbol, px, faded(palette.text, alpha))
+}
+
+/// A status item's own icon as the bar draws it: a template (grey strokes only) in the bar's text colour, as the
+/// symbols are, and a coloured icon as it is.
+pub fn status_image(icon: &IconImage, palette: &MenuPalette) -> IconImage {
+    RowIcon {
+        template: is_template(&icon.image.pixels),
+        image: icon.clone(),
+    }
+    .tinted(palette.text)
 }
 
 fn fill(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, c: Rgba) {
@@ -1291,14 +1308,12 @@ impl<M> SlotNode<M> {
             SlotLook::PrivacyDot => {
                 circle(cx, middle, PRIVACY_DOT_PT / 2.0, palette.screen_capture)
             }
-            SlotLook::Image(icon) => image(cx, icon, middle, STATUS_ICON_PT),
-            SlotLook::Symbol { name, dimmed } => {
-                let alpha = if *dimmed { DIMMED_ALPHA } else { 1.0 };
-                let px = (STATUS_ICON_PT * scale).ceil().max(1.0) as u32;
-                let icon =
-                    cx.env()
-                        .icons
-                        .symbol(name, px, color(faded(palette.text, alpha)), false);
+            SlotLook::Image(icon) => {
+                image(cx, &status_image(icon, palette), middle, STATUS_ICON_PT)
+            }
+            SlotLook::Symbol(glyph) => {
+                let (name, px, tint) = status_symbol(*glyph, palette, scale);
+                let icon = cx.env().icons.symbol(name, px, color(tint), false);
                 image(cx, &icon, middle, STATUS_ICON_PT);
             }
             SlotLook::Dot => circle(

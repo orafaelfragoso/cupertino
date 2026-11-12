@@ -7,7 +7,7 @@
 
 use crate::dbus::sni::{self, StatusItem};
 use crate::desktop::AppName;
-use crate::extras::{ExtraGlyph, ExtraKind, Extras, FrontApp, SystemRow};
+use crate::extras::{tray_glyph, ExtraGlyph, ExtraKind, Extras, FrontApp, SystemRow};
 use crate::fallback::{self, Chords, FallbackAction, WindowRow};
 use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier};
 use crate::layout::{BarContent, StatusEntry, PRIVACY_DOT_PT, STATUS_ICON_PT};
@@ -121,10 +121,13 @@ impl Shared {
                     .map_or(StatusIcon::Dot, StatusIcon::Symbol)
             });
         }
-        self.status
-            .iter()
-            .find(|s| s.item.id == id)
-            .map(|s| s.icon.as_ref().map_or(StatusIcon::Dot, StatusIcon::Image))
+        self.status.iter().find(|s| s.item.id == id).map(|s| {
+            // an item standing for one of the bar's radios draws the bar's own symbol
+            match tray_glyph(&s.item.app_id, s.item.current_icon_name()) {
+                Some(glyph) => StatusIcon::Symbol(glyph),
+                None => s.icon.as_ref().map_or(StatusIcon::Dot, StatusIcon::Image),
+            }
+        })
     }
 
     /// A menu tree arrived from an exporter. Trees nobody asked for, or that no bar uses any
@@ -1107,6 +1110,174 @@ mod tests {
                 status_icon_px(2.0)
             ),
             (16, 24, 32)
+        );
+    }
+
+    /// Every radio and Focus item, the bar's own and a third-party applet's alike, draws a template symbol of the asset
+    /// directory at the bar's status icon size in the text colour of the bar's tone, dark text over a light wallpaper and
+    /// light text over a dark one.
+    #[test]
+    fn every_extra_draws_a_template_symbol_at_the_bar_size_in_the_bar_tint() {
+        use crate::extras::{BluetoothState, FocusState, SYMBOL_NAMES};
+        use crate::tone::{BarTone, MenuPalette};
+        let mut shared = Shared::default();
+        shared.extras.wifi = Some(WifiState {
+            enabled: true,
+            networks: Vec::new(),
+        });
+        shared.extras.bluetooth = Some(BluetoothState {
+            powered: true,
+            devices: Vec::new(),
+        });
+        shared.extras.focus = Some(FocusState {
+            active: true,
+            lifetimes: Vec::new(),
+        });
+        shared.extras.battery = Some(BatteryState {
+            percent: 50,
+            charging: false,
+            on_battery: true,
+        });
+        // the network and Bluetooth applets of a session without the bar's own services, as their tray items report
+        for (id, app, icon) in [
+            (
+                ":1.7/org/ayatana/NotificationItem/nm_applet",
+                "nm-applet",
+                "nm-signal-75",
+            ),
+            (":1.8/org/blueman/sni", "blueman", "blueman-tray"),
+        ] {
+            shared.set_status(StatusState {
+                item: StatusItem {
+                    id: id.into(),
+                    app_id: app.into(),
+                    icon_name: icon.into(),
+                    status: ItemStatus::Active,
+                    ..StatusItem::default()
+                },
+                // the icon theme's own picture, which the bar does not draw for these items
+                icon: Some(crate::view::icon_image(&Pixmap::new(4, 4).unwrap())),
+                menu: None,
+            });
+        }
+        let pack = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/assets/cupertino");
+        let (assets, _) = cupertino_assets::Assets::read_pack(std::path::Path::new(pack)).unwrap();
+        let appearance = MenuPalette::new(false);
+        let slots = [
+            ("extra:wifi", "symbol.wifi"),
+            ("extra:bluetooth", "symbol.bluetooth"),
+            ("extra:focus", "symbol.moon"),
+            ("extra:battery", "symbol.battery"),
+            (":1.7/org/ayatana/NotificationItem/nm_applet", "symbol.wifi"),
+            (":1.8/org/blueman/sni", "symbol.bluetooth"),
+        ];
+        for (slot, symbol) in slots {
+            let Some(StatusIcon::Symbol(glyph)) = shared.status_icon(slot) else {
+                panic!("{slot} draws no symbol");
+            };
+            assert_eq!(glyph.symbol, symbol, "{slot}");
+            assert!(SYMBOL_NAMES.contains(&glyph.symbol), "{slot}");
+            for scale in [1.0, 2.0] {
+                for tone in [BarTone::DarkText, BarTone::LightText] {
+                    let palette = tone.palette(appearance);
+                    let (name, px, tint) = crate::view::status_symbol(glyph, &palette, scale);
+                    assert_eq!(name, symbol);
+                    assert_eq!(px, status_icon_px(scale), "{slot} at {scale}x");
+                    // the bar's text colour; a dimmed item (Wi-Fi without a joined network) fades it
+                    assert_eq!(tint[..3], palette.text[..3], "{slot} in {tone:?}");
+                    if glyph.dimmed {
+                        assert!(tint[3] < palette.text[3], "{slot} in {tone:?}");
+                    } else {
+                        assert_eq!(tint[3], palette.text[3], "{slot} in {tone:?}");
+                    }
+                }
+            }
+            // the checkout's pack gives it as a template symbol, not a themed picture or a placeholder
+            let name = cupertino_assets::IconName::new(symbol).unwrap();
+            assert!(
+                assets
+                    .icon_sources(&name, status_icon_px(2.0))
+                    .iter()
+                    .any(|(_, source)| matches!(source, cupertino_assets::IconSource::Symbol(_))),
+                "{slot}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tray_item_standing_for_a_radio_is_dimmed_while_off_or_unlinked() {
+        let glyph = |id: &str, icon: &str| tray_glyph(id, icon).map(|g| (g.symbol, g.dimmed));
+        assert_eq!(
+            glyph("nm-applet", "nm-signal-100-secure"),
+            Some(("symbol.wifi", false))
+        );
+        assert_eq!(
+            glyph("nm-applet", "nm-no-connection"),
+            Some(("symbol.wifi", true))
+        );
+        assert_eq!(
+            glyph("nm-applet", "nm-device-wired"),
+            Some(("symbol.wifi", true))
+        );
+        assert_eq!(
+            glyph("nm-applet", "nm-stage01-connecting"),
+            Some(("symbol.wifi", true))
+        );
+        assert_eq!(
+            glyph("", "network-wireless-signal-good-symbolic"),
+            Some(("symbol.wifi", false))
+        );
+        assert_eq!(
+            glyph("", "network-wireless-offline-symbolic"),
+            Some(("symbol.wifi", true))
+        );
+        assert_eq!(
+            glyph("blueman", "blueman-tray"),
+            Some(("symbol.bluetooth", false))
+        );
+        assert_eq!(
+            glyph("blueman", "blueman-tray-active"),
+            Some(("symbol.bluetooth", false))
+        );
+        assert_eq!(
+            glyph("blueman", "blueman-tray-disabled"),
+            Some(("symbol.bluetooth", true))
+        );
+        assert_eq!(
+            glyph("", "bluetooth-disabled-symbolic"),
+            Some(("symbol.bluetooth", true))
+        );
+        assert_eq!(glyph("printer-applet", "printer"), None);
+        assert_eq!(glyph("steam", "steam_tray_mono"), None);
+    }
+
+    /// A tray item's own icon in grey strokes takes the bar's text colour; a coloured one keeps its colours.
+    #[test]
+    fn a_template_tray_icon_takes_the_bar_tint_and_a_coloured_one_keeps_its_own() {
+        use crate::tone::{BarTone, MenuPalette};
+        let solid = |rgba: [u8; 4]| {
+            let mut p = Pixmap::new(4, 4).unwrap();
+            for px in p.data_mut().as_chunks_mut::<4>().0 {
+                *px = rgba;
+            }
+            crate::view::icon_image(&p)
+        };
+        let palette = BarTone::DarkText.palette(MenuPalette::new(true));
+        let text = palette.text.map(|v| (v * 255.0).round() as u8);
+        let white = crate::view::status_image(&solid([255, 255, 255, 255]), &palette);
+        let first = &white.image.pixels[..4];
+        let a = f32::from(first[3]) / 255.0;
+        for c in 0..3 {
+            let expected = (f32::from(text[c]) * a).round() as i32;
+            assert!(
+                (i32::from(first[c]) - expected).abs() <= 1,
+                "{first:?} {text:?}"
+            );
+        }
+        let red = solid([200, 0, 0, 255]);
+        assert_eq!(
+            crate::view::status_image(&red, &palette).image.pixels,
+            red.image.pixels
         );
     }
 }

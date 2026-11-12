@@ -336,15 +336,15 @@ fn only_main_application_windows_make_tiles_one_per_application() {
         ],
     );
     // the windows the server lists: two of the browser (one by its window class), one of the editor, a portal's
-    // chooser, an authentication agent, a program with no desktop entry, a window with no application id and one of
-    // a pinned program that has no entry
+    // chooser, an authentication agent, a program with no desktop entry (an application all the same), a window with
+    // no application id and one of a pinned program that has no entry
     let windows = [
         (1, "org.example.Browser"),
         (2, "browser"),
         (3, "org.example.Editor"),
         (4, "xdg-desktop-portal-gtk"),
         (5, "org.example.Agent"),
-        (6, "some-helper"),
+        (6, "some-program"),
         (7, ""),
         (8, "org.example.Pinned"),
     ];
@@ -365,23 +365,23 @@ fn only_main_application_windows_make_tiles_one_per_application() {
         [
             "org.example.Pinned",
             "org.example.Browser",
-            "org.example.Editor"
+            "org.example.Editor",
+            "some-program"
         ]
     );
     assert_eq!(
         s.window_ids(),
-        [1, 2, 3, 8],
+        [1, 2, 3, 6, 8],
         "only application windows count"
     );
     for app in [
         "xdg-desktop-portal-gtk",
         "org.example.Agent",
-        "some-helper",
         "background-service",
     ] {
         assert!(s.dock.app_tile(app).is_none(), "{app} has no tile");
     }
-    // a window that changes to a helper's id leaves its application
-    s.window(3, "some-helper", "w", false, 1.0);
+    // a window that changes to a hidden helper's id leaves its application
+    s.window(3, "org.example.Agent", "w", false, 1.0);
     assert!(!s.has_windows("org.example.Editor"));
 }

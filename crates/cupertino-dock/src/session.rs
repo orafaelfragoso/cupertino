@@ -125,13 +125,25 @@ impl Session {
                 .is_some_and(|t| t.pinned || t.built_in)
     }
 
-    /// A window appeared or one of its properties changed. A window of a process that is not an application
-    /// ([`Session::is_application`]) is not counted.
+    /// Whether a main window of `app_id` gives it a tile: any application showing one does, unless its desktop
+    /// entry says the desktop hides it (`NoDisplay`, as a portal's dialogs, an authentication agent or a helper's
+    /// entry does). A program with no entry is an application like any other while it shows a window.
+    pub fn shows_windows(&self, app_id: &str) -> bool {
+        !app_id.is_empty()
+            && (!self.desktop.find(app_id).is_some_and(|e| e.no_display)
+                || self
+                    .dock
+                    .app_tile(&self.key_of(app_id))
+                    .is_some_and(|t| t.pinned || t.built_in))
+    }
+
+    /// A window appeared or one of its properties changed. A window of a process whose entry the desktop hides
+    /// ([`Session::shows_windows`]) is not counted.
     pub fn window(&mut self, id: u32, app_id: &str, title: &str, minimized: bool, now: f64) {
         if self.windows.get(&id).is_some_and(|w| w.app_id != app_id) {
             self.window_closed(id, now);
         }
-        if !self.is_application(app_id) {
+        if !self.shows_windows(app_id) {
             return;
         }
         let key = self.key_of(app_id);

@@ -6,6 +6,7 @@
     scripts/dev/measure --compare A.json B.json
                                         the change from one measurement to another, process by process
     NO_BUILD=1 scripts/dev/measure      measure what target/release holds
+    MEASURE_BIN=DIR scripts/dev/measure measure the programs in DIR (a copy of an earlier build), without building
 
 The session runs at 1512 x 982 pixels, scale 2, with Files and Settings open. After it starts it is left alone for a
 while (rest), then used: the launcher opens and a search is typed, the pointer sweeps along the dock and over the
@@ -199,9 +200,10 @@ def main() -> int:
         a, b = (json.loads(pathlib.Path(p).read_text()) for p in args[1:3])
         print(compare(a, b))
         return 0
-    if not os.environ.get("NO_BUILD"):
+    bin_dir = pathlib.Path(os.environ.get("MEASURE_BIN", ROOT / "target/release"))
+    if not os.environ.get("NO_BUILD") and "MEASURE_BIN" not in os.environ:
         subprocess.run([str(ROOT / "scripts/dev/build")], check=True)
-    runs = [one_run(ROOT / "target/release") for _ in range(int(os.environ.get("RUNS", "3")))]
+    runs = [one_run(bin_dir) for _ in range(int(os.environ.get("RUNS", "3")))]
     m = median(runs)
     print(table(m))
     if "--out" in args:

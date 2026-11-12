@@ -80,18 +80,26 @@ printf 'Sample download.\n' >"$FHOME/Downloads/Release Notes.txt"
 : >"$FHOME/Music/Song.ogg"
 [ -z "${FIXTURE_DIR:-}" ] || cp -rL "$FIXTURE_DIR"/. "$FHOME"/
 
-# A stand-in `wpctl` first on PATH: the default sink and source at a fixed level, kept in the scratch folder, so the
-# volume the Control Center, the volume overlay and Settings show is the same on every run and no sound device is read.
+# A stand-in `wpctl` first on PATH: one output and two inputs, the default sink and source at a fixed level and the chosen
+# input kept in the scratch folder, so the volume the Control Center, the volume overlay and Settings show is the same on
+# every run, an input can be chosen and no sound device is read.
 AUDIO=$SCRATCH/audio
 mkdir -p "$AUDIO/bin"
 echo "0.50 0" >"$AUDIO/sink"
 echo "0.50 0" >"$AUDIO/source"
+echo 51 >"$AUDIO/default-source"
 cat >"$AUDIO/bin/wpctl" <<'EOF'
 #!/bin/sh
 state=$(dirname "$0")/..
 case "$1" in
-status) printf 'Audio\n ├─ Sinks:\n │\n ├─ Sources:\n'; exit 0 ;;
-set-default) exit 0 ;;
+status)
+    read -r chosen <"$state/default-source"
+    mark() { if [ "$1" = "$chosen" ]; then printf '*'; else printf ' '; fi; }
+    printf 'Audio\n ├─ Sinks:\n │  *   55. Speakers [vol: 0.50]\n │\n ├─ Sources:\n'
+    printf ' │  %s   51. Built-in Microphone [vol: 0.50]\n' "$(mark 51)"
+    printf ' │  %s   57. Headset Microphone [vol: 0.50]\n │\n' "$(mark 57)"
+    exit 0 ;;
+set-default) echo "$2" >"$state/default-source"; exit 0 ;;
 esac
 case "$2" in
 @DEFAULT_AUDIO_SINK@) node=$state/sink ;;

@@ -106,7 +106,7 @@ The process hardens itself, zeroes what it frees and keeps its fields at their l
   `PromptDone()` when it ends a prompt itself (the session locks). The reply to a call is always sent before its
   callback is called. A caller that leaves the bus (the bus daemon's `NameOwnerChanged`) loses its prompt;
 - returns the password only through the secret exchange (`sx-aes-1`): Diffie-Hellman in the 1536-bit MODP group of
-  RFC 3526, HKDF with SHA256 of the shared value padded to the prime's length into a 16-byte key, 128-bit AES in CBC mode with PKCS#7
+  RFC 3526, HKDF with SHA256 of the shared value's bytes without leading zeros into a 16-byte key, 128-bit AES in CBC mode with PKCS#7
   padding and a fresh IV. A cancel or a confirmation carries no secret.
 
 The panel is the agent's alert: 260 points wide, 26-point corners, the panel window's glass, the 64-point lock, the

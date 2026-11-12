@@ -152,3 +152,19 @@ fn comments_blank_lines_and_other_groups_are_skipped() {
     assert_eq!(a.receive(&message), Ok(None));
     assert!(a.shared());
 }
+
+#[test]
+fn a_shared_value_with_a_leading_zero_byte_derives_its_key_from_the_bytes_after_it() {
+    // 2^(0x228 * 0x303) mod p begins with the bytes 00 61 24; the key is HKDF-SHA256 of the 191 bytes from 0x61 on,
+    // which the keyring daemon derives as well (a key from the 192 padded bytes would be 1bbcbd0b...)
+    let mut a = Exchange::with_private(&[0x02, 0x28]);
+    let mut b = Exchange::with_private(&[0x03, 0x03]);
+    a.receive(&b.begin()).unwrap();
+    b.receive(&a.begin()).unwrap();
+    let expected = [
+        0x8e, 0x83, 0xb9, 0xbe, 0x4c, 0x31, 0x10, 0xdd, 0xe7, 0xa8, 0x99, 0xec, 0x6a, 0x18, 0xb5,
+        0x55,
+    ];
+    assert_eq!(**a.key.as_ref().unwrap(), expected);
+    assert_eq!(**b.key.as_ref().unwrap(), expected);
+}

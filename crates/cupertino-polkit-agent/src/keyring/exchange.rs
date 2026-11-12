@@ -1,7 +1,8 @@
 //! The secret exchange of the prompt protocol: how a typed password reaches the keyring daemon without crossing the
 //! bus in clear. Each side sends its Diffie-Hellman public key in the 1536-bit MODP group (RFC 3526, generator 2); the
-//! shared value, padded to the prime's length, goes through HKDF with SHA256 (no salt, no info) to a 16-byte AES key, and a
-//! secret travels encrypted with 128-bit AES in CBC mode with PKCS#7 padding under a fresh 16-byte IV.
+//! shared value, as big-endian bytes without leading zeros, goes through HKDF with SHA256 (no salt, no info) to a
+//! 16-byte AES key, and a secret travels encrypted with 128-bit AES in CBC mode with PKCS#7 padding under a fresh 16-byte
+//! IV.
 //!
 //! A message is a key file of one group, `[sx-aes-1]`, with base64 values: `public` always, and `secret` and `iv` when
 //! it carries a secret. A side must receive the other's public key before it can send a secret.
@@ -215,8 +216,11 @@ impl Exchange {
                 .retrieve()
                 .to_be_bytes(),
         );
+        // the shared value goes into HKDF without its leading zero bytes, as the keyring daemon writes it: padded, one
+        // value in 256 would give the two sides different keys
+        let first = shared.iter().position(|b| *b != 0).unwrap_or(shared.len());
         let mut key = Zeroizing::new([0u8; KEY_BYTES]);
-        Hkdf::<Sha256>::new(None, &shared[..])
+        Hkdf::<Sha256>::new(None, &shared[first..])
             .expand(&[], &mut key[..])
             .expect("16 bytes is a valid HKDF with SHA256 length");
         Ok(key)

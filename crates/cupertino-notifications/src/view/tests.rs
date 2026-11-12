@@ -400,7 +400,8 @@ fn no_window_is_open_while_the_screen_is_locked() {
 }
 
 #[test]
-fn escape_closes_the_clear_menu_before_the_centre_and_closing_forgets_the_list_s_state() {
+fn escape_closes_the_clear_menu_before_the_centre_and_a_centre_opened_once_it_is_out_starts_afresh()
+{
     let mut c = NotificationCenter::default();
     let mut ui = Ui {
         centre_open: true,
@@ -412,7 +413,17 @@ fn escape_closes_the_clear_menu_before_the_centre_and_closing_forgets_the_list_s
     assert!(ui.centre_open && !ui.menu_open);
     assert!(ui.unfolded.contains(&7));
     apply(&mut c, &mut ui, Input::CloseCentre, 0.0);
-    assert_eq!(ui, Ui::default());
+    assert!(!ui.centre_open);
+    assert!(
+        ui.unfolded.contains(&7),
+        "the list keeps its state while it slides out"
+    );
+    ui.open_centre(10.0, false);
+    assert!(ui.centre_open);
+    assert!(
+        ui.unfolded.is_empty(),
+        "a centre that was out opens with a fresh list"
+    );
 }
 
 #[test]

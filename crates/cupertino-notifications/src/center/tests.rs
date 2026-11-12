@@ -379,7 +379,7 @@ fn banner_slides_in_by_the_column_width_with_ease_in_out() {
             p[0].rect.width(),
             p[0].opacity
         ),
-        (REST_X, 40.0, 344.0, 1.0)
+        (REST_X, 24.0 + StackLayout::LIST_TOP_PADDING, 344.0, 1.0)
     );
     c.tick(5.0);
     assert!(
@@ -540,7 +540,10 @@ fn replacing_the_visible_banner_while_another_waits_shows_it_for_one_second() {
 fn from_theme_puts_the_banner_below_the_menu_bar() {
     let theme = Theme::load().unwrap();
     let cfg = CenterConfig::from_theme(&theme);
-    assert_eq!(cfg.layout.top_inset, theme.shapes.menu_bar_height + 16.0);
+    assert_eq!(
+        cfg.layout.top_inset,
+        theme.shapes.menu_bar_height + StackLayout::LIST_TOP_PADDING
+    );
 }
 
 #[test]

@@ -126,10 +126,34 @@ fn may_change(kind: &notify::EventKind) -> bool {
     !kind.is_access()
 }
 
+/// Where the watch thread's messages come from, and the clock their quiet is timed on: the channel and the monotonic
+/// clock, or in tests a script of messages and quiet spans on a clock of its own.
+trait Inbox {
+    /// The next message, waiting as long as it takes; `None` once no more can come.
+    fn recv(&self) -> Option<Msg>;
+    /// The next message if one comes within `timeout`.
+    fn recv_timeout(&self, timeout: Duration) -> Result<Msg, mpsc::RecvTimeoutError>;
+    fn now(&self) -> Instant;
+}
+
+impl Inbox for mpsc::Receiver<Msg> {
+    fn recv(&self) -> Option<Msg> {
+        mpsc::Receiver::recv(self).ok()
+    }
+
+    fn recv_timeout(&self, timeout: Duration) -> Result<Msg, mpsc::RecvTimeoutError> {
+        mpsc::Receiver::recv_timeout(self, timeout)
+    }
+
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
 /// The watch thread: waits for a burst, lets it go quiet, then reports the files whose contents changed.
 fn watch_loop(
     mut watcher: notify::RecommendedWatcher,
-    rx: &mpsc::Receiver<Msg>,
+    rx: &impl Inbox,
     files: &[PathBuf],
     dirs: &BTreeSet<PathBuf>,
     last: &mut BTreeMap<PathBuf, Option<Vec<u8>>>,
@@ -168,18 +192,18 @@ fn watch_loop(
     compare(files, last, report);
     loop {
         // wait for the first event of a burst, then until the burst is quiet
-        let Ok(first) = rx.recv() else { return };
+        let Some(first) = rx.recv() else { return };
         let Some(touched) = handle(first, report) else {
             return;
         };
         if !touched {
             continue;
         }
-        let mut deadline = Instant::now() + COALESCE;
-        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        let mut deadline = rx.now() + COALESCE;
+        while let Some(left) = deadline.checked_duration_since(rx.now()) {
             match rx.recv_timeout(left) {
                 Ok(msg) => match handle(msg, report) {
-                    Some(true) => deadline = Instant::now() + COALESCE,
+                    Some(true) => deadline = rx.now() + COALESCE,
                     Some(false) => (),
                     None => return,
                 },
@@ -391,18 +415,144 @@ mod tests {
         assert_eq!(reports(&rx, WINDOW), vec![WatchEvent::Changed(vec![dock])]);
     }
 
+    /// What a scripted [`Inbox`] plays: a message handed out at once, a quiet span that passes on its clock, or
+    /// something done to the files at that point, taking no time.
+    enum Step {
+        Msg(Msg),
+        Quiet(Duration),
+        Do(Box<dyn FnOnce()>),
+    }
+
+    /// An [`Inbox`] that plays `steps` in order on a clock that moves only through its quiet spans, so a burst is a
+    /// burst however slowly the test runs. It ends when the script does.
+    struct Script {
+        steps: std::cell::RefCell<std::collections::VecDeque<Step>>,
+        now: std::cell::Cell<Instant>,
+    }
+
+    impl Script {
+        fn new(steps: Vec<Step>) -> Self {
+            Self {
+                steps: std::cell::RefCell::new(steps.into()),
+                now: std::cell::Cell::new(Instant::now()),
+            }
+        }
+    }
+
+    impl Inbox for Script {
+        fn recv(&self) -> Option<Msg> {
+            loop {
+                let step = self.steps.borrow_mut().pop_front()?;
+                match step {
+                    Step::Msg(msg) => return Some(msg),
+                    Step::Quiet(span) => self.now.set(self.now.get() + span),
+                    Step::Do(act) => act(),
+                }
+            }
+        }
+
+        fn recv_timeout(&self, timeout: Duration) -> Result<Msg, mpsc::RecvTimeoutError> {
+            let mut steps = self.steps.borrow_mut();
+            match steps.pop_front() {
+                Some(Step::Msg(msg)) => Ok(msg),
+                Some(Step::Quiet(span)) if span > timeout => {
+                    self.now.set(self.now.get() + timeout);
+                    steps.push_front(Step::Quiet(span - timeout));
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                }
+                Some(Step::Quiet(span)) => {
+                    self.now.set(self.now.get() + span);
+                    drop(steps);
+                    self.recv_timeout(timeout - span)
+                }
+                Some(Step::Do(act)) => {
+                    drop(steps);
+                    act();
+                    self.recv_timeout(timeout)
+                }
+                None => Err(mpsc::RecvTimeoutError::Disconnected),
+            }
+        }
+
+        fn now(&self) -> Instant {
+            self.now.get()
+        }
+    }
+
+    fn written(path: &Path) -> Step {
+        Step::Msg(Msg::Event(Ok(notify::Event::new(
+            notify::EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Any,
+            )),
+        )
+        .add_path(path.to_path_buf()))))
+    }
+
+    /// The reports of a watch of `path`, begun as the file is now, playing `steps`.
+    fn played(path: &Path, steps: Vec<Step>) -> Vec<WatchEvent> {
+        let mut last = BTreeMap::from([(path.to_path_buf(), snapshot(path).unwrap())]);
+        let watcher = notify::recommended_watcher(|_| {}).unwrap();
+        let mut reports = Vec::new();
+        watch_loop(
+            watcher,
+            &Script::new(steps),
+            &[path.to_path_buf()],
+            &BTreeSet::new(),
+            &mut last,
+            &mut |event| reports.push(event),
+        );
+        reports
+    }
+
+    /// A write of `text` to `path` and its event.
+    fn write(path: &Path, text: &'static str) -> [Step; 2] {
+        let file = path.to_path_buf();
+        [
+            Step::Do(Box::new(move || std::fs::write(file, text).unwrap())),
+            written(path),
+        ]
+    }
+
+    /// Writes closer together than the quiet time are one burst, reported once when it goes quiet, however long the
+    /// burst lasts in all and however slowly the test runs; writes a quiet span apart are a report each.
     #[test]
     fn a_burst_of_writes_to_one_file_is_one_report() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("keyboard.conf");
-        let (_w, rx) = watch(vec![path.clone()]);
-        for delay in [1, 2, 3] {
-            std::fs::write(&path, format!("repeat_delay = {delay}\n")).unwrap();
+        let gap = || Step::Quiet(COALESCE / 2);
+        let quiet = || Step::Quiet(COALESCE * 2);
+        let mut burst = Vec::new();
+        for (i, text) in [
+            "repeat_delay = 1\n",
+            "repeat_delay = 2\n",
+            "repeat_delay = 3\n",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if i > 0 {
+                burst.push(gap());
+            }
+            burst.extend(write(&path, text));
+        }
+        burst.push(quiet());
+        assert_eq!(
+            played(&path, burst),
+            vec![WatchEvent::Changed(vec![path.clone()])],
+            "written three times, 25 ms apart"
+        );
+        let mut apart = Vec::new();
+        for text in ["repeat_delay = 4\n", "repeat_delay = 5\n"] {
+            apart.extend(write(&path, text));
+            apart.push(quiet());
         }
         assert_eq!(
-            reports(&rx, WINDOW),
-            vec![WatchEvent::Changed(vec![path])],
-            "created and written three times"
+            played(&path, apart),
+            vec![
+                WatchEvent::Changed(vec![path.clone()]),
+                WatchEvent::Changed(vec![path])
+            ],
+            "written twice, 100 ms apart"
         );
     }
 

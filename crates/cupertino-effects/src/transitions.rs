@@ -634,11 +634,11 @@ mod tests {
         assert_eq!(
             table,
             vec![
-                (None, None),
-                (Some(ScaleUpAndIn), None),
-                (None, Some(FadeOut)),
+                (Some(WindowOpen), Some(WindowClose)),
+                (Some(WindowOpen), Some(WindowClose)),
+                (Some(WindowOpen), Some(FadeOut)),
                 (Some(PopIn), Some(ScaleDownAndOut)),
-                (Some(ScaleUpAndIn), Some(FadeOut)),
+                (Some(PopIn), Some(FadeOut)),
                 (Some(SheetIn), Some(SheetOut)),
             ]
         );
@@ -647,18 +647,21 @@ mod tests {
     #[test]
     fn transform_durations_and_slow_motion() {
         let d = |k: TransformKind, slow| match k.driver(slow) {
-            Driver::Timed { duration, ease } => {
-                assert_eq!(ease, Ease::Cosine);
-                duration
-            }
+            Driver::Timed { duration, ease } => (duration, ease),
             Driver::Spring(_) => panic!("timed expected"),
         };
-        assert_eq!(d(TransformKind::ScaleUpAndIn, false), 0.2);
-        assert_eq!(d(TransformKind::PopIn, false), 0.4);
-        assert_eq!(d(TransformKind::PopOut, false), 0.4);
-        assert_eq!(d(TransformKind::ScaleDownAndOut, false), 0.15);
-        assert_eq!(d(TransformKind::FadeOut, false), 0.15);
-        assert_eq!(d(TransformKind::FadeOut, true), 0.6);
+        assert_eq!(d(TransformKind::ScaleUpAndIn, false), (0.2, Ease::Cosine));
+        assert_eq!(d(TransformKind::ScaleDownAndOut, false), (0.15, Ease::Cosine));
+        assert_eq!(d(TransformKind::FadeOut, false), (0.15, Ease::Cosine));
+        assert_eq!(d(TransformKind::FadeOut, true), (0.6, Ease::Cosine));
+        assert_eq!(d(TransformKind::AppearanceFade, false), (0.5, Ease::Cosine));
+        // the pops and the ordinary window's open and close run on linear time and shape themselves, slow motion or not
+        for slow in [false, true] {
+            assert_eq!(d(TransformKind::PopIn, slow), (0.31, Ease::Linear));
+            assert_eq!(d(TransformKind::PopOut, slow), (0.31, Ease::Linear));
+            assert_eq!(d(TransformKind::WindowOpen, slow), (0.16, Ease::Linear));
+            assert_eq!(d(TransformKind::WindowClose, slow), (0.15, Ease::Linear));
+        }
     }
 
     #[test]
@@ -697,20 +700,67 @@ mod tests {
     }
 
     #[test]
-    fn alert_pop_in_overshoots_to_1_2_at_60_percent() {
+    fn alert_pop_in_grows_from_small_overshoots_to_1_18_half_way_and_settles() {
         let s = |t| TransformKind::PopIn.sample(t);
-        assert_close(s(0.0).scale, 1.2 * 0.2f64.powi(3));
-        assert_close(s(0.3).scale, 1.2 * 0.6f64.powi(3));
-        assert_close(s(0.6).scale, 1.2);
-        assert_close(
-            s(0.8).scale,
-            1.0 + 0.2 * (0.1 * std::f64::consts::PI).cos() * 0.5f64.powf(1.5),
-        );
+        assert_close(s(0.0).scale, POP_START_SCALE);
+        assert_close(s(0.5).scale, 1.18);
         assert_close(s(1.0).scale, 1.0);
-        assert_eq!(s(0.6).alpha, 0.6);
-        let out = TransformKind::PopOut.sample(0.4);
-        assert_close(out.scale, 1.2);
-        assert_close(out.alpha, 0.6);
+        // it rises to the peak and comes back down to rest without dipping under 1
+        let scales: Vec<f64> = (0..=20).map(|i| s(f64::from(i) / 20.0).scale).collect();
+        assert!(scales[..=10].windows(2).all(|w| w[1] > w[0]), "{scales:?}");
+        assert!(scales[10..].windows(2).all(|w| w[1] < w[0]), "{scales:?}");
+        assert!(scales[10..].iter().all(|&v| v >= 1.0));
+        // it leaves the peak quicker than it creeps in at the end
+        assert!(scales[10] - scales[12] > scales[18] - scales[20]);
+        // opaque from 35 % of the way on
+        assert_close(s(0.175).alpha, 0.5);
+        assert_eq!(s(0.35).alpha, 1.0);
+        assert_eq!(s(0.0).alpha, 0.0);
+        // the pop-out plays it backwards
+        let out = TransformKind::PopOut.sample(0.5);
+        assert_close(out.scale, 1.18);
+        assert_eq!(out.alpha, 1.0);
+        assert_close(TransformKind::PopOut.sample(1.0).scale, POP_START_SCALE);
+        assert_eq!(TransformKind::PopOut.sample(1.0).alpha, 0.0);
+    }
+
+    #[test]
+    fn an_ordinary_window_opens_from_0_98_opaque_quick_at_first_and_its_shadow_darkens_with_it() {
+        let open = TransformKind::WindowOpen;
+        assert_close(open.sample(0.0).scale, 0.98);
+        assert_close(open.sample(1.0).scale, 1.0);
+        assert!((0..=10).all(|i| open.sample(f64::from(i) / 10.0).alpha == 1.0));
+        assert!(
+            open.sample(0.25).scale - 0.98 > 0.5 * (1.0 - 0.98),
+            "more than half the growth in the first quarter"
+        );
+        assert_close(open.shadow_factor(0.0), 0.45);
+        assert_close(open.shadow_factor(1.0), 1.0);
+        assert!(open.shadow_factor(0.5) > 0.45 && open.shadow_factor(0.5) < 1.0);
+    }
+
+    #[test]
+    fn an_ordinary_window_closes_fading_quickly_while_it_shrinks_a_little() {
+        let close = TransformKind::WindowClose;
+        assert_eq!(close.sample(0.0).alpha, 1.0);
+        assert_close(close.sample(0.0).scale, 1.0);
+        assert_close(close.sample(1.0).alpha, 0.0);
+        assert_close(close.sample(1.0).scale, 0.983);
+        assert!(
+            close.sample(0.25).alpha < 0.4,
+            "two thirds gone in the first quarter"
+        );
+        assert!(
+            (close.sample(0.5).scale - 0.983).abs() < 0.001,
+            "the shrink is done half way"
+        );
+        assert_eq!(close.shadow_factor(0.25), close.sample(0.25).alpha);
+    }
+
+    #[test]
+    fn an_appearance_change_fades_the_old_window_out_without_scaling() {
+        let fade = TransformKind::AppearanceFade.sample(0.25);
+        assert_eq!((fade.scale, fade.alpha, fade.dy), (1.0, 0.75, 0.0));
     }
 
     #[test]

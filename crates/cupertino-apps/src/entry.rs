@@ -212,6 +212,10 @@ pub enum Hidden {
     OnlyShowIn,
     NotShowIn,
     TryExec,
+    /// `Terminal=true` or the `ConsoleOnly` category: a command-line program, not an application with a window.
+    Terminal,
+    /// The `Exec` line names no program that can be found (empty, unbalanced quotes or not on the search path).
+    NoProgram,
 }
 
 /// Environment that decides visibility.
@@ -458,6 +462,36 @@ pub fn index_dirs(dirs: &[PathBuf], locale: &Locale, vis: &Visibility) -> Vec<De
     out
 }
 
+/// Whether `entry` belongs in an application list (the launcher's grid and its search results), on top of the
+/// visibility rules [`parse_desktop_entry`] already applied (`Type=Application`, `NoDisplay`, `Hidden`,
+/// `OnlyShowIn`, `NotShowIn`, `TryExec`, a `Name` and an `Exec`). A command-line program (`Terminal=true` or the
+/// `ConsoleOnly` category) is left out, and so is an entry whose `Exec` names no program that can be found; the
+/// program check is skipped with [`Visibility::skip_try_exec`].
+pub fn listed_application(entry: &DesktopEntry, vis: &Visibility) -> Result<(), Hidden> {
+    if entry.terminal || entry.categories.iter().any(|c| c == "ConsoleOnly") {
+        return Err(Hidden::Terminal);
+    }
+    let program = crate::exec::tokenize(&entry.exec)
+        .and_then(|argv| argv.into_iter().next())
+        .filter(|p| !p.is_empty() && !p.starts_with('%'))
+        .ok_or(Hidden::NoProgram)?;
+    if !vis.skip_try_exec && !vis.executable_exists(&program) {
+        return Err(Hidden::NoProgram);
+    }
+    Ok(())
+}
+
+/// [`index_dirs`] narrowed to the entries [`listed_application`] keeps: the applications a person can open.
+pub fn index_applications(
+    dirs: &[PathBuf],
+    locale: &Locale,
+    vis: &Visibility,
+) -> Vec<DesktopEntry> {
+    let mut entries = index_dirs(dirs, locale, vis);
+    entries.retain(|e| listed_application(e, vis).is_ok());
+    entries
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +605,83 @@ mod tests {
         );
         assert!(
             parse_desktop_entry("x", &text(tool.to_str().unwrap()), &Locale::default(), &v).is_ok()
+        );
+    }
+
+    #[test]
+    fn an_application_list_keeps_only_applications_a_person_opens() {
+        let apps = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        for tool in [
+            "browser",
+            "vim",
+            "htop",
+            "settings-panel",
+            "portal",
+            "agent",
+            "env",
+        ] {
+            let path = bin.path().join(tool);
+            std::fs::write(&path, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let entry = |extra: &str| format!("[Desktop Entry]\nType=Application\nName=X\n{extra}\n");
+        let files = [
+            (
+                "browser.desktop",
+                entry("Exec=browser %U\nCategories=Network;"),
+            ),
+            (
+                "vim.desktop",
+                entry("Exec=vim %F\nTerminal=true\nTryExec=vim"),
+            ),
+            (
+                "htop.desktop",
+                entry("Exec=htop\nCategories=System;ConsoleOnly;"),
+            ),
+            (
+                "panel.desktop",
+                entry("Exec=settings-panel network\nNoDisplay=true"),
+            ),
+            ("portal.desktop", entry("Exec=portal\nNoDisplay=true")),
+            ("removed.desktop", entry("Exec=browser\nHidden=true")),
+            ("agent.desktop", entry("Exec=agent\nOnlyShowIn=Other;")),
+            (
+                "tweaks.desktop",
+                entry("Exec=browser --tweaks\nNotShowIn=Cupertino;"),
+            ),
+            ("gone.desktop", entry("Exec=uninstalled-tool")),
+            ("blank.desktop", entry("Exec=\"unbalanced")),
+            (
+                "link.desktop",
+                "[Desktop Entry]\nType=Link\nName=X\nURL=https://example.org\n".into(),
+            ),
+            ("wrapped.desktop", entry("Exec=env LANG=C browser %u")),
+        ];
+        for (name, text) in &files {
+            std::fs::write(apps.path().join(name), text).unwrap();
+        }
+        let v = Visibility {
+            current_desktops: vec!["Cupertino".into()],
+            path_dirs: vec![bin.path().to_path_buf()],
+            skip_try_exec: false,
+        };
+        let dirs = [apps.path().to_path_buf()];
+        let ids = |list: Vec<DesktopEntry>| list.into_iter().map(|e| e.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(index_applications(&dirs, &Locale::default(), &v)),
+            ["browser.desktop", "wrapped.desktop"]
+        );
+        let all = index_dirs(&dirs, &Locale::default(), &v);
+        let why = |id: &str| listed_application(all.iter().find(|e| e.id == id).unwrap(), &v);
+        assert_eq!(why("vim.desktop"), Err(Hidden::Terminal));
+        assert_eq!(why("htop.desktop"), Err(Hidden::Terminal));
+        assert_eq!(why("gone.desktop"), Err(Hidden::NoProgram));
+        assert_eq!(why("blank.desktop"), Err(Hidden::NoProgram));
+        assert!(
+            all.iter().any(|e| e.id == "vim.desktop"),
+            "the plain index still holds command-line programs for the callers that run them"
         );
     }
 

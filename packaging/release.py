@@ -62,14 +62,14 @@ BINARIES = (
     'cupertino-server',
     'cupertino-dock', 'cupertino-menubar', 'cupertino-launcher', 'cupertino-notifications', 'cupertino-controlcenter',
     'cupertino-osd', 'cupertino-screenshot', 'cupertino-control', 'cupertino-windowmanager', 'cupertino-login', 'cupertino-polkit-agent',
-    'cupertino-portal',
+    'cupertino-keyring-prompter', 'cupertino-portal',
     *APPS,
     'cupertino-sessiond', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd',
     'cupertino-diagnose',
     'cupertino',
 )
 # The crate of a shipped binary whose name is not its crate's; the licence closure starts at the crates.
-BINARY_CRATES = {'cupertino': 'cupertino-cli'}
+BINARY_CRATES = {'cupertino': 'cupertino-cli', 'cupertino-keyring-prompter': 'cupertino-polkit-agent'}
 # The completions the built `cupertino` writes into <gendir>/completions/<shell>, and where each shell finds them.
 COMPLETIONS = (('bash', 'usr/share/bash-completion/completions/cupertino'),
                ('zsh', 'usr/share/zsh/site-functions/_cupertino'),

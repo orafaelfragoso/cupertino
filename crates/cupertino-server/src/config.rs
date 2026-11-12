@@ -51,6 +51,8 @@ pub enum BuiltIn {
     Portal,
     /// The polkit authentication agent, which draws the authentication prompt.
     PolkitAgent,
+    /// The keyring's prompter, which draws the keyring's password prompt as the authentication prompt is drawn.
+    KeyringPrompter,
     /// The native local desktop controller; each run still needs session consent.
     DesktopControl,
 }
@@ -59,9 +61,10 @@ pub enum BuiltIn {
 pub const PORTAL_BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cupertino";
 
 impl BuiltIn {
-    pub const ALL: [BuiltIn; 3] = [
+    pub const ALL: [BuiltIn; 4] = [
         BuiltIn::Portal,
         BuiltIn::PolkitAgent,
+        BuiltIn::KeyringPrompter,
         BuiltIn::DesktopControl,
     ];
 
@@ -70,6 +73,7 @@ impl BuiltIn {
         match self {
             BuiltIn::Portal => "portal",
             BuiltIn::PolkitAgent => "polkit-agent",
+            BuiltIn::KeyringPrompter => "keyring-prompter",
             BuiltIn::DesktopControl => "desktop-control",
         }
     }
@@ -78,6 +82,7 @@ impl BuiltIn {
         match self {
             BuiltIn::Portal => "cupertino-portal",
             BuiltIn::PolkitAgent => "cupertino-polkit-agent",
+            BuiltIn::KeyringPrompter => "cupertino-keyring-prompter",
             BuiltIn::DesktopControl => "cupertino-control",
         }
     }
@@ -86,7 +91,7 @@ impl BuiltIn {
     pub const fn role(self) -> ShellRole {
         match self {
             BuiltIn::Portal => ShellRole::Capture,
-            BuiltIn::PolkitAgent => ShellRole::Prompt,
+            BuiltIn::PolkitAgent | BuiltIn::KeyringPrompter => ShellRole::Prompt,
             BuiltIn::DesktopControl => ShellRole::DesktopControl,
         }
     }
@@ -1471,6 +1476,7 @@ mod tests {
         let json = r#"{"shell":[
             {"name":"portal","command":["/usr/bin/cupertino-dock"],"roles":["session"]},
             {"name":"agent","command":["/usr/bin/cupertino-polkit-agent"],"roles":[]},
+            {"name":"prompter","command":["/usr/bin/cupertino-keyring-prompter"],"roles":["session"]},
             {"name":"capture","command":["target/debug/cupertino-portal"],"roles":["session"]},
             {"name":"dock","command":["/usr/bin/cupertino-dock"],"roles":["session","dock"]}]}"#;
         for trust in [LayerTrust::System, LayerTrust::User, LayerTrust::Dev] {
@@ -1481,7 +1487,7 @@ mod tests {
                 "{trust:?}: {:?}",
                 names(&c)
             );
-            assert!(problems.len() >= 3, "{trust:?}: {problems:?}");
+            assert!(problems.len() >= 4, "{trust:?}: {problems:?}");
         }
         let granted: Vec<ShellRole> = cupertino_defaults::compositor::ShellRoleName::ALL
             .into_iter()
@@ -1691,6 +1697,7 @@ mod tests {
                 "clipboard",
                 "portal",
                 "polkit-agent",
+                "keyring-prompter",
                 "desktop-control",
                 "nonexistent",
             ]
@@ -1710,7 +1717,7 @@ mod tests {
                 "windowmanager"
             ]
         );
-        assert_eq!(warnings.len(), 6, "{warnings:?}");
+        assert_eq!(warnings.len(), 7, "{warnings:?}");
         assert!(warnings[0].contains("login") && warnings[0].contains("SessionLock"));
         assert!(warnings[1].contains("clipboard") && warnings[1].contains("DataControl"));
 

@@ -442,7 +442,7 @@ fn capabilities_of_process(
         })
 }
 
-/// The portal and the polkit agent run supervised, each on a connection that holds its one role and nothing else,
+/// The portal, the polkit agent and the keyring's prompter run supervised, each on a connection that holds its one role and nothing else,
 /// beside a configured process that holds the roles of its entry.
 #[test]
 fn the_built_in_processes_run_with_exactly_their_roles() {
@@ -468,6 +468,10 @@ fn the_built_in_processes_run_with_exactly_their_roles() {
             BuiltIn::PolkitAgent,
             Some(program("cupertino-polkit-agent")),
         ),
+        (
+            BuiltIn::KeyringPrompter,
+            Some(program("cupertino-keyring-prompter")),
+        ),
     ];
     let log = dir.file("dock");
     let dock = stand_in("dock", r#"echo $$ >> "$1"; exec sleep 60"#, &log);
@@ -482,6 +486,11 @@ fn the_built_in_processes_run_with_exactly_their_roles() {
         (
             BuiltIn::PolkitAgent,
             "cupertino-polkit-agent.log",
+            ShellRole::Prompt,
+        ),
+        (
+            BuiltIn::KeyringPrompter,
+            "cupertino-keyring-prompter.log",
             ShellRole::Prompt,
         ),
     ] {

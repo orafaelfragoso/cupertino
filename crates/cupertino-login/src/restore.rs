@@ -52,6 +52,7 @@ pub const SHELL_PROGRAMS: &[&str] = &[
     "cupertino-btd",
     "cupertino-controlcenter",
     "cupertino-dock",
+    "cupertino-keyring-prompter",
     "cupertino-launcher",
     "cupertino-login",
     "cupertino-menubar",

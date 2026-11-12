@@ -73,8 +73,10 @@ impl WindowKind {
     /// Transform played when the window is ordered in.
     pub fn order_in(self) -> Option<TransformKind> {
         match self {
-            WindowKind::Plain | WindowKind::Utility => None,
-            WindowKind::Document | WindowKind::AppModal => Some(TransformKind::ScaleUpAndIn),
+            WindowKind::Plain | WindowKind::Utility | WindowKind::Document => {
+                Some(TransformKind::WindowOpen)
+            }
+            WindowKind::AppModal => Some(TransformKind::PopIn),
             WindowKind::Alert => Some(TransformKind::PopIn),
             WindowKind::Sheet => Some(TransformKind::SheetIn),
         }
@@ -84,7 +86,7 @@ impl WindowKind {
     /// one the modal alert runner sets explicitly).
     pub fn order_out(self) -> Option<TransformKind> {
         match self {
-            WindowKind::Plain | WindowKind::Document => None,
+            WindowKind::Plain | WindowKind::Document => Some(TransformKind::WindowClose),
             WindowKind::Utility | WindowKind::AppModal => Some(TransformKind::FadeOut),
             WindowKind::Alert => Some(TransformKind::ScaleDownAndOut),
             WindowKind::Sheet => Some(TransformKind::SheetOut),
@@ -116,9 +118,9 @@ impl TransformSample {
 pub enum TransformKind {
     /// Grow from the initial scale 0 while fading in, 0.2 s.
     ScaleUpAndIn,
-    /// Alert pop-in, 0.4 s: overshoots to 1.2× at 60 % and settles back to 1.
+    /// Alert pop-in, 0.31 s: grows quickly, overshoots to 1.18× at half way and settles back to 1.
     PopIn,
-    /// Mirror of [`TransformKind::PopIn`], 0.4 s.
+    /// Mirror of [`TransformKind::PopIn`], 0.31 s.
     PopOut,
     /// Shrink to 0.9× while fading out, 0.15 s.
     ScaleDownAndOut,
@@ -128,12 +130,44 @@ pub enum TransformKind {
     SheetIn,
     /// Sheet close, 0.26 s: slides [`SHEET_SLIDE`] back up while fading out.
     SheetOut,
+    /// Ordinary window open, 0.16 s: grows from [`WINDOW_OPEN_SCALE`] to 1 at once-opaque, quick at first then
+    /// settling (exponential ease-out); its shadow darkens with it.
+    WindowOpen,
+    /// Ordinary window close, 0.15 s: fades out quickly (exponential) while shrinking a little.
+    WindowClose,
+    /// Appearance change, 0.5 s: the window as it was before the change fades out over the redrawn one, eased in and out,
+    /// without scaling.
+    AppearanceFade,
 }
 
-/// Scale amount of the pop transforms (0.2).
-pub const POP_SCALE_AMOUNT: f64 = 0.2;
-/// Eased progress at which the pop-in reaches its peak (0.6).
-pub const POP_SPLIT: f64 = 0.6;
+/// Scale an ordinary window starts from when it opens (0.98).
+pub const WINDOW_OPEN_SCALE: f64 = 0.98;
+/// Duration of the ordinary window open (0.16 s).
+pub const WINDOW_OPEN_DURATION: f64 = 0.16;
+/// Rate of the window-open ease-out, in 1/duration: larger settles sooner.
+const WINDOW_OPEN_RATE: f64 = 3.0;
+/// Share of its final darkness the shadow of an opening window starts with.
+const WINDOW_OPEN_SHADOW_START: f64 = 0.45;
+/// Duration of the crossfade when the appearance changes (0.5 s).
+pub const APPEARANCE_FADE_DURATION: f64 = 0.5;
+/// Scale an ordinary window ends at when it closes (0.983).
+pub const WINDOW_CLOSE_SCALE: f64 = 0.983;
+/// Duration of the ordinary window close (0.15 s).
+pub const WINDOW_CLOSE_DURATION: f64 = 0.15;
+/// Rate of the window-close fade, in 1/duration (time constant about 32 ms).
+const WINDOW_CLOSE_FADE_RATE: f64 = 4.7;
+/// Rate of the window-close shrink, in 1/duration (settles within about 60 ms).
+const WINDOW_CLOSE_SHRINK_RATE: f64 = 7.5;
+
+/// Exponential ease-out of `t` in `[0, 1]`, normalised to reach exactly 1 at the end.
+fn exp_out(t: f64, rate: f64) -> f64 {
+    (1.0 - (-rate * t).exp()) / (1.0 - (-rate).exp())
+}
+
+/// Overshoot of the pop transforms (0.18).
+pub const POP_SCALE_AMOUNT: f64 = 0.18;
+/// Progress at which the pop-in reaches its peak (0.5).
+pub const POP_SPLIT: f64 = 0.5;
 /// Final scale of the scale-down-and-out transform (0.9).
 pub const SCALE_DOWN_AND_OUT_SCALE: f64 = 0.9;
 /// Initial scale of the scale-up-and-in transform (default 0).
@@ -144,17 +178,33 @@ pub const TRANSFORM_SLOW_MOTION_FACTOR: f64 = 4.0;
 /// Sheet open and close duration, the sheet animation time default (0.26 s, the
 /// close reusing it is ).
 pub const SHEET_DURATION: f64 = 0.26;
+/// Pop-in and pop-out duration (0.31 s).
+pub const POP_DURATION: f64 = 0.31;
 /// Distance a sheet slides in and out, in points (32).
 pub const SHEET_SLIDE: f64 = 32.0;
 
-/// Pop-in scale at eased progress `t` (formula).
+/// Scale a pop-in starts from.
+const POP_START_SCALE: f64 = 0.07;
+/// Exponent of the pop-in's rise: above 1 it starts slowly and flattens at the peak.
+const POP_RISE_EXPONENT: f64 = 1.7;
+/// Exponent of the pop-in's settling: above 1 it leaves the peak quickly and creeps in at the end.
+const POP_SETTLE_EXPONENT: f64 = 1.35;
+/// Share of the pop-in's opacity ramp, relative to its duration: it is opaque from here on.
+const POP_FADE_SHARE: f64 = 0.35;
+
+/// Pop-in scale at progress `t` (linear in time): it rises to the overshoot at [`POP_SPLIT`] and settles to 1.
 fn pop_in_scale(t: f64) -> f64 {
-    let a = POP_SCALE_AMOUNT;
+    let peak = 1.0 + POP_SCALE_AMOUNT;
     if t <= POP_SPLIT {
-        (1.0 + a) * (0.2 + 0.8 * t / POP_SPLIT).powi(3)
+        let u = (t / POP_SPLIT).clamp(0.0, 1.0);
+        POP_START_SCALE
+            + (peak - POP_START_SCALE)
+                * (u * std::f64::consts::FRAC_PI_2)
+                    .sin()
+                    .powf(POP_RISE_EXPONENT)
     } else {
-        let v = (t - POP_SPLIT) / (1.0 - POP_SPLIT);
-        1.0 + a * (0.2 * std::f64::consts::PI * v).cos() * (1.0 - v).powf(1.5)
+        let v = ((t - POP_SPLIT) / (1.0 - POP_SPLIT)).clamp(0.0, 1.0);
+        1.0 + POP_SCALE_AMOUNT * (1.0 - v).powf(POP_SETTLE_EXPONENT)
     }
 }
 
@@ -163,9 +213,12 @@ impl TransformKind {
     pub fn duration(self) -> f64 {
         match self {
             TransformKind::ScaleUpAndIn => 0.2,
-            TransformKind::PopIn | TransformKind::PopOut => 0.4,
+            TransformKind::PopIn | TransformKind::PopOut => POP_DURATION,
             TransformKind::ScaleDownAndOut | TransformKind::FadeOut => 0.15,
             TransformKind::SheetIn | TransformKind::SheetOut => SHEET_DURATION,
+            TransformKind::WindowOpen => WINDOW_OPEN_DURATION,
+            TransformKind::WindowClose => WINDOW_CLOSE_DURATION,
+            TransformKind::AppearanceFade => APPEARANCE_FADE_DURATION,
         }
     }
 
@@ -175,7 +228,12 @@ impl TransformKind {
     /// unknown (recovers only the duration default), so `slow_motion` leaves them as they are.
     pub fn driver(self, slow_motion: bool) -> Driver {
         match self {
-            TransformKind::SheetIn | TransformKind::SheetOut => Driver::Timed {
+            TransformKind::SheetIn
+            | TransformKind::SheetOut
+            | TransformKind::PopIn
+            | TransformKind::PopOut
+            | TransformKind::WindowOpen
+            | TransformKind::WindowClose => Driver::Timed {
                 duration: self.duration(),
                 ease: Ease::Linear,
             },
@@ -212,12 +270,14 @@ impl TransformKind {
                 let a = SCALE_UP_AND_IN_INITIAL_SCALE;
                 scaled(a + (1.0 - a) * c, c)
             }
-            TransformKind::PopIn => scaled(pop_in_scale(c), c),
-            TransformKind::PopOut => scaled(pop_in_scale(1.0 - c), 1.0 - c),
+            TransformKind::PopIn => scaled(pop_in_scale(c), (c / POP_FADE_SHARE).min(1.0)),
+            TransformKind::PopOut => {
+                scaled(pop_in_scale(1.0 - c), ((1.0 - c) / POP_FADE_SHARE).min(1.0))
+            }
             TransformKind::ScaleDownAndOut => {
                 scaled(1.0 - (1.0 - SCALE_DOWN_AND_OUT_SCALE) * c, 1.0 - c)
             }
-            TransformKind::FadeOut => scaled(1.0, 1.0 - c),
+            TransformKind::FadeOut | TransformKind::AppearanceFade => scaled(1.0, 1.0 - c),
             TransformKind::SheetIn => TransformSample {
                 scale: 1.0,
                 alpha: (2.0 * c).min(1.0),
@@ -228,6 +288,26 @@ impl TransformKind {
                 alpha: 1.0 - c,
                 dy: -SHEET_SLIDE * cosine(c),
             },
+            TransformKind::WindowOpen => scaled(
+                WINDOW_OPEN_SCALE + (1.0 - WINDOW_OPEN_SCALE) * exp_out(c, WINDOW_OPEN_RATE),
+                1.0,
+            ),
+            TransformKind::WindowClose => scaled(
+                1.0 - (1.0 - WINDOW_CLOSE_SCALE) * exp_out(c, WINDOW_CLOSE_SHRINK_RATE),
+                1.0 - exp_out(c, WINDOW_CLOSE_FADE_RATE),
+            ),
+        }
+    }
+
+    /// How dark the window's shadow is at `t`, as a share of its resting darkness: the opacity, except that an
+    /// opening window's shadow darkens while the window itself is already opaque.
+    pub fn shadow_factor(self, t: f64) -> f64 {
+        match self {
+            TransformKind::WindowOpen => {
+                let p = exp_out(t.clamp(0.0, 1.0), WINDOW_OPEN_RATE);
+                WINDOW_OPEN_SHADOW_START + (1.0 - WINDOW_OPEN_SHADOW_START) * p
+            }
+            _ => self.sample(t).alpha,
         }
     }
 

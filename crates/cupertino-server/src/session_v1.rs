@@ -278,6 +278,7 @@ impl Cupertino {
         if self.config.appearance == appearance {
             return;
         }
+        self.snapshot_appearance_fade();
         self.config.appearance = appearance;
         self.decor.set_appearance(self.appearance());
         self.sessions.appearance(appearance.is_dark());

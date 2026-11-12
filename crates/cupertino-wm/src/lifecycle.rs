@@ -362,6 +362,9 @@ impl Lifecycle {
         let t = self.transform.map_or(TransformSample::IDENTITY, |t| {
             t.kind.sample(t.progress.value(now))
         });
+        let shadow_factor = self
+            .transform
+            .map_or(1.0, |t| t.kind.shadow_factor(t.progress.value(now)));
         let mut frame = self.frame.value(now);
         if let Some(c) = self.catch_up {
             let left = 1.0 - c.curve.eval(((now - c.start) / c.duration).clamp(0.0, 1.0));
@@ -374,7 +377,7 @@ impl Lifecycle {
             frame,
             opacity: t.alpha,
             scale: t.scale,
-            shadow: self.shadow.value(now) * t.alpha,
+            shadow: self.shadow.value(now) * shadow_factor,
             minimize_progress: warp,
             minimize_target: self.minimize_target,
             visible: self.state.is_visible(),

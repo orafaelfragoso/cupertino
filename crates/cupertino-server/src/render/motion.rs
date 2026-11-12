@@ -46,14 +46,22 @@ pub fn skips_sheet_slide(kind: WindowKind, state: LifecycleState, options: Displ
     options.reduce_motion && kind == WindowKind::Sheet && state == LifecycleState::Opening
 }
 
-/// The close transform of a window of `kind` given its normal one: a sheet closes at once under
-/// Reduce Motion.
+/// Whether a window opening with the small scale-in is drawn at its full size instead: under Reduce Motion
+/// it simply appears.
+pub fn skips_open_scale(state: LifecycleState, options: DisplayOptions) -> bool {
+    options.reduce_motion && state == LifecycleState::Opening
+}
+
+/// The close transform of a window of `kind` given its normal one: a sheet and an ordinary window close at once
+/// under Reduce Motion.
 pub fn close_transform(
     kind: WindowKind,
     normal: Option<TransformKind>,
     options: DisplayOptions,
 ) -> Option<TransformKind> {
-    if options.reduce_motion && kind == WindowKind::Sheet {
+    if options.reduce_motion
+        && (kind == WindowKind::Sheet || normal == Some(TransformKind::WindowClose))
+    {
         return None;
     }
     normal

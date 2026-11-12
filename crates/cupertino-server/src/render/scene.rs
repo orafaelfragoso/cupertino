@@ -261,6 +261,12 @@ pub fn plan_for(
     {
         pres.frame = w.lifecycle.target_frame();
     }
+    if crate::render::motion::skips_open_scale(w.state(), options)
+        && w.lifecycle.kind() != cupertino_effects::WindowKind::Sheet
+        && w.lifecycle.kind() != cupertino_effects::WindowKind::Alert
+    {
+        pres.scale = 1.0;
+    }
     let animating = w.lifecycle.is_animating(now) || entry.shrink != Shrink::None;
     let mut plan = plan_window(&pres, entry.committed_size(), animating, (slide, 0.0));
     // a full-screen window meets the edges of its output: no corner mask (its shadow is faded out by the model); while

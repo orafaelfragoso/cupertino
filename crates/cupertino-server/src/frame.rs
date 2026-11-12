@@ -436,6 +436,35 @@ impl Cupertino {
         }
     }
 
+    /// Start the crossfade of an appearance change: every window on screen is captured as it is now and its picture fades
+    /// out over the redrawn window. Call before the appearance changes; nothing happens under Reduce Motion.
+    pub fn snapshot_appearance_fade(&mut self) {
+        if self.display_options().reduce_motion {
+            return;
+        }
+        let ids: Vec<_> = self.wm.stacking_order().to_vec();
+        let now = self.now();
+        for id in ids {
+            if self.fx.has_ghost(id) {
+                continue;
+            }
+            let Some(output) = self.wm.window(id).map(|w| w.output) else {
+                continue;
+            };
+            if let Some((snapshot, rect, _)) = self.capture_snapshot(id) {
+                self.fx.start_close(
+                    id,
+                    output,
+                    rect,
+                    snapshot,
+                    cupertino_effects::TransformKind::AppearanceFade,
+                    now,
+                );
+            }
+        }
+        self.request_redraw();
+    }
+
     /// `snapshot_closing` for the window owning `surface` (called before an unmapping commit).
     pub fn snapshot_closing_surface(
         &mut self,

@@ -1143,6 +1143,104 @@ impl Services {
         }
     }
 
+    /// Start `call` on a thread of its own when it can take long: a device's connection, disconnection or removal, a
+    /// join of a saved network, a display's mode or place. `done` gets its result there. `None` when `call` is quick and
+    /// is made with [`Self::call`]; `Some(Err)` when the thread could not start.
+    pub fn call_in_background(
+        &mut self,
+        call: &Call,
+        done: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) -> Option<Result<(), String>> {
+        type Job = Box<dyn FnOnce() -> Result<(), String> + Send>;
+        let on_bus = |s: &mut Self,
+                      f: Box<dyn FnOnce(&Connection) -> zbus::Result<()> + Send>|
+         -> Result<Job, String> {
+            let connection = s.system.connection().cloned();
+            let connection = s.system.checked(connection).map_err(|e| failure(&e))?;
+            Ok(Box::new(move || f(&connection).map_err(|e| failure(&e))))
+        };
+        let on_proxy = |s: &mut Self, method: &'static str, id: String| -> Result<Job, String> {
+            let proxy = s
+                .system
+                .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME);
+            let proxy = s.system.checked(proxy).map_err(|e| failure(&e))?;
+            Ok(Box::new(move || {
+                proxy
+                    .call::<_, _, ()>(method, &(id.as_str(),))
+                    .map_err(|e| failure(&e))
+            }))
+        };
+        let job: Result<Job, String> = match call.clone() {
+            Call::Connect(id) if self.bluez() => {
+                on_bus(self, Box::new(move |c| bluez::connect(c, &id)))
+            }
+            Call::DisconnectDevice(id) if self.bluez() => {
+                on_bus(self, Box::new(move |c| bluez::disconnect(c, &id)))
+            }
+            Call::Remove { id, confirmed } if self.bluez() => {
+                assert!(confirmed, "a device is removed only after its confirmation");
+                on_bus(self, Box::new(move |c| bluez::remove(c, &id)))
+            }
+            Call::Connect(id) => on_proxy(self, "Connect", id),
+            Call::DisconnectDevice(id) => on_proxy(self, "Disconnect", id),
+            Call::Remove { id, confirmed } => {
+                assert!(confirmed, "a device is removed only after its confirmation");
+                on_proxy(self, "Remove", id)
+            }
+            Call::Join {
+                ssid,
+                passphrase: None,
+            } if self.network_manager() => on_bus(self, Box::new(move |c| nm::join(c, &ssid, ""))),
+            Call::SetDisplayRefresh { connector, mhz } => Ok(Box::new(move || {
+                crate::output_config::configure(
+                    &connector,
+                    crate::output_config::Change {
+                        refresh_mhz: Some(mhz),
+                        ..Default::default()
+                    },
+                )
+                .map_err(|e| {
+                    log_once(&format!("the refresh rate could not be changed: {e}"));
+                    "The refresh rate could not be changed.".to_string()
+                })
+            })),
+            Call::SetDisplayPosition { connector, x, y } => Ok(Box::new(move || {
+                crate::output_config::configure(
+                    &connector,
+                    crate::output_config::Change {
+                        position: Some((x, y)),
+                        ..Default::default()
+                    },
+                )
+                .map_err(|e| {
+                    log_once(&format!("the display could not be moved: {e}"));
+                    "The display could not be moved.".to_string()
+                })
+            })),
+            Call::SetDisplayScale { connector, scale } => Ok(Box::new(move || {
+                crate::output_config::set_scale(&connector, scale).map_err(|e| {
+                    log_once(&format!("the display size could not be changed: {e}"));
+                    "The display size could not be changed.".to_string()
+                })
+            })),
+            _ => return None,
+        };
+        let job = match job {
+            Ok(job) => job,
+            Err(e) => return Some(Err(e)),
+        };
+        Some(
+            std::thread::Builder::new()
+                .name("settings-call".into())
+                .spawn(move || done(job()))
+                .map(drop)
+                .map_err(|e| {
+                    log_once(&format!("cannot start a service call: {e}"));
+                    "The change could not be started.".to_string()
+                }),
+        )
+    }
+
     /// Ask the Wi-Fi device to scan (the pane open and every 10 s while the radio is on, approximate).
     pub fn scan(&mut self) -> Result<(), String> {
         if self.network_manager() {

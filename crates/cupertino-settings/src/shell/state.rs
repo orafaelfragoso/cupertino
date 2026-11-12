@@ -59,6 +59,12 @@ pub(crate) enum Background {
     },
     /// sessiond answered Use Mine.
     LoginScreenSaved(std::result::Result<(), String>),
+    /// A service call made on a thread of its own ended; `id` is the control that asked for it.
+    Called {
+        id: Option<ControlId>,
+        call: Call,
+        result: std::result::Result<(), String>,
+    },
 }
 
 /// The longest edge of a thumbnail the cache keeps, in pixels: the decoder keeps a picture of this size whole.
@@ -633,7 +639,7 @@ impl State {
                     self.sheet = Some(Sheet::forget(&id, &name));
                     Ok(())
                 }
-                Effect::Service(call) => self.service_call(&call),
+                Effect::Service(call) => self.service_call(Some(id), &call),
                 Effect::AskPicture { folder } => {
                     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
                     let start = home
@@ -751,12 +757,34 @@ impl State {
 
     /// Make `call` on its service; a Join waits for the device until it connects or fails. The readings are refreshed
     /// after it, so the control shows the service's state, not the asked one.
-    pub(crate) fn service_call(&mut self, call: &Call) -> std::result::Result<(), String> {
+    pub(crate) fn service_call(
+        &mut self,
+        id: Option<ControlId>,
+        call: &Call,
+    ) -> std::result::Result<(), String> {
         if let Call::Pair(id) = call {
             let notify = self.notify.clone();
             return self
                 .services
                 .pair(id, move |result| notify(Background::Paired(result)));
+        }
+        // a call that can take long runs on a thread: the window goes on, and its end refreshes the readings
+        let notify = self.notify.clone();
+        let asked = call.clone();
+        if let Some(started) = self.services.call_in_background(call, move |result| {
+            notify(Background::Called {
+                id,
+                call: asked,
+                result,
+            })
+        }) {
+            if let (Ok(()), Call::Join { ssid, .. }) = (&started, call) {
+                if let crate::live::Reading::Ready(w) = &mut self.live.wifi {
+                    w.joining = Some(ssid.clone());
+                    w.failure = None;
+                }
+            }
+            return started;
         }
         let result = self.services.call(call);
         if let (Ok(()), Call::Join { ssid, .. }) = (&result, call) {
@@ -865,7 +893,7 @@ impl State {
                     Err(e) => eprintln!("cupertino-settings: {e}"),
                 }
             }
-            Outcome::Do(call) => match self.service_call(&call) {
+            Outcome::Do(call) => match self.service_call(None, &call) {
                 Ok(()) => self.sheet = None,
                 // the passphrase sheet stays with the error (§7.2); a failed removal closes it and shows the error
                 Err(e) => match &mut self.sheet {
@@ -1124,6 +1152,30 @@ impl State {
             }
             Background::Files(WatchEvent::Error(e)) => {
                 eprintln!("cupertino-settings: watching the settings files: {e}")
+            }
+            Background::Called { id, call, result } => {
+                if let Err(e) = result {
+                    eprintln!("cupertino-settings: {e}");
+                    match (&call, &mut self.live.wifi, &mut self.live.bluetooth) {
+                        (Call::Join { .. }, crate::live::Reading::Ready(w), _) => {
+                            w.joining = None;
+                            w.failure = Some(e);
+                        }
+                        (
+                            Call::Connect(_) | Call::DisconnectDevice(_) | Call::Remove { .. },
+                            _,
+                            crate::live::Reading::Ready(b),
+                        ) => b.failure = Some(e),
+                        _ => {
+                            if let Some(id) = id {
+                                self.errors.retain(|(e, _)| *e != id);
+                                self.errors.push((id, e));
+                            }
+                        }
+                    }
+                }
+                let now = self.now();
+                self.refresh(now)?;
             }
             Background::Paired(result) => {
                 if let (Err(e), crate::live::Reading::Ready(b)) = (result, &mut self.live.bluetooth)

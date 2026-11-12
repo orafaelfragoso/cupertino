@@ -19,7 +19,7 @@ fn main() {
     let t = Instant::now();
     let mut launcher = Launcher::new(
         LauncherConfig::default(),
-        cupertino_launcher::desktop::index_dirs(
+        cupertino_launcher::desktop::index_applications(
             &cupertino_launcher::desktop::xdg_application_dirs(),
             &cupertino_launcher::desktop::Locale::from_env(),
             &cupertino_launcher::desktop::Visibility::from_env(),

@@ -460,7 +460,7 @@ impl Launcher {
 
     /// Index the XDG application directories and load the persisted frecency store.
     pub fn from_system(config: LauncherConfig) -> Self {
-        let entries = crate::desktop::index_dirs(
+        let entries = crate::desktop::index_applications(
             &crate::desktop::xdg_application_dirs(),
             &crate::desktop::Locale::from_env(),
             &crate::desktop::Visibility::from_env(),

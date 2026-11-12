@@ -104,8 +104,8 @@ fn without_sheets_a_modal_child_keeps_the_app_modal_transforms_and_centres_on_it
     );
     assert_eq!(
         h.wm.presentation(dialog, h.now).unwrap().scale,
-        0.0,
-        "grows in from nothing"
+        0.07,
+        "pops in from small"
     );
     assert!(
         h.wm.is_blocked(parent),
@@ -114,7 +114,7 @@ fn without_sheets_a_modal_child_keeps_the_app_modal_transforms_and_centres_on_it
 }
 
 #[test]
-fn a_plain_child_opens_at_once_centred_on_its_parent() {
+fn a_plain_child_grows_in_from_0_98_centred_on_its_parent() {
     let mut h = H::new();
     let parent = h.map_at("a", Rect::new(200.0, 100.0, 600.0, 400.0));
     let child = map_with(
@@ -130,8 +130,11 @@ fn a_plain_child_opens_at_once_centred_on_its_parent() {
     let p = h.wm.presentation(child, h.now).unwrap();
     assert_eq!(
         (p.frame, p.opacity, p.scale),
-        (Rect::new(350.0, 200.0, 300.0, 200.0), 1.0, 1.0)
+        (Rect::new(350.0, 200.0, 300.0, 200.0), 1.0, 0.98)
     );
+    h.advance(0.16);
+    let p = h.wm.presentation(child, h.now).unwrap();
+    assert_eq!((p.opacity, p.scale), (1.0, 1.0));
     assert!(!h.wm.is_blocked(parent));
 }
 

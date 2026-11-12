@@ -814,53 +814,58 @@ mod tests {
     }
 
     #[test]
-    fn plain_windows_open_and_close_without_a_transform() {
+    fn plain_windows_open_from_0_98_and_close_with_a_quick_fade_and_shrink() {
         let mut l = Lifecycle::new(AnimationConfig::default(), WindowKind::Plain, N);
         assert!(!l.presentation(0.0).visible);
         l.map(1.0);
         let p = l.presentation(1.0);
-        assert_eq!(
-            (p.visible, p.opacity, p.scale, p.shadow),
-            (true, 1.0, 1.0, 1.0)
+        assert!(p.visible && p.opacity == 1.0, "{p:?}");
+        assert!((p.scale - 0.98).abs() < 1e-9, "{p:?}");
+        assert!(
+            (p.shadow - 0.45).abs() < 1e-9,
+            "the shadow darkens with it: {p:?}"
         );
-        assert_eq!(l.tick(1.0), Some((Opening, Normal)));
+        assert!(l.tick(1.15).is_none());
+        let t = settle(&mut l, 1.0);
+        assert!(
+            t <= 1.16 + 1.0 / 120.0 + 1e-9,
+            "open in 0.16 s, took {}",
+            t - 1.0
+        );
+        assert_eq!(l.state(), Normal);
+        let p = l.presentation(t);
+        assert_eq!((p.opacity, p.scale, p.shadow), (1.0, 1.0, 1.0));
         assert!(!l.map(5.0), "map only from Created");
-        assert!(l.close(2.0));
-        assert_eq!(l.presentation(2.0).opacity, 1.0);
-        assert_eq!(l.tick(2.0), Some((Closing, Destroyed)));
+        assert!(l.close(5.0));
+        assert_eq!(l.presentation(5.0).opacity, 1.0);
+        let mid = l.presentation(5.05);
+        assert!(mid.opacity < 0.5 && mid.scale < 1.0, "{mid:?}");
+        assert!(l.tick(5.14).is_none());
+        assert_eq!(l.tick(5.151), Some((Closing, Destroyed)));
     }
 
     #[test]
-    fn document_windows_grow_in_over_200ms() {
+    fn document_windows_open_and_close_as_plain_ones_do() {
         let mut l = Lifecycle::new(AnimationConfig::default(), WindowKind::Document, N);
+        let mut plain = Lifecycle::new(AnimationConfig::default(), WindowKind::Plain, N);
         l.map(1.0);
-        let p0 = l.presentation(1.0);
-        assert_eq!((p0.opacity, p0.scale, p0.shadow), (0.0, 0.0, 0.0));
-        let mid = l.presentation(1.1);
-        assert!(
-            (mid.scale - 0.5).abs() < 1e-12 && (mid.opacity - 0.5).abs() < 1e-12,
-            "{mid:?}"
-        );
-        assert!(l.tick(1.19).is_none());
-        assert_eq!(l.tick(1.2), Some((Opening, Normal)));
-        let p = l.presentation(1.2);
-        assert_eq!((p.opacity, p.scale, p.shadow), (1.0, 1.0, 1.0));
-        assert!(rect_eq(p.frame, N));
+        plain.map(1.0);
+        for t in [1.0, 1.04, 1.08, 1.12] {
+            assert_eq!(l.presentation(t), plain.presentation(t));
+        }
+        let t = settle(&mut l, 1.0);
+        assert!(rect_eq(l.presentation(t).frame, N));
         assert!(l.close(2.0));
-        assert_eq!(
-            l.tick(2.0),
-            Some((Closing, Destroyed)),
-            "documents close without a transform"
-        );
+        assert!(l.tick(2.14).is_none(), "documents close with a transform");
+        assert_eq!(l.tick(2.151), Some((Closing, Destroyed)));
     }
 
     #[test]
     fn alerts_pop_in_and_scale_down_out() {
         let mut l = Lifecycle::new(AnimationConfig::default(), WindowKind::Alert, N);
         l.map(0.0);
-        // eased progress 0.6 at p = acos(1 − 1.2)/π of the 0.4 s
-        let peak = (1.0 - 2.0 * 0.6f64).acos() / std::f64::consts::PI * 0.4;
-        assert!((l.presentation(peak).scale - 1.2).abs() < 1e-9);
+        // the pop-in runs on linear time over 0.31 s and peaks at 1.18 half way
+        assert!((l.presentation(0.155).scale - 1.18).abs() < 1e-9);
         let t = settle(&mut l, 0.0);
         assert!(l.close(t));
         let mid = l.presentation(t + 0.075);

@@ -229,7 +229,8 @@ fn app_switcher_open_step_commit() {
         &fx,
         |e| matches!(e, Effect::SwitcherChanged { selected: 1, apps } if apps == &vec![app_c, app_b, app_a])
     ));
-    h.advance(SWITCHER_SHOW_DELAY);
+    // just past the delay, which the clock's sum of frame steps can fall a rounding short of
+    h.advance(SWITCHER_SHOW_DELAY + 1e-6);
     h.cmd(step(SwitcherStep::Next, false));
     assert_eq!(selected(&h), 2);
     h.cmd(step(SwitcherStep::Next, false));
@@ -272,7 +273,7 @@ fn before_the_panel_is_up_tab_steps_clamp_on_the_hidden_counter() {
         2,
         "the counter went from 3 to 2, still the last entry"
     );
-    h.advance(SWITCHER_SHOW_DELAY);
+    h.advance(SWITCHER_SHOW_DELAY + 1e-6);
     h.cmd(step(SwitcherStep::Next, false));
     assert_eq!(selected(&h), 0, "the panel is up: the press wraps");
 }

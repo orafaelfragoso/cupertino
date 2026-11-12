@@ -213,7 +213,7 @@ fn closing_utility_window_stays_drawn_while_it_fades() {
 }
 
 #[test]
-fn plain_window_is_destroyed_on_the_next_tick_after_unmap() {
+fn plain_window_is_destroyed_once_its_close_ends() {
     let mut h = H::new();
     let w = h.map("a");
     let fx = h.cmd(Command::Unmap { window: w });
@@ -224,7 +224,8 @@ fn plain_window_is_destroyed_on_the_next_tick_after_unmap() {
             ..
         }
     )));
-    let fx = h.wm.tick(h.now);
+    assert!(h.wm.window(w).is_some(), "it shrinks and fades first");
+    let fx = h.advance(0.15);
     assert!(has(
         &fx,
         |e| matches!(e, Effect::WindowDestroyed { window } if *window == w)

@@ -7,7 +7,7 @@
 //! the modifiers the client is told about and, for the cursor chords, the key.
 //!
 //! The decision is pure. The table is from the design's split between menu key equivalents and
-//! text bindings and the documented chords; the terminal copy and paste mapping and
+//! text bindings and the documented chords; the terminal mapping and
 //! the guards are approximate and configurable in the compositor.
 
 use cupertino_modifiers::{Physical, Profile, RawMods};
@@ -25,11 +25,14 @@ pub const KEY_DELETE: u32 = 111;
 /// Latin keysyms of the keys the table names (`xkbcommon-keysyms.h`).
 pub const SYM_RETURN: u32 = 0xff0d;
 pub const SYM_KP_ENTER: u32 = 0xff8d;
-const SYM_C: u32 = 0x63;
-const SYM_V: u32 = 0x76;
-/// The upper-case forms, which a Shift or Caps Lock chord reports.
-const SYM_UPPER_C: u32 = 0x43;
-const SYM_UPPER_V: u32 = 0x56;
+/// The keys of a terminal's text size chords, which it binds with Ctrl alone: equals and plus (larger), minus (smaller)
+/// and zero (the configured size).
+const TERMINAL_SIZE_SYMS: [u32; 4] = [0x3d, 0x2b, 0x2d, 0x30];
+
+/// Whether `sym` is a Latin letter, either case (a Shift or Caps Lock chord reports the upper-case one).
+fn is_letter(sym: u32) -> bool {
+    (0x41..=0x5a).contains(&sym) || (0x61..=0x7a).contains(&sym)
+}
 
 /// What kind of client has the keyboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,21 +100,21 @@ pub fn decide(profile: &Profile, t: &ClientTarget, k: &KeyPress) -> Rewrite {
     if k.is_modifier || k.raw.contains(RawMods::CTRL | RawMods::SUPER) {
         return Rewrite::Pass;
     }
-    let (sup, alt, shift) = (
-        k.raw.contains(RawMods::SUPER),
-        k.raw.contains(RawMods::ALT),
-        k.raw.contains(RawMods::SHIFT),
-    );
-    // 5 and 6: terminals get copy and paste as Ctrl+Shift and nothing else; their Ctrl chords are control characters
+    let (sup, alt) = (k.raw.contains(RawMods::SUPER), k.raw.contains(RawMods::ALT));
+    // 5 and 6: a terminal's Ctrl chords on letters are control characters, so its own commands (copy, paste, new
+    // window, new tab, find) are the Ctrl+Shift ones: Super+letter, with Shift or without, is the Ctrl+Shift chord of
+    // the letter, and Super on a text-size key is the Ctrl chord of that key. Everything else, Ctrl chords included,
+    // reaches the terminal as it is.
     if t.class == ClientClass::Terminal {
-        let copy_or_paste = matches!(k.sym, SYM_C | SYM_V | SYM_UPPER_C | SYM_UPPER_V);
-        return if sup && !alt && !shift && copy_or_paste {
-            Rewrite::Mods {
-                remove: RawMods::SUPER,
-                add: RawMods::CTRL | RawMods::SHIFT,
-            }
-        } else {
-            Rewrite::Pass
+        let add = match k.sym {
+            _ if !sup || alt => return Rewrite::Pass,
+            sym if is_letter(sym) => RawMods::CTRL | RawMods::SHIFT,
+            sym if TERMINAL_SIZE_SYMS.contains(&sym) => RawMods::CTRL,
+            _ => return Rewrite::Pass,
+        };
+        return Rewrite::Mods {
+            remove: RawMods::SUPER,
+            add,
         };
     }
     let text_input = t.text_input_active;
@@ -199,8 +202,8 @@ fn line_editing_key(sym: u32) -> Option<u32> {
 }
 
 /// The chord the person presses so that a client of class `class` receives `received`, outside a text input: the
-/// inverse of the Super and Ctrl rows of [`decide`]. For a terminal, Shift+Ctrl+C or V comes from Super+C or V (5 and
-/// 6); for any other third-party client, a Ctrl chord without Super on a printable key or Return comes from the Super
+/// inverse of the Super and Ctrl rows of [`decide`]. For a terminal, Ctrl+Shift+letter comes from Super+letter and a
+/// Ctrl text size chord from the Super one (5 and 6); for any other third-party client, a Ctrl chord without Super on a printable key or Return comes from the Super
 /// chord of the same key with Shift and Alt kept (9), and a Super chord without Ctrl from the Ctrl one (4). Every other
 /// chord, every chord of a first-party client and every chord
 /// under a profile whose primary modifier is not Super is pressed as it is received.
@@ -216,9 +219,15 @@ pub fn pressed_for(profile: &Profile, class: ClientClass, received: &KeyPress) -
     let chord_key = received.printable || matches!(received.sym, SYM_RETURN | SYM_KP_ENTER);
     let pressed = match class {
         ClientClass::FirstParty => None,
-        ClientClass::Terminal => (raw == RawMods::CTRL | RawMods::SHIFT
-            && matches!(received.sym, SYM_C | SYM_V | SYM_UPPER_C | SYM_UPPER_V))
-        .then_some(RawMods::SUPER),
+        ClientClass::Terminal
+            if raw == RawMods::CTRL | RawMods::SHIFT && is_letter(received.sym) =>
+        {
+            Some(RawMods::SUPER)
+        }
+        ClientClass::Terminal => (raw.contains(RawMods::CTRL)
+            && !raw.contains(RawMods::ALT)
+            && TERMINAL_SIZE_SYMS.contains(&received.sym))
+        .then(|| swap(RawMods::CTRL, RawMods::SUPER)),
         ClientClass::Other if !chord_key => None,
         ClientClass::Other if raw.contains(RawMods::CTRL) => {
             Some(swap(RawMods::CTRL, RawMods::SUPER))
@@ -238,6 +247,25 @@ mod tests {
     use super::*;
 
     const KEY_C: u32 = 46;
+    const KEY_N: u32 = 49;
+    const KEY_T: u32 = 20;
+    const KEY_W: u32 = 17;
+    const KEY_MINUS: u32 = 12;
+    const KEY_EQUAL: u32 = 13;
+    const KEY_LEFTBRACE: u32 = 26;
+    const KEY_BACKSLASH: u32 = 43;
+    const SYM_C: u32 = 0x63;
+    const SYM_V: u32 = 0x76;
+    const SYM_N: u32 = 0x6e;
+    const SYM_UPPER_N: u32 = 0x4e;
+    const SYM_T: u32 = 0x74;
+    const SYM_W: u32 = 0x77;
+    const SYM_MINUS: u32 = 0x2d;
+    const SYM_EQUAL: u32 = 0x3d;
+    const SYM_BRACKETLEFT: u32 = 0x5b;
+    const SYM_BACKSLASH: u32 = 0x5c;
+    /// The upper-case form, which a Shift or Caps Lock chord reports.
+    const SYM_UPPER_C: u32 = 0x43;
     const KEY_F5: u32 = 63;
     const KEY_TAB: u32 = 15;
     const KEY_SPACE: u32 = 57;
@@ -352,20 +380,63 @@ mod tests {
     }
 
     #[test]
-    fn terminals_get_copy_and_paste_as_ctrl_shift_only() {
+    fn a_terminal_gets_super_letter_chords_as_its_ctrl_shift_commands() {
         let term = target(ClientClass::Terminal);
-        let copy = Rewrite::Mods {
+        let command = Rewrite::Mods {
             remove: SUP,
             add: CTRL | SHIFT,
         };
-        assert_eq!(reference(&term, &letter(KEY_C, SYM_C, SUP)), copy);
-        assert_eq!(reference(&term, &letter(47, SYM_V, SUP)), copy);
+        // copy, paste, new window, new tab, and a letter no terminal binds: Shift held or not, the Ctrl+Shift chord
+        for (evdev, sym) in [
+            (KEY_C, SYM_C),
+            (47, SYM_V),
+            (KEY_N, SYM_N),
+            (KEY_T, SYM_T),
+            (KEY_W, SYM_W),
+            (37, 0x6b),
+        ] {
+            assert_eq!(
+                reference(&term, &letter(evdev, sym, SUP)),
+                command,
+                "{sym:#x}"
+            );
+        }
         assert_eq!(
-            reference(&term, &letter(KEY_C, SYM_C, SUP | SHIFT)),
+            reference(&term, &letter(KEY_C, SYM_UPPER_C, SUP | SHIFT)),
+            command
+        );
+        assert_eq!(
+            reference(&term, &letter(KEY_N, SYM_UPPER_N, SUP | SHIFT)),
+            command
+        );
+        // the text size keys take Ctrl alone, as terminals bind them
+        let size = Rewrite::Mods {
+            remove: SUP,
+            add: CTRL,
+        };
+        assert_eq!(reference(&term, &letter(KEY_EQUAL, SYM_EQUAL, SUP)), size);
+        assert_eq!(reference(&term, &letter(KEY_MINUS, SYM_MINUS, SUP)), size);
+        assert_eq!(reference(&term, &letter(11, 0x30, SUP)), size);
+        // punctuation whose Ctrl chord is a control character (Escape, quit) and other digits stay Super chords
+        assert_eq!(
+            reference(&term, &letter(KEY_LEFTBRACE, SYM_BRACKETLEFT, SUP)),
             Rewrite::Pass
         );
-        assert_eq!(reference(&term, &letter(37, 0x6b, SUP)), Rewrite::Pass);
+        assert_eq!(
+            reference(&term, &letter(KEY_BACKSLASH, SYM_BACKSLASH, SUP)),
+            Rewrite::Pass
+        );
+        assert_eq!(reference(&term, &letter(2, 0x31, SUP)), Rewrite::Pass);
+        // Super with Alt, and the terminal's own Ctrl chords (control characters), are left alone
+        assert_eq!(
+            reference(&term, &letter(KEY_N, SYM_N, SUP | ALT)),
+            Rewrite::Pass
+        );
         assert_eq!(reference(&term, &letter(KEY_C, SYM_C, CTRL)), Rewrite::Pass);
+        assert_eq!(
+            reference(&term, &letter(KEY_C, SYM_C, CTRL | SHIFT)),
+            Rewrite::Pass
+        );
         assert_eq!(
             reference(
                 &ClientTarget {
@@ -501,6 +572,7 @@ mod tests {
             letter(KEY_C, SYM_UPPER_C, RawMods::default()),
             letter(2, 0x31, RawMods::default()),
             letter(51, 0x2c, RawMods::default()),
+            letter(KEY_EQUAL, SYM_EQUAL, RawMods::default()),
             named(28, SYM_RETURN, RawMods::default()),
             named(96, SYM_KP_ENTER, RawMods::default()),
             named(KEY_F5, SYM_F5, RawMods::default()),
@@ -553,7 +625,16 @@ mod tests {
                         profile.name
                     );
                     if r != Rewrite::Pass {
-                        assert_eq!(back, *p, "{} {class:?}: {got:?}", profile.name);
+                        // a terminal gets Super+letter and Super+Shift+letter as one chord, pressed without Shift
+                        let pressed = if class == ClientClass::Terminal && is_letter(p.sym) {
+                            KeyPress {
+                                raw: RawMods(p.raw.0 & !SHIFT.0),
+                                ..*p
+                            }
+                        } else {
+                            *p
+                        };
+                        assert_eq!(back, pressed, "{} {class:?}: {got:?}", profile.name);
                     }
                     if !rewritten.contains(p) {
                         assert_eq!(

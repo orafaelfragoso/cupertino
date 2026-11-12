@@ -159,8 +159,9 @@ pub struct KeyboardSettings {
     /// Rewrite Super and Alt chords for third-party clients under the `cupertino` profile
     /// (§10). On by default (approximate).
     pub client_rewrite: bool,
-    /// Application ids of terminal emulators, matched exactly and case-insensitively: Super+C and Super+V become
-    /// Ctrl+Shift+C and Ctrl+Shift+V there (seed list recalled from the upstream application ids, approximate).
+    /// Application ids of terminal emulators, matched exactly and case-insensitively: a Super chord on a letter becomes
+    /// the Ctrl+Shift chord of the letter there (copy, paste, new window, new tab), and Super on a text size key its
+    /// Ctrl chord (seed list recalled from the upstream application ids, approximate).
     pub rewrite_terminals: Vec<String>,
     /// Application ids that never get a rewrite, matched like `rewrite_terminals`.
     pub rewrite_off: Vec<String>,
@@ -1026,6 +1027,47 @@ mod tests {
         let mut off = KeyboardSettings::default();
         apply(&mut off, "repeat_delay = 0");
         assert_eq!(off.repeat_info(), RepeatInfo { rate: 0, delay: 0 });
+    }
+
+    /// With the default settings a terminal such as foot gets the Super chords as its Ctrl+Shift commands, and a
+    /// first-party application, which reads Super itself, gets them as pressed.
+    #[test]
+    fn default_settings_give_a_terminal_its_ctrl_shift_commands_and_leave_first_party_chords_alone()
+    {
+        use cupertino_keyboard::rewrite::{decide, ClientTarget, KeyPress, Rewrite};
+        let s = KeyboardSettings::default();
+        let target = |app: &str| ClientTarget {
+            class: s.client_class(app),
+            text_input_active: false,
+            opted_out: s.rewrite_opted_out(app),
+        };
+        // evdev code and Latin keysym of N, T, C and V, Shift reporting the upper-case keysym
+        let press = |evdev: u32, sym: u32, raw: RawMods| KeyPress {
+            evdev,
+            sym,
+            printable: true,
+            is_modifier: false,
+            raw,
+        };
+        let profile = s.modifier_profile();
+        let command = Rewrite::Mods {
+            remove: RawMods::SUPER,
+            add: RawMods::CTRL | RawMods::SHIFT,
+        };
+        for k in [
+            press(49, 0x4e, RawMods::SUPER | RawMods::SHIFT),
+            press(49, 0x6e, RawMods::SUPER),
+            press(20, 0x74, RawMods::SUPER),
+            press(46, 0x63, RawMods::SUPER),
+            press(47, 0x76, RawMods::SUPER),
+        ] {
+            assert_eq!(decide(&profile, &target("foot"), &k), command, "{k:?}");
+            assert_eq!(
+                decide(&profile, &target("cupertino-terminal"), &k),
+                Rewrite::Pass,
+                "{k:?}"
+            );
+        }
     }
 
     #[test]

@@ -571,6 +571,15 @@ pub struct SystemInfo {
 
 impl SystemInfo {
     pub fn read() -> SystemInfo {
+        Self::read_with(Path::new("/"), &[])
+    }
+
+    /// As [`SystemInfo::read`], About's readings from `about_root` with the graphics memory only the driver's tool
+    /// reports ([`crate::about::About::read_with`]).
+    pub fn read_with(
+        about_root: &Path,
+        video_memory: &[(crate::about::PciAddress, u64)],
+    ) -> SystemInfo {
         let image = ["etc/os-release", "usr/lib/os-release"]
             .iter()
             .find_map(|p| read_small(&Path::new("/").join(p)))
@@ -578,7 +587,7 @@ impl SystemInfo {
             .unwrap_or_default();
         SystemInfo {
             account: Account::read(),
-            about: Some(crate::about::About::read(Path::new("/"))),
+            about: Some(crate::about::About::read_with(about_root, video_memory)),
             hostname: hostname(),
             timezone: timezone(),
             locale: locale(),

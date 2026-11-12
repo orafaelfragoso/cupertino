@@ -775,6 +775,7 @@ impl Application for SettingsApp {
 
 #[cfg(test)]
 mod tests {
+    mod general;
     mod layout;
     mod privacy;
     mod repaint;

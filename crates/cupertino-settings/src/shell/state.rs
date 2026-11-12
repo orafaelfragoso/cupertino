@@ -59,12 +59,37 @@ pub(crate) enum Background {
     },
     /// sessiond answered Use Mine.
     LoginScreenSaved(std::result::Result<(), String>),
+    /// The graphics memory only the driver's tool reports was read.
+    VideoMemory(Vec<(crate::about::PciAddress, u64)>),
     /// A service call made on a thread of its own ended; `id` is the control that asked for it.
     Called {
         id: Option<ControlId>,
         call: Call,
         result: std::result::Result<(), String>,
     },
+}
+
+/// Reads the graphics memory only the driver's tool reports, by PCI address.
+pub(crate) type ReadVideoMemory =
+    std::sync::Arc<dyn Fn() -> Vec<(crate::about::PciAddress, u64)> + Send + Sync>;
+
+/// The driver's tool, given a short time to answer.
+#[cfg(not(test))]
+fn read_video_memory() -> Vec<(crate::about::PciAddress, u64)> {
+    crate::about::nvidia_video_memory(crate::about::VIDEO_MEMORY_TIMEOUT)
+}
+
+/// Tests run no program of the machine's; one that reads the memory sets a reader of its own.
+#[cfg(test)]
+fn read_video_memory() -> Vec<(crate::about::PciAddress, u64)> {
+    Vec::new()
+}
+
+/// The graphics memory only the driver's tool reports.
+pub(crate) enum VideoMemory {
+    /// Its thread is running.
+    Reading,
+    Read(Vec<(crate::about::PciAddress, u64)>),
 }
 
 /// The longest edge of a thumbnail the cache keeps, in pixels: the decoder keeps a picture of this size whole.
@@ -198,6 +223,13 @@ pub struct State {
     pub(crate) agent_registered: bool,
     pub(crate) login_opening: u64,
     pub(crate) login_saving: bool,
+    /// Where About's readings come from: `/`, or a test's tree.
+    pub(crate) about_root: PathBuf,
+    /// The graphics memory only the driver's tool reports, read once on a thread when a pane first shows the
+    /// graphics; `None` until it is asked for.
+    pub(crate) video_memory: Option<VideoMemory>,
+    /// Reads that memory; on a thread, as it runs a program.
+    pub(crate) read_video_memory: ReadVideoMemory,
     /// An activation token another start of Settings handed over, for the window to raise itself with.
     pub(crate) activation: Option<String>,
     _files: Option<ConfigWatcher>,
@@ -303,6 +335,9 @@ impl State {
             agent_answer: None,
             agent_registered: false,
             login_opening: 0,
+            about_root: PathBuf::from("/"),
+            video_memory: None,
+            read_video_memory: std::sync::Arc::new(read_video_memory),
             login_saving: false,
             activation: None,
             _files: files,
@@ -474,7 +509,15 @@ impl State {
             self.ask_login_screen();
         }
         if matches!(to, PaneId::Account | PaneId::General) {
-            self.live.system = Some(Box::new(crate::system::SystemInfo::read()));
+            let known = match &self.video_memory {
+                Some(VideoMemory::Read(list)) => list.as_slice(),
+                _ => &[],
+            };
+            self.live.system = Some(Box::new(crate::system::SystemInfo::read_with(
+                &self.about_root,
+                known,
+            )));
+            self.ask_video_memory();
         }
         if to == PaneId::General {
             self.live.login_items = crate::system::login_items();
@@ -800,6 +843,24 @@ impl State {
 
     /// Ask sessiond whether the Login Screen section shows at this opening of the Accessibility pane: it stays hidden
     /// until the answer, and the refusal shown under it at the last opening goes.
+    /// Read the graphics memory only the driver's tool reports on a thread, once; the pane shows at once without
+    /// it and gains it when [`Background::VideoMemory`] arrives.
+    pub(crate) fn ask_video_memory(&mut self) {
+        if self.video_memory.is_some() {
+            return;
+        }
+        self.video_memory = Some(VideoMemory::Reading);
+        let notify = self.notify.clone();
+        let read = self.read_video_memory.clone();
+        let spawned = std::thread::Builder::new()
+            .name("settings-video-memory".into())
+            .spawn(move || notify(Background::VideoMemory(read())));
+        if let Err(e) = spawned {
+            eprintln!("cupertino-settings: cannot read the graphics memory: {e}");
+            self.video_memory = Some(VideoMemory::Read(Vec::new()));
+        }
+    }
+
     pub(crate) fn ask_login_screen(&mut self) {
         self.live.login_screen = None;
         self.errors.retain(|(id, _)| *id != ControlId::LoginScreen);
@@ -1124,6 +1185,15 @@ impl State {
                         saving: self.login_saving,
                     });
                 }
+            }
+            Background::VideoMemory(list) => {
+                if !list.is_empty() {
+                    if let Some(system) = &mut self.live.system {
+                        system.about =
+                            Some(crate::about::About::read_with(&self.about_root, &list));
+                    }
+                }
+                self.video_memory = Some(VideoMemory::Read(list));
             }
             Background::LoginScreenSaved(result) => {
                 self.login_saving = false;
